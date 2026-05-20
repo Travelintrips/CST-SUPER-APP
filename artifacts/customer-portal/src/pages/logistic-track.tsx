@@ -1,14 +1,15 @@
 import { useState, useEffect, useCallback } from "react";
 import { useLocation } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
 import {
   ArrowLeft, Search, Ship, Truck, CheckCircle2, Clock,
   MapPin, Package, RefreshCw, AlertCircle, FileText,
-  Circle, ArrowRight, Loader2,
+  Circle, ArrowRight, Loader2, ThumbsUp, ThumbsDown, RotateCcw, Tag,
 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { cn } from "@/lib/utils";
@@ -29,12 +30,24 @@ interface DriverJob {
   distance: string | null; assignedAt: string; completedAt: string | null;
   logs: DriverLog[];
 }
+
+interface RfqQuote {
+  rfqId: number;
+  rfqStatus: string;
+  quotedPrice: number | null;
+  quotedAt: string | null;
+  quoteNotes: string | null;
+  customerResponseNotes: string | null;
+  customerRespondedAt: string | null;
+}
+
 interface TrackingData {
   id: number; orderNumber: string;
   shipmentType: string; origin: string; destination: string;
   status: string; createdAt: string;
   items: { id: number; category: string; serviceName: string }[];
   driverJob: DriverJob | null;
+  rfqQuote: RfqQuote | null;
 }
 
 async function fetchTracking(orderNumber: string): Promise<TrackingData> {
@@ -86,6 +99,11 @@ function formatDateTime(iso: string) {
     day: "2-digit", month: "short", year: "numeric",
     hour: "2-digit", minute: "2-digit",
   });
+}
+
+function idr(n: number | null | undefined) {
+  if (n == null) return "—";
+  return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
 }
 
 function OrderStepper({ status }: { status: string }) {
@@ -185,11 +203,232 @@ function DriverStepper({ job }: { job: DriverJob }) {
   );
 }
 
+function QuoteCard({
+  rfqQuote,
+  orderNumber,
+  onRespond,
+}: {
+  rfqQuote: RfqQuote;
+  orderNumber: string;
+  onRespond: () => void;
+}) {
+  const [showNotes, setShowNotes] = useState(false);
+  const [notes, setNotes] = useState("");
+  const [pendingResponse, setPendingResponse] = useState<"approved" | "revision_requested" | "rejected" | null>(null);
+  const qc = useQueryClient();
+
+  const respondMut = useMutation({
+    mutationFn: async (payload: { response: "approved" | "revision_requested" | "rejected"; notes?: string }) => {
+      const r = await fetch(`${BASE}/api/logistic/rfq/quote-respond`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderNumber, ...payload }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.message ?? "Gagal mengirim respons");
+      return d;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tracking", orderNumber] });
+      setShowNotes(false);
+      setPendingResponse(null);
+      setNotes("");
+      onRespond();
+    },
+  });
+
+  const { rfqStatus, quotedPrice, quotedAt, quoteNotes, customerResponseNotes, customerRespondedAt } = rfqQuote;
+
+  // Jika customer sudah approved
+  if (rfqStatus === "customer_approved") {
+    return (
+      <div className="bg-card border border-green-200 rounded-xl p-5 space-y-3">
+        <div className="flex items-center gap-2 text-green-700 font-semibold text-sm">
+          <ThumbsUp className="w-4 h-4" /> Anda telah menyetujui penawaran ini
+        </div>
+        <div className="text-sm text-muted-foreground">
+          Tim kami akan segera memproses pengiriman Anda. Harga yang disepakati: <strong className="text-foreground">{idr(quotedPrice)}</strong>.
+          {customerResponseNotes && <p className="mt-1">Catatan Anda: {customerResponseNotes}</p>}
+        </div>
+        {customerRespondedAt && (
+          <p className="text-xs text-muted-foreground">Disetujui pada {formatDateTime(customerRespondedAt)}</p>
+        )}
+      </div>
+    );
+  }
+
+  // Jika customer sudah rejected
+  if (rfqStatus === "customer_rejected") {
+    return (
+      <div className="bg-card border border-red-200 rounded-xl p-5 space-y-3">
+        <div className="flex items-center gap-2 text-red-700 font-semibold text-sm">
+          <ThumbsDown className="w-4 h-4" /> Anda telah menolak penawaran ini
+        </div>
+        <div className="text-sm text-muted-foreground">
+          Tim kami akan menghubungi Anda untuk membahas opsi lain.
+          {customerResponseNotes && <p className="mt-1">Alasan Anda: {customerResponseNotes}</p>}
+        </div>
+        {customerRespondedAt && (
+          <p className="text-xs text-muted-foreground">Ditolak pada {formatDateTime(customerRespondedAt)}</p>
+        )}
+      </div>
+    );
+  }
+
+  // Jika customer minta revisi
+  if (rfqStatus === "customer_revision_requested") {
+    return (
+      <div className="bg-card border border-yellow-200 rounded-xl p-5 space-y-3">
+        <div className="flex items-center gap-2 text-yellow-700 font-semibold text-sm">
+          <RotateCcw className="w-4 h-4" /> Anda telah meminta revisi penawaran
+        </div>
+        <div className="text-sm text-muted-foreground">
+          Tim kami sedang meninjau permintaan revisi Anda dan akan menghubungi Anda kembali.
+          {customerResponseNotes && <p className="mt-1">Catatan Anda: {customerResponseNotes}</p>}
+        </div>
+        {customerRespondedAt && (
+          <p className="text-xs text-muted-foreground">Diminta pada {formatDateTime(customerRespondedAt)}</p>
+        )}
+      </div>
+    );
+  }
+
+  // Jika penawaran sudah dikirim dan menunggu respons customer
+  if (rfqStatus === "customer_quoted" && quotedPrice != null) {
+    return (
+      <div className="bg-card border border-primary/20 rounded-xl p-5 space-y-4">
+        <div className="flex items-center gap-2 text-primary font-semibold text-sm">
+          <Tag className="w-4 h-4" /> Penawaran Harga Tersedia
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Tim kami telah menyiapkan penawaran terbaik untuk pengiriman Anda. Silakan tinjau dan berikan respons Anda.
+        </p>
+
+        <div className="bg-muted/40 rounded-lg px-4 py-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-muted-foreground">Harga Penawaran</span>
+            <span className="text-xl font-bold text-foreground">{idr(quotedPrice)}</span>
+          </div>
+          {quotedAt && (
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>Dikirim</span>
+              <span>{formatDateTime(quotedAt)}</span>
+            </div>
+          )}
+          {quoteNotes && (
+            <div className="text-xs text-muted-foreground bg-background rounded p-2 border border-border">
+              📝 {quoteNotes}
+            </div>
+          )}
+        </div>
+
+        {respondMut.isError && (
+          <p className="text-xs text-red-500">{(respondMut.error as Error).message}</p>
+        )}
+
+        {respondMut.isSuccess && !showNotes && (
+          <p className="text-xs text-green-600 font-medium">✓ Respons berhasil dikirim. Terima kasih!</p>
+        )}
+
+        {showNotes && pendingResponse && (
+          <div className="space-y-2">
+            <p className="text-sm text-muted-foreground">
+              {pendingResponse === "revision_requested"
+                ? "Apa yang perlu direvisi? (opsional)"
+                : pendingResponse === "rejected"
+                  ? "Alasan penolakan (opsional)"
+                  : "Catatan tambahan (opsional)"}
+            </p>
+            <Textarea
+              placeholder={
+                pendingResponse === "revision_requested"
+                  ? "Contoh: Harga terlalu tinggi, mohon diskusikan lagi..."
+                  : pendingResponse === "rejected"
+                    ? "Contoh: Sudah mendapatkan vendor lain..."
+                    : "Catatan untuk tim kami..."
+              }
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={3}
+              className="text-sm"
+            />
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                className="flex-1"
+                onClick={() => { setShowNotes(false); setPendingResponse(null); setNotes(""); }}
+                disabled={respondMut.isPending}
+              >
+                Batal
+              </Button>
+              <Button
+                size="sm"
+                className={cn(
+                  "flex-1",
+                  pendingResponse === "approved" && "bg-green-600 hover:bg-green-700",
+                  pendingResponse === "revision_requested" && "bg-yellow-600 hover:bg-yellow-700",
+                  pendingResponse === "rejected" && "bg-red-600 hover:bg-red-700",
+                )}
+                onClick={() => respondMut.mutate({ response: pendingResponse, notes: notes || undefined })}
+                disabled={respondMut.isPending}
+              >
+                {respondMut.isPending
+                  ? <Loader2 className="w-4 h-4 animate-spin" />
+                  : pendingResponse === "approved" ? "Konfirmasi Setuju"
+                    : pendingResponse === "revision_requested" ? "Kirim Permintaan Revisi"
+                      : "Konfirmasi Tolak"}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {!showNotes && !respondMut.isSuccess && (
+          <div className="space-y-2">
+            <p className="text-xs text-muted-foreground text-center">Berikan respons Anda:</p>
+            <div className="grid grid-cols-3 gap-2">
+              <Button
+                size="sm"
+                className="bg-green-600 hover:bg-green-700 text-white text-xs"
+                onClick={() => { setPendingResponse("approved"); setShowNotes(true); }}
+                disabled={respondMut.isPending}
+              >
+                <ThumbsUp className="w-3.5 h-3.5 mr-1" /> Setuju
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-yellow-700 border-yellow-300 hover:bg-yellow-50 text-xs"
+                onClick={() => { setPendingResponse("revision_requested"); setShowNotes(true); }}
+                disabled={respondMut.isPending}
+              >
+                <RotateCcw className="w-3.5 h-3.5 mr-1" /> Revisi
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-red-600 border-red-300 hover:bg-red-50 text-xs"
+                onClick={() => { setPendingResponse("rejected"); setShowNotes(true); }}
+                disabled={respondMut.isPending}
+              >
+                <ThumbsDown className="w-3.5 h-3.5 mr-1" /> Tolak
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return null;
+}
+
 export default function TrackPage() {
   const [, setLocation] = useLocation();
   const [input, setInput] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
+  const [respondedFlag, setRespondedFlag] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -215,6 +454,7 @@ export default function TrackPage() {
     const trimmed = input.trim().toUpperCase();
     if (!trimmed) return;
     setSearchTerm(trimmed);
+    setRespondedFlag(false);
   }
 
   const handleRefresh = useCallback(() => { refetch(); }, [refetch]);
@@ -271,6 +511,18 @@ export default function TrackPage() {
                 Perbarui sekarang
               </button>
             </div>
+
+            {/* Penawaran harga — tampil di atas jika ada dan relevan */}
+            {tracking.rfqQuote && ["customer_quoted", "customer_approved", "customer_rejected", "customer_revision_requested"].includes(tracking.rfqQuote.rfqStatus) && (
+              <QuoteCard
+                rfqQuote={tracking.rfqQuote}
+                orderNumber={tracking.orderNumber}
+                onRespond={() => {
+                  setRespondedFlag(true);
+                  setTimeout(() => refetch(), 1000);
+                }}
+              />
+            )}
 
             {/* Header — order number & status */}
             <div className="bg-card border border-border rounded-xl p-5">

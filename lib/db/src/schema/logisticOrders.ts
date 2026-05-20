@@ -102,6 +102,8 @@ export const logisticOrderRfqsTable = pgTable("logistic_order_rfqs", {
   quotedPrice: numeric("quoted_price", { precision: 14, scale: 2 }),
   quotedAt: timestamp("quoted_at", { withTimezone: true }),
   quoteNotes: text("quote_notes"),
+  customerResponseNotes: text("customer_response_notes"),
+  customerRespondedAt: timestamp("customer_responded_at", { withTimezone: true }),
   createdByUserId: text("created_by_user_id"),
   createdByUserName: text("created_by_user_name"),
   createdAt: timestamp("created_at").defaultNow().notNull(),

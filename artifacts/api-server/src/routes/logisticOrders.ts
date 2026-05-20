@@ -9,6 +9,7 @@ import {
   driverJobsTable,
   driverJobLogsTable,
   driverPhotosTable,
+  logisticOrderRfqsTable,
 } from "@workspace/db";
 import { eq, ilike, and, gte, lte, or, sql, desc, inArray, isNotNull } from "drizzle-orm";
 import { salesDocumentsTable } from "@workspace/db";
@@ -379,10 +380,30 @@ logisticOrdersRouter.get(
       };
     }
 
+    // RFQ quote info untuk customer portal
+    const [latestRfq] = await db
+      .select()
+      .from(logisticOrderRfqsTable)
+      .where(eq(logisticOrderRfqsTable.orderId, order.id))
+      .orderBy(desc(logisticOrderRfqsTable.createdAt))
+      .limit(1);
+
+    const rfqQuote = latestRfq ? {
+      rfqId: latestRfq.id,
+      rfqStatus: latestRfq.status,
+      quotedPrice: latestRfq.quotedPrice ? parseFloat(latestRfq.quotedPrice) : null,
+      quotedAt: latestRfq.quotedAt?.toISOString() ?? null,
+      quoteNotes: latestRfq.quoteNotes ?? null,
+      customerResponseNotes: (latestRfq as any).customerResponseNotes ?? null,
+      customerRespondedAt: (latestRfq as any).customerRespondedAt
+        ? new Date((latestRfq as any).customerRespondedAt).toISOString() : null,
+    } : null;
+
     return res.json({
       ...toPublicOrder(order),
       items: items.map(toPublicItem),
       driverJob: driverJobData,
+      rfqQuote,
     });
   }
 );

@@ -17,7 +17,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   ArrowLeft, RefreshCw, Star, CheckCircle, XCircle, MessageCircle,
   Clock, Users, TrendingDown, ExternalLink, Copy, AlertCircle, Loader2,
-  Send, Phone, DollarSign, Eye,
+  Send, Phone, DollarSign, Eye, ThumbsUp, ThumbsDown, RotateCcw, Lock,
 } from "lucide-react";
 
 const idr = (n: number | null | undefined) =>
@@ -118,6 +118,8 @@ interface ComparisonData {
   orderId: number;
   orderNumber: string;
   customerName: string;
+  customerResponseNotes?: string | null;
+  customerRespondedAt?: string | null;
   customerPhone: string | null;
   customerEmail: string | null;
   serviceType: string;
@@ -254,9 +256,33 @@ export default function LogisticsRfqComparisonPage() {
     );
   }
 
+  const closeMut = useMutation({
+    mutationFn: async (notes?: string) => {
+      const r = await fetch(`/api/logistic/rfq/${rfqId}/close`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notes }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.message ?? "Gagal menutup RFQ");
+      return d;
+    },
+    onSuccess: () => {
+      toast({ title: "RFQ Ditutup", description: "Status RFQ telah diubah ke closed" });
+      qc.invalidateQueries({ queryKey: ["rfq-comparison", rfqId] });
+      qc.invalidateQueries({ queryKey: ["rfq-list"] });
+    },
+    onError: (e: Error) => toast({ title: "Gagal", description: e.message, variant: "destructive" }),
+  });
+
   const hasSelected = data.stats.selected > 0;
   const isCustomerQuoted = data.rfqStatus === "customer_quoted";
+  const isCustomerApproved = data.rfqStatus === "customer_approved";
+  const isCustomerRejected = data.rfqStatus === "customer_rejected";
+  const isCustomerRevision = data.rfqStatus === "customer_revision_requested";
+  const isClosed = data.rfqStatus === "closed";
   const canSendQuote = ["vendor_selected", "customer_revision_requested"].includes(data.rfqStatus);
+  const canClose = ["customer_approved", "customer_rejected", "customer_quoted"].includes(data.rfqStatus);
 
   // Pre-fill harga jual saat buka dialog
   const openQuoteDialog = () => {
@@ -311,6 +337,93 @@ export default function LogisticsRfqComparisonPage() {
           <StatCard label="Tolak" value={data.stats.rejected} icon={<XCircle className="w-5 h-5 text-red-500" />} color="red" />
           <StatCard label="Dipilih" value={data.stats.selected} icon={<Star className="w-5 h-5 text-teal-500" />} color="teal" />
         </div>
+
+        {/* Banner: RFQ sudah ditutup */}
+        {isClosed && (
+          <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 flex items-center gap-3">
+            <Lock className="w-4 h-4 text-gray-500 flex-shrink-0" />
+            <div className="text-sm text-gray-600">
+              <span className="font-semibold text-gray-800">RFQ telah ditutup.</span>{" "}
+              Semua aktivitas untuk RFQ ini sudah selesai.
+            </div>
+          </div>
+        )}
+
+        {/* Banner: customer approved */}
+        {isCustomerApproved && (
+          <div className="bg-green-50 border border-green-200 rounded-xl p-4 space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-green-800 font-semibold text-sm">
+                <ThumbsUp className="w-4 h-4 flex-shrink-0" />
+                Customer menyetujui penawaran ini
+              </div>
+              <Button
+                size="sm"
+                className="text-xs bg-green-700 hover:bg-green-800 text-white"
+                onClick={() => closeMut.mutate("Customer approved")}
+                disabled={closeMut.isPending}
+              >
+                {closeMut.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Lock className="w-3.5 h-3.5 mr-1" />}
+                Tutup & Proses Order
+              </Button>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-1 text-xs text-green-900">
+              <span><span className="text-green-600">Harga Disetujui:</span> <strong>{idr(data.quotedPrice)}</strong></span>
+              <span><span className="text-green-600">Customer:</span> {data.customerName}</span>
+              {data.customerRespondedAt && <span><span className="text-green-600">Disetujui:</span> {new Date(data.customerRespondedAt).toLocaleString("id-ID")}</span>}
+              {data.customerResponseNotes && <span className="col-span-2"><span className="text-green-600">Catatan Customer:</span> {data.customerResponseNotes}</span>}
+            </div>
+          </div>
+        )}
+
+        {/* Banner: customer rejected */}
+        {isCustomerRejected && (
+          <div className="bg-red-50 border border-red-200 rounded-xl p-4 space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-red-800 font-semibold text-sm">
+                <ThumbsDown className="w-4 h-4 flex-shrink-0" />
+                Customer menolak penawaran ini
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-xs border-red-300 text-red-700 hover:bg-red-50"
+                onClick={() => closeMut.mutate("Customer rejected")}
+                disabled={closeMut.isPending}
+              >
+                {closeMut.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Lock className="w-3.5 h-3.5 mr-1" />}
+                Tutup RFQ
+              </Button>
+            </div>
+            <div className="text-xs text-red-900 space-y-0.5">
+              {data.customerRespondedAt && <p><span className="text-red-600">Ditolak:</span> {new Date(data.customerRespondedAt).toLocaleString("id-ID")}</p>}
+              {data.customerResponseNotes && <p><span className="text-red-600">Alasan:</span> {data.customerResponseNotes}</p>}
+            </div>
+          </div>
+        )}
+
+        {/* Banner: customer minta revisi */}
+        {isCustomerRevision && (
+          <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-yellow-800 font-semibold text-sm">
+                <RotateCcw className="w-4 h-4 flex-shrink-0" />
+                Customer meminta revisi penawaran
+              </div>
+              <Button
+                size="sm"
+                className="bg-purple-600 hover:bg-purple-700 text-white text-xs"
+                onClick={openQuoteDialog}
+              >
+                <Send className="w-3.5 h-3.5 mr-1" /> Kirim Ulang Penawaran
+              </Button>
+            </div>
+            <div className="text-xs text-yellow-900 space-y-0.5">
+              {data.customerRespondedAt && <p><span className="text-yellow-600">Diminta:</span> {new Date(data.customerRespondedAt).toLocaleString("id-ID")}</p>}
+              {data.customerResponseNotes && <p><span className="text-yellow-600">Catatan revisi:</span> {data.customerResponseNotes}</p>}
+            </div>
+          </div>
+        )}
 
         {/* Banner: penawaran sudah terkirim ke customer */}
         {isCustomerQuoted && (

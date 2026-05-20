@@ -57,7 +57,10 @@ const STATUS_TABS = [
   { value: "vendor_blasted", label: "Di Vendor" },
   { value: "vendor_selected", label: "Vendor Dipilih" },
   { value: "customer_quoted", label: "Penawaran Terkirim" },
-  { value: "customer_approved", label: "Disetujui" },
+  { value: "customer_approved", label: "✓ Disetujui" },
+  { value: "customer_revision_requested", label: "⟳ Revisi" },
+  { value: "customer_rejected", label: "✗ Ditolak" },
+  { value: "closed", label: "Selesai" },
 ];
 
 interface RfqRow {
@@ -323,11 +326,19 @@ export default function LogisticsRfqListPage() {
                               <><Eye className="h-3 w-3 mr-1" />Detail</>
                             )}
                           </Button>
-                          {["vendor_blasted", "vendor_selected"].includes(rfq.rfqStatus) && (
+                          {!["admin_review", "closed"].includes(rfq.rfqStatus) && (
                             <Button
                               size="sm"
                               variant="outline"
-                              className="h-7 px-2 text-xs"
+                              className={`h-7 px-2 text-xs ${
+                                rfq.rfqStatus === "customer_approved"
+                                  ? "border-green-400 text-green-700"
+                                  : rfq.rfqStatus === "customer_revision_requested"
+                                    ? "border-yellow-400 text-yellow-700"
+                                    : rfq.rfqStatus === "customer_rejected"
+                                      ? "border-red-400 text-red-700"
+                                      : ""
+                              }`}
                               onClick={() => navigate(`/logistics/rfq/${rfq.rfqId}/comparison`)}
                             >
                               <BarChart2 className="h-3 w-3 mr-1" />Comparison

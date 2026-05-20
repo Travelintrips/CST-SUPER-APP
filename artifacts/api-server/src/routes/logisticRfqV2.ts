@@ -64,6 +64,27 @@ db.execute(sql`
 db.execute(sql`
   DO $$
   BEGIN
+    -- Add customer_response_notes
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_name='logistic_order_rfqs' AND column_name='customer_response_notes'
+    ) THEN
+      ALTER TABLE logistic_order_rfqs ADD COLUMN customer_response_notes TEXT;
+    END IF;
+
+    -- Add customer_responded_at
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_name='logistic_order_rfqs' AND column_name='customer_responded_at'
+    ) THEN
+      ALTER TABLE logistic_order_rfqs ADD COLUMN customer_responded_at TIMESTAMPTZ;
+    END IF;
+  END $$;
+`).catch((e: unknown) => logger.warn({ e }, "rfq customer response migration warn"));
+
+db.execute(sql`
+  DO $$
+  BEGIN
     -- Add response_deadline if missing (older schema)
     IF NOT EXISTS (
       SELECT 1 FROM information_schema.columns
@@ -669,6 +690,9 @@ logisticRfqV2Router.get("/rfq/:rfqId/comparison", async (req: Request, res: Resp
     quotedPrice: rfq.quotedPrice ? Number(rfq.quotedPrice) : null,
     quotedAt: rfq.quotedAt?.toISOString() ?? null,
     quoteNotes: rfq.quoteNotes ?? null,
+    customerResponseNotes: (rfq as any).customerResponseNotes ?? null,
+    customerRespondedAt: (rfq as any).customerRespondedAt
+      ? new Date((rfq as any).customerRespondedAt).toISOString() : null,
     finalSellingPrice: order?.finalSellingPrice ? Number(order.finalSellingPrice) : null,
     stats,
     vendors: vendorRows,
@@ -869,6 +893,116 @@ logisticRfqV2Router.post("/rfq/:rfqId/send-customer-quote", async (req: Request,
     sellingPrice,
     waSent,
   });
+});
+
+// ─── PUBLIC: POST /rfq/quote-respond — customer merespons penawaran ──────────
+// Body: { orderNumber, response: "approved"|"revision_requested"|"rejected", notes? }
+logisticRfqV2Router.post("/rfq/quote-respond", async (req: Request, res: Response) => {
+  const { orderNumber, response, notes } = req.body as {
+    orderNumber: string;
+    response: "approved" | "revision_requested" | "rejected";
+    notes?: string;
+  };
+
+  if (!orderNumber || !response) {
+    return res.status(400).json({ message: "orderNumber dan response wajib diisi" });
+  }
+  if (!["approved", "revision_requested", "rejected"].includes(response)) {
+    return res.status(400).json({ message: "response tidak valid" });
+  }
+
+  const [order] = await db.select().from(logisticOrdersTable)
+    .where(eq(logisticOrdersTable.orderNumber, orderNumber.toUpperCase().trim()));
+  if (!order) return res.status(404).json({ message: "Order tidak ditemukan" });
+
+  // Cari RFQ aktif dengan status customer_quoted
+  const [rfq] = await db.select().from(logisticOrderRfqsTable)
+    .where(and(
+      eq(logisticOrderRfqsTable.orderId, order.id),
+      eq(logisticOrderRfqsTable.status, "customer_quoted")
+    ))
+    .orderBy(sql`created_at DESC`)
+    .limit(1);
+
+  if (!rfq) {
+    return res.status(400).json({
+      message: "Tidak ada penawaran aktif untuk order ini. Status mungkin sudah berubah.",
+    });
+  }
+
+  const newStatus =
+    response === "approved" ? "customer_approved" :
+    response === "revision_requested" ? "customer_revision_requested" :
+    "customer_rejected";
+
+  await db.execute(sql`
+    UPDATE logistic_order_rfqs
+    SET status = ${newStatus},
+        customer_response_notes = ${notes ?? null},
+        customer_responded_at = NOW()
+    WHERE id = ${rfq.id}
+  `);
+
+  // Notif WA ke admin group
+  const adminWa = await getAdminGroupWa().catch(() => null);
+  if (adminWa) {
+    const emoji = response === "approved" ? "✅" : response === "revision_requested" ? "🔄" : "❌";
+    const label = response === "approved" ? "MENYETUJUI" :
+      response === "revision_requested" ? "MINTA REVISI" : "MENOLAK";
+    const priceInfo = rfq.quotedPrice ? `\n💰 Penawaran: ${fmtRp(rfq.quotedPrice)}` : "";
+    const notesInfo = notes ? `\n📝 Catatan: ${notes}` : "";
+    const msg =
+      `${emoji} *Customer ${label} Penawaran*\n\n` +
+      `👤 Customer: *${order.customerName}*\n` +
+      `📄 Order: *${order.orderNumber}*\n` +
+      `🚚 ${order.shipmentType}: ${order.origin} → ${order.destination}` +
+      priceInfo + notesInfo +
+      `\n\nSilakan cek BizPortal › RFQ untuk tindak lanjut.`;
+    sendWhatsApp(adminWa, msg).catch(() => {});
+  }
+
+  await logActivity(rfq.id, "customer", order.customerName, `customer_${response}`,
+    `Customer ${order.customerName} ${
+      response === "approved" ? "menyetujui" :
+      response === "revision_requested" ? "minta revisi" : "menolak"
+    } penawaran${notes ? `: ${notes}` : ""}`);
+
+  return res.json({ ok: true, rfqId: rfq.id, newStatus });
+});
+
+// ─── ADMIN: POST /rfq/:rfqId/close — tutup RFQ ───────────────────────────────
+logisticRfqV2Router.post("/rfq/:rfqId/close", async (req: Request, res: Response) => {
+  if (!(await requireClerkUser(req, res))) return;
+  const rfqId = parseInt(req.params.rfqId, 10);
+  if (isNaN(rfqId)) return res.status(400).json({ message: "rfqId tidak valid" });
+
+  const [rfq] = await db.select().from(logisticOrderRfqsTable)
+    .where(eq(logisticOrderRfqsTable.id, rfqId));
+  if (!rfq) return res.status(404).json({ message: "RFQ tidak ditemukan" });
+
+  const { notes, updateOrderStatus } = req.body as { notes?: string; updateOrderStatus?: boolean };
+
+  await db.execute(sql`
+    UPDATE logistic_order_rfqs SET status = 'closed' WHERE id = ${rfqId}
+  `);
+
+  if (updateOrderStatus !== false) {
+    // Jika customer approved, update order ke Processing; jika rejected, biarkan
+    const targetStatus = rfq.status === "customer_approved" ? "Processing" : undefined;
+    if (targetStatus) {
+      await db.update(logisticOrdersTable)
+        .set({ status: targetStatus })
+        .where(eq(logisticOrdersTable.id, rfq.orderId));
+    }
+  }
+
+  const [order] = await db.select({ customerName: logisticOrdersTable.customerName, orderNumber: logisticOrdersTable.orderNumber })
+    .from(logisticOrdersTable).where(eq(logisticOrdersTable.id, rfq.orderId));
+
+  await logActivity(rfqId, "admin", "Admin", "rfq_closed",
+    `RFQ ditutup${notes ? `: ${notes}` : ""}`);
+
+  return res.json({ ok: true, rfqId, rfqNumber: rfq.rfqNumber, orderNumber: order?.orderNumber });
 });
 
 // ─── ADMIN: GET /rfq/by-order/:orderId ────────────────────────────────────────
