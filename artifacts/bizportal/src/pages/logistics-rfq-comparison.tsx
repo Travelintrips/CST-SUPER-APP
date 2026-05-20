@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { useParams, useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
@@ -8,16 +8,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Separator } from "@/components/ui/separator";
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import {
   ArrowLeft, RefreshCw, Star, CheckCircle, XCircle, MessageCircle,
   Clock, Users, TrendingDown, ExternalLink, Copy, AlertCircle, Loader2,
+  Send, Phone, DollarSign, Eye,
 } from "lucide-react";
 
 const idr = (n: number | null | undefined) =>
@@ -118,11 +118,17 @@ interface ComparisonData {
   orderId: number;
   orderNumber: string;
   customerName: string;
+  customerPhone: string | null;
+  customerEmail: string | null;
   serviceType: string;
   origin: string;
   destination: string;
   commodity: string | null;
   rfqStatus: string;
+  quotedPrice: number | null;
+  quotedAt: string | null;
+  quoteNotes: string | null;
+  finalSellingPrice: number | null;
   stats: {
     total: number; answered: number; pending: number;
     rejected: number; counterOffer: number; expired: number; selected: number;
@@ -143,6 +149,11 @@ export default function LogisticsRfqComparisonPage() {
   const [revisionDialog, setRevisionDialog] = useState<{ linkId: number; vendorName: string } | null>(null);
   const [revisionMsg, setRevisionMsg] = useState("");
   const [autoRefresh, setAutoRefresh] = useState(true);
+
+  const [quoteDialog, setQuoteDialog] = useState(false);
+  const [quotePrice, setQuotePrice] = useState("");
+  const [quoteNotes, setQuoteNotes] = useState("");
+  const [quoteSendWa, setQuoteSendWa] = useState(true);
 
   const { data, isLoading, refetch } = useQuery<ComparisonData>({
     queryKey: ["rfq-comparison", rfqId],
@@ -171,6 +182,31 @@ export default function LogisticsRfqComparisonPage() {
       qc.invalidateQueries({ queryKey: ["rfq-comparison", rfqId] });
     },
     onError: (e) => toast({ title: "Gagal", description: (e as Error).message, variant: "destructive" }),
+  });
+
+  const sendQuoteMut = useMutation({
+    mutationFn: async () => {
+      const price = Number(quotePrice);
+      if (!price || price <= 0) throw new Error("Harga jual tidak valid");
+      const r = await fetch(`/api/logistic/rfq/${rfqId}/send-customer-quote`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sellingPrice: price, quoteNotes: quoteNotes || undefined, sendWhatsApp: quoteSendWa }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.message ?? "Gagal kirim penawaran");
+      return d;
+    },
+    onSuccess: (d) => {
+      toast({
+        title: "Penawaran terkirim",
+        description: `${idr(Number(quotePrice))} → ${d.customerName}${d.waSent ? " — WA terkirim ✓" : ""}`,
+      });
+      setQuoteDialog(false);
+      qc.invalidateQueries({ queryKey: ["rfq-comparison", rfqId] });
+      qc.invalidateQueries({ queryKey: ["rfq-list"] });
+    },
+    onError: (e: Error) => toast({ title: "Gagal", description: e.message, variant: "destructive" }),
   });
 
   const actionMut = useMutation({
@@ -219,6 +255,19 @@ export default function LogisticsRfqComparisonPage() {
   }
 
   const hasSelected = data.stats.selected > 0;
+  const isCustomerQuoted = data.rfqStatus === "customer_quoted";
+  const canSendQuote = ["vendor_selected", "customer_revision_requested"].includes(data.rfqStatus);
+
+  // Pre-fill harga jual saat buka dialog
+  const openQuoteDialog = () => {
+    const selectedVendor = data.vendors.find((v) => v.status === "selected");
+    const vendorPrice = selectedVendor ? (selectedVendor.offeredPrice ?? selectedVendor.basicPrice) : null;
+    const suggested = vendorPrice ? Math.round(vendorPrice * 1.2) : (data.finalSellingPrice ?? 0);
+    setQuotePrice(data.quotedPrice ? String(data.quotedPrice) : String(suggested));
+    setQuoteNotes(data.quoteNotes ?? "");
+    setQuoteSendWa(true);
+    setQuoteDialog(true);
+  };
 
   return (
     <AppShell>
@@ -226,7 +275,7 @@ export default function LogisticsRfqComparisonPage() {
         {/* Header */}
         <div className="flex flex-wrap items-start gap-3 justify-between">
           <div className="flex items-center gap-3">
-            <Button variant="ghost" size="sm" onClick={() => navigate(`/logistics/portal-orders/${data.orderId}`)}>
+            <Button variant="ghost" size="sm" onClick={() => navigate("/logistics/rfq")}>
               <ArrowLeft className="w-4 h-4 mr-1" /> Kembali
             </Button>
             <div>
@@ -263,18 +312,41 @@ export default function LogisticsRfqComparisonPage() {
           <StatCard label="Dipilih" value={data.stats.selected} icon={<Star className="w-5 h-5 text-teal-500" />} color="teal" />
         </div>
 
-        {hasSelected && (
+        {/* Banner: penawaran sudah terkirim ke customer */}
+        {isCustomerQuoted && (
+          <div className="bg-cyan-50 border border-cyan-200 rounded-xl p-4 space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-cyan-800 font-semibold text-sm">
+                <Send className="w-4 h-4 flex-shrink-0" />
+                Penawaran sudah terkirim ke customer
+              </div>
+              <Button size="sm" variant="outline" className="text-xs border-cyan-300 text-cyan-700" onClick={openQuoteDialog}>
+                <Eye className="w-3.5 h-3.5 mr-1" />Lihat / Kirim Ulang
+              </Button>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-1 text-xs text-cyan-900">
+              <span><span className="text-cyan-600">Harga Jual:</span> <strong>{idr(data.quotedPrice)}</strong></span>
+              <span><span className="text-cyan-600">Customer:</span> {data.customerName}</span>
+              {data.customerPhone && <span><span className="text-cyan-600">WA:</span> {data.customerPhone}</span>}
+              {data.quotedAt && <span><span className="text-cyan-600">Dikirim:</span> {new Date(data.quotedAt).toLocaleString("id-ID")}</span>}
+              {data.quoteNotes && <span className="col-span-2"><span className="text-cyan-600">Catatan:</span> {data.quoteNotes}</span>}
+            </div>
+          </div>
+        )}
+
+        {/* Banner: vendor dipilih, siap kirim penawaran ke customer */}
+        {canSendQuote && (
           <div className="bg-teal-50 border border-teal-200 rounded-xl p-3 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-teal-800 text-sm">
               <CheckCircle className="w-4 h-4 flex-shrink-0" />
-              Vendor sudah dipilih. Kirim penawaran ke customer atau kelola eksekusi order.
+              Vendor sudah dipilih. Sekarang kirim penawaran harga ke customer.
             </div>
             <Button
               size="sm"
               className="bg-purple-600 hover:bg-purple-700 text-white text-xs"
-              onClick={() => navigate(`/logistics/orders/${data.orderId}`)}
+              onClick={openQuoteDialog}
             >
-              📤 Kelola Order &amp; Kirim Penawaran
+              <Send className="w-3.5 h-3.5 mr-1.5" /> Kirim Penawaran ke Customer
             </Button>
           </div>
         )}
@@ -402,6 +474,124 @@ export default function LogisticsRfqComparisonPage() {
               disabled={actionMut.isPending}
             >
               <MessageCircle className="w-4 h-4 mr-1" /> Kirim via WA
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog: Kirim Penawaran ke Customer */}
+      <Dialog open={quoteDialog} onOpenChange={(o) => !o && setQuoteDialog(false)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Send className="w-4 h-4 text-purple-600" />
+              {isCustomerQuoted ? "Lihat / Kirim Ulang Penawaran" : "Kirim Penawaran ke Customer"}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-1">
+            {/* Info customer & order */}
+            <div className="bg-muted/40 rounded-lg p-3 text-sm space-y-1.5">
+              <div className="font-semibold text-gray-800">{data.customerName}</div>
+              <div className="text-xs text-muted-foreground grid grid-cols-2 gap-x-4 gap-y-1">
+                <span>📦 {data.serviceType}</span>
+                <span>📄 {data.orderNumber}</span>
+                <span className="col-span-2">🗺 {data.origin} → {data.destination}</span>
+                {data.customerPhone && (
+                  <span className="col-span-2 flex items-center gap-1">
+                    <Phone className="w-3 h-3" />{data.customerPhone}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Vendor yang dipilih */}
+            {(() => {
+              const sv = data.vendors.find((v) => v.status === "selected");
+              if (!sv) return null;
+              return (
+                <div className="bg-teal-50 border border-teal-200 rounded-lg p-3 text-xs space-y-1">
+                  <p className="font-semibold text-teal-800 text-sm">Vendor Terpilih: {sv.vendorName}</p>
+                  <div className="text-teal-700 grid grid-cols-2 gap-x-4">
+                    <span>Harga Vendor: <strong>{idr(sv.offeredPrice ?? sv.basicPrice)}</strong></span>
+                    {sv.eta && <span>ETA: {sv.eta}</span>}
+                  </div>
+                </div>
+              );
+            })()}
+
+            <Separator />
+
+            {/* Harga jual ke customer */}
+            <div className="space-y-1.5">
+              <Label className="flex items-center gap-1.5">
+                <DollarSign className="w-3.5 h-3.5 text-purple-600" />
+                Harga Jual ke Customer <span className="text-red-500">*</span>
+              </Label>
+              <Input
+                type="number"
+                placeholder="Masukkan harga jual..."
+                value={quotePrice}
+                onChange={(e) => setQuotePrice(e.target.value)}
+                className="font-mono"
+              />
+              {quotePrice && Number(quotePrice) > 0 && (
+                <p className="text-xs text-muted-foreground">{idr(Number(quotePrice))}</p>
+              )}
+              {(() => {
+                const sv = data.vendors.find((v) => v.status === "selected");
+                const vp = sv ? (sv.offeredPrice ?? sv.basicPrice) : null;
+                const sp = Number(quotePrice);
+                if (vp && sp > 0) {
+                  const margin = ((sp - vp) / vp * 100).toFixed(1);
+                  const marginNum = parseFloat(margin);
+                  return (
+                    <p className={`text-xs font-medium ${marginNum >= 0 ? "text-green-700" : "text-red-600"}`}>
+                      Margin: {margin}% ({idr(sp - vp)})
+                    </p>
+                  );
+                }
+                return null;
+              })()}
+            </div>
+
+            {/* Catatan untuk customer */}
+            <div className="space-y-1.5">
+              <Label>Catatan (opsional)</Label>
+              <Textarea
+                placeholder="Catatan tambahan untuk customer, syarat, dll..."
+                value={quoteNotes}
+                onChange={(e) => setQuoteNotes(e.target.value)}
+                rows={2}
+                className="text-sm"
+              />
+            </div>
+
+            {/* Kirim via WA */}
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="send-wa"
+                checked={quoteSendWa}
+                onCheckedChange={(v) => setQuoteSendWa(!!v)}
+              />
+              <label htmlFor="send-wa" className="text-sm cursor-pointer">
+                Kirim notifikasi via WhatsApp ke customer
+                {!data.customerPhone && (
+                  <span className="ml-1 text-xs text-orange-600">(No. WA tidak tersedia)</span>
+                )}
+              </label>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setQuoteDialog(false)}>Batal</Button>
+            <Button
+              onClick={() => sendQuoteMut.mutate()}
+              disabled={!quotePrice || Number(quotePrice) <= 0 || sendQuoteMut.isPending}
+              className="bg-purple-600 hover:bg-purple-700"
+            >
+              {sendQuoteMut.isPending
+                ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Mengirim...</>
+                : <><Send className="w-4 h-4 mr-1.5" />{isCustomerQuoted ? "Kirim Ulang" : "Kirim Penawaran"}</>
+              }
             </Button>
           </DialogFooter>
         </DialogContent>

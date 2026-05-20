@@ -86,6 +86,28 @@ db.execute(sql`
 
     -- Change default for new rows
     ALTER TABLE logistic_order_rfqs ALTER COLUMN status SET DEFAULT 'admin_review';
+
+    -- Add customer quote fields
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_name='logistic_order_rfqs' AND column_name='quoted_price'
+    ) THEN
+      ALTER TABLE logistic_order_rfqs ADD COLUMN quoted_price NUMERIC(14,2);
+    END IF;
+
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_name='logistic_order_rfqs' AND column_name='quoted_at'
+    ) THEN
+      ALTER TABLE logistic_order_rfqs ADD COLUMN quoted_at TIMESTAMPTZ;
+    END IF;
+
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_name='logistic_order_rfqs' AND column_name='quote_notes'
+    ) THEN
+      ALTER TABLE logistic_order_rfqs ADD COLUMN quote_notes TEXT;
+    END IF;
   END $$;
 `).catch((e: unknown) => logger.warn({ e }, "rfq status migration warn"));
 
@@ -637,11 +659,17 @@ logisticRfqV2Router.get("/rfq/:rfqId/comparison", async (req: Request, res: Resp
     orderId: rfq.orderId,
     orderNumber: order?.orderNumber ?? "",
     customerName: order?.customerName ?? "",
+    customerPhone: order?.phone ?? null,
+    customerEmail: order?.email ?? null,
     serviceType: order?.shipmentType ?? "",
     origin: order?.origin ?? "",
     destination: order?.destination ?? "",
     commodity: order?.commodity ?? null,
     rfqStatus: rfq.status,
+    quotedPrice: rfq.quotedPrice ? Number(rfq.quotedPrice) : null,
+    quotedAt: rfq.quotedAt?.toISOString() ?? null,
+    quoteNotes: rfq.quoteNotes ?? null,
+    finalSellingPrice: order?.finalSellingPrice ? Number(order.finalSellingPrice) : null,
     stats,
     vendors: vendorRows,
     activities: activities.map((a) => ({
@@ -754,6 +782,93 @@ logisticRfqV2Router.post("/rfq/:rfqId/vendor-link/:linkId/action", async (req: R
   }
 
   return res.status(400).json({ message: "action tidak dikenal" });
+});
+
+// ─── ADMIN: POST /rfq/:rfqId/send-customer-quote ─────────────────────────────
+// Admin kirim penawaran harga ke customer setelah memilih vendor
+logisticRfqV2Router.post("/rfq/:rfqId/send-customer-quote", async (req: Request, res: Response) => {
+  if (!(await requireClerkUser(req, res))) return;
+  const rfqId = parseInt(req.params.rfqId, 10);
+  if (isNaN(rfqId)) return res.status(400).json({ message: "rfqId tidak valid" });
+
+  const [rfq] = await db.select().from(logisticOrderRfqsTable)
+    .where(eq(logisticOrderRfqsTable.id, rfqId));
+  if (!rfq) return res.status(404).json({ message: "RFQ tidak ditemukan" });
+
+  if (!["vendor_selected", "customer_revision_requested"].includes(rfq.status)) {
+    return res.status(400).json({
+      message: `Status RFQ saat ini '${rfq.status}'. Harus vendor_selected atau customer_revision_requested untuk kirim penawaran.`,
+    });
+  }
+
+  const { sellingPrice, quoteNotes, sendWhatsApp: doSendWa = true } = req.body as {
+    sellingPrice: number;
+    quoteNotes?: string;
+    sendWhatsApp?: boolean;
+  };
+
+  if (!sellingPrice || sellingPrice <= 0) {
+    return res.status(400).json({ message: "sellingPrice wajib diisi" });
+  }
+
+  const [order] = await db.select().from(logisticOrdersTable)
+    .where(eq(logisticOrdersTable.id, rfq.orderId));
+  if (!order) return res.status(404).json({ message: "Order tidak ditemukan" });
+
+  // Cari vendor yang dipilih untuk info WA message
+  const selectedLink = await db.select().from(rfqVendorLinksTable)
+    .where(and(eq(rfqVendorLinksTable.rfqId, rfqId), eq(rfqVendorLinksTable.status, "selected")))
+    .limit(1)
+    .then((r) => r[0]);
+
+  const [selectedVendor] = selectedLink
+    ? await db.select({ name: suppliersTable.name }).from(suppliersTable)
+        .where(eq(suppliersTable.id, selectedLink.vendorId))
+    : [];
+
+  // Simpan quote ke RFQ
+  await db.execute(sql`
+    UPDATE logistic_order_rfqs
+    SET status = 'customer_quoted',
+        quoted_price = ${sellingPrice},
+        quoted_at = NOW(),
+        quote_notes = ${quoteNotes ?? null}
+    WHERE id = ${rfqId}
+  `);
+
+  // Update order: final selling price
+  await db.update(logisticOrdersTable)
+    .set({ finalSellingPrice: String(sellingPrice) })
+    .where(eq(logisticOrdersTable.id, rfq.orderId));
+
+  // Kirim WA ke customer
+  let waSent = false;
+  if (doSendWa && order.phone) {
+    const eta = selectedLink?.eta ? `\n⏱ *Estimasi:* ${selectedLink.eta}` : "";
+    const notes = quoteNotes ? `\n\n📝 *Catatan:* ${quoteNotes}` : "";
+    const waMsg =
+      `✅ *Penawaran Freight Anda Telah Siap*\n\n` +
+      `Halo *${order.customerName}*,\n\n` +
+      `Kami telah mendapatkan penawaran terbaik untuk pengiriman Anda:\n\n` +
+      `📦 *Layanan:* ${order.shipmentType}\n` +
+      `🗺 *Rute:* ${order.origin} → ${order.destination}\n` +
+      `💰 *Harga Penawaran:* ${fmtRp(sellingPrice)}${eta}` +
+      notes +
+      `\n\nSilakan hubungi tim kami untuk konfirmasi.\nNo. Order: *${order.orderNumber}*`;
+    await sendWhatsApp(order.phone, waMsg).then(() => { waSent = true; }).catch(() => {});
+  }
+
+  await logActivity(rfqId, "admin", "Admin", "admin_send_customer_quote",
+    `Admin kirim penawaran ke customer ${order.customerName}: ${fmtRp(sellingPrice)}${waSent ? " — WA terkirim" : ""}`);
+
+  return res.json({
+    ok: true,
+    rfqId,
+    rfqNumber: rfq.rfqNumber,
+    customerName: order.customerName,
+    sellingPrice,
+    waSent,
+  });
 });
 
 // ─── ADMIN: GET /rfq/by-order/:orderId ────────────────────────────────────────
