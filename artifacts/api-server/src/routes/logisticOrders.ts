@@ -16,7 +16,9 @@ import { requireClerkUser } from "../lib/requireAdmin.js";
 import { resolveCompanyId } from "../lib/resolveCompany.js";
 import { requirePortalAdmin } from "../lib/supabaseAuth.js";
 import { sendLogisticOrderNotification } from "../lib/orderNotification";
-import { autoCreateRfqAndNotifyVendors } from "./logisticRfq";
+// [FLOW BARU] autoCreateRfqAndNotifyVendors dinonaktifkan — vendor tidak boleh dihubungi langsung saat order dibuat.
+// Admin harus review dulu via /bizportal/logistics/rfq sebelum blast ke vendor.
+// import { autoCreateRfqAndNotifyVendors } from "./logisticRfq";
 import { sendWhatsApp } from "../lib/fonnte";
 import { saveAndBroadcast } from "../lib/notificationStore";
 import {
@@ -231,24 +233,9 @@ sendLogisticOrderNotification({
     req.log.error({ err }, "sendLogisticOrderNotification failed");
   });
 
-  // Fire-and-forget: auto-create RFQ + send WA to matching vendors with quote form link
-  autoCreateRfqAndNotifyVendors(order.id, {
-    orderNumber,
-    shipmentType: body.shipmentType,
-    origin: body.origin,
-    destination: body.destination,
-    commodity: body.commodity ?? null,
-    cargoDescription: body.cargoDescription ?? null,
-    grossWeight: body.grossWeight != null ? Number(body.grossWeight) : null,
-    volumeCbm: body.volumeCbm != null ? Number(body.volumeCbm) : null,
-    requiredDate: body.requiredDate ?? null,
-    notes: body.notes ?? null,
-    jamOrder: body.jamOrder ?? null,
-    vehicleType,
-    createdAt: order.createdAt,
-  }).catch((err: unknown) => {
-    req.log.error({ err }, "autoCreateRfqAndNotifyVendors failed");
-  });
+  // [FLOW BARU] Auto-blast ke vendor DINONAKTIFKAN.
+  // Order masuk → status admin_review → Admin review → Admin blast ke vendor.
+  // RFQ dibuat manual oleh admin via POST /api/logistic/rfq/create-from-order/:orderId
 
   saveAndBroadcast("new_logistic_order", {
     type: "logistic",

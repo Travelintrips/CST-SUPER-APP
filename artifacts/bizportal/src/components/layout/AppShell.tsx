@@ -62,6 +62,7 @@ import {
   Eye,
   EyeOff,
   SlidersHorizontal,
+  Send,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -347,6 +348,7 @@ export function AppShell({ children }: AppShellProps) {
         { titleKey: "freightForwarding", href: "/logistics/freight", icon: Ship, companyCodes: ["CST"] },
         { titleKey: "Balasan Quotation WA", href: "/logistics/quotation-reply", icon: MessageCircle, companyCodes: ["CST"] },
         { titleKey: "Performa Driver", href: "/logistics/driver-performance", icon: BarChart2, companyCodes: ["CST"] },
+        { titleKey: "RFQ Vendor", href: "/logistics/rfq", icon: Send, companyCodes: ["CST"] },
         { titleKey: "Request Quote", href: "/logistics/quote-requests", icon: FileText, companyCodes: ["CST"] },
         { titleKey: "portalOrders", href: "/logistics/portal-orders", icon: ClipboardList, companyCodes: ["CST"] },
         { titleKey: "Pelanggan Portal", href: "/portal/customers", icon: Users },

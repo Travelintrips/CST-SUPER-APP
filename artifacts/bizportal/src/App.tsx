@@ -81,6 +81,8 @@ import PortalCustomersPage from "@/pages/portal-customers";
 import LogisticsQuotationReplyPage from "@/pages/logistics-quotation-reply";
 import LogisticsVendorQuotePage from "@/pages/logistics-vendor-quote";
 import LogisticsRfqComparisonPage from "@/pages/logistics-rfq-comparison"; // [NEW-RFQ-FLOW]
+import LogisticsRfqListPage from "@/pages/logistics-rfq-list"; // [NEW-RFQ-FLOW]
+import LogisticsRfqDetailPage from "@/pages/logistics-rfq-detail"; // [NEW-RFQ-FLOW]
 import LogisticOrderDetailPage from "@/pages/logistics/order-detail";
 import HoldingPage from "@/pages/HoldingPage";
 import HoldingDashboardPage from "@/pages/accounting/holding-dashboard";
@@ -316,7 +318,9 @@ function Router() {
         <Route path="/logistics/vendors" component={() => <ProtectedRoute component={LogisticsVendorsPage} />} />
         <Route path="/logistics/quotation-reply/:token" component={LogisticsQuotationReplyPage} />
         <Route path="/logistics/vendor-quote/:token" component={LogisticsVendorQuotePage} />
-        <Route path="/logistics/rfq/:rfqId/comparison" component={() => <ProtectedRoute component={LogisticsRfqComparisonPage} />} />  {/* [NEW-RFQ-FLOW] */}
+        <Route path="/logistics/rfq" component={() => <ProtectedRoute component={LogisticsRfqListPage} />} />
+        <Route path="/logistics/rfq/:rfqId/detail" component={() => <ProtectedRoute component={LogisticsRfqDetailPage} />} />
+        <Route path="/logistics/rfq/:rfqId/comparison" component={() => <ProtectedRoute component={LogisticsRfqComparisonPage} />} />
         <Route path="/logistics/orders/:orderId" component={() => <ProtectedRoute component={LogisticOrderDetailPage} />} />
         <Route path="/portal-product-orders" component={() => <ProtectedRoute component={PortalProductOrdersPage} />} />
         <Route path="/portal/onboarding-approvals" component={() => <ProtectedRoute component={PortalOnboardingApprovalsPage} />} />

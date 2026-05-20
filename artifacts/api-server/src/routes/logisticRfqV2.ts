@@ -58,6 +58,37 @@ db.execute(sql`
   )
 `).catch((e: unknown) => logger.warn({ e }, "rfq_activity_logs migration warn"));
 
+// Migrate RFQ status: rename 'open' default → support new status values
+// Valid status: admin_review | vendor_blasted | vendor_selected | customer_quoted
+//               customer_approved | customer_revision_requested | customer_rejected | closed
+db.execute(sql`
+  DO $$
+  BEGIN
+    -- Add response_deadline if missing (older schema)
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_name='logistic_order_rfqs' AND column_name='response_deadline'
+    ) THEN
+      ALTER TABLE logistic_order_rfqs ADD COLUMN response_deadline TIMESTAMPTZ;
+    END IF;
+
+    -- Add basic_price to rfq for initial admin estimate
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_name='logistic_order_rfqs' AND column_name='basic_price'
+    ) THEN
+      ALTER TABLE logistic_order_rfqs ADD COLUMN basic_price NUMERIC(14,2);
+    END IF;
+
+    -- Rename any 'open' status rows to 'admin_review' (migration)
+    UPDATE logistic_order_rfqs SET status = 'admin_review'
+      WHERE status = 'open';
+
+    -- Change default for new rows
+    ALTER TABLE logistic_order_rfqs ALTER COLUMN status SET DEFAULT 'admin_review';
+  END $$;
+`).catch((e: unknown) => logger.warn({ e }, "rfq status migration warn"));
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function getVendorFormUrl(token: string): string {
   const domain = getPreferredDomain();
@@ -154,6 +185,123 @@ async function sendAdminRecapWa(rfqId: number, rfq: { rfqNumber: string; orderId
     logger.error({ e }, "sendAdminRecapWa failed")
   );
 }
+
+// ─── ADMIN: GET /rfq/list ─────────────────────────────────────────────────────
+// Daftar semua RFQ untuk admin dashboard, diurutkan terbaru dulu
+logisticRfqV2Router.get("/rfq/list", async (req: Request, res: Response) => {
+  if (!(await requireClerkUser(req, res))) return;
+
+  const { status, limit = "50", offset = "0" } = req.query as Record<string, string>;
+
+  let query = db
+    .select({
+      rfqId: logisticOrderRfqsTable.id,
+      rfqNumber: logisticOrderRfqsTable.rfqNumber,
+      rfqStatus: logisticOrderRfqsTable.status,
+      responseDeadline: logisticOrderRfqsTable.responseDeadline,
+      createdAt: logisticOrderRfqsTable.createdAt,
+      orderId: logisticOrdersTable.id,
+      orderNumber: logisticOrdersTable.orderNumber,
+      customerName: logisticOrdersTable.customerName,
+      serviceType: logisticOrdersTable.shipmentType,
+      origin: logisticOrdersTable.origin,
+      destination: logisticOrdersTable.destination,
+    })
+    .from(logisticOrderRfqsTable)
+    .innerJoin(logisticOrdersTable, eq(logisticOrderRfqsTable.orderId, logisticOrdersTable.id))
+    .orderBy(sql`${logisticOrderRfqsTable.createdAt} DESC`)
+    .limit(Math.min(Number(limit) || 50, 200))
+    .offset(Number(offset) || 0);
+
+  if (status) {
+    (query as any).where(eq(logisticOrderRfqsTable.status, status));
+  }
+
+  const rows = await query;
+
+  // Attach vendor link stats per RFQ
+  const rfqIds = rows.map((r) => r.rfqId);
+  const allLinks = rfqIds.length
+    ? await db.select({ rfqId: rfqVendorLinksTable.rfqId, status: rfqVendorLinksTable.status })
+        .from(rfqVendorLinksTable).where(inArray(rfqVendorLinksTable.rfqId, rfqIds))
+    : [];
+
+  const linksByRfq = new Map<number, typeof allLinks>();
+  for (const l of allLinks) {
+    if (!linksByRfq.has(l.rfqId)) linksByRfq.set(l.rfqId, []);
+    linksByRfq.get(l.rfqId)!.push(l);
+  }
+
+  const result = rows.map((r) => {
+    const links = linksByRfq.get(r.rfqId) ?? [];
+    return {
+      ...r,
+      responseDeadline: r.responseDeadline?.toISOString() ?? null,
+      createdAt: r.createdAt.toISOString(),
+      comparisonUrl: `/logistics/rfq/${r.rfqId}/comparison`,
+      vendorStats: {
+        total: links.length,
+        waiting: links.filter((l) => l.status === "waiting_response").length,
+        answered: links.filter((l) => ["accepted_basic_price", "counter_offer", "selected", "not_selected", "late_response"].includes(l.status)).length,
+        rejected: links.filter((l) => l.status === "rejected").length,
+        expired: links.filter((l) => l.status === "expired").length,
+      },
+    };
+  });
+
+  return res.json(result);
+});
+
+// ─── ADMIN: POST /rfq/create-from-order/:orderId ──────────────────────────────
+// Buat RFQ baru dari order yang sudah ada, status awal = admin_review
+logisticRfqV2Router.post("/rfq/create-from-order/:orderId", async (req: Request, res: Response) => {
+  if (!(await requireClerkUser(req, res))) return;
+  const orderId = parseInt(req.params.orderId, 10);
+  if (isNaN(orderId)) return res.status(400).json({ message: "orderId tidak valid" });
+
+  const [order] = await db.select().from(logisticOrdersTable).where(eq(logisticOrdersTable.id, orderId));
+  if (!order) return res.status(404).json({ message: "Order tidak ditemukan" });
+
+  const { notes, responseDeadlineHours, basicPrice } = req.body as {
+    notes?: string;
+    responseDeadlineHours?: number;
+    basicPrice?: number;
+  };
+
+  // Generate RFQ number
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  const rand = Math.floor(Math.random() * 9000) + 1000;
+  const rfqNumber = `RFQ/${y}${m}${d}/${rand}`;
+
+  const responseDeadline = responseDeadlineHours
+    ? new Date(Date.now() + responseDeadlineHours * 60 * 60 * 1000)
+    : null;
+
+  const [rfq] = await db.insert(logisticOrderRfqsTable).values({
+    orderId,
+    rfqNumber,
+    status: "admin_review",
+    notes: notes ?? null,
+    responseDeadline: responseDeadline ?? undefined,
+  }).returning();
+
+  const user = (req as any).user;
+  await logActivity(rfq.id, "admin", user?.name ?? "Admin", "rfq_created",
+    `RFQ ${rfqNumber} dibuat oleh admin untuk order ${order.orderNumber}`);
+
+  return res.status(201).json({
+    rfqId: rfq.id,
+    rfqNumber: rfq.rfqNumber,
+    status: rfq.status,
+    orderId,
+    orderNumber: order.orderNumber,
+    customerName: order.customerName,
+    comparisonUrl: getComparisonUrl(rfq.id),
+  });
+});
 
 // ─── PUBLIC: GET /vendor-form/:token ─────────────────────────────────────────
 logisticRfqV2Router.get("/vendor-form/:token", async (req: Request, res: Response) => {
@@ -395,7 +543,11 @@ logisticRfqV2Router.post("/rfq/:rfqId/blast", async (req: Request, res: Response
   }
 
   const newVendorIds = [...new Set([...(Array.isArray(rfq.vendorIds) ? rfq.vendorIds as number[] : []), ...eligible.map((v) => v.id)])];
-  await db.update(logisticOrderRfqsTable).set({ vendorIds: newVendorIds }).where(eq(logisticOrderRfqsTable.id, rfqId));
+  await db.update(logisticOrderRfqsTable).set({
+    vendorIds: newVendorIds,
+    status: "vendor_blasted",
+    responseDeadline: expiredAt,
+  }).where(eq(logisticOrderRfqsTable.id, rfqId));
 
   const sentCount = results.filter((r) => r.sent).length;
   await logActivity(rfqId, "admin", "Admin", "admin_blast", `Admin blast ke ${sentCount} vendor: ${eligible.map((v) => v.name).join(", ")}`);
