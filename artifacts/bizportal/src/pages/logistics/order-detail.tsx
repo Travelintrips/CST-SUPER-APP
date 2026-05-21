@@ -15,10 +15,13 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { Switch } from "@/components/ui/switch";
 import {
   ArrowLeft, Loader2, Copy, ExternalLink, Plus, RefreshCw, Send,
-  Package, Truck, User, ClipboardList, Clock,
+  Package, Truck, User, ClipboardList, Clock, ShieldAlert, Ship,
 } from "lucide-react";
+import { Link } from "wouter";
+import GpsTrackingPanel from "@/components/logistics/GpsTrackingPanel";
 
 const idr = (n: number | string | null | undefined) =>
   n == null ? "—" : `Rp ${Math.round(Number(n)).toLocaleString("id-ID")}`;
@@ -54,11 +57,19 @@ type TaskLink = { id: number; token: string; roleType: string; label: string | n
 type CustomerLink = { id: number; token: string; status: string; trackUrl: string; createdAt: string };
 type QuoteLink = { id: number; token: string; status: string; quoteUrl: string; finalCustomerPrice: string | null; etaFinal: string | null; createdAt: string };
 
+type FreightShipmentLink = {
+  id: number; shipmentNumber: string; status: string;
+  origin: string; destination: string; shipperName: string;
+  approvedVendorName: string | null; createdAt: string;
+  rfqId: number; rfqNumber: string;
+};
+
 type DetailData = {
   order: Order; vendor: Vendor;
   updates: OrderUpdate[];
   taskLinks: TaskLink[]; customerLinks: CustomerLink[]; quoteLinks: QuoteLink[];
   rfqs: { id: number; rfqNumber: string; status: string }[];
+  freightShipments: FreightShipmentLink[];
 };
 
 const ORDER_STATUSES = [
@@ -356,7 +367,7 @@ export default function LogisticOrderDetailPage() {
     );
   }
 
-  const { order, vendor, updates, taskLinks, customerLinks, quoteLinks, rfqs } = data;
+  const { order, vendor, updates, taskLinks, customerLinks, quoteLinks, rfqs, freightShipments = [] } = data;
   const activeRfqId = rfqs.find(r => r.status === "vendor_selected" || r.status === "open")?.id ?? rfqs[0]?.id ?? null;
   const hasVendorSelected = !!order.approvedVendorId;
   const quoteStatus = order.customerQuoteStatus;
@@ -538,6 +549,77 @@ export default function LogisticOrderDetailPage() {
                 </CardContent>
               </Card>
             )}
+
+            {/* Freight Shipments */}
+            {freightShipments.length > 0 && (
+              <Card className="border-teal-200">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm font-semibold text-teal-700 uppercase tracking-wide flex items-center gap-1.5">
+                    <Ship className="w-4 h-4" /> Freight Shipments
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {freightShipments.map(fs => {
+                    const FREIGHT_STATUS_COLORS: Record<string, string> = {
+                      draft: "bg-slate-100 text-slate-600",
+                      rfq_sent: "bg-amber-100 text-amber-700",
+                      confirmed: "bg-blue-100 text-blue-700",
+                      in_transit: "bg-indigo-100 text-indigo-700",
+                      completed: "bg-emerald-100 text-emerald-800",
+                      cancelled: "bg-red-100 text-red-700",
+                    };
+                    const FREIGHT_STATUS_LABELS: Record<string, string> = {
+                      draft: "Draft",
+                      rfq_sent: "RFQ Dikirim",
+                      confirmed: "Dikonfirmasi",
+                      in_transit: "Dalam Perjalanan",
+                      completed: "Selesai",
+                      cancelled: "Dibatalkan",
+                    };
+                    return (
+                      <div key={fs.id} className="rounded-lg border border-teal-100 bg-teal-50/40 p-3 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="font-mono font-semibold text-sm text-teal-800 truncate">{fs.shipmentNumber}</span>
+                            <Badge className={`text-xs ${FREIGHT_STATUS_COLORS[fs.status] ?? "bg-slate-100 text-slate-600"}`}>
+                              {FREIGHT_STATUS_LABELS[fs.status] ?? fs.status}
+                            </Badge>
+                          </div>
+                          <Link href={`/logistics/freight/${fs.id}`}>
+                            <Button variant="outline" size="sm" className="h-7 text-xs shrink-0 border-teal-300 text-teal-700 hover:bg-teal-50">
+                              <ExternalLink className="h-3 w-3 mr-1" />
+                              Detail
+                            </Button>
+                          </Link>
+                        </div>
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-slate-600">
+                          <div>
+                            <span className="text-slate-400">Rute</span>
+                            <p className="font-medium">{fs.origin} → {fs.destination}</p>
+                          </div>
+                          {fs.approvedVendorName && (
+                            <div>
+                              <span className="text-slate-400">Vendor</span>
+                              <p className="font-medium text-teal-700">{fs.approvedVendorName}</p>
+                            </div>
+                          )}
+                          <div>
+                            <span className="text-slate-400">Dari RFQ</span>
+                            <Link href={`/logistics/rfq/${fs.rfqId}/comparison`}>
+                              <span className="font-mono text-teal-600 hover:underline cursor-pointer">{fs.rfqNumber}</span>
+                            </Link>
+                          </div>
+                          <div>
+                            <span className="text-slate-400">Dibuat</span>
+                            <p className="font-medium">{dt(fs.createdAt)}</p>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </CardContent>
+              </Card>
+            )}
           </div>
 
           {/* Right: Timeline */}
@@ -579,6 +661,9 @@ export default function LogisticOrderDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* GPS Tracking Panel — full width below main grid */}
+      <GpsTrackingPanel orderId={orderId} orderNumber={order.orderNumber} />
     </AppShell>
   );
 }

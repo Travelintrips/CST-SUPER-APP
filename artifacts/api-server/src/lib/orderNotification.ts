@@ -96,6 +96,8 @@ function isFreightWithDimensions(shipmentType: string): boolean {
 
 function buildAdminWaMessage(order: LogisticOrderData): string {
   const approveUrl = getApproveFormUrl(order.orderNumber);
+  const domain = getPreferredDomain() || "cstlogistic.co.id";
+  const bizportalUrl = `https://${domain}/bizportal/logistics/orders/${order.id}`;
   const tgl = order.createdAt ? formatTanggal(order.createdAt) : "";
   const jam = order.jamOrder ?? (order.createdAt ? formatJam(order.createdAt) : "");
   return (
@@ -119,7 +121,9 @@ function buildAdminWaMessage(order: LogisticOrderData): string {
     (order.requiredDate ? `Tgl Kirim       : ${order.requiredDate}\n` : ``) +
     (order.notes ? `Catatan         : ${order.notes}\n` : ``) +
     `━━━━━━━━━━━━━━━━━━\n` +
-    (approveUrl ? `📋 *Lihat penawaran vendor:*\n${approveUrl}\n\n` : ``) +
+    `⚡ *Aksi Cepat Admin:*\n` +
+    (approveUrl ? `📋 Penawaran vendor → ${approveUrl}\n` : ``) +
+    `🖥️ Buka BizPortal → ${bizportalUrl}\n\n` +
     `_Dikirim: ${nowWIB()}_`
   );
 }
@@ -127,6 +131,7 @@ function buildAdminWaMessage(order: LogisticOrderData): string {
 function buildVendorWaMessage(order: LogisticOrderData, vendorName: string): string {
   const tgl = order.createdAt ? formatTanggal(order.createdAt) : "";
   const jam = order.jamOrder ?? (order.createdAt ? formatJam(order.createdAt) : "");
+  const responseUrl = getVendorResponseUrl(order.orderNumber);
   return (
     `📦 *PERMINTAAN ORDER BARU — CST LOGISTICS*\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
@@ -145,17 +150,15 @@ function buildVendorWaMessage(order: LogisticOrderData, vendorName: string): str
     `Layanan         :\n${order.serviceList}\n` +
     (order.notes ? `Catatan         : ${order.notes}\n` : ``) +
     `━━━━━━━━━━━━━━━━━━━━\n` +
-    `✏️ *DRAFT BALASAN — tinggal copy, isi harga, lalu kirim:*\n\n` +
-    `📌 *Kirim penawaran harga:*\n` +
-    `\`${order.orderNumber} [HARGA] [TGL_PICKUP] [TGL_KIRIM]\`\n\n` +
-    `_Contoh:_\n` +
-    `\`${order.orderNumber} 5500000 20-Mei 25-Mei\`\n\n` +
-    `📌 *Terima pesanan (tanpa harga dulu):*\n` +
-    `\`TERIMA ${order.orderNumber}\`\n\n` +
-    `📌 *Tolak pesanan:*\n` +
-    `\`TOLAK ${order.orderNumber}\`\n\n` +
-    `_Balas pesan ini langsung dengan salah satu format di atas._\n` +
-    `Terima kasih 🙏\n\n` +
+    `🔗 *Aksi Cepat (klik link):*\n` +
+    `✅ Terima  → ${responseUrl}?action=accept\n` +
+    `❌ Tolak   → ${responseUrl}?action=reject\n` +
+    `💬 Form    → ${responseUrl}\n\n` +
+    `✏️ *Atau balas WA dengan format:*\n` +
+    `📌 Harga: \`${order.orderNumber} [HARGA] [TGL_PICKUP]\`\n` +
+    `📌 Terima: \`TERIMA ${order.orderNumber}\`\n` +
+    `📌 Tolak:  \`TOLAK ${order.orderNumber}\`\n\n` +
+    `Terima kasih 🙏\n` +
     `_Dikirim: ${nowWIB()}_`
   );
 }

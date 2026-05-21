@@ -18,6 +18,7 @@ import {
   ArrowLeft, RefreshCw, Star, CheckCircle, XCircle, MessageCircle,
   Clock, Users, TrendingDown, ExternalLink, Copy, AlertCircle, Loader2,
   Send, Phone, DollarSign, Eye, ThumbsUp, ThumbsDown, RotateCcw, Lock,
+  Package, ExternalLink as LinkIcon,
 } from "lucide-react";
 
 const idr = (n: number | null | undefined) =>
@@ -131,6 +132,7 @@ interface ComparisonData {
   quotedAt: string | null;
   quoteNotes: string | null;
   finalSellingPrice: number | null;
+  freightShipmentId: number | null;
   stats: {
     total: number; answered: number; pending: number;
     rejected: number; counterOffer: number; expired: number; selected: number;
@@ -156,6 +158,8 @@ export default function LogisticsRfqComparisonPage() {
   const [quotePrice, setQuotePrice] = useState("");
   const [quoteNotes, setQuoteNotes] = useState("");
   const [quoteSendWa, setQuoteSendWa] = useState(true);
+
+  const [freightConfirmDialog, setFreightConfirmDialog] = useState(false);
 
   const { data, isLoading, refetch } = useQuery<ComparisonData>({
     queryKey: ["rfq-comparison", rfqId],
@@ -207,6 +211,29 @@ export default function LogisticsRfqComparisonPage() {
       setQuoteDialog(false);
       qc.invalidateQueries({ queryKey: ["rfq-comparison", rfqId] });
       qc.invalidateQueries({ queryKey: ["rfq-list"] });
+    },
+    onError: (e: Error) => toast({ title: "Gagal", description: e.message, variant: "destructive" }),
+  });
+
+  const createFreightMut = useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`/api/logistic/rfq/${rfqId}/create-freight-shipment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.message ?? "Gagal membuat freight shipment");
+      return d as { ok: boolean; shipmentId: number; shipmentNumber?: string; alreadyExists?: boolean };
+    },
+    onSuccess: (d) => {
+      setFreightConfirmDialog(false);
+      if (d.alreadyExists) {
+        toast({ title: "Freight sudah ada", description: `Navigasi ke shipment #${d.shipmentId}` });
+      } else {
+        toast({ title: "Freight Shipment Dibuat!", description: `${d.shipmentNumber} berhasil dibuat dari RFQ ini` });
+      }
+      qc.invalidateQueries({ queryKey: ["rfq-comparison", rfqId] });
+      navigate(`/logistics/freight/${d.shipmentId}`);
     },
     onError: (e: Error) => toast({ title: "Gagal", description: e.message, variant: "destructive" }),
   });
@@ -283,6 +310,10 @@ export default function LogisticsRfqComparisonPage() {
   const isClosed = data.rfqStatus === "closed";
   const canSendQuote = ["vendor_selected", "customer_revision_requested"].includes(data.rfqStatus);
   const canClose = ["customer_approved", "customer_rejected", "customer_quoted"].includes(data.rfqStatus);
+  const canCreateFreight = (isCustomerApproved || isClosed) && !data.freightShipmentId;
+  const freightAlreadyCreated = !!data.freightShipmentId;
+
+  const selectedVendorForFreight = data.vendors.find((v) => v.status === "selected");
 
   // Pre-fill harga jual saat buka dialog
   const openQuoteDialog = () => {
@@ -340,32 +371,82 @@ export default function LogisticsRfqComparisonPage() {
 
         {/* Banner: RFQ sudah ditutup */}
         {isClosed && (
-          <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 flex items-center gap-3">
-            <Lock className="w-4 h-4 text-gray-500 flex-shrink-0" />
-            <div className="text-sm text-gray-600">
-              <span className="font-semibold text-gray-800">RFQ telah ditutup.</span>{" "}
-              Semua aktivitas untuk RFQ ini sudah selesai.
+          <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <Lock className="w-4 h-4 text-gray-500 flex-shrink-0" />
+              <div className="text-sm text-gray-600">
+                <span className="font-semibold text-gray-800">RFQ telah ditutup.</span>{" "}
+                Semua aktivitas untuk RFQ ini sudah selesai.
+              </div>
             </div>
+            {freightAlreadyCreated ? (
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-xs border-blue-300 text-blue-700 hover:bg-blue-50"
+                onClick={() => navigate(`/logistics/freight/${data.freightShipmentId}`)}
+              >
+                <Package className="w-3.5 h-3.5 mr-1" />
+                Lihat Freight Shipment
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-xs border-teal-300 text-teal-700 hover:bg-teal-50"
+                onClick={() => setFreightConfirmDialog(true)}
+                disabled={createFreightMut.isPending}
+              >
+                {createFreightMut.isPending
+                  ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
+                  : <Package className="w-3.5 h-3.5 mr-1" />}
+                Buat Freight Shipment
+              </Button>
+            )}
           </div>
         )}
 
         {/* Banner: customer approved */}
         {isCustomerApproved && (
-          <div className="bg-green-50 border border-green-200 rounded-xl p-4 space-y-2">
+          <div className="bg-green-50 border border-green-200 rounded-xl p-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-2 text-green-800 font-semibold text-sm">
                 <ThumbsUp className="w-4 h-4 flex-shrink-0" />
                 Customer menyetujui penawaran ini
               </div>
-              <Button
-                size="sm"
-                className="text-xs bg-green-700 hover:bg-green-800 text-white"
-                onClick={() => closeMut.mutate("Customer approved")}
-                disabled={closeMut.isPending}
-              >
-                {closeMut.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Lock className="w-3.5 h-3.5 mr-1" />}
-                Tutup & Proses Order
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                {freightAlreadyCreated ? (
+                  <Button
+                    size="sm"
+                    className="text-xs bg-blue-600 hover:bg-blue-700 text-white"
+                    onClick={() => navigate(`/logistics/freight/${data.freightShipmentId}`)}
+                  >
+                    <Package className="w-3.5 h-3.5 mr-1" />
+                    Lihat Freight Shipment
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    className="text-xs bg-teal-600 hover:bg-teal-700 text-white"
+                    onClick={() => setFreightConfirmDialog(true)}
+                    disabled={createFreightMut.isPending}
+                  >
+                    {createFreightMut.isPending
+                      ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
+                      : <Package className="w-3.5 h-3.5 mr-1" />}
+                    Buat Freight Shipment
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  className="text-xs bg-green-700 hover:bg-green-800 text-white"
+                  onClick={() => closeMut.mutate("Customer approved")}
+                  disabled={closeMut.isPending}
+                >
+                  {closeMut.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Lock className="w-3.5 h-3.5 mr-1" />}
+                  Tutup RFQ
+                </Button>
+              </div>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-1 text-xs text-green-900">
               <span><span className="text-green-600">Harga Disetujui:</span> <strong>{idr(data.quotedPrice)}</strong></span>
@@ -519,6 +600,86 @@ export default function LogisticsRfqComparisonPage() {
           </div>
         </div>
       </div>
+
+      {/* Dialog: Buat Freight Shipment */}
+      <Dialog open={freightConfirmDialog} onOpenChange={(o) => !o && setFreightConfirmDialog(false)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Package className="w-4 h-4 text-teal-600" />
+              Buat Freight Shipment Otomatis
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-1 text-sm">
+            <p className="text-gray-600">
+              Freight Shipment baru akan dibuat secara otomatis dengan data berikut dari RFQ ini:
+            </p>
+            <div className="bg-muted/40 rounded-lg p-3 space-y-2">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+                <div>
+                  <p className="text-muted-foreground">Pengirim (Shipper)</p>
+                  <p className="font-medium text-gray-800">{data.customerName}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Layanan</p>
+                  <p className="font-medium text-gray-800">{data.serviceType}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Rute</p>
+                  <p className="font-medium text-gray-800">{data.origin} → {data.destination}</p>
+                </div>
+                {data.commodity && (
+                  <div>
+                    <p className="text-muted-foreground">Komoditi</p>
+                    <p className="font-medium text-gray-800">{data.commodity}</p>
+                  </div>
+                )}
+                {selectedVendorForFreight && (
+                  <div>
+                    <p className="text-muted-foreground">Vendor Terpilih</p>
+                    <p className="font-medium text-teal-700">{selectedVendorForFreight.vendorName}</p>
+                  </div>
+                )}
+                {selectedVendorForFreight && (
+                  <div>
+                    <p className="text-muted-foreground">Harga Vendor</p>
+                    <p className="font-medium text-gray-800">
+                      {idr(selectedVendorForFreight.offeredPrice ?? selectedVendorForFreight.basicPrice)}
+                    </p>
+                  </div>
+                )}
+                {data.quotedPrice && (
+                  <div>
+                    <p className="text-muted-foreground">Harga Jual ke Customer</p>
+                    <p className="font-medium text-green-700">{idr(data.quotedPrice)}</p>
+                  </div>
+                )}
+                {selectedVendorForFreight?.eta && (
+                  <div>
+                    <p className="text-muted-foreground">ETA Vendor</p>
+                    <p className="font-medium text-gray-800">{selectedVendorForFreight.eta}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Setelah dibuat, Anda akan diarahkan ke halaman detail Freight Shipment untuk melengkapi data seperti vessel, B/L, dan dokumen lainnya.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setFreightConfirmDialog(false)}>Batal</Button>
+            <Button
+              className="bg-teal-600 hover:bg-teal-700"
+              onClick={() => createFreightMut.mutate()}
+              disabled={createFreightMut.isPending}
+            >
+              {createFreightMut.isPending
+                ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Membuat...</>
+                : <><Package className="w-4 h-4 mr-1.5" />Buat Freight Sekarang</>}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Select vendor dialog */}
       <Dialog open={!!selectDialog} onOpenChange={(o) => !o && setSelectDialog(null)}>

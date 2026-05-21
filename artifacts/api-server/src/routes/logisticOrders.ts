@@ -10,6 +10,7 @@ import {
   driverJobLogsTable,
   driverPhotosTable,
   logisticOrderRfqsTable,
+  driverLocationsTable,
 } from "@workspace/db";
 import { eq, ilike, and, gte, lte, or, sql, desc, inArray, isNotNull } from "drizzle-orm";
 import { salesDocumentsTable } from "@workspace/db";
@@ -486,10 +487,41 @@ logisticOrdersRouter.get("/", async (req: Request, res: Response) => {
     }
   }
 
+  // Attach latest RFQ info (including freight_shipment_id via raw SQL)
+  const rfqMap = new Map<number, {
+    rfqId: number; rfqNumber: string; rfqStatus: string;
+    freightShipmentId: number | null; freightShipmentNumber: string | null;
+  }>();
+  if (orderIds.length > 0) {
+    const rfqRows = await db.execute(sql`
+      SELECT DISTINCT ON (r.order_id)
+        r.order_id AS "orderId",
+        r.id AS "rfqId",
+        r.rfq_number AS "rfqNumber",
+        r.status AS "rfqStatus",
+        r.freight_shipment_id AS "freightShipmentId",
+        fs.shipment_number AS "freightShipmentNumber"
+      FROM logistic_order_rfqs r
+      LEFT JOIN freight_shipments fs ON fs.id = r.freight_shipment_id
+      WHERE r.order_id = ANY(${sql.raw(`ARRAY[${orderIds.join(",")}]::int[]`)})
+      ORDER BY r.order_id, r.created_at DESC
+    `);
+    for (const row of rfqRows as any[]) {
+      rfqMap.set(Number(row.orderId), {
+        rfqId: Number(row.rfqId),
+        rfqNumber: row.rfqNumber as string,
+        rfqStatus: row.rfqStatus as string,
+        freightShipmentId: row.freightShipmentId ? Number(row.freightShipmentId) : null,
+        freightShipmentNumber: (row.freightShipmentNumber as string) ?? null,
+      });
+    }
+  }
+
   return res.json(rows.map((row) => ({
     ...toOrder(row),
     linkedSalesDocId: linkedDocMap.get(row.id)?.id ?? null,
     linkedSalesDocNumber: linkedDocMap.get(row.id)?.docNumber ?? null,
+    latestRfq: rfqMap.get(row.id) ?? null,
   })));
 });
 
@@ -713,4 +745,39 @@ logisticOrdersRouter.delete("/:id", async (req: Request, res: Response) => {
     .returning();
   if (!deleted) return res.status(404).json({ message: "Order tidak ditemukan" });
   return res.json({ message: "Deleted", id });
+});
+
+// GET /api/logistic/orders/:id/locations — GPS history for an order (admin)
+logisticOrdersRouter.get("/:id/locations", async (req: Request, res: Response) => {
+  const id = parseInt(String(req.params["id"] ?? ""));
+  if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
+  const limit = Math.min(parseInt(String(req.query["limit"] ?? "200"), 10), 500);
+
+  const rows = await db
+    .select({
+      id: driverLocationsTable.id,
+      latitude: driverLocationsTable.latitude,
+      longitude: driverLocationsTable.longitude,
+      accuracy: driverLocationsTable.accuracy,
+      speed: driverLocationsTable.speed,
+      checkpointType: driverLocationsTable.checkpointType,
+      updatedAt: driverLocationsTable.updatedAt,
+    })
+    .from(driverLocationsTable)
+    .where(eq(driverLocationsTable.orderId, id))
+    .orderBy(driverLocationsTable.updatedAt)
+    .limit(limit);
+
+  return res.json({
+    locations: rows.map(r => ({
+      id: r.id,
+      lat: parseFloat(String(r.latitude)),
+      lng: parseFloat(String(r.longitude)),
+      accuracy: r.accuracy != null ? parseFloat(String(r.accuracy)) : null,
+      speed: r.speed != null ? parseFloat(String(r.speed)) : null,
+      checkpointType: r.checkpointType,
+      updatedAt: r.updatedAt,
+    })),
+    total: rows.length,
+  });
 });

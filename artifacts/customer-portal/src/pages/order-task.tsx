@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useParams } from "wouter";
 
 type OrderInfo = {
@@ -29,6 +29,8 @@ type TaskData = {
   availableStatuses: string[];
 };
 
+type GpsState = "idle" | "loading" | "success" | "error";
+
 const STATUS_LABELS: Record<string, string> = {
   order_confirmed: "Order Dikonfirmasi",
   assigned_to_vendor: "Ditugaskan ke Vendor",
@@ -44,6 +46,8 @@ const STATUS_LABELS: Record<string, string> = {
   cancelled: "Dibatalkan",
 };
 
+const GPS_ROLES = ["vendor", "driver", "transporter"];
+
 export default function OrderTaskPage() {
   const { token } = useParams<{ token: string }>();
   const [data, setData] = useState<TaskData | null>(null);
@@ -54,6 +58,10 @@ export default function OrderTaskPage() {
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+
+  const [gpsState, setGpsState] = useState<GpsState>("idle");
+  const [lastLocation, setLastLocation] = useState<{ lat: number; lng: number; time: string } | null>(null);
+  const [gpsError, setGpsError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -81,7 +89,6 @@ export default function OrderTaskPage() {
       const d = await res.json() as { ok?: boolean; error?: string };
       if (!res.ok) throw new Error(d.error ?? "Gagal");
       setSubmitted(true);
-      // Refresh data
       const r2 = await fetch(`/api/order-task/${token}`);
       const d2 = await r2.json() as TaskData;
       setData(d2);
@@ -92,6 +99,48 @@ export default function OrderTaskPage() {
       setSubmitting(false);
     }
   };
+
+  const handleShareLocation = useCallback(() => {
+    if (!navigator.geolocation) {
+      setGpsError("Browser tidak mendukung GPS");
+      return;
+    }
+    setGpsState("loading");
+    setGpsError(null);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const { latitude, longitude, accuracy } = pos.coords;
+        try {
+          const res = await fetch(`/api/order-task/${token}/location`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lat: latitude, lng: longitude, accuracy }),
+          });
+          const d = await res.json() as { ok?: boolean; error?: string };
+          if (!res.ok) throw new Error(d.error ?? "Gagal kirim lokasi");
+          setGpsState("success");
+          setLastLocation({
+            lat: latitude,
+            lng: longitude,
+            time: new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }),
+          });
+        } catch (e: unknown) {
+          setGpsState("error");
+          setGpsError((e as Error).message);
+        }
+      },
+      (err) => {
+        setGpsState("error");
+        const msgs: Record<number, string> = {
+          1: "Akses lokasi ditolak. Izinkan GPS di browser.",
+          2: "Lokasi tidak tersedia.",
+          3: "Timeout mendapatkan lokasi.",
+        };
+        setGpsError(msgs[err.code] ?? "Gagal mendapatkan lokasi");
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+  }, [token]);
 
   if (loading) return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center">
@@ -111,6 +160,7 @@ export default function OrderTaskPage() {
   if (!data) return null;
 
   const { order } = data;
+  const showGps = GPS_ROLES.includes(data.roleType?.toLowerCase());
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50 py-8 px-4">
@@ -137,6 +187,50 @@ export default function OrderTaskPage() {
             <p className="text-xs text-slate-500 mt-2">📦 {order.cargoDetail}</p>
           )}
         </div>
+
+        {/* GPS Location Panel */}
+        {showGps && (
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5">
+            <h2 className="font-semibold text-slate-800 mb-3">📍 Kirim Lokasi GPS</h2>
+            <p className="text-xs text-slate-500 mb-3">
+              Bagikan posisi Anda saat ini agar admin dapat memantau perjalanan secara real-time.
+            </p>
+            <button
+              type="button"
+              onClick={handleShareLocation}
+              disabled={gpsState === "loading"}
+              className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2"
+            >
+              {gpsState === "loading" ? (
+                <>
+                  <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  Mendapatkan lokasi...
+                </>
+              ) : (
+                <>📡 {gpsState === "success" ? "Kirim Ulang Lokasi" : "Kirim Lokasi Sekarang"}</>
+              )}
+            </button>
+            {gpsState === "success" && lastLocation && (
+              <div className="mt-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+                ✅ Lokasi terkirim pukul {lastLocation.time} — ({lastLocation.lat.toFixed(5)}, {lastLocation.lng.toFixed(5)})
+                <br />
+                <a
+                  href={`https://maps.google.com/?q=${lastLocation.lat},${lastLocation.lng}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-emerald-600 underline mt-0.5 inline-block"
+                >
+                  Lihat di Google Maps
+                </a>
+              </div>
+            )}
+            {gpsError && (
+              <p className="mt-2 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                ⚠️ {gpsError}
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Update form */}
         <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 space-y-4">

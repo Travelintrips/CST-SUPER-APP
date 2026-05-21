@@ -1525,6 +1525,15 @@ export default function PosKasirAdminPage() {
                     <SelectItem value="makanan">Makanan</SelectItem>
                     <SelectItem value="topping">Topping</SelectItem>
                     <SelectItem value="paket">Paket</SelectItem>
+                    <SelectItem value="futsal">Futsal</SelectItem>
+                    <SelectItem value="badminton">Badminton</SelectItem>
+                    <SelectItem value="basket">Basket</SelectItem>
+                    <SelectItem value="gym">Gym</SelectItem>
+                    <SelectItem value="yoga">Yoga</SelectItem>
+                    <SelectItem value="aerobik">Aerobik</SelectItem>
+                    <SelectItem value="lapangan-tennis">Lapangan Tennis</SelectItem>
+                    <SelectItem value="lapangan-volley">Lapangan Volley</SelectItem>
+                    <SelectItem value="lainnya">Lainnya</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

@@ -35,11 +35,12 @@ export interface GeofenceResult {
   thresholdKm: number;
 }
 
-export async function checkGeofence(
+async function _checkGeofenceCore(
   driverLat: number,
   driverLng: number,
   pickupAddress: string | null,
   deliveryAddress: string | null,
+  thresholdKm: number,
 ): Promise<GeofenceResult | null> {
   if (!pickupAddress || !deliveryAddress) return null;
 
@@ -50,13 +51,13 @@ export async function checkGeofence(
 
   if (!pickupCoords || !deliveryCoords) return null;
 
-  const distPickup = haversineKm(driverLat, driverLng, pickupCoords.lat, pickupCoords.lng);
-  const distDelivery = haversineKm(driverLat, driverLng, deliveryCoords.lat, deliveryCoords.lng);
   const routeLen = haversineKm(pickupCoords.lat, pickupCoords.lng, deliveryCoords.lat, deliveryCoords.lng);
 
   if (routeLen < 0.5) {
+    const distPickup = haversineKm(driverLat, driverLng, pickupCoords.lat, pickupCoords.lng);
+    const distDelivery = haversineKm(driverLat, driverLng, deliveryCoords.lat, deliveryCoords.lng);
     const deviationKm = Math.min(distPickup, distDelivery);
-    return { deviated: deviationKm > DEVIATION_THRESHOLD_KM, deviationKm, pickupCoords, deliveryCoords, thresholdKm: DEVIATION_THRESHOLD_KM };
+    return { deviated: deviationKm > thresholdKm, deviationKm, pickupCoords, deliveryCoords, thresholdKm };
   }
 
   const deviationKm = pointToSegmentDistanceKm(
@@ -65,11 +66,24 @@ export async function checkGeofence(
     deliveryCoords.lat, deliveryCoords.lng,
   );
 
-  return {
-    deviated: deviationKm > DEVIATION_THRESHOLD_KM,
-    deviationKm,
-    pickupCoords,
-    deliveryCoords,
-    thresholdKm: DEVIATION_THRESHOLD_KM,
-  };
+  return { deviated: deviationKm > thresholdKm, deviationKm, pickupCoords, deliveryCoords, thresholdKm };
+}
+
+export async function checkGeofence(
+  driverLat: number,
+  driverLng: number,
+  pickupAddress: string | null,
+  deliveryAddress: string | null,
+): Promise<GeofenceResult | null> {
+  return _checkGeofenceCore(driverLat, driverLng, pickupAddress, deliveryAddress, DEVIATION_THRESHOLD_KM);
+}
+
+export async function checkGeofenceWithThreshold(
+  driverLat: number,
+  driverLng: number,
+  pickupAddress: string | null,
+  deliveryAddress: string | null,
+  thresholdKm: number,
+): Promise<GeofenceResult | null> {
+  return _checkGeofenceCore(driverLat, driverLng, pickupAddress, deliveryAddress, thresholdKm);
 }

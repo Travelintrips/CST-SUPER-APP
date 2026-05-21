@@ -10,6 +10,7 @@ import {
   logisticOrdersTable,
   suppliersTable,
   vendorCatalogItemsTable,
+  freightShipmentsTable,
 } from "@workspace/db";
 import { requireClerkUser } from "../lib/requireAdmin.js";
 import { sendWhatsApp } from "../lib/fonnte.js";
@@ -131,6 +132,12 @@ db.execute(sql`
     END IF;
   END $$;
 `).catch((e: unknown) => logger.warn({ e }, "rfq status migration warn"));
+
+// Migration: add freight_shipment_id to logistic_order_rfqs
+db.execute(sql`
+  ALTER TABLE logistic_order_rfqs
+    ADD COLUMN IF NOT EXISTS freight_shipment_id INTEGER;
+`).catch((e: unknown) => logger.warn({ e }, "rfq freight_shipment_id migration warn"));
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function getVendorFormUrl(token: string): string {
@@ -604,9 +611,19 @@ logisticRfqV2Router.get("/rfq/:rfqId/comparison", async (req: Request, res: Resp
   const rfqId = parseInt(req.params.rfqId, 10);
   if (isNaN(rfqId)) return res.status(400).json({ message: "rfqId tidak valid" });
 
+  // Use raw SQL to include freight_shipment_id added via migration
+  const rfqRows = await db.execute(sql`
+    SELECT *, freight_shipment_id FROM logistic_order_rfqs WHERE id = ${rfqId}
+  `);
+  const rfqRaw = rfqRows[0] as any;
+  if (!rfqRaw) return res.status(404).json({ message: "RFQ tidak ditemukan" });
+
   const [rfq] = await db.select().from(logisticOrderRfqsTable)
     .where(eq(logisticOrderRfqsTable.id, rfqId));
   if (!rfq) return res.status(404).json({ message: "RFQ tidak ditemukan" });
+
+  const freightShipmentId: number | null = rfqRaw.freight_shipment_id
+    ? Number(rfqRaw.freight_shipment_id) : null;
 
   const [order] = await db.select().from(logisticOrdersTable)
     .where(eq(logisticOrdersTable.id, rfq.orderId));
@@ -694,6 +711,7 @@ logisticRfqV2Router.get("/rfq/:rfqId/comparison", async (req: Request, res: Resp
     customerRespondedAt: (rfq as any).customerRespondedAt
       ? new Date((rfq as any).customerRespondedAt).toISOString() : null,
     finalSellingPrice: order?.finalSellingPrice ? Number(order.finalSellingPrice) : null,
+    freightShipmentId,
     stats,
     vendors: vendorRows,
     activities: activities.map((a) => ({
@@ -704,6 +722,108 @@ logisticRfqV2Router.get("/rfq/:rfqId/comparison", async (req: Request, res: Resp
       description: a.description,
       createdAt: a.createdAt.toISOString(),
     })),
+  });
+});
+
+// ─── ADMIN: POST /rfq/:rfqId/create-freight-shipment ─────────────────────────
+logisticRfqV2Router.post("/rfq/:rfqId/create-freight-shipment", async (req: Request, res: Response) => {
+  if (!(await requireClerkUser(req, res))) return;
+  const rfqId = parseInt(req.params.rfqId, 10);
+  if (isNaN(rfqId)) return res.status(400).json({ message: "rfqId tidak valid" });
+
+  // Load RFQ
+  const [rfqRow] = await db.execute(sql`
+    SELECT *, freight_shipment_id FROM logistic_order_rfqs WHERE id = ${rfqId}
+  `);
+  const rfq = rfqRow as any;
+  if (!rfq) return res.status(404).json({ message: "RFQ tidak ditemukan" });
+
+  // Block if status not customer_approved or closed
+  if (!["customer_approved", "closed"].includes(rfq.status)) {
+    return res.status(400).json({
+      message: `Freight hanya bisa dibuat setelah customer menyetujui penawaran. Status saat ini: ${rfq.status}`,
+    });
+  }
+
+  // If already created, return existing shipment ID
+  if (rfq.freight_shipment_id) {
+    return res.json({ ok: true, shipmentId: rfq.freight_shipment_id, alreadyExists: true });
+  }
+
+  // Load order
+  const [order] = await db.select().from(logisticOrdersTable)
+    .where(eq(logisticOrdersTable.id, rfq.order_id));
+  if (!order) return res.status(404).json({ message: "Order tidak ditemukan" });
+
+  // Load selected vendor link
+  const [selectedLink] = await db.select().from(rfqVendorLinksTable)
+    .where(and(eq(rfqVendorLinksTable.rfqId, rfqId), eq(rfqVendorLinksTable.status, "selected")))
+    .limit(1);
+
+  let vendorName: string | null = null;
+  if (selectedLink) {
+    const [vendor] = await db.select({ name: suppliersTable.name })
+      .from(suppliersTable).where(eq(suppliersTable.id, selectedLink.vendorId));
+    vendorName = vendor?.name ?? null;
+  }
+
+  // Compose notes from RFQ data
+  const vendorPrice = selectedLink
+    ? Number(selectedLink.offeredPrice ?? selectedLink.basicPrice ?? 0) || null
+    : null;
+  const quotedPrice = rfq.quoted_price ? Number(rfq.quoted_price) : null;
+  const noteLines = [
+    `Dibuat otomatis dari RFQ ${rfq.rfq_number}`,
+    `No. Order: ${order.orderNumber}`,
+    `Customer: ${order.customerName}`,
+    vendorName ? `Vendor terpilih: ${vendorName}` : null,
+    vendorPrice ? `Harga vendor: ${fmtRp(vendorPrice)}` : null,
+    quotedPrice ? `Harga jual ke customer: ${fmtRp(quotedPrice)}` : null,
+    selectedLink?.eta ? `ETA vendor: ${selectedLink.eta}` : null,
+    rfq.quote_notes ? `Catatan: ${rfq.quote_notes}` : null,
+  ].filter(Boolean).join("\n");
+
+  // Generate shipment number
+  const now = new Date();
+  const yr = now.getFullYear();
+  const seq = Date.now().toString().slice(-6);
+  const shipmentNumber = `FS/${yr}/${seq}`;
+
+  // Create freight shipment
+  const [shipment] = await db.insert(freightShipmentsTable).values({
+    shipmentNumber,
+    shipperName: order.customerName,
+    consigneeName: order.namaPenerima || order.customerName,
+    commodity: order.commodity || order.shipmentType || "General Cargo",
+    origin: order.origin,
+    destination: order.destination,
+    grossWeight: order.grossWeight ?? order.weightKg ?? null,
+    quantity: order.jumlahKoli ?? null,
+    transportMode: order.transportMode || order.shipmentType || null,
+    portOfLoading: order.originPort ?? null,
+    portOfDischarge: order.destPort ?? null,
+    approvedVendorName: vendorName,
+    actualCost: vendorPrice ? String(vendorPrice) : null,
+    notes: noteLines,
+    status: "confirmed",
+  }).returning();
+
+  // Link freight shipment back to RFQ
+  await db.execute(sql`
+    UPDATE logistic_order_rfqs SET freight_shipment_id = ${shipment!.id} WHERE id = ${rfqId}
+  `);
+
+  // Log activity
+  await logActivity(rfqId, "admin", "Admin", "admin_create_freight",
+    `Freight Shipment ${shipmentNumber} dibuat otomatis dari RFQ ini`);
+
+  logger.info({ rfqId, shipmentId: shipment!.id, shipmentNumber }, "Freight shipment created from RFQ");
+
+  return res.status(201).json({
+    ok: true,
+    shipmentId: shipment!.id,
+    shipmentNumber: shipment!.shipmentNumber,
+    alreadyExists: false,
   });
 });
 

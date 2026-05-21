@@ -1,0 +1,418 @@
+Tambahkan fitur enterprise lanjutan untuk BizPortal agar sistem menjadi logistics ERP + RFQ platform modern dengan mini form architecture.
+
+PENTING:
+- Semua flow tetap menggunakan MINI FORM TERPISAH
+- Dashboard utama hanya untuk management/admin
+- Semua mini form mobile-first, cepat, ringan, dan mudah dibuka dari WhatsApp
+
+==================================================
+1. VENDOR PERFORMANCE & RATING SYSTEM
+==================================================
+
+Tambahkan Vendor Performance System.
+
+Sistem harus menyimpan dan menghitung:
+- on-time delivery percentage
+- average response speed
+- cancel rate
+- POD upload completeness
+- ETA accuracy
+- customer complaint count
+- order success rate
+- average rating
+
+Tampilkan rating vendor di:
+- Admin Vendor Comparison
+- Vendor List
+- Order Detail
+
+Contoh tampilan:
+⭐ 4.9
+On-time: 98%
+Avg response: 12 menit
+Completed Orders: 125
+
+Tambahkan badge:
+- Top Vendor
+- Fast Response
+- Best ETA
+- Trusted Vendor
+
+Tambahkan tabel:
+vendor_performance:
+- id
+- vendor_id
+- total_orders
+- completed_orders
+- cancelled_orders
+- ontime_percentage
+- average_response_minutes
+- pod_completeness_score
+- eta_accuracy_score
+- customer_rating
+- updated_at
+
+==================================================
+2. SMART AUTO VENDOR RECOMMENDATION
+==================================================
+
+Tambahkan AI-like recommendation system untuk admin.
+
+Saat admin membuka RFQ comparison:
+- sistem otomatis menghitung vendor terbaik
+
+Faktor:
+- harga
+- ETA
+- rating vendor
+- response speed
+- cancel history
+- route experience
+
+Tampilkan:
+Recommended Vendor:
+{vendor_name}
+
+Reason:
+- Best price
+- Fastest ETA
+- Highest rating
+
+Tambahkan recommendation score:
+vendor_recommendation_score
+
+Admin tetap dapat override manual.
+
+==================================================
+3. DRIVER GPS TRACKING
+==================================================
+
+Tambahkan GPS tracking pada Driver Task Mini Form.
+
+Route:
+ /order-task/:token
+
+Driver dapat:
+- share live location
+- update lokasi otomatis
+- check-in pickup
+- check-in delivery
+
+Customer tracking page harus menampilkan:
+- current location
+- last update
+- estimated arrival
+
+Tambahkan tabel:
+driver_locations:
+- id
+- order_id
+- driver_id
+- latitude
+- longitude
+- speed
+- updated_at
+
+Tambahkan map integration jika memungkinkan.
+
+==================================================
+4. POD OCR & AUTO VERIFICATION
+==================================================
+
+Saat vendor/driver upload POD:
+- gunakan OCR untuk membaca dokumen
+
+OCR harus mencoba membaca:
+- nomor surat jalan
+- nomor order
+- tanggal
+- penerima
+- tanda tangan
+- nama perusahaan
+
+Sistem harus:
+- mencocokkan dengan order
+- memberi warning jika data tidak sesuai
+
+Tambahkan:
+pod_ocr_results:
+- id
+- order_id
+- extracted_text
+- extracted_order_number
+- extracted_date
+- extracted_receiver
+- verification_status
+- confidence_score
+- created_at
+
+Tampilkan:
+- OCR success
+- OCR failed
+- verification mismatch
+
+==================================================
+5. WHATSAPP QUICK ACTION BUTTON
+==================================================
+
+Tambahkan quick action link/button pada WhatsApp notification.
+
+Contoh customer:
+[ Approve ]
+[ Reject ]
+[ Open Tracking ]
+
+Contoh vendor:
+[ Accept Price ]
+[ Counter Offer ]
+[ Reject RFQ ]
+
+Contoh admin:
+[ Open Comparison ]
+[ Select Vendor ]
+[ Create Invoice ]
+
+WA harus mobile-friendly dan direct open ke mini form terkait.
+
+==================================================
+6. MULTI COMPANY & HOLDING SYSTEM
+==================================================
+
+Tambahkan multi-company support.
+
+Perusahaan:
+- PT Cahaya Sejati Teknologi
+- PT Wangsamas
+- PT Diva Servis
+- PT Elmira Ratu Abadi
+
+Tambahkan Holding Dashboard.
+
+RFQ/order/invoice harus memiliki:
+- company_id
+- branch_id
+
+Setiap company dapat memiliki:
+- vendor berbeda
+- margin rule berbeda
+- quotation template berbeda
+- invoice template berbeda
+- numbering berbeda
+
+Holding dashboard dapat melihat:
+- total revenue seluruh company
+- total expense
+- total margin
+- consolidated reporting
+
+Tambahkan tabel:
+companies:
+- id
+- company_name
+- logo_url
+- address
+- tax_number
+
+branches:
+- id
+- company_id
+- branch_name
+
+==================================================
+7. AUTO INVOICE & AUTO PROFIT CALCULATION
+==================================================
+
+Saat order completed:
+- sistem dapat generate invoice otomatis
+
+Invoice harus:
+- PDF professional
+- company branding
+- tax calculation
+- due date
+- payment status
+
+Tambahkan auto profit calculation:
+profit =
+customer_price - vendor_cost - operational_cost
+
+Tampilkan:
+- gross profit
+- net profit
+- margin percentage
+
+Tambahkan:
+invoices:
+- id
+- order_id
+- invoice_number
+- subtotal
+- tax
+- total
+- due_date
+- payment_status
+- pdf_url
+
+==================================================
+8. INTERNAL TASK ASSIGNMENT
+==================================================
+
+Tambahkan internal assignment.
+
+RFQ/order dapat diassign ke:
+- Sales
+- Operations
+- Warehouse
+- Customs
+- Finance
+- Customer Service
+
+Tampilkan:
+- assigned user
+- task deadline
+- task status
+
+Tambahkan:
+internal_tasks:
+- id
+- order_id
+- assigned_to
+- department
+- task_type
+- deadline
+- status
+
+==================================================
+9. CUSTOMER SELF-SERVICE PORTAL
+==================================================
+
+Buat customer portal ringan.
+
+Customer dapat:
+- lihat quotation history
+- repeat order
+- tracking order
+- lihat invoice
+- lihat payment status
+- upload document
+- download POD
+
+Customer tidak boleh melihat:
+- vendor cost
+- internal notes
+- margin
+- vendor comparison
+
+==================================================
+10. AI ASSISTANT INTERNAL
+==================================================
+
+Tambahkan AI helper internal untuk admin.
+
+Contoh command:
+- "Carikan vendor trucking termurah Jakarta-Surabaya"
+- "Vendor mana paling sering telat?"
+- "Buat RFQ baru dari order sebelumnya"
+- "Tampilkan profit bulan ini"
+- "Customer mana paling sering repeat order?"
+
+AI helper dapat membaca:
+- RFQ
+- vendor data
+- order history
+- margin
+- operational performance
+
+==================================================
+11. SMART REPEAT ORDER
+==================================================
+
+Tambahkan repeat order system.
+
+Jika customer pernah order:
+- sistem rekomendasikan route lama
+- vendor lama
+- pricing sebelumnya
+
+Tambahkan tombol:
+"Repeat Previous Order"
+
+==================================================
+12. ADVANCED NOTIFICATION CENTER
+==================================================
+
+Tambahkan notification center untuk admin.
+
+Notifikasi:
+- vendor response
+- customer approve
+- customer reject
+- pickup started
+- delivered
+- invoice overdue
+- payment received
+
+Tambahkan:
+- unread badge
+- notification grouping
+- mark as read
+- filter by RFQ/order
+
+==================================================
+13. ANALYTICS DASHBOARD
+==================================================
+
+Tambahkan analytics dashboard.
+
+Tampilkan:
+- total RFQ
+- total orders
+- approval rate
+- top vendor
+- top customer
+- profit analytics
+- response speed
+- ETA accuracy
+- operational performance
+
+==================================================
+14. SECURITY & AUDIT
+==================================================
+
+Tambahkan:
+- audit trail lengkap
+- role permission
+- action history
+- login history
+- token expiry
+- IP/device logging
+
+Semua perubahan:
+- harga
+- vendor selection
+- approval
+- invoice
+- payment
+harus tercatat di audit log.
+
+==================================================
+15. PERFORMANCE OPTIMIZATION
+==================================================
+
+Pastikan:
+- mini form ringan
+- mobile optimized
+- lazy loading
+- realtime updates
+- caching
+- no duplicate comparison forms
+- one RFQ = one comparison page
+
+Semua mini form:
+- cepat dibuka dari WhatsApp
+- tidak perlu login dashboard berat
+- fokus satu tugas saja
+- token based access
+- responsive modern UI
+
+Pastikan seluruh fitur tersinkron dengan dashboard utama BizPortal dan seluruh flow tetap modular dan scalable.

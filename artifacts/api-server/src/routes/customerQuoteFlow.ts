@@ -6,12 +6,14 @@ import {
   suppliersTable,
   customerQuoteLinksTable, customerQuoteResponsesTable,
   orderTaskLinksTable, orderUpdatesTable, customerOrderLinksTable,
+  driverLocationsTable,
 } from "@workspace/db";
 import { requireClerkUser } from "../lib/requireAdmin.js";
 import { sendWhatsApp } from "../lib/fonnte.js";
 import { getAdminWa } from "../lib/adminWa.js";
 import { getPreferredDomain } from "../lib/domain.js";
 import { logger } from "../lib/logger.js";
+import { checkOrderGeofence } from "../lib/orderGeofenceChecker.js";
 
 const tok = () => randomBytes(24).toString("hex");
 const fmtRp = (n: number | null | undefined) =>
@@ -211,7 +213,8 @@ customerQuoteAdminRouter.get("/orders/:orderId/detail", async (req: Request, res
 
     // Fetch extra columns added via migration (not in Drizzle schema)
     const extraRows = await db.execute(sql`
-      SELECT customer_quote_status, eta_final, terms_conditions, quote_notes, vendor_cost, order_margin
+      SELECT customer_quote_status, eta_final, terms_conditions, quote_notes, vendor_cost, order_margin,
+        geofence_enabled, geofence_radius_km
       FROM logistic_orders WHERE id = ${orderId}
     `);
     const extra = (extraRows as any).rows?.[0] ?? (extraRows as any)[0] ?? {};
@@ -223,6 +226,8 @@ customerQuoteAdminRouter.get("/orders/:orderId/detail", async (req: Request, res
       quoteNotes: extra.quote_notes ?? null,
       vendorCost: extra.vendor_cost ?? null,
       orderMargin: extra.order_margin ?? null,
+      geofenceEnabled: extra.geofence_enabled ?? true,
+      geofenceRadiusKm: extra.geofence_radius_km ?? 75,
     };
 
     const [vendor] = order.approvedVendorId
@@ -249,6 +254,32 @@ customerQuoteAdminRouter.get("/orders/:orderId/detail", async (req: Request, res
     const rfqs = await db.select().from(logisticOrderRfqsTable)
       .where(eq(logisticOrderRfqsTable.orderId, orderId));
 
+    // Fetch freight shipments linked to any RFQ belonging to this order.
+    // freight_shipment_id was added via a manual migration, so we use raw SQL.
+    const freightRows = await db.execute(sql`
+      SELECT fs.id, fs.shipment_number AS "shipmentNumber", fs.status,
+             fs.origin, fs.destination, fs.shipper_name AS "shipperName",
+             fs.approved_vendor_name AS "approvedVendorName",
+             fs.created_at AS "createdAt",
+             r.id AS "rfqId", r.rfq_number AS "rfqNumber"
+      FROM logistic_order_rfqs r
+      JOIN freight_shipments fs ON fs.id = r.freight_shipment_id
+      WHERE r.order_id = ${orderId}
+      ORDER BY fs.created_at DESC
+    `);
+    const freightShipments = (freightRows as any[]).map((row: any) => ({
+      id: row.id as number,
+      shipmentNumber: row.shipmentNumber as string,
+      status: row.status as string,
+      origin: row.origin as string,
+      destination: row.destination as string,
+      shipperName: row.shipperName as string,
+      approvedVendorName: (row.approvedVendorName as string) ?? null,
+      createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : (row.createdAt as string),
+      rfqId: row.rfqId as number,
+      rfqNumber: row.rfqNumber as string,
+    }));
+
     return res.json({
       order: orderFull,
       vendor,
@@ -257,10 +288,58 @@ customerQuoteAdminRouter.get("/orders/:orderId/detail", async (req: Request, res
       customerLinks: customerLinks.map(l => ({ ...l, trackUrl: `${getBaseUrl()}/customer-order/${l.token}` })),
       quoteLinks: quoteLinks.map(l => ({ ...l, quoteUrl: `${getBaseUrl()}/customer-quote/${l.token}` })),
       rfqs,
+      freightShipments,
     });
   } catch (err) {
     logger.error({ err }, "order-detail error");
     return res.status(500).json({ message: "Gagal memuat detail order" });
+  }
+});
+
+// PATCH /api/logistic/orders/:orderId/geofence  (admin update geofence config)
+customerQuoteAdminRouter.patch("/orders/:orderId/geofence", async (req: Request, res: Response) => {
+  if (!(await requireClerkUser(req, res))) return;
+  const orderId = Number(req.params["orderId"]);
+  if (isNaN(orderId)) return res.status(400).json({ message: "orderId tidak valid" });
+
+  const { geofenceEnabled, geofenceRadiusKm } = req.body as { geofenceEnabled?: boolean; geofenceRadiusKm?: number };
+
+  try {
+    await db.execute(sql`
+      UPDATE logistic_orders
+      SET
+        geofence_enabled = COALESCE(${geofenceEnabled ?? null}::boolean, geofence_enabled),
+        geofence_radius_km = COALESCE(${geofenceRadiusKm != null ? Math.max(1, Math.round(geofenceRadiusKm)) : null}::integer, geofence_radius_km)
+      WHERE id = ${orderId}
+    `);
+    return res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, "update-geofence-config error");
+    return res.status(500).json({ message: "Gagal update geofence config" });
+  }
+});
+
+// GET /api/logistic/orders/:orderId/geofence-alerts  (admin — recent geofence alerts)
+customerQuoteAdminRouter.get("/orders/:orderId/geofence-alerts", async (req: Request, res: Response) => {
+  if (!(await requireClerkUser(req, res))) return;
+  const orderId = Number(req.params["orderId"]);
+  if (isNaN(orderId)) return res.status(400).json({ message: "orderId tidak valid" });
+
+  try {
+    const rows = await db.execute(sql`
+      SELECT id, order_id, actor_name, notes, created_at
+      FROM order_updates
+      WHERE order_id = ${orderId} AND actor_type = 'geofence_alert'
+      ORDER BY created_at DESC
+      LIMIT 20
+    `);
+    const alerts = ((rows as any).rows ?? rows) as Array<{
+      id: number; order_id: number; actor_name: string | null; notes: string | null; created_at: string;
+    }>;
+    return res.json({ alerts });
+  } catch (err) {
+    logger.error({ err }, "geofence-alerts fetch error");
+    return res.status(500).json({ message: "Gagal memuat geofence alerts" });
   }
 });
 
@@ -518,6 +597,46 @@ orderTaskPublicRouter.get("/:token", async (req: Request, res: Response) => {
   } catch (err) {
     logger.error({ err }, "get order-task error");
     return res.status(500).json({ error: "Gagal memuat task" });
+  }
+});
+
+// POST /api/order-task/:token/location
+orderTaskPublicRouter.post("/:token/location", async (req: Request, res: Response) => {
+  const { token } = req.params as { token: string };
+  const { lat, lng, accuracy } = req.body as { lat: number; lng: number; accuracy?: number };
+
+  if (!lat || !lng || typeof lat !== "number" || typeof lng !== "number") {
+    return res.status(400).json({ error: "lat dan lng wajib diisi" });
+  }
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+    return res.status(400).json({ error: "Koordinat tidak valid" });
+  }
+
+  try {
+    const [link] = await db.select().from(orderTaskLinksTable)
+      .where(eq(orderTaskLinksTable.token, token));
+    if (!link) return res.status(404).json({ error: "Link tidak ditemukan" });
+    if (link.expiredAt && link.expiredAt < new Date()) {
+      return res.status(410).json({ error: "Link sudah kadaluarsa" });
+    }
+
+    const driverId = (link as any).driverId ?? null;
+
+    await db.insert(driverLocationsTable).values({
+      driverId,
+      orderId: link.orderId,
+      latitude: String(lat),
+      longitude: String(lng),
+      accuracy: accuracy != null ? String(accuracy) : null,
+      checkpointType: "order_task",
+    });
+
+    void checkOrderGeofence(link.orderId, lat, lng, link.label ?? "Vendor/Driver");
+
+    return res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, "order-task location error");
+    return res.status(500).json({ error: "Gagal menyimpan lokasi" });
   }
 });
 

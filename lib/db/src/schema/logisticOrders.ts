@@ -70,6 +70,8 @@ export const logisticOrdersTable = pgTable("logistic_orders", {
   optionsToken: text("options_token").unique(),
   optionsSentAt: timestamp("options_sent_at", { withTimezone: true }),
   publicRfqToken: text("public_rfq_token").unique(),
+  geofenceEnabled: boolean("geofence_enabled").default(true).notNull(),
+  geofenceRadiusKm: integer("geofence_radius_km").default(75).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => [
   index("logistic_orders_company_idx").on(t.companyId),

@@ -5,7 +5,7 @@ import { execSync } from "child_process";
 try { execSync("fuser -k 5000/tcp", { stdio: "ignore" }); } catch {}
 
 const API_PORT = 8080;
-const BIZPORTAL_PORT = 3000;
+const BIZPORTAL_PORT = 18442;
 const CUSTOMER_PORTAL_PORT = 3001;
 
 function proxyRequest(req, res, port) {

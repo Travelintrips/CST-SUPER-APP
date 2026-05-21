@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db, freightShipmentsTable, freightRfqsTable, freightQuotesTable, freightAttachmentsTable, shipmentStagesTable, salesDocumentsTable, purchaseDocumentsTable, expensesTable, freightCustomsDocsTable, freightShipmentAuditLogsTable } from "@workspace/db";
-import { eq, desc, inArray, sum, and } from "drizzle-orm";
+import { eq, desc, inArray, sum, and, sql } from "drizzle-orm";
 import { requireClerkUser } from "../lib/requireAdmin.js";
 import { saveAndBroadcast } from "../lib/notificationStore.js";
 
@@ -107,6 +107,30 @@ router.get("/freight-shipments/:id", async (req, res) => {
         .orderBy(desc(freightQuotesTable.createdAt))
     : [];
   const stages = await db.select().from(shipmentStagesTable).where(eq(shipmentStagesTable.shipmentId, id));
+
+  // Look up the logistic RFQ that spawned this freight shipment (if any).
+  // freight_shipment_id was added via a manual migration, not in the Drizzle schema,
+  // so we use raw SQL for this join.
+  const linkedRfqRows = await db.execute(sql`
+    SELECT r.id, r.rfq_number AS "rfqNumber", r.status AS "rfqStatus",
+           r.order_id AS "orderId", o.order_number AS "orderNumber"
+    FROM logistic_order_rfqs r
+    LEFT JOIN logistic_orders o ON o.id = r.order_id
+    WHERE r.freight_shipment_id = ${id}
+    LIMIT 1
+  `);
+
+  const linkedLogisticRfqRow = (linkedRfqRows as any[])[0] ?? null;
+  const linkedLogisticRfq = linkedLogisticRfqRow
+    ? {
+        id: linkedLogisticRfqRow.id as number,
+        rfqNumber: linkedLogisticRfqRow.rfqNumber as string,
+        rfqStatus: linkedLogisticRfqRow.rfqStatus as string,
+        orderId: linkedLogisticRfqRow.orderId as number,
+        orderNumber: (linkedLogisticRfqRow.orderNumber as string) ?? null,
+      }
+    : null;
+
   return res.json({
     ...serializeShipment(shipment),
     rfqs: rfqs.map((r) => ({
@@ -114,6 +138,7 @@ router.get("/freight-shipments/:id", async (req, res) => {
       quotes: quotes.filter((q) => q.rfqId === r.id).map(serializeQuote),
     })),
     stages: stages.map(serializeStage),
+    linkedLogisticRfq,
   });
 });
 

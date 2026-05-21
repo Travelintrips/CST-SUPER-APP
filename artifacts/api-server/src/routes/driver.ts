@@ -4,7 +4,7 @@ import bcrypt from "bcryptjs";
 import { randomUUID } from "crypto";
 import { createHmac } from "crypto";
 import { compressImageBuffer } from "../lib/imageCompress";
-import { db, driversTable, driverJobsTable, driverJobLogsTable, driverPhotosTable, freightShipmentsTable } from "@workspace/db";
+import { db, driversTable, driverJobsTable, driverJobLogsTable, driverPhotosTable, freightShipmentsTable, driverLocationsTable } from "@workspace/db";
 import { eq, and, desc, ne } from "drizzle-orm";
 import { requireClerkUser } from "../lib/requireAdmin";
 import { ObjectStorageService } from "../lib/objectStorage";
@@ -385,6 +385,29 @@ router.post("/location", requireDriverAuth, async (req, res) => {
     .select({ id: driversTable.id, name: driversTable.name, vehiclePlate: driversTable.vehiclePlate })
     .from(driversTable)
     .where(eq(driversTable.id, driverId));
+
+  // Find active job for orderId linkage
+  const activeJobs2 = await db
+    .select({ id: driverJobsTable.id, logisticOrderId: driverJobsTable.logisticOrderId, jobNumber: driverJobsTable.jobNumber })
+    .from(driverJobsTable)
+    .where(and(eq(driverJobsTable.driverId, driverId), ne(driverJobsTable.status, "COMPLETED"), ne(driverJobsTable.status, "CANCELLED")))
+    .limit(1);
+  const activeJob2 = activeJobs2[0];
+
+  // Save location history (fire-and-forget)
+  db.insert(driverLocationsTable).values({
+    driverId,
+    orderId: activeJob2?.logisticOrderId ?? null,
+    jobToken: req.body?.jobToken ?? null,
+    latitude: String(lat),
+    longitude: String(lng),
+    accuracy: req.body?.accuracy ? String(req.body.accuracy) : null,
+    speed: req.body?.speed ? String(req.body.speed) : null,
+    heading: req.body?.heading ? String(req.body.heading) : null,
+    checkpointType: req.body?.checkpointType ?? null,
+    updatedAt: new Date(),
+  }).catch(() => {});
+
   broadcastToAdmins("location_update", {
     driverId,
     name: driver?.name ?? "",

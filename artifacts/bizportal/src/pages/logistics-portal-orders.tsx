@@ -31,8 +31,9 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { PackageOpen, Search, RefreshCw, FilePlus, X, Eye, Zap, Send, ExternalLink } from "lucide-react";
+import { PackageOpen, Search, RefreshCw, FilePlus, X, Eye, Zap, Send, ExternalLink, Ship } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Link } from "wouter";
 import { useOrderNotificationsContext } from "@/contexts/OrderNotificationsContext";
 import { useCompany } from "@/contexts/CompanyContext";
 
@@ -85,6 +86,69 @@ const STATUS_COLORS: Record<string, string> = {
 
 const idr = (n: number) =>
   new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
+
+const RFQ_STATUS_LABELS: Record<string, string> = {
+  admin_review: "Review",
+  rfq_sent: "Terkirim",
+  vendor_selected: "Vendor Dipilih",
+  customer_quoted: "Quoted",
+  customer_approved: "Disetujui",
+  customer_rejected: "Ditolak",
+  customer_revision_requested: "Revisi",
+  closed: "Ditutup",
+};
+
+const RFQ_STATUS_COLORS: Record<string, string> = {
+  admin_review:                "bg-slate-100 text-slate-600 border-slate-200",
+  rfq_sent:                    "bg-blue-100 text-blue-700 border-blue-200",
+  vendor_selected:             "bg-violet-100 text-violet-700 border-violet-200",
+  customer_quoted:             "bg-amber-100 text-amber-700 border-amber-200",
+  customer_approved:           "bg-emerald-100 text-emerald-800 border-emerald-200",
+  customer_rejected:           "bg-red-100 text-red-700 border-red-200",
+  customer_revision_requested: "bg-orange-100 text-orange-700 border-orange-200",
+  closed:                      "bg-gray-100 text-gray-600 border-gray-200",
+};
+
+type LatestRfq = {
+  rfqId: number; rfqNumber: string; rfqStatus: string;
+  freightShipmentId: number | null; freightShipmentNumber: string | null;
+} | null;
+
+function RfqStatusCell({ latestRfq, onCreateRfq }: { latestRfq: LatestRfq; onCreateRfq: () => void }) {
+  if (!latestRfq) {
+    return (
+      <Button
+        size="sm"
+        variant="outline"
+        className="h-6 text-[10px] px-1.5 py-0 gap-1 text-muted-foreground border-dashed hover:border-solid hover:text-foreground"
+        onClick={onCreateRfq}
+      >
+        <Send className="h-2.5 w-2.5 shrink-0" />
+        Buat RFQ
+      </Button>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-1 min-w-0">
+      <Link href={`/logistics/rfq/${latestRfq.rfqId}/comparison`}>
+        <Badge
+          className={`${RFQ_STATUS_COLORS[latestRfq.rfqStatus] ?? "bg-slate-100 text-slate-600"} border text-[10px] font-medium px-1.5 py-0.5 cursor-pointer hover:opacity-80 whitespace-nowrap`}
+          title={latestRfq.rfqNumber}
+        >
+          {RFQ_STATUS_LABELS[latestRfq.rfqStatus] ?? latestRfq.rfqStatus}
+        </Badge>
+      </Link>
+      {latestRfq.freightShipmentId && (
+        <Link href={`/logistics/freight/${latestRfq.freightShipmentId}`}>
+          <span className="inline-flex items-center gap-0.5 text-[10px] text-teal-600 hover:underline font-mono">
+            <Ship className="h-2.5 w-2.5 shrink-0" />
+            {latestRfq.freightShipmentNumber ?? `#${latestRfq.freightShipmentId}`}
+          </span>
+        </Link>
+      )}
+    </div>
+  );
+}
 
 const BULAN_ID = ["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agt","Sep","Okt","Nov","Des"];
 function formatTanggal(iso: string) {
@@ -412,19 +476,20 @@ export default function LogisticsPortalOrdersPage() {
                   <TableHead className="text-right">Total</TableHead>
                   <TableHead>Tanggal</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead>RFQ</TableHead>
                   <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {isLoading ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
                       Memuat...
                     </TableCell>
                   </TableRow>
                 ) : filtered.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
                       Tidak ada pesanan
                     </TableCell>
                   </TableRow>
@@ -511,6 +576,13 @@ export default function LogisticsPortalOrdersPage() {
                           </SelectContent>
                         </Select>
                       </div>
+                    </TableCell>
+                    {/* RFQ status column */}
+                    <TableCell onClick={(e) => e.stopPropagation()}>
+                      <RfqStatusCell
+                        latestRfq={(o as any).latestRfq ?? null}
+                        onCreateRfq={() => openRfqDialog(o)}
+                      />
                     </TableCell>
                     <TableCell onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center gap-1">

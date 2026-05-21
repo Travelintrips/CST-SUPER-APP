@@ -136,7 +136,9 @@ import SportCenterSchedulePage from "@/pages/sport-center-schedule";
 import SportCenterReportPage from "@/pages/sport-center-report";
 import NotificationsPage from "@/pages/notifications";
 import VendorFormsPage from "@/pages/purchase/vendor-forms";
-
+import AnalyticsDashboardPage from "@/pages/analytics-dashboard";
+import VendorPerformancePage from "@/pages/logistics/vendor-performance";
+import InternalTasksPage from "@/pages/logistics/internal-tasks";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -465,6 +467,10 @@ function Router() {
         <Route path="/sport-center/purchase-requests" component={() => <ProtectedRoute component={SportCenterPurchaseRequestsPage} />} />
         <Route path="/sport-center/reports" component={() => <ProtectedRoute component={SportCenterReportPage} />} />
         <Route path="/notifications" component={() => <ProtectedRoute component={NotificationsPage} />} />
+        {/* Analytics & Performance */}
+        <Route path="/analytics" component={() => <ProtectedRoute component={AnalyticsDashboardPage} />} />
+        <Route path="/logistics/vendor-performance" component={() => <ProtectedRoute component={VendorPerformancePage} />} />
+        <Route path="/logistics/internal-tasks" component={() => <ProtectedRoute component={InternalTasksPage} />} />
         {/* Legacy /expenses/* → /expense/* */}
         <Route path="/expenses" component={() => <Redirect to="/expense" />} />
         <Route path="/expenses/new" component={() => <Redirect to="/expense/new" />} />

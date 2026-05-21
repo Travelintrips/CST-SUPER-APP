@@ -404,4 +404,110 @@ router.get("/response-time-stats", async (req, res) => {
   }
 });
 
+// GET /api/dashboard/analytics?period=30d&companyId=N
+router.get("/analytics", async (req, res) => {
+  const period = String(req.query.period ?? "30d");
+  const { companyId } = parseCompanyParam(req.query.companyId);
+
+  const intervalMap: Record<string, string> = {
+    "7d": "7 days", "30d": "30 days", "90d": "90 days", "1y": "1 year",
+  };
+  const interval = intervalMap[period] ?? "30 days";
+
+  const companyFilter = companyId ? sql` AND company_id = ${companyId}` : sql``;
+
+  try {
+    const [rfqStats, orderStats, revenueStats, topCustomers, orderStatusCounts, rfqThisPeriod, ordersThisPeriod] = await Promise.all([
+      // Total RFQ
+      db.execute(sql`SELECT count(*)::int AS total FROM logistic_order_rfqs`),
+      // Total orders
+      db.execute(sql`SELECT count(*)::int AS total FROM logistic_orders WHERE 1=1 ${companyFilter}`),
+      // Revenue & profit
+      db.execute(sql`
+        SELECT
+          COALESCE(SUM(grand_total::numeric), 0)::numeric AS total_revenue,
+          COALESCE(SUM(final_selling_price::numeric) - SUM(subtotal::numeric), 0)::numeric AS gross_profit
+        FROM logistic_orders
+        WHERE status NOT IN ('Cancelled', 'cancelled')
+        AND created_at >= NOW() - INTERVAL '${sql.raw(interval)}'
+        ${companyFilter}
+      `),
+      // Top customers by repeat order
+      db.execute(sql`
+        SELECT customer_name, count(*)::int AS order_count
+        FROM logistic_orders
+        WHERE created_at >= NOW() - INTERVAL '${sql.raw(interval)}'
+        ${companyFilter}
+        GROUP BY customer_name
+        ORDER BY order_count DESC
+        LIMIT 10
+      `),
+      // Order status distribution
+      db.execute(sql`
+        SELECT status, count(*)::int AS cnt
+        FROM logistic_orders
+        WHERE 1=1 ${companyFilter}
+        GROUP BY status
+        ORDER BY cnt DESC
+      `),
+      // RFQ this period
+      db.execute(sql`
+        SELECT count(*)::int AS total FROM logistic_order_rfqs
+        WHERE created_at >= NOW() - INTERVAL '${sql.raw(interval)}'
+      `),
+      // Orders this period
+      db.execute(sql`
+        SELECT count(*)::int AS total FROM logistic_orders
+        WHERE created_at >= NOW() - INTERVAL '${sql.raw(interval)}'
+        ${companyFilter}
+      `),
+    ]);
+
+    // Avg response from RFQ vendor links
+    const avgResp = await db.execute(sql`
+      SELECT avg(extract(epoch from (submitted_at - created_at)) / 60)::numeric(10,2) AS avg_min
+      FROM rfq_vendor_links
+      WHERE submitted_at IS NOT NULL
+      AND created_at >= NOW() - INTERVAL '${sql.raw(interval)}'
+    `);
+
+    // Approval rate
+    const approvalStats = await db.execute(sql`
+      SELECT
+        count(*)::int AS total,
+        count(*) filter (where customer_confirm_status = 'confirmed')::int AS confirmed
+      FROM logistic_orders
+      WHERE created_at >= NOW() - INTERVAL '${sql.raw(interval)}'
+      ${companyFilter}
+    `);
+
+    const rev = revenueStats.rows[0] as { total_revenue: string; gross_profit: string };
+    const appr = approvalStats.rows[0] as { total: number; confirmed: number };
+    const totalRevenue = Number(rev?.total_revenue ?? 0);
+    const grossProfit = Number(rev?.gross_profit ?? 0);
+    const marginPct = totalRevenue > 0 ? (grossProfit / totalRevenue) * 100 : 0;
+
+    const orderStatusCountsMap: Record<string, number> = {};
+    for (const row of orderStatusCounts.rows as { status: string; cnt: number }[]) {
+      orderStatusCountsMap[row.status] = row.cnt;
+    }
+
+    res.json({
+      totalRfq: (rfqStats.rows[0] as { total: number }).total,
+      totalOrders: (orderStats.rows[0] as { total: number }).total,
+      rfqThisPeriod: (rfqThisPeriod.rows[0] as { total: number }).total,
+      ordersThisPeriod: (ordersThisPeriod.rows[0] as { total: number }).total,
+      totalRevenue,
+      grossProfit,
+      marginPct: Number(marginPct.toFixed(1)),
+      avgResponseMin: (avgResp.rows[0] as { avg_min: string })?.avg_min ?? null,
+      approvalRate: appr?.total > 0 ? (appr.confirmed / appr.total) * 100 : 0,
+      topCustomers: topCustomers.rows,
+      orderStatusCounts: orderStatusCountsMap,
+    });
+  } catch (e) {
+    res.status(500).json({ error: "Gagal memuat analytics" });
+  }
+});
+
 export default router;
