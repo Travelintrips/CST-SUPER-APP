@@ -2985,6 +2985,7 @@ const locale: DeepRecord = {
     deleteTitle: 'Eliminar',
     quoteSentMsg: '¡Cotización enviada con éxito!',
     quoteSendError: 'Error al enviar',
+  },
 
   jasaDetail: {
     calcTitle: 'Calculadora de estimación de costes',

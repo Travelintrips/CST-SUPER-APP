@@ -3021,6 +3021,7 @@ const locale: DeepRecord = {
     basePrice: 'Base Price',
     routeLabel: 'Route',
     noWa: 'No WA',
+  },
 
   jasaDetail: {
     calcTitle: 'Cost Estimation Calculator',

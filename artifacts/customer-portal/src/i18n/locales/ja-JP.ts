@@ -2985,6 +2985,7 @@ const locale: DeepRecord = {
     deleteTitle: '削除',
     quoteSentMsg: '見積を送信しました！',
     quoteSendError: '送信に失敗しました',
+  },
 
   jasaDetail: {
     calcTitle: 'コスト見積もり計算機',
