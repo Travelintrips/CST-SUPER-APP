@@ -424,6 +424,7 @@ function LandingPage({ onGetQuote }: { onGetQuote: () => void }) {
 /* ─── Main Page ──────────────────────────────────────────────────── */
 export default function OceanFreightPage() {
   const [, setLocation] = useLocation();
+  const { t } = useLanguage();
   const { toast } = useToast();
   const [view, setView] = useState<"landing" | "booking">("landing");
 
