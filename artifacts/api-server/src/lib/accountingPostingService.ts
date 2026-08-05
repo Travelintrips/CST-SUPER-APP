@@ -188,6 +188,10 @@ export async function postToAccountingHub(req: PostingRequest): Promise<{ entryI
     const entryNumber = generateEntryNumber();
     const now = new Date();
 
+    // Insert as 'draft' first so trg_block_lines_mutation allows line inserts.
+    // (The trigger raises IMMUTABILITY_VIOLATION for any INSERT/UPDATE/DELETE on
+    // lines whose parent entry already has status='posted'. After lines are safely
+    // inserted we promote the entry to 'posted'.)
     const [entry] = await db
       .insert(accountingEntriesTable)
       .values({
@@ -199,7 +203,7 @@ export async function postToAccountingHub(req: PostingRequest): Promise<{ entryI
         date,
         ref,
         description,
-        status: "posted",
+        status: "draft",
         source: resolvedSource as any,
         sourceId: ctx.sourceId ?? null,
         sourceSchema: ctx.sourceSchema ?? "public",
@@ -222,6 +226,12 @@ export async function postToAccountingHub(req: PostingRequest): Promise<{ entryI
         credit: l.credit,
       })),
     );
+
+    // Promote entry from 'draft' → 'posted' now that lines are safely committed.
+    await db
+      .update(accountingEntriesTable)
+      .set({ status: "posted" })
+      .where(eq(accountingEntriesTable.id, entryId));
 
     let paymentId: number | undefined;
 
@@ -302,6 +312,8 @@ export async function voidAccountingEntry(
   const voidEntryNumber = generateEntryNumber().replace("HUB/", "VOID/");
 
   try {
+    // Insert as 'draft' first so trg_block_lines_mutation allows line inserts,
+    // then promote to 'posted' after lines are safely committed.
     const [voidEntry] = await db
       .insert(accountingEntriesTable)
       .values({
@@ -313,7 +325,7 @@ export async function voidAccountingEntry(
         date: new Date().toISOString().split("T")[0],
         ref: `VOID-${original.ref ?? original.entryNumber}`,
         description: `Pembalik jurnal: ${original.description ?? ""} — Alasan: ${reason}`,
-        status: "posted",
+        status: "draft",
         source: "reversal",
         sourceId: original.id,
         sourceSchema: original.sourceSchema ?? "public",
@@ -337,6 +349,12 @@ export async function voidAccountingEntry(
         credit: l.credit,
       })),
     );
+
+    // Promote void entry from 'draft' → 'posted' now that lines are committed.
+    await db
+      .update(accountingEntriesTable)
+      .set({ status: "posted" })
+      .where(eq(accountingEntriesTable.id, voidEntryId));
 
     // FIX: DB punya trigger immutability (fn_block_posted_entry_update) yang HANYA
     // mengizinkan UPDATE pada entry posted jika NEW.status='draft' DAN cancel_reason

@@ -18,3 +18,4 @@
 - [accounting_entries missing columns](accounting-entries-missing-columns.md) — is_voided/is_reversed missing → journalReuseEngine FAIL-CLOSED → false MANUAL_REVIEW_REQUIRED saat approve sport payment.
 - [BizPortal startup 40s wait](bizportal-startup-40s-wait.md) — start-dev.sh tunggu 40s jika BIZPORTAL_PORT/CUSTOMER_PORT di-set; fix: yield hanya jika port sudah dipakai; BIZPORTAL_VITE_PORT=18442 wajib.
 - [Draft journal reuse policy](draft-journal-reuse.md) — bank recon on unlinked draft + matching amount → REUSE_EXISTING_JOURNAL; was incorrectly blocked as MANUAL_REVIEW_REQUIRED → false "Buat Proposal COA".
+- [Posting service draft-first rule](posting-service-draft-first.md) — insert entry as 'draft', insert lines, then promote to 'posted'; trigger blocks line INSERT on posted entries.
