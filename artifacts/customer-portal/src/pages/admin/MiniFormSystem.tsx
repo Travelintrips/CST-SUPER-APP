@@ -13,7 +13,7 @@ import {
   Loader2, Plus, Copy, ExternalLink, ToggleLeft, ToggleRight, Trash2, Link2, X,
 } from "lucide-react";
 import { apiPost } from "./adminShared";
-import { SERVICE_SCHEMAS } from "@/../../artifacts/api-server/src/routes/vendorMiniForm";
+import { SERVICE_SCHEMAS } from "@/lib/vendorMiniFormSchemas";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
