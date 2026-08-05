@@ -205,6 +205,7 @@ import waReportSettingsRouter from "./waReportSettings.js";
 import { bankDescriptionNormalizerRouter } from "./bankDescriptionNormalizer.js";
 import { expenseRulesRouter } from "./expenseRules.js";
 import { expenseClassificationRouter } from "./expenseClassification.js";
+import { reconClassificationRouter } from "./reconClassificationConfig.js";
 
 const router: IRouter = Router();
 
@@ -480,6 +481,7 @@ router.use("/bank-recon", bankDescriptionNormalizerRouter);
 router.use("/expense-rules", expenseRulesRouter);
 // Phase 6D — Expense Classification (normalizer → rule engine → AI pipeline)
 router.use("/bank-recon", expenseClassificationRouter);
+router.use("/recon-classification", reconClassificationRouter);
 router.use("/accounting/wa-report", waReportSettingsRouter);
 router.use("/fixed-assets", fixedAssetsRouter);
 router.use("/expense-approvals", expenseApprovalsRouter);
