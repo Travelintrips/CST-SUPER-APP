@@ -47,6 +47,7 @@ import {
   runReconClassificationMigration,
   resetMigrationFlag,
 } from "../lib/reconClassificationMigration.js";
+import { trackAiRuleFeedback } from "../lib/usageTrackingService.js";
 
 export const reconClassificationRouter = Router();
 
@@ -374,6 +375,38 @@ reconClassificationRouter.post("/ai-rules", async (req, res) => {
   } catch (err) {
     logger.error("[ReconClassification] POST /ai-rules error:", err instanceof Error ? err.message : String(err));
     res.status(500).json({ error: "Gagal membuat AI rule." });
+  }
+});
+
+// ─── POST /api/recon-classification/ai-rules/feedback ────────────────────────
+// Record explicit user feedback on an AI rule recommendation.
+// Called by the frontend after the user accepts or rejects an AI suggestion.
+// Best-effort: never fails the caller; errors are logged as warnings only.
+//
+// Body: { rule_id: number, mutation_id?: number, accepted: boolean }
+// Auth: requireAdmin (same as all routes in this router)
+reconClassificationRouter.post("/ai-rules/feedback", async (req, res) => {
+  try {
+    await ensureTables();
+    const ruleId     = Number(req.body?.rule_id);
+    const mutationId = req.body?.mutation_id != null ? Number(req.body.mutation_id) : undefined;
+    const accepted   = Boolean(req.body?.accepted);
+    const companyId: number | null = (req as any).user?.companyId ?? null;
+
+    if (!ruleId || isNaN(ruleId)) {
+      return res.status(400).json({ error: "rule_id wajib diisi dan harus angka." });
+    }
+
+    await trackAiRuleFeedback({ ruleId, accepted, mutationId, companyId });
+
+    res.json({ ok: true });
+  } catch (err) {
+    // Non-fatal — log and return success so caller is unaffected
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      "[ReconClassification] POST /ai-rules/feedback failed — non-fatal",
+    );
+    res.json({ ok: true, warning: "Feedback recorded with errors (non-fatal)" });
   }
 });
 

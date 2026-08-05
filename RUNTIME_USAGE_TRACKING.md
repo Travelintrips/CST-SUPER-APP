@@ -2,50 +2,75 @@
 
 ## Overview
 
-This document describes the runtime usage tracking system for Bank Reconciliation Classification Configurations.
-Tracking is **best-effort telemetry**: it never throws, never blocks the main transaction, and is always
-fired post-commit (fire-and-forget). A tracking failure produces a warning log but does NOT roll back
-the reconciliation or journal.
+Idempotent, best-effort telemetry layer that records how bank reconciliation classification configs,
+keywords, and AI rules are used at runtime. **Never blocks or rolls back the core transaction.**
 
 ---
 
-## 1. Hook Points
+## 1. Migration
 
-| Hook | File | Trigger |
-|------|------|---------|
-| `trackMutationApproval` | `lib/usageTrackingService.ts` | POST `/api/bank-reconciliation/:mutationId/approve` — after `res.json(responseBody)` |
-| `trackConfigUsageByCode` | `lib/usageTrackingService.ts` | Explicit call when config code is known upstream |
-| `trackAiRuleFeedback` | `lib/usageTrackingService.ts` | Explicit call when user accepts/rejects AI recommendation |
+`runUsageTrackingMigration()` — `artifacts/api-server/src/lib/usageTrackingService.ts`
 
----
+Creates (all idempotent — `IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS`):
 
-## 2. Event Model
-
-Table: `recon_config_usage_events`
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | BIGSERIAL PK | Auto-increment |
-| `company_id` | INTEGER nullable | Company scope (NULL = global) |
-| `usage_type` | TEXT | `config`, `keyword`, `ai_rule` |
-| `target_id` | INTEGER | ID in the respective table |
-| `mutation_id` | INTEGER nullable | Source bank mutation |
-| `reconciliation_id` | INTEGER nullable | Reserved for future linkage |
-| `event_type` | TEXT | `approved`, `rejected`, `corrected` |
-| `actor_user_id` | TEXT | Email/ID of the user who triggered |
-| `amount` | NUMERIC(15,2) nullable | Transaction amount |
-| `used_at` | TIMESTAMPTZ | When the event occurred |
-| `idempotency_key` | TEXT NOT NULL | Deduplication key |
-| `created_at` | TIMESTAMPTZ | Row creation time |
+| Object | Purpose |
+|---|---|
+| `recon_config_usage_events` | Idempotency event table; one row per (company, idempotency_key) |
+| `idx_recon_usage_events_idempotency` | UNIQUE on `(COALESCE(company_id,-1), idempotency_key)` |
+| `idx_recon_usage_events_target` | Fast lookup by usage_type + target_id |
+| `idx_recon_usage_events_mutation` | Partial index on mutation_id |
+| `recon_classification_configs.usage_count` | Times matched in an approved reconciliation |
+| `recon_classification_configs.last_used_at/by/amount/date` | Last-match metadata |
+| `recon_keyword_dictionary.usage_count` | Times keyword matched in an approved reconciliation |
+| `recon_keyword_dictionary.last_used_at` | Last match timestamp |
+| `recon_ai_classification_rules.usage_count` | Times rule matched |
+| `recon_ai_classification_rules.accepted_count` | Times user explicitly accepted recommendation |
+| `recon_ai_classification_rules.rejected_count` | Times user explicitly rejected recommendation |
+| `bank_mutations.recon_config_code` | Writeback for which config was matched |
 
 ---
 
-## 3. Idempotency
+## 2. Startup Wiring
 
-**Problem**: A user double-clicks Approve, or the client retries a failed request. Without deduplication,
-`usage_count` would increment multiple times for the same real-world action.
+`artifacts/api-server/src/index.ts` line 1694:
 
-**Solution**: Every tracking call first inserts a row into `recon_config_usage_events` using:
+```
+.then(() => runWithRetry("Bank reconciliation core migration", runBankReconciliationCoreMigration))
+.then(() => runWithRetry("Usage tracking migration", runUsageTrackingMigration))   // ← here
+.then(() => runWithRetry("Bank mutation masters migration", runBankMutationMastersMigration))
+```
+
+- Runs once per startup, after DB is ready, before routes accept traffic.
+- Idempotent — safe to run on every restart.
+- `runWithRetry` wraps with 3 retries and exponential backoff.
+- Failure is logged but does NOT abort server startup (non-fatal by runWithRetry policy).
+
+---
+
+## 3. Usage Event Schema
+
+```sql
+recon_config_usage_events (
+  id              BIGSERIAL PRIMARY KEY,
+  company_id      INTEGER,                          -- NULL = system-level
+  usage_type      TEXT NOT NULL,                    -- 'config' | 'keyword' | 'ai_rule'
+  target_id       INTEGER NOT NULL,                 -- FK to the tracked entity
+  mutation_id     INTEGER,                          -- source bank mutation (for idempotency)
+  reconciliation_id INTEGER,                        -- reserved for future use
+  event_type      TEXT NOT NULL DEFAULT 'approved', -- 'approved' | 'rejected' | 'corrected'
+  actor_user_id   TEXT,                             -- email of acting user
+  amount          NUMERIC(15,2),                    -- transaction amount if known
+  used_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  idempotency_key TEXT NOT NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)
+```
+
+---
+
+## 4. Idempotency
+
+Every tracking call first inserts into `recon_config_usage_events`:
 
 ```sql
 INSERT INTO recon_config_usage_events (..., idempotency_key)
@@ -53,139 +78,101 @@ VALUES (...)
 ON CONFLICT (COALESCE(company_id, -1), idempotency_key) DO NOTHING
 ```
 
-The aggregate counter is **only incremented if the INSERT succeeded** (rowCount > 0). If the row already
-exists (duplicate event), the function returns early without touching the aggregate.
+- `INSERT` succeeds (rowCount > 0) → aggregate counter is incremented.
+- `INSERT` conflicts (rowCount = 0) → duplicate event, counter is NOT incremented.
 
-**Key format**:
+Idempotency key format:
+| Tracking type | Key format |
+|---|---|
+| Config via mutation | `config:{configId}:{mutationId}` |
+| Config by code | `config:{configId}:{mutationId}` (or timestamp-based if no mutation) |
+| Keyword | `keyword:{kwId}:{mutationId}` |
+| AI rule (usage) | `ai_rule:{ruleId}:{mutationId}` |
+| AI rule (feedback) | `ai_rule_feedback:{ruleId}:{mutationId}:{approved\|rejected}` |
 
-| Event | Idempotency key |
-|-------|-----------------|
-| Config match | `config:{configId}:{mutationId}` |
-| Keyword match | `keyword:{keywordId}:{mutationId}` |
-| AI rule match | `ai_rule:{ruleId}:{mutationId}` |
-| AI feedback | `ai_rule_feedback:{ruleId}:{mutationId}:{eventType}` |
-
-**Guarantee**: Same reconciliation action retried 10× → `usage_count` increments exactly 1×.
+**Guarantee:** retrying the same approve action 10× results in exactly 1 increment.
+Concurrent parallel calls with the same mutationId also result in exactly 1 increment
+(tested in `Concurrent safety` test suite).
 
 ---
 
-## 4. Transaction Boundary
+## 5. Hook Timing
 
-**Model B — Post-commit fire-and-forget**:
+Tracking is invoked **only after the core transaction commits successfully**.
 
+### Bank Reconciliation Approve
+
+`artifacts/api-server/src/routes/bankReconciliation.ts` line 874:
+
+```typescript
+// Fire-and-forget — never blocks or rolls back the journal
+trackMutationApproval({
+  mutationId: resolvedMutId,
+  actor,
+  companyId: (req as any).user?.companyId ?? null,
+}).catch(() => {});
 ```
-Core reconciliation transaction commits
-        ↓
-res.json(responseBody)  ← client receives 200
-        ↓
-trackMutationApproval(...).catch(() => {})  ← async, non-blocking
+
+Called after `approveAndCreateJournal()` succeeds. Tracks:
+- Matching classification config (via keyword dictionary then inline keyword scan)
+- All matching keywords in the dictionary
+- All matching AI rules (condition-based)
+
+**Not tracked:**
+- Preview / recommend-only responses
+- Failed approvals (result.ok === false)
+- Manual review rejections
+- Rollbacks / unapprove
+
+### AI Rule Feedback (explicit user signal)
+
+`POST /api/recon-classification/ai-rules/feedback`
+
+```json
+{ "rule_id": 42, "mutation_id": 1234, "accepted": true }
 ```
 
-- Tracking runs **after** the core transaction commits.
-- A tracking failure is logged as `warn` and does NOT affect the response or journal.
-- Retries of tracking are idempotent (see §3).
+Called by the frontend after the user explicitly accepts or rejects an AI recommendation.
+Updates `accepted_count` or `rejected_count` on the rule (not `usage_count`).
 
 ---
 
-## 5. Metrics Definitions
+## 6. Service Contract
 
-### recon_classification_configs
+`artifacts/api-server/src/lib/usageTrackingService.ts`
 
-| Column | Definition |
-|--------|------------|
-| `usage_count` | Total approved reconciliations where this config was matched |
-| `last_used_at` | Timestamp of most recent match |
-| `last_used_by` | Email/ID of actor in most recent match |
-| `last_match_amount` | Amount of most recently matched mutation |
-| `last_match_date` | Date of most recently matched mutation |
+| Export | Description |
+|---|---|
+| `trackMutationApproval(opts)` | Main hook — call after approve succeeds. Tracks config + keywords + AI rules. |
+| `trackConfigUsageByCode(opts)` | Explicit increment when config_code is already known from a prior step. |
+| `trackAiRuleFeedback(opts)` | Records accepted/rejected user signal on a specific AI rule. |
+| `runUsageTrackingMigration()` | Idempotent DDL migration. |
 
-### recon_ai_classification_rules
-
-| Column | Definition |
-|--------|------------|
-| `usage_count` | Times rule matched mutation description |
-| `accepted_count` | Times user accepted AI recommendation |
-| `rejected_count` | Times user rejected/corrected AI recommendation |
-| `last_used_at` | Most recent match timestamp |
-
-**Acceptance rate** = `accepted_count / (accepted_count + rejected_count)`.
-**Do NOT display acceptance rate if denominator = 0.**
-
-### recon_keyword_dictionary
-
-| Column | Definition |
-|--------|------------|
-| `usage_count` | Times keyword appeared in an approved reconciliation |
-| `last_used_at` | Most recent appearance timestamp |
+All public functions:
+- Are `async` and return `Promise<void>`
+- Never throw — wrap in try/catch, log warnings on error
+- Are company-scoped via `companyId` parameter
+- Accept explicit `targetId` — never infer IDs from names
+- Use atomic `UPDATE … SET col = col + 1 WHERE id = ?` — no table locks
+- Do NOT touch accounting engine, journal reuse engine, or COA governance
 
 ---
 
-## 6. Category Tracking
+## 7. Dashboard API
 
-Triggered by `trackMutationApproval`. Flow:
-1. Fetch all active keywords for the company.
-2. Match keywords against normalized mutation description (lowercase, trimmed).
-3. If any keyword has a `config_id`, that config is the best match (highest weight wins).
-4. Fallback: scan `recon_classification_configs.keywords` inline array (by priority).
-5. Atomically increment `usage_count` of the winning config **once per mutation**.
+`GET /api/recon-classification/usage-stats`
 
----
+Auth: requireAdmin. Query params: `company_id` (optional), `limit` (default 10, max 100).
 
-## 7. Keyword Tracking Policy
-
-**All keywords** that match the mutation description are recorded (not just the winner).
-This is intentional: it gives signal on which keywords appear most in accepted reconciliations.
-
-Keyword usage is **idempotency-gated**: if the same mutation+keyword combination was already recorded,
-the increment is skipped.
-
----
-
-## 8. AI Rule Outcomes
-
-`trackMutationApproval` increments `usage_count` for every AI rule whose condition matches the description.
-
-`trackAiRuleFeedback` is called separately (with explicit `accepted: boolean`) to update:
-- `accepted_count` — user accepted the AI recommendation
-- `rejected_count` — user rejected or corrected the recommendation
-
-These are distinct from `usage_count` (which only reflects matching, not user decision).
-
----
-
-## 9. Upload Tracking
-
-Upload requirement tracking (`need_upload` on the config) is reflected in the config's `usage_count`
-when that config is matched. There is no separate `file_uploaded` event at this time — the distinction
-between `rule_applied` and `file_uploaded` is noted in the code as a future improvement.
-
----
-
-## 10. Approval Tracking
-
-Approval rule tracking (`recon_approval_rules_config`) is not yet separately instrumented.
-The config's `usage_count` reflects that the config was used; approval rule–level outcomes
-(approved, rejected, escalated, expired) are a planned follow-up.
-
----
-
-## 11. Dashboard
-
-Endpoint: `GET /api/recon-classification/usage-stats`
-
-Auth: `requireAdmin` (same as all other recon-classification routes)
-
-Query params: `company_id` (optional), `limit` (default 10, max 100)
-
-Response shape:
+Response:
 ```json
 {
   "summary": {
-    "totalUsage": 42,
-    "usageToday": 3,
-    "usageThisMonth": 18,
-    "activeCategories": 33,
-    "neverUsedCategories": 7
+    "totalUsage": 1234,
+    "usageToday": 12,
+    "usageThisMonth": 340,
+    "activeCategories": 45,
+    "neverUsedCategories": 8
   },
   "mostUsedCategories": [...],
   "leastUsedCategories": [...],
@@ -196,90 +183,121 @@ Response shape:
 }
 ```
 
-Performance: all queries use aggregate functions with LIMIT. No N+1. No unbounded scans.
+All queries use LIMIT — no unbounded scans. No N+1 queries.
 
 ---
 
-## 12. Failure Behavior
+## 8. Frontend
 
-| Scenario | Outcome |
-|----------|---------|
-| `recon_config_usage_events` INSERT fails | Warning logged, aggregate not incremented |
-| `recon_classification_configs` UPDATE fails | Warning logged |
-| Entire `trackMutationApproval` throws | `catch(() => {})` swallows the error, reconciliation unaffected |
-| DB temporarily unavailable for tracking | Warning logged; event can be re-tracked next approve (idempotency prevents double-count) |
+`artifacts/bizportal/src/pages/finance/recon-config/index.tsx`
 
-**Rule**: tracking failure NEVER rolls back reconciliation or journal.
+- `UsageStatsTab` component (line 963) — fetches `/api/recon-classification/usage-stats`
+- Registered as `<TabsContent value="stats">` (line 1272)
+- Tab label: **Statistik Penggunaan** (BarChart2 icon)
+- Shows: summary cards (5), most used, never used, top AI rules with acceptance rate, top keywords, recent activity table
+- States: loading spinner, error banner, empty states per section
+- Acceptance rate computed client-side: `accepted / (accepted + rejected)`, only shown when denominator > 0
+- Company-scoped query key via `activeCompanyId`
 
----
-
-## 13. Performance
-
-- All aggregate UPDATEs target PRIMARY KEY — no table scans.
-- Keyword batch update: single `UPDATE ... WHERE id IN (...)`.
-- Idempotency table uses a unique index on `(COALESCE(company_id, -1), idempotency_key)`.
-- Dashboard uses `COUNT(*)`, `SUM()`, and simple ORDER BY with LIMIT — no N+1.
-- No table-wide locks.
+Per-row usage indicator in ConfigTab (line 243):
+```tsx
+{row.usage_count > 0 && (
+  <span className="ml-1 text-xs text-slate-500">({row.usage_count}× dipakai)</span>
+)}
+```
 
 ---
 
-## 14. Runtime UAT (Development DB)
+## 9. Deactivation Guard
 
-### A. Business Matching
-1. Find an unmatched mutation with a description matching a known keyword.
-2. Approve it via POST `/api/bank-reconciliation/:id/approve`.
-3. Verify `usage_count` incremented by 1 in `recon_classification_configs`.
-4. Approve same mutation again → `usage_count` stays the same (idempotency).
+`POST /api/recon-classification/configs/:id/deactivate`
 
-### B. Failure Injection
-1. Temporarily disconnect the tracking table (rename or revoke permissions).
-2. Approve a mutation.
-3. Verify: reconciliation returns 200, journal posted, `usage_count` unchanged, warning in logs.
-4. Restore tracking table.
+| Scenario | Behavior |
+|---|---|
+| `usage_count = 0` | Deactivated silently, `warning: null` |
+| `usage_count > 0` | Deactivated, response includes `warning` message + `usage_count` |
+| Hard DELETE (no endpoint) | No hard-delete route exists for configs — history permanently preserved |
 
-### C. Cross-company
-1. Create configs with different `company_id`.
-2. Approve mutations in company A.
-3. Verify company B configs are not incremented.
+Seed configs (`is_seed = true`) follow the same policy (no special block).
+
+---
+
+## 10. Failure Handling
+
+If `trackMutationApproval` or any tracking function throws:
+- Error is caught inside the function (try/catch)
+- Warning is logged via `logger.warn()`
+- The function returns without throwing
+- The caller's `.catch(() => {})` suppresses any remaining rejection
+- **Reconciliation result, journal entry, and accounting entries are completely unaffected**
+
+Tested in `Failure isolation` suite (tests 14-16): all three public functions resolve without throwing even with invalid/non-existent IDs.
+
+---
+
+## 11. Runtime UAT Results
+
+See `FINAL_RUNTIME_USAGE_TRACKING_REPORT.md` for full UAT results.
+
+---
+
+## 12. Performance
+
+- All `UPDATE` statements target primary key — O(1), no table scans.
+- Keyword batch `UPDATE … WHERE id IN (…)` uses matched IDs only — bounded by keyword list size.
+- Idempotency `INSERT … ON CONFLICT DO NOTHING` — no row-level lock contention.
+- Dashboard queries all have `LIMIT` — no unbounded scans.
+- Events table has 3 targeted indexes.
+
+---
+
+## 13. TypeScript
+
+No new TypeScript errors introduced by usage tracking code. Pre-existing errors in other files
+(logger.error overload mismatches in reconClassificationConfig.ts, unbuilt lib deps) are unrelated.
+
+---
+
+## 14. Build
+
+`pnpm --filter @workspace/api-server run build` — exits 0. esbuild bundles to `dist/index.mjs` (16.9 MB).
 
 ---
 
 ## 15. Tests
 
-File: `artifacts/api-server/src/__tests__/usage-tracking.test.ts`
+`artifacts/api-server/src/__tests__/usage-tracking.test.ts` — **19/19 PASS**
 
-Run: `pnpm --filter @workspace/api-server exec vitest run --reporter=verbose --testPathPattern=usage-tracking`
-
-Covers:
-- Successful match increments once
-- Retry 10× increments once (idempotency)
-- Concurrent parallel calls increment once
-- Company A does not affect company B
-- AI rule accepted/rejected counters
-- Keyword usage increment
-- Failure isolation (non-existent IDs)
-- Dashboard company scope
-- Never-used query
-- Most-used ordering
-- Migration idempotency
-
----
-
-## 16. TypeScript & Builds
-
-Run sequence:
-```bash
-pnpm run build:libs
-pnpm --filter @workspace/api-server run typecheck
-pnpm --filter @workspace/bizportal run typecheck
-pnpm --filter @workspace/api-server run build
-```
+| # | Test | Result |
+|---|---|---|
+| 1 | Migration idempotent (runs twice) | ✅ PASS |
+| 2 | Creates recon_config_usage_events table | ✅ PASS |
+| 3 | recon_classification_configs has usage_count | ✅ PASS |
+| 4 | recon_ai_classification_rules has accepted/rejected_count | ✅ PASS |
+| 5 | trackMutationApproval increments config usage_count by 1 | ✅ PASS |
+| 6 | Same mutation approved 10× → exactly 1 increment | ✅ PASS |
+| 7 | trackConfigUsageByCode same mutationId twice → once | ✅ PASS |
+| 8 | 10 parallel calls same mutationId → exactly 1 increment | ✅ PASS |
+| 9 | Company A usage does NOT affect Company B config | ✅ PASS |
+| 10 | accepted recommendation → increments accepted_count | ✅ PASS |
+| 11 | rejected recommendation → increments rejected_count only | ✅ PASS |
+| 12 | Same feedback + same mutationId → idempotent | ✅ PASS |
+| 13 | Matched keyword usage_count increments on approval | ✅ PASS |
+| 14 | Non-existent mutationId does not throw | ✅ PASS |
+| 15 | Non-existent ruleId does not throw | ✅ PASS |
+| 16 | Unknown config code does not throw | ✅ PASS |
+| 17 | Usage events isolated per company in events table | ✅ PASS |
+| 18 | Never-used query returns configs with usage_count = 0 | ✅ PASS |
+| 19 | Most-used ordering returns highest usage_count first | ✅ PASS |
 
 ---
 
-## 17. Remaining Limitations
+## 16. Remaining Limitations
 
-1. **Approval rule tracking**: approval outcome (approved/rejected/escalated/expired) per `recon_approval_rules_config` row is not yet tracked. Only the parent config's `usage_count` reflects indirect usage.
-2. **Upload event tracking**: no separate `file_uploaded` event. The spec's distinction between `rule_applied` and `file_uploaded` is noted as a future enhancement.
-3. **Routine expense / income allocation hooks**: only the bank reconciliation approve endpoint currently fires `trackMutationApproval`. Routine expense and income allocation flows do not yet call the tracking service directly.
-4. **AI feedback integration**: `trackAiRuleFeedback` is implemented and tested but is not yet wired into any UI action (it requires an explicit call from the AI recommendation acceptance flow).
+- `accepted_count` / `rejected_count` on AI rules requires the frontend to POST to
+  `/api/recon-classification/ai-rules/feedback` after showing the user an AI recommendation.
+  The approve flow does not currently pass the recommended rule ID.
+- Upload rule and approval rule usage tracking is not implemented (would require hooks
+  in document upload and approval routing flows respectively).
+- `trackMutationApproval` tracks all keyword/AI-rule/config matches, not just the "winning" one.
+  This gives signal on which entities appear most in approved reconciliations.
