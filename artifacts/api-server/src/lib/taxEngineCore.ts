@@ -173,7 +173,11 @@ export async function autoMapJournalTax(params: {
     }
 
     // PPh 23 — akun PPh 23 / withholding vendor
-    if (coaName.includes("pph 23") || coaName.includes("pph23") || coaCode.includes("pph-23")) {
+    if (
+      coaName.includes("pph 23") || coaName.includes("pph23") ||
+      coaName.includes("pph pasal 23") || coaName.includes("hutang pph 23") ||
+      coaCode.includes("pph-23") || coaCode.includes("2-1032")
+    ) {
       const baseAmount = Math.abs(Number(line.credit_amount) - Number(line.debit_amount));
       if (baseAmount > 0) {
         const taxLine = await createTaxLine({
@@ -181,6 +185,28 @@ export async function autoMapJournalTax(params: {
           accountingEntryId,
           taxType: "PPH23",
           baseAmount: baseAmount / (TAX_RATES.PPH23 / 100),
+          direction: "output",
+          period,
+          entityType: source ?? null,
+          entityId: String(accountingEntryId),
+        });
+        lines.push(taxLine);
+      }
+    }
+
+    // PPh 21 — akun hutang PPh 21 / withholding karyawan
+    if (
+      coaName.includes("pph 21") || coaName.includes("pph21") ||
+      coaName.includes("pph pasal 21") || coaName.includes("hutang pph 21") ||
+      coaCode.includes("pph-21") || coaCode.includes("2-1031")
+    ) {
+      const baseAmount = Math.abs(Number(line.credit_amount) - Number(line.debit_amount));
+      if (baseAmount > 0) {
+        const taxLine = await createTaxLine({
+          companyId,
+          accountingEntryId,
+          taxType: "PPH21",
+          baseAmount: baseAmount / (TAX_RATES.PPH21 / 100),
           direction: "output",
           period,
           entityType: source ?? null,

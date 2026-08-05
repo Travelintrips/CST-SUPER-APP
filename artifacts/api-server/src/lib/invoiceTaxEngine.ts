@@ -268,7 +268,11 @@ function normalize(input: InvoiceTaxInput, effectiveRate: number): Normalized {
       const rateDecimal = effectiveRate / 100;
       net = Math.round(gross! / (1 + rateDecimal));
       vat = gross! - net;
-      derived.push("NET derived from GROSS using effective rate");
+      // DPP_BACK_CALCULATED: DPP dihitung balik dari gross, bukan diambil dari
+      // data asli transaksi. Ini risiko audit DJP — jika tarif berubah atau
+      // pembulatan berbeda, DPP yang dilaporkan bisa tidak sesuai faktur.
+      // Pastikan sistem sumber menyimpan DPP (net/subtotal) secara eksplisit.
+      derived.push("DPP_BACK_CALCULATED: NET (DPP) diturunkan dari GROSS dengan tarif efektif — simpan DPP asli dari sumber transaksi untuk kepatuhan DJP");
       derived.push("VAT derived from GROSS using effective rate");
     } else {
       // No rate — assume zero-rated, net = gross
@@ -528,6 +532,7 @@ export function runInvoiceTaxEngine(input: InvoiceTaxInput): InvoiceTaxResult {
   let confidence = 1.0;
   if (derivedFields.length > 0)                              confidence -= 0.15 * Math.min(derivedFields.length, 2);
   if (!is_balanced)                                          confidence -= 0.3;
+  if (allFlags.some(f => f.startsWith("DPP_BACK_CALCULATED"))) confidence -= 0.25; // risiko audit DJP
   if (allFlags.some(f => f.startsWith("VAT_EXCEEDS")))      confidence -= 0.2;
   if (allFlags.some(f => f.startsWith("RATE_DRIFT")))       confidence -= 0.1;
   if (allFlags.some(f => f.startsWith("VENDOR_COUNTRY")))   confidence -= 0.05;

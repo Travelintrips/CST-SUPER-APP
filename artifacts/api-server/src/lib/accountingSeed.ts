@@ -98,7 +98,8 @@ const COA_PARENTS: SeedAccount[] = [
  */
 const GOVERNED_TAX_COA_BASE_CODES = new Set([
   "1-1050", "1-1070", "1-1071", "1-1072", "1-1073", "1-1074", "1-1075", "1-1076",
-  "2-1030", "2-1060", "2-1061", "2-1062", "2-1063", "2-1064", "2-1065", "2-1066",
+  "2-1030", "2-1031", "2-1032",
+  "2-1060", "2-1061", "2-1062", "2-1063", "2-1064", "2-1065", "2-1066",
   "2-1067", "2-1068", "2-1069", "2-1070", "2-1071", "2-1072",
   "5-3020", "5-3040", "5-3041", "5-3042", "5-3043", "5-3044", "5-3045", "5-3046",
   "5-3047", "5-3048",
@@ -133,6 +134,8 @@ const COA_LEAF_TEMPLATES: SeedAccount[] = [
   { code: "2-1010", name: "Hutang Usaha",                     type: "liability", parentCode: "2-1000" },
   { code: "2-1020", name: "PPN Keluaran",                     type: "liability", parentCode: "2-1000" },
   { code: "2-1030", name: "Hutang Pajak Lainnya",             type: "liability", parentCode: "2-1000" },
+  { code: "2-1031", name: "Hutang PPh 21",                   type: "liability", parentCode: "2-1000" },
+  { code: "2-1032", name: "Hutang PPh 23",                   type: "liability", parentCode: "2-1000" },
   { code: "2-1040", name: "Uang Muka Pelanggan",              type: "liability", parentCode: "2-1000" },
   { code: "2-1045", name: "GR/IR Clearing (Barang Diterima/Belum Ditagih)", type: "liability", parentCode: "2-1000" },
   { code: "2-1050", name: "Hutang Bank Jangka Pendek",        type: "liability", parentCode: "2-1000" },
@@ -739,8 +742,8 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
   const TAX_TEMPLATES: TaxTemplate[] = [
     { name: "PPN Keluaran 11%",         rate: "11.000", kind: "sale",        cutType: "self_borne",  accountBase: "2-1020", uniqueKey: "sale" },
     { name: "PPN Masukan 11%",          rate: "11.000", kind: "purchase",     cutType: "self_borne",  accountBase: "1-1050", uniqueKey: "purchase" },
-    { name: "PPh 21",                   rate: "5.000",  kind: "withholding",  cutType: "withholding", accountBase: "2-1030", uniqueKey: "pph21" },
-    { name: "PPh 23",                   rate: "2.000",  kind: "withholding",  cutType: "withholding", accountBase: "2-1030", uniqueKey: "pph23" },
+    { name: "PPh 21",                   rate: "5.000",  kind: "withholding",  cutType: "withholding", accountBase: "2-1031", uniqueKey: "pph21" },
+    { name: "PPh 23",                   rate: "2.000",  kind: "withholding",  cutType: "withholding", accountBase: "2-1032", uniqueKey: "pph23" },
     { name: "PPh Final",                rate: "0.500",  kind: "withholding",  cutType: "self_borne",  accountBase: "2-1030", uniqueKey: "pphfinal" },
     { name: "PPh Freight Paket 1,1%",   rate: "1.100",  kind: "withholding",  cutType: "withholding", accountBase: "2-1030", uniqueKey: "pphfreight" },
   ];
