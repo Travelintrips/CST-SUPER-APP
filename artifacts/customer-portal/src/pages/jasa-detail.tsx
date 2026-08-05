@@ -1206,7 +1206,7 @@ export default function JasaDetail() {
                 {ct === "air_freight" && <>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <Label>Origin Airport</Label>
+                      <Label>{t("jasaDetail.originAirport")}</Label>
                       <AirportCombobox
                         value={state.originAirport || ""}
                         onChange={(v) => set("originAirport", v)}
@@ -1214,7 +1214,7 @@ export default function JasaDetail() {
                       />
                     </div>
                     <div>
-                      <Label>Destination Airport</Label>
+                      <Label>{t("jasaDetail.destAirport")}</Label>
                       <AirportCombobox
                         value={state.destinationAirport || ""}
                         onChange={(v) => set("destinationAirport", v)}
@@ -1232,7 +1232,7 @@ export default function JasaDetail() {
                       return (
                         <div key={row.id} className="border border-border rounded-xl p-4 space-y-3 bg-gray-50/50 relative">
                           <div className="flex items-center justify-between">
-                            <p className="text-sm font-semibold text-foreground">Quantity #{idx + 1}</p>
+                            <p className="text-sm font-semibold text-foreground">{t("jasaDetail.quantityLabel")} #{idx + 1}</p>
                             {airRows.length > 1 && (
                               <button
                                 type="button"
@@ -1245,25 +1245,25 @@ export default function JasaDetail() {
                           </div>
                           <div className="grid grid-cols-2 gap-3">
                             <div>
-                              <Label className="text-xs">Gross Weight (kg)</Label>
+                              <Label className="text-xs">{t("jasaDetail.grossWeightKg")}</Label>
                               <Input type="number" placeholder="0" className="mt-1 h-9" value={row.grossWeight} onChange={e => setAirRow(row.id, "grossWeight", e.target.value)} />
                             </div>
                             <div>
-                              <Label className="text-xs">Quantity (pcs)</Label>
+                              <Label className="text-xs">{t("jasaDetail.quantityPcs")}</Label>
                               <Input type="number" placeholder="1" className="mt-1 h-9" value={row.quantity} onChange={e => setAirRow(row.id, "quantity", e.target.value)} />
                             </div>
                           </div>
                           <div className="grid grid-cols-3 gap-3">
                             <div>
-                              <Label className="text-xs">Length (cm)</Label>
+                              <Label className="text-xs">{t("jasaDetail.lengthCm")}</Label>
                               <Input type="number" placeholder="0" className="mt-1 h-9" value={row.length} onChange={e => setAirRow(row.id, "length", e.target.value)} />
                             </div>
                             <div>
-                              <Label className="text-xs">Width (cm)</Label>
+                              <Label className="text-xs">{t("jasaDetail.widthCm")}</Label>
                               <Input type="number" placeholder="0" className="mt-1 h-9" value={row.width} onChange={e => setAirRow(row.id, "width", e.target.value)} />
                             </div>
                             <div>
-                              <Label className="text-xs">Height (cm)</Label>
+                              <Label className="text-xs">{t("jasaDetail.heightCm")}</Label>
                               <Input type="number" placeholder="0" className="mt-1 h-9" value={row.height} onChange={e => setAirRow(row.id, "height", e.target.value)} />
                             </div>
                           </div>
@@ -1302,44 +1302,44 @@ export default function JasaDetail() {
 
                 {ct === "sea_fcl" && <>
                   <div className="grid grid-cols-2 gap-4">
-                    <div><Label>Origin Port</Label><Input placeholder="IDJKT" className="mt-1" value={state.originPort || ""} onChange={e => set("originPort", e.target.value)} /></div>
-                    <div><Label>Destination Port</Label><Input placeholder="SGSIN" className="mt-1" value={state.destinationPort || ""} onChange={e => set("destinationPort", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.originPort")}</Label><Input placeholder="IDJKT" className="mt-1" value={state.originPort || ""} onChange={e => set("originPort", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.destPort")}</Label><Input placeholder="SGSIN" className="mt-1" value={state.destinationPort || ""} onChange={e => set("destinationPort", e.target.value)} /></div>
                   </div>
-                  <div><Label>Container Type</Label>
+                  <div><Label>{t("jasaDetail.containerType")}</Label>
                     <Select value={state.containerType || undefined} onValueChange={v => set("containerType", v)}>
-                      <SelectTrigger className="mt-1"><SelectValue placeholder="Pilih container" /></SelectTrigger>
+                      <SelectTrigger className="mt-1"><SelectValue placeholder={t("jasaDetail.selectContainer")} /></SelectTrigger>
                       <SelectContent>{["20 ft", "40 ft", "40 ft (High Cube)", "20 ft Suspensi", "40 ft Suspensi"].map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
                     </Select>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
-                    <div><Label>Freight Rate (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.freightRate || ""} onChange={e => set("freightRate", e.target.value)} /></div>
-                    <div><Label>Handling Fee (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.handlingFee || ""} onChange={e => set("handlingFee", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.freightRate")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.freightRate || ""} onChange={e => set("freightRate", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.handlingFeeIDR")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.handlingFee || ""} onChange={e => set("handlingFee", e.target.value)} /></div>
                   </div>
                 </>}
 
                 {ct === "sea_lcl" && <>
                   <div className="grid grid-cols-2 gap-4">
-                    <div><Label>CBM</Label><Input type="number" placeholder="0" className="mt-1" value={state.cbm || ""} onChange={e => set("cbm", e.target.value)} /></div>
-                    <div><Label>Weight (kg)</Label><Input type="number" placeholder="0" className="mt-1" value={state.weight || ""} onChange={e => set("weight", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.cbm")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.cbm || ""} onChange={e => set("cbm", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.weightKg")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.weight || ""} onChange={e => set("weight", e.target.value)} /></div>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
-                    <div><Label>Rate per CBM (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.ratePerCbm || ""} onChange={e => set("ratePerCbm", e.target.value)} /></div>
-                    <div><Label>Minimum Charge (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.minimumCharge || ""} onChange={e => set("minimumCharge", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.ratePerCbm")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.ratePerCbm || ""} onChange={e => set("ratePerCbm", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.minimumCharge")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.minimumCharge || ""} onChange={e => set("minimumCharge", e.target.value)} /></div>
                   </div>
                 </>}
 
                 {ct === "customs" && <>
-                  <div><Label>Shipment Type</Label>
+                  <div><Label>{t("jasaDetail.shipmentType")}</Label>
                     <Select value={state.shipmentType || undefined} onValueChange={v => set("shipmentType", v)}>
                       <SelectTrigger className="mt-1"><SelectValue placeholder="Import / Export" /></SelectTrigger>
                       <SelectContent><SelectItem value="Import">Import</SelectItem><SelectItem value="Export">Export</SelectItem></SelectContent>
                     </Select>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
-                    <div><Label>Customs Service Fee (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.customsFee || ""} onChange={e => set("customsFee", e.target.value)} /></div>
-                    <div><Label>Document Fee (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.documentFee || ""} onChange={e => set("documentFee", e.target.value)} /></div>
-                    <div><Label>PIB/PEB Fee (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.pibPebFee || ""} onChange={e => set("pibPebFee", e.target.value)} /></div>
-                    <div><Label>Additional Permit Fee (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.permitFee || ""} onChange={e => set("permitFee", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.customsFeeIDR")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.customsFee || ""} onChange={e => set("customsFee", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.documentFeeIDR")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.documentFee || ""} onChange={e => set("documentFee", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.pibPebFee")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.pibPebFee || ""} onChange={e => set("pibPebFee", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.permitFeeIDR")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.permitFee || ""} onChange={e => set("permitFee", e.target.value)} /></div>
                   </div>
                 </>}
 
@@ -1382,8 +1382,8 @@ export default function JasaDetail() {
                                   <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-transform duration-200 ${orderNow ? "translate-x-5" : "translate-x-0"}`}/>
                                 </button>
                                 <div>
-                                  <p className="text-sm font-semibold text-gray-800">Pesan Sekarang</p>
-                                  <p className="text-[11px] text-gray-400">Pickup dijadwalkan hari ini</p>
+                                  <p className="text-sm font-semibold text-gray-800">{t("jasaDetail.orderNowLabel")}</p>
+                                  <p className="text-[11px] text-gray-400">{t("jasaDetail.orderNowDesc")}</p>
                                 </div>
                                 {orderNow && <span className="ml-auto text-[11px] font-medium text-[#0B5CAD] bg-blue-50 px-2 py-0.5 rounded-full">{t("jasaDetail.activeLabel")}</span>}
                               </div>
@@ -1524,7 +1524,7 @@ export default function JasaDetail() {
                             </div>
                             <div className="border-t border-gray-100 px-4 py-2.5">
                               <button type="button" onClick={addTruckingStop} className="flex items-center gap-1.5 text-[#0B5CAD] text-sm font-semibold hover:text-[#083B70] transition-colors">
-                                <Plus className="h-3.5 w-3.5"/> Add Stop
+                                <Plus className="h-3.5 w-3.5"/> {t("jasaDetail.addStop")}
                               </button>
                             </div>
                             <div className="border-t border-gray-100 px-4 py-3 flex items-start gap-3">
@@ -1534,7 +1534,7 @@ export default function JasaDetail() {
                                 <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${optimizeRoute ? "translate-x-5" : "translate-x-0"}`}/>
                               </button>
                               <div>
-                                <p className="text-xs font-semibold text-gray-800">Optimize Route</p>
+                                <p className="text-xs font-semibold text-gray-800">{t("jasaDetail.optimizeRoute")}</p>
                                 <p className="text-[11px] text-gray-400 leading-snug mt-0.5">{t("jasaDetail.optimizeRouteDesc")}</p>
                               </div>
                             </div>
@@ -1568,7 +1568,7 @@ export default function JasaDetail() {
                                 <Input type="number" min="1" placeholder="0" value={koliQty} onChange={e => setKoliQty(e.target.value)}/>
                               </div>
                               <div>
-                                <label className="text-xs text-gray-500 font-medium block mb-1">Gross Weight (kg) <span className="text-red-500">*</span></label>
+                                <label className="text-xs text-gray-500 font-medium block mb-1">{t("jasaDetail.grossWeightKg")} <span className="text-red-500">*</span></label>
                                 <Input type="number" min="0.1" step="0.1" placeholder="0" value={grossWeight} onChange={e => setGrossWeight(e.target.value)}/>
                               </div>
                             </div>
@@ -1602,7 +1602,7 @@ export default function JasaDetail() {
                               )}
                             </div>
                             <div>
-                              <label className="text-xs text-gray-600 font-medium block mb-1.5">Notes <span className="text-gray-400 font-normal">(optional)</span></label>
+                              <label className="text-xs text-gray-600 font-medium block mb-1.5">{t("jasaDetail.notesOptional")}</label>
                               <textarea
                                 rows={2}
                                 placeholder={t("jasaDetail.notesPlaceholder")}
@@ -1720,7 +1720,7 @@ export default function JasaDetail() {
                             <p className="font-bold text-white text-[11px] uppercase tracking-wide mb-2">{t("jasaDetail.orderSummaryLabel")}</p>
                             <div className="flex justify-between gap-2">
                               <span className="text-white/70">Jadwal</span>
-                              <span className="font-medium">{orderNow ? "Sekarang" : `${state.pickupDate || "—"}${state.pickupTime ? ` · ${state.pickupTime}` : ""}`}</span>
+                              <span className="font-medium">{orderNow ? t("jasaDetail.summaryNow") : `${state.pickupDate || "—"}${state.pickupTime ? ` · ${state.pickupTime}` : ""}`}</span>
                             </div>
                             <div className="flex justify-between gap-2">
                               <span className="text-white/70 flex-shrink-0">{t("jasaDetail.summaryRoute")}</span>
@@ -1732,7 +1732,7 @@ export default function JasaDetail() {
                             </div>
                             {state.distance && (
                               <div className="flex justify-between gap-2">
-                                <span className="text-white/70">Jarak</span>
+                                <span className="text-white/70">{t("jasaDetail.summaryDistance")}</span>
                                 <span className="font-bold text-white">{state.distance} km</span>
                               </div>
                             )}
@@ -1748,16 +1748,16 @@ export default function JasaDetail() {
                             </div>
                             <div className="flex justify-between gap-2">
                               <span className="text-white/70">Foto</span>
-                              <span className="font-medium">{cargoPhotoUrls.length} foto terupload</span>
+                              <span className="font-medium">{t("jasaDetail.photoUploaded").replace('{n}', String(cargoPhotoUrls.length))}</span>
                             </div>
                             <div className="flex justify-between gap-2">
                               <span className="text-white/70">Pembayaran</span>
                               <span className="font-medium">
                                 {truckingPayment === "gateway" ? "Payment Gateway"
-                                  : truckingTransferTerm === "full" ? "Transfer · Full Payment"
-                                  : truckingTransferTerm === "termin" ? `Transfer · Termin ${truckingPayTerm || ""}`
-                                  : truckingTransferTerm === "dp" ? "Transfer · DP/Advance"
-                                  : "Transfer"}
+                                  : truckingTransferTerm === "full" ? t("jasaDetail.payTransferFull")
+                                  : truckingTransferTerm === "termin" ? t("jasaDetail.payTransferTermin").replace('{term}', truckingPayTerm || "")
+                                  : truckingTransferTerm === "dp" ? t("jasaDetail.payTransferDp")
+                                  : t("jasaDetail.payTransfer")}
                               </span>
                             </div>
                           </div>
@@ -1819,14 +1819,14 @@ export default function JasaDetail() {
                                         <div>
                                           <div className="flex items-center justify-between mb-1">
                                             <label className="text-[10px] text-gray-500 font-medium">Rate/km (IDR)</label>
-                                            {truckingRates[VEHICLE_CAPS_LIST.find(vv => vv.key === state.vehicleType)?.rateKey ?? ""] && <span className="text-[10px] text-[#0B5CAD]">✓ admin</span>}
+                                            {truckingRates[VEHICLE_CAPS_LIST.find(vv => vv.key === state.vehicleType)?.rateKey ?? ""] && <span className="text-[10px] text-[#0B5CAD]">{t("jasaDetail.adminVerified")}</span>}
                                           </div>
                                           <Input type="number" placeholder="0" className="h-8 text-xs" value={state.truckingRate || ""} onChange={e => set("truckingRate", e.target.value)}/>
                                         </div>
                                         <div>
                                           <div className="flex items-center justify-between mb-1">
                                             <label className="text-[10px] text-gray-500 font-medium">Loading Fee (IDR)</label>
-                                            {truckingRates[VEHICLE_CAPS_LIST.find(vv => vv.key === state.vehicleType)?.rateKey ?? ""] && <span className="text-[10px] text-[#0B5CAD]">✓ admin</span>}
+                                            {truckingRates[VEHICLE_CAPS_LIST.find(vv => vv.key === state.vehicleType)?.rateKey ?? ""] && <span className="text-[10px] text-[#0B5CAD]">{t("jasaDetail.adminVerified")}</span>}
                                           </div>
                                           <Input type="number" placeholder="0" className="h-8 text-xs" value={state.loadingFee || ""} onChange={e => set("loadingFee", e.target.value)}/>
                                         </div>
@@ -1848,7 +1848,7 @@ export default function JasaDetail() {
                               </div>
                               {(parseFloat(state.loadingFee)||0) > 0 && (
                                 <div className="flex justify-between text-gray-500">
-                                  <span>Loading Fee</span>
+                                  <span>{t("jasaDetail.loadingFeeLabel")}</span>
                                   <span>{formatCurrency(parseFloat(state.loadingFee)||0)}</span>
                                 </div>
                               )}
@@ -1878,41 +1878,41 @@ export default function JasaDetail() {
 
                 {ct === "storage" && <>
                   <div className="grid grid-cols-2 gap-4">
-                    <div><Label>Number of Days</Label><Input type="number" placeholder="0" className="mt-1" value={state.days || ""} onChange={e => set("days", e.target.value)} /></div>
-                    <div><Label>Quantity</Label><Input type="number" placeholder="1" className="mt-1" value={state.quantity || ""} onChange={e => set("quantity", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.numDays")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.days || ""} onChange={e => set("days", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.quantityLabel")}</Label><Input type="number" placeholder="1" className="mt-1" value={state.quantity || ""} onChange={e => set("quantity", e.target.value)} /></div>
                   </div>
-                  <div><Label>Unit</Label>
+                  <div><Label>{t("jasaDetail.unitLabel")}</Label>
                     <Select value={state.unit || undefined} onValueChange={v => set("unit", v)}>
-                      <SelectTrigger className="mt-1"><SelectValue placeholder="Pilih unit" /></SelectTrigger>
+                      <SelectTrigger className="mt-1"><SelectValue placeholder={t("jasaDetail.selectUnit")} /></SelectTrigger>
                       <SelectContent>{["CBM", "Pallet", "KG"].map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent>
                     </Select>
                   </div>
-                  <div><Label>Rate per Day (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.ratePerDay || ""} onChange={e => set("ratePerDay", e.target.value)} /></div>
+                  <div><Label>{t("jasaDetail.ratePerDayIDR")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.ratePerDay || ""} onChange={e => set("ratePerDay", e.target.value)} /></div>
                 </>}
 
                 {ct === "document" && <>
-                  <div><Label>Document Type</Label><Input placeholder="Bill of Lading" className="mt-1" value={state.documentType || ""} onChange={e => set("documentType", e.target.value)} /></div>
+                  <div><Label>{t("jasaDetail.documentType")}</Label><Input placeholder="Bill of Lading" className="mt-1" value={state.documentType || ""} onChange={e => set("documentType", e.target.value)} /></div>
                   <div className="grid grid-cols-2 gap-4">
-                    <div><Label>Quantity</Label><Input type="number" placeholder="1" className="mt-1" value={state.quantity || ""} onChange={e => set("quantity", e.target.value)} /></div>
-                    <div><Label>Fee per Document (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.feePerDocument || ""} onChange={e => set("feePerDocument", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.quantityLabel")}</Label><Input type="number" placeholder="1" className="mt-1" value={state.quantity || ""} onChange={e => set("quantity", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.feePerDocIDR")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.feePerDocument || ""} onChange={e => set("feePerDocument", e.target.value)} /></div>
                   </div>
                 </>}
 
                 {ct === "additional" && <>
-                  <div><Label>Service Type</Label><Input placeholder="Insurance / Survey..." className="mt-1" value={state.serviceType || ""} onChange={e => set("serviceType", e.target.value)} /></div>
+                  <div><Label>{t("jasaDetail.serviceType")}</Label><Input placeholder="Insurance / Survey..." className="mt-1" value={state.serviceType || ""} onChange={e => set("serviceType", e.target.value)} /></div>
                   <div className="grid grid-cols-2 gap-4">
-                    <div><Label>Service Fee (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.serviceFee || ""} onChange={e => set("serviceFee", e.target.value)} /></div>
-                    <div><Label>Admin Fee (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.adminFee || ""} onChange={e => set("adminFee", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.serviceFeeIDR")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.serviceFee || ""} onChange={e => set("serviceFee", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.adminFeeIDR")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.adminFee || ""} onChange={e => set("adminFee", e.target.value)} /></div>
                   </div>
                 </>}
 
                 {ct === "generic" && <>
-                  <div><Label>Service Name</Label><Input placeholder={item.name} className="mt-1" value={state.serviceName || ""} onChange={e => set("serviceName", e.target.value)} /></div>
+                  <div><Label>{t("jasaDetail.serviceName")}</Label><Input placeholder={item.name} className="mt-1" value={state.serviceName || ""} onChange={e => set("serviceName", e.target.value)} /></div>
                   <div className="grid grid-cols-2 gap-4">
-                    <div><Label>Quantity</Label><Input type="number" placeholder="1" className="mt-1" value={state.quantity || ""} onChange={e => set("quantity", e.target.value)} /></div>
-                    <div><Label>Unit Price (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.unitPrice || ""} onChange={e => set("unitPrice", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.quantityLabel")}</Label><Input type="number" placeholder="1" className="mt-1" value={state.quantity || ""} onChange={e => set("quantity", e.target.value)} /></div>
+                    <div><Label>{t("jasaDetail.unitPriceIDR")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.unitPrice || ""} onChange={e => set("unitPrice", e.target.value)} /></div>
                   </div>
-                  <div><Label>Notes (optional)</Label><Input placeholder="Detail tambahan..." className="mt-1" value={state.notes || ""} onChange={e => set("notes", e.target.value)} /></div>
+                  <div><Label>{t("jasaDetail.notesOptional")}</Label><Input placeholder="Detail tambahan..." className="mt-1" value={state.notes || ""} onChange={e => set("notes", e.target.value)} /></div>
                 </>}
 
                 {ct !== "trucking" && (
@@ -1933,7 +1933,7 @@ export default function JasaDetail() {
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <p className="text-[10px] font-bold uppercase tracking-[0.15em] mb-2" style={{ color: subtotal > 0 ? "rgba(255,255,255,0.6)" : "#94A3B8" }}>
-                            Estimasi Subtotal
+                            {t("jasaDetail.estimatedSubtotal")}
                           </p>
                           <p className="text-[2rem] font-bold tracking-tight leading-none" style={{ color: subtotal > 0 ? "#FFFFFF" : "#CBD5E1" }}>
                             {subtotal > 0 ? formatCurrency(subtotal) : "—"}
@@ -2100,10 +2100,10 @@ export default function JasaDetail() {
               <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400 mb-3">{t("jasaDetail.whyUsLabel")}</p>
               <div className="space-y-2.5">
                 {[
-                  { icon: "🛡️", text: "Berlisensi & Terdaftar Resmi" },
-                  { icon: "⏱️", text: "Respon Cepat & Profesional" },
-                  { icon: "📦", text: "Kargo Aman & Terlindungi" },
-                  { icon: "💬", text: "Dukungan WhatsApp 24/7" },
+                  { icon: "🛡️", text: t("jasaDetail.trustBadge1") },
+                  { icon: "⏱️", text: t("jasaDetail.trustBadge2") },
+                  { icon: "📦", text: t("jasaDetail.trustBadge3") },
+                  { icon: "💬", text: t("jasaDetail.trustBadge4") },
                 ].map(b => (
                   <div key={b.text} className="flex items-center gap-2.5">
                     <span className="text-base flex-shrink-0">{b.icon}</span>
@@ -2121,7 +2121,7 @@ export default function JasaDetail() {
               >
                 <div className="px-5 pt-4 pb-3">
                   <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
-                    Layanan {item.category} Lainnya
+                    {t("jasaDetail.relatedServicesLabel").replace('{category}', item.category)}
                   </p>
                 </div>
                 <div className="divide-y divide-slate-100/80 px-2 pb-2">
