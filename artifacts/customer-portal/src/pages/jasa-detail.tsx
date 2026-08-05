@@ -1719,7 +1719,7 @@ export default function JasaDetail() {
                           <div className="bg-white/10 rounded-xl px-4 py-3 space-y-1.5 text-xs text-white/90">
                             <p className="font-bold text-white text-[11px] uppercase tracking-wide mb-2">{t("jasaDetail.orderSummaryLabel")}</p>
                             <div className="flex justify-between gap-2">
-                              <span className="text-white/70">Jadwal</span>
+                              <span className="text-white/70">{t("jasaDetail.summarySchedule")}</span>
                               <span className="font-medium">{orderNow ? t("jasaDetail.summaryNow") : `${state.pickupDate || "—"}${state.pickupTime ? ` · ${state.pickupTime}` : ""}`}</span>
                             </div>
                             <div className="flex justify-between gap-2">
@@ -1747,11 +1747,11 @@ export default function JasaDetail() {
                               <span className="font-medium">{koliQty} koli · {grossWeight} kg{calcTotalVolumeM3(dimensions) > 0 ? ` · ${calcTotalVolumeM3(dimensions).toFixed(2)} m³` : ""}</span>
                             </div>
                             <div className="flex justify-between gap-2">
-                              <span className="text-white/70">Foto</span>
+                              <span className="text-white/70">{t("jasaDetail.summaryPhoto")}</span>
                               <span className="font-medium">{t("jasaDetail.photoUploaded").replace('{n}', String(cargoPhotoUrls.length))}</span>
                             </div>
                             <div className="flex justify-between gap-2">
-                              <span className="text-white/70">Pembayaran</span>
+                              <span className="text-white/70">{t("jasaDetail.summaryPayment")}</span>
                               <span className="font-medium">
                                 {truckingPayment === "gateway" ? "Payment Gateway"
                                   : truckingTransferTerm === "full" ? t("jasaDetail.payTransferFull")
@@ -1766,7 +1766,7 @@ export default function JasaDetail() {
                           {(totalWgt > 0 || totalVol > 0) && (
                             <div className="bg-white/10 rounded-xl px-3 py-2.5 flex items-center gap-3 text-xs text-white/90">
                               <svg className="w-4 h-4 flex-shrink-0 text-white/70" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10"/></svg>
-                              <span>Muatan: <span className="font-semibold text-white">{totalWgt > 0 ? `${totalWgt} kg` : "—"}</span> · <span className="font-semibold text-white">{totalVol > 0 ? `${totalVol.toFixed(2)} m³` : "—"}</span></span>
+                              <span>{t("jasaDetail.summaryCargo")}: <span className="font-semibold text-white">{totalWgt > 0 ? `${totalWgt} kg` : "—"}</span> · <span className="font-semibold text-white">{totalVol > 0 ? `${totalVol.toFixed(2)} m³` : "—"}</span></span>
                             </div>
                           )}
 
@@ -1818,14 +1818,14 @@ export default function JasaDetail() {
                                       <div className="grid grid-cols-2 gap-2">
                                         <div>
                                           <div className="flex items-center justify-between mb-1">
-                                            <label className="text-[10px] text-gray-500 font-medium">Rate/km (IDR)</label>
+                                            <label className="text-[10px] text-gray-500 font-medium">{t("jasaDetail.ratePerKmIDR")}</label>
                                             {truckingRates[VEHICLE_CAPS_LIST.find(vv => vv.key === state.vehicleType)?.rateKey ?? ""] && <span className="text-[10px] text-[#0B5CAD]">{t("jasaDetail.adminVerified")}</span>}
                                           </div>
                                           <Input type="number" placeholder="0" className="h-8 text-xs" value={state.truckingRate || ""} onChange={e => set("truckingRate", e.target.value)}/>
                                         </div>
                                         <div>
                                           <div className="flex items-center justify-between mb-1">
-                                            <label className="text-[10px] text-gray-500 font-medium">Loading Fee (IDR)</label>
+                                            <label className="text-[10px] text-gray-500 font-medium">{t("jasaDetail.loadingFeeIDR")}</label>
                                             {truckingRates[VEHICLE_CAPS_LIST.find(vv => vv.key === state.vehicleType)?.rateKey ?? ""] && <span className="text-[10px] text-[#0B5CAD]">{t("jasaDetail.adminVerified")}</span>}
                                           </div>
                                           <Input type="number" placeholder="0" className="h-8 text-xs" value={state.loadingFee || ""} onChange={e => set("loadingFee", e.target.value)}/>
@@ -1964,13 +1964,13 @@ export default function JasaDetail() {
                         onMouseLeave={e => { (e.currentTarget as HTMLElement).style.boxShadow = `0 4px 16px ${hero.accentColor}35`; (e.currentTarget as HTMLElement).style.transform = "translateY(0)"; }}
                       >
                         <ShoppingCart className="h-5 w-5" />
-                        Tambahkan ke Pesanan
+                        {t("jasaDetail.addToOrderBtn")}
                       </button>
                     ) : (
                       <div className="space-y-2.5">
                         <div className="flex items-center gap-2.5 text-emerald-700 bg-emerald-50 ring-1 ring-emerald-200/80 rounded-xl px-4 py-3 text-[13px] font-semibold">
                           <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
-                          {item.name} berhasil ditambahkan ke pesanan
+                          {t("jasaDetail.addedToCartConfirm").replace('{name}', item.name)}
                         </div>
                         <div className="grid grid-cols-2 gap-2.5">
                           <Button variant="outline" onClick={() => {
@@ -1986,7 +1986,7 @@ export default function JasaDetail() {
                             setCargoPhotoUrls([]);
                             setTruckingStep(1);
                           }} className="gap-1.5 rounded-xl border-slate-200 text-slate-600 h-11">
-                            <Calculator className="h-4 w-4" /> Hitung Ulang
+                            <Calculator className="h-4 w-4" /> {t("jasaDetail.recalcBtn")}
                           </Button>
                           <button
                             type="button"
@@ -2039,7 +2039,7 @@ export default function JasaDetail() {
                     {subtotal > 0 ? formatCurrency(subtotal) : "—"}
                   </p>
                   <p className="text-[11.5px] text-white/55 mt-2 leading-snug">
-                    {ct === "trucking" ? t("jasaDetail.sidebarTruckingNote") : "Negosiasi / Quotation"}
+                    {ct === "trucking" ? t("jasaDetail.sidebarTruckingNote") : t("jasaDetail.quotation")}
                   </p>
                 </div>
               </div>
@@ -2047,14 +2047,14 @@ export default function JasaDetail() {
               {/* White body */}
               <div className="bg-white divide-y divide-slate-100/80">
                 <div className="flex justify-between items-center px-5 py-3.5">
-                  <span className="text-[12px] text-slate-400 font-medium">Kategori</span>
+                  <span className="text-[12px] text-slate-400 font-medium">{t("jasaDetail.summaryCategory")}</span>
                   <span
                     className="text-[11px] font-bold px-2.5 py-0.5 rounded-full"
                     style={{ background: hero.badgeBg, color: hero.badgeText }}
                   >{item.category}</span>
                 </div>
                 <div className="flex justify-between items-center px-5 py-3.5">
-                  <span className="text-[12px] text-slate-400 font-medium">Status</span>
+                  <span className="text-[12px] text-slate-400 font-medium">{t("jasaDetail.statusLabel")}</span>
                   <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full ring-1 ring-emerald-200/80">
                     {t("jasaDetail.availableLabel")}
                   </span>
@@ -2067,7 +2067,7 @@ export default function JasaDetail() {
                 )}
                 {ct === "trucking" && state.distance && (
                   <div className="flex justify-between items-center px-5 py-3.5">
-                    <span className="text-[12px] text-slate-400 font-medium">Jarak</span>
+                    <span className="text-[12px] text-slate-400 font-medium">{t("jasaDetail.distanceLabel")}</span>
                     <span className="text-[11px] font-semibold text-slate-700">{state.distance} km</span>
                   </div>
                 )}
@@ -2087,7 +2087,7 @@ export default function JasaDetail() {
                   onMouseLeave={e => { (e.currentTarget as HTMLElement).style.boxShadow = `0 4px 16px ${hero.accentColor}3A`; (e.currentTarget as HTMLElement).style.transform = "translateY(0)"; }}
                 >
                   <ShoppingCart className="h-4 w-4" />
-                  Lihat Keranjang Pesanan
+                  {t("jasaDetail.viewCartBtn")}
                 </button>
               </div>
             </div>
@@ -2194,7 +2194,7 @@ export default function JasaDetail() {
                     className="sm:min-w-[200px] text-white py-3.5 px-8 rounded-xl font-bold text-sm active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
                     style={{ background: `linear-gradient(135deg, ${hero.accentColor} 0%, ${hero.accentColor}CC 100%)`, boxShadow: `0 4px 16px ${hero.accentColor}35` }}
                   >
-                    Lanjut <ArrowRight className="h-4 w-4" />
+                    {t("jasaDetail.nextBtn")} <ArrowRight className="h-4 w-4" />
                   </button>
                 ) : (
                   <button
@@ -2216,7 +2216,7 @@ export default function JasaDetail() {
                   onClick={() => { setAdded(false); setState({}); setTruckingStep(1); setTruckingStops([]); setOrderNow(false); setCargoCategory(""); setKoliQty(""); setGrossWeight(""); setDimensions([newDimRow()]); setCargoPhotoFiles([]); setCargoPhotoUrls([]); setTruckingPayment(""); setTruckingTransferTerm(""); setTruckingPayTerm(""); setTruckingDpNext(""); }}
                   className="flex-1 sm:flex-none sm:min-w-[130px] py-3.5 px-5 rounded-xl border-2 border-slate-200 text-slate-600 font-semibold text-sm hover:border-slate-300 hover:bg-slate-50 transition-all flex items-center justify-center gap-1.5"
                 >
-                  <Calculator className="h-4 w-4" /> Hitung Ulang
+                  <Calculator className="h-4 w-4" /> {t("jasaDetail.recalcBtn")}
                 </button>
                 <button
                   type="button"
@@ -2224,7 +2224,7 @@ export default function JasaDetail() {
                   className="flex-1 sm:flex-none sm:min-w-[160px] text-white font-bold text-sm active:scale-[0.98] transition-all flex items-center justify-center gap-1.5 py-3.5 px-5 rounded-xl"
                   style={{ background: `linear-gradient(135deg, ${hero.accentColor} 0%, ${hero.accentColor}CC 100%)`, boxShadow: `0 4px 16px ${hero.accentColor}35` }}
                 >
-                  Lanjut Pesan <ArrowRight className="h-4 w-4" />
+                  {t("jasaDetail.proceedBtn")} <ArrowRight className="h-4 w-4" />
                 </button>
               </div>
             )}
