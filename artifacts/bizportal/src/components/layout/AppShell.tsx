@@ -347,6 +347,7 @@ export function AppShell({ children, noPadding }: AppShellProps) {
         { titleKey: "Audit Pajak",         href: "/tax/audit",                          icon: ShieldCheck },
         { titleKey: "Setup Pajak",         href: "/accounting/taxes",                   icon: Receipt },
         { titleKey: "Ekspor DJP",          href: "/tax/export-djp",                     icon: FileText },
+        { titleKey: "Bank Recon Config",   href: "/finance/recon-config",               icon: SlidersHorizontal },
       ],
     },
 

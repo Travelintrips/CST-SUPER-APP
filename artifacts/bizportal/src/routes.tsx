@@ -11,6 +11,7 @@ const MasterDataHubPage = React.lazy(() => import("@/pages/master-data/index"));
 const MasterDataWorkspacePage = React.lazy(() => import("@/pages/master-data/workspace"));
 const FinanceHubPage = React.lazy(() => import("@/pages/finance/index"));
 const FinanceModuleWorkspacePage = React.lazy(() => import("@/pages/finance/workspace"));
+const ReconClassificationConfigPage = React.lazy(() => import("@/pages/finance/recon-config/index"));
 const CfoOverviewPage = React.lazy(() => import("@/pages/finance/cfo-overview"));
 const LogisticsHubPage = React.lazy(() => import("@/pages/logistics/hub"));
 const LogisticsWorkspacePage = React.lazy(() => import("@/pages/logistics/workspace"));
@@ -898,6 +899,7 @@ export function AppRoutes({ rootGuard }: { rootGuard?: React.ComponentType }) {
       <Route path="/cash-bank/settings" component={PR(CashBankSettingsPage)} />
       <Route path="/cash-bank"><Redirect to="/cash-bank/dashboard" /></Route>
 
+      <Route path="/finance/recon-config" component={PR(ReconClassificationConfigPage)} />
       <Route path="/finance" component={PR(FinanceHubPage)} />
       <Route path="/finance/workspace" component={PR(FinanceModuleWorkspacePage)} />
       <Route path="/logistics/workspace" component={PR(LogisticsWorkspacePage)} />

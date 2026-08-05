@@ -1,0 +1,617 @@
+/**
+ * Bank Reconciliation Classification Configuration API
+ *
+ * Routes (all under /api/recon-classification):
+ *
+ * Configs (Business Txn / Routine Expense / Income Allocation):
+ *   GET    /configs            — list configs (filter: category, include_inactive)
+ *   POST   /configs            — create config
+ *   PATCH  /configs/:id        — update config
+ *   POST   /configs/:id/deactivate — soft-deactivate (blocked if usage_count > 0)
+ *   POST   /configs/seed       — re-run seed migration
+ *
+ * AI Classification Rules:
+ *   GET    /ai-rules           — list rules
+ *   POST   /ai-rules           — create rule
+ *   PATCH  /ai-rules/:id       — update rule
+ *   DELETE /ai-rules/:id       — deactivate rule
+ *
+ * Keyword Dictionary:
+ *   GET    /keywords           — list keywords
+ *   POST   /keywords           — create keyword
+ *   PATCH  /keywords/:id       — update keyword
+ *   DELETE /keywords/:id       — delete keyword
+ *
+ * Approval Rules:
+ *   GET    /approval-rules     — list approval rules
+ *   POST   /approval-rules     — create approval rule
+ *   PATCH  /approval-rules/:id — update approval rule
+ *   DELETE /approval-rules/:id — delete approval rule
+ *
+ * Auth: requireAdmin on all routes.
+ *
+ * GUARDRAILS (do not violate):
+ *   - Does NOT modify accounting engine
+ *   - Does NOT modify Universal Journal Reuse Engine
+ *   - Does NOT modify COA Governance
+ *   - Only replaces hardcoded classification config with DB master data
+ */
+
+import { Router } from "express";
+import { z } from "zod/v4";
+import { db } from "@workspace/db";
+import { sql } from "drizzle-orm";
+import { requireAdmin } from "../lib/requireAdmin.js";
+import { logger } from "../lib/logger.js";
+import {
+  runReconClassificationMigration,
+  resetMigrationFlag,
+} from "../lib/reconClassificationMigration.js";
+
+export const reconClassificationRouter = Router();
+
+// ─── Auth guard ────────────────────────────────────────────────────────────────
+reconClassificationRouter.use(async (req, res, next) => {
+  if (!(await requireAdmin(req, res))) return;
+  next();
+});
+
+// ─── Lazy migration ────────────────────────────────────────────────────────────
+let ensureMigrated = false;
+async function ensureTables() {
+  if (ensureMigrated) return;
+  await runReconClassificationMigration();
+  ensureMigrated = true;
+}
+
+// ─── Validation schemas ────────────────────────────────────────────────────────
+
+const ConfigUpsertSchema = z.object({
+  category:             z.enum(["BUSINESS_TRANSACTION", "ROUTINE_EXPENSE", "INCOME_ALLOCATION"]),
+  name:                 z.string().min(1).max(120),
+  code:                 z.string().min(1).max(60).regex(/^[A-Z0-9_]+$/, "code must be UPPER_SNAKE_CASE"),
+  type:                 z.string().optional().nullable(),
+  flow:                 z.enum(["BUSINESS_MATCHING", "ROUTINE_EXPENSE_ALLOCATION", "INCOME_ALLOCATION", "MANUAL_REVIEW", "BLOCKED"]),
+  default_coa_code:     z.string().optional().nullable(),
+  default_vendor_id:    z.number().int().optional().nullable(),
+  default_department:   z.string().optional().nullable(),
+  default_cost_center:  z.string().optional().nullable(),
+  need_upload:          z.enum(["none", "optional", "required"]).default("none"),
+  upload_file_types:    z.array(z.enum(["PDF", "JPG", "PNG", "WEBP"])).default([]),
+  upload_max_files:     z.number().int().min(1).max(20).default(5),
+  upload_max_size_mb:   z.number().int().min(1).max(100).default(10),
+  need_approval:        z.boolean().default(false),
+  need_invoice_number:  z.boolean().default(false),
+  need_reference_number: z.boolean().default(false),
+  ai_learning_enabled:  z.boolean().default(true),
+  confidence_threshold: z.number().min(0).max(1).default(0.75),
+  keywords:             z.array(z.string()).default([]),
+  regex_pattern:        z.string().optional().nullable(),
+  priority:             z.number().int().min(1).max(999).default(50),
+  company_id:           z.number().int().optional().nullable(),
+});
+
+const AiRuleSchema = z.object({
+  name:                z.string().min(1).max(120),
+  description:         z.string().optional().nullable(),
+  config_id:           z.number().int().optional().nullable(),
+  condition_field:     z.enum(["description", "amount", "direction", "intent", "normalized"]),
+  condition_operator:  z.enum(["contains", "starts_with", "regex", "eq", "neq", "gte", "lte"]),
+  condition_value:     z.string().min(1),
+  action_flow:         z.enum(["BUSINESS_MATCHING", "ROUTINE_EXPENSE_ALLOCATION", "INCOME_ALLOCATION", "MANUAL_REVIEW", "BLOCKED"]).optional().nullable(),
+  action_coa_code:     z.string().optional().nullable(),
+  action_config_code:  z.string().optional().nullable(),
+  confidence:          z.number().min(0).max(1).default(0.8),
+  priority:            z.number().int().min(1).max(999).default(50),
+  source:              z.enum(["manual", "ai_generated"]).default("manual"),
+  company_id:          z.number().int().optional().nullable(),
+});
+
+const KeywordSchema = z.object({
+  term:       z.string().min(1).max(200),
+  weight:     z.number().min(0).max(1).default(0.8),
+  config_id:  z.number().int().optional().nullable(),
+  company_id: z.number().int().optional().nullable(),
+});
+
+const ApprovalRuleSchema = z.object({
+  name:                   z.string().min(1).max(120),
+  config_id:              z.number().int().optional().nullable(),
+  min_amount:             z.number().optional().nullable(),
+  max_amount:             z.number().optional().nullable(),
+  required_approver_role: z.string().optional().nullable(),
+  approval_level:         z.number().int().min(1).max(10).default(1),
+  company_id:             z.number().int().optional().nullable(),
+});
+
+// ─── Helper ────────────────────────────────────────────────────────────────────
+
+function parseCompanyId(val: unknown): number | null {
+  if (val == null || val === "" || val === "null") return null;
+  const n = Number(val);
+  return isNaN(n) ? null : n;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONFIGS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// GET /api/recon-classification/configs
+reconClassificationRouter.get("/configs", async (req, res) => {
+  try {
+    await ensureTables();
+    const companyId      = parseCompanyId(req.query["company_id"]);
+    const category       = req.query["category"] as string | undefined;
+    const includeInactive = req.query["include_inactive"] === "true";
+
+    let whereClause = `WHERE 1=1`;
+    if (!includeInactive) whereClause += ` AND is_active = TRUE`;
+    if (category)         whereClause += ` AND category = '${category.replace(/'/g, "''")}'`;
+    if (companyId != null) {
+      whereClause += ` AND (company_id = ${companyId} OR company_id IS NULL)`;
+    }
+
+    const rows = await db.execute(sql.raw(
+      `SELECT * FROM recon_classification_configs ${whereClause} ORDER BY category, priority, name`
+    ));
+
+    res.json({ data: rows.rows });
+  } catch (err) {
+    logger.error("[ReconClassification] GET /configs error:", err instanceof Error ? err.message : String(err));
+    res.status(500).json({ error: "Gagal mengambil konfigurasi." });
+  }
+});
+
+// POST /api/recon-classification/configs/seed  (must come before /:id)
+reconClassificationRouter.post("/configs/seed", async (req, res) => {
+  try {
+    resetMigrationFlag();
+    ensureMigrated = false;
+    await ensureTables();
+    res.json({ ok: true, message: "Seed berhasil dijalankan ulang." });
+  } catch (err) {
+    logger.error("[ReconClassification] POST /configs/seed error:", err instanceof Error ? err.message : String(err));
+    res.status(500).json({ error: "Gagal menjalankan seed." });
+  }
+});
+
+// POST /api/recon-classification/configs
+reconClassificationRouter.post("/configs", async (req, res) => {
+  try {
+    await ensureTables();
+    const parsed = ConfigUpsertSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Validasi gagal.", details: parsed.error.issues });
+    }
+    const d = parsed.data;
+    const userId = (req as any).user?.id ?? null;
+
+    const result = await db.execute(sql.raw(`
+      INSERT INTO recon_classification_configs
+        (company_id, category, name, code, type, flow,
+         default_coa_code, default_vendor_id, default_department, default_cost_center,
+         need_upload, upload_file_types, upload_max_files, upload_max_size_mb,
+         need_approval, need_invoice_number, need_reference_number,
+         ai_learning_enabled, confidence_threshold,
+         keywords, regex_pattern, priority, created_by)
+      VALUES (
+        ${d.company_id ?? "NULL"},
+        '${d.category}',
+        '${d.name.replace(/'/g, "''")}',
+        '${d.code}',
+        ${d.type ? `'${d.type.replace(/'/g, "''")}'` : "NULL"},
+        '${d.flow}',
+        ${d.default_coa_code ? `'${d.default_coa_code.replace(/'/g, "''")}'` : "NULL"},
+        ${d.default_vendor_id ?? "NULL"},
+        ${d.default_department ? `'${d.default_department.replace(/'/g, "''")}'` : "NULL"},
+        ${d.default_cost_center ? `'${d.default_cost_center.replace(/'/g, "''")}'` : "NULL"},
+        '${d.need_upload}',
+        '${JSON.stringify(d.upload_file_types)}',
+        ${d.upload_max_files},
+        ${d.upload_max_size_mb},
+        ${d.need_approval},
+        ${d.need_invoice_number},
+        ${d.need_reference_number},
+        ${d.ai_learning_enabled},
+        ${d.confidence_threshold},
+        '${JSON.stringify(d.keywords)}',
+        ${d.regex_pattern ? `'${d.regex_pattern.replace(/'/g, "''")}'` : "NULL"},
+        ${d.priority},
+        ${userId ? `'${userId}'` : "NULL"}
+      )
+      ON CONFLICT (code, COALESCE(company_id, 0)) DO NOTHING
+      RETURNING *
+    `));
+
+    if (!result.rows[0]) {
+      return res.status(409).json({ error: `Kode '${d.code}' sudah digunakan dalam scope yang sama.` });
+    }
+    res.status(201).json({ data: result.rows[0] });
+  } catch (err) {
+    logger.error("[ReconClassification] POST /configs error:", err instanceof Error ? err.message : String(err));
+    res.status(500).json({ error: "Gagal membuat konfigurasi." });
+  }
+});
+
+// PATCH /api/recon-classification/configs/:id
+reconClassificationRouter.patch("/configs/:id", async (req, res) => {
+  try {
+    await ensureTables();
+    const id = parseInt(req.params["id"] ?? "", 10);
+    if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid." });
+
+    const parsed = ConfigUpsertSchema.partial().safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Validasi gagal.", details: parsed.error.issues });
+    }
+    const d = parsed.data;
+    const userId = (req as any).user?.id ?? null;
+
+    const setClauses: string[] = [`updated_at = NOW()`, `updated_by = ${userId ? `'${userId}'` : "NULL"}`];
+    if (d.name !== undefined)                setClauses.push(`name = '${d.name.replace(/'/g, "''")}'`);
+    if (d.flow !== undefined)                setClauses.push(`flow = '${d.flow}'`);
+    if (d.type !== undefined)                setClauses.push(`type = ${d.type ? `'${d.type.replace(/'/g, "''")}'` : "NULL"}`);
+    if (d.default_coa_code !== undefined)    setClauses.push(`default_coa_code = ${d.default_coa_code ? `'${d.default_coa_code.replace(/'/g, "''")}'` : "NULL"}`);
+    if (d.default_vendor_id !== undefined)   setClauses.push(`default_vendor_id = ${d.default_vendor_id ?? "NULL"}`);
+    if (d.default_department !== undefined)  setClauses.push(`default_department = ${d.default_department ? `'${d.default_department.replace(/'/g, "''")}'` : "NULL"}`);
+    if (d.default_cost_center !== undefined) setClauses.push(`default_cost_center = ${d.default_cost_center ? `'${d.default_cost_center.replace(/'/g, "''")}'` : "NULL"}`);
+    if (d.need_upload !== undefined)         setClauses.push(`need_upload = '${d.need_upload}'`);
+    if (d.upload_file_types !== undefined)   setClauses.push(`upload_file_types = '${JSON.stringify(d.upload_file_types)}'`);
+    if (d.upload_max_files !== undefined)    setClauses.push(`upload_max_files = ${d.upload_max_files}`);
+    if (d.upload_max_size_mb !== undefined)  setClauses.push(`upload_max_size_mb = ${d.upload_max_size_mb}`);
+    if (d.need_approval !== undefined)       setClauses.push(`need_approval = ${d.need_approval}`);
+    if (d.need_invoice_number !== undefined) setClauses.push(`need_invoice_number = ${d.need_invoice_number}`);
+    if (d.need_reference_number !== undefined) setClauses.push(`need_reference_number = ${d.need_reference_number}`);
+    if (d.ai_learning_enabled !== undefined) setClauses.push(`ai_learning_enabled = ${d.ai_learning_enabled}`);
+    if (d.confidence_threshold !== undefined) setClauses.push(`confidence_threshold = ${d.confidence_threshold}`);
+    if (d.keywords !== undefined)            setClauses.push(`keywords = '${JSON.stringify(d.keywords)}'`);
+    if (d.regex_pattern !== undefined)       setClauses.push(`regex_pattern = ${d.regex_pattern ? `'${d.regex_pattern.replace(/'/g, "''")}'` : "NULL"}`);
+    if (d.priority !== undefined)            setClauses.push(`priority = ${d.priority}`);
+
+    const result = await db.execute(sql.raw(
+      `UPDATE recon_classification_configs SET ${setClauses.join(", ")} WHERE id = ${id} RETURNING *`
+    ));
+
+    if (!result.rows[0]) return res.status(404).json({ error: "Konfigurasi tidak ditemukan." });
+    res.json({ data: result.rows[0] });
+  } catch (err) {
+    logger.error("[ReconClassification] PATCH /configs/:id error:", err instanceof Error ? err.message : String(err));
+    res.status(500).json({ error: "Gagal memperbarui konfigurasi." });
+  }
+});
+
+// POST /api/recon-classification/configs/:id/deactivate
+reconClassificationRouter.post("/configs/:id/deactivate", async (req, res) => {
+  try {
+    await ensureTables();
+    const id = parseInt(req.params["id"] ?? "", 10);
+    if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid." });
+
+    // Check if already used
+    const existing = await db.execute(sql.raw(
+      `SELECT usage_count, is_seed FROM recon_classification_configs WHERE id = ${id}`
+    ));
+    const row = existing.rows[0] as any;
+    if (!row) return res.status(404).json({ error: "Konfigurasi tidak ditemukan." });
+    if (row.usage_count > 0) {
+      return res.status(409).json({
+        error: `Tidak bisa menonaktifkan — sudah digunakan ${row.usage_count} kali dalam rekonsiliasi.`,
+      });
+    }
+
+    await db.execute(sql.raw(
+      `UPDATE recon_classification_configs SET is_active = FALSE, updated_at = NOW() WHERE id = ${id}`
+    ));
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error("[ReconClassification] POST /configs/:id/deactivate error:", err instanceof Error ? err.message : String(err));
+    res.status(500).json({ error: "Gagal menonaktifkan konfigurasi." });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// AI CLASSIFICATION RULES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+reconClassificationRouter.get("/ai-rules", async (req, res) => {
+  try {
+    await ensureTables();
+    const companyId = parseCompanyId(req.query["company_id"]);
+    const includeInactive = req.query["include_inactive"] === "true";
+
+    let where = `WHERE 1=1`;
+    if (!includeInactive) where += ` AND r.is_active = TRUE`;
+    if (companyId != null) where += ` AND (r.company_id = ${companyId} OR r.company_id IS NULL)`;
+
+    const rows = await db.execute(sql.raw(`
+      SELECT r.*, c.name AS config_name, c.category AS config_category
+      FROM recon_ai_classification_rules r
+      LEFT JOIN recon_classification_configs c ON c.id = r.config_id
+      ${where}
+      ORDER BY r.priority, r.id
+    `));
+    res.json({ data: rows.rows });
+  } catch (err) {
+    logger.error("[ReconClassification] GET /ai-rules error:", err instanceof Error ? err.message : String(err));
+    res.status(500).json({ error: "Gagal mengambil AI rules." });
+  }
+});
+
+reconClassificationRouter.post("/ai-rules", async (req, res) => {
+  try {
+    await ensureTables();
+    const parsed = AiRuleSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Validasi gagal.", details: parsed.error.issues });
+    const d = parsed.data;
+    const userId = (req as any).user?.id ?? null;
+
+    const result = await db.execute(sql.raw(`
+      INSERT INTO recon_ai_classification_rules
+        (company_id, config_id, name, description, condition_field, condition_operator, condition_value,
+         action_flow, action_coa_code, action_config_code, confidence, priority, source, created_by)
+      VALUES (
+        ${d.company_id ?? "NULL"},
+        ${d.config_id ?? "NULL"},
+        '${d.name.replace(/'/g, "''")}',
+        ${d.description ? `'${d.description.replace(/'/g, "''")}'` : "NULL"},
+        '${d.condition_field}',
+        '${d.condition_operator}',
+        '${d.condition_value.replace(/'/g, "''")}',
+        ${d.action_flow ? `'${d.action_flow}'` : "NULL"},
+        ${d.action_coa_code ? `'${d.action_coa_code.replace(/'/g, "''")}'` : "NULL"},
+        ${d.action_config_code ? `'${d.action_config_code.replace(/'/g, "''")}'` : "NULL"},
+        ${d.confidence},
+        ${d.priority},
+        '${d.source}',
+        ${userId ? `'${userId}'` : "NULL"}
+      )
+      RETURNING *
+    `));
+    res.status(201).json({ data: result.rows[0] });
+  } catch (err) {
+    logger.error("[ReconClassification] POST /ai-rules error:", err instanceof Error ? err.message : String(err));
+    res.status(500).json({ error: "Gagal membuat AI rule." });
+  }
+});
+
+reconClassificationRouter.patch("/ai-rules/:id", async (req, res) => {
+  try {
+    await ensureTables();
+    const id = parseInt(req.params["id"] ?? "", 10);
+    if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid." });
+
+    const parsed = AiRuleSchema.partial().safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Validasi gagal.", details: parsed.error.issues });
+    const d = parsed.data;
+
+    const setClauses: string[] = [`updated_at = NOW()`];
+    if (d.name !== undefined)               setClauses.push(`name = '${d.name.replace(/'/g, "''")}'`);
+    if (d.description !== undefined)        setClauses.push(`description = ${d.description ? `'${d.description.replace(/'/g, "''")}'` : "NULL"}`);
+    if (d.condition_field !== undefined)    setClauses.push(`condition_field = '${d.condition_field}'`);
+    if (d.condition_operator !== undefined) setClauses.push(`condition_operator = '${d.condition_operator}'`);
+    if (d.condition_value !== undefined)    setClauses.push(`condition_value = '${d.condition_value.replace(/'/g, "''")}'`);
+    if (d.action_flow !== undefined)        setClauses.push(`action_flow = ${d.action_flow ? `'${d.action_flow}'` : "NULL"}`);
+    if (d.action_coa_code !== undefined)    setClauses.push(`action_coa_code = ${d.action_coa_code ? `'${d.action_coa_code.replace(/'/g, "''")}'` : "NULL"}`);
+    if (d.action_config_code !== undefined) setClauses.push(`action_config_code = ${d.action_config_code ? `'${d.action_config_code.replace(/'/g, "''")}'` : "NULL"}`);
+    if (d.confidence !== undefined)         setClauses.push(`confidence = ${d.confidence}`);
+    if (d.priority !== undefined)           setClauses.push(`priority = ${d.priority}`);
+
+    const result = await db.execute(sql.raw(
+      `UPDATE recon_ai_classification_rules SET ${setClauses.join(", ")} WHERE id = ${id} RETURNING *`
+    ));
+    if (!result.rows[0]) return res.status(404).json({ error: "Rule tidak ditemukan." });
+    res.json({ data: result.rows[0] });
+  } catch (err) {
+    logger.error("[ReconClassification] PATCH /ai-rules/:id error:", err instanceof Error ? err.message : String(err));
+    res.status(500).json({ error: "Gagal memperbarui AI rule." });
+  }
+});
+
+reconClassificationRouter.delete("/ai-rules/:id", async (req, res) => {
+  try {
+    await ensureTables();
+    const id = parseInt(req.params["id"] ?? "", 10);
+    if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid." });
+    await db.execute(sql.raw(`UPDATE recon_ai_classification_rules SET is_active = FALSE WHERE id = ${id}`));
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error("[ReconClassification] DELETE /ai-rules/:id error:", err instanceof Error ? err.message : String(err));
+    res.status(500).json({ error: "Gagal menonaktifkan AI rule." });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// KEYWORD DICTIONARY
+// ═══════════════════════════════════════════════════════════════════════════════
+
+reconClassificationRouter.get("/keywords", async (req, res) => {
+  try {
+    await ensureTables();
+    const companyId = parseCompanyId(req.query["company_id"]);
+    const configId  = req.query["config_id"] ? parseInt(String(req.query["config_id"]), 10) : null;
+    const includeInactive = req.query["include_inactive"] === "true";
+
+    let where = `WHERE 1=1`;
+    if (!includeInactive) where += ` AND k.is_active = TRUE`;
+    if (companyId != null) where += ` AND (k.company_id = ${companyId} OR k.company_id IS NULL)`;
+    if (configId)          where += ` AND k.config_id = ${configId}`;
+
+    const rows = await db.execute(sql.raw(`
+      SELECT k.*, c.name AS config_name
+      FROM recon_keyword_dictionary k
+      LEFT JOIN recon_classification_configs c ON c.id = k.config_id
+      ${where}
+      ORDER BY k.config_id NULLS LAST, k.term
+    `));
+    res.json({ data: rows.rows });
+  } catch (err) {
+    logger.error("[ReconClassification] GET /keywords error:", err instanceof Error ? err.message : String(err));
+    res.status(500).json({ error: "Gagal mengambil keyword dictionary." });
+  }
+});
+
+reconClassificationRouter.post("/keywords", async (req, res) => {
+  try {
+    await ensureTables();
+    const parsed = KeywordSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Validasi gagal.", details: parsed.error.issues });
+    const d = parsed.data;
+    const userId = (req as any).user?.id ?? null;
+
+    const result = await db.execute(sql.raw(`
+      INSERT INTO recon_keyword_dictionary (company_id, config_id, term, weight, created_by)
+      VALUES (
+        ${d.company_id ?? "NULL"},
+        ${d.config_id ?? "NULL"},
+        '${d.term.replace(/'/g, "''")}',
+        ${d.weight},
+        ${userId ? `'${userId}'` : "NULL"}
+      )
+      RETURNING *
+    `));
+    res.status(201).json({ data: result.rows[0] });
+  } catch (err) {
+    logger.error("[ReconClassification] POST /keywords error:", err instanceof Error ? err.message : String(err));
+    res.status(500).json({ error: "Gagal membuat keyword." });
+  }
+});
+
+reconClassificationRouter.patch("/keywords/:id", async (req, res) => {
+  try {
+    await ensureTables();
+    const id = parseInt(req.params["id"] ?? "", 10);
+    if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid." });
+
+    const parsed = KeywordSchema.partial().safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Validasi gagal.", details: parsed.error.issues });
+    const d = parsed.data;
+
+    const setClauses: string[] = [];
+    if (d.term !== undefined)      setClauses.push(`term = '${d.term.replace(/'/g, "''")}'`);
+    if (d.weight !== undefined)    setClauses.push(`weight = ${d.weight}`);
+    if (d.config_id !== undefined) setClauses.push(`config_id = ${d.config_id ?? "NULL"}`);
+    if (setClauses.length === 0)   return res.status(400).json({ error: "Tidak ada field yang diubah." });
+
+    const result = await db.execute(sql.raw(
+      `UPDATE recon_keyword_dictionary SET ${setClauses.join(", ")} WHERE id = ${id} RETURNING *`
+    ));
+    if (!result.rows[0]) return res.status(404).json({ error: "Keyword tidak ditemukan." });
+    res.json({ data: result.rows[0] });
+  } catch (err) {
+    logger.error("[ReconClassification] PATCH /keywords/:id error:", err instanceof Error ? err.message : String(err));
+    res.status(500).json({ error: "Gagal memperbarui keyword." });
+  }
+});
+
+reconClassificationRouter.delete("/keywords/:id", async (req, res) => {
+  try {
+    await ensureTables();
+    const id = parseInt(req.params["id"] ?? "", 10);
+    if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid." });
+    await db.execute(sql.raw(`UPDATE recon_keyword_dictionary SET is_active = FALSE WHERE id = ${id}`));
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error("[ReconClassification] DELETE /keywords/:id error:", err instanceof Error ? err.message : String(err));
+    res.status(500).json({ error: "Gagal menghapus keyword." });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// APPROVAL RULES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+reconClassificationRouter.get("/approval-rules", async (req, res) => {
+  try {
+    await ensureTables();
+    const companyId = parseCompanyId(req.query["company_id"]);
+    const includeInactive = req.query["include_inactive"] === "true";
+
+    let where = `WHERE 1=1`;
+    if (!includeInactive) where += ` AND ar.is_active = TRUE`;
+    if (companyId != null) where += ` AND (ar.company_id = ${companyId} OR ar.company_id IS NULL)`;
+
+    const rows = await db.execute(sql.raw(`
+      SELECT ar.*, c.name AS config_name, c.category AS config_category
+      FROM recon_approval_rules_config ar
+      LEFT JOIN recon_classification_configs c ON c.id = ar.config_id
+      ${where}
+      ORDER BY ar.approval_level, ar.id
+    `));
+    res.json({ data: rows.rows });
+  } catch (err) {
+    logger.error("[ReconClassification] GET /approval-rules error:", err instanceof Error ? err.message : String(err));
+    res.status(500).json({ error: "Gagal mengambil approval rules." });
+  }
+});
+
+reconClassificationRouter.post("/approval-rules", async (req, res) => {
+  try {
+    await ensureTables();
+    const parsed = ApprovalRuleSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Validasi gagal.", details: parsed.error.issues });
+    const d = parsed.data;
+    const userId = (req as any).user?.id ?? null;
+
+    const result = await db.execute(sql.raw(`
+      INSERT INTO recon_approval_rules_config
+        (company_id, config_id, name, min_amount, max_amount, required_approver_role, approval_level, created_by)
+      VALUES (
+        ${d.company_id ?? "NULL"},
+        ${d.config_id ?? "NULL"},
+        '${d.name.replace(/'/g, "''")}',
+        ${d.min_amount ?? "NULL"},
+        ${d.max_amount ?? "NULL"},
+        ${d.required_approver_role ? `'${d.required_approver_role.replace(/'/g, "''")}'` : "NULL"},
+        ${d.approval_level},
+        ${userId ? `'${userId}'` : "NULL"}
+      )
+      RETURNING *
+    `));
+    res.status(201).json({ data: result.rows[0] });
+  } catch (err) {
+    logger.error("[ReconClassification] POST /approval-rules error:", err instanceof Error ? err.message : String(err));
+    res.status(500).json({ error: "Gagal membuat approval rule." });
+  }
+});
+
+reconClassificationRouter.patch("/approval-rules/:id", async (req, res) => {
+  try {
+    await ensureTables();
+    const id = parseInt(req.params["id"] ?? "", 10);
+    if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid." });
+
+    const parsed = ApprovalRuleSchema.partial().safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Validasi gagal.", details: parsed.error.issues });
+    const d = parsed.data;
+
+    const setClauses: string[] = [`updated_at = NOW()`];
+    if (d.name !== undefined)                   setClauses.push(`name = '${d.name.replace(/'/g, "''")}'`);
+    if (d.min_amount !== undefined)             setClauses.push(`min_amount = ${d.min_amount ?? "NULL"}`);
+    if (d.max_amount !== undefined)             setClauses.push(`max_amount = ${d.max_amount ?? "NULL"}`);
+    if (d.required_approver_role !== undefined) setClauses.push(`required_approver_role = ${d.required_approver_role ? `'${d.required_approver_role.replace(/'/g, "''")}'` : "NULL"}`);
+    if (d.approval_level !== undefined)         setClauses.push(`approval_level = ${d.approval_level}`);
+    if (d.config_id !== undefined)              setClauses.push(`config_id = ${d.config_id ?? "NULL"}`);
+
+    const result = await db.execute(sql.raw(
+      `UPDATE recon_approval_rules_config SET ${setClauses.join(", ")} WHERE id = ${id} RETURNING *`
+    ));
+    if (!result.rows[0]) return res.status(404).json({ error: "Approval rule tidak ditemukan." });
+    res.json({ data: result.rows[0] });
+  } catch (err) {
+    logger.error("[ReconClassification] PATCH /approval-rules/:id error:", err instanceof Error ? err.message : String(err));
+    res.status(500).json({ error: "Gagal memperbarui approval rule." });
+  }
+});
+
+reconClassificationRouter.delete("/approval-rules/:id", async (req, res) => {
+  try {
+    await ensureTables();
+    const id = parseInt(req.params["id"] ?? "", 10);
+    if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid." });
+    await db.execute(sql.raw(`UPDATE recon_approval_rules_config SET is_active = FALSE WHERE id = ${id}`));
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error("[ReconClassification] DELETE /approval-rules/:id error:", err instanceof Error ? err.message : String(err));
+    res.status(500).json({ error: "Gagal menghapus approval rule." });
+  }
+});
