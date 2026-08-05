@@ -2183,7 +2183,7 @@ export default function JasaDetail() {
                     onClick={() => setTruckingStep(truckingStep - 1)}
                     className="sm:min-w-[130px] py-3.5 px-6 rounded-xl border-2 border-slate-200 text-slate-600 font-semibold text-sm hover:border-slate-300 hover:bg-slate-50 transition-all flex items-center justify-center gap-1.5"
                   >
-                    ← Kembali
+                    {t("jasaDetail.backBtn")}
                   </button>
                 ) : <div />}
                 {truckingStep < 2 ? (
@@ -2205,7 +2205,7 @@ export default function JasaDetail() {
                     style={{ background: `linear-gradient(135deg, ${hero.accentColor} 0%, ${hero.accentColor}CC 100%)`, boxShadow: `0 4px 16px ${hero.accentColor}35` }}
                   >
                     <ShoppingCart className="h-4 w-4" />
-                    Tambahkan ke Pesanan
+                    {t("jasaDetail.addToOrderBtn")}
                   </button>
                 )}
               </>
