@@ -1096,7 +1096,6 @@ const locale: DeepRecord = {
     lclCargoSub: "Less than Container Load",
     lclRateNote: "Rate berdasarkan CBM yang terisi",
     checkEstimate: "Cek Estimasi",
-    calculating: "Menghitung...",
     estimateResults: "Hasil Estimasi",
     recalculate: "Hitung Ulang",
     noRate: "Tidak ada rate tersedia untuk rute ini",

@@ -1088,7 +1088,6 @@ const locale: DeepRecord = {
     lclCargoSub: "Less than Container Load",
     lclRateNote: "Rate based on CBM used",
     checkEstimate: "Check Estimate",
-    calculating: "Calculating...",
     estimateResults: "Estimate Results",
     recalculate: "Recalculate",
     noRate: "No rates available for this route",
