@@ -50,6 +50,7 @@ import { detectDrift } from "../lib/monitoring/dataDriftDetector.js";
 import { triggerWritebackForMutation, syncOneSheetConfig } from "../lib/sheetSyncService.js";
 import { canonicalMutationKey } from "../lib/reconciliation/canonicalMutationKey.js";
 import { voidApprovedJournal } from "../lib/accounting/approveAndCreateJournal.js";
+import { trackMutationApproval, runUsageTrackingMigration } from "../lib/usageTrackingService.js";
 import {
   detectFormat,
   parseMT940,
@@ -868,6 +869,13 @@ router.post("/:mutationId/approve", async (req, res) => {
   // Writeback langsung ke Google Sheet (fire-and-forget, non-blocking)
   // agar kolom nama_customer, kategori, status_rekon terupdate tanpa tunggu sync 60-detik
   triggerWritebackForMutation(mutId).catch(() => {});
+
+  // Runtime Usage Tracking — best-effort, never blocks or rolls back the journal
+  trackMutationApproval({
+    mutationId: resolvedMutId,
+    actor,
+    companyId: (req as any).user?.companyId ?? null,
+  }).catch(() => {});
 
   return res.json(responseBody);
 });
