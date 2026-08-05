@@ -1195,8 +1195,8 @@ export default function JasaDetail() {
                       <Calculator className="h-5 w-5 text-white" />
                     </div>
                     <div>
-                      <h2 className="text-[18px] font-bold text-slate-900 leading-tight tracking-tight">Kalkulator Estimasi Biaya</h2>
-                      <p className="text-[13px] text-slate-400 mt-0.5">Isi parameter layanan untuk mendapatkan estimasi harga</p>
+                      <h2 className="text-[18px] font-bold text-slate-900 leading-tight tracking-tight">{t("jasaDetail.calcTitle")}</h2>
+                      <p className="text-[13px] text-slate-400 mt-0.5">{t("jasaDetail.calcSubtitle")}</p>
                     </div>
                   </div>
                 </div>
@@ -1289,13 +1289,13 @@ export default function JasaDetail() {
                     {t("jasaDetail.airAddQty")}
                   </Button>
 
-                  <div><Label>Rate per Kg (IDR)</Label><Input type="number" placeholder="0" className="mt-1" value={state.ratePerKg || ""} onChange={e => set("ratePerKg", e.target.value)} /></div>
+                  <div><Label>{t("jasaDetail.ratePerKg")}</Label><Input type="number" placeholder="0" className="mt-1" value={state.ratePerKg || ""} onChange={e => set("ratePerKg", e.target.value)} /></div>
 
                   {subtotal > 0 && (
                     <div className="bg-blue-50 border border-blue-100 rounded-lg p-4 text-sm space-y-1.5">
                       <p className="text-blue-700 font-medium">{t("jasaDetail.airCalcSummary").replace('{count}', String(airRows.length))}</p>
-                      <p className="text-muted-foreground">Total Vol. Weight: <span className="font-semibold text-foreground">{airRows.reduce((s, r) => s + rowVolumeWeight(r), 0).toFixed(2)} kg</span></p>
-                      <p className="text-muted-foreground">Total Chargeable Weight: <span className="font-semibold text-foreground">{airRows.reduce((s, r) => s + rowChargeableWeight(r), 0).toFixed(2)} kg</span></p>
+                      <p className="text-muted-foreground">{t("jasaDetail.totalVolWeight")}: <span className="font-semibold text-foreground">{airRows.reduce((s, r) => s + rowVolumeWeight(r), 0).toFixed(2)} kg</span></p>
+                      <p className="text-muted-foreground">{t("jasaDetail.totalChargeableWeight")}: <span className="font-semibold text-foreground">{airRows.reduce((s, r) => s + rowChargeableWeight(r), 0).toFixed(2)} kg</span></p>
                     </div>
                   )}
                 </>}
