@@ -1555,10 +1555,15 @@ export default function JasaDetail() {
                             <div>
                               <p className="text-xs text-gray-600 font-medium mb-1.5">{t("jasaDetail.cargoCategoryLabel")} <span className="text-red-500">*</span></p>
                               <div className="grid grid-cols-2 gap-2">
-                                {["Umum", "Mudah Pecah Belah", "Dangerous Goods (DG)", "Perlu Penanganan Khusus"].map(cat => (
-                                  <button key={cat} type="button" onClick={() => setCargoCategory(cat)}
-                                    className={`py-2 px-3 rounded-lg text-xs font-medium border-2 transition-all text-left leading-snug ${cargoCategory === cat ? "border-[#0B5CAD] bg-blue-50 text-[#0B5CAD]" : "border-gray-200 text-gray-600 hover:border-gray-300"}`}
-                                  >{cat}</button>
+                                {([
+                                  { key: "Umum", label: t("jasaDetail.cargoCatGeneral") },
+                                  { key: "Mudah Pecah Belah", label: t("jasaDetail.cargoCatFragile") },
+                                  { key: "Dangerous Goods (DG)", label: t("jasaDetail.cargoCatDG") },
+                                  { key: "Perlu Penanganan Khusus", label: t("jasaDetail.cargoCatSpecial") },
+                                ] as { key: string; label: string }[]).map(({ key, label }) => (
+                                  <button key={key} type="button" onClick={() => setCargoCategory(key)}
+                                    className={`py-2 px-3 rounded-lg text-xs font-medium border-2 transition-all text-left leading-snug ${cargoCategory === key ? "border-[#0B5CAD] bg-blue-50 text-[#0B5CAD]" : "border-gray-200 text-gray-600 hover:border-gray-300"}`}
+                                  >{label}</button>
                                 ))}
                               </div>
                             </div>

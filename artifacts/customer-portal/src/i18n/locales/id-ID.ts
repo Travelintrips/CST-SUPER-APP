@@ -2063,6 +2063,10 @@ const locale: DeepRecord = {
     gpsSendNow: 'Kirim Lokasi Sekarang',
     gpsMapsLink: 'Lihat di Google Maps',
     updateFormTitle: '📝 Kirim Update',
+    cargoCatGeneral: 'Umum',
+    cargoCatFragile: 'Mudah Pecah Belah',
+    cargoCatDG: 'Dangerous Goods (DG)',
+    cargoCatSpecial: 'Perlu Penanganan Khusus',
     statusLabel: 'Update Status',
     notesLabel: 'Catatan Operasional',
     notesPh: 'Contoh: Barang sudah diambil pukul 09.00, estimasi tiba besok...',
@@ -3190,6 +3194,7 @@ const locale: DeepRecord = {
     quotation: 'Negosiasi / Quotation',
   },
 
-  };
+
+};
 
 export default locale;

@@ -2043,6 +2043,10 @@ const locale: DeepRecord = {
     gpsSendNow: 'Send Location Now',
     gpsMapsLink: 'View on Google Maps',
     updateFormTitle: '📝 Send Update',
+    cargoCatGeneral: '一般貨物',
+    cargoCatFragile: '壊れ物',
+    cargoCatDG: '危険物 (DG)',
+    cargoCatSpecial: '特別取扱品',
     statusLabel: 'Update Status',
     notesLabel: 'Operational Notes',
     notesPh: 'Example: Goods picked up at 09:00, estimated arrival tomorrow...',
@@ -3155,6 +3159,7 @@ const locale: DeepRecord = {
     unitPriceIDR: '単価 (IDR)',
     quotation: '交渉 / 見積',
   },
+
 };
 
 export default locale;

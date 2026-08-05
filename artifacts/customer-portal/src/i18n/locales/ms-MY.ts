@@ -2043,6 +2043,10 @@ const locale: DeepRecord = {
     gpsSendNow: 'Send Location Now',
     gpsMapsLink: 'View on Google Maps',
     updateFormTitle: '📝 Send Update',
+    cargoCatGeneral: 'Umum',
+    cargoCatFragile: 'Mudah Pecah',
+    cargoCatDG: 'Barang Berbahaya (DG)',
+    cargoCatSpecial: 'Perlu Pengendalian Khas',
     statusLabel: 'Update Status',
     notesLabel: 'Operational Notes',
     notesPh: 'Example: Goods picked up at 09:00, estimated arrival tomorrow...',
@@ -3155,6 +3159,7 @@ const locale: DeepRecord = {
     unitPriceIDR: 'Harga Seunit (IDR)',
     quotation: 'Rundingan / Sebut Harga',
   },
+
 };
 
 export default locale;
