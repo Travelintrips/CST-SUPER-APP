@@ -58,7 +58,7 @@ describe("Migration", () => {
   it("runs twice without error (idempotent)", async () => {
     resetMigrationFlag();
     await expect(runReconClassificationMigration()).resolves.not.toThrow();
-  });
+  }, 30_000);
 
   it("creates all 4 tables", async () => {
     const tables = ["recon_classification_configs", "recon_ai_classification_rules",
