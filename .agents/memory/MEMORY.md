@@ -19,3 +19,5 @@
 - [BizPortal startup 40s wait](bizportal-startup-40s-wait.md) — start-dev.sh tunggu 40s jika BIZPORTAL_PORT/CUSTOMER_PORT di-set; fix: yield hanya jika port sudah dipakai; BIZPORTAL_VITE_PORT=18442 wajib.
 - [Draft journal reuse policy](draft-journal-reuse.md) — bank recon on unlinked draft + matching amount → REUSE_EXISTING_JOURNAL; was incorrectly blocked as MANUAL_REVIEW_REQUIRED → false "Buat Proposal COA".
 - [Posting service draft-first rule](posting-service-draft-first.md) — insert entry as 'draft', insert lines, then promote to 'posted'; trigger blocks line INSERT on posted entries.
+- [Ledger trigger conflict ae_immutability](ledger-trigger-conflict.md) — ae_immutability_fn (ledgerGuard) is stricter than fn_block_posted_entry_update; both must allow posted→draft with cancel_reason for repair to work.
+- [Drizzle sql array ANY syntax](drizzle-sql-array-any.md) — sql`= ANY(${jsArray})` generates tuple ($1,$2,…) not ARRAY[$1,…]; use sql.raw(inList) for static IN-lists.

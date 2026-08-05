@@ -246,6 +246,13 @@ export async function runGuardMigration(): Promise<void> {
       v_is_closed BOOLEAN;
       v_override  BOOLEAN;
     BEGIN
+      -- Izinkan repair/cancellation: posted → draft dengan cancel_reason + cancelled_at
+      -- Konsisten dengan fn_block_posted_entry_update (financeGovernanceMigration).
+      IF OLD.status = 'posted' AND NEW.status = 'draft'
+         AND NEW.cancel_reason IS NOT NULL AND NEW.cancelled_at IS NOT NULL THEN
+        RETURN NEW;
+      END IF;
+
       -- Jika status berubah dari 'posted' ke bukan 'voided' → BLOK
       IF OLD.status = 'posted' AND NEW.status IS DISTINCT FROM OLD.status AND NEW.status <> 'voided' THEN
         RAISE EXCEPTION

@@ -1962,7 +1962,11 @@ router.post("/entries/:id/reverse", async (req, res) => {
   if (origLines.length === 0)
     return res
       .status(400)
-      .json({ message: "Entri tidak memiliki baris jurnal" });
+      .json({
+        message: "Entri tidak memiliki baris jurnal",
+        detail: "Entri ini kemungkinan dibuat sebelum perbaikan sistem (bug draft-first). Muat ulang halaman — sistem sedang memperbaiki entri ini secara otomatis saat startup. Jika masalah berlanjut setelah muat ulang, hubungi administrator.",
+        code: "NO_LINES_ORPHAN_ENTRY",
+      });
 
   const [journal] = await db
     .select()

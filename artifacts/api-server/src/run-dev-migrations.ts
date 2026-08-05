@@ -8,7 +8,7 @@ import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 
 // ── Accounting / Finance migrations ─────────────────────────────────────────
-import { runAccountingMigration, repairKasErSportCenterEntries } from "./lib/accountingMigration.js";
+import { runAccountingMigration, repairKasErSportCenterEntries, repairOrphanedEntryLines } from "./lib/accountingMigration.js";
 import { runAccountingHubMigration } from "./lib/accountingHubMigration.js";
 import { runGuardMigration as runLedgerGuardMigration } from "./lib/accounting/ledgerGuard.js";
 import { runFreightAccountingMigration } from "./lib/freightAccountingMigration.js";
@@ -267,6 +267,7 @@ async function main() {
   await runSafe("expenseClassification", runExpenseClassificationMigration);
   await runSafe("costCenter", runCostCenterMigration);
   await runSafe("repairKasErSportCenter (non-fatal)", repairKasErSportCenterEntries);
+  await runSafe("repairOrphanedEntryLines (non-fatal)", repairOrphanedEntryLines);
 
   console.log("\n--- Accounting seeds ---");
   // Ensure expense_categories has a UNIQUE constraint on code before seeding

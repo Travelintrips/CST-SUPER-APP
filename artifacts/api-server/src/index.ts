@@ -25,7 +25,7 @@ import { seedProductTemplates } from "./routes/productTemplates.js";
 import { runPortalMigration } from "./lib/portalMigration";
 import { runVendorProfileFieldsMigration } from "./lib/vendorProfileFieldsMigration";
 import { runSupplierEnhancementMigration } from "./lib/supplierEnhancementMigration";
-import { runAccountingMigration, repairKasErSportCenterEntries } from "./lib/accountingMigration";
+import { runAccountingMigration, repairKasErSportCenterEntries, repairOrphanedEntryLines } from "./lib/accountingMigration";
 import { runCoaGovernanceMigration } from "./lib/coaGovernanceMigration";
 import { runCoaProposalMigration } from "./lib/coaProposalMigration.js";
 import { runAccountingHubMigration } from "./lib/accountingHubMigration";
@@ -1810,6 +1810,11 @@ async function startServer() {
     .then(() =>
       repairKasErSportCenterEntries().catch((err) => {
         logger.warn({ err }, "Repair Kas ER sport center entries failed (non-fatal)");
+      })
+    )
+    .then(() =>
+      repairOrphanedEntryLines().catch((err) => {
+        logger.warn({ err }, "Repair orphaned entry lines failed (non-fatal)");
       })
     )
     .then(() =>

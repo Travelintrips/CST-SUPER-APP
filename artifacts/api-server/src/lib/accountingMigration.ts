@@ -279,3 +279,139 @@ export async function repairKasErSportCenterEntries(): Promise<void> {
     logger.warn({ err }, "[repairKasER] Repair gagal (non-fatal)");
   }
 }
+
+/**
+ * Repair: posted entries yang tidak punya baris jurnal (accounting_entry_lines).
+ *
+ * Root cause: bug draft-first — postToAccountingHub lama menginsert entry langsung
+ * sebagai 'posted', sehingga trigger fn_block_posted_lines_mutation memblok INSERT
+ * baris, dan entry tersimpan tanpa baris. Akibatnya reversal gagal dengan
+ * "Entri tidak memiliki baris jurnal".
+ *
+ * Strategi repair per entry:
+ *   1. Downgrade posted → draft (trigger mengizinkan ini dengan cancel_reason + cancelled_at)
+ *   2. Insert baris yang direkonstruksi dari totalDebit/totalCredit + accounting_settings
+ *   3. Promote kembali draft → posted dan clear cancel fields
+ *      (trigger tidak menghalangi karena OLD.status = 'draft' pada UPDATE ini)
+ *
+ * Idempoten — aman dijalankan berkali-kali.
+ */
+export async function repairOrphanedEntryLines(): Promise<void> {
+  const SPORT_CENTER_INBOUND_SOURCES = [
+    "sport_center_booking",
+    "sport_center_payment",
+    "sport_center_membership_payment",
+    "sport_center_ppn_correction",
+    "sport_center_amount_correction",
+  ];
+  const SPORT_CENTER_OUTBOUND_SOURCES = [
+    "sport_center_booking_refund",
+    "sport_center_refund",
+  ];
+  const ALL_SPORT_SOURCES = [...SPORT_CENTER_INBOUND_SOURCES, ...SPORT_CENTER_OUTBOUND_SOURCES];
+
+  try {
+    // Find posted entries that have no lines at all.
+    // Use sql.raw() for the static IN-list — these are hardcoded constants, no user input.
+    const inList = ALL_SPORT_SOURCES.map(s => `'${s}'`).join(', ');
+    const orphansRes = await db.execute(sql`
+      SELECT ae.id, ae.company_id, ae.source, ae.total_debit, ae.total_credit, ae.journal_id
+      FROM accounting_entries ae
+      LEFT JOIN accounting_entry_lines ael ON ael.entry_id = ae.id
+      WHERE ae.status = 'posted'
+        AND ael.id IS NULL
+        AND ae.source::text IN (${sql.raw(inList)})
+      ORDER BY ae.id
+    `);
+
+    const orphans = orphansRes.rows as Array<Record<string, unknown>>;
+    if (orphans.length === 0) {
+      logger.info("[repairOrphanedEntryLines] Tidak ada orphan entry — skip");
+      return;
+    }
+
+    logger.warn({ count: orphans.length }, "[repairOrphanedEntryLines] Ditemukan posted entries tanpa baris — mulai repair");
+
+    let repaired = 0;
+    let skipped = 0;
+
+    for (const row of orphans) {
+      const entryId   = Number(row["id"]);
+      const companyId = Number(row["company_id"] ?? 1);
+      const source    = String(row["source"] ?? "");
+      const totalDebit = Number(row["total_debit"] ?? 0);
+
+      try {
+        // Resolve accounts from accounting_settings for this company
+        const settingsRes = await db.execute(sql`
+          SELECT default_cash_account_id, default_bank_account_id, sales_income_account_id
+          FROM accounting_settings
+          WHERE company_id = ${companyId}
+          LIMIT 1
+        `);
+        const settings = (settingsRes.rows[0] ?? {}) as Record<string, unknown>;
+
+        const kasAccountId       = Number(settings["default_cash_account_id"] ?? settings["default_bank_account_id"] ?? 0);
+        const fallbackIncomeId   = Number(settings["sales_income_account_id"] ?? 0);
+
+        // Sport center income account: look for code LIKE '4-1017%' for this company
+        const incomeRes = await db.execute(sql`
+          SELECT id FROM chart_of_accounts
+          WHERE code LIKE '4-1017%' AND company_id = ${companyId}
+          LIMIT 1
+        `);
+        const incomeAccountId = Number((incomeRes.rows[0] as Record<string, unknown> | undefined)?.["id"] ?? fallbackIncomeId);
+
+        if (!kasAccountId || !incomeAccountId) {
+          logger.warn({ entryId, companyId }, "[repairOrphanedEntryLines] Akun kas/pendapatan tidak ditemukan — skip entry");
+          skipped++;
+          continue;
+        }
+
+        const isOutbound = SPORT_CENTER_OUTBOUND_SOURCES.includes(source);
+        // Inbound (booking/payment): Debit = Kas, Credit = Pendapatan
+        // Outbound (refund):         Debit = Pendapatan, Credit = Kas
+        const debitAccountId  = isOutbound ? incomeAccountId : kasAccountId;
+        const creditAccountId = isOutbound ? kasAccountId    : incomeAccountId;
+        const amount          = totalDebit > 0 ? totalDebit : Number(row["total_credit"] ?? 0);
+
+        // Step 1: downgrade posted → draft (trigger allows with cancel_reason + cancelled_at)
+        await db.execute(sql`
+          UPDATE accounting_entries
+          SET status        = 'draft',
+              cancel_reason = 'REPAIR-ORPHAN-LINES: entry tanpa baris jurnal akibat bug draft-first — diperbaiki otomatis',
+              cancelled_at  = NOW()
+          WHERE id = ${entryId} AND status = 'posted'
+        `);
+
+        // Step 2: insert the two reconstructed lines (trigger allows INSERT on 'draft' entries)
+        await db.execute(sql`
+          INSERT INTO accounting_entry_lines (entry_id, account_id, debit, credit, description)
+          VALUES
+            (${entryId}, ${debitAccountId},  ${amount}, 0,        '[repair] baris debit rekonstruksi'),
+            (${entryId}, ${creditAccountId}, 0,         ${amount}, '[repair] baris kredit rekonstruksi')
+        `);
+
+        // Step 3: promote back to posted and clear cancel fields
+        // OLD.status = 'draft' here so the immutability trigger does NOT fire
+        await db.execute(sql`
+          UPDATE accounting_entries
+          SET status        = 'posted',
+              cancel_reason = NULL,
+              cancelled_at  = NULL
+          WHERE id = ${entryId} AND status = 'draft'
+        `);
+
+        logger.info({ entryId, source, amount, debitAccountId, creditAccountId }, "[repairOrphanedEntryLines] Entry berhasil direpair");
+        repaired++;
+      } catch (rowErr) {
+        logger.warn({ rowErr, entryId }, "[repairOrphanedEntryLines] Gagal repair satu entry — skip");
+        skipped++;
+      }
+    }
+
+    logger.info({ repaired, skipped }, "[repairOrphanedEntryLines] Repair selesai");
+  } catch (err) {
+    logger.warn({ err }, "[repairOrphanedEntryLines] Repair gagal (non-fatal)");
+  }
+}
