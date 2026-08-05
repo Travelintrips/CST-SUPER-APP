@@ -1,0 +1,26 @@
+kind = "mobile"
+previewPath = "/cst-driver/"
+title = "CST Driver"
+version = "1.0.0"
+id = "artifacts/cst-driver"
+router = "expo-domain"
+
+[[integratedSkills]]
+name = "expo"
+version = "1.0.0"
+
+[[services]]
+name = "expo"
+paths = [ "/cst-driver/" ]
+localPort = 21170
+
+[services.development]
+run = "pnpm --filter @workspace/cst-driver run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/cst-driver", "run", "build" ]
+run = [ "pnpm", "--filter", "@workspace/cst-driver", "run", "serve" ]
+
+[services.env]
+PORT = "21170"
+BASE_PATH = "/cst-driver/"

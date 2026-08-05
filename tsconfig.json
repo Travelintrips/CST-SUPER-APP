@@ -1,0 +1,28 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compileOnSave": false,
+  "files": [],
+  "references": [
+    {
+      "path": "./lib/db"
+    },
+    {
+      "path": "./lib/api-client-react"
+    },
+    {
+      "path": "./lib/api-zod"
+    },
+    {
+      "path": "./lib/object-storage-web"
+    },
+    {
+      "path": "./lib/replit-auth-web"
+    },
+    {
+      "path": "./lib/integrations-openai-ai-server"
+    },
+    {
+      "path": "./lib/integrations-openai-ai-react"
+    }
+  ]
+}

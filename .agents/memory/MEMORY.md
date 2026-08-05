@@ -1,0 +1,20 @@
+- [Asset storage rule](asset-storage-rule.md) — gambar/biner wajib ke Supabase Storage, bukan git; history sudah di-rewrite Jul 2026 (475 MB → 139 MB).
+- [Recon Batch 2 audit](recon-batch2.md) — 82/82 tests, build bersih, type fix deskripsi ECF, 7 endpoint governance; verdiksi LULUS semua fitur.
+- [Git repo cleanup](git-repo-cleanup.md) — strip dist/+attached_assets/+.agents/outputs/ via git-filter-repo; re-add origin after; resolve subrepl conflicts with --ours; gateway workflow = "Start application".
+- [Artifact workflow CWD](artifact-workflow-cwd.md) — artifact workflow run commands execute from inside the artifact dir, not workspace root; use bare `bash start-dev.sh`, not `cd artifacts/X && bash start-dev.sh`.
+- [Accounting settings seed bug](accounting-settings-seed-bug.md) — null journal IDs in accounting_settings blocks sport center accounting; fix + enum 'draft' + bizportal Supabase key mismatch solution.
+- [Reconciliation account mapping](reconciliation-account-mapping.md) — direct bank expenses use expense COA; AP/AR are only for explicit payable/receivable settlements.
+- [AI policy COA contract](ai-policy-coa-contract.md) — decision policy reads Phase 3 `primaryRecommendation`; legacy `recommendedCoa` causes false manual-review flags.
+- [API Server Startup Requirements](api-server-startup-blocker.md) — butuh GCP_PROJECT_ID + GCP_SECRET_ID + GCP_SECRET_MANAGER_BOOTSTRAP_JSON + SUPABASE_DATABASE_URL_DEV; semua wajib; PORTAL_ADMIN_KEY + CASHIER_TOKEN_SECRET non-fatal warning.
+- [API runtime migrations](api-runtime-migrations.md) — schema yang dipakai API harus dimigrasikan ke database Supabase runtime, bukan hanya database Drizzle/Replit lokal.
+- [Auth user role contract](auth-user-role-contract.md) — `/api/auth/user` wajib mempertahankan `role` dan `companyId` agar authorization UI tidak salah.
+- [COA proposal and bank reconciliation flow](coa-proposal-bank-reconciliation-flow.md) — approval proposal, Task #5 implementation, dan approval mutasi bank adalah state governance terpisah.
+- [Payment posting visibility](payment-posting-visibility.md) — payment sumber harus menyimpan status error dan pesan saat accounting entry gagal; jangan tandai posted hanya karena row payment berhasil dibuat.
+- [Tax COA collision fix](tax-coa-collision.md) — 2-1060 ditempati Hutang Intercompany; safe header = 2-1090 (children 2-1091–2-1102); 128 CRs PENDING_APPROVAL di dev; vitest runner (testTimeout=120s) adalah cara terbaik menjalankan migration function tanpa server.
+- [Deployment publish build prerequisites](deployment-publish-build.md) — root manifest yang tidak terpakai dapat memicu builder bahasa lain; validasi build publish dan preflight environment harus dipisahkan.
+- [Google credential separation](google-credential-separation.md) — Service Account Google Sheets dan bootstrap Secret Manager dapat berbeda dan membutuhkan izin berbeda.
+- [BizPortal preview API proxy](bizportal-preview-api-proxy.md) — preview BizPortal harus meneruskan `/api` ke API server port 8080 agar login tidak 502.
+- [Dev/Prod DB Isolation](dev-prod-isolation.md) — APP_ENV=development di start-dev.sh; load-secrets.mjs inject *_DEV keys as canonical + shared keys tanpa _DEV counterpart.
+- [accounting_entries missing columns](accounting-entries-missing-columns.md) — is_voided/is_reversed missing → journalReuseEngine FAIL-CLOSED → false MANUAL_REVIEW_REQUIRED saat approve sport payment.
+- [BizPortal startup 40s wait](bizportal-startup-40s-wait.md) — start-dev.sh tunggu 40s jika BIZPORTAL_PORT/CUSTOMER_PORT di-set; fix: yield hanya jika port sudah dipakai; BIZPORTAL_VITE_PORT=18442 wajib.
+- [Draft journal reuse policy](draft-journal-reuse.md) — bank recon on unlinked draft + matching amount → REUSE_EXISTING_JOURNAL; was incorrectly blocked as MANUAL_REVIEW_REQUIRED → false "Buat Proposal COA".

@@ -1,0 +1,162 @@
+kind = "web"
+previewPath = "/"
+title = "Customer Portal — Website Publik"
+version = "1.0.0"
+id = "artifacts/customer-portal"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 23434
+
+[services.development]
+run = "bash start-dev.sh"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/customer-portal", "run", "build" ]
+publicDir = "artifacts/customer-portal/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/services/"
+to = "/services/index.html"
+
+[[services.production.rewrites]]
+from = "/services"
+to = "/services/index.html"
+
+[[services.production.rewrites]]
+from = "/freight-forwarding/"
+to = "/freight-forwarding/index.html"
+
+[[services.production.rewrites]]
+from = "/freight-forwarding"
+to = "/freight-forwarding/index.html"
+
+[[services.production.rewrites]]
+from = "/pabean/"
+to = "/pabean/index.html"
+
+[[services.production.rewrites]]
+from = "/pabean"
+to = "/pabean/index.html"
+
+[[services.production.rewrites]]
+from = "/custom-clearance/"
+to = "/custom-clearance/index.html"
+
+[[services.production.rewrites]]
+from = "/custom-clearance"
+to = "/custom-clearance/index.html"
+
+[[services.production.rewrites]]
+from = "/trucking/"
+to = "/trucking/index.html"
+
+[[services.production.rewrites]]
+from = "/trucking"
+to = "/trucking/index.html"
+
+[[services.production.rewrites]]
+from = "/ocean-freight/"
+to = "/ocean-freight/index.html"
+
+[[services.production.rewrites]]
+from = "/ocean-freight"
+to = "/ocean-freight/index.html"
+
+[[services.production.rewrites]]
+from = "/jasa/"
+to = "/jasa/index.html"
+
+[[services.production.rewrites]]
+from = "/jasa"
+to = "/jasa/index.html"
+
+[[services.production.rewrites]]
+from = "/marketplace/"
+to = "/marketplace/index.html"
+
+[[services.production.rewrites]]
+from = "/marketplace"
+to = "/marketplace/index.html"
+
+[[services.production.rewrites]]
+from = "/catalog/"
+to = "/catalog/index.html"
+
+[[services.production.rewrites]]
+from = "/catalog"
+to = "/catalog/index.html"
+
+[[services.production.rewrites]]
+from = "/calculator/"
+to = "/calculator/index.html"
+
+[[services.production.rewrites]]
+from = "/calculator"
+to = "/calculator/index.html"
+
+[[services.production.rewrites]]
+from = "/track/"
+to = "/track/index.html"
+
+[[services.production.rewrites]]
+from = "/track"
+to = "/track/index.html"
+
+[[services.production.rewrites]]
+from = "/book/"
+to = "/book/index.html"
+
+[[services.production.rewrites]]
+from = "/book"
+to = "/book/index.html"
+
+[[services.production.rewrites]]
+from = "/ocean-freight-booking/"
+to = "/ocean-freight-booking/index.html"
+
+[[services.production.rewrites]]
+from = "/ocean-freight-booking"
+to = "/ocean-freight-booking/index.html"
+
+[[services.production.rewrites]]
+from = "/shipment-timeline/"
+to = "/shipment-timeline/index.html"
+
+[[services.production.rewrites]]
+from = "/shipment-timeline"
+to = "/shipment-timeline/index.html"
+
+[[services.production.rewrites]]
+from = "/contact/"
+to = "/contact/index.html"
+
+[[services.production.rewrites]]
+from = "/contact"
+to = "/contact/index.html"
+
+[[services.production.rewrites]]
+from = "/privacy-policy/"
+to = "/privacy-policy/index.html"
+
+[[services.production.rewrites]]
+from = "/privacy-policy"
+to = "/privacy-policy/index.html"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23434"
+BASE_PATH = "/"
+
+[services.production.env]
+BASE_PATH = "/"

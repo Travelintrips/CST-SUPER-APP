@@ -1,0 +1,1324 @@
+import { useState, useMemo, useEffect } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "wouter";
+import { Button } from "@/components/ui/button";
+import {
+  Calculator, ArrowRight, Ship, Plane, Truck, Package,
+  Warehouse, Globe, Info, RefreshCw, MessageCircle,
+  CheckCircle2, ChevronRight, Sparkles, ArrowLeft,
+  Send, X, MapPin, AlertTriangle, FileText, Box,
+  Thermometer, Zap, Shield, Receipt, Plus, Minus, Download,
+} from "lucide-react";
+import { useLanguage } from "@/i18n/LanguageContext";
+import { CART_KEY, CartItem } from "@/lib/logistic-cart";
+import PageSeo from "@/components/PageSeo";
+import { useGetPortalCompany } from "@workspace/api-client-react";
+
+function normalizePhone(p: string) { return p.replace(/\D/g, ""); }
+
+// ── Types ────────────────────────────────────────────────────────────────────
+type ServiceType = "seaFreight" | "airFreight" | "customs" | "domestic" | "warehousing" | "projectCargo" | "";
+
+interface ServiceRates {
+  airFreight: { ratePerKg: number; fuelSurchargePct: number; securityFeePerKg: number; handlingFee: number; awbFee: number; documentationFee: number; insurancePct: number; ppnPct: number; };
+  seaFreight: { ratePerCbmLcl: number; ratePerContainer: Record<string, number>; thc: number; documentationFee: number; customsClearance: number; truckingFee: number; insurancePct: number; ppnPct: number; };
+  customs: { jasaPpjk: number; customsHandling: number; documentProcessing: number; pibSubmission: number; courierFee: number; additionalServiceFee: number; };
+  domestic: { vehicleRates: Record<string, number>; distanceRatePerKm: number; loadingFee: number; unloadingFee: number; overnightFee: number; helperFeePerDay: number; };
+  warehousing: { palletRatePerDay: number; cbmRatePerDay: number; sqmRatePerDay: number; inboundFee: number; outboundFeePerPallet: number; inventoryFeePerMonth: number; };
+}
+
+const DEFAULT_RATES: ServiceRates = {
+  airFreight: { ratePerKg: 90000, fuelSurchargePct: 25, securityFeePerKg: 2000, handlingFee: 350000, awbFee: 250000, documentationFee: 200000, insurancePct: 0.15, ppnPct: 11 },
+  seaFreight: { ratePerCbmLcl: 2500000, ratePerContainer: { "20GP": 12000000, "40GP": 18000000, "40HC": 20000000, "Reefer": 35000000, "Open Top": 25000000, "Flat Rack": 28000000 }, thc: 1500000, documentationFee: 750000, customsClearance: 1500000, truckingFee: 1200000, insurancePct: 0.10, ppnPct: 11 },
+  customs: { jasaPpjk: 2500000, customsHandling: 750000, documentProcessing: 500000, pibSubmission: 350000, courierFee: 150000, additionalServiceFee: 500000 },
+  domestic: { vehicleRates: { pickup: 500000, blindVan: 600000, CDE: 750000, CDD: 1000000, Fuso: 1500000, Wingbox: 2000000, "Trailer 20FT": 3500000, "Trailer 40FT": 5000000 }, distanceRatePerKm: 8500, loadingFee: 350000, unloadingFee: 350000, overnightFee: 500000, helperFeePerDay: 200000 },
+  warehousing: { palletRatePerDay: 15000, cbmRatePerDay: 25000, sqmRatePerDay: 8000, inboundFee: 25000, outboundFeePerPallet: 25000, inventoryFeePerMonth: 500000 },
+};
+
+interface CostItem { label: string; value: number; note?: string; isNegative?: boolean; }
+interface CalcResult {
+  service: ServiceType;
+  items: CostItem[];
+  subtotal: number;
+  insurance: number;
+  surcharges: number;
+  ppn: number;
+  grandTotal: number;
+  // Metrics
+  chargeableWeight?: number;
+  volumetricWeight?: number;
+  cbm?: number;
+  // Project cargo
+  isProjectCargo?: boolean;
+  budgetMin?: number;
+  budgetMax?: number;
+  // Extra data for submission
+  extraData?: Record<string, string | number | boolean | null>;
+}
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+function formatIDR(n: number) {
+  return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
+}
+
+function exportCalcCSV(result: CalcResult, serviceName: string) {
+  const rows: string[] = [
+    "Item,Nilai (IDR)",
+    ...result.items.map(i => `"${i.label}","${i.value}"`),
+    `"Subtotal","${result.subtotal}"`,
+    ...(result.insurance > 0 ? [`"Asuransi","${result.insurance}"`] : []),
+    ...(result.ppn > 0 ? [`"PPN","${result.ppn}"`] : []),
+    `"Grand Total","${result.grandTotal}"`,
+  ];
+  const blob = new Blob([rows.join("\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `estimasi-${serviceName.replace(/\s+/g, "-").toLowerCase()}-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportCalcJSON(result: CalcResult, serviceName: string) {
+  const data = {
+    service: serviceName,
+    tanggal: new Date().toISOString(),
+    items: result.items,
+    subtotal: result.subtotal,
+    asuransi: result.insurance,
+    ppn: result.ppn,
+    grandTotal: result.grandTotal,
+    ...(result.chargeableWeight !== undefined && { chargeableWeight: result.chargeableWeight }),
+    ...(result.cbm !== undefined && { cbm: result.cbm }),
+    catatan: "Estimasi, belum termasuk biaya tidak terduga",
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `estimasi-${serviceName.replace(/\s+/g, "-").toLowerCase()}-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Service Config ─────────────────────────────────────────────────────────────
+const SERVICE_CONFIG: Record<string, { icon: React.ReactNode; label: string; labelFull: string; color: string; gradient: string; emoji: string; }> = {
+  seaFreight:   { icon: <Ship className="h-5 w-5" />,      label: "Sea Freight",    labelFull: "Sea Freight",            color: "#1D4ED8", gradient: "linear-gradient(135deg,#1D4ED8,#3B82F6)", emoji: "🚢" },
+  airFreight:   { icon: <Plane className="h-5 w-5" />,     label: "Air Freight",    labelFull: "Air Freight",            color: "#0284C7", gradient: "linear-gradient(135deg,#0284C7,#38BDF8)", emoji: "✈️" },
+  customs:      { icon: <Package className="h-5 w-5" />,   label: "PPJK / Bea Cukai", labelFull: "PPJK / Customs Clearance", color: "#EA580C", gradient: "linear-gradient(135deg,#EA580C,#FB923C)", emoji: "📦" },
+  domestic:     { icon: <Truck className="h-5 w-5" />,     label: "Trucking",       labelFull: "Trucking / Domestik",    color: "#D97706", gradient: "linear-gradient(135deg,#D97706,#FCD34D)", emoji: "🚚" },
+  warehousing:  { icon: <Warehouse className="h-5 w-5" />, label: "Warehousing",    labelFull: "Warehousing / Gudang",   color: "#0D9488", gradient: "linear-gradient(135deg,#0D9488,#2DD4BF)", emoji: "🏭" },
+  projectCargo: { icon: <Globe className="h-5 w-5" />,     label: "Project Cargo",  labelFull: "Project Cargo",          color: "#7C3AED", gradient: "linear-gradient(135deg,#7C3AED,#A78BFA)", emoji: "🏗️" },
+};
+
+// ── Main Component ─────────────────────────────────────────────────────────────
+export default function CalculatorPage() {
+  const { t } = useLanguage();
+  const qc = useQueryClient();
+
+  // Pre-select service from URL ?service=X
+  const initialService = useMemo<ServiceType>(() => {
+    if (typeof window === "undefined") return "";
+    const param = new URLSearchParams(window.location.search).get("service");
+    const valid: ServiceType[] = ["seaFreight","airFreight","customs","domestic","warehousing","projectCargo"];
+    return (valid.includes(param as ServiceType) ? param : "") as ServiceType;
+  }, []);
+
+  const { data: ratesData } = useQuery<ServiceRates>({
+    queryKey: ["portal-calc-rates-v2"],
+    queryFn: () => fetch("/api/portal/calculator-rates-v2").then(r => r.ok ? r.json() : null),
+    staleTime: 5 * 60 * 1000,
+  });
+  const rates = ratesData ?? DEFAULT_RATES;
+  const isUsingFallback = !ratesData;
+
+  useEffect(() => {
+    const es = new EventSource("/api/ecommerce/events");
+    es.addEventListener("price_sync", () => qc.invalidateQueries({ queryKey: ["portal-calc-rates-v2"] }));
+    return () => es.close();
+  }, [qc]);
+
+  // Company phone for WA links
+  const { data: portalCompany } = useGetPortalCompany({});
+  const csPhone = portalCompany?.phone ? normalizePhone(portalCompany.phone) : null;
+  const buildWaHref = (text: string) =>
+    csPhone ? `https://wa.me/${csPhone}?text=${encodeURIComponent(text)}` : `https://wa.me/?text=${encodeURIComponent(text)}`;
+
+  // ── Common State ────────────────────────────────────────────────────────────
+  const [service, setService] = useState<ServiceType>(initialService);
+  const [result, setResult] = useState<CalcResult | null>(null);
+  const [error, setError] = useState("");
+  const [calculated, setCalculated] = useState(false);
+
+  // Common fields
+  const [customerName, setCustomerName] = useState("");
+  const [origin, setOrigin] = useState("");
+  const [destination, setDestination] = useState("");
+  const [cargoDesc, setCargoDesc] = useState("");
+  const [cargoValue, setCargoValue] = useState("");
+  const [incoterms, setIncoterms] = useState("");
+  const [insured, setInsured] = useState(false);
+  const [notes, setNotes] = useState("");
+
+  // Auto-fill origin
+  const [companyOrigin, setCompanyOrigin] = useState<string | null>(null);
+  useEffect(() => {
+    fetch("/api/settings/company-pickup-address")
+      .then(r => r.ok ? r.json() : null)
+      .then((d: { originCity?: string } | null) => {
+        const city = d?.originCity ?? "Jakarta, Indonesia";
+        setCompanyOrigin(city);
+        setOrigin(prev => prev || city);
+      })
+      .catch(() => { setCompanyOrigin("Jakarta, Indonesia"); setOrigin(prev => prev || "Jakarta, Indonesia"); });
+
+    try {
+      const stored = localStorage.getItem(CART_KEY);
+      const cartItems: CartItem[] = stored ? JSON.parse(stored) : [];
+      const productItems = cartItems.filter(i => i.calculatorType === "product");
+      if (productItems.length > 0) {
+        const w = productItems.reduce((s, i) => s + Number(i.inputData.weightKg ?? 0) * Number(i.inputData.qty ?? 1), 0);
+        if (w > 0) { setAirWeight(String(Math.round(w * 100) / 100)); setSeaGrossWeight(String(Math.round(w * 100) / 100)); }
+      }
+    } catch { /**/ }
+  }, []);
+
+  // ── Sea Freight State ───────────────────────────────────────────────────────
+  const [seaShipmentType, setSeaShipmentType] = useState<"FCL"|"LCL">("LCL");
+  const [seaPol, setSeaPol] = useState("");
+  const [seaPod, setSeaPod] = useState("");
+  const [seaContainerType, setSeaContainerType] = useState("20GP");
+  const [seaCbm, setSeaCbm] = useState("");
+  const [seaGrossWeight, setSeaGrossWeight] = useState("");
+  const [seaCommodity, setSeaCommodity] = useState("");
+  const [seaDg, setSeaDg] = useState(false);
+  const [seaTrucking, setSeaTrucking] = useState(false);
+  const [seaCustoms, setSeaCustoms] = useState(true);
+
+  // ── Air Freight State ───────────────────────────────────────────────────────
+  const [airOriginAirport, setAirOriginAirport] = useState("");
+  const [airDestAirport, setAirDestAirport] = useState("");
+  const [airWeight, setAirWeight] = useState("");
+  const [airPieces, setAirPieces] = useState("1");
+  const [airLength, setAirLength] = useState("");
+  const [airWidth, setAirWidth] = useState("");
+  const [airHeight, setAirHeight] = useState("");
+  const [airCommodity, setAirCommodity] = useState("");
+  const [airDg, setAirDg] = useState(false);
+  const [airTempControlled, setAirTempControlled] = useState(false);
+  const [airAirline, setAirAirline] = useState("");
+
+  // Auto-calculated air metrics
+  const airVolumetric = useMemo(() => {
+    const l = parseFloat(airLength), w = parseFloat(airWidth), h = parseFloat(airHeight);
+    return (l > 0 && w > 0 && h > 0) ? (l * w * h) / 6000 : null;
+  }, [airLength, airWidth, airHeight]);
+  const airChargeable = useMemo(() => {
+    const gw = parseFloat(airWeight);
+    if (!gw) return null;
+    return Math.max(gw, airVolumetric ?? 0);
+  }, [airWeight, airVolumetric]);
+
+  // ── PPJK / Customs State ────────────────────────────────────────────────────
+  const [customsTradeType, setCustomsTradeType] = useState<"import"|"export">("import");
+  const [customsDocType, setCustomsDocType] = useState<"PIB"|"PEB">("PIB");
+  const [customsHsCode, setCustomsHsCode] = useState("");
+  const [customsCommodity, setCustomsCommodity] = useState("");
+  const [customsNilaiPabean, setCustomsNilaiPabean] = useState("");
+  const [customsNomorAju, setCustomsNomorAju] = useState("");
+  const [customsNpwp, setCustomsNpwp] = useState("");
+  const [customsAddlService, setCustomsAddlService] = useState(false);
+
+  // ── Trucking State ──────────────────────────────────────────────────────────
+  const [truckPickup, setTruckPickup] = useState("");
+  const [truckDelivery, setTruckDelivery] = useState("");
+  const [truckVehicle, setTruckVehicle] = useState("CDE");
+  const [truckDistance, setTruckDistance] = useState("");
+  const [truckTonase, setTruckTonase] = useState("");
+  const [truckKoli, setTruckKoli] = useState("");
+  const [truckLoading, setTruckLoading] = useState(false);
+  const [truckUnloading, setTruckUnloading] = useState(false);
+  const [truckOvernight, setTruckOvernight] = useState(false);
+  const [truckHelperDays, setTruckHelperDays] = useState("0");
+
+  // ── Warehousing State ────────────────────────────────────────────────────────
+  const [whLocation, setWhLocation] = useState("");
+  const [whStorageType, setWhStorageType] = useState<"Pallet"|"CBM"|"SQM">("Pallet");
+  const [whQty, setWhQty] = useState("");
+  const [whDuration, setWhDuration] = useState("");
+  const [whInbound, setWhInbound] = useState(false);
+  const [whOutbound, setWhOutbound] = useState(false);
+  const [whInventory, setWhInventory] = useState(false);
+
+  // ── Project Cargo State ──────────────────────────────────────────────────────
+  const [pcLength, setPcLength] = useState("");
+  const [pcWidth, setPcWidth] = useState("");
+  const [pcHeight, setPcHeight] = useState("");
+  const [pcWeight, setPcWeight] = useState("");
+  const [pcHeavyLift, setPcHeavyLift] = useState(false);
+  const [pcOversize, setPcOversize] = useState(false);
+  const [pcCrane, setPcCrane] = useState(false);
+  const [pcRouteSurvey, setPcRouteSurvey] = useState(false);
+  const [pcEscort, setPcEscort] = useState(false);
+
+  // ── Quote Modal State ────────────────────────────────────────────────────────
+  const [showQuoteForm, setShowQuoteForm] = useState(false);
+  const [quoteName, setQuoteName] = useState("");
+  const [quoteEmail, setQuoteEmail] = useState("");
+  const [quoteWa, setQuoteWa] = useState("");
+  const [quoteSubmitting, setQuoteSubmitting] = useState(false);
+  const [quoteSuccess, setQuoteSuccess] = useState(false);
+  const [quoteError, setQuoteError] = useState("");
+
+  // ── Reset ─────────────────────────────────────────────────────────────────
+  function handleServiceChange(s: ServiceType) {
+    setService(s);
+    setResult(null);
+    setCalculated(false);
+    setError("");
+  }
+
+  function handleReset() {
+    setResult(null); setCalculated(false); setError("");
+    setCustomerName(""); setDestination(""); setCargoDesc(""); setCargoValue("");
+    setIncoterms(""); setInsured(false); setNotes("");
+    setSeaShipmentType("LCL"); setSeaPol(""); setSeaPod(""); setSeaContainerType("20GP");
+    setSeaCbm(""); setSeaGrossWeight(""); setSeaCommodity(""); setSeaDg(false); setSeaTrucking(false); setSeaCustoms(true);
+    setAirOriginAirport(""); setAirDestAirport(""); setAirWeight(""); setAirPieces("1");
+    setAirLength(""); setAirWidth(""); setAirHeight(""); setAirCommodity(""); setAirDg(false); setAirTempControlled(false); setAirAirline("");
+    setCustomsTradeType("import"); setCustomsDocType("PIB"); setCustomsHsCode(""); setCustomsCommodity("");
+    setCustomsNilaiPabean(""); setCustomsNomorAju(""); setCustomsNpwp(""); setCustomsAddlService(false);
+    setTruckPickup(""); setTruckDelivery(""); setTruckVehicle("CDE"); setTruckDistance("");
+    setTruckTonase(""); setTruckKoli(""); setTruckLoading(false); setTruckUnloading(false); setTruckOvernight(false); setTruckHelperDays("0");
+    setWhLocation(""); setWhStorageType("Pallet"); setWhQty(""); setWhDuration(""); setWhInbound(false); setWhOutbound(false); setWhInventory(false);
+    setPcLength(""); setPcWidth(""); setPcHeight(""); setPcWeight("");
+    setPcHeavyLift(false); setPcOversize(false); setPcCrane(false); setPcRouteSurvey(false); setPcEscort(false);
+    setShowQuoteForm(false); setQuoteSuccess(false); setQuoteError("");
+  }
+
+  // ── Formula Engine ────────────────────────────────────────────────────────
+  function handleCalculate(e: React.FormEvent) {
+    e.preventDefault();
+    setError(""); setResult(null);
+    if (!service) { setError("Pilih jenis layanan terlebih dahulu."); return; }
+    if (!destination.trim()) { setError("Tujuan pengiriman wajib diisi."); return; }
+
+    const cargoVal = parseFloat(cargoValue.replace(/[^0-9.]/g, "")) || 0;
+
+    let calc: CalcResult = { service, items: [], subtotal: 0, insurance: 0, surcharges: 0, ppn: 0, grandTotal: 0 };
+
+    if (service === "airFreight") {
+      const gw = parseFloat(airWeight) || 0;
+      if (gw <= 0) { setError("Berat kargo (Gross Weight) wajib diisi."); return; }
+      const r = rates.airFreight;
+      const vol = airVolumetric ?? 0;
+      const cw = Math.max(gw, vol);
+      const pieces = parseInt(airPieces) || 1;
+      calc.volumetricWeight = Math.round(vol * 100) / 100;
+      calc.chargeableWeight = Math.round(cw * 100) / 100;
+
+      const freightCost = Math.ceil(cw) * r.ratePerKg;
+      const fuelSurcharge = Math.round(freightCost * r.fuelSurchargePct / 100);
+      const securityFee = Math.ceil(cw) * r.securityFeePerKg;
+
+      calc.items = [
+        { label: "Air Freight Charge", value: freightCost, note: `${Math.ceil(cw)} kg × ${formatIDR(r.ratePerKg)}/kg` },
+        { label: "Fuel Surcharge", value: fuelSurcharge, note: `${r.fuelSurchargePct}% dari freight charge` },
+        { label: "Security Surcharge", value: securityFee, note: `${Math.ceil(cw)} kg × ${formatIDR(r.securityFeePerKg)}/kg` },
+        { label: "Handling Fee", value: r.handlingFee * pieces },
+        { label: "AWB Fee", value: r.awbFee },
+        { label: "Documentation", value: r.documentationFee },
+        ...(airTempControlled ? [{ label: "Cold Chain Handling", value: 1500000 }] : []),
+        ...(airDg ? [{ label: "DG Surcharge", value: 2000000 }] : []),
+      ];
+      calc.surcharges = fuelSurcharge + securityFee;
+      calc.extraData = { grossWeight: gw, volumetricWeight: vol, chargeableWeight: cw, pieces, commodity: airCommodity, airline: airAirline, dg: airDg, tempControlled: airTempControlled };
+
+    } else if (service === "seaFreight") {
+      const r = rates.seaFreight;
+      if (seaShipmentType === "LCL") {
+        const cbm = parseFloat(seaCbm) || 0;
+        if (cbm <= 0) { setError("Volume CBM wajib diisi untuk LCL."); return; }
+        const effectiveCbm = Math.max(cbm, 0.1);
+        const freightCost = Math.ceil(effectiveCbm * 10) / 10 * r.ratePerCbmLcl;
+        calc.cbm = Math.round(cbm * 1000) / 1000;
+        calc.items = [
+          { label: "Ocean Freight (LCL)", value: freightCost, note: `${effectiveCbm.toFixed(2)} CBM × ${formatIDR(r.ratePerCbmLcl)}/CBM` },
+          { label: "THC (Terminal Handling)", value: r.thc },
+          { label: "Documentation", value: r.documentationFee },
+          ...(seaCustoms ? [{ label: "Customs Clearance", value: r.customsClearance }] : []),
+          ...(seaTrucking ? [{ label: "Inland Trucking", value: r.truckingFee }] : []),
+          ...(seaDg ? [{ label: "DG Surcharge", value: 3500000 }] : []),
+        ];
+      } else {
+        const containerRate = r.ratePerContainer[seaContainerType] ?? r.ratePerContainer["20GP"];
+        calc.items = [
+          { label: `Ocean Freight (FCL - ${seaContainerType})`, value: containerRate },
+          { label: "THC (Terminal Handling)", value: r.thc },
+          { label: "Documentation", value: r.documentationFee },
+          ...(seaCustoms ? [{ label: "Customs Clearance", value: r.customsClearance }] : []),
+          ...(seaTrucking ? [{ label: "Inland Trucking", value: r.truckingFee }] : []),
+          ...(seaDg ? [{ label: "DG Surcharge", value: 5000000 }] : []),
+        ];
+      }
+      calc.extraData = { shipmentType: seaShipmentType, pol: seaPol, pod: seaPod, containerType: seaContainerType, cbm: seaCbm, grossWeight: seaGrossWeight, commodity: seaCommodity, dg: seaDg, trucking: seaTrucking, customs: seaCustoms };
+
+    } else if (service === "customs") {
+      const r = rates.customs;
+      const nilaiPabean = parseFloat(customsNilaiPabean.replace(/[^0-9.]/g, "")) || 0;
+      calc.items = [
+        { label: "Jasa PPJK", value: r.jasaPpjk },
+        { label: "Customs Handling", value: r.customsHandling },
+        { label: "Document Processing", value: r.documentProcessing },
+        { label: `${customsDocType} Submission`, value: r.pibSubmission },
+        { label: "Courier", value: r.courierFee },
+        ...(customsAddlService ? [{ label: "Additional Services", value: r.additionalServiceFee }] : []),
+        ...(nilaiPabean > 0 ? [{ label: "Est. Bea Masuk (3%)", value: Math.round(nilaiPabean * 0.03), note: "Estimasi — tergantung HS Code & kebijakan" }] : []),
+        ...(nilaiPabean > 0 ? [{ label: "Est. PPN Impor (11%)", value: Math.round((nilaiPabean + Math.round(nilaiPabean * 0.03)) * 0.11), note: "11% × (Nilai Pabean + Bea Masuk)" }] : []),
+        ...(nilaiPabean > 0 && customsTradeType === "import" ? [{ label: "Est. PPh Pasal 22 (2.5%)", value: Math.round(nilaiPabean * 0.025), note: "Estimasi dengan API — 7.5% tanpa API" }] : []),
+      ];
+      calc.extraData = { tradeType: customsTradeType, docType: customsDocType, hsCode: customsHsCode, commodity: customsCommodity, nilaiPabean, nomorAju: customsNomorAju, npwp: customsNpwp };
+
+    } else if (service === "domestic") {
+      if (!truckDistance) { setError("Jarak (KM) wajib diisi."); return; }
+      const r = rates.domestic;
+      const baseRate = r.vehicleRates[truckVehicle] ?? r.vehicleRates["CDE"];
+      const distKm = parseFloat(truckDistance) || 0;
+      const distCost = Math.round(distKm * r.distanceRatePerKm);
+      const helperDays = parseInt(truckHelperDays) || 0;
+
+      calc.items = [
+        { label: `Base Rate (${truckVehicle})`, value: baseRate },
+        { label: "Biaya Jarak", value: distCost, note: `${distKm} km × ${formatIDR(r.distanceRatePerKm)}/km` },
+        ...(truckLoading ? [{ label: "Loading Service", value: r.loadingFee }] : []),
+        ...(truckUnloading ? [{ label: "Unloading Service", value: r.unloadingFee }] : []),
+        ...(truckOvernight ? [{ label: "Overnight Stay", value: r.overnightFee }] : []),
+        ...(helperDays > 0 ? [{ label: `Helper (${helperDays} hari)`, value: helperDays * r.helperFeePerDay }] : []),
+      ];
+      calc.extraData = { pickupAddress: truckPickup, deliveryAddress: truckDelivery, vehicle: truckVehicle, distanceKm: distKm, tonase: truckTonase, koli: truckKoli, loading: truckLoading, unloading: truckUnloading, overnight: truckOvernight, helperDays };
+
+    } else if (service === "warehousing") {
+      if (!whQty || !whDuration) { setError("Quantity dan durasi penyimpanan wajib diisi."); return; }
+      const r = rates.warehousing;
+      const qty = parseFloat(whQty) || 1;
+      const days = parseInt(whDuration) || 1;
+      const storageRates: Record<string, number> = { Pallet: r.palletRatePerDay, CBM: r.cbmRatePerDay, SQM: r.sqmRatePerDay };
+      const storageRate = storageRates[whStorageType];
+      const storageCost = Math.round(qty * days * storageRate);
+      const unitLabel = whStorageType === "Pallet" ? "pallet" : whStorageType === "CBM" ? "CBM" : "m²";
+
+      calc.items = [
+        { label: `Storage (${whStorageType})`, value: storageCost, note: `${qty} ${unitLabel} × ${days} hari × ${formatIDR(storageRate)}/hari` },
+        ...(whInbound ? [{ label: "Inbound Handling", value: Math.round(qty * r.inboundFee) }] : []),
+        ...(whOutbound ? [{ label: "Outbound Handling", value: Math.round(qty * r.outboundFeePerPallet) }] : []),
+        ...(whInventory ? [{ label: "Inventory Management", value: r.inventoryFeePerMonth, note: "per bulan" }] : []),
+      ];
+      calc.extraData = { location: whLocation, storageType: whStorageType, qty, durationDays: days, inbound: whInbound, outbound: whOutbound, inventory: whInventory };
+
+    } else if (service === "projectCargo") {
+      const l = parseFloat(pcLength) || 0;
+      const w = parseFloat(pcWidth) || 0;
+      const h = parseFloat(pcHeight) || 0;
+      const wt = parseFloat(pcWeight) || 0;
+      const cbm = l > 0 && w > 0 && h > 0 ? l * w * h : 0;
+
+      let budgetMin = 50000000;
+      let budgetMax = 150000000;
+      if (wt > 10000 || pcHeavyLift) { budgetMin += 50000000; budgetMax += 100000000; }
+      if (pcCrane) { budgetMin += 30000000; budgetMax += 80000000; }
+      if (pcRouteSurvey) { budgetMin += 15000000; budgetMax += 30000000; }
+      if (pcEscort) { budgetMin += 20000000; budgetMax += 50000000; }
+      if (pcOversize || cbm > 100) { budgetMin += 25000000; budgetMax += 75000000; }
+
+      calc.isProjectCargo = true;
+      calc.budgetMin = budgetMin;
+      calc.budgetMax = budgetMax;
+      calc.cbm = cbm > 0 ? Math.round(cbm * 1000) / 1000 : undefined;
+      calc.extraData = { length: l, width: w, height: h, weight: wt, heavyLift: pcHeavyLift, oversize: pcOversize, crane: pcCrane, routeSurvey: pcRouteSurvey, escort: pcEscort };
+      setResult(calc);
+      setCalculated(true);
+      return;
+    }
+
+    // ── Common: subtotal, insurance, PPN ──────────────────────────────────────
+    calc.subtotal = calc.items.reduce((s, i) => s + i.value, 0);
+    if (insured && cargoVal > 0) {
+      const pct = service === "airFreight" ? rates.airFreight.insurancePct : rates.seaFreight.insurancePct;
+      calc.insurance = Math.round(cargoVal * pct / 100);
+    }
+    const ppnBase = calc.subtotal + calc.insurance;
+    const ppnPct = (service === "airFreight" ? rates.airFreight.ppnPct : service === "seaFreight" ? rates.seaFreight.ppnPct : 0);
+    calc.ppn = ppnPct > 0 ? Math.round(ppnBase * ppnPct / 100) : 0;
+    calc.grandTotal = ppnBase + calc.ppn;
+
+    setResult(calc);
+    setCalculated(true);
+  }
+
+  // ── Quote Submission ────────────────────────────────────────────────────────
+  async function handleQuoteSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setQuoteError("");
+    if (!quoteName.trim()) { setQuoteError("Nama wajib diisi"); return; }
+    if (!quoteWa.trim()) { setQuoteError("Nomor WhatsApp wajib diisi"); return; }
+    setQuoteSubmitting(true);
+    try {
+      const res = await fetch("/api/portal/request-quote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: quoteName.trim(),
+          email: quoteEmail.trim() || undefined,
+          whatsapp: quoteWa.trim(),
+          service,
+          origin,
+          destination,
+          cargoDesc: cargoDesc || undefined,
+          cargoValue: cargoValue || undefined,
+          incoterms: incoterms || undefined,
+          insurance: insured,
+          notes: notes || undefined,
+          result: result ? {
+            grandTotal: result.grandTotal,
+            subtotal: result.subtotal,
+            ppn: result.ppn,
+            items: result.items,
+            chargeableWeight: result.chargeableWeight,
+            cbm: result.cbm,
+            isProjectCargo: result.isProjectCargo,
+            budgetMin: result.budgetMin,
+            budgetMax: result.budgetMax,
+          } : undefined,
+          extraData: result?.extraData,
+          createRfq: true,
+        }),
+      });
+      const data = await res.json() as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) { setQuoteError(data.error ?? "Gagal mengirim. Silakan coba lagi."); }
+      else { setQuoteSuccess(true); setShowQuoteForm(false); }
+    } catch { setQuoteError("Tidak dapat terhubung ke server. Cek koneksi Anda."); }
+    finally { setQuoteSubmitting(false); }
+  }
+
+  const svc = service ? SERVICE_CONFIG[service] : null;
+
+  // ── Field Components (inline helpers) ────────────────────────────────────
+  const Label = ({ children, req }: { children: React.ReactNode; req?: boolean }) => (
+    <label className="calc-label">{children}{req && <span className="text-red-500 ml-0.5">*</span>}</label>
+  );
+  const Input = ({ ...props }: React.InputHTMLAttributes<HTMLInputElement>) => (
+    <input {...props} className="calc-input" />
+  );
+  const Select = ({ children, ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) => (
+    <select {...props} className="calc-select">{children}</select>
+  );
+  const Check = ({ checked, onChange, label, sub }: { checked: boolean; onChange: (v: boolean) => void; label: string; sub?: string }) => (
+    <label className={`option-toggle${checked ? " option-toggle-active" : ""}`} style={{ flex: "0 0 auto" }}>
+      <input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} className="w-4 h-4 accent-blue-600" />
+      <div>
+        <p className="text-[12.5px] font-semibold text-slate-700 leading-tight">{label}</p>
+        {sub && <p className="text-[10.5px] text-slate-400">{sub}</p>}
+      </div>
+    </label>
+  );
+  const SectionTitle = ({ n, children }: { n: number; children: React.ReactNode }) => (
+    <div className="flex items-center gap-2 mb-3">
+      <span className="inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold text-white flex-shrink-0" style={{ background: "linear-gradient(135deg,#0B5CAD,#1A73D4)" }}>{n}</span>
+      <label className="text-[12.5px] font-bold text-slate-700 uppercase tracking-wide">{children}</label>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen" style={{ background: "linear-gradient(160deg, #F0F6FF 0%, #F8FAFC 50%, #FFFFFF 100%)" }}>
+      <PageSeo path="/calculator" />
+      <style>{`
+        .calc-input { width:100%; border-radius:10px; border:1.5px solid #E2E8F0; background:#FFFFFF; padding:10px 14px; font-size:13.5px; color:#1E293B; outline:none; transition:border-color 0.15s,box-shadow 0.15s; box-shadow:0 1px 2px rgba(0,0,0,0.04); }
+        .calc-input:focus { border-color:#3B82F6; box-shadow:0 0 0 3px rgba(59,130,246,0.12); }
+        .calc-input::placeholder { color:#94A3B8; }
+        .calc-input:read-only { background:#F8FAFC; color:#64748B; cursor:not-allowed; }
+        .calc-select { width:100%; border-radius:10px; border:1.5px solid #E2E8F0; background:#FFFFFF; padding:10px 14px; font-size:13.5px; color:#1E293B; outline:none; transition:border-color 0.15s; box-shadow:0 1px 2px rgba(0,0,0,0.04); cursor:pointer; appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' viewBox='0 0 24 24'%3E%3Cpath stroke='%2394A3B8' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 12px center; padding-right:36px; }
+        .calc-select:focus { border-color:#3B82F6; box-shadow:0 0 0 3px rgba(59,130,246,0.12); }
+        .calc-label { display:block; font-size:12px; font-weight:600; color:#475569; margin-bottom:6px; letter-spacing:0.01em; text-transform:uppercase; }
+        .calc-card { background:#FFFFFF; border-radius:18px; border:1px solid rgba(226,232,240,0.80); box-shadow:0 1px 3px rgba(0,0,0,0.04),0 4px 16px rgba(0,0,0,0.05); }
+        .result-row { display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid #F1F5F9; font-size:13px; }
+        .result-row:last-child { border-bottom:none; }
+        @keyframes slide-up-fade { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+        .result-appear { animation:slide-up-fade 0.35s ease both; }
+        .svc-btn { display:flex; flex-direction:column; align-items:center; gap:5px; padding:11px 6px; border-radius:12px; border:1.5px solid #E2E8F0; background:#FFFFFF; font-size:11px; font-weight:600; color:#64748B; cursor:pointer; transition:all 0.18s ease; box-shadow:0 1px 2px rgba(0,0,0,0.04); }
+        .svc-btn:hover:not(.svc-btn-active) { border-color:#93C5FD; background:#EFF6FF; color:#1D4ED8; transform:translateY(-1px); }
+        .svc-btn-active { color:white; border-color:transparent!important; transform:translateY(-2px); box-shadow:0 6px 20px rgba(0,0,0,0.18),0 2px 6px rgba(0,0,0,0.10)!important; }
+        .option-toggle { display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:10px; border:1.5px solid #E2E8F0; background:#FFFFFF; cursor:pointer; transition:all 0.16s; box-shadow:0 1px 2px rgba(0,0,0,0.04); }
+        .option-toggle:hover { border-color:#93C5FD; }
+        .option-toggle-active { border-color:#3B82F6!important; background:#EFF6FF; }
+        .shipment-type-btn { flex:1; display:flex; align-items:center; justify-content:center; gap:6px; padding:10px; border-radius:10px; border:1.5px solid #E2E8F0; font-size:13px; font-weight:600; color:#64748B; cursor:pointer; transition:all 0.15s; background:#FFFFFF; }
+        .shipment-type-btn.active { border-color:#3B82F6; background:#EFF6FF; color:#1D4ED8; }
+        .cost-row { display:flex; justify-content:space-between; align-items:baseline; padding:7px 0; border-bottom:1px dashed #F1F5F9; font-size:13px; }
+        .cost-row:last-of-type { border-bottom:none; }
+      `}</style>
+
+      {/* ── Header ── */}
+      <div className="relative overflow-hidden" style={{ background: "linear-gradient(135deg, #0B3D6B 0%, #0D6EBF 55%, #1E9FE8 100%)", padding: "clamp(24px,3.5vw,36px) 0 clamp(18px,2.5vw,26px)" }}>
+        <div aria-hidden="true" style={{ position:"absolute",inset:0,backgroundImage:"radial-gradient(rgba(255,255,255,0.10) 1px,transparent 1px)",backgroundSize:"32px 32px",pointerEvents:"none" }} />
+        <div className="max-w-6xl mx-auto px-4 md:px-8" style={{ position:"relative",zIndex:2 }}>
+          <button
+            onClick={() => window.history.length > 1 ? window.history.back() : undefined}
+            className="inline-flex items-center gap-1.5 mb-3 text-[12px] font-semibold rounded-lg px-3 py-1.5 select-none"
+            style={{ color:"rgba(255,255,255,0.85)", background:"rgba(255,255,255,0.10)", border:"1.5px solid rgba(255,255,255,0.20)" }}
+          >
+            <ArrowLeft className="h-3.5 w-3.5" /> Kembali
+          </button>
+          <div className="flex flex-col md:flex-row md:items-end gap-3 justify-between">
+            <div>
+              <div className="inline-flex items-center gap-1.5 mb-2 px-2.5 py-1 rounded-full text-[10.5px] font-semibold uppercase tracking-widest" style={{ background:"rgba(255,255,255,0.14)", color:"rgba(255,255,255,0.80)", border:"1px solid rgba(255,255,255,0.18)" }}>
+                <Calculator className="h-3 w-3" /> Dynamic Service Calculator
+              </div>
+              <h1 className="font-bold text-white" style={{ fontSize:"clamp(20px,2.8vw,30px)", lineHeight:1.1, letterSpacing:"-0.02em" }}>
+                Kalkulator Biaya Logistik
+              </h1>
+              <p className="mt-1.5 text-[13px]" style={{ color:"rgba(255,255,255,0.68)", maxWidth:"420px" }}>
+                Estimasi biaya real-time untuk semua layanan logistik. Formula berbeda untuk setiap jenis layanan.
+              </p>
+            </div>
+            <div className="hidden md:flex items-center gap-2 shrink-0">
+              {["Transparan","Formula Akurat","Tarif DB"].map(tag => (
+                <span key={tag} className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full" style={{ background:"rgba(255,255,255,0.12)", color:"rgba(255,255,255,0.85)", border:"1px solid rgba(255,255,255,0.18)" }}>
+                  <CheckCircle2 className="h-3 w-3" /> {tag}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Content ── */}
+      <div className="max-w-6xl mx-auto px-4 md:px-8 py-7">
+        {isUsingFallback && (
+          <div className="flex items-start gap-3 mb-5 px-4 py-3 rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-[13px]">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500 mt-0.5" />
+            <span>
+              <strong>Perhatian:</strong> Tarif yang ditampilkan menggunakan <em>estimasi default</em> karena data tarif terbaru tidak dapat dimuat. Angka ini belum tentu mencerminkan tarif aktual — hubungi tim kami untuk konfirmasi harga.
+            </span>
+          </div>
+        )}
+        <div className="grid lg:grid-cols-5 gap-6 items-start">
+
+          {/* ── Form ── */}
+          <div className="lg:col-span-3">
+            <div className="calc-card p-6">
+              <div className="flex items-center justify-between mb-5">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background:"linear-gradient(135deg,#0B5CAD,#1A73D4)", boxShadow:"0 4px 12px rgba(11,92,173,0.30)" }}>
+                    <Calculator className="h-4 w-4 text-white" />
+                  </div>
+                  <div>
+                    <p className="font-bold text-slate-800 text-[14px] leading-tight">
+                      {svc ? `${svc.emoji} ${svc.labelFull}` : "Form Kalkulator"}
+                    </p>
+                    <p className="text-[11px] text-slate-400">
+                      {svc ? "Field disesuaikan untuk layanan ini" : "Pilih layanan untuk memulai kalkulasi"}
+                    </p>
+                  </div>
+                </div>
+                {calculated && (
+                  <button onClick={handleReset} className="inline-flex items-center gap-1.5 text-[11.5px] font-semibold text-slate-500 hover:text-slate-700 px-2.5 py-1.5 rounded-lg hover:bg-slate-100 transition-all">
+                    <RefreshCw className="h-3.5 w-3.5" /> Reset
+                  </button>
+                )}
+              </div>
+
+              <form onSubmit={handleCalculate} className="space-y-6">
+
+                {/* ── STEP 1: Service Selector ── */}
+                <div>
+                  <SectionTitle n={1}>Pilih Jenis Layanan</SectionTitle>
+                  <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                    {(["seaFreight","airFreight","customs","domestic","warehousing","projectCargo"] as ServiceType[]).map(s => {
+                      const cfg = SERVICE_CONFIG[s as string];
+                      const isActive = service === s;
+                      return (
+                        <button key={s} type="button" onClick={() => handleServiceChange(s)}
+                          className={`svc-btn${isActive ? " svc-btn-active" : ""}`}
+                          style={isActive ? { background: cfg.gradient } : {}}>
+                          <span style={isActive ? { color:"white" } : { color: cfg.color }}>{cfg.icon}</span>
+                          <span style={{ fontSize:"10px", lineHeight:1.2, textAlign:"center" }}>{cfg.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {svc && (
+                    <div className="mt-2 flex items-center gap-1.5 text-[11.5px] font-semibold" style={{ color: svc.color }}>
+                      <CheckCircle2 className="h-3.5 w-3.5" /> {svc.labelFull} dipilih — tampilkan field sesuai layanan ini
+                    </div>
+                  )}
+                </div>
+
+                {!service && (
+                  <div className="rounded-xl border-2 border-dashed border-slate-200 p-8 text-center">
+                    <Calculator className="h-8 w-8 text-slate-300 mx-auto mb-3" />
+                    <p className="text-slate-400 text-[13px]">Pilih jenis layanan di atas untuk melanjutkan</p>
+                  </div>
+                )}
+
+                {/* ── STEP 2: Common Fields ── */}
+                {service && (
+                  <div>
+                    <SectionTitle n={2}>Informasi Umum</SectionTitle>
+                    <div className="space-y-3">
+                      <div className="grid sm:grid-cols-2 gap-3">
+                        <div>
+                          <Label>Nama Customer / Perusahaan</Label>
+                          <Input value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="PT. Maju Bersama" />
+                        </div>
+                        <div>
+                          <Label>Incoterms</Label>
+                          <Select value={incoterms} onChange={e => setIncoterms(e.target.value)}>
+                            <option value="">Pilih Incoterms</option>
+                            {["EXW","FOB","CIF","CFR","DAP","DDP","FCA","CPT","CIP","FAS"].map(i => <option key={i}>{i}</option>)}
+                          </Select>
+                        </div>
+                      </div>
+                      <div className="grid sm:grid-cols-2 gap-3">
+                        <div>
+                          <Label req>
+                            {service === "domestic" ? "Kota Asal" : service === "seaFreight" ? "Port of Loading (POL)" : "Origin"}
+                          </Label>
+                          {companyOrigin ? (
+                            <div className="calc-input flex items-center gap-2 bg-orange-50 border-orange-200 cursor-not-allowed select-none" style={{ color:"#C2410C" }}>
+                              <span className="text-sm">🇮🇩</span><span className="font-medium text-[13px]">{origin}</span>
+                              <span className="ml-auto text-[10px] text-orange-400">Otomatis</span>
+                            </div>
+                          ) : (
+                            <Input value={origin} onChange={e => setOrigin(e.target.value)} placeholder="Jakarta, Indonesia" />
+                          )}
+                        </div>
+                        <div>
+                          <Label req>
+                            {service === "domestic" ? "Kota Tujuan" : service === "seaFreight" ? "Port of Discharge (POD)" : "Destination"}
+                          </Label>
+                          <Input value={destination} onChange={e => setDestination(e.target.value)} placeholder="Surabaya, Indonesia" style={{ borderColor: !destination && error ? "#FCA5A5" : "" }} />
+                        </div>
+                      </div>
+                      <div>
+                        <Label>Deskripsi Kargo / Komoditi</Label>
+                        <Input value={cargoDesc} onChange={e => setCargoDesc(e.target.value)} placeholder="Mesin industri, elektronik, dll." />
+                      </div>
+                      <div className="grid sm:grid-cols-2 gap-3">
+                        <div>
+                          <Label>Nilai Kargo (IDR)</Label>
+                          <Input value={cargoValue} onChange={e => setCargoValue(e.target.value)} placeholder="Rp 100.000.000" type="text" />
+                        </div>
+                        <div className="flex flex-col justify-end">
+                          <Check checked={insured} onChange={setInsured} label="Tambah Asuransi" sub={`+${service === "airFreight" ? rates.airFreight.insurancePct : rates.seaFreight.insurancePct}% dari nilai kargo`} />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* ── STEP 3: Service-Specific Fields ── */}
+
+                {/* SEA FREIGHT */}
+                {service === "seaFreight" && (
+                  <div>
+                    <SectionTitle n={3}>Detail Sea Freight</SectionTitle>
+                    <div className="space-y-3">
+                      <div>
+                        <Label req>Shipment Type</Label>
+                        <div className="flex gap-2">
+                          {(["LCL","FCL"] as const).map(t => (
+                            <button key={t} type="button" onClick={() => setSeaShipmentType(t)}
+                              className={`shipment-type-btn${seaShipmentType === t ? " active" : ""}`}>
+                              <Box className="h-4 w-4" /> {t}
+                              <span className="text-[11px] text-slate-400">{t === "LCL" ? "— Per CBM" : "— Full Container"}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      {seaShipmentType === "FCL" && (
+                        <div>
+                          <Label req>Container Type</Label>
+                          <Select value={seaContainerType} onChange={e => setSeaContainerType(e.target.value)}>
+                            {["20GP","40GP","40HC","Reefer","Open Top","Flat Rack"].map(t => (
+                              <option key={t} value={t}>{t} — {formatIDR(rates.seaFreight.ratePerContainer[t] ?? 0)}</option>
+                            ))}
+                          </Select>
+                        </div>
+                      )}
+                      {seaShipmentType === "LCL" && (
+                        <div className="grid sm:grid-cols-2 gap-3">
+                          <div>
+                            <Label req>Volume (CBM)</Label>
+                            <Input type="number" min="0" step="0.001" value={seaCbm} onChange={e => setSeaCbm(e.target.value)} placeholder="0.000 CBM" />
+                            <p className="text-[10.5px] text-slate-400 mt-1">Tarif: {formatIDR(rates.seaFreight.ratePerCbmLcl)}/CBM</p>
+                          </div>
+                          <div>
+                            <Label>Gross Weight (kg)</Label>
+                            <Input type="number" min="0" value={seaGrossWeight} onChange={e => setSeaGrossWeight(e.target.value)} placeholder="Berat kotor (kg)" />
+                          </div>
+                        </div>
+                      )}
+                      <div className="grid sm:grid-cols-2 gap-3">
+                        <div>
+                          <Label>Commodity</Label>
+                          <Input value={seaCommodity} onChange={e => setSeaCommodity(e.target.value)} placeholder="Komoditi kargo" />
+                        </div>
+                        <div>
+                          <Label>Ready Date</Label>
+                          <Input type="date" />
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Check checked={seaDg} onChange={setSeaDg} label="Dangerous Goods" sub="Tambah DG surcharge" />
+                        <Check checked={seaTrucking} onChange={setSeaTrucking} label="Inland Trucking" sub={`+${formatIDR(rates.seaFreight.truckingFee)}`} />
+                        <Check checked={seaCustoms} onChange={setSeaCustoms} label="Customs Clearance" sub={`+${formatIDR(rates.seaFreight.customsClearance)}`} />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* AIR FREIGHT */}
+                {service === "airFreight" && (
+                  <div>
+                    <SectionTitle n={3}>Detail Air Freight</SectionTitle>
+                    <div className="space-y-3">
+                      <div className="grid sm:grid-cols-2 gap-3">
+                        <div>
+                          <Label req>Airport Asal</Label>
+                          <Input value={airOriginAirport} onChange={e => setAirOriginAirport(e.target.value)} placeholder="CGK — Soekarno-Hatta" />
+                        </div>
+                        <div>
+                          <Label req>Airport Tujuan</Label>
+                          <Input value={airDestAirport} onChange={e => setAirDestAirport(e.target.value)} placeholder="SIN — Changi Singapore" />
+                        </div>
+                      </div>
+                      <div className="grid sm:grid-cols-3 gap-3">
+                        <div>
+                          <Label req>Gross Weight (kg)</Label>
+                          <Input type="number" min="0" step="0.1" value={airWeight} onChange={e => setAirWeight(e.target.value)} placeholder="0.0 kg" />
+                        </div>
+                        <div>
+                          <Label>Jumlah Koli</Label>
+                          <Input type="number" min="1" value={airPieces} onChange={e => setAirPieces(e.target.value)} placeholder="1" />
+                        </div>
+                        <div>
+                          <Label>Airline</Label>
+                          <Input value={airAirline} onChange={e => setAirAirline(e.target.value)} placeholder="Garuda, Lion Air..." />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="calc-label flex items-center gap-2">
+                          Dimensi Per Koli (cm)
+                          {airVolumetric !== null && (
+                            <span className="inline-flex items-center gap-1 text-[10.5px] font-bold px-2 py-0.5 rounded-full" style={{ background:"#EFF6FF", color:"#1D4ED8", border:"1px solid #BFDBFE" }}>
+                              <Sparkles className="h-2.5 w-2.5" /> Vol. Weight: {airVolumetric.toFixed(2)} kg
+                            </span>
+                          )}
+                          {airChargeable !== null && (
+                            <span className="inline-flex items-center gap-1 text-[10.5px] font-bold px-2 py-0.5 rounded-full" style={{ background:"#F0FDF4", color:"#15803D", border:"1px solid #BBF7D0" }}>
+                              <Zap className="h-2.5 w-2.5" /> Chargeable: {airChargeable.toFixed(2)} kg
+                            </span>
+                          )}
+                        </label>
+                        <div className="grid grid-cols-3 gap-2.5">
+                          <Input type="number" min="0" step="0.1" value={airLength} onChange={e => setAirLength(e.target.value)} placeholder="P (cm)" />
+                          <Input type="number" min="0" step="0.1" value={airWidth} onChange={e => setAirWidth(e.target.value)} placeholder="L (cm)" />
+                          <Input type="number" min="0" step="0.1" value={airHeight} onChange={e => setAirHeight(e.target.value)} placeholder="T (cm)" />
+                        </div>
+                        <p className="text-[10.5px] text-slate-400 mt-1.5">
+                          Volumetric Weight = (P × L × T) / 6000 &nbsp;|&nbsp; Chargeable Weight = max(Gross, Volumetric)
+                        </p>
+                      </div>
+                      <div>
+                        <Label>Commodity</Label>
+                        <Input value={airCommodity} onChange={e => setAirCommodity(e.target.value)} placeholder="Jenis komoditi" />
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Check checked={airDg} onChange={setAirDg} label="DG (Dangerous Goods)" sub="+IDR 2.000.000" />
+                        <Check checked={airTempControlled} onChange={setAirTempControlled} label="Temperature Controlled" sub="+IDR 1.500.000" />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* PPJK / CUSTOMS */}
+                {service === "customs" && (
+                  <div>
+                    <SectionTitle n={3}>Detail PPJK / Customs Clearance</SectionTitle>
+                    <div className="space-y-3">
+                      <div className="grid sm:grid-cols-2 gap-3">
+                        <div>
+                          <Label req>Jenis Perdagangan</Label>
+                          <div className="flex gap-2">
+                            {(["import","export"] as const).map(t => (
+                              <button key={t} type="button" onClick={() => { setCustomsTradeType(t); setCustomsDocType(t === "import" ? "PIB" : "PEB"); }}
+                                className={`shipment-type-btn${customsTradeType === t ? " active" : ""}`}>
+                                {t === "import" ? "📥" : "📤"} {t.charAt(0).toUpperCase() + t.slice(1)}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <Label>Dokumen</Label>
+                          <Select value={customsDocType} onChange={e => setCustomsDocType(e.target.value as "PIB"|"PEB")}>
+                            <option value="PIB">PIB — Pemberitahuan Impor Barang</option>
+                            <option value="PEB">PEB — Pemberitahuan Ekspor Barang</option>
+                          </Select>
+                        </div>
+                      </div>
+                      <div className="grid sm:grid-cols-2 gap-3">
+                        <div>
+                          <Label req>HS Code</Label>
+                          <Input value={customsHsCode} onChange={e => setCustomsHsCode(e.target.value)} placeholder="8471.30.00.00" />
+                        </div>
+                        <div>
+                          <Label>Commodity</Label>
+                          <Input value={customsCommodity} onChange={e => setCustomsCommodity(e.target.value)} placeholder="Laptop, mesin, dll." />
+                        </div>
+                      </div>
+                      <div className="grid sm:grid-cols-2 gap-3">
+                        <div>
+                          <Label>Nilai Pabean (CIF, IDR)</Label>
+                          <Input value={customsNilaiPabean} onChange={e => setCustomsNilaiPabean(e.target.value)} placeholder="Rp 500.000.000" />
+                          <p className="text-[10.5px] text-slate-400 mt-1">Digunakan untuk hitung est. bea masuk & PPN impor</p>
+                        </div>
+                        <div>
+                          <Label>NPWP Importir</Label>
+                          <Input value={customsNpwp} onChange={e => setCustomsNpwp(e.target.value)} placeholder="XX.XXX.XXX.X-XXX.XXX" />
+                        </div>
+                      </div>
+                      <div>
+                        <Label>Nomor Aju (Opsional)</Label>
+                        <Input value={customsNomorAju} onChange={e => setCustomsNomorAju(e.target.value)} placeholder="Diisi jika sudah ada" />
+                      </div>
+                      <Check checked={customsAddlService} onChange={setCustomsAddlService} label="Additional Services" sub={`+${formatIDR(rates.customs.additionalServiceFee)} (pengawalan, pemeriksaan fisik, dll.)`} />
+                    </div>
+                  </div>
+                )}
+
+                {/* TRUCKING */}
+                {service === "domestic" && (
+                  <div>
+                    <SectionTitle n={3}>Detail Trucking / Domestik</SectionTitle>
+                    <div className="space-y-3">
+                      <div className="grid sm:grid-cols-2 gap-3">
+                        <div>
+                          <Label req>Alamat Pickup</Label>
+                          <Input value={truckPickup} onChange={e => setTruckPickup(e.target.value)} placeholder="Jl. Raya No. 1, Tangerang" />
+                        </div>
+                        <div>
+                          <Label req>Alamat Delivery</Label>
+                          <Input value={truckDelivery} onChange={e => setTruckDelivery(e.target.value)} placeholder="Jl. Industri No. 5, Surabaya" />
+                        </div>
+                      </div>
+                      <div>
+                        <Label req>Tipe Kendaraan</Label>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                          {Object.entries(rates.domestic.vehicleRates).map(([v, r]) => (
+                            <button key={v} type="button" onClick={() => setTruckVehicle(v)}
+                              className={`shipment-type-btn flex-col gap-0.5 py-3${truckVehicle === v ? " active" : ""}`}
+                              style={{ minHeight: "auto" }}>
+                              <span className="text-[12.5px] font-bold">{v}</span>
+                              <span className="text-[10px] text-slate-400 font-normal">{formatIDR(r)}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="grid sm:grid-cols-3 gap-3">
+                        <div>
+                          <Label req>Jarak (KM)</Label>
+                          <Input type="number" min="0" value={truckDistance} onChange={e => setTruckDistance(e.target.value)} placeholder="0 km" />
+                          <p className="text-[10.5px] text-slate-400 mt-1">+{formatIDR(rates.domestic.distanceRatePerKm)}/km</p>
+                        </div>
+                        <div>
+                          <Label>Tonase (ton)</Label>
+                          <Input type="number" min="0" step="0.1" value={truckTonase} onChange={e => setTruckTonase(e.target.value)} placeholder="0.0 ton" />
+                        </div>
+                        <div>
+                          <Label>Jumlah Koli</Label>
+                          <Input type="number" min="0" value={truckKoli} onChange={e => setTruckKoli(e.target.value)} placeholder="0 koli" />
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Check checked={truckLoading} onChange={setTruckLoading} label="Loading" sub={formatIDR(rates.domestic.loadingFee)} />
+                        <Check checked={truckUnloading} onChange={setTruckUnloading} label="Unloading" sub={formatIDR(rates.domestic.unloadingFee)} />
+                        <Check checked={truckOvernight} onChange={setTruckOvernight} label="Overnight" sub={formatIDR(rates.domestic.overnightFee)} />
+                        <div className="flex items-center gap-2 option-toggle" style={{ flex:"0 0 auto" }}>
+                          <span className="text-[12.5px] font-semibold text-slate-700">Helper (hari):</span>
+                          <button type="button" onClick={() => setTruckHelperDays(d => String(Math.max(0, parseInt(d)-1)))} className="w-6 h-6 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition-colors"><Minus className="h-3 w-3" /></button>
+                          <span className="font-bold w-6 text-center text-[13px]">{truckHelperDays}</span>
+                          <button type="button" onClick={() => setTruckHelperDays(d => String(parseInt(d)+1))} className="w-6 h-6 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition-colors"><Plus className="h-3 w-3" /></button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* WAREHOUSING */}
+                {service === "warehousing" && (
+                  <div>
+                    <SectionTitle n={3}>Detail Warehousing</SectionTitle>
+                    <div className="space-y-3">
+                      <div>
+                        <Label>Lokasi Gudang</Label>
+                        <Input value={whLocation} onChange={e => setWhLocation(e.target.value)} placeholder="Tangerang, Cikarang, Surabaya..." />
+                      </div>
+                      <div>
+                        <Label req>Tipe Penyimpanan</Label>
+                        <div className="flex gap-2">
+                          {(["Pallet","CBM","SQM"] as const).map(t => (
+                            <button key={t} type="button" onClick={() => setWhStorageType(t)}
+                              className={`shipment-type-btn flex-col gap-0.5 py-3${whStorageType === t ? " active" : ""}`}>
+                              <span className="text-[12.5px] font-bold">{t}</span>
+                              <span className="text-[10px] text-slate-400 font-normal">
+                                {t === "Pallet" ? formatIDR(rates.warehousing.palletRatePerDay) : t === "CBM" ? formatIDR(rates.warehousing.cbmRatePerDay) : formatIDR(rates.warehousing.sqmRatePerDay)}/hari
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="grid sm:grid-cols-2 gap-3">
+                        <div>
+                          <Label req>Jumlah ({whStorageType === "Pallet" ? "pallet" : whStorageType === "CBM" ? "CBM" : "m²"})</Label>
+                          <Input type="number" min="0" step={whStorageType === "CBM" ? "0.01" : "1"} value={whQty} onChange={e => setWhQty(e.target.value)} placeholder="0" />
+                        </div>
+                        <div>
+                          <Label req>Durasi (hari)</Label>
+                          <Input type="number" min="1" value={whDuration} onChange={e => setWhDuration(e.target.value)} placeholder="30 hari" />
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Check checked={whInbound} onChange={setWhInbound} label="Inbound Handling" sub={`${formatIDR(rates.warehousing.inboundFee)}/unit`} />
+                        <Check checked={whOutbound} onChange={setWhOutbound} label="Outbound Handling" sub={`${formatIDR(rates.warehousing.outboundFeePerPallet)}/unit`} />
+                        <Check checked={whInventory} onChange={setWhInventory} label="Inventory Management" sub={`${formatIDR(rates.warehousing.inventoryFeePerMonth)}/bulan`} />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* PROJECT CARGO */}
+                {service === "projectCargo" && (
+                  <div>
+                    <SectionTitle n={3}>Detail Project Cargo</SectionTitle>
+                    <div className="space-y-3">
+                      <div className="bg-violet-50 border border-violet-200 rounded-xl px-4 py-3 flex items-start gap-2.5">
+                        <AlertTriangle className="h-4 w-4 text-violet-500 mt-0.5 shrink-0" />
+                        <p className="text-[12px] text-violet-700">Project Cargo bersifat custom. Kalkulasi ini menghasilkan <strong>Estimated Budget Range</strong>, bukan fixed quotation.</p>
+                      </div>
+                      <div className="grid sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="calc-label">Dimensi Kargo (meter)</label>
+                          <div className="grid grid-cols-3 gap-2">
+                            <Input type="number" min="0" step="0.01" value={pcLength} onChange={e => setPcLength(e.target.value)} placeholder="P (m)" />
+                            <Input type="number" min="0" step="0.01" value={pcWidth} onChange={e => setPcWidth(e.target.value)} placeholder="L (m)" />
+                            <Input type="number" min="0" step="0.01" value={pcHeight} onChange={e => setPcHeight(e.target.value)} placeholder="T (m)" />
+                          </div>
+                        </div>
+                        <div>
+                          <Label>Berat Per Piece (ton)</Label>
+                          <Input type="number" min="0" step="0.1" value={pcWeight} onChange={e => setPcWeight(e.target.value)} placeholder="0.0 ton" />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="calc-label">Kebutuhan Khusus (pilih semua yang sesuai)</label>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                          <Check checked={pcHeavyLift} onChange={setPcHeavyLift} label="Heavy Lift" sub="Muatan sangat berat" />
+                          <Check checked={pcOversize} onChange={setPcOversize} label="Oversize" sub="Dimensi melebihi standar" />
+                          <Check checked={pcCrane} onChange={setPcCrane} label="Crane Required" sub="Perlu crane khusus" />
+                          <Check checked={pcRouteSurvey} onChange={setPcRouteSurvey} label="Route Survey" sub="Survey jalur khusus" />
+                          <Check checked={pcEscort} onChange={setPcEscort} label="Escort Required" sub="Pengawalan khusus" />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* ── STEP 4: Notes ── */}
+                {service && (
+                  <div>
+                    <SectionTitle n={4}>Catatan Tambahan</SectionTitle>
+                    <textarea
+                      value={notes} onChange={e => setNotes(e.target.value)}
+                      placeholder="Instruksi khusus, persyaratan tambahan, deadline, dll."
+                      className="calc-input" rows={2} style={{ resize:"vertical" }}
+                    />
+                  </div>
+                )}
+
+                {/* Error */}
+                {error && (
+                  <div className="flex items-center gap-2 text-red-600 rounded-xl px-4 py-3 text-[13px] font-medium" style={{ background:"#FEF2F2", border:"1.5px solid #FECACA" }}>
+                    <Info className="h-4 w-4 shrink-0" /> {error}
+                  </div>
+                )}
+
+                {/* CTA */}
+                {service && (
+                  <button type="submit" className="w-full flex items-center justify-center gap-2.5 font-bold rounded-xl transition-all duration-200 select-none"
+                    style={{ height:"48px", fontSize:"14.5px", background:"linear-gradient(135deg,#0B5CAD 0%,#1A73D4 50%,#2B8FE8 100%)", color:"white", boxShadow:"0 4px 20px rgba(11,92,173,0.35),inset 0 1px 0 rgba(255,255,255,0.18)", border:"none" }}
+                    onMouseEnter={e => { const el=e.currentTarget as HTMLElement; el.style.transform="translateY(-1px)"; el.style.boxShadow="0 8px 28px rgba(11,92,173,0.40),inset 0 1px 0 rgba(255,255,255,0.18)"; }}
+                    onMouseLeave={e => { const el=e.currentTarget as HTMLElement; el.style.transform="translateY(0)"; el.style.boxShadow="0 4px 20px rgba(11,92,173,0.35),inset 0 1px 0 rgba(255,255,255,0.18)"; }}>
+                    <Calculator className="h-5 w-5" /> Hitung Estimasi Biaya <ChevronRight className="h-4 w-4 opacity-70" />
+                  </button>
+                )}
+
+              </form>
+            </div>
+          </div>
+
+          {/* ── Right Panel: Results ── */}
+          <div className="lg:col-span-2 space-y-4">
+
+            {/* Empty State */}
+            {!calculated && (
+              <div className="calc-card p-6 text-center">
+                <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4" style={{ background:"linear-gradient(135deg,#EFF6FF,#DBEAFE)" }}>
+                  <Calculator className="h-7 w-7" style={{ color:"#3B82F6" }} />
+                </div>
+                <h3 className="font-bold text-slate-700 text-[15px] mb-1.5">Hasil Estimasi</h3>
+                <p className="text-slate-400 text-[12.5px] leading-relaxed max-w-[220px] mx-auto">
+                  Isi form di sebelah kiri, lalu tekan tombol Hitung Estimasi
+                </p>
+                <div className="mt-5 pt-4 border-t border-slate-100">
+                  <div className="space-y-2.5">
+                    {(["seaFreight","airFreight","customs","domestic","warehousing","projectCargo"] as const).map(s => {
+                      const cfg = SERVICE_CONFIG[s];
+                      return (
+                        <button key={s} type="button" onClick={() => handleServiceChange(s)}
+                          className="w-full text-left flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-slate-50 transition-colors">
+                          <span className="text-base">{cfg.emoji}</span>
+                          <span className="text-[12.5px] font-semibold text-slate-700">{cfg.labelFull}</span>
+                          <ArrowRight className="h-3.5 w-3.5 text-slate-300 ml-auto" />
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Project Cargo Budget Range */}
+            {calculated && result?.isProjectCargo && (
+              <div className="calc-card p-6 result-appear" style={{ border:"1.5px solid #DDD6FE" }}>
+                <div className="flex items-center gap-2.5 mb-4">
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background:"linear-gradient(135deg,#7C3AED,#A78BFA)" }}>
+                    <Globe className="h-5 w-5 text-white" />
+                  </div>
+                  <div>
+                    <p className="font-bold text-[14px] text-slate-800">Project Cargo</p>
+                    <p className="text-[11px] text-slate-400">Estimated Budget Range</p>
+                  </div>
+                </div>
+                {result.cbm && (
+                  <div className="bg-violet-50 rounded-xl p-3 mb-4 text-center">
+                    <p className="text-[10.5px] text-violet-600 font-semibold uppercase mb-1">Volume Kargo</p>
+                    <p className="text-[24px] font-bold text-violet-800">{result.cbm} <span className="text-[14px]">m³</span></p>
+                  </div>
+                )}
+                <div className="space-y-2 mb-4">
+                  {[pcHeavyLift && "Heavy Lift", pcOversize && "Oversize", pcCrane && "Crane", pcRouteSurvey && "Route Survey", pcEscort && "Escort"].filter(Boolean).map(f => (
+                    <div key={f as string} className="flex items-center gap-2 text-[12.5px] text-violet-700">
+                      <CheckCircle2 className="h-3.5 w-3.5" /> {f}
+                    </div>
+                  ))}
+                </div>
+                <div className="rounded-xl p-4 text-center mb-4" style={{ background:"linear-gradient(135deg,#F5F3FF,#EDE9FE)" }}>
+                  <p className="text-[11px] font-bold text-violet-600 uppercase mb-1">Estimated Budget Range</p>
+                  <p className="text-[13px] text-violet-700 font-semibold">{formatIDR(result.budgetMin ?? 0)}</p>
+                  <p className="text-[11px] text-violet-400 font-medium">s/d</p>
+                  <p className="text-[22px] font-bold text-violet-800">{formatIDR(result.budgetMax ?? 0)}</p>
+                </div>
+                <p className="text-[11px] text-slate-500 mb-4 leading-relaxed">Estimasi ini bersifat indikatif. Penawaran resmi memerlukan survei & kalkulasi khusus.</p>
+                <div className="space-y-2">
+                  <button onClick={() => setShowQuoteForm(true)} className="w-full h-10 flex items-center justify-center gap-2 rounded-xl font-bold text-[13px] text-white transition-all"
+                    style={{ background:"linear-gradient(135deg,#7C3AED,#A78BFA)", boxShadow:"0 4px 14px rgba(124,58,237,0.35)" }}>
+                    <FileText className="h-4 w-4" /> Request Official Quotation
+                  </button>
+                  <a href={buildWaHref(`Halo, saya ingin berdiskusi mengenai estimasi biaya logistik yang saya hitung.`)} target="_blank" rel="noreferrer" className="w-full h-10 flex items-center justify-center gap-2 rounded-xl font-bold text-[13px] border border-green-300 text-green-700 hover:bg-green-50 transition-colors">
+                    <MessageCircle className="h-4 w-4" /> Diskusi via WhatsApp
+                  </a>
+                </div>
+              </div>
+            )}
+
+            {/* Result Breakdown */}
+            {calculated && result && !result.isProjectCargo && (
+              <div className="space-y-4 result-appear">
+
+                {/* Cargo Metrics */}
+                {(result.chargeableWeight !== undefined || result.cbm !== undefined) && (
+                  <div className="calc-card p-4" style={{ border:`1.5px solid ${svc?.color}40` }}>
+                    <p className="text-[10.5px] font-bold uppercase tracking-widest mb-3" style={{ color: svc?.color }}>Metrik Kargo</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      {result.volumetricWeight !== undefined && (
+                        <div className="rounded-xl p-3 text-center bg-slate-50">
+                          <p className="text-[10px] font-semibold text-slate-500 uppercase mb-1">Volumetric</p>
+                          <p className="text-[18px] font-bold text-slate-800">{result.volumetricWeight}</p>
+                          <p className="text-[10px] text-slate-400">kg</p>
+                        </div>
+                      )}
+                      {result.chargeableWeight !== undefined && (
+                        <div className="rounded-xl p-3 text-center" style={{ background: `${svc?.color}10` }}>
+                          <p className="text-[10px] font-semibold uppercase mb-1" style={{ color: svc?.color }}>Chargeable</p>
+                          <p className="text-[18px] font-bold" style={{ color: svc?.color }}>{result.chargeableWeight}</p>
+                          <p className="text-[10px]" style={{ color: `${svc?.color}99` }}>kg</p>
+                        </div>
+                      )}
+                      {result.cbm !== undefined && (
+                        <div className="rounded-xl p-3 text-center col-span-2" style={{ background: `${svc?.color}10` }}>
+                          <p className="text-[10px] font-semibold uppercase mb-1" style={{ color: svc?.color }}>Volume CBM</p>
+                          <p className="text-[18px] font-bold" style={{ color: svc?.color }}>{result.cbm}</p>
+                          <p className="text-[10px]" style={{ color: `${svc?.color}99` }}>CBM</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Cost Breakdown */}
+                <div className="calc-card p-5">
+                  <div className="flex items-center gap-2 mb-4">
+                    <Receipt className="h-4 w-4" style={{ color: svc?.color }} />
+                    <p className="text-[12px] font-bold uppercase tracking-wider" style={{ color: svc?.color }}>Rincian Biaya</p>
+                  </div>
+
+                  <div className="space-y-0">
+                    {result.items.map((item, i) => (
+                      <div key={i} className="cost-row">
+                        <div>
+                          <p className="text-[13px] text-slate-700">{item.label}</p>
+                          {item.note && <p className="text-[10.5px] text-slate-400">{item.note}</p>}
+                        </div>
+                        <span className="font-semibold text-slate-800 text-[13px] ml-2 shrink-0">{formatIDR(item.value)}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="mt-3 pt-3 border-t border-slate-200 space-y-2">
+                    <div className="flex justify-between text-[13px]">
+                      <span className="text-slate-600">Subtotal</span>
+                      <span className="font-semibold">{formatIDR(result.subtotal)}</span>
+                    </div>
+                    {result.insurance > 0 && (
+                      <div className="flex justify-between text-[13px]">
+                        <span className="text-slate-600 flex items-center gap-1"><Shield className="h-3 w-3 text-green-500" /> Asuransi</span>
+                        <span className="font-semibold">{formatIDR(result.insurance)}</span>
+                      </div>
+                    )}
+                    {result.ppn > 0 && (
+                      <div className="flex justify-between text-[13px]">
+                        <span className="text-slate-600">PPN {service === "airFreight" ? rates.airFreight.ppnPct : rates.seaFreight.ppnPct}%</span>
+                        <span className="font-semibold">{formatIDR(result.ppn)}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mt-4 rounded-xl p-4 text-center" style={{ background:`linear-gradient(135deg,${svc?.color}12,${svc?.color}06)`, border:`1.5px solid ${svc?.color}30` }}>
+                    <p className="text-[10.5px] font-bold uppercase tracking-widest mb-1" style={{ color: svc?.color }}>Estimasi Grand Total</p>
+                    <p className="text-[28px] font-black" style={{ color: svc?.color }}>{formatIDR(result.grandTotal)}</p>
+                    <p className="text-[10.5px] mt-1" style={{ color: `${svc?.color}80` }}>*Estimasi, belum termasuk biaya tidak terduga</p>
+                  </div>
+
+                  <div className="mt-4 space-y-2">
+                    <button onClick={() => setShowQuoteForm(true)} className="w-full h-11 flex items-center justify-center gap-2 rounded-xl font-bold text-[13.5px] text-white transition-all"
+                      style={{ background:`linear-gradient(135deg,#0B5CAD,#1A73D4)`, boxShadow:"0 4px 14px rgba(11,92,173,0.35)" }}>
+                      <FileText className="h-4 w-4" /> Request Official Quotation
+                    </button>
+                    <div className="grid grid-cols-2 gap-2">
+                      <a href={buildWaHref(`Estimasi ${svc?.labelFull}: ${formatIDR(result.grandTotal)}\nRute: ${origin} → ${destination}`)}
+                        target="_blank" rel="noreferrer"
+                        className="h-9 flex items-center justify-center gap-1.5 rounded-xl font-semibold text-[12px] border border-green-300 text-green-700 hover:bg-green-50 transition-colors">
+                        <MessageCircle className="h-3.5 w-3.5" /> WhatsApp
+                      </a>
+                      <button onClick={() => window.print()}
+                        className="h-9 flex items-center justify-center gap-1.5 rounded-xl font-semibold text-[12px] border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors">
+                        <Receipt className="h-3.5 w-3.5" /> Simpan PDF
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button onClick={() => exportCalcCSV(result, svc?.labelFull ?? service)}
+                        className="h-9 flex items-center justify-center gap-1.5 rounded-xl font-semibold text-[12px] border border-emerald-200 text-emerald-700 hover:bg-emerald-50 transition-colors">
+                        <Download className="h-3.5 w-3.5" /> Export CSV
+                      </button>
+                      <button onClick={() => exportCalcJSON(result, svc?.labelFull ?? service)}
+                        className="h-9 flex items-center justify-center gap-1.5 rounded-xl font-semibold text-[12px] border border-violet-200 text-violet-700 hover:bg-violet-50 transition-colors">
+                        <Download className="h-3.5 w-3.5" /> Export JSON
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Quote Success */}
+            {quoteSuccess && (
+              <div className="calc-card p-6 text-center result-appear" style={{ border:"1.5px solid #BBF7D0" }}>
+                <CheckCircle2 className="h-10 w-10 text-green-500 mx-auto mb-3" />
+                <h3 className="font-bold text-[15px] text-slate-800 mb-2">Permintaan Terkirim!</h3>
+                <p className="text-slate-500 text-[12.5px] leading-relaxed">Tim B2B Marketplace and Logistic akan menghubungi Anda dalam 1×24 jam kerja.</p>
+              </div>
+            )}
+
+          </div>
+        </div>
+      </div>
+
+      {/* ── Quote Request Modal ── */}
+      {showQuoteForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background:"rgba(0,0,0,0.55)", backdropFilter:"blur(4px)" }}>
+          <div className="calc-card w-full max-w-md p-6 result-appear">
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <h2 className="font-bold text-slate-800 text-[16px]">Request Official Quotation</h2>
+                <p className="text-[11.5px] text-slate-400 mt-0.5">Tim kami akan menyiapkan penawaran resmi untuk Anda</p>
+              </div>
+              <button onClick={() => setShowQuoteForm(false)} className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition-colors">
+                <X className="h-4 w-4 text-slate-500" />
+              </button>
+            </div>
+
+            {/* Summary */}
+            {result && (
+              <div className="rounded-xl p-3 mb-5" style={{ background:`linear-gradient(135deg,${svc?.color}10,${svc?.color}06)`, border:`1px solid ${svc?.color}20` }}>
+                <div className="flex items-center justify-between text-[12.5px]">
+                  <span className="font-semibold text-slate-700">{svc?.emoji} {svc?.labelFull}</span>
+                  <span className="font-bold" style={{ color: svc?.color }}>
+                    {result.isProjectCargo ? `${formatIDR(result.budgetMin ?? 0)} – ${formatIDR(result.budgetMax ?? 0)}` : formatIDR(result.grandTotal)}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1">{origin} → {destination}</p>
+              </div>
+            )}
+
+            <form onSubmit={handleQuoteSubmit} className="space-y-3">
+              <div>
+                <Label req>Nama Lengkap</Label>
+                <Input value={quoteName} onChange={e => setQuoteName(e.target.value)} placeholder="Budi Santoso" />
+              </div>
+              <div>
+                <Label>Email</Label>
+                <Input type="email" value={quoteEmail} onChange={e => setQuoteEmail(e.target.value)} placeholder="budi@perusahaan.com" />
+              </div>
+              <div>
+                <Label req>Nomor WhatsApp</Label>
+                <Input type="tel" value={quoteWa} onChange={e => setQuoteWa(e.target.value)} placeholder="081234567890" />
+              </div>
+              {quoteError && (
+                <div className="text-red-600 text-[12.5px] bg-red-50 border border-red-200 rounded-lg px-3 py-2">{quoteError}</div>
+              )}
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <button type="button" onClick={() => setShowQuoteForm(false)} className="h-11 rounded-xl font-semibold text-[13px] border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors">
+                  Batal
+                </button>
+                <button type="submit" disabled={quoteSubmitting} className="h-11 rounded-xl font-bold text-[13px] text-white flex items-center justify-center gap-2 transition-all"
+                  style={{ background:"linear-gradient(135deg,#0B5CAD,#1A73D4)", boxShadow:"0 4px 14px rgba(11,92,173,0.30)", opacity: quoteSubmitting ? 0.7 : 1 }}>
+                  {quoteSubmitting ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                  {quoteSubmitting ? "Mengirim..." : "Kirim Request"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

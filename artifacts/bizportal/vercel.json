@@ -1,0 +1,27 @@
+{
+  "buildCommand": "cd ../.. && node artifacts/api-server/build.mjs --skip || true && BASE_PATH=/ pnpm --filter @workspace/bizportal run build",
+  "outputDirectory": "artifacts/bizportal/dist/public",
+  "installCommand": "pnpm install",
+  "framework": null,
+  "env": {
+    "BASE_PATH": "/"
+  },
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://REPLIT_BACKEND_DOMAIN/api/:path*"
+    },
+    {
+      "source": "/objects/:path*",
+      "destination": "https://REPLIT_BACKEND_DOMAIN/objects/:path*"
+    },
+    {
+      "source": "/wa-gateway/:path*",
+      "destination": "https://REPLIT_BACKEND_DOMAIN/wa-gateway/:path*"
+    },
+    {
+      "source": "/((?!api|objects|wa-gateway).*)",
+      "destination": "/index.html"
+    }
+  ]
+}

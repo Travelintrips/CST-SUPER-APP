@@ -1,0 +1,9 @@
+onlyBuiltDependencies = [
+  "sharp",
+  "core-js",
+  "@whiskeysockets/baileys",
+  "protobufjs",
+  "esbuild",
+]
+
+ignoredBuiltDependencies = []

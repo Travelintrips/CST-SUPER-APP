@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/logistic-order/"
+title = "Export Import & Logistic Ordering System"
+version = "1.0.0"
+id = "artifacts/logistic-order"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/logistic-order/" ]
+localPort = 19368
+
+[services.development]
+run = "bash start-dev.sh"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/logistic-order", "run", "build" ]
+publicDir = "artifacts/logistic-order/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "19368"
+BASE_PATH = "/logistic-order/"

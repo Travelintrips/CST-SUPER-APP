@@ -1,0 +1,34 @@
+kind = "web"
+previewPath = "/bizportal/"
+title = "BizPortal — Multi-Divisi"
+version = "1.0.0"
+id = "artifacts/bizportal"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/bizportal/" ]
+localPort = 18442
+
+[services.development]
+run = "bash start-dev.sh"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/bizportal", "run", "build" ]
+publicDir = "artifacts/bizportal/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "18442"
+BASE_PATH = "/bizportal/"
+
+[services.production.env]
+BASE_PATH = "/bizportal/"

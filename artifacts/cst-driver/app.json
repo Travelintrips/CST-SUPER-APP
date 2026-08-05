@@ -1,0 +1,61 @@
+{
+  "expo": {
+    "name": "CST Driver",
+    "slug": "cst-driver",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "cst-driver",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/images/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0F3460"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.cst.driver"
+    },
+    "android": {
+      "package": "com.cst.driver",
+      "versionCode": 2,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/icon.png",
+        "backgroundColor": "#0F3460"
+      },
+      "permissions": [
+        "android.permission.VIBRATE",
+        "android.permission.RECEIVE_BOOT_COMPLETED"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/images/icon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      [
+        "expo-router",
+        {
+          "origin": "https://cst-super-app.replit.app/cst-driver/"
+        }
+      ],
+      "expo-font",
+      "expo-web-browser",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon.png",
+          "color": "#FF6B00",
+          "androidMode": "default",
+          "androidCollapsedTitle": "CST Driver",
+          "sounds": ["./assets/sounds/notify.mp3"]
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}

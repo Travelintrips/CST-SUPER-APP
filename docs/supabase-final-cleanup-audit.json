@@ -1,0 +1,306 @@
+{
+  "meta": {
+    "auditDate": "2026-06-23",
+    "auditVersion": "1.0",
+    "scope": "Phase 1 + Phase 2 archive candidates",
+    "totalTablesAudited": 59,
+    "migrationFiles": [
+      "migrations/archive-phase-1-safe-only.sql",
+      "migrations/archive-phase-2-candidates.sql"
+    ],
+    "methodology": [
+      "grep search in artifacts/ and lib/ for SQL table name strings",
+      "Drizzle ORM schema scan in lib/db/src/schema/",
+      "API route scan in artifacts/api-server/src/routes/",
+      "Frontend page API call scan in artifacts/bizportal/src/ and artifacts/customer-portal/src/",
+      "PostgreSQL view/trigger check via codebase scan"
+    ]
+  },
+  "summary": {
+    "SAFE_TO_DROP": 56,
+    "KEEP_ARCHIVED": 3,
+    "RESTORE_REQUIRED": 0,
+    "keepArchivedResolution": {
+      "resolvedAt": "2026-06-23",
+      "workflow_events": "RESOLVED — kode bersih, tabel tidak ada di DB",
+      "sport_center_memberships": "SAFE_AFTER_30_DAYS — tabel tidak ada di DB, batas 2026-07-23",
+      "sport_center_bookings": "COOLING_PERIOD — tabel tidak ada di DB, batas 2026-07-23",
+      "referenceDoc": "docs/supabase-keep-archived-resolution.md"
+    }
+  },
+  "checks": {
+    "activeCodeReferences": {
+      "tablesWithZeroRefs": 56,
+      "tablesWithActiveRefs": 3,
+      "details": [
+        {
+          "table": "workflow_events",
+          "verdict": "RESOLVED",
+          "resolvedAt": "2026-06-23",
+          "dbStatus": "TABLE_NOT_EXISTS",
+          "references": [],
+          "actionsCompleted": [
+            "DELETED lib/db/src/schema/workflowEvents.ts",
+            "Removed export * from './workflowEvents' from lib/db/src/schema/index.ts (line 75)",
+            "Removed CREATE TABLE IF NOT EXISTS workflow_events block from phase1Migration.ts (lines 9-30)",
+            "Removed CREATE INDEX workflow_events_status_idx from phase1Migration.ts",
+            "Updated log message at phase1Migration.ts:132 — removed workflow_events mention"
+          ],
+          "verificationResult": "grep workflowEventsTable artifacts/ lib/ = 0 hits",
+          "roadmap": "lib/db/migrations/next-release-drop-legacy-tables.sql"
+        },
+        {
+          "table": "sport_center_memberships",
+          "verdict": "SAFE_AFTER_30_DAYS",
+          "resolvedAt": "2026-06-23",
+          "coolingPeriodEnd": "2026-07-23",
+          "dbStatus": "TABLE_NOT_EXISTS",
+          "references": [],
+          "notes": "Tabel tidak ditemukan di DB manapun (public, sport_center, dll.) — tidak ada data yang perlu dimigrasikan ke sport_members.",
+          "requiredActionsBeforeDrop": [
+            "Tunggu cooling period berakhir: 2026-07-23",
+            "Konfirmasi tidak ada keluhan data hilang dari user",
+            "Uncomment DROP di migrations/resolve-keep-archived.sql lalu eksekusi"
+          ]
+        },
+        {
+          "table": "sport_center_bookings",
+          "verdict": "COOLING_PERIOD",
+          "resolvedAt": null,
+          "coolingPeriodEnd": "2026-07-23",
+          "dbStatus": "TABLE_NOT_EXISTS",
+          "references": [
+            { "file": "artifacts/api-server/src/modules/sport-center/migration.ts", "line": "334-400", "type": "conditional_read", "description": "IF EXISTS guard wraps legacy data pull — no-op since table does not exist" }
+          ],
+          "notes": "Tabel tidak ditemukan di DB manapun — IF EXISTS guard di migration.ts aktif. Tidak ada perubahan kode diperlukan. Tunggu cooling period.",
+          "requiredActionsBeforeDrop": [
+            "Tunggu cooling period berakhir: 2026-07-23",
+            "Konfirmasi tidak ada keluhan data hilang dari user",
+            "Uncomment DROP di migrations/resolve-keep-archived.sql lalu eksekusi"
+          ]
+        }
+      ]
+    },
+    "apiRoutes": {
+      "totalChecked": 7,
+      "routesWithArchivedTableDependency": 0,
+      "migratedRoutes": [
+        { "route": "GET /api/settings/documents", "oldTable": "document_templates", "newTable": "portal_content", "file": "artifacts/api-server/src/routes/settings.ts", "status": "MIGRATED" },
+        { "route": "GET /api/sport-center/facilities", "oldTable": "sport_center_facilities", "newTable": "sport_facilities", "status": "MIGRATED" },
+        { "route": "GET /api/sport-center/bookings", "oldTable": "sport_center_bookings", "newTable": "sport_bookings", "status": "MIGRATED" },
+        { "route": "GET /api/sport-center/members", "oldTable": "sport_center_memberships", "newTable": "sport_members", "status": "MIGRATED" },
+        { "route": "GET /api/sport-center/payments", "oldTable": "sc_payments", "newTable": "sport_payments", "status": "MIGRATED" },
+        { "route": "GET /api/sport-center/settings", "oldTable": "sc_settings", "newTable": "none (config in-memory)", "status": "MIGRATED" },
+        { "route": "POST /api/portal/auth/wa-otp/send", "oldTable": "otp_tokens", "newTable": "wa_otp_codes", "status": "MIGRATED" }
+      ]
+    },
+    "drizzleSchemas": {
+      "schemasPointingToArchivedTables": 1,
+      "details": [
+        {
+          "file": "lib/db/src/schema/workflowEvents.ts",
+          "table": "workflow_events",
+          "status": "NEEDS_DELETION",
+          "note": "File is marked @deprecated but not yet removed. Must be deleted before DROP TABLE."
+        }
+      ]
+    },
+    "postgresViews": {
+      "viewsPointingToArchivedTables": 0,
+      "verificationQuery": "SELECT viewname, definition FROM pg_views WHERE schemaname='public' AND definition LIKE '%zz_deleted%'",
+      "notes": "No CREATE VIEW definitions found in codebase referencing archived tables."
+    },
+    "triggersAndFunctions": {
+      "triggersOnArchivedTables": 0,
+      "verificationQuery": "SELECT tgname, relname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE relname LIKE 'zz_deleted%'",
+      "notes": "No trigger or function definitions found in codebase referencing archived tables."
+    },
+    "frontendPages": {
+      "pagesWithArchivedTableDependency": 0,
+      "noteableFindings": [
+        {
+          "page": "artifacts/bizportal/src/pages/settings/document-templates.tsx",
+          "apiEndpoint": "/api/settings/documents",
+          "oldTable": "document_templates",
+          "status": "OK",
+          "notes": "Backend route (settings.ts:774) now uses portalContentTable, not document_templates. Frontend page continues to work correctly."
+        },
+        {
+          "page": "artifacts/bizportal/src/pages/sport-center/facilities.tsx",
+          "apiEndpoint": "/api/sport-center/facilities",
+          "oldTable": "sport_center_facilities",
+          "status": "OK",
+          "notes": "Backend uses sport_facilities. Code fix applied 2026-06-23."
+        },
+        {
+          "page": "artifacts/bizportal/src/pages/sport-center/bookings.tsx",
+          "apiEndpoint": "/api/sport-center/bookings",
+          "oldTable": "sport_center_bookings",
+          "status": "OK",
+          "notes": "Backend uses sport_bookings."
+        },
+        {
+          "page": "artifacts/bizportal/src/pages/sport-center/members.tsx",
+          "apiEndpoint": "/api/sport-center/members",
+          "oldTable": "sport_center_memberships",
+          "status": "OK",
+          "notes": "UNION ALL with sport_center_memberships removed. Only sport_members queried."
+        },
+        {
+          "page": "artifacts/customer-portal/src/pages/register.tsx",
+          "apiEndpoint": "/api/portal/auth/wa-otp/send",
+          "oldTable": "otp_tokens",
+          "status": "OK",
+          "notes": "Backend uses wa_otp_codes table, not otp_tokens."
+        }
+      ]
+    }
+  },
+  "tables": {
+    "SAFE_TO_DROP": [
+      { "table": "ai_tasks", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "attendance_records", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "bank_account_balances", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "bank_closing_periods", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "bank_coa_rules", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "bank_recon_audit_logs", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "banners", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "blast_session_logs", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "cashier_shifts", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "cms_blocks", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "cms_media", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "cms_pages", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "cms_settings", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "company_settings", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false, "notes": "Ref di portal.ts:51 adalah komentar in-memory cache — bukan SQL query" },
+      { "table": "customer_contexts", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "data_template_fields", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "data_templates", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "dispatcher_logs", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "document_audits", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false, "notes": "String 'sales_document_audit' di sales.ts:1433 adalah audit type value — bukan SQL ke tabel ini" },
+      { "table": "document_template_fields", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "document_templates", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": true, "notes": "Frontend page settings/document-templates.tsx tetap ada tapi backend sudah pakai portalContentTable" },
+      { "table": "draft_agreements_wa_log", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "follow_up_logs", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "gym_memberships", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "intent_master", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "keyword_rules", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "leave_requests", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "operational_checklists", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "operational_expenses", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "otp_tokens", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false, "notes": "OTP aktif menggunakan wa_otp_codes (tabel berbeda)" },
+      { "table": "page_products", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "promo_registrations", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "public_tokens", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "registration_link_wa_log", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "sc_admin_notes", "phase": 1, "originalRisk": "LOW", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "sc_blocked_schedules", "phase": 1, "originalRisk": "LOW", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "sc_facility_images", "phase": 1, "originalRisk": "LOW", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "sc_promos", "phase": 1, "originalRisk": "LOW", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "sc_settings", "phase": 1, "originalRisk": "LOW", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "service_catalog", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "service_circuit_states", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false, "notes": "lib/system-watchdog-service.mjs tidak ditemukan di filesystem — confirmed zero refs" },
+      { "table": "service_registry", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false, "notes": "lib/system-watchdog-service.mjs tidak ditemukan di filesystem — confirmed zero refs" },
+      { "table": "shipment_events", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "shipment_trackings", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "sport_center_expenses", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false, "notes": "Tabel aktif: sport_expenses (Drizzle: sportExpensesTable). sport_center_expenses adalah nama lama." },
+      { "table": "task_assignments", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false, "notes": "Internal tasks pakai internal_tasks tabel" },
+      { "table": "task_attachments", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "task_comments", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "task_timeline", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "team_members", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "user_site_access", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "wa_send_logs", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "whatsapp_messages", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "whatsapp_notifications", "phase": 1, "originalRisk": "SAFE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false },
+      { "table": "sc_payments", "phase": 2, "originalRisk": "ARCHIVE_CANDIDATE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false, "notes": "Hanya muncul sebagai JSON response field name (variable), bukan SQL table query" },
+      { "table": "sport_center_facilities", "phase": 2, "originalRisk": "ARCHIVE_CANDIDATE", "codeRefs": 0, "drizzleSchema": false, "frontendDep": false, "notes": "Code fix applied 2026-06-23: .schema('sport_center').from('facilities') in supabaseSync.ts + routes.ts" },
+      { "table": "sport_center_bookings", "phase": 2, "originalRisk": "ARCHIVE_CANDIDATE", "codeRefs": 1, "drizzleSchema": false, "frontendDep": false, "notes": "Satu-satunya ref di migration.ts dilindungi IF EXISTS guard — safe untuk archive/drop" }
+    ],
+    "KEEP_ARCHIVED": [
+      {
+        "table": "workflow_events",
+        "phase": 2,
+        "codeRefs": 3,
+        "drizzleSchema": true,
+        "frontendDep": false,
+        "keepReason": "Drizzle schema file masih ada + phase1Migration.ts recreates table on every boot",
+        "requiredActions": [
+          "Delete lib/db/src/schema/workflowEvents.ts",
+          "Remove export from lib/db/src/schema/index.ts",
+          "Remove CREATE TABLE block from phase1Migration.ts (lines 9-30)",
+          "Update log message phase1Migration.ts:150"
+        ],
+        "afterCleanup": "SAFE_TO_DROP"
+      },
+      {
+        "table": "sport_center_memberships",
+        "phase": 2,
+        "codeRefs": 0,
+        "drizzleSchema": false,
+        "frontendDep": false,
+        "keepReason": "Data migration ke sport_members belum dikonfirmasi — row count harus diverifikasi dulu",
+        "requiredActions": [
+          "SELECT COUNT(*) FROM sport_center_memberships;",
+          "If rows > 0: migrate to sport_members before DROP"
+        ],
+        "afterCleanup": "SAFE_TO_DROP"
+      },
+      {
+        "table": "sport_center_bookings",
+        "phase": 2,
+        "codeRefs": 1,
+        "drizzleSchema": false,
+        "frontendDep": false,
+        "keepReason": "30-day cooling period recommended — data booking lama ada, IF EXISTS guard aktif",
+        "requiredActions": [
+          "Wait 30-day cooling period after archive",
+          "Verify all booking data is in sport_bookings"
+        ],
+        "afterCleanup": "SAFE_TO_DROP"
+      }
+    ],
+    "RESTORE_REQUIRED": []
+  },
+  "codeCleanupPlan": {
+    "priority": "HIGH",
+    "items": [
+      {
+        "id": "CC-001",
+        "file": "lib/db/src/schema/workflowEvents.ts",
+        "action": "DELETE_FILE",
+        "description": "Hapus seluruh file schema workflowEvents.ts",
+        "blockedBy": []
+      },
+      {
+        "id": "CC-002",
+        "file": "lib/db/src/schema/index.ts",
+        "action": "REMOVE_EXPORT",
+        "description": "Hapus: export * from './workflowEvents'",
+        "blockedBy": ["CC-001"]
+      },
+      {
+        "id": "CC-003",
+        "file": "artifacts/api-server/src/lib/phase1Migration.ts",
+        "action": "REMOVE_BLOCK",
+        "description": "Hapus CREATE TABLE IF NOT EXISTS workflow_events block (lines 9-30) dan CREATE INDEX workflow_events_status_idx (lines 27-30)",
+        "blockedBy": []
+      },
+      {
+        "id": "CC-004",
+        "file": "artifacts/api-server/src/lib/phase1Migration.ts",
+        "action": "UPDATE_LOG",
+        "description": "Update log message di line 150 — hapus mention 'workflow_events'",
+        "blockedBy": ["CC-003"]
+      }
+    ]
+  },
+  "verificationSQL": {
+    "preDropCheck": [
+      "SELECT tablename, pg_total_relation_size(quote_ident(tablename)) AS size_bytes FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'zz_deleted_%' ORDER BY size_bytes DESC;",
+      "SELECT viewname, definition FROM pg_views WHERE schemaname='public' AND (definition LIKE '%zz_deleted%' OR definition LIKE '%workflow_events%' OR definition LIKE '%sport_center_bookings%' OR definition LIKE '%sport_center_memberships%');",
+      "SELECT tgname, relname AS table_name FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE relname LIKE 'zz_deleted%' OR relname IN ('workflow_events', 'sport_center_bookings', 'sport_center_memberships');",
+      "SELECT COUNT(*) FROM sport_center_memberships;",
+      "SELECT COUNT(*) FROM sport_center_bookings;"
+    ]
+  }
+}

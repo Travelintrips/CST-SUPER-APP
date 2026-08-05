@@ -1,0 +1,31 @@
+<svg width="180" height="180" viewBox="0 0 180 180" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Dark background circle -->
+  <circle cx="90" cy="90" r="90" fill="#040c1e"/>
+  <!-- Outer silver metallic ring -->
+  <circle cx="90" cy="90" r="87" fill="none" stroke="url(#rim)" stroke-width="10"/>
+  <!-- Inner dark field -->
+  <circle cx="90" cy="90" r="78" fill="#081228"/>
+
+  <!-- CST lightning bolt mark — upper diagonal bar (C stroke) -->
+  <path d="M115 38 L55 82 L70 82 L52 142 L112 98 L97 98 Z" fill="url(#bolt)"/>
+  <!-- Highlight edge on bolt -->
+  <path d="M115 38 L92 38 L55 82 L70 82 Z" fill="#93c5fd" opacity="0.55"/>
+  <path d="M52 142 L75 142 L112 98 L97 98 Z" fill="#bfdbfe" opacity="0.35"/>
+
+  <!-- Silver inner circle rim highlight -->
+  <circle cx="90" cy="90" r="77" fill="none" stroke="#8ba4c0" stroke-width="2" opacity="0.5"/>
+
+  <defs>
+    <linearGradient id="rim" x1="0" y1="0" x2="180" y2="180" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#d8e4f0"/>
+      <stop offset="35%"  stop-color="#7090b0"/>
+      <stop offset="65%"  stop-color="#b0c8dc"/>
+      <stop offset="100%" stop-color="#e0eaf4"/>
+    </linearGradient>
+    <linearGradient id="bolt" x1="52" y1="38" x2="115" y2="142" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#60a5fa"/>
+      <stop offset="50%"  stop-color="#2563eb"/>
+      <stop offset="100%" stop-color="#1d4ed8"/>
+    </linearGradient>
+  </defs>
+</svg>

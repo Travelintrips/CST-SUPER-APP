@@ -1,0 +1,14 @@
+# translations.ts: file besar yang diedit banyak orang.
+# Gunakan union merge agar tiap pihak bisa tambah/edit baris berbeda
+# tanpa memicu konflik setiap kali pull.
+artifacts/customer-portal/src/i18n/translations.ts merge=union
+
+# Replit auto-modifies .replit — jangan biarkan remote menimpanya
+.replit merge=ours
+
+# replit.md dikelola oleh Replit agent — selalu pakai versi lokal
+replit.md merge=ours
+
+# pnpm-lock.yaml: file generated, jangan di-auto-merge (bisa corrupt).
+# Saat conflict: ambil salah satu versi lalu jalankan 'pnpm install' untuk regenerate.
+pnpm-lock.yaml merge=binary

@@ -1,0 +1,26 @@
+import { pgTable, serial, text, numeric, timestamp, boolean } from "drizzle-orm/pg-core";
+
+export const quoteRequestsTable = pgTable("quote_requests", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  email: text("email"),
+  whatsapp: text("whatsapp").notNull(),
+  service: text("service").notNull(),
+  origin: text("origin").notNull(),
+  destination: text("destination").notNull(),
+  weight: text("weight"),
+  length: text("length"),
+  width: text("width"),
+  height: text("height"),
+  incoterms: text("incoterms"),
+  insurance: boolean("insurance").default(false),
+  express: boolean("express").default(false),
+  estimatedTotal: numeric("estimated_total", { precision: 14, scale: 2 }),
+  estimatedCbm: numeric("estimated_cbm", { precision: 10, scale: 4 }),
+  estimatedChargeableWeight: numeric("estimated_chargeable_weight", { precision: 10, scale: 2 }),
+  status: text("status").notNull().default("new"),
+  notes: text("notes"),
+  handledBy: text("handled_by"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
