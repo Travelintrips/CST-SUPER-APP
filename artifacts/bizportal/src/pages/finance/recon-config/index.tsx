@@ -30,6 +30,7 @@ import { useCompany } from "@/contexts/CompanyContext";
 import {
   SlidersHorizontal, Plus, Pencil, PowerOff, RefreshCw,
   Brain, BookOpen, Tag, Upload, Shield, ArrowLeft,
+  BarChart2, TrendingUp, TrendingDown, Clock, AlertCircle, CheckCircle2,
 } from "lucide-react";
 
 const API = "/api";
@@ -957,6 +958,245 @@ function UploadRequirementsTab() {
   );
 }
 
+// ─── Usage Stats Tab ──────────────────────────────────────────────────────────
+
+function UsageStatsTab() {
+  const { activeCompanyId } = useCompany();
+  const [stats, setStats]     = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({ limit: "10" });
+      if (activeCompanyId) params.set("company_id", String(activeCompanyId));
+      const r = await fetch(`${API}/recon-classification/usage-stats?${params}`, { credentials: "include" });
+      if (!r.ok) { setError("Gagal memuat statistik."); return; }
+      setStats(await r.json());
+    } catch { setError("Gagal memuat statistik."); }
+    finally { setLoading(false); }
+  }, [activeCompanyId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (loading) return (
+    <div className="flex items-center justify-center py-16 text-slate-400">
+      <RefreshCw size={18} className="animate-spin mr-2" /> Memuat statistik...
+    </div>
+  );
+  if (error) return (
+    <div className="flex items-center gap-2 text-red-400 py-8">
+      <AlertCircle size={16} /> {error}
+    </div>
+  );
+  if (!stats) return null;
+
+  const { summary, mostUsedCategories = [], leastUsedCategories = [],
+          neverUsedCategories = [], topRules = [], topKeywords = [], recentUsage = [] } = stats;
+
+  const fmtDate = (d: string | null) => d ? new Date(d).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" }) : "—";
+  const fmtNum  = (n: number) => n.toLocaleString("id-ID");
+
+  return (
+    <div className="space-y-6">
+      {/* Refresh */}
+      <div className="flex justify-end">
+        <button onClick={load}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-slate-600 text-slate-300 hover:text-white hover:border-slate-400 text-sm transition-colors">
+          <RefreshCw size={13} /> Refresh
+        </button>
+      </div>
+
+      {/* Summary Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        {[
+          { label: "Total Usage",       value: fmtNum(summary.totalUsage),          icon: BarChart2,      tip: "Total reconciliation actions tracked across all configs" },
+          { label: "Hari Ini",          value: fmtNum(summary.usageToday),           icon: Clock,          tip: "Usage events recorded today" },
+          { label: "Bulan Ini",         value: fmtNum(summary.usageThisMonth),        icon: TrendingUp,     tip: "Usage events this calendar month" },
+          { label: "Aktif",             value: fmtNum(summary.activeCategories),      icon: CheckCircle2,   tip: "Active classification configs" },
+          { label: "Belum Dipakai",     value: fmtNum(summary.neverUsedCategories),   icon: AlertCircle,    tip: "Active configs with zero usage — candidates for review" },
+        ].map(({ label, value, icon: Icon, tip }) => (
+          <div key={label} className="bg-slate-800 rounded-lg p-4 border border-slate-700" title={tip}>
+            <div className="flex items-center gap-2 text-slate-400 text-xs mb-1">
+              <Icon size={13} /> {label}
+            </div>
+            <p className="text-xl font-bold text-white">{value}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Most used */}
+        <div>
+          <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-300 mb-3">
+            <TrendingUp size={14} className="text-green-400" /> Paling Sering Dipakai
+            <span className="text-slate-500 font-normal text-xs ml-1"
+              title="Total times this config was matched and approved in bank reconciliation">
+              (total approval match)
+            </span>
+          </h3>
+          {mostUsedCategories.length === 0
+            ? <p className="text-slate-500 text-sm py-4 text-center">Belum ada penggunaan.</p>
+            : (
+              <div className="space-y-2">
+                {mostUsedCategories.slice(0, 10).map((row: any) => (
+                  <div key={row.id} className="flex items-center justify-between bg-slate-800/60 rounded px-3 py-2 border border-slate-700/50">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm text-white font-medium truncate">{row.name}</p>
+                      <p className="text-xs text-slate-500 truncate">
+                        {row.category} · {row.last_used_by ?? "—"}
+                        {row.last_used_at ? ` · ${fmtDate(row.last_used_at)}` : ""}
+                      </p>
+                    </div>
+                    <span className="ml-3 text-green-400 font-bold text-sm whitespace-nowrap">
+                      {fmtNum(row.usage_count)}×
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+        </div>
+
+        {/* Never used */}
+        <div>
+          <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-300 mb-3">
+            <AlertCircle size={14} className="text-yellow-400" /> Belum Pernah Dipakai
+            <span className="text-slate-500 font-normal text-xs ml-1"
+              title="Active configs that have never been matched in any reconciliation">
+              (aktif, usage = 0)
+            </span>
+          </h3>
+          {neverUsedCategories.length === 0
+            ? <p className="text-slate-500 text-sm py-4 text-center">Semua konfigurasi sudah pernah dipakai.</p>
+            : (
+              <div className="space-y-2">
+                {neverUsedCategories.slice(0, 10).map((row: any) => (
+                  <div key={row.id} className="flex items-center justify-between bg-slate-800/60 rounded px-3 py-2 border border-slate-700/50">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm text-white font-medium truncate">{row.name}</p>
+                      <p className="text-xs text-slate-500">{row.category} · {row.code}</p>
+                    </div>
+                    <span className="ml-3 text-yellow-500 text-xs whitespace-nowrap">Belum dipakai</span>
+                  </div>
+                ))}
+              </div>
+            )}
+        </div>
+
+        {/* Top AI Rules */}
+        <div>
+          <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-300 mb-3">
+            <Brain size={14} className="text-purple-400" /> Top AI Rules
+            <span className="text-slate-500 font-normal text-xs ml-1"
+              title="AI rule usage_count = times matched; accepted / (accepted+rejected) = acceptance rate. Rate is not shown if denominator is 0.">
+              (match count + acceptance rate)
+            </span>
+          </h3>
+          {topRules.length === 0
+            ? <p className="text-slate-500 text-sm py-4 text-center">Belum ada AI rule yang dipakai.</p>
+            : (
+              <div className="space-y-2">
+                {topRules.slice(0, 10).map((rule: any) => {
+                  const denom = Number(rule.accepted_count ?? 0) + Number(rule.rejected_count ?? 0);
+                  const rate  = denom > 0 ? Math.round(Number(rule.accepted_count) / denom * 100) : null;
+                  return (
+                    <div key={rule.id} className="bg-slate-800/60 rounded px-3 py-2 border border-slate-700/50">
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm text-white font-medium truncate flex-1">{rule.name}</p>
+                        <span className="ml-3 text-purple-300 font-bold text-sm">{fmtNum(rule.usage_count)}×</span>
+                      </div>
+                      <div className="flex items-center gap-3 mt-1 text-xs text-slate-500">
+                        <span title="Times AI recommended this rule and user accepted">
+                          ✓ {fmtNum(rule.accepted_count ?? 0)} acc
+                        </span>
+                        <span title="Times user rejected this recommendation">
+                          ✗ {fmtNum(rule.rejected_count ?? 0)} rej
+                        </span>
+                        {rate !== null && (
+                          <span className={rate >= 70 ? "text-green-400" : rate >= 40 ? "text-yellow-400" : "text-red-400"}
+                            title="Acceptance rate = accepted / (accepted + rejected). Only shown when denominator > 0.">
+                            {rate}% acc rate
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+        </div>
+
+        {/* Top Keywords */}
+        <div>
+          <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-300 mb-3">
+            <Tag size={14} className="text-blue-400" /> Top Keywords
+            <span className="text-slate-500 font-normal text-xs ml-1"
+              title="All keywords that matched the mutation description in approved reconciliations are counted. Not just the winning keyword.">
+              (semua keyword yang match)
+            </span>
+          </h3>
+          {topKeywords.length === 0
+            ? <p className="text-slate-500 text-sm py-4 text-center">Belum ada keyword yang dipakai.</p>
+            : (
+              <div className="space-y-2">
+                {topKeywords.slice(0, 10).map((kw: any) => (
+                  <div key={kw.id} className="flex items-center justify-between bg-slate-800/60 rounded px-3 py-2 border border-slate-700/50">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm text-white font-medium truncate">"{kw.term}"</p>
+                      <p className="text-xs text-slate-500 truncate">
+                        {kw.config_name ? `→ ${kw.config_name}` : "global"} · weight {Number(kw.weight).toFixed(2)}
+                      </p>
+                    </div>
+                    <span className="ml-3 text-blue-300 font-bold text-sm">{fmtNum(kw.usage_count)}×</span>
+                  </div>
+                ))}
+              </div>
+            )}
+        </div>
+      </div>
+
+      {/* Recent Usage */}
+      {recentUsage.length > 0 && (
+        <div>
+          <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-300 mb-3">
+            <Clock size={14} className="text-slate-400" /> Aktivitas Terbaru
+          </h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-700 text-slate-400 text-xs">
+                  <th className="text-left pb-2 font-medium">Waktu</th>
+                  <th className="text-left pb-2 font-medium">Tipe</th>
+                  <th className="text-left pb-2 font-medium">Konfigurasi</th>
+                  <th className="text-left pb-2 font-medium">Mutasi</th>
+                  <th className="text-left pb-2 font-medium">Aktor</th>
+                  <th className="text-right pb-2 font-medium">Jumlah</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800">
+                {recentUsage.map((ev: any) => (
+                  <tr key={ev.id} className="text-slate-300 hover:bg-slate-800/30">
+                    <td className="py-2 text-xs text-slate-500 whitespace-nowrap">{fmtDate(ev.used_at)}</td>
+                    <td className="py-2 text-xs capitalize">{ev.usage_type}</td>
+                    <td className="py-2 max-w-[180px] truncate text-xs">{ev.config_name ?? `ID:${ev.target_id}`}</td>
+                    <td className="py-2 text-xs">{ev.mutation_id ?? "—"}</td>
+                    <td className="py-2 text-xs truncate max-w-[120px]">{ev.actor_user_id ?? "—"}</td>
+                    <td className="py-2 text-right text-xs">
+                      {ev.amount != null ? `Rp ${Number(ev.amount).toLocaleString("id-ID")}` : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main page ─────────────────────────────────────────────────────────────────
 
 export default function ReconClassificationConfigPage() {
@@ -970,6 +1210,7 @@ export default function ReconClassificationConfigPage() {
     { value: "keywords",  label: "Kamus Keyword",         icon: Tag },
     { value: "upload",    label: "Syarat Upload",         icon: Upload },
     { value: "approval",  label: "Rule Approval",         icon: Shield },
+    { value: "stats",     label: "Statistik Penggunaan",  icon: BarChart2 },
   ];
 
   return (
@@ -1027,6 +1268,9 @@ export default function ReconClassificationConfigPage() {
               </TabsContent>
               <TabsContent value="approval" className="mt-0">
                 <ApprovalRulesTab />
+              </TabsContent>
+              <TabsContent value="stats" className="mt-0">
+                <UsageStatsTab />
               </TabsContent>
             </div>
           </Tabs>

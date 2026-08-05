@@ -138,6 +138,7 @@ import { runTaxCoretaxMigration } from "./lib/taxCoretaxMigration.js";
 import { backfillSportCenterAccountingPayments } from "./lib/backfillSportCenterPayments.js";
 import { runFreightAccountingMigration } from "./lib/freightAccountingMigration.js";
 import { runBankReconciliationCoreMigration } from "./routes/bankReconciliation.js";
+import { runUsageTrackingMigration } from "./lib/usageTrackingService.js";
 import { runBankMutationMastersMigration } from "./routes/bankMutationMasters.js";
 import { runBankMutationImportMigration } from "./routes/bankMutationImport.js";
 import { runFleetIntelligenceMigration } from "./routes/fleetIntelligence.js";
@@ -1690,6 +1691,7 @@ async function startServer() {
     .then(() => runWithRetry("Freight accounting migration", runFreightAccountingMigration))
     .then(() => runWithRetry("Logistics rates migration", runLogisticsRatesMigration))
     .then(() => runWithRetry("Bank reconciliation core migration", runBankReconciliationCoreMigration))
+    .then(() => runWithRetry("Usage tracking migration", runUsageTrackingMigration))
     .then(() => runWithRetry("Bank mutation masters migration", runBankMutationMastersMigration))
     .then(() => runWithRetry("Bank mutation import migration", runBankMutationImportMigration))
     .then(() => runWithRetry("Freight doc verify migration", runFreightDocVerifyMigration))

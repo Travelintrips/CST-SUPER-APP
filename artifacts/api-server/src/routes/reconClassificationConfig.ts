@@ -281,28 +281,31 @@ reconClassificationRouter.patch("/configs/:id", async (req, res) => {
 });
 
 // POST /api/recon-classification/configs/:id/deactivate
+// Phase 14: allow deactivate with warning if usage_count > 0 (only hard DELETE is blocked)
 reconClassificationRouter.post("/configs/:id/deactivate", async (req, res) => {
   try {
     await ensureTables();
     const id = parseInt(req.params["id"] ?? "", 10);
     if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid." });
 
-    // Check if already used
     const existing = await db.execute(sql.raw(
       `SELECT usage_count, is_seed FROM recon_classification_configs WHERE id = ${id}`
     ));
     const row = existing.rows[0] as any;
     if (!row) return res.status(404).json({ error: "Konfigurasi tidak ditemukan." });
-    if (row.usage_count > 0) {
-      return res.status(409).json({
-        error: `Tidak bisa menonaktifkan — sudah digunakan ${row.usage_count} kali dalam rekonsiliasi.`,
-      });
-    }
 
     await db.execute(sql.raw(
       `UPDATE recon_classification_configs SET is_active = FALSE, updated_at = NOW() WHERE id = ${id}`
     ));
-    res.json({ ok: true });
+
+    const usageCount = Number(row.usage_count ?? 0);
+    res.json({
+      ok: true,
+      warning: usageCount > 0
+        ? `Konfigurasi ini sudah pernah digunakan ${usageCount} kali dan tidak dapat dihapus. Anda tetap dapat menonaktifkannya untuk transaksi baru.`
+        : null,
+      usage_count: usageCount,
+    });
   } catch (err) {
     logger.error("[ReconClassification] POST /configs/:id/deactivate error:", err instanceof Error ? err.message : String(err));
     res.status(500).json({ error: "Gagal menonaktifkan konfigurasi." });
@@ -613,5 +616,131 @@ reconClassificationRouter.delete("/approval-rules/:id", async (req, res) => {
   } catch (err) {
     logger.error("[ReconClassification] DELETE /approval-rules/:id error:", err instanceof Error ? err.message : String(err));
     res.status(500).json({ error: "Gagal menghapus approval rule." });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// USAGE STATISTICS DASHBOARD
+// GET /api/recon-classification/usage-stats
+//
+// Returns aggregate usage data for the recon config dashboard.
+// - company_scoped (optional company_id query param)
+// - No unbounded queries — all use LIMIT
+// - No N+1 — all aggregates from single queries
+// ═══════════════════════════════════════════════════════════════════════════════
+
+reconClassificationRouter.get("/usage-stats", async (req, res) => {
+  try {
+    await ensureTables();
+    const companyId = parseCompanyId(req.query["company_id"]);
+    const limit     = Math.min(parseInt(String(req.query["limit"] ?? "10"), 10) || 10, 100);
+
+    const companyFilter = companyId != null
+      ? `AND (company_id = ${companyId} OR company_id IS NULL)`
+      : "";
+
+    // ── Summary ───────────────────────────────────────────────────────────────
+    const summaryRow = await db.execute(sql.raw(`
+      SELECT
+        COALESCE(SUM(usage_count), 0) AS total_usage,
+        COUNT(*) FILTER (WHERE is_active = TRUE) AS active_categories,
+        COUNT(*) FILTER (WHERE is_active = TRUE AND usage_count = 0) AS never_used_categories
+      FROM recon_classification_configs
+      WHERE 1=1 ${companyFilter}
+    `));
+
+    const todayFilter   = `AND DATE(e.used_at) = CURRENT_DATE`;
+    const monthFilter   = `AND DATE_TRUNC('month', e.used_at) = DATE_TRUNC('month', NOW())`;
+
+    const todayRow = await db.execute(sql.raw(`
+      SELECT COUNT(*) AS cnt FROM recon_config_usage_events e
+      WHERE e.usage_type = 'config' ${companyId != null ? `AND (e.company_id = ${companyId} OR e.company_id IS NULL)` : ""} ${todayFilter}
+    `)).catch(() => ({ rows: [{ cnt: 0 }] }));
+
+    const monthRow = await db.execute(sql.raw(`
+      SELECT COUNT(*) AS cnt FROM recon_config_usage_events e
+      WHERE e.usage_type = 'config' ${companyId != null ? `AND (e.company_id = ${companyId} OR e.company_id IS NULL)` : ""} ${monthFilter}
+    `)).catch(() => ({ rows: [{ cnt: 0 }] }));
+
+    const s = summaryRow.rows[0] as any;
+    const summary = {
+      totalUsage:          Number(s?.total_usage ?? 0),
+      usageToday:          Number((todayRow.rows[0] as any)?.cnt ?? 0),
+      usageThisMonth:      Number((monthRow.rows[0] as any)?.cnt ?? 0),
+      activeCategories:    Number(s?.active_categories ?? 0),
+      neverUsedCategories: Number(s?.never_used_categories ?? 0),
+    };
+
+    // ── Most used categories ──────────────────────────────────────────────────
+    const mostUsed = await db.execute(sql.raw(`
+      SELECT id, name, code, category, flow, usage_count, last_used_at, last_used_by
+      FROM recon_classification_configs
+      WHERE is_active = TRUE AND usage_count > 0 ${companyFilter}
+      ORDER BY usage_count DESC, last_used_at DESC NULLS LAST
+      LIMIT ${limit}
+    `));
+
+    // ── Least used (active, non-zero) ─────────────────────────────────────────
+    const leastUsed = await db.execute(sql.raw(`
+      SELECT id, name, code, category, flow, usage_count, last_used_at
+      FROM recon_classification_configs
+      WHERE is_active = TRUE AND usage_count > 0 ${companyFilter}
+      ORDER BY usage_count ASC, last_used_at ASC NULLS FIRST
+      LIMIT ${limit}
+    `));
+
+    // ── Never used ────────────────────────────────────────────────────────────
+    const neverUsed = await db.execute(sql.raw(`
+      SELECT id, name, code, category, flow
+      FROM recon_classification_configs
+      WHERE is_active = TRUE AND usage_count = 0 ${companyFilter}
+      ORDER BY category, priority, name
+      LIMIT ${limit}
+    `));
+
+    // ── Top AI rules ──────────────────────────────────────────────────────────
+    const topRules = await db.execute(sql.raw(`
+      SELECT id, name, condition_field, condition_operator, condition_value,
+             usage_count, accepted_count, rejected_count, last_used_at
+      FROM recon_ai_classification_rules
+      WHERE is_active = TRUE AND usage_count > 0 ${companyFilter}
+      ORDER BY usage_count DESC, accepted_count DESC
+      LIMIT ${limit}
+    `));
+
+    // ── Top keywords ──────────────────────────────────────────────────────────
+    const topKeywords = await db.execute(sql.raw(`
+      SELECT k.id, k.term, k.weight, k.usage_count, k.last_used_at, c.name AS config_name
+      FROM recon_keyword_dictionary k
+      LEFT JOIN recon_classification_configs c ON c.id = k.config_id
+      WHERE k.is_active = TRUE AND k.usage_count > 0 ${companyFilter.replace(/company_id/g, "k.company_id")}
+      ORDER BY k.usage_count DESC, k.last_used_at DESC NULLS LAST
+      LIMIT ${limit}
+    `));
+
+    // ── Recent usage events ───────────────────────────────────────────────────
+    const recentUsage = await db.execute(sql.raw(`
+      SELECT e.id, e.usage_type, e.target_id, e.mutation_id, e.event_type,
+             e.actor_user_id, e.amount, e.used_at,
+             c.name AS config_name, c.code AS config_code
+      FROM recon_config_usage_events e
+      LEFT JOIN recon_classification_configs c ON c.id = e.target_id AND e.usage_type = 'config'
+      WHERE 1=1 ${companyId != null ? `AND (e.company_id = ${companyId} OR e.company_id IS NULL)` : ""}
+      ORDER BY e.used_at DESC
+      LIMIT ${limit}
+    `)).catch(() => ({ rows: [] }));
+
+    res.json({
+      summary,
+      mostUsedCategories: mostUsed.rows,
+      leastUsedCategories: leastUsed.rows,
+      neverUsedCategories: neverUsed.rows,
+      topRules: topRules.rows,
+      topKeywords: topKeywords.rows,
+      recentUsage: recentUsage.rows,
+    });
+  } catch (err) {
+    logger.error("[ReconClassification] GET /usage-stats error:", err instanceof Error ? err.message : String(err));
+    res.status(500).json({ error: "Gagal mengambil statistik penggunaan." });
   }
 });
