@@ -76,6 +76,16 @@ const MODULE_LABELS: Record<string, string> = {
 
 const moduleLabel = (m: string) => MODULE_LABELS[m] ?? m;
 
+/** Detail row: label + value side by side */
+function Row({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex items-start gap-2">
+      <span className="text-xs text-muted-foreground w-36 shrink-0">{label}</span>
+      <span className="text-xs font-medium break-all">{value}</span>
+    </div>
+  );
+}
+
 const MONTH_NAMES = [
   "Januari", "Februari", "Maret", "April", "Mei", "Juni",
   "Juli", "Agustus", "September", "Oktober", "November", "Desember",
@@ -156,6 +166,7 @@ export default function AccountingHubGLPage() {
   const [voidError, setVoidError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [detailRow, setDetailRow] = useState<GLRow | null>(null);
 
   const load = async (p = page, sb = sortBy, sd = sortDir, rpp: RppOption = rowsPerPage) => {
     const lim = rpp === "all" ? 999999 : rpp;
@@ -521,7 +532,15 @@ export default function AccountingHubGLPage() {
               const rbAbnormal = rb !== null && rb < 0;
 
               return (
-                <tr key={r.line_id} className={`border-t hover:bg-muted/40 ${r.status === "voided" ? "opacity-50" : ""}`}>
+                <tr
+                  key={r.line_id}
+                  className={`border-t hover:bg-muted/40 cursor-pointer ${r.status === "voided" ? "opacity-50" : ""}`}
+                  onClick={(e) => {
+                    // Don't open detail if clicking the void button
+                    if ((e.target as HTMLElement).closest("button")) return;
+                    setDetailRow(r);
+                  }}
+                >
                   <td className="px-3 py-2 whitespace-nowrap text-xs">{r.date}</td>
                   <td className="px-3 py-2 whitespace-nowrap text-xs">{rowMonthLabel} {r.date?.slice(0, 4)}</td>
                   <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">{r.entry_number}</td>
@@ -676,6 +695,100 @@ export default function AccountingHubGLPage() {
           )}
         </div>
       </div>
+
+      {/* Row Detail Dialog */}
+      <Dialog open={!!detailRow} onOpenChange={(open) => { if (!open) setDetailRow(null); }}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="font-mono text-base">{detailRow?.entry_number}</DialogTitle>
+            <DialogDescription asChild>
+              <div className="text-xs text-muted-foreground">{detailRow?.date} · {detailRow && moduleLabel(detailRow.source_module)}</div>
+            </DialogDescription>
+          </DialogHeader>
+          {detailRow && (
+            <div className="space-y-4 text-sm">
+              {/* Status & Type */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <Badge variant={detailRow.status === "posted" ? "default" : "secondary"} className="text-xs">{detailRow.status}</Badge>
+                <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${typeColor(detailRow.account_type)}`}>{detailRow.account_type}</span>
+              </div>
+
+              {/* Jurnal / Modul */}
+              <div className="rounded-md border bg-muted/30 p-3 space-y-2">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Jurnal</p>
+                <Row label="No. Jurnal" value={<span className="font-mono">{detailRow.entry_number}</span>} />
+                <Row label="Tanggal" value={detailRow.date} />
+                <Row label="Nama Jurnal" value={detailRow.journal_name} />
+                <Row label="Tipe Jurnal" value={detailRow.journal_type} />
+                <Row label="Modul" value={moduleLabel(detailRow.source_module)} />
+                <Row label="Skema Sumber" value={detailRow.source_schema} />
+                {detailRow.source_table && <Row label="Tabel Sumber" value={detailRow.source_table} />}
+                {detailRow.source_id != null && <Row label="ID Sumber" value={String(detailRow.source_id)} />}
+              </div>
+
+              {/* Akun */}
+              <div className="rounded-md border bg-muted/30 p-3 space-y-2">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Akun</p>
+                <Row label="Kode Akun" value={<span className="font-mono">{detailRow.account_code}</span>} />
+                <Row label="Nama Akun" value={detailRow.account_name} />
+                <Row label="Tipe" value={detailRow.account_type} />
+                <Row label="Normal Balance" value={detailRow.normal_balance} />
+              </div>
+
+              {/* Entitas */}
+              {(detailRow.partner_name || detailRow.source_doc_number) && (
+                <div className="rounded-md border bg-muted/30 p-3 space-y-2">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Sumber / Entitas</p>
+                  {detailRow.partner_name && <Row label="Nama" value={detailRow.partner_name} />}
+                  {detailRow.source_doc_number && <Row label="No. Dokumen" value={<span className="font-mono">{detailRow.source_doc_number}</span>} />}
+                </div>
+              )}
+
+              {/* Keterangan */}
+              {(detailRow.ref || detailRow.entry_description || detailRow.line_description) && (
+                <div className="rounded-md border bg-muted/30 p-3 space-y-2">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Keterangan</p>
+                  {detailRow.ref && <Row label="Ref" value={<span className="font-mono">{detailRow.ref}</span>} />}
+                  {detailRow.entry_description && <Row label="Keterangan Entry" value={detailRow.entry_description} />}
+                  {detailRow.line_description && <Row label="Keterangan Baris" value={detailRow.line_description} />}
+                </div>
+              )}
+
+              {/* Nominal */}
+              <div className="rounded-md border bg-muted/30 p-3 space-y-2">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Nominal</p>
+                <Row label="Debit" value={<span className="font-mono font-semibold">{Number(detailRow.debit) ? `Rp ${fmt(detailRow.debit)}` : "—"}</span>} />
+                <Row label="Kredit" value={<span className={`font-mono font-semibold ${Number(detailRow.credit) > 0 ? "text-red-600" : ""}`}>{Number(detailRow.credit) ? `Rp ${fmt(detailRow.credit)}` : "—"}</span>} />
+                {detailRow.running_balance !== null && (
+                  <Row
+                    label="Saldo Berjalan"
+                    value={
+                      <span className={`font-mono font-semibold ${Number(detailRow.running_balance) < 0 ? "text-red-600" : "text-primary"}`}>
+                        {fmtBalance(Number(detailRow.running_balance))}
+                      </span>
+                    }
+                  />
+                )}
+              </div>
+
+              {/* Metadata */}
+              <div className="rounded-md border bg-muted/30 p-3 space-y-2">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Metadata</p>
+                <Row label="Company ID" value={String(detailRow.company_id)} />
+                {detailRow.branch_id != null && <Row label="Branch ID" value={String(detailRow.branch_id)} />}
+                {detailRow.division_id != null && <Row label="Division ID" value={String(detailRow.division_id)} />}
+                <Row label="Dibuat" value={new Date(detailRow.created_at).toLocaleString("id-ID")} />
+                {detailRow.posted_at && <Row label="Diposting" value={new Date(detailRow.posted_at).toLocaleString("id-ID")} />}
+                <Row label="Line ID" value={<span className="font-mono text-xs text-muted-foreground">{detailRow.line_id}</span>} />
+                <Row label="Entry ID" value={<span className="font-mono text-xs text-muted-foreground">{detailRow.entry_id}</span>} />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setDetailRow(null)}>Tutup</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Void Confirmation Dialog */}
       <Dialog open={!!voidDialog?.open} onOpenChange={(open) => { if (!open) setVoidDialog(null); }}>
