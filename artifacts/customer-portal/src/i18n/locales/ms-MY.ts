@@ -2985,6 +2985,7 @@ const locale: DeepRecord = {
     deleteTitle: 'Padam',
     quoteSentMsg: 'Sebutan harga berjaya dihantar!',
     quoteSendError: 'Gagal menghantar',
+  },
 
   jasaDetail: {
     calcTitle: 'Kalkulator Anggaran Kos',

@@ -2985,6 +2985,7 @@ const locale: DeepRecord = {
     deleteTitle: 'हटाएं',
     quoteSentMsg: 'कोटेशन सफलतापूर्वक भेजा गया!',
     quoteSendError: 'भेजने में विफल',
+  },
 
   jasaDetail: {
     calcTitle: 'लागत अनुमान कैलकुलेटर',

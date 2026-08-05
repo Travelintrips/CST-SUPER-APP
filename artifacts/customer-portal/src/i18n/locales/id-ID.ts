@@ -3019,6 +3019,7 @@ const locale: DeepRecord = {
     basePrice: 'Harga Dasar',
     routeLabel: 'Rute',
     noWa: 'Tanpa WA',
+  },
 
   jasaDetail: {
     calcTitle: 'Kalkulator Estimasi Biaya',

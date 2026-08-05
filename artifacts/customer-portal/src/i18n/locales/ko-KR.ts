@@ -2985,6 +2985,7 @@ const locale: DeepRecord = {
     deleteTitle: '삭제',
     quoteSentMsg: '견적이 성공적으로 전송되었습니다!',
     quoteSendError: '전송에 실패했습니다',
+  },
 
   jasaDetail: {
     calcTitle: '비용 견적 계산기',

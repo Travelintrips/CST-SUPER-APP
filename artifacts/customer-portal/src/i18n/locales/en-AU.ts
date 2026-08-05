@@ -2985,6 +2985,7 @@ const locale: DeepRecord = {
     deleteTitle: 'Delete',
     quoteSentMsg: 'Quote sent successfully!',
     quoteSendError: 'Failed to send',
+  },
 
   jasaDetail: {
     calcTitle: 'Cost Estimation Calculator',
