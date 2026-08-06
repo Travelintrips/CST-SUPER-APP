@@ -3230,6 +3230,48 @@ const locale: DeepRecord = {
     quotation: '谈判 / 报价',
   },
 
+  portalDokumen: {
+    title: "文件",
+    subtitle: "您的商业发票和交易文件",
+    searchPlaceholder: "搜索文件或订单号...",
+    viewAllOrders: "查看所有订单",
+    transactionDocs: "交易文件",
+    documentsCount: "{n} 个文件",
+    orderRef: "订单: {number}",
+    dueDateLabel: "到期日",
+    noMatchDocs: "没有匹配的文件",
+    clearSearch: "清除搜索",
+    emptyTitle: "尚无文件",
+    emptyDesc: "交易文件将在您的订单确认后显示在此处。",
+    viewMyOrders: "查看我的订单",
+    logisticDocsTitle: "物流团队文件",
+    logisticDocsDesc: "以上文件由运营团队通过WhatsApp或电子邮件直接发送，与货运进度同步。",
+    detailBtn: "详情",
+  },
+
+  portalInvoice: {
+    title: "发票与付款",
+    subtitle: "您的账单历史记录和付款状态",
+    totalUnpaid: "未付总额",
+    invoiceList: "发票列表",
+    payBtn: "支付",
+    emptyTitle: "尚无发票",
+    emptyDesc: "发票将在您的订单确认并准备开票后显示在此处。",
+    viewShipments: "查看我的货运",
+    orderRef: "订单: {number}",
+    dueDateLabel: "到期日",
+    paymentLink: "付款链接",
+  },
+
+  orderStatusLabels: {
+    "New Order": "新订单",
+    "Awaiting Payment": "等待付款",
+    "Paid": "已付款",
+    "In Progress": "进行中",
+    "Completed": "已完成",
+    "Cancelled": "已取消",
+  },
+
 };
 
 export default locale;

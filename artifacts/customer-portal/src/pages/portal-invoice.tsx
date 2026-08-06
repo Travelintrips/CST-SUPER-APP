@@ -2,9 +2,10 @@ import { useEffect } from "react";
 import { useLocation, Link } from "wouter";
 import { isAuthenticated } from "@/lib/auth";
 import { useQuery } from "@tanstack/react-query";
-import { Receipt, CreditCard, Clock, CheckCircle2, AlertCircle, ArrowRight, ArrowLeft, Link as LinkIcon } from "lucide-react";
+import { Receipt, CreditCard, Clock, CheckCircle2, AlertCircle, ArrowRight, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 interface InvoiceItem {
   id: number;
@@ -30,6 +31,7 @@ const STATUS_COLOR: Record<string, string> = {
 export default function PortalInvoice() {
   const [, setLocation] = useLocation();
   const authed = isAuthenticated();
+  const { t, locale } = useLanguage();
 
   useEffect(() => {
     if (!authed) setLocation("/login");
@@ -51,6 +53,8 @@ export default function PortalInvoice() {
   const unpaidTotal = invoices.filter(i => i.status === "unpaid" || i.status === "overdue")
     .reduce((s, i) => s + i.amount, 0);
 
+  const dateLocale = locale.startsWith("ar") ? "ar-SA" : locale.startsWith("zh") ? "zh-CN" : locale.startsWith("fr") ? "fr-FR" : "id-ID";
+
   return (
     <div className="min-h-[calc(100vh-80px)] bg-gray-50 py-8">
       <div className="container px-4 md:px-6 max-w-5xl">
@@ -59,19 +63,19 @@ export default function PortalInvoice() {
           onClick={() => window.history.length > 1 ? window.history.back() : setLocation("/dashboard")}
           className="inline-flex items-center gap-1.5 mb-5 text-[12px] font-semibold px-3 py-1.5 rounded-lg text-slate-500 hover:text-slate-800 bg-white hover:bg-slate-50 border border-slate-200 transition-all shadow-sm"
         >
-          <ArrowLeft className="h-3.5 w-3.5" /> Kembali
+          <ArrowLeft className="h-3.5 w-3.5" /> {t("common.back")}
         </button>
 
         <div className="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-bold text-slate-900">Invoice & Pembayaran</h1>
-            <p className="text-slate-500 mt-1">Riwayat tagihan dan status pembayaran Anda</p>
+            <h1 className="text-3xl font-bold text-slate-900">{t("portalInvoice.title")}</h1>
+            <p className="text-slate-500 mt-1">{t("portalInvoice.subtitle")}</p>
           </div>
           {unpaidTotal > 0 && (
             <div className="flex items-center gap-2 px-4 py-2.5 bg-orange-50 border border-orange-200 rounded-xl">
               <AlertCircle className="h-4 w-4 text-orange-600 shrink-0" />
               <div>
-                <p className="text-xs text-orange-500">Total Belum Dibayar</p>
+                <p className="text-xs text-orange-500">{t("portalInvoice.totalUnpaid")}</p>
                 <p className="text-sm font-bold text-orange-700">{idr(unpaidTotal)}</p>
               </div>
             </div>
@@ -81,7 +85,7 @@ export default function PortalInvoice() {
         <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
           <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-3">
             <Receipt className="h-5 w-5 text-sky-600" />
-            <h2 className="font-semibold text-slate-800">Daftar Invoice</h2>
+            <h2 className="font-semibold text-slate-800">{t("portalInvoice.invoiceList")}</h2>
           </div>
 
           {isLoading ? (
@@ -104,11 +108,13 @@ export default function PortalInvoice() {
                     <div>
                       <p className="font-semibold text-slate-800 text-sm">{inv.invoiceNumber}</p>
                       {inv.orderNumber && (
-                        <p className="text-xs text-slate-400">Order: {inv.orderNumber}</p>
+                        <p className="text-xs text-slate-400">
+                          {t("portalInvoice.orderRef").replace("{number}", inv.orderNumber)}
+                        </p>
                       )}
                       <p className="text-xs text-slate-400">
-                        {new Date(inv.createdAt).toLocaleDateString("id-ID")}
-                        {inv.dueDate && ` · Jatuh tempo: ${new Date(inv.dueDate).toLocaleDateString("id-ID")}`}
+                        {new Date(inv.createdAt).toLocaleDateString(dateLocale)}
+                        {inv.dueDate && ` · ${t("portalInvoice.dueDateLabel")}: ${new Date(inv.dueDate).toLocaleDateString(dateLocale)}`}
                       </p>
                     </div>
                   </div>
@@ -122,7 +128,7 @@ export default function PortalInvoice() {
                     {(inv.status === "unpaid" || inv.status === "overdue") && (
                       <Link href={`/orders`}>
                         <Button size="sm" className="text-[12px] h-8 px-3 bg-sky-600 hover:bg-sky-700 text-white gap-1.5 shrink-0">
-                          <CreditCard className="h-3.5 w-3.5" /> Bayar
+                          <CreditCard className="h-3.5 w-3.5" /> {t("portalInvoice.payBtn")}
                         </Button>
                       </Link>
                     )}
@@ -135,13 +141,11 @@ export default function PortalInvoice() {
               <div className="w-16 h-16 rounded-2xl bg-sky-50 flex items-center justify-center mb-4">
                 <Clock className="h-8 w-8 text-sky-400" />
               </div>
-              <h3 className="text-lg font-semibold text-slate-700 mb-2">Belum Ada Invoice</h3>
-              <p className="text-slate-400 text-sm max-w-sm">
-                Invoice akan muncul di sini setelah order Anda dikonfirmasi dan siap ditagihkan.
-              </p>
+              <h3 className="text-lg font-semibold text-slate-700 mb-2">{t("portalInvoice.emptyTitle")}</h3>
+              <p className="text-slate-400 text-sm max-w-sm">{t("portalInvoice.emptyDesc")}</p>
               <Link href="/orders" className="mt-6">
                 <Button variant="outline" className="gap-2">
-                  Lihat Shipment Saya <ArrowRight className="h-4 w-4" />
+                  {t("portalInvoice.viewShipments")} <ArrowRight className="h-4 w-4" />
                 </Button>
               </Link>
             </div>

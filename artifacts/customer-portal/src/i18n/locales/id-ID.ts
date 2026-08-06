@@ -3265,6 +3265,48 @@ const locale: DeepRecord = {
   },
 
 
+  portalDokumen: {
+    title: "Dokumen",
+    subtitle: "Commercial Invoice dan dokumen transaksi Anda",
+    searchPlaceholder: "Cari nomor dokumen atau order...",
+    viewAllOrders: "Lihat Semua Order",
+    transactionDocs: "Dokumen Transaksi",
+    documentsCount: "{n} dokumen",
+    orderRef: "Order: {number}",
+    dueDateLabel: "Jatuh tempo",
+    noMatchDocs: "Tidak ada dokumen yang cocok",
+    clearSearch: "Hapus pencarian",
+    emptyTitle: "Belum Ada Dokumen",
+    emptyDesc: "Dokumen transaksi akan muncul di sini setelah order Anda dikonfirmasi.",
+    viewMyOrders: "Lihat Order Saya",
+    logisticDocsTitle: "Dokumen dari Tim Logistik",
+    logisticDocsDesc: "Dokumen-dokumen di atas dikirimkan langsung oleh tim operasional melalui WhatsApp atau email sesuai dengan progres shipment.",
+    detailBtn: "Detail",
+  },
+
+  portalInvoice: {
+    title: "Invoice & Pembayaran",
+    subtitle: "Riwayat tagihan dan status pembayaran Anda",
+    totalUnpaid: "Total Belum Dibayar",
+    invoiceList: "Daftar Invoice",
+    payBtn: "Bayar",
+    emptyTitle: "Belum Ada Invoice",
+    emptyDesc: "Invoice akan muncul di sini setelah order Anda dikonfirmasi dan siap ditagihkan.",
+    viewShipments: "Lihat Shipment Saya",
+    orderRef: "Order: {number}",
+    dueDateLabel: "Jatuh tempo",
+    paymentLink: "Link Pembayaran",
+  },
+
+  orderStatusLabels: {
+    "New Order": "Order Baru",
+    "Awaiting Payment": "Menunggu Pembayaran",
+    "Paid": "Dibayar",
+    "In Progress": "Sedang Diproses",
+    "Completed": "Selesai",
+    "Cancelled": "Dibatalkan",
+  },
+
 };
 
 export default locale;

@@ -2,10 +2,11 @@ import { useEffect, useState } from "react";
 import { useLocation, Link } from "wouter";
 import { isAuthenticated } from "@/lib/auth";
 import { useQuery } from "@tanstack/react-query";
-import { FolderOpen, FileText, Search, ArrowLeft, Receipt, Truck, Package, ExternalLink } from "lucide-react";
+import { FolderOpen, FileText, Search, ArrowLeft, Receipt, Truck, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 interface DocItem {
   id: number;
@@ -16,12 +17,6 @@ interface DocItem {
   createdAt: string;
   orderNumber?: string;
 }
-
-const TYPE_ICON: Record<string, React.ReactNode> = {
-  invoice: <Receipt className="h-4 w-4 text-sky-600" />,
-  shipment: <Truck className="h-4 w-4 text-indigo-600" />,
-  order: <Package className="h-4 w-4 text-emerald-600" />,
-};
 
 const STATUS_COLOR: Record<string, string> = {
   unpaid:  "bg-orange-100 text-orange-700",
@@ -38,6 +33,7 @@ export default function PortalDokumen() {
   const [, setLocation] = useLocation();
   const authed = isAuthenticated();
   const [search, setSearch] = useState("");
+  const { t, locale } = useLanguage();
 
   useEffect(() => {
     if (!authed) setLocation("/login");
@@ -62,6 +58,8 @@ export default function PortalDokumen() {
     (doc.orderNumber ?? "").toLowerCase().includes(search.toLowerCase())
   );
 
+  const dateLocale = locale.startsWith("ar") ? "ar-SA" : locale.startsWith("zh") ? "zh-CN" : locale.startsWith("fr") ? "fr-FR" : "id-ID";
+
   return (
     <div className="min-h-[calc(100vh-80px)] bg-gray-50 py-8">
       <div className="container px-4 md:px-6 max-w-5xl">
@@ -70,19 +68,19 @@ export default function PortalDokumen() {
           onClick={() => window.history.length > 1 ? window.history.back() : setLocation("/dashboard")}
           className="inline-flex items-center gap-1.5 mb-5 text-[12px] font-semibold px-3 py-1.5 rounded-lg text-slate-500 hover:text-slate-800 bg-white hover:bg-slate-50 border border-slate-200 transition-all shadow-sm"
         >
-          <ArrowLeft className="h-3.5 w-3.5" /> Kembali
+          <ArrowLeft className="h-3.5 w-3.5" /> {t("common.back")}
         </button>
 
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-slate-900">Dokumen</h1>
-          <p className="text-slate-500 mt-1">Commercial Invoice dan dokumen transaksi Anda</p>
+          <h1 className="text-3xl font-bold text-slate-900">{t("portalDokumen.title")}</h1>
+          <p className="text-slate-500 mt-1">{t("portalDokumen.subtitle")}</p>
         </div>
 
         <div className="flex flex-col sm:flex-row gap-3 mb-6">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
             <Input
-              placeholder="Cari nomor dokumen atau order..."
+              placeholder={t("portalDokumen.searchPlaceholder")}
               className="pl-9"
               value={search}
               onChange={e => setSearch(e.target.value)}
@@ -90,7 +88,7 @@ export default function PortalDokumen() {
           </div>
           <Link href="/orders">
             <Button variant="outline" className="gap-2 w-full sm:w-auto">
-              <Truck className="h-4 w-4" /> Lihat Semua Order
+              <Truck className="h-4 w-4" /> {t("portalDokumen.viewAllOrders")}
             </Button>
           </Link>
         </div>
@@ -98,9 +96,11 @@ export default function PortalDokumen() {
         <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
           <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-3">
             <FolderOpen className="h-5 w-5 text-sky-600" />
-            <h2 className="font-semibold text-slate-800">Dokumen Transaksi</h2>
+            <h2 className="font-semibold text-slate-800">{t("portalDokumen.transactionDocs")}</h2>
             {invoices.length > 0 && (
-              <span className="ml-auto text-xs text-slate-400">{invoices.length} dokumen</span>
+              <span className="ml-auto text-xs text-slate-400">
+                {t("portalDokumen.documentsCount").replace("{n}", String(invoices.length))}
+              </span>
             )}
           </div>
 
@@ -114,7 +114,7 @@ export default function PortalDokumen() {
                 <div key={doc.id} className="flex items-center justify-between px-6 py-4 hover:bg-slate-50 transition-colors">
                   <div className="flex items-center gap-4">
                     <div className="w-10 h-10 rounded-xl bg-sky-50 flex items-center justify-center">
-                      {TYPE_ICON.invoice}
+                      <Receipt className="h-4 w-4 text-sky-600" />
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
@@ -124,11 +124,13 @@ export default function PortalDokumen() {
                         </Badge>
                       </div>
                       {doc.orderNumber && (
-                        <p className="text-xs text-slate-400">Order: {doc.orderNumber}</p>
+                        <p className="text-xs text-slate-400">
+                          {t("portalDokumen.orderRef").replace("{number}", doc.orderNumber)}
+                        </p>
                       )}
                       <p className="text-xs text-slate-400">
-                        {new Date(doc.createdAt).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })}
-                        {doc.dueDate && ` · Jatuh tempo: ${new Date(doc.dueDate).toLocaleDateString("id-ID")}`}
+                        {new Date(doc.createdAt).toLocaleDateString(dateLocale, { day: "numeric", month: "long", year: "numeric" })}
+                        {doc.dueDate && ` · ${t("portalDokumen.dueDateLabel")}: ${new Date(doc.dueDate).toLocaleDateString(dateLocale)}`}
                       </p>
                     </div>
                   </div>
@@ -139,7 +141,7 @@ export default function PortalDokumen() {
                     </div>
                     <Link href="/portal-invoice">
                       <Button size="sm" variant="ghost" className="gap-1.5 text-sky-600 hover:text-sky-700 hover:bg-sky-50">
-                        <ExternalLink className="h-3.5 w-3.5" /> Detail
+                        <ExternalLink className="h-3.5 w-3.5" /> {t("portalDokumen.detailBtn")}
                       </Button>
                     </Link>
                   </div>
@@ -149,30 +151,32 @@ export default function PortalDokumen() {
           ) : invoices.length > 0 ? (
             <div className="flex flex-col items-center justify-center py-14 text-center px-6">
               <Search className="h-8 w-8 text-slate-300 mb-3" />
-              <p className="text-slate-500 text-sm font-medium">Tidak ada dokumen yang cocok</p>
-              <button onClick={() => setSearch("")} className="mt-2 text-xs text-sky-600 hover:underline">Hapus pencarian</button>
+              <p className="text-slate-500 text-sm font-medium">{t("portalDokumen.noMatchDocs")}</p>
+              <button onClick={() => setSearch("")} className="mt-2 text-xs text-sky-600 hover:underline">
+                {t("portalDokumen.clearSearch")}
+              </button>
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center py-20 px-6 text-center">
               <div className="w-16 h-16 rounded-2xl bg-sky-50 flex items-center justify-center mb-4">
                 <FileText className="h-8 w-8 text-sky-400" />
               </div>
-              <h3 className="text-lg font-semibold text-slate-700 mb-2">Belum Ada Dokumen</h3>
-              <p className="text-slate-400 text-sm max-w-sm">
-                Dokumen transaksi akan muncul di sini setelah order Anda dikonfirmasi.
-              </p>
+              <h3 className="text-lg font-semibold text-slate-700 mb-2">{t("portalDokumen.emptyTitle")}</h3>
+              <p className="text-slate-400 text-sm max-w-sm">{t("portalDokumen.emptyDesc")}</p>
               <Link href="/orders" className="mt-6">
                 <Button variant="outline" className="gap-2">
-                  Lihat Order Saya <ExternalLink className="h-4 w-4" />
+                  {t("portalDokumen.viewMyOrders")} <ExternalLink className="h-4 w-4" />
                 </Button>
               </Link>
             </div>
           )}
         </div>
 
-        {/* Info tipe dokumen lain */}
+        {/* Logistic docs info */}
         <div className="mt-6 rounded-xl border border-slate-200 bg-white px-6 py-4">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Dokumen dari Tim Logistik</p>
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
+            {t("portalDokumen.logisticDocsTitle")}
+          </p>
           <div className="flex flex-wrap gap-2">
             {["Bill of Lading", "Packing List", "Customs Declaration", "Certificate of Origin", "POD"].map(doc => (
               <span key={doc} className="px-3 py-1.5 rounded-full bg-slate-100 text-slate-500 text-xs font-medium inline-flex items-center gap-1">
@@ -180,7 +184,7 @@ export default function PortalDokumen() {
               </span>
             ))}
           </div>
-          <p className="text-xs text-slate-400 mt-3">Dokumen-dokumen di atas dikirimkan langsung oleh tim operasional melalui WhatsApp atau email sesuai dengan progres shipment.</p>
+          <p className="text-xs text-slate-400 mt-3">{t("portalDokumen.logisticDocsDesc")}</p>
         </div>
 
       </div>

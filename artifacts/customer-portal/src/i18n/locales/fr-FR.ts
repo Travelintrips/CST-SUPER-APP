@@ -3227,6 +3227,48 @@ const locale: DeepRecord = {
     quotation: 'Négociation / Devis',
   },
 
+  portalDokumen: {
+    title: "Documents",
+    subtitle: "Vos factures commerciales et documents de transaction",
+    searchPlaceholder: "Rechercher un document ou numéro de commande...",
+    viewAllOrders: "Voir toutes les commandes",
+    transactionDocs: "Documents de transaction",
+    documentsCount: "{n} document(s)",
+    orderRef: "Commande : {number}",
+    dueDateLabel: "Échéance",
+    noMatchDocs: "Aucun document correspondant",
+    clearSearch: "Effacer la recherche",
+    emptyTitle: "Aucun document pour l'instant",
+    emptyDesc: "Les documents de transaction apparaîtront ici après confirmation de votre commande.",
+    viewMyOrders: "Voir mes commandes",
+    logisticDocsTitle: "Documents de l'équipe logistique",
+    logisticDocsDesc: "Les documents ci-dessus sont envoyés directement par l'équipe opérationnelle via WhatsApp ou e-mail selon l'avancement de l'expédition.",
+    detailBtn: "Détail",
+  },
+
+  portalInvoice: {
+    title: "Facture & Paiement",
+    subtitle: "Votre historique de facturation et statut de paiement",
+    totalUnpaid: "Total impayé",
+    invoiceList: "Liste des factures",
+    payBtn: "Payer",
+    emptyTitle: "Aucune facture pour l'instant",
+    emptyDesc: "Les factures apparaîtront ici après confirmation de votre commande et prêtes à la facturation.",
+    viewShipments: "Voir mes expéditions",
+    orderRef: "Commande : {number}",
+    dueDateLabel: "Échéance",
+    paymentLink: "Lien de paiement",
+  },
+
+  orderStatusLabels: {
+    "New Order": "Nouvelle commande",
+    "Awaiting Payment": "En attente de paiement",
+    "Paid": "Payé",
+    "In Progress": "En cours",
+    "Completed": "Terminé",
+    "Cancelled": "Annulé",
+  },
+
 };
 
 export default locale;
