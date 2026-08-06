@@ -854,19 +854,19 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
             )}
           </div>
           {calc.includePpn && item.priceSell != null && (
-            <p className="text-slate-400 text-[11px]">Sudah termasuk PPN 11%</p>
+            <p className="text-slate-400 text-[11px]">{t("marketplaceDetail.inclPpnNote")}</p>
           )}
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-3">
           <div className="space-y-1">
             <Label className="text-[12px]">
-              Nama Lengkap <span className="text-red-500">*</span>
+              {t("marketplaceDetail.rfqFieldName")} <span className="text-red-500">*</span>
             </Label>
             <Input
               value={form.buyerName}
               onChange={(e) => setForm({ ...form, buyerName: e.target.value })}
-              placeholder="Nama Anda / PIC"
+              placeholder={t("marketplaceDetail.rfqFieldNamePlaceholder")}
               className="h-9 text-sm"
               required
               // eslint-disable-next-line jsx-a11y/no-autofocus
@@ -875,18 +875,18 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
           </div>
 
           <div className="space-y-1">
-            <Label className="text-[12px]">Nama Perusahaan</Label>
+            <Label className="text-[12px]">{t("marketplaceDetail.rfqFieldCompany")}</Label>
             <Input
               value={form.companyName}
               onChange={(e) => setForm({ ...form, companyName: e.target.value })}
-              placeholder="PT. Nama Perusahaan (opsional)"
+              placeholder={t("marketplaceDetail.rfqFieldCompanyPlaceholder")}
               className="h-9 text-sm"
             />
           </div>
 
           <div className="space-y-1">
             <Label className="text-[12px]">
-              No. WhatsApp <span className="text-red-500">*</span>
+              {t("marketplaceDetail.rfqFieldPhone")} <span className="text-red-500">*</span>
             </Label>
             <Input
               value={form.guestContact}
@@ -894,7 +894,7 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
                 setForm({ ...form, guestContact: e.target.value });
                 if (phoneError) setPhoneError(validatePhone(e.target.value));
               }}
-              placeholder="628xxxxxxxxx atau 08xxxxxxxxxx"
+              placeholder={t("marketplaceDetail.rfqFieldPhonePlaceholder")}
               className={`h-9 text-sm ${phoneError ? "border-red-400 focus-visible:ring-red-400" : ""}`}
               required
               aria-describedby={phoneError ? "phone-error" : undefined}
@@ -905,28 +905,28 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
           </div>
 
           <div className="space-y-1">
-            <Label className="text-[12px]">Email</Label>
+            <Label className="text-[12px]">{t("marketplaceDetail.rfqFieldEmail")}</Label>
             <Input
               type="email"
               value={form.email}
               onChange={(e) => setForm({ ...form, email: e.target.value })}
-              placeholder="email@contoh.com"
+              placeholder={t("marketplaceDetail.rfqFieldEmailPlaceholder")}
               className="h-9 text-sm"
             />
           </div>
 
           <div className="space-y-1">
-            <Label className="text-[12px]">Tujuan Pengiriman</Label>
+            <Label className="text-[12px]">{t("marketplaceDetail.rfqFieldDest")}</Label>
             <Input
               value={form.destination}
               onChange={(e) => setForm({ ...form, destination: e.target.value })}
-              placeholder="Kota / Pelabuhan tujuan (opsional)"
+              placeholder={t("marketplaceDetail.rfqFieldDestPlaceholder")}
               className="h-9 text-sm"
             />
           </div>
 
           <div className="space-y-1">
-            <Label className="text-[12px]">Tanggal Dibutuhkan</Label>
+            <Label className="text-[12px]">{t("marketplaceDetail.rfqFieldDate")}</Label>
             <Input
               type="date"
               value={form.requiredDate}
@@ -936,11 +936,11 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
           </div>
 
           <div className="space-y-1">
-            <Label className="text-[12px]">Catatan / Permintaan Khusus</Label>
+            <Label className="text-[12px]">{t("marketplaceDetail.rfqFieldNotes")}</Label>
             <Textarea
               value={form.notes}
               onChange={(e) => setForm({ ...form, notes: e.target.value })}
-              placeholder="Spesifikasi tambahan, incoterm, syarat khusus..."
+              placeholder={t("marketplaceDetail.rfqFieldNotesPlaceholder")}
               className="text-sm resize-none"
               rows={2}
             />
