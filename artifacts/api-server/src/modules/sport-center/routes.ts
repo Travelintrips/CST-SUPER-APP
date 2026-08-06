@@ -1996,7 +1996,9 @@ router.get("/payments", async (req, res) => {
             p.status::text                                 AS raw_status,
             COALESCE(p.confirmed_at, p.created_at)::timestamptz AS paid_at,
             p.created_at::timestamptz                      AS created_at,
-            'canonical'::text                              AS source
+            'canonical'::text                              AS source,
+            NULL::integer                                  AS bank_account_id,
+            NULL::text                                     AS bank_account_name
           FROM sport_center.sport_payments p
           LEFT JOIN sport_center.sport_bookings  b ON b.id = p.booking_id
           LEFT JOIN sport_center.sport_facilities f ON f.id = b.facility_id
@@ -2017,10 +2019,13 @@ router.get("/payments", async (req, res) => {
             sp.status::text                                AS raw_status,
             COALESCE(sp.paid_at, sp.created_at)::timestamptz AS paid_at,
             sp.created_at::timestamptz                     AS created_at,
-            'bizportal_mirror'::text                       AS source
+            'bizportal_mirror'::text                       AS source,
+            sp.bank_account_id::integer                    AS bank_account_id,
+            cba.name::text                                 AS bank_account_name
           FROM public.sport_payments sp
           LEFT JOIN public.sport_bookings  sb ON sb.id = sp.booking_id
           LEFT JOIN public.sport_facilities sf ON sf.id = sb.facility_id
+          LEFT JOIN public.company_bank_accounts cba ON cba.id = sp.bank_account_id
           WHERE sp.payment_number NOT LIKE 'SCPAY-%'
         ),
         combined AS (
@@ -2135,6 +2140,9 @@ router.post("/payments", async (req, res) => {
     const amount = req.body.amount ?? req.body.total_amount;
     // Terima payment_method ATAU method (alias), default cash
     const finalMethod: string = req.body.payment_method ?? req.body.method ?? "cash";
+    // Rekening bank tujuan (wajib untuk metode non-tunai agar rekonsiliasi bank berfungsi)
+    const bankAccountId: number | null =
+      req.body.bank_account_id != null ? Number(req.body.bank_account_id) : null;
 
     if (!booking_id || !amount) {
       return res.status(400).json({ error: "booking_id dan amount wajib" });
@@ -2182,11 +2190,11 @@ router.post("/payments", async (req, res) => {
         const r = await tx.execute(sql`
           INSERT INTO sport_payments
             (company_id, booking_id, payment_number, amount, method, status,
-             paid_at, notes, source, payment_type)
+             paid_at, notes, source, payment_type, bank_account_id)
           VALUES
             (${bCompanyId}, ${booking_id}, ${paymentNumber}, ${amount}, ${finalMethod},
              'paid', COALESCE(${paidAt}::timestamptz, NOW()), ${notes ?? null},
-             'SPORT_CENTER', 'booking')
+             'SPORT_CENTER', 'booking', ${bankAccountId})
           RETURNING *
         `);
         const row = r.rows[0] as Record<string, unknown>;

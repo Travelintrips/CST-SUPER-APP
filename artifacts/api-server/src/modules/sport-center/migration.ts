@@ -261,6 +261,10 @@ export async function runSportCenterMigration(): Promise<void> {
     await db.execute(sql`ALTER TABLE sport_payments ADD COLUMN IF NOT EXISTS posting_error TEXT`);
     await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_sport_payments_posting_status ON sport_payments(posting_status)`);
 
+    // Bank account linkage — agar rekonsiliasi bank dapat filter berdasarkan rekening tujuan
+    await db.execute(sql`ALTER TABLE sport_payments ADD COLUMN IF NOT EXISTS bank_account_id INTEGER REFERENCES company_bank_accounts(id) ON DELETE SET NULL`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_sport_payments_bank_account_id ON sport_payments(bank_account_id)`);
+
     // Fase 3: tabel maintenance request (integrasi Purchase — Fase 4 upgrade)
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS sport_maintenance_requests (

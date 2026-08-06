@@ -385,10 +385,11 @@ export function confidenceLabel(score: number): "high" | "medium" | "low" | "non
 // ─── Fetch candidates (amount-first filter) ───────────────────────────────────
 
 export async function fetchCandidates(
-  mutation: Pick<MutationInput, "amount" | "transaction_date" | "company_id" | "direction">,
+  mutation: Pick<MutationInput, "amount" | "transaction_date" | "company_id" | "direction" | "bank_account_id">,
 ): Promise<MatchCandidate[]> {
   const candidates: MatchCandidate[] = [];
   const { amount, transaction_date, company_id } = mutation;
+  const mutationBankAccountId = mutation.bank_account_id != null ? Number(mutation.bank_account_id) : null;
   const direction = String(mutation.direction ?? "IN").toUpperCase() === "OUT" ? "OUT" : "IN";
   const dateFrom = `'${transaction_date}'::date - 3`;
   const dateTo   = `'${transaction_date}'::date + 3`;
@@ -458,8 +459,7 @@ export async function fetchCandidates(
       `,
     },
     {
-      // sport_payment & tenant_invoice tidak difilter company_id
-      // karena merupakan data lintas entitas (sport center / tenant)
+      // sport_payment: filter per company + bank_account jika tersedia
       type: "sport_payment",
       q: `
         SELECT sp.id, sp.amount,
@@ -474,6 +474,10 @@ export async function fetchCandidates(
           ${company_id ? `AND sp.company_id = ${Number(company_id)}` : ""}
           AND COALESCE(sp.paid_at::date, sp.created_at::date) BETWEEN ${dateFrom} AND ${dateTo}
           AND sp.status = 'paid'
+          AND (
+            sp.bank_account_id IS NULL
+            OR ${mutationBankAccountId != null ? `sp.bank_account_id = ${mutationBankAccountId}` : "TRUE"}
+          )
       `,
     },
     {

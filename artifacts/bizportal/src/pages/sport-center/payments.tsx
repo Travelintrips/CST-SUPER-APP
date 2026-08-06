@@ -42,6 +42,7 @@ type Payment = {
   booking_number: string | null; customer_name: string | null; booking_date: string | null;
   amount: number; method: string; status: string; paid_at: string | null;
   notes: string | null; facility_name: string | null; payment_type: string | null;
+  bank_account_id: number | null; bank_account_name: string | null;
 };
 
 const METHOD_LABEL: Record<string, string> = {
@@ -63,13 +64,25 @@ export default function SportCenterPayments() {
   const [page, setPage] = useState(1);
   const [showDialog, setShowDialog] = useState(false);
   const [detailPayment, setDetailPayment] = useState<Payment | null>(null);
-  const [form, setForm] = useState({ booking_id: "", amount: "", method: "cash", notes: "" });
+  const [form, setForm] = useState({ booking_id: "", amount: "", method: "cash", notes: "", bank_account_id: "" });
 
   const [debouncedSearch, setDebouncedSearch] = useState("");
   useEffect(() => {
     const t = setTimeout(() => { setDebouncedSearch(searchQuery); setPage(1); }, 350);
     return () => clearTimeout(t);
   }, [searchQuery]);
+
+  // Rekening bank untuk metode non-tunai
+  const { data: bankAccountsData } = useQuery<{ data: Array<{ id: number; name: string; bank_name: string | null; account_number: string | null }> }>({
+    queryKey: ["cash-bank-accounts", activeCompanyId],
+    queryFn: async () => {
+      const qs = activeCompanyId ? `?companyId=${activeCompanyId}` : "";
+      const r = await fetch(`/api/cash-bank/accounts${qs}`, { credentials: "include" });
+      return r.json();
+    },
+    enabled: !!activeCompanyId,
+  });
+  const bankAccounts = bankAccountsData?.data ?? [];
 
   const { data, isLoading } = useQuery<{ data: Payment[]; total: number; totalRevenue: number }>({
     queryKey: ["sport-center-payments", activeCompanyId, statusFilter, dateFrom, dateTo, debouncedSearch, page],
@@ -116,7 +129,7 @@ export default function SportCenterPayments() {
     onSuccess: () => {
       toast({ title: "Pembayaran dicatat" });
       setShowDialog(false);
-      setForm({ booking_id: "", amount: "", method: "cash", notes: "" });
+      setForm({ booking_id: "", amount: "", method: "cash", notes: "", bank_account_id: "" });
       qc.invalidateQueries({ queryKey: ["sport-center-payments"] });
       qc.invalidateQueries({ queryKey: ["sport-center-dashboard"] });
     },
@@ -327,7 +340,15 @@ export default function SportCenterPayments() {
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">Metode Pembayaran</Label>
-                <Select value={form.method} onValueChange={(v) => setForm((p) => ({ ...p, method: v }))}>
+                <Select
+                  value={form.method}
+                  onValueChange={(v) => setForm((p) => ({
+                    ...p,
+                    method: v,
+                    // Reset pilihan rekening jika ganti ke tunai
+                    bank_account_id: v === "cash" ? "" : p.bank_account_id,
+                  }))}
+                >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="cash">Tunai</SelectItem>
@@ -338,6 +359,33 @@ export default function SportCenterPayments() {
                   </SelectContent>
                 </Select>
               </div>
+              {form.method !== "cash" && (
+                <div className="space-y-1">
+                  <Label className="text-xs">Rekening Bank Tujuan</Label>
+                  <Select
+                    value={form.bank_account_id}
+                    onValueChange={(v) => setForm((p) => ({ ...p, bank_account_id: v }))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Pilih rekening bank…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {bankAccounts.length === 0 ? (
+                        <SelectItem value="" disabled>Belum ada rekening bank</SelectItem>
+                      ) : (
+                        bankAccounts.map((a) => (
+                          <SelectItem key={a.id} value={String(a.id)}>
+                            {a.name}{a.bank_name ? ` — ${a.bank_name}` : ""}{a.account_number ? ` (${a.account_number})` : ""}
+                          </SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Wajib diisi agar bisa dicocokan saat rekonsiliasi bank.
+                  </p>
+                </div>
+              )}
               <div className="space-y-1">
                 <Label className="text-xs">Catatan</Label>
                 <Input
@@ -356,6 +404,7 @@ export default function SportCenterPayments() {
                   amount: Number(form.amount),
                   method: form.method,
                   notes: form.notes,
+                  ...(form.bank_account_id ? { bank_account_id: Number(form.bank_account_id) } : {}),
                 })}
               >
                 {createMutation.isPending ? <RefreshCw className="h-4 w-4 animate-spin" /> : "Catat Pembayaran"}
@@ -416,6 +465,12 @@ export default function SportCenterPayments() {
                     <p className="text-xs text-muted-foreground">Metode</p>
                     <p>{METHOD_LABEL[detailPayment.method] ?? detailPayment.method}</p>
                   </div>
+                  {detailPayment.bank_account_id && (
+                    <div>
+                      <p className="text-xs text-muted-foreground">Rekening Bank</p>
+                      <p>{detailPayment.bank_account_name ?? `ID #${detailPayment.bank_account_id}`}</p>
+                    </div>
+                  )}
                   <div className="col-span-2 border-t border-border/30 pt-2">
                     <p className="text-xs text-muted-foreground">Jumlah</p>
                     <p className="text-xl font-bold text-emerald-400">{idr(Number(detailPayment.amount))}</p>
