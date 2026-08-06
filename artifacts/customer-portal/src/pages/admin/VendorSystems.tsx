@@ -6,6 +6,7 @@
 import { useState, useEffect, useRef, Fragment } from "react";
 import { getAuthHeaders } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
+import { useLanguage } from "@/i18n/LanguageContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -122,6 +123,7 @@ const VENDOR_INV_SERVICE_OPTIONS = [
 
 export function VendorMarketplaceTab() {
   const { toast } = useToast();
+  const { t } = useLanguage();
   const [suppliers, setSuppliers] = useState<SupplierRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -135,7 +137,7 @@ export function VendorMarketplaceTab() {
       const data = await res.json();
       setSuppliers(Array.isArray(data) ? data : []);
     } catch {
-      toast({ title: "Gagal memuat data supplier", variant: "destructive" });
+      toast({ title: t("vendorSystems.errorLoadSupplier", "Gagal memuat data supplier"), variant: "destructive" });
     } finally {
       setLoading(false);
     }
@@ -157,16 +159,16 @@ export function VendorMarketplaceTab() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error((err as any).message || "Gagal update");
+        throw new Error((err as any).message || t("vendorSystems.errorUpdate", "Gagal update"));
       }
       setSuppliers(prev => prev.map(s => s.id === id ? {
         ...s,
         ...(patch.isVerified       !== undefined ? { is_verified:       patch.isVerified }       : {}),
         ...(patch.marketplaceStatus !== undefined ? { marketplace_status: patch.marketplaceStatus } : {}),
       } : s));
-      toast({ title: "Berhasil diperbarui" });
+      toast({ title: t("vendorSystems.updateSuccess", "Berhasil diperbarui") });
     } catch (e: any) {
-      toast({ title: e.message || "Gagal update", variant: "destructive" });
+      toast({ title: e.message || t("vendorSystems.errorUpdate", "Gagal update"), variant: "destructive" });
     } finally {
       setSaving(null);
     }
@@ -195,11 +197,10 @@ export function VendorMarketplaceTab() {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Globe className="h-5 w-5 text-emerald-500" />
-          Vendor Marketplace
+          {t("vendorSystems.marketplaceTitle", "Vendor Marketplace")}
         </CardTitle>
         <CardDescription>
-          Kelola verifikasi vendor dan status publish ke marketplace publik.
-          Produk vendor hanya tampil di marketplace jika vendor sudah <strong>Verified</strong> dan <strong>Published</strong>.
+          {t("vendorSystems.marketplaceDesc", "Kelola verifikasi vendor dan status publish ke marketplace publik. Produk vendor hanya tampil di marketplace jika vendor sudah")} <strong>Verified</strong> {t("vendorSystems.and", "dan")} <strong>Published</strong>.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -208,7 +209,7 @@ export function VendorMarketplaceTab() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
             <input
               className="w-full pl-9 pr-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
-              placeholder="Cari nama atau email vendor..."
+              placeholder={t("vendorSystems.searchPlaceholder", "Cari nama atau email vendor...")}
               value={search}
               onChange={e => setSearch(e.target.value)}
             />
@@ -224,7 +225,7 @@ export function VendorMarketplaceTab() {
                     : "bg-white text-slate-600 border-slate-200 hover:border-slate-300"
                 }`}
               >
-                {f === "all" ? "Semua" : f === "published" ? "Published" : f === "draft" ? "Draft" : "Unpublished"}
+                {f === "all" ? t("vendorSystems.filterAll", "Semua") : f === "published" ? "Published" : f === "draft" ? "Draft" : "Unpublished"}
               </button>
             ))}
           </div>
@@ -234,7 +235,7 @@ export function VendorMarketplaceTab() {
             className="flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-sm text-slate-600 hover:bg-slate-50 transition-all"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-            Refresh
+            {t("vendorSystems.refresh", "Refresh")}
           </button>
         </div>
 
@@ -256,23 +257,23 @@ export function VendorMarketplaceTab() {
         {loading ? (
           <div className="flex items-center justify-center py-16 text-slate-400 gap-2">
             <Loader2 className="h-5 w-5 animate-spin" />
-            <span>Memuat data...</span>
+            <span>{t("vendorSystems.loading", "Memuat data...")}</span>
           </div>
         ) : filtered.length === 0 ? (
           <div className="text-center py-16 text-slate-400">
             <Building2 className="h-10 w-10 mx-auto mb-3 opacity-30" />
-            <p className="text-sm">Tidak ada vendor ditemukan</p>
+            <p className="text-sm">{t("vendorSystems.noVendor", "Tidak ada vendor ditemukan")}</p>
           </div>
         ) : (
           <div className="rounded-xl border overflow-hidden">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 border-b">
                 <tr>
-                  <th className="text-left px-4 py-3 font-semibold text-slate-600">Vendor</th>
-                  <th className="text-left px-4 py-3 font-semibold text-slate-600">Produk</th>
+                  <th className="text-left px-4 py-3 font-semibold text-slate-600">{t("vendorSystems.colVendor", "Vendor")}</th>
+                  <th className="text-left px-4 py-3 font-semibold text-slate-600">{t("vendorSystems.colProducts", "Produk")}</th>
                   <th className="text-center px-4 py-3 font-semibold text-slate-600">Verified</th>
-                  <th className="text-left px-4 py-3 font-semibold text-slate-600">Status Marketplace</th>
-                  <th className="text-right px-4 py-3 font-semibold text-slate-600">Aksi</th>
+                  <th className="text-left px-4 py-3 font-semibold text-slate-600">{t("vendorSystems.colMarketplaceStatus", "Status Marketplace")}</th>
+                  <th className="text-right px-4 py-3 font-semibold text-slate-600">{t("vendorSystems.colAction", "Aksi")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -296,7 +297,7 @@ export function VendorMarketplaceTab() {
                       <button
                         disabled={saving === s.id}
                         onClick={() => updateMarketplace(s.id, { isVerified: !s.is_verified })}
-                        title={s.is_verified ? "Klik untuk cabut verifikasi" : "Klik untuk verifikasi"}
+                        title={s.is_verified ? t("vendorSystems.revokeVerification", "Klik untuk cabut verifikasi") : t("vendorSystems.verify", "Klik untuk verifikasi")}
                         className="inline-flex items-center justify-center"
                       >
                         {saving === s.id ? (
@@ -323,7 +324,7 @@ export function VendorMarketplaceTab() {
                             className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-7 px-3"
                           >
                             {saving === s.id ? <Loader2 className="h-3 w-3 animate-spin" /> : (
-                              <><Globe className="h-3 w-3 mr-1" />Publish</>
+                              <><Globe className="h-3 w-3 mr-1" />{t("vendorSystems.publish", "Publish")}</>
                             )}
                           </Button>
                         ) : (
@@ -334,7 +335,7 @@ export function VendorMarketplaceTab() {
                             onClick={() => updateMarketplace(s.id, { marketplaceStatus: "unpublished" })}
                             className="text-xs h-7 px-3 border-amber-300 text-amber-700 hover:bg-amber-50"
                           >
-                            {saving === s.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Unpublish"}
+                            {saving === s.id ? <Loader2 className="h-3 w-3 animate-spin" /> : t("vendorSystems.unpublish", "Unpublish")}
                           </Button>
                         )}
                       </div>
@@ -354,6 +355,7 @@ export function VendorMarketplaceTab() {
 
 export function VendorInvitationsTab() {
   const { toast } = useToast();
+  const { t } = useLanguage();
   const [list, setList] = useState<VendorInv[]>([]);
   const [loadingList, setLoadingList] = useState(true);
 
@@ -389,7 +391,7 @@ export function VendorInvitationsTab() {
   useEffect(() => { loadList(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleCreate = async () => {
-    if (!vendorName.trim()) { toast({ title: "Nama vendor harus diisi", variant: "destructive" }); return; }
+    if (!vendorName.trim()) { toast({ title: t("vendorSystems.vendorNameRequired", "Nama vendor harus diisi"), variant: "destructive" }); return; }
     setSubmitting(true);
     try {
       const res = await fetch("/api/portal/admin/vendor-invitations", {
@@ -401,18 +403,18 @@ export function VendorInvitationsTab() {
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.message ?? data.error ?? "Gagal");
+      if (!res.ok) throw new Error(data.message ?? data.error ?? t("vendorSystems.errorGeneric", "Gagal"));
       setLastToken(data.token);
       setLastVendorName(vendorName);
       setCopied(false);
       toast({
-        title: "Undangan berhasil dibuat!",
-        description: data.sent_via_wa ? "Link sudah dikirim via WhatsApp." : "Salin link dan kirim manual ke vendor.",
+        title: t("vendorSystems.inviteCreated", "Undangan berhasil dibuat!"),
+        description: data.sent_via_wa ? t("vendorSystems.inviteSentWa", "Link sudah dikirim via WhatsApp.") : t("vendorSystems.inviteCopyManual", "Salin link dan kirim manual ke vendor."),
       });
       setVendorName(""); setPhone(""); setEmail(""); setServiceType(""); setNotes(""); setSendWa(true);
       loadList();
     } catch (e: any) {
-      toast({ title: "Gagal membuat undangan", description: e.message, variant: "destructive" });
+      toast({ title: t("vendorSystems.errorCreateInvite", "Gagal membuat undangan"), description: e.message, variant: "destructive" });
     } finally { setSubmitting(false); }
   };
 
@@ -420,17 +422,17 @@ export function VendorInvitationsTab() {
     navigator.clipboard.writeText(inviteLink(token)).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-      toast({ title: "Link disalin!" });
+      toast({ title: t("vendorSystems.linkCopied", "Link disalin!") });
     });
   };
 
   const handleDelete = async (id: number, name: string) => {
-    if (!confirm(`Cabut undangan untuk "${name}"?`)) return;
+    if (!confirm(`${t("vendorSystems.revokeInviteConfirm", "Cabut undangan untuk")} "${name}"?`)) return;
     await fetch(`/api/portal/admin/vendor-invitations/${id}`, {
       method: "DELETE", credentials: "include", headers: getAuthHeaders(),
     });
     setList(prev => prev.filter(v => v.id !== id));
-    toast({ title: "Undangan dicabut" });
+    toast({ title: t("vendorSystems.inviteRevoked", "Undangan dicabut") });
   };
 
   const [approvingId, setApprovingId] = useState<number | null>(null);
@@ -442,11 +444,11 @@ export function VendorInvitationsTab() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        toast({ title: "Gagal menyetujui vendor", description: data?.message ?? "Coba lagi", variant: "destructive" });
+        toast({ title: t("vendorSystems.errorApproveVendor", "Gagal menyetujui vendor"), description: data?.message ?? t("vendorSystems.tryAgain", "Coba lagi"), variant: "destructive" });
         return;
       }
       setList(prev => prev.map(v => v.id === id ? { ...v, supplier_id: data.supplier_id, approved_at: new Date().toISOString() } : v));
-      toast({ title: "Vendor disetujui & diaktifkan", description: `Supplier ID #${data.supplier_id} dibuat di ERP` });
+      toast({ title: t("vendorSystems.vendorApproved", "Vendor disetujui & diaktifkan"), description: `Supplier ID #${data.supplier_id} ${t("vendorSystems.createdInErp", "dibuat di ERP")}` });
     } finally { setApprovingId(null); }
   };
 
@@ -458,11 +460,11 @@ export function VendorInvitationsTab() {
   };
 
   const statusBadge = (inv: VendorInv) => {
-    if (inv.status === "accepted") return <Badge className="bg-green-100 text-green-700">Diterima</Badge>;
-    if (inv.status === "rejected") return <Badge className="bg-red-100 text-red-700">Ditolak</Badge>;
+    if (inv.status === "accepted") return <Badge className="bg-green-100 text-green-700">{t("vendorSystems.statusAccepted", "Diterima")}</Badge>;
+    if (inv.status === "rejected") return <Badge className="bg-red-100 text-red-700">{t("vendorSystems.statusRejected", "Ditolak")}</Badge>;
     const expired = new Date(inv.valid_until) < new Date();
-    if (expired) return <Badge variant="outline" className="text-slate-400">Kadaluarsa</Badge>;
-    return <Badge className="bg-amber-100 text-amber-700">Menunggu</Badge>;
+    if (expired) return <Badge variant="outline" className="text-slate-400">{t("vendorSystems.statusExpired", "Kadaluarsa")}</Badge>;
+    return <Badge className="bg-amber-100 text-amber-700">{t("vendorSystems.statusPending", "Menunggu")}</Badge>;
   };
 
   const inviteFilterStatus = (inv: VendorInv): "pending" | "accepted" | "active" | "rejected" | "expired" => {
@@ -492,26 +494,26 @@ export function VendorInvitationsTab() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <UserPlus className="h-5 w-5 text-indigo-500" />
-            Buat Undangan Vendor Baru
+            {t("vendorSystems.createInviteTitle", "Buat Undangan Vendor Baru")}
           </CardTitle>
-          <CardDescription>Setiap vendor mendapat link unik yang berbeda. Link berlaku 30 hari.</CardDescription>
+          <CardDescription>{t("vendorSystems.createInviteDesc", "Setiap vendor mendapat link unik yang berbeda. Link berlaku 30 hari.")}</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl">
             <div className="space-y-1.5">
-              <Label>Nama Vendor / Perusahaan <span className="text-red-500">*</span></Label>
+              <Label>{t("vendorSystems.labelVendorName", "Nama Vendor / Perusahaan")} <span className="text-red-500">*</span></Label>
               <Input value={vendorName} onChange={e => setVendorName(e.target.value)} placeholder="PT. Maju Jaya Logistics" />
             </div>
             <div className="space-y-1.5">
-              <Label>No. WhatsApp</Label>
+              <Label>{t("vendorSystems.labelWhatsapp", "No. WhatsApp")}</Label>
               <Input value={phone} onChange={e => setPhone(e.target.value)} placeholder="628123456789" />
             </div>
             <div className="space-y-1.5">
-              <Label>Email</Label>
+              <Label>{t("vendorSystems.labelEmail", "Email")}</Label>
               <Input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="vendor@email.com" />
             </div>
             <div className="space-y-1.5">
-              <Label>Tipe Layanan</Label>
+              <Label>{t("vendorSystems.labelServiceType", "Tipe Layanan")}</Label>
               <select
                 value={serviceType}
                 onChange={e => setServiceType(e.target.value)}
@@ -521,8 +523,8 @@ export function VendorInvitationsTab() {
               </select>
             </div>
             <div className="space-y-1.5 sm:col-span-2">
-              <Label>Catatan (opsional)</Label>
-              <Textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2} placeholder="Informasi tambahan untuk vendor..." />
+              <Label>{t("vendorSystems.labelNotes", "Catatan (opsional)")}</Label>
+              <Textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2} placeholder={t("vendorSystems.notesPlaceholder", "Informasi tambahan untuk vendor...")} />
             </div>
             <div className="sm:col-span-2 flex items-center gap-3 pt-1">
               <label className="flex items-center gap-2 cursor-pointer select-none text-sm">
@@ -532,23 +534,23 @@ export function VendorInvitationsTab() {
                   onChange={e => setSendWa(e.target.checked)}
                   className="h-4 w-4 rounded accent-indigo-600"
                 />
-                Kirim otomatis via WhatsApp (jika ada No. WA)
+                {t("vendorSystems.sendViaWa", "Kirim otomatis via WhatsApp (jika ada No. WA)")}
               </label>
             </div>
           </div>
 
           {vendorName.trim() && (
             <div className="mt-5 max-w-2xl rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-3">
-              <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Preview sebelum dikirim</p>
+              <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">{t("vendorSystems.previewTitle", "Preview sebelum dikirim")}</p>
               <div className="space-y-1">
-                <p className="text-xs text-slate-500">Format link undangan yang akan dibuat:</p>
+                <p className="text-xs text-slate-500">{t("vendorSystems.previewLinkFormat", "Format link undangan yang akan dibuat:")}</p>
                 <code className="block text-xs bg-white border border-slate-200 rounded px-3 py-2 text-indigo-700 break-all">
                   {portalOrigin}/vendor-register?token=<span className="text-slate-400 italic">[token-unik-64-karakter]</span>
                 </code>
               </div>
               {sendWa && phone && (
                 <div className="space-y-1">
-                  <p className="text-xs text-slate-500">Preview pesan WhatsApp yang akan dikirim ke <span className="font-medium">{phone}</span>:</p>
+                  <p className="text-xs text-slate-500">{t("vendorSystems.previewWaMessage", "Preview pesan WhatsApp yang akan dikirim ke")} <span className="font-medium">{phone}</span>:</p>
                   <pre className="text-xs bg-white border border-slate-200 rounded px-3 py-2 whitespace-pre-wrap text-slate-700 font-sans leading-relaxed">
 {`Halo *${vendorName.trim()}*! 👋
 
@@ -564,7 +566,7 @@ Terima kasih 🙏`}
                 </div>
               )}
               {sendWa && !phone && (
-                <p className="text-xs text-amber-600">⚠ Isi No. WhatsApp agar pesan bisa dikirim otomatis, atau salin link manual setelah undangan dibuat.</p>
+                <p className="text-xs text-amber-600">⚠ {t("vendorSystems.fillWaWarning", "Isi No. WhatsApp agar pesan bisa dikirim otomatis, atau salin link manual setelah undangan dibuat.")}</p>
               )}
             </div>
           )}
@@ -572,14 +574,14 @@ Terima kasih 🙏`}
           <div className="mt-4">
             <Button onClick={handleCreate} disabled={submitting || !vendorName.trim()} className="gap-2">
               <Send className="h-4 w-4" />
-              {submitting ? "Membuat..." : "Buat Undangan"}
+              {submitting ? t("vendorSystems.creating", "Membuat...") : t("vendorSystems.createInvite", "Buat Undangan")}
             </Button>
           </div>
 
           {lastToken && (
             <div className="mt-5 rounded-lg border border-indigo-200 bg-indigo-50 p-4 space-y-2">
               <p className="text-sm font-semibold text-indigo-800">
-                ✅ Link undangan untuk <span className="font-bold">{lastVendorName}</span>
+                ✅ {t("vendorSystems.inviteLinkFor", "Link undangan untuk")} <span className="font-bold">{lastVendorName}</span>
               </p>
               <div className="flex items-center gap-2">
                 <code className="flex-1 text-xs bg-white border border-indigo-200 rounded px-2 py-1.5 break-all text-indigo-700">
@@ -587,10 +589,10 @@ Terima kasih 🙏`}
                 </code>
                 <Button size="sm" variant="outline" className="shrink-0 gap-1.5" onClick={() => handleCopy(lastToken)}>
                   {copied ? <CheckCircle className="h-4 w-4 text-green-500" /> : <ClipboardCopy className="h-4 w-4" />}
-                  {copied ? "Tersalin!" : "Salin"}
+                  {copied ? t("vendorSystems.copied", "Tersalin!") : t("vendorSystems.copy", "Salin")}
                 </Button>
               </div>
-              <p className="text-xs text-indigo-600">Bagikan link ini ke vendor. Setiap vendor memiliki link unik yang berbeda.</p>
+              <p className="text-xs text-indigo-600">{t("vendorSystems.shareLinkHint", "Bagikan link ini ke vendor. Setiap vendor memiliki link unik yang berbeda.")}</p>
             </div>
           )}
         </CardContent>
@@ -600,7 +602,7 @@ Terima kasih 🙏`}
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center justify-between">
-            <span>Daftar Undangan Terkirim</span>
+            <span>{t("vendorSystems.inviteListTitle", "Daftar Undangan Terkirim")}</span>
             <Button size="sm" variant="ghost" onClick={loadList} disabled={loadingList}>
               <RefreshCw className={`h-4 w-4 ${loadingList ? "animate-spin" : ""}`} />
             </Button>
@@ -609,43 +611,43 @@ Terima kasih 🙏`}
             <Input
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              placeholder="Cari nama vendor, kontak, atau kategori..."
+              placeholder={t("vendorSystems.searchInvitePlaceholder", "Cari nama vendor, kontak, atau kategori...")}
               className="sm:max-w-xs h-8 text-sm"
             />
             <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as typeof statusFilter)}>
               <SelectTrigger className="sm:w-48 h-8 text-sm">
-                <SelectValue placeholder="Semua status" />
+                <SelectValue placeholder={t("vendorSystems.allStatuses", "Semua status")} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">Semua status</SelectItem>
-                <SelectItem value="pending">Menunggu</SelectItem>
-                <SelectItem value="accepted">Diterima (belum aktif)</SelectItem>
-                <SelectItem value="active">Supplier aktif</SelectItem>
-                <SelectItem value="rejected">Ditolak</SelectItem>
-                <SelectItem value="expired">Kadaluarsa</SelectItem>
+                <SelectItem value="all">{t("vendorSystems.allStatuses", "Semua status")}</SelectItem>
+                <SelectItem value="pending">{t("vendorSystems.statusPending", "Menunggu")}</SelectItem>
+                <SelectItem value="accepted">{t("vendorSystems.statusAcceptedNotActive", "Diterima (belum aktif)")}</SelectItem>
+                <SelectItem value="active">{t("vendorSystems.statusActiveSupplier", "Supplier aktif")}</SelectItem>
+                <SelectItem value="rejected">{t("vendorSystems.statusRejected", "Ditolak")}</SelectItem>
+                <SelectItem value="expired">{t("vendorSystems.statusExpired", "Kadaluarsa")}</SelectItem>
               </SelectContent>
             </Select>
           </div>
         </CardHeader>
         <CardContent>
           {loadingList ? (
-            <p className="text-sm text-muted-foreground">Memuat...</p>
+            <p className="text-sm text-muted-foreground">{t("vendorSystems.loading", "Memuat...")}</p>
           ) : list.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Belum ada undangan yang dibuat.</p>
+            <p className="text-sm text-muted-foreground">{t("vendorSystems.noInvites", "Belum ada undangan yang dibuat.")}</p>
           ) : filteredList.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Tidak ada undangan yang cocok dengan filter.</p>
+            <p className="text-sm text-muted-foreground">{t("vendorSystems.noInvitesFilter", "Tidak ada undangan yang cocok dengan filter.")}</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="text-xs text-muted-foreground border-b">
                   <tr>
-                    <th className="text-left pb-2 pr-4">Vendor</th>
-                    <th className="text-left pb-2 pr-4">Kontak</th>
-                    <th className="text-left pb-2 pr-4">Layanan</th>
-                    <th className="text-left pb-2 pr-4">Status</th>
+                    <th className="text-left pb-2 pr-4">{t("vendorSystems.colVendor", "Vendor")}</th>
+                    <th className="text-left pb-2 pr-4">{t("vendorSystems.colContact", "Kontak")}</th>
+                    <th className="text-left pb-2 pr-4">{t("vendorSystems.colService", "Layanan")}</th>
+                    <th className="text-left pb-2 pr-4">{t("vendorSystems.colStatus", "Status")}</th>
                     <th className="text-left pb-2 pr-4">WA</th>
-                    <th className="text-left pb-2 pr-4">Dibuat</th>
-                    <th className="text-left pb-2">Aksi</th>
+                    <th className="text-left pb-2 pr-4">{t("vendorSystems.colCreated", "Dibuat")}</th>
+                    <th className="text-left pb-2">{t("vendorSystems.colAction", "Aksi")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -675,17 +677,17 @@ Terima kasih 🙏`}
                             {inv.status !== "pending" || hasDocs ? (
                               <div className="mt-1">
                                 {missingDocs.length === 0
-                                  ? <Badge className="bg-green-50 text-green-600 border border-green-200 text-[10px]">Dokumen lengkap</Badge>
+                                  ? <Badge className="bg-green-50 text-green-600 border border-green-200 text-[10px]">{t("vendorSystems.docsComplete", "Dokumen lengkap")}</Badge>
                                   : <Badge className="bg-amber-50 text-amber-600 border border-amber-200 text-[10px]">
-                                      {hasDocs ? `Kurang ${missingDocs.length} dok.` : "Belum ada dokumen"}
+                                      {hasDocs ? `${t("vendorSystems.missingDocs", "Kurang")} ${missingDocs.length} ${t("vendorSystems.docUnit", "dok.")}` : t("vendorSystems.noDocs", "Belum ada dokumen")}
                                     </Badge>}
                               </div>
                             ) : null}
                           </td>
                           <td className="py-2 pr-4">
                             {inv.sent_via_wa
-                              ? <Badge className="bg-green-100 text-green-700 text-xs">Terkirim</Badge>
-                              : <Badge variant="outline" className="text-xs">Belum</Badge>}
+                              ? <Badge className="bg-green-100 text-green-700 text-xs">{t("vendorSystems.waSent", "Terkirim")}</Badge>
+                              : <Badge variant="outline" className="text-xs">{t("vendorSystems.waNotSent", "Belum")}</Badge>}
                           </td>
                           <td className="py-2 pr-4 text-xs text-muted-foreground whitespace-nowrap">
                             {new Date(inv.created_at).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}
@@ -693,32 +695,32 @@ Terima kasih 🙏`}
                           <td className="py-2">
                             <div className="flex items-center gap-1">
                               {hasDetail && (
-                                <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1" onClick={() => setDetailInv(inv)} title="Lihat detail pendaftaran">
-                                  <Eye className="h-3.5 w-3.5" /> Detail
+                                <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1" onClick={() => setDetailInv(inv)} title={t("vendorSystems.viewDetail", "Lihat detail pendaftaran")}>
+                                  <Eye className="h-3.5 w-3.5" /> {t("vendorSystems.detail", "Detail")}
                                 </Button>
                               )}
                               {inv.status === "accepted" && (
                                 inv.supplier_id ? (
                                   <div className="flex flex-col items-start gap-0.5">
-                                    <Badge className="bg-green-100 text-green-700 text-xs">Supplier aktif #{inv.supplier_id}</Badge>
+                                    <Badge className="bg-green-100 text-green-700 text-xs">{t("vendorSystems.activeSupplier", "Supplier aktif")} #{inv.supplier_id}</Badge>
                                     {inv.approved_at && (
                                       <span className="text-[10px] text-muted-foreground whitespace-nowrap">
-                                        Disetujui {new Date(inv.approved_at).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}
+                                        {t("vendorSystems.approvedOn", "Disetujui")} {new Date(inv.approved_at).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}
                                       </span>
                                     )}
                                   </div>
                                 ) : (
                                   <Button size="sm" variant="default" className="h-7 px-2 text-xs gap-1 bg-green-600 hover:bg-green-700"
-                                    onClick={() => handleApprove(inv.id)} disabled={approvingId === inv.id} title="Setujui & aktifkan sebagai supplier ERP">
-                                    {approvingId === inv.id ? "Memproses..." : "Setujui & Aktifkan"}
+                                    onClick={() => handleApprove(inv.id)} disabled={approvingId === inv.id} title={t("vendorSystems.approveActivate", "Setujui & aktifkan sebagai supplier ERP")}>
+                                    {approvingId === inv.id ? t("vendorSystems.processing", "Memproses...") : t("vendorSystems.approveActivateBtn", "Setujui & Aktifkan")}
                                   </Button>
                                 )
                               )}
-                              <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1" onClick={() => handleCopy(inv.token)} title="Salin link undangan">
-                                <ClipboardCopy className="h-3.5 w-3.5" /> Salin Link
+                              <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1" onClick={() => handleCopy(inv.token)} title={t("vendorSystems.copyInviteLink", "Salin link undangan")}>
+                                <ClipboardCopy className="h-3.5 w-3.5" /> {t("vendorSystems.copyLink", "Salin Link")}
                               </Button>
                               <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-red-500 hover:text-red-700"
-                                onClick={() => handleDelete(inv.id, inv.vendor_name)} title="Cabut undangan">
+                                onClick={() => handleDelete(inv.id, inv.vendor_name)} title={t("vendorSystems.revokeInvite", "Cabut undangan")}>
                                 <X className="h-3.5 w-3.5" />
                               </Button>
                             </div>
@@ -728,7 +730,7 @@ Terima kasih 🙏`}
                           <tr className="border-b last:border-0">
                             <td colSpan={7} className="pb-2 pt-0">
                               <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-                                <span className="font-semibold">Alasan tidak setuju</span>
+                                <span className="font-semibold">{t("vendorSystems.rejectionReason", "Alasan tidak setuju")}</span>
                                 {inv.rejected_at && (
                                   <span className="text-red-400 font-normal">
                                     {" "}· {new Date(inv.rejected_at).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}
@@ -759,7 +761,7 @@ Terima kasih 🙏`}
             const products = Array.isArray(inv.products) ? inv.products : [];
             return (
               <>
-                <DialogHeader><DialogTitle>Detail Pendaftaran Vendor</DialogTitle></DialogHeader>
+                <DialogHeader><DialogTitle>{t("vendorSystems.detailModalTitle", "Detail Pendaftaran Vendor")}</DialogTitle></DialogHeader>
                 <div className="space-y-4 text-sm">
                   <div>
                     <p className="font-semibold text-slate-800">{inv.company_name || inv.vendor_name}</p>
@@ -769,37 +771,37 @@ Terima kasih 🙏`}
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-2 text-xs">
-                    {inv.contact_name && <div><span className="text-slate-400">Kontak</span><div className="text-slate-700">{inv.contact_name}</div></div>}
-                    {inv.phone && <div><span className="text-slate-400">No. WA</span><div className="text-slate-700">{inv.phone}</div></div>}
-                    {inv.email && <div><span className="text-slate-400">Email</span><div className="text-slate-700">{inv.email}</div></div>}
+                    {inv.contact_name && <div><span className="text-slate-400">{t("vendorSystems.contact", "Kontak")}</span><div className="text-slate-700">{inv.contact_name}</div></div>}
+                    {inv.phone && <div><span className="text-slate-400">{t("vendorSystems.waNumber", "No. WA")}</span><div className="text-slate-700">{inv.phone}</div></div>}
+                    {inv.email && <div><span className="text-slate-400">{t("vendorSystems.labelEmail", "Email")}</span><div className="text-slate-700">{inv.email}</div></div>}
                     {inv.accepted_at && (
-                      <div><span className="text-slate-400">Diterima</span><div className="text-slate-700">{new Date(inv.accepted_at).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })}</div></div>
+                      <div><span className="text-slate-400">{t("vendorSystems.accepted", "Diterima")}</span><div className="text-slate-700">{new Date(inv.accepted_at).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })}</div></div>
                     )}
                   </div>
                   {inv.vendor_message && (
                     <div>
-                      <p className="text-xs font-semibold text-slate-700 mb-1">Pesan dari vendor</p>
+                      <p className="text-xs font-semibold text-slate-700 mb-1">{t("vendorSystems.vendorMessage", "Pesan dari vendor")}</p>
                       <p className="text-xs text-slate-600 whitespace-pre-line rounded-lg border border-slate-200 bg-slate-50 p-2.5">{inv.vendor_message}</p>
                     </div>
                   )}
                   {inv.notes && (
                     <div>
-                      <p className="text-xs font-semibold text-slate-700 mb-1">Catatan</p>
+                      <p className="text-xs font-semibold text-slate-700 mb-1">{t("vendorSystems.notes", "Catatan")}</p>
                       <p className="text-xs text-slate-600 whitespace-pre-line rounded-lg border border-slate-200 bg-slate-50 p-2.5">{inv.notes}</p>
                     </div>
                   )}
                   <div>
                     <p className="text-xs font-semibold text-slate-700 mb-1.5">
-                      Produk / Jasa ditawarkan {products.length > 0 && `(${products.length})`}
+                      {t("vendorSystems.offeredProducts", "Produk / Jasa ditawarkan")} {products.length > 0 && `(${products.length})`}
                     </p>
                     {products.length === 0 ? (
-                      <p className="text-xs text-slate-400 italic">Belum ada produk/jasa yang diisi vendor.</p>
+                      <p className="text-xs text-slate-400 italic">{t("vendorSystems.noProductsFilled", "Belum ada produk/jasa yang diisi vendor.")}</p>
                     ) : (
                       <div className="space-y-2">
                         {products.map((p, i) => (
                           <div key={i} className="rounded-lg border border-slate-200 p-2.5">
                             <div className="flex items-center justify-between gap-2">
-                              <p className="text-xs font-medium text-slate-800">{p.name || "(tanpa nama)"}</p>
+                              <p className="text-xs font-medium text-slate-800">{p.name || t("vendorSystems.noName", "(tanpa nama)")}</p>
                               {p.category && <Badge variant="outline" className="text-[10px] shrink-0">{p.category}</Badge>}
                             </div>
                             {p.description && <p className="text-xs text-slate-500 mt-0.5">{p.description}</p>}
@@ -807,7 +809,7 @@ Terima kasih 🙏`}
                               <div className="mt-1.5 flex flex-wrap gap-1.5">
                                 {p.mediaUrls.map((u, j) => (
                                   <a key={j} href={u} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline text-[11px] inline-flex items-center gap-0.5">
-                                    <ImageIcon className="h-3 w-3" /> Media {j + 1}
+                                    <ImageIcon className="h-3 w-3" /> {t("vendorSystems.media", "Media")} {j + 1}
                                   </a>
                                 ))}
                               </div>
@@ -818,7 +820,7 @@ Terima kasih 🙏`}
                     )}
                   </div>
                   <div>
-                    <p className="text-xs font-semibold text-slate-700 mb-1.5">Dokumen legalitas</p>
+                    <p className="text-xs font-semibold text-slate-700 mb-1.5">{t("vendorSystems.legalDocs", "Dokumen legalitas")}</p>
                     <div className="space-y-1.5">
                       {["npwp", "siup_nib", "akta", "ktp_pic"].map((docType) => {
                         const doc = docs.find(d => d.docType === docType);
@@ -831,13 +833,13 @@ Terima kasih 🙏`}
                             {doc ? (
                               doc.url ? (
                                 <a href={doc.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-indigo-600 hover:underline">
-                                  <Eye className="h-3.5 w-3.5" /> Lihat dokumen
+                                  <Eye className="h-3.5 w-3.5" /> {t("vendorSystems.viewDocument", "Lihat dokumen")}
                                 </a>
                               ) : (
-                                <Badge className="bg-green-50 text-green-600 border border-green-200 text-[10px]">Tersimpan (aman)</Badge>
+                                <Badge className="bg-green-50 text-green-600 border border-green-200 text-[10px]">{t("vendorSystems.docSaved", "Tersimpan (aman)")}</Badge>
                               )
                             ) : (
-                              <Badge variant="outline" className="text-slate-400 text-[10px]">Belum diunggah</Badge>
+                              <Badge variant="outline" className="text-slate-400 text-[10px]">{t("vendorSystems.docNotUploaded", "Belum diunggah")}</Badge>
                             )}
                           </div>
                         );
@@ -845,16 +847,16 @@ Terima kasih 🙏`}
                     </div>
                     {missingDocs.length > 0 && (
                       <p className="text-[11px] text-amber-600 mt-1.5">
-                        Dokumen wajib belum lengkap: {missingDocs.map(t => DOC_TYPE_LABEL[t]).join(", ")}.
+                        {t("vendorSystems.missingMandatoryDocs", "Dokumen wajib belum lengkap:")} {missingDocs.map(t => DOC_TYPE_LABEL[t]).join(", ")}.
                       </p>
                     )}
                     <p className="text-[11px] text-slate-400 mt-1.5">
-                      Link dokumen bersifat sementara (5 menit) dan hanya dapat diakses oleh admin yang login.
+                      {t("vendorSystems.docLinkNote", "Link dokumen bersifat sementara (5 menit) dan hanya dapat diakses oleh admin yang login.")}
                     </p>
                   </div>
                 </div>
                 <DialogFooter>
-                  <Button variant="outline" onClick={() => setDetailInv(null)}>Tutup</Button>
+                  <Button variant="outline" onClick={() => setDetailInv(null)}>{t("vendorSystems.close", "Tutup")}</Button>
                 </DialogFooter>
               </>
             );
@@ -869,6 +871,7 @@ Terima kasih 🙏`}
 
 export function VendorCatalogTab() {
   const { toast } = useToast();
+  const { t } = useLanguage();
   const [items, setItems] = useState<VendorCatalogItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -898,7 +901,7 @@ export function VendorCatalogTab() {
         documents:    Array.isArray(d.documents)    ? d.documents    : [],
       })));
     } catch {
-      toast({ title: "Gagal memuat katalog vendor", variant: "destructive" });
+      toast({ title: t("vendorSystems.errorLoadCatalog", "Gagal memuat katalog vendor"), variant: "destructive" });
     } finally { setLoading(false); }
   };
 
@@ -917,7 +920,7 @@ export function VendorCatalogTab() {
 
   const handleSaveEdit = async () => {
     if (!editTarget) return;
-    if (!editForm.name.trim()) { toast({ title: "Nama produk harus diisi", variant: "destructive" }); return; }
+    if (!editForm.name.trim()) { toast({ title: t("vendorSystems.productNameRequired", "Nama produk harus diisi"), variant: "destructive" }); return; }
     setSaving(true);
     try {
       const base = parseFloat(editForm.price_base) || 0;
@@ -936,10 +939,10 @@ export function VendorCatalogTab() {
         ? { ...i, name: editForm.name.trim(), description: editForm.description.trim() || null, price_base: base ? String(base) : null, markup_pct: String(effectiveMarkup), price_sell: sell != null ? String(sell) : null, kategori: editForm.kategori.trim() || null }
         : i
       ));
-      toast({ title: "Produk berhasil diperbarui" });
+      toast({ title: t("vendorSystems.productUpdated", "Produk berhasil diperbarui") });
       setEditTarget(null);
     } catch (e) {
-      toast({ title: "Gagal menyimpan", description: String(e), variant: "destructive" });
+      toast({ title: t("vendorSystems.errorSave", "Gagal menyimpan"), description: String(e), variant: "destructive" });
     } finally { setSaving(false); }
   };
 
@@ -956,12 +959,12 @@ export function VendorCatalogTab() {
   };
 
   const handleDelete = async (item: VendorCatalogItem) => {
-    if (!confirm(`Hapus produk "${item.name}" dari katalog?`)) return;
+    if (!confirm(`${t("vendorSystems.deleteProductConfirm", "Hapus produk")} "${item.name}" ${t("vendorSystems.fromCatalog", "dari katalog?")}`)) return;
     setBusyId(item.id);
     try {
       await fetch(`/api/portal/admin/vendor-catalog-items/${item.id}`, { method: "DELETE", credentials: "include", headers: getAuthHeaders() });
       setItems(prev => prev.filter(i => i.id !== item.id));
-      toast({ title: "Produk dihapus dari katalog" });
+      toast({ title: t("vendorSystems.productDeleted", "Produk dihapus dari katalog") });
     } finally { setBusyId(null); }
   };
 
@@ -974,13 +977,13 @@ export function VendorCatalogTab() {
         method: "POST", headers: getAuthHeaders(), credentials: "include", body: fd,
       });
       const j = await r.json() as { media?: VendorCatalogMediaItem; error?: string };
-      if (!r.ok) throw new Error(j.error ?? "Upload gagal");
+      if (!r.ok) throw new Error(j.error ?? t("vendorSystems.uploadFailed", "Upload gagal"));
       if (j.media) {
         setItems(prev => prev.map(i => i.id === itemId ? { ...i, media: [...i.media, j.media!] } : i));
       }
-      toast({ title: "Foto berhasil diunggah" });
+      toast({ title: t("vendorSystems.photoUploaded", "Foto berhasil diunggah") });
     } catch (e: unknown) {
-      toast({ title: "Upload gagal", description: e instanceof Error ? e.message : String(e), variant: "destructive" });
+      toast({ title: t("vendorSystems.uploadFailed", "Upload gagal"), description: e instanceof Error ? e.message : String(e), variant: "destructive" });
     } finally {
       setUploading(p => ({ ...p, [itemId]: false }));
       if (fileInputRefs.current[itemId]) fileInputRefs.current[itemId]!.value = "";
@@ -993,10 +996,10 @@ export function VendorCatalogTab() {
       const r = await fetch(`/api/portal/admin/vendor-catalog-items/media/${mediaId}`, {
         method: "DELETE", credentials: "include", headers: getAuthHeaders(),
       });
-      if (!r.ok) throw new Error("Gagal menghapus foto");
+      if (!r.ok) throw new Error(t("vendorSystems.errorDeletePhoto", "Gagal menghapus foto"));
       setItems(prev => prev.map(i => i.id === itemId ? { ...i, media: i.media.filter(m => m.id !== mediaId) } : i));
     } catch {
-      toast({ title: "Gagal hapus foto", variant: "destructive" });
+      toast({ title: t("vendorSystems.errorDeletePhoto", "Gagal hapus foto"), variant: "destructive" });
     } finally { setDeletingMedia(p => ({ ...p, [mediaId]: false })); }
   };
 
@@ -1020,7 +1023,7 @@ export function VendorCatalogTab() {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              Edit Produk
+              {t("vendorSystems.editProduct", "Edit Produk")}
               {editTarget?.is_internal_vendor && (
                 <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 border border-violet-300 uppercase tracking-wide">
                   🏢 Internal Company
@@ -1031,32 +1034,32 @@ export function VendorCatalogTab() {
           <div className="space-y-3 py-2">
             {editTarget?.is_internal_vendor && (
               <div className="rounded-md border border-violet-200 bg-violet-50 px-3 py-2 text-xs text-violet-700">
-                Vendor ini adalah perusahaan internal. Markup platform tidak berlaku — harga customer sama dengan harga dasar.
+                {t("vendorSystems.internalVendorNote", "Vendor ini adalah perusahaan internal. Markup platform tidak berlaku — harga customer sama dengan harga dasar.")}
               </div>
             )}
             <div>
-              <Label className="text-xs font-medium">Nama Produk</Label>
-              <input className="mt-1 flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm" value={editForm.name} onChange={e => setEditForm(p => ({ ...p, name: e.target.value }))} placeholder="Nama produk..." />
+              <Label className="text-xs font-medium">{t("vendorSystems.productName", "Nama Produk")}</Label>
+              <input className="mt-1 flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm" value={editForm.name} onChange={e => setEditForm(p => ({ ...p, name: e.target.value }))} placeholder={t("vendorSystems.productNamePlaceholder", "Nama produk...")} />
             </div>
             <div>
-              <Label className="text-xs font-medium">Deskripsi</Label>
-              <textarea className="mt-1 flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm resize-none" rows={3} value={editForm.description} onChange={e => setEditForm(p => ({ ...p, description: e.target.value }))} placeholder="Deskripsi singkat..." />
+              <Label className="text-xs font-medium">{t("vendorSystems.description", "Deskripsi")}</Label>
+              <textarea className="mt-1 flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm resize-none" rows={3} value={editForm.description} onChange={e => setEditForm(p => ({ ...p, description: e.target.value }))} placeholder={t("vendorSystems.shortDescPlaceholder", "Deskripsi singkat...")} />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label className="text-xs font-medium">Harga Dasar (Rp)</Label>
-                <input type="number" min={0} className="mt-1 flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm" value={editForm.price_base} onChange={e => setEditForm(p => ({ ...p, price_base: e.target.value }))} placeholder="Misal: 40000" />
+                <Label className="text-xs font-medium">{t("vendorSystems.basePrice", "Harga Dasar (Rp)")}</Label>
+                <input type="number" min={0} className="mt-1 flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm" value={editForm.price_base} onChange={e => setEditForm(p => ({ ...p, price_base: e.target.value }))} placeholder={t("vendorSystems.basePricePlaceholder", "Misal: 40000")} />
               </div>
               <div>
                 <Label className="text-xs font-medium text-muted-foreground">
-                  Markup Platform (%)
-                  {editTarget?.is_internal_vendor && <span className="ml-1 text-violet-600 normal-case font-normal">(dinonaktifkan)</span>}
+                  {t("vendorSystems.platformMarkup", "Markup Platform (%)")}
+                  {editTarget?.is_internal_vendor && <span className="ml-1 text-violet-600 normal-case font-normal">({t("vendorSystems.disabled", "dinonaktifkan")})</span>}
                 </Label>
                 <input type="number" min={0} max={100} step={0.5} className="mt-1 flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                   value={editTarget?.is_internal_vendor ? "0" : editForm.markup_pct}
                   onChange={e => { if (editTarget?.is_internal_vendor) return; setEditForm(p => ({ ...p, markup_pct: e.target.value })); }}
                   disabled={editTarget?.is_internal_vendor}
-                  placeholder="Misal: 12.5"
+                  placeholder={t("vendorSystems.markupPlaceholder", "Misal: 12.5")}
                 />
               </div>
             </div>
@@ -1069,16 +1072,16 @@ export function VendorCatalogTab() {
               return base > 0 ? (
                 <div className={`rounded-md border px-3 py-2.5 text-sm ${isInternal ? "bg-violet-50 border-violet-200" : "bg-emerald-50 border-emerald-200"}`}>
                   <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground text-xs">Harga Customer</span>
+                    <span className="text-muted-foreground text-xs">{t("vendorSystems.customerPrice", "Harga Customer")}</span>
                     <span className={`font-bold text-base ${isInternal ? "text-violet-700" : "text-emerald-700"}`}>
                       {new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(sell ?? 0)}
                     </span>
                   </div>
                   <div className="flex justify-between items-center mt-1">
-                    <span className="text-muted-foreground text-xs">Keuntungan Platform</span>
+                    <span className="text-muted-foreground text-xs">{t("vendorSystems.platformProfit", "Keuntungan Platform")}</span>
                     <span className={`text-xs font-medium ${isInternal ? "text-violet-500" : "text-emerald-600"}`}>
                       {isInternal
-                        ? "Rp0 (Internal — tidak ada markup)"
+                        ? `Rp0 (${t("vendorSystems.internalNoMarkup", "Internal — tidak ada markup")})`
                         : `${new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(profit ?? 0)}${markup > 0 ? ` (${markup}%)` : ""}`
                       }
                     </span>
@@ -1087,14 +1090,14 @@ export function VendorCatalogTab() {
               ) : null;
             })()}
             <div>
-              <Label className="text-xs font-medium">Kategori</Label>
-              <input className="mt-1 flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm" value={editForm.kategori} onChange={e => setEditForm(p => ({ ...p, kategori: e.target.value }))} placeholder="Misal: commodity" />
+              <Label className="text-xs font-medium">{t("vendorSystems.category", "Kategori")}</Label>
+              <input className="mt-1 flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm" value={editForm.kategori} onChange={e => setEditForm(p => ({ ...p, kategori: e.target.value }))} placeholder={t("vendorSystems.categoryPlaceholder", "Misal: commodity")} />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" size="sm" onClick={() => setEditTarget(null)}>Batal</Button>
+            <Button variant="outline" size="sm" onClick={() => setEditTarget(null)}>{t("vendorSystems.cancel", "Batal")}</Button>
             <Button size="sm" onClick={() => void handleSaveEdit()} disabled={saving}>
-              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : null} Simpan
+              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : null} {t("vendorSystems.save", "Simpan")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1104,17 +1107,17 @@ export function VendorCatalogTab() {
         <CardHeader>
           <div className="flex items-start justify-between gap-4">
             <div>
-              <CardTitle className="text-base">Katalog Produk Vendor</CardTitle>
+              <CardTitle className="text-base">{t("vendorSystems.catalogTitle", "Katalog Produk Vendor")}</CardTitle>
               <p className="text-xs text-muted-foreground mt-1">
-                Semua produk marketplace. Admin dapat edit detail, upload/hapus foto, dan mengatur status publish.
+                {t("vendorSystems.catalogDesc", "Semua produk marketplace. Admin dapat edit detail, upload/hapus foto, dan mengatur status publish.")}
               </p>
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <Button size="sm" variant="outline" onClick={() => void loadItems()} className="gap-1.5 text-xs">
-                <RefreshCw className="h-3.5 w-3.5" /> Refresh
+                <RefreshCw className="h-3.5 w-3.5" /> {t("vendorSystems.refresh", "Refresh")}
               </Button>
               <Button size="sm" onClick={() => setShowAddWizard(true)} className="gap-1.5 text-xs bg-indigo-600 hover:bg-indigo-700">
-                <Plus className="h-3.5 w-3.5" /> Tambah Produk
+                <Plus className="h-3.5 w-3.5" /> {t("vendorSystems.addProduct", "Tambah Produk")}
               </Button>
             </div>
           </div>
@@ -1123,18 +1126,18 @@ export function VendorCatalogTab() {
             <input
               value={searchQ}
               onChange={e => setSearchQ(e.target.value)}
-              placeholder="Cari nama produk, vendor, kategori..."
+              placeholder={t("vendorSystems.catalogSearchPlaceholder", "Cari nama produk, vendor, kategori...")}
               className="pl-8 text-sm h-8 flex w-full rounded-md border border-input bg-background px-3 py-1"
             />
           </div>
         </CardHeader>
         <CardContent>
           {loading ? (
-            <p className="text-sm text-muted-foreground">Memuat...</p>
+            <p className="text-sm text-muted-foreground">{t("vendorSystems.loading", "Memuat...")}</p>
           ) : items.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Belum ada produk vendor di katalog.</p>
+            <p className="text-sm text-muted-foreground">{t("vendorSystems.noCatalogProducts", "Belum ada produk vendor di katalog.")}</p>
           ) : filteredItems.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Tidak ada produk yang cocok dengan pencarian.</p>
+            <p className="text-sm text-muted-foreground">{t("vendorSystems.noMatchingProducts", "Tidak ada produk yang cocok dengan pencarian.")}</p>
           ) : (
             <div className="space-y-6">
               {Object.entries(vendorGroups).map(([vendorName, vendorItems]) => (
@@ -1142,7 +1145,7 @@ export function VendorCatalogTab() {
                   <div className="flex items-center gap-2 mb-2">
                     <Building2 className="h-3.5 w-3.5 text-slate-500" />
                     <span className="text-xs font-semibold text-slate-700">{vendorName}</span>
-                    <Badge variant="outline" className="text-[10px]">{vendorItems.length} produk</Badge>
+                    <Badge variant="outline" className="text-[10px]">{vendorItems.length} {t("vendorSystems.productUnit", "produk")}</Badge>
                     {vendorItems[0]?.is_internal_vendor && (
                       <span className="inline-flex items-center text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-700 border border-violet-300 uppercase tracking-wide">
                         🏢 Internal Company
@@ -1154,14 +1157,14 @@ export function VendorCatalogTab() {
                       <thead>
                         <tr className="text-left text-xs text-muted-foreground border-b">
                           <th className="py-2 pr-2 w-6"></th>
-                          <th className="py-2 pr-4">Produk</th>
-                          <th className="py-2 pr-4">Kategori</th>
-                          <th className="py-2 pr-4">Harga Jual</th>
-                          <th className="py-2 pr-4">Markup</th>
-                          <th className="py-2 pr-4">Foto</th>
-                          <th className="py-2 pr-4">Status</th>
-                          <th className="py-2 pr-4">Dibuat</th>
-                          <th className="py-2">Aksi</th>
+                          <th className="py-2 pr-4">{t("vendorSystems.colProduct", "Produk")}</th>
+                          <th className="py-2 pr-4">{t("vendorSystems.colCategory", "Kategori")}</th>
+                          <th className="py-2 pr-4">{t("vendorSystems.colSellPrice", "Harga Jual")}</th>
+                          <th className="py-2 pr-4">{t("vendorSystems.colMarkup", "Markup")}</th>
+                          <th className="py-2 pr-4">{t("vendorSystems.colPhoto", "Foto")}</th>
+                          <th className="py-2 pr-4">{t("vendorSystems.colStatus", "Status")}</th>
+                          <th className="py-2 pr-4">{t("vendorSystems.colCreated", "Dibuat")}</th>
+                          <th className="py-2">{t("vendorSystems.colAction", "Aksi")}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1172,7 +1175,7 @@ export function VendorCatalogTab() {
                             <Fragment key={item.id}>
                               <tr className="border-b hover:bg-slate-50/50">
                                 <td className="py-2 pr-2">
-                                  <button onClick={() => setExpanded(p => ({ ...p, [item.id]: !p[item.id] }))} className="text-slate-400 hover:text-slate-700 transition-colors" title={isExpanded ? "Tutup foto" : "Kelola foto"}>
+                                  <button onClick={() => setExpanded(p => ({ ...p, [item.id]: !p[item.id] }))} className="text-slate-400 hover:text-slate-700 transition-colors" title={isExpanded ? t("vendorSystems.closePhotos", "Tutup foto") : t("vendorSystems.managePhotos", "Kelola foto")}>
                                     <ImageIcon className="h-4 w-4" />
                                   </button>
                                 </td>
@@ -1187,12 +1190,12 @@ export function VendorCatalogTab() {
                                       {new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(parseFloat(String(item.price_sell)))}
                                     </span>
                                   ) : (
-                                    <span className="text-xs text-muted-foreground italic">Belum diset</span>
+                                    <span className="text-xs text-muted-foreground italic">{t("vendorSystems.notSet", "Belum diset")}</span>
                                   )}
                                 </td>
                                 <td className="py-2 pr-4 whitespace-nowrap">
                                   {item.is_internal_vendor ? (
-                                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-600 border border-violet-200">Internal</span>
+                                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-600 border border-violet-200">{t("vendorSystems.internal", "Internal")}</span>
                                   ) : item.markup_pct != null && parseFloat(String(item.markup_pct)) > 0 ? (
                                     <span className="text-xs text-slate-600">{parseFloat(String(item.markup_pct))}%</span>
                                   ) : (
@@ -1201,7 +1204,7 @@ export function VendorCatalogTab() {
                                 </td>
                                 <td className="py-2 pr-4">
                                   <button onClick={() => setExpanded(p => ({ ...p, [item.id]: !p[item.id] }))} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-slate-800 transition-colors">
-                                    <ImageIcon className="h-3.5 w-3.5" />{item.media.length} foto
+                                    <ImageIcon className="h-3.5 w-3.5" />{item.media.length} {t("vendorSystems.photoUnit", "foto")}
                                   </button>
                                 </td>
                                 <td className="py-2 pr-4">
@@ -1214,14 +1217,14 @@ export function VendorCatalogTab() {
                                 </td>
                                 <td className="py-2">
                                   <div className="flex items-center gap-1">
-                                    <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1" onClick={() => openEdit(item)} title="Edit detail produk">
-                                      <Pencil className="h-3 w-3" /> Edit
+                                    <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1" onClick={() => openEdit(item)} title={t("vendorSystems.editProductDetail", "Edit detail produk")}>
+                                      <Pencil className="h-3 w-3" /> {t("vendorSystems.edit", "Edit")}
                                     </Button>
-                                    <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1" onClick={() => setMediaAssetsTarget(item)} title="Kelola media">
-                                      <ImageIcon className="h-3 w-3" /> Media
+                                    <Button size="sm" variant="ghost" className="h-7 px-2 text-xs gap-1" onClick={() => setMediaAssetsTarget(item)} title={t("vendorSystems.manageMedia", "Kelola media")}>
+                                      <ImageIcon className="h-3 w-3" /> {t("vendorSystems.media", "Media")}
                                     </Button>
                                     <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" disabled={busyId === item.id} onClick={() => togglePublish(item)}>
-                                      {item.is_published ? "Sembunyikan" : "Publish"}
+                                      {item.is_published ? t("vendorSystems.hide", "Sembunyikan") : t("vendorSystems.publish", "Publish")}
                                     </Button>
                                     <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-red-500 hover:text-red-700" disabled={busyId === item.id} onClick={() => handleDelete(item)}>
                                       <X className="h-3.5 w-3.5" />
@@ -1234,8 +1237,8 @@ export function VendorCatalogTab() {
                                   <td colSpan={9} className="px-4 py-3">
                                     <div className="flex items-center gap-2 mb-2">
                                       <ImageIcon className="h-3.5 w-3.5 text-slate-500" />
-                                      <span className="text-xs font-semibold text-slate-600">Foto Produk — {item.name}</span>
-                                      <span className="text-xs text-muted-foreground">({item.media.length} foto)</span>
+                                      <span className="text-xs font-semibold text-slate-600">{t("vendorSystems.productPhotos", "Foto Produk")} — {item.name}</span>
+                                      <span className="text-xs text-muted-foreground">({item.media.length} {t("vendorSystems.photoUnit", "foto")})</span>
                                     </div>
                                     <div className="flex flex-wrap gap-2">
                                       {item.media.map(img => (
@@ -1251,7 +1254,7 @@ export function VendorCatalogTab() {
                                               onClick={() => void handleDeleteMedia(img.id, item.id)}
                                               disabled={!!deletingMedia[img.id]}
                                               className="bg-red-500 hover:bg-red-600 text-white rounded-full p-1.5 transition-colors"
-                                              title="Hapus foto"
+                                              title={t("vendorSystems.deletePhoto", "Hapus foto")}
                                             >
                                               {deletingMedia[img.id] ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
                                             </button>
@@ -1262,11 +1265,11 @@ export function VendorCatalogTab() {
                                         onClick={() => fileInputRefs.current[item.id]?.click()}
                                         disabled={isUploading}
                                         className="w-20 h-20 rounded-lg border-2 border-dashed border-slate-300 hover:border-sky-400 hover:bg-sky-50 flex flex-col items-center justify-center gap-1 transition-colors disabled:opacity-50 shrink-0"
-                                        title="Upload foto baru"
+                                        title={t("vendorSystems.uploadNewPhoto", "Upload foto baru")}
                                       >
                                         {isUploading
                                           ? <Loader2 className="h-5 w-5 text-sky-500 animate-spin" />
-                                          : <><Upload className="h-4 w-4 text-slate-400" /><span className="text-[10px] text-slate-400 text-center leading-tight">Upload Foto</span></>}
+                                          : <><Upload className="h-4 w-4 text-slate-400" /><span className="text-[10px] text-slate-400 text-center leading-tight">{t("vendorSystems.uploadPhoto", "Upload Foto")}</span></>}
                                       </button>
                                       <input
                                         ref={(el) => { fileInputRefs.current[item.id] = el; }}

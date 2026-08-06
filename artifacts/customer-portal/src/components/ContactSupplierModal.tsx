@@ -139,7 +139,7 @@ export function ContactSupplierModal({
           <div className="flex items-center justify-between">
             <div>
               <p className="text-[10px] font-bold text-sky-500 uppercase tracking-widest mb-0.5">
-                Contact Supplier
+                {t("contactSupplier.header", "Contact Supplier")}
               </p>
               <DialogTitle className="text-[16px] font-extrabold text-slate-800 leading-tight">
                 {vendorName}
@@ -161,14 +161,14 @@ export function ContactSupplierModal({
               <CheckCircle2 className="h-8 w-8 text-emerald-500" />
             </div>
             <div>
-              <h3 className="text-[18px] font-extrabold text-slate-800 mb-1">Inquiry Terkirim!</h3>
+              <h3 className="text-[18px] font-extrabold text-slate-800 mb-1">{t("contactSupplier.successTitle", "Inquiry Terkirim!")}</h3>
               <p className="text-[13px] text-slate-500 leading-relaxed mb-4">
-                Inquiry Anda telah diterima. Vendor akan menghubungi Anda segera.
+                {t("contactSupplier.successDesc", "Inquiry Anda telah diterima. Vendor akan menghubungi Anda segera.")}
               </p>
               <div className="inline-flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5">
                 <Hash className="h-4 w-4 text-sky-500" />
                 <div>
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Nomor Inquiry</p>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{t("contactSupplier.inquiryNumber", "Nomor Inquiry")}</p>
                   <p className="text-[14px] font-black text-slate-800 font-mono">{inquiryNumber}</p>
                 </div>
               </div>
@@ -177,7 +177,7 @@ export function ContactSupplierModal({
               onClick={handleClose}
               className="rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold mt-2"
             >
-              Selesai
+              {t("contactSupplier.doneBtn", "Selesai")}
             </Button>
           </div>
         ) : (
