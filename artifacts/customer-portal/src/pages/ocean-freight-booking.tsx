@@ -42,16 +42,11 @@ interface EstimateOption {
   validity: string;
 }
 
-/* ─── Helpers ────────────────────────────────────────────── */
-const IDR = (n: number) =>
-  new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
-const fmtNum = (n: number) =>
-  new Intl.NumberFormat("id-ID", { maximumFractionDigits: 2 }).format(n);
-
-const OPTION_META: Record<string, { label: string; badgeCls: string; desc: string }> = {
-  economy:  { label: "Ekonomi",   badgeCls: "bg-green-50 text-green-700",  desc: "Harga paling terjangkau" },
-  standard: { label: "Standar",   badgeCls: "bg-blue-50 text-blue-700",    desc: "Keseimbangan harga & waktu" },
-  priority: { label: "Prioritas", badgeCls: "bg-orange-50 text-orange-700",desc: "Transit tercepat" },
+/* ─── Module-level static data (no hardcoded display text) ── */
+const OPTION_META: Record<string, { labelKey: string; badgeCls: string; descKey: string }> = {
+  economy:  { labelKey: "oceanFreightBooking.optionEconomy",  badgeCls: "bg-green-50 text-green-700",  descKey: "oceanFreightBooking.optionEconomyDesc" },
+  standard: { labelKey: "oceanFreightBooking.optionStandard", badgeCls: "bg-blue-50 text-blue-700",    descKey: "oceanFreightBooking.optionStandardDesc" },
+  priority: { labelKey: "oceanFreightBooking.optionPriority", badgeCls: "bg-orange-50 text-orange-700",descKey: "oceanFreightBooking.optionPriorityDesc" },
 };
 
 const PORTS = [
@@ -82,7 +77,13 @@ export default function OceanFreightBookingPage() {
   const [, setLocation] = useLocation();
   const { toast }       = useToast();
   const { data: me }    = useGetPortalMe({ query: { retry: false, queryKey: getGetPortalMeQueryKey() } });
-  const { t }           = useLanguage();
+  const { t, locale }   = useLanguage();
+
+  /* RC-6: locale-aware formatters — inside component so locale is available */
+  const IDR = (n: number) =>
+    new Intl.NumberFormat(locale, { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
+  const fmtNum = (n: number) =>
+    new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(n);
 
   const [step, setStep]               = useState<"form"|"results"|"inquiry"|"success">("form");
   const [loading, setLoading]         = useState(false);
@@ -124,9 +125,9 @@ export default function OceanFreightBookingPage() {
   const [custCompany, setCustCompany] = useState("");
 
   async function handleCalculate() {
-    if (!originPort || !destPort) { toast({ title: "Isi origin dan destination port", variant: "destructive" }); return; }
-    if (shipmentType === "FCL" && !containerType) { toast({ title: "Pilih container type", variant: "destructive" }); return; }
-    if (shipmentType === "LCL" && !totalCbm && !grossWeight) { toast({ title: "Isi CBM atau gross weight", variant: "destructive" }); return; }
+    if (!originPort || !destPort) { toast({ title: t("oceanFreightBooking.errorFillPorts"), variant: "destructive" }); return; }
+    if (shipmentType === "FCL" && !containerType) { toast({ title: t("oceanFreightBooking.errorSelectContainer"), variant: "destructive" }); return; }
+    if (shipmentType === "LCL" && !totalCbm && !grossWeight) { toast({ title: t("oceanFreightBooking.errorFillCbm"), variant: "destructive" }); return; }
     setLoading(true);
     try {
       const r = await fetch("/api/ocean-freight/calculate", {
@@ -154,8 +155,8 @@ export default function OceanFreightBookingPage() {
   }
 
   async function handleSubmitInquiry() {
-    if (!custName) { toast({ title: "Nama wajib diisi", variant: "destructive" }); return; }
-    if (!custPhone && !custEmail) { toast({ title: "Phone atau email wajib diisi", variant: "destructive" }); return; }
+    if (!custName) { toast({ title: t("oceanFreightBooking.errorNameRequired"), variant: "destructive" }); return; }
+    if (!custPhone && !custEmail) { toast({ title: t("oceanFreightBooking.errorContactRequired"), variant: "destructive" }); return; }
     setLoading(true);
     try {
       const r = await fetch("/api/ocean-freight/inquiry", {
@@ -174,9 +175,6 @@ export default function OceanFreightBookingPage() {
           commodity, cargo_condition: cargoCondition,
           incoterm, etd_preferred: etdPreferred,
           selected_additional_services: selectedSvc,
-          selected_estimate_option: selectedOption?.estimate_option ?? null,
-          selected_rate_id: selectedOption?.rate_id ?? null,
-          estimated_price: selectedOption?.total_estimate ?? null,
           estimated_price_idr: selectedOption?.total_estimate_idr ?? null,
           currency: selectedOption?.currency ?? "IDR",
           pricing_breakdown: selectedOption ?? null,
@@ -203,11 +201,11 @@ export default function OceanFreightBookingPage() {
           <CheckCircle2 className="h-10 w-10 text-white" />
         </div>
         <div>
-          <h2 className="text-2xl font-extrabold text-slate-900">Inquiry Terkirim!</h2>
-          <p className="text-slate-500 mt-1 text-sm">Tim kami akan mengkonfirmasi penawaran final dan menghubungi Anda segera.</p>
+          <h2 className="text-2xl font-extrabold text-slate-900">{t("oceanFreightBooking.successTitle")}</h2>
+          <p className="text-slate-500 mt-1 text-sm">{t("oceanFreightBooking.successDesc")}</p>
         </div>
         <div className={cardCls + " p-5"} style={cardShadow}>
-          <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">Nomor Order</p>
+          <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">{t("oceanFreightBooking.orderNumberLabel")}</p>
           <p className="text-xl font-extrabold text-blue-700 font-mono">{orderNumber}</p>
         </div>
         <div className="flex gap-3">
@@ -222,7 +220,7 @@ export default function OceanFreightBookingPage() {
             style={{ background: "linear-gradient(135deg,#1d4ed8,#3b82f6)", boxShadow: "0 4px 16px rgba(29,78,216,0.3)" }}
             onClick={() => { setStep("form"); setOptions([]); setSelectedOption(null); setOrderNumber(""); }}
           >
-            <RefreshCw className="h-4 w-4" /> Order Lagi
+            <RefreshCw className="h-4 w-4" /> {t("oceanFreightBooking.orderAgain")}
           </button>
         </div>
       </div>
@@ -238,7 +236,7 @@ export default function OceanFreightBookingPage() {
         {/* Back */}
         <button onClick={() => setStep("results")}
           className="flex items-center gap-1.5 text-slate-500 hover:text-slate-800 text-sm font-medium transition-colors">
-          <ArrowLeft className="h-4 w-4" /> Kembali ke Estimasi
+          <ArrowLeft className="h-4 w-4" /> {t("oceanFreightBooking.backToEstimate")}
         </button>
 
         {/* Header */}
@@ -247,11 +245,11 @@ export default function OceanFreightBookingPage() {
             <User className="h-5 w-5 text-white" />
           </div>
           <div>
-            <h2 className="text-xl font-extrabold text-slate-900">Data Pengirim</h2>
+            <h2 className="text-xl font-extrabold text-slate-900">{t("oceanFreightBooking.senderTitle")}</h2>
             {selectedOption && (
               <p className="text-slate-500 text-sm">
-                Estimasi: <span className="font-bold text-blue-700">{IDR(selectedOption.total_estimate_idr)}</span>
-                {" · "}{OPTION_META[selectedOption.estimate_option]?.label}
+                {t("estimate")}: <span className="font-bold text-blue-700">{IDR(selectedOption.total_estimate_idr)}</span>
+                {" · "}{t((OPTION_META[selectedOption.estimate_option] ?? { labelKey: "oceanFreightBooking.optionStandard" }).labelKey as any)}
               </p>
             )}
           </div>
@@ -261,48 +259,48 @@ export default function OceanFreightBookingPage() {
         <div className={cardCls} style={cardShadow}>
           <div className="px-5 py-4 border-b border-slate-50 flex items-center gap-2">
             <User className="w-4 h-4 text-blue-600" />
-            <h3 className="font-bold text-slate-800 text-sm">Informasi Kontak</h3>
+            <h3 className="font-bold text-slate-800 text-sm">{t("oceanFreightBooking.contactInfo")}</h3>
           </div>
           <div className="p-5 space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className={labelCls}>Nama Lengkap *</label>
+                <label className={labelCls}>{t("oceanFreightBooking.fullName")}</label>
                 <Input value={custName} onChange={e => setCustName(e.target.value)} placeholder="John Doe" className={inputCls} />
               </div>
               <div>
-                <label className={labelCls}>No. HP / WhatsApp *</label>
+                <label className={labelCls}>{t("oceanFreightBooking.phoneWa")}</label>
                 <Input value={custPhone} onChange={e => setCustPhone(e.target.value)} placeholder="+62812..." className={inputCls} />
               </div>
               <div>
-                <label className={labelCls}>Email</label>
+                <label className={labelCls}>{t("oceanFreightBooking.email")}</label>
                 <Input type="email" value={custEmail} onChange={e => setCustEmail(e.target.value)} placeholder="email@domain.com" className={inputCls} />
               </div>
               <div>
-                <label className={labelCls}>Perusahaan</label>
+                <label className={labelCls}>{t("oceanFreightBooking.company")}</label>
                 <Input value={custCompany} onChange={e => setCustCompany(e.target.value)} placeholder="PT ..." className={inputCls} />
               </div>
               <div>
                 <label className={labelCls}>Incoterm</label>
                 <Select value={incoterm} onValueChange={setIncoterm}>
-                  <SelectTrigger className={inputCls + " mt-0"}><SelectValue placeholder="Pilih..." /></SelectTrigger>
+                  <SelectTrigger className={inputCls + " mt-0"}><SelectValue placeholder="EXW / FOB / CIF..." /></SelectTrigger>
                   <SelectContent>
                     {["EXW","FOB","CFR/CNF","CIF","DAP","DDP"].map(i => <SelectItem key={i} value={i}>{i}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
               <div>
-                <label className={labelCls}>Target ETD</label>
+                <label className={labelCls}>{t("oceanFreightBooking.targetEtd")}</label>
                 <Input type="date" value={etdPreferred} onChange={e => setEtdPreferred(e.target.value)} className={inputCls} />
               </div>
             </div>
             <div>
-              <label className={labelCls}>Komoditas</label>
-              <Input value={commodity} onChange={e => setCommodity(e.target.value)} placeholder="Nama barang..." className={inputCls} />
+              <label className={labelCls}>{t("oceanFreightBooking.commodity")}</label>
+              <Input value={commodity} onChange={e => setCommodity(e.target.value)} placeholder="..." className={inputCls} />
             </div>
 
             <div className="p-3 rounded-xl flex gap-2" style={{ background: "#eff6ff" }}>
               <Info className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
-              <p className="text-[11px] text-blue-700 leading-relaxed">Tim kami akan menghubungi Anda untuk konfirmasi harga final dalam 1×24 jam.</p>
+              <p className="text-[11px] text-blue-700 leading-relaxed">{t("oceanFreightBooking.confirmNote")}</p>
             </div>
 
             <button
@@ -311,8 +309,8 @@ export default function OceanFreightBookingPage() {
               style={{ background: "linear-gradient(135deg,#1d4ed8,#3b82f6)", boxShadow: "0 4px 16px rgba(29,78,216,0.3)" }}
             >
               {loading
-                ? <><Loader2 className="h-5 w-5 animate-spin" />Mengirim...</>
-                : <><Send className="h-5 w-5" />Kirim Request Penawaran</>}
+                ? <><Loader2 className="h-5 w-5 animate-spin" />{t("oceanFreightBooking.sending")}</>
+                : <><Send className="h-5 w-5" />{t("oceanFreightBooking.submitInquiry")}</>}
             </button>
           </div>
         </div>
@@ -328,11 +326,11 @@ export default function OceanFreightBookingPage() {
       <div className="max-w-2xl mx-auto space-y-4">
         <button onClick={() => setStep("form")}
           className="flex items-center gap-1.5 text-slate-500 hover:text-slate-800 text-sm font-medium transition-colors">
-          <ArrowLeft className="h-4 w-4" /> Ubah Pencarian
+          <ArrowLeft className="h-4 w-4" /> {t("oceanFreightBooking.changeSearch")}
         </button>
 
         <div>
-          <h2 className="text-xl font-extrabold text-slate-900">Estimasi Ocean Freight</h2>
+          <h2 className="text-xl font-extrabold text-slate-900">{t("oceanFreightBooking.resultsTitle")}</h2>
           <p className="text-slate-500 text-sm mt-1">
             {originPort} → {destPort} · {shipmentType}
             {shipmentType === "FCL" ? ` / ${containerType} × ${containerQty}` : ` / ${totalCbm} CBM`}
@@ -344,20 +342,20 @@ export default function OceanFreightBookingPage() {
             <div className="w-14 h-14 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-4">
               <Ship className="h-7 w-7 text-slate-400" />
             </div>
-            <h3 className="font-bold text-slate-800 text-base">Rate Belum Tersedia</h3>
-            <p className="text-slate-500 text-sm mt-1 max-w-xs mx-auto">Kami belum memiliki rate untuk rute ini. Tim kami akan mencari penawaran terbaik untuk Anda.</p>
+            <h3 className="font-bold text-slate-800 text-base">{t("oceanFreightBooking.noRatesTitle")}</h3>
+            <p className="text-slate-500 text-sm mt-1 max-w-xs mx-auto">{t("oceanFreightBooking.noRatesDesc")}</p>
             <button
               className="mt-5 px-6 py-2.5 rounded-xl font-bold text-white text-sm"
               style={{ background: "linear-gradient(135deg,#1d4ed8,#3b82f6)" }}
               onClick={() => setStep("inquiry")}
             >
-              Minta Penawaran Manual
+              {t("oceanFreightBooking.requestManualQuote")}
             </button>
           </div>
         ) : (
           <div className="space-y-3">
             {options.map(opt => {
-              const meta      = OPTION_META[opt.estimate_option] ?? { label: opt.estimate_option, badgeCls: "bg-blue-50 text-blue-700", desc: "" };
+              const meta      = OPTION_META[opt.estimate_option] ?? { labelKey: opt.estimate_option, badgeCls: "bg-blue-50 text-blue-700", descKey: "" };
               const isSelected= selectedOption?.rate_id === opt.rate_id;
               return (
                 <div
@@ -370,13 +368,17 @@ export default function OceanFreightBookingPage() {
                     <div className="flex items-start justify-between gap-4">
                       <div className="space-y-1.5">
                         <div className="flex items-center gap-2">
-                          <span className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${meta.badgeCls}`}>{meta.label}</span>
+                          <span className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${meta.badgeCls}`}>
+                            {t(meta.labelKey as any)}
+                          </span>
                           <span className="text-slate-600 text-sm font-medium">{opt.carrier}</span>
                         </div>
-                        <p className="text-slate-400 text-xs">{meta.desc}</p>
+                        <p className="text-slate-400 text-xs">{meta.descKey ? t(meta.descKey as any) : ""}</p>
                         <div className="flex items-center gap-3 text-xs text-slate-500">
                           {opt.transit_days != null && (
-                            <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{opt.transit_days} hari transit</span>
+                            <span className="flex items-center gap-1">
+                              <Clock className="w-3 h-3" />{opt.transit_days} {t("oceanFreightBooking.daysTransit")}
+                            </span>
                           )}
                           <span className="flex items-center gap-1">
                             <Globe className="w-3 h-3" />
@@ -390,7 +392,7 @@ export default function OceanFreightBookingPage() {
                           <p className="text-slate-400 text-xs">{opt.currency} {fmtNum(opt.total_estimate)}</p>
                         )}
                         <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mt-0.5">
-                          {opt.price_status === "estimate" ? "Estimasi" : "Harga Tetap"}
+                          {opt.price_status === "estimate" ? t("oceanFreightBooking.estimate") : t("oceanFreightBooking.fixedPrice")}
                         </p>
                       </div>
                     </div>
@@ -402,7 +404,7 @@ export default function OceanFreightBookingPage() {
                           className="flex items-center gap-1.5 text-slate-500 text-xs hover:text-slate-800 font-medium transition-colors"
                         >
                           <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showBreakdown ? "rotate-180" : ""}`} />
-                          {showBreakdown ? "Sembunyikan" : "Lihat"} Rincian Biaya
+                          {showBreakdown ? t("oceanFreightBooking.hideBreakdown") : t("oceanFreightBooking.showBreakdown")} {t("oceanFreightBooking.breakdownTitle")}
                         </button>
                         {showBreakdown && (
                           <div className="mt-3 space-y-1.5 text-sm">
@@ -410,7 +412,7 @@ export default function OceanFreightBookingPage() {
                               ["Ocean Freight",     opt.base_ocean_freight],
                               ["THC Origin",        opt.origin_charges],
                               ["THC Destination",   opt.destination_charges],
-                              ["Biaya Dokumen",     opt.document_charges],
+                              [t("oceanFreightBooking.docCharges"),     opt.document_charges],
                               ...(opt.trucking_charges > 0  ? [["Trucking",          opt.trucking_charges]]  : []),
                               ...(opt.customs_charges  > 0  ? [["Customs Clearance", opt.customs_charges]]   : []),
                               ...Object.entries(opt.surcharge_breakdown).map(([k, v]) => [k, v] as [string, number]),
@@ -421,7 +423,7 @@ export default function OceanFreightBookingPage() {
                               </div>
                             ))}
                             <div className="border-t border-slate-100 pt-2 flex justify-between font-extrabold text-slate-900">
-                              <span>Total Estimasi</span>
+                              <span>{t("oceanFreightBooking.totalEstimate")}</span>
                               <span className="text-blue-700">{IDR(opt.total_estimate_idr)}</span>
                             </div>
                           </div>
@@ -438,7 +440,7 @@ export default function OceanFreightBookingPage() {
                 className="flex-1 py-3 rounded-xl border-2 border-slate-200 text-slate-700 font-semibold text-sm hover:border-slate-400 transition-all bg-white"
                 onClick={() => { setSelectedOption(null); setStep("inquiry"); }}
               >
-                Minta Manual
+                {t("oceanFreightBooking.requestManual")}
               </button>
               <button
                 disabled={!selectedOption}
@@ -446,10 +448,10 @@ export default function OceanFreightBookingPage() {
                 style={{ background: "linear-gradient(135deg,#1d4ed8,#3b82f6)", boxShadow: "0 4px 16px rgba(29,78,216,0.3)" }}
                 onClick={() => setStep("inquiry")}
               >
-                Minta Penawaran Final
+                {t("oceanFreightBooking.requestFinal")}
               </button>
             </div>
-            <p className="text-slate-400 text-xs text-center">Estimasi awal — harga final dikonfirmasi setelah mendapat rate dari shipping line / partner.</p>
+            <p className="text-slate-400 text-xs text-center">{t("oceanFreightBooking.priceNote")}</p>
           </div>
         )}
       </div>
@@ -470,7 +472,7 @@ export default function OceanFreightBookingPage() {
             onClick={() => window.history.length > 1 ? window.history.back() : setLocation("/jasa")}
             className="inline-flex items-center gap-1.5 mb-5 text-[12px] font-semibold px-3 py-1.5 rounded-lg text-slate-500 hover:text-slate-800 bg-white hover:bg-slate-50 border border-slate-200 transition-all"
           >
-            <ArrowLeft className="h-3.5 w-3.5" /> Kembali
+            <ArrowLeft className="h-3.5 w-3.5" /> {t("oceanFreightBooking.back")}
           </button>
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-2xl flex items-center justify-center" style={{ background: "linear-gradient(135deg,#1d4ed8,#3b82f6)", boxShadow: "0 4px 16px rgba(29,78,216,0.3)" }}>
@@ -478,7 +480,7 @@ export default function OceanFreightBookingPage() {
             </div>
             <div>
               <h1 className="text-2xl font-extrabold text-slate-900">Ocean Freight</h1>
-              <p className="text-slate-500 text-sm">Pengiriman laut FCL &amp; LCL</p>
+              <p className="text-slate-500 text-sm">{t("oceanFreightBooking.subtitle")}</p>
             </div>
           </div>
         </div>
@@ -487,7 +489,7 @@ export default function OceanFreightBookingPage() {
         <div className={cardCls} style={cardShadow}>
           <div className="px-5 py-4 border-b border-slate-50 flex items-center gap-2">
             <Anchor className="w-4 h-4 text-blue-600" />
-            <h2 className="font-bold text-slate-800 text-sm">Rute Pengiriman</h2>
+            <h2 className="font-bold text-slate-800 text-sm">{t("oceanFreightBooking.shippingRoute")}</h2>
           </div>
           <div className="p-5 space-y-4">
             <div className="grid grid-cols-2 gap-4">
@@ -506,7 +508,7 @@ export default function OceanFreightBookingPage() {
                 <label className={labelCls}>Destination Port *</label>
                 <Select value={destPort} onValueChange={setDestPort}>
                   <SelectTrigger className={inputCls + " mt-0 h-10"}>
-                    <SelectValue placeholder="Pilih port..." />
+                    <SelectValue placeholder={t("oceanFreightBooking.selectPort")} />
                   </SelectTrigger>
                   <SelectContent className="max-h-60">
                     {PORTS.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
@@ -539,24 +541,24 @@ export default function OceanFreightBookingPage() {
         <div className={cardCls} style={cardShadow}>
           <div className="px-5 py-4 border-b border-slate-50 flex items-center gap-2">
             <Package className="w-4 h-4 text-blue-600" />
-            <h2 className="font-bold text-slate-800 text-sm">Jenis Muatan</h2>
+            <h2 className="font-bold text-slate-800 text-sm">{t("oceanFreightBooking.cargoType")}</h2>
           </div>
           <div className="p-5 space-y-4">
             {/* FCL / LCL toggle */}
             <div className="grid grid-cols-2 gap-3">
-              {["FCL","LCL"].map(t => (
+              {(["FCL","LCL"] as const).map(st => (
                 <button
-                  key={t}
-                  onClick={() => setShipmentType(t)}
+                  key={st}
+                  onClick={() => setShipmentType(st)}
                   className={`py-3 rounded-xl border-2 text-sm font-bold transition-all ${
-                    shipmentType === t
-                      ? t === "FCL"
+                    shipmentType === st
+                      ? st === "FCL"
                         ? "border-blue-500 bg-blue-600 text-white shadow-md shadow-blue-200"
                         : "border-slate-700 bg-slate-800 text-white shadow-md"
                       : "border-slate-200 bg-white text-slate-600 hover:border-slate-400"
                   }`}
                 >
-                  {t === "FCL" ? "FCL — Full Container" : "LCL — Less Container"}
+                  {st === "FCL" ? t("oceanFreightBooking.fclFull") : t("oceanFreightBooking.lclLess")}
                 </button>
               ))}
             </div>
@@ -573,7 +575,7 @@ export default function OceanFreightBookingPage() {
                   </Select>
                 </div>
                 <div>
-                  <label className={labelCls}>Jumlah Container</label>
+                  <label className={labelCls}>{t("oceanFreightBooking.containerQty")}</label>
                   <Input
                     type="number" min="1" value={containerQty}
                     onChange={e => setContainerQty(Math.max(1, Number(e.target.value)))}
@@ -588,18 +590,18 @@ export default function OceanFreightBookingPage() {
                   <Input type="number" min="0" step="0.01" value={totalCbm} onChange={e => setTotalCbm(e.target.value)} placeholder="0.00" className={inputCls} />
                 </div>
                 <div>
-                  <label className={labelCls}>Berat Kotor (kg)</label>
+                  <label className={labelCls}>{t("oceanFreightBooking.grossWeightKg")}</label>
                   <Input type="number" min="0" step="0.1" value={grossWeight} onChange={e => setGrossWeight(e.target.value)} placeholder="0" className={inputCls} />
                 </div>
                 <div>
-                  <label className={labelCls}>Jumlah Koli</label>
+                  <label className={labelCls}>{t("oceanFreightBooking.colliCount")}</label>
                   <Input type="number" min="0" value={koli} onChange={e => setKoli(e.target.value)} placeholder="0" className={inputCls} />
                 </div>
               </div>
             )}
 
             <div>
-              <label className={labelCls}>Kondisi Kargo</label>
+              <label className={labelCls}>{t("oceanFreightBooking.cargoCondition")}</label>
               <Select value={cargoCondition} onValueChange={setCargoCondition}>
                 <SelectTrigger className={inputCls + " mt-0 h-10"}><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -613,8 +615,8 @@ export default function OceanFreightBookingPage() {
         {/* Card: Layanan Tambahan */}
         <div className={cardCls} style={cardShadow}>
           <div className="px-5 py-4 border-b border-slate-50">
-            <h2 className="font-bold text-slate-800 text-sm">Layanan Tambahan</h2>
-            <p className="text-[11px] text-slate-400 mt-0.5">Pilih layanan yang dibutuhkan (opsional)</p>
+            <h2 className="font-bold text-slate-800 text-sm">{t("oceanFreightBooking.additionalServices")}</h2>
+            <p className="text-[11px] text-slate-400 mt-0.5">{t("oceanFreightBooking.additionalServicesHint")}</p>
           </div>
           <div className="p-5">
             <div className="grid grid-cols-2 gap-2">
@@ -652,8 +654,8 @@ export default function OceanFreightBookingPage() {
           onMouseLeave={e => (e.currentTarget as HTMLElement).style.boxShadow = "0 4px 20px rgba(29,78,216,0.35)"}
         >
           {loading
-            ? <><Loader2 className="h-5 w-5 animate-spin" />Menghitung Estimasi...</>
-            : <><RefreshCw className="h-5 w-5" />Cek Estimasi Harga</>}
+            ? <><Loader2 className="h-5 w-5 animate-spin" />{t("oceanFreightBooking.calculating")}</>
+            : <><RefreshCw className="h-5 w-5" />{t("oceanFreightBooking.checkPrice")}</>}
         </button>
 
       </div>
