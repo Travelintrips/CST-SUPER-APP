@@ -26,23 +26,23 @@ type OrderData = {
   timeline: TimelineItem[];
 };
 
-const STATUS_LABELS: Record<string, { label: string; icon: string; color: string }> = {
-  order_confirmed:     { label: "Order Dikonfirmasi",      icon: "✅", color: "text-green-700 bg-green-50" },
-  assigned_to_vendor:  { label: "Ditugaskan ke Vendor",    icon: "🏷️", color: "text-blue-700 bg-blue-50" },
-  waiting_pickup:      { label: "Menunggu Pickup",          icon: "⏳", color: "text-amber-700 bg-amber-50" },
-  picked_up:           { label: "Sudah Pickup",             icon: "📦", color: "text-blue-700 bg-blue-50" },
-  in_progress:         { label: "Dalam Perjalanan",         icon: "🚚", color: "text-indigo-700 bg-indigo-50" },
-  delivered:           { label: "Terkirim",                 icon: "📍", color: "text-teal-700 bg-teal-50" },
-  pod_uploaded:        { label: "Bukti Pengiriman Diupload",icon: "📄", color: "text-teal-700 bg-teal-50" },
-  invoice_created:     { label: "Invoice Dibuat",           icon: "🧾", color: "text-slate-700 bg-slate-50" },
-  payment_pending:     { label: "Menunggu Pembayaran",      icon: "💳", color: "text-orange-700 bg-orange-50" },
-  paid:                { label: "Sudah Dibayar",            icon: "💚", color: "text-green-700 bg-green-50" },
-  completed:           { label: "Selesai",                  icon: "🎉", color: "text-green-700 bg-green-50" },
-  cancelled:           { label: "Dibatalkan",               icon: "❌", color: "text-red-700 bg-red-50" },
+const STATUS_LABELS: Record<string, { labelKey: string; label: string; icon: string; color: string }> = {
+  order_confirmed:     { labelKey: "customerOrder.statusOrderConfirmed",    label: "Order Dikonfirmasi",       icon: "✅", color: "text-green-700 bg-green-50" },
+  assigned_to_vendor:  { labelKey: "customerOrder.statusAssignedToVendor",  label: "Ditugaskan ke Vendor",     icon: "🏷️", color: "text-blue-700 bg-blue-50" },
+  waiting_pickup:      { labelKey: "customerOrder.statusWaitingPickup",      label: "Menunggu Pickup",          icon: "⏳", color: "text-amber-700 bg-amber-50" },
+  picked_up:           { labelKey: "customerOrder.statusPickedUp",           label: "Sudah Pickup",             icon: "📦", color: "text-blue-700 bg-blue-50" },
+  in_progress:         { labelKey: "customerOrder.statusInProgress",         label: "Dalam Perjalanan",         icon: "🚚", color: "text-indigo-700 bg-indigo-50" },
+  delivered:           { labelKey: "customerOrder.statusDelivered",          label: "Terkirim",                 icon: "📍", color: "text-teal-700 bg-teal-50" },
+  pod_uploaded:        { labelKey: "customerOrder.statusPodUploaded",        label: "Bukti Pengiriman Diupload",icon: "📄", color: "text-teal-700 bg-teal-50" },
+  invoice_created:     { labelKey: "customerOrder.statusInvoiceCreated",     label: "Invoice Dibuat",           icon: "🧾", color: "text-slate-700 bg-slate-50" },
+  payment_pending:     { labelKey: "customerOrder.statusPaymentPending",     label: "Menunggu Pembayaran",      icon: "💳", color: "text-orange-700 bg-orange-50" },
+  paid:                { labelKey: "customerOrder.statusPaid",               label: "Sudah Dibayar",            icon: "💚", color: "text-green-700 bg-green-50" },
+  completed:           { labelKey: "customerOrder.statusCompleted",          label: "Selesai",                  icon: "🎉", color: "text-green-700 bg-green-50" },
+  cancelled:           { labelKey: "customerOrder.statusCancelled",          label: "Dibatalkan",               icon: "❌", color: "text-red-700 bg-red-50" },
 };
 
 function getStatusMeta(status: string) {
-  return STATUS_LABELS[status] ?? { label: status, icon: "📋", color: "text-slate-700 bg-slate-50" };
+  return STATUS_LABELS[status] ?? { labelKey: status, label: status, icon: "📋", color: "text-slate-700 bg-slate-50" };
 }
 
 export default function CustomerOrderPage() {
@@ -108,8 +108,8 @@ export default function CustomerOrderPage() {
 
           {/* Current status banner */}
           <div className={`rounded-xl px-4 py-3 mb-4 ${statusMeta.color}`}>
-            <p className="text-sm font-semibold">{statusMeta.icon} {statusMeta.label}</p>
-            {data.etaFinal && <p className="text-xs mt-0.5 opacity-75">Estimasi: {data.etaFinal}</p>}
+            <p className="text-sm font-semibold">{statusMeta.icon} {t(statusMeta.labelKey, statusMeta.label)}</p>
+            {data.etaFinal && <p className="text-xs mt-0.5 opacity-75">{t("customerOrder.eta", "Estimasi")}: {data.etaFinal}</p>}
           </div>
 
           <div className="space-y-2">
@@ -182,7 +182,7 @@ export default function CustomerOrderPage() {
                       <div>
                         {m && (
                           <span className={`text-xs rounded-full px-2.5 py-0.5 font-medium ${m.color}`}>
-                            {m.icon} {m.label}
+                            {m.icon} {t(m.labelKey, m.label)}
                           </span>
                         )}
                         {item.notes && (
@@ -219,14 +219,15 @@ export default function CustomerOrderPage() {
 }
 
 const PROGRESS_STEPS = [
-  { key: "order_confirmed", label: "Konfirmasi" },
-  { key: "picked_up", label: "Pickup" },
-  { key: "in_progress", label: "Perjalanan" },
-  { key: "delivered", label: "Terkirim" },
-  { key: "completed", label: "Selesai" },
+  { key: "order_confirmed", labelKey: "customerOrder.progressConfirm",  label: "Konfirmasi" },
+  { key: "picked_up",       labelKey: "customerOrder.progressPickup",   label: "Pickup" },
+  { key: "in_progress",     labelKey: "customerOrder.progressOnTheWay", label: "Perjalanan" },
+  { key: "delivered",       labelKey: "customerOrder.progressDelivered",label: "Terkirim" },
+  { key: "completed",       labelKey: "customerOrder.progressDone",     label: "Selesai" },
 ];
 
 function ProgressBar({ status }: { status: string }) {
+  const { t } = useLanguage();
   const stepKeys = PROGRESS_STEPS.map(s => s.key);
   const currentIdx = stepKeys.indexOf(status);
   const activeIdx = currentIdx >= 0 ? currentIdx : (status === "cancelled" ? -1 : 0);
@@ -244,7 +245,7 @@ function ProgressBar({ status }: { status: string }) {
               {idx < activeIdx ? "✓" : idx + 1}
             </div>
             <span className={`text-xs text-center ${idx <= activeIdx ? "text-teal-700 font-medium" : "text-slate-400"}`}>
-              {step.label}
+              {t(step.labelKey, step.label)}
             </span>
             {idx < PROGRESS_STEPS.length - 1 && (
               <div className={`absolute h-0.5 w-full ${idx < activeIdx ? "bg-teal-400" : "bg-slate-100"}`} />

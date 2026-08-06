@@ -113,7 +113,7 @@ export function CompareTray({
       <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3 flex-wrap">
         <div className="shrink-0">
           <p className="text-[11px] font-semibold text-sky-600 uppercase tracking-wider">{t("vendorComparison.compare", "Bandingkan")}</p>
-          <p className="text-[12px] text-slate-600 font-medium">{selected.length} dari maks. {MAX} dipilih</p>
+          <p className="text-[12px] text-slate-600 font-medium">{selected.length} {t("vendorComparison.ofMax", "dari maks.")} {MAX} {t("vendorComparison.selected", "dipilih")}</p>
         </div>
         <div className="flex gap-2 flex-1 min-w-0 overflow-x-auto scrollbar-none">
           {selected.map((item) => {
@@ -481,7 +481,7 @@ export function CompareModal({
             <div>
               <p className="text-[11px] font-semibold text-sky-200 uppercase tracking-widest">{t("vendorComparison.reportTitle", "Vendor Comparison Report")}</p>
               <DialogTitle className="text-[18px] font-extrabold text-white">
-                Perbandingan {items.length} Vendor
+                {t("vendorComparison.comparisonTitle", "Perbandingan")} {items.length} Vendor
               </DialogTitle>
             </div>
             <div className="flex gap-2">
@@ -511,7 +511,7 @@ export function CompareModal({
             <thead className="sticky top-0 z-10 bg-white shadow-sm">
               <tr>
                 <th className="w-36 min-w-[120px] bg-slate-50 border-b border-r border-slate-200 px-4 py-3 text-left">
-                  <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Atribut</span>
+                  <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">{t("vendorComparison.attribute", "Atribut")}</span>
                 </th>
                 {items.map((item) => {
                   const catKey = item.categoryKey ?? item.serviceType ?? "";
@@ -537,7 +537,7 @@ export function CompareModal({
                               onClick={() => onRemove(item.id)}
                               className="mt-1 text-[10px] text-red-400 hover:text-red-600 font-semibold flex items-center gap-0.5"
                             >
-                              <X className="h-3 w-3" /> Hapus
+                              <X className="h-3 w-3" /> {t("common.remove", "Hapus")}
                             </button>
                           )}
                         </div>
@@ -562,7 +562,7 @@ export function CompareModal({
                         {row.key === "price" && item.priceSell === minPrice && prices.length > 1 && (
                           <div className="mt-1">
                             <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-bold">
-                              💚 Harga Terbaik
+                              💚 {t("vendorComparison.bestPrice", "Harga Terbaik")}
                             </span>
                           </div>
                         )}
@@ -576,7 +576,7 @@ export function CompareModal({
               {specFields.length > 0 && (
                 <tr>
                   <td colSpan={items.length + 1} className="bg-sky-50 border-b border-slate-200 px-4 py-2">
-                    <span className="text-[11px] font-bold text-sky-700 uppercase tracking-wider">Spesifikasi Teknis</span>
+                    <span className="text-[11px] font-bold text-sky-700 uppercase tracking-wider">{t("vendorComparison.technicalSpec", "Spesifikasi Teknis")}</span>
                   </td>
                 </tr>
               )}
@@ -610,14 +610,14 @@ export function CompareModal({
 
               {/* CTA row */}
               <tr className="bg-slate-50">
-                <td className="border-r border-slate-200 px-4 py-4 text-[12px] font-semibold text-slate-500">Aksi</td>
+                <td className="border-r border-slate-200 px-4 py-4 text-[12px] font-semibold text-slate-500">{t("vendorComparison.action", "Aksi")}</td>
                 {items.map((item) => (
                   <td key={item.id} className="border-r border-slate-200 px-4 py-4">
                     <Button
                       onClick={() => onRequestQuote(item)}
                       className="bg-sky-600 hover:bg-sky-700 text-white rounded-xl w-full text-[12px] font-semibold"
                     >
-                      Request Quote
+                      {t("vendorComparison.requestQuote", "Request Quote")}
                     </Button>
                   </td>
                 ))}
@@ -629,8 +629,7 @@ export function CompareModal({
         {/* Footer note */}
         <div className="px-6 py-3 border-t border-slate-200 bg-slate-50 rounded-b-2xl">
           <p className="text-[11px] text-slate-400">
-            💡 Klik <strong>Export PDF</strong> untuk menyimpan laporan perbandingan ini sebagai file PDF profesional.
-            Rating bersumber dari ulasan transaksi yang telah diverifikasi.
+            {t("vendorComparison.footerNote", "💡 Klik")} <strong>Export PDF</strong> {t("vendorComparison.footerNoteEnd", "untuk menyimpan laporan perbandingan ini sebagai file PDF profesional. Rating bersumber dari ulasan transaksi yang telah diverifikasi.")}
           </p>
         </div>
       </DialogContent>
