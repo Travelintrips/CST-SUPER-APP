@@ -141,6 +141,7 @@ import { productFirstOverrideRouter } from "./productFirstOverride.js";
 import { portalQuickQuotesPublicRouter, portalQuickQuotesAdminRouter } from "./portalQuickQuotes.js";
 import mktAdminRouter from "./mktAdmin.js";
 import mktPortalRouter from "./mktPortal.js";
+import mktGuestRouter from "./mktGuest.js";
 import { vendorQuotePublicRouter } from "./vendorQuotePublic.js";
 import mktVendorPoRouter from "./mktVendorPo.js";
 import { systemRouter } from "./system.js";
@@ -525,6 +526,8 @@ router.use("/portal/admin/quick-quotes", portalQuickQuotesAdminRouter);
 router.use("/mkt/admin", mktAdminRouter);
 // Phase 2F — Marketplace Portal (buyer / approver, portal auth)
 router.use("/mkt/portal", mktPortalRouter);
+// Sprint 1B — Marketplace Guest RFQ (no auth for view, requirePortalAuth for claim)
+router.use("/mkt/guest", mktGuestRouter);
 // Phase 2D — Vendor Quote Submission (public, token-based)
 router.use("/vendor-quote", vendorQuotePublicRouter);
 // Phase 2G — Vendor PO confirmation (public, token-based)

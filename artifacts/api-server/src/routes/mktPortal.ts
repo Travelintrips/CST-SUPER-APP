@@ -38,6 +38,7 @@ import {
 import { enqueueNotification } from "../lib/services/marketplaceNotificationQueueService.js";
 import { NotificationService } from "../lib/services/notificationService.js";
 import { logger } from "../lib/logger.js";
+import { validateBody } from "../lib/middleware/validateBody.js";
 
 const router = Router();
 
@@ -79,6 +80,10 @@ const RejectBodySchema = z.object({
 
 const CustomerRejectBodySchema = z.object({
   reason: z.string().max(500).optional(),
+});
+
+const ApproveBodySchema = z.object({
+  notes: z.string().max(1000).optional(),
 });
 
 // ── All routes require portal buyer/approver auth ─────────────────────────────
@@ -161,15 +166,14 @@ router.post("/rfqs/:id/submit", async (req: Request, res: Response) => {
 // Body (optional): { reason: string }
 // Response 200: { ok: true, data: { rfqNumber } }
 
-router.post("/rfqs/:id/cancel", async (req: Request, res: Response) => {
+router.post("/rfqs/:id/cancel", writeLimiter, validateBody(CancelBodySchema), async (req: Request, res: Response) => {
   const portalCustomerId = (req as PortalAuthReq).portalCustomerId;
   const rfqId = Number(req.params["id"]);
   if (!Number.isInteger(rfqId) || rfqId <= 0) {
     return res.status(400).json({ ok: false, error: "rfqId harus berupa integer positif" });
   }
 
-  const body = req.body as { reason?: unknown };
-  const reason = typeof body.reason === "string" ? body.reason.trim() || undefined : undefined;
+  const { reason } = req.body as { reason?: string };
 
   const result = await cancelRfq(rfqId, portalCustomerId, reason);
 
@@ -250,15 +254,14 @@ router.post("/rfqs/:id/submit-for-approval", async (req: Request, res: Response)
 // Body (optional): { notes: string }
 // Response 200: { ok: true, data: { rfqNumber, approvalId } }
 
-router.post("/rfqs/:id/approve", async (req: Request, res: Response) => {
+router.post("/rfqs/:id/approve", writeLimiter, validateBody(ApproveBodySchema), async (req: Request, res: Response) => {
   const portalCustomerId = (req as PortalAuthReq).portalCustomerId;
   const rfqId = Number(req.params["id"]);
   if (!Number.isInteger(rfqId) || rfqId <= 0) {
     return res.status(400).json({ ok: false, error: "rfqId harus berupa integer positif" });
   }
 
-  const body = req.body as { notes?: unknown };
-  const notes = typeof body.notes === "string" ? body.notes.trim() || undefined : undefined;
+  const { notes } = req.body as { notes?: string };
 
   const result = await approveRfq(rfqId, portalCustomerId, notes);
 
@@ -303,18 +306,14 @@ router.post("/rfqs/:id/approve", async (req: Request, res: Response) => {
 // Body: { notes: string }
 // Response 200: { ok: true, data: { rfqNumber, approvalId } }
 
-router.post("/rfqs/:id/reject", async (req: Request, res: Response) => {
+router.post("/rfqs/:id/reject", writeLimiter, validateBody(RejectBodySchema), async (req: Request, res: Response) => {
   const portalCustomerId = (req as PortalAuthReq).portalCustomerId;
   const rfqId = Number(req.params["id"]);
   if (!Number.isInteger(rfqId) || rfqId <= 0) {
     return res.status(400).json({ ok: false, error: "rfqId harus berupa integer positif" });
   }
 
-  const body = req.body as { notes?: unknown };
-  if (!body.notes || typeof body.notes !== "string" || !body.notes.trim()) {
-    return res.status(400).json({ ok: false, error: "notes (alasan penolakan) wajib diisi dan tidak boleh kosong" });
-  }
-  const notes = body.notes.trim();
+  const { notes } = req.body as { notes: string };
 
   const result = await rejectRfq(rfqId, portalCustomerId, notes);
 
@@ -680,6 +679,58 @@ router.get("/rfqs/:id", async (req: Request, res: Response) => {
   }
 });
 
+// ── GET /api/mkt/portal/rfqs/:id/lines ───────────────────────────────────────
+// Buyer melihat line items dari RFQ miliknya.
+// Ownership diverifikasi dari session — bukan dari query/params/body.
+// Field internal (targetPricePerUnit, vendorCatalogItemId) tidak di-expose.
+router.get("/rfqs/:id/lines", readLimiter, async (req: Request, res: Response) => {
+  const portalCustomerId = (req as PortalAuthReq).portalCustomerId;
+  const rfqId = Number(req.params["id"]);
+  if (!Number.isInteger(rfqId) || rfqId <= 0) {
+    return res.status(400).json({ ok: false, error: "rfqId harus berupa integer positif" });
+  }
+
+  try {
+    const { db, mktRfqsTable, mktRfqLinesTable } = await import("@workspace/db");
+    const { eq, and, asc } = await import("drizzle-orm");
+
+    // 1. Verify ownership — portalCustomerId dari session (PortalAuthReq)
+    const [rfq] = await db
+      .select({ id: mktRfqsTable.id })
+      .from(mktRfqsTable)
+      .where(and(
+        eq(mktRfqsTable.id, rfqId),
+        eq(mktRfqsTable.portalCustomerId, portalCustomerId),
+      ))
+      .limit(1);
+
+    // 404 generic — tidak membedakan "tidak ada" vs "milik orang lain"
+    if (!rfq) {
+      return res.status(404).json({ ok: false, error: "RFQ tidak ditemukan" });
+    }
+
+    // 2. Ambil lines — hanya field buyer-safe, diurutkan sort_order ASC
+    const lines = await db
+      .select({
+        id:              mktRfqLinesTable.id,
+        itemName:        mktRfqLinesTable.itemName,
+        itemDescription: mktRfqLinesTable.itemDescription,
+        itemUnit:        mktRfqLinesTable.itemUnit,
+        requestedQty:    mktRfqLinesTable.requestedQty,
+        notes:           mktRfqLinesTable.notes,
+        sortOrder:       mktRfqLinesTable.sortOrder,
+      })
+      .from(mktRfqLinesTable)
+      .where(eq(mktRfqLinesTable.rfqId, rfqId))
+      .orderBy(asc(mktRfqLinesTable.sortOrder));
+
+    return res.json({ ok: true, rfqId, count: lines.length, data: lines });
+  } catch (err: unknown) {
+    logger.error({ err, portalCustomerId, rfqId }, "[mktPortal] getRfqLines error");
+    return res.status(500).json({ ok: false, error: "Gagal memuat lines RFQ" });
+  }
+});
+
 // ── GET /api/mkt/portal/rfqs/:id/quotation ───────────────────────────────────
 // Buyer-safe quotation view. Hanya tersedia saat status = customer_review.
 // Tidak mengekspos: commission, rank, token, internal price.
@@ -855,14 +906,14 @@ router.post("/rfqs/:id/customer-approve", async (req: Request, res: Response) =>
 // ── POST /api/mkt/portal/rfqs/:id/customer-reject ────────────────────────────
 // Customer menolak quotation → RFQ kembali ke 'quoted', admin perlu re-evaluasi.
 // C4-REMEDIATION: transition sekarang melalui canonical rejectCustomerQuotation service.
-router.post("/rfqs/:id/customer-reject", async (req: Request, res: Response) => {
+router.post("/rfqs/:id/customer-reject", writeLimiter, validateBody(CustomerRejectBodySchema), async (req: Request, res: Response) => {
   const portalCustomerId = (req as PortalAuthReq).portalCustomerId;
   const rfqId = Number(req.params["id"]);
   if (!Number.isInteger(rfqId) || rfqId <= 0)
     return res.status(400).json({ ok: false, error: "rfqId harus berupa integer positif" });
 
-  const body = req.body as { reason?: unknown };
-  const reason = typeof body.reason === "string" ? body.reason.trim() || "Ditolak oleh buyer" : "Ditolak oleh buyer";
+  const { reason: rawReason } = req.body as { reason?: string };
+  const reason = rawReason?.trim() || "Ditolak oleh buyer";
 
   // ── Canonical transition via service (C4-REMEDIATION) ──────────────────────
   const result = await rejectCustomerQuotation({ rfqId, portalCustomerId, reason });
