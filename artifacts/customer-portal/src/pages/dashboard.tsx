@@ -105,7 +105,7 @@ export default function Dashboard() {
     ...logisticOrders.map((o) => ({
       _key:          `log-${o.id}`,
       displayNumber: o.orderNumber,
-      subtitle:      `${o.shipmentType ?? "Logistik"} · ${o.origin ?? ""} → ${o.destination ?? ""}`,
+      subtitle:      `${o.shipmentType ?? t("orders.typeLogistic")} · ${o.origin ?? ""} → ${o.destination ?? ""}`,
       status:        o.status,
       displayStatus: LOGISTIC_STATUS_ID[o.status] ?? o.status,
       statusColor:   LOGISTIC_STATUS_COLOR[o.status] ?? "bg-gray-100 text-gray-800",
@@ -116,7 +116,7 @@ export default function Dashboard() {
     ...crmOrders.map((o) => ({
       _key:          `crm-${o.id}`,
       displayNumber: o.docNumber,
-      subtitle:      "Sales Order",
+      subtitle:      t("orders.typeCrm"),
       status:        o.status,
       displayStatus: LOGISTIC_STATUS_ID[o.status] ?? o.status,
       statusColor:   "bg-gray-100 text-gray-800",
@@ -127,7 +127,7 @@ export default function Dashboard() {
     ...productOrders.map((o) => ({
       _key:          `prod-${o.id}`,
       displayNumber: o.orderNumber,
-      subtitle:      "Product Order",
+      subtitle:      t("orders.typeProduct"),
       status:        o.status,
       displayStatus: o.status,
       statusColor:   "bg-purple-100 text-purple-800",

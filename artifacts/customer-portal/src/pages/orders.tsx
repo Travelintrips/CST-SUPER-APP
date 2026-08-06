@@ -46,10 +46,6 @@ const LOGISTIC_STATUS_COLOR: Record<string, string> = { ..._LOGISTIC_STATUS_COLO
 
 const LOGISTIC_STATUS_ID: Record<string, string> = {
   ..._LOGISTIC_STATUS_ID,
-  // product order statuses
-  "New Order":         "Order Baru",
-  "Awaiting Payment":  "Menunggu Pembayaran",
-  "Paid":              "Dibayar",
 };
 
 const PRODUCT_ORDER_STATUS_COLOR: Record<string, string> = {
