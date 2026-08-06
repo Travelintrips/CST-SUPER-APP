@@ -8,6 +8,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { MarketplaceItem } from "@/lib/catalogFilters";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -102,6 +103,7 @@ export function CompareTray({
   onClear: () => void;
   onOpen: () => void;
 }) {
+  const { t } = useLanguage();
   if (compareIds.length === 0) return null;
   const MAX = 4;
   const selected = compareIds.map((id) => allItems.find((i) => i.id === id)).filter(Boolean) as MarketplaceItem[];
@@ -110,8 +112,8 @@ export function CompareTray({
     <div className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t-2 border-sky-400 shadow-2xl print:hidden">
       <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3 flex-wrap">
         <div className="shrink-0">
-          <p className="text-[11px] font-semibold text-sky-600 uppercase tracking-wider">Bandingkan</p>
-          <p className="text-[12px] text-slate-600 font-medium">{selected.length} dari maks. {MAX} dipilih</p>
+          <p className="text-[11px] font-semibold text-sky-600 uppercase tracking-wider">{t("vendorComparison.compare", "Bandingkan")}</p>
+          <p className="text-[12px] text-slate-600 font-medium">{selected.length} {t("vendorComparison.ofMax", "dari maks.")} {MAX} {t("vendorComparison.selected", "dipilih")}</p>
         </div>
         <div className="flex gap-2 flex-1 min-w-0 overflow-x-auto scrollbar-none">
           {selected.map((item) => {
@@ -140,7 +142,7 @@ export function CompareTray({
           })}
           {Array.from({ length: Math.max(0, 2 - selected.length) }).map((_, i) => (
             <div key={`empty-${i}`} className="flex items-center justify-center w-[120px] h-[56px] rounded-xl border-2 border-dashed border-slate-200 shrink-0">
-              <span className="text-[11px] text-slate-300 font-medium">+ Tambah item</span>
+              <span className="text-[11px] text-slate-300 font-medium">{t("vendorComparison.addItem", "+ Tambah item")}</span>
             </div>
           ))}
         </div>
@@ -149,14 +151,14 @@ export function CompareTray({
             onClick={onClear}
             className="px-3 py-2 rounded-xl text-[12px] font-semibold text-slate-500 hover:text-slate-700 hover:bg-slate-100 transition-all"
           >
-            Hapus Semua
+            {t("vendorComparison.clearAll", "Hapus Semua")}
           </button>
           <Button
             onClick={onOpen}
             disabled={selected.length < 2}
             className="bg-sky-600 hover:bg-sky-700 text-white rounded-xl px-4 py-2 text-[13px] font-bold flex items-center gap-2 disabled:opacity-40"
           >
-            Bandingkan ({selected.length})
+            {t("vendorComparison.compare", "Bandingkan")} ({selected.length})
             <ArrowRight className="h-4 w-4" />
           </Button>
         </div>
@@ -183,7 +185,7 @@ function generateComparisonReport(
   const minPrice = prices.length > 1 ? Math.min(...prices) : null;
 
   function fmtP(p: number | null, currency: string) {
-    if (p == null) return '<em style="color:#94a3b8">Harga nego</em>';
+    if (p == null) return '<em style="color:#94a3b8">Harga nego</em>'; // PDF report — not translated via t()
     if (currency === "USD") return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0 }).format(p);
     return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(p);
   }
@@ -328,6 +330,7 @@ export function CompareModal({
   onRemove: (id: number) => void;
   onRequestQuote: (item: MarketplaceItem) => void;
 }) {
+  const { t } = useLanguage();
   const printRef = useRef<HTMLDivElement>(null);
   const [vendorRatings, setVendorRatings] = useState<Record<number, VendorRatingSummary | null>>({});
   const [ratingsLoading, setRatingsLoading] = useState(false);
@@ -398,7 +401,7 @@ export function CompareModal({
               <span className="text-[15px] font-extrabold text-sky-700">{formatPrice(item.priceSell, item.currency)}</span>
               {item.unit && <span className="text-[11px] text-slate-400 ml-1">/ {item.unit}</span>}
             </div>
-          : <span className="text-[12px] text-slate-400 italic">Harga nego</span>
+          : <span className="text-[12px] text-slate-400 italic">{t("vendorComparison.priceNegotiable", "Harga nego")}</span>
       ),
       highlight: (item) => {
         if (item.priceSell === null) return "";
@@ -448,7 +451,7 @@ export function CompareModal({
           return <Loader2 className="h-3.5 w-3.5 text-slate-300 animate-spin" />;
         }
         if (!r || r.count === 0) {
-          return <span className="text-[12px] text-slate-400 italic">No reviews yet</span>;
+          return <span className="text-[12px] text-slate-400 italic">{t("vendorComparison.noReviews", "No reviews yet")}</span>;
         }
         return (
           <div className="flex items-center gap-1.5">
@@ -476,19 +479,19 @@ export function CompareModal({
         <DialogHeader className="px-6 py-4 border-b border-slate-200 bg-gradient-to-r from-sky-700 to-blue-700 rounded-t-2xl">
           <div className="flex items-center justify-between gap-4">
             <div>
-              <p className="text-[11px] font-semibold text-sky-200 uppercase tracking-widest">Vendor Comparison Report</p>
+              <p className="text-[11px] font-semibold text-sky-200 uppercase tracking-widest">{t("vendorComparison.reportTitle", "Vendor Comparison Report")}</p>
               <DialogTitle className="text-[18px] font-extrabold text-white">
-                Perbandingan {items.length} Vendor
+                {t("vendorComparison.comparisonTitle", "Perbandingan")} {items.length} Vendor
               </DialogTitle>
             </div>
             <div className="flex gap-2">
               <button
                 onClick={handleExportPdf}
                 className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/15 hover:bg-white/25 text-white text-[12px] font-semibold transition-all"
-                title="Export PDF"
+                title={t("vendorComparison.exportPdf", "Export PDF")}
               >
                 <Download className="h-4 w-4" />
-                Export PDF
+                {t("vendorComparison.exportPdf", "Export PDF")}
               </button>
               <button
                 onClick={onClose}
@@ -508,7 +511,7 @@ export function CompareModal({
             <thead className="sticky top-0 z-10 bg-white shadow-sm">
               <tr>
                 <th className="w-36 min-w-[120px] bg-slate-50 border-b border-r border-slate-200 px-4 py-3 text-left">
-                  <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Atribut</span>
+                  <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">{t("vendorComparison.attribute", "Atribut")}</span>
                 </th>
                 {items.map((item) => {
                   const catKey = item.categoryKey ?? item.serviceType ?? "";
@@ -534,7 +537,7 @@ export function CompareModal({
                               onClick={() => onRemove(item.id)}
                               className="mt-1 text-[10px] text-red-400 hover:text-red-600 font-semibold flex items-center gap-0.5"
                             >
-                              <X className="h-3 w-3" /> Hapus
+                              <X className="h-3 w-3" /> {t("common.remove", "Hapus")}
                             </button>
                           )}
                         </div>
@@ -559,7 +562,7 @@ export function CompareModal({
                         {row.key === "price" && item.priceSell === minPrice && prices.length > 1 && (
                           <div className="mt-1">
                             <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-bold">
-                              💚 Harga Terbaik
+                              💚 {t("vendorComparison.bestPrice", "Harga Terbaik")}
                             </span>
                           </div>
                         )}
@@ -573,7 +576,7 @@ export function CompareModal({
               {specFields.length > 0 && (
                 <tr>
                   <td colSpan={items.length + 1} className="bg-sky-50 border-b border-slate-200 px-4 py-2">
-                    <span className="text-[11px] font-bold text-sky-700 uppercase tracking-wider">Spesifikasi Teknis</span>
+                    <span className="text-[11px] font-bold text-sky-700 uppercase tracking-wider">{t("vendorComparison.technicalSpec", "Spesifikasi Teknis")}</span>
                   </td>
                 </tr>
               )}
@@ -607,14 +610,14 @@ export function CompareModal({
 
               {/* CTA row */}
               <tr className="bg-slate-50">
-                <td className="border-r border-slate-200 px-4 py-4 text-[12px] font-semibold text-slate-500">Aksi</td>
+                <td className="border-r border-slate-200 px-4 py-4 text-[12px] font-semibold text-slate-500">{t("vendorComparison.action", "Aksi")}</td>
                 {items.map((item) => (
                   <td key={item.id} className="border-r border-slate-200 px-4 py-4">
                     <Button
                       onClick={() => onRequestQuote(item)}
                       className="bg-sky-600 hover:bg-sky-700 text-white rounded-xl w-full text-[12px] font-semibold"
                     >
-                      Request Quote
+                      {t("vendorComparison.requestQuote", "Request Quote")}
                     </Button>
                   </td>
                 ))}
@@ -626,8 +629,7 @@ export function CompareModal({
         {/* Footer note */}
         <div className="px-6 py-3 border-t border-slate-200 bg-slate-50 rounded-b-2xl">
           <p className="text-[11px] text-slate-400">
-            💡 Klik <strong>Export PDF</strong> untuk menyimpan laporan perbandingan ini sebagai file PDF profesional.
-            Rating bersumber dari ulasan transaksi yang telah diverifikasi.
+            {t("vendorComparison.footerNote", "💡 Klik")} <strong>Export PDF</strong> {t("vendorComparison.footerNoteEnd", "untuk menyimpan laporan perbandingan ini sebagai file PDF profesional. Rating bersumber dari ulasan transaksi yang telah diverifikasi.")}
           </p>
         </div>
       </DialogContent>

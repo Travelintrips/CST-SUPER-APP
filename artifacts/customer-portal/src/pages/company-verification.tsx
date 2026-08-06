@@ -12,6 +12,7 @@ import {
   CheckCircle2, Clock, AlertTriangle, XCircle, FileText,
   Upload, Trash2, RefreshCw, Eye, ChevronRight, Info,
 } from "lucide-react";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 const DOC_TYPES = [
   { value: "NPWP", label: "NPWP" },
@@ -74,6 +75,7 @@ export default function CompanyVerificationPage() {
   const token = getAuthToken();
   const headers = getAuthHeaders() as Record<string, string>;
   const { toast } = useToast();
+  const { t } = useLanguage();
 
   const [data, setData] = useState<VerifState | null>(null);
   const [loading, setLoading] = useState(true);
@@ -100,8 +102,8 @@ export default function CompanyVerificationPage() {
   useEffect(() => { load(); }, []);
 
   async function handleUpload() {
-    if (!uploadFile) { toast({ title: "Pilih file terlebih dahulu", variant: "destructive" }); return; }
-    if (!uploadType) { toast({ title: "Pilih jenis dokumen", variant: "destructive" }); return; }
+    if (!uploadFile) { toast({ title: t("companyVerif.selectFileFirst", "Pilih file terlebih dahulu"), variant: "destructive" }); return; }
+    if (!uploadType) { toast({ title: t("companyVerif.selectDocType", "Pilih jenis dokumen"), variant: "destructive" }); return; }
 
     setUploading(true);
     try {
@@ -119,30 +121,30 @@ export default function CompanyVerificationPage() {
       const json = await r.json();
 
       if (r.ok) {
-        toast({ title: reuploadDocId ? "Dokumen berhasil diperbarui" : "Dokumen berhasil diupload" });
+        toast({ title: reuploadDocId ? t("companyVerif.docUpdated", "Dokumen berhasil diperbarui") : t("companyVerif.docUploaded", "Dokumen berhasil diupload") });
         setUploadFile(null);
         setUploadType("");
         setUploadNumber("");
         setReuploadDocId(null);
         load();
       } else {
-        toast({ title: json.message ?? "Gagal upload", variant: "destructive" });
+        toast({ title: json.message ?? t("companyVerif.uploadFailed", "Gagal upload"), variant: "destructive" });
       }
     } catch {
-      toast({ title: "Gagal upload dokumen", variant: "destructive" });
+      toast({ title: t("companyVerif.uploadDocFailed", "Gagal upload dokumen"), variant: "destructive" });
     }
     setUploading(false);
   }
 
   async function handleDelete(docId: number) {
-    if (!confirm("Hapus dokumen ini?")) return;
+    if (!confirm(t("companyVerif.confirmDeleteDoc", "Hapus dokumen ini?"))) return;
     const r = await fetch(`/api/customer-verification/documents/${docId}`, { method: "DELETE", headers, credentials: "include" });
     if (r.ok) {
-      toast({ title: "Dokumen dihapus" });
+      toast({ title: t("companyVerif.docDeleted", "Dokumen dihapus") });
       load();
     } else {
       const json = await r.json();
-      toast({ title: json.message ?? "Gagal hapus", variant: "destructive" });
+      toast({ title: json.message ?? t("companyVerif.deleteFailed", "Gagal hapus"), variant: "destructive" });
     }
   }
 
@@ -152,13 +154,13 @@ export default function CompanyVerificationPage() {
       const r = await fetch("/api/customer-verification/submit", { method: "POST", headers, credentials: "include" });
       const json = await r.json();
       if (r.ok) {
-        toast({ title: "Pengajuan verifikasi berhasil dikirim" });
+        toast({ title: t("companyVerif.submissionSent", "Pengajuan verifikasi berhasil dikirim") });
         load();
       } else {
-        toast({ title: json.message ?? "Gagal submit", variant: "destructive" });
+        toast({ title: json.message ?? t("companyVerif.submitFailed", "Gagal submit"), variant: "destructive" });
       }
     } catch {
-      toast({ title: "Gagal submit verifikasi", variant: "destructive" });
+      toast({ title: t("companyVerif.submitVerifFailed", "Gagal submit verifikasi"), variant: "destructive" });
     }
     setSubmitting(false);
   }
@@ -189,16 +191,16 @@ export default function CompanyVerificationPage() {
     <div className="max-w-3xl mx-auto px-4 py-8 space-y-6">
       {/* Header */}
       <div className="flex items-center gap-2 text-sm text-gray-500">
-        <Link href="/dashboard" className="hover:text-gray-700">Dashboard</Link>
+        <Link href="/dashboard" className="hover:text-gray-700">{t("companyVerif.dashboard", "Dashboard")}</Link>
         <ChevronRight className="w-3 h-3" />
-        <span className="text-gray-900">Verifikasi Perusahaan</span>
+        <span className="text-gray-900">{t("companyVerif.pageTitle", "Verifikasi Perusahaan")}</span>
       </div>
 
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Verifikasi Perusahaan</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{t("companyVerif.pageTitle", "Verifikasi Perusahaan")}</h1>
           <p className="text-gray-500 mt-1 text-sm">
-            Upload dokumen legal perusahaan untuk layanan PPJK, Export, Import &amp; Customs Clearance
+            {t("companyVerif.pageSubtitle", "Upload dokumen legal perusahaan untuk layanan PPJK, Export, Import & Customs Clearance")}
           </p>
         </div>
         <Badge className={`${statusCfg.color} hover:${statusCfg.color} flex items-center gap-1.5 px-3 py-1.5`}>
@@ -214,7 +216,7 @@ export default function CompanyVerificationPage() {
             <div className="flex gap-2">
               <Info className="w-4 h-4 mt-0.5 flex-shrink-0 text-amber-600" />
               <div>
-                <p className="font-medium text-sm">Catatan Admin</p>
+                <p className="font-medium text-sm">{t("companyVerif.adminNotes", "Catatan Admin")}</p>
                 <p className="text-sm mt-1">{data.verificationNotes}</p>
               </div>
             </div>
@@ -229,10 +231,10 @@ export default function CompanyVerificationPage() {
             <div className="flex gap-2">
               <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
               <div>
-                <p className="font-semibold text-emerald-800">Perusahaan Anda Telah Terverifikasi</p>
+                <p className="font-semibold text-emerald-800">{t("companyVerif.companyVerified", "Perusahaan Anda Telah Terverifikasi")}</p>
                 {data?.verificationExpiredAt && (
                   <p className="text-sm text-emerald-700 mt-1">
-                    Berlaku hingga: {new Date(data.verificationExpiredAt).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })}
+                    {t("companyVerif.validUntil", "Berlaku hingga:")} {new Date(data.verificationExpiredAt).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })}
                   </p>
                 )}
               </div>
@@ -244,7 +246,7 @@ export default function CompanyVerificationPage() {
       {/* PPJK Info */}
       <Card className="bg-blue-50 border-blue-200">
         <CardContent className="pt-4">
-          <p className="text-sm font-medium text-blue-800 mb-1">Dokumen Wajib untuk PPJK / Export / Import / Customs</p>
+          <p className="text-sm font-medium text-blue-800 mb-1">{t("companyVerif.requiredDocs", "Dokumen Wajib untuk PPJK / Export / Import / Customs")}</p>
           <div className="flex gap-4 text-sm text-blue-700">
             {["NPWP", "NIB", "KTP PIC"].map((d) => {
               const found = docs.find((doc) => {
@@ -269,12 +271,12 @@ export default function CompanyVerificationPage() {
       {/* Document List */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Dokumen Perusahaan ({docs.length})</CardTitle>
+          <CardTitle className="text-base">{t("companyVerif.companyDocs", "Dokumen Perusahaan")} ({docs.length})</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           {docs.length === 0 && (
             <p className="text-sm text-gray-400 text-center py-4">
-              Belum ada dokumen. Upload dokumen di bawah.
+              {t("companyVerif.noDocsYet", "Belum ada dokumen. Upload dokumen di bawah.")}
             </p>
           )}
           {docs.map((doc) => {
@@ -292,7 +294,7 @@ export default function CompanyVerificationPage() {
                     )}
                   </div>
                   {doc.documentNumber && (
-                    <p className="text-xs text-gray-500 mt-0.5">No: {doc.documentNumber}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">{t("companyVerif.docNumber", "No:")} {doc.documentNumber}</p>
                   )}
                   {doc.fileName && (
                     <p className="text-xs text-gray-400 mt-0.5 truncate">{doc.fileName}</p>
@@ -305,12 +307,12 @@ export default function CompanyVerificationPage() {
                   )}
                   {doc.expiryDate && (
                     <p className="text-xs text-gray-500 mt-0.5">
-                      Exp: {new Date(doc.expiryDate).toLocaleDateString("id-ID")}
+                      {t("companyVerif.exp", "Exp:")} {new Date(doc.expiryDate).toLocaleDateString("id-ID")}
                     </p>
                   )}
                 </div>
                 <div className="flex gap-1">
-                  <Button variant="ghost" size="sm" onClick={() => handleViewDoc(doc.id)} className="h-7 w-7 p-0">
+                  <Button variant="ghost" size="sm" onClick={() => handleViewDoc(doc.id)} className="h-7 w-7 p-0" aria-label={t("companyVerif.viewDoc", "Lihat dokumen")}>
                     <Eye className="w-3.5 h-3.5" />
                   </Button>
                   {canUpload && (
@@ -319,6 +321,7 @@ export default function CompanyVerificationPage() {
                         variant="ghost"
                         size="sm"
                         className="h-7 w-7 p-0"
+                        aria-label={t("companyVerif.reuploadDoc", "Upload ulang dokumen")}
                         onClick={() => {
                           setReuploadDocId(doc.id);
                           setUploadType(doc.documentType);
@@ -331,6 +334,7 @@ export default function CompanyVerificationPage() {
                         variant="ghost"
                         size="sm"
                         className="h-7 w-7 p-0 text-rose-500 hover:text-rose-700"
+                        aria-label={t("companyVerif.deleteDoc", "Hapus dokumen")}
                         onClick={() => handleDelete(doc.id)}
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -349,25 +353,25 @@ export default function CompanyVerificationPage() {
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base">
-              {reuploadDocId ? "Upload Ulang Dokumen" : "Upload Dokumen Baru"}
+              {reuploadDocId ? t("companyVerif.reuploadTitle", "Upload Ulang Dokumen") : t("companyVerif.uploadNewTitle", "Upload Dokumen Baru")}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             {reuploadDocId && (
               <div className="p-2 bg-amber-50 border border-amber-200 rounded text-sm text-amber-700 flex items-center gap-2">
                 <Info className="w-4 h-4 flex-shrink-0" />
-                Mode upload ulang dokumen yang sudah ada.
+                {t("companyVerif.reuploadMode", "Mode upload ulang dokumen yang sudah ada.")}
                 <button className="ml-auto text-xs underline" onClick={() => { setReuploadDocId(null); setUploadType(""); setUploadNumber(""); }}>
-                  Batal
+                  {t("common.cancel", "Batal")}
                 </button>
               </div>
             )}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
-                <Label>Jenis Dokumen *</Label>
+                <Label>{t("companyVerif.docType", "Jenis Dokumen")} *</Label>
                 <Select value={uploadType} onValueChange={setUploadType} disabled={!!reuploadDocId}>
                   <SelectTrigger>
-                    <SelectValue placeholder="Pilih jenis dokumen" />
+                    <SelectValue placeholder={t("companyVerif.selectDocTypePlaceholder", "Pilih jenis dokumen")} />
                   </SelectTrigger>
                   <SelectContent>
                     {DOC_TYPES.map((t) => (
@@ -377,16 +381,16 @@ export default function CompanyVerificationPage() {
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <Label>Nomor Dokumen (opsional)</Label>
+                <Label>{t("companyVerif.docNumberOptional", "Nomor Dokumen (opsional)")}</Label>
                 <Input
-                  placeholder="cth: 01.234.567.8-901.000"
+                  placeholder={t("companyVerif.docNumberPlaceholder", "cth: 01.234.567.8-901.000")}
                   value={uploadNumber}
                   onChange={(e) => setUploadNumber(e.target.value)}
                 />
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label>File Dokumen * (PDF, JPG, PNG, WebP — maks 20MB)</Label>
+              <Label>{t("companyVerif.fileDocLabel", "File Dokumen * (PDF, JPG, PNG, WebP — maks 20MB)")}</Label>
               <Input
                 type="file"
                 accept=".pdf,.jpg,.jpeg,.png,.webp"
@@ -403,9 +407,9 @@ export default function CompanyVerificationPage() {
               className="w-full"
             >
               {uploading ? (
-                <><RefreshCw className="w-4 h-4 mr-2 animate-spin" />Mengupload...</>
+                <><RefreshCw className="w-4 h-4 mr-2 animate-spin" />{t("companyVerif.uploading", "Mengupload...")}</>
               ) : (
-                <><Upload className="w-4 h-4 mr-2" />{reuploadDocId ? "Simpan Upload Ulang" : "Upload Dokumen"}</>
+                <><Upload className="w-4 h-4 mr-2" />{reuploadDocId ? t("companyVerif.saveReupload", "Simpan Upload Ulang") : t("companyVerif.uploadDoc", "Upload Dokumen")}</>
               )}
             </Button>
           </CardContent>
@@ -421,16 +425,16 @@ export default function CompanyVerificationPage() {
           disabled={submitting}
         >
           {submitting ? (
-            <><RefreshCw className="w-4 h-4 mr-2 animate-spin" />Mengirim...</>
+            <><RefreshCw className="w-4 h-4 mr-2 animate-spin" />{t("companyVerif.sending", "Mengirim...")}</>
           ) : (
-            <>Kirim Pengajuan Verifikasi<ChevronRight className="w-4 h-4 ml-2" /></>
+            <>{t("companyVerif.submitVerification", "Kirim Pengajuan Verifikasi")}<ChevronRight className="w-4 h-4 ml-2" /></>
           )}
         </Button>
       )}
 
       {status === "PENDING_VERIFICATION" && (
         <p className="text-center text-sm text-gray-500">
-          Dokumen Anda sedang dalam proses review oleh tim kami. Kami akan menghubungi Anda setelah selesai.
+          {t("companyVerif.pendingReviewNote", "Dokumen Anda sedang dalam proses review oleh tim kami. Kami akan menghubungi Anda setelah selesai.")}
         </p>
       )}
     </div>
