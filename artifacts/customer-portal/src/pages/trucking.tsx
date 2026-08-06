@@ -137,50 +137,86 @@ const VEHICLE_META_I18N: Record<string, Record<string, VehicleMetaEntry>> = {
   "mobil": {
     "id-ID": { bestFor: ["Pengiriman dalam kota", "Dokumen & paket kecil", "Last-mile delivery"], advantages: ["Lincah di jalanan padat", "Biaya paling ekonomis", "Parkir mudah"], deliveryDays: "Hari ini" },
     "en-US": { bestFor: ["City deliveries", "Documents & small packages", "Last-mile delivery"], advantages: ["Agile in congested traffic", "Most economical rate", "Easy parking"], deliveryDays: "Today" },
+    "zh-CN": { bestFor: ["城市配送", "文件和小件包裹", "末端配送"], advantages: ["穿行拥堵路段灵活", "最经济实惠", "停车便利"], deliveryDays: "今天" },
+    "fr-FR": { bestFor: ["Livraisons en ville", "Documents & petits colis", "Livraison du dernier kilomètre"], advantages: ["Agile dans les embouteillages", "Tarif le plus économique", "Stationnement facile"], deliveryDays: "Aujourd'hui" },
+    "ar-SA": { bestFor: ["التوصيل داخل المدينة", "الوثائق والطرود الصغيرة", "توصيل الميل الأخير"], advantages: ["رشاقة في الازدحام", "الأكثر اقتصاداً", "سهولة الوقوف"], deliveryDays: "اليوم" },
   },
   "mobil-xl": {
     "id-ID": { bestFor: ["Pengiriman medium", "Barang rumah tangga", "FMCG"], advantages: ["Kapasitas lebih dari mobil biasa", "Fleksibel untuk berbagai barang", "Harga terjangkau"], deliveryDays: "Hari ini" },
     "en-US": { bestFor: ["Medium deliveries", "Household goods", "FMCG"], advantages: ["More capacity than standard car", "Flexible for various goods", "Affordable rate"], deliveryDays: "Today" },
+    "zh-CN": { bestFor: ["中型配送", "家居用品", "快消品"], advantages: ["容量大于普通轿车", "适用于各类货物", "价格实惠"], deliveryDays: "今天" },
+    "fr-FR": { bestFor: ["Livraisons moyennes", "Articles ménagers", "FMCG"], advantages: ["Plus de capacité que la voiture standard", "Flexible pour divers articles", "Tarif abordable"], deliveryDays: "Aujourd'hui" },
+    "ar-SA": { bestFor: ["التوصيل المتوسط", "السلع المنزلية", "السلع الاستهلاكية"], advantages: ["سعة أكبر من السيارة العادية", "مرن لمختلف البضائع", "سعر معقول"], deliveryDays: "اليوم" },
   },
   "van": {
     "id-ID": { bestFor: ["Barang sensitif & tertutup", "Produk fashion", "Elektronik"], advantages: ["Tertutup & aman dari hujan", "Kapasitas bagasi besar", "Nyaman untuk barang premium"], deliveryDays: "Hari ini" },
     "en-US": { bestFor: ["Sensitive & enclosed goods", "Fashion products", "Electronics"], advantages: ["Fully enclosed from rain", "Large boot capacity", "Great for premium goods"], deliveryDays: "Today" },
+    "zh-CN": { bestFor: ["敏感与封闭货物", "时尚产品", "电子产品"], advantages: ["全封闭防雨", "超大储物空间", "适合高端商品"], deliveryDays: "今天" },
+    "fr-FR": { bestFor: ["Marchandises sensibles & fermées", "Produits de mode", "Électronique"], advantages: ["Entièrement fermé à la pluie", "Grande capacité de chargement", "Idéal pour produits premium"], deliveryDays: "Aujourd'hui" },
+    "ar-SA": { bestFor: ["البضائع الحساسة والمغلقة", "منتجات الأزياء", "الإلكترونيات"], advantages: ["مغلق تماماً من المطر", "سعة تحميل كبيرة", "مناسب للبضائع الفاخرة"], deliveryDays: "اليوم" },
   },
   "pickup-kecil": {
     "id-ID": { bestFor: ["Material bangunan", "Barang berat & kasar", "Distribusi grosir"], advantages: ["Bak terbuka fleksibel", "Cocok untuk barang tak beraturan", "Mudah loading"], deliveryDays: "Hari ini" },
     "en-US": { bestFor: ["Building materials", "Heavy & bulky goods", "Wholesale distribution"], advantages: ["Flexible open bed", "Suitable for irregular items", "Easy loading"], deliveryDays: "Today" },
+    "zh-CN": { bestFor: ["建筑材料", "重型散装货物", "批发分销"], advantages: ["开放式货床灵活", "适合不规则货物", "装卸方便"], deliveryDays: "今天" },
+    "fr-FR": { bestFor: ["Matériaux de construction", "Marchandises lourdes & encombrantes", "Distribution en gros"], advantages: ["Plateau ouvert flexible", "Adapté aux articles irréguliers", "Chargement facile"], deliveryDays: "Aujourd'hui" },
+    "ar-SA": { bestFor: ["مواد البناء", "البضائع الثقيلة والضخمة", "التوزيع بالجملة"], advantages: ["صندوق مفتوح مرن", "مناسب للبضائع غير المنتظمة", "سهولة التحميل"], deliveryDays: "اليوم" },
   },
   "box-kecil": {
     "id-ID": { bestFor: ["Barang sensitif", "Produk farmasi", "Makanan & minuman"], advantages: ["Box tertutup penuh", "Aman dari cuaca", "Kapasitas volume besar"], deliveryDays: "Hari ini – 1 Hari" },
     "en-US": { bestFor: ["Sensitive goods", "Pharmaceuticals", "Food & beverages"], advantages: ["Fully closed box", "Protected from weather", "Large volume capacity"], deliveryDays: "Today – 1 Day" },
+    "zh-CN": { bestFor: ["敏感货物", "药品", "食品饮料"], advantages: ["全封闭厢式", "防风雨保护", "大容量"], deliveryDays: "今天 – 1天" },
+    "fr-FR": { bestFor: ["Marchandises sensibles", "Pharmaceutique", "Alimentation & boissons"], advantages: ["Boîte entièrement fermée", "Protégé des intempéries", "Grande capacité volumique"], deliveryDays: "Aujourd'hui – 1 Jour" },
+    "ar-SA": { bestFor: ["البضائع الحساسة", "المستحضرات الصيدلانية", "الأغذية والمشروبات"], advantages: ["صندوق مغلق تماماً", "محمي من الطقس", "سعة حجمية كبيرة"], deliveryDays: "اليوم – 1 يوم" },
   },
   "engkel": {
     "id-ID": { bestFor: ["Pengiriman antar kota", "Distribusi grosir", "Material ringan"], advantages: ["Kapasitas 3.5 ton", "Bisa masuk kota", "Sopir berpengalaman"], deliveryDays: "1–2 Hari" },
     "en-US": { bestFor: ["Inter-city deliveries", "Wholesale distribution", "Light materials"], advantages: ["3.5-ton capacity", "Can enter city areas", "Experienced driver"], deliveryDays: "1–2 Days" },
+    "zh-CN": { bestFor: ["城际配送", "批发分销", "轻型材料"], advantages: ["3.5吨载重", "可进入城区", "经验丰富司机"], deliveryDays: "1–2天" },
+    "fr-FR": { bestFor: ["Livraisons intercités", "Distribution en gros", "Matériaux légers"], advantages: ["Capacité 3,5 tonnes", "Accès aux zones urbaines", "Chauffeur expérimenté"], deliveryDays: "1–2 Jours" },
+    "ar-SA": { bestFor: ["التوصيل بين المدن", "التوزيع بالجملة", "المواد الخفيفة"], advantages: ["سعة 3.5 طن", "يمكنه دخول المناطق الحضرية", "سائق ذو خبرة"], deliveryDays: "1–2 أيام" },
   },
   "double-engkel": {
     "id-ID": { bestFor: ["Muatan medium-besar", "Antar provinsi", "Barang industri"], advantages: ["Kapasitas 5 ton", "Efisien untuk jarak menengah", "Harga kompetitif"], deliveryDays: "1–3 Hari" },
     "en-US": { bestFor: ["Medium-large loads", "Inter-province", "Industrial goods"], advantages: ["5-ton capacity", "Efficient for mid-range distances", "Competitive rate"], deliveryDays: "1–3 Days" },
+    "zh-CN": { bestFor: ["中大型载重", "跨省运输", "工业货物"], advantages: ["5吨载重", "中等距离高效", "价格有竞争力"], deliveryDays: "1–3天" },
+    "fr-FR": { bestFor: ["Charges moyennes à grandes", "Interprovincial", "Marchandises industrielles"], advantages: ["Capacité 5 tonnes", "Efficace sur distances moyennes", "Tarif compétitif"], deliveryDays: "1–3 Jours" },
+    "ar-SA": { bestFor: ["الأحمال المتوسطة والكبيرة", "بين المحافظات", "البضائع الصناعية"], advantages: ["سعة 5 أطنان", "كفاءة عالية للمسافات المتوسطة", "سعر تنافسي"], deliveryDays: "1–3 أيام" },
   },
   "cdd-long": {
     "id-ID": { bestFor: ["Pengiriman jarak jauh", "Muatan besar", "Antar provinsi & pulau"], advantages: ["Kapasitas 6 ton / 22 m³", "Ideal untuk proyek besar", "Cover Jawa–Sumatra"], deliveryDays: "1–3 Hari" },
     "en-US": { bestFor: ["Long-distance shipping", "Large cargo", "Inter-province & island"], advantages: ["6-ton / 22 m³ capacity", "Ideal for large projects", "Cover Java–Sumatra"], deliveryDays: "1–3 Days" },
+    "zh-CN": { bestFor: ["长距离运输", "大型货物", "跨省跨岛"], advantages: ["6吨/22立方米容量", "适合大型项目", "覆盖爪哇-苏门答腊"], deliveryDays: "1–3天" },
+    "fr-FR": { bestFor: ["Transport longue distance", "Grande cargaison", "Interprovincial & inter-îles"], advantages: ["Capacité 6 t / 22 m³", "Idéal pour grands projets", "Couvre Java–Sumatra"], deliveryDays: "1–3 Jours" },
+    "ar-SA": { bestFor: ["الشحن لمسافات طويلة", "البضائع الكبيرة", "بين المحافظات والجزر"], advantages: ["سعة 6 أطنان / 22 م³", "مثالي للمشاريع الكبيرة", "يغطي جاوة-سومطرة"], deliveryDays: "1–3 أيام" },
   },
   "fuso": {
     "id-ID": { bestFor: ["Industri manufaktur", "Proyek konstruksi", "Ekspor impor lokal"], advantages: ["Kapasitas 8 ton", "Mesin andal untuk jarak jauh", "Volume cargo besar"], deliveryDays: "2–4 Hari" },
     "en-US": { bestFor: ["Manufacturing industry", "Construction projects", "Local export & import"], advantages: ["8-ton capacity", "Reliable engine for long haul", "Large cargo volume"], deliveryDays: "2–4 Days" },
+    "zh-CN": { bestFor: ["制造业", "建筑项目", "本地进出口"], advantages: ["8吨载重", "可靠引擎适合长途", "大货物体积"], deliveryDays: "2–4天" },
+    "fr-FR": { bestFor: ["Industrie manufacturière", "Projets de construction", "Export & import local"], advantages: ["Capacité 8 tonnes", "Moteur fiable pour longue distance", "Grand volume de cargaison"], deliveryDays: "2–4 Jours" },
+    "ar-SA": { bestFor: ["الصناعة التحويلية", "مشاريع البناء", "التصدير والاستيراد المحلي"], advantages: ["سعة 8 أطنان", "محرك موثوق للمسافات الطويلة", "حجم شحن كبير"], deliveryDays: "2–4 أيام" },
   },
   "tronton": {
     "id-ID": { bestFor: ["Industri berat", "Logistik skala besar", "Distribusi nasional"], advantages: ["Kapasitas 15 ton", "Efisien untuk skala besar", "Volume 40 m³"], deliveryDays: "2–5 Hari" },
     "en-US": { bestFor: ["Heavy industry", "Large-scale logistics", "National distribution"], advantages: ["15-ton capacity", "Efficient at scale", "40 m³ volume"], deliveryDays: "2–5 Days" },
+    "zh-CN": { bestFor: ["重工业", "大规模物流", "全国配送"], advantages: ["15吨载重", "大规模高效", "40立方米"], deliveryDays: "2–5天" },
+    "fr-FR": { bestFor: ["Industrie lourde", "Logistique à grande échelle", "Distribution nationale"], advantages: ["Capacité 15 tonnes", "Efficace à grande échelle", "Volume 40 m³"], deliveryDays: "2–5 Jours" },
+    "ar-SA": { bestFor: ["الصناعة الثقيلة", "اللوجستيات الضخمة", "التوزيع الوطني"], advantages: ["سعة 15 طن", "كفاءة على نطاق واسع", "حجم 40 م³"], deliveryDays: "2–5 أيام" },
   },
   "truk-trailer": {
     "id-ID": { bestFor: ["Kargo masif", "Ekspor kontainer", "Lintas pulau"], advantages: ["Kapasitas 30 ton", "Standar ekspor internasional", "Volume 75 m³"], deliveryDays: "3–7 Hari" },
     "en-US": { bestFor: ["Massive cargo", "Container export", "Cross-island"], advantages: ["30-ton capacity", "International export standard", "75 m³ volume"], deliveryDays: "3–7 Days" },
+    "zh-CN": { bestFor: ["大型货物", "集装箱出口", "跨岛运输"], advantages: ["30吨载重", "国际出口标准", "75立方米"], deliveryDays: "3–7天" },
+    "fr-FR": { bestFor: ["Cargaison massive", "Export de conteneurs", "Trans-île"], advantages: ["Capacité 30 tonnes", "Norme d'export international", "Volume 75 m³"], deliveryDays: "3–7 Jours" },
+    "ar-SA": { bestFor: ["البضائع الضخمة", "تصدير الحاويات", "عبر الجزر"], advantages: ["سعة 30 طن", "معيار التصدير الدولي", "حجم 75 م³"], deliveryDays: "3–7 أيام" },
   },
   "truk-reefer": {
     "id-ID": { bestFor: ["Produk segar & beku", "Farmasi", "Makanan premium"], advantages: ["Pendingin aktif", "Menjaga kualitas produk", "Standar food-grade"], deliveryDays: "1–3 Hari" },
     "en-US": { bestFor: ["Fresh & frozen goods", "Pharmaceuticals", "Premium food"], advantages: ["Active refrigeration", "Preserves product quality", "Food-grade standard"], deliveryDays: "1–3 Days" },
+    "zh-CN": { bestFor: ["新鲜和冷冻货物", "药品", "优质食品"], advantages: ["主动制冷", "保持产品质量", "食品级标准"], deliveryDays: "1–3天" },
+    "fr-FR": { bestFor: ["Produits frais & surgelés", "Pharmaceutique", "Alimentation premium"], advantages: ["Réfrigération active", "Préserve la qualité des produits", "Norme alimentaire"], deliveryDays: "1–3 Jours" },
+    "ar-SA": { bestFor: ["البضائع الطازجة والمجمدة", "الأدوية", "الأغذية الفاخرة"], advantages: ["تبريد نشط", "يحافظ على جودة المنتج", "معيار غذائي"], deliveryDays: "1–3 أيام" },
   },
 };
 /** Pick the best-matching locale entry; falls back to id-ID. */
@@ -208,18 +244,18 @@ const VEHICLES: Vehicle[] = [
 
 // ─── Vehicle descriptions (translated object) ─────────────────────────────────
 const VEHICLE_DESCRIPTIONS: Record<string, Record<string, string>> = {
-  "mobil":         { "id-ID": "Cocok untuk pengiriman kecil dalam kota",                           "en-US": "Suitable for small city deliveries" },
-  "mobil-xl":      { "id-ID": "Kapasitas lebih besar untuk barang medium",                         "en-US": "Larger capacity for medium-sized items" },
-  "van":           { "id-ID": "Ideal untuk barang banyak dan tertutup",                            "en-US": "Ideal for large quantities of enclosed goods" },
-  "pickup-kecil":  { "id-ID": "Bak terbuka, cocok untuk material",                                "en-US": "Open bed, great for building materials" },
-  "box-kecil":     { "id-ID": "Box tertutup untuk barang sensitif",                               "en-US": "Fully enclosed box for sensitive goods" },
-  "engkel":        { "id-ID": "Truk ringan untuk pengiriman antar kota",                           "en-US": "Light truck for inter-city deliveries" },
-  "double-engkel": { "id-ID": "Kapasitas lebih besar dari engkel biasa",                          "en-US": "Larger capacity than standard light truck" },
-  "cdd-long":      { "id-ID": "Cocok untuk pengiriman dalam jumlah besar dan jarak jauh",         "en-US": "Suitable for large-volume long-distance shipments" },
-  "fuso":          { "id-ID": "Truk medium untuk muatan berat",                                   "en-US": "Medium truck for heavy loads" },
-  "tronton":       { "id-ID": "Truk besar untuk kapasitas industri",                              "en-US": "Large truck for industrial-scale capacity" },
-  "truk-trailer":  { "id-ID": "Untuk pengiriman besar lintas pulau",                              "en-US": "For large cross-island shipments" },
-  "truk-reefer":   { "id-ID": "Berpendingin untuk produk segar & farmasi",                        "en-US": "Refrigerated for fresh & pharmaceutical products" },
+  "mobil":         { "id-ID": "Cocok untuk pengiriman kecil dalam kota",                           "en-US": "Suitable for small city deliveries",                       "zh-CN": "适合小型城市配送",                              "fr-FR": "Adapté aux petites livraisons en ville",                       "ar-SA": "مناسب للتوصيل الصغير داخل المدينة" },
+  "mobil-xl":      { "id-ID": "Kapasitas lebih besar untuk barang medium",                         "en-US": "Larger capacity for medium-sized items",                   "zh-CN": "更大容量适合中型货物",                           "fr-FR": "Plus grande capacité pour articles de taille moyenne",          "ar-SA": "سعة أكبر للبضائع المتوسطة" },
+  "van":           { "id-ID": "Ideal untuk barang banyak dan tertutup",                            "en-US": "Ideal for large quantities of enclosed goods",             "zh-CN": "适合大量封闭货物",                               "fr-FR": "Idéal pour grandes quantités de marchandises fermées",          "ar-SA": "مثالي لكميات كبيرة من البضائع المغلقة" },
+  "pickup-kecil":  { "id-ID": "Bak terbuka, cocok untuk material",                                "en-US": "Open bed, great for building materials",                   "zh-CN": "开放式货床，适合建筑材料",                        "fr-FR": "Plateau ouvert, idéal pour les matériaux de construction",      "ar-SA": "صندوق مفتوح، مناسب لمواد البناء" },
+  "box-kecil":     { "id-ID": "Box tertutup untuk barang sensitif",                               "en-US": "Fully enclosed box for sensitive goods",                   "zh-CN": "全封闭厢式适合敏感货物",                          "fr-FR": "Boîte entièrement fermée pour marchandises sensibles",          "ar-SA": "صندوق مغلق تماماً للبضائع الحساسة" },
+  "engkel":        { "id-ID": "Truk ringan untuk pengiriman antar kota",                           "en-US": "Light truck for inter-city deliveries",                    "zh-CN": "轻型卡车适合城际配送",                           "fr-FR": "Camionnette légère pour livraisons intercités",                 "ar-SA": "شاحنة خفيفة للتوصيل بين المدن" },
+  "double-engkel": { "id-ID": "Kapasitas lebih besar dari engkel biasa",                          "en-US": "Larger capacity than standard light truck",                "zh-CN": "容量大于标准轻型卡车",                           "fr-FR": "Plus grande capacité que la camionnette légère standard",       "ar-SA": "سعة أكبر من الشاحنة الخفيفة القياسية" },
+  "cdd-long":      { "id-ID": "Cocok untuk pengiriman dalam jumlah besar dan jarak jauh",         "en-US": "Suitable for large-volume long-distance shipments",         "zh-CN": "适合大量长途运输",                               "fr-FR": "Adapté aux expéditions longue distance en grands volumes",      "ar-SA": "مناسب للشحنات الضخمة لمسافات طويلة" },
+  "fuso":          { "id-ID": "Truk medium untuk muatan berat",                                   "en-US": "Medium truck for heavy loads",                             "zh-CN": "中型卡车适合重型载重",                           "fr-FR": "Camion moyen pour lourdes charges",                             "ar-SA": "شاحنة متوسطة للأحمال الثقيلة" },
+  "tronton":       { "id-ID": "Truk besar untuk kapasitas industri",                              "en-US": "Large truck for industrial-scale capacity",                "zh-CN": "大型卡车适合工业规模容量",                        "fr-FR": "Grand camion pour capacité industrielle",                       "ar-SA": "شاحنة كبيرة للسعة الصناعية" },
+  "truk-trailer":  { "id-ID": "Untuk pengiriman besar lintas pulau",                              "en-US": "For large cross-island shipments",                         "zh-CN": "适合大型跨岛运输",                               "fr-FR": "Pour grandes expéditions trans-île",                            "ar-SA": "للشحنات الكبيرة عبر الجزر" },
+  "truk-reefer":   { "id-ID": "Berpendingin untuk produk segar & farmasi",                        "en-US": "Refrigerated for fresh & pharmaceutical products",         "zh-CN": "冷藏适合新鲜和制药产品",                          "fr-FR": "Réfrigéré pour produits frais et pharmaceutiques",              "ar-SA": "مبرد للمنتجات الطازجة والصيدلانية" },
 };
 function getVehicleDesc(id: string, locale: string): string {
   const d = VEHICLE_DESCRIPTIONS[id];
@@ -242,12 +278,18 @@ const JENIS_BARANG = [
 const JENIS_BARANG_LABELS: Record<string, string[]> = {
   "id-ID": ["Elektronik", "Furniture", "Pakaian & Tekstil", "Makanan & Minuman", "Bahan Bangunan", "Alat Berat", "Kimia & Industri", "Farmasi", "Dokumen & Kertas", "Barang Berbahaya", "Lainnya"],
   "en-US": ["Electronics", "Furniture", "Clothing & Textiles", "Food & Beverages", "Building Materials", "Heavy Equipment", "Chemical & Industrial", "Pharmaceuticals", "Documents & Paper", "Hazardous Goods", "Other"],
+  "zh-CN": ["电子产品", "家具", "服装与纺织品", "食品饮料", "建筑材料", "重型设备", "化工与工业品", "药品", "文件与纸张", "危险品", "其他"],
+  "fr-FR": ["Électronique", "Mobilier", "Vêtements & Textiles", "Alimentation & Boissons", "Matériaux de Construction", "Équipement Lourd", "Chimie & Industrie", "Pharmaceutique", "Documents & Papier", "Marchandises Dangereuses", "Autres"],
+  "ar-SA": ["إلكترونيات", "أثاث", "ملابس ومنسوجات", "غذاء ومشروبات", "مواد البناء", "معدات ثقيلة", "كيمياء وصناعة", "أدوية", "وثائق وورق", "بضائع خطرة", "أخرى"],
 };
 
 // ─── Spec dimension labels (translated object) ────────────────────────────────
 const SPEC_LABELS: Record<string, { panjang: string; lebar: string; tinggi: string; kapasitas: string; volume: string }> = {
-  "id-ID": { panjang: "Panjang",  lebar: "Lebar",  tinggi: "Tinggi",  kapasitas: "Kapasitas", volume: "Volume" },
-  "en-US": { panjang: "Length",   lebar: "Width",  tinggi: "Height",  kapasitas: "Capacity",  volume: "Volume" },
+  "id-ID": { panjang: "Panjang",   lebar: "Lebar",   tinggi: "Tinggi",   kapasitas: "Kapasitas",  volume: "Volume" },
+  "en-US": { panjang: "Length",    lebar: "Width",   tinggi: "Height",   kapasitas: "Capacity",   volume: "Volume" },
+  "zh-CN": { panjang: "长度",       lebar: "宽度",    tinggi: "高度",      kapasitas: "容量",        volume: "体积" },
+  "fr-FR": { panjang: "Longueur",  lebar: "Largeur", tinggi: "Hauteur",  kapasitas: "Capacité",   volume: "Volume" },
+  "ar-SA": { panjang: "الطول",     lebar: "العرض",   tinggi: "الارتفاع", kapasitas: "السعة",      volume: "الحجم" },
 };
 
 const ADDON_LIST = [
