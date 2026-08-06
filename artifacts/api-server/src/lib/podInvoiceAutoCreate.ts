@@ -12,6 +12,7 @@ import { loadDocTemplate } from "./docTemplateLoader.js";
 import { postLogisticSalesInvoice, normalizeShipmentServiceType, type LogisticInvoiceLine } from "./accounting.js";
 import { logger } from "./logger.js";
 import { writeAuditLog } from "./auditLog.js";
+import { getPreferredDomain } from "./domain.js";
 import type { LogisticOrderData } from "./orderNotification.js";
 
 export type { LogisticOrderData };
@@ -392,7 +393,7 @@ export async function autoCreateLogisticInvoice(order: LogisticOrderData, compan
         grandTotal > 0 ? `Total     : *${idrFmt(grandTotal)}*` : null,
         ``,
         `✅ POD diterima. Invoice telah dibuat & dikirim ke WhatsApp customer.`,
-        `📋 BizPortal: https://${process.env.REPLIT_DEV_DOMAIN ?? "localhost:5000"}/sales/documents`,
+        `📋 BizPortal: https://${getPreferredDomain() || "localhost:5000"}/sales/documents`,
         ``,
         `🕐 ${nowWIB()}`,
       ].filter((l) => l !== null).join("\n");

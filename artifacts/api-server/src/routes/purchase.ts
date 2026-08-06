@@ -25,6 +25,7 @@ import {
   chartOfAccountsTable,
 } from "@workspace/db";
 import { eq, sql, desc, and, or, inArray, type SQL } from "drizzle-orm";
+import { getPreferredDomain } from "../lib/domain.js";
 
 /** Kirim WA ke semua admin (ADMIN_WA_PHONES + FONNTE_ADMIN_WA), fire-and-forget. */
 function notifyAdminWa(message: string, context?: string, refType?: string, refId?: string): void {
@@ -1075,7 +1076,8 @@ router.post("/documents/:id/generate-vendor-token", async (req, res) => {
   { const _cid = resolveCompanyId(req); if (!await assertCompanyAccess(doc.companyId, _cid, req, res, { resourceType: "purchase_document", resourceId: id })) return; }
   if (doc.kind !== "order") return res.status(400).json({ message: "Hanya PO yang bisa dibuat link vendor accept" });
 
-  const baseUrl = process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : `http://localhost:5000`;
+  const _domain = getPreferredDomain();
+  const baseUrl = _domain ? `https://${_domain}` : `http://localhost:5000`;
 
   const existingToken = (doc as any).vendor_accept_token as string | null | undefined;
   const token = existingToken ?? randomBytes(24).toString("hex");
