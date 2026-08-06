@@ -13,6 +13,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   Image as ImageIcon, Upload, X, Loader2, Save, GripVertical, CheckCircle2,
 } from "lucide-react";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 // ── Vehicle definitions ───────────────────────────────────────────────────────
 
@@ -48,6 +49,7 @@ function VehicleImageCard({
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
+  const { t } = useLanguage();
 
   async function handleFile(file: File) {
     setUploading(true);
@@ -72,14 +74,14 @@ function VehicleImageCard({
             </button>
             <div className="absolute bottom-2 left-2">
               <Badge variant="secondary" className="text-[10px] gap-1 bg-white/90">
-                <CheckCircle2 className="w-3 h-3 text-green-500" /> Terpasang
+                <CheckCircle2 className="w-3 h-3 text-green-500" /> {t("adminVehicle.imageMounted", "Terpasang")}
               </Badge>
             </div>
           </>
         ) : (
           <div className="flex flex-col items-center gap-2 text-slate-400">
             <ImageIcon className="w-10 h-10" style={{ color: vehicle.color }} />
-            <span className="text-xs">Belum ada gambar</span>
+            <span className="text-xs">{t("adminVehicle.noImage", "Belum ada gambar")}</span>
           </div>
         )}
         {uploading && (
@@ -111,8 +113,8 @@ function VehicleImageCard({
           disabled={uploading}
         >
           {uploading
-            ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Mengupload…</>
-            : <><Upload className="w-3.5 h-3.5" /> {imageUrl ? "Ganti" : "Upload"}</>
+            ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t("adminVehicle.uploading", "Mengupload…")}</>
+            : <><Upload className="w-3.5 h-3.5" /> {imageUrl ? t("adminVehicle.replaceBtn", "Ganti") : t("adminVehicle.uploadBtn", "Upload")}</>
           }
         </Button>
       </CardContent>
@@ -124,6 +126,7 @@ function VehicleImageCard({
 
 function SortableVehicleItem({ vehicle, index, imageUrl }: { vehicle: VehicleDef; index: number; imageUrl?: string }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: vehicle.id });
+  const { t } = useLanguage();
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1, zIndex: isDragging ? 50 : "auto" as const };
 
   return (
@@ -140,7 +143,7 @@ function SortableVehicleItem({ vehicle, index, imageUrl }: { vehicle: VehicleDef
       </div>
       <span className="font-medium text-slate-800 flex-1">{vehicle.name}</span>
       {imageUrl
-        ? <Badge variant="secondary" className="text-[10px] gap-1"><CheckCircle2 className="w-3 h-3 text-green-500" /> Gambar</Badge>
+        ? <Badge variant="secondary" className="text-[10px] gap-1"><CheckCircle2 className="w-3 h-3 text-green-500" /> {t("adminVehicle.imageLabel", "Gambar")}</Badge>
         : <Badge variant="outline" className="text-[10px] text-slate-400">SVG</Badge>
       }
     </div>
@@ -151,6 +154,7 @@ function SortableVehicleItem({ vehicle, index, imageUrl }: { vehicle: VehicleDef
 
 export function VehicleImagesTab() {
   const { toast } = useToast();
+  const { t } = useLanguage();
   const [images, setImages] = useState<Record<string, string>>({});
   const [savedOrder, setSavedOrder] = useState<string[]>([]);
   const [localOrder, setLocalOrder] = useState<string[] | null>(null);
@@ -178,7 +182,7 @@ export function VehicleImagesTab() {
         if (imgRes.ok) setImages(await imgRes.json());
         if (ordRes.ok) setSavedOrder(await ordRes.json());
       } catch {
-        toast({ title: "Gagal memuat data kendaraan", variant: "destructive" });
+        toast({ title: t("adminVehicle.loadError", "Gagal memuat data kendaraan"), variant: "destructive" });
       } finally {
         setLoadingImages(false);
       }
@@ -195,16 +199,16 @@ export function VehicleImagesTab() {
       if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error((j as { error?: string }).error ?? `HTTP ${res.status}`); }
       url = (await res.json()).url;
     } catch (err) {
-      toast({ title: "Gagal upload", description: String(err), variant: "destructive" });
+      toast({ title: t("adminVehicle.uploadError", "Gagal upload"), description: String(err), variant: "destructive" });
       return;
     }
     const updated = { ...images, [vehicleId]: url };
     const saveRes = await fetch("/api/settings/vehicle-images", { method: "PUT", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(updated) });
     if (saveRes.ok) {
       setImages(updated);
-      toast({ title: `Gambar ${VEHICLE_DEFS.find(v => v.id === vehicleId)?.name} berhasil disimpan` });
+      toast({ title: `${t("adminVehicle.imageSavedPrefix", "Gambar")} ${VEHICLE_DEFS.find(v => v.id === vehicleId)?.name} ${t("adminVehicle.imageSavedSuffix", "berhasil disimpan")}` });
     } else {
-      toast({ title: "Gagal menyimpan gambar", variant: "destructive" });
+      toast({ title: t("adminVehicle.imageSaveError", "Gagal menyimpan gambar"), variant: "destructive" });
     }
   }
 
@@ -214,9 +218,9 @@ export function VehicleImagesTab() {
     const saveRes = await fetch("/api/settings/vehicle-images", { method: "PUT", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(updated) });
     if (saveRes.ok) {
       setImages(updated);
-      toast({ title: `Gambar ${VEHICLE_DEFS.find(v => v.id === vehicleId)?.name} dihapus` });
+      toast({ title: `${t("adminVehicle.imageSavedPrefix", "Gambar")} ${VEHICLE_DEFS.find(v => v.id === vehicleId)?.name} ${t("adminVehicle.imageRemovedSuffix", "dihapus")}` });
     } else {
-      toast({ title: "Gagal menghapus gambar", variant: "destructive" });
+      toast({ title: t("adminVehicle.imageRemoveError", "Gagal menghapus gambar"), variant: "destructive" });
     }
   }
 
@@ -237,8 +241,8 @@ export function VehicleImagesTab() {
     try {
       const order = orderedVehicles.map(v => v.id);
       const res = await fetch("/api/settings/vehicle-order", { method: "PUT", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(order) });
-      if (res.ok) { setSavedOrder(order); setLocalOrder(null); toast({ title: "Urutan kendaraan berhasil disimpan" }); }
-      else toast({ title: "Gagal menyimpan urutan", variant: "destructive" });
+      if (res.ok) { setSavedOrder(order); setLocalOrder(null); toast({ title: t("adminVehicle.orderSaved", "Urutan kendaraan berhasil disimpan") }); }
+      else toast({ title: t("adminVehicle.orderSaveError", "Gagal menyimpan urutan"), variant: "destructive" });
     } finally {
       setSavingOrder(false);
     }
@@ -252,10 +256,10 @@ export function VehicleImagesTab() {
     <div className="space-y-4">
       <div className="flex gap-2 border-b pb-2">
         <Button variant={activeSubTab === "gambar" ? "default" : "ghost"} size="sm" className="gap-1.5" onClick={() => setActiveSubTab("gambar")}>
-          <ImageIcon className="w-4 h-4" /> Gambar
+          <ImageIcon className="w-4 h-4" /> {t("adminVehicle.tabImages", "Gambar")}
         </Button>
         <Button variant={activeSubTab === "urutan" ? "default" : "ghost"} size="sm" className="gap-1.5" onClick={() => setActiveSubTab("urutan")}>
-          <GripVertical className="w-4 h-4" /> Urutan Tampil
+          <GripVertical className="w-4 h-4" /> {t("adminVehicle.tabOrder", "Urutan Tampil")}
         </Button>
       </div>
 
@@ -263,7 +267,7 @@ export function VehicleImagesTab() {
         <div className="space-y-4">
           <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/50 rounded-lg px-4 py-2.5">
             <ImageIcon className="w-4 h-4 shrink-0" />
-            <span>{Object.keys(images).length} dari {VEHICLE_DEFS.length} kendaraan sudah punya gambar. Yang belum diupload tetap menampilkan ilustrasi SVG bawaan.</span>
+            <span>{Object.keys(images).length} {t("adminVehicle.imageCountOf", "dari")} {VEHICLE_DEFS.length} {t("adminVehicle.imageCountSuffix", "kendaraan sudah punya gambar. Yang belum diupload tetap menampilkan ilustrasi SVG bawaan.")}</span>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
             {orderedVehicles.map(v => (
@@ -276,10 +280,10 @@ export function VehicleImagesTab() {
       {activeSubTab === "urutan" && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">Drag baris untuk mengubah urutan tampil kendaraan di halaman Trucking.</p>
+            <p className="text-sm text-muted-foreground">{t("adminVehicle.orderHint", "Drag baris untuk mengubah urutan tampil kendaraan di halaman Trucking.")}</p>
             {localOrder !== null && (
               <Button size="sm" className="gap-1.5" onClick={() => void saveOrder()} disabled={savingOrder}>
-                {savingOrder ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Menyimpan…</> : <><Save className="w-3.5 h-3.5" /> Simpan Urutan</>}
+                {savingOrder ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t("adminVehicle.savingOrder", "Menyimpan…")}</> : <><Save className="w-3.5 h-3.5" /> {t("adminVehicle.saveOrderBtn", "Simpan Urutan")}</>}
               </Button>
             )}
           </div>
@@ -293,7 +297,7 @@ export function VehicleImagesTab() {
             </SortableContext>
           </DndContext>
           {localOrder === null && savedOrder.length === 0 && (
-            <p className="text-xs text-center text-slate-400 pt-2">Urutan default — drag untuk mengubah, lalu klik Simpan.</p>
+            <p className="text-xs text-center text-slate-400 pt-2">{t("adminVehicle.defaultOrderHint", "Urutan default — drag untuk mengubah, lalu klik Simpan.")}</p>
           )}
         </div>
       )}

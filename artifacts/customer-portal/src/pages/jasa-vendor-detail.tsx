@@ -11,6 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
 import { useCart } from "@/lib/logistic-cart";
+import { useLanguage } from "@/i18n/LanguageContext";
 import {
   ArrowLeft, Building2, Truck, Plane, Ship, Package,
   FileText, MapPin, Clock, Tag, CheckCircle2, ShoppingCart,
@@ -136,6 +137,7 @@ const CATEGORY_ICONS: Record<string, React.ReactNode> = {
 // ── SpecGrid ───────────────────────────────────────────────────────────────────
 
 function SpecGrid({ specValues, templateSnapshot }: { specValues: unknown; templateSnapshot: unknown }) {
+  const { t } = useLanguage();
   const specs = specValues && typeof specValues === "object" ? specValues as Record<string, unknown> : {};
   const snapshot = templateSnapshot && typeof templateSnapshot === "object" ? templateSnapshot as Record<string, unknown> : {};
 
@@ -155,7 +157,7 @@ function SpecGrid({ specValues, templateSnapshot }: { specValues: unknown; templ
 
   return (
     <div>
-      <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-3">Spesifikasi Layanan</p>
+      <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-3">{t("jasaVendorDetail.specGrid.title", "Spesifikasi Layanan")}</p>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
         {filled.map((f) => (
           <div key={f.key} className="bg-slate-50 rounded-xl px-3 py-2.5 border border-slate-100">
@@ -179,6 +181,7 @@ interface CalcResult {
 
 // Trucking
 function TruckingCalc({ item, onChange }: { item: CatalogDetail; onChange: (r: CalcResult | null) => void }) {
+  const { t } = useLanguage();
   const snap = item.templateSnapshot && typeof item.templateSnapshot === "object" ? item.templateSnapshot as Record<string, unknown> : {};
   const specs = item.specValues && typeof item.specValues === "object" ? item.specValues as Record<string, unknown> : {};
   const truckOptions: string[] = Array.isArray(snap["truckTypes"]) ? snap["truckTypes"] as string[] : [];
@@ -230,41 +233,41 @@ function TruckingCalc({ item, onChange }: { item: CatalogDetail; onChange: (r: C
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-2">
         <div className="space-y-1">
-          <Label className="text-[11px] font-semibold text-slate-600">Kota Asal <span className="text-red-400">*</span></Label>
+          <Label className="text-[11px] font-semibold text-slate-600">{t("jasaVendorDetail.trucking.originCity", "Kota Asal")} <span className="text-red-400">*</span></Label>
           <Input value={pickupCity} onChange={(e) => { setPickupCity(e.target.value); recalc({ pickupCity: e.target.value }); }}
-            placeholder="Jakarta" className="h-9 text-[13px] rounded-xl border-slate-200" />
+            placeholder={t("jasaVendorDetail.trucking.originCityPlaceholder", "Jakarta")} className="h-9 text-[13px] rounded-xl border-slate-200" />
         </div>
         <div className="space-y-1">
-          <Label className="text-[11px] font-semibold text-slate-600">Kota Tujuan <span className="text-red-400">*</span></Label>
+          <Label className="text-[11px] font-semibold text-slate-600">{t("jasaVendorDetail.trucking.destCity", "Kota Tujuan")} <span className="text-red-400">*</span></Label>
           <Input value={destCity} onChange={(e) => { setDestCity(e.target.value); recalc({ destCity: e.target.value }); }}
-            placeholder="Surabaya" className="h-9 text-[13px] rounded-xl border-slate-200" />
+            placeholder={t("jasaVendorDetail.trucking.destCityPlaceholder", "Surabaya")} className="h-9 text-[13px] rounded-xl border-slate-200" />
         </div>
       </div>
       {truckOptions.length > 0 && (
         <div className="space-y-1">
-          <Label className="text-[11px] font-semibold text-slate-600">Jenis Truk</Label>
+          <Label className="text-[11px] font-semibold text-slate-600">{t("jasaVendorDetail.trucking.truckType", "Jenis Truk")}</Label>
           <select value={truckType} onChange={(e) => { setTruckType(e.target.value); recalc({ truckType: e.target.value }); }}
             className="w-full h-9 rounded-xl border border-slate-200 text-[13px] px-3 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-400">
-            <option value="">Pilih jenis truk…</option>
+            <option value="">{t("jasaVendorDetail.trucking.truckTypePlaceholder", "Pilih jenis truk…")}</option>
             {truckOptions.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
         </div>
       )}
       <div className="space-y-1">
-        <Label className="text-[11px] font-semibold text-slate-600">Jumlah Trip</Label>
+        <Label className="text-[11px] font-semibold text-slate-600">{t("jasaVendorDetail.trucking.tripQty", "Jumlah Trip")}</Label>
         <Input type="number" min={1} value={tripQty}
           onChange={(e) => { const v = Math.max(1, Number(e.target.value) || 1); setTripQty(v); recalc({ tripQty: v }); }}
           className="h-9 text-[13px] rounded-xl border-slate-200" />
       </div>
       <div className="grid grid-cols-2 gap-2">
         <div className="space-y-1">
-          <Label className="text-[11px] font-semibold text-slate-600">Biaya Muat (opsional)</Label>
+          <Label className="text-[11px] font-semibold text-slate-600">{t("jasaVendorDetail.trucking.loadingFee", "Biaya Muat (opsional)")}</Label>
           <Input type="number" min={0} value={loadingFee === 0 ? "" : loadingFee} placeholder="0"
             onChange={(e) => { const v = e.target.value === "" ? "" : Number(e.target.value) || 0; setLoadingFee(v); recalc({ loadingFee: v }); }}
             className="h-9 text-[13px] rounded-xl border-slate-200" />
         </div>
         <div className="space-y-1">
-          <Label className="text-[11px] font-semibold text-slate-600">Biaya Bongkar (opsional)</Label>
+          <Label className="text-[11px] font-semibold text-slate-600">{t("jasaVendorDetail.trucking.unloadingFee", "Biaya Bongkar (opsional)")}</Label>
           <Input type="number" min={0} value={unloadingFee === 0 ? "" : unloadingFee} placeholder="0"
             onChange={(e) => { const v = e.target.value === "" ? "" : Number(e.target.value) || 0; setUnloadingFee(v); recalc({ unloadingFee: v }); }}
             className="h-9 text-[13px] rounded-xl border-slate-200" />
@@ -276,6 +279,7 @@ function TruckingCalc({ item, onChange }: { item: CatalogDetail; onChange: (r: C
 
 // Sea Freight
 function SeaFreightCalc({ item, onChange }: { item: CatalogDetail; onChange: (r: CalcResult | null) => void }) {
+  const { t } = useLanguage();
   const [originPort, setOriginPort] = useState("");
   const [destPort, setDestPort] = useState("");
   const [shipmentMode, setShipmentMode] = useState<"FCL" | "LCL">("FCL");
@@ -309,18 +313,18 @@ function SeaFreightCalc({ item, onChange }: { item: CatalogDetail; onChange: (r:
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-2">
         <div className="space-y-1">
-          <Label className="text-[11px] font-semibold text-slate-600">Pelabuhan Asal <span className="text-red-400">*</span></Label>
+          <Label className="text-[11px] font-semibold text-slate-600">{t("jasaVendorDetail.seaFreight.originPort", "Pelabuhan Asal")} <span className="text-red-400">*</span></Label>
           <Input value={originPort} onChange={(e) => { setOriginPort(e.target.value); recalc({ originPort: e.target.value }); }}
-            placeholder="Tanjung Priok" className="h-9 text-[13px] rounded-xl border-slate-200" />
+            placeholder={t("jasaVendorDetail.seaFreight.originPortPlaceholder", "Tanjung Priok")} className="h-9 text-[13px] rounded-xl border-slate-200" />
         </div>
         <div className="space-y-1">
-          <Label className="text-[11px] font-semibold text-slate-600">Pelabuhan Tujuan <span className="text-red-400">*</span></Label>
+          <Label className="text-[11px] font-semibold text-slate-600">{t("jasaVendorDetail.seaFreight.destPort", "Pelabuhan Tujuan")} <span className="text-red-400">*</span></Label>
           <Input value={destPort} onChange={(e) => { setDestPort(e.target.value); recalc({ destPort: e.target.value }); }}
-            placeholder="Tanjung Perak" className="h-9 text-[13px] rounded-xl border-slate-200" />
+            placeholder={t("jasaVendorDetail.seaFreight.destPortPlaceholder", "Tanjung Perak")} className="h-9 text-[13px] rounded-xl border-slate-200" />
         </div>
       </div>
       <div className="space-y-1">
-        <Label className="text-[11px] font-semibold text-slate-600">Mode Pengiriman</Label>
+        <Label className="text-[11px] font-semibold text-slate-600">{t("jasaVendorDetail.seaFreight.shipmentMode", "Mode Pengiriman")}</Label>
         <div className="flex rounded-xl border border-slate-200 overflow-hidden">
           {(["FCL", "LCL"] as const).map((m) => (
             <button key={m} type="button"
@@ -334,14 +338,14 @@ function SeaFreightCalc({ item, onChange }: { item: CatalogDetail; onChange: (r:
       {shipmentMode === "FCL" ? (
         <>
           <div className="space-y-1">
-            <Label className="text-[11px] font-semibold text-slate-600">Tipe Kontainer</Label>
+            <Label className="text-[11px] font-semibold text-slate-600">{t("jasaVendorDetail.seaFreight.containerType", "Tipe Kontainer")}</Label>
             <select value={containerType} onChange={(e) => { setContainerType(e.target.value); recalc({ containerType: e.target.value }); }}
               className="w-full h-9 rounded-xl border border-slate-200 text-[13px] px-3 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-400">
               {["20ft", "40ft", "40HC", "45ft"].map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
           </div>
           <div className="space-y-1">
-            <Label className="text-[11px] font-semibold text-slate-600">Jumlah Kontainer</Label>
+            <Label className="text-[11px] font-semibold text-slate-600">{t("jasaVendorDetail.seaFreight.containerQty", "Jumlah Kontainer")}</Label>
             <Input type="number" min={1} value={qtyContainer}
               onChange={(e) => { const v = Math.max(1, Number(e.target.value) || 1); setQtyContainer(v); recalc({ qtyContainer: v }); }}
               className="h-9 text-[13px] rounded-xl border-slate-200" />
@@ -349,7 +353,7 @@ function SeaFreightCalc({ item, onChange }: { item: CatalogDetail; onChange: (r:
         </>
       ) : (
         <div className="space-y-1">
-          <Label className="text-[11px] font-semibold text-slate-600">Volume (CBM) <span className="text-red-400">*</span></Label>
+          <Label className="text-[11px] font-semibold text-slate-600">{t("jasaVendorDetail.seaFreight.volumeCbm", "Volume (CBM)")} <span className="text-red-400">*</span></Label>
           <Input type="number" min={0.1} step={0.1} value={cbm === 0 ? "" : cbm} placeholder="0.0"
             onChange={(e) => { const v = e.target.value === "" ? "" : Number(e.target.value); setCbm(v); recalc({ cbm: v }); }}
             className="h-9 text-[13px] rounded-xl border-slate-200" />
@@ -361,6 +365,7 @@ function SeaFreightCalc({ item, onChange }: { item: CatalogDetail; onChange: (r:
 
 // Air Freight
 function AirFreightCalc({ item, onChange }: { item: CatalogDetail; onChange: (r: CalcResult | null) => void }) {
+  const { t } = useLanguage();
   const [originAirport, setOriginAirport] = useState("");
   const [destAirport, setDestAirport] = useState("");
   const [grossWeightKg, setGrossWeightKg] = useState<number | "">(0);
@@ -407,32 +412,32 @@ function AirFreightCalc({ item, onChange }: { item: CatalogDetail; onChange: (r:
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-2">
         <div className="space-y-1">
-          <Label className="text-[11px] font-semibold text-slate-600">Bandara Asal <span className="text-red-400">*</span></Label>
+          <Label className="text-[11px] font-semibold text-slate-600">{t("jasaVendorDetail.airFreight.originAirport", "Bandara Asal")} <span className="text-red-400">*</span></Label>
           <Input value={originAirport} onChange={(e) => { setOriginAirport(e.target.value); recalc({ originAirport: e.target.value }); }}
             placeholder="CGK" className="h-9 text-[13px] rounded-xl border-slate-200" />
         </div>
         <div className="space-y-1">
-          <Label className="text-[11px] font-semibold text-slate-600">Bandara Tujuan <span className="text-red-400">*</span></Label>
+          <Label className="text-[11px] font-semibold text-slate-600">{t("jasaVendorDetail.airFreight.destAirport", "Bandara Tujuan")} <span className="text-red-400">*</span></Label>
           <Input value={destAirport} onChange={(e) => { setDestAirport(e.target.value); recalc({ destAirport: e.target.value }); }}
             placeholder="SUB" className="h-9 text-[13px] rounded-xl border-slate-200" />
         </div>
       </div>
       <div className="grid grid-cols-2 gap-2">
         <div className="space-y-1">
-          <Label className="text-[11px] font-semibold text-slate-600">Berat Kotor (kg) <span className="text-red-400">*</span></Label>
+          <Label className="text-[11px] font-semibold text-slate-600">{t("jasaVendorDetail.airFreight.grossWeight", "Berat Kotor (kg)")} <span className="text-red-400">*</span></Label>
           <Input type="number" min={0.1} step={0.1} value={grossWeightKg === 0 ? "" : grossWeightKg} placeholder="0.0"
             onChange={(e) => { const v = e.target.value === "" ? "" : Number(e.target.value); setGrossWeightKg(v); recalc({ grossWeightKg: v }); }}
             className="h-9 text-[13px] rounded-xl border-slate-200" />
         </div>
         <div className="space-y-1">
-          <Label className="text-[11px] font-semibold text-slate-600">Jumlah Koli</Label>
+          <Label className="text-[11px] font-semibold text-slate-600">{t("jasaVendorDetail.airFreight.packageQty", "Jumlah Koli")}</Label>
           <Input type="number" min={1} value={packageQty}
             onChange={(e) => { const v = Math.max(1, Number(e.target.value) || 1); setPackageQty(v); recalc({ packageQty: v }); }}
             className="h-9 text-[13px] rounded-xl border-slate-200" />
         </div>
       </div>
       <div>
-        <Label className="text-[11px] font-semibold text-slate-600 mb-1.5 block">Dimensi per Koli (cm, untuk volume weight)</Label>
+        <Label className="text-[11px] font-semibold text-slate-600 mb-1.5 block">{t("jasaVendorDetail.airFreight.dimensionLabel", "Dimensi per Koli (cm, untuk volume weight)")}</Label>
         <div className="grid grid-cols-3 gap-2">
           {[
             { label: "P", val: lengthCm, set: setLengthCm, key: "lengthCm" as const },
@@ -450,7 +455,7 @@ function AirFreightCalc({ item, onChange }: { item: CatalogDetail; onChange: (r:
         {vw > 0 && (
           <p className="text-[11px] text-slate-400 mt-1.5 flex items-center gap-1">
             <Info className="h-3 w-3" />
-            Volume weight: {vw.toFixed(2)} kg ({packageQty} koli × P×L×T/6000)
+            {t("jasaVendorDetail.airFreight.volumeWeightInfo", "Volume weight:")} {vw.toFixed(2)} kg ({packageQty} {t("jasaVendorDetail.airFreight.koli", "koli")} × P×L×T/6000)
           </p>
         )}
       </div>
@@ -460,6 +465,7 @@ function AirFreightCalc({ item, onChange }: { item: CatalogDetail; onChange: (r:
 
 // PPJK / Customs
 function PpjkCalc({ item, onChange }: { item: CatalogDetail; onChange: (r: CalcResult | null) => void }) {
+  const { t } = useLanguage();
   const [documentType, setDocumentType] = useState("PIB");
   const [documentQty, setDocumentQty] = useState(1);
   const [shipmentType, setShipmentType] = useState("Import");
@@ -482,18 +488,18 @@ function PpjkCalc({ item, onChange }: { item: CatalogDetail; onChange: (r: CalcR
   return (
     <div className="space-y-3">
       <div className="space-y-1">
-        <Label className="text-[11px] font-semibold text-slate-600">Jenis Dokumen</Label>
+        <Label className="text-[11px] font-semibold text-slate-600">{t("jasaVendorDetail.ppjk.documentType", "Jenis Dokumen")}</Label>
         <select value={documentType} onChange={(e) => { setDocumentType(e.target.value); recalc({ documentType: e.target.value }); }}
           className="w-full h-9 rounded-xl border border-slate-200 text-[13px] px-3 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-400">
           <option value="PIB">PIB (Import)</option>
           <option value="PEB">PEB (Export)</option>
           <option value="BC 2.3">BC 2.3</option>
           <option value="BC 3.0">BC 3.0</option>
-          <option value="Lainnya">Lainnya</option>
+          <option value="Lainnya">{t("jasaVendorDetail.ppjk.other", "Lainnya")}</option>
         </select>
       </div>
       <div className="space-y-1">
-        <Label className="text-[11px] font-semibold text-slate-600">Jenis Shipment</Label>
+        <Label className="text-[11px] font-semibold text-slate-600">{t("jasaVendorDetail.ppjk.shipmentType", "Jenis Shipment")}</Label>
         <div className="flex rounded-xl border border-slate-200 overflow-hidden">
           {["Import", "Export"].map((m) => (
             <button key={m} type="button"
@@ -505,7 +511,7 @@ function PpjkCalc({ item, onChange }: { item: CatalogDetail; onChange: (r: CalcR
         </div>
       </div>
       <div className="space-y-1">
-        <Label className="text-[11px] font-semibold text-slate-600">Jumlah Dokumen</Label>
+        <Label className="text-[11px] font-semibold text-slate-600">{t("jasaVendorDetail.ppjk.documentQty", "Jumlah Dokumen")}</Label>
         <Input type="number" min={1} value={documentQty}
           onChange={(e) => { const v = Math.max(1, Number(e.target.value) || 1); setDocumentQty(v); recalc({ documentQty: v }); }}
           className="h-9 text-[13px] rounded-xl border-slate-200" />
@@ -516,6 +522,7 @@ function PpjkCalc({ item, onChange }: { item: CatalogDetail; onChange: (r: CalcR
 
 // Handling
 function HandlingCalc({ item, onChange }: { item: CatalogDetail; onChange: (r: CalcResult | null) => void }) {
+  const { t } = useLanguage();
   const [handlingType, setHandlingType] = useState("Stuffing");
   const [quantity, setQuantity] = useState(1);
 
@@ -533,7 +540,7 @@ function HandlingCalc({ item, onChange }: { item: CatalogDetail; onChange: (r: C
   return (
     <div className="space-y-3">
       <div className="space-y-1">
-        <Label className="text-[11px] font-semibold text-slate-600">Jenis Handling</Label>
+        <Label className="text-[11px] font-semibold text-slate-600">{t("jasaVendorDetail.handling.handlingType", "Jenis Handling")}</Label>
         <select value={handlingType} onChange={(e) => { setHandlingType(e.target.value); recalc({ handlingType: e.target.value }); }}
           className="w-full h-9 rounded-xl border border-slate-200 text-[13px] px-3 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-400">
           <option value="Stuffing">Stuffing</option>
@@ -541,11 +548,11 @@ function HandlingCalc({ item, onChange }: { item: CatalogDetail; onChange: (r: C
           <option value="Loading">Loading</option>
           <option value="Unloading">Unloading</option>
           <option value="Warehousing">Warehousing</option>
-          <option value="Lainnya">Lainnya</option>
+          <option value="Lainnya">{t("jasaVendorDetail.handling.other", "Lainnya")}</option>
         </select>
       </div>
       <div className="space-y-1">
-        <Label className="text-[11px] font-semibold text-slate-600">Kuantitas ({item.unit ?? "unit"})</Label>
+        <Label className="text-[11px] font-semibold text-slate-600">{t("jasaVendorDetail.handling.quantity", "Kuantitas")} ({item.unit ?? "unit"})</Label>
         <Input type="number" min={1} value={quantity}
           onChange={(e) => { const v = Math.max(1, Number(e.target.value) || 1); setQuantity(v); recalc({ quantity: v }); }}
           className="h-9 text-[13px] rounded-xl border-slate-200" />
@@ -556,6 +563,7 @@ function HandlingCalc({ item, onChange }: { item: CatalogDetail; onChange: (r: C
 
 // Document
 function DocumentCalc({ item, onChange }: { item: CatalogDetail; onChange: (r: CalcResult | null) => void }) {
+  const { t } = useLanguage();
   const [documentName, setDocumentName] = useState("");
   const [documentQty, setDocumentQty] = useState(1);
 
@@ -573,12 +581,12 @@ function DocumentCalc({ item, onChange }: { item: CatalogDetail; onChange: (r: C
   return (
     <div className="space-y-3">
       <div className="space-y-1">
-        <Label className="text-[11px] font-semibold text-slate-600">Nama / Jenis Dokumen</Label>
+        <Label className="text-[11px] font-semibold text-slate-600">{t("jasaVendorDetail.document.documentName", "Nama / Jenis Dokumen")}</Label>
         <Input value={documentName} onChange={(e) => { setDocumentName(e.target.value); recalc({ documentName: e.target.value }); }}
-          placeholder="Contoh: Surat Jalan, SKA, COO…" className="h-9 text-[13px] rounded-xl border-slate-200" />
+          placeholder={t("jasaVendorDetail.document.documentNamePlaceholder", "Contoh: Surat Jalan, SKA, COO…")} className="h-9 text-[13px] rounded-xl border-slate-200" />
       </div>
       <div className="space-y-1">
-        <Label className="text-[11px] font-semibold text-slate-600">Jumlah Dokumen</Label>
+        <Label className="text-[11px] font-semibold text-slate-600">{t("jasaVendorDetail.document.documentQty", "Jumlah Dokumen")}</Label>
         <Input type="number" min={1} value={documentQty}
           onChange={(e) => { const v = Math.max(1, Number(e.target.value) || 1); setDocumentQty(v); recalc({ documentQty: v }); }}
           className="h-9 text-[13px] rounded-xl border-slate-200" />
@@ -589,6 +597,7 @@ function DocumentCalc({ item, onChange }: { item: CatalogDetail; onChange: (r: C
 
 // General / Fallback
 function GeneralCalc({ item, onChange }: { item: CatalogDetail; onChange: (r: CalcResult | null) => void }) {
+  const { t } = useLanguage();
   const [quantity, setQuantity] = useState(1);
 
   function recalc(q: number) {
@@ -598,7 +607,7 @@ function GeneralCalc({ item, onChange }: { item: CatalogDetail; onChange: (r: Ca
 
   return (
     <div className="space-y-1">
-      <Label className="text-[11px] font-semibold text-slate-600">Kuantitas ({item.unit ?? "unit"})</Label>
+      <Label className="text-[11px] font-semibold text-slate-600">{t("jasaVendorDetail.general.quantity", "Kuantitas")} ({item.unit ?? "unit"})</Label>
       <Input type="number" min={1} value={quantity}
         onChange={(e) => { const v = Math.max(1, Number(e.target.value) || 1); setQuantity(v); recalc(v); }}
         className="h-9 text-[13px] rounded-xl border-slate-200" />
@@ -624,6 +633,7 @@ export default function JasaVendorDetail() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const { addItem } = useCart();
+  const { t } = useLanguage();
 
   const [calcResult, setCalcResult] = useState<CalcResult | null>(null);
   const [withTax, setWithTax] = useState(false);
@@ -710,7 +720,7 @@ export default function JasaVendorDetail() {
   }, [id, handleCatalogChange]);
 
   const serviceType = useMemo(() => item ? resolveServiceType(item) : "general", [item]);
-  const categoryLabel = CATEGORY_LABELS[serviceType] ?? "Layanan";
+  const categoryLabel = CATEGORY_LABELS[serviceType] ?? t("jasaVendorDetail.categoryLabelFallback", "Layanan");
   const categoryIcon = CATEGORY_ICONS[serviceType] ?? <Truck className="h-5 w-5 text-white" />;
 
   const taxRate = 0.11;
@@ -778,11 +788,11 @@ export default function JasaVendorDetail() {
     });
     setAdded(true);
     toast({
-      title: "Ditambahkan ke pesanan",
+      title: t("jasaVendorDetail.toast.addedTitle", "Ditambahkan ke pesanan"),
       description: `${item.name} · ${calcResult.chargeableQty} ${calcResult.chargeableUnit}`,
       action: (
-        <ToastAction altText="Lanjut ke Pesanan" onClick={() => setLocation("/book")}>
-          Lanjut →
+        <ToastAction altText={t("jasaVendorDetail.toast.continueAlt", "Lanjut ke Pesanan")} onClick={() => setLocation("/book")}>
+          {t("jasaVendorDetail.toast.continueAction", "Lanjut →")}
         </ToastAction>
       ),
     });
@@ -800,7 +810,7 @@ export default function JasaVendorDetail() {
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
         <div className="flex flex-col items-center gap-4">
           <div className="h-10 w-10 rounded-full border-4 border-sky-500 border-t-transparent animate-spin" />
-          <p className="text-[13px] text-slate-400 font-semibold">Memuat detail layanan…</p>
+          <p className="text-[13px] text-slate-400 font-semibold">{t("jasaVendorDetail.loading", "Memuat detail layanan…")}</p>
         </div>
       </div>
     );
@@ -814,11 +824,11 @@ export default function JasaVendorDetail() {
           <Truck className="h-8 w-8 text-amber-400" />
         </div>
         <div className="text-center">
-          <h2 className="text-xl font-bold text-slate-800 mb-1">Layanan Tidak Tersedia</h2>
-          <p className="text-[13px] text-slate-500">Layanan ini telah dihapus atau tidak lagi dipublikasikan oleh vendor.</p>
+          <h2 className="text-xl font-bold text-slate-800 mb-1">{t("jasaVendorDetail.unavailable.title", "Layanan Tidak Tersedia")}</h2>
+          <p className="text-[13px] text-slate-500">{t("jasaVendorDetail.unavailable.desc", "Layanan ini telah dihapus atau tidak lagi dipublikasikan oleh vendor.")}</p>
         </div>
         <Button variant="outline" className="rounded-xl" onClick={() => setLocation("/marketplace?type=service")}>
-          <ArrowLeft className="h-4 w-4 mr-2" />Kembali ke Marketplace
+          <ArrowLeft className="h-4 w-4 mr-2" />{t("jasaVendorDetail.backToMarketplace", "Kembali ke Marketplace")}
         </Button>
       </div>
     );
@@ -831,11 +841,11 @@ export default function JasaVendorDetail() {
           <Truck className="h-8 w-8 text-slate-300" />
         </div>
         <div className="text-center">
-          <h2 className="text-xl font-bold text-slate-800 mb-1">Layanan tidak ditemukan</h2>
-          <p className="text-[13px] text-slate-500">Item ini tidak tersedia atau belum dipublikasikan.</p>
+          <h2 className="text-xl font-bold text-slate-800 mb-1">{t("jasaVendorDetail.notFound.title", "Layanan tidak ditemukan")}</h2>
+          <p className="text-[13px] text-slate-500">{t("jasaVendorDetail.notFound.desc", "Item ini tidak tersedia atau belum dipublikasikan.")}</p>
         </div>
         <Button variant="outline" className="rounded-xl" onClick={() => setLocation("/marketplace?type=service")}>
-          <ArrowLeft className="h-4 w-4 mr-2" />Kembali ke Marketplace
+          <ArrowLeft className="h-4 w-4 mr-2" />{t("jasaVendorDetail.backToMarketplace", "Kembali ke Marketplace")}
         </Button>
       </div>
     );
@@ -857,7 +867,7 @@ export default function JasaVendorDetail() {
           <button onClick={handleBack}
             className="inline-flex items-center gap-1.5 mb-4 text-[12px] font-semibold rounded-lg px-3 py-1.5"
             style={{ color: "rgba(255,255,255,0.85)", background: "rgba(255,255,255,0.10)", border: "1.5px solid rgba(255,255,255,0.20)" }}>
-            <ArrowLeft className="h-3.5 w-3.5" />Kembali
+            <ArrowLeft className="h-3.5 w-3.5" />{t("jasaVendorDetail.back", "Kembali")}
           </button>
           <div className="flex items-start gap-4">
             <div className="w-12 h-12 rounded-xl flex items-center justify-center shrink-0"
@@ -873,7 +883,7 @@ export default function JasaVendorDetail() {
                 {item.stockStatus === "available" && (
                   <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
                     style={{ background: "rgba(34,197,94,0.20)", color: "rgba(255,255,255,0.95)", border: "1px solid rgba(34,197,94,0.35)" }}>
-                    Tersedia
+                    {t("jasaVendorDetail.available", "Tersedia")}
                   </span>
                 )}
               </div>
@@ -884,7 +894,7 @@ export default function JasaVendorDetail() {
                 <button
                   onClick={() => setLocation(`/vendor/${item.vendorId}`)}
                   className="flex items-center gap-1.5 mt-1.5 group"
-                  title={`Lihat semua katalog ${item.vendorName}`}
+                  title={`${t("jasaVendorDetail.vendorCatalogTitle", "Lihat semua katalog")} ${item.vendorName}`}
                 >
                   <Building2 className="h-3.5 w-3.5 shrink-0" style={{ color: "rgba(255,255,255,0.65)" }} />
                   <span className="text-[13px] font-semibold group-hover:underline" style={{ color: "rgba(255,255,255,0.80)" }}>{item.vendorName}</span>
@@ -924,7 +934,7 @@ export default function JasaVendorDetail() {
             {/* Price card */}
             {item.priceSell != null && (
               <div className="rounded-2xl px-5 py-4 border" style={{ background: "linear-gradient(135deg,#EFF6FF 0%,#DBEAFE 100%)", borderColor: "rgba(59,130,246,0.25)" }}>
-                <p className="text-[11px] font-semibold text-sky-600 uppercase tracking-wider mb-0.5">Harga Jual</p>
+                <p className="text-[11px] font-semibold text-sky-600 uppercase tracking-wider mb-0.5">{t("jasaVendorDetail.sellingPrice", "Harga Jual")}</p>
                 <div className="flex items-baseline gap-2">
                   <span className="text-[26px] font-extrabold text-sky-700 leading-none">
                     {formatCurrency(item.priceSell, item.currency)}
@@ -932,7 +942,7 @@ export default function JasaVendorDetail() {
                   {item.unit && <span className="text-[14px] text-sky-500 font-medium">/ {item.unit}</span>}
                 </div>
                 {item.moq != null && item.moq > 1 && (
-                  <p className="text-[12px] text-sky-600 mt-1">Min. order: {item.moq} {item.unit ?? "unit"}</p>
+                  <p className="text-[12px] text-sky-600 mt-1">{t("jasaVendorDetail.minOrder", "Min. order:")} {item.moq} {item.unit ?? "unit"}</p>
                 )}
               </div>
             )}
@@ -940,7 +950,7 @@ export default function JasaVendorDetail() {
             {/* Description */}
             {item.description && (
               <div className="bg-white rounded-2xl border border-slate-200 px-5 py-4 shadow-sm">
-                <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Deskripsi</p>
+                <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-2">{t("jasaVendorDetail.description", "Deskripsi")}</p>
                 <p className="text-[13.5px] text-slate-700 leading-relaxed whitespace-pre-line">{item.description}</p>
               </div>
             )}
@@ -954,17 +964,17 @@ export default function JasaVendorDetail() {
 
             {/* Meta info */}
             <div className="bg-white rounded-2xl border border-slate-200 px-5 py-4 shadow-sm">
-              <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-3">Informasi Layanan</p>
+              <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-3">{t("jasaVendorDetail.serviceInfo", "Informasi Layanan")}</p>
               <div className="grid grid-cols-2 gap-3">
                 {[
-                  { icon: <Tag className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />, label: "Tipe Layanan", val: item.resolvedCategoryLabel ?? categoryLabel },
+                  { icon: <Tag className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />, label: t("jasaVendorDetail.meta.serviceType", "Tipe Layanan"), val: item.resolvedCategoryLabel ?? categoryLabel },
                   item.serviceType ? { icon: <Tag className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />, label: "Service Type", val: item.serviceType } : null,
-                  item.location ? { icon: <MapPin className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />, label: "Lokasi", val: item.location } : null,
-                  item.origin ? { icon: <MapPin className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />, label: "Asal", val: item.origin } : null,
+                  item.location ? { icon: <MapPin className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />, label: t("jasaVendorDetail.meta.location", "Lokasi"), val: item.location } : null,
+                  item.origin ? { icon: <MapPin className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />, label: t("jasaVendorDetail.meta.origin", "Asal"), val: item.origin } : null,
                   item.leadTime ? { icon: <Clock className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />, label: "Lead Time", val: item.leadTime } : null,
-                  item.moq != null ? { icon: <Tag className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />, label: "Min. Order", val: `${item.moq} ${item.unit ?? "unit"}` } : null,
-                  item.subcategory ? { icon: <ChevronRight className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />, label: "Sub-kategori", val: item.subcategory } : null,
-                  item.currency !== "IDR" ? { icon: <Tag className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />, label: "Mata Uang", val: item.currency } : null,
+                  item.moq != null ? { icon: <Tag className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />, label: t("jasaVendorDetail.meta.minOrder", "Min. Order"), val: `${item.moq} ${item.unit ?? "unit"}` } : null,
+                  item.subcategory ? { icon: <ChevronRight className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />, label: t("jasaVendorDetail.meta.subcategory", "Sub-kategori"), val: item.subcategory } : null,
+                  item.currency !== "IDR" ? { icon: <Tag className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />, label: t("jasaVendorDetail.meta.currency", "Mata Uang"), val: item.currency } : null,
                 ].filter(Boolean).map((row, i) => (
                   <div key={i} className="flex items-start gap-2">
                     {row!.icon}
@@ -988,8 +998,8 @@ export default function JasaVendorDetail() {
                   <Calculator className="h-4 w-4 text-sky-600" />
                 </div>
                 <div>
-                  <p className="text-[14px] font-bold text-slate-800 leading-tight">Kalkulator Estimasi</p>
-                  <p className="text-[11px] text-slate-400">Isi detail pengiriman untuk estimasi biaya</p>
+                  <p className="text-[14px] font-bold text-slate-800 leading-tight">{t("jasaVendorDetail.calculator.title", "Kalkulator Estimasi")}</p>
+                  <p className="text-[11px] text-slate-400">{t("jasaVendorDetail.calculator.subtitle", "Isi detail pengiriman untuk estimasi biaya")}</p>
                 </div>
               </div>
 
@@ -997,7 +1007,7 @@ export default function JasaVendorDetail() {
 
               {/* Service type badge */}
               <div className="flex items-center gap-1.5">
-                <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Tipe:</span>
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">{t("jasaVendorDetail.calculator.typeLabel", "Tipe:")} </span>
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-sky-50 border border-sky-200 text-[11px] font-bold text-sky-700">
                   {categoryIcon && <span className="[&>svg]:h-3 [&>svg]:w-3 [&>svg]:text-sky-600">{categoryIcon}</span>}
                   {categoryLabel}
@@ -1007,7 +1017,7 @@ export default function JasaVendorDetail() {
               {/* Calculator form by type */}
               {item.priceSell == null && (
                 <div className="text-center py-4">
-                  <p className="text-[12px] text-slate-400">Harga belum tersedia.<br />Hubungi vendor untuk penawaran.</p>
+                  <p className="text-[12px] text-slate-400">{t("jasaVendorDetail.noPriceMessage", "Harga belum tersedia.")}<br />{t("jasaVendorDetail.noPriceHint", "Hubungi vendor untuk penawaran.")}</p>
                 </div>
               )}
 
@@ -1028,24 +1038,24 @@ export default function JasaVendorDetail() {
                 <>
                   <Separator />
                   <div>
-                    <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Ringkasan Estimasi</p>
+                    <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-2">{t("jasaVendorDetail.summary.title", "Ringkasan Estimasi")}</p>
                     <div className="space-y-0.5">
-                      <SummaryRow label="Harga Satuan" value={formatCurrency(item.priceSell ?? 0, item.currency)} />
+                      <SummaryRow label={t("jasaVendorDetail.summary.unitPrice", "Harga Satuan")} value={formatCurrency(item.priceSell ?? 0, item.currency)} />
                       <SummaryRow label={`× ${calcResult.chargeableQty} ${calcResult.chargeableUnit}`} value={formatCurrency(calcResult.subtotal, item.currency)} />
                       <div className="flex items-center justify-between py-1">
                         <div className="flex items-center gap-2">
                           <Switch checked={withTax} onCheckedChange={setWithTax} />
-                          <span className="text-[12px] text-slate-600">PPN 11%</span>
+                          <span className="text-[12px] text-slate-600">{t("jasaVendorDetail.summary.ppn", "PPN 11%")}</span>
                         </div>
                         <span className="text-[12px] font-semibold text-slate-700 tabular-nums">
                           {withTax ? formatCurrency(tax, item.currency) : "—"}
                         </span>
                       </div>
                       <Separator />
-                      <SummaryRow label="Total Estimasi" value={formatCurrency(total, item.currency)} bold />
+                      <SummaryRow label={t("jasaVendorDetail.summary.totalEstimate", "Total Estimasi")} value={formatCurrency(total, item.currency)} bold />
                     </div>
                     <p className="text-[10px] text-slate-400 mt-2 leading-relaxed">
-                      * Estimasi awal. Harga final dikonfirmasi vendor.
+                      {t("jasaVendorDetail.summary.disclaimer", "* Estimasi awal. Harga final dikonfirmasi vendor.")}
                     </p>
                   </div>
 
@@ -1054,9 +1064,9 @@ export default function JasaVendorDetail() {
                     onClick={handleAddToCart}
                   >
                     {added ? (
-                      <><CheckCircle2 className="h-4 w-4 mr-2" />Ditambahkan!</>
+                      <><CheckCircle2 className="h-4 w-4 mr-2" />{t("jasaVendorDetail.addedBtn", "Ditambahkan!")}</>
                     ) : (
-                      <><ShoppingCart className="h-4 w-4 mr-2" />Tambahkan ke Pesanan</>
+                      <><ShoppingCart className="h-4 w-4 mr-2" />{t("jasaVendorDetail.addToCartBtn", "Tambahkan ke Pesanan")}</>
                     )}
                   </Button>
                 </>
@@ -1070,7 +1080,7 @@ export default function JasaVendorDetail() {
                   <svg className="h-4 w-4 fill-current" viewBox="0 0 24 24">
                     <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
                   </svg>
-                  Tanya via WhatsApp
+                  {t("jasaVendorDetail.whatsappBtn", "Tanya via WhatsApp")}
                 </a>
               )}
 

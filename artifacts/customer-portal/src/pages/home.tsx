@@ -145,9 +145,9 @@ export default function Home() {
   ];
 
   const testimonials = [
-    { nameKey: "testimonials.t1Name", roleKey: "testimonials.t1Role", textKey: "testimonials.t1Text", photoKey: "testimonials.t1Photo", defaultImg: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=96&h=96&fit=crop&crop=face" },
-    { nameKey: "testimonials.t2Name", roleKey: "testimonials.t2Role", textKey: "testimonials.t2Text", photoKey: "testimonials.t2Photo", defaultImg: "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=96&h=96&fit=crop&crop=face" },
-    { nameKey: "testimonials.t3Name", roleKey: "testimonials.t3Role", textKey: "testimonials.t3Text", photoKey: "testimonials.t3Photo", defaultImg: "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=96&h=96&fit=crop&crop=face" },
+    { nameKey: "testimonials.t1Name", roleKey: "testimonials.t1Role", textKey: "testimonials.t1Text", photoKey: "testimonials.t1Photo", defaultImg: "/api/storage/public-objects/portal/images/testimonials/t1.jpg" },
+    { nameKey: "testimonials.t2Name", roleKey: "testimonials.t2Role", textKey: "testimonials.t2Text", photoKey: "testimonials.t2Photo", defaultImg: "/api/storage/public-objects/portal/images/testimonials/t2.jpg" },
+    { nameKey: "testimonials.t3Name", roleKey: "testimonials.t3Role", textKey: "testimonials.t3Text", photoKey: "testimonials.t3Photo", defaultImg: "/api/storage/public-objects/portal/images/testimonials/t3.jpg" },
   ];
 
   return (
@@ -155,7 +155,7 @@ export default function Home() {
       <PageSeo path="/" />
 
       {/* H1 tersembunyi untuk SEO — selalu ada di DOM tanpa JS rendering delay */}
-      <h1 className="sr-only">B2B Marketplace and Logistic — Solusi Ekspor Impor, Freight Forwarding &amp; Logistik Terpadu</h1>
+      <h1 className="sr-only">{COMPANY_CONFIG.brandName} — Solusi Ekspor Impor, Freight Forwarding &amp; Logistik Terpadu</h1>
 
       {/* ── Draft Resume Banner ───────────────────────────────────── */}
       {showDraftBanner && (
@@ -187,7 +187,7 @@ export default function Home() {
         <EditableImage
           contentKey="hero_bg"
           defaultSrc="/images/hero-bg.webp"
-          alt="Cargo ship at sea"
+          alt={t("home.altCargoShip", "Cargo ship at sea")}
           className="absolute inset-0 w-full h-full object-cover z-0"
           priority
         />
@@ -246,7 +246,7 @@ export default function Home() {
               <button
                 className="w-full sm:w-auto inline-flex items-center justify-center gap-2 h-14 px-10 text-[15px] font-bold text-white rounded-xl transition-all duration-300 active:scale-95"
                 style={{
-                  background: "linear-gradient(135deg, #0ea5e9 0%, #0284c7 60%, #0369a1 100%)",
+                  background: "linear-gradient(135deg, var(--brand-primary) 0%, var(--brand-primary-600) 60%, var(--brand-primary-700) 100%)",
                   boxShadow: "0 0 32px rgba(14,165,233,0.55), 0 4px 24px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.2)",
                 }}
               >
@@ -266,10 +266,12 @@ export default function Home() {
           {/* Social proof row */}
           <div className="flex items-center justify-center gap-4 flex-wrap">
             <div className="flex -space-x-2.5">
-              {["photo-1507003211169-0a1dd7228f2d","photo-1438761681033-6461ffad8d80","photo-1472099645785-5658abf4ff4e","photo-1560250097-0b93528c311a"].map((id, i) => (
-                <img key={i} src={`https://images.unsplash.com/${id}?w=40&h=40&fit=crop&crop=face`}
+              {["sp1","sp2","sp3","sp4"].map((id, i) => (
+                <img key={i}
+                  src={`/api/storage/public-objects/portal/images/testimonials/${id}.jpg`}
                   className="w-8 h-8 rounded-full ring-2 object-cover"
                   style={{ outline: "2px solid rgba(15,23,42,0.8)", outlineOffset: "-2px" }}
+                  onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
                   alt=""
                 />
               ))}
@@ -287,7 +289,7 @@ export default function Home() {
 
         {/* Scroll indicator */}
         <button
-          aria-label="Scroll down"
+          aria-label={t("home.ariaScrollDown", "Scroll down")}
           className="absolute bottom-7 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-1 text-white/40 hover:text-white/80 transition-colors duration-300 cursor-pointer"
           onClick={() => window.scrollBy({ top: window.innerHeight * 0.85, behavior: "smooth" })}
         >
@@ -297,7 +299,7 @@ export default function Home() {
       </section>
 
       {/* ── Quick Actions Bar (mobile-first) ─────────────────────── */}
-      <section className="md:hidden" style={{ background: "linear-gradient(to bottom, rgba(2,8,23,0.98) 0%, #0f172a 100%)" }}>
+      <section className="md:hidden" style={{ background: "linear-gradient(to bottom, rgba(2,8,23,0.98) 0%, var(--brand-dark-900) 100%)" }}>
         <div className="px-3 pt-0 pb-4 grid grid-cols-3 gap-2.5">
           <a href="/track" className="flex flex-col items-center gap-2 pt-4 pb-3 px-2 rounded-2xl active:scale-95 transition-transform"
             style={{ background: "rgba(14,165,233,0.12)", border: "1px solid rgba(14,165,233,0.25)" }}>
@@ -327,7 +329,7 @@ export default function Home() {
       </section>
 
       {/* ── Trust Signals / Stats ────────────────────────────────── */}
-      <section className="py-12 md:py-16" style={{ background: "linear-gradient(135deg, #0f172a 0%, #1e293b 100%)" }}>
+      <section className="py-12 md:py-16" style={{ background: "linear-gradient(135deg, var(--brand-dark-900) 0%, var(--brand-dark-800) 100%)" }}>
         <div className="container px-4 md:px-6">
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
             {stats.map(({ icon: Icon, valueKey, defaultVal, labelKey, defaultLabel, color, bg, border }) => (
@@ -356,7 +358,7 @@ export default function Home() {
       </section>
 
       {/* ── Partner Carrier Logos — auto-scroll marquee ───────────── */}
-      <section className="py-8 overflow-hidden" style={{ background: "#0a1628", borderTop: "1px solid rgba(255,255,255,0.06)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+      <section className="py-8 overflow-hidden" style={{ background: "var(--brand-navy)", borderTop: "1px solid rgba(255,255,255,0.06)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
         <p className="text-center text-[10px] font-bold uppercase tracking-[0.22em] mb-6" style={{ color: "rgba(148,163,184,0.6)" }}>
           <EditableText contentKey="partners_label" defaultValue={t("partners.label")} />
         </p>
@@ -365,9 +367,9 @@ export default function Home() {
         <div className="relative">
           {/* Fade edges */}
           <div className="absolute left-0 top-0 bottom-0 w-16 z-10 pointer-events-none"
-            style={{ background: "linear-gradient(to right, #0a1628, transparent)" }} />
+            style={{ background: "linear-gradient(to right, var(--brand-navy), transparent)" }} />
           <div className="absolute right-0 top-0 bottom-0 w-16 z-10 pointer-events-none"
-            style={{ background: "linear-gradient(to left, #0a1628, transparent)" }} />
+            style={{ background: "linear-gradient(to left, var(--brand-navy), transparent)" }} />
 
           <div className="flex gap-4 overflow-hidden">
             {/* We render the list twice for seamless CSS marquee */}
@@ -669,7 +671,7 @@ export default function Home() {
                 <EditableImage
                   contentKey="about_img1"
                   defaultSrc="/api/storage/public-objects/portal/images/port-operations.png"
-                  alt="Operasi Pelabuhan"
+                  alt={t("home.altPortOperations", "Operasi Pelabuhan")}
                   className="w-full h-full object-cover"
                 />
               </div>
@@ -821,7 +823,7 @@ export default function Home() {
             <Link href="/register" className="w-full sm:w-auto">
               <button
                 className="inline-flex items-center justify-center gap-2 w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 focus-visible:ring-offset-2 focus-visible:ring-offset-transparent"
-                style={{ background: "#0F172A", color: "#ffffff", borderRadius: "16px", padding: "15px 28px", fontSize: "16px", fontWeight: 700, letterSpacing: "-0.01em", border: "none", cursor: "pointer", boxShadow: "0 16px 35px rgba(15,23,42,0.30)", transition: "transform 0.22s ease, box-shadow 0.22s ease", whiteSpace: "nowrap" }}
+                style={{ background: "var(--brand-dark-900)", color: "#ffffff", borderRadius: "16px", padding: "15px 28px", fontSize: "16px", fontWeight: 700, letterSpacing: "-0.01em", border: "none", cursor: "pointer", boxShadow: "0 16px 35px rgba(15,23,42,0.30)", transition: "transform 0.22s ease, box-shadow 0.22s ease", whiteSpace: "nowrap" }}
                 onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.transform = "translateY(-2px)"; (e.currentTarget as HTMLElement).style.boxShadow = "0 22px 44px rgba(15,23,42,0.45)"; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.transform = "translateY(0)"; (e.currentTarget as HTMLElement).style.boxShadow = "0 16px 35px rgba(15,23,42,0.30)"; }}
               >

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useParams } from "wouter";
 import { ArrowLeft } from "lucide-react";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 type TimelineItem = {
   id: number;
@@ -46,6 +47,7 @@ function getStatusMeta(status: string) {
 
 export default function CustomerOrderPage() {
   const { token } = useParams<{ token: string }>();
+  const { t } = useLanguage();
   const [data, setData] = useState<OrderData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -55,7 +57,7 @@ export default function CustomerOrderPage() {
     fetch(`/api/customer-order/${token}`)
       .then(async (r) => {
         const d = await r.json() as OrderData & { error?: string };
-        if (!r.ok) throw new Error(d.error ?? "Terjadi kesalahan");
+        if (!r.ok) throw new Error(d.error ?? t("common.error", "Terjadi kesalahan"));
         setData(d);
       })
       .catch((e: Error) => setError(e.message))
@@ -66,7 +68,7 @@ export default function CustomerOrderPage() {
     <div className="min-h-screen bg-slate-50 flex items-center justify-center">
       <div className="flex flex-col items-center gap-3 text-slate-400">
         <div className="h-8 w-8 border-4 border-teal-500 border-t-transparent rounded-full animate-spin" />
-        <span className="text-sm">Memuat status order...</span>
+        <span className="text-sm">{t("customerOrder.loadingStatus", "Memuat status order...")}</span>
       </div>
     </div>
   );
@@ -75,7 +77,7 @@ export default function CustomerOrderPage() {
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl p-8 text-center max-w-sm w-full shadow-sm">
         <div className="text-4xl mb-3">⚠️</div>
-        <p className="text-sm text-slate-600">{error ?? "Data tidak ditemukan"}</p>
+        <p className="text-sm text-slate-600">{error ?? t("customerOrder.dataNotFound", "Data tidak ditemukan")}</p>
       </div>
     </div>
   );
@@ -89,7 +91,7 @@ export default function CustomerOrderPage() {
           onClick={() => window.history.back()}
           className="inline-flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1.5 rounded-lg text-slate-500 hover:text-slate-800 bg-white hover:bg-slate-50 border border-slate-200 transition-all shadow-sm"
         >
-          <ArrowLeft className="h-3.5 w-3.5" /> Kembali
+          <ArrowLeft className="h-3.5 w-3.5" /> {t("common.back", "Kembali")}
         </button>
 
         {/* Header */}
@@ -111,9 +113,9 @@ export default function CustomerOrderPage() {
           </div>
 
           <div className="space-y-2">
-            <InfoRow label="Asal" value={data.origin} />
-            <InfoRow label="Tujuan" value={data.destination} />
-            <InfoRow label="Tanggal Order" value={new Date(data.createdAt).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })} />
+            <InfoRow label={t("customerOrder.origin", "Asal")} value={data.origin} />
+            <InfoRow label={t("customerOrder.destination", "Tujuan")} value={data.destination} />
+            <InfoRow label={t("customerOrder.orderDate", "Tanggal Order")} value={new Date(data.createdAt).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })} />
           </div>
         </div>
 
@@ -123,11 +125,11 @@ export default function CustomerOrderPage() {
         {/* Price summary card */}
         {(data.productPrice != null || data.truckPrice != null || data.totalPrice != null) && (
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-            <h2 className="font-semibold text-slate-800 mb-3">💰 Ringkasan Harga</h2>
+            <h2 className="font-semibold text-slate-800 mb-3">{t("customerOrder.priceSummary", "💰 Ringkasan Harga")}</h2>
             <div className="space-y-2 text-sm">
               {data.productPrice != null && (
                 <div className="flex justify-between">
-                  <span className="text-slate-500">Produk / Jasa</span>
+                  <span className="text-slate-500">{t("customerOrder.productService", "Produk / Jasa")}</span>
                   <span className="font-medium text-slate-800">
                     {data.productPrice.toLocaleString("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 })}
                   </span>
@@ -136,14 +138,14 @@ export default function CustomerOrderPage() {
               {data.truckPrice != null && (
                 <div className="flex justify-between items-center">
                   <span className="text-slate-500 flex items-center gap-1.5">
-                    Truk
+                    {t("customerOrder.truck", "Truk")}
                     {data.truckSource && (
                       <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
                         data.truckSource === "internal"
                           ? "bg-orange-100 text-orange-700"
                           : "bg-blue-100 text-blue-700"
                       }`}>
-                        {data.truckSource === "internal" ? "Internal" : "Eksternal"}
+                        {data.truckSource === "internal" ? t("customerOrder.internal", "Internal") : t("customerOrder.external", "Eksternal")}
                       </span>
                     )}
                   </span>
@@ -154,7 +156,7 @@ export default function CustomerOrderPage() {
               )}
               {data.totalPrice != null && (
                 <div className="flex justify-between pt-2 border-t border-slate-100">
-                  <span className="font-semibold text-slate-700">Total</span>
+                  <span className="font-semibold text-slate-700">{t("customerOrder.total", "Total")}</span>
                   <span className="font-bold text-teal-700 text-base">
                     {data.totalPrice.toLocaleString("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 })}
                   </span>
@@ -167,7 +169,7 @@ export default function CustomerOrderPage() {
         {/* Timeline */}
         {data.timeline.length > 0 ? (
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-            <h2 className="font-semibold text-slate-800 mb-4">📅 Riwayat Perjalanan</h2>
+            <h2 className="font-semibold text-slate-800 mb-4">{t("customerOrder.journeyHistory", "📅 Riwayat Perjalanan")}</h2>
             <div className="relative pl-5">
               <div className="absolute left-2 top-0 bottom-0 w-0.5 bg-slate-100" />
               <div className="space-y-5">
@@ -189,7 +191,7 @@ export default function CustomerOrderPage() {
                         {item.attachmentUrl && (
                           <a href={item.attachmentUrl} target="_blank" rel="noopener noreferrer"
                             className="text-xs text-blue-600 underline mt-1 block">
-                            📎 Lihat Dokumen
+                            {t("customerOrder.viewDocument", "📎 Lihat Dokumen")}
                           </a>
                         )}
                         <p className="text-xs text-slate-400 mt-1">
@@ -207,7 +209,7 @@ export default function CustomerOrderPage() {
           </div>
         ) : (
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 text-center text-slate-400 text-sm">
-            Belum ada riwayat perjalanan.
+            {t("customerOrder.noJourneyHistory", "Belum ada riwayat perjalanan.")}
           </div>
         )}
 

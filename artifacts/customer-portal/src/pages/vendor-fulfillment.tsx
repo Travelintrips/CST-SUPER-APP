@@ -280,7 +280,7 @@ function Loader() {
     <div className="min-h-screen bg-slate-50 flex items-center justify-center">
       <div className="flex flex-col items-center gap-3 text-slate-400">
         <div className="h-8 w-8 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-        <span className="text-sm">{t("vendor.fulfillment.loading")}</span>
+        <span className="text-sm">{t("vendorFulfillment.loading", "Memuat…")}</span>
       </div>
     </div>
   );
@@ -292,9 +292,9 @@ function ErrorCard({ message }: { message: string }) {
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-8 max-w-sm w-full text-center">
         <div className="text-5xl mb-4">⚠️</div>
-        <h2 className="text-lg font-semibold text-slate-800 mb-2">{t("vendor.fulfillment.linkInvalid")}</h2>
+        <h2 className="text-lg font-semibold text-slate-800 mb-2">{t("vendorFulfillment.linkInvalid", "Link tidak valid")}</h2>
         <p className="text-sm text-slate-600">{message}</p>
-        <p className="text-xs text-slate-400 mt-3">{t("vendor.fulfillment.linkInvalidHint")}</p>
+        <p className="text-xs text-slate-400 mt-3">{t("vendorFulfillment.linkInvalidHint", "Pastikan link yang Anda buka sudah benar.")}</p>
       </div>
     </div>
   );
@@ -406,12 +406,12 @@ function SubmittedReview({
         <div className="bg-white rounded-2xl shadow-sm border border-emerald-100 p-6 text-center">
           <div className="text-5xl mb-3">{justSubmitted ? "✅" : "📋"}</div>
           <h1 className="text-xl font-bold text-slate-800 mb-1">
-            {justSubmitted ? t("vendor.fulfillment.successTitle") : t("vendor.fulfillment.reviewTitle")}
+            {justSubmitted ? t("vendorFulfillment.successTitle", "Data Berhasil Dikirim!") : t("vendorFulfillment.reviewTitle", "Data Fulfillment")}
           </h1>
           <p className="text-sm text-slate-500 mb-4">
             {justSubmitted
-              ? t("vendor.fulfillment.successDesc")
-              : t("vendor.fulfillment.reviewDesc")}
+              ? t("vendorFulfillment.successDesc", "Data fulfillment Anda telah berhasil dikirim.")
+              : t("vendorFulfillment.reviewDesc", "Berikut ringkasan data yang telah dikirim.")}
           </p>
           <div className="inline-flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-full px-4 py-1.5 text-xs font-semibold text-emerald-700">
             <span>✓ Submitted</span>
@@ -423,7 +423,7 @@ function SubmittedReview({
 
         {progressEvents.length > 0 && (
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5">
-            <h3 className="text-sm font-semibold text-slate-700 mb-3">📊 Progress Order</h3>
+            <h3 className="text-sm font-semibold text-slate-700 mb-3">📊 {t("vendorFulfillment.progressOrder", "Progress Order")}</h3>
             <div className="space-y-2">
               {progressEvents.map((ev) => (
                 <div key={ev.step_key} className="flex items-center gap-3">
@@ -444,21 +444,21 @@ function SubmittedReview({
           <div className="flex items-center gap-2 mb-4">
             <span className="text-xl">{icon}</span>
             <div>
-              <h2 className="text-sm font-semibold text-slate-700">{t("vendor.fulfillment.orderDetail")} — {svcLabel}</h2>
+              <h2 className="text-sm font-semibold text-slate-700">{t("vendorFulfillment.orderDetail", "Detail Order")} — {svcLabel}</h2>
               {data.vendorName && (
-                <p className="text-xs text-slate-400">Vendor: {data.vendorName}</p>
+                <p className="text-xs text-slate-400">{t("vendorFulfillment.vendor", "Vendor")}: {data.vendorName}</p>
               )}
             </div>
           </div>
           <div className="space-y-2.5">
-            <OrderRow label="No. Order" value={order.orderNumber} />
-            {order.customerName && <OrderRow label="Customer" value={order.customerName} />}
-            <OrderRow label="Layanan" value={order.serviceType} />
-            {!isProduct && <OrderRow label="Rute" value={`${order.origin} → ${order.destination}`} />}
-            {order.commodity && <OrderRow label="Komoditi" value={order.commodity} />}
+            <OrderRow label={t("vendorFulfillment.orderNumber", "No. Order")} value={order.orderNumber} />
+            {order.customerName && <OrderRow label={t("vendorFulfillment.customer", "Customer")} value={order.customerName} />}
+            <OrderRow label={t("vendorFulfillment.service", "Layanan")} value={order.serviceType} />
+            {!isProduct && <OrderRow label={t("vendorFulfillment.route", "Rute")} value={`${order.origin} → ${order.destination}`} />}
+            {order.commodity && <OrderRow label={t("vendorFulfillment.commodity", "Komoditi")} value={order.commodity} />}
             {order.templateSnapshot && (order.templateSnapshot as any).label && (
               <div className="mt-2 pt-2 border-t border-slate-100">
-                <p className="text-xs text-slate-400 uppercase tracking-wide mb-1">📋 Template Produk</p>
+                <p className="text-xs text-slate-400 uppercase tracking-wide mb-1">📋 {t("vendorFulfillment.productTemplate", "Template Produk")}</p>
                 <p className="text-sm font-medium text-slate-700">{String((order.templateSnapshot as any).label)}</p>
                 {Array.isArray((order.templateSnapshot as any).requiredDocuments) &&
                   ((order.templateSnapshot as any).requiredDocuments as any[]).filter((d) => d.required).length > 0 && (
@@ -476,9 +476,9 @@ function SubmittedReview({
         {hasAnyData && (
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5">
             <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-1">
-              {icon} Data Fulfillment yang Dikirim
+              {icon} {t("vendorFulfillment.submittedFulfillmentData", "Data Fulfillment yang Dikirim")}
             </h2>
-            <p className="text-xs text-slate-400 mb-4">Read-only — tidak dapat diubah.</p>
+            <p className="text-xs text-slate-400 mb-4">{t("vendorFulfillment.readOnly", "Read-only — tidak dapat diubah.")}</p>
 
             {isTemplateService && (() => {
               const snap = tmplSnap as TmplServiceSnapshot;
@@ -493,19 +493,19 @@ function SubmittedReview({
             })()}
             {isTrucking && (
               <>
-                <Row label="Nama Driver"    value={val("driverName")} />
-                <Row label="No. HP Driver"  value={val("driverPhone")} />
-                <Row label="Nomor Plat"     value={val("plateNumber")} />
-                <Row label="Tipe Kendaraan" value={val("vehicleType")} />
-                <Row label="Est. Pickup"    value={val("pickupTime")} />
+                <Row label={t("vendorFulfillment.driverName", "Nama Driver")}    value={val("driverName")} />
+                <Row label={t("vendorFulfillment.driverPhone", "No. HP Driver")}  value={val("driverPhone")} />
+                <Row label={t("vendorFulfillment.plateNumber", "Nomor Plat")}     value={val("plateNumber")} />
+                <Row label={t("vendorFulfillment.vehicleType", "Tipe Kendaraan")} value={val("vehicleType")} />
+                <Row label={t("vendorFulfillment.estPickup", "Est. Pickup")}    value={val("pickupTime")} />
               </>
             )}
             {isFreight && (
               <>
-                <Row label="Carrier / Maskapai"     value={val("carrierName")} />
-                <Row label="No. AWB / BL"            value={val("awbBlNumber")} />
-                <Row label="No. Penerbangan/Vessel"  value={val("flightVessel")} />
-                <Row label="No. Booking"             value={val("bookingNumber")} />
+                <Row label={t("vendorFulfillment.carrier", "Carrier / Maskapai")}     value={val("carrierName")} />
+                <Row label={t("vendorFulfillment.awbBl", "No. AWB / BL")}            value={val("awbBlNumber")} />
+                <Row label={t("vendorFulfillment.flightVessel", "No. Penerbangan/Vessel")}  value={val("flightVessel")} />
+                <Row label={t("vendorFulfillment.bookingNumber", "No. Booking")}             value={val("bookingNumber")} />
                 <Row label="ETD"                     value={val("etd")} />
                 <Row label="ETA"                     value={val("eta")} />
               </>
@@ -518,10 +518,10 @@ function SubmittedReview({
                     <table className="w-full text-sm">
                       <thead className="bg-slate-50">
                         <tr className="text-slate-400 text-xs">
-                          <th className="text-left px-3 py-2 font-medium">Produk</th>
+                          <th className="text-left px-3 py-2 font-medium">{t("vendorFulfillment.product", "Produk")}</th>
                           <th className="text-right px-3 py-2 font-medium">Qty</th>
-                          <th className="text-right px-3 py-2 font-medium">Satuan</th>
-                          <th className="text-right px-3 py-2 font-medium">Harga/Unit</th>
+                          <th className="text-right px-3 py-2 font-medium">{t("vendorFulfillment.unit", "Satuan")}</th>
+                          <th className="text-right px-3 py-2 font-medium">{t("vendorFulfillment.pricePerUnit", "Harga/Unit")}</th>
                           <th className="text-right px-3 py-2 font-medium">Subtotal</th>
                         </tr>
                       </thead>
@@ -539,13 +539,13 @@ function SubmittedReview({
                     </table>
                   </div>
                 )}
-                <Row label="Status Stok"      value={stockStatus ? STOCK_LABEL[stockStatus] ?? stockStatus : null} />
-                {isPartial && <Row label={t("vendor.fulfillment.qtyFulfilled")}   value={val("qtyConfirmed")} />}
-                <Row label="Tanggal Siap Kirim" value={val("readyDate") ? fmtDateLocal(val("readyDate")) : null} />
-                <Row label={t("vendor.fulfillment.leadTime")}          value={val("leadTime")} />
-                <Row label="Lokasi Gudang"      value={val("warehouseLocation")} />
-                <Row label="Konfirmasi Harga"   value={priceChoice ? PRICE_LABEL[priceChoice] ?? priceChoice : null} />
-                {isRevised && <Row label="Harga Revisi (DPP)" value={val("revisedPrice") ? idr(val("revisedPrice")) : null} />}
+                <Row label={t("vendorFulfillment.stockStatus", "Status Stok")}      value={stockStatus ? STOCK_LABEL[stockStatus] ?? stockStatus : null} />
+                {isPartial && <Row label={t("vendorFulfillment.qtyFulfilled", "Qty Terpenuhi")}   value={val("qtyConfirmed")} />}
+                <Row label={t("vendorFulfillment.readyDate", "Tanggal Siap Kirim")} value={val("readyDate") ? fmtDateLocal(val("readyDate")) : null} />
+                <Row label={t("vendorFulfillment.leadTime", "Lead Time")}          value={val("leadTime")} />
+                <Row label={t("vendorFulfillment.warehouseLocation", "Lokasi Gudang")}      value={val("warehouseLocation")} />
+                <Row label={t("vendorFulfillment.priceConfirm", "Konfirmasi Harga")}   value={priceChoice ? PRICE_LABEL[priceChoice] ?? priceChoice : null} />
+                {isRevised && <Row label={t("vendorFulfillment.revisedPriceDpp", "Harga Revisi (DPP)")} value={val("revisedPrice") ? idr(val("revisedPrice")) : null} />}
                 {stockStatus !== "none" && total > 0 && (
                   <div className="mt-3 pt-3 border-t border-slate-100 space-y-1.5">
                     <div className="flex justify-between text-sm">
@@ -563,7 +563,7 @@ function SubmittedReview({
                   </div>
                 )}
                 {val("deliveryMethod") && (
-                  <Row label="Metode Pengiriman" value={
+                  <Row label={t("vendorFulfillment.deliveryMethod", "Metode Pengiriman")} value={
                     val("deliveryMethod") === "vendor_delivery" ? "🚛 Vendor Delivery" :
                     val("deliveryMethod") === "customer_pickup" ? "🏭 Customer Pickup" :
                     val("deliveryMethod") === "third_party" ? "📦 Third Party Carrier" :
@@ -572,39 +572,39 @@ function SubmittedReview({
                 )}
                 {val("stockPhotoUrl") && (
                   <div className="mt-3">
-                    <p className="text-xs text-slate-400 mb-1.5">Foto Barang / Stok</p>
+                    <p className="text-xs text-slate-400 mb-1.5">{t("vendorFulfillment.stockPhoto", "Foto Barang / Stok")}</p>
                     {val("stockPhotoUrl")!.match(/\.(jpg|jpeg|png|webp|heic|heif)$/i) ? (
-                      <img src={val("stockPhotoUrl")!} alt="Foto stok" className="max-h-40 rounded-lg border border-slate-200" />
+                      <img src={val("stockPhotoUrl")!} alt={t("vendorFulfillment.stockPhotoAlt", "Foto stok")} className="max-h-40 rounded-lg border border-slate-200" />
                     ) : (
-                      <a href={val("stockPhotoUrl")!} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 underline">Lihat file foto stok</a>
+                      <a href={val("stockPhotoUrl")!} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 underline">{t("vendorFulfillment.viewStockPhoto", "Lihat file foto stok")}</a>
                     )}
                   </div>
                 )}
                 {val("packingListUrl") && (
                   <div className="mt-2">
                     <a href={val("packingListUrl")!} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-xs text-blue-600 underline">
-                      📋 Lihat Packing List
+                      📋 {t("vendorFulfillment.viewPackingList", "Lihat Packing List")}
                     </a>
                   </div>
                 )}
                 {val("invoiceUrl") && (
                   <div className="mt-2">
                     <a href={val("invoiceUrl")!} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-xs text-blue-600 underline">
-                      📄 Lihat Invoice
+                      📄 {t("vendorFulfillment.viewInvoice", "Lihat Invoice")}
                     </a>
                   </div>
                 )}
                 {val("podUrl") && (
                   <div className="mt-2">
                     <a href={val("podUrl")!} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-xs text-blue-600 underline">
-                      ✅ Lihat POD (Proof of Delivery)
+                      ✅ {t("vendorFulfillment.viewPod", "Lihat POD (Proof of Delivery)")}
                     </a>
                   </div>
                 )}
                 {val("supportingDocUrl") && (
                   <div className="mt-1">
                     <a href={val("supportingDocUrl")!} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-xs text-blue-600 underline">
-                      📎 Lihat Dokumen Pendukung
+                      📎 {t("vendorFulfillment.viewSupportingDoc", "Lihat Dokumen Pendukung")}
                     </a>
                   </div>
                 )}
@@ -612,26 +612,26 @@ function SubmittedReview({
             )}
             {isCustoms && (
               <>
-                <Row label="Nama PIC Kepabeanan"      value={val("customsPicName")} />
-                <Row label="Dokumen Dibutuhkan"        value={val("customsDocuments")} />
-                <Row label="Est. Selesai Bea Cukai"   value={val("customsProcessEta")} />
+                <Row label={t("vendorFulfillment.customsPic", "Nama PIC Kepabeanan")}      value={val("customsPicName")} />
+                <Row label={t("vendorFulfillment.customsDocuments", "Dokumen Dibutuhkan")}        value={val("customsDocuments")} />
+                <Row label={t("vendorFulfillment.customsProcessEta", "Est. Selesai Bea Cukai")}   value={val("customsProcessEta")} />
               </>
             )}
             {!isTrucking && !isFreight && !isProduct && !isCustoms && (
               <>
-                <Row label="Driver"         value={val("driverName")} />
-                <Row label="No. Plat"       value={val("plateNumber")} />
+                <Row label={t("vendorFulfillment.driverShort", "Driver")}         value={val("driverName")} />
+                <Row label={t("vendorFulfillment.platShort", "No. Plat")}       value={val("plateNumber")} />
                 <Row label="Carrier"        value={val("carrierName")} />
                 <Row label="AWB/BL"         value={val("awbBlNumber")} />
                 <Row label="ETD"            value={val("etd")} />
                 <Row label="ETA"            value={val("eta")} />
-                <Row label="Stok"           value={val("stockConfirmed")} />
-                <Row label="PIC Kepabeanan" value={val("customsPicName")} />
+                <Row label={t("vendorFulfillment.stockShort", "Stok")}           value={val("stockConfirmed")} />
+                <Row label={t("vendorFulfillment.customsPicShort", "PIC Kepabeanan")} value={val("customsPicName")} />
               </>
             )}
             {val("notes") && (
               <div className="mt-3 pt-3 border-t border-slate-100">
-                <p className="text-xs text-slate-400 mb-1">Catatan Tambahan</p>
+                <p className="text-xs text-slate-400 mb-1">{t("vendorFulfillment.additionalNotes", "Catatan Tambahan")}</p>
                 <p className="text-sm text-slate-700 whitespace-pre-wrap">{val("notes")}</p>
               </div>
             )}
@@ -684,6 +684,7 @@ function UploadField({
   uploading: boolean;
   onUpload: (fileType: string, file: File) => void;
 }) {
+  const { t } = useLanguage();
   const inputRef = useRef<HTMLInputElement>(null);
   const isImage = url && url.match(/\.(jpg|jpeg|png|webp|heic|heif)$/i);
 
@@ -715,12 +716,12 @@ function UploadField({
           {uploading ? (
             <>
               <span className="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-              Mengupload...
+              {t("vendorFulfillment.uploading", "Mengupload...")}
             </>
           ) : url ? (
-            "✅ Terupload — Ganti"
+            t("vendorFulfillment.uploadedChange", "✅ Terupload — Ganti")
           ) : (
-            "📎 Pilih File"
+            t("vendorFulfillment.chooseFile", "📎 Pilih File")
           )}
         </button>
         {url && (
@@ -730,7 +731,7 @@ function UploadField({
             rel="noopener noreferrer"
             className="text-xs text-blue-600 underline truncate max-w-[160px]"
           >
-            {isImage ? "Lihat foto" : "Lihat dokumen"}
+            {isImage ? t("vendorFulfillment.viewPhoto", "Lihat foto") : t("vendorFulfillment.viewDocument", "Lihat dokumen")}
           </a>
         )}
       </div>
@@ -762,6 +763,7 @@ function DriverPicker({
   vehicleType: string;
   onSelect: (d: { name: string; phone: string; plate: string; vehicleType: string }) => void;
 }) {
+  const { t } = useLanguage();
   const [drivers, setDrivers] = useState<VendorDriver[]>([]);
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
@@ -804,7 +806,7 @@ function DriverPicker({
   }, [onSelect]);
 
   const handleSaveNew = async () => {
-    if (!newName.trim()) { setSaveError("Nama driver wajib diisi"); return; }
+    if (!newName.trim()) { setSaveError(t("vendorFulfillment.driverNameRequired", "Nama driver wajib diisi")); return; }
     setSaving(true); setSaveError(null);
     try {
       const r = await fetch(`/api/vendor-fulfillment/${token}/drivers`, {
@@ -813,7 +815,7 @@ function DriverPicker({
         body: JSON.stringify({ name: newName.trim(), phone: newPhone.trim(), vehiclePlate: newPlate.trim(), vehicleType: newVehicleType.trim() }),
       });
       const d = await r.json() as { driver?: VendorDriver; error?: string };
-      if (!r.ok) throw new Error(d.error ?? "Gagal menyimpan driver");
+      if (!r.ok) throw new Error(d.error ?? t("vendorFulfillment.saveDriverFailed", "Gagal menyimpan driver"));
       if (d.driver) {
         setDrivers((prev) => [...prev, d.driver!]);
         handleSelect(d.driver!);
@@ -835,7 +837,7 @@ function DriverPicker({
       {/* Driver Combobox */}
       <div className="space-y-1.5" ref={dropRef}>
         <label className="text-sm font-medium text-slate-700">
-          Pilih Driver<span className="text-red-500 ml-0.5">*</span>
+          {t("vendorFulfillment.selectDriver", "Pilih Driver")}<span className="text-red-500 ml-0.5">*</span>
         </label>
         {/* Selected preview */}
         {selectedLabel && !open && (
@@ -846,7 +848,7 @@ function DriverPicker({
               {plateNumber && <span className="text-slate-500 ml-2">· {plateNumber}</span>}
             </div>
             <button type="button" onClick={() => { setOpen(true); setSearch(""); }}
-              className="text-xs text-emerald-600 hover:text-emerald-800 underline shrink-0">Ganti</button>
+              className="text-xs text-emerald-600 hover:text-emerald-800 underline shrink-0">{t("vendorFulfillment.changeDriver", "Ganti")}</button>
           </div>
         )}
         {/* Search + dropdown */}
@@ -857,7 +859,7 @@ function DriverPicker({
               value={search}
               onChange={(e) => { setSearch(e.target.value); setOpen(true); }}
               onFocus={() => setOpen(true)}
-              placeholder={drivers.length > 0 ? "Cari nama driver atau plat..." : "Belum ada driver terdaftar"}
+              placeholder={drivers.length > 0 ? t("vendorFulfillment.searchDriver", "Cari nama driver atau plat...") : t("vendorFulfillment.noDriversRegistered", "Belum ada driver terdaftar")}
               className={inputCls}
               autoComplete="off"
             />
@@ -881,7 +883,7 @@ function DriverPicker({
                   ))
                 ) : (
                   <div className="px-3 py-3 text-sm text-slate-400 text-center">
-                    {search ? `"${search}" tidak ditemukan` : "Belum ada driver terdaftar"}
+                    {search ? `"${search}" ${t("vendorFulfillment.notFound", "tidak ditemukan")}` : t("vendorFulfillment.noDriversRegistered", "Belum ada driver terdaftar")}
                   </div>
                 )}
                 <button
@@ -889,7 +891,7 @@ function DriverPicker({
                   onClick={() => { setOpen(false); setShowAddForm(true); setNewName(search); setSearch(""); }}
                   className="w-full text-left px-3 py-2.5 text-sm text-emerald-700 font-medium bg-emerald-50 hover:bg-emerald-100 border-t border-emerald-100 flex items-center gap-2"
                 >
-                  <span className="text-base">＋</span> Tambah driver baru
+                  <span className="text-base">＋</span> {t("vendorFulfillment.addNewDriver", "Tambah driver baru")}
                 </button>
               </div>
             )}
@@ -900,28 +902,28 @@ function DriverPicker({
       {/* Add new driver mini form */}
       {showAddForm && (
         <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 space-y-3">
-          <p className="text-sm font-semibold text-emerald-800">➕ Tambah Driver Baru</p>
+          <p className="text-sm font-semibold text-emerald-800">➕ {t("vendorFulfillment.addNewDriverTitle", "Tambah Driver Baru")}</p>
           {saveError && <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{saveError}</p>}
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-slate-600">Nama Driver <span className="text-red-500">*</span></label>
+            <label className="text-xs font-medium text-slate-600">{t("vendorFulfillment.driverNameLabel", "Nama Driver")} <span className="text-red-500">*</span></label>
             <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)}
-              placeholder="Nama lengkap driver" className={inputCls} />
+              placeholder={t("vendorFulfillment.driverNamePlaceholder", "Nama lengkap driver")} className={inputCls} />
           </div>
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-slate-600">No. HP</label>
+            <label className="text-xs font-medium text-slate-600">{t("vendorFulfillment.driverPhoneLabel", "No. HP")}</label>
             <input type="text" value={newPhone} onChange={(e) => setNewPhone(e.target.value)}
               placeholder="08xxxxxxxxxx" className={inputCls} />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-slate-600">Plat Nomor</label>
+              <label className="text-xs font-medium text-slate-600">{t("vendorFulfillment.platNumberLabel", "Plat Nomor")}</label>
               <input type="text" value={newPlate} onChange={(e) => setNewPlate(e.target.value)}
                 placeholder="B 1234 XYZ" className={inputCls} />
             </div>
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-slate-600">Jenis Kendaraan</label>
+              <label className="text-xs font-medium text-slate-600">{t("vendorFulfillment.vehicleTypeLabel", "Jenis Kendaraan")}</label>
               <input type="text" value={newVehicleType} onChange={(e) => setNewVehicleType(e.target.value)}
-                placeholder="Engkel, CDD, dll" className={inputCls} />
+                placeholder={t("vendorFulfillment.vehicleTypePlaceholder", "Engkel, CDD, dll")} className={inputCls} />
             </div>
           </div>
           <div className="flex gap-2 pt-1">
@@ -932,14 +934,14 @@ function DriverPicker({
               className="flex-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white text-sm font-medium py-2 transition-colors flex items-center justify-center gap-2"
             >
               {saving && <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />}
-              {saving ? "Menyimpan..." : "Simpan & Pilih"}
+              {saving ? t("vendorFulfillment.saving", "Menyimpan...") : t("vendorFulfillment.saveAndSelect", "Simpan & Pilih")}
             </button>
             <button
               type="button"
               onClick={() => { setShowAddForm(false); setSaveError(null); }}
               className="px-4 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50 py-2"
             >
-              Batal
+              {t("vendorFulfillment.cancel", "Batal")}
             </button>
           </div>
         </div>
@@ -948,9 +950,9 @@ function DriverPicker({
       {/* Readonly detail fields after driver selected */}
       {driverName && (
         <div className="grid grid-cols-1 gap-3">
-          <Field label="No. HP Driver" name="driverPhone" value={driverPhone} onChange={(v) => onSelect({ name: driverName, phone: v, plate: plateNumber, vehicleType })} placeholder="08xxxxxxxxxx" />
-          <Field label="Nomor Plat Kendaraan" name="plateNumber" value={plateNumber} onChange={(v) => onSelect({ name: driverName, phone: driverPhone, plate: v, vehicleType })} placeholder="B 1234 XYZ" required />
-          <Field label="Tipe Kendaraan" name="vehicleType" value={vehicleType} onChange={(v) => onSelect({ name: driverName, phone: driverPhone, plate: plateNumber, vehicleType: v })} placeholder="Engkel, Tronton, CDD, dll" />
+          <Field label={t("vendorFulfillment.driverPhoneField", "No. HP Driver")} name="driverPhone" value={driverPhone} onChange={(v) => onSelect({ name: driverName, phone: v, plate: plateNumber, vehicleType })} placeholder="08xxxxxxxxxx" />
+          <Field label={t("vendorFulfillment.plateNumberField", "Nomor Plat Kendaraan")} name="plateNumber" value={plateNumber} onChange={(v) => onSelect({ name: driverName, phone: driverPhone, plate: v, vehicleType })} placeholder="B 1234 XYZ" required />
+          <Field label={t("vendorFulfillment.vehicleTypeField", "Tipe Kendaraan")} name="vehicleType" value={vehicleType} onChange={(v) => onSelect({ name: driverName, phone: driverPhone, plate: plateNumber, vehicleType: v })} placeholder={t("vendorFulfillment.vehicleTypePlaceholder2", "Engkel, Tronton, CDD, dll")} />
         </div>
       )}
     </div>
@@ -960,6 +962,7 @@ function DriverPicker({
 /* ─── Trucking & Freight & Customs (unchanged) ────────────────────────────── */
 
 function TruckingFields({ fields, setField, token }: { fields: Record<string, string>; setField: (k: string, v: string) => void; token: string }) {
+  const { t } = useLanguage();
   const handleDriverSelect = useCallback((d: { name: string; phone: string; plate: string; vehicleType: string }) => {
     setField("driverName", d.name);
     setField("driverPhone", d.phone);
@@ -977,30 +980,32 @@ function TruckingFields({ fields, setField, token }: { fields: Record<string, st
         vehicleType={fields.vehicleType ?? ""}
         onSelect={handleDriverSelect}
       />
-      <Field label="Estimasi Waktu Pickup" name="pickupTime" value={fields.pickupTime ?? ""} onChange={(v) => setField("pickupTime", v)} placeholder="Contoh: 14 Jun 2026, 09:00 WIB" />
+      <Field label={t("vendorFulfillment.estPickupTime", "Estimasi Waktu Pickup")} name="pickupTime" value={fields.pickupTime ?? ""} onChange={(v) => setField("pickupTime", v)} placeholder={t("vendorFulfillment.estPickupPlaceholder", "Contoh: 14 Jun 2026, 09:00 WIB")} />
     </>
   );
 }
 
 function FreightFields({ fields, setField }: { fields: Record<string, string>; setField: (k: string, v: string) => void }) {
+  const { t } = useLanguage();
   return (
     <>
-      <Field label="Nama Carrier / Maskapai" name="carrierName" value={fields.carrierName ?? ""} onChange={(v) => setField("carrierName", v)} placeholder="Garuda Cargo, Evergreen, dll" required />
-      <Field label="No. AWB / BL" name="awbBlNumber" value={fields.awbBlNumber ?? ""} onChange={(v) => setField("awbBlNumber", v)} placeholder="AWB/BL number" />
-      <Field label="No. Penerbangan / Vessel" name="flightVessel" value={fields.flightVessel ?? ""} onChange={(v) => setField("flightVessel", v)} placeholder="GA-123, MSC Elbe, dll" />
-      <Field label="No. Booking" name="bookingNumber" value={fields.bookingNumber ?? ""} onChange={(v) => setField("bookingNumber", v)} placeholder="Nomor booking jika ada" />
-      <Field label="ETD (Tanggal Keberangkatan)" name="etd" value={fields.etd ?? ""} onChange={(v) => setField("etd", v)} placeholder="dd/mm/yyyy" required />
-      <Field label="ETA (Tanggal Kedatangan)" name="eta" value={fields.eta ?? ""} onChange={(v) => setField("eta", v)} placeholder="dd/mm/yyyy" />
+      <Field label={t("vendorFulfillment.carrierName", "Nama Carrier / Maskapai")} name="carrierName" value={fields.carrierName ?? ""} onChange={(v) => setField("carrierName", v)} placeholder={t("vendorFulfillment.carrierPlaceholder", "Garuda Cargo, Evergreen, dll")} required />
+      <Field label={t("vendorFulfillment.awbBlNumber", "No. AWB / BL")} name="awbBlNumber" value={fields.awbBlNumber ?? ""} onChange={(v) => setField("awbBlNumber", v)} placeholder="AWB/BL number" />
+      <Field label={t("vendorFulfillment.flightVesselNumber", "No. Penerbangan / Vessel")} name="flightVessel" value={fields.flightVessel ?? ""} onChange={(v) => setField("flightVessel", v)} placeholder={t("vendorFulfillment.flightVesselPlaceholder", "GA-123, MSC Elbe, dll")} />
+      <Field label={t("vendorFulfillment.bookingNumberField", "No. Booking")} name="bookingNumber" value={fields.bookingNumber ?? ""} onChange={(v) => setField("bookingNumber", v)} placeholder={t("vendorFulfillment.bookingNumberPlaceholder", "Nomor booking jika ada")} />
+      <Field label={t("vendorFulfillment.etdField", "ETD (Tanggal Keberangkatan)")} name="etd" value={fields.etd ?? ""} onChange={(v) => setField("etd", v)} placeholder="dd/mm/yyyy" required />
+      <Field label={t("vendorFulfillment.etaField", "ETA (Tanggal Kedatangan)")} name="eta" value={fields.eta ?? ""} onChange={(v) => setField("eta", v)} placeholder="dd/mm/yyyy" />
     </>
   );
 }
 
 function CustomsFields({ fields, setField }: { fields: Record<string, string>; setField: (k: string, v: string) => void }) {
+  const { t } = useLanguage();
   return (
     <>
-      <Field label="Nama PIC Kepabeanan" name="customsPicName" value={fields.customsPicName ?? ""} onChange={(v) => setField("customsPicName", v)} placeholder="Nama PIC / PPJK" required />
-      <Field label="Dokumen Dibutuhkan" name="customsDocuments" value={fields.customsDocuments ?? ""} onChange={(v) => setField("customsDocuments", v)} placeholder="PIB, BC 2.3, Invoice, Packing List, dll" />
-      <Field label="Estimasi Selesai Proses Bea Cukai" name="customsProcessEta" value={fields.customsProcessEta ?? ""} onChange={(v) => setField("customsProcessEta", v)} placeholder="dd/mm/yyyy atau rentang waktu" />
+      <Field label={t("vendorFulfillment.customsPicName", "Nama PIC Kepabeanan")} name="customsPicName" value={fields.customsPicName ?? ""} onChange={(v) => setField("customsPicName", v)} placeholder={t("vendorFulfillment.customsPicPlaceholder", "Nama PIC / PPJK")} required />
+      <Field label={t("vendorFulfillment.customsDocumentsField", "Dokumen Dibutuhkan")} name="customsDocuments" value={fields.customsDocuments ?? ""} onChange={(v) => setField("customsDocuments", v)} placeholder={t("vendorFulfillment.customsDocumentsPlaceholder", "PIB, BC 2.3, Invoice, Packing List, dll")} />
+      <Field label={t("vendorFulfillment.customsProcessEtaField", "Estimasi Selesai Proses Bea Cukai")} name="customsProcessEta" value={fields.customsProcessEta ?? ""} onChange={(v) => setField("customsProcessEta", v)} placeholder={t("vendorFulfillment.customsProcessEtaPlaceholder", "dd/mm/yyyy atau rentang waktu")} />
     </>
   );
 }
@@ -1010,6 +1015,7 @@ function CustomsFields({ fields, setField }: { fields: Record<string, string>; s
 function TemplateSelectField({
   field, value, onChange,
 }: { field: TmplField; value: string; onChange: (v: string) => void }) {
+  const { t } = useLanguage();
   return (
     <div className="space-y-1.5">
       <label className="text-sm font-medium text-slate-700">
@@ -1021,7 +1027,7 @@ function TemplateSelectField({
         required={field.required}
         className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 bg-white"
       >
-        <option value="">— Pilih —</option>
+        <option value="">{t("vendorFulfillment.selectPlaceholder", "— Pilih —")}</option>
         {(field.options ?? []).map((opt) => (
           <option key={opt} value={opt}>{opt}</option>
         ))}
@@ -1139,9 +1145,9 @@ function ProductFulfillmentForm({
     const diffMs = ready.getTime() - today.getTime();
     const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
     if (diffDays <= 0) {
-      setField("leadTime", "Hari ini");
+      setField("leadTime", t("vendorFulfillment.today", "Hari ini"));
     } else {
-      setField("leadTime", `${diffDays} hari`);
+      setField("leadTime", `${diffDays} ${t("vendorFulfillment.days", "hari")}`);
     }
   }, [fields.readyDate]);
 
@@ -1176,7 +1182,7 @@ function ProductFulfillmentForm({
         body: fd,
       });
       const d = await r.json() as { url?: string; error?: string };
-      if (!r.ok) throw new Error(d.error ?? "Upload gagal");
+      if (!r.ok) throw new Error(d.error ?? t("vendorFulfillment.uploadFailed", "Upload gagal"));
       setField(`${fileType}Url`, d.url!);
     } catch (e) {
       alert((e as Error).message);
@@ -1191,16 +1197,16 @@ function ProductFulfillmentForm({
       {order.items && order.items.length > 0 && (
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
           <div className="px-5 py-3 bg-slate-50 border-b border-slate-100">
-            <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Detail Produk</p>
+            <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">{t("vendorFulfillment.productDetail", "Detail Produk")}</p>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-slate-400 text-xs border-b border-slate-100">
-                  <th className="text-left px-4 py-2.5 font-medium">Nama Produk</th>
-                  <th className="text-right px-4 py-2.5 font-medium">{t("vendor.fulfillment.qtyOrder")}</th>
-                  <th className="text-right px-4 py-2.5 font-medium">Satuan</th>
-                  <th className="text-right px-4 py-2.5 font-medium">Harga/Unit</th>
+                  <th className="text-left px-4 py-2.5 font-medium">{t("vendorFulfillment.productName", "Nama Produk")}</th>
+                  <th className="text-right px-4 py-2.5 font-medium">{t("vendorFulfillment.qtyOrder", "Qty Order")}</th>
+                  <th className="text-right px-4 py-2.5 font-medium">{t("vendorFulfillment.unitShort", "Satuan")}</th>
+                  <th className="text-right px-4 py-2.5 font-medium">{t("vendorFulfillment.pricePerUnitShort", "Harga/Unit")}</th>
                   <th className="text-right px-4 py-2.5 font-medium">Subtotal</th>
                 </tr>
               </thead>
@@ -1221,7 +1227,7 @@ function ProductFulfillmentForm({
             <div className="px-5 py-4 border-t border-slate-100 bg-slate-50/50 space-y-1.5">
               {origDpp > 0 && (
                 <div className="flex justify-between text-sm">
-                  <span className="text-slate-500">{t("vendor.fulfillment.dppBase")}</span>
+                  <span className="text-slate-500">{t("vendorFulfillment.dppBase", "DPP (Harga Dasar)")}</span>
                   <span className="text-slate-700">{idr(origDpp)}</span>
                 </div>
               )}
@@ -1232,7 +1238,7 @@ function ProductFulfillmentForm({
                 </div>
               )}
               <div className="flex justify-between font-bold border-t border-slate-200 pt-2">
-                <span className="text-slate-700">Grand Total Order</span>
+                <span className="text-slate-700">{t("vendorFulfillment.grandTotalOrder", "Grand Total Order")}</span>
                 <span className="text-emerald-700 text-base">{idr(origGrand)}</span>
               </div>
             </div>
@@ -1243,14 +1249,14 @@ function ProductFulfillmentForm({
       {/* ── 2. Metode Pengiriman ── */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 px-5 py-5 space-y-4">
         <div>
-          <h2 className="text-sm font-bold text-slate-800">🚚 Metode Pengiriman</h2>
-          <p className="text-xs text-slate-400 mt-0.5">Bagaimana barang akan dikirim ke customer?</p>
+          <h2 className="text-sm font-bold text-slate-800">🚚 {t("vendorFulfillment.deliveryMethodTitle", "Metode Pengiriman")}</h2>
+          <p className="text-xs text-slate-400 mt-0.5">{t("vendorFulfillment.deliveryMethodHint", "Bagaimana barang akan dikirim ke customer?")}</p>
         </div>
         <div className="flex flex-col gap-2">
           {[
-            { val: "vendor_delivery", label: "🚛 Vendor Delivery", desc: "Vendor mengirim langsung ke lokasi customer" },
-            { val: "customer_pickup", label: "🏭 Customer Pickup", desc: "Customer mengambil sendiri dari gudang vendor" },
-            { val: "third_party",     label: "📦 Third Party Carrier", desc: "Dikirim via jasa pengiriman pihak ketiga" },
+            { val: "vendor_delivery", label: t("vendorFulfillment.vendorDelivery", "🚛 Vendor Delivery"), desc: t("vendorFulfillment.vendorDeliveryDesc", "Vendor mengirim langsung ke lokasi customer") },
+            { val: "customer_pickup", label: t("vendorFulfillment.customerPickup", "🏭 Customer Pickup"), desc: t("vendorFulfillment.customerPickupDesc", "Customer mengambil sendiri dari gudang vendor") },
+            { val: "third_party",     label: t("vendorFulfillment.thirdParty", "📦 Third Party Carrier"), desc: t("vendorFulfillment.thirdPartyDesc", "Dikirim via jasa pengiriman pihak ketiga") },
           ].map((opt) => (
             <button
               key={opt.val}
@@ -1277,19 +1283,19 @@ function ProductFulfillmentForm({
         {fields.deliveryMethod === "third_party" && (
           <div className="space-y-3 pt-1">
             <Field
-              label="Nama Carrier / Ekspedisi"
+              label={t("vendorFulfillment.carrierExpedisi", "Nama Carrier / Ekspedisi")}
               name="carrierName"
               value={fields.carrierName ?? ""}
               onChange={(v) => setField("carrierName", v)}
-              placeholder="JNE, J&T, Sicepat, dll"
+              placeholder={t("vendorFulfillment.carrierExpedisiPlaceholder", "JNE, J&T, Sicepat, dll")}
               required
             />
             <Field
-              label="Tipe Kendaraan / Layanan"
+              label={t("vendorFulfillment.vehicleService", "Tipe Kendaraan / Layanan")}
               name="vehicleType"
               value={fields.vehicleType ?? ""}
               onChange={(v) => setField("vehicleType", v)}
-              placeholder="Reguler, Express, Cargo, dll"
+              placeholder={t("vendorFulfillment.vehicleServicePlaceholder", "Reguler, Express, Cargo, dll")}
             />
           </div>
         )}
@@ -1315,14 +1321,14 @@ function ProductFulfillmentForm({
       {/* ── 3. Konfirmasi Stok ── */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 px-5 py-5 space-y-4">
         <div>
-          <h2 className="text-sm font-bold text-slate-800">📦 Konfirmasi Stok</h2>
-          <p className="text-xs text-slate-400 mt-0.5">Pilih ketersediaan stok untuk order ini</p>
+          <h2 className="text-sm font-bold text-slate-800">📦 {t("vendorFulfillment.stockConfirmTitle", "Konfirmasi Stok")}</h2>
+          <p className="text-xs text-slate-400 mt-0.5">{t("vendorFulfillment.stockConfirmHint", "Pilih ketersediaan stok untuk order ini")}</p>
         </div>
         <div className="flex flex-col gap-2">
           {[
-            { val: "all",     label: "✅ Tersedia Semua",     desc: "Semua qty dapat dipenuhi" },
-            { val: "partial", label: "⚠️ Tersedia Sebagian",  desc: "Hanya sebagian qty tersedia" },
-            { val: "none",    label: "❌ Tidak Tersedia",      desc: "Stok kosong saat ini" },
+            { val: "all",     label: t("vendorFulfillment.stockAll", "✅ Tersedia Semua"),     desc: t("vendorFulfillment.stockAllDesc", "Semua qty dapat dipenuhi") },
+            { val: "partial", label: t("vendorFulfillment.stockPartial", "⚠️ Tersedia Sebagian"),  desc: t("vendorFulfillment.stockPartialDesc", "Hanya sebagian qty tersedia") },
+            { val: "none",    label: t("vendorFulfillment.stockNone", "❌ Tidak Tersedia"),      desc: t("vendorFulfillment.stockNoneDesc", "Stok kosong saat ini") },
           ].map((opt) => (
             <button
               key={opt.val}
@@ -1355,11 +1361,11 @@ function ProductFulfillmentForm({
         {isPartial && (
           <div className="pt-1">
             <Field
-              label="Jumlah yang Dapat Dipenuhi"
+              label={t("vendorFulfillment.qtyFulfilledField", "Jumlah yang Dapat Dipenuhi")}
               name="qtyConfirmed"
               value={fields.qtyConfirmed ?? ""}
               onChange={(v) => setField("qtyConfirmed", v)}
-              placeholder="Contoh: 50 karton atau 200 kg"
+              placeholder={t("vendorFulfillment.qtyFulfilledPlaceholder", "Contoh: 50 karton atau 200 kg")}
               required
             />
           </div>
@@ -1370,12 +1376,12 @@ function ProductFulfillmentForm({
       {stockStatus && stockStatus !== "none" && (
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 px-5 py-5 space-y-4">
           <div>
-            <h2 className="text-sm font-bold text-slate-800">📅 Jadwal Pemenuhan</h2>
-            <p className="text-xs text-slate-400 mt-0.5">{t("vendor.fulfillment.readyToShip")}</p>
+            <h2 className="text-sm font-bold text-slate-800">📅 {t("vendorFulfillment.fulfillmentScheduleTitle", "Jadwal Pemenuhan")}</h2>
+            <p className="text-xs text-slate-400 mt-0.5">{t("vendorFulfillment.readyToShip", "Kapan barang siap dikirim?")}</p>
           </div>
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-slate-700">
-              Tanggal Siap Kirim<span className="text-red-500 ml-0.5">*</span>
+              {t("vendorFulfillment.readyDateLabel", "Tanggal Siap Kirim")}<span className="text-red-500 ml-0.5">*</span>
             </label>
             <input
               type="date"
@@ -1410,11 +1416,11 @@ function ProductFulfillmentForm({
             })()}
           </div>
           <Field
-            label={t("vendor.fulfillment.leadTime")}
+            label={t("vendorFulfillment.leadTime", "Lead Time")}
             name="leadTime"
             value={fields.leadTime ?? ""}
             onChange={(v) => setField("leadTime", v)}
-            placeholder="Contoh: 3 hari kerja"
+            placeholder={t("vendorFulfillment.leadTimePlaceholder", "Contoh: 3 hari kerja")}
           />
           {getLeadTimeWarning(fields.leadTime ?? "") && (
             <p className="text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200 rounded-lg px-3 py-2">
@@ -1422,9 +1428,9 @@ function ProductFulfillmentForm({
             </p>
           )}
           <div className="space-y-1.5">
-            <label className="text-sm font-medium text-slate-700">{t("vendor.fulfillment.leadTime")}</label>
+            <label className="text-sm font-medium text-slate-700">{t("vendorFulfillment.leadTime", "Lead Time")}</label>
             <div className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
-              {fields.leadTime || <span className="text-slate-400 italic">{t("vendor.fulfillment.leadTimeAuto")}</span>}
+              {fields.leadTime || <span className="text-slate-400 italic">{t("vendorFulfillment.leadTimeAuto", "Otomatis dihitung dari tanggal siap")}</span>}
             </div>
           </div>
         </div>
@@ -1434,15 +1440,15 @@ function ProductFulfillmentForm({
       {showWarehouse && stockStatus && stockStatus !== "none" && (
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 px-5 py-5 space-y-4">
           <div>
-            <h2 className="text-sm font-bold text-slate-800">📍 Lokasi Gudang / Pickup</h2>
-            <p className="text-xs text-slate-400 mt-0.5">{t("vendor.fulfillment.warehouseAddressHint")}</p>
+            <h2 className="text-sm font-bold text-slate-800">📍 {t("vendorFulfillment.warehouseTitle", "Lokasi Gudang / Pickup")}</h2>
+            <p className="text-xs text-slate-400 mt-0.5">{t("vendorFulfillment.warehouseAddressHint", "Alamat lengkap gudang/lokasi pickup barang")}</p>
           </div>
           <Field
-            label="Alamat Gudang"
+            label={t("vendorFulfillment.warehouseAddressLabel", "Alamat Gudang")}
             name="warehouseLocation"
             value={fields.warehouseLocation ?? ""}
             onChange={(v) => setField("warehouseLocation", v)}
-            placeholder="Jl. Industri No. 10, Kawasan Pabrik, Jakarta Utara"
+            placeholder={t("vendorFulfillment.warehouseAddressPlaceholder", "Jl. Industri No. 10, Kawasan Pabrik, Jakarta Utara")}
             required
           />
         </div>
@@ -1452,9 +1458,9 @@ function ProductFulfillmentForm({
       {stockStatus && stockStatus !== "none" && (
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 px-5 py-5 space-y-4">
           <div>
-            <h2 className="text-sm font-bold text-slate-800">💰 Konfirmasi Harga</h2>
+            <h2 className="text-sm font-bold text-slate-800">💰 {t("vendorFulfillment.priceConfirmTitle", "Konfirmasi Harga")}</h2>
             <p className="text-xs text-slate-400 mt-0.5">
-              Harga order: <span className="font-semibold text-slate-600">{idr(order.grandTotal)}</span>
+              {t("vendorFulfillment.orderPrice", "Harga order:")} <span className="font-semibold text-slate-600">{idr(order.grandTotal)}</span>
             </p>
           </div>
           <div className="flex flex-col gap-2">
@@ -1468,10 +1474,10 @@ function ProductFulfillmentForm({
               }`}
             >
               <p className={`text-sm font-semibold ${priceChoice === "agree" ? "text-emerald-800" : "text-slate-700"}`}>
-                ✅ Setuju Harga Asal
+                ✅ {t("vendorFulfillment.agreePrice", "Setuju Harga Asal")}
               </p>
               <p className={`text-xs mt-0.5 ${priceChoice === "agree" ? "text-slate-600" : "text-slate-400"}`}>
-                Harga sesuai {idr(order.grandTotal)} (sudah termasuk PPN)
+                {t("vendorFulfillment.agreePriceDesc", "Harga sesuai")} {idr(order.grandTotal)} {t("vendorFulfillment.includingPpn", "(sudah termasuk PPN)")}
               </p>
             </button>
             <button
@@ -1484,28 +1490,28 @@ function ProductFulfillmentForm({
               }`}
             >
               <p className={`text-sm font-semibold ${priceChoice === "revised" ? "text-amber-800" : "text-slate-700"}`}>
-                ✏️ Ajukan Revisi Harga
+                ✏️ {t("vendorFulfillment.revisePrice", "Ajukan Revisi Harga")}
               </p>
               <p className={`text-xs mt-0.5 ${priceChoice === "revised" ? "text-amber-600" : "text-slate-400"}`}>
-                Input harga baru yang Anda tawarkan (sebelum PPN)
+                {t("vendorFulfillment.revisePriceDesc", "Input harga baru yang Anda tawarkan (sebelum PPN)")}
               </p>
             </button>
           </div>
           {isRevised && (
             <div className="space-y-1.5 pt-1">
               <Field
-                label={`Harga Total Penawaran (sebelum PPN, Rp)`}
+                label={t("vendorFulfillment.revisedPriceField", "Harga Total Penawaran (sebelum PPN, Rp)")}
                 name="revisedPrice"
                 type="number"
                 value={fields.revisedPrice ?? ""}
                 onChange={(v) => setField("revisedPrice", v)}
-                placeholder="Contoh: 5000000"
+                placeholder={t("vendorFulfillment.revisedPricePlaceholder", "Contoh: 5000000")}
                 required
               />
               {fields.revisedPrice && Number(fields.revisedPrice) > 0 && (
                 <div className="bg-amber-50 rounded-lg px-3 py-2.5 text-xs space-y-1">
                   <div className="flex justify-between">
-                    <span className="text-slate-500">{t("vendor.fulfillment.dpp")}</span>
+                    <span className="text-slate-500">{t("vendorFulfillment.dpp", "DPP")}</span>
                     <span className="font-medium text-slate-700">{idr(fields.revisedPrice)}</span>
                   </div>
                   <div className="flex justify-between">
@@ -1513,7 +1519,7 @@ function ProductFulfillmentForm({
                     <span className="font-medium text-slate-700">{idr(Math.round(Number(fields.revisedPrice) * TAX_RATE / 100))}</span>
                   </div>
                   <div className="flex justify-between font-bold border-t border-amber-200 pt-1.5">
-                    <span className="text-slate-700">{t("vendor.fulfillment.totalInclPpn")}</span>
+                    <span className="text-slate-700">{t("vendorFulfillment.totalInclPpn", "Total inkl. PPN")}</span>
                     <span className="text-amber-700">{idr(Number(fields.revisedPrice) + Math.round(Number(fields.revisedPrice) * TAX_RATE / 100))}</span>
                   </div>
                 </div>
@@ -1526,39 +1532,39 @@ function ProductFulfillmentForm({
       {/* ── 6. Upload Dokumen ── */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 px-5 py-5 space-y-5">
         <div>
-          <h2 className="text-sm font-bold text-slate-800">📎 Upload Dokumen</h2>
-          <p className="text-xs text-slate-400 mt-0.5">{t("vendor.fulfillment.uploadHint")}</p>
+          <h2 className="text-sm font-bold text-slate-800">📎 {t("vendorFulfillment.uploadDocTitle", "Upload Dokumen")}</h2>
+          <p className="text-xs text-slate-400 mt-0.5">{t("vendorFulfillment.uploadHint", "Lampirkan foto produk, packing list, invoice, dan dokumen lainnya")}</p>
         </div>
         <UploadField
-          label="Foto Barang / Stok"
+          label={t("vendorFulfillment.stockPhotoLabel", "Foto Barang / Stok")}
           fileType="stockPhoto"
           url={fields.stockPhotoUrl ?? ""}
           uploading={!!uploading["stockPhoto"]}
           onUpload={handleUpload}
         />
         <UploadField
-          label="Packing List"
+          label={t("vendorFulfillment.packingListLabel", "Packing List")}
           fileType="packingList"
           url={fields.packingListUrl ?? ""}
           uploading={!!uploading["packingList"]}
           onUpload={handleUpload}
         />
         <UploadField
-          label="Invoice / Faktur"
+          label={t("vendorFulfillment.invoiceLabel", "Invoice / Faktur")}
           fileType="invoice"
           url={fields.invoiceUrl ?? ""}
           uploading={!!uploading["invoice"]}
           onUpload={handleUpload}
         />
         <UploadField
-          label="POD (Proof of Delivery)"
+          label={t("vendorFulfillment.podLabel", "POD (Proof of Delivery)")}
           fileType="pod"
           url={fields.podUrl ?? ""}
           uploading={!!uploading["pod"]}
           onUpload={handleUpload}
         />
         <UploadField
-          label="Dokumen Pendukung Lainnya"
+          label={t("vendorFulfillment.supportingDocLabel", "Dokumen Pendukung Lainnya")}
           fileType="supportingDoc"
           url={fields.supportingDocUrl ?? ""}
           uploading={!!uploading["supportingDoc"]}
@@ -1569,17 +1575,17 @@ function ProductFulfillmentForm({
       {/* ── 7. Ringkasan Fulfillment ── */}
       {hasSummary && (
         <div className="bg-amber-50 border border-amber-200 rounded-2xl px-5 py-5">
-          <h2 className="text-sm font-bold text-slate-800 mb-3">📋 Ringkasan Fulfillment</h2>
+          <h2 className="text-sm font-bold text-slate-800 mb-3">📋 {t("vendorFulfillment.fulfillmentSummaryTitle", "Ringkasan Fulfillment")}</h2>
           <div className="space-y-0.5">
-            <SummaryRow label="Status Stok" value={STOCK_LABEL[stockStatus] ?? stockStatus} />
+            <SummaryRow label={t("vendorFulfillment.stockStatusLabel", "Status Stok")} value={STOCK_LABEL[stockStatus] ?? stockStatus} />
             {isPartial && fields.qtyConfirmed && (
-              <SummaryRow label={t("vendor.fulfillment.qtyFulfilled")} value={fields.qtyConfirmed} />
+              <SummaryRow label={t("vendorFulfillment.qtyFulfilled", "Qty Terpenuhi")} value={fields.qtyConfirmed} />
             )}
-            <SummaryRow label="Tanggal Siap Kirim" value={fmtDateLocal(fields.readyDate)} />
-            {fields.leadTime && <SummaryRow label={t("vendor.fulfillment.leadTime")} value={fields.leadTime} />}
+            <SummaryRow label={t("vendorFulfillment.readyDateLabel", "Tanggal Siap Kirim")} value={fmtDateLocal(fields.readyDate)} />
+            {fields.leadTime && <SummaryRow label={t("vendorFulfillment.leadTime", "Lead Time")} value={fields.leadTime} />}
             {stockStatus !== "none" && summaryTotal > 0 && (
               <>
-                <SummaryRow label={t("vendor.fulfillment.dppBase")} value={idr(summaryDpp)} />
+                <SummaryRow label={t("vendorFulfillment.dppBase", "DPP (Harga Dasar)")} value={idr(summaryDpp)} />
                 <SummaryRow label={`PPN ${TAX_RATE}%`} value={idr(summaryPpn)} />
                 <SummaryRow label="Grand Total" value={idr(summaryTotal)} bold />
               </>
@@ -1589,7 +1595,7 @@ function ProductFulfillmentForm({
                 <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full ${
                   priceChoice === "agree" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"
                 }`}>
-                  {priceChoice === "agree" ? "✅ Setuju harga asal" : "✏️ Revisi harga diajukan"}
+                  {priceChoice === "agree" ? t("vendorFulfillment.agreedPrice", "✅ Setuju harga asal") : t("vendorFulfillment.revisedPriceSubmitted", "✏️ Revisi harga diajukan")}
                 </span>
               </div>
             )}
@@ -1621,7 +1627,7 @@ export default function VendorFulfillmentPage() {
     fetch(`/api/vendor-fulfillment/${token}`)
       .then(async (r) => {
         const d = await r.json() as PageData & { error?: string };
-        if (!r.ok) throw new Error(d.error ?? "Terjadi kesalahan");
+        if (!r.ok) throw new Error(d.error ?? t("vendorFulfillment.genericError", "Terjadi kesalahan"));
         setData(d);
       })
       .catch((e: Error) => setError(e.message))
@@ -1638,12 +1644,12 @@ export default function VendorFulfillmentPage() {
     const isProduct = !isTemplateServiceH && svc.includes("product");
 
     if (isProduct) {
-      if (!fields.stockConfirmed) { alert("Pilih status konfirmasi stok terlebih dahulu."); return; }
+      if (!fields.stockConfirmed) { alert(t("vendorFulfillment.selectStockFirst", "Pilih status konfirmasi stok terlebih dahulu.")); return; }
       if (fields.stockConfirmed !== "none") {
-        if (!fields.readyDate) { alert("Tanggal siap kirim wajib diisi."); return; }
-        if (!fields.priceConfirmed) { alert("Pilih konfirmasi harga terlebih dahulu."); return; }
+        if (!fields.readyDate) { alert(t("vendorFulfillment.readyDateRequired", "Tanggal siap kirim wajib diisi.")); return; }
+        if (!fields.priceConfirmed) { alert(t("vendorFulfillment.selectPriceFirst", "Pilih konfirmasi harga terlebih dahulu.")); return; }
         if (fields.priceConfirmed === "revised" && !fields.revisedPrice) {
-          alert("Masukkan harga revisi."); return;
+          alert(t("vendorFulfillment.enterRevisedPrice", "Masukkan harga revisi.")); return;
         }
       }
     }
@@ -1660,7 +1666,7 @@ export default function VendorFulfillmentPage() {
         body: JSON.stringify(submitBody),
       });
       const d = await res.json() as { ok?: boolean; error?: string };
-      if (!res.ok) throw new Error(d.error ?? "Gagal mengirim");
+      if (!res.ok) throw new Error(d.error ?? t("vendorFulfillment.sendFailed", "Gagal mengirim"));
       setJustSubmitted(true);
     } catch (e: unknown) {
       alert((e as Error).message);
@@ -1671,7 +1677,7 @@ export default function VendorFulfillmentPage() {
 
   if (loading) return <Loader />;
   if (error)   return <ErrorCard message={error} />;
-  if (!data)   return <ErrorCard message="Data tidak ditemukan" />;
+  if (!data)   return <ErrorCard message={t("vendorFulfillment.dataNotFound", "Data tidak ditemukan")} />;
 
   if (data.isSubmitted) {
     return <SubmittedReview data={data} justSubmitted={false} />;
@@ -1707,32 +1713,32 @@ export default function VendorFulfillmentPage() {
               <span className="text-3xl">{icon}</span>
               <div>
                 <h1 className="text-xl font-bold text-slate-800">
-                  {isProduct ? "Konfirmasi Pemenuhan Produk" : `Form Fulfillment ${tmplLabel ?? svcLabel}`}
+                  {isProduct ? t("vendorFulfillment.productFulfillmentConfirm", "Konfirmasi Pemenuhan Produk") : `${t("vendorFulfillment.fulfillmentForm", "Form Fulfillment")} ${tmplLabel ?? svcLabel}`}
                 </h1>
                 {data.vendorName && (
-                  <p className="text-sm text-slate-500">Vendor: {data.vendorName}</p>
+                  <p className="text-sm text-slate-500">{t("vendorFulfillment.vendor", "Vendor")}: {data.vendorName}</p>
                 )}
               </div>
             </div>
             <p className="text-xs text-slate-400 mt-2">
               {isProduct
-                ? "Lengkapi data konfirmasi produk, stok, harga, dan jadwal pengiriman."
-                : "Lengkapi data di bawah ini untuk mengkonfirmasi penugasan order Anda."}
+                ? t("vendorFulfillment.productFormDesc", "Lengkapi data konfirmasi produk, stok, harga, dan jadwal pengiriman.")
+                : t("vendorFulfillment.serviceFormDesc", "Lengkapi data di bawah ini untuk mengkonfirmasi penugasan order Anda.")}
             </p>
           </div>
 
           {/* Order info */}
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5">
-            <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-4">{t("vendor.fulfillment.orderDetail")}</h2>
+            <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-4">{t("vendorFulfillment.orderDetail", "Detail Order")}</h2>
             <div className="space-y-2.5">
-              <OrderRow label="No. Order" value={order.orderNumber} />
-              {order.customerName && <OrderRow label="Customer" value={order.customerName} />}
-              {!isProduct && <OrderRow label="Layanan" value={tmplLabel ?? order.serviceType} />}
-              {!isProduct && <OrderRow label="Rute" value={`${order.origin} → ${order.destination}`} />}
-              {order.commodity && <OrderRow label="Komoditi" value={order.commodity} />}
-              {order.grossWeight && !isProduct && <OrderRow label="Berat" value={`${order.grossWeight} kg`} />}
-              {order.requiredDate && <OrderRow label="Tgl Butuh" value={order.requiredDate} />}
-              {order.vehicleType && !isProduct && <OrderRow label="Tipe Kendaraan" value={order.vehicleType} />}
+              <OrderRow label={t("vendorFulfillment.orderNumber", "No. Order")} value={order.orderNumber} />
+              {order.customerName && <OrderRow label={t("vendorFulfillment.customer", "Customer")} value={order.customerName} />}
+              {!isProduct && <OrderRow label={t("vendorFulfillment.service", "Layanan")} value={tmplLabel ?? order.serviceType} />}
+              {!isProduct && <OrderRow label={t("vendorFulfillment.route", "Rute")} value={`${order.origin} → ${order.destination}`} />}
+              {order.commodity && <OrderRow label={t("vendorFulfillment.commodity", "Komoditi")} value={order.commodity} />}
+              {order.grossWeight && !isProduct && <OrderRow label={t("vendorFulfillment.weight", "Berat")} value={`${order.grossWeight} kg`} />}
+              {order.requiredDate && <OrderRow label={t("vendorFulfillment.requiredDate", "Tgl Butuh")} value={order.requiredDate} />}
+              {order.vehicleType && !isProduct && <OrderRow label={t("vendorFulfillment.vehicleTypeOrder", "Tipe Kendaraan")} value={order.vehicleType} />}
             </div>
           </div>
 
@@ -1740,12 +1746,12 @@ export default function VendorFulfillmentPage() {
           <div className={`${isProduct ? "" : "bg-white rounded-2xl shadow-sm border border-emerald-100 p-5 space-y-4"}`}>
             {!isProduct && !isTemplateServiceR && (
               <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide">
-                {icon} Data Fulfillment
+                {icon} {t("vendorFulfillment.fulfillmentData", "Data Fulfillment")}
               </h2>
             )}
             {!isProduct && isTemplateServiceR && (
               <h2 className="text-sm font-semibold text-slate-500 uppercase tracking-wide">
-                {icon} Data Fulfillment — {tmplLabel}
+                {icon} {t("vendorFulfillment.fulfillmentData", "Data Fulfillment")} — {tmplLabel}
               </h2>
             )}
             {isTemplateServiceR && (
@@ -1769,17 +1775,17 @@ export default function VendorFulfillmentPage() {
             )}
             {!isTemplateServiceR && svc.includes("customs") && <CustomsFields fields={fields} setField={setField} />}
             {!isTemplateServiceR && svc.includes("general") && (
-              <p className="text-sm text-slate-500">{t("vendor.fulfillment.fillNotesDesc")}</p>
+              <p className="text-sm text-slate-500">{t("vendorFulfillment.fillNotesDesc", "Isi catatan di bawah untuk menjelaskan progres fulfillment Anda.")}</p>
             )}
 
             {/* Catatan tambahan */}
             <div className={`${isProduct ? "bg-white rounded-2xl shadow-sm border border-slate-100 px-5 py-5" : ""} space-y-1.5`}>
-              <label className="text-sm font-medium text-slate-700">{t("vendor.fulfillment.additionalNotes")}</label>
+              <label className="text-sm font-medium text-slate-700">{t("vendorFulfillment.additionalNotes", "Catatan Tambahan")}</label>
               <textarea
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 rows={3}
-                placeholder="Catatan operasional, kendala, atau informasi lain yang relevan..."
+                placeholder={t("vendorFulfillment.additionalNotesPlaceholder", "Catatan operasional, kendala, atau informasi lain yang relevan...")}
                 className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 resize-none"
               />
             </div>
@@ -1794,19 +1800,19 @@ export default function VendorFulfillmentPage() {
             {submitting ? (
               <>
                 <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                Mengirim...
+                {t("vendorFulfillment.sending", "Mengirim...")}
               </>
             ) : isProduct ? (
-              "✓ Konfirmasi Pemenuhan Produk"
+              t("vendorFulfillment.confirmProductFulfillment", "✓ Konfirmasi Pemenuhan Produk")
             ) : (
-              "Kirim Data Fulfillment"
+              t("vendorFulfillment.submitFulfillmentData", "Kirim Data Fulfillment")
             )}
           </button>
 
           <p className="text-center text-xs text-slate-400 pb-8">
             {isProduct
-              ? "Data Anda akan langsung diproses oleh tim kami"
-              : "Data tidak dapat diubah setelah dikirim"}
+              ? t("vendorFulfillment.productSubmitNote", "Data Anda akan langsung diproses oleh tim kami")
+              : t("vendorFulfillment.serviceSubmitNote", "Data tidak dapat diubah setelah dikirim")}
           </p>
 
         </div>

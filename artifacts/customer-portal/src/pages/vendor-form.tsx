@@ -128,7 +128,7 @@ export default function VendorFormPage() {
       const res = await fetch(apiUrl(`/api/logistic/vendor-form/${token}`));
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
-        throw new Error((j as any).message || "Gagal memuat data");
+        throw new Error((j as any).message || t("vendorForm.failLoadData", "Gagal memuat data"));
       }
       return res.json();
     },
@@ -190,7 +190,7 @@ export default function VendorFormPage() {
       const j = await res.json() as { url: string };
       setAttachmentUrl(j.url);
     } catch {
-      setError("Gagal upload file");
+      setError(t("vendorForm.failUploadFile", "Gagal upload file"));
     } finally {
       setUploadingFile(false);
     }
@@ -230,7 +230,7 @@ export default function VendorFormPage() {
 
   async function handleSubmit() {
     if (!mode || mode === "select" || mode === "done") return;
-    if (isExpired) { setError("Batas waktu RFQ sudah berakhir."); return; }
+    if (isExpired) { setError(t("vendorForm.rfqDeadlineExpired", "Batas waktu RFQ sudah berakhir.")); return; }
     if (mode === "counter") {
       // When per-item pricing is available, require at least one item price
       if (hasItemPricing) {
@@ -238,12 +238,12 @@ export default function VendorFormPage() {
           const key = item.id != null ? String(item.id) : item.serviceName;
           return !!itemPrices[key];
         });
-        if (!hasAnyPrice) { setError("Masukkan harga minimal untuk satu item"); return; }
+        if (!hasAnyPrice) { setError(t("vendorForm.enterAtLeastOneItemPrice", "Masukkan harga minimal untuk satu item")); return; }
       } else {
-        if (!unitPrice) { setError("Harga penawaran harus diisi"); return; }
-        if (isNaN(unitPriceNum) || unitPriceNum <= 0) { setError("Harga penawaran harus lebih dari Rp 0"); return; }
+        if (!unitPrice) { setError(t("vendorForm.offerPriceRequired", "Harga penawaran harus diisi")); return; }
+        if (isNaN(unitPriceNum) || unitPriceNum <= 0) { setError(t("vendorForm.offerPriceMustBePositive", "Harga penawaran harus lebih dari Rp 0")); return; }
       }
-      if (!eta) { setError("Estimasi waktu harus diisi"); return; }
+      if (!eta) { setError(t("vendorForm.etaRequired", "Estimasi waktu harus diisi")); return; }
     }
     setSubmitting(true);
     setError("");
@@ -278,10 +278,10 @@ export default function VendorFormPage() {
         body: JSON.stringify(body),
       });
       const j = await res.json() as { success: boolean; message?: string };
-      if (!res.ok) throw new Error(j.message || "Gagal mengirim");
+      if (!res.ok) throw new Error(j.message || t("vendorForm.failSubmit", "Gagal mengirim"));
       setMode("done");
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Gagal mengirim");
+      setError(e instanceof Error ? e.message : t("vendorForm.failSubmit", "Gagal mengirim"));
     } finally {
       setSubmitting(false);
     }
@@ -292,7 +292,7 @@ export default function VendorFormPage() {
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="text-center p-8">
           <div className="text-5xl mb-4">❌</div>
-          <p className="text-lg font-semibold text-gray-700">{t("vendor.form.invalidToken")}</p>
+          <p className="text-lg font-semibold text-gray-700">{t("vendorForm.invalidToken", "Token tidak valid")}</p>
         </div>
       </div>
     );
@@ -303,19 +303,19 @@ export default function VendorFormPage() {
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="text-center p-8">
           <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-gray-600">{t("vendor.form.loading")}</p>
+          <p className="text-gray-600">{t("vendorForm.loading", "Memuat data...")}</p>
         </div>
       </div>
     );
   }
 
   if (isError) {
-    const msg = (qError as Error)?.message ?? "Link tidak valid";
+    const msg = (qError as Error)?.message ?? t("vendorForm.linkInvalid", "Link tidak valid");
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
         <div className="bg-white rounded-2xl shadow-sm border border-red-100 p-8 max-w-sm w-full text-center">
           <div className="text-5xl mb-4">⚠️</div>
-          <p className="font-semibold text-gray-800 mb-2">{t("vendor.form.linkUnavailable")}</p>
+          <p className="font-semibold text-gray-800 mb-2">{t("vendorForm.linkUnavailable", "Link tidak tersedia")}</p>
           <p className="text-sm text-gray-500">{msg}</p>
         </div>
       </div>
@@ -329,8 +329,8 @@ export default function VendorFormPage() {
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-green-50 to-teal-50 p-4">
         <div className="bg-white rounded-2xl shadow-md p-10 max-w-sm w-full text-center">
           <div className="text-6xl mb-4">✅</div>
-          <h2 className="text-xl font-bold text-gray-800 mb-2">{t("vendor.form.offerSent")}</h2>
-          <p className="text-gray-500 text-sm">{t("vendor.form.offerSentDesc")}</p>
+          <h2 className="text-xl font-bold text-gray-800 mb-2">{t("vendorForm.offerSent", "Penawaran Terkirim")}</h2>
+          <p className="text-gray-500 text-sm">{t("vendorForm.offerSentDesc", "Penawaran Anda telah berhasil dikirim. Tim kami akan segera menindaklanjuti.")}</p>
           <div className="mt-6 p-3 bg-gray-50 rounded-lg text-sm text-gray-600">
             RFQ: <strong>{data.rfqNumber}</strong>
           </div>
@@ -351,17 +351,17 @@ export default function VendorFormPage() {
               RFQ
             </div>
             <div>
-              <p className="text-xs text-gray-400 uppercase tracking-wide">{t("vendor.form.rfqLabel")}</p>
+              <p className="text-xs text-gray-400 uppercase tracking-wide">{t("vendorForm.rfqLabel", "Permintaan Penawaran Harga")}</p>
               <p className="font-bold text-gray-800">{data.rfqNumber}</p>
             </div>
           </div>
           <p className="text-sm text-gray-600">
-            Kepada Yth. <strong>{data.vendorName}</strong>,<br />
+            {t("vendorForm.greetingPrefix", "Kepada Yth.")} <strong>{data.vendorName}</strong>,<br />
             {data.orderType === "product"
-              ? "Mohon bantu isi penawaran harga untuk kebutuhan pembelian produk di bawah ini."
+              ? t("vendorForm.requestProductQuote", "Mohon bantu isi penawaran harga untuk kebutuhan pembelian produk di bawah ini.")
               : data.orderType === "service"
-              ? "Mohon bantu isi penawaran harga untuk kebutuhan layanan di bawah ini."
-              : "Mohon bantu isi penawaran harga untuk kebutuhan layanan logistik di bawah ini."}
+              ? t("vendorForm.requestServiceQuote", "Mohon bantu isi penawaran harga untuk kebutuhan layanan di bawah ini.")
+              : t("vendorForm.requestLogisticQuote", "Mohon bantu isi penawaran harga untuk kebutuhan layanan logistik di bawah ini.")}
           </p>
         </div>
 
@@ -370,14 +370,14 @@ export default function VendorFormPage() {
           <div className={`rounded-2xl p-4 ${isExpired ? "bg-red-50 border border-red-300" : countdown < 3600000 ? "bg-orange-50 border border-orange-300" : "bg-amber-50 border border-amber-200"}`}>
             <div className="flex items-center justify-between">
               <span className={`text-sm font-medium ${isExpired ? "text-red-700" : "text-amber-800"}`}>
-                {isExpired ? t("vendor.form.timeExpired") : t("vendor.form.timeRemaining")}
+                {isExpired ? t("vendorForm.timeExpired", "Waktu sudah habis") : t("vendorForm.timeRemaining", "Sisa Waktu")}
               </span>
               <span className={`font-mono font-bold text-lg ${isExpired ? "text-red-700" : countdown < 3600000 ? "text-orange-700" : "text-amber-700"}`}>
                 {isExpired ? "EXPIRED" : formatCountdown(countdown)}
               </span>
             </div>
             <p className="text-xs text-gray-500 mt-1">
-              Deadline: {new Date(data.responseDeadline).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" })}
+              {t("vendorForm.deadline", "Deadline:")}: {new Date(data.responseDeadline).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" })}
             </p>
             {!isExpired && (
               <div className="mt-2 h-1.5 bg-gray-200 rounded-full overflow-hidden">
@@ -393,7 +393,7 @@ export default function VendorFormPage() {
         {/* RFQ Details */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
           <h3 className="font-semibold text-sm uppercase tracking-wide text-blue-600 mb-4">
-            {isProductOrder ? "Detail Produk" : data.orderType === "service" ? "Detail Layanan" : "Detail Muatan"}
+            {isProductOrder ? t("vendorForm.productDetail", "Detail Produk") : data.orderType === "service" ? t("vendorForm.serviceDetail", "Detail Layanan") : t("vendorForm.cargoDetail", "Detail Muatan")}
           </h3>
 
           {isProductOrder && productItems.length > 0 ? (
@@ -405,12 +405,12 @@ export default function VendorFormPage() {
                     <span className="font-semibold text-gray-800 text-sm">{item.serviceName || item.category || "—"}</span>
                   </div>
                   <div className="flex justify-between text-xs text-gray-500">
-                    <span>{t("vendor.form.qty")}</span>
+                    <span>{t("vendorForm.qty", "Qty")}</span>
                     <span className="font-medium text-gray-700">{item.qty} {item.unit}</span>
                   </div>
                   {item.vendorUnitPrice != null && (
                     <div className="flex justify-between text-xs text-gray-500">
-                      <span>{t("vendor.form.vendorUnitPrice")}</span>
+                      <span>{t("vendorForm.vendorUnitPrice", "Harga Satuan Vendor")}</span>
                       <span className="font-medium text-blue-700">{idr(item.vendorUnitPrice)}</span>
                     </div>
                   )}
@@ -427,18 +427,18 @@ export default function VendorFormPage() {
               {hasVendorPricing && (
                 <div className="mt-2 pt-3 border-t border-gray-100 space-y-1.5">
                   <div className="flex justify-between text-sm text-gray-500">
-                    <span>{t("vendor.form.vendorSubtotal")}</span>
+                    <span>{t("vendorForm.vendorSubtotal", "Subtotal Vendor")}</span>
                     <span>{idr(totalVendorSubtotal)}</span>
                   </div>
                   <div className="flex justify-between text-sm text-gray-500">
-                    <span>{t("vendor.form.ppn")}</span>
+                    <span>{t("vendorForm.ppn", "PPN 11%")}</span>
                     <span>{idr(totalPpn)}</span>
                   </div>
                   <div className="flex justify-between text-sm font-bold text-blue-700 pt-1 border-t border-blue-100">
-                    <span>{t("vendor.form.grandTotalVendor")}</span>
+                    <span>{t("vendorForm.grandTotalVendor", "Grand Total Vendor")}</span>
                     <span>{idr(totalVendorGrandTotal)}</span>
                   </div>
-                  <p className="text-xs text-blue-500">* Harga referensi dari etalase vendor. Belum termasuk margin & markup.</p>
+                  <p className="text-xs text-blue-500">* {t("vendorForm.priceReferenceNote", "Harga referensi dari etalase vendor. Belum termasuk margin & markup.")}</p>
                 </div>
               )}
 
@@ -447,11 +447,11 @@ export default function VendorFormPage() {
                 <div className="flex flex-col gap-1 pt-3 border-t border-gray-100">
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-gray-500 font-medium">
-                      HARGA DASAR <span className="text-xs text-gray-400">(belum PPN)</span>
+                      {t("vendorForm.basePrice", "HARGA DASAR")} <span className="text-xs text-gray-400">({t("vendorForm.excludingVat", "belum PPN")})</span>
                     </span>
                     <span className="font-bold text-blue-600 text-base">{idr(data.basicPrice)}</span>
                   </div>
-                  <p className="text-xs text-blue-500">* Harga referensi dari etalase vendor. Belum termasuk margin & PPN.</p>
+                  <p className="text-xs text-blue-500">* {t("vendorForm.priceReferenceNotePpn", "Harga referensi dari etalase vendor. Belum termasuk margin & PPN.")}</p>
                 </div>
               )}
             </div>
@@ -469,31 +469,31 @@ export default function VendorFormPage() {
                       ))}
                     </div>
                   ) : data.serviceType ? (
-                    <Row label={data.orderType === "product" ? "Produk" : "Layanan"} value={data.serviceType} />
+                    <Row label={data.orderType === "product" ? t("vendorForm.product", "Produk") : t("vendorForm.service", "Layanan")} value={data.serviceType} />
                   ) : null}
-                  {data.requiredDate && <Row label="Tgl Dibutuhkan" value={data.requiredDate} />}
-                  {data.commodity && <Row label="Keterangan" value={data.commodity} />}
+                  {data.requiredDate && <Row label={t("vendorForm.requiredDate", "Tgl Dibutuhkan")} value={data.requiredDate} />}
+                  {data.commodity && <Row label={t("vendorForm.description", "Keterangan")} value={data.commodity} />}
                 </>
               ) : (
                 <>
-                  {data.serviceType && <Row label="Layanan" value={data.serviceType} />}
+                  {data.serviceType && <Row label={t("vendorForm.service", "Layanan")} value={data.serviceType} />}
                   {(data.origin || data.destination) && (
-                    <Row label="Rute" value={`${data.origin || "—"} → ${data.destination || "—"}`} />
+                    <Row label={t("vendorForm.route", "Rute")} value={`${data.origin || "—"} → ${data.destination || "—"}`} />
                   )}
-                  {data.commodity && <Row label="Komoditi" value={data.commodity} />}
-                  {data.cargoDescription && <Row label="Deskripsi" value={data.cargoDescription} />}
-                  {data.grossWeight && <Row label="Berat" value={`${data.grossWeight} kg`} />}
-                  {data.volumeCbm && <Row label="Volume" value={`${data.volumeCbm} CBM`} />}
-                  {data.requiredDate && <Row label="Tgl Butuh" value={data.requiredDate} />}
+                  {data.commodity && <Row label={t("vendorForm.commodity", "Komoditi")} value={data.commodity} />}
+                  {data.cargoDescription && <Row label={t("vendorForm.cargoDescription", "Deskripsi")} value={data.cargoDescription} />}
+                  {data.grossWeight && <Row label={t("vendorForm.weight", "Berat")} value={`${data.grossWeight} kg`} />}
+                  {data.volumeCbm && <Row label={t("vendorForm.volume", "Volume")} value={`${data.volumeCbm} CBM`} />}
+                  {data.requiredDate && <Row label={t("vendorForm.requiredDateShort", "Tgl Butuh")} value={data.requiredDate} />}
                   {data.basicPrice && (
                     <div className="flex flex-col gap-1 pt-3 border-t border-gray-100">
                       <div className="flex justify-between items-center">
                         <span className="text-sm text-gray-500 font-medium">
-                          HARGA DASAR <span className="text-xs text-gray-400">(belum PPN)</span>
+                          {t("vendorForm.basePrice", "HARGA DASAR")} <span className="text-xs text-gray-400">({t("vendorForm.excludingVat", "belum PPN")})</span>
                         </span>
                         <span className="font-bold text-blue-600 text-base">{idr(data.basicPrice)}</span>
                       </div>
-                      <p className="text-xs text-blue-500">* Harga referensi dari etalase vendor. Belum termasuk margin & PPN.</p>
+                      <p className="text-xs text-blue-500">* {t("vendorForm.priceReferenceNotePpn", "Harga referensi dari etalase vendor. Belum termasuk margin & PPN.")}</p>
                     </div>
                   )}
                 </>
@@ -502,13 +502,13 @@ export default function VendorFormPage() {
           )}
           {data.templateSnapshot && (data.templateSnapshot as any).label && (
             <div className="mt-3 pt-3 border-t border-blue-100">
-              <p className="text-xs text-blue-600 font-semibold uppercase tracking-wide mb-2">📋 Template Produk</p>
+              <p className="text-xs text-blue-600 font-semibold uppercase tracking-wide mb-2">📋 {t("vendorForm.productTemplate", "Template Produk")}</p>
               <div className="bg-blue-50 rounded-lg px-3 py-2 space-y-1">
                 <p className="text-sm font-medium text-blue-800">{String((data.templateSnapshot as any).label)}</p>
                 {Array.isArray((data.templateSnapshot as any).requiredDocuments) &&
                   ((data.templateSnapshot as any).requiredDocuments as any[]).filter((d) => d.required).length > 0 && (
                   <div>
-                    <p className="text-xs text-blue-500 mt-1">{t("vendor.form.requiredDocs")}</p>
+                    <p className="text-xs text-blue-500 mt-1">{t("vendorForm.requiredDocs", "Dokumen wajib:")}</p>
                     <ul className="text-xs text-blue-700 list-disc pl-4 mt-0.5">
                       {((data.templateSnapshot as any).requiredDocuments as any[]).filter((d) => d.required).map((d, i) => (
                         <li key={i}>{d.label}</li>
@@ -525,55 +525,55 @@ export default function VendorFormPage() {
         {isExpired && (
           <div className="bg-red-50 border border-red-300 rounded-2xl p-5 text-center">
             <p className="text-2xl mb-2">⛔</p>
-            <p className="font-bold text-red-700 mb-1">{t("vendor.form.expired")}</p>
-            <p className="text-sm text-red-600">{t("vendor.form.expiredDesc")}</p>
+            <p className="font-bold text-red-700 mb-1">{t("vendorForm.expired", "Waktu Penawaran Berakhir")}</p>
+            <p className="text-sm text-red-600">{t("vendorForm.expiredDesc", "Batas waktu untuk merespons RFQ ini sudah habis.")}</p>
           </div>
         )}
 
         {/* Already submitted notice */}
         {!isExpired && alreadySubmitted && (
           <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-sm">
-            <p className="font-semibold text-amber-800 mb-1">⚡ Anda sudah mengirim penawaran</p>
+            <p className="font-semibold text-amber-800 mb-1">⚡ {t("vendorForm.alreadySubmittedTitle", "Anda sudah mengirim penawaran")}</p>
             <p className="text-amber-700">
-              Status: <strong>{STATUS_LABEL[data.currentStatus] ?? data.currentStatus}</strong>
+              {t("vendorForm.status", "Status:")}: <strong>{STATUS_LABEL[data.currentStatus] ?? data.currentStatus}</strong>
             </p>
             {data.currentOfferedPrice && (
-              <p className="text-amber-700">Harga: <strong>{idr(data.currentOfferedPrice)}</strong></p>
+              <p className="text-amber-700">{t("vendorForm.price", "Harga:")}: <strong>{idr(data.currentOfferedPrice)}</strong></p>
             )}
             {data.currentEta && <p className="text-amber-700">ETA: <strong>{data.currentEta}</strong></p>}
-            <p className="mt-2 text-amber-600 text-xs">{t("vendor.form.canStillUpdate")}</p>
+            <p className="mt-2 text-amber-600 text-xs">{t("vendorForm.canStillUpdate", "Anda masih bisa memperbarui penawaran.")}</p>
           </div>
         )}
 
         {/* Action selection */}
         {!isExpired && (mode === "select" || mode === null) && (
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-            <h3 className="font-semibold text-gray-800 mb-4">Pilih Tindakan</h3>
+            <h3 className="font-semibold text-gray-800 mb-4">{t("vendorForm.chooseAction", "Pilih Tindakan")}</h3>
             <div className="space-y-3">
               <ActionButton
                 icon="✅"
-                label="Terima Harga Dasar"
+                label={t("vendorForm.acceptBasePrice", "Terima Harga Dasar")}
                 desc={
                   hasVendorPricing && totalVendorGrandTotal > 0
-                    ? `Setuju dengan total ${idr(totalVendorGrandTotal)} (termasuk PPN)`
+                    ? `${t("vendorForm.agreeWithTotal", "Setuju dengan total")} ${idr(totalVendorGrandTotal)} (${t("vendorForm.includingVat", "termasuk PPN")})`
                     : data.basicPrice
-                    ? `Setuju dengan harga ${idr(data.basicPrice)}`
-                    : "Saya setuju dengan harga yang tertera"
+                    ? `${t("vendorForm.agreeWithPrice", "Setuju dengan harga")} ${idr(data.basicPrice)}`
+                    : t("vendorForm.agreeWithPriceListed", "Saya setuju dengan harga yang tertera")
                 }
                 color="green"
                 onClick={() => setMode("accept")}
               />
               <ActionButton
                 icon="💬"
-                label="Ajukan Harga Baru"
-                desc="Saya ingin memberikan penawaran harga berbeda"
+                label={t("vendorForm.submitNewPrice", "Ajukan Harga Baru")}
+                desc={t("vendorForm.submitNewPriceDesc", "Saya ingin memberikan penawaran harga berbeda")}
                 color="blue"
                 onClick={() => setMode("counter")}
               />
               <ActionButton
                 icon="❌"
-                label="Tidak Bisa Melayani"
-                desc="Saya tidak dapat memproses permintaan ini"
+                label={t("vendorForm.cannotServe", "Tidak Bisa Melayani")}
+                desc={t("vendorForm.cannotServeDesc", "Saya tidak dapat memproses permintaan ini")}
                 color="red"
                 onClick={() => setMode("reject")}
               />
@@ -585,9 +585,9 @@ export default function VendorFormPage() {
         {!isExpired && mode === "accept" && (
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
             <div className="flex items-center gap-2 mb-4">
-              <button onClick={() => setMode("select")} className="text-gray-400 hover:text-gray-600 text-sm">← Kembali</button>
+              <button onClick={() => setMode("select")} className="text-gray-400 hover:text-gray-600 text-sm">← {t("vendorForm.back", "Kembali")}</button>
             </div>
-            <h3 className="font-semibold text-gray-800 mb-4">✅ Terima Harga Dasar</h3>
+            <h3 className="font-semibold text-gray-800 mb-4">✅ {t("vendorForm.acceptBasePrice", "Terima Harga Dasar")}</h3>
 
             {/* Breakdown for product orders */}
             {isProductOrder && hasVendorPricing && productItems.length > 0 ? (
@@ -596,10 +596,10 @@ export default function VendorFormPage() {
                   <div key={i} className="space-y-1">
                     <p className="text-sm font-semibold text-green-800">{item.serviceName || item.category}</p>
                     <div className="flex justify-between text-xs text-green-700">
-                      <span>{t("vendor.form.qty")}</span><span>{item.qty} {item.unit}</span>
+                      <span>{t("vendorForm.qty", "Qty")}</span><span>{item.qty} {item.unit}</span>
                     </div>
                     <div className="flex justify-between text-xs text-green-700">
-                      <span>{t("vendor.form.unitPrice")}</span><span>{idr(item.vendorUnitPrice)}</span>
+                      <span>{t("vendorForm.unitPrice", "Harga Satuan")}</span><span>{idr(item.vendorUnitPrice)}</span>
                     </div>
                     <div className="flex justify-between text-xs text-green-700">
                       <span>Subtotal</span><span>{idr(item.vendorSubtotal)}</span>
@@ -620,15 +620,15 @@ export default function VendorFormPage() {
               </div>
             ) : data.basicPrice ? (
               <div className="bg-green-50 border border-green-200 rounded-xl p-3 mb-4 text-center">
-                <p className="text-sm text-green-700">Anda menyetujui harga</p>
+                <p className="text-sm text-green-700">{t("vendorForm.youAgreePrice", "Anda menyetujui harga")}</p>
                 <p className="text-2xl font-bold text-green-700">{idr(data.basicPrice)}</p>
               </div>
             ) : null}
 
-            <FormField label="Estimasi Waktu (opsional)" placeholder="Contoh: 2-3 hari" value={eta} onChange={setEta} />
-            <FormField label="Catatan (opsional)" placeholder="Catatan tambahan..." value={notes} onChange={setNotes} textarea />
+            <FormField label={t("vendorForm.estimatedTimeOptional", "Estimasi Waktu (opsional)")} placeholder={t("vendorForm.etaPlaceholder", "Contoh: 2-3 hari")} value={eta} onChange={setEta} />
+            <FormField label={t("vendorForm.notesOptional", "Catatan (opsional)")} placeholder={t("vendorForm.notesPlaceholder", "Catatan tambahan...")} value={notes} onChange={setNotes} textarea />
             {error && <p className="text-red-500 text-sm mt-2">{error}</p>}
-            <SubmitButton onClick={handleSubmit} loading={submitting} label="Kirim Konfirmasi" color="green" />
+            <SubmitButton onClick={handleSubmit} loading={submitting} label={t("vendorForm.sendConfirmation", "Kirim Konfirmasi")} color="green" />
           </div>
         )}
 
@@ -636,15 +636,15 @@ export default function VendorFormPage() {
         {!isExpired && mode === "counter" && (
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
             <div className="flex items-center gap-2 mb-4">
-              <button onClick={() => setMode("select")} className="text-gray-400 hover:text-gray-600 text-sm">← Kembali</button>
+              <button onClick={() => setMode("select")} className="text-gray-400 hover:text-gray-600 text-sm">← {t("vendorForm.back", "Kembali")}</button>
             </div>
-            <h3 className="font-semibold text-gray-800 mb-4">💬 Ajukan Harga Baru</h3>
+            <h3 className="font-semibold text-gray-800 mb-4">💬 {t("vendorForm.submitNewPrice", "Ajukan Harga Baru")}</h3>
 
             {/* Per-item pricing table (Step 11) */}
             {hasItemPricing ? (
               <>
                 <div className="mb-4">
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Mata Uang</p>
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{t("vendorForm.currency", "Mata Uang")}</p>
                   <select
                     value={globalCurrency}
                     onChange={e => setGlobalCurrency(e.target.value)}
@@ -658,7 +658,7 @@ export default function VendorFormPage() {
                   </select>
                 </div>
                 <div className="mb-4">
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Harga Per Item *</p>
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{t("vendorForm.pricePerItem", "Harga Per Item")} *</p>
                   <div className="space-y-3">
                     {allItems.map((item) => {
                       const key = item.id != null ? String(item.id) : item.serviceName;
@@ -669,7 +669,7 @@ export default function VendorFormPage() {
                           <input
                             type="number"
                             min="0"
-                            placeholder={`Harga satuan (${globalCurrency})`}
+                            placeholder={`${t("vendorForm.unitPriceCurrency", "Harga satuan")} (${globalCurrency})`}
                             value={itemPrices[key] ?? ""}
                             onChange={e => setItemPrices(prev => ({ ...prev, [key]: e.target.value }))}
                             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
@@ -701,15 +701,15 @@ export default function VendorFormPage() {
             ) : isProductOrder ? (
               <>
                 <FormField
-                  label={`${t("vendor.form.unitPrice")} per Unit (IDR) *`}
-                  placeholder="Contoh: 4800000"
+                  label={`${t("vendorForm.unitPrice", "Harga Satuan")} per Unit (IDR) *`}
+                  placeholder={t("vendorForm.unitPricePlaceholder", "Contoh: 4800000")}
                   type="number"
                   value={unitPrice}
                   onChange={setUnitPrice}
                 />
                 {unitPriceNum > 0 && totalQty > 0 && (
                   <div className="mb-4 bg-blue-50 border border-blue-200 rounded-xl p-3 text-sm space-y-1">
-                    <p className="text-xs font-semibold text-blue-700 uppercase tracking-wide mb-2">Kalkulasi Penawaran</p>
+                    <p className="text-xs font-semibold text-blue-700 uppercase tracking-wide mb-2">{t("vendorForm.offerCalculation", "Kalkulasi Penawaran")}</p>
                     <div className="flex justify-between text-blue-700">
                       <span>{totalQty} Unit × {idr(unitPriceNum)}</span>
                       <span>{idr(previewSubtotal)}</span>
@@ -718,15 +718,15 @@ export default function VendorFormPage() {
                       <span>PPN 11%</span><span>{idr(previewPpn)}</span>
                     </div>
                     <div className="flex justify-between font-bold text-blue-800 pt-1 border-t border-blue-200">
-                      <span>Grand Total Penawaran</span><span>{idr(previewGrandTotal)}</span>
+                      <span>{t("vendorForm.offerGrandTotal", "Grand Total Penawaran")}</span><span>{idr(previewGrandTotal)}</span>
                     </div>
                   </div>
                 )}
               </>
             ) : (
               <FormField
-                label="Harga Penawaran (IDR) *"
-                placeholder="Contoh: 5000000"
+                label={`${t("vendorForm.offerPrice", "Harga Penawaran")} (IDR) *`}
+                placeholder={t("vendorForm.offerPricePlaceholder", "Contoh: 5000000")}
                 type="number"
                 value={unitPrice}
                 onChange={setUnitPrice}
@@ -734,38 +734,38 @@ export default function VendorFormPage() {
             )}
 
             <FormField
-              label="Estimasi Waktu / ETA *"
-              placeholder="Contoh: 3-5 hari"
+              label={`${t("vendorForm.etaLabel", "Estimasi Waktu / ETA")} *`}
+              placeholder={t("vendorForm.etaLabelPlaceholder", "Contoh: 3-5 hari")}
               value={eta}
               onChange={setEta}
             />
             <FormField
-              label="Berlaku Sampai (opsional)"
-              placeholder="Contoh: 2025-12-31"
+              label={t("vendorForm.validUntilOptional", "Berlaku Sampai (opsional)")}
+              placeholder={t("vendorForm.validUntilPlaceholder", "Contoh: 2025-12-31")}
               value={validityDate}
               onChange={setValidityDate}
             />
             <FormField
-              label="Syarat & Ketentuan (opsional)"
-              placeholder="Contoh: DP 50%, sisa sebelum pengiriman"
+              label={t("vendorForm.termsOptional", "Syarat & Ketentuan (opsional)")}
+              placeholder={t("vendorForm.termsPlaceholder", "Contoh: DP 50%, sisa sebelum pengiriman")}
               value={termsInput}
               onChange={setTermsInput}
               textarea
             />
-            <FormField label="Catatan (opsional)" placeholder="Catatan untuk admin..." value={notes} onChange={setNotes} textarea />
+            <FormField label={t("vendorForm.notesOptional", "Catatan (opsional)")} placeholder={t("vendorForm.notesForAdmin", "Catatan untuk admin...")} value={notes} onChange={setNotes} textarea />
             <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Lampiran (opsional)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">{t("vendorForm.attachmentOptional", "Lampiran (opsional)")}</label>
               <input
                 type="file"
                 accept="image/*,.pdf"
                 onChange={handleUpload}
                 className="text-sm text-gray-500 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-sm file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
               />
-              {uploadingFile && <p className="text-xs text-blue-500 mt-1">Uploading...</p>}
-              {attachmentUrl && <p className="text-xs text-green-600 mt-1">✓ File berhasil diupload</p>}
+              {uploadingFile && <p className="text-xs text-blue-500 mt-1">{t("vendorForm.uploading", "Uploading...")}</p>}
+              {attachmentUrl && <p className="text-xs text-green-600 mt-1">✓ {t("vendorForm.fileUploadSuccess", "File berhasil diupload")}</p>}
             </div>
             {error && <p className="text-red-500 text-sm mt-2">{error}</p>}
-            <SubmitButton onClick={handleSubmit} loading={submitting} label="Kirim Penawaran" color="blue" />
+            <SubmitButton onClick={handleSubmit} loading={submitting} label={t("vendorForm.sendOffer", "Kirim Penawaran")} color="blue" />
           </div>
         )}
 
@@ -773,17 +773,17 @@ export default function VendorFormPage() {
         {!isExpired && mode === "reject" && (
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
             <div className="flex items-center gap-2 mb-4">
-              <button onClick={() => setMode("select")} className="text-gray-400 hover:text-gray-600 text-sm">← Kembali</button>
+              <button onClick={() => setMode("select")} className="text-gray-400 hover:text-gray-600 text-sm">← {t("vendorForm.back", "Kembali")}</button>
             </div>
-            <h3 className="font-semibold text-gray-800 mb-4">❌ Tidak Dapat Melayani</h3>
-            <FormField label="Alasan (opsional)" placeholder="Contoh: Rute tidak tersedia, kapasitas penuh..." value={notes} onChange={setNotes} textarea />
+            <h3 className="font-semibold text-gray-800 mb-4">❌ {t("vendorForm.cannotServeTitle", "Tidak Dapat Melayani")}</h3>
+            <FormField label={t("vendorForm.reasonOptional", "Alasan (opsional)")} placeholder={t("vendorForm.reasonPlaceholder", "Contoh: Rute tidak tersedia, kapasitas penuh...")} value={notes} onChange={setNotes} textarea />
             {error && <p className="text-red-500 text-sm mt-2">{error}</p>}
-            <SubmitButton onClick={handleSubmit} loading={submitting} label="Konfirmasi Penolakan" color="red" />
+            <SubmitButton onClick={handleSubmit} loading={submitting} label={t("vendorForm.confirmRejection", "Konfirmasi Penolakan")} color="red" />
           </div>
         )}
 
         <p className="text-center text-xs text-gray-400 pb-4">
-          {t("vendor.form.replyBeforeDeadline")}
+          {t("vendorForm.replyBeforeDeadline", "Harap balas sebelum batas waktu yang ditentukan.")}
         </p>
       </div>
     </div>
@@ -836,6 +836,7 @@ function SubmitButton({ onClick, loading, label, color }: {
   onClick: () => void; loading: boolean; label: string;
   color: "green" | "blue" | "red";
 }) {
+  const { t } = useLanguage();
   const bg = { green: "bg-green-600 hover:bg-green-700", blue: "bg-blue-600 hover:bg-blue-700", red: "bg-red-600 hover:bg-red-700" }[color];
   return (
     <button
@@ -843,7 +844,7 @@ function SubmitButton({ onClick, loading, label, color }: {
       disabled={loading}
       className={`w-full ${bg} text-white font-semibold py-3 rounded-xl mt-2 disabled:opacity-50 transition-colors`}
     >
-      {loading ? "Mengirim..." : label}
+      {loading ? t("vendorForm.sending", "Mengirim...") : label}
     </button>
   );
 }

@@ -29,16 +29,18 @@ import {
 } from "lucide-react";
 import { CityAutocompleteInput } from "@/components/ui/city-autocomplete";
 import PageSeo from "@/components/PageSeo";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 const GOODS_TYPES_BOOK = ["General Cargo","Kopi / Hasil Bumi","Elektronik","Perishable","Kimia / B3","Furniture","Mesin & Spare-part","Lainnya"];
 const INCOTERMS_BOOK   = ["EXW","FCA","FOB","CIF","DAP","DDP","CPT","CIP"];
 
 function AutoReadOnly({ label, value }: { label: string; value: string }) {
+  const { t } = useLanguage();
   return (
     <div>
       <label className="text-xs flex items-center gap-1 font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
         {label}
-        <span className="ml-auto text-[10px] font-semibold text-orange-600 bg-orange-100 border border-orange-200 rounded px-1.5 py-0.5">Otomatis</span>
+        <span className="ml-auto text-[10px] font-semibold text-orange-600 bg-orange-100 border border-orange-200 rounded px-1.5 py-0.5">{t("logisticBook.auto", "Otomatis")}</span>
       </label>
       <div className="flex items-center gap-2 bg-orange-50 border border-orange-200 rounded-md px-3 py-2 mt-1">
         <span className="text-xs font-semibold text-slate-800">{value || "—"}</span>
@@ -52,110 +54,72 @@ const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   Package, Warehouse, Truck, FileCheck, Shield, FileText,
 };
 
-const QUICK_SERVICES = [
-  {
-    id: "freight",
-    name: "Freight",
-    description: "Air & sea forwarding, domestic delivery",
-    category: "Freight" as const,
-    isTrucking: false,
-    icon: <Ship className="w-5 h-5 text-blue-600" />,
-    color: "border-blue-200 bg-blue-50/60 hover:border-blue-400 text-blue-900",
-  },
-  {
-    id: "customs",
-    name: "Customs",
-    description: "Import/export customs clearance",
-    category: "Customs" as const,
-    isTrucking: false,
-    icon: <FileCheck className="w-5 h-5 text-orange-600" />,
-    color: "border-orange-200 bg-orange-50/60 hover:border-orange-400 text-orange-900",
-  },
-  {
-    id: "trucking",
-    name: "Trucking",
-    description: "Pickup, delivery & container transport",
-    category: "Trucking" as const,
-    isTrucking: true,
-    icon: <Truck className="w-5 h-5 text-amber-600" />,
-    color: "border-amber-200 bg-amber-50/60 hover:border-amber-400 text-amber-900",
-  },
-  {
-    id: "storage",
-    name: "Storage",
-    description: "Warehouse & bonded storage",
-    category: "Storage" as const,
-    isTrucking: false,
-    icon: <Warehouse className="w-5 h-5 text-teal-600" />,
-    color: "border-teal-200 bg-teal-50/60 hover:border-teal-400 text-teal-900",
-  },
-];
-
 function getServiceDetailRows(
   calculatorType: string,
-  inputData: Record<string, unknown>
+  inputData: Record<string, unknown>,
+  t: (key: string, fallback: string) => string
 ): { label: string; value: string }[] {
   const str = (v: unknown) => (v != null && v !== "" ? String(v) : "");
 
   if (calculatorType === "trucking") {
     return [
-      { label: "Pickup City", value: str(inputData.pickupCity) || "-" },
-      { label: "Destination City", value: str(inputData.destCity) || "-" },
-      { label: "Distance", value: inputData.distance ? `${inputData.distance} KM` : "-" },
-      { label: "Vehicle Type", value:
+      { label: t("logisticBook.detail.pickupCity", "Pickup City"), value: str(inputData.pickupCity) || "-" },
+      { label: t("logisticBook.detail.destinationCity", "Destination City"), value: str(inputData.destCity) || "-" },
+      { label: t("logisticBook.detail.distance", "Distance"), value: inputData.distance ? `${inputData.distance} KM` : "-" },
+      { label: t("logisticBook.detail.vehicleType", "Vehicle Type"), value:
           (inputData.vehicleType === "Trailer Truck" || inputData.vehicleType === "Trailer") && inputData.trailerSize
             ? `${str(inputData.vehicleType)} - ${str(inputData.trailerSize)}`
-            : str(inputData.vehicleType) || "Not specified" },
+            : str(inputData.vehicleType) || t("logisticBook.detail.notSpecified", "Not specified") },
     ];
   }
   if (calculatorType === "air_freight") {
     return [
-      ...(inputData.originAirport ? [{ label: "Origin Airport", value: str(inputData.originAirport) }] : []),
-      ...(inputData.destinationAirport ? [{ label: "Destination Airport", value: str(inputData.destinationAirport) }] : []),
-      ...(inputData.grossWeight ? [{ label: "Gross Weight", value: `${inputData.grossWeight} kg` }] : []),
-      ...(inputData.quantity ? [{ label: "Quantity", value: `${inputData.quantity} pcs` }] : []),
+      ...(inputData.originAirport ? [{ label: t("logisticBook.detail.originAirport", "Origin Airport"), value: str(inputData.originAirport) }] : []),
+      ...(inputData.destinationAirport ? [{ label: t("logisticBook.detail.destinationAirport", "Destination Airport"), value: str(inputData.destinationAirport) }] : []),
+      ...(inputData.grossWeight ? [{ label: t("logisticBook.detail.grossWeight", "Gross Weight"), value: `${inputData.grossWeight} kg` }] : []),
+      ...(inputData.quantity ? [{ label: t("logisticBook.detail.quantity", "Quantity"), value: `${inputData.quantity} pcs` }] : []),
     ];
   }
   if (calculatorType === "sea_fcl") {
     return [
-      ...(inputData.originPort ? [{ label: "Origin Port", value: str(inputData.originPort) }] : []),
-      ...(inputData.destinationPort ? [{ label: "Destination Port", value: str(inputData.destinationPort) }] : []),
-      ...(inputData.containerType ? [{ label: "Container Type", value: str(inputData.containerType) }] : []),
+      ...(inputData.originPort ? [{ label: t("logisticBook.detail.originPort", "Origin Port"), value: str(inputData.originPort) }] : []),
+      ...(inputData.destinationPort ? [{ label: t("logisticBook.detail.destinationPort", "Destination Port"), value: str(inputData.destinationPort) }] : []),
+      ...(inputData.containerType ? [{ label: t("logisticBook.detail.containerType", "Container Type"), value: str(inputData.containerType) }] : []),
     ];
   }
   if (calculatorType === "sea_lcl") {
     return [
-      ...(inputData.cbm ? [{ label: "CBM", value: String(inputData.cbm) }] : []),
-      ...(inputData.weight ? [{ label: "Weight", value: `${inputData.weight} kg` }] : []),
+      ...(inputData.cbm ? [{ label: t("logisticBook.detail.cbm", "CBM"), value: String(inputData.cbm) }] : []),
+      ...(inputData.weight ? [{ label: t("logisticBook.detail.weight", "Weight"), value: `${inputData.weight} kg` }] : []),
     ];
   }
   if (calculatorType === "customs") {
     return [
-      ...(inputData.shipmentType ? [{ label: "Shipment Type", value: str(inputData.shipmentType) }] : []),
+      ...(inputData.shipmentType ? [{ label: t("logisticBook.detail.shipmentType", "Shipment Type"), value: str(inputData.shipmentType) }] : []),
     ];
   }
   if (calculatorType === "storage") {
     return [
-      ...(inputData.days ? [{ label: "Days", value: String(inputData.days) }] : []),
-      ...(inputData.quantity ? [{ label: "Quantity", value: String(inputData.quantity) }] : []),
-      ...(inputData.unit ? [{ label: "Unit", value: str(inputData.unit) }] : []),
+      ...(inputData.days ? [{ label: t("logisticBook.detail.days", "Days"), value: String(inputData.days) }] : []),
+      ...(inputData.quantity ? [{ label: t("logisticBook.detail.quantity", "Quantity"), value: String(inputData.quantity) }] : []),
+      ...(inputData.unit ? [{ label: t("logisticBook.detail.unit", "Unit"), value: str(inputData.unit) }] : []),
     ];
   }
   if (calculatorType === "product") {
     return [
-      ...(inputData.qty ? [{ label: "Qty", value: String(inputData.qty) }] : []),
-      ...(inputData.unit ? [{ label: "Unit", value: str(inputData.unit) }] : []),
+      ...(inputData.qty ? [{ label: t("logisticBook.detail.qty", "Qty"), value: String(inputData.qty) }] : []),
+      ...(inputData.unit ? [{ label: t("logisticBook.detail.unit", "Unit"), value: str(inputData.unit) }] : []),
     ];
   }
   if (inputData.itemSource === "vendor_catalog_item") {
     const rows: { label: string; value: string }[] = [];
-    if (inputData.serviceType) rows.push({ label: "Tipe Layanan", value: str(inputData.serviceType) });
-    if (inputData.quantity != null) rows.push({ label: "Qty / Volume", value: `${inputData.quantity}${inputData.unit ? " " + str(inputData.unit) : ""}` });
-    if (inputData.pickupCity || inputData.origin) rows.push({ label: "Asal", value: str(inputData.pickupCity ?? inputData.origin) });
-    if (inputData.destCity || inputData.destination) rows.push({ label: "Tujuan", value: str(inputData.destCity ?? inputData.destination) });
-    if (inputData.containerType) rows.push({ label: "Kontainer", value: str(inputData.containerType) });
-    if (inputData.grossWeight) rows.push({ label: "Berat Kotor", value: `${inputData.grossWeight} kg` });
-    if (inputData.chargeableWeight) rows.push({ label: "Chargeable Weight", value: `${inputData.chargeableWeight} kg` });
+    if (inputData.serviceType) rows.push({ label: t("logisticBook.detail.serviceType", "Tipe Layanan"), value: str(inputData.serviceType) });
+    if (inputData.quantity != null) rows.push({ label: t("logisticBook.detail.qtyVolume", "Qty / Volume"), value: `${inputData.quantity}${inputData.unit ? " " + str(inputData.unit) : ""}` });
+    if (inputData.pickupCity || inputData.origin) rows.push({ label: t("logisticBook.detail.origin", "Asal"), value: str(inputData.pickupCity ?? inputData.origin) });
+    if (inputData.destCity || inputData.destination) rows.push({ label: t("logisticBook.detail.destination", "Tujuan"), value: str(inputData.destCity ?? inputData.destination) });
+    if (inputData.containerType) rows.push({ label: t("logisticBook.detail.container", "Kontainer"), value: str(inputData.containerType) });
+    if (inputData.grossWeight) rows.push({ label: t("logisticBook.detail.grossWeightKg", "Berat Kotor"), value: `${inputData.grossWeight} kg` });
+    if (inputData.chargeableWeight) rows.push({ label: t("logisticBook.detail.chargeableWeight", "Chargeable Weight"), value: `${inputData.chargeableWeight} kg` });
     return rows;
   }
   const skipped = new Set(["unitPrice", "serviceFee", "adminFee", "ratePerKg", "ratePerCbm", "minimumCharge", "freightRate", "handlingFee", "truckingRate", "loadingFee", "customsFee", "documentFee", "pibPebFee", "permitFee", "notes"]);
@@ -168,13 +132,13 @@ function getServiceDetailRows(
     }));
 }
 
-const STEPS = [
-  "Tipe Pengiriman",
-  "Pilih Layanan",
-  "Ringkasan",
-  "Data Pemesan",
-  "Pembayaran",
-  "Konfirmasi",
+const STEPS_KEYS = [
+  { key: "logisticBook.steps.shipmentType", fallback: "Tipe Pengiriman" },
+  { key: "logisticBook.steps.selectService", fallback: "Pilih Layanan" },
+  { key: "logisticBook.steps.summary", fallback: "Ringkasan" },
+  { key: "logisticBook.steps.ordererData", fallback: "Data Pemesan" },
+  { key: "logisticBook.steps.payment", fallback: "Pembayaran" },
+  { key: "logisticBook.steps.confirmation", fallback: "Konfirmasi" },
 ];
 
 type Step = 0 | 1 | 2 | 3 | 4 | 5;
@@ -278,6 +242,7 @@ function CalculatorForm({ item, onAdd, onBack, transportMode, truckType, origin,
   companyOrigin?: CompanyOrigin;
   initialState?: Record<string, string>;
 }) {
+  const { t } = useLanguage();
   const [state, setState] = useState<CalcState>({});
   const [autoRateFetching, setAutoRateFetching] = useState(false);
   const { toast } = useToast();
@@ -334,11 +299,11 @@ function CalculatorForm({ item, onAdd, onBack, transportMode, truckType, origin,
   function handleAdd() {
     if (item.calculatorType === "trucking") {
       if (!state.pickupCity || !state.destCity || !state.vehicleType) {
-        toast({ title: "Isi kota asal, kota tujuan, dan tipe kendaraan", variant: "destructive" });
+        toast({ title: t("logisticBook.toast.fillTruckingFields", "Isi kota asal, kota tujuan, dan tipe kendaraan"), variant: "destructive" });
         return;
       }
     } else if (subtotal <= 0) {
-      toast({ title: "Isi data kalkulator terlebih dahulu", variant: "destructive" });
+      toast({ title: t("logisticBook.toast.fillCalculator", "Isi data kalkulator terlebih dahulu"), variant: "destructive" });
       return;
     }
     onAdd({
@@ -349,7 +314,7 @@ function CalculatorForm({ item, onAdd, onBack, transportMode, truckType, origin,
       calculationResult: calcResult(item.calculatorType, state),
       subtotal,
     });
-    toast({ title: `${item.name} ditambahkan ke pesanan` });
+    toast({ title: `${item.name} ${t("logisticBook.toast.addedToOrder", "ditambahkan ke pesanan")}` });
   }
 
   const ct = item.calculatorType;
@@ -374,15 +339,15 @@ function CalculatorForm({ item, onAdd, onBack, transportMode, truckType, origin,
 
       <div className="bg-muted/30 rounded-lg border border-border p-5 space-y-4">
         <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-          <Calculator className="w-4 h-4 text-accent" /> Calculator
+          <Calculator className="w-4 h-4 text-accent" /> {t("logisticBook.calculator", "Calculator")}
         </div>
 
         {hasAnyAuto && (
           <div className="flex gap-2 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3">
             <Sparkles className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
             <div>
-              <p className="text-xs font-semibold text-blue-700">Diisi otomatis dari produk pesanan</p>
-              <p className="text-xs text-blue-600 mt-0.5">Berat &amp; dimensi dihitung dari item di keranjang. Lengkapi detail lainnya lalu klik Hitung Estimasi.</p>
+              <p className="text-xs font-semibold text-blue-700">{t("logisticBook.autoFillTitle", "Diisi otomatis dari produk pesanan")}</p>
+              <p className="text-xs text-blue-600 mt-0.5">{t("logisticBook.autoFillDesc", "Berat & dimensi dihitung dari item di keranjang. Lengkapi detail lainnya lalu klik Hitung Estimasi.")}</p>
             </div>
           </div>
         )}
@@ -391,8 +356,8 @@ function CalculatorForm({ item, onAdd, onBack, transportMode, truckType, origin,
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label className="text-xs flex items-center gap-1">
-                Bandara Asal
-                <span className="ml-auto text-[10px] font-semibold text-orange-600 bg-orange-100 border border-orange-200 rounded px-1.5 py-0.5">Otomatis</span>
+                {t("logisticBook.form.originAirport", "Bandara Asal")}
+                <span className="ml-auto text-[10px] font-semibold text-orange-600 bg-orange-100 border border-orange-200 rounded px-1.5 py-0.5">{t("logisticBook.auto", "Otomatis")}</span>
               </Label>
               <div className="flex items-center gap-2 bg-orange-50 border border-orange-200 rounded-md px-3 py-2 mt-1">
                 <MapPin className="w-3.5 h-3.5 text-orange-500 shrink-0" />
@@ -400,34 +365,34 @@ function CalculatorForm({ item, onAdd, onBack, transportMode, truckType, origin,
               </div>
             </div>
             <div>
-              <Label className="text-xs">Bandara Tujuan <span className="text-destructive">*</span></Label>
-              <CityAutocompleteInput type="airport" placeholder="Cari bandara tujuan..." value={state.destinationAirport||""} onChange={v => set("destinationAirport", v)} />
+              <Label className="text-xs">{t("logisticBook.form.destinationAirport", "Bandara Tujuan")} <span className="text-destructive">*</span></Label>
+              <CityAutocompleteInput type="airport" placeholder={t("logisticBook.form.searchDestAirport", "Cari bandara tujuan...")} value={state.destinationAirport||""} onChange={v => set("destinationAirport", v)} />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
             {hasAutoWeight
-              ? <AutoReadOnly label="Gross Weight (kg)" value={state.grossWeight||""} />
-              : <div><Label className="text-xs">Gross Weight (kg)</Label><Input type="number" placeholder="0" value={state.grossWeight||""} onChange={e => set("grossWeight", e.target.value)} /></div>
+              ? <AutoReadOnly label={t("logisticBook.form.grossWeightKg", "Gross Weight (kg)")} value={state.grossWeight||""} />
+              : <div><Label className="text-xs">{t("logisticBook.form.grossWeightKg", "Gross Weight (kg)")}</Label><Input type="number" placeholder="0" value={state.grossWeight||""} onChange={e => set("grossWeight", e.target.value)} /></div>
             }
-            <div><Label className="text-xs">Quantity (pcs)</Label><Input type="number" placeholder="1" value={state.quantity||""} onChange={e => set("quantity", e.target.value)} /></div>
+            <div><Label className="text-xs">{t("logisticBook.form.quantityPcs", "Quantity (pcs)")}</Label><Input type="number" placeholder="1" value={state.quantity||""} onChange={e => set("quantity", e.target.value)} /></div>
           </div>
           <div className="grid grid-cols-3 gap-3">
             {hasAutoDims ? <>
-              <AutoReadOnly label="Panjang (cm)" value={state.length||""} />
-              <AutoReadOnly label="Lebar (cm)" value={state.width||""} />
-              <AutoReadOnly label="Tinggi (cm)" value={state.height||""} />
+              <AutoReadOnly label={t("logisticBook.form.lengthCm", "Panjang (cm)")} value={state.length||""} />
+              <AutoReadOnly label={t("logisticBook.form.widthCm", "Lebar (cm)")} value={state.width||""} />
+              <AutoReadOnly label={t("logisticBook.form.heightCm", "Tinggi (cm)")} value={state.height||""} />
             </> : <>
-              <div><Label className="text-xs">Length (cm)</Label><Input type="number" placeholder="0" value={state.length||""} onChange={e => set("length", e.target.value)} /></div>
-              <div><Label className="text-xs">Width (cm)</Label><Input type="number" placeholder="0" value={state.width||""} onChange={e => set("width", e.target.value)} /></div>
-              <div><Label className="text-xs">Height (cm)</Label><Input type="number" placeholder="0" value={state.height||""} onChange={e => set("height", e.target.value)} /></div>
+              <div><Label className="text-xs">{t("logisticBook.form.lengthCmEn", "Length (cm)")}</Label><Input type="number" placeholder="0" value={state.length||""} onChange={e => set("length", e.target.value)} /></div>
+              <div><Label className="text-xs">{t("logisticBook.form.widthCmEn", "Width (cm)")}</Label><Input type="number" placeholder="0" value={state.width||""} onChange={e => set("width", e.target.value)} /></div>
+              <div><Label className="text-xs">{t("logisticBook.form.heightCmEn", "Height (cm)")}</Label><Input type="number" placeholder="0" value={state.height||""} onChange={e => set("height", e.target.value)} /></div>
             </>}
           </div>
-          {hasAutoGoods && <AutoReadOnly label="Jenis Barang" value={state.goodsType||""} />}
-          <div><Label className="text-xs">Rate per Kg (IDR)</Label><Input type="number" placeholder="0" value={state.ratePerKg||""} onChange={e => set("ratePerKg", e.target.value)} /></div>
+          {hasAutoGoods && <AutoReadOnly label={t("logisticBook.form.goodsType", "Jenis Barang")} value={state.goodsType||""} />}
+          <div><Label className="text-xs">{t("logisticBook.form.ratePerKg", "Rate per Kg (IDR)")}</Label><Input type="number" placeholder="0" value={state.ratePerKg||""} onChange={e => set("ratePerKg", e.target.value)} /></div>
           {(parseFloat(state.grossWeight)||0) > 0 && (parseFloat(state.ratePerKg)||0) > 0 && (
             <div className="text-xs text-muted-foreground bg-background rounded p-3 space-y-1">
-              <p>Volume Weight: {((parseFloat(state.length)||0)*(parseFloat(state.width)||0)*(parseFloat(state.height)||0)*(parseFloat(state.quantity)||1)/6000).toFixed(2)} kg</p>
-              <p>Chargeable Weight: {Math.max(parseFloat(state.grossWeight)||0, (parseFloat(state.length)||0)*(parseFloat(state.width)||0)*(parseFloat(state.height)||0)*(parseFloat(state.quantity)||1)/6000).toFixed(2)} kg</p>
+              <p>{t("logisticBook.form.volumeWeight", "Volume Weight")}: {((parseFloat(state.length)||0)*(parseFloat(state.width)||0)*(parseFloat(state.height)||0)*(parseFloat(state.quantity)||1)/6000).toFixed(2)} kg</p>
+              <p>{t("logisticBook.form.chargeableWeight", "Chargeable Weight")}: {Math.max(parseFloat(state.grossWeight)||0, (parseFloat(state.length)||0)*(parseFloat(state.width)||0)*(parseFloat(state.height)||0)*(parseFloat(state.quantity)||1)/6000).toFixed(2)} kg</p>
             </div>
           )}
         </>}
@@ -436,8 +401,8 @@ function CalculatorForm({ item, onAdd, onBack, transportMode, truckType, origin,
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label className="text-xs flex items-center gap-1">
-                Pelabuhan Asal
-                <span className="ml-auto text-[10px] font-semibold text-orange-600 bg-orange-100 border border-orange-200 rounded px-1.5 py-0.5">Otomatis</span>
+                {t("logisticBook.form.originPort", "Pelabuhan Asal")}
+                <span className="ml-auto text-[10px] font-semibold text-orange-600 bg-orange-100 border border-orange-200 rounded px-1.5 py-0.5">{t("logisticBook.auto", "Otomatis")}</span>
               </Label>
               <div className="flex items-center gap-2 bg-orange-50 border border-orange-200 rounded-md px-3 py-2 mt-1">
                 <MapPin className="w-3.5 h-3.5 text-orange-500 shrink-0" />
@@ -445,57 +410,57 @@ function CalculatorForm({ item, onAdd, onBack, transportMode, truckType, origin,
               </div>
             </div>
             <div>
-              <Label className="text-xs">Pelabuhan Tujuan <span className="text-destructive">*</span></Label>
-              <CityAutocompleteInput type="port" placeholder="Cari pelabuhan tujuan..." value={state.destinationPort||""} onChange={v => set("destinationPort", v)} />
+              <Label className="text-xs">{t("logisticBook.form.destinationPort", "Pelabuhan Tujuan")} <span className="text-destructive">*</span></Label>
+              <CityAutocompleteInput type="port" placeholder={t("logisticBook.form.searchDestPort", "Cari pelabuhan tujuan...")} value={state.destinationPort||""} onChange={v => set("destinationPort", v)} />
             </div>
           </div>
           {(hasAutoWeight || hasAutoDims || hasAutoGoods) && (
             <div className="grid grid-cols-2 gap-3">
-              {hasAutoWeight && <AutoReadOnly label="Berat (kg)" value={state.grossWeight||""} />}
-              {hasAutoGoods && <AutoReadOnly label="Jenis Barang" value={state.goodsType||""} />}
+              {hasAutoWeight && <AutoReadOnly label={t("logisticBook.form.weightKg", "Berat (kg)")} value={state.grossWeight||""} />}
+              {hasAutoGoods && <AutoReadOnly label={t("logisticBook.form.goodsType", "Jenis Barang")} value={state.goodsType||""} />}
               {hasAutoDims && <>
-                <AutoReadOnly label="Panjang (cm)" value={state.length||""} />
-                <AutoReadOnly label="Lebar (cm)" value={state.width||""} />
-                <AutoReadOnly label="Tinggi (cm)" value={state.height||""} />
+                <AutoReadOnly label={t("logisticBook.form.lengthCm", "Panjang (cm)")} value={state.length||""} />
+                <AutoReadOnly label={t("logisticBook.form.widthCm", "Lebar (cm)")} value={state.width||""} />
+                <AutoReadOnly label={t("logisticBook.form.heightCm", "Tinggi (cm)")} value={state.height||""} />
               </>}
             </div>
           )}
-          <div><Label className="text-xs">Container Type</Label>
+          <div><Label className="text-xs">{t("logisticBook.form.containerType", "Container Type")}</Label>
             <Select value={state.containerType||undefined} onValueChange={v => set("containerType", v)}>
-              <SelectTrigger><SelectValue placeholder="Select container" /></SelectTrigger>
+              <SelectTrigger><SelectValue placeholder={t("logisticBook.form.selectContainer", "Select container")} /></SelectTrigger>
               <SelectContent>
                 {["20FT", "40FT", "40HC"].map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <div><Label className="text-xs">Freight Rate (IDR)</Label><Input type="number" placeholder="0" value={state.freightRate||""} onChange={e => set("freightRate", e.target.value)} /></div>
-            <div><Label className="text-xs">Handling Fee (IDR)</Label><Input type="number" placeholder="0" value={state.handlingFee||""} onChange={e => set("handlingFee", e.target.value)} /></div>
+            <div><Label className="text-xs">{t("logisticBook.form.freightRate", "Freight Rate (IDR)")}</Label><Input type="number" placeholder="0" value={state.freightRate||""} onChange={e => set("freightRate", e.target.value)} /></div>
+            <div><Label className="text-xs">{t("logisticBook.form.handlingFee", "Handling Fee (IDR)")}</Label><Input type="number" placeholder="0" value={state.handlingFee||""} onChange={e => set("handlingFee", e.target.value)} /></div>
           </div>
         </>}
 
         {ct === "sea_lcl" && <>
           <div className="grid grid-cols-2 gap-3">
             {hasAutoDims
-              ? <AutoReadOnly label="CBM" value={state.cbm||""} />
-              : <div><Label className="text-xs">CBM</Label><Input type="number" placeholder="0" value={state.cbm||""} onChange={e => set("cbm", e.target.value)} /></div>
+              ? <AutoReadOnly label={t("logisticBook.form.cbm", "CBM")} value={state.cbm||""} />
+              : <div><Label className="text-xs">{t("logisticBook.form.cbm", "CBM")}</Label><Input type="number" placeholder="0" value={state.cbm||""} onChange={e => set("cbm", e.target.value)} /></div>
             }
             {hasAutoWeight
-              ? <AutoReadOnly label="Berat (kg)" value={state.weight||state.grossWeight||""} />
-              : <div><Label className="text-xs">Weight (kg)</Label><Input type="number" placeholder="0" value={state.weight||""} onChange={e => set("weight", e.target.value)} /></div>
+              ? <AutoReadOnly label={t("logisticBook.form.weightKg", "Berat (kg)")} value={state.weight||state.grossWeight||""} />
+              : <div><Label className="text-xs">{t("logisticBook.form.weightKgEn", "Weight (kg)")}</Label><Input type="number" placeholder="0" value={state.weight||""} onChange={e => set("weight", e.target.value)} /></div>
             }
           </div>
-          {hasAutoGoods && <AutoReadOnly label="Jenis Barang" value={state.goodsType||""} />}
+          {hasAutoGoods && <AutoReadOnly label={t("logisticBook.form.goodsType", "Jenis Barang")} value={state.goodsType||""} />}
           <div className="grid grid-cols-2 gap-3">
-            <div><Label className="text-xs">Rate per CBM (IDR)</Label><Input type="number" placeholder="0" value={state.ratePerCbm||""} onChange={e => set("ratePerCbm", e.target.value)} /></div>
-            <div><Label className="text-xs">Minimum Charge (IDR)</Label><Input type="number" placeholder="0" value={state.minimumCharge||""} onChange={e => set("minimumCharge", e.target.value)} /></div>
+            <div><Label className="text-xs">{t("logisticBook.form.ratePerCbm", "Rate per CBM (IDR)")}</Label><Input type="number" placeholder="0" value={state.ratePerCbm||""} onChange={e => set("ratePerCbm", e.target.value)} /></div>
+            <div><Label className="text-xs">{t("logisticBook.form.minimumCharge", "Minimum Charge (IDR)")}</Label><Input type="number" placeholder="0" value={state.minimumCharge||""} onChange={e => set("minimumCharge", e.target.value)} /></div>
           </div>
         </>}
 
         {ct === "customs" && <>
-          <div><Label className="text-xs">Shipment Type</Label>
+          <div><Label className="text-xs">{t("logisticBook.form.shipmentType", "Shipment Type")}</Label>
             <Select value={state.shipmentType||undefined} onValueChange={v => set("shipmentType", v)}>
-              <SelectTrigger><SelectValue placeholder="Import / Export" /></SelectTrigger>
+              <SelectTrigger><SelectValue placeholder={t("logisticBook.form.importExport", "Import / Export")} /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="Import">Import</SelectItem>
                 <SelectItem value="Export">Export</SelectItem>
@@ -503,10 +468,10 @@ function CalculatorForm({ item, onAdd, onBack, transportMode, truckType, origin,
             </Select>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <div><Label className="text-xs">Customs Service Fee (IDR)</Label><Input type="number" placeholder="0" value={state.customsFee||""} onChange={e => set("customsFee", e.target.value)} /></div>
-            <div><Label className="text-xs">Document Fee (IDR)</Label><Input type="number" placeholder="0" value={state.documentFee||""} onChange={e => set("documentFee", e.target.value)} /></div>
-            <div><Label className="text-xs">PIB/PEB Fee (IDR)</Label><Input type="number" placeholder="0" value={state.pibPebFee||""} onChange={e => set("pibPebFee", e.target.value)} /></div>
-            <div><Label className="text-xs">Additional Permit Fee (IDR)</Label><Input type="number" placeholder="0" value={state.permitFee||""} onChange={e => set("permitFee", e.target.value)} /></div>
+            <div><Label className="text-xs">{t("logisticBook.form.customsServiceFee", "Customs Service Fee (IDR)")}</Label><Input type="number" placeholder="0" value={state.customsFee||""} onChange={e => set("customsFee", e.target.value)} /></div>
+            <div><Label className="text-xs">{t("logisticBook.form.documentFee", "Document Fee (IDR)")}</Label><Input type="number" placeholder="0" value={state.documentFee||""} onChange={e => set("documentFee", e.target.value)} /></div>
+            <div><Label className="text-xs">{t("logisticBook.form.pibPebFee", "PIB/PEB Fee (IDR)")}</Label><Input type="number" placeholder="0" value={state.pibPebFee||""} onChange={e => set("pibPebFee", e.target.value)} /></div>
+            <div><Label className="text-xs">{t("logisticBook.form.additionalPermitFee", "Additional Permit Fee (IDR)")}</Label><Input type="number" placeholder="0" value={state.permitFee||""} onChange={e => set("permitFee", e.target.value)} /></div>
           </div>
         </>}
 
@@ -514,8 +479,8 @@ function CalculatorForm({ item, onAdd, onBack, transportMode, truckType, origin,
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label className="text-xs flex items-center gap-1">
-                Kota Asal
-                <span className="ml-auto text-[10px] font-semibold text-orange-600 bg-orange-100 border border-orange-200 rounded px-1.5 py-0.5">Otomatis</span>
+                {t("logisticBook.form.originCity", "Kota Asal")}
+                <span className="ml-auto text-[10px] font-semibold text-orange-600 bg-orange-100 border border-orange-200 rounded px-1.5 py-0.5">{t("logisticBook.auto", "Otomatis")}</span>
               </Label>
               <div className="flex items-center gap-2 bg-orange-50 border border-orange-200 rounded-md px-3 py-2 mt-1">
                 <MapPin className="w-3.5 h-3.5 text-orange-500 shrink-0" />
@@ -523,80 +488,80 @@ function CalculatorForm({ item, onAdd, onBack, transportMode, truckType, origin,
               </div>
             </div>
             <div>
-              <Label className="text-xs">Kota Tujuan <span className="text-destructive">*</span></Label>
-              <CityAutocompleteInput type="city" placeholder="Cari kota tujuan..." value={state.destCity||""} onChange={v => set("destCity", v)} />
+              <Label className="text-xs">{t("logisticBook.form.destinationCity", "Kota Tujuan")} <span className="text-destructive">*</span></Label>
+              <CityAutocompleteInput type="city" placeholder={t("logisticBook.form.searchDestCity", "Cari kota tujuan...")} value={state.destCity||""} onChange={v => set("destCity", v)} />
             </div>
           </div>
           {(hasAutoWeight || hasAutoGoods) && (
             <div className="grid grid-cols-2 gap-3">
-              {hasAutoWeight && <AutoReadOnly label="Berat (kg)" value={state.grossWeight||""} />}
-              {hasAutoGoods && <AutoReadOnly label="Jenis Barang" value={state.goodsType||""} />}
+              {hasAutoWeight && <AutoReadOnly label={t("logisticBook.form.weightKg", "Berat (kg)")} value={state.grossWeight||""} />}
+              {hasAutoGoods && <AutoReadOnly label={t("logisticBook.form.goodsType", "Jenis Barang")} value={state.goodsType||""} />}
             </div>
           )}
-          <div><Label className="text-xs">Vehicle Type</Label>
+          <div><Label className="text-xs">{t("logisticBook.form.vehicleType", "Vehicle Type")}</Label>
             <Select value={state.vehicleType||undefined} onValueChange={v => set("vehicleType", v)}>
-              <SelectTrigger><SelectValue placeholder="Select vehicle" /></SelectTrigger>
+              <SelectTrigger><SelectValue placeholder={t("logisticBook.form.selectVehicle", "Select vehicle")} /></SelectTrigger>
               <SelectContent>
                 {["CDE", "CDD", "Fuso", "Wingbox", "Trailer"].map(v => <SelectItem key={v} value={v}>{v}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <div><Label className="text-xs">Distance (km)</Label><Input type="number" placeholder="0" value={state.distance||""} onChange={e => set("distance", e.target.value)} /></div>
+            <div><Label className="text-xs">{t("logisticBook.form.distanceKm", "Distance (km)")}</Label><Input type="number" placeholder="0" value={state.distance||""} onChange={e => set("distance", e.target.value)} /></div>
             <div>
               <Label className="text-xs flex items-center gap-1">
-                Trucking Rate (IDR)
-                {autoRateFetching && <span className="text-[10px] text-muted-foreground animate-pulse">menghitung…</span>}
+                {t("logisticBook.form.truckingRate", "Trucking Rate (IDR)")}
+                {autoRateFetching && <span className="text-[10px] text-muted-foreground animate-pulse">{t("logisticBook.form.calculating", "menghitung…")}</span>}
                 {!autoRateFetching && state.truckingRate && state.distance && <span className="text-[10px] text-emerald-600">● auto</span>}
               </Label>
               <Input type="number" placeholder="0" value={state.truckingRate||""} onChange={e => set("truckingRate", e.target.value)} />
             </div>
           </div>
           <div className="rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-700 space-y-0.5">
-            <p className="font-semibold">Harga Akan Dikonfirmasi oleh Vendor</p>
-            <p>Harga trucking akan diberikan setelah vendor menerima dan mengkonfirmasi pesanan Anda.</p>
+            <p className="font-semibold">{t("logisticBook.truckingPriceConfirmTitle", "Harga Akan Dikonfirmasi oleh Vendor")}</p>
+            <p>{t("logisticBook.truckingPriceConfirmDesc", "Harga trucking akan diberikan setelah vendor menerima dan mengkonfirmasi pesanan Anda.")}</p>
           </div>
         </>}
 
         {ct === "storage" && <>
           <div className="grid grid-cols-2 gap-3">
-            <div><Label className="text-xs">Number of Days</Label><Input type="number" placeholder="0" value={state.days||""} onChange={e => set("days", e.target.value)} /></div>
-            <div><Label className="text-xs">Quantity</Label><Input type="number" placeholder="1" value={state.quantity||""} onChange={e => set("quantity", e.target.value)} /></div>
+            <div><Label className="text-xs">{t("logisticBook.form.numberOfDays", "Number of Days")}</Label><Input type="number" placeholder="0" value={state.days||""} onChange={e => set("days", e.target.value)} /></div>
+            <div><Label className="text-xs">{t("logisticBook.form.quantity", "Quantity")}</Label><Input type="number" placeholder="1" value={state.quantity||""} onChange={e => set("quantity", e.target.value)} /></div>
           </div>
-          <div><Label className="text-xs">Unit</Label>
+          <div><Label className="text-xs">{t("logisticBook.form.unit", "Unit")}</Label>
             <Select value={state.unit||undefined} onValueChange={v => set("unit", v)}>
-              <SelectTrigger><SelectValue placeholder="Select unit" /></SelectTrigger>
+              <SelectTrigger><SelectValue placeholder={t("logisticBook.form.selectUnit", "Select unit")} /></SelectTrigger>
               <SelectContent>
                 {["CBM", "Pallet", "KG"].map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
-          <div><Label className="text-xs">Rate per Day (IDR)</Label><Input type="number" placeholder="0" value={state.ratePerDay||""} onChange={e => set("ratePerDay", e.target.value)} /></div>
+          <div><Label className="text-xs">{t("logisticBook.form.ratePerDay", "Rate per Day (IDR)")}</Label><Input type="number" placeholder="0" value={state.ratePerDay||""} onChange={e => set("ratePerDay", e.target.value)} /></div>
         </>}
 
         {ct === "document" && <>
-          <div><Label className="text-xs">Document Type</Label><Input placeholder="Bill of Lading" value={state.documentType||""} onChange={e => set("documentType", e.target.value)} /></div>
+          <div><Label className="text-xs">{t("logisticBook.form.documentType", "Document Type")}</Label><Input placeholder="Bill of Lading" value={state.documentType||""} onChange={e => set("documentType", e.target.value)} /></div>
           <div className="grid grid-cols-2 gap-3">
-            <div><Label className="text-xs">Quantity</Label><Input type="number" placeholder="1" value={state.quantity||""} onChange={e => set("quantity", e.target.value)} /></div>
-            <div><Label className="text-xs">Fee per Document (IDR)</Label><Input type="number" placeholder="0" value={state.feePerDocument||""} onChange={e => set("feePerDocument", e.target.value)} /></div>
+            <div><Label className="text-xs">{t("logisticBook.form.quantity", "Quantity")}</Label><Input type="number" placeholder="1" value={state.quantity||""} onChange={e => set("quantity", e.target.value)} /></div>
+            <div><Label className="text-xs">{t("logisticBook.form.feePerDocument", "Fee per Document (IDR)")}</Label><Input type="number" placeholder="0" value={state.feePerDocument||""} onChange={e => set("feePerDocument", e.target.value)} /></div>
           </div>
         </>}
 
         {ct === "additional" && <>
-          <div><Label className="text-xs">Service Type</Label><Input placeholder="Insurance" value={state.serviceType||""} onChange={e => set("serviceType", e.target.value)} /></div>
+          <div><Label className="text-xs">{t("logisticBook.form.serviceType", "Service Type")}</Label><Input placeholder="Insurance" value={state.serviceType||""} onChange={e => set("serviceType", e.target.value)} /></div>
           <div className="grid grid-cols-2 gap-3">
-            <div><Label className="text-xs">Service Fee (IDR)</Label><Input type="number" placeholder="0" value={state.serviceFee||""} onChange={e => set("serviceFee", e.target.value)} /></div>
-            <div><Label className="text-xs">Admin Fee (IDR)</Label><Input type="number" placeholder="0" value={state.adminFee||""} onChange={e => set("adminFee", e.target.value)} /></div>
+            <div><Label className="text-xs">{t("logisticBook.form.serviceFee", "Service Fee (IDR)")}</Label><Input type="number" placeholder="0" value={state.serviceFee||""} onChange={e => set("serviceFee", e.target.value)} /></div>
+            <div><Label className="text-xs">{t("logisticBook.form.adminFee", "Admin Fee (IDR)")}</Label><Input type="number" placeholder="0" value={state.adminFee||""} onChange={e => set("adminFee", e.target.value)} /></div>
           </div>
         </>}
 
         {ct === "generic" && <>
-          <div><Label className="text-xs">Service Name</Label><Input placeholder={item.name} value={state.serviceName||""} onChange={e => set("serviceName", e.target.value)} /></div>
+          <div><Label className="text-xs">{t("logisticBook.form.serviceName", "Service Name")}</Label><Input placeholder={item.name} value={state.serviceName||""} onChange={e => set("serviceName", e.target.value)} /></div>
           <div className="grid grid-cols-2 gap-3">
-            <div><Label className="text-xs">Quantity</Label><Input type="number" placeholder="1" value={state.quantity||""} onChange={e => set("quantity", e.target.value)} /></div>
-            <div><Label className="text-xs">Unit Price (IDR)</Label><Input type="number" placeholder="0" value={state.unitPrice||""} onChange={e => set("unitPrice", e.target.value)} /></div>
+            <div><Label className="text-xs">{t("logisticBook.form.quantity", "Quantity")}</Label><Input type="number" placeholder="1" value={state.quantity||""} onChange={e => set("quantity", e.target.value)} /></div>
+            <div><Label className="text-xs">{t("logisticBook.form.unitPrice", "Unit Price (IDR)")}</Label><Input type="number" placeholder="0" value={state.unitPrice||""} onChange={e => set("unitPrice", e.target.value)} /></div>
           </div>
-          <div><Label className="text-xs">Notes (optional)</Label><Input placeholder="Additional details" value={state.notes||""} onChange={e => set("notes", e.target.value)} /></div>
+          <div><Label className="text-xs">{t("logisticBook.form.notesOptional", "Notes (optional)")}</Label><Input placeholder={t("logisticBook.form.additionalDetails", "Additional details")} value={state.notes||""} onChange={e => set("notes", e.target.value)} /></div>
         </>}
 
         <Separator />
@@ -606,16 +571,16 @@ function CalculatorForm({ item, onAdd, onBack, transportMode, truckType, origin,
             onClick={handleAdd}
             disabled={!state.pickupCity || !state.destCity || !state.vehicleType}
           >
-            <Plus className="w-4 h-4 mr-2" /> Add to Order
+            <Plus className="w-4 h-4 mr-2" /> {t("logisticBook.btn.addToOrder", "Add to Order")}
           </Button>
         ) : (
           <>
             <div className="flex items-center justify-between">
-              <span className="text-sm font-semibold text-foreground">Subtotal</span>
+              <span className="text-sm font-semibold text-foreground">{t("logisticBook.subtotal", "Subtotal")}</span>
               <span className="text-lg font-bold text-accent">{formatCurrency(subtotal)}</span>
             </div>
             <Button className="w-full" onClick={handleAdd} disabled={subtotal <= 0}>
-              <Plus className="w-4 h-4 mr-2" /> Add to Order
+              <Plus className="w-4 h-4 mr-2" /> {t("logisticBook.btn.addToOrder", "Add to Order")}
             </Button>
           </>
         )}
@@ -625,7 +590,49 @@ function CalculatorForm({ item, onAdd, onBack, transportMode, truckType, origin,
 }
 
 export default function BookPage() {
+  const { t } = useLanguage();
   const DRAFT_META_KEY = "logistic_draft_meta";
+
+  const STEPS = STEPS_KEYS.map(({ key, fallback }) => t(key, fallback));
+
+  const QUICK_SERVICES = [
+    {
+      id: "freight",
+      name: t("logisticBook.quickServices.freight.name", "Freight"),
+      description: t("logisticBook.quickServices.freight.desc", "Air & sea forwarding, domestic delivery"),
+      category: "Freight" as const,
+      isTrucking: false,
+      icon: <Ship className="w-5 h-5 text-blue-600" />,
+      color: "border-blue-200 bg-blue-50/60 hover:border-blue-400 text-blue-900",
+    },
+    {
+      id: "customs",
+      name: t("logisticBook.quickServices.customs.name", "Customs"),
+      description: t("logisticBook.quickServices.customs.desc", "Import/export customs clearance"),
+      category: "Customs" as const,
+      isTrucking: false,
+      icon: <FileCheck className="w-5 h-5 text-orange-600" />,
+      color: "border-orange-200 bg-orange-50/60 hover:border-orange-400 text-orange-900",
+    },
+    {
+      id: "trucking",
+      name: t("logisticBook.quickServices.trucking.name", "Trucking"),
+      description: t("logisticBook.quickServices.trucking.desc", "Pickup, delivery & container transport"),
+      category: "Trucking" as const,
+      isTrucking: true,
+      icon: <Truck className="w-5 h-5 text-amber-600" />,
+      color: "border-amber-200 bg-amber-50/60 hover:border-amber-400 text-amber-900",
+    },
+    {
+      id: "storage",
+      name: t("logisticBook.quickServices.storage.name", "Storage"),
+      description: t("logisticBook.quickServices.storage.desc", "Warehouse & bonded storage"),
+      category: "Storage" as const,
+      isTrucking: false,
+      icon: <Warehouse className="w-5 h-5 text-teal-600" />,
+      color: "border-teal-200 bg-teal-50/60 hover:border-teal-400 text-teal-900",
+    },
+  ];
 
   const [step, setStep] = useState<Step>(0);
   const [orderType, setOrderType] = useState<"product" | "service" | "shipment" | null>(null);
@@ -728,12 +735,12 @@ export default function BookPage() {
       form.append("file", file);
       const r = await fetch("/api/portal/payment-proof-upload", { method: "POST", body: form });
       const json = await r.json() as { objectPath?: string; message?: string };
-      if (!r.ok) throw new Error(json.message ?? "Upload gagal");
+      if (!r.ok) throw new Error(json.message ?? t("logisticBook.toast.uploadFailed", "Upload gagal"));
       setProofObjectPath(json.objectPath ?? "");
       setProofUploaded(true);
-      toast({ title: "Bukti pembayaran berhasil diunggah ✓" });
+      toast({ title: t("logisticBook.toast.proofUploaded", "Bukti pembayaran berhasil diunggah ✓") });
     } catch (err) {
-      toast({ title: "Gagal mengunggah bukti", description: String(err), variant: "destructive" });
+      toast({ title: t("logisticBook.toast.uploadError", "Gagal mengunggah bukti"), description: String(err), variant: "destructive" });
     } finally {
       setProofUploading(false);
     }
@@ -755,7 +762,7 @@ export default function BookPage() {
     setShipmentType(null);
     setSelectedCategory(null);
     setSelectedItem(null);
-    toast({ title: "Draft dihapus", description: "Mulai pemesanan baru dari awal." });
+    toast({ title: t("logisticBook.toast.draftDeleted", "Draft dihapus"), description: t("logisticBook.toast.draftDeletedDesc", "Mulai pemesanan baru dari awal.") });
   }
 
   // Pre-fill form with logged-in user's profile data (only once, when data loads)
@@ -984,25 +991,25 @@ export default function BookPage() {
   function handleSubmit() {
     const { companyName, customerName, email, phone, origin, destination, shippingAddress } = customerForm;
     if (!customerName.trim()) {
-      toast({ title: "Nama PIC wajib diisi", variant: "destructive" });
+      toast({ title: t("logisticBook.toast.picRequired", "Nama PIC wajib diisi"), variant: "destructive" });
       return;
     }
     if (!email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-      toast({ title: "Format email tidak valid", variant: "destructive" });
+      toast({ title: t("logisticBook.toast.invalidEmail", "Format email tidak valid"), variant: "destructive" });
       return;
     }
     if (!phone.trim()) {
-      toast({ title: "Nomor telepon / WhatsApp wajib diisi", variant: "destructive" });
+      toast({ title: t("logisticBook.toast.phoneRequired", "Nomor telepon / WhatsApp wajib diisi"), variant: "destructive" });
       return;
     }
     if (cartItems.length === 0) {
-      toast({ title: "Tambahkan minimal 1 item ke pesanan", variant: "destructive" });
+      toast({ title: t("logisticBook.toast.addMinOneItem", "Tambahkan minimal 1 item ke pesanan"), variant: "destructive" });
       return;
     }
     const truckingItem = cartItems.find(c => c.calculatorType === "trucking");
     const truckingItemData = (truckingItem?.inputData ?? {}) as Record<string, unknown>;
     if (truckingItem && !String(truckingItemData.destCity ?? "").trim()) {
-      toast({ title: "Alamat Pengiriman wajib diisi pada item Trucking", variant: "destructive" });
+      toast({ title: t("logisticBook.toast.truckingDestRequired", "Alamat Pengiriman wajib diisi pada item Trucking"), variant: "destructive" });
       return;
     }
     const hasProductOnly = cartItems.every(c => c.calculatorType === "product");
@@ -1121,7 +1128,7 @@ export default function BookPage() {
         setLocation("/logistic-order-success");
       },
       onError: () => {
-        toast({ title: "Gagal menyimpan pesanan", variant: "destructive" });
+        toast({ title: t("logisticBook.toast.saveFailed", "Gagal menyimpan pesanan"), variant: "destructive" });
       },
     });
   }
@@ -1133,9 +1140,9 @@ export default function BookPage() {
         {
           type: "product" as const,
           icon: Package,
-          title: "Produk",
-          desc: "Pesan produk dari katalog. Shipment opsional, bisa pickup sendiri.",
-          badge: "Tanpa logistik",
+          title: t("logisticBook.orderType.product.title", "Produk"),
+          desc: t("logisticBook.orderType.product.desc", "Pesan produk dari katalog. Shipment opsional, bisa pickup sendiri."),
+          badge: t("logisticBook.orderType.product.badge", "Tanpa logistik"),
           color: "border-emerald-500 bg-emerald-50",
           iconColor: "text-emerald-600",
           badgeColor: "bg-emerald-100 text-emerald-700",
@@ -1143,9 +1150,9 @@ export default function BookPage() {
         {
           type: "service" as const,
           icon: FileCheck,
-          title: "Layanan Jasa",
-          desc: "Customs, handling, storage, konsultasi, maintenance, dan lainnya.",
-          badge: "Non-shipment",
+          title: t("logisticBook.orderType.service.title", "Layanan Jasa"),
+          desc: t("logisticBook.orderType.service.desc", "Customs, handling, storage, konsultasi, maintenance, dan lainnya."),
+          badge: t("logisticBook.orderType.service.badge", "Non-shipment"),
           color: "border-violet-500 bg-violet-50",
           iconColor: "text-violet-600",
           badgeColor: "bg-violet-100 text-violet-700",
@@ -1153,9 +1160,9 @@ export default function BookPage() {
         {
           type: "shipment" as const,
           icon: Ship,
-          title: "Pengiriman Logistik",
-          desc: "Trucking, air freight, sea freight, export/import.",
-          badge: "Butuh detail rute",
+          title: t("logisticBook.orderType.shipment.title", "Pengiriman Logistik"),
+          desc: t("logisticBook.orderType.shipment.desc", "Trucking, air freight, sea freight, export/import."),
+          badge: t("logisticBook.orderType.shipment.badge", "Butuh detail rute"),
           color: "border-blue-500 bg-blue-50",
           iconColor: "text-blue-600",
           badgeColor: "bg-blue-100 text-blue-700",
@@ -1164,8 +1171,8 @@ export default function BookPage() {
       return (
         <div className="space-y-5">
           <div>
-            <h2 className="text-xl font-bold text-foreground mb-1">Jenis Pesanan</h2>
-            <p className="text-sm text-muted-foreground">Pilih jenis pesanan untuk melanjutkan</p>
+            <h2 className="text-xl font-bold text-foreground mb-1">{t("logisticBook.step0.title", "Jenis Pesanan")}</h2>
+            <p className="text-sm text-muted-foreground">{t("logisticBook.step0.subtitle", "Pilih jenis pesanan untuk melanjutkan")}</p>
           </div>
           <div className="space-y-3">
             {ORDER_TYPES.map(({ type, icon: Icon, title, desc, badge, color, iconColor, badgeColor }) => (
@@ -1204,7 +1211,7 @@ export default function BookPage() {
           {/* Sub-selector: Shipment Type — tampil saat orderType = shipment */}
           {orderType === "shipment" && (
             <div className="space-y-3 pt-2">
-              <p className="text-sm font-semibold text-foreground">Pilih Tipe Pengiriman:</p>
+              <p className="text-sm font-semibold text-foreground">{t("logisticBook.step0.selectShipmentType", "Pilih Tipe Pengiriman:")}</p>
               <div className="grid grid-cols-2 gap-3">
                 {SHIPMENT_TYPES.map(({ type, description, icon }) => {
                   const Icon = ICON_MAP[icon] || Package;
@@ -1244,8 +1251,8 @@ export default function BookPage() {
             <div className="flex items-center gap-2">
               <Truck className="w-5 h-5 text-orange-500" />
               <div>
-                <h2 className="text-xl font-bold text-foreground">Layanan Trucking</h2>
-                <p className="text-sm text-muted-foreground">Isi detail atau hitung estimasi biaya</p>
+                <h2 className="text-xl font-bold text-foreground">{t("logisticBook.trucking.title", "Layanan Trucking")}</h2>
+                <p className="text-sm text-muted-foreground">{t("logisticBook.trucking.subtitle", "Isi detail atau hitung estimasi biaya")}</p>
               </div>
             </div>
           </div>
@@ -1256,8 +1263,8 @@ export default function BookPage() {
               <button key={mode} onClick={() => setQuickTrucking(mode)}
                 className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors flex items-center justify-center gap-1.5 ${quickTrucking === mode ? "bg-background shadow text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
                 {mode === "detail"
-                  ? <><MapPin className="w-4 h-4" /> Form Pickup &amp; Delivery</>
-                  : <><Calculator className="w-4 h-4" /> Kalkulator Estimasi</>}
+                  ? <><MapPin className="w-4 h-4" /> {t("logisticBook.trucking.tabDetail", "Form Pickup & Delivery")}</>
+                  : <><Calculator className="w-4 h-4" /> {t("logisticBook.trucking.tabCalc", "Kalkulator Estimasi")}</>}
               </button>
             ))}
           </div>
@@ -1267,22 +1274,22 @@ export default function BookPage() {
             <div className="bg-muted/30 rounded-xl border border-border p-5 space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="sm:col-span-2">
-                  <Label className="text-xs">Alamat Pickup <span className="text-destructive">*</span></Label>
+                  <Label className="text-xs">{t("logisticBook.trucking.pickupAddress", "Alamat Pickup")} <span className="text-destructive">*</span></Label>
                   <GooglePlacesAutocomplete
                     value={quickTruckData.pickupAddress || ""}
                     onChange={v => setQuickTruckData(p => ({ ...p, pickupAddress: v }))}
-                    placeholder="Jl. ..., Kota, Provinsi"
+                    placeholder={t("logisticBook.trucking.pickupAddressPlaceholder", "Jl. ..., Kota, Provinsi")}
                   />
                 </div>
                 <div className="sm:col-span-2">
-                  <Label className="text-xs">Alamat Pengiriman <span className="text-destructive">*</span></Label>
+                  <Label className="text-xs">{t("logisticBook.trucking.deliveryAddress", "Alamat Pengiriman")} <span className="text-destructive">*</span></Label>
                   <GooglePlacesAutocomplete
                     value={quickTruckData.deliveryAddress || ""}
                     onChange={v => { setQuickDeliveryAddressError(false); setQuickTruckData(p => ({ ...p, deliveryAddress: v })); }}
-                    placeholder="Jl. ..., Kota, Provinsi"
+                    placeholder={t("logisticBook.trucking.deliveryAddressPlaceholder", "Jl. ..., Kota, Provinsi")}
                     className={quickDeliveryAddressError ? "border-destructive focus-visible:ring-destructive" : ""}
                   />
-                  {quickDeliveryAddressError && <p className="text-[11px] text-destructive mt-1">Alamat pengiriman wajib diisi.</p>}
+                  {quickDeliveryAddressError && <p className="text-[11px] text-destructive mt-1">{t("logisticBook.trucking.deliveryAddressRequired", "Alamat pengiriman wajib diisi.")}</p>}
                 </div>
                 {(quickTruckData.pickupAddress || quickTruckData.deliveryAddress) && (
                   <div className="sm:col-span-2">
@@ -1293,27 +1300,27 @@ export default function BookPage() {
                   </div>
                 )}
                 <div>
-                  <Label className="text-xs">Nama Kontak</Label>
-                  <Input placeholder="Nama PIC" value={quickTruckData.contactName||""} onChange={e => setQuickTruckData(p => ({ ...p, contactName: e.target.value }))} />
+                  <Label className="text-xs">{t("logisticBook.trucking.contactName", "Nama Kontak")}</Label>
+                  <Input placeholder={t("logisticBook.trucking.contactNamePlaceholder", "Nama PIC")} value={quickTruckData.contactName||""} onChange={e => setQuickTruckData(p => ({ ...p, contactName: e.target.value }))} />
                 </div>
                 <div>
-                  <Label className="text-xs">No. Telepon</Label>
+                  <Label className="text-xs">{t("logisticBook.trucking.contactPhone", "No. Telepon")}</Label>
                   <Input type="tel" placeholder="08xxxxxxxxxx" value={quickTruckData.contactPhone||""} onChange={e => setQuickTruckData(p => ({ ...p, contactPhone: e.target.value }))} />
                 </div>
                 <div className="sm:col-span-2">
-                  <Label className="text-xs">Catatan (opsional)</Label>
-                  <Textarea rows={2} placeholder="Instruksi khusus untuk tim pengiriman..." value={quickTruckData.notes||""} onChange={e => setQuickTruckData(p => ({ ...p, notes: e.target.value }))} />
+                  <Label className="text-xs">{t("logisticBook.trucking.notesOptional", "Catatan (opsional)")}</Label>
+                  <Textarea rows={2} placeholder={t("logisticBook.trucking.notesPlaceholder", "Instruksi khusus untuk tim pengiriman...")} value={quickTruckData.notes||""} onChange={e => setQuickTruckData(p => ({ ...p, notes: e.target.value }))} />
                 </div>
               </div>
               <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 text-xs text-orange-700">
-                💡 Estimasi biaya akan dikonfirmasi oleh tim setelah pesanan masuk.
+                💡 {t("logisticBook.trucking.estimateNote", "Estimasi biaya akan dikonfirmasi oleh tim setelah pesanan masuk.")}
               </div>
               <Separator />
               <Button className="w-full bg-orange-600 hover:bg-orange-700"
                 onClick={() => {
                   if (!quickTruckData.deliveryAddress?.trim()) {
                     setQuickDeliveryAddressError(true);
-                    toast({ title: "Alamat Pengiriman wajib diisi", variant: "destructive" });
+                    toast({ title: t("logisticBook.toast.deliveryAddressRequired", "Alamat Pengiriman wajib diisi"), variant: "destructive" });
                     return;
                   }
                   addItem({ category: "Trucking", serviceName: "Trucking — Pickup & Delivery",
@@ -1323,12 +1330,12 @@ export default function BookPage() {
                       receiver_name: quickTruckData.contactName, receiver_phone: quickTruckData.contactPhone,
                       notes: quickTruckData.notes },
                     calculationResult: {}, subtotal: 0 });
-                  toast({ title: "Trucking ditambahkan ke pesanan" });
+                  toast({ title: t("logisticBook.toast.truckingAdded", "Trucking ditambahkan ke pesanan") });
                   setQuickTrucking(null); setQuickTruckData({}); setQuickTruckEstimate(null);
                   setQuickDeliveryAddressError(false);
                   setStep(2);
                 }}>
-                <Plus className="w-4 h-4 mr-2" /> Tambahkan ke Pesanan
+                <Plus className="w-4 h-4 mr-2" /> {t("logisticBook.btn.addToOrder2", "Tambahkan ke Pesanan")}
               </Button>
             </div>
           )}
@@ -1338,43 +1345,43 @@ export default function BookPage() {
             <div className="bg-muted/30 rounded-xl border border-border p-5 space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <Label className="text-xs flex items-center gap-1"><MapPin className="w-3 h-3" /> Kota Asal <span className="text-destructive">*</span></Label>
-                  <CityAutocompleteInput type="city" placeholder="Cari kota asal..." value={quickTruckData.pickupCity||""} onChange={v => setQuickTruckData(p => ({ ...p, pickupCity: v }))} />
+                  <Label className="text-xs flex items-center gap-1"><MapPin className="w-3 h-3" /> {t("logisticBook.form.originCity", "Kota Asal")} <span className="text-destructive">*</span></Label>
+                  <CityAutocompleteInput type="city" placeholder={t("logisticBook.form.searchOriginCity", "Cari kota asal...")} value={quickTruckData.pickupCity||""} onChange={v => setQuickTruckData(p => ({ ...p, pickupCity: v }))} />
                 </div>
                 <div>
-                  <Label className="text-xs flex items-center gap-1"><MapPin className="w-3 h-3" /> Kota Tujuan <span className="text-destructive">*</span></Label>
-                  <CityAutocompleteInput type="city" placeholder="Cari kota tujuan..." value={quickTruckData.destCity||""} onChange={v => setQuickTruckData(p => ({ ...p, destCity: v }))} />
+                  <Label className="text-xs flex items-center gap-1"><MapPin className="w-3 h-3" /> {t("logisticBook.form.destinationCity", "Kota Tujuan")} <span className="text-destructive">*</span></Label>
+                  <CityAutocompleteInput type="city" placeholder={t("logisticBook.form.searchDestCity", "Cari kota tujuan...")} value={quickTruckData.destCity||""} onChange={v => setQuickTruckData(p => ({ ...p, destCity: v }))} />
                 </div>
                 <div>
-                  <Label className="text-xs">Berat (kg) <span className="text-destructive">*</span></Label>
+                  <Label className="text-xs">{t("logisticBook.form.weightKg", "Berat (kg)")} <span className="text-destructive">*</span></Label>
                   <Input type="number" min={0} placeholder="100" value={quickTruckData.weight||""} onChange={e => setQuickTruckData(p => ({ ...p, weight: e.target.value }))} />
                 </div>
                 <div>
-                  <Label className="text-xs">Jenis Barang</Label>
+                  <Label className="text-xs">{t("logisticBook.form.goodsType", "Jenis Barang")}</Label>
                   <Select value={quickTruckData.goodsType||undefined} onValueChange={v => setQuickTruckData(p => ({ ...p, goodsType: v }))}>
-                    <SelectTrigger><SelectValue placeholder="Pilih jenis" /></SelectTrigger>
+                    <SelectTrigger><SelectValue placeholder={t("logisticBook.form.selectGoodsType", "Pilih jenis")} /></SelectTrigger>
                     <SelectContent>{GOODS_TYPES_BOOK.map(g => <SelectItem key={g} value={g}>{g}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
                 <div className="sm:col-span-2">
-                  <Label className="text-xs block mb-1.5">Dimensi (cm) — P × L × T</Label>
+                  <Label className="text-xs block mb-1.5">{t("logisticBook.form.dimensionsCm", "Dimensi (cm) — P × L × T")}</Label>
                   <div className="grid grid-cols-3 gap-2">
-                    <Input type="number" min={0} placeholder="Panjang" value={quickTruckData.length||""} onChange={e => setQuickTruckData(p => ({ ...p, length: e.target.value }))} />
-                    <Input type="number" min={0} placeholder="Lebar"   value={quickTruckData.width||""}  onChange={e => setQuickTruckData(p => ({ ...p, width:  e.target.value }))} />
-                    <Input type="number" min={0} placeholder="Tinggi"  value={quickTruckData.height||""} onChange={e => setQuickTruckData(p => ({ ...p, height: e.target.value }))} />
+                    <Input type="number" min={0} placeholder={t("logisticBook.form.panjang", "Panjang")} value={quickTruckData.length||""} onChange={e => setQuickTruckData(p => ({ ...p, length: e.target.value }))} />
+                    <Input type="number" min={0} placeholder={t("logisticBook.form.lebar", "Lebar")} value={quickTruckData.width||""}  onChange={e => setQuickTruckData(p => ({ ...p, width:  e.target.value }))} />
+                    <Input type="number" min={0} placeholder={t("logisticBook.form.tinggi", "Tinggi")} value={quickTruckData.height||""} onChange={e => setQuickTruckData(p => ({ ...p, height: e.target.value }))} />
                   </div>
                 </div>
                 <div>
-                  <Label className="text-xs">Incoterms</Label>
+                  <Label className="text-xs">{t("logisticBook.form.incoterms", "Incoterms")}</Label>
                   <Select value={quickTruckData.incoterms||"FOB"} onValueChange={v => setQuickTruckData(p => ({ ...p, incoterms: v }))}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>{INCOTERMS_BOOK.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+                    <SelectContent>{INCOTERMS_BOOK.map(t2 => <SelectItem key={t2} value={t2}>{t2}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
                 <div>
-                  <Label className="text-xs">Jenis Kendaraan</Label>
+                  <Label className="text-xs">{t("logisticBook.form.vehicleTypeId", "Jenis Kendaraan")}</Label>
                   <Select value={quickTruckData.vehicleType||undefined} onValueChange={v => setQuickTruckData(p => ({ ...p, vehicleType: v }))}>
-                    <SelectTrigger><SelectValue placeholder="Pilih kendaraan" /></SelectTrigger>
+                    <SelectTrigger><SelectValue placeholder={t("logisticBook.form.selectVehicleId", "Pilih kendaraan")} /></SelectTrigger>
                     <SelectContent>{["CDE","CDD","Fuso","Wingbox","Trailer"].map(v => <SelectItem key={v} value={v}>{v}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
@@ -1409,16 +1416,16 @@ export default function BookPage() {
                     .finally(() => setQuickEstimating(false));
                 }}>
                 {quickEstimating
-                  ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Menghitung...</>
-                  : <><Calculator className="w-4 h-4 mr-2" /> Hitung Estimasi</>}
+                  ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> {t("logisticBook.trucking.calculating", "Menghitung...")}</>
+                  : <><Calculator className="w-4 h-4 mr-2" /> {t("logisticBook.trucking.calculateEstimate", "Hitung Estimasi")}</>}
               </Button>
 
               {quickTruckEstimate !== null && (
                 <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 space-y-1">
-                  <p className="text-xs text-emerald-600 font-medium">Estimasi Biaya Trucking</p>
+                  <p className="text-xs text-emerald-600 font-medium">{t("logisticBook.trucking.estimateCost", "Estimasi Biaya Trucking")}</p>
                   <p className="text-2xl font-bold text-emerald-700">{formatCurrency(quickTruckEstimate)}</p>
                   <p className="text-xs text-emerald-500">{quickTruckData.pickupCity} → {quickTruckData.destCity} · {quickTruckData.weight} kg</p>
-                  <p className="text-[10px] text-muted-foreground">*Estimasi indikatif. Biaya final dikonfirmasi tim logistik.</p>
+                  <p className="text-[10px] text-muted-foreground">{t("logisticBook.trucking.estimateDisclaimer", "*Estimasi indikatif. Biaya final dikonfirmasi tim logistik.")}</p>
                 </div>
               )}
 
@@ -1431,11 +1438,11 @@ export default function BookPage() {
                     inputData: { ...quickTruckData },
                     calculationResult: quickTruckEstimate ? { estimated_price: quickTruckEstimate } : {},
                     subtotal: 0 });
-                  toast({ title: "Trucking ditambahkan ke pesanan" });
+                  toast({ title: t("logisticBook.toast.truckingAdded", "Trucking ditambahkan ke pesanan") });
                   setQuickTrucking(null); setQuickTruckData({}); setQuickTruckEstimate(null);
                   setStep(2);
                 }}>
-                {quickTruckEstimate ? "Tambahkan ke Pesanan" : "Tambahkan (Harga Menyusul)"}
+                {quickTruckEstimate ? t("logisticBook.btn.addToOrder2", "Tambahkan ke Pesanan") : t("logisticBook.btn.addPriceTBD", "Tambahkan (Harga Menyusul)")}
                 <ArrowRight className="w-4 h-4 ml-2" />
               </Button>
             </div>
@@ -1450,10 +1457,10 @@ export default function BookPage() {
             <>
               <div>
                 <h2 className="text-xl font-bold text-foreground mb-1">
-                  {!selectedCategory ? "Pilih Layanan" : selectedCategory}
+                  {!selectedCategory ? t("logisticBook.step1.selectService", "Pilih Layanan") : selectedCategory}
                 </h2>
                 <p className="text-sm text-muted-foreground">
-                  {!selectedCategory ? "Pilih layanan logistik untuk Anda" : "Pilih item layanan untuk kalkulasi estimasi biaya"}
+                  {!selectedCategory ? t("logisticBook.step1.selectServiceDesc", "Pilih layanan logistik untuk Anda") : t("logisticBook.step1.selectItemDesc", "Pilih item layanan untuk kalkulasi estimasi biaya")}
                 </p>
               </div>
 
@@ -1480,7 +1487,7 @@ export default function BookPage() {
                             <p className="text-xs opacity-70 mt-0.5 leading-snug">{svc.description}</p>
                             {svc.isTrucking && (
                               <span className="inline-block mt-1.5 text-[10px] bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full font-medium">
-                                Kalkulator tersedia
+                                {t("logisticBook.step1.calculatorAvailable", "Kalkulator tersedia")}
                               </span>
                             )}
                           </div>
@@ -1490,7 +1497,7 @@ export default function BookPage() {
                   </div>
 
                   <Separator />
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Semua Kategori</p>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{t("logisticBook.step1.allCategories", "Semua Kategori")}</p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {CATEGORIES.map((cat) => {
                       const Icon = ICON_MAP[cat.icon] || Package;
@@ -1519,7 +1526,7 @@ export default function BookPage() {
                 <>
                   <button onClick={() => setSelectedCategory(null)}
                     className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-2">
-                    <ChevronLeft className="w-4 h-4" /> Semua Layanan
+                    <ChevronLeft className="w-4 h-4" /> {t("logisticBook.step1.allServices", "Semua Layanan")}
                   </button>
                   <div className="space-y-2">
                     {itemsByCategory(selectedCategory).map((item) => (
@@ -1558,8 +1565,8 @@ export default function BookPage() {
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-xl font-bold text-foreground mb-1">Ringkasan Pesanan</h2>
-            <p className="text-sm text-muted-foreground">{cartItems.length} layanan dipilih</p>
+            <h2 className="text-xl font-bold text-foreground mb-1">{t("logisticBook.step2.title", "Ringkasan Pesanan")}</h2>
+            <p className="text-sm text-muted-foreground">{cartItems.length} {t("logisticBook.step2.servicesSelected", "layanan dipilih")}</p>
           </div>
           <div className="flex items-center gap-2">
             <Button
@@ -1568,10 +1575,10 @@ export default function BookPage() {
               onClick={clearDraft}
               className="text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10"
             >
-              <Trash2 className="w-3 h-3 mr-1" /> Hapus Draft
+              <Trash2 className="w-3 h-3 mr-1" /> {t("logisticBook.btn.deleteDraft", "Hapus Draft")}
             </Button>
             <Button variant="outline" size="sm" onClick={() => setStep(1)}>
-              <Plus className="w-3 h-3 mr-1" /> Tambah Layanan
+              <Plus className="w-3 h-3 mr-1" /> {t("logisticBook.btn.addService", "Tambah Layanan")}
             </Button>
           </div>
         </div>
@@ -1580,17 +1587,17 @@ export default function BookPage() {
         {cartItems.length === 0 ? (
           <div className="text-center py-12 text-muted-foreground">
             <ShoppingCart className="w-10 h-10 mx-auto mb-3 opacity-40" />
-            <p className="font-medium">Keranjang kosong</p>
-            <p className="text-sm mt-1">Tambahkan layanan dari step sebelumnya</p>
-            <Button className="mt-4" onClick={() => setStep(1)}>Pilih Layanan</Button>
+            <p className="font-medium">{t("logisticBook.step2.emptyCart", "Keranjang kosong")}</p>
+            <p className="text-sm mt-1">{t("logisticBook.step2.emptyCartDesc", "Tambahkan layanan dari step sebelumnya")}</p>
+            <Button className="mt-4" onClick={() => setStep(1)}>{t("logisticBook.step1.selectService", "Pilih Layanan")}</Button>
           </div>
         ) : (
           <>
             <div className="rounded-xl border-2 border-primary/20 bg-primary/5 overflow-hidden">
               <div className="flex items-center gap-2 px-4 py-2.5 bg-primary/10 border-b border-primary/20">
                 <Package className="w-4 h-4 text-primary" />
-                <span className="text-xs font-bold text-primary uppercase tracking-wide">1 Pesanan</span>
-                <span className="text-xs text-primary/70">— semua layanan di bawah diproses dalam satu paket</span>
+                <span className="text-xs font-bold text-primary uppercase tracking-wide">{t("logisticBook.step2.oneOrder", "1 Pesanan")}</span>
+                <span className="text-xs text-primary/70">— {t("logisticBook.step2.oneOrderDesc", "semua layanan di bawah diproses dalam satu paket")}</span>
               </div>
               <div className="p-3 space-y-2">
                 {cartItems.map((item, idx) => (
@@ -1609,7 +1616,7 @@ export default function BookPage() {
                           <div className="flex items-center flex-wrap gap-1 mb-1">
                             <Badge variant="outline" className="text-xs">{item.category}</Badge>
                             {item.itemSource === "vendor_catalog_item" && (
-                              <span className="text-[10px] font-bold bg-purple-100 text-purple-700 border border-purple-200 rounded px-1.5 py-0.5">Vendor Marketplace</span>
+                              <span className="text-[10px] font-bold bg-purple-100 text-purple-700 border border-purple-200 rounded px-1.5 py-0.5">{t("logisticBook.vendorMarketplace", "Vendor Marketplace")}</span>
                             )}
                           </div>
                           <p className="font-semibold text-foreground text-sm">{item.serviceName}</p>
@@ -1617,7 +1624,7 @@ export default function BookPage() {
                             <p className="text-xs text-purple-600 mt-0.5 font-medium">by {item.vendorName}</p>
                           )}
                           <dl className="mt-2 space-y-1">
-                            {getServiceDetailRows(item.calculatorType, item.itemSource === "vendor_catalog_item" ? { ...item.inputData, itemSource: "vendor_catalog_item", serviceType: item.serviceType } : item.inputData).map(({ label, value }) => (
+                            {getServiceDetailRows(item.calculatorType, item.itemSource === "vendor_catalog_item" ? { ...item.inputData, itemSource: "vendor_catalog_item", serviceType: item.serviceType } : item.inputData, t).map(({ label, value }) => (
                               <div key={label} className="flex gap-2 text-xs leading-relaxed">
                                 <dt className="font-medium text-foreground shrink-0 w-28">{label}</dt>
                                 <dd className="text-muted-foreground">{value}</dd>
@@ -1626,7 +1633,7 @@ export default function BookPage() {
                           </dl>
                           {item.itemSource === "vendor_catalog_item" && item.priceSnapshot && (
                             <div className="mt-2 text-xs text-muted-foreground bg-white/60 border border-purple-100 rounded px-2 py-1 space-y-0.5">
-                              <span className="font-medium text-purple-700">Harga satuan: </span>
+                              <span className="font-medium text-purple-700">{t("logisticBook.unitPrice", "Harga satuan")}: </span>
                               <span>{formatCurrency(item.priceSnapshot.priceSell)} / {item.priceSnapshot.unit}</span>
                               {item.tax != null && item.tax > 0 && (
                                 <span className="block">PPN 11%: +{formatCurrency(item.tax)}</span>
@@ -1640,15 +1647,15 @@ export default function BookPage() {
                               ? (
                                 <div className="text-right">
                                   <span className="font-bold text-purple-700 text-sm">{formatCurrency(item.total)}</span>
-                                  <p className="text-[10px] text-muted-foreground">incl. PPN</p>
+                                  <p className="text-[10px] text-muted-foreground">{t("logisticBook.inclTax", "incl. PPN")}</p>
                                 </div>
                               )
                               : <span className="font-bold text-accent text-sm">{formatCurrency(item.subtotal)}</span>
                             : item.calculatorType === "trucking"
-                              ? <span className="text-xs font-semibold text-blue-600 bg-blue-50 border border-blue-200 rounded px-2 py-0.5">Harga menyusul</span>
+                              ? <span className="text-xs font-semibold text-blue-600 bg-blue-50 border border-blue-200 rounded px-2 py-0.5">{t("logisticBook.priceTBD", "Harga menyusul")}</span>
                               : item.subtotal > 0
                                 ? <span className="font-bold text-accent text-sm">{formatCurrency(item.subtotal)}</span>
-                                : <span className="text-xs font-semibold text-amber-600 bg-amber-50 border border-amber-200 rounded px-2 py-0.5">Harga nego</span>
+                                : <span className="text-xs font-semibold text-amber-600 bg-amber-50 border border-amber-200 rounded px-2 py-0.5">{t("logisticBook.priceNego", "Harga nego")}</span>
                           }
                           <button
                             onClick={() => removeItem(item.cartId)}
@@ -1665,14 +1672,14 @@ export default function BookPage() {
             </div>
 
             <div className="bg-muted/40 rounded-lg border border-border p-4 space-y-2">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Rincian Pesanan</p>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">{t("logisticBook.step2.orderDetails", "Rincian Pesanan")}</p>
               {cartItems.map((item) => (
                 <div key={item.cartId} className="flex justify-between text-sm gap-2">
                   <span className="text-foreground font-medium min-w-0 truncate">{item.serviceName}</span>
                   <span className="font-medium shrink-0">
                     {item.calculatorType === "trucking"
-                      ? <span className="text-blue-600 text-xs font-semibold">Harga menyusul</span>
-                      : item.subtotal > 0 ? formatCurrency(item.subtotal) : <span className="text-amber-600 text-xs">Harga nego</span>}
+                      ? <span className="text-blue-600 text-xs font-semibold">{t("logisticBook.priceTBD", "Harga menyusul")}</span>
+                      : item.subtotal > 0 ? formatCurrency(item.subtotal) : <span className="text-amber-600 text-xs">{t("logisticBook.priceNego", "Harga nego")}</span>}
                   </span>
                 </div>
               ))}
@@ -1685,19 +1692,19 @@ export default function BookPage() {
                   </div>
                   <Separator />
                   <div className="flex justify-between">
-                    <span className="font-bold text-foreground">Total Estimasi</span>
+                    <span className="font-bold text-foreground">{t("logisticBook.totalEstimate", "Total Estimasi")}</span>
                     <span className="font-bold text-accent text-lg">{formatCurrency(grandTotal)}</span>
                   </div>
                   <p className="text-xs text-muted-foreground italic">
-                    Ini adalah estimasi harga. Penawaran final akan dikonfirmasi oleh tim kami.
+                    {t("logisticBook.estimateDisclaimer", "Ini adalah estimasi harga. Penawaran final akan dikonfirmasi oleh tim kami.")}
                   </p>
                 </>
               ) : (
                 <>
                   <Separator />
                   <div className="rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-700 space-y-0.5">
-                    <p className="font-semibold">Harga Akan Diberikan oleh Vendor</p>
-                    <p>Setelah pesanan diterima, vendor akan membalas dengan penawaran harga untuk Anda.</p>
+                    <p className="font-semibold">{t("logisticBook.vendorPriceTitle", "Harga Akan Diberikan oleh Vendor")}</p>
+                    <p>{t("logisticBook.vendorPriceDesc", "Setelah pesanan diterima, vendor akan membalas dengan penawaran harga untuk Anda.")}</p>
                   </div>
                 </>
               )}
@@ -1724,9 +1731,9 @@ export default function BookPage() {
       );
 
       const SHIPPING_LABEL: Record<string, string> = {
-        darat: "Pengiriman Darat (Trucking)",
-        laut: "Pengiriman Laut (Sea Freight)",
-        udara: "Pengiriman Udara (Air Freight)",
+        darat: t("logisticBook.shipping.darat", "Pengiriman Darat (Trucking)"),
+        laut: t("logisticBook.shipping.laut", "Pengiriman Laut (Sea Freight)"),
+        udara: t("logisticBook.shipping.udara", "Pengiriman Udara (Air Freight)"),
       };
       const SHIPPING_ICON: Record<string, React.ReactElement> = {
         darat: <Truck className="w-5 h-5 text-orange-600" />,
@@ -1737,8 +1744,8 @@ export default function BookPage() {
       return (
         <div className="space-y-5">
           <div>
-            <h2 className="text-xl font-bold text-foreground mb-1">Data Pemesan</h2>
-            <p className="text-sm text-muted-foreground">Lengkapi data untuk konfirmasi pesanan</p>
+            <h2 className="text-xl font-bold text-foreground mb-1">{t("logisticBook.step3.title", "Data Pemesan")}</h2>
+            <p className="text-sm text-muted-foreground">{t("logisticBook.step3.subtitle", "Lengkapi data untuk konfirmasi pesanan")}</p>
           </div>
 
           {/* ── Ringkasan Pengiriman (hanya untuk product-only order) ── */}
@@ -1749,16 +1756,16 @@ export default function BookPage() {
                   {SHIPPING_ICON[productShipping.method]}
                 </div>
                 <div className="flex-1">
-                  <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Metode Pengiriman</p>
+                  <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">{t("logisticBook.step3.shippingMethod", "Metode Pengiriman")}</p>
                   <p className="text-sm font-semibold text-slate-900">{SHIPPING_LABEL[productShipping.method]}</p>
                 </div>
                 {productShipping.estimate ? (
                   <div className="text-right">
-                    <p className="text-[10px] text-slate-400">Estimasi</p>
+                    <p className="text-[10px] text-slate-400">{t("logisticBook.estimate", "Estimasi")}</p>
                     <p className="text-sm font-bold text-slate-800">{formatCurrency(productShipping.estimate)}</p>
                   </div>
                 ) : (
-                  <span className="text-[11px] text-slate-400 italic">Sesuai rute</span>
+                  <span className="text-[11px] text-slate-400 italic">{t("logisticBook.step3.perRoute", "Sesuai rute")}</span>
                 )}
               </div>
             </div>
@@ -1767,40 +1774,40 @@ export default function BookPage() {
           {/* ── Group 1: Data Perusahaan ─────────────────────────── */}
           <div className="space-y-3">
             <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-              <User className="w-4 h-4 text-accent" /> Data Perusahaan
+              <User className="w-4 h-4 text-accent" /> {t("logisticBook.step3.companyData", "Data Perusahaan")}
             </h3>
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2 sm:col-span-1">
-                <Label className="text-xs">Nama Perusahaan</Label>
+                <Label className="text-xs">{t("logisticBook.step3.companyName", "Nama Perusahaan")}</Label>
                 <Input placeholder="PT. ..." value={f.companyName} onChange={e => set("companyName", e.target.value)} />
               </div>
               <div className="col-span-2 sm:col-span-1">
-                <Label className="text-xs">Nama PIC <span className="text-destructive">*</span></Label>
-                <Input placeholder="Nama lengkap" value={f.customerName} onChange={e => set("customerName", e.target.value)} />
+                <Label className="text-xs">{t("logisticBook.step3.picName", "Nama PIC")} <span className="text-destructive">*</span></Label>
+                <Input placeholder={t("logisticBook.step3.picNamePlaceholder", "Nama lengkap")} value={f.customerName} onChange={e => set("customerName", e.target.value)} />
               </div>
               <div className="col-span-2 sm:col-span-1">
-                <Label className="text-xs">Nama Pengirim</Label>
-                <Input placeholder="Nama pengirim barang (opsional)" value={f.senderName} onChange={e => set("senderName", e.target.value)} />
+                <Label className="text-xs">{t("logisticBook.step3.senderName", "Nama Pengirim")}</Label>
+                <Input placeholder={t("logisticBook.step3.senderNamePlaceholder", "Nama pengirim barang (opsional)")} value={f.senderName} onChange={e => set("senderName", e.target.value)} />
               </div>
               <div className="col-span-2 sm:col-span-1">
-                <Label className="text-xs">Email <span className="text-destructive">*</span></Label>
+                <Label className="text-xs">{t("logisticBook.step3.email", "Email")} <span className="text-destructive">*</span></Label>
                 <Input type="email" placeholder="email@perusahaan.com" value={f.email} onChange={e => set("email", e.target.value)} />
               </div>
               <div className="col-span-2 sm:col-span-1">
-                <Label className="text-xs">Telepon / WhatsApp <span className="text-destructive">*</span></Label>
+                <Label className="text-xs">{t("logisticBook.step3.phone", "Telepon / WhatsApp")} <span className="text-destructive">*</span></Label>
                 <Input placeholder="+62..." value={f.phone} onChange={e => set("phone", e.target.value)} />
               </div>
 
               {/* ── Mode Pengiriman — hanya tampil jika ada layanan logistik ─── */}
               {hasLogisticService && (
                 <div className="col-span-2">
-                  <Label className="text-xs">Mode Pengiriman</Label>
+                  <Label className="text-xs">{t("logisticBook.step3.transportMode", "Mode Pengiriman")}</Label>
                   <select
                     className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     value={f.transportMode}
                     onChange={e => set("transportMode", e.target.value)}
                   >
-                    <option value="">-- Pilih Mode (opsional) --</option>
+                    <option value="">-- {t("logisticBook.step3.selectModeOptional", "Pilih Mode (opsional)")} --</option>
                     <option value="TRUCKING">🚛 Trucking / Darat</option>
                     <option value="AIR_FREIGHT">✈️ Air Freight / Udara</option>
                     <option value="SEA_FREIGHT">🚢 Sea Freight / Laut</option>
@@ -1812,21 +1819,21 @@ export default function BookPage() {
               {/* ── Trucking-specific fields ─── */}
               {hasLogisticService && f.transportMode === "TRUCKING" && (<>
                 <div className="col-span-2 sm:col-span-1">
-                  <Label className="text-xs">Kota Asal (Kecamatan)</Label>
+                  <Label className="text-xs">{t("logisticBook.step3.originCityDistrict", "Kota Asal (Kecamatan)")}</Label>
                   <Input placeholder="Cakung, Jakarta Timur" value={f.originDistrict} onChange={e => set("originDistrict", e.target.value)} />
                 </div>
                 <div className="col-span-2 sm:col-span-1">
-                  <Label className="text-xs">Kota Tujuan (Kecamatan)</Label>
+                  <Label className="text-xs">{t("logisticBook.step3.destCityDistrict", "Kota Tujuan (Kecamatan)")}</Label>
                   <Input placeholder="Rungkut, Surabaya" value={f.destDistrict} onChange={e => set("destDistrict", e.target.value)} />
                 </div>
                 <div className="col-span-2">
-                  <Label className="text-xs">Tipe Unit / Armada</Label>
+                  <Label className="text-xs">{t("logisticBook.step3.truckUnit", "Tipe Unit / Armada")}</Label>
                   <select
                     className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     value={f.truckType}
                     onChange={e => set("truckType", e.target.value)}
                   >
-                    <option value="">-- Pilih Tipe --</option>
+                    <option value="">-- {t("logisticBook.step3.selectType", "Pilih Tipe")} --</option>
                     <option value="CDD">CDD</option>
                     <option value="CDD Long">CDD Long</option>
                     <option value="CDE">CDE</option>
@@ -1843,8 +1850,8 @@ export default function BookPage() {
               {hasLogisticService && (f.transportMode === "AIR_FREIGHT" || f.transportMode === "SEA_FREIGHT") && (<>
                 <div className="col-span-2 sm:col-span-1">
                   <Label className="text-xs flex items-center gap-1">
-                    {f.transportMode === "AIR_FREIGHT" ? "Bandara" : "Pelabuhan"} Asal
-                    <span className="ml-auto text-[10px] font-semibold text-orange-600 bg-orange-100 border border-orange-200 rounded px-1.5 py-0.5">Otomatis</span>
+                    {f.transportMode === "AIR_FREIGHT" ? t("logisticBook.form.originAirport", "Bandara") : t("logisticBook.form.originPort", "Pelabuhan")} {t("logisticBook.step3.origin", "Asal")}
+                    <span className="ml-auto text-[10px] font-semibold text-orange-600 bg-orange-100 border border-orange-200 rounded px-1.5 py-0.5">{t("logisticBook.auto", "Otomatis")}</span>
                   </Label>
                   <div className="flex items-center gap-2 bg-orange-50 border border-orange-200 rounded-md px-3 py-2 mt-1">
                     <MapPin className="w-3.5 h-3.5 text-orange-500 shrink-0" />
@@ -1856,21 +1863,21 @@ export default function BookPage() {
                   </div>
                 </div>
                 <div className="col-span-2 sm:col-span-1">
-                  <Label className="text-xs">{f.transportMode === "AIR_FREIGHT" ? "Bandara" : "Pelabuhan"} Tujuan</Label>
+                  <Label className="text-xs">{f.transportMode === "AIR_FREIGHT" ? t("logisticBook.form.originAirport", "Bandara") : t("logisticBook.form.originPort", "Pelabuhan")} {t("logisticBook.step3.dest", "Tujuan")}</Label>
                   <Input placeholder={f.transportMode === "AIR_FREIGHT" ? "SUB / Juanda" : "Tanjung Perak"} value={f.destPort} onChange={e => set("destPort", e.target.value)} />
                 </div>
                 <div className="col-span-2 sm:col-span-1">
-                  <Label className="text-xs">Berat Kargo (kg)</Label>
+                  <Label className="text-xs">{t("logisticBook.step3.cargoWeight", "Berat Kargo (kg)")}</Label>
                   <Input type="number" placeholder="500" value={f.weightKg} onChange={e => set("weightKg", e.target.value)} />
                 </div>
                 <div className="col-span-2 sm:col-span-1">
-                  <Label className="text-xs">Incoterm</Label>
+                  <Label className="text-xs">{t("logisticBook.step3.incoterm", "Incoterm")}</Label>
                   <select
                     className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     value={f.incoterm}
                     onChange={e => set("incoterm", e.target.value)}
                   >
-                    <option value="">-- Pilih --</option>
+                    <option value="">-- {t("logisticBook.step3.select", "Pilih")} --</option>
                     <option value="EXW">EXW</option>
                     <option value="FOB">FOB</option>
                     <option value="CIF">CIF</option>
@@ -1879,11 +1886,11 @@ export default function BookPage() {
                   </select>
                 </div>
                 <div className="col-span-2 sm:col-span-1">
-                  <Label className="text-xs">ETD (Keberangkatan)</Label>
+                  <Label className="text-xs">{t("logisticBook.step3.etd", "ETD (Keberangkatan)")}</Label>
                   <Input type="date" value={f.etd} onChange={e => set("etd", e.target.value)} />
                 </div>
                 <div className="col-span-2 sm:col-span-1">
-                  <Label className="text-xs">ETA (Tiba Tujuan)</Label>
+                  <Label className="text-xs">{t("logisticBook.step3.eta", "ETA (Tiba Tujuan)")}</Label>
                   <Input type="date" value={f.eta} onChange={e => set("eta", e.target.value)} />
                 </div>
               </>)}
@@ -1892,26 +1899,26 @@ export default function BookPage() {
               {isProductOrder && (
                 <div className="col-span-2">
                   <Label className="text-xs">
-                    Alamat Tujuan Pengiriman
-                    <span className="text-muted-foreground font-normal"> (opsional — kosongkan jika ambil sendiri)</span>
+                    {t("logisticBook.step3.shippingAddress", "Alamat Tujuan Pengiriman")}
+                    <span className="text-muted-foreground font-normal"> ({t("logisticBook.step3.shippingAddressOptional", "opsional — kosongkan jika ambil sendiri")})</span>
                   </Label>
                   <Input
-                    placeholder="Jl. ..., Kota, Provinsi — kosongkan jika ambil sendiri di gudang"
+                    placeholder={t("logisticBook.step3.shippingAddressPlaceholder", "Jl. ..., Kota, Provinsi — kosongkan jika ambil sendiri di gudang")}
                     value={f.shippingAddress}
                     onChange={e => set("shippingAddress", e.target.value)}
                   />
-                  <p className="text-[11px] text-muted-foreground mt-1">Masukkan alamat tujuan pengiriman, atau kosongkan jika barang akan diambil sendiri.</p>
+                  <p className="text-[11px] text-muted-foreground mt-1">{t("logisticBook.step3.shippingAddressHint", "Masukkan alamat tujuan pengiriman, atau kosongkan jika barang akan diambil sendiri.")}</p>
                 </div>
               )}
 
               {/* ── Asal & Tujuan Pengiriman — hanya tampil jika ada data dari layanan ─── */}
               {hasOriginDest && (<>
                 <div className="col-span-2 sm:col-span-1">
-                  <Label className="text-xs">Asal Pengiriman</Label>
+                  <Label className="text-xs">{t("logisticBook.step3.originShipping", "Asal Pengiriman")}</Label>
                   <Input placeholder="Jakarta" value={f.origin} onChange={e => set("origin", e.target.value)} />
                 </div>
                 <div className="col-span-2 sm:col-span-1">
-                  <Label className="text-xs">Tujuan Pengiriman</Label>
+                  <Label className="text-xs">{t("logisticBook.step3.destShipping", "Tujuan Pengiriman")}</Label>
                   <Input placeholder="Surabaya" value={f.destination} onChange={e => set("destination", e.target.value)} />
                 </div>
               </>)}
@@ -1919,25 +1926,25 @@ export default function BookPage() {
               {/* ── Jumlah Koli — sembunyikan untuk product order tanpa shipment ─── */}
               {(!isProductOrder || hasShipmentInCart) && (
                 <div className="col-span-2 sm:col-span-1">
-                  <Label className="text-xs">Jumlah Koli <span className="text-muted-foreground font-normal">(pcs/koli)</span></Label>
+                  <Label className="text-xs">{t("logisticBook.step3.jumlahKoli", "Jumlah Koli")} <span className="text-muted-foreground font-normal">(pcs/koli)</span></Label>
                   <Input
                     type="number"
                     min="1"
-                    placeholder="Contoh: 10"
+                    placeholder={t("logisticBook.step3.jumlahKoliPlaceholder", "Contoh: 10")}
                     value={f.jumlahKoli}
                     onChange={e => set("jumlahKoli", e.target.value)}
                   />
                   <p className="text-[11px] text-muted-foreground mt-1">
                     {isProductOrder && hasShipmentInCart
-                      ? "Terisi otomatis dari data layanan shipment."
-                      : "Total jumlah koli / kotak / karton"}
+                      ? t("logisticBook.step3.jumlahKoliAutoFill", "Terisi otomatis dari data layanan shipment.")
+                      : t("logisticBook.step3.jumlahKoliDesc", "Total jumlah koli / kotak / karton")}
                   </p>
                 </div>
               )}
 
               <div className="col-span-2">
-                <Label className="text-xs">Catatan Tambahan</Label>
-                <Textarea placeholder="Informasi tambahan untuk tim kami..." value={f.notes} onChange={e => set("notes", e.target.value)} rows={3} />
+                <Label className="text-xs">{t("logisticBook.step3.additionalNotes", "Catatan Tambahan")}</Label>
+                <Textarea placeholder={t("logisticBook.step3.additionalNotesPlaceholder", "Informasi tambahan untuk tim kami...")} value={f.notes} onChange={e => set("notes", e.target.value)} rows={3} />
               </div>
 
               {/* ── Estimasi Harga ─── */}
@@ -1945,18 +1952,18 @@ export default function BookPage() {
                 <div className="col-span-2">
                   {estimating && (
                     <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-700 flex items-center gap-2">
-                      <span className="animate-spin">⏳</span> Menghitung estimasi harga...
+                      <span className="animate-spin">⏳</span> {t("logisticBook.step3.calculatingEstimate", "Menghitung estimasi harga...")}
                     </div>
                   )}
                   {!estimating && estimation && (
                     <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 space-y-1">
-                      <p className="text-xs font-semibold text-emerald-700 uppercase tracking-wide">Estimasi Harga</p>
+                      <p className="text-xs font-semibold text-emerald-700 uppercase tracking-wide">{t("logisticBook.step3.priceEstimate", "Estimasi Harga")}</p>
                       {estimation.estimated_price != null ? (
                         <p className="text-lg font-bold text-emerald-800">
                           Rp {Math.round(estimation.estimated_price).toLocaleString("id-ID")}
                         </p>
                       ) : (
-                        <p className="text-sm text-slate-500">Estimasi tidak tersedia — harga akan dikonfirmasi admin</p>
+                        <p className="text-sm text-slate-500">{t("logisticBook.step3.estimateNotAvailable", "Estimasi tidak tersedia — harga akan dikonfirmasi admin")}</p>
                       )}
                       <p className="text-[11px] text-slate-400">{estimation.disclaimer}</p>
                     </div>
@@ -1971,7 +1978,7 @@ export default function BookPage() {
           {/* ── Detail Pemesanan ────────────────────────── */}
           <div className="space-y-3">
             <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-              <ShoppingCart className="w-4 h-4 text-accent" /> Detail Pemesanan
+              <ShoppingCart className="w-4 h-4 text-accent" /> {t("logisticBook.step3.orderDetail", "Detail Pemesanan")}
             </h3>
             <div className="space-y-2">
               {cartItems.map((item) => (
@@ -1981,7 +1988,7 @@ export default function BookPage() {
                       <Badge variant="outline" className="text-[10px] mb-1">{item.category}</Badge>
                       <p className="font-semibold text-foreground text-sm">{item.serviceName}</p>
                       <dl className="mt-1.5 space-y-0.5">
-                        {getServiceDetailRows(item.calculatorType, item.inputData).map(({ label, value }) => (
+                        {getServiceDetailRows(item.calculatorType, item.inputData, t).map(({ label, value }) => (
                           <div key={label} className="flex gap-2 text-xs">
                             <dt className="text-muted-foreground shrink-0 w-24">{label}</dt>
                             <dd className="font-medium text-foreground">{value}</dd>
@@ -1992,14 +1999,14 @@ export default function BookPage() {
                     <div className="text-right shrink-0">
                       {item.subtotal > 0
                         ? <span className="font-bold text-accent text-sm">{formatCurrency(item.subtotal)}</span>
-                        : <span className="text-amber-600 text-xs font-medium">Harga nego</span>}
+                        : <span className="text-amber-600 text-xs font-medium">{t("logisticBook.priceNego", "Harga nego")}</span>}
                     </div>
                   </div>
                 </div>
               ))}
             </div>
             <div className="rounded-lg border border-border bg-muted/40 px-4 py-3 flex justify-between items-center">
-              <span className="font-semibold text-sm text-foreground">Total Estimasi</span>
+              <span className="font-semibold text-sm text-foreground">{t("logisticBook.totalEstimate", "Total Estimasi")}</span>
               <span className="font-bold text-accent text-base">{formatCurrency(grandTotal)}</span>
             </div>
           </div>
@@ -2017,60 +2024,60 @@ export default function BookPage() {
         {
           id: "gateway" as const,
           icon: <CreditCard className="w-5 h-5 text-emerald-600" />,
-          label: "Payment Gateway",
-          desc: "Bayar online sekarang",
-          badge: "Cepat & Aman",
+          label: t("logisticBook.payment.gateway.label", "Payment Gateway"),
+          desc: t("logisticBook.payment.gateway.desc", "Bayar online sekarang"),
+          badge: t("logisticBook.payment.gateway.badge", "Cepat & Aman"),
           badgeColor: "bg-emerald-100 text-emerald-700",
         },
         {
           id: "transfer" as const,
           icon: <Building2 className="w-5 h-5 text-blue-600" />,
-          label: "Transfer Bank",
-          desc: "Transfer ke rekening kami",
+          label: t("logisticBook.payment.transfer.label", "Transfer Bank"),
+          desc: t("logisticBook.payment.transfer.desc", "Transfer ke rekening kami"),
           badge: null,
           badgeColor: "",
         },
         {
           id: "cod" as const,
           icon: <Banknote className="w-5 h-5 text-orange-600" />,
-          label: "COD / Tunai",
-          desc: "Bayar saat pengiriman",
+          label: t("logisticBook.payment.cod.label", "COD / Tunai"),
+          desc: t("logisticBook.payment.cod.desc", "Bayar saat pengiriman"),
           badge: null,
           badgeColor: "",
         },
         {
           id: "invoice" as const,
           icon: <Receipt className="w-5 h-5 text-purple-600" />,
-          label: "Invoice / Net Terms",
-          desc: "Tagihan setelah selesai",
+          label: t("logisticBook.payment.invoice.label", "Invoice / Net Terms"),
+          desc: t("logisticBook.payment.invoice.desc", "Tagihan setelah selesai"),
           badge: null,
           badgeColor: "",
         },
       ];
 
       const TRANSFER_TERMS = [
-        { id: "full" as const, label: "Pembayaran Penuh", desc: "Bayar seluruh tagihan di muka" },
-        { id: "dp"   as const, label: "DP + Pelunasan",  desc: "Down payment, sisa dibayar kemudian" },
-        { id: "termin" as const, label: "Termin / Cicilan", desc: "Bayar dalam beberapa tahap" },
+        { id: "full" as const, label: t("logisticBook.payment.transferTerms.full.label", "Pembayaran Penuh"), desc: t("logisticBook.payment.transferTerms.full.desc", "Bayar seluruh tagihan di muka") },
+        { id: "dp"   as const, label: t("logisticBook.payment.transferTerms.dp.label", "DP + Pelunasan"),  desc: t("logisticBook.payment.transferTerms.dp.desc", "Down payment, sisa dibayar kemudian") },
+        { id: "termin" as const, label: t("logisticBook.payment.transferTerms.termin.label", "Termin / Cicilan"), desc: t("logisticBook.payment.transferTerms.termin.desc", "Bayar dalam beberapa tahap") },
       ];
       const NET_TERMS = [
-        { id: "net7" as const, label: "Net 7 hari" },
-        { id: "net14" as const, label: "Net 14 hari" },
-        { id: "net30" as const, label: "Net 30 hari" },
-        { id: "net60" as const, label: "Net 60 hari" },
+        { id: "net7" as const, label: t("logisticBook.payment.netTerms.net7", "Net 7 hari") },
+        { id: "net14" as const, label: t("logisticBook.payment.netTerms.net14", "Net 14 hari") },
+        { id: "net30" as const, label: t("logisticBook.payment.netTerms.net30", "Net 30 hari") },
+        { id: "net60" as const, label: t("logisticBook.payment.netTerms.net60", "Net 60 hari") },
       ];
       const DP_TERMS = [
-        { id: "lunas-delivery" as const, label: "Lunas saat pengiriman" },
-        { id: "lunas-net30"   as const, label: "Lunas Net 30 hari" },
-        { id: "lunas-net60"   as const, label: "Lunas Net 60 hari" },
-        { id: "cicil"         as const, label: "Cicilan" },
+        { id: "lunas-delivery" as const, label: t("logisticBook.payment.dpTerms.lunasDelivery", "Lunas saat pengiriman") },
+        { id: "lunas-net30"   as const, label: t("logisticBook.payment.dpTerms.lunasNet30", "Lunas Net 30 hari") },
+        { id: "lunas-net60"   as const, label: t("logisticBook.payment.dpTerms.lunasNet60", "Lunas Net 60 hari") },
+        { id: "cicil"         as const, label: t("logisticBook.payment.dpTerms.cicil", "Cicilan") },
       ];
 
       return (
         <div className="space-y-5">
           <div>
-            <h2 className="text-xl font-bold text-foreground mb-1">Metode Pembayaran</h2>
-            <p className="text-sm text-muted-foreground">Pilih cara pembayaran yang Anda inginkan</p>
+            <h2 className="text-xl font-bold text-foreground mb-1">{t("logisticBook.step4.title", "Metode Pembayaran")}</h2>
+            <p className="text-sm text-muted-foreground">{t("logisticBook.step4.subtitle", "Pilih cara pembayaran yang Anda inginkan")}</p>
           </div>
 
           {/* Method cards */}
@@ -2119,25 +2126,25 @@ export default function BookPage() {
           {paymentType === "transfer" && (
             <div className="rounded-xl border border-blue-200 bg-blue-50/50 overflow-hidden">
               <div className="px-4 py-2.5 bg-blue-100/60 border-b border-blue-200">
-                <p className="text-sm font-semibold text-blue-900">Pilih Skema Transfer</p>
+                <p className="text-sm font-semibold text-blue-900">{t("logisticBook.payment.selectTransferScheme", "Pilih Skema Transfer")}</p>
               </div>
               <div className="p-4 space-y-2">
-                {TRANSFER_TERMS.map(t => (
+                {TRANSFER_TERMS.map(tt => (
                   <button
-                    key={t.id}
-                    onClick={() => { setTransferTerm(t.id); setPaymentTerm(""); setDpNext(""); }}
+                    key={tt.id}
+                    onClick={() => { setTransferTerm(tt.id); setPaymentTerm(""); setDpNext(""); }}
                     className={`w-full rounded-lg border px-4 py-3 flex items-center gap-3 text-left transition-all ${
-                      transferTerm === t.id ? "border-blue-400 bg-white shadow-sm" : "border-blue-200 hover:bg-white/80"
+                      transferTerm === tt.id ? "border-blue-400 bg-white shadow-sm" : "border-blue-200 hover:bg-white/80"
                     }`}
                   >
                     <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 ${
-                      transferTerm === t.id ? "border-blue-500" : "border-slate-400"
+                      transferTerm === tt.id ? "border-blue-500" : "border-slate-400"
                     }`}>
-                      {transferTerm === t.id && <div className="w-2 h-2 rounded-full bg-blue-500" />}
+                      {transferTerm === tt.id && <div className="w-2 h-2 rounded-full bg-blue-500" />}
                     </div>
                     <div>
-                      <p className="text-sm font-semibold text-foreground">{t.label}</p>
-                      <p className="text-xs text-muted-foreground">{t.desc}</p>
+                      <p className="text-sm font-semibold text-foreground">{tt.label}</p>
+                      <p className="text-xs text-muted-foreground">{tt.desc}</p>
                     </div>
                   </button>
                 ))}
@@ -2145,16 +2152,16 @@ export default function BookPage() {
                 {/* Termin sub-options */}
                 {transferTerm === "termin" && (
                   <div className="ml-7 pt-1 grid grid-cols-2 gap-2">
-                    {NET_TERMS.map(t => (
+                    {NET_TERMS.map(nt => (
                       <button
-                        key={t.id}
-                        onClick={() => setPaymentTerm(t.id)}
+                        key={nt.id}
+                        onClick={() => setPaymentTerm(nt.id)}
                         className={`rounded-lg border px-3 py-2 text-xs font-semibold transition-all ${
-                          paymentTerm === t.id
+                          paymentTerm === nt.id
                             ? "border-blue-500 bg-blue-500 text-white"
                             : "border-blue-200 hover:bg-blue-100 text-foreground"
                         }`}
-                      >{t.label}</button>
+                      >{nt.label}</button>
                     ))}
                   </div>
                 )}
@@ -2162,7 +2169,7 @@ export default function BookPage() {
                 {/* DP sub-options */}
                 {transferTerm === "dp" && (
                   <div className="ml-7 pt-1 space-y-1.5">
-                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide">Jadwal Pelunasan:</p>
+                    <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide">{t("logisticBook.payment.repaymentSchedule", "Jadwal Pelunasan")}:</p>
                     {DP_TERMS.map(d => (
                       <button
                         key={d.id}
@@ -2185,19 +2192,19 @@ export default function BookPage() {
             <div className="rounded-xl border border-blue-200 bg-gradient-to-br from-blue-50 to-indigo-50 overflow-hidden">
               <div className="px-4 py-2.5 bg-blue-100/70 border-b border-blue-200 flex items-center gap-2">
                 <Building2 className="w-4 h-4 text-blue-700" />
-                <p className="text-sm font-semibold text-blue-900">Informasi Rekening Tujuan</p>
+                <p className="text-sm font-semibold text-blue-900">{t("logisticBook.payment.bankInfo", "Informasi Rekening Tujuan")}</p>
               </div>
               {bankInfo ? (
                 <div className="p-4 space-y-3">
                   <div className="grid grid-cols-2 gap-y-2 text-sm">
-                    <span className="text-muted-foreground font-medium">Bank</span>
+                    <span className="text-muted-foreground font-medium">{t("logisticBook.payment.bank", "Bank")}</span>
                     <span className="font-bold text-foreground">{bankInfo.bankName}</span>
-                    <span className="text-muted-foreground font-medium">No. Rekening</span>
+                    <span className="text-muted-foreground font-medium">{t("logisticBook.payment.accountNumber", "No. Rekening")}</span>
                     <span className="font-bold text-foreground tracking-widest">{bankInfo.accountNumber}</span>
-                    <span className="text-muted-foreground font-medium">Atas Nama</span>
+                    <span className="text-muted-foreground font-medium">{t("logisticBook.payment.accountName", "Atas Nama")}</span>
                     <span className="font-semibold text-foreground">{bankInfo.accountName}</span>
                     {bankInfo.branch && <>
-                      <span className="text-muted-foreground font-medium">Cabang</span>
+                      <span className="text-muted-foreground font-medium">{t("logisticBook.payment.branch", "Cabang")}</span>
                       <span className="text-foreground">{bankInfo.branch}</span>
                     </>}
                   </div>
@@ -2208,21 +2215,21 @@ export default function BookPage() {
               ) : (
                 <div className="p-4 flex items-center gap-2 text-sm text-muted-foreground">
                   <div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
-                  Memuat info rekening…
+                  {t("logisticBook.payment.loadingBank", "Memuat info rekening…")}
                 </div>
               )}
 
               {/* Upload Bukti Pembayaran */}
               <div className="border-t border-blue-200 px-4 py-4 space-y-3">
-                <p className="text-sm font-semibold text-blue-900">Upload Bukti Transfer <span className="text-xs font-normal text-muted-foreground">(opsional, bisa dilakukan setelah konfirmasi)</span></p>
+                <p className="text-sm font-semibold text-blue-900">{t("logisticBook.payment.uploadProof", "Upload Bukti Transfer")} <span className="text-xs font-normal text-muted-foreground">({t("logisticBook.payment.uploadProofOptional", "opsional, bisa dilakukan setelah konfirmasi")})</span></p>
                 {proofUploaded ? (
                   <div className="flex items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2.5">
                     <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <p className="text-sm font-semibold text-emerald-800">Bukti pembayaran berhasil diunggah ✓</p>
+                    <p className="text-sm font-semibold text-emerald-800">{t("logisticBook.toast.proofUploaded", "Bukti pembayaran berhasil diunggah ✓")}</p>
                     <button
                       className="ml-auto text-xs text-muted-foreground underline"
                       onClick={() => { setProofUploaded(false); setProofObjectPath(""); setProofFile(null); }}
-                    >Ganti</button>
+                    >{t("logisticBook.payment.changeProof", "Ganti")}</button>
                   </div>
                 ) : (
                   <label className={`flex flex-col items-center gap-2 rounded-xl border-2 border-dashed cursor-pointer transition-all px-4 py-5 ${
@@ -2242,13 +2249,13 @@ export default function BookPage() {
                     {proofUploading ? (
                       <>
                         <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-                        <p className="text-xs text-blue-700">Mengunggah…</p>
+                        <p className="text-xs text-blue-700">{t("logisticBook.payment.uploading", "Mengunggah…")}</p>
                       </>
                     ) : (
                       <>
                         <Upload className="w-6 h-6 text-blue-400" />
                         <p className="text-xs text-center text-muted-foreground">
-                          {proofFile ? proofFile.name : "Klik untuk pilih file (JPG, PNG, PDF, maks. 10 MB)"}
+                          {proofFile ? proofFile.name : t("logisticBook.payment.uploadHint", "Klik untuk pilih file (JPG, PNG, PDF, maks. 10 MB)")}
                         </p>
                       </>
                     )}
@@ -2263,10 +2270,10 @@ export default function BookPage() {
             <div className="rounded-xl border border-orange-200 bg-orange-50 p-4 space-y-2">
               <div className="flex items-center gap-2">
                 <Banknote className="w-4 h-4 text-orange-600 shrink-0" />
-                <p className="font-semibold text-sm text-orange-900">Bayar Saat Pengiriman</p>
+                <p className="font-semibold text-sm text-orange-900">{t("logisticBook.payment.codTitle", "Bayar Saat Pengiriman")}</p>
               </div>
               <p className="text-xs text-orange-700">
-                Siapkan pembayaran tunai atau transfer instan saat kurir tiba. Nominal final dikonfirmasi tim kami setelah pesanan diproses.
+                {t("logisticBook.payment.codDesc", "Siapkan pembayaran tunai atau transfer instan saat kurir tiba. Nominal final dikonfirmasi tim kami setelah pesanan diproses.")}
               </p>
             </div>
           )}
@@ -2275,28 +2282,28 @@ export default function BookPage() {
           {paymentType === "invoice" && (
             <div className="rounded-xl border border-purple-200 bg-purple-50/50 overflow-hidden">
               <div className="px-4 py-2.5 bg-purple-100/60 border-b border-purple-200">
-                <p className="text-sm font-semibold text-purple-900">Pilih Jangka Waktu Invoice</p>
+                <p className="text-sm font-semibold text-purple-900">{t("logisticBook.payment.selectInvoiceTerm", "Pilih Jangka Waktu Invoice")}</p>
               </div>
               <div className="p-4 grid grid-cols-2 gap-2">
-                {NET_TERMS.map(t => (
+                {NET_TERMS.map(nt => (
                   <button
-                    key={t.id}
-                    onClick={() => setPaymentTerm(t.id)}
+                    key={nt.id}
+                    onClick={() => setPaymentTerm(nt.id)}
                     className={`rounded-lg border px-3 py-2.5 text-sm font-semibold transition-all ${
-                      paymentTerm === t.id
+                      paymentTerm === nt.id
                         ? "border-purple-500 bg-purple-500 text-white"
                         : "border-purple-200 hover:bg-purple-100 text-foreground"
                     }`}
-                  >{t.label}</button>
+                  >{nt.label}</button>
                 ))}
               </div>
-              <p className="px-4 pb-3 text-xs text-purple-700">Tagihan dikirim ke email setelah pekerjaan selesai. Tersedia untuk pelanggan dengan credit terms yang disetujui.</p>
+              <p className="px-4 pb-3 text-xs text-purple-700">{t("logisticBook.payment.invoiceNote", "Tagihan dikirim ke email setelah pekerjaan selesai. Tersedia untuk pelanggan dengan credit terms yang disetujui.")}</p>
             </div>
           )}
 
           {/* Total summary */}
           <div className="rounded-xl border border-border bg-muted/30 px-4 py-3 flex justify-between items-center">
-            <span className="font-semibold text-sm text-foreground">Total Estimasi</span>
+            <span className="font-semibold text-sm text-foreground">{t("logisticBook.totalEstimate", "Total Estimasi")}</span>
             <span className="font-bold text-accent text-base">{formatCurrency(totalWithShipping)}</span>
           </div>
         </div>
@@ -2308,7 +2315,9 @@ export default function BookPage() {
       const hasProductOnly = cartItems.every(c => c.calculatorType === "product") && cartItems.length > 0;
 
       const SHIPPING_LABEL: Record<string, string> = {
-        darat: "Darat (Trucking)", laut: "Laut (Sea Freight)", udara: "Udara (Air Freight)",
+        darat: t("logisticBook.shipping.daratShort", "Darat (Trucking)"),
+        laut: t("logisticBook.shipping.lautShort", "Laut (Sea Freight)"),
+        udara: t("logisticBook.shipping.udaraShort", "Udara (Air Freight)"),
       };
       const SHIPPING_ICON: Record<string, React.ReactElement> = {
         darat: <Truck className="w-5 h-5 text-orange-600" />,
@@ -2316,9 +2325,9 @@ export default function BookPage() {
         udara: <Plane className="w-5 h-5 text-sky-600" />,
       };
       const SHIPPING_METHODS = [
-        { id: "darat" as const, label: "Darat", icon: <Truck className="w-5 h-5 text-orange-600" />, desc: "Trucking" },
-        { id: "laut"  as const, label: "Laut",  icon: <Ship  className="w-5 h-5 text-blue-600"   />, desc: "Sea Freight" },
-        { id: "udara" as const, label: "Udara", icon: <Plane className="w-5 h-5 text-sky-600"    />, desc: "Air Freight" },
+        { id: "darat" as const, label: t("logisticBook.shipping.daratLabel", "Darat"), icon: <Truck className="w-5 h-5 text-orange-600" />, desc: "Trucking" },
+        { id: "laut"  as const, label: t("logisticBook.shipping.lautLabel", "Laut"),  icon: <Ship  className="w-5 h-5 text-blue-600"   />, desc: "Sea Freight" },
+        { id: "udara" as const, label: t("logisticBook.shipping.udaraLabel", "Udara"), icon: <Plane className="w-5 h-5 text-sky-600"    />, desc: "Air Freight" },
       ];
 
       function handleQtyChange(item: CartItem, delta: number) {
@@ -2347,15 +2356,15 @@ export default function BookPage() {
       return (
         <div className="space-y-5">
           <div>
-            <h2 className="text-xl font-bold text-foreground mb-1">Konfirmasi Pesanan</h2>
-            <p className="text-sm text-muted-foreground">Periksa kembali sebelum submit</p>
+            <h2 className="text-xl font-bold text-foreground mb-1">{t("logisticBook.step5.title", "Konfirmasi Pesanan")}</h2>
+            <p className="text-sm text-muted-foreground">{t("logisticBook.step5.subtitle", "Periksa kembali sebelum submit")}</p>
           </div>
 
           {/* Section 1 — Produk & Layanan */}
           <div className="rounded-xl border border-border overflow-hidden">
             <div className="px-4 py-2.5 bg-muted/50 border-b border-border flex items-center gap-2">
               <ShoppingCart className="w-4 h-4 text-muted-foreground" />
-              <span className="text-sm font-semibold">Produk &amp; Layanan</span>
+              <span className="text-sm font-semibold">{t("logisticBook.step5.productsAndServices", "Produk & Layanan")}</span>
               <Badge variant="secondary" className="ml-auto text-xs">{cartItems.length} item</Badge>
             </div>
             <div className="divide-y divide-border">
@@ -2369,7 +2378,7 @@ export default function BookPage() {
                       <p className="font-semibold text-sm text-foreground">{item.serviceName}</p>
                       {!isProduct && (
                         <dl className="mt-1 space-y-0.5">
-                          {getServiceDetailRows(item.calculatorType, item.inputData).map(({ label, value }) => (
+                          {getServiceDetailRows(item.calculatorType, item.inputData, t).map(({ label, value }) => (
                             <div key={label} className="flex gap-2 text-xs">
                               <dt className="text-muted-foreground w-24 shrink-0">{label}</dt>
                               <dd className="font-medium text-foreground">{value}</dd>
@@ -2395,12 +2404,12 @@ export default function BookPage() {
                       <span className="text-sm font-bold text-accent">
                         {item.subtotal > 0
                           ? formatCurrency(item.subtotal)
-                          : <span className="text-amber-600 text-xs font-medium">Harga nego</span>}
+                          : <span className="text-amber-600 text-xs font-medium">{t("logisticBook.priceNego", "Harga nego")}</span>}
                       </span>
                       <button
                         className="text-destructive/60 hover:text-destructive transition-colors"
                         onClick={() => removeItem(item.cartId)}
-                        title="Hapus item"
+                        title={t("logisticBook.step5.removeItem", "Hapus item")}
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -2416,12 +2425,12 @@ export default function BookPage() {
             <div className="rounded-xl border border-border overflow-hidden">
               <div className="px-4 py-2.5 bg-muted/50 border-b border-border flex items-center gap-2">
                 <Truck className="w-4 h-4 text-muted-foreground" />
-                <span className="text-sm font-semibold">Metode Pengiriman</span>
+                <span className="text-sm font-semibold">{t("logisticBook.step5.shippingMethod", "Metode Pengiriman")}</span>
                 <button
                   className="ml-auto text-xs text-accent font-medium hover:underline"
                   onClick={() => setConfirmEditShipping(p => !p)}
                 >
-                  {confirmEditShipping ? "Batal" : "Ubah"}
+                  {confirmEditShipping ? t("logisticBook.step5.cancel", "Batal") : t("logisticBook.step5.change", "Ubah")}
                 </button>
               </div>
               {confirmEditShipping ? (
@@ -2451,14 +2460,14 @@ export default function BookPage() {
                     <div className="flex-1">
                       <p className="text-sm font-semibold text-foreground">{SHIPPING_LABEL[productShipping.method]}</p>
                       {productShipping.estimate
-                        ? <p className="text-xs text-accent font-medium">Estimasi: {formatCurrency(productShipping.estimate)}</p>
-                        : <p className="text-xs text-muted-foreground italic">Harga sesuai rute</p>}
+                        ? <p className="text-xs text-accent font-medium">{t("logisticBook.estimate", "Estimasi")}: {formatCurrency(productShipping.estimate)}</p>
+                        : <p className="text-xs text-muted-foreground italic">{t("logisticBook.step5.pricePerRoute", "Harga sesuai rute")}</p>}
                     </div>
                   </div>
                   <div className="flex items-start gap-2 bg-orange-50 border border-orange-100 rounded-lg px-3 py-2">
                     <MapPin className="w-3.5 h-3.5 text-orange-500 shrink-0 mt-0.5" />
                     <div>
-                      <p className="text-[10px] font-bold text-orange-500 uppercase tracking-wide">Pengirim</p>
+                      <p className="text-[10px] font-bold text-orange-500 uppercase tracking-wide">{t("logisticBook.step5.sender", "Pengirim")}</p>
                       <p className="text-xs font-semibold text-slate-800">{productShipping.companyName}</p>
                       <p className="text-xs text-muted-foreground">{productShipping.companyAddress}</p>
                     </div>
@@ -2466,8 +2475,8 @@ export default function BookPage() {
                 </div>
               ) : (
                 <div className="p-4 text-center text-sm text-muted-foreground">
-                  Belum dipilih.{" "}
-                  <button className="text-accent underline" onClick={() => setConfirmEditShipping(true)}>Pilih sekarang</button>
+                  {t("logisticBook.step5.notYetChosen", "Belum dipilih.")}{" "}
+                  <button className="text-accent underline" onClick={() => setConfirmEditShipping(true)}>{t("logisticBook.step5.chooseNow", "Pilih sekarang")}</button>
                 </div>
               )}
             </div>
@@ -2477,26 +2486,26 @@ export default function BookPage() {
           <div className="rounded-xl border border-border overflow-hidden">
             <div className="px-4 py-2.5 bg-muted/50 border-b border-border flex items-center gap-2">
               <User className="w-4 h-4 text-muted-foreground" />
-              <span className="text-sm font-semibold">Data Pemesan</span>
+              <span className="text-sm font-semibold">{t("logisticBook.step5.ordererData", "Data Pemesan")}</span>
               <Button
                 variant="ghost" size="sm"
                 className="ml-auto h-7 text-xs gap-1 text-accent"
                 onClick={() => setStep(3)}
               >
-                <Edit2 className="w-3 h-3" /> Edit
+                <Edit2 className="w-3 h-3" /> {t("logisticBook.step5.edit", "Edit")}
               </Button>
             </div>
             <div className="p-4 grid grid-cols-2 gap-x-6 gap-y-3">
               {([
-                ["Nama PIC", customerForm.customerName],
-                ["Perusahaan", customerForm.companyName],
-                ["Nama Pengirim", customerForm.senderName],
-                ["Email", customerForm.email],
-                ["Telepon", customerForm.phone],
-                ...(customerForm.shippingAddress ? [["Alamat Tujuan", customerForm.shippingAddress]] : []),
-                ...(customerForm.notes ? [["Catatan", customerForm.notes]] : []),
+                [t("logisticBook.step5.picName", "Nama PIC"), customerForm.customerName],
+                [t("logisticBook.step5.company", "Perusahaan"), customerForm.companyName],
+                [t("logisticBook.step5.senderName", "Nama Pengirim"), customerForm.senderName],
+                [t("logisticBook.step5.email", "Email"), customerForm.email],
+                [t("logisticBook.step5.phone", "Telepon"), customerForm.phone],
+                ...(customerForm.shippingAddress ? [[t("logisticBook.step5.destAddress", "Alamat Tujuan"), customerForm.shippingAddress]] : []),
+                ...(customerForm.notes ? [[t("logisticBook.step5.notes", "Catatan"), customerForm.notes]] : []),
               ] as [string, string][]).filter(([, v]) => !!v).map(([label, value]) => (
-                <div key={label} className={label === "Alamat Tujuan" || label === "Catatan" ? "col-span-2" : ""}>
+                <div key={label} className={label === t("logisticBook.step5.destAddress", "Alamat Tujuan") || label === t("logisticBook.step5.notes", "Catatan") ? "col-span-2" : ""}>
                   <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wide mb-0.5">{label}</p>
                   <p className="text-sm font-medium text-foreground break-words">{value}</p>
                 </div>
@@ -2509,28 +2518,28 @@ export default function BookPage() {
             <div className="rounded-xl border border-border overflow-hidden">
               <div className="px-4 py-2.5 bg-muted/50 border-b border-border flex items-center gap-2">
                 <CreditCard className="w-4 h-4 text-muted-foreground" />
-                <span className="text-sm font-semibold">Metode Pembayaran</span>
+                <span className="text-sm font-semibold">{t("logisticBook.step5.paymentMethod", "Metode Pembayaran")}</span>
                 <Button variant="ghost" size="sm" className="ml-auto h-7 text-xs gap-1 text-accent" onClick={() => setStep(4)}>
-                  <Edit2 className="w-3 h-3" /> Ubah
+                  <Edit2 className="w-3 h-3" /> {t("logisticBook.step5.changePayment", "Ubah")}
                 </Button>
               </div>
               <div className="p-4 space-y-1">
                 <p className="text-sm font-semibold text-foreground">
-                  {paymentType === "gateway" ? "💳 Payment Gateway"
-                    : paymentType === "transfer" ? "🏦 Transfer Bank"
-                    : paymentType === "cod" ? "💵 COD / Tunai"
-                    : paymentType === "invoice" ? "📄 Invoice / Net Terms"
+                  {paymentType === "gateway" ? `💳 ${t("logisticBook.payment.gateway.label", "Payment Gateway")}`
+                    : paymentType === "transfer" ? `🏦 ${t("logisticBook.payment.transfer.label", "Transfer Bank")}`
+                    : paymentType === "cod" ? `💵 ${t("logisticBook.payment.cod.label", "COD / Tunai")}`
+                    : paymentType === "invoice" ? `📄 ${t("logisticBook.payment.invoice.label", "Invoice / Net Terms")}`
                     : paymentType}
                 </p>
                 {paymentType === "transfer" && transferTerm && (
                   <p className="text-xs text-muted-foreground">
-                    {transferTerm === "full" ? "Pembayaran Penuh"
-                      : transferTerm === "dp" ? `DP + Pelunasan${dpNext ? ` (${dpNext.replace(/-/g," ")})` : ""}`
-                      : transferTerm === "termin" ? `Termin${paymentTerm ? ` ${paymentTerm}` : ""}` : ""}
+                    {transferTerm === "full" ? t("logisticBook.payment.transferTerms.full.label", "Pembayaran Penuh")
+                      : transferTerm === "dp" ? `${t("logisticBook.payment.transferTerms.dp.label", "DP + Pelunasan")}${dpNext ? ` (${dpNext.replace(/-/g," ")})` : ""}`
+                      : transferTerm === "termin" ? `${t("logisticBook.payment.transferTerms.termin.label", "Termin / Cicilan")}${paymentTerm ? ` ${paymentTerm}` : ""}` : ""}
                   </p>
                 )}
                 {paymentType === "invoice" && paymentTerm && (
-                  <p className="text-xs text-muted-foreground">Jatuh tempo: {paymentTerm.replace("net","Net ").replace("7","7 hari").replace("14","14 hari").replace("30","30 hari").replace("60","60 hari")}</p>
+                  <p className="text-xs text-muted-foreground">{t("logisticBook.step5.dueDate", "Jatuh tempo")}: {paymentTerm.replace("net","Net ").replace("7","7 hari").replace("14","14 hari").replace("30","30 hari").replace("60","60 hari")}</p>
                 )}
               </div>
             </div>
@@ -2540,24 +2549,24 @@ export default function BookPage() {
           <div className="rounded-xl border border-accent/30 bg-accent/5 px-4 py-4 space-y-2">
             {grandTotal > 0 && (
               <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Subtotal Produk &amp; Layanan</span>
+                <span className="text-muted-foreground">{t("logisticBook.step5.subtotalProductsServices", "Subtotal Produk & Layanan")}</span>
                 <span className="font-medium">{formatCurrency(grandTotal)}</span>
               </div>
             )}
             {hasProductOnly && (
               <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Estimasi Ongkos Kirim</span>
+                <span className="text-muted-foreground">{t("logisticBook.step5.shippingEstimate", "Estimasi Ongkos Kirim")}</span>
                 {shippingEstimate > 0
                   ? <span className="font-medium">{formatCurrency(shippingEstimate)}</span>
-                  : <span className="text-muted-foreground italic text-xs">Dikonfirmasi setelah order</span>}
+                  : <span className="text-muted-foreground italic text-xs">{t("logisticBook.step5.confirmedAfterOrder", "Dikonfirmasi setelah order")}</span>}
               </div>
             )}
             <Separator />
             <div className="flex justify-between items-baseline">
-              <span className="font-bold text-base">Total Estimasi</span>
+              <span className="font-bold text-base">{t("logisticBook.totalEstimate", "Total Estimasi")}</span>
               <span className="font-bold text-lg text-accent">{formatCurrency(totalWithShipping)}</span>
             </div>
-            <p className="text-[11px] text-muted-foreground">Harga final dikonfirmasi oleh tim kami setelah pesanan diterima.</p>
+            <p className="text-[11px] text-muted-foreground">{t("logisticBook.step5.finalPriceNote", "Harga final dikonfirmasi oleh tim kami setelah pesanan diterima.")}</p>
           </div>
         </div>
       );
@@ -2596,7 +2605,7 @@ export default function BookPage() {
         <div className="max-w-3xl mx-auto px-4 h-14 flex items-center justify-between">
           <button onClick={() => setLocation("/")} className="flex items-center gap-2 text-sm font-semibold text-foreground">
             <ArrowLeft className="w-4 h-4" />
-            Booking
+            {t("logisticBook.nav.booking", "Booking")}
           </button>
           <div className="flex items-center gap-2">
             <ShoppingCart className="w-4 h-4 text-muted-foreground" />
@@ -2636,7 +2645,7 @@ export default function BookPage() {
           <div className="max-w-3xl mx-auto px-4 py-3 flex items-center gap-3">
             <Package className="w-5 h-5 text-amber-600 shrink-0" />
             <div className="flex-1 min-w-0">
-              <p className="text-xs text-amber-700 font-semibold uppercase tracking-wide">Produk yang dipesan</p>
+              <p className="text-xs text-amber-700 font-semibold uppercase tracking-wide">{t("logisticBook.banner.orderedProduct", "Produk yang dipesan")}</p>
               <p className="font-semibold text-amber-900 truncate">{fromProduct.name}</p>
               {fromProduct.unit && (
                 <span className="inline-block text-xs bg-amber-200 text-amber-800 px-2 py-0.5 rounded-full font-medium mt-0.5">{fromProduct.unit}</span>
@@ -2658,22 +2667,22 @@ export default function BookPage() {
               onClick={() => setStep((s) => Math.max(0, s - 1) as Step)}
               disabled={(step as number) === 0}
             >
-              <ChevronLeft className="w-4 h-4 mr-1" /> Kembali
+              <ChevronLeft className="w-4 h-4 mr-1" /> {t("logisticBook.btn.back", "Kembali")}
             </Button>
             {step < 3 ? (
               <Button
                 onClick={() => setStep((s) => (s + 1) as Step)}
                 disabled={!canProceed()}
               >
-                Lanjutkan <ChevronRight className="w-4 h-4 ml-1" />
+                {t("logisticBook.btn.continue", "Lanjutkan")} <ChevronRight className="w-4 h-4 ml-1" />
               </Button>
             ) : step === 3 ? (
               <Button onClick={() => setStep(4)} disabled={!canProceed()}>
-                Pilih Pembayaran <ChevronRight className="w-4 h-4 ml-1" />
+                {t("logisticBook.btn.selectPayment", "Pilih Pembayaran")} <ChevronRight className="w-4 h-4 ml-1" />
               </Button>
             ) : step === 4 ? (
               <Button onClick={() => setStep(5)} disabled={!canProceed()}>
-                Review Pesanan <ChevronRight className="w-4 h-4 ml-1" />
+                {t("logisticBook.btn.reviewOrder", "Review Pesanan")} <ChevronRight className="w-4 h-4 ml-1" />
               </Button>
             ) : (
               <Button
@@ -2681,7 +2690,7 @@ export default function BookPage() {
                 disabled={createOrder.isPending || !canProceed()}
                 className="bg-accent hover:bg-accent/90 text-accent-foreground font-semibold gap-2"
               >
-                {createOrder.isPending ? "Menyimpan..." : <><CheckCircle2 className="w-4 h-4" /> Konfirmasi &amp; Submit</>}
+                {createOrder.isPending ? t("logisticBook.btn.saving", "Menyimpan...") : <><CheckCircle2 className="w-4 h-4" /> {t("logisticBook.btn.confirmSubmit", "Konfirmasi & Submit")}</>}
               </Button>
             )}
           </div>

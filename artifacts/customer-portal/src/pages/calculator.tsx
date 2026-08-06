@@ -326,14 +326,14 @@ export default function CalculatorPage() {
       const securityFee = Math.ceil(cw) * r.securityFeePerKg;
 
       calc.items = [
-        { label: "Air Freight Charge", value: freightCost, note: `${Math.ceil(cw)} kg × ${formatIDR(r.ratePerKg)}/kg` },
-        { label: "Fuel Surcharge", value: fuelSurcharge, note: `${r.fuelSurchargePct}% dari freight charge` },
-        { label: "Security Surcharge", value: securityFee, note: `${Math.ceil(cw)} kg × ${formatIDR(r.securityFeePerKg)}/kg` },
-        { label: "Handling Fee", value: r.handlingFee * pieces },
-        { label: "AWB Fee", value: r.awbFee },
-        { label: "Documentation", value: r.documentationFee },
-        ...(airTempControlled ? [{ label: "Cold Chain Handling", value: 1500000 }] : []),
-        ...(airDg ? [{ label: "DG Surcharge", value: 2000000 }] : []),
+        { label: t("calculator.itemAirFreightCharge", "Air Freight Charge"), value: freightCost, note: `${Math.ceil(cw)} kg × ${formatIDR(r.ratePerKg)}/kg` },
+        { label: t("calculator.itemFuelSurcharge", "Fuel Surcharge"), value: fuelSurcharge, note: `${r.fuelSurchargePct}% dari freight charge` },
+        { label: t("calculator.itemSecuritySurcharge", "Security Surcharge"), value: securityFee, note: `${Math.ceil(cw)} kg × ${formatIDR(r.securityFeePerKg)}/kg` },
+        { label: t("calculator.itemHandlingFee", "Handling Fee"), value: r.handlingFee * pieces },
+        { label: t("calculator.itemAwbFee", "AWB Fee"), value: r.awbFee },
+        { label: t("calculator.itemDocumentation", "Documentation"), value: r.documentationFee },
+        ...(airTempControlled ? [{ label: t("calculator.itemColdChain", "Cold Chain Handling"), value: 1500000 }] : []),
+        ...(airDg ? [{ label: t("calculator.itemDgSurcharge", "DG Surcharge"), value: 2000000 }] : []),
       ];
       calc.surcharges = fuelSurcharge + securityFee;
       calc.extraData = { grossWeight: gw, volumetricWeight: vol, chargeableWeight: cw, pieces, commodity: airCommodity, airline: airAirline, dg: airDg, tempControlled: airTempControlled };
@@ -347,22 +347,22 @@ export default function CalculatorPage() {
         const freightCost = Math.ceil(effectiveCbm * 10) / 10 * r.ratePerCbmLcl;
         calc.cbm = Math.round(cbm * 1000) / 1000;
         calc.items = [
-          { label: "Ocean Freight (LCL)", value: freightCost, note: `${effectiveCbm.toFixed(2)} CBM × ${formatIDR(r.ratePerCbmLcl)}/CBM` },
-          { label: "THC (Terminal Handling)", value: r.thc },
-          { label: "Documentation", value: r.documentationFee },
-          ...(seaCustoms ? [{ label: "Customs Clearance", value: r.customsClearance }] : []),
-          ...(seaTrucking ? [{ label: "Inland Trucking", value: r.truckingFee }] : []),
-          ...(seaDg ? [{ label: "DG Surcharge", value: 3500000 }] : []),
+          { label: t("calculator.itemOceanFreightLcl", "Ocean Freight (LCL)"), value: freightCost, note: `${effectiveCbm.toFixed(2)} CBM × ${formatIDR(r.ratePerCbmLcl)}/CBM` },
+          { label: t("calculator.itemThc", "THC (Terminal Handling)"), value: r.thc },
+          { label: t("calculator.itemDocumentation", "Documentation"), value: r.documentationFee },
+          ...(seaCustoms ? [{ label: t("calculator.itemCustomsClearance", "Customs Clearance"), value: r.customsClearance }] : []),
+          ...(seaTrucking ? [{ label: t("calculator.itemInlandTrucking", "Inland Trucking"), value: r.truckingFee }] : []),
+          ...(seaDg ? [{ label: t("calculator.itemDgSurcharge", "DG Surcharge"), value: 3500000 }] : []),
         ];
       } else {
         const containerRate = r.ratePerContainer[seaContainerType] ?? r.ratePerContainer["20GP"];
         calc.items = [
-          { label: `Ocean Freight (FCL - ${seaContainerType})`, value: containerRate },
-          { label: "THC (Terminal Handling)", value: r.thc },
-          { label: "Documentation", value: r.documentationFee },
-          ...(seaCustoms ? [{ label: "Customs Clearance", value: r.customsClearance }] : []),
-          ...(seaTrucking ? [{ label: "Inland Trucking", value: r.truckingFee }] : []),
-          ...(seaDg ? [{ label: "DG Surcharge", value: 5000000 }] : []),
+          { label: `${t("calculator.itemOceanFreightFcl", "Ocean Freight (FCL)")} - ${seaContainerType}`, value: containerRate },
+          { label: t("calculator.itemThc", "THC (Terminal Handling)"), value: r.thc },
+          { label: t("calculator.itemDocumentation", "Documentation"), value: r.documentationFee },
+          ...(seaCustoms ? [{ label: t("calculator.itemCustomsClearance", "Customs Clearance"), value: r.customsClearance }] : []),
+          ...(seaTrucking ? [{ label: t("calculator.itemInlandTrucking", "Inland Trucking"), value: r.truckingFee }] : []),
+          ...(seaDg ? [{ label: t("calculator.itemDgSurcharge", "DG Surcharge"), value: 5000000 }] : []),
         ];
       }
       calc.extraData = { shipmentType: seaShipmentType, pol: seaPol, pod: seaPod, containerType: seaContainerType, cbm: seaCbm, grossWeight: seaGrossWeight, commodity: seaCommodity, dg: seaDg, trucking: seaTrucking, customs: seaCustoms };
@@ -371,12 +371,12 @@ export default function CalculatorPage() {
       const r = rates.customs;
       const nilaiPabean = parseFloat(customsNilaiPabean.replace(/[^0-9.]/g, "")) || 0;
       calc.items = [
-        { label: "Jasa PPJK", value: r.jasaPpjk },
-        { label: "Customs Handling", value: r.customsHandling },
-        { label: "Document Processing", value: r.documentProcessing },
+        { label: t("calculator.itemJasaPpjk", "Jasa PPJK"), value: r.jasaPpjk },
+        { label: t("calculator.itemCustomsHandling", "Customs Handling"), value: r.customsHandling },
+        { label: t("calculator.itemDocumentProcessing", "Document Processing"), value: r.documentProcessing },
         { label: `${customsDocType} Submission`, value: r.pibSubmission },
-        { label: "Courier", value: r.courierFee },
-        ...(customsAddlService ? [{ label: "Additional Services", value: r.additionalServiceFee }] : []),
+        { label: t("calculator.itemCourier", "Courier"), value: r.courierFee },
+        ...(customsAddlService ? [{ label: t("calculator.itemAdditionalServices", "Additional Services"), value: r.additionalServiceFee }] : []),
         ...(nilaiPabean > 0 ? [{ label: "Est. Bea Masuk (3%)", value: Math.round(nilaiPabean * 0.03), note: "Estimasi — tergantung HS Code & kebijakan" }] : []),
         ...(nilaiPabean > 0 ? [{ label: "Est. PPN Impor (11%)", value: Math.round((nilaiPabean + Math.round(nilaiPabean * 0.03)) * 0.11), note: "11% × (Nilai Pabean + Bea Masuk)" }] : []),
         ...(nilaiPabean > 0 && customsTradeType === "import" ? [{ label: "Est. PPh Pasal 22 (2.5%)", value: Math.round(nilaiPabean * 0.025), note: "Estimasi dengan API — 7.5% tanpa API" }] : []),
@@ -392,12 +392,12 @@ export default function CalculatorPage() {
       const helperDays = parseInt(truckHelperDays) || 0;
 
       calc.items = [
-        { label: `Base Rate (${truckVehicle})`, value: baseRate },
-        { label: "Biaya Jarak", value: distCost, note: `${distKm} km × ${formatIDR(r.distanceRatePerKm)}/km` },
-        ...(truckLoading ? [{ label: "Loading Service", value: r.loadingFee }] : []),
-        ...(truckUnloading ? [{ label: "Unloading Service", value: r.unloadingFee }] : []),
-        ...(truckOvernight ? [{ label: "Overnight Stay", value: r.overnightFee }] : []),
-        ...(helperDays > 0 ? [{ label: `Helper (${helperDays} hari)`, value: helperDays * r.helperFeePerDay }] : []),
+        { label: `${t("calculator.itemBaseRate", "Base Rate")} (${truckVehicle})`, value: baseRate },
+        { label: t("calculator.itemDistanceFee", "Biaya Jarak"), value: distCost, note: `${distKm} km × ${formatIDR(r.distanceRatePerKm)}/km` },
+        ...(truckLoading ? [{ label: t("calculator.itemLoadingService", "Loading Service"), value: r.loadingFee }] : []),
+        ...(truckUnloading ? [{ label: t("calculator.itemUnloadingService", "Unloading Service"), value: r.unloadingFee }] : []),
+        ...(truckOvernight ? [{ label: t("calculator.itemOvernight", "Overnight Stay"), value: r.overnightFee }] : []),
+        ...(helperDays > 0 ? [{ label: `${t("calculator.itemHelper", "Helper")} (${helperDays} hari)`, value: helperDays * r.helperFeePerDay }] : []),
       ];
       calc.extraData = { pickupAddress: truckPickup, deliveryAddress: truckDelivery, vehicle: truckVehicle, distanceKm: distKm, tonase: truckTonase, koli: truckKoli, loading: truckLoading, unloading: truckUnloading, overnight: truckOvernight, helperDays };
 
@@ -412,10 +412,10 @@ export default function CalculatorPage() {
       const unitLabel = whStorageType === "Pallet" ? "pallet" : whStorageType === "CBM" ? "CBM" : "m²";
 
       calc.items = [
-        { label: `Storage (${whStorageType})`, value: storageCost, note: `${qty} ${unitLabel} × ${days} hari × ${formatIDR(storageRate)}/hari` },
-        ...(whInbound ? [{ label: "Inbound Handling", value: Math.round(qty * r.inboundFee) }] : []),
-        ...(whOutbound ? [{ label: "Outbound Handling", value: Math.round(qty * r.outboundFeePerPallet) }] : []),
-        ...(whInventory ? [{ label: "Inventory Management", value: r.inventoryFeePerMonth, note: "per bulan" }] : []),
+        { label: `${t("calculator.itemStorage", "Storage")} (${whStorageType})`, value: storageCost, note: `${qty} ${unitLabel} × ${days} hari × ${formatIDR(storageRate)}/hari` },
+        ...(whInbound ? [{ label: t("calculator.itemInboundHandling", "Inbound Handling"), value: Math.round(qty * r.inboundFee) }] : []),
+        ...(whOutbound ? [{ label: t("calculator.itemOutboundHandling", "Outbound Handling"), value: Math.round(qty * r.outboundFeePerPallet) }] : []),
+        ...(whInventory ? [{ label: t("calculator.itemInventoryMgmt", "Inventory Management"), value: r.inventoryFeePerMonth, note: t("calculator.perMonth", "per bulan") }] : []),
       ];
       calc.extraData = { location: whLocation, storageType: whStorageType, qty, durationDays: days, inbound: whInbound, outbound: whOutbound, inventory: whInventory };
 
@@ -863,8 +863,8 @@ export default function CalculatorPage() {
                         <div>
                           <Label>{t("calculator.document")}</Label>
                           <Select value={customsDocType} onChange={e => setCustomsDocType(e.target.value as "PIB"|"PEB")}>
-                            <option value="PIB">PIB — Pemberitahuan Impor Barang</option>
-                            <option value="PEB">PEB — Pemberitahuan Ekspor Barang</option>
+                            <option value="PIB">{t("calculator.pibOption", "PIB — Pemberitahuan Impor Barang")}</option>
+                            <option value="PEB">{t("calculator.pebOption", "PEB — Pemberitahuan Ekspor Barang")}</option>
                           </Select>
                         </div>
                       </div>
@@ -1125,19 +1125,19 @@ export default function CalculatorPage() {
                   ))}
                 </div>
                 <div className="rounded-xl p-4 text-center mb-4" style={{ background:"linear-gradient(135deg,#F5F3FF,#EDE9FE)" }}>
-                  <p className="text-[11px] font-bold text-violet-600 uppercase mb-1">Estimated Budget Range</p>
+                  <p className="text-[11px] font-bold text-violet-600 uppercase mb-1">{t("calculator.estimatedBudgetRange", "Estimated Budget Range")}</p>
                   <p className="text-[13px] text-violet-700 font-semibold">{formatIDR(result.budgetMin ?? 0)}</p>
-                  <p className="text-[11px] text-violet-400 font-medium">s/d</p>
+                  <p className="text-[11px] text-violet-400 font-medium">{t("calculator.to", "s/d")}</p>
                   <p className="text-[22px] font-bold text-violet-800">{formatIDR(result.budgetMax ?? 0)}</p>
                 </div>
-                <p className="text-[11px] text-slate-500 mb-4 leading-relaxed">Estimasi ini bersifat indikatif. Penawaran resmi memerlukan survei & kalkulasi khusus.</p>
+                <p className="text-[11px] text-slate-500 mb-4 leading-relaxed">{t("calculator.projectCargoNote", "Estimasi ini bersifat indikatif. Penawaran resmi memerlukan survei & kalkulasi khusus.")}</p>
                 <div className="space-y-2">
                   <button onClick={() => setShowQuoteForm(true)} className="w-full h-10 flex items-center justify-center gap-2 rounded-xl font-bold text-[13px] text-white transition-all"
                     style={{ background:"linear-gradient(135deg,#7C3AED,#A78BFA)", boxShadow:"0 4px 14px rgba(124,58,237,0.35)" }}>
-                    <FileText className="h-4 w-4" /> Request Official Quotation
+                    <FileText className="h-4 w-4" /> {t("calculator.requestOfficialQuotation", "Request Official Quotation")}
                   </button>
                   <a href={buildWaHref(`Halo, saya ingin berdiskusi mengenai estimasi biaya logistik yang saya hitung.`)} target="_blank" rel="noreferrer" className="w-full h-10 flex items-center justify-center gap-2 rounded-xl font-bold text-[13px] border border-green-300 text-green-700 hover:bg-green-50 transition-colors">
-                    <MessageCircle className="h-4 w-4" /> Diskusi via WhatsApp
+                    <MessageCircle className="h-4 w-4" /> {t("calculator.discussWhatsApp", "Diskusi via WhatsApp")}
                   </a>
                 </div>
               </div>

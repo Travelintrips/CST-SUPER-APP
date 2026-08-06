@@ -972,7 +972,7 @@ export function Navbar() {
                 </Link>
                 <Link href="/register">
                   <button className="px-4 py-2 text-[13.5px] font-semibold rounded-xl text-white transition-all duration-200 whitespace-nowrap"
-                    style={{ background: "linear-gradient(135deg,#0ea5e9,#0284c7)", boxShadow: "0 2px 12px rgba(14,165,233,0.35)" }}
+                    style={{ background: "linear-gradient(135deg,var(--brand-primary),var(--brand-primary-600))", boxShadow: "0 2px 12px rgba(14,165,233,0.35)" }}
                     onMouseEnter={e => (e.currentTarget as HTMLElement).style.boxShadow = "0 4px 16px rgba(14,165,233,0.45)"}
                     onMouseLeave={e => (e.currentTarget as HTMLElement).style.boxShadow = "0 2px 12px rgba(14,165,233,0.35)"}
                   >

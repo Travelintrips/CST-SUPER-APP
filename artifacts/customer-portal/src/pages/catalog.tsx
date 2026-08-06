@@ -5,6 +5,7 @@ import {
   Building2, AlertCircle, BarChart2, LayoutGrid, TrendingDown, Crown, ArrowUpDown,
 } from "lucide-react";
 import PageSeo from "@/components/PageSeo";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 const idr = (n: number) =>
   n > 0
@@ -86,6 +87,7 @@ function InquiryModal({
   item: { name: string; vendorName?: string; kategori?: string | null; type?: string; templateType?: "product" | "service" };
   onClose: () => void;
 }) {
+  const { t } = useLanguage();
   const [form, setForm] = useState({ name: "", email: "", whatsapp: "", quantity: "", notes: "" });
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
@@ -96,7 +98,7 @@ function InquiryModal({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.name.trim() || !form.whatsapp.trim()) { setError("Nama dan WhatsApp wajib diisi"); return; }
+    if (!form.name.trim() || !form.whatsapp.trim()) { setError(t("catalog.inquiry.nameWhatsappRequired", "Nama dan WhatsApp wajib diisi")); return; }
     setLoading(true); setError("");
     try {
       const res = await fetch("/api/portal/catalog-inquiry", {
@@ -110,10 +112,10 @@ function InquiryModal({
         }),
       });
       const d = await res.json();
-      if (!res.ok) throw new Error(d.message ?? "Gagal");
+      if (!res.ok) throw new Error(d.message ?? t("catalog.inquiry.sendFailed", "Gagal"));
       setDone(true);
     } catch (err: any) {
-      setError(err.message ?? "Gagal mengirim");
+      setError(err.message ?? t("catalog.inquiry.sendError", "Gagal mengirim"));
     } finally {
       setLoading(false);
     }
@@ -124,7 +126,7 @@ function InquiryModal({
       <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
         <div className="bg-gradient-to-r from-sky-500 to-blue-600 px-5 py-4 flex items-start justify-between">
           <div>
-            <p className="text-white font-bold text-[15px]">Minta Penawaran</p>
+            <p className="text-white font-bold text-[15px]">{t("catalog.inquiry.title", "Minta Penawaran")}</p>
             <p className="text-sky-100 text-sm mt-0.5 line-clamp-1">{item.name}{item.vendorName ? ` — ${item.vendorName}` : ""}</p>
           </div>
           <button onClick={onClose} className="text-white/70 hover:text-white mt-0.5"><X className="h-5 w-5" /></button>
@@ -135,9 +137,9 @@ function InquiryModal({
             <div className="w-14 h-14 rounded-full bg-emerald-100 flex items-center justify-center mx-auto">
               <Send className="h-6 w-6 text-emerald-600" />
             </div>
-            <p className="font-bold text-slate-800">Permintaan Terkirim!</p>
-            <p className="text-sm text-slate-500">Tim kami akan menghubungi Anda via WhatsApp segera.</p>
-            <button onClick={onClose} className="mt-2 px-5 py-2 rounded-lg bg-sky-500 text-white text-sm font-medium hover:bg-sky-600 transition-colors">Tutup</button>
+            <p className="font-bold text-slate-800">{t("catalog.inquiry.sentTitle", "Permintaan Terkirim!")}</p>
+            <p className="text-sm text-slate-500">{t("catalog.inquiry.sentDesc", "Tim kami akan menghubungi Anda via WhatsApp segera.")}</p>
+            <button onClick={onClose} className="mt-2 px-5 py-2 rounded-lg bg-sky-500 text-white text-sm font-medium hover:bg-sky-600 transition-colors">{t("catalog.inquiry.closeBtn", "Tutup")}</button>
           </div>
         ) : (
           <form onSubmit={submit} className="p-5 space-y-3">
@@ -147,28 +149,28 @@ function InquiryModal({
               </div>
             )}
             <div>
-              <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Nama Lengkap *</label>
-              <input className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-400" placeholder="Nama Anda" value={form.name} onChange={set("name")} required />
+              <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{t("catalog.inquiry.fullName", "Nama Lengkap *")}</label>
+              <input className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-400" placeholder={t("catalog.inquiry.namePlaceholder", "Nama Anda")} value={form.name} onChange={set("name")} required />
             </div>
             <div>
-              <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">WhatsApp *</label>
+              <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{t("catalog.inquiry.whatsapp", "WhatsApp *")}</label>
               <input className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-400" placeholder="08xx-xxxx-xxxx" value={form.whatsapp} onChange={set("whatsapp")} type="tel" required />
             </div>
             <div>
-              <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Email (opsional)</label>
+              <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{t("catalog.inquiry.email", "Email (opsional)")}</label>
               <input className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-400" placeholder="email@domain.com" value={form.email} onChange={set("email")} type="email" />
             </div>
             <div>
-              <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Jumlah / Qty</label>
-              <input className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-400" placeholder="cth: 100 pcs" value={form.quantity} onChange={set("quantity")} />
+              <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{t("catalog.inquiry.quantity", "Jumlah / Qty")}</label>
+              <input className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-400" placeholder={t("catalog.inquiry.quantityPlaceholder", "cth: 100 pcs")} value={form.quantity} onChange={set("quantity")} />
             </div>
             <div>
-              <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Catatan</label>
-              <textarea className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-400 resize-none" rows={2} placeholder="Kebutuhan spesifik, spesifikasi, dll." value={form.notes} onChange={set("notes")} />
+              <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{t("catalog.inquiry.notes", "Catatan")}</label>
+              <textarea className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-400 resize-none" rows={2} placeholder={t("catalog.inquiry.notesPlaceholder", "Kebutuhan spesifik, spesifikasi, dll.")} value={form.notes} onChange={set("notes")} />
             </div>
             <button type="submit" disabled={loading} className="w-full py-2.5 rounded-xl bg-sky-500 hover:bg-sky-600 text-white font-semibold text-sm transition-colors disabled:opacity-60 flex items-center justify-center gap-2">
               {loading ? <span className="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Send className="h-4 w-4" />}
-              {loading ? "Mengirim..." : "Kirim Permintaan"}
+              {loading ? t("catalog.inquiry.sending", "Mengirim...") : t("catalog.inquiry.submitBtn", "Kirim Permintaan")}
             </button>
           </form>
         )}
@@ -199,6 +201,7 @@ function CompareGroupCard({
   group: CompareGroup;
   onInquiry: (item: { name: string; vendorName?: string; kategori?: string | null; type?: string }) => void;
 }) {
+  const { t } = useLanguage();
   const [expanded, setExpanded] = useState(true);
 
   const cheapest = group.vendors.find((v) => v.sellPrice > 0 && v.sellPrice === group.minPrice);
@@ -226,11 +229,11 @@ function CompareGroupCard({
                 </span>
               )}
               <span className="text-[11px] text-slate-400">
-                {group.vendorCount} vendor
+                {group.vendorCount} {t("catalog.compare.vendorCount", "vendor")}
               </span>
               {savings > 0 && (
                 <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-full">
-                  <TrendingDown className="h-3 w-3" />Hemat s.d. {idrShort(savings)}
+                  <TrendingDown className="h-3 w-3" />{t("catalog.compare.savingsPrefix", "Hemat s.d.")} {idrShort(savings)}
                 </span>
               )}
             </div>
@@ -239,7 +242,7 @@ function CompareGroupCard({
         <div className="flex items-center gap-3 shrink-0">
           {group.minPrice > 0 && (
             <div className="text-right hidden sm:block">
-              <p className="text-[10px] text-slate-400 uppercase tracking-wide">Mulai dari</p>
+              <p className="text-[10px] text-slate-400 uppercase tracking-wide">{t("catalog.compare.startingFrom", "Mulai dari")}</p>
               <p className="text-emerald-700 font-bold text-sm">{idrShort(group.minPrice)}</p>
             </div>
           )}
@@ -255,10 +258,10 @@ function CompareGroupCard({
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-slate-50/80 text-[11px] uppercase tracking-wide text-slate-500">
-                  <th className="text-left px-4 py-2.5 font-semibold">Vendor</th>
-                  <th className="text-right px-4 py-2.5 font-semibold">Harga</th>
-                  <th className="text-left px-4 py-2.5 font-semibold hidden md:table-cell">Satuan</th>
-                  <th className="px-4 py-2.5 font-semibold hidden lg:table-cell w-28">Perbandingan</th>
+                  <th className="text-left px-4 py-2.5 font-semibold">{t("catalog.compare.col.vendor", "Vendor")}</th>
+                  <th className="text-right px-4 py-2.5 font-semibold">{t("catalog.compare.col.price", "Harga")}</th>
+                  <th className="text-left px-4 py-2.5 font-semibold hidden md:table-cell">{t("catalog.compare.col.unit", "Satuan")}</th>
+                  <th className="px-4 py-2.5 font-semibold hidden lg:table-cell w-28">{t("catalog.compare.col.comparison", "Perbandingan")}</th>
                   <th className="px-4 py-2.5 font-semibold w-36"></th>
                 </tr>
               </thead>
@@ -275,7 +278,7 @@ function CompareGroupCard({
                           )}
                           <span className="font-medium text-slate-800">{v.vendorName}</span>
                           {isCheapest && (
-                            <span className="text-[10px] font-bold bg-emerald-500 text-white px-1.5 py-0.5 rounded-full leading-none">TERMURAH</span>
+                            <span className="text-[10px] font-bold bg-emerald-500 text-white px-1.5 py-0.5 rounded-full leading-none">{t("catalog.compare.cheapestBadge", "TERMURAH")}</span>
                           )}
                         </div>
                         {v.description && (
@@ -298,7 +301,7 @@ function CompareGroupCard({
                           onClick={() => onInquiry({ name: group.itemName, vendorName: v.vendorName, kategori: group.kategori, type: group.type })}
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-500 hover:bg-sky-600 text-white text-[12px] font-semibold transition-colors whitespace-nowrap"
                         >
-                          <Send className="h-3 w-3" />Minta Penawaran
+                          <Send className="h-3 w-3" />{t("catalog.requestQuote", "Minta Penawaran")}
                         </button>
                       </td>
                     </tr>
@@ -318,7 +321,7 @@ function CompareGroupCard({
                     <div className="flex items-center gap-1.5">
                       {idx === 0 && v.sellPrice > 0 && <Crown className="h-3.5 w-3.5 text-amber-500" />}
                       <span className="font-semibold text-slate-800 text-sm">{v.vendorName}</span>
-                      {isCheapest && <span className="text-[10px] font-bold bg-emerald-500 text-white px-1.5 py-0.5 rounded-full">TERMURAH</span>}
+                      {isCheapest && <span className="text-[10px] font-bold bg-emerald-500 text-white px-1.5 py-0.5 rounded-full">{t("catalog.compare.cheapestBadge", "TERMURAH")}</span>}
                     </div>
                     <span className={`font-bold text-sm ${isCheapest ? "text-emerald-700" : "text-slate-700"}`}>{idr(v.sellPrice)}{v.unit && v.sellPrice > 0 ? ` / ${v.unit}` : ""}</span>
                   </div>
@@ -327,7 +330,7 @@ function CompareGroupCard({
                     onClick={() => onInquiry({ name: group.itemName, vendorName: v.vendorName, kategori: group.kategori, type: group.type })}
                     className="w-full py-1.5 rounded-lg bg-sky-500 hover:bg-sky-600 text-white text-[12px] font-semibold transition-colors flex items-center justify-center gap-1.5"
                   >
-                    <Send className="h-3 w-3" />Minta Penawaran
+                    <Send className="h-3 w-3" />{t("catalog.requestQuote", "Minta Penawaran")}
                   </button>
                 </div>
               );
@@ -341,6 +344,7 @@ function CompareGroupCard({
 
 // ── Etalase Tab ───────────────────────────────────────────────────────────────
 function EtalaseTab({ onInquiry }: { onInquiry: (item: { name: string; vendorName?: string; kategori?: string | null; type?: string }) => void }) {
+  const { t } = useLanguage();
   const [search, setSearch] = useState("");
   const [filterType, setFilterType] = useState<"" | "product" | "service">("");
   const [mode, setMode] = useState<"browse" | "compare">("browse");
@@ -399,13 +403,13 @@ function EtalaseTab({ onInquiry }: { onInquiry: (item: { name: string; vendorNam
             onClick={() => setMode("browse")}
             className={`flex items-center gap-1.5 px-3.5 py-2 text-sm font-semibold transition-colors ${mode === "browse" ? "bg-sky-500 text-white" : "text-slate-600 hover:bg-slate-50"}`}
           >
-            <LayoutGrid className="h-3.5 w-3.5" />Semua Item
+            <LayoutGrid className="h-3.5 w-3.5" />{t("catalog.etalase.allItems", "Semua Item")}
           </button>
           <button
             onClick={() => setMode("compare")}
             className={`flex items-center gap-1.5 px-3.5 py-2 text-sm font-semibold transition-colors border-l border-slate-200 ${mode === "compare" ? "bg-sky-500 text-white" : "text-slate-600 hover:bg-slate-50"}`}
           >
-            <BarChart2 className="h-3.5 w-3.5" />Bandingkan Harga
+            <BarChart2 className="h-3.5 w-3.5" />{t("catalog.etalase.comparePrice", "Bandingkan Harga")}
             {compareData && compareData.totalGroups > 0 && (
               <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none ${mode === "compare" ? "bg-white/25 text-white" : "bg-sky-100 text-sky-700"}`}>
                 {compareData.totalGroups}
@@ -419,7 +423,7 @@ function EtalaseTab({ onInquiry }: { onInquiry: (item: { name: string; vendorNam
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
           <input
             className="w-full pl-9 pr-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-sky-400 bg-white"
-            placeholder={mode === "compare" ? "Cari nama item, vendor..." : "Cari nama, vendor, kategori..."}
+            placeholder={mode === "compare" ? t("catalog.etalase.searchCompare", "Cari nama item, vendor...") : t("catalog.etalase.searchBrowse", "Cari nama, vendor, kategori...")}
             value={mode === "compare" ? compareSearch : search}
             onChange={(e) => mode === "compare" ? setCompareSearch(e.target.value) : setSearch(e.target.value)}
           />
@@ -427,13 +431,13 @@ function EtalaseTab({ onInquiry }: { onInquiry: (item: { name: string; vendorNam
 
         {/* Type filter */}
         <div className="flex gap-1.5 shrink-0">
-          {(["", "product", "service"] as const).map((t) => (
+          {(["", "product", "service"] as const).map((tp) => (
             <button
-              key={t}
-              onClick={() => setFilterType(t)}
-              className={`px-3.5 py-2 rounded-xl text-sm font-medium transition-colors border ${filterType === t ? "bg-sky-500 text-white border-sky-500" : "bg-white text-slate-600 border-slate-200 hover:border-sky-300 hover:text-sky-600"}`}
+              key={tp}
+              onClick={() => setFilterType(tp)}
+              className={`px-3.5 py-2 rounded-xl text-sm font-medium transition-colors border ${filterType === tp ? "bg-sky-500 text-white border-sky-500" : "bg-white text-slate-600 border-slate-200 hover:border-sky-300 hover:text-sky-600"}`}
             >
-              {t === "" ? "Semua" : t === "product" ? "Produk" : "Layanan"}
+              {tp === "" ? t("catalog.filter.all", "Semua") : tp === "product" ? t("catalog.filter.product", "Produk") : t("catalog.filter.service", "Layanan")}
             </button>
           ))}
         </div>
@@ -448,8 +452,8 @@ function EtalaseTab({ onInquiry }: { onInquiry: (item: { name: string; vendorNam
         ) : filtered.length === 0 ? (
           <div className="text-center py-16 text-slate-400">
             <Store className="h-12 w-12 mx-auto mb-3 opacity-40" />
-            <p className="font-medium">Belum ada item etalase</p>
-            <p className="text-sm mt-1">Vendor belum menambahkan produk atau layanan ke katalog</p>
+            <p className="font-medium">{t("catalog.etalase.empty", "Belum ada item etalase")}</p>
+            <p className="text-sm mt-1">{t("catalog.etalase.emptyDesc", "Vendor belum menambahkan produk atau layanan ke katalog")}</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -459,7 +463,7 @@ function EtalaseTab({ onInquiry }: { onInquiry: (item: { name: string; vendorNam
                   <div className="flex items-center justify-between gap-2">
                     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold ${item.type === "service" ? "bg-violet-100 text-violet-700" : "bg-emerald-100 text-emerald-700"}`}>
                       {item.type === "service" ? <Wrench className="h-3 w-3" /> : <Package className="h-3 w-3" />}
-                      {item.type === "service" ? "Layanan" : "Produk"}
+                      {item.type === "service" ? t("catalog.typeService", "Layanan") : t("catalog.typeProduct", "Produk")}
                     </span>
                     {item.kategori && (
                       <span className="text-[11px] text-slate-400 flex items-center gap-1">
@@ -478,7 +482,7 @@ function EtalaseTab({ onInquiry }: { onInquiry: (item: { name: string; vendorNam
                 </div>
                 <div className="px-4 pb-4 flex items-center justify-between gap-2">
                   <div>
-                    <p className="text-[11px] text-slate-400">Harga mulai</p>
+                    <p className="text-[11px] text-slate-400">{t("catalog.etalase.startingPrice", "Harga mulai")}</p>
                     <p className={`font-bold text-[15px] ${item.sellPrice > 0 ? "text-sky-700" : "text-slate-400 text-[13px]"}`}>
                       {idr(item.sellPrice)}{item.unit && item.sellPrice > 0 ? ` / ${item.unit}` : ""}
                     </p>
@@ -487,7 +491,7 @@ function EtalaseTab({ onInquiry }: { onInquiry: (item: { name: string; vendorNam
                     onClick={() => onInquiry({ name: item.name, vendorName: item.vendorName, kategori: item.kategori, type: item.type })}
                     className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-sky-500 hover:bg-sky-600 text-white text-[13px] font-semibold transition-colors"
                   >
-                    Minta Penawaran <ChevronRight className="h-3.5 w-3.5" />
+                    {t("catalog.requestQuote", "Minta Penawaran")} <ChevronRight className="h-3.5 w-3.5" />
                   </button>
                 </div>
               </div>
@@ -507,14 +511,14 @@ function EtalaseTab({ onInquiry }: { onInquiry: (item: { name: string; vendorNam
             <BarChart2 className="h-12 w-12 mx-auto mb-3 opacity-40" />
             <p className="font-medium">
               {(compareData?.totalGroups ?? 0) === 0
-                ? "Belum ada item yang ditawarkan oleh 2 vendor atau lebih"
-                : "Tidak ada item yang cocok dengan pencarian"
+                ? t("catalog.compare.noItems", "Belum ada item yang ditawarkan oleh 2 vendor atau lebih")
+                : t("catalog.compare.noResults", "Tidak ada item yang cocok dengan pencarian")
               }
             </p>
             <p className="text-sm mt-1">
               {(compareData?.totalGroups ?? 0) === 0
-                ? "Perbandingan harga tersedia saat minimal 2 vendor menawarkan item yang sama"
-                : "Coba kata kunci lain"
+                ? t("catalog.compare.noItemsDesc", "Perbandingan harga tersedia saat minimal 2 vendor menawarkan item yang sama")
+                : t("catalog.compare.noResultsDesc", "Coba kata kunci lain")
               }
             </p>
           </div>
@@ -524,8 +528,8 @@ function EtalaseTab({ onInquiry }: { onInquiry: (item: { name: string; vendorNam
             <div className="flex items-center gap-2 text-sm text-slate-500 bg-white/80 rounded-xl px-4 py-2.5 border border-slate-100">
               <BarChart2 className="h-4 w-4 text-sky-500 shrink-0" />
               <span>
-                <span className="font-semibold text-slate-700">{filteredGroups.length}</span> item tersedia untuk dibandingkan.
-                {" "}Vendor dengan <span className="font-semibold text-emerald-600">badge TERMURAH</span> adalah pilihan harga terbaik.
+                <span className="font-semibold text-slate-700">{filteredGroups.length}</span> {t("catalog.compare.itemsAvailable", "item tersedia untuk dibandingkan.")}{" "}
+                {t("catalog.compare.cheapestDesc", "Vendor dengan")} <span className="font-semibold text-emerald-600">{t("catalog.compare.cheapestBadge", "badge TERMURAH")}</span> {t("catalog.compare.cheapestDescEnd", "adalah pilihan harga terbaik.")}
               </span>
             </div>
             {filteredGroups.map((group) => (
@@ -540,6 +544,7 @@ function EtalaseTab({ onInquiry }: { onInquiry: (item: { name: string; vendorNam
 
 // ── Product Template Tab ──────────────────────────────────────────────────────
 function ProductTemplateTab({ onInquiry }: { onInquiry: (item: { name: string; kategori?: string | null; templateType: "product" }) => void }) {
+  const { t } = useLanguage();
   const { data: templates = [], isLoading } = useQuery<ProductTemplate[]>({
     queryKey: ["portal-product-templates"],
     queryFn: async () => {
@@ -558,36 +563,51 @@ function ProductTemplateTab({ onInquiry }: { onInquiry: (item: { name: string; k
   if (templates.length === 0) return (
     <div className="text-center py-16 text-slate-400">
       <Package className="h-12 w-12 mx-auto mb-3 opacity-40" />
-      <p className="font-medium">Belum ada template produk</p>
-      <p className="text-sm mt-1">Admin belum menambahkan template produk</p>
+      <p className="font-medium">{t("catalog.productTemplate.empty", "Belum ada template produk")}</p>
+      <p className="text-sm mt-1">{t("catalog.productTemplate.emptyDesc", "Admin belum menambahkan template produk")}</p>
     </div>
   );
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-      {templates.map((t) => (
-        <div key={t.id} className="group bg-white rounded-2xl border border-slate-100 shadow-sm hover:shadow-md hover:border-emerald-200 transition-all flex flex-col overflow-hidden">
+      {templates.map((tmpl) => (
+        <div key={tmpl.id} className="group bg-white rounded-2xl border border-slate-100 shadow-sm hover:shadow-md hover:border-emerald-200 transition-all flex flex-col overflow-hidden">
           <div className="p-4 flex-1 space-y-3">
             <div className="flex items-start gap-3">
-              {t.icon
-                ? <span className="text-3xl shrink-0">{t.icon}</span>
+              {tmpl.icon
+                ? <span className="text-3xl shrink-0">{tmpl.icon}</span>
                 : <div className="w-10 h-10 rounded-xl bg-emerald-100 flex items-center justify-center shrink-0"><Package className="h-5 w-5 text-emerald-600" /></div>
               }
               <div className="min-w-0">
-                <p className="font-bold text-slate-800 text-[15px] leading-snug group-hover:text-emerald-700 transition-colors">{t.label}</p>
-                <p className="text-[11px] text-slate-400 font-mono mt-0.5">{t.categoryKey}</p>
+                <p className="font-bold text-slate-800 text-[15px] leading-snug group-hover:text-emerald-700 transition-colors">{tmpl.label}</p>
+                <p className="text-[11px] text-slate-400 font-mono mt-0.5">{tmpl.categoryKey}</p>
               </div>
             </div>
-            {t.description && <p className="text-sm text-slate-500 line-clamp-2">{t.description}</p>}
+            {tmpl.description && <p className="text-sm text-slate-500 line-clamp-2">{tmpl.description}</p>}
             <div className="space-y-1.5">
-              {Array.isArray(t.customFields) && t.customFields.length > 0 && <div className="flex items-center gap-1.5 text-[12px] text-slate-500"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />{t.customFields.length} field pengisian data</div>}
-              {Array.isArray(t.requiredDocuments) && t.requiredDocuments.length > 0 && <div className="flex items-center gap-1.5 text-[12px] text-slate-500"><span className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />{t.requiredDocuments.length} dokumen diperlukan</div>}
-              {Array.isArray(t.checklist) && t.checklist.length > 0 && <div className="flex items-center gap-1.5 text-[12px] text-slate-500"><span className="w-1.5 h-1.5 rounded-full bg-violet-400 shrink-0" />{t.checklist.length} poin checklist</div>}
+              {Array.isArray(tmpl.customFields) && tmpl.customFields.length > 0 && (
+                <div className="flex items-center gap-1.5 text-[12px] text-slate-500">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                  {tmpl.customFields.length} {t("catalog.productTemplate.fields", "field pengisian data")}
+                </div>
+              )}
+              {Array.isArray(tmpl.requiredDocuments) && tmpl.requiredDocuments.length > 0 && (
+                <div className="flex items-center gap-1.5 text-[12px] text-slate-500">
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />
+                  {tmpl.requiredDocuments.length} {t("catalog.template.docsRequired", "dokumen diperlukan")}
+                </div>
+              )}
+              {Array.isArray(tmpl.checklist) && tmpl.checklist.length > 0 && (
+                <div className="flex items-center gap-1.5 text-[12px] text-slate-500">
+                  <span className="w-1.5 h-1.5 rounded-full bg-violet-400 shrink-0" />
+                  {tmpl.checklist.length} {t("catalog.template.checklistPoints", "poin checklist")}
+                </div>
+              )}
             </div>
           </div>
           <div className="px-4 pb-4">
-            <button onClick={() => onInquiry({ name: t.label, kategori: t.categoryKey, templateType: "product" })} className="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold transition-colors flex items-center justify-center gap-2">
-              <Send className="h-4 w-4" />Minta Penawaran
+            <button onClick={() => onInquiry({ name: tmpl.label, kategori: tmpl.categoryKey, templateType: "product" })} className="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold transition-colors flex items-center justify-center gap-2">
+              <Send className="h-4 w-4" />{t("catalog.requestQuote", "Minta Penawaran")}
             </button>
           </div>
         </div>
@@ -598,6 +618,7 @@ function ProductTemplateTab({ onInquiry }: { onInquiry: (item: { name: string; k
 
 // ── Service Template Tab ──────────────────────────────────────────────────────
 function ServiceTemplateTab({ onInquiry }: { onInquiry: (item: { name: string; kategori?: string | null; templateType: "service" }) => void }) {
+  const { t } = useLanguage();
   const { data: templates = [], isLoading } = useQuery<ServiceTemplate[]>({
     queryKey: ["portal-service-templates"],
     queryFn: async () => {
@@ -616,33 +637,48 @@ function ServiceTemplateTab({ onInquiry }: { onInquiry: (item: { name: string; k
   if (templates.length === 0) return (
     <div className="text-center py-16 text-slate-400">
       <Wrench className="h-12 w-12 mx-auto mb-3 opacity-40" />
-      <p className="font-medium">Belum ada template layanan</p>
-      <p className="text-sm mt-1">Admin belum menambahkan template layanan</p>
+      <p className="font-medium">{t("catalog.serviceTemplate.empty", "Belum ada template layanan")}</p>
+      <p className="text-sm mt-1">{t("catalog.serviceTemplate.emptyDesc", "Admin belum menambahkan template layanan")}</p>
     </div>
   );
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-      {templates.map((t) => (
-        <div key={t.id} className="group bg-white rounded-2xl border border-slate-100 shadow-sm hover:shadow-md hover:border-violet-200 transition-all flex flex-col overflow-hidden">
+      {templates.map((tmpl) => (
+        <div key={tmpl.id} className="group bg-white rounded-2xl border border-slate-100 shadow-sm hover:shadow-md hover:border-violet-200 transition-all flex flex-col overflow-hidden">
           <div className="p-4 flex-1 space-y-3">
             <div className="flex items-start gap-3">
-              <span className="text-3xl shrink-0">{t.emoji || "📋"}</span>
+              <span className="text-3xl shrink-0">{tmpl.emoji || "📋"}</span>
               <div className="min-w-0">
-                <p className="font-bold text-slate-800 text-[15px] leading-snug group-hover:text-violet-700 transition-colors">{t.label}</p>
-                <p className="text-[11px] text-slate-400 font-mono mt-0.5">{t.serviceType}</p>
+                <p className="font-bold text-slate-800 text-[15px] leading-snug group-hover:text-violet-700 transition-colors">{tmpl.label}</p>
+                <p className="text-[11px] text-slate-400 font-mono mt-0.5">{tmpl.serviceType}</p>
               </div>
             </div>
-            {t.description && <p className="text-sm text-slate-500 line-clamp-2">{t.description}</p>}
+            {tmpl.description && <p className="text-sm text-slate-500 line-clamp-2">{tmpl.description}</p>}
             <div className="space-y-1.5">
-              {Array.isArray(t.fields) && t.fields.length > 0 && <div className="flex items-center gap-1.5 text-[12px] text-slate-500"><span className="w-1.5 h-1.5 rounded-full bg-violet-400 shrink-0" />{t.fields.length} informasi yang dibutuhkan</div>}
-              {Array.isArray(t.requiredDocuments) && t.requiredDocuments.length > 0 && <div className="flex items-center gap-1.5 text-[12px] text-slate-500"><span className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />{t.requiredDocuments.length} dokumen diperlukan</div>}
-              {Array.isArray(t.checklist) && t.checklist.length > 0 && <div className="flex items-center gap-1.5 text-[12px] text-slate-500"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />{t.checklist.length} poin checklist</div>}
+              {Array.isArray(tmpl.fields) && tmpl.fields.length > 0 && (
+                <div className="flex items-center gap-1.5 text-[12px] text-slate-500">
+                  <span className="w-1.5 h-1.5 rounded-full bg-violet-400 shrink-0" />
+                  {tmpl.fields.length} {t("catalog.serviceTemplate.infoRequired", "informasi yang dibutuhkan")}
+                </div>
+              )}
+              {Array.isArray(tmpl.requiredDocuments) && tmpl.requiredDocuments.length > 0 && (
+                <div className="flex items-center gap-1.5 text-[12px] text-slate-500">
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />
+                  {tmpl.requiredDocuments.length} {t("catalog.template.docsRequired", "dokumen diperlukan")}
+                </div>
+              )}
+              {Array.isArray(tmpl.checklist) && tmpl.checklist.length > 0 && (
+                <div className="flex items-center gap-1.5 text-[12px] text-slate-500">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                  {tmpl.checklist.length} {t("catalog.template.checklistPoints", "poin checklist")}
+                </div>
+              )}
             </div>
           </div>
           <div className="px-4 pb-4">
-            <button onClick={() => onInquiry({ name: t.label, kategori: t.serviceType, templateType: "service" })} className="w-full py-2.5 rounded-xl bg-violet-500 hover:bg-violet-600 text-white text-sm font-semibold transition-colors flex items-center justify-center gap-2">
-              <Send className="h-4 w-4" />Minta Penawaran
+            <button onClick={() => onInquiry({ name: tmpl.label, kategori: tmpl.serviceType, templateType: "service" })} className="w-full py-2.5 rounded-xl bg-violet-500 hover:bg-violet-600 text-white text-sm font-semibold transition-colors flex items-center justify-center gap-2">
+              <Send className="h-4 w-4" />{t("catalog.requestQuote", "Minta Penawaran")}
             </button>
           </div>
         </div>
@@ -653,13 +689,14 @@ function ServiceTemplateTab({ onInquiry }: { onInquiry: (item: { name: string; k
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function CatalogPage() {
+  const { t } = useLanguage();
   const [tab, setTab] = useState<Tab>("etalase");
   const [inquiry, setInquiry] = useState<{ name: string; vendorName?: string; kategori?: string | null; type?: string; templateType?: "product" | "service" } | null>(null);
 
   const tabs: { key: Tab; label: string; icon: React.ElementType }[] = [
-    { key: "etalase", label: "Etalase Vendor", icon: Store },
-    { key: "product-template", label: "Template Produk", icon: Package },
-    { key: "service-template", label: "Template Layanan", icon: Wrench },
+    { key: "etalase", label: t("catalog.tabs.etalase", "Etalase Vendor"), icon: Store },
+    { key: "product-template", label: t("catalog.tabs.productTemplate", "Template Produk"), icon: Package },
+    { key: "service-template", label: t("catalog.tabs.serviceTemplate", "Template Layanan"), icon: Wrench },
   ];
 
   return (
@@ -667,10 +704,10 @@ export default function CatalogPage() {
       <PageSeo path="/catalog" />
       <div className="bg-gradient-to-br from-sky-600 via-blue-700 to-indigo-800 text-white py-14 px-4">
         <div className="max-w-5xl mx-auto text-center space-y-3">
-          <p className="text-sky-300 text-sm font-semibold uppercase tracking-widest">Katalog Kami</p>
-          <h1 className="text-3xl sm:text-4xl font-extrabold leading-tight">Produk & Layanan Vendor</h1>
+          <p className="text-sky-300 text-sm font-semibold uppercase tracking-widest">{t("catalog.hero.eyebrow", "Katalog Kami")}</p>
+          <h1 className="text-3xl sm:text-4xl font-extrabold leading-tight">{t("catalog.hero.title", "Produk & Layanan Vendor")}</h1>
           <p className="text-sky-100 text-[15px] max-w-xl mx-auto leading-relaxed">
-            Temukan dan <span className="font-semibold text-white">bandingkan harga</span> produk & layanan dari vendor terpercaya kami.
+            {t("catalog.hero.descPrefix", "Temukan dan")} <span className="font-semibold text-white">{t("catalog.hero.descHighlight", "bandingkan harga")}</span> {t("catalog.hero.descSuffix", "produk & layanan dari vendor terpercaya kami.")}
           </p>
         </div>
       </div>

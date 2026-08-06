@@ -29,6 +29,7 @@ import {
   Globe, Image as ImageIcon, Check, Plus, Loader2, Search,
   Upload, X, Star, AlertCircle,
 } from "lucide-react";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -97,14 +98,6 @@ const INITIAL_FORM: WizardForm = {
   price_base: "", markup_pct: "0", currency: "IDR", moq: "", lead_time: "", unit: "",
 };
 
-const STEPS = [
-  { id: 1, label: "Vendor",   icon: Building2 },
-  { id: 2, label: "Item",     icon: Package },
-  { id: 3, label: "Harga",    icon: DollarSign },
-  { id: 4, label: "Info",     icon: Globe },
-  { id: 5, label: "Media",    icon: ImageIcon },
-];
-
 const KATEGORI_OPTIONS = [
   "Produk", "Jasa", "Logistik", "Forwarder", "Manufaktur",
   "Pertanian", "Elektronik", "Tekstil", "Kimia", "Konstruksi",
@@ -125,6 +118,7 @@ export function AddVendorProductWizard({
   onCreated: () => void;
 }) {
   const { toast } = useToast();
+  const { t } = useLanguage();
   const [step, setStep] = useState(1);
   const [form, setForm] = useState<WizardForm>(INITIAL_FORM);
   const [saving, setSaving] = useState(false);
@@ -147,6 +141,15 @@ export function AddVendorProductWizard({
   const [mediaFiles, setMediaFiles] = useState<MediaFile[]>([]);
   const [uploadingAll, setUploadingAll] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const STEPS = [
+    { id: 1, label: t("addVendorWizard.stepVendor", "Vendor"),   icon: Building2 },
+    { id: 2, label: t("addVendorWizard.stepItem", "Item"),       icon: Package },
+    { id: 3, label: t("addVendorWizard.stepPrice", "Harga"),     icon: DollarSign },
+    { id: 4, label: t("addVendorWizard.stepInfo", "Info"),       icon: Globe },
+    { id: 5, label: t("addVendorWizard.stepMedia", "Media"),     icon: ImageIcon },
+  ];
+
   // Reset on open/close
   useEffect(() => {
     if (!open) {
@@ -168,7 +171,7 @@ export function AddVendorProductWizard({
     fetch("/api/portal/admin/suppliers", { credentials: "include" })
       .then(r => r.json())
       .then((data: unknown) => setVendors(Array.isArray(data) ? data as Supplier[] : []))
-      .catch(() => toast({ title: "Gagal memuat vendor", variant: "destructive" }))
+      .catch(() => toast({ title: t("addVendorWizard.errorLoadVendors", "Gagal memuat vendor"), variant: "destructive" }))
       .finally(() => setLoadingVendors(false));
   }, [open, step]);
 
@@ -179,7 +182,7 @@ export function AddVendorProductWizard({
     fetch("/api/portal/admin/products", { credentials: "include" })
       .then(r => r.json())
       .then((data: unknown) => setMasterItems(Array.isArray(data) ? data as MasterItem[] : []))
-      .catch(() => toast({ title: "Gagal memuat master item", variant: "destructive" }))
+      .catch(() => toast({ title: t("addVendorWizard.errorLoadMasterItems", "Gagal memuat master item"), variant: "destructive" }))
       .finally(() => setLoadingItems(false));
   }, [open, step]);
 
@@ -202,11 +205,11 @@ export function AddVendorProductWizard({
   // ── Validation per step ───────────────────────────────────────────────────
 
   function validateStep(s: number): string | null {
-    if (s === 1 && !form.vendor_id)            return "Pilih vendor terlebih dahulu";
+    if (s === 1 && !form.vendor_id)            return t("addVendorWizard.validationSelectVendor", "Pilih vendor terlebih dahulu");
     if (s === 4) {
       const base = parseFloat(form.price_base) || 0;
-      if (base < 0) return "Harga beli tidak boleh negatif";
-      if (base > 0 && priceSell < base) return "Harga jual tidak boleh lebih kecil dari harga beli";
+      if (base < 0) return t("addVendorWizard.validationPriceNegative", "Harga beli tidak boleh negatif");
+      if (base > 0 && priceSell < base) return t("addVendorWizard.validationSellPriceLow", "Harga jual tidak boleh lebih kecil dari harga beli");
     }
     return null;
   }
@@ -223,7 +226,7 @@ export function AddVendorProductWizard({
 
   const handleCreateMasterItem = async () => {
     if (!newItemForm.name.trim()) {
-      toast({ title: "Nama item wajib diisi", variant: "destructive" }); return;
+      toast({ title: t("addVendorWizard.validationItemNameRequired", "Nama item wajib diisi"), variant: "destructive" }); return;
     }
     setCreatingItem(true);
     try {
@@ -243,9 +246,9 @@ export function AddVendorProductWizard({
       setForm(f => ({ ...f, master_item_id: created.id, master_item_name: created.name, name: f.name || created.name }));
       setShowCreateItem(false);
       setNewItemForm({ name: "", sku: "", description: "", unit: "" });
-      toast({ title: "Master item berhasil dibuat" });
+      toast({ title: t("addVendorWizard.masterItemCreated", "Master item berhasil dibuat") });
     } catch (e) {
-      toast({ title: "Gagal membuat master item", description: String(e), variant: "destructive" });
+      toast({ title: t("addVendorWizard.errorCreateMasterItem", "Gagal membuat master item"), description: String(e), variant: "destructive" });
     } finally {
       setCreatingItem(false);
     }
@@ -256,7 +259,7 @@ export function AddVendorProductWizard({
   const handleSave = async () => {
     const err = validateStep(step);
     if (err) { toast({ title: err, variant: "destructive" }); return; }
-    if (!form.name.trim()) { toast({ title: "Nama produk wajib diisi", variant: "destructive" }); return; }
+    if (!form.name.trim()) { toast({ title: t("addVendorWizard.validationProductNameRequired", "Nama produk wajib diisi"), variant: "destructive" }); return; }
     setSaving(true);
     try {
       const r = await fetch("/api/portal/admin/vendor-catalog-items", {
@@ -283,14 +286,14 @@ export function AddVendorProductWizard({
       });
       if (!r.ok) {
         const body = await r.json().catch(() => ({})) as { message?: string };
-        throw new Error(body.message ?? "Gagal menyimpan produk");
+        throw new Error(body.message ?? t("addVendorWizard.errorSaveProduct", "Gagal menyimpan produk"));
       }
       const data = await r.json() as { id: number };
       setCreatedItemId(data.id);
-      toast({ title: "Produk berhasil dibuat!" });
+      toast({ title: t("addVendorWizard.productCreated", "Produk berhasil dibuat!") });
       setStep(5); // Go to media step
     } catch (e) {
-      toast({ title: "Gagal menyimpan produk", description: String(e), variant: "destructive" });
+      toast({ title: t("addVendorWizard.errorSaveProduct", "Gagal menyimpan produk"), description: String(e), variant: "destructive" });
     } finally {
       setSaving(false);
     }
@@ -304,16 +307,16 @@ export function AddVendorProductWizard({
     const MAX_SIZE = 20 * 1024 * 1024; // 20MB
     Array.from(files).forEach(file => {
       if (!ALLOWED_TYPES.includes(file.type)) {
-        toast({ title: `Tipe file tidak didukung: ${file.name}`, description: "Gunakan JPG, PNG, WEBP, PDF, atau MP4", variant: "destructive" }); return;
+        toast({ title: `${t("addVendorWizard.errorFileType", "Tipe file tidak didukung")}: ${file.name}`, description: t("addVendorWizard.errorFileTypeDesc", "Gunakan JPG, PNG, WEBP, PDF, atau MP4"), variant: "destructive" }); return;
       }
       if (file.size > MAX_SIZE) {
-        toast({ title: `File terlalu besar: ${file.name}`, description: "Maks 20 MB per file", variant: "destructive" }); return;
+        toast({ title: `${t("addVendorWizard.errorFileSize", "File terlalu besar")}: ${file.name}`, description: t("addVendorWizard.errorFileSizeDesc", "Maks 20 MB per file"), variant: "destructive" }); return;
       }
       const type: "image" | "pdf" | "video" = file.type.startsWith("video/") ? "video" : file.type === "application/pdf" ? "pdf" : "image";
       const preview = type === "image" ? URL.createObjectURL(file) : "";
       setMediaFiles(prev => [...prev, { file, preview, type }]);
     });
-  }, [toast]);
+  }, [toast, t]);
 
   const uploadAllMedia = async () => {
     if (!createdItemId || mediaFiles.length === 0) return;
@@ -361,7 +364,7 @@ export function AddVendorProductWizard({
       }).catch(() => {});
     }
     setUploadingAll(false);
-    toast({ title: "Media berhasil diupload!" });
+    toast({ title: t("addVendorWizard.mediaUploaded", "Media berhasil diupload!") });
   };
 
   const handleFinish = () => {
@@ -401,22 +404,22 @@ export function AddVendorProductWizard({
   function Step1() {
     return (
       <div className="space-y-4">
-        <h3 className="font-semibold text-sm">Pilih Vendor</h3>
+        <h3 className="font-semibold text-sm">{t("addVendorWizard.selectVendorTitle", "Pilih Vendor")}</h3>
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
             value={vendorSearch}
             onChange={e => setVendorSearch(e.target.value)}
-            placeholder="Cari nama vendor..."
+            placeholder={t("addVendorWizard.searchVendorPlaceholder", "Cari nama vendor...")}
             className="pl-8 h-8 text-sm"
           />
         </div>
         {loadingVendors ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
-            <Loader2 className="h-4 w-4 animate-spin" /> Memuat vendor...
+            <Loader2 className="h-4 w-4 animate-spin" /> {t("addVendorWizard.loadingVendors", "Memuat vendor...")}
           </div>
         ) : filteredVendors.length === 0 ? (
-          <p className="text-sm text-muted-foreground py-4">Tidak ada vendor ditemukan.</p>
+          <p className="text-sm text-muted-foreground py-4">{t("addVendorWizard.noVendorFound", "Tidak ada vendor ditemukan.")}</p>
         ) : (
           <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
             {filteredVendors.map(v => (
@@ -442,7 +445,7 @@ export function AddVendorProductWizard({
         {form.vendor_id && (
           <div className="flex items-center gap-2 text-sm text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-2">
             <Check className="h-4 w-4" />
-            <span className="font-medium">{form.vendor_name}</span> dipilih
+            <span className="font-medium">{form.vendor_name}</span> {t("addVendorWizard.vendorSelected", "dipilih")}
           </div>
         )}
       </div>
@@ -453,45 +456,45 @@ export function AddVendorProductWizard({
     return (
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-sm">Master Item</h3>
+          <h3 className="font-semibold text-sm">{t("addVendorWizard.masterItemTitle", "Master Item")}</h3>
           <Button
             size="sm" variant="outline"
             className="gap-1.5 text-xs h-7"
             onClick={() => setShowCreateItem(p => !p)}
           >
-            <Plus className="h-3 w-3" /> Buat Master Item Baru
+            <Plus className="h-3 w-3" /> {t("addVendorWizard.createNewMasterItem", "Buat Master Item Baru")}
           </Button>
         </div>
 
         {showCreateItem && (
           <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3 space-y-2">
-            <p className="text-xs font-medium text-indigo-700">Buat Master Item Baru</p>
+            <p className="text-xs font-medium text-indigo-700">{t("addVendorWizard.createNewMasterItem", "Buat Master Item Baru")}</p>
             <Input
               value={newItemForm.name}
               onChange={e => setNewItemForm(f => ({ ...f, name: e.target.value }))}
-              placeholder="Nama item *"
+              placeholder={t("addVendorWizard.itemNamePlaceholder", "Nama item *")}
               className="h-8 text-sm bg-white"
             />
             <div className="grid grid-cols-2 gap-2">
               <Input
                 value={newItemForm.unit}
                 onChange={e => setNewItemForm(f => ({ ...f, unit: e.target.value }))}
-                placeholder="Satuan (pcs, kg, ...)"
+                placeholder={t("addVendorWizard.unitPlaceholder", "Satuan (pcs, kg, ...)")}
                 className="h-8 text-sm bg-white"
               />
               <Input
                 value={newItemForm.description}
                 onChange={e => setNewItemForm(f => ({ ...f, description: e.target.value }))}
-                placeholder="Deskripsi (opsional)"
+                placeholder={t("addVendorWizard.descriptionOptionalPlaceholder", "Deskripsi (opsional)")}
                 className="h-8 text-sm bg-white"
               />
             </div>
             <div className="flex gap-2">
               <Button size="sm" onClick={handleCreateMasterItem} disabled={creatingItem} className="gap-1.5 h-7 text-xs">
-                {creatingItem ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />} Simpan Item
+                {creatingItem ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />} {t("addVendorWizard.saveItem", "Simpan Item")}
               </Button>
               <Button size="sm" variant="ghost" onClick={() => setShowCreateItem(false)} className="h-7 text-xs">
-                Batal
+                {t("common.cancel", "Batal")}
               </Button>
             </div>
           </div>
@@ -502,13 +505,13 @@ export function AddVendorProductWizard({
           <Input
             value={itemSearch}
             onChange={e => setItemSearch(e.target.value)}
-            placeholder="Cari nama atau SKU..."
+            placeholder={t("addVendorWizard.searchItemPlaceholder", "Cari nama atau SKU...")}
             className="pl-8 h-8 text-sm"
           />
         </div>
         {loadingItems ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground py-3">
-            <Loader2 className="h-4 w-4 animate-spin" /> Memuat item...
+            <Loader2 className="h-4 w-4 animate-spin" /> {t("addVendorWizard.loadingItems", "Memuat item...")}
           </div>
         ) : (
           <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
@@ -518,7 +521,7 @@ export function AddVendorProductWizard({
                 !form.master_item_id ? "border-slate-400 bg-slate-50" : "border-slate-200 hover:border-slate-300"
               }`}
             >
-              <span className="text-muted-foreground text-xs italic">Tanpa master item (opsional)</span>
+              <span className="text-muted-foreground text-xs italic">{t("addVendorWizard.noMasterItem", "Tanpa master item (opsional)")}</span>
             </button>
             {filteredItems.map(item => (
               <button
@@ -544,7 +547,7 @@ export function AddVendorProductWizard({
               </button>
             ))}
             {filteredItems.length === 0 && itemSearch && (
-              <p className="text-sm text-muted-foreground py-2 px-3">Item tidak ditemukan.</p>
+              <p className="text-sm text-muted-foreground py-2 px-3">{t("addVendorWizard.itemNotFound", "Item tidak ditemukan.")}</p>
             )}
           </div>
         )}
@@ -555,20 +558,20 @@ export function AddVendorProductWizard({
   function Step3() {
     return (
       <div className="space-y-4">
-        <h3 className="font-semibold text-sm">Harga & Pemesanan</h3>
+        <h3 className="font-semibold text-sm">{t("addVendorWizard.priceAndOrderTitle", "Harga & Pemesanan")}</h3>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <Label className="text-xs font-medium">Harga Beli (Rp)</Label>
+            <Label className="text-xs font-medium">{t("addVendorWizard.purchasePriceLabel", "Harga Beli (Rp)")}</Label>
             <Input
               type="number" min={0}
               value={form.price_base}
               onChange={e => setForm(f => ({ ...f, price_base: e.target.value }))}
               className="mt-1 h-8 text-sm"
-              placeholder="Harga dasar / HPP"
+              placeholder={t("addVendorWizard.purchasePricePlaceholder", "Harga dasar / HPP")}
             />
           </div>
           <div>
-            <Label className="text-xs font-medium">Markup (%)</Label>
+            <Label className="text-xs font-medium">{t("addVendorWizard.markupLabel", "Markup (%)")}</Label>
             <Input
               type="number" min={0} max={10000} step={0.5}
               value={form.markup_pct}
@@ -582,14 +585,14 @@ export function AddVendorProductWizard({
         {parseFloat(form.price_base) > 0 && (
           <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5">
             <div className="flex justify-between items-center">
-              <span className="text-xs text-muted-foreground">Harga Jual (Customer)</span>
+              <span className="text-xs text-muted-foreground">{t("addVendorWizard.sellPriceLabel", "Harga Jual (Customer)")}</span>
               <span className="font-bold text-emerald-700">
                 {new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(priceSell)}
               </span>
             </div>
             {parseFloat(form.markup_pct) > 0 && (
               <div className="flex justify-between items-center mt-0.5">
-                <span className="text-xs text-muted-foreground">Keuntungan Platform</span>
+                <span className="text-xs text-muted-foreground">{t("addVendorWizard.platformProfitLabel", "Keuntungan Platform")}</span>
                 <span className="text-xs text-emerald-600">
                   {new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(priceSell - (parseFloat(form.price_base)||0))}
                   {" "}({parseFloat(form.markup_pct)}%)
@@ -601,7 +604,7 @@ export function AddVendorProductWizard({
 
         <div className="grid grid-cols-3 gap-3">
           <div>
-            <Label className="text-xs font-medium">Mata Uang</Label>
+            <Label className="text-xs font-medium">{t("addVendorWizard.currencyLabel", "Mata Uang")}</Label>
             <Select value={form.currency} onValueChange={v => setForm(f => ({ ...f, currency: v }))}>
               <SelectTrigger className="mt-1 h-8 text-sm">
                 <SelectValue />
@@ -612,33 +615,33 @@ export function AddVendorProductWizard({
             </Select>
           </div>
           <div>
-            <Label className="text-xs font-medium">Min. Order (MOQ)</Label>
+            <Label className="text-xs font-medium">{t("addVendorWizard.moqLabel", "Min. Order (MOQ)")}</Label>
             <Input
               type="number" min={0}
               value={form.moq}
               onChange={e => setForm(f => ({ ...f, moq: e.target.value }))}
               className="mt-1 h-8 text-sm"
-              placeholder="Misal: 100"
+              placeholder={t("addVendorWizard.moqPlaceholder", "Misal: 100")}
             />
           </div>
           <div>
-            <Label className="text-xs font-medium">Satuan</Label>
+            <Label className="text-xs font-medium">{t("addVendorWizard.unitLabel", "Satuan")}</Label>
             <Input
               value={form.unit}
               onChange={e => setForm(f => ({ ...f, unit: e.target.value }))}
               className="mt-1 h-8 text-sm"
-              placeholder="pcs, kg, box..."
+              placeholder={t("addVendorWizard.unitPlaceholder2", "pcs, kg, box...")}
             />
           </div>
         </div>
 
         <div>
-          <Label className="text-xs font-medium">Lead Time</Label>
+          <Label className="text-xs font-medium">{t("addVendorWizard.leadTimeLabel", "Lead Time")}</Label>
           <Input
             value={form.lead_time}
             onChange={e => setForm(f => ({ ...f, lead_time: e.target.value }))}
             className="mt-1 h-8 text-sm"
-            placeholder="Misal: 7-14 hari kerja"
+            placeholder={t("addVendorWizard.leadTimePlaceholder", "Misal: 7-14 hari kerja")}
           />
         </div>
       </div>
@@ -648,32 +651,32 @@ export function AddVendorProductWizard({
   function Step4() {
     return (
       <div className="space-y-4">
-        <h3 className="font-semibold text-sm">Info Marketplace</h3>
+        <h3 className="font-semibold text-sm">{t("addVendorWizard.marketplaceInfoTitle", "Info Marketplace")}</h3>
         <div>
-          <Label className="text-xs font-medium">Nama Produk *</Label>
+          <Label className="text-xs font-medium">{t("addVendorWizard.productNameLabel", "Nama Produk *")}</Label>
           <Input
             value={form.name}
             onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
             className="mt-1 h-8 text-sm"
-            placeholder="Nama yang tampil di marketplace..."
+            placeholder={t("addVendorWizard.productNamePlaceholder", "Nama yang tampil di marketplace...")}
           />
         </div>
         <div>
-          <Label className="text-xs font-medium">Deskripsi</Label>
+          <Label className="text-xs font-medium">{t("addVendorWizard.descriptionLabel", "Deskripsi")}</Label>
           <Textarea
             value={form.description}
             onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
             className="mt-1 text-sm resize-none"
             rows={3}
-            placeholder="Deskripsi produk untuk customer..."
+            placeholder={t("addVendorWizard.descriptionPlaceholder", "Deskripsi produk untuk customer...")}
           />
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <Label className="text-xs font-medium">Kategori</Label>
+            <Label className="text-xs font-medium">{t("addVendorWizard.kategoriLabel", "Kategori")}</Label>
             <Select value={form.kategori || ""} onValueChange={v => setForm(f => ({ ...f, kategori: v }))}>
               <SelectTrigger className="mt-1 h-8 text-sm">
-                <SelectValue placeholder="Pilih kategori" />
+                <SelectValue placeholder={t("addVendorWizard.kategoriPlaceholder", "Pilih kategori")} />
               </SelectTrigger>
               <SelectContent>
                 {KATEGORI_OPTIONS.map(k => <SelectItem key={k} value={k}>{k}</SelectItem>)}
@@ -681,22 +684,22 @@ export function AddVendorProductWizard({
             </Select>
           </div>
           <div>
-            <Label className="text-xs font-medium">Negara Asal</Label>
+            <Label className="text-xs font-medium">{t("addVendorWizard.originLabel", "Negara Asal")}</Label>
             <Input
               value={form.origin}
               onChange={e => setForm(f => ({ ...f, origin: e.target.value }))}
               className="mt-1 h-8 text-sm"
-              placeholder="Indonesia, China, ..."
+              placeholder={t("addVendorWizard.originPlaceholder", "Indonesia, China, ...")}
             />
           </div>
         </div>
         <div>
-          <Label className="text-xs font-medium">HS Code</Label>
+          <Label className="text-xs font-medium">{t("addVendorWizard.hsCodeLabel", "HS Code")}</Label>
           <Input
             value={form.hs_code}
             onChange={e => setForm(f => ({ ...f, hs_code: e.target.value }))}
             className="mt-1 h-8 text-sm font-mono"
-            placeholder="Misal: 8471.30.10"
+            placeholder={t("addVendorWizard.hsCodePlaceholder", "Misal: 8471.30.10")}
           />
         </div>
         <div className="flex items-center gap-6">
@@ -707,7 +710,7 @@ export function AddVendorProductWizard({
               onChange={e => setForm(f => ({ ...f, is_published: e.target.checked }))}
               className="w-4 h-4 rounded border-slate-300"
             />
-            <span className="text-sm font-medium">Publish sekarang</span>
+            <span className="text-sm font-medium">{t("addVendorWizard.publishNow", "Publish sekarang")}</span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
             <input
@@ -717,7 +720,7 @@ export function AddVendorProductWizard({
               className="w-4 h-4 rounded border-slate-300"
             />
             <span className="text-sm font-medium flex items-center gap-1">
-              <Star className="h-3.5 w-3.5 text-amber-500" /> Featured
+              <Star className="h-3.5 w-3.5 text-amber-500" /> {t("addVendorWizard.featured", "Featured")}
             </span>
           </label>
         </div>
@@ -729,14 +732,14 @@ export function AddVendorProductWizard({
     return (
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-sm">Upload Media</h3>
-          <span className="text-xs text-muted-foreground">{mediaFiles.length} file dipilih</span>
+          <h3 className="font-semibold text-sm">{t("addVendorWizard.uploadMediaTitle", "Upload Media")}</h3>
+          <span className="text-xs text-muted-foreground">{mediaFiles.length} {t("addVendorWizard.filesSelected", "file dipilih")}</span>
         </div>
 
         {!createdItemId ? (
           <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-700">
             <AlertCircle className="h-4 w-4 shrink-0" />
-            Simpan produk terlebih dahulu sebelum upload media.
+            {t("addVendorWizard.saveFirstBeforeMedia", "Simpan produk terlebih dahulu sebelum upload media.")}
           </div>
         ) : (
           <>
@@ -747,8 +750,8 @@ export function AddVendorProductWizard({
               onDrop={e => { e.preventDefault(); addFiles(e.dataTransfer.files); }}
             >
               <Upload className="h-8 w-8 text-slate-400 mx-auto mb-2" />
-              <p className="text-sm font-medium text-slate-700">Klik atau drag & drop file di sini</p>
-              <p className="text-xs text-muted-foreground mt-1">JPG, PNG, WEBP, PDF, MP4 — maks 20 MB per file</p>
+              <p className="text-sm font-medium text-slate-700">{t("addVendorWizard.dropzoneLabel", "Klik atau drag & drop file di sini")}</p>
+              <p className="text-xs text-muted-foreground mt-1">{t("addVendorWizard.dropzoneHint", "JPG, PNG, WEBP, PDF, MP4 — maks 20 MB per file")}</p>
               <input
                 ref={fileInputRef} type="file" multiple hidden
                 accept="image/jpeg,image/png,image/webp,application/pdf,video/mp4,video/webm"
@@ -776,7 +779,7 @@ export function AddVendorProductWizard({
                     </div>
                     <div className="flex items-center gap-1.5">
                       {idx === 0 && (
-                        <span className="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-medium">Thumbnail</span>
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-medium">{t("addVendorWizard.thumbnailLabel", "Thumbnail")}</span>
                       )}
                       {mf.uploading && <Loader2 className="h-4 w-4 animate-spin text-indigo-500" />}
                       {mf.uploaded && <Check className="h-4 w-4 text-emerald-500" />}
@@ -799,11 +802,11 @@ export function AddVendorProductWizard({
                   size="sm"
                 >
                   {uploadingAll ? (
-                    <><Loader2 className="h-4 w-4 animate-spin" /> Mengupload...</>
+                    <><Loader2 className="h-4 w-4 animate-spin" /> {t("addVendorWizard.uploading", "Mengupload...")}</>
                   ) : mediaFiles.every(m => m.uploaded) ? (
-                    <><Check className="h-4 w-4" /> Semua terupload</>
+                    <><Check className="h-4 w-4" /> {t("addVendorWizard.allUploaded", "Semua terupload")}</>
                   ) : (
-                    <><Upload className="h-4 w-4" /> Upload {mediaFiles.filter(m => !m.uploaded).length} File</>
+                    <><Upload className="h-4 w-4" /> {t("addVendorWizard.uploadFiles", "Upload")} {mediaFiles.filter(m => !m.uploaded).length} {t("addVendorWizard.fileCount", "File")}</>
                   )}
                 </Button>
               </div>
@@ -813,10 +816,10 @@ export function AddVendorProductWizard({
 
         <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-700">
           <div className="flex items-center gap-2 font-medium mb-1">
-            <Check className="h-4 w-4" /> Produk berhasil dibuat!
+            <Check className="h-4 w-4" /> {t("addVendorWizard.productCreated", "Produk berhasil dibuat!")}
           </div>
           <p className="text-xs text-emerald-600">
-            Produk langsung tersedia di Katalog Vendor Admin, Marketplace Customer Portal, dan BizPortal Vendor Detail.
+            {t("addVendorWizard.productCreatedDesc", "Produk langsung tersedia di Katalog Vendor Admin, Marketplace Customer Portal, dan BizPortal Vendor Detail.")}
           </p>
         </div>
       </div>
@@ -834,7 +837,7 @@ export function AddVendorProductWizard({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Plus className="h-4 w-4 text-indigo-600" />
-            Tambah Produk Vendor
+            {t("addVendorWizard.dialogTitle", "Tambah Produk Vendor")}
           </DialogTitle>
         </DialogHeader>
 
@@ -852,21 +855,21 @@ export function AddVendorProductWizard({
           <div className="flex-1">
             {step > 1 && !isMediaStep && (
               <Button variant="ghost" onClick={back} className="gap-1.5 text-sm" size="sm">
-                <ChevronLeft className="h-4 w-4" /> Kembali
+                <ChevronLeft className="h-4 w-4" /> {t("common.back", "Kembali")}
               </Button>
             )}
           </div>
           {isMediaStep ? (
             <Button onClick={handleFinish} className="gap-2">
-              <Check className="h-4 w-4" /> Selesai
+              <Check className="h-4 w-4" /> {t("addVendorWizard.finish", "Selesai")}
             </Button>
           ) : isLastDataStep ? (
             <Button onClick={handleSave} disabled={saving} className="gap-2 bg-indigo-600 hover:bg-indigo-700">
-              {saving ? <><Loader2 className="h-4 w-4 animate-spin" /> Menyimpan...</> : <><Check className="h-4 w-4" /> Simpan Produk</>}
+              {saving ? <><Loader2 className="h-4 w-4 animate-spin" /> {t("addVendorWizard.saving", "Menyimpan...")}</> : <><Check className="h-4 w-4" /> {t("addVendorWizard.saveProduct", "Simpan Produk")}</>}
             </Button>
           ) : (
             <Button onClick={next} className="gap-1.5">
-              Lanjut <ChevronRight className="h-4 w-4" />
+              {t("addVendorWizard.next", "Lanjut")} <ChevronRight className="h-4 w-4" />
             </Button>
           )}
         </DialogFooter>

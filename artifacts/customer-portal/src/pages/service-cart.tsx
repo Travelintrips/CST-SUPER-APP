@@ -8,6 +8,7 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
+import { useLanguage } from "@/i18n/LanguageContext";
 // C1: auth via cookie
 import {
   Plane, Ship, Truck, Package, Warehouse, ShieldCheck,
@@ -185,10 +186,11 @@ function SelectInput({ value, onChange, options }: {
   value: string; onChange: (v: string) => void;
   options: { v: string; l: string }[];
 }) {
+  const { t } = useLanguage();
   return (
     <Select value={value} onValueChange={onChange}>
       <SelectTrigger className="h-8 text-sm">
-        <SelectValue placeholder="Pilih..." />
+        <SelectValue placeholder={t("serviceCart.selectPlaceholder", "Pilih...")} />
       </SelectTrigger>
       <SelectContent>
         {options.map((o) => <SelectItem key={o.v} value={o.v}>{o.l}</SelectItem>)}
@@ -209,6 +211,7 @@ function CheckRow({ label, checked, onChange }: { label: string; checked: boolea
 // ─── STEP 7 — Dynamic forms per service type ──────────────────────────────────
 
 function AirFreightForm({ data, onChange }: { data: Record<string, string | number | boolean>; onChange: (k: string, v: string | number | boolean) => void }) {
+  const { t } = useLanguage();
   const l = Number(data.dim_length_cm ?? 0);
   const w = Number(data.dim_width_cm ?? 0);
   const h = Number(data.dim_height_cm ?? 0);
@@ -218,19 +221,19 @@ function AirFreightForm({ data, onChange }: { data: Record<string, string | numb
 
   return (
     <div className="grid grid-cols-2 gap-3">
-      <Field label="Bandara Asal" required>
+      <Field label={t("serviceCart.originAirport", "Bandara Asal")} required>
         <TextInput value={String(data.origin_airport ?? "")} onChange={(v) => onChange("origin_airport", v)} placeholder="e.g. CGK" />
       </Field>
-      <Field label="Bandara Tujuan" required>
+      <Field label={t("serviceCart.destAirport", "Bandara Tujuan")} required>
         <TextInput value={String(data.dest_airport ?? "")} onChange={(v) => onChange("dest_airport", v)} placeholder="e.g. SIN" />
       </Field>
-      <Field label="Komoditi" required>
+      <Field label={t("serviceCart.commodity", "Komoditi")} required>
         <TextInput value={String(data.commodity ?? "")} onChange={(v) => onChange("commodity", v)} placeholder="e.g. Electronics" />
       </Field>
       <Field label="HS Code">
         <TextInput value={String(data.hs_code ?? "")} onChange={(v) => onChange("hs_code", v)} placeholder="e.g. 8471" />
       </Field>
-      <Field label="Mode Layanan">
+      <Field label={t("serviceCart.serviceMode", "Mode Layanan")}>
         <SelectInput value={String(data.service_mode ?? "")} onChange={(v) => onChange("service_mode", v)} options={[
           { v: "airport_to_airport", l: "Airport to Airport" },
           { v: "door_to_door", l: "Door to Door" },
@@ -238,34 +241,34 @@ function AirFreightForm({ data, onChange }: { data: Record<string, string | numb
           { v: "airport_to_door", l: "Airport to Door" },
         ]} />
       </Field>
-      <Field label="Ready Date">
+      <Field label={t("serviceCart.readyDate", "Ready Date")}>
         <TextInput type="date" value={String(data.ready_date ?? "")} onChange={(v) => onChange("ready_date", v)} />
       </Field>
-      <Field label="Gross Weight (kg)" required>
+      <Field label={t("serviceCart.grossWeightKg", "Gross Weight (kg)")} required>
         <TextInput type="number" value={String(data.gross_weight_kg ?? "")} onChange={(v) => onChange("gross_weight_kg", v)} placeholder="0" />
       </Field>
-      <Field label="Jumlah Koli">
+      <Field label={t("serviceCart.jumlahKoli", "Jumlah Koli")}>
         <TextInput type="number" value={String(data.koli ?? "")} onChange={(v) => onChange("koli", v)} placeholder="1" />
       </Field>
       <div className="col-span-2">
-        <p className="text-xs font-medium text-slate-600 mb-1.5">Dimensi per Koli (cm)</p>
+        <p className="text-xs font-medium text-slate-600 mb-1.5">{t("serviceCart.dimensiPerKoli", "Dimensi per Koli (cm)")}</p>
         <div className="grid grid-cols-3 gap-2">
-          <TextInput type="number" value={String(data.dim_length_cm ?? "")} onChange={(v) => onChange("dim_length_cm", v)} placeholder="Panjang" />
-          <TextInput type="number" value={String(data.dim_width_cm ?? "")} onChange={(v) => onChange("dim_width_cm", v)} placeholder="Lebar" />
-          <TextInput type="number" value={String(data.dim_height_cm ?? "")} onChange={(v) => onChange("dim_height_cm", v)} placeholder="Tinggi" />
+          <TextInput type="number" value={String(data.dim_length_cm ?? "")} onChange={(v) => onChange("dim_length_cm", v)} placeholder={t("serviceCart.panjang", "Panjang")} />
+          <TextInput type="number" value={String(data.dim_width_cm ?? "")} onChange={(v) => onChange("dim_width_cm", v)} placeholder={t("serviceCart.lebar", "Lebar")} />
+          <TextInput type="number" value={String(data.dim_height_cm ?? "")} onChange={(v) => onChange("dim_height_cm", v)} placeholder={t("serviceCart.tinggi", "Tinggi")} />
         </div>
       </div>
       {(l > 0 || w > 0 || h > 0 || gross > 0) && (
         <div className="col-span-2 bg-blue-50 border border-blue-200 rounded-lg px-4 py-2.5 flex items-center gap-3">
           <Calculator className="w-4 h-4 text-blue-500 flex-shrink-0" />
           <div className="text-xs text-blue-700 flex gap-4">
-            <span>Volumetric: <strong>{volumetric.toFixed(1)} kg</strong></span>
-            <span>Gross: <strong>{gross.toFixed(1)} kg</strong></span>
-            <span className="font-bold text-blue-800">Chargeable: {chargeable.toFixed(1)} kg</span>
+            <span>{t("serviceCart.volumetric", "Volumetric")}: <strong>{volumetric.toFixed(1)} kg</strong></span>
+            <span>{t("serviceCart.gross", "Gross")}: <strong>{gross.toFixed(1)} kg</strong></span>
+            <span className="font-bold text-blue-800">{t("serviceCart.chargeable", "Chargeable")}: {chargeable.toFixed(1)} kg</span>
           </div>
         </div>
       )}
-      <Field label="Foto Barang (URL)">
+      <Field label={t("serviceCart.fotoBarangUrl", "Foto Barang (URL)")}>
         <div className="flex gap-1.5">
           <ImageIcon className="w-4 h-4 text-slate-400 mt-2 flex-shrink-0" />
           <TextInput value={String(data.photo_url ?? "")} onChange={(v) => onChange("photo_url", v)} placeholder="https://..." />
@@ -276,15 +279,16 @@ function AirFreightForm({ data, onChange }: { data: Record<string, string | numb
 }
 
 function OceanFreightForm({ data, onChange }: { data: Record<string, string | number | boolean>; onChange: (k: string, v: string | number | boolean) => void }) {
+  const { t } = useLanguage();
   return (
     <div className="grid grid-cols-2 gap-3">
-      <Field label="Jenis Muatan" required>
+      <Field label={t("serviceCart.jenisMuatan", "Jenis Muatan")} required>
         <SelectInput value={String(data.load_type ?? "")} onChange={(v) => onChange("load_type", v)} options={[
           { v: "FCL", l: "FCL — Full Container Load" },
           { v: "LCL", l: "LCL — Less than Container Load" },
         ]} />
       </Field>
-      <Field label="Tipe Container">
+      <Field label={t("serviceCart.tipeContainer", "Tipe Container")}>
         <SelectInput value={String(data.container_type ?? "")} onChange={(v) => onChange("container_type", v)} options={[
           { v: "20GP", l: "20' GP" }, { v: "40GP", l: "40' GP" },
           { v: "40HC", l: "40' HC" }, { v: "20RF", l: "20' Reefer" },
@@ -297,7 +301,7 @@ function OceanFreightForm({ data, onChange }: { data: Record<string, string | nu
       <Field label="Port of Discharge (POD)" required>
         <TextInput value={String(data.pod ?? "")} onChange={(v) => onChange("pod", v)} placeholder="e.g. SGSIN" />
       </Field>
-      <Field label="Komoditi" required>
+      <Field label={t("serviceCart.commodity", "Komoditi")} required>
         <TextInput value={String(data.commodity ?? "")} onChange={(v) => onChange("commodity", v)} placeholder="e.g. Furniture" />
       </Field>
       <Field label="HS Code">
@@ -306,13 +310,13 @@ function OceanFreightForm({ data, onChange }: { data: Record<string, string | nu
       <Field label="Volume (CBM)" required>
         <TextInput type="number" value={String(data.volume_cbm ?? "")} onChange={(v) => onChange("volume_cbm", v)} placeholder="0" />
       </Field>
-      <Field label="Gross Weight (kg)">
+      <Field label={t("serviceCart.grossWeightKg", "Gross Weight (kg)")}>
         <TextInput type="number" value={String(data.gross_weight_kg ?? "")} onChange={(v) => onChange("gross_weight_kg", v)} placeholder="0" />
       </Field>
-      <Field label="Ready Date">
+      <Field label={t("serviceCart.readyDate", "Ready Date")}>
         <TextInput type="date" value={String(data.ready_date ?? "")} onChange={(v) => onChange("ready_date", v)} />
       </Field>
-      <Field label="Foto Barang (URL)">
+      <Field label={t("serviceCart.fotoBarangUrl", "Foto Barang (URL)")}>
         <div className="flex gap-1.5">
           <ImageIcon className="w-4 h-4 text-slate-400 mt-2 flex-shrink-0" />
           <TextInput value={String(data.photo_url ?? "")} onChange={(v) => onChange("photo_url", v)} placeholder="https://..." />
@@ -323,39 +327,40 @@ function OceanFreightForm({ data, onChange }: { data: Record<string, string | nu
 }
 
 function ForwardingForm({ data, onChange }: { data: Record<string, string | number | boolean>; onChange: (k: string, v: string | number | boolean) => void }) {
+  const { t } = useLanguage();
   return (
     <div className="grid grid-cols-2 gap-3">
-      <Field label="Arah Perdagangan" required>
+      <Field label={t("serviceCart.arahPerdagangan", "Arah Perdagangan")} required>
         <SelectInput value={String(data.trade_direction ?? "")} onChange={(v) => onChange("trade_direction", v)} options={[
           { v: "export", l: "Export" }, { v: "import", l: "Import" },
         ]} />
       </Field>
-      <Field label="Negara Asal" required>
+      <Field label={t("serviceCart.negaraAsal", "Negara Asal")} required>
         <TextInput value={String(data.origin_country ?? "")} onChange={(v) => onChange("origin_country", v)} placeholder="e.g. Indonesia" />
       </Field>
-      <Field label="Negara Tujuan" required>
+      <Field label={t("serviceCart.negaraTujuan", "Negara Tujuan")} required>
         <TextInput value={String(data.dest_country ?? "")} onChange={(v) => onChange("dest_country", v)} placeholder="e.g. China" />
       </Field>
-      <Field label="Komoditi" required>
+      <Field label={t("serviceCart.commodity", "Komoditi")} required>
         <TextInput value={String(data.commodity ?? "")} onChange={(v) => onChange("commodity", v)} placeholder="e.g. Palm Oil" />
       </Field>
       <Field label="HS Code" required>
         <TextInput value={String(data.hs_code ?? "")} onChange={(v) => onChange("hs_code", v)} placeholder="e.g. 1511" />
       </Field>
-      <Field label="Foto Barang (URL)" required>
+      <Field label={t("serviceCart.fotoBarangUrl", "Foto Barang (URL)")} required>
         <div className="flex gap-1.5">
           <ImageIcon className="w-4 h-4 text-slate-400 mt-2 flex-shrink-0" />
           <TextInput value={String(data.photo_url ?? "")} onChange={(v) => onChange("photo_url", v)} placeholder="https://..." />
         </div>
       </Field>
       <div className="col-span-2 space-y-2">
-        <p className="text-xs font-medium text-slate-600">Dokumen Tersedia:</p>
+        <p className="text-xs font-medium text-slate-600">{t("serviceCart.dokumenTersedia", "Dokumen Tersedia:")}</p>
         <div className="grid grid-cols-2 gap-2">
           <CheckRow label="Invoice" checked={!!data.has_invoice} onChange={(v) => onChange("has_invoice", v)} />
           <CheckRow label="Packing List" checked={!!data.has_packing_list} onChange={(v) => onChange("has_packing_list", v)} />
           <CheckRow label="MSDS (Material Safety Data Sheet)" checked={!!data.has_msds} onChange={(v) => onChange("has_msds", v)} />
-          <CheckRow label="Lartas (Larangan / Pembatasan)" checked={!!data.lartas_check} onChange={(v) => onChange("lartas_check", v)} />
-          <CheckRow label="Barang Berbahaya / DG" checked={!!data.dg_check} onChange={(v) => onChange("dg_check", v)} />
+          <CheckRow label={t("serviceCart.lartasCheck", "Lartas (Larangan / Pembatasan)")} checked={!!data.lartas_check} onChange={(v) => onChange("lartas_check", v)} />
+          <CheckRow label={t("serviceCart.dgCheck", "Barang Berbahaya / DG")} checked={!!data.dg_check} onChange={(v) => onChange("dg_check", v)} />
         </div>
       </div>
     </div>
@@ -363,14 +368,15 @@ function ForwardingForm({ data, onChange }: { data: Record<string, string | numb
 }
 
 function PpjkForm({ data, onChange }: { data: Record<string, string | number | boolean>; onChange: (k: string, v: string | number | boolean) => void }) {
+  const { t } = useLanguage();
   return (
     <div className="grid grid-cols-2 gap-3">
-      <Field label="Arah" required>
+      <Field label={t("serviceCart.arah", "Arah")} required>
         <SelectInput value={String(data.trade_direction ?? "")} onChange={(v) => onChange("trade_direction", v)} options={[
           { v: "export", l: "Export" }, { v: "import", l: "Import" },
         ]} />
       </Field>
-      <Field label="Jenis Dokumen">
+      <Field label={t("serviceCart.jenisDokumen", "Jenis Dokumen")}>
         <SelectInput value={String(data.doc_type ?? "")} onChange={(v) => onChange("doc_type", v)} options={[
           { v: "PIB", l: "PIB — Pemberitahuan Impor Barang" },
           { v: "PEB", l: "PEB — Pemberitahuan Ekspor Barang" },
@@ -381,47 +387,48 @@ function PpjkForm({ data, onChange }: { data: Record<string, string | number | b
       <Field label="HS Code" required>
         <TextInput value={String(data.hs_code ?? "")} onChange={(v) => onChange("hs_code", v)} placeholder="e.g. 8471" />
       </Field>
-      <Field label="NPWP / NIB Perusahaan">
-        <TextInput value={String(data.npwp_nib ?? "")} onChange={(v) => onChange("npwp_nib", v)} placeholder="NPWP atau NIB" />
+      <Field label={t("serviceCart.npwpNib", "NPWP / NIB Perusahaan")}>
+        <TextInput value={String(data.npwp_nib ?? "")} onChange={(v) => onChange("npwp_nib", v)} placeholder={t("serviceCart.npwpNibPh", "NPWP atau NIB")} />
       </Field>
-      <Field label="Komoditi">
+      <Field label={t("serviceCart.commodity", "Komoditi")}>
         <TextInput value={String(data.commodity ?? "")} onChange={(v) => onChange("commodity", v)} placeholder="e.g. Laptop Computer" />
       </Field>
-      <Field label="Nilai CIF (IDR)">
+      <Field label={t("serviceCart.nilaiCif", "Nilai CIF (IDR)")}>
         <TextInput type="number" value={String(data.cif_value ?? "")} onChange={(v) => onChange("cif_value", v)} placeholder="0" />
       </Field>
       <div className="col-span-2 space-y-2">
-        <p className="text-xs font-medium text-slate-600">Dokumen:</p>
+        <p className="text-xs font-medium text-slate-600">{t("serviceCart.dokumen", "Dokumen:")}</p>
         <div className="grid grid-cols-2 gap-2">
-          <CheckRow label="Invoice tersedia" checked={!!data.has_invoice} onChange={(v) => onChange("has_invoice", v)} />
-          <CheckRow label="Packing List tersedia" checked={!!data.has_packing_list} onChange={(v) => onChange("has_packing_list", v)} />
-          <CheckRow label="Dokumen Lartas / Izin diperlukan" checked={!!data.lartas_permit_required} onChange={(v) => onChange("lartas_permit_required", v)} />
+          <CheckRow label={t("serviceCart.invoiceTersedia", "Invoice tersedia")} checked={!!data.has_invoice} onChange={(v) => onChange("has_invoice", v)} />
+          <CheckRow label={t("serviceCart.packingListTersedia", "Packing List tersedia")} checked={!!data.has_packing_list} onChange={(v) => onChange("has_packing_list", v)} />
+          <CheckRow label={t("serviceCart.lartasPermitRequired", "Dokumen Lartas / Izin diperlukan")} checked={!!data.lartas_permit_required} onChange={(v) => onChange("lartas_permit_required", v)} />
         </div>
       </div>
       <div className="col-span-2 space-y-1">
-        <Label className="text-xs font-medium text-slate-600">Customs Note / Catatan Kepabeanan</Label>
-        <Textarea value={String(data.customs_note ?? "")} onChange={(e) => onChange("customs_note", e.target.value)} rows={2} className="text-sm resize-none" placeholder="Instruksi khusus, preferensi jalur, dll..." />
+        <Label className="text-xs font-medium text-slate-600">{t("serviceCart.customsNote", "Customs Note / Catatan Kepabeanan")}</Label>
+        <Textarea value={String(data.customs_note ?? "")} onChange={(e) => onChange("customs_note", e.target.value)} rows={2} className="text-sm resize-none" placeholder={t("serviceCart.customsNotePh", "Instruksi khusus, preferensi jalur, dll...")} />
       </div>
     </div>
   );
 }
 
 function TruckingForm({ data, onChange }: { data: Record<string, string | number | boolean>; onChange: (k: string, v: string | number | boolean) => void }) {
+  const { t } = useLanguage();
   return (
     <div className="grid grid-cols-2 gap-3">
-      <Field label="Alamat Pickup" required>
+      <Field label={t("serviceCart.alamatPickup", "Alamat Pickup")} required>
         <TextInput value={String(data.pickup_address ?? "")} onChange={(v) => onChange("pickup_address", v)} placeholder="Jl. ..., Kota" />
       </Field>
-      <Field label="Alamat Tujuan" required>
+      <Field label={t("serviceCart.alamatTujuan", "Alamat Tujuan")} required>
         <TextInput value={String(data.delivery_address ?? "")} onChange={(v) => onChange("delivery_address", v)} placeholder="Jl. ..., Kota" />
       </Field>
-      <Field label="PIC Pickup (Nama & HP)">
+      <Field label={t("serviceCart.picPickup", "PIC Pickup (Nama & HP)")}>
         <TextInput value={String(data.pickup_pic ?? "")} onChange={(v) => onChange("pickup_pic", v)} placeholder="e.g. Budi — 08123..." />
       </Field>
-      <Field label="PIC Tujuan (Nama & HP)">
+      <Field label={t("serviceCart.picTujuan", "PIC Tujuan (Nama & HP)")}>
         <TextInput value={String(data.delivery_pic ?? "")} onChange={(v) => onChange("delivery_pic", v)} placeholder="e.g. Siti — 08987..." />
       </Field>
-      <Field label="Jenis Kendaraan" required>
+      <Field label={t("serviceCart.jenisKendaraan", "Jenis Kendaraan")} required>
         <SelectInput value={String(data.vehicle_type ?? "")} onChange={(v) => onChange("vehicle_type", v)} options={[
           { v: "motor", l: "Motor" }, { v: "mobil", l: "Mobil / Van" },
           { v: "pickup", l: "Pickup" }, { v: "engkel", l: "Engkel" },
@@ -430,16 +437,16 @@ function TruckingForm({ data, onChange }: { data: Record<string, string | number
           { v: "trailer", l: "Trailer" },
         ]} />
       </Field>
-      <Field label="Tanggal Pickup">
+      <Field label={t("serviceCart.tanggalPickup", "Tanggal Pickup")}>
         <TextInput type="date" value={String(data.pickup_date ?? "")} onChange={(v) => onChange("pickup_date", v)} />
       </Field>
-      <Field label="Berat (kg)">
+      <Field label={t("serviceCart.beratKg", "Berat (kg)")}>
         <TextInput type="number" value={String(data.gross_weight_kg ?? "")} onChange={(v) => onChange("gross_weight_kg", v)} placeholder="0" />
       </Field>
       <Field label="Volume (CBM)">
         <TextInput type="number" value={String(data.volume_cbm ?? "")} onChange={(v) => onChange("volume_cbm", v)} placeholder="0" />
       </Field>
-      <Field label="Foto Kargo (URL)">
+      <Field label={t("serviceCart.fotoKargoUrl", "Foto Kargo (URL)")}>
         <div className="flex gap-1.5">
           <ImageIcon className="w-4 h-4 text-slate-400 mt-2 flex-shrink-0" />
           <TextInput value={String(data.photo_url ?? "")} onChange={(v) => onChange("photo_url", v)} placeholder="https://..." />
@@ -450,68 +457,70 @@ function TruckingForm({ data, onChange }: { data: Record<string, string | number
 }
 
 function WarehousingForm({ data, onChange }: { data: Record<string, string | number | boolean>; onChange: (k: string, v: string | number | boolean) => void }) {
+  const { t } = useLanguage();
   return (
     <div className="grid grid-cols-2 gap-3">
-      <Field label="Lokasi Gudang Preferensi">
+      <Field label={t("serviceCart.lokasiGudang", "Lokasi Gudang Preferensi")}>
         <TextInput value={String(data.warehouse_location ?? "")} onChange={(v) => onChange("warehouse_location", v)} placeholder="e.g. Cikarang, Cikupa, Surabaya" />
       </Field>
-      <Field label="Estimasi Durasi">
+      <Field label={t("serviceCart.estimasiDurasi", "Estimasi Durasi")}>
         <SelectInput value={String(data.storage_duration ?? "")} onChange={(v) => onChange("storage_duration", v)} options={[
           { v: "1_bulan", l: "1 Bulan" }, { v: "3_bulan", l: "3 Bulan" },
           { v: "6_bulan", l: "6 Bulan" }, { v: "1_tahun", l: "1 Tahun" },
           { v: "ongoing", l: "Ongoing / TBD" },
         ]} />
       </Field>
-      <Field label="SKU / Kode Produk">
+      <Field label={t("serviceCart.skuKodeProduk", "SKU / Kode Produk")}>
         <TextInput value={String(data.sku ?? "")} onChange={(v) => onChange("sku", v)} placeholder="e.g. SKU-001, SKU-002" />
       </Field>
-      <Field label="Jumlah Unit">
+      <Field label={t("serviceCart.jumlahUnit", "Jumlah Unit")}>
         <TextInput type="number" value={String(data.quantity ?? "")} onChange={(v) => onChange("quantity", v)} placeholder="0" />
       </Field>
-      <Field label="Tipe Penyimpanan">
+      <Field label={t("serviceCart.tipePenyimpanan", "Tipe Penyimpanan")}>
         <SelectInput value={String(data.storage_type ?? "")} onChange={(v) => onChange("storage_type", v)} options={[
           { v: "dry", l: "Dry Warehouse" },
           { v: "cold", l: "Cold Storage" },
           { v: "bonded", l: "Bonded Warehouse" },
         ]} />
       </Field>
-      <Field label="Tanggal Inbound">
+      <Field label={t("serviceCart.tanggalInbound", "Tanggal Inbound")}>
         <TextInput type="date" value={String(data.inbound_date ?? "")} onChange={(v) => onChange("inbound_date", v)} />
       </Field>
       <div className="col-span-2 space-y-1">
-        <Label className="text-xs font-medium text-slate-600">Persyaratan Penyimpanan Khusus</Label>
-        <Textarea value={String(data.storage_requirement ?? "")} onChange={(e) => onChange("storage_requirement", e.target.value)} rows={2} className="text-sm resize-none" placeholder="e.g. suhu tertentu, rak khusus, forklift..." />
+        <Label className="text-xs font-medium text-slate-600">{t("serviceCart.persyaratanPenyimpanan", "Persyaratan Penyimpanan Khusus")}</Label>
+        <Textarea value={String(data.storage_requirement ?? "")} onChange={(e) => onChange("storage_requirement", e.target.value)} rows={2} className="text-sm resize-none" placeholder={t("serviceCart.persyaratanPenyimpananPh", "e.g. suhu tertentu, rak khusus, forklift...")} />
       </div>
     </div>
   );
 }
 
 function InsuranceForm({ data, onChange }: { data: Record<string, string | number | boolean>; onChange: (k: string, v: string | number | boolean) => void }) {
+  const { t } = useLanguage();
   return (
     <div className="grid grid-cols-2 gap-3">
-      <Field label="Nilai Kargo" required>
+      <Field label={t("serviceCart.nilaiKargo", "Nilai Kargo")} required>
         <TextInput type="number" value={String(data.cargo_value ?? "")} onChange={(v) => onChange("cargo_value", v)} placeholder="0" />
       </Field>
-      <Field label="Mata Uang" required>
+      <Field label={t("serviceCart.mataUang", "Mata Uang")} required>
         <SelectInput value={String(data.currency ?? "IDR")} onChange={(v) => onChange("currency", v)} options={[
           { v: "IDR", l: "IDR — Rupiah" }, { v: "USD", l: "USD — Dollar" },
           { v: "EUR", l: "EUR — Euro" }, { v: "SGD", l: "SGD — Singapore Dollar" },
         ]} />
       </Field>
-      <Field label="Tipe Coverage" required>
+      <Field label={t("serviceCart.tipeCoverage", "Tipe Coverage")} required>
         <SelectInput value={String(data.coverage_type ?? "")} onChange={(v) => onChange("coverage_type", v)} options={[
           { v: "all_risk", l: "All Risk" },
           { v: "total_loss", l: "Total Loss Only (TLO)" },
           { v: "war_srcc", l: "War & SRCC" },
         ]} />
       </Field>
-      <Field label="Komoditi">
+      <Field label={t("serviceCart.commodity", "Komoditi")}>
         <TextInput value={String(data.commodity ?? "")} onChange={(v) => onChange("commodity", v)} placeholder="e.g. Elektronik" />
       </Field>
-      <Field label="Nilai Invoice">
+      <Field label={t("serviceCart.nilaiInvoice", "Nilai Invoice")}>
         <TextInput type="number" value={String(data.invoice_value ?? "")} onChange={(v) => onChange("invoice_value", v)} placeholder="0" />
       </Field>
-      <Field label="Moda Transportasi">
+      <Field label={t("serviceCart.modaTransportasi", "Moda Transportasi")}>
         <SelectInput value={String(data.transport_mode ?? "")} onChange={(v) => onChange("transport_mode", v)} options={[
           { v: "air", l: "Air Freight" }, { v: "sea", l: "Ocean Freight" },
           { v: "truck", l: "Trucking / Darat" }, { v: "multi", l: "Multimodal" },
@@ -522,35 +531,37 @@ function InsuranceForm({ data, onChange }: { data: Record<string, string | numbe
 }
 
 function HandlingForm({ data, onChange }: { data: Record<string, string | number | boolean>; onChange: (k: string, v: string | number | boolean) => void }) {
+  const { t } = useLanguage();
   return (
     <div className="grid grid-cols-2 gap-3">
-      <Field label="Jenis Handling" required>
+      <Field label={t("serviceCart.jenisHandling", "Jenis Handling")} required>
         <SelectInput value={String(data.handling_type ?? "")} onChange={(v) => onChange("handling_type", v)} options={[
           { v: "loading", l: "Loading (Muat)" }, { v: "unloading", l: "Unloading (Bongkar)" },
           { v: "stuffing", l: "Stuffing Container" }, { v: "stripping", l: "Stripping Container" },
           { v: "sorting", l: "Sorting & Labeling" }, { v: "repacking", l: "Repacking" },
         ]} />
       </Field>
-      <Field label="Lokasi" required>
+      <Field label={t("serviceCart.lokasi", "Lokasi")} required>
         <TextInput value={String(data.location ?? "")} onChange={(v) => onChange("location", v)} placeholder="e.g. Tanjung Priok" />
       </Field>
-      <Field label="Jumlah Koli / Unit">
+      <Field label={t("serviceCart.jumlahKoliUnit", "Jumlah Koli / Unit")}>
         <TextInput type="number" value={String(data.quantity ?? "")} onChange={(v) => onChange("quantity", v)} placeholder="0" />
       </Field>
-      <Field label="Total Berat (kg)">
+      <Field label={t("serviceCart.totalBeratKg", "Total Berat (kg)")}>
         <TextInput type="number" value={String(data.gross_weight_kg ?? "")} onChange={(v) => onChange("gross_weight_kg", v)} placeholder="0" />
       </Field>
-      <Field label="Komoditi">
-        <TextInput value={String(data.commodity ?? "")} onChange={(v) => onChange("commodity", v)} placeholder="Jenis barang" />
+      <Field label={t("serviceCart.commodity", "Komoditi")}>
+        <TextInput value={String(data.commodity ?? "")} onChange={(v) => onChange("commodity", v)} placeholder={t("serviceCart.jenisBarang", "Jenis barang")} />
       </Field>
     </div>
   );
 }
 
 function SurveyForm({ data, onChange }: { data: Record<string, string | number | boolean>; onChange: (k: string, v: string | number | boolean) => void }) {
+  const { t } = useLanguage();
   return (
     <div className="grid grid-cols-2 gap-3">
-      <Field label="Jenis Survey" required>
+      <Field label={t("serviceCart.jenisSurvey", "Jenis Survey")} required>
         <SelectInput value={String(data.survey_type ?? "")} onChange={(v) => onChange("survey_type", v)} options={[
           { v: "pre_shipment", l: "Pre-Shipment Inspection" },
           { v: "condition_report", l: "Condition Report" },
@@ -559,16 +570,16 @@ function SurveyForm({ data, onChange }: { data: Record<string, string | number |
           { v: "loading_supervision", l: "Loading Supervision" },
         ]} />
       </Field>
-      <Field label="Lokasi Survey" required>
+      <Field label={t("serviceCart.lokasiSurvey", "Lokasi Survey")} required>
         <TextInput value={String(data.location ?? "")} onChange={(v) => onChange("location", v)} placeholder="e.g. Gudang Jakarta" />
       </Field>
-      <Field label="Tanggal Survey">
+      <Field label={t("serviceCart.tanggalSurvey", "Tanggal Survey")}>
         <TextInput type="date" value={String(data.survey_date ?? "")} onChange={(v) => onChange("survey_date", v)} />
       </Field>
-      <Field label="Komoditi">
-        <TextInput value={String(data.commodity ?? "")} onChange={(v) => onChange("commodity", v)} placeholder="Jenis barang" />
+      <Field label={t("serviceCart.commodity", "Komoditi")}>
+        <TextInput value={String(data.commodity ?? "")} onChange={(v) => onChange("commodity", v)} placeholder={t("serviceCart.jenisBarang", "Jenis barang")} />
       </Field>
-      <Field label="Jumlah Barang">
+      <Field label={t("serviceCart.jumlahBarang", "Jumlah Barang")}>
         <TextInput type="number" value={String(data.quantity ?? "")} onChange={(v) => onChange("quantity", v)} placeholder="0" />
       </Field>
     </div>
@@ -576,36 +587,37 @@ function SurveyForm({ data, onChange }: { data: Record<string, string | number |
 }
 
 function ProjectCargoForm({ data, onChange }: { data: Record<string, string | number | boolean>; onChange: (k: string, v: string | number | boolean) => void }) {
+  const { t } = useLanguage();
   return (
     <div className="grid grid-cols-2 gap-3">
-      <Field label="Lokasi Asal" required>
+      <Field label={t("serviceCart.lokasiAsal", "Lokasi Asal")} required>
         <TextInput value={String(data.origin ?? "")} onChange={(v) => onChange("origin", v)} placeholder="e.g. Jakarta Port" />
       </Field>
-      <Field label="Lokasi Tujuan" required>
+      <Field label={t("serviceCart.lokasiTujuan", "Lokasi Tujuan")} required>
         <TextInput value={String(data.destination ?? "")} onChange={(v) => onChange("destination", v)} placeholder="e.g. Balikpapan" />
       </Field>
-      <Field label="Deskripsi Kargo" required>
+      <Field label={t("serviceCart.deskripsiKargo", "Deskripsi Kargo")} required>
         <TextInput value={String(data.cargo_description ?? "")} onChange={(v) => onChange("cargo_description", v)} placeholder="e.g. Transformator 500kV" />
       </Field>
-      <Field label="Total Berat (ton)">
+      <Field label={t("serviceCart.totalBeratTon", "Total Berat (ton)")}>
         <TextInput type="number" value={String(data.total_weight_tons ?? "")} onChange={(v) => onChange("total_weight_tons", v)} placeholder="0" />
       </Field>
-      <Field label="Panjang (m)">
+      <Field label={t("serviceCart.panjangM", "Panjang (m)")}>
         <TextInput type="number" value={String(data.length_m ?? "")} onChange={(v) => onChange("length_m", v)} placeholder="0" />
       </Field>
-      <Field label="Lebar (m)">
+      <Field label={t("serviceCart.lebarM", "Lebar (m)")}>
         <TextInput type="number" value={String(data.width_m ?? "")} onChange={(v) => onChange("width_m", v)} placeholder="0" />
       </Field>
-      <Field label="Tinggi (m)">
+      <Field label={t("serviceCart.tinggiM", "Tinggi (m)")}>
         <TextInput type="number" value={String(data.height_m ?? "")} onChange={(v) => onChange("height_m", v)} placeholder="0" />
       </Field>
-      <Field label="Kebutuhan Khusus">
+      <Field label={t("serviceCart.kebutuhanKhusus", "Kebutuhan Khusus")}>
         <SelectInput value={String(data.special_requirement ?? "")} onChange={(v) => onChange("special_requirement", v)} options={[
           { v: "heavy_lift", l: "Heavy Lift Crane" },
           { v: "special_trailer", l: "Special Trailer" },
           { v: "escort", l: "Police Escort" },
           { v: "roll_on_off", l: "RoRo" },
-          { v: "none", l: "Tidak Ada" },
+          { v: "none", l: t("serviceCart.tidakAda", "Tidak Ada") },
         ]} />
       </Field>
     </div>
@@ -635,12 +647,13 @@ function ServiceForm({
 // ─── Step indicators ──────────────────────────────────────────────────────────
 
 function StepBar({ current }: { current: Step }) {
+  const { t } = useLanguage();
   const STEPS: { id: Step; label: string }[] = [
-    { id: "trade_type", label: "Data Diri" },
-    { id: "company_profile", label: "Profil Perusahaan" },
-    { id: "mode_select", label: "Mode Pemesanan" },
-    { id: "add_items", label: "Detail Layanan" },
-    { id: "review", label: "Review & Kirim" },
+    { id: "trade_type", label: t("serviceCart.stepDataDiri", "Data Diri") },
+    { id: "company_profile", label: t("serviceCart.stepProfilPerusahaan", "Profil Perusahaan") },
+    { id: "mode_select", label: t("serviceCart.stepModePemesanan", "Mode Pemesanan") },
+    { id: "add_items", label: t("serviceCart.stepDetailLayanan", "Detail Layanan") },
+    { id: "review", label: t("serviceCart.stepReviewKirim", "Review & Kirim") },
   ];
   const activeIdx = STEPS.findIndex((s) => s.id === current || (current === "package_select" && s.id === "add_items"));
   return (
@@ -665,6 +678,7 @@ function StepBar({ current }: { current: Step }) {
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function ServiceCartPage() {
+  const { t } = useLanguage();
   const [, navigate] = useLocation();
   const [, params] = useRoute("/service-cart/:requestId");
   const { toast } = useToast();
@@ -804,13 +818,13 @@ export default function ServiceCartPage() {
   // Apply package
   const applyPackage = async (pkg: ServicePackage) => {
     if (!customerInfo.customerName || !customerInfo.customerEmail) {
-      toast({ title: "Isi data diri terlebih dahulu", variant: "destructive" });
+      toast({ title: t("serviceCart.toastFillDataFirst", "Isi data diri terlebih dahulu"), variant: "destructive" });
       return;
     }
     setApplyingPackage(true);
     try {
       const reqId = await createDraft();
-      if (!reqId) { toast({ title: "Gagal membuat request", variant: "destructive" }); return; }
+      if (!reqId) { toast({ title: t("serviceCart.toastCreateRequestFailed", "Gagal membuat request"), variant: "destructive" }); return; }
       const res = await fetch(`/api/service-packages/${pkg.id}/apply/${reqId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -824,12 +838,12 @@ export default function ServiceCartPage() {
           ...i, tempId: `pkg-${i.id}`,
         })));
         setStep("add_items");
-        toast({ title: `Paket "${pkg.packageName}" diterapkan — ${data.items.length} item ditambahkan` });
+        toast({ title: `${t("serviceCart.toastPaket", "Paket")} "${pkg.packageName}" ${t("serviceCart.toastPaketApplied", "diterapkan")} — ${data.items.length} ${t("serviceCart.toastItemAdded", "item ditambahkan")}` });
       } else {
-        toast({ title: data.error ?? "Gagal menerapkan paket", variant: "destructive" });
+        toast({ title: data.error ?? t("serviceCart.toastApplyFailed", "Gagal menerapkan paket"), variant: "destructive" });
       }
     } catch {
-      toast({ title: "Terjadi kesalahan", variant: "destructive" });
+      toast({ title: t("serviceCart.toastError", "Terjadi kesalahan"), variant: "destructive" });
     } finally {
       setApplyingPackage(false);
     }
@@ -875,18 +889,18 @@ export default function ServiceCartPage() {
 
   const handleConfirmItem = async () => {
     if (!pendingType || !itemTitle.trim()) {
-      toast({ title: "Pilih jenis layanan dan isi judul", variant: "destructive" });
+      toast({ title: t("serviceCart.toastPickServiceAndTitle", "Pilih jenis layanan dan isi judul"), variant: "destructive" });
       return;
     }
     if (!customerInfo.customerName || !customerInfo.customerEmail) {
-      toast({ title: "Isi data diri di langkah pertama", variant: "destructive" });
+      toast({ title: t("serviceCart.toastFillDataStep1", "Isi data diri di langkah pertama"), variant: "destructive" });
       setShowItemEditor(false);
       return;
     }
     setSavingItem(true);
     try {
       const reqId = await createDraft();
-      if (!reqId) { toast({ title: "Gagal membuat request", variant: "destructive" }); return; }
+      if (!reqId) { toast({ title: t("serviceCart.toastCreateRequestFailed", "Gagal membuat request"), variant: "destructive" }); return; }
       const item: ServiceItem = {
         ...(editingItem ?? {}),
         tempId: editingItem?.tempId ?? crypto.randomUUID(),
@@ -903,12 +917,12 @@ export default function ServiceCartPage() {
             : [...prev, merged]
         );
         setShowItemEditor(false);
-        toast({ title: `"${merged.title}" ${editingItem ? "diperbarui" : "ditambahkan"}` });
+        toast({ title: `"${merged.title}" ${editingItem ? t("serviceCart.toastItemUpdated", "diperbarui") : t("serviceCart.toastItemAdded2", "ditambahkan")}` });
       } else {
-        toast({ title: "Gagal menyimpan item", variant: "destructive" });
+        toast({ title: t("serviceCart.toastSaveItemFailed", "Gagal menyimpan item"), variant: "destructive" });
       }
     } catch {
-      toast({ title: "Terjadi kesalahan", variant: "destructive" });
+      toast({ title: t("serviceCart.toastError", "Terjadi kesalahan"), variant: "destructive" });
     } finally {
       setSavingItem(false);
     }
@@ -916,7 +930,7 @@ export default function ServiceCartPage() {
 
   const handleDeleteItem = async (item: ServiceItem) => {
     if (item.isRequired) {
-      toast({ title: "Item wajib tidak bisa dihapus dari paket", variant: "destructive" });
+      toast({ title: t("serviceCart.toastRequiredItemCannotDelete", "Item wajib tidak bisa dihapus dari paket"), variant: "destructive" });
       return;
     }
     if (item.id && requestId) {
@@ -925,12 +939,12 @@ export default function ServiceCartPage() {
       });
     }
     setItems((prev) => prev.filter((it) => it.tempId !== item.tempId));
-    toast({ title: `"${item.title}" dihapus` });
+    toast({ title: `"${item.title}" ${t("serviceCart.toastItemDeleted", "dihapus")}` });
   };
 
   const handleSubmit = async () => {
     if (!requestId || items.length === 0) {
-      toast({ title: "Tambahkan minimal 1 item layanan", variant: "destructive" });
+      toast({ title: t("serviceCart.toastAddMinOne", "Tambahkan minimal 1 item layanan"), variant: "destructive" });
       return;
     }
     setLoading(true);
@@ -944,10 +958,10 @@ export default function ServiceCartPage() {
         setStep("success");
       } else {
         const data = await res.json();
-        toast({ title: data.error ?? "Gagal submit", variant: "destructive" });
+        toast({ title: data.error ?? t("serviceCart.toastSubmitFailed", "Gagal submit"), variant: "destructive" });
       }
     } catch {
-      toast({ title: "Terjadi kesalahan saat submit", variant: "destructive" });
+      toast({ title: t("serviceCart.toastSubmitError", "Terjadi kesalahan saat submit"), variant: "destructive" });
     } finally {
       setLoading(false);
     }
@@ -959,49 +973,49 @@ export default function ServiceCartPage() {
       <div className="max-w-2xl mx-auto space-y-6">
         <div>
           <button onClick={() => navigate("/jasa")} className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-800 mb-4">
-            <ArrowLeft className="w-4 h-4" /> Kembali
+            <ArrowLeft className="w-4 h-4" /> {t("serviceCart.kembali", "Kembali")}
           </button>
           <div className="flex items-center gap-3 mb-3">
             <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center">
               <BoxSelect className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1 className="text-xl font-bold text-slate-900">Buat Permintaan Layanan</h1>
-              <p className="text-sm text-slate-500">Logistik CST — isi data awal untuk melanjutkan</p>
+              <h1 className="text-xl font-bold text-slate-900">{t("serviceCart.buatPermintaanLayanan", "Buat Permintaan Layanan")}</h1>
+              <p className="text-sm text-slate-500">{t("serviceCart.logistikCstSubtitle", "Logistik CST — isi data awal untuk melanjutkan")}</p>
             </div>
           </div>
           <StepBar current="trade_type" />
         </div>
 
         <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
-          <h2 className="font-semibold text-slate-800">Data Diri</h2>
+          <h2 className="font-semibold text-slate-800">{t("serviceCart.dataDiri", "Data Diri")}</h2>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <Label className="text-sm">Nama Lengkap <span className="text-red-500">*</span></Label>
-              <Input placeholder="Nama Anda" value={customerInfo.customerName} onChange={(e) => setCustomerInfo((p) => ({ ...p, customerName: e.target.value }))} />
+              <Label className="text-sm">{t("serviceCart.namaLengkap", "Nama Lengkap")} <span className="text-red-500">*</span></Label>
+              <Input placeholder={t("serviceCart.namaAnda", "Nama Anda")} value={customerInfo.customerName} onChange={(e) => setCustomerInfo((p) => ({ ...p, customerName: e.target.value }))} />
             </div>
             <div className="space-y-1.5">
               <Label className="text-sm">Email <span className="text-red-500">*</span></Label>
               <Input type="email" placeholder="email@perusahaan.com" value={customerInfo.customerEmail} onChange={(e) => setCustomerInfo((p) => ({ ...p, customerEmail: e.target.value }))} />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-sm">Nomor HP / WhatsApp</Label>
+              <Label className="text-sm">{t("serviceCart.nomorHpWa", "Nomor HP / WhatsApp")}</Label>
               <Input placeholder="08xxxxxxxxxx" value={customerInfo.customerPhone} onChange={(e) => setCustomerInfo((p) => ({ ...p, customerPhone: e.target.value }))} />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-sm">Nama Perusahaan</Label>
+              <Label className="text-sm">{t("serviceCart.namaPerusahaan", "Nama Perusahaan")}</Label>
               <Input placeholder="PT / CV ..." value={customerInfo.customerCompany} onChange={(e) => setCustomerInfo((p) => ({ ...p, customerCompany: e.target.value }))} />
             </div>
           </div>
         </div>
 
         <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
-          <h2 className="font-semibold text-slate-800">Jenis Perdagangan</h2>
+          <h2 className="font-semibold text-slate-800">{t("serviceCart.jenisPerdagangan", "Jenis Perdagangan")}</h2>
           <div className="grid grid-cols-3 gap-3">
             {[
-              { type: "EXPORT" as TradeType, icon: "📤", desc: "Barang keluar dari Indonesia" },
-              { type: "IMPORT" as TradeType, icon: "📥", desc: "Barang masuk ke Indonesia" },
-              { type: "DOMESTIC" as TradeType, icon: "🇮🇩", desc: "Pengiriman dalam negeri" },
+              { type: "EXPORT" as TradeType, icon: "📤", desc: t("serviceCart.exportDesc", "Barang keluar dari Indonesia") },
+              { type: "IMPORT" as TradeType, icon: "📥", desc: t("serviceCart.importDesc", "Barang masuk ke Indonesia") },
+              { type: "DOMESTIC" as TradeType, icon: "🇮🇩", desc: t("serviceCart.domesticDesc", "Pengiriman dalam negeri") },
             ].map(({ type, icon, desc }) => (
               <button key={type} onClick={() => setTradeType(type)}
                 className={`rounded-xl border-2 p-4 text-left transition-all ${tradeType === type ? "border-blue-600 bg-blue-50" : "border-slate-200 hover:border-blue-300 bg-white"}`}>
@@ -1016,7 +1030,7 @@ export default function ServiceCartPage() {
         <Button className="w-full h-12 text-base bg-blue-600 hover:bg-blue-700"
           disabled={!tradeType || !customerInfo.customerName || !customerInfo.customerEmail}
           onClick={() => { setProfileFetched(false); setStep("company_profile"); }}>
-          Lanjut <ArrowRight className="w-4 h-4 ml-2" />
+          {t("serviceCart.lanjut", "Lanjut")} <ArrowRight className="w-4 h-4 ml-2" />
         </Button>
       </div>
     </div>
@@ -1046,15 +1060,15 @@ export default function ServiceCartPage() {
         <div className="max-w-2xl mx-auto space-y-6">
           <div>
             <button onClick={() => setStep("trade_type")} className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-800 mb-4">
-              <ArrowLeft className="w-4 h-4" /> Kembali
+              <ArrowLeft className="w-4 h-4" /> {t("serviceCart.kembali", "Kembali")}
             </button>
             <div className="flex items-center gap-3 mb-3">
               <div className="w-10 h-10 rounded-xl bg-violet-600 flex items-center justify-center">
                 <ShieldCheck className="w-5 h-5 text-white" />
               </div>
               <div>
-                <h1 className="text-xl font-bold text-slate-900">Profil Perusahaan</h1>
-                <p className="text-sm text-slate-500">Data legal & informasi PIC untuk memproses permintaan layanan</p>
+                <h1 className="text-xl font-bold text-slate-900">{t("serviceCart.profilPerusahaan", "Profil Perusahaan")}</h1>
+                <p className="text-sm text-slate-500">{t("serviceCart.profilPerusahaanSubtitle", "Data legal & informasi PIC untuk memproses permintaan layanan")}</p>
               </div>
             </div>
             <StepBar current="company_profile" />
@@ -1063,32 +1077,32 @@ export default function ServiceCartPage() {
           {profileLoading ? (
             <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center text-slate-500">
               <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2" />
-              Memeriksa profil perusahaan...
+              {t("serviceCart.memeriksaProfil", "Memeriksa profil perusahaan...")}
             </div>
           ) : companyProfile.isVerified ? (
             <div className="bg-white rounded-2xl border border-green-300 p-6">
               <div className="flex items-center gap-2 mb-3">
                 <ShieldCheck className="w-5 h-5 text-green-600" />
-                <span className="font-semibold text-green-700">Profil Terverifikasi</span>
+                <span className="font-semibold text-green-700">{t("serviceCart.profilTerverifikasi", "Profil Terverifikasi")}</span>
               </div>
               <div className="grid grid-cols-2 gap-y-2 text-sm">
-                <div className="text-slate-500">Perusahaan</div><div className="font-medium">{companyProfile.companyName}</div>
+                <div className="text-slate-500">{t("serviceCart.perusahaan", "Perusahaan")}</div><div className="font-medium">{companyProfile.companyName}</div>
                 <div className="text-slate-500">NPWP</div><div className="font-mono">{companyProfile.npwp}</div>
                 <div className="text-slate-500">NIB</div><div className="font-mono">{companyProfile.nib}</div>
                 <div className="text-slate-500">PIC</div><div>{companyProfile.picName}</div>
-                <div className="text-slate-500">WA PIC</div><div>{companyProfile.picWhatsapp}</div>
+                <div className="text-slate-500">{t("serviceCart.waPic", "WA PIC")}</div><div>{companyProfile.picWhatsapp}</div>
               </div>
               <Button className="w-full mt-4 bg-blue-600 hover:bg-blue-700" onClick={() => setStep("mode_select")}>
-                Lanjut <ArrowRight className="w-4 h-4 ml-2" />
+                {t("serviceCart.lanjut", "Lanjut")} <ArrowRight className="w-4 h-4 ml-2" />
               </Button>
             </div>
           ) : (
             <>
               <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
-                <h2 className="font-semibold text-slate-800">Data Legal Perusahaan</h2>
+                <h2 className="font-semibold text-slate-800">{t("serviceCart.dataLegalPerusahaan", "Data Legal Perusahaan")}</h2>
                 <div className="space-y-3">
                   <div className="space-y-1.5">
-                    <Label className="text-sm">Nama Perusahaan (PT/CV/UD) <span className="text-red-500">*</span></Label>
+                    <Label className="text-sm">{t("serviceCart.namaPerusahaanPtCvUd", "Nama Perusahaan (PT/CV/UD)")} <span className="text-red-500">*</span></Label>
                     <Input placeholder="PT Contoh Jaya" value={companyProfile.companyName} onChange={(e) => setCompanyProfile((p) => ({ ...p, companyName: e.target.value }))} />
                   </div>
                   <div className="grid grid-cols-2 gap-3">
@@ -1098,31 +1112,31 @@ export default function ServiceCartPage() {
                     </div>
                     <div className="space-y-1.5">
                       <Label className="text-sm">NIB <span className="text-red-500">*</span></Label>
-                      <Input placeholder="Nomor Induk Berusaha" value={companyProfile.nib} onChange={(e) => setCompanyProfile((p) => ({ ...p, nib: e.target.value }))} />
+                      <Input placeholder={t("serviceCart.nomorIndukBerusaha", "Nomor Induk Berusaha")} value={companyProfile.nib} onChange={(e) => setCompanyProfile((p) => ({ ...p, nib: e.target.value }))} />
                     </div>
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-sm">Alamat Perusahaan <span className="text-red-500">*</span></Label>
-                    <Textarea placeholder="Alamat lengkap perusahaan" value={companyProfile.companyAddress} onChange={(e) => setCompanyProfile((p) => ({ ...p, companyAddress: e.target.value }))} rows={2} className="resize-none" />
+                    <Label className="text-sm">{t("serviceCart.alamatPerusahaan", "Alamat Perusahaan")} <span className="text-red-500">*</span></Label>
+                    <Textarea placeholder={t("serviceCart.alamatPerusahaanPh", "Alamat lengkap perusahaan")} value={companyProfile.companyAddress} onChange={(e) => setCompanyProfile((p) => ({ ...p, companyAddress: e.target.value }))} rows={2} className="resize-none" />
                   </div>
                 </div>
               </div>
 
               <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
-                <h2 className="font-semibold text-slate-800">Informasi PIC (Person In Charge)</h2>
+                <h2 className="font-semibold text-slate-800">{t("serviceCart.informasiPic", "Informasi PIC (Person In Charge)")}</h2>
                 <div className="space-y-3">
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1.5">
-                      <Label className="text-sm">Nama PIC <span className="text-red-500">*</span></Label>
-                      <Input placeholder="Nama lengkap PIC" value={companyProfile.picName} onChange={(e) => setCompanyProfile((p) => ({ ...p, picName: e.target.value }))} />
+                      <Label className="text-sm">{t("serviceCart.namaPic", "Nama PIC")} <span className="text-red-500">*</span></Label>
+                      <Input placeholder={t("serviceCart.namaPicPh", "Nama lengkap PIC")} value={companyProfile.picName} onChange={(e) => setCompanyProfile((p) => ({ ...p, picName: e.target.value }))} />
                     </div>
                     <div className="space-y-1.5">
-                      <Label className="text-sm">WhatsApp PIC <span className="text-red-500">*</span></Label>
+                      <Label className="text-sm">{t("serviceCart.whatsappPic", "WhatsApp PIC")} <span className="text-red-500">*</span></Label>
                       <Input placeholder="08xxxxxxxxxx" value={companyProfile.picWhatsapp} onChange={(e) => setCompanyProfile((p) => ({ ...p, picWhatsapp: e.target.value }))} />
                     </div>
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-sm">Email PIC</Label>
+                    <Label className="text-sm">{t("serviceCart.emailPic", "Email PIC")}</Label>
                     <Input type="email" value={companyProfile.picEmail} onChange={(e) => setCompanyProfile((p) => ({ ...p, picEmail: e.target.value }))} />
                   </div>
                 </div>
@@ -1130,31 +1144,31 @@ export default function ServiceCartPage() {
 
               <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
                 <div className="flex items-center justify-between">
-                  <h2 className="font-semibold text-slate-800">Dokumen Pendukung</h2>
-                  <span className="text-xs text-slate-400">Opsional — dapat dilengkapi nanti</span>
+                  <h2 className="font-semibold text-slate-800">{t("serviceCart.dokumenPendukung", "Dokumen Pendukung")}</h2>
+                  <span className="text-xs text-slate-400">{t("serviceCart.opsionalNanti", "Opsional — dapat dilengkapi nanti")}</span>
                 </div>
                 <div className="space-y-3">
                   <div className="space-y-1.5">
-                    <Label className="text-sm">URL Dokumen Legal (Akta, NIB, dll.)</Label>
+                    <Label className="text-sm">{t("serviceCart.urlDokumenLegal", "URL Dokumen Legal (Akta, NIB, dll.)")}</Label>
                     <Input placeholder="https://..." value={companyProfile.legalDocUrl} onChange={(e) => setCompanyProfile((p) => ({ ...p, legalDocUrl: e.target.value }))} />
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1.5">
-                      <Label className="text-sm">URL KTP PIC</Label>
+                      <Label className="text-sm">{t("serviceCart.urlKtpPic", "URL KTP PIC")}</Label>
                       <Input placeholder="https://..." value={companyProfile.ktpPicUrl} onChange={(e) => setCompanyProfile((p) => ({ ...p, ktpPicUrl: e.target.value }))} />
                     </div>
                     <div className="space-y-1.5">
-                      <Label className="text-sm">URL Surat Kuasa</Label>
+                      <Label className="text-sm">{t("serviceCart.urlSuratKuasa", "URL Surat Kuasa")}</Label>
                       <Input placeholder="https://..." value={companyProfile.suratKuasaUrl} onChange={(e) => setCompanyProfile((p) => ({ ...p, suratKuasaUrl: e.target.value }))} />
                     </div>
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-sm">URL API / NIK Izin Impor-Ekspor</Label>
+                    <Label className="text-sm">{t("serviceCart.urlApiNikIzin", "URL API / NIK Izin Impor-Ekspor")}</Label>
                     <Input placeholder="https://..." value={companyProfile.apiNikIzinUrl} onChange={(e) => setCompanyProfile((p) => ({ ...p, apiNikIzinUrl: e.target.value }))} />
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-sm">Catatan Tambahan</Label>
-                    <Textarea placeholder="Informasi tambahan yang perlu diketahui tim CST..." value={companyProfile.additionalNotes} onChange={(e) => setCompanyProfile((p) => ({ ...p, additionalNotes: e.target.value }))} rows={2} className="resize-none" />
+                    <Label className="text-sm">{t("serviceCart.catatanTambahan", "Catatan Tambahan")}</Label>
+                    <Textarea placeholder={t("serviceCart.catatanTambahanPh", "Informasi tambahan yang perlu diketahui tim CST...")} value={companyProfile.additionalNotes} onChange={(e) => setCompanyProfile((p) => ({ ...p, additionalNotes: e.target.value }))} rows={2} className="resize-none" />
                   </div>
                 </div>
               </div>
@@ -1163,7 +1177,7 @@ export default function ServiceCartPage() {
                 disabled={!profileRequiredDone || profileSaving}
                 onClick={saveProfileAndContinue}>
                 {profileSaving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-                Simpan & Lanjut <ArrowRight className="w-4 h-4 ml-2" />
+                {t("serviceCart.simpanLanjut", "Simpan & Lanjut")} <ArrowRight className="w-4 h-4 ml-2" />
               </Button>
             </>
           )}
@@ -1178,9 +1192,9 @@ export default function ServiceCartPage() {
       <div className="max-w-2xl mx-auto space-y-6">
         <div>
           <button onClick={() => setStep("trade_type")} className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-800 mb-4">
-            <ArrowLeft className="w-4 h-4" /> Kembali
+            <ArrowLeft className="w-4 h-4" /> {t("serviceCart.kembali", "Kembali")}
           </button>
-          <h1 className="text-xl font-bold text-slate-900 mb-1">Pilih Mode Pemesanan</h1>
+          <h1 className="text-xl font-bold text-slate-900 mb-1">{t("serviceCart.pilihModePemesanan", "Pilih Mode Pemesanan")}</h1>
           <p className="text-sm text-slate-500 mb-3">
             <Badge variant="outline" className="mr-2">{tradeType}</Badge>
             {customerInfo.customerName}
@@ -1196,11 +1210,11 @@ export default function ServiceCartPage() {
             <div className="w-12 h-12 rounded-xl bg-blue-100 flex items-center justify-center mb-4 group-hover:bg-blue-200 transition-colors">
               <BoxSelect className="w-6 h-6 text-blue-600" />
             </div>
-            <h3 className="font-bold text-slate-800 mb-1">Item Mandiri</h3>
-            <p className="text-sm text-slate-500 mb-3">Pilih & tambahkan layanan satu per satu sesuai kebutuhan spesifik Anda</p>
+            <h3 className="font-bold text-slate-800 mb-1">{t("serviceCart.itemMandiri", "Item Mandiri")}</h3>
+            <p className="text-sm text-slate-500 mb-3">{t("serviceCart.itemMandiriDesc", "Pilih & tambahkan layanan satu per satu sesuai kebutuhan spesifik Anda")}</p>
             <div className="flex flex-wrap gap-1.5">
-              {["Air Freight", "Ocean", "PPJK", "Trucking", "+6 lainnya"].map((t) => (
-                <Badge key={t} variant="outline" className="text-xs">{t}</Badge>
+              {["Air Freight", "Ocean", "PPJK", "Trucking", t("serviceCart.plusLainnya", "+6 lainnya")].map((lbl) => (
+                <Badge key={lbl} variant="outline" className="text-xs">{lbl}</Badge>
               ))}
             </div>
           </button>
@@ -1212,11 +1226,11 @@ export default function ServiceCartPage() {
             <div className="w-12 h-12 rounded-xl bg-purple-100 flex items-center justify-center mb-4 group-hover:bg-purple-200 transition-colors">
               <Package className="w-6 h-6 text-purple-600" />
             </div>
-            <h3 className="font-bold text-slate-800 mb-1">Paket Borongan</h3>
-            <p className="text-sm text-slate-500 mb-3">Pilih paket lengkap yang sudah mencakup semua layanan dalam satu bundel</p>
+            <h3 className="font-bold text-slate-800 mb-1">{t("serviceCart.paketBorongan", "Paket Borongan")}</h3>
+            <p className="text-sm text-slate-500 mb-3">{t("serviceCart.paketBoronganDesc", "Pilih paket lengkap yang sudah mencakup semua layanan dalam satu bundel")}</p>
             <div className="flex flex-wrap gap-1.5">
-              {["Door to Door", "Sea Import", "Customs Only", "+2 paket"].map((t) => (
-                <Badge key={t} variant="outline" className="text-xs bg-purple-50 border-purple-200 text-purple-700">{t}</Badge>
+              {["Door to Door", "Sea Import", "Customs Only", t("serviceCart.plusPaket", "+2 paket")].map((lbl) => (
+                <Badge key={lbl} variant="outline" className="text-xs bg-purple-50 border-purple-200 text-purple-700">{lbl}</Badge>
               ))}
             </div>
           </button>
@@ -1231,10 +1245,10 @@ export default function ServiceCartPage() {
       <div className="max-w-2xl mx-auto space-y-6">
         <div>
           <button onClick={() => setStep("mode_select")} className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-800 mb-4">
-            <ArrowLeft className="w-4 h-4" /> Kembali
+            <ArrowLeft className="w-4 h-4" /> {t("serviceCart.kembali", "Kembali")}
           </button>
-          <h1 className="text-xl font-bold text-slate-900 mb-1">Pilih Paket Borongan</h1>
-          <p className="text-sm text-slate-500 mb-3">Paket untuk <Badge variant="outline">{tradeType}</Badge></p>
+          <h1 className="text-xl font-bold text-slate-900 mb-1">{t("serviceCart.pilihPaketBorongan", "Pilih Paket Borongan")}</h1>
+          <p className="text-sm text-slate-500 mb-3">{t("serviceCart.paketUntuk", "Paket untuk")} <Badge variant="outline">{tradeType}</Badge></p>
           <StepBar current="package_select" />
         </div>
 
@@ -1245,9 +1259,9 @@ export default function ServiceCartPage() {
         ) : packages.length === 0 ? (
           <div className="text-center py-12 text-slate-500">
             <Package className="w-10 h-10 mx-auto mb-3 text-slate-300" />
-            <p>Tidak ada paket tersedia untuk {tradeType}</p>
+            <p>{t("serviceCart.tidakAdaPaket", "Tidak ada paket tersedia untuk")} {tradeType}</p>
             <Button variant="outline" className="mt-4" onClick={() => { setOrderMode("ITEM_MANDIRI"); setStep("add_items"); }}>
-              Gunakan Item Mandiri
+              {t("serviceCart.gunakanItemMandiri", "Gunakan Item Mandiri")}
             </Button>
           </div>
         ) : (
@@ -1272,11 +1286,11 @@ export default function ServiceCartPage() {
                     disabled={applyingPackage}
                     onClick={() => applyPackage(pkg)}
                   >
-                    {applyingPackage ? <Loader2 className="w-4 h-4 animate-spin" /> : "Pilih Paket"}
+                    {applyingPackage ? <Loader2 className="w-4 h-4 animate-spin" /> : t("serviceCart.pilihPaket", "Pilih Paket")}
                   </Button>
                 </div>
                 <div className="px-6 pb-4">
-                  <p className="text-xs font-medium text-slate-500 mb-2">Item dalam paket:</p>
+                  <p className="text-xs font-medium text-slate-500 mb-2">{t("serviceCart.itemDalamPaket", "Item dalam paket:")}</p>
                   <div className="flex flex-wrap gap-2">
                     {(pkg.items ?? []).map((item, idx) => {
                       const meta = SERVICE_META[item.itemType as ServiceType];
@@ -1300,7 +1314,7 @@ export default function ServiceCartPage() {
           onClick={() => { setOrderMode("ITEM_MANDIRI"); setStep("add_items"); }}
           className="w-full text-sm text-slate-500 hover:text-blue-600 py-2"
         >
-          Atau gunakan Item Mandiri →
+          {t("serviceCart.atauGunakanItemMandiri", "Atau gunakan Item Mandiri →")}
         </button>
       </div>
     </div>
@@ -1314,17 +1328,17 @@ export default function ServiceCartPage() {
           <div>
             <button onClick={() => setStep(orderMode === "PAKET_BORONGAN" ? "package_select" : "mode_select")}
               className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-800 mb-4">
-              <ArrowLeft className="w-4 h-4" /> Kembali
+              <ArrowLeft className="w-4 h-4" /> {t("serviceCart.kembali", "Kembali")}
             </button>
             <div className="flex items-start justify-between mb-2">
               <div>
-                <h1 className="text-xl font-bold text-slate-900">Detail Layanan</h1>
+                <h1 className="text-xl font-bold text-slate-900">{t("serviceCart.detailLayanan", "Detail Layanan")}</h1>
                 <p className="text-sm text-slate-500">
                   <Badge variant="outline" className="mr-1">{tradeType}</Badge>
                   {orderMode === "PAKET_BORONGAN" && selectedPackage
                     ? <Badge className="bg-purple-100 text-purple-700 mr-1">{selectedPackage.packageName}</Badge>
-                    : <Badge className="bg-slate-100 text-slate-600 mr-1">Item Mandiri</Badge>}
-                  {requestNumber ?? "Draft"}
+                    : <Badge className="bg-slate-100 text-slate-600 mr-1">{t("serviceCart.itemMandiri", "Item Mandiri")}</Badge>}
+                  {requestNumber ?? t("serviceCart.draft", "Draft")}
                 </p>
               </div>
               <Badge className="bg-blue-100 text-blue-700 flex-shrink-0 mt-1">{items.length} item</Badge>
@@ -1335,10 +1349,10 @@ export default function ServiceCartPage() {
           {items.length === 0 ? (
             <div className="bg-white rounded-2xl border-2 border-dashed border-slate-200 p-12 text-center">
               <Plus className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-              <p className="font-medium text-slate-700 mb-1">Belum ada item layanan</p>
-              <p className="text-sm text-slate-500 mb-5">Klik tombol di bawah untuk menambahkan layanan</p>
+              <p className="font-medium text-slate-700 mb-1">{t("serviceCart.belumAdaItemLayanan", "Belum ada item layanan")}</p>
+              <p className="text-sm text-slate-500 mb-5">{t("serviceCart.klikTombolTambahLayanan", "Klik tombol di bawah untuk menambahkan layanan")}</p>
               <Button onClick={openAddItem} className="bg-blue-600 hover:bg-blue-700">
-                <Plus className="w-4 h-4 mr-2" /> Tambah Layanan
+                <Plus className="w-4 h-4 mr-2" /> {t("serviceCart.tambahLayanan", "Tambah Layanan")}
               </Button>
             </div>
           ) : (
@@ -1356,7 +1370,7 @@ export default function ServiceCartPage() {
                         <span className="text-xs font-medium text-slate-400">#{idx + 1}</span>
                         <span className="font-semibold text-slate-800 text-sm">{item.title}</span>
                         <Badge variant="outline" className="text-xs">{meta?.title ?? item.itemType}</Badge>
-                        {item.isRequired && <Lock className="w-3 h-3 text-amber-500" aria-label="Item wajib dari paket" />}
+                        {item.isRequired && <Lock className="w-3 h-3 text-amber-500" aria-label={t("serviceCart.itemWajibDariPaket", "Item wajib dari paket")} />}
                       </div>
                       <div className="flex flex-wrap gap-1.5 mt-2">
                         {Object.entries(item.formData).slice(0, 4).map(([k, v]) => v ? (
@@ -1381,7 +1395,7 @@ export default function ServiceCartPage() {
               })}
               <button onClick={openAddItem}
                 className="w-full rounded-xl border-2 border-dashed border-blue-200 p-3 flex items-center justify-center gap-2 text-blue-600 hover:bg-blue-50 text-sm font-medium">
-                <Plus className="w-4 h-4" /> Tambah Item Lagi
+                <Plus className="w-4 h-4" /> {t("serviceCart.tambahItemLagi", "Tambah Item Lagi")}
               </button>
             </div>
           )}
@@ -1389,10 +1403,10 @@ export default function ServiceCartPage() {
           {items.length > 0 && (
             <div className="flex gap-3 pt-2">
               <Button variant="outline" className="flex-1" onClick={openAddItem}>
-                <Plus className="w-4 h-4 mr-2" /> Tambah Item
+                <Plus className="w-4 h-4 mr-2" /> {t("serviceCart.tambahItem", "Tambah Item")}
               </Button>
               <Button className="flex-1 bg-blue-600 hover:bg-blue-700" onClick={() => setStep("review")}>
-                Review & Kirim <ArrowRight className="w-4 h-4 ml-2" />
+                {t("serviceCart.reviewKirim", "Review & Kirim")} <ArrowRight className="w-4 h-4 ml-2" />
               </Button>
             </div>
           )}
@@ -1402,7 +1416,7 @@ export default function ServiceCartPage() {
         <Dialog open={showItemEditor} onOpenChange={(o) => { if (!o) setShowItemEditor(false); }}>
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>{editingItem ? "Edit Item Layanan" : "Tambah Item Layanan"}</DialogTitle>
+              <DialogTitle>{editingItem ? t("serviceCart.editItemLayanan", "Edit Item Layanan") : t("serviceCart.tambahItemLayanan", "Tambah Item Layanan")}</DialogTitle>
             </DialogHeader>
 
             {!pendingType ? (
@@ -1436,12 +1450,12 @@ export default function ServiceCartPage() {
                   })()}
                   <button onClick={() => { setPendingType(null); setItemFormData({}); }}
                     className="text-xs text-blue-600 hover:underline flex items-center gap-1">
-                    <RotateCcw className="w-3.5 h-3.5" /> Ganti layanan
+                    <RotateCcw className="w-3.5 h-3.5" /> {t("serviceCart.gantiLayanan", "Ganti layanan")}
                   </button>
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label className="text-sm font-medium">Judul Item <span className="text-red-500">*</span></Label>
+                  <Label className="text-sm font-medium">{t("serviceCart.judulItem", "Judul Item")} <span className="text-red-500">*</span></Label>
                   <Input placeholder={`e.g. ${SERVICE_META[pendingType].title} Jakarta → Singapura`}
                     value={itemTitle} onChange={(e) => setItemTitle(e.target.value)} />
                 </div>
@@ -1456,7 +1470,7 @@ export default function ServiceCartPage() {
 
                 {SERVICE_META[pendingType].requiredDocs.length > 0 && (
                   <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
-                    <p className="text-xs font-medium text-amber-700 mb-1.5">Dokumen yang perlu disiapkan:</p>
+                    <p className="text-xs font-medium text-amber-700 mb-1.5">{t("serviceCart.dokumenPerluDisiapkan", "Dokumen yang perlu disiapkan:")}</p>
                     <div className="flex flex-wrap gap-1.5">
                       {SERVICE_META[pendingType].requiredDocs.map((d) => (
                         <Badge key={d} variant="outline" className="text-xs border-amber-300 text-amber-700 bg-amber-50">
@@ -1470,11 +1484,11 @@ export default function ServiceCartPage() {
             )}
 
             <DialogFooter>
-              <Button variant="outline" onClick={() => setShowItemEditor(false)}>Batal</Button>
+              <Button variant="outline" onClick={() => setShowItemEditor(false)}>{t("serviceCart.batal", "Batal")}</Button>
               {pendingType && (
                 <Button onClick={handleConfirmItem} disabled={savingItem || !itemTitle.trim()} className="bg-blue-600 hover:bg-blue-700">
                   {savingItem && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
-                  {editingItem ? "Simpan Perubahan" : "Tambah Item"}
+                  {editingItem ? t("serviceCart.simpanPerubahan", "Simpan Perubahan") : t("serviceCart.tambahItem", "Tambah Item")}
                 </Button>
               )}
             </DialogFooter>
@@ -1490,34 +1504,34 @@ export default function ServiceCartPage() {
       <div className="max-w-2xl mx-auto space-y-6">
         <div>
           <button onClick={() => setStep("add_items")} className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-800 mb-4">
-            <ArrowLeft className="w-4 h-4" /> Kembali ke Item
+            <ArrowLeft className="w-4 h-4" /> {t("serviceCart.kembaliKeItem", "Kembali ke Item")}
           </button>
           <div className="flex items-center justify-between mb-2">
-            <h1 className="text-xl font-bold text-slate-900">Review Permintaan</h1>
-            <Badge className="bg-amber-100 text-amber-700">Draft</Badge>
+            <h1 className="text-xl font-bold text-slate-900">{t("serviceCart.reviewPermintaan", "Review Permintaan")}</h1>
+            <Badge className="bg-amber-100 text-amber-700">{t("serviceCart.draft", "Draft")}</Badge>
           </div>
           <StepBar current="review" />
         </div>
 
         <div className="bg-white rounded-2xl border border-slate-200 p-5 space-y-3">
-          <h2 className="font-semibold text-slate-800 text-sm">Informasi Pemohon</h2>
+          <h2 className="font-semibold text-slate-800 text-sm">{t("serviceCart.informasiPemohon", "Informasi Pemohon")}</h2>
           <div className="grid grid-cols-2 gap-y-2 text-sm">
-            <span className="text-slate-500">Nama</span>
+            <span className="text-slate-500">{t("serviceCart.nama", "Nama")}</span>
             <span className="font-medium">{customerInfo.customerName}</span>
             <span className="text-slate-500">Email</span>
             <span className="font-medium">{customerInfo.customerEmail}</span>
-            {customerInfo.customerPhone && <><span className="text-slate-500">HP</span><span className="font-medium">{customerInfo.customerPhone}</span></>}
-            {customerInfo.customerCompany && <><span className="text-slate-500">Perusahaan</span><span className="font-medium">{customerInfo.customerCompany}</span></>}
-            <span className="text-slate-500">Perdagangan</span>
+            {customerInfo.customerPhone && <><span className="text-slate-500">{t("serviceCart.hp", "HP")}</span><span className="font-medium">{customerInfo.customerPhone}</span></>}
+            {customerInfo.customerCompany && <><span className="text-slate-500">{t("serviceCart.perusahaan", "Perusahaan")}</span><span className="font-medium">{customerInfo.customerCompany}</span></>}
+            <span className="text-slate-500">{t("serviceCart.perdagangan", "Perdagangan")}</span>
             <Badge variant="outline">{tradeType}</Badge>
-            <span className="text-slate-500">Mode</span>
-            <span className="font-medium">{orderMode === "PAKET_BORONGAN" ? `Paket — ${selectedPackage?.packageName ?? ""}` : "Item Mandiri"}</span>
+            <span className="text-slate-500">{t("serviceCart.mode", "Mode")}</span>
+            <span className="font-medium">{orderMode === "PAKET_BORONGAN" ? `${t("serviceCart.paket", "Paket")} — ${selectedPackage?.packageName ?? ""}` : t("serviceCart.itemMandiri", "Item Mandiri")}</span>
           </div>
         </div>
 
         <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
           <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-            <h2 className="font-semibold text-slate-800 text-sm">Item Layanan</h2>
+            <h2 className="font-semibold text-slate-800 text-sm">{t("serviceCart.itemLayanan", "Item Layanan")}</h2>
             <Badge className="bg-blue-100 text-blue-700">{items.length} item</Badge>
           </div>
           <div className="divide-y divide-slate-100">
@@ -1542,7 +1556,7 @@ export default function ServiceCartPage() {
                     </div>
                   </div>
                   <button onClick={() => { setStep("add_items"); openEditItem(item); }}
-                    className="text-xs text-blue-600 hover:underline flex-shrink-0">Edit</button>
+                    className="text-xs text-blue-600 hover:underline flex-shrink-0">{t("serviceCart.edit", "Edit")}</button>
                 </div>
               );
             })}
@@ -1550,8 +1564,8 @@ export default function ServiceCartPage() {
         </div>
 
         <div className="space-y-1.5">
-          <Label className="text-sm">Catatan Tambahan (opsional)</Label>
-          <Textarea placeholder="Instruksi khusus, preferensi vendor, timeline, dll..."
+          <Label className="text-sm">{t("serviceCart.catatanTambahanOpsional", "Catatan Tambahan (opsional)")}</Label>
+          <Textarea placeholder={t("serviceCart.catatanTambahanReviewPh", "Instruksi khusus, preferensi vendor, timeline, dll...")}
             value={customerInfo.notes}
             onChange={(e) => setCustomerInfo((p) => ({ ...p, notes: e.target.value }))}
             rows={3} />
@@ -1560,18 +1574,18 @@ export default function ServiceCartPage() {
         <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 flex gap-3">
           <AlertCircle className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
           <div className="text-sm text-blue-700">
-            <p className="font-semibold mb-0.5">Setelah dikirim:</p>
-            <p>Tim B2B Marketplace and Logistic menghubungi Anda dalam 1×24 jam dengan penawaran harga untuk setiap item layanan.</p>
+            <p className="font-semibold mb-0.5">{t("serviceCart.setelahDikirim", "Setelah dikirim:")}</p>
+            <p>{t("serviceCart.setelahDikirimDesc", "Tim B2B Marketplace and Logistic menghubungi Anda dalam 1×24 jam dengan penawaran harga untuk setiap item layanan.")}</p>
           </div>
         </div>
 
         <div className="flex gap-3 pt-2">
           <Button variant="outline" className="flex-1" onClick={() => setStep("add_items")}>
-            <ArrowLeft className="w-4 h-4 mr-2" /> Edit Item
+            <ArrowLeft className="w-4 h-4 mr-2" /> {t("serviceCart.editItem", "Edit Item")}
           </Button>
           <Button className="flex-1 bg-blue-600 hover:bg-blue-700" onClick={handleSubmit} disabled={loading}>
             {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Send className="w-4 h-4 mr-2" />}
-            Kirim Permintaan
+            {t("serviceCart.kirimPermintaan", "Kirim Permintaan")}
           </Button>
         </div>
       </div>
@@ -1586,34 +1600,34 @@ export default function ServiceCartPage() {
           <CheckCircle2 className="w-10 h-10 text-green-600" />
         </div>
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 mb-2">Permintaan Terkirim!</h1>
-          <p className="text-slate-600">Nomor referensi Anda:</p>
+          <h1 className="text-2xl font-bold text-slate-900 mb-2">{t("serviceCart.permintaanTerkirim", "Permintaan Terkirim!")}</h1>
+          <p className="text-slate-600">{t("serviceCart.nomorReferensiAnda", "Nomor referensi Anda:")}</p>
           <div className="mt-3 bg-white border border-slate-200 rounded-xl px-6 py-3 inline-block">
             <span className="font-mono font-bold text-blue-700 text-lg">{requestNumber}</span>
           </div>
         </div>
         <div className="bg-white rounded-2xl border border-slate-200 p-5 text-left space-y-3">
-          <h2 className="font-semibold text-slate-800">Ringkasan</h2>
+          <h2 className="font-semibold text-slate-800">{t("serviceCart.ringkasan", "Ringkasan")}</h2>
           <div className="grid grid-cols-2 gap-y-2 text-sm">
-            <span className="text-slate-500">Nama</span>
+            <span className="text-slate-500">{t("serviceCart.nama", "Nama")}</span>
             <span className="font-medium">{customerInfo.customerName}</span>
-            <span className="text-slate-500">Total Item</span>
-            <span className="font-medium">{items.length} layanan</span>
-            <span className="text-slate-500">Jenis</span>
+            <span className="text-slate-500">{t("serviceCart.totalItem", "Total Item")}</span>
+            <span className="font-medium">{items.length} {t("serviceCart.layanan", "layanan")}</span>
+            <span className="text-slate-500">{t("serviceCart.jenis", "Jenis")}</span>
             <Badge variant="outline">{tradeType}</Badge>
-            <span className="text-slate-500">Mode</span>
-            <span className="font-medium text-xs">{orderMode === "PAKET_BORONGAN" ? selectedPackage?.packageName : "Item Mandiri"}</span>
+            <span className="text-slate-500">{t("serviceCart.mode", "Mode")}</span>
+            <span className="font-medium text-xs">{orderMode === "PAKET_BORONGAN" ? selectedPackage?.packageName : t("serviceCart.itemMandiri", "Item Mandiri")}</span>
           </div>
         </div>
         <p className="text-sm text-slate-500">
-          Konfirmasi dikirim ke <strong>{customerInfo.customerEmail}</strong>. Tim kami menghubungi dalam 1×24 jam.
+          {t("serviceCart.konfirmasiDikirimKe", "Konfirmasi dikirim ke")} <strong>{customerInfo.customerEmail}</strong>. {t("serviceCart.timMenghubungi", "Tim kami menghubungi dalam 1×24 jam.")}
         </p>
         <div className="flex gap-3">
           <Button variant="outline" className="flex-1" onClick={() => navigate("/dashboard")}>
-            Dashboard Saya
+            {t("serviceCart.dashboardSaya", "Dashboard Saya")}
           </Button>
           <Button className="flex-1 bg-blue-600 hover:bg-blue-700" onClick={() => navigate("/jasa")}>
-            Tambah Request Lain
+            {t("serviceCart.tambahRequestLain", "Tambah Request Lain")}
           </Button>
         </div>
       </div>

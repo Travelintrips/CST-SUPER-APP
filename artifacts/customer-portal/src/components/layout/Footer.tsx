@@ -13,7 +13,7 @@ function normalizePhone(raw: string): string {
   return "62" + digits;
 }
 
-const FOOTER_GRADIENT = "linear-gradient(150deg, #0F172A 0%, #1E293B 50%, #0C4A6E 100%)";
+const FOOTER_GRADIENT = "linear-gradient(150deg, var(--brand-dark-900) 0%, var(--brand-dark-800) 50%, var(--brand-navy-footer) 100%)";
 const FOOTER_STYLE: React.CSSProperties = { background: FOOTER_GRADIENT };
 
 interface NavItem {

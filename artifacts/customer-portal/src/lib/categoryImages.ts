@@ -121,7 +121,8 @@ const SERVICE_IMAGES: Array<{ keywords: string[]; url: string }> = [
   },
 ];
 
-const DEFAULT_SERVICE = `${BASE}1586528116311-ad8dd3c8310d${W}`;
+// Default service image — upload to Supabase Storage portal bucket at this path
+const DEFAULT_SERVICE = `/api/storage/public-objects/portal/images/services/default-service.jpg`;
 
 // ── Product images (order: most-specific first) ──────────────────────────────
 // All IDs below are verified HTTP 200 as of 2026-05.

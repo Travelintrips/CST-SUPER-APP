@@ -18,6 +18,7 @@ import {
   CreditCard, DollarSign, BookOpen, Receipt, Wallet, ArrowUpRight,
   LayoutDashboard, PackageCheck, Mail, Image as ImageIcon, X, Menu,
 } from "lucide-react";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 // ── Module imports ────────────────────────────────────────────────────────────
 import { ContentTab }                                    from "@/pages/admin/ContentTab";
@@ -47,6 +48,7 @@ type ErpStats = {
 export default function AdminPage() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const { t } = useLanguage();
   const [erpStats, setErpStats] = useState<ErpStats | null>(null);
   const [erpStatsLoading, setErpStatsLoading] = useState(false);
   const [erpStatsLastUpdated, setErpStatsLastUpdated] = useState<Date | null>(null);
@@ -86,11 +88,11 @@ export default function AdminPage() {
           setErpStatsLastUpdated(new Date());
           if (fromEvent) {
             const messages: Record<string, { title: string; description: string }> = {
-              new_logistic_order:            { title: "Order baru masuk",        description: "Statistik portal diperbarui otomatis." },
-              logistic_order_status_changed: { title: "Status order berubah",    description: "Statistik freight diperbarui otomatis." },
-              vendor_quote_received:         { title: "Quote vendor diterima",   description: "Data RFQ diperbarui otomatis." },
+              new_logistic_order:            { title: t("adminPage.erpEvent.newOrder", "Order baru masuk"),        description: t("adminPage.erpEvent.statsUpdated", "Statistik portal diperbarui otomatis.") },
+              logistic_order_status_changed: { title: t("adminPage.erpEvent.statusChanged", "Status order berubah"),    description: t("adminPage.erpEvent.freightUpdated", "Statistik freight diperbarui otomatis.") },
+              vendor_quote_received:         { title: t("adminPage.erpEvent.quoteReceived", "Quote vendor diterima"),   description: t("adminPage.erpEvent.rfqUpdated", "Data RFQ diperbarui otomatis.") },
             };
-            const msg = messages[fromEvent] ?? { title: "Statistik diperbarui", description: "Data ERP terbaru telah dimuat." };
+            const msg = messages[fromEvent] ?? { title: t("adminPage.erpEvent.statsRefreshed", "Statistik diperbarui"), description: t("adminPage.erpEvent.latestLoaded", "Data ERP terbaru telah dimuat.") };
             toast({ title: msg.title, description: msg.description });
           }
         }
@@ -155,7 +157,7 @@ export default function AdminPage() {
               <Shield className="h-6 w-6 md:h-7 md:w-7" strokeWidth={2.5} />
             </div>
             <div>
-              <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight text-white">Admin Panel</h1>
+              <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight text-white">{t("adminPage.header.title", "Admin Panel")}</h1>
               <p className="text-slate-400 text-xs md:text-sm font-medium mt-1 tracking-wide">
                 <span className="hidden sm:inline">PT. Cahaya Sejati Teknologi <span className="mx-2 text-slate-700">|</span> </span>COMMAND CENTER
               </p>
@@ -172,7 +174,7 @@ export default function AdminPage() {
             <button
               className="md:hidden p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 shrink-0 transition-colors"
               onClick={() => setMobileNavOpen(true)}
-              aria-label="Buka menu navigasi"
+              aria-label={t("adminPage.nav.openMenu", "Buka menu navigasi")}
             >
               <Menu className="h-5 w-5" />
             </button>
@@ -182,13 +184,13 @@ export default function AdminPage() {
 
       {/* ── Mobile sidebar Sheet ───────────────────────────────────────────── */}
       <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
-        <SheetContent side="left" aria-label="Menu navigasi admin" className="p-0 w-72 bg-slate-900 border-r border-slate-800 flex flex-col [&>button]:hidden">
+        <SheetContent side="left" aria-label={t("adminPage.nav.menuAriaLabel", "Menu navigasi admin")} className="p-0 w-72 bg-slate-900 border-r border-slate-800 flex flex-col [&>button]:hidden">
           <div className="px-4 pt-5 pb-3 border-b border-slate-800/80 flex items-center justify-between shrink-0">
             <div className="flex items-center gap-3">
               <div className="bg-gradient-to-br from-amber-400 to-amber-600 text-slate-950 p-2 rounded-lg">
                 <Shield className="h-4 w-4" strokeWidth={2.5} />
               </div>
-              <p className="text-[10px] font-semibold tracking-widest text-slate-400 uppercase">Command Center</p>
+              <p className="text-[10px] font-semibold tracking-widest text-slate-400 uppercase">{t("adminPage.nav.commandCenter", "Command Center")}</p>
             </div>
             <SheetClose className="text-slate-500 hover:text-white transition-colors p-1 rounded">
               <X className="h-4 w-4" />
@@ -197,14 +199,14 @@ export default function AdminPage() {
           <nav className="flex-1 overflow-y-auto p-2 flex flex-col gap-0.5 [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:bg-slate-700">
             {isAdmin && (
               <>
-                <p className="px-3 pt-4 pb-1.5 text-[10px] font-semibold tracking-widest text-slate-600 uppercase select-none">Website & Konten</p>
+                <p className="px-3 pt-4 pb-1.5 text-[10px] font-semibold tracking-widest text-slate-600 uppercase select-none">{t("adminPage.nav.sectionWebsite", "Website & Konten")}</p>
                 {[
-                  { value: "content",         icon: FileText,   label: "Konten Website" },
-                  { value: "services",        icon: Settings,   label: "Kelola Layanan" },
-                  { value: "products",        icon: Box,        label: "Kelola Produk" },
-                  { value: "couriers",        icon: Truck,      label: "Kurir" },
-                  { value: "pricing",         icon: Tag,        label: "Kelola Harga" },
-                  { value: "armada-trucking", icon: ImageIcon,  label: "Armada Trucking" },
+                  { value: "content",         icon: FileText,   label: t("adminPage.nav.websiteContent", "Konten Website") },
+                  { value: "services",        icon: Settings,   label: t("adminPage.nav.manageServices", "Kelola Layanan") },
+                  { value: "products",        icon: Box,        label: t("adminPage.nav.manageProducts", "Kelola Produk") },
+                  { value: "couriers",        icon: Truck,      label: t("adminPage.nav.couriers", "Kurir") },
+                  { value: "pricing",         icon: Tag,        label: t("adminPage.nav.managePricing", "Kelola Harga") },
+                  { value: "armada-trucking", icon: ImageIcon,  label: t("adminPage.nav.truckingFleet", "Armada Trucking") },
                 ].map(({ value, icon: Icon, label }) => (
                   <button key={value} type="button" aria-current={activeTab === value ? "page" : undefined}
                     onClick={() => { setActiveTab(value); setMobileNavOpen(false); }}
@@ -213,14 +215,14 @@ export default function AdminPage() {
                   </button>
                 ))}
 
-                <p className="px-3 pt-4 pb-1.5 text-[10px] font-semibold tracking-widest text-slate-600 uppercase select-none">Marketplace</p>
+                <p className="px-3 pt-4 pb-1.5 text-[10px] font-semibold tracking-widest text-slate-600 uppercase select-none">{t("adminPage.nav.sectionMarketplace", "Marketplace")}</p>
                 {[
-                  { value: "vendor-catalog",    icon: Package,      label: "Katalog Vendor" },
-                  { value: "produk-unggulan",   icon: Store,        label: "Produk Unggulan" },
-                  { value: "mini-forms",        icon: Link2,        label: "Mini Form" },
-                  { value: "product-templates", icon: Layers,       label: "Product Templates" },
-                  { value: "vendor-marketplace",icon: ShoppingCart, label: "Vendor Marketplace" },
-                  { value: "master-price",      icon: DollarSign,   label: "Master Price" },
+                  { value: "vendor-catalog",    icon: Package,      label: t("adminPage.nav.vendorCatalog", "Katalog Vendor") },
+                  { value: "produk-unggulan",   icon: Store,        label: t("adminPage.nav.featuredProducts", "Produk Unggulan") },
+                  { value: "mini-forms",        icon: Link2,        label: t("adminPage.nav.miniForms", "Mini Form") },
+                  { value: "product-templates", icon: Layers,       label: t("adminPage.nav.productTemplates", "Product Templates") },
+                  { value: "vendor-marketplace",icon: ShoppingCart, label: t("adminPage.nav.vendorMarketplace", "Vendor Marketplace") },
+                  { value: "master-price",      icon: DollarSign,   label: t("adminPage.nav.masterPrice", "Master Price") },
                 ].map(({ value, icon: Icon, label }) => (
                   <button key={value} type="button" aria-current={activeTab === value ? "page" : undefined}
                     onClick={() => { setActiveTab(value); setMobileNavOpen(false); }}
@@ -229,20 +231,20 @@ export default function AdminPage() {
                   </button>
                 ))}
 
-                <p className="px-3 pt-4 pb-1.5 text-[10px] font-semibold tracking-widest text-slate-600 uppercase select-none">Vendor & Pengguna</p>
+                <p className="px-3 pt-4 pb-1.5 text-[10px] font-semibold tracking-widest text-slate-600 uppercase select-none">{t("adminPage.nav.sectionVendorUsers", "Vendor & Pengguna")}</p>
                 <button type="button" aria-current={activeTab === "vendor-invitations" ? "page" : undefined}
                   onClick={() => { setActiveTab("vendor-invitations"); setMobileNavOpen(false); }}
                   className={sidebarBtnCls("vendor-invitations")}>
                   <UserPlus className="h-4 w-4 shrink-0" strokeWidth={2} />
-                  <span className="flex-1">Undang Vendor</span>
+                  <span className="flex-1">{t("adminPage.nav.inviteVendor", "Undang Vendor")}</span>
                   {pendingVendorApprovals > 0 && (
                     <span className="ml-auto bg-amber-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-5 text-center">{pendingVendorApprovals}</span>
                   )}
                 </button>
                 {[
-                  { value: "approvals", icon: UserCheck,     label: "Approvals" },
-                  { value: "customers", icon: Users,         label: "Pelanggan" },
-                  { value: "wa-logs",   icon: MessageCircle, label: "WhatsApp" },
+                  { value: "approvals", icon: UserCheck,     label: t("adminPage.nav.approvals", "Approvals") },
+                  { value: "customers", icon: Users,         label: t("adminPage.nav.customers", "Pelanggan") },
+                  { value: "wa-logs",   icon: MessageCircle, label: t("adminPage.nav.whatsapp", "WhatsApp") },
                 ].map(({ value, icon: Icon, label }) => (
                   <button key={value} type="button" aria-current={activeTab === value ? "page" : undefined}
                     onClick={() => { setActiveTab(value); setMobileNavOpen(false); }}
@@ -251,11 +253,11 @@ export default function AdminPage() {
                   </button>
                 ))}
 
-                <p className="px-3 pt-4 pb-1.5 text-[10px] font-semibold tracking-widest text-slate-600 uppercase select-none">Sistem</p>
+                <p className="px-3 pt-4 pb-1.5 text-[10px] font-semibold tracking-widest text-slate-600 uppercase select-none">{t("adminPage.nav.sectionSystem", "Sistem")}</p>
                 {[
-                  { value: "bizportal-erp",   icon: Building2,  label: "BizPortal ERP" },
-                  { value: "paylabs-setting", icon: CreditCard, label: "Paylabs Setting" },
-                  { value: "utilities",       icon: Wrench,     label: "Utilitas" },
+                  { value: "bizportal-erp",   icon: Building2,  label: t("adminPage.nav.bizportalErp", "BizPortal ERP") },
+                  { value: "paylabs-setting", icon: CreditCard, label: t("adminPage.nav.paylabsSetting", "Paylabs Setting") },
+                  { value: "utilities",       icon: Wrench,     label: t("adminPage.nav.utilities", "Utilitas") },
                 ].map(({ value, icon: Icon, label }) => (
                   <button key={value} type="button" aria-current={activeTab === value ? "page" : undefined}
                     onClick={() => { setActiveTab(value); setMobileNavOpen(false); }}
@@ -269,7 +271,7 @@ export default function AdminPage() {
               <button type="button" aria-current={activeTab === "claim" ? "page" : undefined}
                 onClick={() => { setActiveTab("claim"); setMobileNavOpen(false); }}
                 className={sidebarBtnCls("claim")}>
-                <Shield className="h-4 w-4 shrink-0" strokeWidth={2} />Aktivasi Admin
+                <Shield className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.adminActivation", "Aktivasi Admin")}
               </button>
             </div>
           </nav>
@@ -283,50 +285,50 @@ export default function AdminPage() {
           {/* ── Desktop sidebar ────────────────────────────────────────────── */}
           <div className="hidden md:flex md:flex-col w-56 lg:w-60 shrink-0 bg-slate-900 border-r border-slate-800 sticky top-0 h-screen overflow-y-auto [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:bg-slate-700 [&::-webkit-scrollbar-track]:bg-transparent">
             <div className="px-4 pt-5 pb-3 border-b border-slate-800/80">
-              <p className="text-[10px] font-semibold tracking-widest text-slate-500 uppercase">Command Center</p>
+              <p className="text-[10px] font-semibold tracking-widest text-slate-500 uppercase">{t("adminPage.nav.commandCenter", "Command Center")}</p>
             </div>
 
             <TabsList className="flex flex-col h-auto bg-transparent p-2 gap-0.5 items-stretch flex-1">
               {isAdmin && (
                 <>
-                  <p className="px-3 pt-4 pb-1.5 text-[10px] font-semibold tracking-widest text-slate-600 uppercase select-none">Website & Konten</p>
-                  <TabsTrigger value="content"          className={TABS_TRIGGER_CLS}><FileText  className="h-4 w-4 shrink-0" strokeWidth={2} />Konten Website</TabsTrigger>
-                  <TabsTrigger value="services"         className={TABS_TRIGGER_CLS}><Settings  className="h-4 w-4 shrink-0" strokeWidth={2} />Kelola Layanan</TabsTrigger>
-                  <TabsTrigger value="products"         className={TABS_TRIGGER_CLS}><Box       className="h-4 w-4 shrink-0" strokeWidth={2} />Kelola Produk</TabsTrigger>
-                  <TabsTrigger value="couriers"         className={TABS_TRIGGER_CLS}><Truck     className="h-4 w-4 shrink-0" strokeWidth={2} />Kurir</TabsTrigger>
-                  <TabsTrigger value="pricing"          className={TABS_TRIGGER_CLS}><Tag       className="h-4 w-4 shrink-0" strokeWidth={2} />Kelola Harga</TabsTrigger>
-                  <TabsTrigger value="armada-trucking"  className={TABS_TRIGGER_CLS}><ImageIcon className="h-4 w-4 shrink-0" strokeWidth={2} />Armada Trucking</TabsTrigger>
+                  <p className="px-3 pt-4 pb-1.5 text-[10px] font-semibold tracking-widest text-slate-600 uppercase select-none">{t("adminPage.nav.sectionWebsite", "Website & Konten")}</p>
+                  <TabsTrigger value="content"          className={TABS_TRIGGER_CLS}><FileText  className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.websiteContent", "Konten Website")}</TabsTrigger>
+                  <TabsTrigger value="services"         className={TABS_TRIGGER_CLS}><Settings  className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.manageServices", "Kelola Layanan")}</TabsTrigger>
+                  <TabsTrigger value="products"         className={TABS_TRIGGER_CLS}><Box       className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.manageProducts", "Kelola Produk")}</TabsTrigger>
+                  <TabsTrigger value="couriers"         className={TABS_TRIGGER_CLS}><Truck     className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.couriers", "Kurir")}</TabsTrigger>
+                  <TabsTrigger value="pricing"          className={TABS_TRIGGER_CLS}><Tag       className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.managePricing", "Kelola Harga")}</TabsTrigger>
+                  <TabsTrigger value="armada-trucking"  className={TABS_TRIGGER_CLS}><ImageIcon className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.truckingFleet", "Armada Trucking")}</TabsTrigger>
 
-                  <p className="px-3 pt-4 pb-1.5 text-[10px] font-semibold tracking-widest text-slate-600 uppercase select-none">Marketplace</p>
-                  <TabsTrigger value="vendor-catalog"     className={TABS_TRIGGER_CLS}><Package      className="h-4 w-4 shrink-0" strokeWidth={2} />Katalog Vendor</TabsTrigger>
-                  <TabsTrigger value="produk-unggulan"    className={TABS_TRIGGER_CLS}><Store        className="h-4 w-4 shrink-0" strokeWidth={2} />Produk Unggulan</TabsTrigger>
-                  <TabsTrigger value="mini-forms"         className={TABS_TRIGGER_CLS}><Link2        className="h-4 w-4 shrink-0" strokeWidth={2} />Mini Form</TabsTrigger>
-                  <TabsTrigger value="product-templates"  className={TABS_TRIGGER_CLS}><Layers       className="h-4 w-4 shrink-0" strokeWidth={2} />Product Templates</TabsTrigger>
-                  <TabsTrigger value="vendor-marketplace" className={TABS_TRIGGER_CLS}><ShoppingCart className="h-4 w-4 shrink-0" strokeWidth={2} />Vendor Marketplace</TabsTrigger>
-                  <TabsTrigger value="master-price"       className={TABS_TRIGGER_CLS}><DollarSign   className="h-4 w-4 shrink-0" strokeWidth={2} />Master Price</TabsTrigger>
+                  <p className="px-3 pt-4 pb-1.5 text-[10px] font-semibold tracking-widest text-slate-600 uppercase select-none">{t("adminPage.nav.sectionMarketplace", "Marketplace")}</p>
+                  <TabsTrigger value="vendor-catalog"     className={TABS_TRIGGER_CLS}><Package      className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.vendorCatalog", "Katalog Vendor")}</TabsTrigger>
+                  <TabsTrigger value="produk-unggulan"    className={TABS_TRIGGER_CLS}><Store        className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.featuredProducts", "Produk Unggulan")}</TabsTrigger>
+                  <TabsTrigger value="mini-forms"         className={TABS_TRIGGER_CLS}><Link2        className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.miniForms", "Mini Form")}</TabsTrigger>
+                  <TabsTrigger value="product-templates"  className={TABS_TRIGGER_CLS}><Layers       className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.productTemplates", "Product Templates")}</TabsTrigger>
+                  <TabsTrigger value="vendor-marketplace" className={TABS_TRIGGER_CLS}><ShoppingCart className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.vendorMarketplace", "Vendor Marketplace")}</TabsTrigger>
+                  <TabsTrigger value="master-price"       className={TABS_TRIGGER_CLS}><DollarSign   className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.masterPrice", "Master Price")}</TabsTrigger>
 
-                  <p className="px-3 pt-4 pb-1.5 text-[10px] font-semibold tracking-widest text-slate-600 uppercase select-none">Vendor & Pengguna</p>
+                  <p className="px-3 pt-4 pb-1.5 text-[10px] font-semibold tracking-widest text-slate-600 uppercase select-none">{t("adminPage.nav.sectionVendorUsers", "Vendor & Pengguna")}</p>
                   <TabsTrigger value="vendor-invitations" className={TABS_TRIGGER_CLS}>
                     <UserPlus className="h-4 w-4 shrink-0" strokeWidth={2} />
-                    <span className="flex-1">Undang Vendor</span>
+                    <span className="flex-1">{t("adminPage.nav.inviteVendor", "Undang Vendor")}</span>
                     {pendingVendorApprovals > 0 && (
                       <span className="ml-auto bg-amber-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-5 text-center">{pendingVendorApprovals}</span>
                     )}
                   </TabsTrigger>
-                  <TabsTrigger value="approvals" className={TABS_TRIGGER_CLS}><UserCheck     className="h-4 w-4 shrink-0" strokeWidth={2} />Approvals</TabsTrigger>
-                  <TabsTrigger value="customers" className={TABS_TRIGGER_CLS}><Users         className="h-4 w-4 shrink-0" strokeWidth={2} />Pelanggan</TabsTrigger>
-                  <TabsTrigger value="wa-logs"   className={TABS_TRIGGER_CLS}><MessageCircle className="h-4 w-4 shrink-0" strokeWidth={2} />WhatsApp</TabsTrigger>
+                  <TabsTrigger value="approvals" className={TABS_TRIGGER_CLS}><UserCheck     className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.approvals", "Approvals")}</TabsTrigger>
+                  <TabsTrigger value="customers" className={TABS_TRIGGER_CLS}><Users         className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.customers", "Pelanggan")}</TabsTrigger>
+                  <TabsTrigger value="wa-logs"   className={TABS_TRIGGER_CLS}><MessageCircle className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.whatsapp", "WhatsApp")}</TabsTrigger>
 
-                  <p className="px-3 pt-4 pb-1.5 text-[10px] font-semibold tracking-widest text-slate-600 uppercase select-none">Sistem</p>
-                  <TabsTrigger value="bizportal-erp"   className={TABS_TRIGGER_CLS}><Building2  className="h-4 w-4 shrink-0" strokeWidth={2} />BizPortal ERP</TabsTrigger>
-                  <TabsTrigger value="paylabs-setting" className={TABS_TRIGGER_CLS}><CreditCard className="h-4 w-4 shrink-0" strokeWidth={2} />Paylabs Setting</TabsTrigger>
-                  <TabsTrigger value="utilities"       className={TABS_TRIGGER_CLS}><Wrench     className="h-4 w-4 shrink-0" strokeWidth={2} />Utilitas</TabsTrigger>
+                  <p className="px-3 pt-4 pb-1.5 text-[10px] font-semibold tracking-widest text-slate-600 uppercase select-none">{t("adminPage.nav.sectionSystem", "Sistem")}</p>
+                  <TabsTrigger value="bizportal-erp"   className={TABS_TRIGGER_CLS}><Building2  className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.bizportalErp", "BizPortal ERP")}</TabsTrigger>
+                  <TabsTrigger value="paylabs-setting" className={TABS_TRIGGER_CLS}><CreditCard className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.paylabsSetting", "Paylabs Setting")}</TabsTrigger>
+                  <TabsTrigger value="utilities"       className={TABS_TRIGGER_CLS}><Wrench     className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.utilities", "Utilitas")}</TabsTrigger>
                 </>
               )}
 
               <div className="mt-auto pt-4 border-t border-slate-800/80 mx-2 mb-2">
                 <TabsTrigger value="claim" className={TABS_TRIGGER_CLS}>
-                  <Shield className="h-4 w-4 shrink-0" strokeWidth={2} />Aktivasi Admin
+                  <Shield className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.adminActivation", "Aktivasi Admin")}
                 </TabsTrigger>
               </div>
             </TabsList>
@@ -341,8 +343,8 @@ export default function AdminPage() {
                   <TabsContent value="content">
                     <Card>
                       <CardHeader>
-                        <CardTitle>Konten Website</CardTitle>
-                        <CardDescription>Edit teks yang tampil di berbagai bagian website publik.</CardDescription>
+                        <CardTitle>{t("adminPage.tab.websiteContent.title", "Konten Website")}</CardTitle>
+                        <CardDescription>{t("adminPage.tab.websiteContent.desc", "Edit teks yang tampil di berbagai bagian website publik.")}</CardDescription>
                       </CardHeader>
                       <CardContent><ContentTab /></CardContent>
                     </Card>
@@ -351,8 +353,8 @@ export default function AdminPage() {
                   <TabsContent value="services">
                     <Card>
                       <CardHeader>
-                        <CardTitle>Kelola Layanan</CardTitle>
-                        <CardDescription>Edit nama, deskripsi, harga, dan gambar untuk setiap layanan.</CardDescription>
+                        <CardTitle>{t("adminPage.tab.services.title", "Kelola Layanan")}</CardTitle>
+                        <CardDescription>{t("adminPage.tab.services.desc", "Edit nama, deskripsi, harga, dan gambar untuk setiap layanan.")}</CardDescription>
                       </CardHeader>
                       <CardContent><ServicesTab /></CardContent>
                     </Card>
@@ -361,8 +363,8 @@ export default function AdminPage() {
                   <TabsContent value="products">
                     <Card>
                       <CardHeader>
-                        <CardTitle>Kelola Produk</CardTitle>
-                        <CardDescription>Edit nama, deskripsi, harga, dan gambar untuk setiap produk.</CardDescription>
+                        <CardTitle>{t("adminPage.tab.products.title", "Kelola Produk")}</CardTitle>
+                        <CardDescription>{t("adminPage.tab.products.desc", "Edit nama, deskripsi, harga, dan gambar untuk setiap produk.")}</CardDescription>
                       </CardHeader>
                       <CardContent><ProductsTab /></CardContent>
                     </Card>
@@ -371,8 +373,8 @@ export default function AdminPage() {
                   <TabsContent value="couriers">
                     <Card>
                       <CardHeader>
-                        <CardTitle>Vendor Kurir & Pengiriman</CardTitle>
-                        <CardDescription>Kelola daftar kurir yang ditampilkan ke pelanggan saat memilih pengiriman produk.</CardDescription>
+                        <CardTitle>{t("adminPage.tab.couriers.title", "Vendor Kurir & Pengiriman")}</CardTitle>
+                        <CardDescription>{t("adminPage.tab.couriers.desc", "Kelola daftar kurir yang ditampilkan ke pelanggan saat memilih pengiriman produk.")}</CardDescription>
                       </CardHeader>
                       <CardContent><DeliveryVendorsTab /></CardContent>
                     </Card>
@@ -381,8 +383,8 @@ export default function AdminPage() {
                   <TabsContent value="pricing">
                     <Card>
                       <CardHeader>
-                        <CardTitle>Kelola Harga Trucking & Freight</CardTitle>
-                        <CardDescription>Atur tarif trucking dan tarif freight internasional.</CardDescription>
+                        <CardTitle>{t("adminPage.tab.pricing.title", "Kelola Harga Trucking & Freight")}</CardTitle>
+                        <CardDescription>{t("adminPage.tab.pricing.desc", "Atur tarif trucking dan tarif freight internasional.")}</CardDescription>
                       </CardHeader>
                       <CardContent><PricingTab /></CardContent>
                     </Card>
@@ -392,16 +394,16 @@ export default function AdminPage() {
                     <Card>
                       <CardHeader>
                         <CardTitle className="flex items-center gap-2">
-                          <Link2 className="h-5 w-5 text-indigo-500" />Mini Form
+                          <Link2 className="h-5 w-5 text-indigo-500" />{t("adminPage.tab.miniForms.title", "Mini Form")}
                         </CardTitle>
-                        <CardDescription>Buat dan kelola link form dinamis. Bagikan ke penerima — mereka cukup membuka link dan mengisi form tanpa perlu login.</CardDescription>
+                        <CardDescription>{t("adminPage.tab.miniForms.desc", "Buat dan kelola link form dinamis. Bagikan ke penerima — mereka cukup membuka link dan mengisi form tanpa perlu login.")}</CardDescription>
                       </CardHeader>
                       <CardContent>
                         <Tabs defaultValue="vendor">
                           <TabsList className="mb-4">
-                            <TabsTrigger value="vendor">🚛 Vendor</TabsTrigger>
-                            <TabsTrigger value="customer">👤 Customer</TabsTrigger>
-                            <TabsTrigger value="admin">🔐 Internal</TabsTrigger>
+                            <TabsTrigger value="vendor">🚛 {t("adminPage.tab.miniForms.vendor", "Vendor")}</TabsTrigger>
+                            <TabsTrigger value="customer">👤 {t("adminPage.tab.miniForms.customer", "Customer")}</TabsTrigger>
+                            <TabsTrigger value="admin">🔐 {t("adminPage.tab.miniForms.internal", "Internal")}</TabsTrigger>
                           </TabsList>
                           <TabsContent value="vendor"><MiniFormTab formTarget="vendor" /></TabsContent>
                           <TabsContent value="customer"><MiniFormTab formTarget="customer" /></TabsContent>
@@ -415,9 +417,9 @@ export default function AdminPage() {
                     <Card>
                       <CardHeader>
                         <CardTitle className="flex items-center gap-2">
-                          <Layers className="h-5 w-5 text-indigo-500" />Product Template Engine
+                          <Layers className="h-5 w-5 text-indigo-500" />{t("adminPage.tab.productTemplates.title", "Product Template Engine")}
                         </CardTitle>
-                        <CardDescription>Referensi template komoditas multi-jenis — custom fields, dokumen wajib, checklist operasional, dan instruksi pengemasan per kategori barang.</CardDescription>
+                        <CardDescription>{t("adminPage.tab.productTemplates.desc", "Referensi template komoditas multi-jenis — custom fields, dokumen wajib, checklist operasional, dan instruksi pengemasan per kategori barang.")}</CardDescription>
                       </CardHeader>
                       <CardContent><PortalProductTemplateEngine /></CardContent>
                     </Card>
@@ -427,18 +429,18 @@ export default function AdminPage() {
                     <div className="space-y-6">
                       <div className="flex items-center justify-between">
                         <div>
-                          <h2 className="text-xl font-semibold">BizPortal ERP</h2>
-                          <p className="text-sm text-muted-foreground mt-1">Akses cepat ke semua modul ERP internal. Klik modul untuk membuka BizPortal.</p>
+                          <h2 className="text-xl font-semibold">{t("adminPage.erp.title", "BizPortal ERP")}</h2>
+                          <p className="text-sm text-muted-foreground mt-1">{t("adminPage.erp.subtitle", "Akses cepat ke semua modul ERP internal. Klik modul untuk membuka BizPortal.")}</p>
                         </div>
                         <a href="/bizportal/" target="_blank" rel="noopener noreferrer"
                           className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium transition-colors">
-                          <Building2 className="h-4 w-4" />Buka BizPortal<ArrowUpRight className="h-4 w-4" />
+                          <Building2 className="h-4 w-4" />{t("adminPage.erp.openBizPortal", "Buka BizPortal")}<ArrowUpRight className="h-4 w-4" />
                         </a>
                       </div>
 
                       <div className="flex items-center justify-between gap-3 flex-wrap">
                         <div className="flex items-center gap-2">
-                          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Statistik Real-time</p>
+                          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{t("adminPage.erp.realtimeStats", "Statistik Real-time")}</p>
                           <span className="inline-flex items-center gap-1 text-[10px] text-emerald-600 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-full font-medium">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />Live
                           </span>
@@ -446,24 +448,24 @@ export default function AdminPage() {
                         <div className="flex items-center gap-2">
                           {erpStatsLastUpdated && (
                             <span className="text-[11px] text-muted-foreground">
-                              Diperbarui {erpStatsLastUpdated.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                              {t("adminPage.erp.updatedAt", "Diperbarui")} {erpStatsLastUpdated.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                             </span>
                           )}
                           <button onClick={() => fetchErpStats()} disabled={erpStatsLoading}
                             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-background hover:bg-muted text-xs font-medium text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50">
-                            <Loader2 className={`h-3.5 w-3.5 ${erpStatsLoading ? "animate-spin" : ""}`} />Refresh
+                            <Loader2 className={`h-3.5 w-3.5 ${erpStatsLoading ? "animate-spin" : ""}`} />{t("adminPage.erp.refresh", "Refresh")}
                           </button>
                         </div>
                       </div>
 
                       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
                         {[
-                          { label: "Order Portal (bulan ini)", value: erpStats?.portalOrdersThisMonth,    icon: ClipboardList, color: "text-blue-600",   bg: "bg-blue-50",   href: "/bizportal/logistics/portal-orders" },
-                          { label: "Freight Aktif",            value: erpStats?.activeFreightShipments,   icon: Ship,          color: "text-indigo-600", bg: "bg-indigo-50", href: "/bizportal/logistics/freight" },
-                          { label: "Dalam Pengiriman",         value: erpStats?.inTransitShipments,       icon: Truck,         color: "text-cyan-600",   bg: "bg-cyan-50",   href: "/bizportal/logistics/freight" },
-                          { label: "RFQ Pending",              value: erpStats?.pendingRfqs,              icon: FileText,      color: "text-orange-600", bg: "bg-orange-50", href: "/bizportal/logistics/rfq" },
-                          { label: "Revenue Bulan Ini",        value: erpStats?.salesRevenueThisMonth,    icon: BarChart2,     color: "text-green-600",  bg: "bg-green-50",  href: "/bizportal/reports/sales", isRupiah: true },
-                          { label: "Pelanggan Portal",         value: erpStats?.activeCustomers,          icon: Users,         color: "text-purple-600", bg: "bg-purple-50", href: "/bizportal/portal/customers" },
+                          { label: t("adminPage.erp.stat.portalOrders", "Order Portal (bulan ini)"), value: erpStats?.portalOrdersThisMonth,    icon: ClipboardList, color: "text-blue-600",   bg: "bg-blue-50",   href: "/bizportal/logistics/portal-orders" },
+                          { label: t("adminPage.erp.stat.activeFreight", "Freight Aktif"),            value: erpStats?.activeFreightShipments,   icon: Ship,          color: "text-indigo-600", bg: "bg-indigo-50", href: "/bizportal/logistics/freight" },
+                          { label: t("adminPage.erp.stat.inTransit", "Dalam Pengiriman"),             value: erpStats?.inTransitShipments,       icon: Truck,         color: "text-cyan-600",   bg: "bg-cyan-50",   href: "/bizportal/logistics/freight" },
+                          { label: t("adminPage.erp.stat.pendingRfq", "RFQ Pending"),                 value: erpStats?.pendingRfqs,              icon: FileText,      color: "text-orange-600", bg: "bg-orange-50", href: "/bizportal/logistics/rfq" },
+                          { label: t("adminPage.erp.stat.monthlyRevenue", "Revenue Bulan Ini"),        value: erpStats?.salesRevenueThisMonth,    icon: BarChart2,     color: "text-green-600",  bg: "bg-green-50",  href: "/bizportal/reports/sales", isRupiah: true },
+                          { label: t("adminPage.erp.stat.portalCustomers", "Pelanggan Portal"),        value: erpStats?.activeCustomers,          icon: Users,         color: "text-purple-600", bg: "bg-purple-50", href: "/bizportal/portal/customers" },
                         ].map(({ label, value, isRupiah, icon: Icon, color, bg, href }) => (
                           <a key={label} href={href} target="_blank" rel="noopener noreferrer"
                             className="flex flex-col gap-2 p-4 rounded-xl border bg-white hover:shadow-md transition-all group">
@@ -487,13 +489,13 @@ export default function AdminPage() {
                       </div>
 
                       {[
-                        { label: "Dashboard & Utama",  color: "bg-slate-50 border-slate-200",   iconColor: "text-slate-600",  items: [{ icon: LayoutDashboard, label: "Dashboard", path: "/bizportal/dashboard" }, { icon: ClipboardList, label: "Approvals", path: "/bizportal/approvals" }, { icon: Building2, label: "Holding / Grup", path: "/bizportal/holding" }] },
-                        { label: "Logistik",           color: "bg-blue-50 border-blue-200",     iconColor: "text-blue-600",   items: [{ icon: Ship, label: "Freight Shipments", path: "/bizportal/logistics/freight" }, { icon: ClipboardList, label: "Portal Orders", path: "/bizportal/logistics/portal-orders" }, { icon: Truck, label: "Drivers", path: "/bizportal/logistics/drivers" }, { icon: FileText, label: "RFQ Logistik", path: "/bizportal/logistics/rfq" }, { icon: Tag, label: "Quote Requests", path: "/bizportal/logistics/quote-requests" }, { icon: BarChart2, label: "Margin Rules", path: "/bizportal/logistics/margin-rules" }] },
-                        { label: "Sales",              color: "bg-green-50 border-green-200",   iconColor: "text-green-600",  items: [{ icon: FileText, label: "Quotations", path: "/bizportal/sales/quotations" }, { icon: ShoppingCart, label: "Sales Orders", path: "/bizportal/sales/orders" }, { icon: Receipt, label: "Invoices", path: "/bizportal/sales/documents" }, { icon: Users, label: "Pelanggan Portal", path: "/bizportal/portal/customers" }, { icon: Store, label: "E-commerce", path: "/bizportal/ecommerce" }, { icon: Package, label: "Portal Product Orders", path: "/bizportal/portal-product-orders" }] },
-                        { label: "Purchase",           color: "bg-orange-50 border-orange-200", iconColor: "text-orange-600", items: [{ icon: ClipboardList, label: "Purchase Requests", path: "/bizportal/purchase/pr" }, { icon: FileText, label: "RFQ Purchase", path: "/bizportal/purchase/rfq" }, { icon: ShoppingCart, label: "Purchase Orders", path: "/bizportal/purchase/orders" }, { icon: PackageCheck, label: "Goods Receipt", path: "/bizportal/purchase/gr" }, { icon: Users, label: "Vendors", path: "/bizportal/purchase/vendors" }, { icon: Receipt, label: "Bills", path: "/bizportal/purchase/bills" }] },
-                        { label: "Accounting",         color: "bg-purple-50 border-purple-200", iconColor: "text-purple-600", items: [{ icon: BookOpen, label: "Chart of Accounts", path: "/bizportal/accounting/accounts" }, { icon: FileText, label: "Journal Entries", path: "/bizportal/accounting/entries" }, { icon: Wallet, label: "Payments", path: "/bizportal/accounting/payments" }, { icon: BarChart2, label: "Trial Balance", path: "/bizportal/accounting/reports/trial-balance" }, { icon: BarChart2, label: "Profit & Loss", path: "/bizportal/accounting/reports/profit-loss" }, { icon: BarChart2, label: "Balance Sheet", path: "/bizportal/accounting/reports/balance-sheet" }] },
-                        { label: "Expenses & Reports", color: "bg-rose-50 border-rose-200",     iconColor: "text-rose-600",   items: [{ icon: Receipt, label: "Expense", path: "/bizportal/expense" }, { icon: BarChart2, label: "Laporan Sales", path: "/bizportal/reports/sales" }, { icon: BarChart2, label: "Laporan Purchase", path: "/bizportal/reports/purchase" }, { icon: BarChart2, label: "AR Aging", path: "/bizportal/reports/ar-aging" }, { icon: BarChart2, label: "AP Aging", path: "/bizportal/reports/ap-aging" }, { icon: ClipboardList, label: "Audit Log", path: "/bizportal/reports/audit-log" }] },
-                        { label: "Lainnya",            color: "bg-amber-50 border-amber-200",   iconColor: "text-amber-600",  items: [{ icon: Mail, label: "Correspondences", path: "/bizportal/correspondences" }, { icon: Package, label: "Trading", path: "/bizportal/trading" }, { icon: Store, label: "Katalog Terpadu", path: "/bizportal/katalog-terpadu" }, { icon: Settings, label: "Org & HR", path: "/bizportal/org" }] },
+                        { label: t("adminPage.erp.section.dashboard", "Dashboard & Utama"),  color: "bg-slate-50 border-slate-200",   iconColor: "text-slate-600",  items: [{ icon: LayoutDashboard, label: "Dashboard", path: "/bizportal/dashboard" }, { icon: ClipboardList, label: "Approvals", path: "/bizportal/approvals" }, { icon: Building2, label: "Holding / Grup", path: "/bizportal/holding" }] },
+                        { label: t("adminPage.erp.section.logistics", "Logistik"),           color: "bg-blue-50 border-blue-200",     iconColor: "text-blue-600",   items: [{ icon: Ship, label: "Freight Shipments", path: "/bizportal/logistics/freight" }, { icon: ClipboardList, label: "Portal Orders", path: "/bizportal/logistics/portal-orders" }, { icon: Truck, label: "Drivers", path: "/bizportal/logistics/drivers" }, { icon: FileText, label: "RFQ Logistik", path: "/bizportal/logistics/rfq" }, { icon: Tag, label: "Quote Requests", path: "/bizportal/logistics/quote-requests" }, { icon: BarChart2, label: "Margin Rules", path: "/bizportal/logistics/margin-rules" }] },
+                        { label: t("adminPage.erp.section.sales", "Sales"),                  color: "bg-green-50 border-green-200",   iconColor: "text-green-600",  items: [{ icon: FileText, label: "Quotations", path: "/bizportal/sales/quotations" }, { icon: ShoppingCart, label: "Sales Orders", path: "/bizportal/sales/orders" }, { icon: Receipt, label: "Invoices", path: "/bizportal/sales/documents" }, { icon: Users, label: t("adminPage.erp.portalCustomers", "Pelanggan Portal"), path: "/bizportal/portal/customers" }, { icon: Store, label: "E-commerce", path: "/bizportal/ecommerce" }, { icon: Package, label: "Portal Product Orders", path: "/bizportal/portal-product-orders" }] },
+                        { label: t("adminPage.erp.section.purchase", "Purchase"),            color: "bg-orange-50 border-orange-200", iconColor: "text-orange-600", items: [{ icon: ClipboardList, label: "Purchase Requests", path: "/bizportal/purchase/pr" }, { icon: FileText, label: "RFQ Purchase", path: "/bizportal/purchase/rfq" }, { icon: ShoppingCart, label: "Purchase Orders", path: "/bizportal/purchase/orders" }, { icon: PackageCheck, label: "Goods Receipt", path: "/bizportal/purchase/gr" }, { icon: Users, label: "Vendors", path: "/bizportal/purchase/vendors" }, { icon: Receipt, label: "Bills", path: "/bizportal/purchase/bills" }] },
+                        { label: t("adminPage.erp.section.accounting", "Accounting"),        color: "bg-purple-50 border-purple-200", iconColor: "text-purple-600", items: [{ icon: BookOpen, label: "Chart of Accounts", path: "/bizportal/accounting/accounts" }, { icon: FileText, label: "Journal Entries", path: "/bizportal/accounting/entries" }, { icon: Wallet, label: "Payments", path: "/bizportal/accounting/payments" }, { icon: BarChart2, label: "Trial Balance", path: "/bizportal/accounting/reports/trial-balance" }, { icon: BarChart2, label: "Profit & Loss", path: "/bizportal/accounting/reports/profit-loss" }, { icon: BarChart2, label: "Balance Sheet", path: "/bizportal/accounting/reports/balance-sheet" }] },
+                        { label: t("adminPage.erp.section.expensesReports", "Expenses & Reports"), color: "bg-rose-50 border-rose-200",     iconColor: "text-rose-600",   items: [{ icon: Receipt, label: "Expense", path: "/bizportal/expense" }, { icon: BarChart2, label: t("adminPage.erp.salesReport", "Laporan Sales"), path: "/bizportal/reports/sales" }, { icon: BarChart2, label: t("adminPage.erp.purchaseReport", "Laporan Purchase"), path: "/bizportal/reports/purchase" }, { icon: BarChart2, label: "AR Aging", path: "/bizportal/reports/ar-aging" }, { icon: BarChart2, label: "AP Aging", path: "/bizportal/reports/ap-aging" }, { icon: ClipboardList, label: "Audit Log", path: "/bizportal/reports/audit-log" }] },
+                        { label: t("adminPage.erp.section.others", "Lainnya"),               color: "bg-amber-50 border-amber-200",   iconColor: "text-amber-600",  items: [{ icon: Mail, label: "Correspondences", path: "/bizportal/correspondences" }, { icon: Package, label: "Trading", path: "/bizportal/trading" }, { icon: Store, label: t("adminPage.erp.unifiedCatalog", "Katalog Terpadu"), path: "/bizportal/katalog-terpadu" }, { icon: Settings, label: "Org & HR", path: "/bizportal/org" }] },
                       ].map((section) => (
                         <div key={section.label} className={`rounded-xl border p-4 ${section.color}`}>
                           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">{section.label}</h3>
@@ -514,8 +516,8 @@ export default function AdminPage() {
                   <TabsContent value="approvals">
                     <Card>
                       <CardHeader>
-                        <CardTitle className="flex items-center gap-2"><UserCheck className="h-5 w-5 text-indigo-500" />Approval Vendor &amp; Pelanggan</CardTitle>
-                        <CardDescription>Tinjau dan setujui atau tolak permohonan akun vendor, driver, dan employee yang mendaftar melalui portal.</CardDescription>
+                        <CardTitle className="flex items-center gap-2"><UserCheck className="h-5 w-5 text-indigo-500" />{t("adminPage.tab.approvals.title", "Approval Vendor & Pelanggan")}</CardTitle>
+                        <CardDescription>{t("adminPage.tab.approvals.desc", "Tinjau dan setujui atau tolak permohonan akun vendor, driver, dan employee yang mendaftar melalui portal.")}</CardDescription>
                       </CardHeader>
                       <CardContent><ApprovalsTab getAuthHeaders={getAuthHeaders} /></CardContent>
                     </Card>
@@ -524,8 +526,8 @@ export default function AdminPage() {
                   <TabsContent value="customers">
                     <Card>
                       <CardHeader>
-                        <CardTitle className="flex items-center gap-2"><Users className="h-5 w-5 text-indigo-500" />Data Pelanggan Portal</CardTitle>
-                        <CardDescription>Daftar semua akun yang terdaftar di portal — customer, vendor, driver, dan admin.</CardDescription>
+                        <CardTitle className="flex items-center gap-2"><Users className="h-5 w-5 text-indigo-500" />{t("adminPage.tab.customers.title", "Data Pelanggan Portal")}</CardTitle>
+                        <CardDescription>{t("adminPage.tab.customers.desc", "Daftar semua akun yang terdaftar di portal — customer, vendor, driver, dan admin.")}</CardDescription>
                       </CardHeader>
                       <CardContent><CustomersTab getAuthHeaders={getAuthHeaders} /></CardContent>
                     </Card>
@@ -534,8 +536,8 @@ export default function AdminPage() {
                   <TabsContent value="wa-logs">
                     <Card>
                       <CardHeader>
-                        <CardTitle className="flex items-center gap-2"><MessageCircle className="h-5 w-5 text-indigo-500" />Log Notifikasi WhatsApp</CardTitle>
-                        <CardDescription>Pantau status pengiriman notifikasi WhatsApp — terkirim, gagal, atau deduplikasi — dan kirim ulang pesan yang gagal secara manual.</CardDescription>
+                        <CardTitle className="flex items-center gap-2"><MessageCircle className="h-5 w-5 text-indigo-500" />{t("adminPage.tab.waLogs.title", "Log Notifikasi WhatsApp")}</CardTitle>
+                        <CardDescription>{t("adminPage.tab.waLogs.desc", "Pantau status pengiriman notifikasi WhatsApp — terkirim, gagal, atau deduplikasi — dan kirim ulang pesan yang gagal secara manual.")}</CardDescription>
                       </CardHeader>
                       <CardContent><WaLogsTab getAuthHeaders={getAuthHeaders} /></CardContent>
                     </Card>
@@ -548,12 +550,12 @@ export default function AdminPage() {
                   <TabsContent value="utilities">
                     <Card>
                       <CardHeader>
-                        <CardTitle className="flex items-center gap-2"><Wrench className="h-5 w-5 text-amber-500" />Utilitas Admin</CardTitle>
-                        <CardDescription>Alat pembersihan dan perbaikan data — jalankan hanya jika diperlukan.</CardDescription>
+                        <CardTitle className="flex items-center gap-2"><Wrench className="h-5 w-5 text-amber-500" />{t("adminPage.tab.utilities.title", "Utilitas Admin")}</CardTitle>
+                        <CardDescription>{t("adminPage.tab.utilities.desc", "Alat pembersihan dan perbaikan data — jalankan hanya jika diperlukan.")}</CardDescription>
                       </CardHeader>
                       <CardContent>
                         <div className="max-w-2xl">
-                          <h3 className="text-sm font-semibold mb-3">Perbaiki Nama Produk "Jasa"</h3>
+                          <h3 className="text-sm font-semibold mb-3">{t("adminPage.tab.utilities.fixJasaNames", "Perbaiki Nama Produk \"Jasa\"")}</h3>
                           <FixJasaNamesTool />
                         </div>
                       </CardContent>
@@ -575,8 +577,8 @@ export default function AdminPage() {
                   <TabsContent value="produk-unggulan">
                     <Card>
                       <CardHeader>
-                        <CardTitle className="flex items-center gap-2"><Store className="h-5 w-5 text-indigo-500" />Produk Unggulan</CardTitle>
-                        <CardDescription>Kelola pengajuan, produk aktif, paket promosi, riwayat, dan verifikasi pembayaran produk unggulan vendor di marketplace.</CardDescription>
+                        <CardTitle className="flex items-center gap-2"><Store className="h-5 w-5 text-indigo-500" />{t("adminPage.tab.featuredProducts.title", "Produk Unggulan")}</CardTitle>
+                        <CardDescription>{t("adminPage.tab.featuredProducts.desc", "Kelola pengajuan, produk aktif, paket promosi, riwayat, dan verifikasi pembayaran produk unggulan vendor di marketplace.")}</CardDescription>
                       </CardHeader>
                       <CardContent>
                         <ProdukUnggulanTab getAuthHeaders={getAuthHeaders} />
@@ -587,8 +589,8 @@ export default function AdminPage() {
                   <TabsContent value="armada-trucking">
                     <Card>
                       <CardHeader>
-                        <CardTitle className="flex items-center gap-2"><Truck className="h-5 w-5 text-orange-500" />Gambar &amp; Urutan Armada Trucking</CardTitle>
-                        <CardDescription>Upload gambar dan atur urutan tampil kendaraan di halaman Trucking.</CardDescription>
+                        <CardTitle className="flex items-center gap-2"><Truck className="h-5 w-5 text-orange-500" />{t("adminPage.tab.truckingFleet.title", "Gambar & Urutan Armada Trucking")}</CardTitle>
+                        <CardDescription>{t("adminPage.tab.truckingFleet.desc", "Upload gambar dan atur urutan tampil kendaraan di halaman Trucking.")}</CardDescription>
                       </CardHeader>
                       <CardContent><VehicleImagesTab /></CardContent>
                     </Card>
@@ -597,8 +599,8 @@ export default function AdminPage() {
                   <TabsContent value="master-price">
                     <Card>
                       <CardHeader>
-                        <CardTitle className="flex items-center gap-2"><DollarSign className="h-5 w-5 text-emerald-600" />Master Price Management</CardTitle>
-                        <CardDescription>Kelola harga produk marketplace secara terpusat — update satu-satu, bulk, import Excel/CSV, riwayat perubahan, dan approval harga.</CardDescription>
+                        <CardTitle className="flex items-center gap-2"><DollarSign className="h-5 w-5 text-emerald-600" />{t("adminPage.tab.masterPrice.title", "Master Price Management")}</CardTitle>
+                        <CardDescription>{t("adminPage.tab.masterPrice.desc", "Kelola harga produk marketplace secara terpusat — update satu-satu, bulk, import Excel/CSV, riwayat perubahan, dan approval harga.")}</CardDescription>
                       </CardHeader>
                       <CardContent><MasterPriceManagement /></CardContent>
                     </Card>
@@ -609,8 +611,8 @@ export default function AdminPage() {
               <TabsContent value="claim">
                 <Card>
                   <CardHeader>
-                    <CardTitle>Aktivasi Admin</CardTitle>
-                    <CardDescription>Aktifkan hak akses admin menggunakan kunci rahasia.</CardDescription>
+                    <CardTitle>{t("adminPage.tab.claim.title", "Aktivasi Admin")}</CardTitle>
+                    <CardDescription>{t("adminPage.tab.claim.desc", "Aktifkan hak akses admin menggunakan kunci rahasia.")}</CardDescription>
                   </CardHeader>
                   <CardContent><ClaimAdminTab /></CardContent>
                 </Card>

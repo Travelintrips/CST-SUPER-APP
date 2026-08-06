@@ -422,26 +422,26 @@ export default function ImportTariffCalculatorPage() {
   return (
     <>
       <PageSeo
-        title={t("importTariff.pageSeoTitle")}
-        description="Hitung Bea Masuk, PPN Impor, dan PPh Pasal 22 secara otomatis berdasarkan HS Code BTKI 2022. Mendukung multi-mata uang (JISDOR BI) dan berbagai Incoterm."
+        title={t("importTariffCalc.pageSeoTitle", "Kalkulator Tarif Impor — BM, PPN, PPh")}
+        description={t("importTariffCalc.pageSeoDesc", "Hitung Bea Masuk, PPN Impor, dan PPh Pasal 22 secara otomatis berdasarkan HS Code BTKI 2022. Mendukung multi-mata uang (JISDOR BI) dan berbagai Incoterm.")}
       />
 
       {/* ── Header ── */}
       <div className="bg-gradient-to-br from-sky-900 via-sky-800 to-indigo-900 text-white py-12 px-4">
         <div className="max-w-5xl mx-auto">
           <div className="flex items-center gap-2 text-sky-300 text-sm mb-4">
-            <Link href="/" className="hover:text-white transition-colors">{t("importCalculator.breadcrumbHome", "Beranda")}</Link>
+            <Link href="/" className="hover:text-white transition-colors">{t("importTariffCalc.breadcrumbHome", "Beranda")}</Link>
             <ChevronRight className="h-3.5 w-3.5" />
-            <span>{t("importCalculator.title", "Kalkulator Tarif Impor")}</span>
+            <span>{t("importTariffCalc.pageTitle", "Kalkulator Tarif Impor")}</span>
           </div>
           <div className="flex items-start gap-4">
             <div className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center shrink-0">
               <Calculator className="h-6 w-6 text-white" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold">{t("importCalculator.title", "Kalkulator Tarif Impor")}</h1>
+              <h1 className="text-2xl font-bold">{t("importTariffCalc.pageTitle", "Kalkulator Tarif Impor")}</h1>
               <p className="text-sky-200 mt-1 text-sm leading-relaxed">
-                {t("importCalculator.subtitle", "Hitung Bea Masuk (BM), PPN Impor, dan PPh Pasal 22 berdasarkan BTKI 2022. Multi-mata uang, kurs live JISDOR BI, tarif FTA, auto-hitung otomatis.")}
+                {t("importTariffCalc.pageSubtitle", "Hitung Bea Masuk (BM), PPN Impor, dan PPh Pasal 22 berdasarkan BTKI 2022. Multi-mata uang, kurs live JISDOR BI, tarif FTA, auto-hitung otomatis.")}
               </p>
             </div>
           </div>
@@ -451,7 +451,7 @@ export default function ImportTariffCalculatorPage() {
             {ratesLoading ? (
               <div className="flex items-center gap-2 text-xs text-sky-300">
                 <Loader2 className="h-3 w-3 animate-spin" />
-                <span>{t("importCalculator.loadingRates", "Mengambil kurs terkini…")}</span>
+                <span>{t("importTariffCalc.loadingRates", "Mengambil kurs terkini…")}</span>
               </div>
             ) : ratesData ? (
               <>
@@ -463,11 +463,11 @@ export default function ImportTariffCalculatorPage() {
                     : "bg-amber-500/20 text-amber-300 border border-amber-500/30"
                 }`}>
                   {ratesData.source === "bi_jisdor" ? (
-                    <><Zap className="h-3 w-3" /> {t("importCalculator.rateJisdor", "JISDOR BI — Live")}</>
+                    <><Zap className="h-3 w-3" /> {t("importTariffCalc.rateJisdor", "JISDOR BI — Live")}</>
                   ) : ratesData.source === "live" ? (
-                    <><RefreshCw className="h-3 w-3" /> {t("importCalculator.rateLive", "Kurs Live")}</>
+                    <><RefreshCw className="h-3 w-3" /> {t("importTariffCalc.rateLive", "Kurs Live")}</>
                   ) : (
-                    <><AlertTriangle className="h-3 w-3" /> {t("importCalculator.rateEstimate", "Kurs Estimasi")}</>
+                    <><AlertTriangle className="h-3 w-3" /> {t("importTariffCalc.rateEstimate", "Kurs Estimasi")}</>
                   )}
                 </div>
                 <span className="text-xs text-sky-300">
@@ -479,7 +479,7 @@ export default function ImportTariffCalculatorPage() {
                   </span>
                 )}
                 <span className="text-xs text-sky-400 ml-auto">
-                  {t("importCalculator.updatedAt", "Diperbarui")} {new Date(ratesData.updatedAt).toLocaleTimeString("id-ID")}
+                  {t("importTariffCalc.updatedAt", "Diperbarui")} {new Date(ratesData.updatedAt).toLocaleTimeString("id-ID")}
                 </span>
               </>
             ) : null}
@@ -500,7 +500,7 @@ export default function ImportTariffCalculatorPage() {
               }`}
             >
               <Calculator className="h-4 w-4" />
-              Kalkulasi Tunggal
+              {t("importTariffCalc.tabSingle", "Kalkulasi Tunggal")}
             </button>
             <button
               onClick={() => setActiveTab("multi")}
@@ -511,8 +511,8 @@ export default function ImportTariffCalculatorPage() {
               }`}
             >
               <BarChart3 className="h-4 w-4" />
-              Perbandingan Multi-HS
-              <span className="text-[10px] bg-sky-100 text-sky-600 rounded-full px-1.5 py-0.5 font-bold">{t("importTariff.tabMultiBadge")}</span>
+              {t("importTariffCalc.tabMulti", "Perbandingan Multi-HS")}
+              <span className="text-[10px] bg-sky-100 text-sky-600 rounded-full px-1.5 py-0.5 font-bold">{t("importTariffCalc.tabMultiBadge", "Baru")}</span>
             </button>
           </div>
         </div>
@@ -533,7 +533,7 @@ export default function ImportTariffCalculatorPage() {
                   <div className="w-6 h-6 rounded-full bg-sky-100 flex items-center justify-center">
                     <span className="text-[11px] font-bold text-sky-600">1</span>
                   </div>
-                  <span className="text-sm font-semibold text-slate-800">{t("importTariff.step1Title")}</span>
+                  <span className="text-sm font-semibold text-slate-800">{t("importTariffCalc.step1Title", "HS Code — BTKI 2022")}</span>
                 </div>
 
                 {selectedHs ? (
@@ -568,7 +568,7 @@ export default function ImportTariffCalculatorPage() {
                         value={hsInput}
                         onChange={(e) => { setHsInput(e.target.value); setSearchOpen(true); }}
                         onFocus={() => setSearchOpen(true)}
-                        placeholder={t("importTariff.hcSearchPlaceholder")}
+                        placeholder={t("importTariffCalc.hsSearchPlaceholder", "Cari HS Code atau deskripsi barang…")}
                         className="flex-1 text-sm outline-none placeholder-slate-400"
                       />
                       {searching && <Loader2 className="h-4 w-4 text-slate-400 animate-spin" />}
@@ -615,7 +615,7 @@ export default function ImportTariffCalculatorPage() {
 
                     {searchOpen && hsInput.length >= 2 && !searching && searchData?.results?.length === 0 && (
                       <div className="absolute top-full left-0 right-0 mt-1.5 z-50 bg-white border border-slate-200 rounded-xl shadow-lg p-4 text-center">
-                        <p className="text-sm text-slate-500">Tidak ditemukan. Coba kata kunci lain.</p>
+                        <p className="text-sm text-slate-500">{t("importTariffCalc.notFound", "Tidak ditemukan. Coba kata kunci lain.")}</p>
                       </div>
                     )}
                   </div>
@@ -628,13 +628,13 @@ export default function ImportTariffCalculatorPage() {
                   <div className="w-6 h-6 rounded-full bg-sky-100 flex items-center justify-center">
                     <span className="text-[11px] font-bold text-sky-600">2</span>
                   </div>
-                  <span className="text-sm font-semibold text-slate-800">{t("importTariff.step2Title")}</span>
+                  <span className="text-sm font-semibold text-slate-800">{t("importTariffCalc.step2Title", "Nilai Barang & Mata Uang")}</span>
                 </div>
 
                 <div className="space-y-3">
                   {/* Currency selector */}
                   <div>
-                    <label className="text-xs font-medium text-slate-500 mb-1.5 block">{t("importTariff.currencyLabel")}</label>
+                    <label className="text-xs font-medium text-slate-500 mb-1.5 block">{t("importTariffCalc.currencyLabel", "Mata Uang")}</label>
                     <select
                       value={currency}
                       onChange={(e) => setCurrency(e.target.value)}
@@ -649,7 +649,7 @@ export default function ImportTariffCalculatorPage() {
                   {/* Goods value input */}
                   <div>
                     <label className="text-xs font-medium text-slate-500 mb-1.5 block">
-                      Nilai Barang (dalam {currency})
+                      {t("importTariffCalc.goodsValueLabel", "Nilai Barang")} ({t("importTariffCalc.inCurrency", "dalam")} {currency})
                     </label>
                     <div className="flex items-center gap-0 border border-slate-300 rounded-xl overflow-hidden focus-within:border-sky-500 focus-within:ring-2 focus-within:ring-sky-100 transition-all">
                       <span className="bg-slate-50 border-r border-slate-200 px-3 py-2.5 text-sm font-semibold text-slate-600 shrink-0">
@@ -672,13 +672,13 @@ export default function ImportTariffCalculatorPage() {
                     <div className="rounded-xl bg-gradient-to-r from-sky-50 to-indigo-50 border border-sky-100 p-3">
                       <div className="flex items-center justify-between">
                         <div>
-                          <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wide">Konversi ke IDR</p>
+                          <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wide">{t("importTariffCalc.convertToIdr", "Konversi ke IDR")}</p>
                           <p className="text-base font-bold text-sky-700 mt-0.5">
                             {idr(parseFloat(goodsValue) * (currentRate ?? 16200))}
                           </p>
                         </div>
                         <div className="text-right">
-                          <p className="text-[10px] text-slate-400">Kurs pakai</p>
+                          <p className="text-[10px] text-slate-400">{t("importTariffCalc.rateUsed", "Kurs pakai")}</p>
                           <p className="text-xs font-semibold text-slate-600">
                             1 {currency} = {idr(currentRate ?? 16200)}
                           </p>
@@ -704,7 +704,7 @@ export default function ImportTariffCalculatorPage() {
                   <div className="w-6 h-6 rounded-full bg-sky-100 flex items-center justify-center">
                     <span className="text-[11px] font-bold text-sky-600">3</span>
                   </div>
-                  <span className="text-sm font-semibold text-slate-800">Incoterm <span className="text-slate-400 font-normal text-xs">(opsional, default CIF)</span></span>
+                  <span className="text-sm font-semibold text-slate-800">{t("importTariffCalc.step3Title", "Incoterm")} <span className="text-slate-400 font-normal text-xs">({t("importTariffCalc.step3Optional", "opsional, default CIF")})</span></span>
                 </div>
 
                 <div className="grid grid-cols-3 gap-1.5 mb-3">
@@ -730,19 +730,19 @@ export default function ImportTariffCalculatorPage() {
                 {needsFreight && (
                   <div className="mt-3 space-y-2 pt-3 border-t border-slate-100">
                     <div>
-                      <label className="text-xs font-medium text-slate-600 block mb-1">Ongkir / Freight (IDR)</label>
+                      <label className="text-xs font-medium text-slate-600 block mb-1">{t("importTariffCalc.freightLabel", "Ongkir / Freight (IDR)")}</label>
                       <input
                         type="number"
                         min="0"
                         step="any"
                         value={freightCost}
                         onChange={(e) => setFreightCost(e.target.value)}
-                        placeholder={t("importTariff.freightPlaceholder")}
+                        placeholder={t("importTariffCalc.freightPlaceholder", "0")}
                         className="w-full text-sm border border-slate-300 rounded-xl px-3 py-2 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
                       />
                     </div>
                     <div>
-                      <label className="text-xs font-medium text-slate-600 block mb-1">Asuransi (%)</label>
+                      <label className="text-xs font-medium text-slate-600 block mb-1">{t("importTariffCalc.insuranceLabel", "Asuransi (%)")}</label>
                       <input
                         type="number"
                         min="0"
@@ -764,11 +764,11 @@ export default function ImportTariffCalculatorPage() {
                   <div className="w-6 h-6 rounded-full bg-sky-100 flex items-center justify-center">
                     <span className="text-[11px] font-bold text-sky-600">4</span>
                   </div>
-                  <span className="text-sm font-semibold text-slate-800">{t("importTariff.step4Title")}</span>
+                  <span className="text-sm font-semibold text-slate-800">{t("importTariffCalc.step4Title", "Jenis Importir & FTA")}</span>
                 </div>
 
                 <div>
-                  <p className="text-xs font-medium text-slate-600 mb-2">{t("importTariff.importerTypeLabel")}</p>
+                  <p className="text-xs font-medium text-slate-600 mb-2">{t("importTariffCalc.importerTypeLabel", "Jenis Importir (PPh Pasal 22)")}</p>
                   <div className="flex gap-2">
                     <button
                       onClick={() => setIsApi(true)}
@@ -792,12 +792,12 @@ export default function ImportTariffCalculatorPage() {
                     </button>
                   </div>
                   <p className="text-[10px] text-slate-400 mt-1.5">
-                    API = importir berlisensi (Angka Pengenal Importir). Non-API = perorangan/umum.
+                    {t("importTariffCalc.apiNote", "API = importir berlisensi (Angka Pengenal Importir). Non-API = perorangan/umum.")}
                   </p>
                 </div>
 
                 <div>
-                  <p className="text-xs font-medium text-slate-600 mb-2">{t("importTariff.ftaRateLabel")}</p>
+                  <p className="text-xs font-medium text-slate-600 mb-2">{t("importTariffCalc.ftaRateLabel", "Skema Tarif FTA (Preferensi)")}</p>
                   <select
                     value={prefScheme}
                     onChange={(e) => setPrefScheme(e.target.value)}
@@ -809,7 +809,7 @@ export default function ImportTariffCalculatorPage() {
                   </select>
                   {prefScheme && (
                     <p className="text-[10px] text-sky-600 mt-1.5">
-                      {t("importTariff.cooCertNote")}
+                      {t("importTariffCalc.cooCertNote", "Memerlukan Certificate of Origin (COO) yang valid.")}
                     </p>
                   )}
                 </div>
@@ -820,20 +820,20 @@ export default function ImportTariffCalculatorPage() {
                 {calcMutation.isPending ? (
                   <div className="flex items-center gap-2 text-xs text-sky-600">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    <span>{t("importTariff.calculating")}</span>
+                    <span>{t("importTariffCalc.calculating", "Menghitung…")}</span>
                   </div>
                 ) : canCalculate && result ? (
                   <div className="flex items-center gap-2 text-xs text-emerald-600">
                     <Zap className="h-3.5 w-3.5" />
-                    <span>{t("importTariff.autoCalcActive")}</span>
+                    <span>{t("importTariffCalc.autoCalcActive", "Auto-hitung aktif")}</span>
                   </div>
                 ) : canCalculate ? (
                   <div className="flex items-center gap-2 text-xs text-slate-400">
                     <RefreshCw className="h-3.5 w-3.5" />
-                    <span>{t("importTariff.calcSpinner")}</span>
+                    <span>{t("importTariffCalc.calcSpinner", "Menunggu input…")}</span>
                   </div>
                 ) : (
-                  <p className="text-xs text-slate-400">{t("importTariff.fillForm")}</p>
+                  <p className="text-xs text-slate-400">{t("importTariffCalc.fillForm", "Isi HS Code dan nilai barang untuk mulai kalkulasi.")}</p>
                 )}
               </div>
 
@@ -852,15 +852,15 @@ export default function ImportTariffCalculatorPage() {
                   <div className="w-16 h-16 rounded-2xl bg-slate-100 flex items-center justify-center mb-4">
                     <Calculator className="h-7 w-7 text-slate-400" />
                   </div>
-                  <h3 className="text-base font-semibold text-slate-700">{t("importTariff.readyTitle")}</h3>
+                  <h3 className="text-base font-semibold text-slate-700">{t("importTariffCalc.readyTitle", "Kalkulator Siap")}</h3>
                   <p className="text-sm text-slate-500 mt-1.5 max-w-xs">
-                    {t("importTariff.readyDesc")}
+                    {t("importTariffCalc.readyDesc", "Pilih HS Code dan isi nilai barang untuk menghitung BM, PPN, dan PPh secara otomatis.")}
                   </p>
                   <div className="mt-6 grid grid-cols-3 gap-3 text-left w-full max-w-sm">
                     {[
-                      { icon: <Receipt className="h-4 w-4 text-blue-500" />, label: t("importTariff.calcLabel_bm"), color: "bg-blue-50" },
-                      { icon: <Banknote className="h-4 w-4 text-green-500" />, label: t("importTariff.calcLabel_ppn"), color: "bg-green-50" },
-                      { icon: <Building2 className="h-4 w-4 text-orange-500" />, label: t("importTariff.calcLabel_pph"), color: "bg-orange-50" },
+                      { icon: <Receipt className="h-4 w-4 text-blue-500" />, label: t("importTariffCalc.calcLabelBm", "Bea Masuk (BM)"), color: "bg-blue-50" },
+                      { icon: <Banknote className="h-4 w-4 text-green-500" />, label: t("importTariffCalc.calcLabelPpn", "PPN Impor"), color: "bg-green-50" },
+                      { icon: <Building2 className="h-4 w-4 text-orange-500" />, label: t("importTariffCalc.calcLabelPph", "PPh Pasal 22"), color: "bg-orange-50" },
                     ].map((item) => (
                       <div key={item.label} className={`${item.color} rounded-xl p-3 text-center`}>
                         <div className="flex justify-center mb-1.5">{item.icon}</div>
@@ -874,7 +874,7 @@ export default function ImportTariffCalculatorPage() {
               {calcMutation.isPending && (
                 <div className="bg-white rounded-2xl border border-slate-200 p-12 flex flex-col items-center">
                   <Loader2 className="h-8 w-8 text-sky-500 animate-spin mb-3" />
-                  <p className="text-sm text-slate-600">{t("importTariff.calcLoading")}</p>
+                  <p className="text-sm text-slate-600">{t("importTariffCalc.calcLoading", "Menghitung tarif impor…")}</p>
                 </div>
               )}
 
@@ -890,30 +890,30 @@ export default function ImportTariffCalculatorPage() {
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between">
                             <p className="text-sm font-bold text-amber-800">
-                              ⚠ Barang Terkena LARTAS (Larangan &amp; Pembatasan)
+                              ⚠ {t("importTariffCalc.lartasWarning", "Barang Terkena LARTAS (Larangan & Pembatasan)")}
                             </p>
                             <button
                               onClick={() => setLartasOpen((v) => !v)}
                               className="text-xs text-amber-700 hover:underline flex items-center gap-1 shrink-0"
                             >
-                              Detail
+                              {t("importTariffCalc.lartasDetail", "Detail")}
                               <ChevronDown className={`h-3.5 w-3.5 transition-transform ${lartasOpen ? "rotate-180" : ""}`} />
                             </button>
                           </div>
                           <p className="text-xs text-amber-700 mt-0.5">
-                            Wajib memiliki izin khusus sebelum impor. Hubungi PPJK kami untuk asistensi.
+                            {t("importTariffCalc.lartasDesc", "Wajib memiliki izin khusus sebelum impor. Hubungi PPJK kami untuk asistensi.")}
                           </p>
                           {lartasOpen && (
                             <div className="mt-3 space-y-2 text-xs text-amber-800 bg-amber-100 rounded-xl p-3">
                               {result.lartas.description && (
-                                <p><strong>Keterangan:</strong> {result.lartas.description}</p>
+                                <p><strong>{t("importTariffCalc.lartasKeterangan", "Keterangan")}:</strong> {result.lartas.description}</p>
                               )}
                               {result.lartas.regulator && (
-                                <p><strong>Regulator:</strong> {result.lartas.regulator}</p>
+                                <p><strong>{t("importTariffCalc.lartasRegulator", "Regulator")}:</strong> {result.lartas.regulator}</p>
                               )}
                               {!!result.lartas.perizinan && Array.isArray(result.lartas.perizinan) && (
                                 <div>
-                                  <strong>Perizinan yang dibutuhkan:</strong>
+                                  <strong>{t("importTariffCalc.lartasPerizinan", "Perizinan yang dibutuhkan")}:</strong>
                                   <ul className="mt-1 space-y-0.5 list-disc list-inside">
                                     {(result.lartas.perizinan as string[]).map((p, i) => (
                                       <li key={i}>{p}</li>
@@ -928,7 +928,7 @@ export default function ImportTariffCalculatorPage() {
                                 className="flex items-center gap-1 text-amber-700 hover:underline mt-1"
                               >
                                 <Globe className="h-3 w-3" />
-                                Cek detail di INSW
+                                {t("importTariffCalc.lartasInsw", "Cek detail di INSW")}
                               </a>
                             </div>
                           )}
@@ -963,7 +963,7 @@ export default function ImportTariffCalculatorPage() {
                           )}
                           {!result.lartas.hasLartas && (
                             <span className="text-[10px] bg-green-100 text-green-700 rounded-full px-2 py-0.5 flex items-center gap-1">
-                              <CheckCircle2 className="h-2.5 w-2.5" /> Bebas LARTAS
+                              <CheckCircle2 className="h-2.5 w-2.5" /> {t("importTariffCalc.noLartas", "Bebas LARTAS")}
                             </span>
                           )}
                         </div>
@@ -971,14 +971,14 @@ export default function ImportTariffCalculatorPage() {
                       <div className="flex gap-1.5 shrink-0">
                         <button
                           onClick={exportCSV}
-                          title={t("importTariff.exportCsv")}
+                          title={t("importTariffCalc.exportCsv", "Export CSV")}
                           className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-500 hover:text-slate-700 transition-colors"
                         >
                           <Download className="h-4 w-4" />
                         </button>
                         <button
                           onClick={exportJSON}
-                          title={t("importTariff.exportJson")}
+                          title={t("importTariffCalc.exportJson", "Export JSON")}
                           className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-500 hover:text-slate-700 transition-colors"
                         >
                           <FileText className="h-4 w-4" />
@@ -989,27 +989,27 @@ export default function ImportTariffCalculatorPage() {
                     {/* Input summary */}
                     <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-2 gap-y-2 gap-x-4 text-xs">
                       <div>
-                        <span className="text-slate-400">{t("importTariff.inputGoodsValueLabel")}</span>
+                        <span className="text-slate-400">{t("importTariffCalc.inputGoodsValueLabel", "Nilai Barang")}</span>
                         <p className="font-semibold text-slate-700">
                           {num(result.input.goodsValue, result.input.currency)}
                         </p>
                       </div>
                       <div>
-                        <span className="text-slate-400">{t("importTariff.inputRateUsedLabel")}</span>
+                        <span className="text-slate-400">{t("importTariffCalc.inputRateUsedLabel", "Kurs Dipakai")}</span>
                         <p className="font-semibold text-slate-700">
                           {idr(result.input.exchangeRate)} / {result.input.currency}
                         </p>
                       </div>
                       <div>
-                        <span className="text-slate-400">{t("importTariff.step3Title")}</span>
+                        <span className="text-slate-400">{t("importTariffCalc.step3Title", "Incoterm")}</span>
                         <p className="font-semibold text-slate-700">{result.input.incoterm}</p>
                       </div>
                       <div>
-                        <span className="text-slate-400">{t("importTariff.inputDutyScheme")}</span>
+                        <span className="text-slate-400">{t("importTariffCalc.inputDutyScheme", "Skema Tarif BM")}</span>
                         <p className="font-semibold text-slate-700">{result.rates.bmScheme}</p>
                       </div>
                       <div className="col-span-2">
-                        <span className="text-slate-400">{t("importTariff.inputNdpbm")}</span>
+                        <span className="text-slate-400">{t("importTariffCalc.inputNdpbm", "NDPBM (CIF IDR)")}</span>
                         <p className="font-semibold text-sky-700">{idr(result.ndpbm)}</p>
                       </div>
                       {result.input.incotermNote && (
@@ -1023,14 +1023,14 @@ export default function ImportTariffCalculatorPage() {
                   {/* ── Tabel Kalkulasi Pajak ── */}
                   <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                     <div className="px-5 py-3.5 border-b border-slate-100">
-                      <h3 className="text-sm font-bold text-slate-800">{t("importTariff.taxDetailTitle")}</h3>
+                      <h3 className="text-sm font-bold text-slate-800">{t("importTariffCalc.taxDetailTitle", "Rincian Kalkulasi Pajak Impor")}</h3>
                     </div>
                     <table className="w-full">
                       <thead>
                         <tr className="bg-slate-50">
-                          <th className="text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wide px-5 py-2.5">{t("importTariff.tableColComponent")}</th>
-                          <th className="text-right text-[11px] font-semibold text-slate-500 uppercase tracking-wide px-5 py-2.5">{t("importTariff.tableColRate")}</th>
-                          <th className="text-right text-[11px] font-semibold text-slate-500 uppercase tracking-wide px-5 py-2.5">{t("importTariff.tableColAmount")}</th>
+                          <th className="text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wide px-5 py-2.5">{t("importTariffCalc.tableColComponent", "Komponen")}</th>
+                          <th className="text-right text-[11px] font-semibold text-slate-500 uppercase tracking-wide px-5 py-2.5">{t("importTariffCalc.tableColRate", "Tarif")}</th>
+                          <th className="text-right text-[11px] font-semibold text-slate-500 uppercase tracking-wide px-5 py-2.5">{t("importTariffCalc.tableColAmount", "Jumlah (IDR)")}</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
@@ -1038,7 +1038,7 @@ export default function ImportTariffCalculatorPage() {
                           <td className="px-5 py-3 text-sm text-slate-700">
                             <div className="flex items-center gap-2">
                               <div className="w-2 h-2 rounded-full bg-slate-300" />
-                              {t("importTariff.ndpbmLabel")}
+                              {t("importTariffCalc.ndpbmLabel", "NDPBM (Nilai Dasar Perhitungan Bea Masuk)")}
                             </div>
                           </td>
                           <td className="px-5 py-3 text-right text-sm text-slate-400">—</td>
@@ -1050,7 +1050,7 @@ export default function ImportTariffCalculatorPage() {
                           <td className="px-5 py-3 text-sm text-slate-700">
                             <div className="flex items-center gap-2">
                               <div className="w-2 h-2 rounded-full bg-blue-400" />
-                              {t("importTariff.calcLabel_bm")}
+                              {t("importTariffCalc.calcLabelBm", "Bea Masuk (BM)")}
                             </div>
                             <p className="text-[10px] text-slate-400 ml-4 mt-0.5">
                               NDPBM × {result.rates.bm} [{result.rates.bmScheme}]
@@ -1065,7 +1065,7 @@ export default function ImportTariffCalculatorPage() {
                           <td className="px-5 py-3 text-sm text-slate-700">
                             <div className="flex items-center gap-2">
                               <div className="w-2 h-2 rounded-full bg-green-500" />
-                              PPN Impor
+                              {t("importTariffCalc.calcLabelPpn", "PPN Impor")}
                             </div>
                             <p className="text-[10px] text-slate-400 ml-4 mt-0.5">
                               (NDPBM + BM) × {result.rates.ppn}
@@ -1081,7 +1081,7 @@ export default function ImportTariffCalculatorPage() {
                             <td className="px-5 py-3 text-sm text-slate-700">
                               <div className="flex items-center gap-2">
                                 <div className="w-2 h-2 rounded-full bg-purple-400" />
-                                PPnBM (Barang Mewah)
+                                {t("importTariffCalc.calcLabelPpnbm", "PPnBM (Barang Mewah)")}
                               </div>
                             </td>
                             <td className="px-5 py-3 text-right text-sm text-purple-600 font-medium">{result.rates.ppnbm}</td>
@@ -1109,7 +1109,7 @@ export default function ImportTariffCalculatorPage() {
                         </tr>
                         <tr className="border-t-2 border-slate-200 bg-slate-50">
                           <td className="px-5 py-3 text-sm font-bold text-slate-800">
-                            Total Pungutan Impor
+                            {t("importTariffCalc.totalImportDuties", "Total Pungutan Impor")}
                           </td>
                           <td className="px-5 py-3 text-right text-sm font-bold text-slate-600">
                             {result.duties.effectiveRate}
@@ -1126,10 +1126,10 @@ export default function ImportTariffCalculatorPage() {
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="text-xs font-semibold text-sky-200 uppercase tracking-wide">
-                            Total DDP (Landed Cost)
+                            {t("importTariffCalc.ddpTitle", "Total DDP (Landed Cost)")}
                           </p>
                           <p className="text-[10px] text-sky-300 mt-0.5">
-                            Nilai barang + semua pungutan impor
+                            {t("importTariffCalc.ddpDesc", "Nilai barang + semua pungutan impor")}
                           </p>
                         </div>
                         <p className="text-2xl font-bold text-white">{idr(result.ddp)}</p>
@@ -1143,18 +1143,18 @@ export default function ImportTariffCalculatorPage() {
                       <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-2">
                           <Shield className="h-4 w-4 text-emerald-500" />
-                          <span className="text-sm font-bold text-slate-800">Tarif Preferensi FTA</span>
+                          <span className="text-sm font-bold text-slate-800">{t("importTariffCalc.ftaTitle", "Tarif Preferensi FTA")}</span>
                         </div>
                         <button
                           onClick={() => setPrefOpen((v) => !v)}
                           className="text-xs text-sky-600 hover:underline flex items-center gap-1"
                         >
-                          {prefOpen ? "Sembunyikan" : "Tampilkan semua"}
+                          {prefOpen ? t("importTariffCalc.hide", "Sembunyikan") : t("importTariffCalc.showAll", "Tampilkan semua")}
                           <ChevronDown className={`h-3.5 w-3.5 transition-transform ${prefOpen ? "rotate-180" : ""}`} />
                         </button>
                       </div>
                       <p className="text-xs text-slate-500 mb-3">
-                        Jika memiliki Certificate of Origin (COO) yang valid, tarif BM bisa lebih rendah:
+                        {t("importTariffCalc.ftaDesc", "Jika memiliki Certificate of Origin (COO) yang valid, tarif BM bisa lebih rendah:")}
                       </p>
                       {prefOpen && (
                         <div className="grid grid-cols-2 gap-2">
@@ -1196,7 +1196,7 @@ export default function ImportTariffCalculatorPage() {
                               onClick={() => setPrefOpen(true)}
                               className="text-[10px] text-sky-500 hover:underline self-center"
                             >
-                              +{Object.keys(result.preferential).length - 5} lainnya
+                              +{Object.keys(result.preferential).length - 5} {t("importTariffCalc.more", "lainnya")}
                             </button>
                           )}
                         </div>
@@ -1211,20 +1211,20 @@ export default function ImportTariffCalculatorPage() {
                         <Info className="h-5 w-5 text-sky-600" />
                       </div>
                       <div className="flex-1">
-                        <p className="text-sm font-bold text-sky-900">Butuh Bantuan Pengurusan Impor?</p>
+                        <p className="text-sm font-bold text-sky-900">{t("importTariffCalc.ctaTitle", "Butuh Bantuan Pengurusan Impor?")}</p>
                         <p className="text-xs text-sky-700 mt-0.5">
-                          Tim PPJK kami siap membantu custom clearance, pengurusan dokumen, dan perhitungan biaya impor yang lebih akurat.
+                          {t("importTariffCalc.ctaDesc", "Tim PPJK kami siap membantu custom clearance, pengurusan dokumen, dan perhitungan biaya impor yang lebih akurat.")}
                         </p>
                         <div className="flex flex-wrap gap-2 mt-3">
                           <Link href="/pabean">
                             <Button size="sm" className="bg-sky-600 hover:bg-sky-700 text-white text-xs gap-1.5 rounded-xl">
-                              Konsultasi Pabean
+                              {t("importTariffCalc.consultButton", "Konsultasi Pabean")}
                               <ArrowRight className="h-3.5 w-3.5" />
                             </Button>
                           </Link>
                           <Link href="/custom-clearance">
                             <Button size="sm" variant="outline" className="text-xs gap-1.5 rounded-xl border-sky-300 text-sky-700">
-                              Custom Clearance
+                              {t("importTariffCalc.customClearanceButton", "Custom Clearance")}
                             </Button>
                           </Link>
                         </div>
@@ -1237,7 +1237,7 @@ export default function ImportTariffCalculatorPage() {
                     <a href={result.btkiLink} target="_blank" rel="noopener noreferrer" className="text-sky-500 hover:underline">
                       btki.kemenkeu.go.id
                     </a>
-                    {" "}· Kalkulasi bersifat estimasi, hubungi PPJK untuk kepastian.
+                    {" "}· {t("importTariffCalc.disclaimer", "Kalkulasi bersifat estimasi, hubungi PPJK untuk kepastian.")}
                   </p>
                 </>
               )}
@@ -1252,11 +1252,11 @@ export default function ImportTariffCalculatorPage() {
             <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
               <h3 className="text-sm font-bold text-slate-800 mb-4 flex items-center gap-2">
                 <TrendingUp className="h-4 w-4 text-sky-500" />
-                {t("importTariff.multiSharedSettings")}
+                {t("importTariffCalc.multiSharedSettings", "Pengaturan Bersama")}
               </h3>
               <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div>
-                  <label className="text-xs font-medium text-slate-500 block mb-1.5">{t("importTariff.currencyLabel")}</label>
+                  <label className="text-xs font-medium text-slate-500 block mb-1.5">{t("importTariffCalc.currencyLabel", "Mata Uang")}</label>
                   <select
                     value={currency}
                     onChange={(e) => setCurrency(e.target.value)}
@@ -1285,7 +1285,7 @@ export default function ImportTariffCalculatorPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-slate-500 block mb-1.5">Jenis Importir</label>
+                  <label className="text-xs font-medium text-slate-500 block mb-1.5">{t("importTariffCalc.importerTypeShort", "Jenis Importir")}</label>
                   <select
                     value={isApi ? "api" : "nonapi"}
                     onChange={(e) => setIsApi(e.target.value === "api")}
@@ -1296,7 +1296,7 @@ export default function ImportTariffCalculatorPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-slate-500 block mb-1.5">Skema FTA</label>
+                  <label className="text-xs font-medium text-slate-500 block mb-1.5">{t("importTariffCalc.ftaSchemeLabel", "Skema FTA")}</label>
                   <select
                     value={prefScheme}
                     onChange={(e) => setPrefScheme(e.target.value)}
@@ -1311,12 +1311,12 @@ export default function ImportTariffCalculatorPage() {
               {needsFreight && (
                 <div className="mt-4 grid sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="text-xs font-medium text-slate-500 block mb-1">Ongkir Bersama (IDR)</label>
+                    <label className="text-xs font-medium text-slate-500 block mb-1">{t("importTariffCalc.sharedFreight", "Ongkir Bersama (IDR)")}</label>
                     <input type="number" min="0" value={freightCost} onChange={(e) => setFreightCost(e.target.value)}
                       placeholder="0" className="w-full text-sm border border-slate-300 rounded-xl px-3 py-2 outline-none focus:border-sky-500" />
                   </div>
                   <div>
-                    <label className="text-xs font-medium text-slate-500 block mb-1">Asuransi (%)</label>
+                    <label className="text-xs font-medium text-slate-500 block mb-1">{t("importTariffCalc.insurancePctLabel", "Asuransi (%)")}</label>
                     <input type="number" min="0" max="5" step="0.1" value={insurancePct} onChange={(e) => setInsurancePct(e.target.value)}
                       placeholder="0.5" className="w-full text-sm border border-slate-300 rounded-xl px-3 py-2 outline-none focus:border-sky-500" />
                   </div>
@@ -1328,7 +1328,7 @@ export default function ImportTariffCalculatorPage() {
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-bold text-slate-800">
-                  Daftar HS Code ({multiItems.length}/10)
+                  {t("importTariffCalc.hsListTitle", "Daftar HS Code")} ({multiItems.length}/10)
                 </h3>
                 <button
                   onClick={addMultiItem}
@@ -1336,14 +1336,14 @@ export default function ImportTariffCalculatorPage() {
                   className="flex items-center gap-1.5 text-xs font-semibold text-sky-600 hover:text-sky-700 disabled:text-slate-400 transition-colors"
                 >
                   <Plus className="h-3.5 w-3.5" />
-                  Tambah HS Code
+                  {t("importTariffCalc.addHsCode", "Tambah HS Code")}
                 </button>
               </div>
 
               {multiItems.length === 0 && (
                 <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-10 text-center">
                   <BarChart3 className="h-8 w-8 text-slate-300 mx-auto mb-3" />
-                  <p className="text-sm text-slate-500">Belum ada HS Code. Klik "Tambah HS Code" untuk mulai.</p>
+                  <p className="text-sm text-slate-500">{t("importTariffCalc.emptyHsList", "Belum ada HS Code. Klik Tambah HS Code untuk mulai.")}</p>
                 </div>
               )}
 
@@ -1424,7 +1424,7 @@ export default function ImportTariffCalculatorPage() {
                         step="any"
                         value={item.goodsValue}
                         onChange={(e) => updateMultiItem(item.id, { goodsValue: e.target.value })}
-                        placeholder="Nilai barang"
+                        placeholder={t("importTariffCalc.goodsValuePlaceholder", "Nilai barang")}
                         className="flex-1 text-xs px-3 py-2 outline-none bg-white"
                       />
                     </div>
@@ -1441,9 +1441,9 @@ export default function ImportTariffCalculatorPage() {
                 className="w-full h-11 text-sm font-semibold rounded-xl bg-sky-600 hover:bg-sky-700 text-white gap-2"
               >
                 {multiCalcMutation.isPending ? (
-                  <><Loader2 className="h-4 w-4 animate-spin" /> Menghitung {multiItems.filter(i => i.selectedHs && i.goodsValue).length} HS Code…</>
+                  <><Loader2 className="h-4 w-4 animate-spin" /> {t("importTariffCalc.calculating", "Menghitung…")} {multiItems.filter(i => i.selectedHs && i.goodsValue).length} HS Code…</>
                 ) : (
-                  <><BarChart3 className="h-4 w-4" /> Bandingkan {multiItems.filter(i => i.selectedHs && i.goodsValue).length} HS Code</>
+                  <><BarChart3 className="h-4 w-4" /> {t("importTariffCalc.compareButton", "Bandingkan")} {multiItems.filter(i => i.selectedHs && i.goodsValue).length} HS Code</>
                 )}
               </Button>
             )}
@@ -1459,13 +1459,13 @@ export default function ImportTariffCalculatorPage() {
             {multiResults.length > 0 && (
               <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                 <div className="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between">
-                  <h3 className="text-sm font-bold text-slate-800">Tabel Perbandingan Pajak Impor</h3>
+                  <h3 className="text-sm font-bold text-slate-800">{t("importTariffCalc.multiTableTitle", "Tabel Perbandingan Pajak Impor")}</h3>
                   <button
                     onClick={exportMultiCSV}
                     className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-700 border border-slate-200 rounded-lg px-2.5 py-1.5 transition-colors"
                   >
                     <Download className="h-3.5 w-3.5" />
-                    Export CSV
+                    {t("importTariffCalc.exportCsvBtn", "Export CSV")}
                   </button>
                 </div>
                 <div className="overflow-x-auto">
@@ -1538,7 +1538,7 @@ export default function ImportTariffCalculatorPage() {
                     <div className="bg-emerald-50 border-t border-emerald-100 px-5 py-3 flex items-center gap-3">
                       <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
                       <p className="text-xs text-emerald-800">
-                        <strong>Landed cost terendah:</strong> {minDdp.label !== minDdp.hs.code ? minDdp.label : minDdp.hs.code} — {idr(minDdp.ddp)} (effective rate {minDdp.duties.effectiveRate})
+                        <strong>{t("importTariffCalc.lowestLandedCost", "Landed cost terendah")}:</strong> {minDdp.label !== minDdp.hs.code ? minDdp.label : minDdp.hs.code} — {idr(minDdp.ddp)} (effective rate {minDdp.duties.effectiveRate})
                       </p>
                     </div>
                   );

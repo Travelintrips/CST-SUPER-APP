@@ -217,7 +217,8 @@ function LiveMapSection({ location, trail }: { location: GpsPoint; trail: GpsPoi
   const s = location.lat - delta;
   const e = location.lng + delta;
   const n = location.lat + delta;
-  const osmEmbed = `https://www.openstreetmap.org/export/embed.html?bbox=${w},${s},${e},${n}&layer=mapnik&marker=${location.lat},${location.lng}`;
+  const osmEmbedBase = import.meta.env.VITE_OSM_EMBED_BASE_URL ?? "https://www.openstreetmap.org/export/embed.html";
+  const osmEmbed = `${osmEmbedBase}?bbox=${w},${s},${e},${n}&layer=mapnik&marker=${location.lat},${location.lng}`;
   const gmapsUrl = `https://www.google.com/maps?q=${location.lat},${location.lng}`;
   const minsAgo = Math.round((Date.now() - new Date(location.updatedAt).getTime()) / 60000);
   const freshLabel = minsAgo < 1 ? t("orderTrack.justNow", "baru saja") : minsAgo < 60 ? `${minsAgo} ${t("orderTrack.minutesAgo", "mnt lalu")}` : `${Math.round(minsAgo / 60)} ${t("orderTrack.hoursAgo", "jam lalu")}`;

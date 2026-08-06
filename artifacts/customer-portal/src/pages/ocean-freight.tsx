@@ -475,13 +475,13 @@ export default function OceanFreightPage() {
   }
 
   function validateForm(): string | null {
-    if (!originPort.trim()) return "Port of Loading wajib diisi";
-    if (!destPort.trim())   return "Port of Discharge wajib diisi";
+    if (!originPort.trim()) return t("oceanFreight.polRequired", "Port of Loading wajib diisi");
+    if (!destPort.trim())   return t("oceanFreight.podRequired", "Port of Discharge wajib diisi");
     if (shipmentType === "FCL") {
-      if (!containerType) return "Tipe container wajib dipilih";
-      if (Number(containerQty) < 1) return "Jumlah container minimal 1";
+      if (!containerType) return t("oceanFreight.containerTypeRequired", "Tipe container wajib dipilih");
+      if (Number(containerQty) < 1) return t("oceanFreight.containerQtyMin", "Jumlah container minimal 1");
     }
-    if (shipmentType === "LCL" && !totalCbm && !grossWeight) return "Total CBM atau Gross Weight wajib diisi untuk LCL";
+    if (shipmentType === "LCL" && !totalCbm && !grossWeight) return t("oceanFreight.lclWeightRequired", "Total CBM atau Gross Weight wajib diisi untuk LCL");
     return null;
   }
 
@@ -515,7 +515,7 @@ export default function OceanFreightPage() {
         setStep("results");
       }
     } catch {
-      toast({ title: "Error", description: "Gagal menghitung estimasi", variant: "destructive" });
+      toast({ title: "Error", description: t("oceanFreight.estimateFailed", "Gagal menghitung estimasi"), variant: "destructive" });
     } finally {
       setLoading(false);
     }
@@ -550,7 +550,7 @@ export default function OceanFreightPage() {
         }),
       });
       const data = await res.json() as { order_number?: string; error?: string };
-      if (!res.ok) throw new Error(data.error ?? "Gagal submit");
+      if (!res.ok) throw new Error(data.error ?? t("oceanFreight.submitFailed", "Gagal submit"));
       setSuccessOrder(data.order_number ?? "");
       setStep("success");
     } catch (e: unknown) {

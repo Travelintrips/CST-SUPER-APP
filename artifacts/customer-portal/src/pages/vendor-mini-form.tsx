@@ -9,6 +9,7 @@ import {
   TemplateInstructionRenderer,
   TemplatePriceBreakdown,
 } from "@/components/template";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 type FieldDef = {
   key: string; label: string;
@@ -107,6 +108,7 @@ function FormSkeleton() {
 
 // ── States ────────────────────────────────────────────────────────────────────
 function ErrorState({ message }: { message: string }) {
+  const { t } = useLanguage();
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-md p-8 max-w-md w-full text-center">
@@ -115,7 +117,7 @@ function ErrorState({ message }: { message: string }) {
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
           </svg>
         </div>
-        <h2 className="text-lg font-semibold text-slate-800 mb-2">Link Tidak Valid</h2>
+        <h2 className="text-lg font-semibold text-slate-800 mb-2">{t("vendorMiniForm.errorState.title", "Link Tidak Valid")}</h2>
         <p className="text-sm text-slate-500">{message}</p>
       </div>
     </div>
@@ -123,6 +125,7 @@ function ErrorState({ message }: { message: string }) {
 }
 
 function SuccessState({ orderNumber }: { orderNumber?: string | null }) {
+  const { t } = useLanguage();
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-md p-8 max-w-md w-full text-center">
@@ -131,11 +134,10 @@ function SuccessState({ orderNumber }: { orderNumber?: string | null }) {
             <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
           </svg>
         </div>
-        <h2 className="text-xl font-semibold text-slate-800 mb-2">Penawaran Terkirim!</h2>
-        {orderNumber && <p className="text-xs text-slate-400 mb-2">Order Ref: {orderNumber}</p>}
+        <h2 className="text-xl font-semibold text-slate-800 mb-2">{t("vendorMiniForm.successState.title", "Penawaran Terkirim!")}</h2>
+        {orderNumber && <p className="text-xs text-slate-400 mb-2">{t("vendorMiniForm.successState.orderRef", "Order Ref")}: {orderNumber}</p>}
         <p className="text-sm text-slate-500">
-          Terima kasih! Penawaran Anda telah kami terima dan akan segera diproses oleh tim kami.
-          Kami akan menghubungi Anda apabila ada pertanyaan lebih lanjut.
+          {t("vendorMiniForm.successState.message", "Terima kasih! Penawaran Anda telah kami terima dan akan segera diproses oleh tim kami. Kami akan menghubungi Anda apabila ada pertanyaan lebih lanjut.")}
         </p>
       </div>
     </div>
@@ -143,6 +145,7 @@ function SuccessState({ orderNumber }: { orderNumber?: string | null }) {
 }
 
 function AlreadySubmittedState() {
+  const { t } = useLanguage();
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-md p-8 max-w-md w-full text-center">
@@ -151,9 +154,9 @@ function AlreadySubmittedState() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
         </div>
-        <h2 className="text-lg font-semibold text-slate-800 mb-2">Penawaran Sudah Dikirim</h2>
+        <h2 className="text-lg font-semibold text-slate-800 mb-2">{t("vendorMiniForm.alreadySubmitted.title", "Penawaran Sudah Dikirim")}</h2>
         <p className="text-sm text-slate-500">
-          Penawaran untuk order ini sudah pernah dikirim melalui link ini. Tim kami sedang memproses penawaran Anda.
+          {t("vendorMiniForm.alreadySubmitted.message", "Penawaran untuk order ini sudah pernah dikirim melalui link ini. Tim kami sedang memproses penawaran Anda.")}
         </p>
       </div>
     </div>
@@ -193,6 +196,7 @@ function DriverPicker({
   vehicleType: string;
   onSelect: (d: { name: string; phone: string; plate: string; vehicleType: string }) => void;
 }) {
+  const { t } = useLanguage();
   const [drivers, setDrivers] = useState<VendorDriver[]>([]);
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
@@ -233,7 +237,7 @@ function DriverPicker({
   }, [onSelect]);
 
   const handleSaveNew = async () => {
-    if (!newName.trim()) { setSaveError("Nama driver wajib diisi"); return; }
+    if (!newName.trim()) { setSaveError(t("vendorMiniForm.driver.nameRequired", "Nama driver wajib diisi")); return; }
     setSaving(true); setSaveError(null);
     try {
       const r = await fetch(`/api/vendor-form/${token}/drivers`, {
@@ -242,7 +246,7 @@ function DriverPicker({
         body: JSON.stringify({ name: newName.trim(), phone: newPhone.trim(), vehiclePlate: newPlate.trim(), vehicleType: newVehicleType.trim() }),
       });
       const d = await r.json() as { driver?: VendorDriver; error?: string };
-      if (!r.ok) throw new Error(d.error ?? "Gagal menyimpan driver");
+      if (!r.ok) throw new Error(d.error ?? t("vendorMiniForm.driver.saveFailed", "Gagal menyimpan driver"));
       if (d.driver) {
         setDrivers((prev) => [...prev, d.driver!]);
         handleSelect(d.driver!);
@@ -263,7 +267,7 @@ function DriverPicker({
     <div className="space-y-3">
       <div className="space-y-1.5" ref={dropRef}>
         <label className="text-sm font-medium text-slate-700">
-          Pilih Driver <span className="text-red-500">*</span>
+          {t("vendorMiniForm.driver.selectLabel", "Pilih Driver")} <span className="text-red-500">*</span>
         </label>
         {selectedLabel && !open && (
           <div className="flex items-center justify-between gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm">
@@ -273,7 +277,7 @@ function DriverPicker({
               {plateNumber && <span className="text-slate-500 ml-2">· {plateNumber}</span>}
             </div>
             <button type="button" onClick={() => { setOpen(true); setSearch(""); }}
-              className="text-xs text-emerald-600 hover:text-emerald-800 underline shrink-0">Ganti</button>
+              className="text-xs text-emerald-600 hover:text-emerald-800 underline shrink-0">{t("vendorMiniForm.driver.change", "Ganti")}</button>
           </div>
         )}
         {(!selectedLabel || open) && (
@@ -283,7 +287,7 @@ function DriverPicker({
               value={search}
               onChange={(e) => { setSearch(e.target.value); setOpen(true); }}
               onFocus={() => setOpen(true)}
-              placeholder={drivers.length > 0 ? "Cari nama driver atau plat..." : "Belum ada driver terdaftar"}
+              placeholder={drivers.length > 0 ? t("vendorMiniForm.driver.searchPlaceholder", "Cari nama driver atau plat...") : t("vendorMiniForm.driver.noDrivers", "Belum ada driver terdaftar")}
               className={inputCls}
               autoComplete="off"
             />
@@ -303,13 +307,13 @@ function DriverPicker({
                   ))
                 ) : (
                   <div className="px-3 py-3 text-sm text-slate-400 text-center">
-                    {search ? `"${search}" tidak ditemukan` : "Belum ada driver terdaftar"}
+                    {search ? `"${search}" ${t("vendorMiniForm.driver.notFound", "tidak ditemukan")}` : t("vendorMiniForm.driver.noDrivers", "Belum ada driver terdaftar")}
                   </div>
                 )}
                 <button type="button"
                   onClick={() => { setOpen(false); setShowAddForm(true); setNewName(search); setSearch(""); }}
                   className="w-full text-left px-3 py-2.5 text-sm text-emerald-700 font-medium bg-emerald-50 hover:bg-emerald-100 border-t border-emerald-100 flex items-center gap-2">
-                  <span className="text-base">＋</span> Tambah driver baru
+                  <span className="text-base">＋</span> {t("vendorMiniForm.driver.addNew", "Tambah driver baru")}
                 </button>
               </div>
             )}
@@ -319,39 +323,39 @@ function DriverPicker({
 
       {showAddForm && (
         <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 space-y-3">
-          <p className="text-sm font-semibold text-emerald-800">➕ Tambah Driver Baru</p>
+          <p className="text-sm font-semibold text-emerald-800">➕ {t("vendorMiniForm.driver.addNewTitle", "Tambah Driver Baru")}</p>
           {saveError && <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{saveError}</p>}
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-slate-600">Nama Driver <span className="text-red-500">*</span></label>
+            <label className="text-xs font-medium text-slate-600">{t("vendorMiniForm.driver.nameLabel", "Nama Driver")} <span className="text-red-500">*</span></label>
             <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)}
-              placeholder="Nama lengkap driver" className={inputCls} />
+              placeholder={t("vendorMiniForm.driver.namePlaceholder", "Nama lengkap driver")} className={inputCls} />
           </div>
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-slate-600">No. HP</label>
+            <label className="text-xs font-medium text-slate-600">{t("vendorMiniForm.driver.phoneLabel", "No. HP")}</label>
             <input type="text" value={newPhone} onChange={(e) => setNewPhone(e.target.value)}
               placeholder="08xxxxxxxxxx" className={inputCls} />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-slate-600">Plat Nomor</label>
+              <label className="text-xs font-medium text-slate-600">{t("vendorMiniForm.driver.plateLabel", "Plat Nomor")}</label>
               <input type="text" value={newPlate} onChange={(e) => setNewPlate(e.target.value)}
                 placeholder="B 1234 XYZ" className={inputCls} />
             </div>
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-slate-600">Jenis Kendaraan</label>
+              <label className="text-xs font-medium text-slate-600">{t("vendorMiniForm.driver.vehicleTypeLabel", "Jenis Kendaraan")}</label>
               <input type="text" value={newVehicleType} onChange={(e) => setNewVehicleType(e.target.value)}
-                placeholder="Engkel, CDD, dll" className={inputCls} />
+                placeholder={t("vendorMiniForm.driver.vehicleTypePlaceholder", "Engkel, CDD, dll")} className={inputCls} />
             </div>
           </div>
           <div className="flex gap-2 pt-1">
             <button type="button" onClick={handleSaveNew} disabled={saving}
               className="flex-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white text-sm font-medium py-2 transition-colors flex items-center justify-center gap-2">
               {saving && <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />}
-              {saving ? "Menyimpan..." : "Simpan & Pilih"}
+              {saving ? t("vendorMiniForm.driver.saving", "Menyimpan...") : t("vendorMiniForm.driver.saveAndSelect", "Simpan & Pilih")}
             </button>
             <button type="button" onClick={() => { setShowAddForm(false); setSaveError(null); }}
               className="px-4 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50 py-2">
-              Batal
+              {t("vendorMiniForm.driver.cancel", "Batal")}
             </button>
           </div>
         </div>
@@ -360,24 +364,24 @@ function DriverPicker({
       {driverName && (
         <div className="grid grid-cols-1 gap-3 pt-1">
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">No. HP Driver</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">{t("vendorMiniForm.driver.driverPhoneLabel", "No. HP Driver")}</label>
             <input type="text" value={driverPhone}
               onChange={(e) => onSelect({ name: driverName, phone: e.target.value, plate: plateNumber, vehicleType })}
               placeholder="08xxxxxxxxxx" className={inputCls} />
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">
-              Nomor Plat Kendaraan <span className="text-red-500">*</span>
+              {t("vendorMiniForm.driver.plateNumberLabel", "Nomor Plat Kendaraan")} <span className="text-red-500">*</span>
             </label>
             <input type="text" value={plateNumber}
               onChange={(e) => onSelect({ name: driverName, phone: driverPhone, plate: e.target.value, vehicleType })}
               placeholder="B 1234 XYZ" className={inputCls} />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Tipe Kendaraan</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">{t("vendorMiniForm.driver.vehicleTypeFieldLabel", "Tipe Kendaraan")}</label>
             <input type="text" value={vehicleType}
               onChange={(e) => onSelect({ name: driverName, phone: driverPhone, plate: plateNumber, vehicleType: e.target.value })}
-              placeholder="Engkel, Tronton, CDD, dll" className={inputCls} />
+              placeholder={t("vendorMiniForm.driver.vehicleTypeLongPlaceholder", "Engkel, Tronton, CDD, dll")} className={inputCls} />
           </div>
         </div>
       )}
@@ -388,6 +392,7 @@ function DriverPicker({
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function VendorMiniFormPage() {
   const { token } = useParams<{ token: string }>();
+  const { t } = useLanguage();
   const [meta, setMeta] = useState<FormMeta | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -441,7 +446,7 @@ export default function VendorMiniFormPage() {
       fd.append("role", role);
       const res = await fetch(`/api/vendor-form/upload-media/${token}`, { method: "POST", body: fd });
       const data = await res.json() as { objectPath?: string; filename?: string; mimeType?: string; size?: number; role?: string; error?: string };
-      if (!res.ok) throw new Error(data.error ?? "Upload gagal");
+      if (!res.ok) throw new Error(data.error ?? t("vendorMiniForm.upload.failed", "Upload gagal"));
       const item: MediaAssetItem = {
         role,
         objectPath: data.objectPath!,
@@ -473,12 +478,12 @@ export default function VendorMiniFormPage() {
   };
 
   useEffect(() => {
-    if (!token) { setError("Token tidak ditemukan"); setLoading(false); return; }
+    if (!token) { setError(t("vendorMiniForm.tokenNotFound", "Token tidak ditemukan")); setLoading(false); return; }
     const ctrl = new AbortController();
     fetch(`/api/vendor-form/${token}`, { signal: ctrl.signal })
       .then(async (r) => {
         const data = await r.json() as FormMeta & { error?: string };
-        if (!r.ok) throw new Error(data.error ?? "Terjadi kesalahan");
+        if (!r.ok) throw new Error(data.error ?? t("vendorMiniForm.genericError", "Terjadi kesalahan"));
         setMeta(data);
         if (data.vendorName) setVendorName(data.vendorName);
         if (data.vendorPhone) setContactPhone(data.vendorPhone);
@@ -509,7 +514,7 @@ export default function VendorMiniFormPage() {
       const missing = visibleFields
         .filter(f => f.required && !f.isUpload && !values[f.key]?.trim())
         .map(f => f.label);
-      if (missing.length) { setSubmitError(`Field wajib belum diisi: ${missing.join(", ")}`); return; }
+      if (missing.length) { setSubmitError(`${t("vendorMiniForm.validation.requiredFields", "Field wajib belum diisi")}: ${missing.join(", ")}`); return; }
     } else if (meta?.schema) {
       const phase = meta.phase ?? "quotation";
       // Ketika productTemplate ada, field product_name / unit_price / unit
@@ -524,18 +529,18 @@ export default function VendorMiniFormPage() {
           !values[f.key]?.trim()
         )
         .map(f => f.label);
-      if (missing.length) { setSubmitError(`Field wajib belum diisi: ${missing.join(", ")}`); return; }
+      if (missing.length) { setSubmitError(`${t("vendorMiniForm.validation.requiredFields", "Field wajib belum diisi")}: ${missing.join(", ")}`); return; }
     }
 
     if (meta?.productTemplate && (!tplHarga || Number(tplHarga) <= 0)) {
       setTplHargaError(true);
-      setSubmitError("Harga dasar wajib diisi");
+      setSubmitError(t("vendorMiniForm.validation.basePriceRequired", "Harga dasar wajib diisi"));
       tplHargaRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
       tplHargaRef.current?.querySelector("input")?.focus();
       return;
     }
     if (meta?.mode === "order_based" && !meta?.productTemplate && (!vendorUnitPrice || Number(vendorUnitPrice) <= 0)) {
-      setSubmitError("Harga satuan dasar wajib diisi"); return;
+      setSubmitError(t("vendorMiniForm.validation.unitPriceRequired", "Harga satuan dasar wajib diisi")); return;
     }
 
     setSubmitting(true);
@@ -549,7 +554,7 @@ export default function VendorMiniFormPage() {
         const upRes = await fetch(`/api/vendor-form/upload/${token}`, { method: "POST", body: fd });
         const upData = await upRes.json() as { objectPath?: string; error?: string };
         setUploading(false);
-        if (!upRes.ok) throw new Error(upData.error ?? "Upload file gagal");
+        if (!upRes.ok) throw new Error(upData.error ?? t("vendorMiniForm.upload.fileFailed", "Upload file gagal"));
         attachmentUrl = upData.objectPath;
       }
 
@@ -604,7 +609,7 @@ export default function VendorMiniFormPage() {
         body: JSON.stringify(body),
       });
       const data = await res.json() as { success?: boolean; error?: string };
-      if (!res.ok) throw new Error(data.error ?? "Gagal mengirim data");
+      if (!res.ok) throw new Error(data.error ?? t("vendorMiniForm.submit.failed", "Gagal mengirim data"));
       setSubmitted(true);
     } catch (e: unknown) {
       setUploading(false);
@@ -621,7 +626,7 @@ export default function VendorMiniFormPage() {
 
   // Allow rendering when any of schema, productTemplate, or serviceTemplate is available
   if (!meta?.schema && !meta?.productTemplate && !meta?.serviceTemplate) {
-    return <ErrorState message="Form tidak tersedia untuk link ini." />;
+    return <ErrorState message={t("vendorMiniForm.formNotAvailable", "Form tidak tersedia untuk link ini.")} />;
   }
 
   const schema = meta.schema;
@@ -637,8 +642,8 @@ export default function VendorMiniFormPage() {
           <div className="rounded-xl bg-amber-50 border border-amber-300 text-amber-800 text-sm px-4 py-3 mb-4 flex items-start gap-2">
             <span className="mt-0.5">⚠️</span>
             <div>
-              <p className="font-semibold">Template produk tidak ditemukan</p>
-              <p className="text-xs mt-0.5">Spesifikasi untuk kategori ini belum tersedia. Hubungi admin untuk memperbarui template.</p>
+              <p className="font-semibold">{t("vendorMiniForm.templateMissing.title", "Template produk tidak ditemukan")}</p>
+              <p className="text-xs mt-0.5">{t("vendorMiniForm.templateMissing.message", "Spesifikasi untuk kategori ini belum tersedia. Hubungi admin untuk memperbarui template.")}</p>
             </div>
           </div>
         )}
@@ -651,11 +656,11 @@ export default function VendorMiniFormPage() {
             </span>
             <div>
               <h1 className="text-xl font-bold text-slate-800">
-                {meta.title ?? `Form Penawaran ${schema?.label ?? meta.productTemplate?.label ?? meta.serviceTemplate?.label ?? ""}`}
+                {meta.title ?? `${t("vendorMiniForm.header.formTitle", "Form Penawaran")} ${schema?.label ?? meta.productTemplate?.label ?? meta.serviceTemplate?.label ?? ""}`}
               </h1>
-              {meta.vendorName && <p className="text-sm text-slate-500">Untuk: {meta.vendorName}</p>}
+              {meta.vendorName && <p className="text-sm text-slate-500">{t("vendorMiniForm.header.forVendor", "Untuk")}: {meta.vendorName}</p>}
               {meta.orderNumber && (
-                <p className="text-xs text-blue-600 font-medium mt-0.5">📦 Order Ref: {meta.orderNumber}</p>
+                <p className="text-xs text-blue-600 font-medium mt-0.5">📦 {t("vendorMiniForm.header.orderRef", "Order Ref")}: {meta.orderNumber}</p>
               )}
             </div>
           </div>
@@ -663,12 +668,12 @@ export default function VendorMiniFormPage() {
             <div className="mt-3 flex flex-wrap gap-2">
               {isOrderBased && (
                 <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200 px-3 py-1.5 rounded-lg">
-                  <span>📋</span> Form ini terkait dengan order customer spesifik
+                  <span>📋</span> {t("vendorMiniForm.badge.orderBased", "Form ini terkait dengan order customer spesifik")}
                 </span>
               )}
               {hasProductTemplate && (
                 <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-violet-50 text-violet-700 border border-violet-200 px-3 py-1.5 rounded-lg">
-                  <span>🧩</span> Spesifikasi: {meta.productTemplate!.label}
+                  <span>🧩</span> {t("vendorMiniForm.badge.spec", "Spesifikasi")}: {meta.productTemplate!.label}
                   {meta.templateVersion && <span className="opacity-60 ml-1">v{meta.templateVersion}</span>}
                 </span>
               )}
@@ -698,29 +703,29 @@ export default function VendorMiniFormPage() {
         {/* Order Context Card */}
         {meta.orderContext && (meta.orderContext.customerName || meta.orderContext.items.length > 0 || meta.orderContext.adminNotes) && (
           <div className="bg-blue-50 border border-blue-200 rounded-2xl p-5 mb-4">
-            <h2 className="text-xs font-semibold text-blue-700 uppercase tracking-wide mb-3">📋 Detail Order Customer</h2>
+            <h2 className="text-xs font-semibold text-blue-700 uppercase tracking-wide mb-3">📋 {t("vendorMiniForm.orderContext.title", "Detail Order Customer")}</h2>
             <div className="space-y-2">
               {meta.orderNumber && (
                 <div className="flex justify-between text-sm">
-                  <span className="text-slate-500">No. Order</span>
+                  <span className="text-slate-500">{t("vendorMiniForm.orderContext.orderNo", "No. Order")}</span>
                   <span className="font-mono font-semibold text-slate-800">{meta.orderNumber}</span>
                 </div>
               )}
               {meta.orderContext.customerName && (
                 <div className="flex justify-between text-sm">
-                  <span className="text-slate-500">Customer</span>
+                  <span className="text-slate-500">{t("vendorMiniForm.orderContext.customer", "Customer")}</span>
                   <span className="font-medium text-slate-800">{meta.orderContext.customerName}</span>
                 </div>
               )}
               {meta.orderContext.shipmentType && (
                 <div className="flex justify-between text-sm">
-                  <span className="text-slate-500">Jenis Layanan</span>
+                  <span className="text-slate-500">{t("vendorMiniForm.orderContext.serviceType", "Jenis Layanan")}</span>
                   <span className="font-medium text-slate-800">{meta.orderContext.shipmentType}</span>
                 </div>
               )}
               {(meta.orderContext.origin || meta.orderContext.destination) && (
                 <div className="flex justify-between text-sm">
-                  <span className="text-slate-500">Rute</span>
+                  <span className="text-slate-500">{t("vendorMiniForm.orderContext.route", "Rute")}</span>
                   <span className="font-medium text-slate-800 text-right">
                     {[meta.orderContext.origin, meta.orderContext.destination].filter(Boolean).join(" → ")}
                   </span>
@@ -728,7 +733,7 @@ export default function VendorMiniFormPage() {
               )}
               {meta.orderContext.requiredDate && (
                 <div className="flex justify-between text-sm">
-                  <span className="text-slate-500">Target Pengiriman</span>
+                  <span className="text-slate-500">{t("vendorMiniForm.orderContext.targetDelivery", "Target Pengiriman")}</span>
                   <span className="font-medium text-slate-800">
                     {(() => {
                       try {
@@ -744,16 +749,16 @@ export default function VendorMiniFormPage() {
 
             {meta.orderContext.items.length > 0 && (
               <div className="mt-3">
-                <p className="text-xs font-semibold text-blue-600 mb-2">Detail Item</p>
+                <p className="text-xs font-semibold text-blue-600 mb-2">{t("vendorMiniForm.orderContext.itemDetail", "Detail Item")}</p>
                 <div className="overflow-x-auto rounded-xl border border-blue-100 bg-white">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="text-slate-400 text-xs border-b border-slate-100">
-                        <th className="text-left px-3 py-2 font-medium">Nama / SKU</th>
-                        <th className="text-right px-2 py-2 font-medium">Qty</th>
-                        <th className="text-right px-2 py-2 font-medium">Sat.</th>
-                        <th className="text-right px-2 py-2 font-medium">Harga Dasar</th>
-                        <th className="text-right px-3 py-2 font-medium">Subtotal</th>
+                        <th className="text-left px-3 py-2 font-medium">{t("vendorMiniForm.orderContext.colNameSku", "Nama / SKU")}</th>
+                        <th className="text-right px-2 py-2 font-medium">{t("vendorMiniForm.orderContext.colQty", "Qty")}</th>
+                        <th className="text-right px-2 py-2 font-medium">{t("vendorMiniForm.orderContext.colUnit", "Sat.")}</th>
+                        <th className="text-right px-2 py-2 font-medium">{t("vendorMiniForm.orderContext.colBasePrice", "Harga Dasar")}</th>
+                        <th className="text-right px-3 py-2 font-medium">{t("vendorMiniForm.orderContext.colSubtotal", "Subtotal")}</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-50">
@@ -781,7 +786,7 @@ export default function VendorMiniFormPage() {
 
             {meta.orderContext.adminNotes && (
               <div className="mt-3 pt-3 border-t border-blue-200">
-                <p className="text-xs font-semibold text-blue-600 mb-1">Catatan Admin</p>
+                <p className="text-xs font-semibold text-blue-600 mb-1">{t("vendorMiniForm.orderContext.adminNotes", "Catatan Admin")}</p>
                 <p className="text-sm text-slate-700 whitespace-pre-line">{meta.orderContext.adminNotes}</p>
               </div>
             )}
@@ -791,19 +796,19 @@ export default function VendorMiniFormPage() {
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Identity */}
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-            <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-4">Identitas Vendor</h2>
+            <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-4">{t("vendorMiniForm.identity.title", "Identitas Vendor")}</h2>
             <div className="space-y-4">
-              <FormField label="Nama Perusahaan / Vendor" required>
+              <FormField label={t("vendorMiniForm.identity.companyName", "Nama Perusahaan / Vendor")} required>
                 <input type="text" value={vendorName} onChange={e => setVendorName(e.target.value)}
-                  required placeholder="Nama perusahaan Anda" className={INPUT_CLS} />
+                  required placeholder={t("vendorMiniForm.identity.companyPlaceholder", "Nama perusahaan Anda")} className={INPUT_CLS} />
               </FormField>
-              <FormField label="Nama PIC / Contact Person">
+              <FormField label={t("vendorMiniForm.identity.picName", "Nama PIC / Contact Person")}>
                 <input type="text" value={contactPerson} onChange={e => setContactPerson(e.target.value)}
-                  placeholder="Nama penghubung" className={INPUT_CLS} />
+                  placeholder={t("vendorMiniForm.identity.picPlaceholder", "Nama penghubung")} className={INPUT_CLS} />
               </FormField>
-              <FormField label="Nomor WhatsApp / Telepon">
+              <FormField label={t("vendorMiniForm.identity.phone", "Nomor WhatsApp / Telepon")}>
                 <input type="text" value={contactPhone} onChange={e => setContactPhone(e.target.value)}
-                  placeholder="Contoh: 0812xxxx" className={INPUT_CLS} />
+                  placeholder={t("vendorMiniForm.identity.phonePlaceholder", "Contoh: 0812xxxx")} className={INPUT_CLS} />
               </FormField>
             </div>
           </div>
@@ -815,27 +820,27 @@ export default function VendorMiniFormPage() {
             const subtotal = qty * unitPrice;
             return (
               <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-                <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">💰 Rincian Harga Dasar</h2>
+                <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">💰 {t("vendorMiniForm.pricing.title", "Rincian Harga Dasar")}</h2>
                 <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-4">
-                  Isi <strong>Harga Dasar</strong> Anda — belum termasuk margin & PPN. Harga jual ke customer ditentukan oleh admin.
+                  {t("vendorMiniForm.pricing.hint", "Isi")} <strong>{t("vendorMiniForm.pricing.basePrice", "Harga Dasar")}</strong> {t("vendorMiniForm.pricing.hintSuffix", "Anda — belum termasuk margin & PPN. Harga jual ke customer ditentukan oleh admin.")}
                 </p>
                 <div className="space-y-4">
-                  <FormField label="Deskripsi Layanan / Produk">
+                  <FormField label={t("vendorMiniForm.pricing.serviceDesc", "Deskripsi Layanan / Produk")}>
                     <input type="text" value={vendorDesc} onChange={e => setVendorDesc(e.target.value)}
-                      placeholder="Contoh: Jasa angkutan laut FCL Jakarta–Singapura" className={INPUT_CLS} />
+                      placeholder={t("vendorMiniForm.pricing.serviceDescPlaceholder", "Contoh: Jasa angkutan laut FCL Jakarta–Singapura")} className={INPUT_CLS} />
                   </FormField>
                   <div className="grid grid-cols-2 gap-3">
-                    <FormField label="Qty">
+                    <FormField label={t("vendorMiniForm.pricing.qty", "Qty")}>
                       <input type="number" min="1" step="any" value={vendorQty}
                         onChange={e => setVendorQty(e.target.value)}
                         placeholder="1" className={INPUT_CLS} />
                     </FormField>
-                    <FormField label="Satuan">
+                    <FormField label={t("vendorMiniForm.pricing.unit", "Satuan")}>
                       <input type="text" value={vendorUnit} onChange={e => setVendorUnit(e.target.value)}
-                        placeholder="Ls / kg / CBM / unit" className={INPUT_CLS} />
+                        placeholder={t("vendorMiniForm.pricing.unitPlaceholder", "Ls / kg / CBM / unit")} className={INPUT_CLS} />
                     </FormField>
                   </div>
-                  <FormField label="Harga Satuan Dasar (belum PPN)" required>
+                  <FormField label={t("vendorMiniForm.pricing.unitPriceLabel", "Harga Satuan Dasar (belum PPN)")} required>
                     <div className="flex gap-2">
                       <select
                         value={currency} onChange={e => setCurrency(e.target.value)}
@@ -846,7 +851,7 @@ export default function VendorMiniFormPage() {
                       <input
                         type="number" min="0" step="any"
                         value={vendorUnitPrice} onChange={e => setVendorUnitPrice(e.target.value)}
-                        required placeholder="Contoh: 5000000" className={`${INPUT_CLS} flex-1`}
+                        required placeholder={t("vendorMiniForm.pricing.pricePlaceholder", "Contoh: 5000000")} className={`${INPUT_CLS} flex-1`}
                       />
                     </div>
                   </FormField>
@@ -857,14 +862,14 @@ export default function VendorMiniFormPage() {
                     qty={qty}
                     unit={vendorUnit || "Ls"}
                     currency={currency}
-                    hint="Isi Harga Dasar Anda — belum termasuk margin & PPN. Harga jual ke customer ditentukan oleh admin."
+                    hint={t("vendorMiniForm.pricing.hint", "Isi Harga Dasar Anda — belum termasuk margin & PPN. Harga jual ke customer ditentukan oleh admin.")}
                   />
 
-                  <FormField label="Estimasi Pengiriman / Lead Time">
+                  <FormField label={t("vendorMiniForm.pricing.eta", "Estimasi Pengiriman / Lead Time")}>
                     <input type="text" value={eta} onChange={e => setEta(e.target.value)}
-                      placeholder="Contoh: H+2, 3 hari kerja, 15 Jan 2026" className={INPUT_CLS} />
+                      placeholder={t("vendorMiniForm.pricing.etaPlaceholder", "Contoh: H+2, 3 hari kerja, 15 Jan 2026")} className={INPUT_CLS} />
                   </FormField>
-                  <FormField label="Harga Berlaku Sampai">
+                  <FormField label={t("vendorMiniForm.pricing.validUntil", "Harga Berlaku Sampai")}>
                     <input type="date" value={validUntil} onChange={e => setValidUntil(e.target.value)}
                       className={INPUT_CLS} />
                   </FormField>
@@ -916,7 +921,7 @@ export default function VendorMiniFormPage() {
                   <FormField key={field.key} label={field.label} required={field.required}>
                     <label className="flex items-center gap-3 cursor-pointer">
                       <span className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 px-3 py-2 text-sm font-medium text-slate-700 transition-colors">
-                        <span>📎</span> Pilih File
+                        <span>📎</span> {t("vendorMiniForm.upload.chooseFile", "Pilih File")}
                       </span>
                       <input
                         type="file"
@@ -935,8 +940,8 @@ export default function VendorMiniFormPage() {
                         }}
                       />
                       {values[field.key]
-                        ? <span className="text-xs text-emerald-600 font-medium">✓ File terupload</span>
-                        : <span className="text-xs text-slate-400">Belum ada file dipilih</span>
+                        ? <span className="text-xs text-emerald-600 font-medium">✓ {t("vendorMiniForm.upload.uploaded", "File terupload")}</span>
+                        : <span className="text-xs text-slate-400">{t("vendorMiniForm.upload.noFile", "Belum ada file dipilih")}</span>
                       }
                     </label>
                   </FormField>
@@ -951,7 +956,7 @@ export default function VendorMiniFormPage() {
                       required={field.required}
                       className={`${INPUT_CLS} bg-white`}
                     >
-                      <option value="">— Pilih —</option>
+                      <option value="">— {t("vendorMiniForm.select.choose", "Pilih")} —</option>
                       {field.options?.map(opt => <option key={opt} value={opt}>{opt}</option>)}
                     </select>
                   </FormField>
@@ -1000,7 +1005,7 @@ export default function VendorMiniFormPage() {
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
                   <div className="flex items-center justify-between mb-4">
                     <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
-                      {stpl.emoji} Detail {stpl.label}
+                      {stpl.emoji} {t("vendorMiniForm.serviceFields.detail", "Detail")} {stpl.label}
                     </h2>
                     <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full uppercase tracking-wide">
                       ⚙️ Template Active
@@ -1019,7 +1024,7 @@ export default function VendorMiniFormPage() {
               return (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
                   <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-4">
-                    {schema.emoji} Detail {schema.label}
+                    {schema.emoji} {t("vendorMiniForm.serviceFields.detail", "Detail")} {schema.label}
                   </h2>
                   <div className="space-y-4">
                     {schema.fields.map(renderField)}
@@ -1034,13 +1039,13 @@ export default function VendorMiniFormPage() {
           {/* Vendor penawaran section — hanya tampil saat productTemplate aktif */}
           {hasProductTemplate && (
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-              <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">💰 Penawaran Vendor</h2>
+              <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">💰 {t("vendorMiniForm.vendorOffer.title", "Penawaran Vendor")}</h2>
               <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-4">
-                Isi <strong>Harga Dasar</strong> dan detail penawaran Anda. Harga jual ke customer ditentukan oleh admin.
+                {t("vendorMiniForm.vendorOffer.hint", "Isi")} <strong>{t("vendorMiniForm.pricing.basePrice", "Harga Dasar")}</strong> {t("vendorMiniForm.vendorOffer.hintSuffix", "dan detail penawaran Anda. Harga jual ke customer ditentukan oleh admin.")}
               </p>
               <div className="space-y-4">
                 <div ref={tplHargaRef}>
-                  <FormField label="Harga Dasar (Rp, belum PPN)" required>
+                  <FormField label={t("vendorMiniForm.vendorOffer.basePriceLabel", "Harga Dasar (Rp, belum PPN)")} required>
                     <div className={`flex gap-2 rounded-lg transition-all ${tplHargaError ? "ring-2 ring-red-400" : ""}`}>
                       <select value={currency} onChange={e => setCurrency(e.target.value)}
                         className={`rounded-lg border px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white w-24 ${tplHargaError ? "border-red-400" : "border-slate-200"}`}>
@@ -1049,7 +1054,7 @@ export default function VendorMiniFormPage() {
                       <input
                         type="number" min="0" step="any" value={tplHarga}
                         onChange={e => { setTplHarga(e.target.value); if (tplHargaError) setTplHargaError(false); }}
-                        required placeholder="Contoh: 5000000"
+                        required placeholder={t("vendorMiniForm.pricing.pricePlaceholder", "Contoh: 5000000")}
                         className={`flex-1 rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 ${tplHargaError ? "border-red-400 focus:ring-red-400 bg-red-50" : "border-slate-200 focus:ring-indigo-400"}`}
                       />
                     </div>
@@ -1058,33 +1063,33 @@ export default function VendorMiniFormPage() {
                         <svg className="w-3.5 h-3.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                           <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd"/>
                         </svg>
-                        Harga dasar wajib diisi dan harus lebih dari 0
+                        {t("vendorMiniForm.vendorOffer.basePriceError", "Harga dasar wajib diisi dan harus lebih dari 0")}
                       </p>
                     )}
                   </FormField>
                 </div>
-                <FormField label="Status Stok">
+                <FormField label={t("vendorMiniForm.vendorOffer.stockStatus", "Status Stok")}>
                   <select value={tplStockStatus} onChange={e => setTplStockStatus(e.target.value)}
                     className={`${INPUT_CLS} bg-white`}>
-                    <option value="">— Pilih —</option>
+                    <option value="">— {t("vendorMiniForm.select.choose", "Pilih")} —</option>
                     {["Ready Stock","Indent","Pre-order"].map(o => <option key={o} value={o}>{o}</option>)}
                   </select>
                 </FormField>
-                <FormField label="Lead Time / Estimasi Pengiriman">
+                <FormField label={t("vendorMiniForm.vendorOffer.leadTime", "Lead Time / Estimasi Pengiriman")}>
                   <input type="text" value={tplLeadTime} onChange={e => setTplLeadTime(e.target.value)}
-                    placeholder="Contoh: 7 hari kerja, H+3" className={INPUT_CLS} />
+                    placeholder={t("vendorMiniForm.vendorOffer.leadTimePlaceholder", "Contoh: 7 hari kerja, H+3")} className={INPUT_CLS} />
                 </FormField>
-                <FormField label="Minimum Order (MOQ)">
+                <FormField label={t("vendorMiniForm.vendorOffer.moq", "Minimum Order (MOQ)")}>
                   <input type="text" value={tplMoq} onChange={e => setTplMoq(e.target.value)}
-                    placeholder="Contoh: 100 MT, 1 truk" className={INPUT_CLS} />
+                    placeholder={t("vendorMiniForm.vendorOffer.moqPlaceholder", "Contoh: 100 MT, 1 truk")} className={INPUT_CLS} />
                 </FormField>
-                <FormField label="Harga Berlaku Sampai">
+                <FormField label={t("vendorMiniForm.pricing.validUntil", "Harga Berlaku Sampai")}>
                   <input type="date" value={validUntil} onChange={e => setValidUntil(e.target.value)}
                     className={INPUT_CLS} />
                 </FormField>
-                <FormField label="Catatan Tambahan">
+                <FormField label={t("vendorMiniForm.vendorOffer.additionalNotes", "Catatan Tambahan")}>
                   <textarea value={tplNotes} onChange={e => setTplNotes(e.target.value)}
-                    rows={3} placeholder="Catatan kondisi, syarat, atau info tambahan..."
+                    rows={3} placeholder={t("vendorMiniForm.vendorOffer.notesPlaceholder", "Catatan kondisi, syarat, atau info tambahan...")}
                     className={`${INPUT_CLS} resize-none`} />
                 </FormField>
               </div>
@@ -1113,11 +1118,11 @@ export default function VendorMiniFormPage() {
 
           {/* Attachment upload (optional) */}
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-            <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-4">📎 Lampiran Dokumen</h2>
-            <p className="text-xs text-slate-500 mb-3">Opsional — sertakan dokumen pendukung (PDF, gambar, atau spreadsheet, maks. 10 MB).</p>
+            <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-4">📎 {t("vendorMiniForm.attachment.title", "Lampiran Dokumen")}</h2>
+            <p className="text-xs text-slate-500 mb-3">{t("vendorMiniForm.attachment.hint", "Opsional — sertakan dokumen pendukung (PDF, gambar, atau spreadsheet, maks. 10 MB).")}</p>
             <label className="flex items-center gap-3 cursor-pointer">
               <span className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition-colors">
-                <span>📂</span> Pilih File
+                <span>📂</span> {t("vendorMiniForm.upload.chooseFile", "Pilih File")}
               </span>
               <input
                 type="file"
@@ -1128,21 +1133,21 @@ export default function VendorMiniFormPage() {
               {attachmentFile ? (
                 <span className="text-sm text-slate-700 truncate max-w-[200px]">{attachmentFile.name}</span>
               ) : (
-                <span className="text-sm text-slate-400">Belum ada file dipilih</span>
+                <span className="text-sm text-slate-400">{t("vendorMiniForm.upload.noFile", "Belum ada file dipilih")}</span>
               )}
             </label>
             {attachmentFile && (
               <button type="button" onClick={() => setAttachmentFile(null)}
                 className="mt-2 text-xs text-red-500 hover:text-red-700">
-                ✕ Hapus lampiran
+                ✕ {t("vendorMiniForm.attachment.remove", "Hapus lampiran")}
               </button>
             )}
           </div>
 
           {/* ── Media Produk/Jasa ──────────────────────────────────────── */}
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-            <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">📷 Media Produk/Jasa</h2>
-            <p className="text-xs text-slate-500 mb-5">Opsional — unggah foto, video, atau brosur untuk memperkuat penawaran Anda.</p>
+            <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">📷 {t("vendorMiniForm.media.title", "Media Produk/Jasa")}</h2>
+            <p className="text-xs text-slate-500 mb-5">{t("vendorMiniForm.media.hint", "Opsional — unggah foto, video, atau brosur untuk memperkuat penawaran Anda.")}</p>
 
             {/* Cover Image */}
             {(() => {
@@ -1151,11 +1156,11 @@ export default function VendorMiniFormPage() {
               const err = mediaErrors["cover"];
               return (
                 <div className="mb-5">
-                  <p className="text-sm font-medium text-slate-700 mb-1">🖼️ Cover Image <span className="text-slate-400 font-normal text-xs">(1 foto, maks. 10 MB)</span></p>
+                  <p className="text-sm font-medium text-slate-700 mb-1">🖼️ {t("vendorMiniForm.media.coverImage", "Cover Image")} <span className="text-slate-400 font-normal text-xs">({t("vendorMiniForm.media.coverImageHint", "1 foto, maks. 10 MB")})</span></p>
                   {items.length === 0 ? (
                     <label className={`flex items-center gap-3 cursor-pointer w-fit ${busy ? "pointer-events-none opacity-60" : ""}`}>
                       <span className="inline-flex items-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 hover:bg-slate-100 px-4 py-2.5 text-sm text-slate-600 transition-colors">
-                        {busy ? <span className="h-4 w-4 border-2 border-slate-400 border-t-transparent rounded-full animate-spin inline-block" /> : "📤"} {busy ? "Mengupload..." : "Pilih Foto Cover"}
+                        {busy ? <span className="h-4 w-4 border-2 border-slate-400 border-t-transparent rounded-full animate-spin inline-block" /> : "📤"} {busy ? t("vendorMiniForm.media.uploading", "Mengupload...") : t("vendorMiniForm.media.chooseCover", "Pilih Foto Cover")}
                       </span>
                       <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" disabled={busy}
                         onChange={e => { const f = e.target.files?.[0]; if (f) handleMediaUpload("cover", f); e.target.value = ""; }} />
@@ -1169,7 +1174,7 @@ export default function VendorMiniFormPage() {
                       </div>
                       <div>
                         <p className="text-sm text-slate-700 font-medium truncate max-w-[160px]">{items[0].filename}</p>
-                        <p className="text-xs text-green-600 mt-0.5">✓ Terupload</p>
+                        <p className="text-xs text-green-600 mt-0.5">✓ {t("vendorMiniForm.media.uploaded", "Terupload")}</p>
                       </div>
                     </div>
                   )}
@@ -1185,7 +1190,7 @@ export default function VendorMiniFormPage() {
               const err = mediaErrors["gallery"];
               return (
                 <div className="mb-5">
-                  <p className="text-sm font-medium text-slate-700 mb-1">🖼️ Gallery Foto <span className="text-slate-400 font-normal text-xs">(beberapa foto, maks. 10 MB/file)</span></p>
+                  <p className="text-sm font-medium text-slate-700 mb-1">🖼️ {t("vendorMiniForm.media.gallery", "Gallery Foto")} <span className="text-slate-400 font-normal text-xs">({t("vendorMiniForm.media.galleryHint", "beberapa foto, maks. 10 MB/file")})</span></p>
                   <div className="flex flex-wrap gap-2 mb-2">
                     {items.map(item => (
                       <div key={item.objectPath} className="relative">
@@ -1212,11 +1217,11 @@ export default function VendorMiniFormPage() {
               const err = mediaErrors["video"];
               return (
                 <div className="mb-5">
-                  <p className="text-sm font-medium text-slate-700 mb-1">🎬 Video Profil <span className="text-slate-400 font-normal text-xs">(1 video MP4/MOV/WebM, maks. 50 MB)</span></p>
+                  <p className="text-sm font-medium text-slate-700 mb-1">🎬 {t("vendorMiniForm.media.video", "Video Profil")} <span className="text-slate-400 font-normal text-xs">({t("vendorMiniForm.media.videoHint", "1 video MP4/MOV/WebM, maks. 50 MB")})</span></p>
                   {items.length === 0 ? (
                     <label className={`flex items-center gap-3 cursor-pointer w-fit ${busy ? "pointer-events-none opacity-60" : ""}`}>
                       <span className="inline-flex items-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 hover:bg-slate-100 px-4 py-2.5 text-sm text-slate-600 transition-colors">
-                        {busy ? <span className="h-4 w-4 border-2 border-slate-400 border-t-transparent rounded-full animate-spin inline-block" /> : "🎥"} {busy ? "Mengupload..." : "Pilih Video"}
+                        {busy ? <span className="h-4 w-4 border-2 border-slate-400 border-t-transparent rounded-full animate-spin inline-block" /> : "🎥"} {busy ? t("vendorMiniForm.media.uploading", "Mengupload...") : t("vendorMiniForm.media.chooseVideo", "Pilih Video")}
                       </span>
                       <input type="file" accept="video/mp4,video/quicktime,video/webm,video/x-msvideo" className="hidden" disabled={busy}
                         onChange={e => { const f = e.target.files?.[0]; if (f) handleMediaUpload("video", f); e.target.value = ""; }} />
@@ -1226,10 +1231,10 @@ export default function VendorMiniFormPage() {
                       <span className="text-xl">🎬</span>
                       <div className="min-w-0">
                         <p className="text-sm text-slate-700 font-medium truncate max-w-[200px]">{items[0].filename}</p>
-                        <p className="text-xs text-green-600">✓ Terupload · {(items[0].size / 1024 / 1024).toFixed(1)} MB</p>
+                        <p className="text-xs text-green-600">✓ {t("vendorMiniForm.media.uploaded", "Terupload")} · {(items[0].size / 1024 / 1024).toFixed(1)} MB</p>
                       </div>
                       <button type="button" onClick={() => handleMediaRemove(items[0].objectPath)}
-                        className="text-red-400 hover:text-red-600 ml-2 text-xs">✕ Hapus</button>
+                        className="text-red-400 hover:text-red-600 ml-2 text-xs">✕ {t("vendorMiniForm.media.remove", "Hapus")}</button>
                     </div>
                   )}
                   {err && <p className="text-xs text-red-500 mt-1">{err}</p>}
@@ -1244,11 +1249,11 @@ export default function VendorMiniFormPage() {
               const err = mediaErrors["brochure"];
               return (
                 <div className="mb-5">
-                  <p className="text-sm font-medium text-slate-700 mb-1">📄 Brosur / Katalog PDF <span className="text-slate-400 font-normal text-xs">(1 PDF, maks. 10 MB)</span></p>
+                  <p className="text-sm font-medium text-slate-700 mb-1">📄 {t("vendorMiniForm.media.brochure", "Brosur / Katalog PDF")} <span className="text-slate-400 font-normal text-xs">({t("vendorMiniForm.media.brochureHint", "1 PDF, maks. 10 MB")})</span></p>
                   {items.length === 0 ? (
                     <label className={`flex items-center gap-3 cursor-pointer w-fit ${busy ? "pointer-events-none opacity-60" : ""}`}>
                       <span className="inline-flex items-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 hover:bg-slate-100 px-4 py-2.5 text-sm text-slate-600 transition-colors">
-                        {busy ? <span className="h-4 w-4 border-2 border-slate-400 border-t-transparent rounded-full animate-spin inline-block" /> : "📁"} {busy ? "Mengupload..." : "Pilih PDF"}
+                        {busy ? <span className="h-4 w-4 border-2 border-slate-400 border-t-transparent rounded-full animate-spin inline-block" /> : "📁"} {busy ? t("vendorMiniForm.media.uploading", "Mengupload...") : t("vendorMiniForm.media.choosePdf", "Pilih PDF")}
                       </span>
                       <input type="file" accept="application/pdf" className="hidden" disabled={busy}
                         onChange={e => { const f = e.target.files?.[0]; if (f) handleMediaUpload("brochure", f); e.target.value = ""; }} />
@@ -1258,10 +1263,10 @@ export default function VendorMiniFormPage() {
                       <span className="text-xl">📄</span>
                       <div className="min-w-0">
                         <p className="text-sm text-slate-700 font-medium truncate max-w-[200px]">{items[0].filename}</p>
-                        <p className="text-xs text-green-600">✓ Terupload</p>
+                        <p className="text-xs text-green-600">✓ {t("vendorMiniForm.media.uploaded", "Terupload")}</p>
                       </div>
                       <button type="button" onClick={() => handleMediaRemove(items[0].objectPath)}
-                        className="text-red-400 hover:text-red-600 ml-2 text-xs">✕ Hapus</button>
+                        className="text-red-400 hover:text-red-600 ml-2 text-xs">✕ {t("vendorMiniForm.media.remove", "Hapus")}</button>
                     </div>
                   )}
                   {err && <p className="text-xs text-red-500 mt-1">{err}</p>}
@@ -1276,7 +1281,7 @@ export default function VendorMiniFormPage() {
               const err = mediaErrors["certificate"];
               return (
                 <div>
-                  <p className="text-sm font-medium text-slate-700 mb-1">🏆 Sertifikat / Dokumen Pendukung <span className="text-slate-400 font-normal text-xs">(PDF atau foto, maks. 10 MB/file)</span></p>
+                  <p className="text-sm font-medium text-slate-700 mb-1">🏆 {t("vendorMiniForm.media.certificate", "Sertifikat / Dokumen Pendukung")} <span className="text-slate-400 font-normal text-xs">({t("vendorMiniForm.media.certificateHint", "PDF atau foto, maks. 10 MB/file")})</span></p>
                   {items.length > 0 && (
                     <div className="space-y-1.5 mb-2">
                       {items.map(item => (
@@ -1292,7 +1297,7 @@ export default function VendorMiniFormPage() {
                   )}
                   <label className={`flex items-center gap-3 cursor-pointer w-fit ${busy ? "pointer-events-none opacity-60" : ""}`}>
                     <span className="inline-flex items-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 hover:bg-slate-100 px-4 py-2.5 text-sm text-slate-600 transition-colors">
-                      {busy ? <span className="h-4 w-4 border-2 border-slate-400 border-t-transparent rounded-full animate-spin inline-block" /> : "➕"} {busy ? "Mengupload..." : "Tambah Sertifikat"}
+                      {busy ? <span className="h-4 w-4 border-2 border-slate-400 border-t-transparent rounded-full animate-spin inline-block" /> : "➕"} {busy ? t("vendorMiniForm.media.uploading", "Mengupload...") : t("vendorMiniForm.media.addCertificate", "Tambah Sertifikat")}
                     </span>
                     <input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" className="hidden" disabled={busy} multiple
                       onChange={e => { Array.from(e.target.files ?? []).forEach(f => handleMediaUpload("certificate", f)); e.target.value = ""; }} />
@@ -1304,7 +1309,7 @@ export default function VendorMiniFormPage() {
 
             {mediaAssets.length > 0 && (
               <p className="text-xs text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2 mt-4">
-                ✓ {mediaAssets.length} file media siap dikirim bersama penawaran
+                ✓ {mediaAssets.length} {t("vendorMiniForm.media.readyToSend", "file media siap dikirim bersama penawaran")}
               </p>
             )}
           </div>
@@ -1350,20 +1355,20 @@ export default function VendorMiniFormPage() {
             {uploading ? (
               <span className="flex items-center justify-center gap-2">
                 <span className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                Mengupload file...
+                {t("vendorMiniForm.submit.uploading", "Mengupload file...")}
               </span>
             ) : submitting ? (
               <span className="flex items-center justify-center gap-2">
                 <span className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                Mengirim...
+                {t("vendorMiniForm.submit.sending", "Mengirim...")}
               </span>
             ) : (
-              isOrderBased ? "✉️ Kirim Penawaran" : "✉️ Kirim Data"
+              isOrderBased ? `✉️ ${t("vendorMiniForm.submit.sendQuote", "Kirim Penawaran")}` : `✉️ ${t("vendorMiniForm.submit.sendData", "Kirim Data")}`
             )}
           </button>
 
           <p className="text-center text-xs text-slate-400 pb-6">
-            Data Anda aman dan hanya digunakan untuk keperluan pengadaan.
+            {t("vendorMiniForm.footer.privacy", "Data Anda aman dan hanya digunakan untuk keperluan pengadaan.")}
           </p>
         </form>
       </div>
