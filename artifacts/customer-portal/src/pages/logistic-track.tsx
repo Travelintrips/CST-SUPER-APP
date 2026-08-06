@@ -18,6 +18,7 @@ import { usePortalSSEOrderTracker } from "@/hooks/usePortalSSE";
 import { formatDate } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 import PageSeo from "@/components/PageSeo";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 const BASE = import.meta.env.BASE_URL?.replace(/\/$/, "") ?? "";
 
@@ -119,7 +120,180 @@ interface PaylabsLinkResult {
   message?: string;
 }
 
+function getStatusLabels(t: (k: string) => string): Record<string, string> {
+  return {
+    "Order Received":    t("logisticTrackStatus.statusOrderReceived"),
+    "Admin Review":      t("logisticTrackStatus.statusAdminReview"),
+    "RFQ Sent":          t("logisticTrackStatus.statusRfqSent"),
+    "Quote Received":    t("logisticTrackStatus.statusQuoteReceived"),
+    "Customer Approval": t("logisticTrackStatus.statusCustomerApproval"),
+    "Vendor Confirmed":  t("logisticTrackStatus.statusVendorConfirmed"),
+    "Vendor Rejected":   t("logisticTrackStatus.statusVendorRejected"),
+    "In Progress":       t("logisticTrackStatus.statusInProgress"),
+    "Pickup":            t("logisticTrackStatus.statusPickup"),
+    "In Transit":        t("logisticTrackStatus.statusInTransit"),
+    "Arrived":           t("logisticTrackStatus.statusArrived"),
+    "Delivered":         t("logisticTrackStatus.statusDelivered"),
+    "POD Uploaded":      t("logisticTrackStatus.statusPodUploaded"),
+    "Invoice Issued":    t("logisticTrackStatus.statusInvoiceIssued"),
+    "Payment Received":  t("logisticTrackStatus.statusPaymentReceived"),
+    "Completed":         t("logisticTrackStatus.statusCompleted"),
+    "Done":              t("logisticTrackStatus.statusDone"),
+    "Cancelled":         t("logisticTrackStatus.statusCancelled"),
+    "New Order":         t("logisticTrackStatus.statusNewOrder"),
+    "Under Review":      t("logisticTrackStatus.statusUnderReview"),
+    "Quotation Sent":    t("logisticTrackStatus.statusQuotationSent"),
+    "Customer Approved": t("logisticTrackStatus.statusCustomerApproved"),
+    "Processing":        t("logisticTrackStatus.statusProcessing"),
+  };
+}
+
+function getOrderSteps(t: (k: string) => string) {
+  return [
+    { key: "Order Received",    label: t("logisticTrackStatus.stepLabelOrderReceived"),    icon: FileText },
+    { key: "Admin Review",      label: t("logisticTrackStatus.stepLabelAdminReview"),      icon: Clock },
+    { key: "RFQ Sent",          label: t("logisticTrackStatus.stepLabelRfqSent"),          icon: ArrowRight },
+    { key: "Quote Received",    label: t("logisticTrackStatus.stepLabelQuoteReceived"),    icon: Tag },
+    { key: "Customer Approval", label: t("logisticTrackStatus.stepLabelCustomerApproval"), icon: ThumbsUp },
+    { key: "Vendor Confirmed",  label: t("logisticTrackStatus.stepLabelVendorConfirmed"),  icon: CheckCircle2 },
+    { key: "In Progress",       label: t("logisticTrackStatus.stepLabelInProgress"),       icon: RotateCcw },
+    { key: "Pickup",            label: t("logisticTrackStatus.stepLabelPickup"),           icon: MapPin },
+    { key: "In Transit",        label: t("logisticTrackStatus.stepLabelInTransit"),        icon: Truck },
+    { key: "Arrived",           label: t("logisticTrackStatus.stepLabelArrived"),          icon: MapPin },
+    { key: "Delivered",         label: t("logisticTrackStatus.stepLabelDelivered"),        icon: Package },
+    { key: "POD Uploaded",      label: t("logisticTrackStatus.stepLabelPodUploaded"),      icon: FileText },
+    { key: "Invoice Issued",    label: t("logisticTrackStatus.stepLabelInvoiceIssued"),    icon: FileText },
+    { key: "Payment Received",  label: t("logisticTrackStatus.stepLabelPaymentReceived"),  icon: CheckCircle2 },
+    { key: "Completed",         label: t("logisticTrackStatus.stepLabelCompleted"),        icon: CheckCircle2 },
+  ];
+}
+
+function getDriverSteps(t: (k: string) => string): { key: DriverJobStatus; label: string }[] {
+  return [
+    { key: "ASSIGNED",               label: t("logisticTrackStatus.driverAssigned") },
+    { key: "ACCEPTED",               label: t("logisticTrackStatus.driverAccepted") },
+    { key: "ON_THE_WAY_TO_PICKUP",   label: t("logisticTrackStatus.driverOnWayPickup") },
+    { key: "ARRIVED_AT_PICKUP",      label: t("logisticTrackStatus.driverArrivedPickup") },
+    { key: "PICKED_UP",              label: t("logisticTrackStatus.driverPickedUp") },
+    { key: "IN_TRANSIT",             label: t("logisticTrackStatus.driverInTransit") },
+    { key: "ARRIVED_AT_DESTINATION", label: t("logisticTrackStatus.driverArrivedDest") },
+    { key: "DELIVERED",              label: t("logisticTrackStatus.driverDelivered") },
+    { key: "COMPLETED",              label: t("logisticTrackStatus.driverCompleted") },
+  ];
+}
+
+function getCustomerVisibleSteps(t: (k: string) => string) {
+  return [
+    { key: "Order Received",   label: t("logisticTrackStatus.stepOrderReceived") },
+    { key: "Admin Review",     label: t("logisticTrackStatus.stepAdminReview") },
+    { key: "Vendor Confirmed", label: t("logisticTrackStatus.stepVendorConfirmed") },
+    { key: "In Progress",      label: t("logisticTrackStatus.stepInProgress") },
+    { key: "In Transit",       label: t("logisticTrackStatus.stepInTransit") },
+    { key: "Delivered",        label: t("logisticTrackStatus.stepDelivered") },
+    { key: "POD Uploaded",     label: t("logisticTrackStatus.stepPodUploaded") },
+    { key: "Invoice Issued",   label: t("logisticTrackStatus.stepInvoiceIssued") },
+    { key: "Completed",        label: t("logisticTrackStatus.stepCompleted") },
+  ];
+}
+
+const ORDER_STATUS_RANK: Record<string, number> = {
+  "Order Received":    0,
+  "Admin Review":      1,
+  "RFQ Sent":          2,
+  "Quote Received":    3,
+  "Customer Approval": 4,
+  "Vendor Confirmed":  5,
+  "In Progress":       6,
+  "Pickup":            7,
+  "In Transit":        8,
+  "Arrived":           9,
+  "Delivered":         10,
+  "POD Uploaded":      11,
+  "Invoice Issued":    12,
+  "Payment Received":  13,
+  "Completed":         14,
+  // backward compat aliases
+  "New Order":         0,
+  "Under Review":      1,
+  "Processing":        1,
+  "Quotation Sent":    3,
+  "Customer Approved": 4,
+  "Vendor Rejected":   2,
+  "Done":              14,
+};
+
+const DRIVER_STATUS_RANK: Record<string, number> = {
+  "ASSIGNED":               0,
+  "ACCEPTED":               1,
+  "ON_THE_WAY_TO_PICKUP":   2,
+  "ARRIVED_AT_PICKUP":      3,
+  "PICKED_UP":              4,
+  "IN_TRANSIT":             5,
+  "ARRIVED_AT_DESTINATION": 6,
+  "DELIVERED":              7,
+  "COMPLETED":              8,
+};
+
+const STATUS_COLORS: Record<string, string> = {
+  "Order Received":    "bg-slate-100 text-slate-700 border-slate-200",
+  "Admin Review":      "bg-amber-100 text-amber-800 border-amber-200",
+  "RFQ Sent":          "bg-blue-100 text-blue-700 border-blue-200",
+  "Quote Received":    "bg-purple-100 text-purple-800 border-purple-200",
+  "Customer Approval": "bg-violet-100 text-violet-800 border-violet-200",
+  "Vendor Confirmed":  "bg-green-100 text-green-800 border-green-200",
+  "In Progress":       "bg-blue-100 text-blue-800 border-blue-200",
+  "Pickup":            "bg-yellow-100 text-yellow-800 border-yellow-200",
+  "In Transit":        "bg-indigo-100 text-indigo-800 border-indigo-200",
+  "Arrived":           "bg-cyan-100 text-cyan-800 border-cyan-200",
+  "Delivered":         "bg-teal-100 text-teal-800 border-teal-200",
+  "POD Uploaded":      "bg-emerald-100 text-emerald-800 border-emerald-200",
+  "Invoice Issued":    "bg-orange-100 text-orange-800 border-orange-200",
+  "Payment Received":  "bg-lime-100 text-lime-800 border-lime-200",
+  "Completed":         "bg-green-200 text-green-900 border-green-300",
+  "Cancelled":         "bg-red-100 text-red-800 border-red-200",
+  // backward compat
+  "New Order":         "bg-yellow-100 text-yellow-800 border-yellow-200",
+  "Processing":        "bg-blue-100 text-blue-800 border-blue-200",
+};
+
+function isTerminalStatus(status: string) {
+  return status === "Completed" || status === "Done" || status === "Cancelled";
+}
+
+const CUSTOMER_STEP_RANK: Record<string, number> = {
+  "Order Received":    0,
+  "Admin Review":      1,
+  "RFQ Sent":          1,
+  "Quote Received":    1,
+  "Customer Approval": 1,
+  "Vendor Confirmed":  2,
+  "In Progress":       3,
+  "Pickup":            4,
+  "In Transit":        4,
+  "Arrived":           5,
+  "Delivered":         5,
+  "POD Uploaded":      6,
+  "Invoice Issued":    7,
+  "Payment Received":  8,
+  "Completed":         8,
+  "New Order":         0,
+  "Processing":        1,
+};
+
+function formatDateTime(iso: string, locale: string) {
+  return new Date(iso).toLocaleString(locale, {
+    day: "2-digit", month: "short", year: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
+}
+
+function idr(n: number | null | undefined) {
+  if (n == null) return "—";
+  return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
+}
+
 function PaylabsPaymentSection({ orderNumber }: { orderNumber: string }) {
+  const { t, locale } = useLanguage();
   const [state, setState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [result, setResult] = useState<PaylabsLinkResult | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
@@ -134,14 +308,14 @@ function PaylabsPaymentSection({ orderNumber }: { orderNumber: string }) {
         headers: { "Content-Type": "application/json" },
       });
       const data = await r.json() as PaylabsLinkResult & { message?: string };
-      if (!r.ok) throw new Error(data.message ?? "Gagal membuat link pembayaran");
+      if (!r.ok) throw new Error(data.message ?? t("logisticTrackStatus.linkFailed"));
       setResult(data);
       setState("ready");
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : "Terjadi kesalahan");
+      setErrorMsg(err instanceof Error ? err.message : t("common.error"));
       setState("error");
     }
-  }, [orderNumber]);
+  }, [orderNumber, t]);
 
   useEffect(() => {
     if (!calledRef.current) {
@@ -158,14 +332,14 @@ function PaylabsPaymentSection({ orderNumber }: { orderNumber: string }) {
     <div className="bg-card border border-emerald-200 rounded-xl overflow-hidden">
       <div className="px-5 py-3 bg-emerald-50 border-b border-emerald-200 flex items-center gap-2">
         <CreditCard className="w-4 h-4 text-emerald-600 shrink-0" />
-        <p className="text-sm font-semibold text-emerald-900">Bayar via Payment Gateway</p>
+        <p className="text-sm font-semibold text-emerald-900">{t("logisticTrackStatus.payViaGateway")}</p>
         <Badge className="ml-auto bg-emerald-100 text-emerald-700 border-emerald-300 text-[10px] border">Paylabs</Badge>
       </div>
       <div className="p-5 space-y-4">
         {state === "loading" && (
           <div className="flex flex-col items-center py-6 gap-3">
             <Loader2 className="w-8 h-8 animate-spin text-emerald-500" />
-            <p className="text-sm text-muted-foreground">Menyiapkan link pembayaran…</p>
+            <p className="text-sm text-muted-foreground">{t("logisticTrackStatus.preparingLink")}</p>
           </div>
         )}
         {state === "error" && (
@@ -173,12 +347,12 @@ function PaylabsPaymentSection({ orderNumber }: { orderNumber: string }) {
             <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
               <div>
-                <p className="font-semibold">Gagal Membuat Link Pembayaran</p>
+                <p className="font-semibold">{t("logisticTrackStatus.linkFailed")}</p>
                 <p className="text-xs mt-0.5">{errorMsg}</p>
               </div>
             </div>
             <Button variant="outline" size="sm" className="w-full gap-2" onClick={() => void generate()}>
-              <RefreshCw className="w-4 h-4" /> Coba Lagi
+              <RefreshCw className="w-4 h-4" /> {t("logisticTrackStatus.retryBtn")}
             </Button>
           </div>
         )}
@@ -188,20 +362,20 @@ function PaylabsPaymentSection({ orderNumber }: { orderNumber: string }) {
               <>
                 <div className="rounded-lg bg-slate-50 border border-slate-200 px-4 py-3 space-y-2 text-sm">
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Nomor Pesanan</span>
+                    <span className="text-muted-foreground">{t("logisticTrackStatus.orderNo")}</span>
                     <span className="font-bold tracking-wider text-foreground">{orderNumber}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Total Tagihan</span>
+                    <span className="text-muted-foreground">{t("logisticTrackStatus.totalBill")}</span>
                     <span className="font-bold text-emerald-700">{fmtIdr(result.amount)}</span>
                   </div>
                   {result.expiredAt && (
                     <div className="flex justify-between items-center">
                       <span className="text-muted-foreground flex items-center gap-1">
-                        <Clock className="w-3 h-3" /> Berlaku sampai
+                        <Clock className="w-3 h-3" /> {t("logisticTrackStatus.validUntil")}
                       </span>
                       <span className="text-xs text-slate-600">
-                        {new Date(result.expiredAt).toLocaleString("id-ID", {
+                        {new Date(result.expiredAt).toLocaleString(locale, {
                           day: "numeric", month: "short", year: "numeric",
                           hour: "2-digit", minute: "2-digit",
                         })}
@@ -211,27 +385,27 @@ function PaylabsPaymentSection({ orderNumber }: { orderNumber: string }) {
                 </div>
                 <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <ShieldCheck className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                  Pembayaran diamankan oleh Paylabs — mendukung transfer bank, QRIS, e-wallet, dan kartu.
+                  {t("logisticTrackStatus.securedByPaylabs")}
                 </div>
                 <Button
                   className="w-full bg-emerald-600 hover:bg-emerald-700 text-white gap-2 h-12 text-base font-bold shadow-md"
                   onClick={() => window.open(result.paymentUrl!, "_blank")}
                 >
                   <CreditCard className="w-5 h-5" />
-                  Bayar Sekarang
+                  {t("logisticTrackStatus.payNow")}
                   <ExternalLink className="w-4 h-4 ml-auto opacity-70" />
                 </Button>
                 {result.reused && (
                   <p className="text-xs text-center text-muted-foreground">
-                    Link pembayaran sebelumnya masih aktif dan digunakan kembali.
+                    {t("logisticTrackStatus.linkReused")}
                   </p>
                 )}
               </>
             ) : (
               <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                <p className="font-semibold">Link Pembayaran Sedang Disiapkan</p>
+                <p className="font-semibold">{t("logisticTrackStatus.linkPending")}</p>
                 <p className="text-xs mt-1">
-                  Tim kami akan mengirimkan link pembayaran via WhatsApp/Email setelah order dikonfirmasi.
+                  {t("logisticTrackStatus.linkPendingDesc")}
                 </p>
               </div>
             )}
@@ -280,166 +454,9 @@ async function fetchTracking(orderNumber: string, phoneLast4: string): Promise<T
   return res.json() as Promise<TrackingData>;
 }
 
-
-const ORDER_STEPS = [
-  { key: "Order Received",    label: "Order Diterima",         icon: FileText },
-  { key: "Admin Review",      label: "Review Admin",           icon: Clock },
-  { key: "RFQ Sent",          label: "RFQ Terkirim",           icon: ArrowRight },
-  { key: "Quote Received",    label: "Penawaran Masuk",        icon: Tag },
-  { key: "Customer Approval", label: "Persetujuan",            icon: ThumbsUp },
-  { key: "Vendor Confirmed",  label: "Vendor Konfirmasi",      icon: CheckCircle2 },
-  { key: "In Progress",       label: "Diproses",               icon: RotateCcw },
-  { key: "Pickup",            label: "Penjemputan",            icon: MapPin },
-  { key: "In Transit",        label: "Dalam Perjalanan",       icon: Truck },
-  { key: "Arrived",           label: "Tiba",                   icon: MapPin },
-  { key: "Delivered",         label: "Terkirim",               icon: Package },
-  { key: "POD Uploaded",      label: "Bukti Upload",           icon: FileText },
-  { key: "Invoice Issued",    label: "Invoice",                icon: FileText },
-  { key: "Payment Received",  label: "Pembayaran",             icon: CheckCircle2 },
-  { key: "Completed",         label: "Selesai",                icon: CheckCircle2 },
-];
-
-const ORDER_STATUS_RANK: Record<string, number> = {
-  "Order Received":    0,
-  "Admin Review":      1,
-  "RFQ Sent":          2,
-  "Quote Received":    3,
-  "Customer Approval": 4,
-  "Vendor Confirmed":  5,
-  "In Progress":       6,
-  "Pickup":            7,
-  "In Transit":        8,
-  "Arrived":           9,
-  "Delivered":         10,
-  "POD Uploaded":      11,
-  "Invoice Issued":    12,
-  "Payment Received":  13,
-  "Completed":         14,
-  // backward compat aliases
-  "New Order":         0,
-  "Under Review":      1,
-  "Processing":        1,
-  "Quotation Sent":    3,
-  "Customer Approved": 4,
-  "Vendor Rejected":   2,
-  "Done":              14,
-};
-
-const DRIVER_STEPS: { key: DriverJobStatus; label: string }[] = [
-  { key: "ASSIGNED",              label: "Driver Ditugaskan" },
-  { key: "ACCEPTED",              label: "Driver Menerima" },
-  { key: "ON_THE_WAY_TO_PICKUP",  label: "Menuju Pickup" },
-  { key: "ARRIVED_AT_PICKUP",     label: "Tiba di Pickup" },
-  { key: "PICKED_UP",             label: "Barang Diambil" },
-  { key: "IN_TRANSIT",            label: "Dalam Perjalanan" },
-  { key: "ARRIVED_AT_DESTINATION", label: "Tiba di Tujuan" },
-  { key: "DELIVERED",             label: "Terkirim" },
-  { key: "COMPLETED",             label: "Selesai" },
-];
-
-const DRIVER_STATUS_RANK: Record<string, number> = Object.fromEntries(
-  DRIVER_STEPS.map((s, i) => [s.key, i])
-);
-
-const STATUS_COLORS: Record<string, string> = {
-
-  "Order Received":    "bg-slate-100 text-slate-700 border-slate-200",
-  "Admin Review":      "bg-amber-100 text-amber-800 border-amber-200",
-  "RFQ Sent":          "bg-blue-100 text-blue-700 border-blue-200",
-  "Quote Received":    "bg-purple-100 text-purple-800 border-purple-200",
-  "Customer Approval": "bg-violet-100 text-violet-800 border-violet-200",
-  "Vendor Confirmed":  "bg-green-100 text-green-800 border-green-200",
-  "In Progress":       "bg-blue-100 text-blue-800 border-blue-200",
-  "Pickup":            "bg-yellow-100 text-yellow-800 border-yellow-200",
-  "In Transit":        "bg-indigo-100 text-indigo-800 border-indigo-200",
-  "Arrived":           "bg-cyan-100 text-cyan-800 border-cyan-200",
-  "Delivered":         "bg-teal-100 text-teal-800 border-teal-200",
-  "POD Uploaded":      "bg-emerald-100 text-emerald-800 border-emerald-200",
-  "Invoice Issued":    "bg-orange-100 text-orange-800 border-orange-200",
-  "Payment Received":  "bg-lime-100 text-lime-800 border-lime-200",
-  "Completed":         "bg-green-200 text-green-900 border-green-300",
-  "Cancelled":         "bg-red-100 text-red-800 border-red-200",
-  // backward compat
-  "New Order":         "bg-yellow-100 text-yellow-800 border-yellow-200",
-  "Processing":        "bg-blue-100 text-blue-800 border-blue-200",
-};
-
-const STATUS_LABELS: Record<string, string> = {
-  "Order Received":    "Order Diterima",
-  "Admin Review":      "Ditinjau Admin",
-  "RFQ Sent":          "Mencari Vendor",
-  "Quote Received":    "Penawaran Masuk",
-  "Customer Approval": "Menunggu Persetujuan Anda",
-  "Vendor Confirmed":  "Vendor Dikonfirmasi",
-  "Vendor Rejected":   "Vendor Menolak",
-  "In Progress":       "Sedang Diproses",
-  "Pickup":            "Proses Penjemputan",
-  "In Transit":        "Dalam Perjalanan",
-  "Arrived":           "Tiba di Tujuan",
-  "Delivered":         "Terkirim",
-  "POD Uploaded":      "Bukti Pengiriman Diunggah",
-  "Invoice Issued":    "Invoice Diterbitkan",
-  "Payment Received":  "Pembayaran Diterima",
-  "Completed":         "Selesai",
-  "Done":              "Selesai",
-  "Cancelled":         "Dibatalkan",
-  // backward compat
-  "New Order":         "Order Masuk",
-  "Under Review":      "Sedang Ditinjau",
-  "Quotation Sent":    "Penawaran Dikirim",
-  "Customer Approved": "Customer Menyetujui",
-  "Processing":        "Sedang Diproses",
-};
-
-function isTerminalStatus(status: string) {
-  return status === "Completed" || status === "Done" || status === "Cancelled";
-}
-
-const CUSTOMER_VISIBLE_STEPS = [
-  { key: "Order Received",    label: "Order\nDiterima" },
-  { key: "Admin Review",      label: "Review\nAdmin" },
-  { key: "Vendor Confirmed",  label: "Vendor\nKonfirmasi" },
-  { key: "In Progress",       label: "Diproses" },
-  { key: "In Transit",        label: "Dalam\nPerjalanan" },
-  { key: "Delivered",         label: "Terkirim" },
-  { key: "POD Uploaded",      label: "Bukti\nPengiriman" },
-  { key: "Invoice Issued",    label: "Invoice" },
-  { key: "Completed",         label: "Selesai" },
-];
-
-const CUSTOMER_STEP_RANK: Record<string, number> = {
-  "Order Received":    0,
-  "Admin Review":      1,
-  "RFQ Sent":          1,
-  "Quote Received":    1,
-  "Customer Approval": 1,
-  "Vendor Confirmed":  2,
-  "In Progress":       3,
-  "Pickup":            4,
-  "In Transit":        4,
-  "Arrived":           5,
-  "Delivered":         5,
-  "POD Uploaded":      6,
-  "Invoice Issued":    7,
-  "Payment Received":  8,
-  "Completed":         8,
-  "New Order":         0,
-  "Processing":        1,
-};
-
-function formatDateTime(iso: string) {
-  return new Date(iso).toLocaleString("id-ID", {
-    day: "2-digit", month: "short", year: "numeric",
-    hour: "2-digit", minute: "2-digit",
-  });
-}
-
-function idr(n: number | null | undefined) {
-  if (n == null) return "—";
-  return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
-}
-
 function OrderStepper({ status }: { status: string }) {
+  const { t } = useLanguage();
+  const customerVisibleSteps = getCustomerVisibleSteps(t);
   const isCancelled = status === "Cancelled";
   const current = CUSTOMER_STEP_RANK[status] ?? 0;
 
@@ -447,7 +464,7 @@ function OrderStepper({ status }: { status: string }) {
     return (
       <div className="flex items-center gap-2 rounded-lg bg-red-50 border border-red-200 px-4 py-3 my-1">
         <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
-        <span className="text-red-700 font-semibold text-sm">Order Dibatalkan</span>
+        <span className="text-red-700 font-semibold text-sm">{t("logisticTrackStatus.orderCancelled")}</span>
       </div>
     );
   }
@@ -455,7 +472,7 @@ function OrderStepper({ status }: { status: string }) {
   return (
     <div className="w-full overflow-x-auto pb-1">
       <div className="flex items-start min-w-[480px]">
-        {CUSTOMER_VISIBLE_STEPS.map((step, i) => {
+        {customerVisibleSteps.map((step, i) => {
           const done = i < current;
           const active = i === current;
           return (
@@ -478,7 +495,7 @@ function OrderStepper({ status }: { status: string }) {
                   {step.label}
                 </span>
               </div>
-              {i < CUSTOMER_VISIBLE_STEPS.length - 1 && (
+              {i < customerVisibleSteps.length - 1 && (
                 <div className={cn(
                   "h-0.5 flex-shrink-0 w-3 mt-3.5",
                   i < current ? "bg-green-400" : "bg-border"
@@ -493,9 +510,11 @@ function OrderStepper({ status }: { status: string }) {
 }
 
 function DriverStepper({ job }: { job: DriverJob }) {
+  const { t, locale } = useLanguage();
+  const driverSteps = getDriverSteps(t);
   const current = DRIVER_STATUS_RANK[job.status] ?? 0;
   const isCancelled = job.status === "CANCELLED";
-  const visibleSteps = DRIVER_STEPS.filter((s) => s.key !== "COMPLETED" || job.status === "COMPLETED");
+  const visibleSteps = driverSteps.filter((s) => s.key !== "COMPLETED" || job.status === "COMPLETED");
 
   return (
     <div className="space-y-0">
@@ -539,7 +558,7 @@ function DriverStepper({ job }: { job: DriverJob }) {
               </p>
               {log && (
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  {formatDateTime(log.timestamp)}
+                  {formatDateTime(log.timestamp, locale)}
                 </p>
               )}
             </div>
@@ -559,6 +578,7 @@ function QuoteCard({
   orderNumber: string;
   onRespond: () => void;
 }) {
+  const { t, locale } = useLanguage();
   const [showNotes, setShowNotes] = useState(false);
   const [notes, setNotes] = useState("");
   const [pendingResponse, setPendingResponse] = useState<"approved" | "revision_requested" | "rejected" | null>(null);
@@ -572,7 +592,7 @@ function QuoteCard({
         body: JSON.stringify({ orderNumber, ...payload }),
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.message ?? "Gagal mengirim respons");
+      if (!r.ok) throw new Error(d.message ?? t("common.error"));
       return d;
     },
     onSuccess: () => {
@@ -590,14 +610,14 @@ function QuoteCard({
     return (
       <div className="bg-card border border-green-200 rounded-xl p-5 space-y-3">
         <div className="flex items-center gap-2 text-green-700 font-semibold text-sm">
-          <ThumbsUp className="w-4 h-4" /> Anda telah menyetujui penawaran ini
+          <ThumbsUp className="w-4 h-4" /> {t("logisticTrackStatus.quoteApproved")}
         </div>
         <div className="text-sm text-muted-foreground">
-          Tim kami akan segera memproses pengiriman Anda. Harga yang disepakati: <strong className="text-foreground">{idr(quotedPrice)}</strong>.
-          {customerResponseNotes && <p className="mt-1">Catatan Anda: {customerResponseNotes}</p>}
+          {t("logisticTrackStatus.quoteProcessingDesc")} <strong className="text-foreground">{idr(quotedPrice)}</strong>.
+          {customerResponseNotes && <p className="mt-1">{t("logisticTrackStatus.quoteYourNotes")} {customerResponseNotes}</p>}
         </div>
         {customerRespondedAt && (
-          <p className="text-xs text-muted-foreground">Disetujui pada {formatDateTime(customerRespondedAt)}</p>
+          <p className="text-xs text-muted-foreground">{t("logisticTrackStatus.quoteApprovedAt")} {formatDateTime(customerRespondedAt, locale)}</p>
         )}
       </div>
     );
@@ -607,14 +627,14 @@ function QuoteCard({
     return (
       <div className="bg-card border border-red-200 rounded-xl p-5 space-y-3">
         <div className="flex items-center gap-2 text-red-700 font-semibold text-sm">
-          <ThumbsDown className="w-4 h-4" /> Anda telah menolak penawaran ini
+          <ThumbsDown className="w-4 h-4" /> {t("logisticTrackStatus.quoteRejected")}
         </div>
         <div className="text-sm text-muted-foreground">
-          Tim kami akan menghubungi Anda untuk membahas opsi lain.
-          {customerResponseNotes && <p className="mt-1">Alasan Anda: {customerResponseNotes}</p>}
+          {t("logisticTrackStatus.quoteRevisionNotes")}
+          {customerResponseNotes && <p className="mt-1">{customerResponseNotes}</p>}
         </div>
         {customerRespondedAt && (
-          <p className="text-xs text-muted-foreground">Ditolak pada {formatDateTime(customerRespondedAt)}</p>
+          <p className="text-xs text-muted-foreground">{t("logisticTrackStatus.quoteRejectedAt")} {formatDateTime(customerRespondedAt, locale)}</p>
         )}
       </div>
     );
@@ -624,14 +644,14 @@ function QuoteCard({
     return (
       <div className="bg-card border border-yellow-200 rounded-xl p-5 space-y-3">
         <div className="flex items-center gap-2 text-yellow-700 font-semibold text-sm">
-          <RotateCcw className="w-4 h-4" /> Anda telah meminta revisi penawaran
+          <RotateCcw className="w-4 h-4" /> {t("logisticTrackStatus.quoteRevisionRequested")}
         </div>
         <div className="text-sm text-muted-foreground">
-          Tim kami sedang meninjau permintaan revisi Anda dan akan menghubungi Anda kembali.
-          {customerResponseNotes && <p className="mt-1">Catatan Anda: {customerResponseNotes}</p>}
+          {t("logisticTrackStatus.quoteRevisionNotes")}
+          {customerResponseNotes && <p className="mt-1">{customerResponseNotes}</p>}
         </div>
         {customerRespondedAt && (
-          <p className="text-xs text-muted-foreground">Diminta pada {formatDateTime(customerRespondedAt)}</p>
+          <p className="text-xs text-muted-foreground">{t("logisticTrackStatus.quoteRevisionAt")} {formatDateTime(customerRespondedAt, locale)}</p>
         )}
       </div>
     );
@@ -641,21 +661,21 @@ function QuoteCard({
     return (
       <div className="bg-card border border-primary/20 rounded-xl p-5 space-y-4">
         <div className="flex items-center gap-2 text-primary font-semibold text-sm">
-          <Tag className="w-4 h-4" /> Penawaran Harga Tersedia
+          <Tag className="w-4 h-4" /> {t("logisticTrackStatus.statusQuoteReceived")}
         </div>
         <p className="text-xs text-muted-foreground">
-          Tim kami telah menyiapkan penawaran terbaik untuk pengiriman Anda. Silakan tinjau dan berikan respons Anda.
+          {t("logisticTrackStatus.quoteProcessingDesc")}
         </p>
 
         <div className="bg-muted/40 rounded-lg px-4 py-3 space-y-2">
           <div className="flex items-center justify-between">
-            <span className="text-sm text-muted-foreground">Harga Penawaran</span>
+            <span className="text-sm text-muted-foreground">{t("logisticTrackStatus.totalBill")}</span>
             <span className="text-xl font-bold text-foreground">{idr(quotedPrice)}</span>
           </div>
           {quotedAt && (
             <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>Dikirim</span>
-              <span>{formatDateTime(quotedAt)}</span>
+              <span>{t("logisticTrackStatus.quoteApprovedAt")}</span>
+              <span>{formatDateTime(quotedAt, locale)}</span>
             </div>
           )}
           {quoteNotes && (
@@ -670,25 +690,25 @@ function QuoteCard({
         )}
 
         {respondMut.isSuccess && !showNotes && (
-          <p className="text-xs text-green-600 font-medium">✓ Respons berhasil dikirim. Terima kasih!</p>
+          <p className="text-xs text-green-600 font-medium">✓ {t("logisticTrackStatus.quoteApproved")}</p>
         )}
 
         {showNotes && pendingResponse && (
           <div className="space-y-2">
             <p className="text-sm text-muted-foreground">
               {pendingResponse === "revision_requested"
-                ? "Apa yang perlu direvisi? (opsional)"
+                ? t("logisticTrackStatus.quoteRevisionNotes")
                 : pendingResponse === "rejected"
-                  ? "Alasan penolakan (opsional)"
-                  : "Catatan tambahan (opsional)"}
+                  ? t("logisticTrackStatus.quoteRejectedAt")
+                  : t("logisticTrackStatus.quoteYourNotes")}
             </p>
             <Textarea
               placeholder={
                 pendingResponse === "revision_requested"
-                  ? "Contoh: Harga terlalu tinggi, mohon diskusikan lagi..."
+                  ? t("logisticTrackStatus.quoteRevisionNotes")
                   : pendingResponse === "rejected"
-                    ? "Contoh: Sudah mendapatkan vendor lain..."
-                    : "Catatan untuk tim kami..."
+                    ? t("logisticTrackStatus.quoteRejectedAt")
+                    : t("logisticTrackStatus.quoteYourNotes")
               }
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
@@ -703,7 +723,7 @@ function QuoteCard({
                 onClick={() => { setShowNotes(false); setPendingResponse(null); setNotes(""); }}
                 disabled={respondMut.isPending}
               >
-                Batal
+                {t("common.cancel")}
               </Button>
               <Button
                 size="sm"
@@ -718,9 +738,9 @@ function QuoteCard({
               >
                 {respondMut.isPending
                   ? <Loader2 className="w-4 h-4 animate-spin" />
-                  : pendingResponse === "approved" ? "Konfirmasi Setuju"
-                    : pendingResponse === "revision_requested" ? "Kirim Permintaan Revisi"
-                      : "Konfirmasi Tolak"}
+                  : pendingResponse === "approved" ? t("logisticTrackStatus.quoteApproved")
+                    : pendingResponse === "revision_requested" ? t("logisticTrackStatus.quoteRevisionRequested")
+                      : t("logisticTrackStatus.quoteRejected")}
               </Button>
             </div>
           </div>
@@ -728,7 +748,7 @@ function QuoteCard({
 
         {!showNotes && !respondMut.isSuccess && (
           <div className="space-y-2">
-            <p className="text-xs text-muted-foreground text-center">Berikan respons Anda:</p>
+            <p className="text-xs text-muted-foreground text-center">{t("logisticTrackStatus.quoteYourNotes")}</p>
             <div className="grid grid-cols-3 gap-2">
               <Button
                 size="sm"
@@ -736,7 +756,7 @@ function QuoteCard({
                 onClick={() => { setPendingResponse("approved"); setShowNotes(true); }}
                 disabled={respondMut.isPending}
               >
-                <ThumbsUp className="w-3.5 h-3.5 mr-1" /> Setuju
+                <ThumbsUp className="w-3.5 h-3.5 mr-1" /> {t("logisticTrackStatus.quoteApproved")}
               </Button>
               <Button
                 size="sm"
@@ -745,7 +765,7 @@ function QuoteCard({
                 onClick={() => { setPendingResponse("revision_requested"); setShowNotes(true); }}
                 disabled={respondMut.isPending}
               >
-                <RotateCcw className="w-3.5 h-3.5 mr-1" /> Revisi
+                <RotateCcw className="w-3.5 h-3.5 mr-1" /> {t("logisticTrackStatus.quoteRevisionRequested")}
               </Button>
               <Button
                 size="sm"
@@ -754,7 +774,7 @@ function QuoteCard({
                 onClick={() => { setPendingResponse("rejected"); setShowNotes(true); }}
                 disabled={respondMut.isPending}
               >
-                <ThumbsDown className="w-3.5 h-3.5 mr-1" /> Tolak
+                <ThumbsDown className="w-3.5 h-3.5 mr-1" /> {t("logisticTrackStatus.quoteRejected")}
               </Button>
             </div>
           </div>
@@ -771,14 +791,16 @@ function StatusChangeBanner({
   prevStatus,
   newStatus,
   onDismiss,
+  statusLabels,
 }: {
   prevStatus: string;
   newStatus: string;
   onDismiss: () => void;
+  statusLabels: Record<string, string>;
 }) {
   useEffect(() => {
-    const t = setTimeout(onDismiss, 6000);
-    return () => clearTimeout(t);
+    const timer = setTimeout(onDismiss, 6000);
+    return () => clearTimeout(timer);
   }, [onDismiss]);
 
   return (
@@ -787,13 +809,13 @@ function StatusChangeBanner({
       <div className="flex-1">
         <p className="text-sm font-semibold text-green-800">Status Pengiriman Diperbarui</p>
         <p className="text-xs text-green-700 mt-0.5">
-          <span className="line-through opacity-60">{STATUS_LABELS[prevStatus] ?? prevStatus}</span>
+          <span className="line-through opacity-60">{statusLabels[prevStatus] ?? prevStatus}</span>
           {" → "}
-          <strong>{STATUS_LABELS[newStatus] ?? newStatus}</strong>
+          <strong>{statusLabels[newStatus] ?? newStatus}</strong>
         </p>
       </div>
       <button onClick={onDismiss} className="text-green-500 hover:text-green-700 text-xs font-medium">
-        Tutup
+        {/* close button */}✕
       </button>
     </div>
   );
@@ -816,6 +838,7 @@ function AutoRefreshBar({
   onRefresh: () => void;
   sseConnected: boolean;
 }) {
+  const { t } = useLanguage();
   const intervalSec = isTerminal ? TERMINAL_INTERVAL : ACTIVE_INTERVAL;
   const [countdown, setCountdown] = useState(intervalSec);
 
@@ -825,10 +848,10 @@ function AutoRefreshBar({
 
   useEffect(() => {
     if (isTerminal) return;
-    const t = setInterval(() => {
+    const timer = setInterval(() => {
       setCountdown((prev) => (prev <= 1 ? intervalSec : prev - 1));
     }, 1000);
-    return () => clearInterval(t);
+    return () => clearInterval(timer);
   }, [isTerminal, intervalSec, lastRefreshed]);
 
   return (
@@ -850,12 +873,12 @@ function AutoRefreshBar({
         )}
         <span>
           {isFetching
-            ? "Memperbarui..."
+            ? t("common.loading")
             : isTerminal
-              ? "Order selesai — tracking dihentikan"
+              ? t("logisticTrackStatus.statusCompleted")
               : sseConnected
-                ? `Live · SSE aktif — refresh dalam ${countdown}d`
-                : `Menghubungkan ulang... — refresh dalam ${countdown}d`}
+                ? `Live · SSE — ${t("logisticTrackStatus.refreshBtn")} ${countdown}s`
+                : `${t("logisticTrackStatus.refreshBtn")} ${countdown}s`}
         </span>
       </div>
       {!isTerminal && (
@@ -865,7 +888,7 @@ function AutoRefreshBar({
           className="flex items-center gap-1 hover:text-foreground transition-colors disabled:opacity-50"
         >
           <RefreshCw className="w-3 h-3" />
-          Perbarui
+          {t("logisticTrackStatus.refreshBtn")}
         </button>
       )}
     </div>
@@ -874,6 +897,7 @@ function AutoRefreshBar({
 
 // ── Push Notification Toggle ──────────────────────────────────────────────────
 function PushToggle({ orderNumber }: { orderNumber: string | null }) {
+  const { t } = useLanguage();
   const { state, subscribe, unsubscribe } = usePushNotification(orderNumber);
 
   if (state === "unsupported" || !orderNumber) return null;
@@ -882,7 +906,7 @@ function PushToggle({ orderNumber }: { orderNumber: string | null }) {
     return (
       <div className="text-xs text-muted-foreground flex items-center gap-1.5 px-3 py-2 rounded-lg bg-muted/60">
         <BellOff className="w-3.5 h-3.5 flex-shrink-0" />
-        Notifikasi diblokir — aktifkan di pengaturan browser
+        {t("logisticTrackStatus.pushNotifDisable")}
       </div>
     );
   }
@@ -894,7 +918,7 @@ function PushToggle({ orderNumber }: { orderNumber: string | null }) {
         className="flex items-center gap-2 text-xs text-primary font-medium px-3 py-2 rounded-lg bg-primary/10 hover:bg-primary/20 transition-colors"
       >
         <Bell className="w-3.5 h-3.5 fill-primary" />
-        Notifikasi aktif — klik untuk matikan
+        {t("logisticTrackStatus.pushNotifDisable")}
       </button>
     );
   }
@@ -908,12 +932,12 @@ function PushToggle({ orderNumber }: { orderNumber: string | null }) {
       {state === "loading"
         ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
         : <Bell className="w-3.5 h-3.5" />}
-      Aktifkan notifikasi browser
+      {t("logisticTrackStatus.pushNotifEnable")}
     </button>
   );
 }
 
-function GpsMapEmbed({ events }: { events: ProgressEvent[] }) {
+function GpsMapEmbed({ events, locale }: { events: ProgressEvent[]; locale: string }) {
   const pts = events.filter((e) => e.gpsLatitude != null && e.gpsLongitude != null);
   if (pts.length === 0) return null;
 
@@ -923,12 +947,12 @@ function GpsMapEmbed({ events }: { events: ProgressEvent[] }) {
     label: e.stepLabel,
     num: i + 1,
     ts: e.deviceTimestamp
-      ? new Date(e.deviceTimestamp).toLocaleString("id-ID", {
+      ? new Date(e.deviceTimestamp).toLocaleString(locale, {
           day: "numeric", month: "short", year: "numeric",
           hour: "2-digit", minute: "2-digit",
           timeZone: "Asia/Jakarta",
         }) + " WIB"
-      : new Date(e.createdAt).toLocaleString("id-ID", {
+      : new Date(e.createdAt).toLocaleString(locale, {
           day: "numeric", month: "short", year: "numeric",
           hour: "2-digit", minute: "2-digit",
           timeZone: "Asia/Jakarta",
@@ -1004,6 +1028,7 @@ function GpsMapEmbed({ events }: { events: ProgressEvent[] }) {
 }
 
 function DriverGpsTimeline({ events }: { events: ProgressEvent[] }) {
+  const { locale } = useLanguage();
   const gpsEvents = events.filter((e) => e.gpsLatitude != null && e.gpsLongitude != null);
   if (gpsEvents.length === 0) return null;
 
@@ -1014,18 +1039,18 @@ function DriverGpsTimeline({ events }: { events: ProgressEvent[] }) {
         Riwayat Lokasi Driver
         <Badge variant="outline" className="text-xs ml-auto">{gpsEvents.length} titik</Badge>
       </h3>
-      <GpsMapEmbed events={gpsEvents} />
+      <GpsMapEmbed events={gpsEvents} locale={locale} />
       <div className="space-y-0">
         {[...gpsEvents].reverse().map((ev, i) => {
           const isFirst = i === 0;
           const isLast = i === gpsEvents.length - 1;
           const ts = ev.deviceTimestamp
-            ? new Date(ev.deviceTimestamp).toLocaleString("id-ID", {
+            ? new Date(ev.deviceTimestamp).toLocaleString(locale, {
                 day: "numeric", month: "short", year: "numeric",
                 hour: "2-digit", minute: "2-digit",
                 timeZone: "Asia/Jakarta",
               })
-            : new Date(ev.createdAt).toLocaleString("id-ID", {
+            : new Date(ev.createdAt).toLocaleString(locale, {
                 day: "numeric", month: "short", year: "numeric",
                 hour: "2-digit", minute: "2-digit",
                 timeZone: "Asia/Jakarta",
@@ -1170,6 +1195,7 @@ function DeliveryProofGallery({ events, driverPhotos, jobNumber, orderStatusRank
   jobNumber?: string;
   orderStatusRank: number;
 }) {
+  const { locale } = useLanguage();
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [errorUrls, setErrorUrls] = useState<Set<string>>(new Set());
 
@@ -1240,7 +1266,7 @@ function DeliveryProofGallery({ events, driverPhotos, jobNumber, orderStatusRank
                       {ev.actorName && (
                         <p className="text-xs text-muted-foreground truncate">👤 {ev.actorName}</p>
                       )}
-                      <p className="text-xs text-muted-foreground">{formatDateTime(ev.createdAt)}</p>
+                      <p className="text-xs text-muted-foreground">{formatDateTime(ev.createdAt, locale)}</p>
                     </div>
                   </div>
                 ))}
@@ -1302,6 +1328,7 @@ function DeliveryProofGallery({ events, driverPhotos, jobNumber, orderStatusRank
 }
 
 export default function TrackPage() {
+  const { t, locale } = useLanguage();
   const [, setLocation] = useLocation();
   const { orderNumber: pathOrderNumber } = useParams<{ orderNumber?: string }>();
   const [input, setInput] = useState("");
@@ -1314,6 +1341,8 @@ export default function TrackPage() {
   const prevStatusRef = useRef<string | null>(null);
   const prevDriverStatusRef = useRef<string | null>(null);
   const [statusChangeBanner, setStatusChangeBanner] = useState<{ prev: string; next: string } | null>(null);
+
+  const statusLabels = getStatusLabels(t);
 
   useEffect(() => {
     if (pathOrderNumber) {
@@ -1392,20 +1421,20 @@ export default function TrackPage() {
           <button onClick={() => setLocation("/")} className="text-muted-foreground hover:text-foreground">
             <ArrowLeft className="w-4 h-4" />
           </button>
-          <span className="font-semibold text-foreground">Lacak Pengiriman</span>
+          <span className="font-semibold text-foreground">{t("logisticTrackStatus.progress")}</span>
         </div>
       </nav>
 
       <div className="max-w-2xl mx-auto px-4 py-8 space-y-6">
         <div>
-          <h1 className="text-xl font-bold text-foreground mb-1">Tracking Order</h1>
-          <p className="text-sm text-muted-foreground">Masukkan nomor order untuk melihat status pengiriman secara real-time.</p>
+          <h1 className="text-xl font-bold text-foreground mb-1">{t("logisticTrackStatus.progress")}</h1>
+          <p className="text-sm text-muted-foreground">{t("logisticTrackStatus.searchPlaceholder")}</p>
         </div>
 
         <div className="space-y-2">
           <div className="flex gap-2">
             <Input
-              placeholder="Contoh: LOG-250513-12345"
+              placeholder={t("logisticTrackStatus.searchPlaceholder")}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleSearch()}
@@ -1414,7 +1443,7 @@ export default function TrackPage() {
           </div>
           <div className="flex gap-2">
             <Input
-              placeholder="4 digit terakhir no. HP"
+              placeholder={t("logisticTrackStatus.phonePlaceholder")}
               value={phoneInput}
               onChange={(e) => setPhoneInput(e.target.value.replace(/\D/g, "").slice(0, 4))}
               onKeyDown={(e) => e.key === "Enter" && handleSearch()}
@@ -1424,12 +1453,12 @@ export default function TrackPage() {
             />
             <Button onClick={handleSearch} disabled={isLoading || !input.trim() || phoneInput.replace(/\D/g, "").length !== 4}>
               {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-              <span className="ml-1 hidden sm:inline">{isLoading ? "Mencari..." : "Cari"}</span>
+              <span className="ml-1 hidden sm:inline">{isLoading ? t("common.loading") : t("logisticTrackStatus.trackBtn")}</span>
             </Button>
           </div>
           <p className="text-xs text-muted-foreground flex items-center gap-1">
             <ShieldCheck className="w-3 h-3" />
-            Untuk melindungi privasi Anda, masukkan juga 4 digit terakhir nomor HP yang didaftarkan saat order.
+            {t("logisticTrackStatus.verifPhoneDesc")}
           </p>
         </div>
 
@@ -1437,12 +1466,12 @@ export default function TrackPage() {
           <div className="text-center py-10 text-muted-foreground">
             <AlertCircle className="w-10 h-10 mx-auto mb-3 text-red-400" />
             <p className="font-medium text-foreground">
-              {needsPhoneVerification ? "Verifikasi gagal" : "Order tidak ditemukan"}
+              {needsPhoneVerification ? t("logisticTrackStatus.verifError") : t("logisticTrackStatus.notFound")}
             </p>
             <p className="text-sm mt-1">
               {needsPhoneVerification
-                ? "Nomor order ditemukan, tapi 4 digit terakhir no. HP tidak cocok. Periksa kembali nomor HP yang digunakan saat order."
-                : (error?.message ?? "Pastikan nomor order sudah benar.")}
+                ? t("logisticTrackStatus.verifPhoneDesc")
+                : (error?.message ?? t("logisticTrackStatus.notFoundDesc"))}
             </p>
           </div>
         )}
@@ -1456,6 +1485,7 @@ export default function TrackPage() {
                 prevStatus={statusChangeBanner.prev}
                 newStatus={statusChangeBanner.next}
                 onDismiss={() => setStatusChangeBanner(null)}
+                statusLabels={statusLabels}
               />
             )}
 
@@ -1486,11 +1516,11 @@ export default function TrackPage() {
             <div className="bg-card border border-border rounded-xl p-5">
               <div className="flex items-start justify-between gap-3 mb-4">
                 <div>
-                  <p className="text-xs text-muted-foreground mb-1 uppercase tracking-wider">Nomor Order</p>
+                  <p className="text-xs text-muted-foreground mb-1 uppercase tracking-wider">{t("logisticTrackStatus.orderNo")}</p>
                   <p className="text-xl font-bold font-mono text-foreground">{tracking.orderNumber}</p>
                 </div>
                 <Badge className={cn("border font-medium", STATUS_COLORS[tracking.status] ?? "bg-gray-100 text-gray-800")}>
-                  {STATUS_LABELS[tracking.status] ?? tracking.status}
+                  {statusLabels[tracking.status] ?? tracking.status}
                 </Badge>
               </div>
               <Separator className="mb-4" />
@@ -1498,7 +1528,7 @@ export default function TrackPage() {
               {/* Route */}
               <div className="flex items-center gap-2 mb-4 bg-muted/40 rounded-lg px-4 py-3">
                 <div className="text-center flex-1">
-                  <p className="text-xs text-muted-foreground mb-0.5">Asal</p>
+                  <p className="text-xs text-muted-foreground mb-0.5">{t("logisticTrackStatus.deliveryRoute")}</p>
                   <p className="font-semibold text-sm text-foreground leading-tight">{tracking.origin}</p>
                 </div>
                 <div className="flex flex-col items-center gap-1 flex-shrink-0">
@@ -1506,7 +1536,7 @@ export default function TrackPage() {
                   <span className="text-[10px] text-muted-foreground">{tracking.shipmentType}</span>
                 </div>
                 <div className="text-center flex-1">
-                  <p className="text-xs text-muted-foreground mb-0.5">Tujuan</p>
+                  <p className="text-xs text-muted-foreground mb-0.5">{t("logisticTrackStatus.deliveryRoute")}</p>
                   <p className="font-semibold text-sm text-foreground leading-tight">{tracking.destination}</p>
                 </div>
               </div>
@@ -1516,9 +1546,9 @@ export default function TrackPage() {
 
               <Separator className="mt-5 mb-4" />
               <div className="grid grid-cols-2 gap-y-2 text-sm">
-                <span className="text-muted-foreground">Customer</span>
+                <span className="text-muted-foreground">{t("logisticTrackStatus.customer")}</span>
                 <span className="font-medium text-foreground text-right">{tracking.customerName}</span>
-                <span className="text-muted-foreground">Tgl Order</span>
+                <span className="text-muted-foreground">{t("logisticTrackStatus.orderDate")}</span>
                 <span className="font-medium text-foreground text-right">{formatDate(tracking.createdAt)}</span>
                 {tracking.subtotal != null && (
                   <>
@@ -1534,7 +1564,7 @@ export default function TrackPage() {
                 )}
                 {tracking.grandTotal != null && (
                   <>
-                    <span className="text-muted-foreground font-semibold">Total Est.</span>
+                    <span className="text-muted-foreground font-semibold">{t("logisticTrackStatus.totalAmount")}</span>
                     <span className="font-bold text-foreground text-right">{idr(tracking.grandTotal)}</span>
                   </>
                 )}
@@ -1547,7 +1577,7 @@ export default function TrackPage() {
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="font-semibold text-foreground text-sm flex items-center gap-2">
                     <Truck className="w-4 h-4 text-primary" />
-                    Status Pengiriman Driver
+                    {t("logisticTrackStatus.driverStatus")}
                   </h3>
                   <Badge variant="outline" className="text-xs font-mono">
                     {tracking.driverJob.jobNumber}
@@ -1558,20 +1588,20 @@ export default function TrackPage() {
                 <div className="bg-muted/40 rounded-lg px-4 py-3 mb-4 grid grid-cols-2 gap-y-2 text-sm">
                   {tracking.driverJob.vehicleType && (
                     <>
-                      <span className="text-muted-foreground">Kendaraan</span>
+                      <span className="text-muted-foreground">{t("logisticTrackStatus.driverInfo")}</span>
                       <span className="font-medium text-right">{tracking.driverJob.vehicleType}</span>
                     </>
                   )}
                   {tracking.driverJob.pickupDateTime && (
                     <>
                       <span className="text-muted-foreground flex items-center gap-1"><MapPin className="w-3 h-3" />Est. Pickup</span>
-                      <span className="font-medium text-right text-xs leading-snug">{formatDateTime(tracking.driverJob.pickupDateTime)}</span>
+                      <span className="font-medium text-right text-xs leading-snug">{formatDateTime(tracking.driverJob.pickupDateTime, locale)}</span>
                     </>
                   )}
                   {tracking.driverJob.deliveryDateTime && (
                     <>
                       <span className="text-muted-foreground">Est. Tiba</span>
-                      <span className="font-medium text-right text-xs leading-snug">{formatDateTime(tracking.driverJob.deliveryDateTime)}</span>
+                      <span className="font-medium text-right text-xs leading-snug">{formatDateTime(tracking.driverJob.deliveryDateTime, locale)}</span>
                     </>
                   )}
                 </div>
@@ -1583,7 +1613,7 @@ export default function TrackPage() {
               tracking.status !== "Completed" && (
                 <div className="bg-card border border-border rounded-xl p-4 flex items-center gap-3 text-sm text-muted-foreground">
                   <Clock className="w-4 h-4 flex-shrink-0" />
-                  <p>Driver belum ditugaskan. Anda akan menerima notifikasi setelah order dikonfirmasi dan driver ditetapkan.</p>
+                  <p>{t("logisticTrackStatus.driverAssigned")}</p>
                 </div>
               )
             )}
@@ -1604,13 +1634,13 @@ export default function TrackPage() {
               <div className="bg-card border border-teal-200 rounded-xl p-5">
                 <h3 className="font-semibold text-teal-800 text-sm mb-4 flex items-center gap-2">
                   <FileText className="w-4 h-4" />
-                  Bukti Pengiriman (POD)
+                  {t("logisticTrackStatus.podTitle")}
                 </h3>
                 <div className="space-y-3">
                   <div className="grid grid-cols-2 gap-y-2 text-sm">
                     {tracking.driverJob.driverNameOverride && (
                       <>
-                        <span className="text-muted-foreground">Driver</span>
+                        <span className="text-muted-foreground">{t("logisticTrackStatus.driverInfo")}</span>
                         <span className="font-semibold text-foreground text-right">{tracking.driverJob.driverNameOverride}</span>
                       </>
                     )}
@@ -1622,7 +1652,7 @@ export default function TrackPage() {
                     )}
                     {tracking.driverJob.podReceiverName && (
                       <>
-                        <span className="text-muted-foreground">Diterima oleh</span>
+                        <span className="text-muted-foreground">{t("logisticTrackStatus.podReceiver")}</span>
                         <span className="font-semibold text-foreground text-right">{tracking.driverJob.podReceiverName}</span>
                       </>
                     )}
@@ -1630,7 +1660,7 @@ export default function TrackPage() {
                       <>
                         <span className="text-muted-foreground">Waktu perangkat</span>
                         <span className="font-medium text-right">
-                          {new Date(tracking.driverJob.podDeviceTimestamp).toLocaleString("id-ID", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+                          {new Date(tracking.driverJob.podDeviceTimestamp).toLocaleString(locale, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
                         </span>
                       </>
                     )}
@@ -1643,9 +1673,9 @@ export default function TrackPage() {
                       </>
                     )}
                     <>
-                      <span className="text-muted-foreground">Waktu submit</span>
+                      <span className="text-muted-foreground">{t("logisticTrackStatus.podSubmittedAt")}</span>
                       <span className="font-medium text-right">
-                        {new Date(tracking.driverJob.podSubmittedAt).toLocaleString("id-ID", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+                        {new Date(tracking.driverJob.podSubmittedAt).toLocaleString(locale, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
                       </span>
                     </>
                   </div>
@@ -1655,7 +1685,7 @@ export default function TrackPage() {
                         <a href={tracking.driverJob.podMapUrl} target="_blank" rel="noopener noreferrer" className="flex-1">
                           <button className="w-full flex items-center justify-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-xs font-medium text-teal-700 hover:bg-teal-100 transition-colors">
                             <MapPin className="w-3.5 h-3.5" />
-                            Lihat di Maps
+                            {t("logisticTrackStatus.podMap")}
                           </button>
                         </a>
                       )}
@@ -1663,7 +1693,7 @@ export default function TrackPage() {
                         <a href={tracking.driverJob.podStreetViewUrl} target="_blank" rel="noopener noreferrer" className="flex-1">
                           <button className="w-full flex items-center justify-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700 hover:bg-blue-100 transition-colors">
                             <Navigation className="w-3.5 h-3.5" />
-                            Street View
+                            {t("logisticTrackStatus.podStreetView")}
                           </button>
                         </a>
                       )}
@@ -1678,14 +1708,14 @@ export default function TrackPage() {
               <div className="bg-card border border-teal-200 rounded-xl p-5">
                 <h3 className="font-semibold text-teal-800 text-sm mb-4 flex items-center gap-2">
                   <FileText className="w-4 h-4" />
-                  Bukti Pengiriman (POD)
+                  {t("logisticTrackStatus.podTitle")}
                 </h3>
                 {(tracking.podSubmissions ?? []).map((pod) => (
                   <div key={pod.id} className="space-y-3">
                     <div className="grid grid-cols-2 gap-y-2 text-sm">
                       {pod.receiverName && (
                         <>
-                          <span className="text-muted-foreground">Diterima oleh</span>
+                          <span className="text-muted-foreground">{t("logisticTrackStatus.podReceiver")}</span>
                           <span className="font-semibold text-foreground text-right">{pod.receiverName}</span>
                         </>
                       )}
@@ -1695,8 +1725,8 @@ export default function TrackPage() {
                           <span className="font-medium text-right">{pod.submittedBy}</span>
                         </>
                       )}
-                      <span className="text-muted-foreground">Tanggal</span>
-                      <span className="font-medium text-right">{formatDateTime(pod.createdAt)}</span>
+                      <span className="text-muted-foreground">{t("logisticTrackStatus.podSubmittedAt")}</span>
+                      <span className="font-medium text-right">{formatDateTime(pod.createdAt, locale)}</span>
                     </div>
                     {pod.note && (
                       <p className="text-sm text-muted-foreground bg-muted/40 rounded-lg px-3 py-2">
@@ -1707,7 +1737,7 @@ export default function TrackPage() {
                       <a href={pod.photoUrl} target="_blank" rel="noopener noreferrer" className="block">
                         <img
                           src={pod.photoUrl}
-                          alt="Bukti pengiriman"
+                          alt={t("logisticTrackStatus.podTitle")}
                           className="w-full max-h-64 object-contain rounded-lg border border-teal-100 hover:opacity-90 transition-opacity cursor-zoom-in"
                         />
                         <p className="text-xs text-center text-muted-foreground mt-1">Klik untuk perbesar foto</p>
@@ -1729,7 +1759,7 @@ export default function TrackPage() {
               <div className="bg-card border border-orange-200 rounded-xl p-5">
                 <h3 className="font-semibold text-orange-800 text-sm mb-3 flex items-center gap-2">
                   <FileText className="w-4 h-4" />
-                  Invoice
+                  {t("logisticTrackStatus.invoiceLinks")}
                 </h3>
                 {(tracking.invoiceLinks ?? []).length > 0 ? (
                   <div className="space-y-3">
@@ -1751,20 +1781,20 @@ export default function TrackPage() {
                         <div className="grid grid-cols-2 gap-y-1 text-sm">
                           {inv.grandTotal != null && (
                             <>
-                              <span className="text-muted-foreground">Total</span>
+                              <span className="text-muted-foreground">{t("logisticTrackStatus.totalAmount")}</span>
                               <span className="font-semibold text-right">{idr(inv.grandTotal)}</span>
                             </>
                           )}
                           {inv.dueDate && (
                             <>
-                              <span className="text-muted-foreground">Jatuh Tempo</span>
-                              <span className="font-medium text-right">{formatDateTime(inv.dueDate)}</span>
+                              <span className="text-muted-foreground">{t("logisticTrackStatus.dueDate")}</span>
+                              <span className="font-medium text-right">{formatDateTime(inv.dueDate, locale)}</span>
                             </>
                           )}
                           {inv.confirmedAt && (
                             <>
-                              <span className="text-muted-foreground">Tgl Bayar</span>
-                              <span className="font-medium text-right text-green-700">{formatDateTime(inv.confirmedAt)}</span>
+                              <span className="text-muted-foreground">{t("logisticTrackStatus.paymentStatus")}</span>
+                              <span className="font-medium text-right text-green-700">{formatDateTime(inv.confirmedAt, locale)}</span>
                             </>
                           )}
                         </div>
@@ -1775,7 +1805,7 @@ export default function TrackPage() {
                           className="inline-flex items-center gap-1.5 text-xs font-medium text-orange-700 bg-orange-100 hover:bg-orange-200 px-3 py-1.5 rounded-md transition-colors"
                         >
                           <FileText className="w-3.5 h-3.5" />
-                          Lihat Invoice
+                          {t("logisticTrackStatus.downloadInvoice")}
                           <ExternalLink className="w-3 h-3" />
                         </a>
                       </div>
@@ -1783,7 +1813,7 @@ export default function TrackPage() {
                   </div>
                 ) : (
                   <div className="text-sm text-muted-foreground bg-orange-50/40 rounded-lg px-3 py-3">
-                    <p>Invoice untuk order ini telah diterbitkan. Silakan cek <strong>email</strong> atau hubungi tim B2B Marketplace and Logistic untuk menerima invoice Anda.</p>
+                    <p>{t("logisticTrackStatus.invoiceLinks")}</p>
                   </div>
                 )}
               </div>
@@ -1814,7 +1844,7 @@ export default function TrackPage() {
               <div className="bg-card border border-border rounded-xl p-5">
                 <h3 className="font-semibold text-foreground text-sm mb-4 flex items-center gap-2">
                   <Clock className="w-4 h-4 text-primary" />
-                  Riwayat Status
+                  {t("logisticTrackStatus.updateHistory")}
                 </h3>
                 <div className="space-y-0">
                   {[...tracking.orderUpdates].reverse().map((update, i) => (
@@ -1835,13 +1865,13 @@ export default function TrackPage() {
                       <div className={cn("pb-4", i === tracking.orderUpdates.length - 1 && "pb-0")}>
                         {update.status && (
                           <p className="text-sm font-medium text-foreground">
-                            {STATUS_LABELS[update.status] ?? update.status}
+                            {statusLabels[update.status] ?? update.status}
                           </p>
                         )}
                         {update.notes && (
                           <p className="text-xs text-muted-foreground mt-0.5">{update.notes}</p>
                         )}
-                        <p className="text-xs text-muted-foreground mt-0.5">{formatDateTime(update.createdAt)}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">{formatDateTime(update.createdAt, locale)}</p>
                       </div>
                     </div>
                   ))}
@@ -1850,7 +1880,7 @@ export default function TrackPage() {
             )}
 
             <Button variant="outline" className="w-full" onClick={() => setLocation("/jasa")}>
-              <Ship className="w-4 h-4 mr-2" /> Buat Order Baru
+              <Ship className="w-4 h-4 mr-2" /> {t("logisticTrackStatus.backToHome")}
             </Button>
           </div>
         )}

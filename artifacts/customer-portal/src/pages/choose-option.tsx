@@ -1,13 +1,19 @@
 // [MULTI-MODE] Halaman customer memilih opsi anonim (Opsi 1, Opsi 2, ...)
 import { useState, useEffect } from "react";
 import { CheckCircle2, AlertCircle, Loader2, Truck, Ship, Plane, MapPin, Package, ArrowLeft } from "lucide-react";
+import { useLanguage } from "@/i18n/LanguageContext";
 
-const BULAN = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
-function formatTanggal(iso: string | null): string {
+function formatTanggal(iso: string | null, locale = "id-ID"): string {
   if (!iso) return "-";
   const [y, m, d] = iso.split("-");
-  const month = BULAN[parseInt(m, 10) - 1] ?? m;
-  return `${parseInt(d, 10)} ${month} ${y}`;
+  if (!y || !m || !d) return iso;
+  try {
+    return new Date(`${y}-${m}-${d}T00:00:00`).toLocaleDateString(locale, {
+      day: "numeric", month: "long", year: "numeric",
+    });
+  } catch {
+    return iso;
+  }
 }
 
 const BASE = import.meta.env.BASE_URL?.replace(/\/$/, "") ?? "";
@@ -52,6 +58,7 @@ interface OptionFormData {
 const fmt = (n: number) => `Rp ${Math.round(n).toLocaleString("id-ID")}`;
 
 export default function ChooseOptionPage() {
+  const { t, locale } = useLanguage();
   const token = getTokenFromUrl();
   const [data, setData] = useState<OptionFormData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -60,12 +67,12 @@ export default function ChooseOptionPage() {
   const [chosen, setChosen] = useState<{ label: string; price: number } | null>(null);
 
   useEffect(() => {
-    if (!token) { setError("Token tidak valid"); setLoading(false); return; }
+    if (!token) { setError(t("chooseOption.invalidToken")); setLoading(false); return; }
     fetch(apiUrl(`/api/logistic/orders/choose-option-form/${encodeURIComponent(token)}`))
       .then((r) => r.ok ? r.json() : r.json().then((e: { message?: string }) => { throw new Error(e.message ?? "Error"); }))
       .then((d: OptionFormData) => { setData(d); setLoading(false); })
       .catch((e: Error) => { setError(e.message); setLoading(false); });
-  }, [token]);
+  }, [token, t]);
 
   async function handleChoose(optionId: number, label: string, price: number) {
     setChoosing(optionId);
@@ -76,7 +83,7 @@ export default function ChooseOptionPage() {
         body: JSON.stringify({ token, optionId }),
       });
       const body = await res.json() as { ok?: boolean; message?: string; chosenLabel?: string; price?: number };
-      if (!res.ok) throw new Error(body.message ?? "Gagal memilih opsi");
+      if (!res.ok) throw new Error(body.message ?? t("chooseOption.failedChoice"));
       setChosen({ label, price });
     } catch (e: unknown) {
       alert((e as Error).message);
@@ -90,7 +97,7 @@ export default function ChooseOptionPage() {
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-slate-100 flex items-center justify-center">
         <div className="text-center space-y-3">
           <Loader2 className="h-8 w-8 animate-spin text-blue-500 mx-auto" />
-          <p className="text-slate-500 text-sm">Memuat opsi penawaran...</p>
+          <p className="text-slate-500 text-sm">{t("chooseOption.loading")}</p>
         </div>
       </div>
     );
@@ -101,8 +108,8 @@ export default function ChooseOptionPage() {
       <div className="min-h-screen bg-gradient-to-br from-red-50 to-slate-100 flex items-center justify-center p-4">
         <div className="bg-white rounded-2xl shadow-lg p-8 max-w-sm w-full text-center space-y-4">
           <AlertCircle className="h-12 w-12 text-red-500 mx-auto" />
-          <h2 className="font-bold text-slate-800">Link Tidak Valid</h2>
-          <p className="text-sm text-slate-500">{error ?? "Link sudah kadaluarsa atau tidak ditemukan."}</p>
+          <h2 className="font-bold text-slate-800">{t("chooseOption.invalidLink")}</h2>
+          <p className="text-sm text-slate-500">{error ?? t("chooseOption.linkExpired")}</p>
         </div>
       </div>
     );
@@ -116,14 +123,14 @@ export default function ChooseOptionPage() {
       <div className="min-h-screen bg-gradient-to-br from-green-50 to-slate-100 flex items-center justify-center p-4">
         <div className="bg-white rounded-2xl shadow-lg p-8 max-w-sm w-full text-center space-y-4">
           <CheckCircle2 className="h-14 w-14 text-green-500 mx-auto" />
-          <h2 className="font-bold text-xl text-slate-800">Pilihan Diterima!</h2>
+          <h2 className="font-bold text-xl text-slate-800">{t("chooseOption.choiceMade")}</h2>
           <div className="bg-green-50 rounded-xl p-4 space-y-1">
-            <p className="text-sm text-slate-500">Anda memilih</p>
+            <p className="text-sm text-slate-500">{t("chooseOption.youChose")}</p>
             <p className="font-bold text-lg text-green-700">{displayLabel}</p>
             <p className="font-mono text-xl font-bold text-slate-800">{fmt(displayPrice)}</p>
           </div>
-          <p className="text-sm text-slate-500">Tim kami akan segera menghubungi Anda untuk proses selanjutnya.</p>
-          <p className="text-xs text-slate-400">Order {data.orderNumber}</p>
+          <p className="text-sm text-slate-500">{t("chooseOption.contactSoon")}</p>
+          <p className="text-xs text-slate-400">{t("chooseOption.orderRef")} {data.orderNumber}</p>
         </div>
       </div>
     );
@@ -146,17 +153,17 @@ export default function ChooseOptionPage() {
             onClick={() => window.history.back()}
             className="inline-flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1.5 rounded-lg text-slate-500 hover:text-slate-800 bg-white/80 hover:bg-white border border-slate-200 transition-all shadow-sm"
           >
-            <ArrowLeft className="h-3.5 w-3.5" /> Kembali
+            <ArrowLeft className="h-3.5 w-3.5" /> {t("common.back")}
           </button>
         </div>
         {/* Header */}
         <div className="text-center space-y-2">
           <div className="inline-flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-full text-sm font-semibold">
             <ModeIcon className="h-4 w-4" />
-{modeLabel}
+            {modeLabel}
           </div>
-          <h1 className="text-xl font-bold text-slate-800">Penawaran untuk Anda</h1>
-          <p className="text-sm text-slate-500">Pilih satu opsi terbaik yang sesuai kebutuhan Anda</p>
+          <h1 className="text-xl font-bold text-slate-800">{t("chooseOption.offerTitle")}</h1>
+          <p className="text-sm text-slate-500">{t("chooseOption.offerSubtitle")}</p>
         </div>
 
         {/* Order Info */}
@@ -164,7 +171,7 @@ export default function ChooseOptionPage() {
           <div className="flex items-start gap-3">
             <MapPin className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />
             <div>
-              <p className="text-xs text-slate-400">Rute Pengiriman</p>
+              <p className="text-xs text-slate-400">{t("chooseOption.routeLabel")}</p>
               <p className="font-medium text-slate-700">{data.origin} → {data.destination}</p>
             </div>
           </div>
@@ -172,9 +179,9 @@ export default function ChooseOptionPage() {
             <div className="flex items-start gap-3">
               <Truck className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />
               <div>
-                <p className="text-xs text-slate-400">Jadwal Pickup</p>
+                <p className="text-xs text-slate-400">{t("chooseOption.pickupLabel")}</p>
                 <p className="font-medium text-slate-700">
-                  {formatTanggal(data.pickupDate)}{data.pickupTime ? ` · ${data.pickupTime} WIB` : ""}
+                  {formatTanggal(data.pickupDate, locale)}{data.pickupTime ? ` · ${data.pickupTime} WIB` : ""}
                 </p>
               </div>
             </div>
@@ -183,7 +190,7 @@ export default function ChooseOptionPage() {
             <div className="flex items-start gap-3">
               <Truck className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />
               <div>
-                <p className="text-xs text-slate-400">Tipe Unit</p>
+                <p className="text-xs text-slate-400">{t("chooseOption.unitType")}</p>
                 <p className="font-medium text-slate-700">{data.truckType}</p>
               </div>
             </div>
@@ -192,7 +199,7 @@ export default function ChooseOptionPage() {
             <div className="flex items-start gap-3">
               <MapPin className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />
               <div>
-                <p className="text-xs text-slate-400">Port / Bandara</p>
+                <p className="text-xs text-slate-400">{t("chooseOption.portAirport")}</p>
                 <p className="font-medium text-slate-700">
                   {[data.originPort, data.destPort].filter(Boolean).join(" → ")}
                 </p>
@@ -203,9 +210,9 @@ export default function ChooseOptionPage() {
             <div className="flex items-start gap-3">
               <Plane className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />
               <div>
-                <p className="text-xs text-slate-400">ETD / ETA</p>
+                <p className="text-xs text-slate-400">{t("chooseOption.etdEta")}</p>
                 <p className="font-medium text-slate-700">
-                  {data.etd ? formatTanggal(data.etd) : "—"} → {data.eta ? formatTanggal(data.eta) : "—"}
+                  {data.etd ? formatTanggal(data.etd, locale) : "—"} → {data.eta ? formatTanggal(data.eta, locale) : "—"}
                 </p>
               </div>
             </div>
@@ -214,18 +221,18 @@ export default function ChooseOptionPage() {
             <div className="flex items-start gap-3">
               <Package className="h-4 w-4 text-slate-400 mt-0.5 shrink-0" />
               <div>
-                <p className="text-xs text-slate-400">Komoditi</p>
+                <p className="text-xs text-slate-400">{t("chooseOption.commodity")}</p>
                 <p className="font-medium text-slate-700">{data.commodity}</p>
               </div>
             </div>
           )}
-          <p className="text-xs text-slate-400">No. Order: {data.orderNumber}</p>
+          <p className="text-xs text-slate-400">{t("chooseOption.orderNo")}: {data.orderNumber}</p>
         </div>
 
         {/* Options */}
         <div className="space-y-3">
           <p className="text-sm font-semibold text-slate-600 uppercase tracking-wide">
-            {data.options.length} Opsi Tersedia
+            {data.options.length} {t("chooseOption.optionsCount")}
           </p>
           {data.options.map((opt, i) => (
             <div
@@ -247,32 +254,32 @@ export default function ChooseOptionPage() {
                   </div>
                   <div className="text-right">
                     <p className="text-2xl font-bold text-slate-800">{fmt(opt.price)}</p>
-                    <p className="text-xs text-slate-400">termasuk semua biaya</p>
+                    <p className="text-xs text-slate-400">{t("chooseOption.includedFees")}</p>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2 text-sm">
                   {data.isTrucking && opt.vehicleYear && (
                     <div className="bg-slate-50 rounded-lg px-3 py-2">
-                      <p className="text-xs text-slate-400">Tahun Unit</p>
+                      <p className="text-xs text-slate-400">{t("chooseOption.vehicleYear")}</p>
                       <p className="font-semibold text-slate-700">{opt.vehicleYear}</p>
                     </div>
                   )}
                   {!data.isTrucking && opt.transitDays && (
                     <div className="bg-slate-50 rounded-lg px-3 py-2">
-                      <p className="text-xs text-slate-400">Transit Time</p>
-                      <p className="font-semibold text-slate-700">{opt.transitDays} hari</p>
+                      <p className="text-xs text-slate-400">{t("chooseOption.transitTime")}</p>
+                      <p className="font-semibold text-slate-700">{opt.transitDays} {t("chooseOption.days")}</p>
                     </div>
                   )}
                   {opt.carrierInfo && (
                     <div className="bg-slate-50 rounded-lg px-3 py-2 col-span-2">
-                      <p className="text-xs text-slate-400">Info</p>
+                      <p className="text-xs text-slate-400">{t("chooseOption.info")}</p>
                       <p className="font-semibold text-slate-700">{opt.carrierInfo}</p>
                     </div>
                   )}
                   {opt.notes && (
                     <div className="bg-amber-50 rounded-lg px-3 py-2 col-span-2">
-                      <p className="text-xs text-amber-500">Catatan</p>
+                      <p className="text-xs text-amber-500">{t("chooseOption.notes")}</p>
                       <p className="text-sm text-slate-700">{opt.notes}</p>
                     </div>
                   )}
@@ -288,9 +295,9 @@ export default function ChooseOptionPage() {
                   }`}
                 >
                   {choosing === opt.id ? (
-                    <><Loader2 className="h-4 w-4 animate-spin" /> Memproses...</>
+                    <><Loader2 className="h-4 w-4 animate-spin" /> {t("chooseOption.processing")}</>
                   ) : (
-                    <>Pilih {opt.label}</>
+                    <>{t("chooseOption.choose")} {opt.label}</>
                   )}
                 </button>
               </div>
@@ -299,8 +306,8 @@ export default function ChooseOptionPage() {
         </div>
 
         <p className="text-center text-xs text-slate-400 pb-4">
-          Setelah memilih, tim kami akan menghubungi Anda untuk konfirmasi akhir.
-          <br />Harga sudah termasuk pajak & biaya administrasi.
+          {t("chooseOption.confirmText")}
+          <br />{t("chooseOption.priceNote")}
         </p>
       </div>
     </div>
