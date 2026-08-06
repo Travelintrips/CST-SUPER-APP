@@ -69,6 +69,19 @@ const writeLimiter = rateLimit({
   },
 });
 
+// Vendor selection — 10 req / 15 menit per buyer (lebih ketat dari write biasa)
+const selectLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: "RATE_LIMIT", message: "Terlalu banyak permintaan vendor selection. Coba lagi dalam 15 menit." },
+  keyGenerator: (req) => {
+    const pid = (req as PortalAuthReq).portalCustomerId;
+    return `mkt-portal-select:${pid ?? req.ip}`;
+  },
+});
+
 // ── Zod input schemas ─────────────────────────────────────────────────────────
 const CancelBodySchema = z.object({
   reason: z.string().max(500).optional(),
@@ -83,6 +96,15 @@ const CustomerRejectBodySchema = z.object({
 });
 
 const ApproveBodySchema = z.object({
+  notes: z.string().max(1000).optional(),
+});
+
+// Sprint 2 — vendor selection & customer review
+const SelectVendorBodySchema = z.object({
+  quoteId: z.number().int().positive(),
+});
+
+const SendToCustomerReviewBodySchema = z.object({
   notes: z.string().max(1000).optional(),
 });
 
@@ -998,6 +1020,401 @@ router.get("/rfqs/:id/purchase-order", async (req: Request, res: Response) => {
   } catch (err: unknown) {
     logger.error({ err, portalCustomerId, rfqId }, "[mktPortal] getRfqPurchaseOrder error");
     return res.status(500).json({ ok: false, error: "Gagal memuat PO" });
+  }
+});
+
+// ── GET /api/mkt/portal/rfqs/:id/quotes ──────────────────────────────────────
+// Buyer melihat semua quotation vendor untuk RFQ ini (comparison view).
+// Buyer-safe: tidak mengekspos token, commission_*, rank_score, attachment_url (raw).
+// Hanya menampilkan quotes yang sudah disubmit vendor (status != 'draft').
+// Activity log: QUOTE_VIEWED (non-fatal, fire-and-forget).
+router.get("/rfqs/:id/quotes", readLimiter, async (req: Request, res: Response) => {
+  const portalCustomerId = (req as PortalAuthReq).portalCustomerId;
+  const rfqId = Number(req.params["id"]);
+  if (!Number.isInteger(rfqId) || rfqId <= 0)
+    return res.status(400).json({ ok: false, error: "rfqId harus berupa integer positif" });
+
+  try {
+    const {
+      db, mktRfqsTable, mktVendorQuotesTable, mktVendorQuoteLinesTable,
+      mktRfqLinesTable, suppliersTable,
+    } = await import("@workspace/db");
+    const { eq, and, ne } = await import("drizzle-orm");
+
+    // 1. Verifikasi ownership — portalCustomerId dari session
+    const [rfq] = await db
+      .select({ id: mktRfqsTable.id, status: mktRfqsTable.status })
+      .from(mktRfqsTable)
+      .where(and(
+        eq(mktRfqsTable.id, rfqId),
+        eq(mktRfqsTable.portalCustomerId, portalCustomerId),
+      ))
+      .limit(1);
+
+    if (!rfq) return res.status(404).json({ ok: false, error: "RFQ tidak ditemukan" });
+
+    // 2. Ambil semua quotes yang bukan draft — buyer-safe fields, no token/commission/rank
+    const quotes = await db
+      .select({
+        id:               mktVendorQuotesTable.id,
+        status:           mktVendorQuotesTable.status,
+        quotationNumber:  mktVendorQuotesTable.quotationNumber,
+        quotationDate:    mktVendorQuotesTable.quotationDate,
+        paymentTerms:     mktVendorQuotesTable.paymentTerms,
+        incoterm:         mktVendorQuotesTable.incoterm,
+        deliveryLocation: mktVendorQuotesTable.deliveryLocation,
+        notes:            mktVendorQuotesTable.notes,
+        validUntil:       mktVendorQuotesTable.validUntil,
+        submittedAt:      mktVendorQuotesTable.submittedAt,
+        createdAt:        mktVendorQuotesTable.createdAt,
+        updatedAt:        mktVendorQuotesTable.updatedAt,
+        // Attachment — hanya nama dan ketersediaan, bukan URL langsung
+        attachmentAvailable: mktVendorQuotesTable.attachmentFilename,
+        attachmentName:      mktVendorQuotesTable.attachmentFilename,
+        // Vendor info dari suppliers
+        vendorId:    mktVendorQuotesTable.vendorId,
+        vendorName:  suppliersTable.name,
+        vendorPhone: suppliersTable.phone,
+        vendorEmail: suppliersTable.contactEmail,
+      })
+      .from(mktVendorQuotesTable)
+      .innerJoin(suppliersTable, eq(mktVendorQuotesTable.vendorId, suppliersTable.id))
+      .where(and(
+        eq(mktVendorQuotesTable.rfqId, rfqId),
+        ne(mktVendorQuotesTable.status, "draft"),
+      ));
+
+    // 3. Ambil lines untuk setiap quote (buyer-safe — no commission/vendor_catalog_item_id)
+    const quoteIds = quotes.map((q) => q.id);
+    let allLines: Array<{
+      quoteId: number;
+      rfqLineId: number;
+      itemName: string | null;
+      requestedQty: string | null;
+      offeredUnitPrice: string;
+      offeredQty: string;
+      subtotal: string;
+      currency: string | null;
+      minimumOrderQty: string | null;
+      validUntil: string | null;
+      leadTimeDays: number | null;
+      stockStatus: string | null;
+      notes: string | null;
+    }> = [];
+
+    if (quoteIds.length > 0) {
+      const { inArray } = await import("drizzle-orm");
+      allLines = await db
+        .select({
+          quoteId:          mktVendorQuoteLinesTable.quoteId,
+          rfqLineId:        mktVendorQuoteLinesTable.rfqLineId,
+          itemName:         mktRfqLinesTable.itemName,
+          requestedQty:     mktRfqLinesTable.requestedQty,
+          offeredUnitPrice: mktVendorQuoteLinesTable.offeredUnitPrice,
+          offeredQty:       mktVendorQuoteLinesTable.offeredQty,
+          subtotal:         mktVendorQuoteLinesTable.subtotal,
+          currency:         mktVendorQuoteLinesTable.currency,
+          minimumOrderQty:  mktVendorQuoteLinesTable.minimumOrderQty,
+          validUntil:       mktVendorQuoteLinesTable.validUntil,
+          leadTimeDays:     mktVendorQuoteLinesTable.leadTimeDays,
+          stockStatus:      mktVendorQuoteLinesTable.stockStatus,
+          notes:            mktVendorQuoteLinesTable.notes,
+        })
+        .from(mktVendorQuoteLinesTable)
+        .leftJoin(mktRfqLinesTable, eq(mktVendorQuoteLinesTable.rfqLineId, mktRfqLinesTable.id))
+        .where(inArray(mktVendorQuoteLinesTable.quoteId, quoteIds));
+    }
+
+    // 4. Gabungkan lines ke dalam masing-masing quote
+    const linesByQuote = new Map<number, typeof allLines>();
+    for (const line of allLines) {
+      const arr = linesByQuote.get(line.quoteId) ?? [];
+      arr.push(line);
+      linesByQuote.set(line.quoteId, arr);
+    }
+
+    const data = quotes.map((q) => {
+      const lines = linesByQuote.get(q.id) ?? [];
+      const totalAmount = lines.reduce((s, l) => s + Number(l.subtotal ?? 0), 0);
+      return {
+        id:               q.id,
+        vendorId:         q.vendorId,
+        vendorName:       q.vendorName,
+        vendorPhone:      q.vendorPhone,
+        vendorEmail:      q.vendorEmail,
+        status:           q.status,
+        quotationNumber:  q.quotationNumber,
+        quotationDate:    q.quotationDate,
+        paymentTerms:     q.paymentTerms,
+        incoterm:         q.incoterm,
+        deliveryLocation: q.deliveryLocation,
+        notes:            q.notes,
+        validUntil:       q.validUntil,
+        attachmentAvailable: q.attachmentAvailable != null,
+        attachmentName:   q.attachmentName,
+        submittedAt:      q.submittedAt,
+        createdAt:        q.createdAt,
+        updatedAt:        q.updatedAt,
+        totalAmount,
+        lines,
+      };
+    });
+
+    // Activity log — QUOTE_VIEWED (non-fatal)
+    const { logActivity } = await import("../lib/activityLog.js");
+    logActivity({
+      action:      "QUOTE_VIEWED",
+      description: `Buyer melihat ${data.length} quote untuk RFQ #${rfqId}`,
+      mktRfqId:    rfqId,
+      newValue:    { rfqId, quoteCount: data.length },
+    }).catch(() => {});
+
+    return res.json({ ok: true, rfqId, rfqStatus: rfq.status, count: data.length, data });
+  } catch (err: unknown) {
+    logger.error({ err, portalCustomerId, rfqId }, "[mktPortal] getQuotes error");
+    return res.status(500).json({ ok: false, error: "Gagal memuat daftar quotation" });
+  }
+});
+
+// ── POST /api/mkt/portal/rfqs/:id/select-vendor ──────────────────────────────
+// Buyer memilih vendor dari daftar quotation.
+// Menyimpan proposed_quote_id di mkt_rfqs — belum membuat PO.
+// Aturan:
+//   - Ownership dari session (portalCustomerId)
+//   - RFQ belum awarded / cancelled / customer_review (tidak boleh double-select)
+//   - Quote harus dimiliki oleh RFQ ini dan status = 'submitted'
+//   - Atomic: UPDATE mkt_rfqs ... RETURNING id
+//   - Activity log: VENDOR_SELECTED
+//   - Notification (non-fatal)
+router.post("/rfqs/:id/select-vendor", selectLimiter, validateBody(SelectVendorBodySchema), async (req: Request, res: Response) => {
+  const portalCustomerId = (req as PortalAuthReq).portalCustomerId;
+  const rfqId = Number(req.params["id"]);
+  if (!Number.isInteger(rfqId) || rfqId <= 0)
+    return res.status(400).json({ ok: false, error: "rfqId harus berupa integer positif" });
+
+  const { quoteId } = req.body as { quoteId: number };
+
+  try {
+    const { db, mktVendorQuotesTable, suppliersTable } = await import("@workspace/db");
+    const { eq, and, sql } = await import("drizzle-orm");
+
+    // 1. Verifikasi quote — harus milik RFQ ini dan status 'submitted'
+    //    Sekaligus validasi tenant isolation: quote.rfq_id harus = rfqId
+    const [quote] = await db
+      .select({
+        id:         mktVendorQuotesTable.id,
+        status:     mktVendorQuotesTable.status,
+        rfqId:      mktVendorQuotesTable.rfqId,
+        vendorId:   mktVendorQuotesTable.vendorId,
+        vendorName: suppliersTable.name,
+      })
+      .from(mktVendorQuotesTable)
+      .innerJoin(suppliersTable, eq(mktVendorQuotesTable.vendorId, suppliersTable.id))
+      .where(and(
+        eq(mktVendorQuotesTable.id, quoteId),
+        eq(mktVendorQuotesTable.rfqId, rfqId),
+      ))
+      .limit(1);
+
+    if (!quote) return res.status(404).json({ ok: false, error: "Quotation tidak ditemukan untuk RFQ ini" });
+    if (quote.status !== "submitted") {
+      return res.status(422).json({
+        ok: false,
+        error: `Hanya quotation dengan status 'submitted' yang dapat dipilih (current: ${quote.status})`,
+      });
+    }
+
+    // 2. Atomic UPDATE — hanya berhasil jika RFQ:
+    //    - dimiliki buyer ini (portal_customer_id = $portalCustomerId)
+    //    - belum di status akhir: awarded, cancelled, customer_review
+    const updateRows = await db.execute(sql`
+      UPDATE mkt_rfqs
+      SET    proposed_quote_id   = ${quoteId},
+             winner_selected_at  = NOW(),
+             winner_selected_by  = ${"portal:" + portalCustomerId}
+      WHERE  id                  = ${rfqId}
+        AND  portal_customer_id  = ${portalCustomerId}
+        AND  status NOT IN ('awarded', 'cancelled', 'customer_review')
+      RETURNING id, status, rfq_number, buyer_name, buyer_phone
+    `);
+    const updated = (((updateRows as any).rows ?? updateRows) as Record<string, unknown>[])[0];
+
+    if (!updated) {
+      // Cek apakah karena status tidak valid atau bukan milik buyer
+      const rfqRows = await db.execute(sql`
+        SELECT status FROM mkt_rfqs
+        WHERE id = ${rfqId} AND portal_customer_id = ${portalCustomerId}
+        LIMIT 1
+      `);
+      const rfqCheck = (((rfqRows as any).rows ?? rfqRows) as Record<string, unknown>[])[0];
+      if (!rfqCheck) return res.status(404).json({ ok: false, error: "RFQ tidak ditemukan" });
+      const s = rfqCheck["status"];
+      if (s === "customer_review")
+        return res.status(409).json({ ok: false, error: "RFQ sudah dikirim ke customer review. Tidak dapat mengubah vendor pilihan." });
+      if (s === "awarded")
+        return res.status(409).json({ ok: false, error: "RFQ sudah di-award. Tidak dapat memilih ulang." });
+      if (s === "cancelled")
+        return res.status(409).json({ ok: false, error: "RFQ sudah dibatalkan." });
+      return res.status(422).json({ ok: false, error: "Tidak dapat memilih vendor untuk RFQ ini" });
+    }
+
+    // 3. Activity log — VENDOR_SELECTED (non-fatal)
+    const { logActivity } = await import("../lib/activityLog.js");
+    logActivity({
+      action:      "VENDOR_SELECTED",
+      description: `Buyer memilih vendor ${quote.vendorName} (quoteId=${quoteId}) untuk RFQ #${rfqId}`,
+      mktRfqId:    rfqId,
+      newValue:    { rfqId, quoteId, vendorId: quote.vendorId, vendorName: quote.vendorName, selectedBy: `portal:${portalCustomerId}` },
+    }).catch(() => {});
+
+    // 4. Notification (non-fatal)
+    enqueueNotification({
+      eventType:     "mkt_vendor_selected" as any,
+      recipientType: "buyer",
+      recipientPhone: updated["buyer_phone"] ? String(updated["buyer_phone"]) : null,
+      rfqId,
+      payloadJson: {
+        rfqId,
+        rfqNumber:  String(updated["rfq_number"] ?? rfqId),
+        quoteId,
+        vendorId:   quote.vendorId,
+        vendorName: quote.vendorName,
+        selectedBy: `portal:${portalCustomerId}`,
+      },
+    }).catch(() => {});
+
+    logger.info({ rfqId, portalCustomerId, quoteId, vendorId: quote.vendorId }, "[mktPortal] selectVendor success");
+    return res.json({
+      ok: true,
+      data: {
+        rfqId,
+        rfqNumber:  String(updated["rfq_number"] ?? rfqId),
+        quoteId,
+        vendorId:   quote.vendorId,
+        vendorName: quote.vendorName,
+        selectedAt: updated["winner_selected_at"] ?? null,
+        message:    "Vendor berhasil dipilih. Gunakan /send-to-customer-review untuk mengirim ke customer.",
+      },
+    });
+  } catch (err: unknown) {
+    logger.error({ err, portalCustomerId, rfqId, quoteId }, "[mktPortal] selectVendor error");
+    return res.status(500).json({ ok: false, error: "Gagal memilih vendor" });
+  }
+});
+
+// ── POST /api/mkt/portal/rfqs/:id/send-to-customer-review ────────────────────
+// Buyer mengirim vendor terpilih ke Customer untuk review/persetujuan.
+// Prasyarat: proposed_quote_id sudah di-set via /select-vendor.
+// Efek: mkt_rfqs.status → 'customer_review'.
+// Aturan:
+//   - Ownership dari session
+//   - Harus sudah ada proposed_quote_id
+//   - RFQ status harus 'quoted' (bukan customer_review / awarded / cancelled)
+//   - Atomic transition via UPDATE ... RETURNING
+//   - Activity log: CUSTOMER_REVIEW_SENT
+//   - Notification (non-fatal)
+router.post("/rfqs/:id/send-to-customer-review", writeLimiter, validateBody(SendToCustomerReviewBodySchema), async (req: Request, res: Response) => {
+  const portalCustomerId = (req as PortalAuthReq).portalCustomerId;
+  const rfqId = Number(req.params["id"]);
+  if (!Number.isInteger(rfqId) || rfqId <= 0)
+    return res.status(400).json({ ok: false, error: "rfqId harus berupa integer positif" });
+
+  const { notes } = (req.body ?? {}) as { notes?: string };
+
+  try {
+    const { db } = await import("@workspace/db");
+    const { sql } = await import("drizzle-orm");
+
+    // Verifikasi kondisi sebelum update (untuk error message yang tepat)
+    const preRows = await db.execute(sql`
+      SELECT status, proposed_quote_id, rfq_number, buyer_name, buyer_phone
+      FROM   mkt_rfqs
+      WHERE  id = ${rfqId} AND portal_customer_id = ${portalCustomerId}
+      LIMIT  1
+    `);
+    const pre = (((preRows as any).rows ?? preRows) as Record<string, unknown>[])[0];
+    if (!pre) return res.status(404).json({ ok: false, error: "RFQ tidak ditemukan" });
+
+    if (!pre["proposed_quote_id"])
+      return res.status(422).json({ ok: false, error: "Pilih vendor terlebih dahulu sebelum mengirim ke customer review" });
+
+    if (pre["status"] === "customer_review")
+      return res.status(409).json({ ok: false, error: "RFQ sudah dalam status customer_review" });
+    if (pre["status"] === "awarded")
+      return res.status(409).json({ ok: false, error: "RFQ sudah di-award — tidak dapat diubah" });
+    if (pre["status"] === "cancelled")
+      return res.status(409).json({ ok: false, error: "RFQ sudah dibatalkan" });
+
+    // Atomic transition: quoted → customer_review
+    // Hanya berhasil jika status masih 'quoted' (bukan awarded/cancelled/customer_review)
+    const updateRows = await db.execute(sql`
+      UPDATE mkt_rfqs
+      SET    status     = 'customer_review',
+             updated_at = NOW()
+      WHERE  id                 = ${rfqId}
+        AND  portal_customer_id = ${portalCustomerId}
+        AND  proposed_quote_id  IS NOT NULL
+        AND  status NOT IN ('awarded', 'cancelled', 'customer_review')
+      RETURNING id, status, rfq_number, proposed_quote_id, buyer_name, buyer_phone
+    `);
+    const updated = (((updateRows as any).rows ?? updateRows) as Record<string, unknown>[])[0];
+    if (!updated)
+      return res.status(422).json({ ok: false, error: "Tidak dapat mengirim ke customer review — periksa status RFQ" });
+
+    // Activity log — CUSTOMER_REVIEW_SENT (non-fatal)
+    const { logActivity } = await import("../lib/activityLog.js");
+    logActivity({
+      action:      "CUSTOMER_REVIEW_SENT",
+      description: `RFQ #${rfqId} dikirim ke customer review dengan quoteId=${pre["proposed_quote_id"]}${notes ? ` — catatan: ${notes}` : ""}`,
+      mktRfqId:    rfqId,
+      newValue:    {
+        rfqId,
+        proposedQuoteId: pre["proposed_quote_id"],
+        sentBy:          `portal:${portalCustomerId}`,
+        notes:           notes ?? null,
+      },
+    }).catch(() => {});
+
+    // Notification (non-fatal)
+    enqueueNotification({
+      eventType:      "mkt_rfq_customer_review" as any,
+      recipientType:  "buyer",
+      recipientPhone: pre["buyer_phone"] ? String(pre["buyer_phone"]) : null,
+      rfqId,
+      payloadJson: {
+        rfqId,
+        rfqNumber:       String(pre["rfq_number"] ?? rfqId),
+        proposedQuoteId: pre["proposed_quote_id"],
+        sentBy:          `portal:${portalCustomerId}`,
+        notes:           notes ?? null,
+      },
+    }).catch(() => {});
+
+    // Admin in-app notification
+    void NotificationService.saveAndBroadcast("admin_notification", {
+      type:        "mkt_rfq_sent_to_customer_review",
+      orderNumber: String(pre["rfq_number"] ?? rfqId),
+      title:       "RFQ Dikirim ke Customer Review",
+      body:        `Buyer mengirim RFQ ${pre["rfq_number"]} ke customer review. Menunggu persetujuan customer.`,
+      targetRole:  "admin",
+      rfqId,
+      proposedQuoteId: pre["proposed_quote_id"],
+    });
+
+    logger.info({ rfqId, portalCustomerId, proposedQuoteId: pre["proposed_quote_id"] }, "[mktPortal] sendToCustomerReview success");
+    return res.json({
+      ok: true,
+      data: {
+        rfqId,
+        rfqNumber:       String(updated["rfq_number"] ?? rfqId),
+        status:          "customer_review",
+        proposedQuoteId: updated["proposed_quote_id"],
+        message:         "RFQ berhasil dikirim ke customer review. Customer akan menerima notifikasi.",
+      },
+    });
+  } catch (err: unknown) {
+    logger.error({ err, portalCustomerId, rfqId }, "[mktPortal] sendToCustomerReview error");
+    return res.status(500).json({ ok: false, error: "Gagal mengirim ke customer review" });
   }
 });
 
