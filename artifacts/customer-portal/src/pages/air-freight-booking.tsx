@@ -232,7 +232,7 @@ export default function AirFreightBookingPage() {
     if (!custPhone.trim()) { toast({ title: t("airFreight.validationPhone"),  variant: "destructive" }); return; }
     if (!commodity.trim()) { toast({ title: t("airFreight.validationCommodity"), variant: "destructive" }); return; }
     if (!originAirport.trim() || !destAirport.trim()) {
-      toast({ title: "Kode bandara asal & tujuan wajib diisi", variant: "destructive" }); return;
+      toast({ title: t("airFreightBooking.validationAirport", "Kode bandara asal & tujuan wajib diisi"), variant: "destructive" }); return;
     }
     if (chargeableWeight <= 0) {
       toast({ title: t("airFreight.validationWeightFill"), variant: "destructive" }); return;
@@ -425,21 +425,21 @@ export default function AirFreightBookingPage() {
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label className="text-xs text-gray-500 mb-1 block">Trade Type</Label>
+              <Label className="text-xs text-gray-500 mb-1 block">{t("airFreightBooking.tradeType", "Trade Type")}</Label>
               <Select value={tradeType} onValueChange={setTradeType}>
                 <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
                 <SelectContent>{TRADE_TYPE_OPTS.map(o => <SelectItem key={o.v} value={o.v}>{o.l}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div>
-              <Label className="text-xs text-gray-500 mb-1 block">Service Mode</Label>
+              <Label className="text-xs text-gray-500 mb-1 block">{t("airFreightBooking.serviceMode", "Service Mode")}</Label>
               <Select value={serviceMode} onValueChange={setServiceMode}>
                 <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
                 <SelectContent>{SERVICE_MODE_OPTS.map(o => <SelectItem key={o.v} value={o.v}>{o.l}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div>
-              <Label className="text-xs text-gray-500 mb-1 block">Service Level</Label>
+              <Label className="text-xs text-gray-500 mb-1 block">{t("airFreightBooking.serviceLevel", "Service Level")}</Label>
               <Select value={serviceLevel} onValueChange={setServiceLevel}>
                 <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
                 <SelectContent>{SERVICE_LEVEL_OPTS.map(o => <SelectItem key={o.v} value={o.v}>{o.l}</SelectItem>)}</SelectContent>
@@ -453,7 +453,7 @@ export default function AirFreightBookingPage() {
               </Select>
             </div>
             <div className="col-span-2">
-              <Label className="text-xs text-gray-500 mb-1 block">Incoterm</Label>
+              <Label className="text-xs text-gray-500 mb-1 block">{t("airFreightBooking.incoterm", "Incoterm")}</Label>
               <Select value={incoterm} onValueChange={setIncoterm}>
                 <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
                 <SelectContent>{INCOTERM_OPTS.map(o => <SelectItem key={o.v} value={o.v}>{o.l}</SelectItem>)}</SelectContent>
@@ -513,15 +513,15 @@ export default function AirFreightBookingPage() {
           {(totalGross > 0 || totalVol > 0) && (
             <div className="mt-4 rounded-xl bg-sky-50 border border-sky-100 p-3 grid grid-cols-3 gap-2 text-center">
               <div>
-                <p className="text-[10px] text-sky-600 font-semibold uppercase tracking-wide">Gross Weight</p>
+                <p className="text-[10px] text-sky-600 font-semibold uppercase tracking-wide">{t("airFreightBooking.grossWeight", "Gross Weight")}</p>
                 <p className="text-sm font-bold text-gray-900">{fmtNum(totalGross)} kg</p>
               </div>
               <div>
-                <p className="text-[10px] text-sky-600 font-semibold uppercase tracking-wide">Volumetrik (1:167)</p>
+                <p className="text-[10px] text-sky-600 font-semibold uppercase tracking-wide">{t("airFreightBooking.volumetric", "Volumetrik (1:167)")}</p>
                 <p className="text-sm font-bold text-gray-900">{fmtNum(totalVol)} kg</p>
               </div>
               <div className="bg-sky-600 rounded-xl p-1.5">
-                <p className="text-[10px] text-sky-100 font-semibold uppercase tracking-wide">Chargeable</p>
+                <p className="text-[10px] text-sky-100 font-semibold uppercase tracking-wide">{t("airFreightBooking.chargeable", "Chargeable")}</p>
                 <p className="text-sm font-bold text-white">{fmtNum(chargeableWeight)} kg</p>
               </div>
             </div>

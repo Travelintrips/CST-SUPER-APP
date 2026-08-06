@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { useLanguage } from "@/i18n/LanguageContext";
 import {
   User, Building2, Car, Briefcase, Upload, CheckCircle2,
   AlertCircle, Loader2, Eye, ArrowLeft, ArrowRight, LogOut,
@@ -76,11 +77,12 @@ interface OcrData {
 }
 
 function StepIndicator({ current }: { current: Step }) {
+  const { t } = useLanguage();
   const stepConfig = [
-    { id: "basic",        label: "Info Dasar" },
-    { id: "account-type", label: "Tipe Akun" },
-    { id: "type-specific",label: "Detail" },
-    { id: "review",       label: "Konfirmasi" },
+    { id: "basic",        label: t("onboarding.step.basicInfo", "Info Dasar") },
+    { id: "account-type", label: t("onboarding.step.accountType", "Tipe Akun") },
+    { id: "type-specific",label: t("onboarding.step.detail", "Detail") },
+    { id: "review",       label: t("onboarding.step.confirm", "Konfirmasi") },
   ];
   const idx = STEPS.indexOf(current);
   return (
@@ -110,6 +112,7 @@ function StepIndicator({ current }: { current: Step }) {
 
 export default function OnboardingPage() {
   const [, setLocation] = useLocation();
+  const { t } = useLanguage();
   const authed = isAuthenticated();
 
   const [step, setStep]             = useState<Step>("basic");
@@ -210,7 +213,7 @@ export default function OnboardingPage() {
       });
       const json = await res.json() as { ok?: boolean; data?: OcrData; error?: string };
       if (!res.ok || !json.ok) {
-        setOcrError(json.error ?? "OCR gagal. Coba upload ulang.");
+        setOcrError(json.error ?? t("onboarding.ocr.failed", "OCR gagal. Coba upload ulang."));
       } else {
         setOcrData(json.data ?? null);
         // Auto-fill form fields if empty
@@ -222,7 +225,7 @@ export default function OnboardingPage() {
         }
       }
     } catch {
-      setOcrError("Gagal menghubungi server OCR.");
+      setOcrError(t("onboarding.ocr.serverError", "Gagal menghubungi server OCR."));
     } finally {
       setOcrLoading(false);
     }
@@ -329,7 +332,7 @@ export default function OnboardingPage() {
       });
       const json = await res.json() as { ok?: boolean; status?: string; error?: string };
       if (!res.ok || !json.ok) {
-        setSubmitError(json.error ?? "Gagal menyimpan profil.");
+        setSubmitError(json.error ?? t("onboarding.submit.saveFailed", "Gagal menyimpan profil."));
         return;
       }
       if (json.status === "pending") {
@@ -338,7 +341,7 @@ export default function OnboardingPage() {
         setLocation("/dashboard");
       }
     } catch {
-      setSubmitError("Gagal menghubungi server.");
+      setSubmitError(t("onboarding.submit.serverError", "Gagal menghubungi server."));
     } finally {
       setSubmitting(false);
     }
@@ -355,8 +358,8 @@ export default function OnboardingPage() {
           <div className="inline-flex mb-4" style={{ background: "rgba(255,255,255,0.95)", borderRadius: "14px", padding: "10px 14px", boxShadow: "0 4px 16px rgba(15,23,42,0.10)" }}>
             <img src="/api/storage/public-objects/portal/images/logo.png" alt="Logo" className="h-8 w-auto object-contain" onError={(e) => { const el = e.currentTarget; const fb = el.src.replace("/api/storage/public-objects/portal/images/", "/images/"); if (el.src !== fb) el.src = fb; }} />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">Lengkapi Profil Anda</h1>
-          <p className="text-muted-foreground text-sm mt-1">Isi data berikut untuk mengaktifkan akun Anda</p>
+          <h1 className="text-2xl font-bold text-gray-900">{t("onboarding.header.title", "Lengkapi Profil Anda")}</h1>
+          <p className="text-muted-foreground text-sm mt-1">{t("onboarding.header.subtitle", "Isi data berikut untuk mengaktifkan akun Anda")}</p>
         </div>
 
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 sm:p-8">
@@ -365,12 +368,12 @@ export default function OnboardingPage() {
           {/* ── STEP 1: Basic Info ── */}
           {step === "basic" && (
             <form onSubmit={baseForm.handleSubmit(handleBaseNext)} className="space-y-5">
-              <h2 className="text-lg font-semibold mb-4">Informasi Dasar</h2>
+              <h2 className="text-lg font-semibold mb-4">{t("onboarding.basicInfo.title", "Informasi Dasar")}</h2>
 
               <div className="space-y-2">
-                <Label>Nama Lengkap <span className="text-red-500">*</span></Label>
+                <Label>{t("onboarding.basicInfo.fullName", "Nama Lengkap")} <span className="text-red-500">*</span></Label>
                 <Input
-                  placeholder="Sesuai KTP"
+                  placeholder={t("onboarding.basicInfo.fullNamePlaceholder", "Sesuai KTP")}
                   {...baseForm.register("fullName")}
                 />
                 {baseForm.formState.errors.fullName && (
@@ -379,7 +382,7 @@ export default function OnboardingPage() {
               </div>
 
               <div className="space-y-2">
-                <Label>Nomor HP / WhatsApp <span className="text-red-500">*</span></Label>
+                <Label>{t("onboarding.basicInfo.phone", "Nomor HP / WhatsApp")} <span className="text-red-500">*</span></Label>
                 <Input
                   placeholder="08xxxxxxxxxx"
                   type="tel"
@@ -391,9 +394,9 @@ export default function OnboardingPage() {
               </div>
 
               <div className="space-y-2">
-                <Label>Alamat Lengkap <span className="text-red-500">*</span></Label>
+                <Label>{t("onboarding.basicInfo.address", "Alamat Lengkap")} <span className="text-red-500">*</span></Label>
                 <Textarea
-                  placeholder="Jl. Contoh No. 123, Kelurahan, Kecamatan, Kota/Kabupaten"
+                  placeholder={t("onboarding.basicInfo.addressPlaceholder", "Jl. Contoh No. 123, Kelurahan, Kecamatan, Kota/Kabupaten")}
                   rows={3}
                   {...baseForm.register("address")}
                 />
@@ -406,7 +409,7 @@ export default function OnboardingPage() {
               <div className="space-y-2">
                 <Label className="flex items-center gap-2">
                   <Camera className="h-4 w-4" />
-                  Upload KTP (Opsional, untuk OCR otomatis)
+                  {t("onboarding.ktp.uploadLabel", "Upload KTP (Opsional, untuk OCR otomatis)")}
                 </Label>
                 <div
                   className="border-2 border-dashed border-gray-200 rounded-xl p-4 text-center cursor-pointer hover:border-primary/50 hover:bg-primary/5 transition-colors"
@@ -417,8 +420,8 @@ export default function OnboardingPage() {
                   ) : (
                     <div className="space-y-2">
                       <Upload className="h-8 w-8 text-muted-foreground mx-auto" />
-                      <p className="text-sm text-muted-foreground">Klik untuk upload foto KTP</p>
-                      <p className="text-xs text-muted-foreground">JPG, PNG, maks. 10MB</p>
+                      <p className="text-sm text-muted-foreground">{t("onboarding.ktp.clickToUpload", "Klik untuk upload foto KTP")}</p>
+                      <p className="text-xs text-muted-foreground">{t("onboarding.ktp.fileHint", "JPG, PNG, maks. 10MB")}</p>
                     </div>
                   )}
                 </div>
@@ -434,7 +437,7 @@ export default function OnboardingPage() {
                   <Alert className="border-blue-200 bg-blue-50">
                     <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />
                     <AlertDescription className="text-blue-800">
-                      Sedang membaca data KTP...
+                      {t("onboarding.ocr.reading", "Sedang membaca data KTP...")}
                     </AlertDescription>
                   </Alert>
                 )}
@@ -450,22 +453,22 @@ export default function OnboardingPage() {
                   <div className="rounded-xl bg-green-50 border border-green-200 p-4 space-y-2">
                     <div className="flex items-center gap-2 text-green-700 font-medium text-sm mb-2">
                       <CheckCircle2 className="h-4 w-4" />
-                      Data KTP berhasil dibaca — silakan periksa dan edit jika perlu
+                      {t("onboarding.ocr.success", "Data KTP berhasil dibaca — silakan periksa dan edit jika perlu")}
                     </div>
                     <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
                       {ocrData.nik     && <><span className="text-muted-foreground">NIK</span><span className="font-mono font-medium">{ocrData.nik}</span></>}
-                      {ocrData.name    && <><span className="text-muted-foreground">Nama</span><span>{ocrData.name}</span></>}
-                      {ocrData.birthDate && <><span className="text-muted-foreground">Tgl Lahir</span><span>{ocrData.birthDate}</span></>}
-                      {ocrData.gender  && <><span className="text-muted-foreground">JK</span><span>{ocrData.gender}</span></>}
-                      {ocrData.address && <><span className="text-muted-foreground col-span-2">Alamat KTP</span><span className="col-span-2 text-xs">{ocrData.address}</span></>}
+                      {ocrData.name    && <><span className="text-muted-foreground">{t("onboarding.ocr.name", "Nama")}</span><span>{ocrData.name}</span></>}
+                      {ocrData.birthDate && <><span className="text-muted-foreground">{t("onboarding.ocr.birthDate", "Tgl Lahir")}</span><span>{ocrData.birthDate}</span></>}
+                      {ocrData.gender  && <><span className="text-muted-foreground">{t("onboarding.ocr.gender", "JK")}</span><span>{ocrData.gender}</span></>}
+                      {ocrData.address && <><span className="text-muted-foreground col-span-2">{t("onboarding.ocr.ktpAddress", "Alamat KTP")}</span><span className="col-span-2 text-xs">{ocrData.address}</span></>}
                     </div>
-                    <p className="text-xs text-muted-foreground mt-1">Data di atas otomatis mengisi form. Anda bisa edit secara manual.</p>
+                    <p className="text-xs text-muted-foreground mt-1">{t("onboarding.ocr.autoFillNote", "Data di atas otomatis mengisi form. Anda bisa edit secara manual.")}</p>
                   </div>
                 )}
               </div>
 
               <Button type="submit" className="w-full gap-2">
-                Lanjut <ArrowRight className="h-4 w-4" />
+                {t("onboarding.next", "Lanjut")} <ArrowRight className="h-4 w-4" />
               </Button>
             </form>
           )}
@@ -473,7 +476,7 @@ export default function OnboardingPage() {
           {/* ── STEP 2: Account Type ── */}
           {step === "account-type" && (
             <div className="space-y-5">
-              <h2 className="text-lg font-semibold mb-4">Pilih Tipe Akun</h2>
+              <h2 className="text-lg font-semibold mb-4">{t("onboarding.accountType.title", "Pilih Tipe Akun")}</h2>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {ACCOUNT_TYPES.map(({ value, label, desc, icon: Icon }) => (
                   <button
@@ -493,7 +496,7 @@ export default function OnboardingPage() {
                       <p className="font-semibold text-sm">{label}</p>
                       <p className="text-xs text-muted-foreground mt-0.5">{desc}</p>
                       {value !== "customer" && (
-                        <Badge variant="secondary" className="mt-1 text-xs">Perlu persetujuan admin</Badge>
+                        <Badge variant="secondary" className="mt-1 text-xs">{t("onboarding.accountType.needsAdminApproval", "Perlu persetujuan admin")}</Badge>
                       )}
                     </div>
                   </button>
@@ -502,10 +505,10 @@ export default function OnboardingPage() {
 
               <div className="flex gap-3 pt-2">
                 <Button variant="outline" className="flex-1 gap-2" onClick={goBack}>
-                  <ArrowLeft className="h-4 w-4" /> Kembali
+                  <ArrowLeft className="h-4 w-4" /> {t("onboarding.back", "Kembali")}
                 </Button>
                 <Button className="flex-1 gap-2" onClick={handleAccountTypeNext}>
-                  Lanjut <ArrowRight className="h-4 w-4" />
+                  {t("onboarding.next", "Lanjut")} <ArrowRight className="h-4 w-4" />
                 </Button>
               </div>
             </div>
@@ -515,36 +518,36 @@ export default function OnboardingPage() {
           {step === "type-specific" && (
             <div className="space-y-5">
               <h2 className="text-lg font-semibold mb-4">
-                {accountType === "vendor"   && "Detail Vendor"}
-                {accountType === "driver"   && "Detail Driver"}
-                {accountType === "employee" && "Detail Karyawan"}
+                {accountType === "vendor"   && t("onboarding.vendorDetail.title", "Detail Vendor")}
+                {accountType === "driver"   && t("onboarding.driverDetail.title", "Detail Driver")}
+                {accountType === "employee" && t("onboarding.employeeDetail.title", "Detail Karyawan")}
               </h2>
 
               {/* VENDOR */}
               {accountType === "vendor" && (
                 <div className="space-y-4">
                   <div className="space-y-2">
-                    <Label>Nama Perusahaan <span className="text-red-500">*</span></Label>
-                    <Input placeholder="PT / CV / UD ..." {...vendorForm.register("companyName")} />
+                    <Label>{t("onboarding.vendor.companyName", "Nama Perusahaan")} <span className="text-red-500">*</span></Label>
+                    <Input placeholder={t("onboarding.vendor.companyNamePlaceholder", "PT / CV / UD ...")} {...vendorForm.register("companyName")} />
                     {vendorForm.formState.errors.companyName && <p className="text-sm text-red-500">{vendorForm.formState.errors.companyName.message}</p>}
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label>NIB (Opsional)</Label>
-                      <Input placeholder="Nomor Induk Berusaha" {...vendorForm.register("nib")} />
+                      <Label>{t("onboarding.vendor.nib", "NIB (Opsional)")}</Label>
+                      <Input placeholder={t("onboarding.vendor.nibPlaceholder", "Nomor Induk Berusaha")} {...vendorForm.register("nib")} />
                     </div>
                     <div className="space-y-2">
-                      <Label>NPWP (Opsional)</Label>
+                      <Label>{t("onboarding.vendor.npwp", "NPWP (Opsional)")}</Label>
                       <Input placeholder="XX.XXX.XXX.X-XXX.XXX" {...vendorForm.register("npwp")} />
                     </div>
                   </div>
                   <div className="space-y-2">
-                    <Label>Jenis Layanan Vendor <span className="text-red-500">*</span></Label>
-                    <Input placeholder="contoh: Trucking, Forwarding, Warehouse, dll." {...vendorForm.register("serviceType")} />
+                    <Label>{t("onboarding.vendor.serviceType", "Jenis Layanan Vendor")} <span className="text-red-500">*</span></Label>
+                    <Input placeholder={t("onboarding.vendor.serviceTypePlaceholder", "contoh: Trucking, Forwarding, Warehouse, dll.")} {...vendorForm.register("serviceType")} />
                     {vendorForm.formState.errors.serviceType && <p className="text-sm text-red-500">{vendorForm.formState.errors.serviceType.message}</p>}
                   </div>
                   <div className="space-y-2">
-                    <Label className="flex items-center gap-2"><FileText className="h-4 w-4" />Upload Dokumen Legalitas (Opsional)</Label>
+                    <Label className="flex items-center gap-2"><FileText className="h-4 w-4" />{t("onboarding.vendor.legalityDoc", "Upload Dokumen Legalitas (Opsional)")}</Label>
                     <div className="border-2 border-dashed border-gray-200 rounded-xl p-4 text-center cursor-pointer hover:border-primary/50 hover:bg-primary/5 transition-colors"
                       onClick={() => legalityInputRef.current?.click()}>
                       {legalityFile ? (
@@ -555,7 +558,7 @@ export default function OnboardingPage() {
                       ) : (
                         <div className="space-y-1">
                           <Upload className="h-6 w-6 text-muted-foreground mx-auto" />
-                          <p className="text-sm text-muted-foreground">NIB, Akta Perusahaan, dll.</p>
+                          <p className="text-sm text-muted-foreground">{t("onboarding.vendor.legalityDocHint", "NIB, Akta Perusahaan, dll.")}</p>
                         </div>
                       )}
                     </div>
@@ -568,36 +571,36 @@ export default function OnboardingPage() {
               {accountType === "driver" && (
                 <div className="space-y-4">
                   <div className="space-y-2">
-                    <Label>Nomor SIM <span className="text-red-500">*</span></Label>
-                    <Input placeholder="Nomor SIM sesuai kartu" {...driverForm.register("licenseNumber")} />
+                    <Label>{t("onboarding.driver.licenseNumber", "Nomor SIM")} <span className="text-red-500">*</span></Label>
+                    <Input placeholder={t("onboarding.driver.licenseNumberPlaceholder", "Nomor SIM sesuai kartu")} {...driverForm.register("licenseNumber")} />
                     {driverForm.formState.errors.licenseNumber && <p className="text-sm text-red-500">{driverForm.formState.errors.licenseNumber.message}</p>}
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label>Jenis Kendaraan <span className="text-red-500">*</span></Label>
-                      <Input placeholder="Motor / Mobil / Truk / dll." {...driverForm.register("vehicleType")} />
+                      <Label>{t("onboarding.driver.vehicleType", "Jenis Kendaraan")} <span className="text-red-500">*</span></Label>
+                      <Input placeholder={t("onboarding.driver.vehicleTypePlaceholder", "Motor / Mobil / Truk / dll.")} {...driverForm.register("vehicleType")} />
                       {driverForm.formState.errors.vehicleType && <p className="text-sm text-red-500">{driverForm.formState.errors.vehicleType.message}</p>}
                     </div>
                     <div className="space-y-2">
-                      <Label>Nomor Plat <span className="text-red-500">*</span></Label>
+                      <Label>{t("onboarding.driver.plateNumber", "Nomor Plat")} <span className="text-red-500">*</span></Label>
                       <Input placeholder="B 1234 ABC" {...driverForm.register("plateNumber")} />
                       {driverForm.formState.errors.plateNumber && <p className="text-sm text-red-500">{driverForm.formState.errors.plateNumber.message}</p>}
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label className="flex items-center gap-1"><FileText className="h-3.5 w-3.5" />Upload SIM</Label>
+                      <Label className="flex items-center gap-1"><FileText className="h-3.5 w-3.5" />{t("onboarding.driver.uploadSim", "Upload SIM")}</Label>
                       <div className="border-2 border-dashed border-gray-200 rounded-xl p-3 text-center cursor-pointer hover:border-primary/50 transition-colors" onClick={() => simInputRef.current?.click()}>
                         {simFile ? <p className="text-xs text-green-700 flex items-center justify-center gap-1"><CheckCircle2 className="h-3.5 w-3.5" />{simFile.name.slice(0, 16)}</p>
-                          : <><Upload className="h-5 w-5 text-muted-foreground mx-auto mb-1" /><p className="text-xs text-muted-foreground">Upload SIM</p></>}
+                          : <><Upload className="h-5 w-5 text-muted-foreground mx-auto mb-1" /><p className="text-xs text-muted-foreground">{t("onboarding.driver.uploadSimHint", "Upload SIM")}</p></>}
                       </div>
                       <input ref={simInputRef} type="file" accept="image/*" className="hidden" onChange={e => setSimFile(e.target.files?.[0] ?? null)} />
                     </div>
                     <div className="space-y-2">
-                      <Label className="flex items-center gap-1"><FileText className="h-3.5 w-3.5" />Upload STNK</Label>
+                      <Label className="flex items-center gap-1"><FileText className="h-3.5 w-3.5" />{t("onboarding.driver.uploadStnk", "Upload STNK")}</Label>
                       <div className="border-2 border-dashed border-gray-200 rounded-xl p-3 text-center cursor-pointer hover:border-primary/50 transition-colors" onClick={() => stnkInputRef.current?.click()}>
                         {stnkFile ? <p className="text-xs text-green-700 flex items-center justify-center gap-1"><CheckCircle2 className="h-3.5 w-3.5" />{stnkFile.name.slice(0, 16)}</p>
-                          : <><Upload className="h-5 w-5 text-muted-foreground mx-auto mb-1" /><p className="text-xs text-muted-foreground">Upload STNK</p></>}
+                          : <><Upload className="h-5 w-5 text-muted-foreground mx-auto mb-1" /><p className="text-xs text-muted-foreground">{t("onboarding.driver.uploadStnkHint", "Upload STNK")}</p></>}
                       </div>
                       <input ref={stnkInputRef} type="file" accept="image/*" className="hidden" onChange={e => setStnkFile(e.target.files?.[0] ?? null)} />
                     </div>
@@ -609,28 +612,28 @@ export default function OnboardingPage() {
               {accountType === "employee" && (
                 <div className="space-y-4">
                   <div className="space-y-2">
-                    <Label>Nama Perusahaan <span className="text-red-500">*</span></Label>
-                    <Input placeholder="Nama perusahaan tempat bekerja" {...employeeForm.register("companyName")} />
+                    <Label>{t("onboarding.employee.companyName", "Nama Perusahaan")} <span className="text-red-500">*</span></Label>
+                    <Input placeholder={t("onboarding.employee.companyNamePlaceholder", "Nama perusahaan tempat bekerja")} {...employeeForm.register("companyName")} />
                     {employeeForm.formState.errors.companyName && <p className="text-sm text-red-500">{employeeForm.formState.errors.companyName.message}</p>}
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label>Cabang (Opsional)</Label>
-                      <Input placeholder="Nama cabang" {...employeeForm.register("branch")} />
+                      <Label>{t("onboarding.employee.branch", "Cabang (Opsional)")}</Label>
+                      <Input placeholder={t("onboarding.employee.branchPlaceholder", "Nama cabang")} {...employeeForm.register("branch")} />
                     </div>
                     <div className="space-y-2">
-                      <Label>Departemen (Opsional)</Label>
-                      <Input placeholder="Nama departemen" {...employeeForm.register("department")} />
+                      <Label>{t("onboarding.employee.department", "Departemen (Opsional)")}</Label>
+                      <Input placeholder={t("onboarding.employee.departmentPlaceholder", "Nama departemen")} {...employeeForm.register("department")} />
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label>Divisi (Opsional)</Label>
-                      <Input placeholder="Nama divisi" {...employeeForm.register("division")} />
+                      <Label>{t("onboarding.employee.division", "Divisi (Opsional)")}</Label>
+                      <Input placeholder={t("onboarding.employee.divisionPlaceholder", "Nama divisi")} {...employeeForm.register("division")} />
                     </div>
                     <div className="space-y-2">
-                      <Label>Jabatan <span className="text-red-500">*</span></Label>
-                      <Input placeholder="Jabatan / Posisi" {...employeeForm.register("position")} />
+                      <Label>{t("onboarding.employee.position", "Jabatan")} <span className="text-red-500">*</span></Label>
+                      <Input placeholder={t("onboarding.employee.positionPlaceholder", "Jabatan / Posisi")} {...employeeForm.register("position")} />
                       {employeeForm.formState.errors.position && <p className="text-sm text-red-500">{employeeForm.formState.errors.position.message}</p>}
                     </div>
                   </div>
@@ -639,10 +642,10 @@ export default function OnboardingPage() {
 
               <div className="flex gap-3 pt-2">
                 <Button variant="outline" className="flex-1 gap-2" onClick={goBack}>
-                  <ArrowLeft className="h-4 w-4" /> Kembali
+                  <ArrowLeft className="h-4 w-4" /> {t("onboarding.back", "Kembali")}
                 </Button>
                 <Button className="flex-1 gap-2" onClick={handleTypeSpecificNext}>
-                  Lanjut <ArrowRight className="h-4 w-4" />
+                  {t("onboarding.next", "Lanjut")} <ArrowRight className="h-4 w-4" />
                 </Button>
               </div>
             </div>
@@ -651,7 +654,7 @@ export default function OnboardingPage() {
           {/* ── STEP 4: Review ── */}
           {step === "review" && (
             <div className="space-y-5">
-              <h2 className="text-lg font-semibold mb-4">Konfirmasi Data</h2>
+              <h2 className="text-lg font-semibold mb-4">{t("onboarding.review.title", "Konfirmasi Data")}</h2>
 
               {submitError && (
                 <Alert variant="destructive">
@@ -661,41 +664,41 @@ export default function OnboardingPage() {
               )}
 
               <div className="rounded-xl border border-gray-100 bg-gray-50 divide-y divide-gray-100 text-sm">
-                <div className="px-4 py-3 font-semibold text-xs uppercase text-muted-foreground tracking-wide">Informasi Dasar</div>
-                <Row label="Nama Lengkap" value={baseData?.fullName} />
-                <Row label="Nomor HP" value={baseData?.phone} />
-                <Row label="Alamat" value={baseData?.address} />
-                <Row label="KTP" value={ktpFile ? `✅ ${ktpFile.name}` : "Tidak diupload"} />
-                {ocrData?.nik && <Row label="NIK (OCR)" value={ocrData.nik} />}
+                <div className="px-4 py-3 font-semibold text-xs uppercase text-muted-foreground tracking-wide">{t("onboarding.review.basicInfo", "Informasi Dasar")}</div>
+                <Row label={t("onboarding.review.fullName", "Nama Lengkap")} value={baseData?.fullName} />
+                <Row label={t("onboarding.review.phone", "Nomor HP")} value={baseData?.phone} />
+                <Row label={t("onboarding.review.address", "Alamat")} value={baseData?.address} />
+                <Row label={t("onboarding.review.ktp", "KTP")} value={ktpFile ? `✅ ${ktpFile.name}` : t("onboarding.review.notUploaded", "Tidak diupload")} />
+                {ocrData?.nik && <Row label={t("onboarding.review.nikOcr", "NIK (OCR)")} value={ocrData.nik} />}
 
-                <div className="px-4 py-3 font-semibold text-xs uppercase text-muted-foreground tracking-wide">Tipe Akun</div>
-                <Row label="Tipe" value={ACCOUNT_TYPES.find(a => a.value === accountType)?.label ?? accountType} />
+                <div className="px-4 py-3 font-semibold text-xs uppercase text-muted-foreground tracking-wide">{t("onboarding.review.accountType", "Tipe Akun")}</div>
+                <Row label={t("onboarding.review.type", "Tipe")} value={ACCOUNT_TYPES.find(a => a.value === accountType)?.label ?? accountType} />
 
                 {accountType === "vendor" && vendorData && <>
-                  <div className="px-4 py-3 font-semibold text-xs uppercase text-muted-foreground tracking-wide">Data Vendor</div>
-                  <Row label="Perusahaan" value={vendorData.companyName} />
+                  <div className="px-4 py-3 font-semibold text-xs uppercase text-muted-foreground tracking-wide">{t("onboarding.review.vendorData", "Data Vendor")}</div>
+                  <Row label={t("onboarding.review.company", "Perusahaan")} value={vendorData.companyName} />
                   <Row label="NIB" value={vendorData.nib || "-"} />
                   <Row label="NPWP" value={vendorData.npwp || "-"} />
-                  <Row label="Jenis Layanan" value={vendorData.serviceType} />
-                  <Row label="Dok. Legalitas" value={legalityFile ? `✅ ${legalityFile.name}` : "Tidak diupload"} />
+                  <Row label={t("onboarding.review.serviceType", "Jenis Layanan")} value={vendorData.serviceType} />
+                  <Row label={t("onboarding.review.legalityDoc", "Dok. Legalitas")} value={legalityFile ? `✅ ${legalityFile.name}` : t("onboarding.review.notUploaded", "Tidak diupload")} />
                 </>}
 
                 {accountType === "driver" && driverData && <>
-                  <div className="px-4 py-3 font-semibold text-xs uppercase text-muted-foreground tracking-wide">Data Driver</div>
-                  <Row label="No. SIM" value={driverData.licenseNumber} />
-                  <Row label="Kendaraan" value={driverData.vehicleType} />
-                  <Row label="Plat" value={driverData.plateNumber} />
-                  <Row label="SIM" value={simFile ? `✅ ${simFile.name}` : "Tidak diupload"} />
-                  <Row label="STNK" value={stnkFile ? `✅ ${stnkFile.name}` : "Tidak diupload"} />
+                  <div className="px-4 py-3 font-semibold text-xs uppercase text-muted-foreground tracking-wide">{t("onboarding.review.driverData", "Data Driver")}</div>
+                  <Row label={t("onboarding.review.licenseNumber", "No. SIM")} value={driverData.licenseNumber} />
+                  <Row label={t("onboarding.review.vehicle", "Kendaraan")} value={driverData.vehicleType} />
+                  <Row label={t("onboarding.review.plate", "Plat")} value={driverData.plateNumber} />
+                  <Row label="SIM" value={simFile ? `✅ ${simFile.name}` : t("onboarding.review.notUploaded", "Tidak diupload")} />
+                  <Row label="STNK" value={stnkFile ? `✅ ${stnkFile.name}` : t("onboarding.review.notUploaded", "Tidak diupload")} />
                 </>}
 
                 {accountType === "employee" && employeeData && <>
-                  <div className="px-4 py-3 font-semibold text-xs uppercase text-muted-foreground tracking-wide">Data Karyawan</div>
-                  <Row label="Perusahaan" value={employeeData.companyName} />
-                  <Row label="Jabatan" value={employeeData.position} />
-                  {employeeData.branch     && <Row label="Cabang" value={employeeData.branch} />}
-                  {employeeData.department && <Row label="Departemen" value={employeeData.department} />}
-                  {employeeData.division   && <Row label="Divisi" value={employeeData.division} />}
+                  <div className="px-4 py-3 font-semibold text-xs uppercase text-muted-foreground tracking-wide">{t("onboarding.review.employeeData", "Data Karyawan")}</div>
+                  <Row label={t("onboarding.review.company", "Perusahaan")} value={employeeData.companyName} />
+                  <Row label={t("onboarding.review.position", "Jabatan")} value={employeeData.position} />
+                  {employeeData.branch     && <Row label={t("onboarding.review.branch", "Cabang")} value={employeeData.branch} />}
+                  {employeeData.department && <Row label={t("onboarding.review.department", "Departemen")} value={employeeData.department} />}
+                  {employeeData.division   && <Row label={t("onboarding.review.division", "Divisi")} value={employeeData.division} />}
                 </>}
               </div>
 
@@ -703,17 +706,17 @@ export default function OnboardingPage() {
                 <Alert className="border-amber-200 bg-amber-50">
                   <Eye className="h-4 w-4 text-amber-500" />
                   <AlertDescription className="text-amber-800">
-                    Akun <strong>{ACCOUNT_TYPES.find(a => a.value === accountType)?.label}</strong> akan masuk status <strong>Pending Review</strong> dan perlu persetujuan admin sebelum bisa digunakan.
+                    {t("onboarding.review.pendingNotice.prefix", "Akun")} <strong>{ACCOUNT_TYPES.find(a => a.value === accountType)?.label}</strong> {t("onboarding.review.pendingNotice.suffix", "akan masuk status")} <strong>{t("onboarding.review.pendingReview", "Pending Review")}</strong> {t("onboarding.review.pendingNotice.detail", "dan perlu persetujuan admin sebelum bisa digunakan.")}
                   </AlertDescription>
                 </Alert>
               )}
 
               <div className="flex gap-3 pt-2">
                 <Button variant="outline" className="flex-1 gap-2" onClick={goBack} disabled={submitting}>
-                  <ArrowLeft className="h-4 w-4" /> Kembali
+                  <ArrowLeft className="h-4 w-4" /> {t("onboarding.back", "Kembali")}
                 </Button>
                 <Button className="flex-1 gap-2" onClick={handleSubmit} disabled={submitting}>
-                  {submitting ? <><Loader2 className="h-4 w-4 animate-spin" />Menyimpan...</> : <><CheckCircle2 className="h-4 w-4" />Simpan & Lanjut</>}
+                  {submitting ? <><Loader2 className="h-4 w-4 animate-spin" />{t("onboarding.review.saving", "Menyimpan...")}</> : <><CheckCircle2 className="h-4 w-4" />{t("onboarding.review.saveAndContinue", "Simpan & Lanjut")}</>}
                 </Button>
               </div>
 
@@ -722,7 +725,7 @@ export default function OnboardingPage() {
                 className="w-full text-xs text-muted-foreground hover:text-foreground flex items-center justify-center gap-1 mt-2"
                 onClick={() => { removeAuthToken(); setLocation("/login"); }}
               >
-                <LogOut className="h-3 w-3" /> Keluar dari akun ini
+                <LogOut className="h-3 w-3" /> {t("onboarding.review.logout", "Keluar dari akun ini")}
               </button>
             </div>
           )}

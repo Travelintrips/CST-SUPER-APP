@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useParams } from "wouter";
 import { resolveServiceCategory } from "@workspace/logistics-constants";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 type LightboxItem = { url: string; title: string; subtitle?: string };
 
@@ -14,6 +15,7 @@ function Lightbox({
   onNavigate: (i: number) => void;
   onClose: () => void;
 }) {
+  const { t } = useLanguage();
   const overlayRef = useRef<HTMLDivElement>(null);
   const touchStartX = useRef<number | null>(null);
   const touchStartY = useRef<number | null>(null);
@@ -63,7 +65,7 @@ function Lightbox({
         <button
           onClick={() => onNavigate(index - 1)}
           className="absolute left-3 top-1/2 -translate-y-1/2 z-10 w-10 h-10 rounded-full bg-white/20 hover:bg-white/40 text-white text-xl flex items-center justify-center transition"
-          aria-label="Foto sebelumnya"
+          aria-label={t("vendorJob.lightbox.prevPhoto", "Foto sebelumnya")}
         >‹</button>
       )}
       {/* Next */}
@@ -71,7 +73,7 @@ function Lightbox({
         <button
           onClick={() => onNavigate(index + 1)}
           className="absolute right-3 top-1/2 -translate-y-1/2 z-10 w-10 h-10 rounded-full bg-white/20 hover:bg-white/40 text-white text-xl flex items-center justify-center transition"
-          aria-label="Foto berikutnya"
+          aria-label={t("vendorJob.lightbox.nextPhoto", "Foto berikutnya")}
         >›</button>
       )}
 
@@ -80,7 +82,7 @@ function Lightbox({
         <button
           onClick={onClose}
           className="absolute -top-3 -right-3 z-10 w-8 h-8 rounded-full bg-white/90 text-slate-800 text-lg font-bold leading-none flex items-center justify-center shadow-lg hover:bg-white"
-          aria-label="Tutup"
+          aria-label={t("vendorJob.lightbox.close", "Tutup")}
         >×</button>
 
         <img
@@ -157,13 +159,6 @@ type JobData = {
   progress: ProgressEntry[];
 };
 
-const PROGRESS_OPTIONS = [
-  { value: "Pickup Scheduled", label: "📅 Pickup Dijadwalkan" },
-  { value: "In Progress", label: "🚛 Sedang Diproses / Dalam Perjalanan" },
-  { value: "Completed", label: "✅ Selesai" },
-  { value: "Problem", label: "⚠️ Ada Masalah / Perlu Perhatian" },
-];
-
 function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
   if (!value) return null;
   return (
@@ -189,6 +184,7 @@ const inputCls = "w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-s
 const textareaCls = "w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 transition resize-none";
 
 export default function VendorJobPage() {
+  const { t } = useLanguage();
   const { token } = useParams<{ token: string }>();
   const [data, setData] = useState<JobData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -199,7 +195,7 @@ export default function VendorJobPage() {
     if (!data) return [];
     const podPhotos: LightboxItem[] = data.podFiles
       .filter(f => f.publicUrl)
-      .map(f => ({ url: f.publicUrl!, title: f.name, subtitle: "Foto POD" }));
+      .map(f => ({ url: f.publicUrl!, title: f.name, subtitle: t("vendorJob.podPhoto", "Foto POD") }));
     const progressPhotos: LightboxItem[] = [...data.progress]
       .reverse()
       .filter(p => p.photo_url)
@@ -211,7 +207,7 @@ export default function VendorJobPage() {
           (p.notes ? ` · ${p.notes}` : ""),
       }));
     return [...podPhotos, ...progressPhotos];
-  }, [data]);
+  }, [data, t]);
 
   const lightboxIdxByUrl = useMemo(
     () => new Map(lightboxItems.map((item, i) => [item.url, i])),
@@ -248,12 +244,12 @@ export default function VendorJobPage() {
     fetch(`/api/vendor-job/${token}`)
       .then(async r => {
         const d = await r.json() as JobData & { error?: string };
-        if (!r.ok) throw new Error(d.error ?? "Terjadi kesalahan");
+        if (!r.ok) throw new Error(d.error ?? t("vendorJob.errorGeneric", "Terjadi kesalahan"));
         setData(d);
       })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [token]);
+  }, [token, t]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -265,13 +261,13 @@ export default function VendorJobPage() {
     // Validate required fields by category
     const required: string[] = [];
     if (category === "trucking") {
-      if (!acceptValues.driverName?.trim()) required.push("Nama Driver");
-      if (!acceptValues.driverPhone?.trim()) required.push("No. HP Driver");
-      if (!acceptValues.vehiclePlate?.trim()) required.push("Plat Nomor");
+      if (!acceptValues.driverName?.trim()) required.push(t("vendorJob.field.driverName", "Nama Driver"));
+      if (!acceptValues.driverPhone?.trim()) required.push(t("vendorJob.field.driverPhone", "No. HP Driver"));
+      if (!acceptValues.vehiclePlate?.trim()) required.push(t("vendorJob.field.vehiclePlate", "Plat Nomor"));
     } else if (category === "freight") {
-      if (!acceptValues.carrier?.trim()) required.push("Carrier");
+      if (!acceptValues.carrier?.trim()) required.push(t("vendorJob.field.carrier", "Carrier"));
     }
-    if (required.length) { setAcceptError(`Field wajib: ${required.join(", ")}`); return; }
+    if (required.length) { setAcceptError(`${t("vendorJob.requiredFields", "Field wajib")}: ${required.join(", ")}`); return; }
 
     setAccepting(true); setAcceptError(null);
     try {
@@ -280,7 +276,7 @@ export default function VendorJobPage() {
         body: JSON.stringify(acceptValues),
       });
       const d = await res.json() as { ok?: boolean; error?: string; message?: string };
-      if (!res.ok) throw new Error(d.error ?? "Gagal");
+      if (!res.ok) throw new Error(d.error ?? t("vendorJob.errorFailed", "Gagal"));
       setShowAcceptForm(false);
       fetchData();
     } catch (e: unknown) {
@@ -338,11 +334,18 @@ export default function VendorJobPage() {
     }
   };
 
+  const PROGRESS_OPTIONS = [
+    { value: "Pickup Scheduled", label: `📅 ${t("vendorJob.progress.pickupScheduled", "Pickup Dijadwalkan")}` },
+    { value: "In Progress", label: `🚛 ${t("vendorJob.progress.inProgress", "Sedang Diproses / Dalam Perjalanan")}` },
+    { value: "Completed", label: `✅ ${t("vendorJob.progress.completed", "Selesai")}` },
+    { value: "Problem", label: `⚠️ ${t("vendorJob.progress.problem", "Ada Masalah / Perlu Perhatian")}` },
+  ];
+
   if (loading) return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center">
       <div className="flex flex-col items-center gap-3 text-slate-500">
         <div className="h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
-        <span className="text-sm">Memuat job order...</span>
+        <span className="text-sm">{t("vendorJob.loading", "Memuat job order...")}</span>
       </div>
     </div>
   );
@@ -351,9 +354,9 @@ export default function VendorJobPage() {
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-md p-8 max-w-md w-full text-center">
         <div className="text-5xl mb-4">⚠️</div>
-        <h2 className="text-lg font-semibold text-slate-800 mb-2">Link Tidak Valid</h2>
+        <h2 className="text-lg font-semibold text-slate-800 mb-2">{t("vendorJob.invalidLink", "Link Tidak Valid")}</h2>
         <p className="text-sm text-slate-500">{error}</p>
-        <p className="text-xs text-slate-400 mt-3">Hubungi tim kami jika ada kendala.</p>
+        <p className="text-xs text-slate-400 mt-3">{t("vendorJob.contactTeam", "Hubungi tim kami jika ada kendala.")}</p>
       </div>
     </div>
   );
@@ -369,13 +372,13 @@ export default function VendorJobPage() {
   const canUploadPod = isAccepted || data.status === "completed";
 
   const STATUS_LABEL: Record<string, { text: string; color: string }> = {
-    pending:          { text: "⏳ Menunggu Respon", color: "bg-amber-50 border-amber-200 text-amber-800" },
-    accepted:         { text: "✅ Diterima", color: "bg-green-50 border-green-200 text-green-800" },
-    rejected:         { text: "❌ Ditolak", color: "bg-red-50 border-red-200 text-red-800" },
-    in_progress:      { text: "🚛 Dalam Proses", color: "bg-blue-50 border-blue-200 text-blue-800" },
-    pickup_scheduled: { text: "📅 Pickup Dijadwalkan", color: "bg-indigo-50 border-indigo-200 text-indigo-800" },
-    completed:        { text: "🎉 Selesai", color: "bg-emerald-50 border-emerald-200 text-emerald-800" },
-    problem:          { text: "⚠️ Ada Masalah", color: "bg-orange-50 border-orange-200 text-orange-800" },
+    pending:          { text: `⏳ ${t("vendorJob.status.pending", "Menunggu Respon")}`, color: "bg-amber-50 border-amber-200 text-amber-800" },
+    accepted:         { text: `✅ ${t("vendorJob.status.accepted", "Diterima")}`, color: "bg-green-50 border-green-200 text-green-800" },
+    rejected:         { text: `❌ ${t("vendorJob.status.rejected", "Ditolak")}`, color: "bg-red-50 border-red-200 text-red-800" },
+    in_progress:      { text: `🚛 ${t("vendorJob.status.inProgress", "Dalam Proses")}`, color: "bg-blue-50 border-blue-200 text-blue-800" },
+    pickup_scheduled: { text: `📅 ${t("vendorJob.status.pickupScheduled", "Pickup Dijadwalkan")}`, color: "bg-indigo-50 border-indigo-200 text-indigo-800" },
+    completed:        { text: `🎉 ${t("vendorJob.status.completed", "Selesai")}`, color: "bg-emerald-50 border-emerald-200 text-emerald-800" },
+    problem:          { text: `⚠️ ${t("vendorJob.status.problem", "Ada Masalah")}`, color: "bg-orange-50 border-orange-200 text-orange-800" },
   };
 
   const statusInfo = STATUS_LABEL[data.status] ?? { text: data.status, color: "bg-slate-50 border-slate-200 text-slate-700" };
@@ -397,8 +400,8 @@ export default function VendorJobPage() {
           <div className="flex items-start gap-3">
             <div className="text-3xl flex-shrink-0">🚚</div>
             <div className="flex-1 min-w-0">
-              <h1 className="text-xl font-bold text-slate-800">Job Order Vendor</h1>
-              {data.vendorName && <p className="text-sm text-slate-500 mt-0.5">Vendor: {data.vendorName}</p>}
+              <h1 className="text-xl font-bold text-slate-800">{t("vendorJob.title", "Job Order Vendor")}</h1>
+              {data.vendorName && <p className="text-sm text-slate-500 mt-0.5">{t("vendorJob.vendorLabel", "Vendor")}: {data.vendorName}</p>}
             </div>
           </div>
 
@@ -407,32 +410,32 @@ export default function VendorJobPage() {
           </div>
 
           <div className="mt-4 bg-slate-50 rounded-xl px-4 py-3 space-y-2">
-            <InfoRow label="No. Order" value={<span className="font-mono">{data.order.orderNumber}</span>} />
-            <InfoRow label="Layanan" value={data.order.shipmentType} />
-            <InfoRow label="Rute" value={`${data.order.origin} → ${data.order.destination}`} />
-            {data.order.commodity && <InfoRow label="Komoditi" value={data.order.commodity} />}
-            {data.order.grossWeight && <InfoRow label="Berat" value={`${data.order.grossWeight} kg`} />}
-            {data.order.requiredDate && <InfoRow label="Tanggal Dibutuhkan" value={data.order.requiredDate} />}
-            {data.order.notes && <InfoRow label="Catatan" value={data.order.notes} />}
+            <InfoRow label={t("vendorJob.info.orderNo", "No. Order")} value={<span className="font-mono">{data.order.orderNumber}</span>} />
+            <InfoRow label={t("vendorJob.info.service", "Layanan")} value={data.order.shipmentType} />
+            <InfoRow label={t("vendorJob.info.route", "Rute")} value={`${data.order.origin} → ${data.order.destination}`} />
+            {data.order.commodity && <InfoRow label={t("vendorJob.info.commodity", "Komoditi")} value={data.order.commodity} />}
+            {data.order.grossWeight && <InfoRow label={t("vendorJob.info.weight", "Berat")} value={`${data.order.grossWeight} kg`} />}
+            {data.order.requiredDate && <InfoRow label={t("vendorJob.info.requiredDate", "Tanggal Dibutuhkan")} value={data.order.requiredDate} />}
+            {data.order.notes && <InfoRow label={t("vendorJob.info.notes", "Catatan")} value={data.order.notes} />}
           </div>
         </div>
 
         {/* Pending: Accept / Reject buttons */}
         {isPending && !showAcceptForm && !showRejectForm && (
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 space-y-3">
-            <p className="text-sm text-slate-600 font-medium">Apakah Anda bersedia menerima job ini?</p>
+            <p className="text-sm text-slate-600 font-medium">{t("vendorJob.pendingQuestion", "Apakah Anda bersedia menerima job ini?")}</p>
             <div className="flex gap-3">
               <button
                 onClick={() => setShowAcceptForm(true)}
                 className="flex-1 rounded-xl bg-green-600 hover:bg-green-700 text-white font-semibold py-3 text-sm transition-colors"
               >
-                ✅ Terima Job
+                ✅ {t("vendorJob.acceptBtn", "Terima Job")}
               </button>
               <button
                 onClick={() => setShowRejectForm(true)}
                 className="flex-1 rounded-xl bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 font-semibold py-3 text-sm transition-colors"
               >
-                ❌ Tolak Job
+                ❌ {t("vendorJob.rejectBtn", "Tolak Job")}
               </button>
             </div>
           </div>
@@ -441,26 +444,26 @@ export default function VendorJobPage() {
         {/* Reject form */}
         {showRejectForm && (
           <div className="bg-white rounded-2xl shadow-sm border border-red-100 p-5 space-y-3">
-            <h2 className="text-sm font-semibold text-red-700">Konfirmasi Penolakan Job</h2>
-            <FormField label="Alasan Penolakan (opsional)">
+            <h2 className="text-sm font-semibold text-red-700">{t("vendorJob.rejectForm.title", "Konfirmasi Penolakan Job")}</h2>
+            <FormField label={t("vendorJob.rejectForm.reasonLabel", "Alasan Penolakan (opsional)")}>
               <textarea
                 value={rejectReason}
                 onChange={e => setRejectReason(e.target.value)}
                 rows={3}
-                placeholder="Jelaskan alasan tidak bisa menerima job ini..."
+                placeholder={t("vendorJob.rejectForm.reasonPlaceholder", "Jelaskan alasan tidak bisa menerima job ini...")}
                 className={textareaCls}
               />
             </FormField>
             <div className="flex gap-3">
               <button onClick={() => setShowRejectForm(false)} className="flex-1 rounded-xl border border-slate-200 text-slate-600 py-2.5 text-sm font-medium">
-                Batal
+                {t("vendorJob.cancel", "Batal")}
               </button>
               <button
                 onClick={handleReject}
                 disabled={rejecting}
                 className="flex-1 rounded-xl bg-red-600 hover:bg-red-700 disabled:bg-slate-300 text-white font-semibold py-2.5 text-sm transition-colors"
               >
-                {rejecting ? "Mengirim..." : "Konfirmasi Tolak"}
+                {rejecting ? t("vendorJob.sending", "Mengirim...") : t("vendorJob.rejectForm.confirmBtn", "Konfirmasi Tolak")}
               </button>
             </div>
           </div>
@@ -470,47 +473,47 @@ export default function VendorJobPage() {
         {showAcceptForm && (
           <form onSubmit={handleAccept} className="bg-white rounded-2xl shadow-sm border border-green-100 p-5 space-y-4">
             <h2 className="text-sm font-semibold text-green-700 uppercase tracking-wide">
-              ✅ Detail Operasional
+              ✅ {t("vendorJob.acceptForm.title", "Detail Operasional")}
             </h2>
-            <p className="text-xs text-slate-500">Isi detail berikut untuk mengkonfirmasi penerimaan job.</p>
+            <p className="text-xs text-slate-500">{t("vendorJob.acceptForm.subtitle", "Isi detail berikut untuk mengkonfirmasi penerimaan job.")}</p>
 
             {category === "trucking" && (<>
-              <FormField label="Nama Driver" required><input type="text" className={inputCls} value={acceptValues.driverName ?? ""} onChange={e => setAcceptValues(p => ({...p, driverName: e.target.value}))} placeholder="Nama lengkap driver" /></FormField>
-              <FormField label="No. HP Driver" required><input type="text" className={inputCls} value={acceptValues.driverPhone ?? ""} onChange={e => setAcceptValues(p => ({...p, driverPhone: e.target.value}))} placeholder="0812xxxx" /></FormField>
-              <FormField label="Plat Nomor Kendaraan" required><input type="text" className={inputCls} value={acceptValues.vehiclePlate ?? ""} onChange={e => setAcceptValues(p => ({...p, vehiclePlate: e.target.value}))} placeholder="B 1234 XYZ" /></FormField>
-              <FormField label="Jenis Kendaraan"><input type="text" className={inputCls} value={acceptValues.vehicleType ?? ""} onChange={e => setAcceptValues(p => ({...p, vehicleType: e.target.value}))} placeholder="CDE / Fuso / Engkel" /></FormField>
-              <FormField label="Waktu Pickup"><input type="datetime-local" className={inputCls} value={acceptValues.pickupTime ?? ""} onChange={e => setAcceptValues(p => ({...p, pickupTime: e.target.value}))} /></FormField>
+              <FormField label={t("vendorJob.field.driverName", "Nama Driver")} required><input type="text" className={inputCls} value={acceptValues.driverName ?? ""} onChange={e => setAcceptValues(p => ({...p, driverName: e.target.value}))} placeholder={t("vendorJob.field.driverNamePlaceholder", "Nama lengkap driver")} /></FormField>
+              <FormField label={t("vendorJob.field.driverPhone", "No. HP Driver")} required><input type="text" className={inputCls} value={acceptValues.driverPhone ?? ""} onChange={e => setAcceptValues(p => ({...p, driverPhone: e.target.value}))} placeholder="0812xxxx" /></FormField>
+              <FormField label={t("vendorJob.field.vehiclePlate", "Plat Nomor Kendaraan")} required><input type="text" className={inputCls} value={acceptValues.vehiclePlate ?? ""} onChange={e => setAcceptValues(p => ({...p, vehiclePlate: e.target.value}))} placeholder="B 1234 XYZ" /></FormField>
+              <FormField label={t("vendorJob.field.vehicleType", "Jenis Kendaraan")}><input type="text" className={inputCls} value={acceptValues.vehicleType ?? ""} onChange={e => setAcceptValues(p => ({...p, vehicleType: e.target.value}))} placeholder={t("vendorJob.field.vehicleTypePlaceholder", "CDE / Fuso / Engkel")} /></FormField>
+              <FormField label={t("vendorJob.field.pickupTime", "Waktu Pickup")}><input type="datetime-local" className={inputCls} value={acceptValues.pickupTime ?? ""} onChange={e => setAcceptValues(p => ({...p, pickupTime: e.target.value}))} /></FormField>
             </>)}
 
             {category === "freight" && (<>
-              <FormField label="Carrier / Maskapai" required><input type="text" className={inputCls} value={acceptValues.carrier ?? ""} onChange={e => setAcceptValues(p => ({...p, carrier: e.target.value}))} placeholder="Garuda Cargo, Salam Pacific, dll." /></FormField>
-              <FormField label="Jadwal Keberangkatan"><input type="text" className={inputCls} value={acceptValues.schedule ?? ""} onChange={e => setAcceptValues(p => ({...p, schedule: e.target.value}))} placeholder="Nomor flight/voyage, jadwal" /></FormField>
-              <FormField label="ETD (Estimasi Keberangkatan)"><input type="datetime-local" className={inputCls} value={acceptValues.etd ?? ""} onChange={e => setAcceptValues(p => ({...p, etd: e.target.value}))} /></FormField>
-              <FormField label="ETA (Estimasi Tiba)"><input type="datetime-local" className={inputCls} value={acceptValues.eta ?? ""} onChange={e => setAcceptValues(p => ({...p, eta: e.target.value}))} /></FormField>
-              <FormField label="AWB / BL Number"><input type="text" className={inputCls} value={acceptValues.awbBlNumber ?? ""} onChange={e => setAcceptValues(p => ({...p, awbBlNumber: e.target.value}))} placeholder="Nomor dokumen pengiriman" /></FormField>
+              <FormField label={t("vendorJob.field.carrierAirline", "Carrier / Maskapai")} required><input type="text" className={inputCls} value={acceptValues.carrier ?? ""} onChange={e => setAcceptValues(p => ({...p, carrier: e.target.value}))} placeholder={t("vendorJob.field.carrierPlaceholder", "Garuda Cargo, Salam Pacific, dll.")} /></FormField>
+              <FormField label={t("vendorJob.field.departureSchedule", "Jadwal Keberangkatan")}><input type="text" className={inputCls} value={acceptValues.schedule ?? ""} onChange={e => setAcceptValues(p => ({...p, schedule: e.target.value}))} placeholder={t("vendorJob.field.departureSchedulePlaceholder", "Nomor flight/voyage, jadwal")} /></FormField>
+              <FormField label={t("vendorJob.field.etd", "ETD (Estimasi Keberangkatan)")}><input type="datetime-local" className={inputCls} value={acceptValues.etd ?? ""} onChange={e => setAcceptValues(p => ({...p, etd: e.target.value}))} /></FormField>
+              <FormField label={t("vendorJob.field.eta", "ETA (Estimasi Tiba)")}><input type="datetime-local" className={inputCls} value={acceptValues.eta ?? ""} onChange={e => setAcceptValues(p => ({...p, eta: e.target.value}))} /></FormField>
+              <FormField label={t("vendorJob.field.awbBl", "AWB / BL Number")}><input type="text" className={inputCls} value={acceptValues.awbBlNumber ?? ""} onChange={e => setAcceptValues(p => ({...p, awbBlNumber: e.target.value}))} placeholder={t("vendorJob.field.awbBlPlaceholder", "Nomor dokumen pengiriman")} /></FormField>
             </>)}
 
             {category === "product" && (<>
-              <FormField label="Konfirmasi Stok" required><input type="text" className={inputCls} value={acceptValues.stockConfirmed ?? ""} onChange={e => setAcceptValues(p => ({...p, stockConfirmed: e.target.value}))} placeholder="Stok tersedia / jumlah" /></FormField>
-              <FormField label="Jadwal Pengiriman"><input type="text" className={inputCls} value={acceptValues.deliverySchedule ?? ""} onChange={e => setAcceptValues(p => ({...p, deliverySchedule: e.target.value}))} placeholder="Estimasi tanggal pengiriman" /></FormField>
+              <FormField label={t("vendorJob.field.stockConfirm", "Konfirmasi Stok")} required><input type="text" className={inputCls} value={acceptValues.stockConfirmed ?? ""} onChange={e => setAcceptValues(p => ({...p, stockConfirmed: e.target.value}))} placeholder={t("vendorJob.field.stockConfirmPlaceholder", "Stok tersedia / jumlah")} /></FormField>
+              <FormField label={t("vendorJob.field.deliverySchedule", "Jadwal Pengiriman")}><input type="text" className={inputCls} value={acceptValues.deliverySchedule ?? ""} onChange={e => setAcceptValues(p => ({...p, deliverySchedule: e.target.value}))} placeholder={t("vendorJob.field.deliverySchedulePlaceholder", "Estimasi tanggal pengiriman")} /></FormField>
             </>)}
 
             {category === "customs" && (<>
-              <FormField label="Status Dokumen"><input type="text" className={inputCls} value={acceptValues.documentStatus ?? ""} onChange={e => setAcceptValues(p => ({...p, documentStatus: e.target.value}))} placeholder="PIB sudah diserahkan, menunggu pemeriksaan..." /></FormField>
+              <FormField label={t("vendorJob.field.documentStatus", "Status Dokumen")}><input type="text" className={inputCls} value={acceptValues.documentStatus ?? ""} onChange={e => setAcceptValues(p => ({...p, documentStatus: e.target.value}))} placeholder={t("vendorJob.field.documentStatusPlaceholder", "PIB sudah diserahkan, menunggu pemeriksaan...")} /></FormField>
             </>)}
 
-            <FormField label="Catatan Tambahan">
-              <textarea rows={3} className={textareaCls} value={acceptValues.notes ?? ""} onChange={e => setAcceptValues(p => ({...p, notes: e.target.value}))} placeholder="Instruksi khusus, kendala, dll." />
+            <FormField label={t("vendorJob.field.additionalNotes", "Catatan Tambahan")}>
+              <textarea rows={3} className={textareaCls} value={acceptValues.notes ?? ""} onChange={e => setAcceptValues(p => ({...p, notes: e.target.value}))} placeholder={t("vendorJob.field.additionalNotesPlaceholder", "Instruksi khusus, kendala, dll.")} />
             </FormField>
 
             {acceptError && <p className="text-sm text-red-600 bg-red-50 rounded-xl px-4 py-2.5">{acceptError}</p>}
 
             <div className="flex gap-3 pt-1">
               <button type="button" onClick={() => setShowAcceptForm(false)} className="flex-1 rounded-xl border border-slate-200 text-slate-600 py-3 text-sm font-medium">
-                Batal
+                {t("vendorJob.cancel", "Batal")}
               </button>
               <button type="submit" disabled={accepting} className="flex-1 rounded-xl bg-green-600 hover:bg-green-700 disabled:bg-slate-300 text-white font-semibold py-3 text-sm transition-colors">
-                {accepting ? "Memproses..." : "✅ Konfirmasi Terima Job"}
+                {accepting ? t("vendorJob.processing", "Memproses...") : `✅ ${t("vendorJob.acceptForm.confirmBtn", "Konfirmasi Terima Job")}`}
               </button>
             </div>
           </form>
@@ -520,32 +523,32 @@ export default function VendorJobPage() {
         {isRejected && (
           <div className="bg-red-50 border border-red-200 rounded-2xl p-5 text-center">
             <div className="text-3xl mb-2">❌</div>
-            <p className="text-sm font-semibold text-red-700">Job ini telah ditolak.</p>
-            {data.rejectReason && <p className="text-xs text-red-500 mt-1">Alasan: {data.rejectReason}</p>}
-            <p className="text-xs text-slate-500 mt-2">Admin akan segera menindaklanjuti.</p>
-          <p className="text-xs text-slate-400 mt-1">Hubungi tim kami jika ada kendala.</p>
+            <p className="text-sm font-semibold text-red-700">{t("vendorJob.rejectedMsg", "Job ini telah ditolak.")}</p>
+            {data.rejectReason && <p className="text-xs text-red-500 mt-1">{t("vendorJob.rejectReasonLabel", "Alasan")}: {data.rejectReason}</p>}
+            <p className="text-xs text-slate-500 mt-2">{t("vendorJob.adminFollowUp", "Admin akan segera menindaklanjuti.")}</p>
+            <p className="text-xs text-slate-400 mt-1">{t("vendorJob.contactTeam", "Hubungi tim kami jika ada kendala.")}</p>
           </div>
         )}
 
         {/* Accepted: show operational details */}
         {(isAccepted || isCompleted) && data.operationalDetails && (
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5">
-            <h2 className="text-sm font-semibold text-slate-600 uppercase tracking-wide mb-3">📋 Detail Operasional</h2>
+            <h2 className="text-sm font-semibold text-slate-600 uppercase tracking-wide mb-3">📋 {t("vendorJob.operationalDetails", "Detail Operasional")}</h2>
             <div className="space-y-2">
-              <InfoRow label="Driver" value={data.operationalDetails.driverName} />
-              <InfoRow label="HP Driver" value={data.operationalDetails.driverPhone} />
-              <InfoRow label="Plat Kendaraan" value={data.operationalDetails.vehiclePlate} />
-              <InfoRow label="Jenis Kendaraan" value={data.operationalDetails.vehicleType} />
-              <InfoRow label="Waktu Pickup" value={data.operationalDetails.pickupTime} />
-              <InfoRow label="Carrier" value={data.operationalDetails.carrier} />
-              <InfoRow label="Jadwal" value={data.operationalDetails.schedule} />
+              <InfoRow label={t("vendorJob.opDetail.driver", "Driver")} value={data.operationalDetails.driverName} />
+              <InfoRow label={t("vendorJob.opDetail.driverPhone", "HP Driver")} value={data.operationalDetails.driverPhone} />
+              <InfoRow label={t("vendorJob.opDetail.vehiclePlate", "Plat Kendaraan")} value={data.operationalDetails.vehiclePlate} />
+              <InfoRow label={t("vendorJob.opDetail.vehicleType", "Jenis Kendaraan")} value={data.operationalDetails.vehicleType} />
+              <InfoRow label={t("vendorJob.opDetail.pickupTime", "Waktu Pickup")} value={data.operationalDetails.pickupTime} />
+              <InfoRow label={t("vendorJob.opDetail.carrier", "Carrier")} value={data.operationalDetails.carrier} />
+              <InfoRow label={t("vendorJob.opDetail.schedule", "Jadwal")} value={data.operationalDetails.schedule} />
               <InfoRow label="ETD" value={data.operationalDetails.etd} />
               <InfoRow label="ETA" value={data.operationalDetails.eta} />
               <InfoRow label="AWB / BL" value={data.operationalDetails.awbBlNumber} />
-              <InfoRow label="Stok" value={data.operationalDetails.stockConfirmed} />
-              <InfoRow label="Jadwal Kirim" value={data.operationalDetails.deliverySchedule} />
-              <InfoRow label="Status Dokumen" value={data.operationalDetails.documentStatus} />
-              <InfoRow label="Catatan" value={data.operationalDetails.notes} />
+              <InfoRow label={t("vendorJob.opDetail.stock", "Stok")} value={data.operationalDetails.stockConfirmed} />
+              <InfoRow label={t("vendorJob.opDetail.deliverySchedule", "Jadwal Kirim")} value={data.operationalDetails.deliverySchedule} />
+              <InfoRow label={t("vendorJob.opDetail.documentStatus", "Status Dokumen")} value={data.operationalDetails.documentStatus} />
+              <InfoRow label={t("vendorJob.opDetail.notes", "Catatan")} value={data.operationalDetails.notes} />
             </div>
           </div>
         )}
@@ -554,32 +557,32 @@ export default function VendorJobPage() {
         {canUpdateProgress && (
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 space-y-3">
             <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-slate-600 uppercase tracking-wide">📍 Update Progress</h2>
+              <h2 className="text-sm font-semibold text-slate-600 uppercase tracking-wide">📍 {t("vendorJob.progressUpdate.title", "Update Progress")}</h2>
               {!showProgressForm && (
                 <button onClick={() => setShowProgressForm(true)} className="text-sm text-blue-600 font-medium hover:underline">
-                  + Update
+                  + {t("vendorJob.progressUpdate.updateBtn", "Update")}
                 </button>
               )}
             </div>
             {showProgressForm && (
               <form onSubmit={handleProgress} className="space-y-3">
-                <FormField label="Status Terbaru" required>
+                <FormField label={t("vendorJob.progressUpdate.statusLabel", "Status Terbaru")} required>
                   <select
                     className={inputCls}
                     value={progressStatus}
                     onChange={e => setProgressStatus(e.target.value)}
                     required
                   >
-                    <option value="">Pilih status...</option>
+                    <option value="">{t("vendorJob.progressUpdate.selectStatus", "Pilih status...")}</option>
                     {PROGRESS_OPTIONS.map(o => (
                       <option key={o.value} value={o.value}>{o.label}</option>
                     ))}
                   </select>
                 </FormField>
-                <FormField label="Keterangan">
-                  <textarea rows={2} className={textareaCls} value={progressNotes} onChange={e => setProgressNotes(e.target.value)} placeholder="Informasi tambahan..." />
+                <FormField label={t("vendorJob.progressUpdate.notesLabel", "Keterangan")}>
+                  <textarea rows={2} className={textareaCls} value={progressNotes} onChange={e => setProgressNotes(e.target.value)} placeholder={t("vendorJob.progressUpdate.notesPlaceholder", "Informasi tambahan...")} />
                 </FormField>
-                <FormField label="Foto (opsional)">
+                <FormField label={t("vendorJob.progressUpdate.photoLabel", "Foto (opsional)")}>
                   <input
                     type="file"
                     accept="image/*"
@@ -592,9 +595,9 @@ export default function VendorJobPage() {
                   )}
                 </FormField>
                 <div className="flex gap-3">
-                  <button type="button" onClick={() => setShowProgressForm(false)} className="flex-1 rounded-xl border border-slate-200 text-slate-600 py-2.5 text-sm">Batal</button>
+                  <button type="button" onClick={() => setShowProgressForm(false)} className="flex-1 rounded-xl border border-slate-200 text-slate-600 py-2.5 text-sm">{t("vendorJob.cancel", "Batal")}</button>
                   <button type="submit" disabled={updatingProgress} className="flex-1 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-semibold py-2.5 text-sm">
-                    {updatingProgress ? "Menyimpan..." : "Kirim Update"}
+                    {updatingProgress ? t("vendorJob.saving", "Menyimpan...") : t("vendorJob.progressUpdate.submitBtn", "Kirim Update")}
                   </button>
                 </div>
               </form>
@@ -606,10 +609,10 @@ export default function VendorJobPage() {
         {canUploadPod && (
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 space-y-3">
             <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-slate-600 uppercase tracking-wide">📎 Upload POD / Dokumen</h2>
+              <h2 className="text-sm font-semibold text-slate-600 uppercase tracking-wide">📎 {t("vendorJob.pod.title", "Upload POD / Dokumen")}</h2>
               {!showPodForm && !podDone && (
                 <button onClick={() => setShowPodForm(true)} className="text-sm text-emerald-600 font-medium hover:underline">
-                  Upload
+                  {t("vendorJob.pod.uploadBtn", "Upload")}
                 </button>
               )}
             </div>
@@ -639,21 +642,21 @@ export default function VendorJobPage() {
               </div>
             )}
             {podDone && (
-              <p className="text-sm text-emerald-600 font-medium">✅ Dokumen berhasil diunggah. Menunggu konfirmasi admin.</p>
+              <p className="text-sm text-emerald-600 font-medium">✅ {t("vendorJob.pod.uploadedMsg", "Dokumen berhasil diunggah. Menunggu konfirmasi admin.")}</p>
             )}
             {showPodForm && !podDone && (
               <form onSubmit={handlePodUpload} className="space-y-3">
-                <FormField label="File (POD, Invoice, Foto)" required>
+                <FormField label={t("vendorJob.pod.fileLabel", "File (POD, Invoice, Foto)")} required>
                   <input type="file" multiple accept="image/*,application/pdf" onChange={e => setPodFiles(e.target.files)}
                     className="w-full text-sm text-slate-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700 file:font-medium cursor-pointer" />
                 </FormField>
-                <FormField label="Catatan Penyelesaian">
-                  <textarea rows={2} className={textareaCls} value={podNotes} onChange={e => setPodNotes(e.target.value)} placeholder="Catatan akhir, kendala, dll." />
+                <FormField label={t("vendorJob.pod.completionNotes", "Catatan Penyelesaian")}>
+                  <textarea rows={2} className={textareaCls} value={podNotes} onChange={e => setPodNotes(e.target.value)} placeholder={t("vendorJob.pod.completionNotesPlaceholder", "Catatan akhir, kendala, dll.")} />
                 </FormField>
                 <div className="flex gap-3">
-                  <button type="button" onClick={() => setShowPodForm(false)} className="flex-1 rounded-xl border border-slate-200 text-slate-600 py-2.5 text-sm">Batal</button>
+                  <button type="button" onClick={() => setShowPodForm(false)} className="flex-1 rounded-xl border border-slate-200 text-slate-600 py-2.5 text-sm">{t("vendorJob.cancel", "Batal")}</button>
                   <button type="submit" disabled={uploadingPod || !podFiles?.length} className="flex-1 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-semibold py-2.5 text-sm">
-                    {uploadingPod ? "Mengunggah..." : "Upload Dokumen"}
+                    {uploadingPod ? t("vendorJob.uploading", "Mengunggah...") : t("vendorJob.pod.uploadDocBtn", "Upload Dokumen")}
                   </button>
                 </div>
               </form>
@@ -664,7 +667,7 @@ export default function VendorJobPage() {
         {/* Progress timeline */}
         {data.progress.length > 0 && (
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5">
-            <h2 className="text-sm font-semibold text-slate-600 uppercase tracking-wide mb-4">📅 Riwayat Progress</h2>
+            <h2 className="text-sm font-semibold text-slate-600 uppercase tracking-wide mb-4">📅 {t("vendorJob.progressHistory", "Riwayat Progress")}</h2>
             <div className="relative pl-5">
               <div className="absolute left-2 top-0 bottom-0 w-0.5 bg-slate-100" />
               <div className="space-y-4">
@@ -677,14 +680,14 @@ export default function VendorJobPage() {
                       <button type="button" onClick={() => { const idx = lightboxIdxByUrl.get(p.photo_url!); if (idx !== undefined) setLightboxIdx(idx); }} className="inline-block mt-1 focus:outline-none">
                         <img
                           src={p.photo_url}
-                          alt="Foto progress"
+                          alt={t("vendorJob.progressPhoto", "Foto progress")}
                           className="w-28 h-28 object-cover rounded-lg border border-slate-200 shadow-sm hover:opacity-80 transition-opacity cursor-zoom-in"
                         />
                       </button>
                     )}
                     <p className="text-xs text-slate-400 mt-0.5">
                       {new Date(p.created_at).toLocaleString("id-ID", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
-                      {" · "}{p.updated_by === "admin" ? "Admin" : "Vendor"}
+                      {" · "}{p.updated_by === "admin" ? t("vendorJob.updatedByAdmin", "Admin") : t("vendorJob.updatedByVendor", "Vendor")}
                     </p>
                   </div>
                 ))}
@@ -693,7 +696,7 @@ export default function VendorJobPage() {
           </div>
         )}
 
-        <p className="text-center text-xs text-slate-400 pb-4">Vendor Job Order</p>
+        <p className="text-center text-xs text-slate-400 pb-4">{t("vendorJob.footer", "Vendor Job Order")}</p>
       </div>
     </div>
     </>

@@ -153,6 +153,7 @@ function DocUploader({
 export default function FreightForwarding() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const { t } = useLanguage();
   const { editMode, content, updateField, uploadImage } = useEditMode();
   const [uploadingLogo, setUploadingLogo] = useState<string | null>(null);
   const logoFileRefs = useRef<Record<string, HTMLInputElement | null>>({});
@@ -163,7 +164,7 @@ export default function FreightForwarding() {
       const path = await uploadImage(file);
       updateField(`ff_direction_logo_${dirLabel}`, path);
     } catch {
-      toast({ title: "Gagal upload logo", variant: "destructive" });
+      toast({ title: t("freightForwarding.failUploadLogo", "Gagal upload logo"), variant: "destructive" });
     } finally {
       setUploadingLogo(null);
     }
@@ -175,7 +176,7 @@ export default function FreightForwarding() {
       const path = await uploadImage(file);
       updateField(`ff_mode_logo_${modeLabel}`, path);
     } catch {
-      toast({ title: "Gagal upload logo", variant: "destructive" });
+      toast({ title: t("freightForwarding.failUploadLogo", "Gagal upload logo"), variant: "destructive" });
     } finally {
       setUploadingLogo(null);
     }
@@ -187,7 +188,7 @@ export default function FreightForwarding() {
       const path = await uploadImage(file);
       updateField(`ff_variant_logo_${variantLabel}`, path);
     } catch {
-      toast({ title: "Gagal upload logo", variant: "destructive" });
+      toast({ title: t("freightForwarding.failUploadLogo", "Gagal upload logo"), variant: "destructive" });
     } finally {
       setUploadingLogo(null);
     }
@@ -296,11 +297,18 @@ export default function FreightForwarding() {
   }
 
   function freightLabel() {
-    return mode === "Sea" ? "Harga Sea Freight" : "Harga Air Freight";
+    return mode === "Sea"
+      ? t("freightForwarding.priceSeaFreight", "Harga Sea Freight")
+      : t("freightForwarding.priceAirFreight", "Harga Air Freight");
   }
 
   // Stepper display
-  const STEP_LABELS = ["Arah", "Mode", "Layanan", "Form & Dokumen"];
+  const STEP_LABELS = [
+    t("freightForwarding.stepDirection", "Arah"),
+    t("freightForwarding.stepMode", "Mode"),
+    t("freightForwarding.stepService", "Layanan"),
+    t("freightForwarding.stepFormDocs", "Form & Dokumen"),
+  ];
 
   // Item helpers
   function updateItem(id: string, field: keyof CargoItem, val: string) {
@@ -312,19 +320,19 @@ export default function FreightForwarding() {
   // Validation per step
   function missingFields(): string[] {
     const missing: string[] = [];
-    if (!senderName) missing.push("Nama Pengirim");
-    if (!senderAddress) missing.push("Alamat Pengirim");
-    if (!receiverName) missing.push("Nama Penerima");
-    if (!receiverAddress) missing.push("Alamat Penerima");
-    if (!commodity) missing.push("Nama Barang / Komoditi");
-    if (!docInvoice?.objectPath) missing.push("Dokumen Invoice");
-    if (!docPackingList?.objectPath) missing.push("Dokumen Packing List");
-    if (isDG && !docMsds?.objectPath) missing.push("Dokumen MSDS/SDS");
-    if (isDG && !docCoa?.objectPath) missing.push("Dokumen COA");
-    if (!customerName) missing.push("Nama PIC");
-    if (!customerEmail) missing.push("Email");
-    if (!customerPhone) missing.push("Telepon / WhatsApp");
-    if (items.some((it) => !it.grossWeight || !it.kolli)) missing.push("Berat & Kolli semua item kargo");
+    if (!senderName) missing.push(t("freightForwarding.fieldSenderName", "Nama Pengirim"));
+    if (!senderAddress) missing.push(t("freightForwarding.fieldSenderAddress", "Alamat Pengirim"));
+    if (!receiverName) missing.push(t("freightForwarding.fieldReceiverName", "Nama Penerima"));
+    if (!receiverAddress) missing.push(t("freightForwarding.fieldReceiverAddress", "Alamat Penerima"));
+    if (!commodity) missing.push(t("freightForwarding.fieldCommodity", "Nama Barang / Komoditi"));
+    if (!docInvoice?.objectPath) missing.push(t("freightForwarding.fieldDocInvoice", "Dokumen Invoice"));
+    if (!docPackingList?.objectPath) missing.push(t("freightForwarding.fieldDocPackingList", "Dokumen Packing List"));
+    if (isDG && !docMsds?.objectPath) missing.push(t("freightForwarding.fieldDocMsds", "Dokumen MSDS/SDS"));
+    if (isDG && !docCoa?.objectPath) missing.push(t("freightForwarding.fieldDocCoa", "Dokumen COA"));
+    if (!customerName) missing.push(t("freightForwarding.fieldPicName", "Nama PIC"));
+    if (!customerEmail) missing.push(t("freightForwarding.fieldEmail", "Email"));
+    if (!customerPhone) missing.push(t("freightForwarding.fieldPhone", "Telepon / WhatsApp"));
+    if (items.some((it) => !it.grossWeight || !it.kolli)) missing.push(t("freightForwarding.fieldCargoItems", "Berat & Kolli semua item kargo"));
     return missing;
   }
 
@@ -337,7 +345,7 @@ export default function FreightForwarding() {
 
   async function handleSubmit() {
     if (!canProceed()) {
-      toast({ title: "Lengkapi semua data yang wajib diisi", variant: "destructive" });
+      toast({ title: t("freightForwarding.fillAllRequired", "Lengkapi semua data yang wajib diisi"), variant: "destructive" });
       return;
     }
     setSubmitting(true);
@@ -414,11 +422,11 @@ export default function FreightForwarding() {
       }}, {
         onSuccess: (data: unknown) => {
           localStorage.setItem("last_order", JSON.stringify(data));
-          toast({ title: "Pesanan freight forwarding berhasil dikirim!" });
+          toast({ title: t("freightForwarding.orderSuccess", "Pesanan freight forwarding berhasil dikirim!") });
           setLocation("/logistic-order-success");
         },
         onError: (err: unknown) => {
-          toast({ title: "Gagal mengirim pesanan", description: String(err), variant: "destructive" });
+          toast({ title: t("freightForwarding.orderFail", "Gagal mengirim pesanan"), description: String(err), variant: "destructive" });
         },
         onSettled: () => setSubmitting(false),
       });
@@ -427,9 +435,9 @@ export default function FreightForwarding() {
 
   /* ── STEP 1: Direction ─────────────────────────────────────────── */
   const DIRECTIONS: { label: Direction; icon: string; desc: string; color: string }[] = [
-    { label: "Impor",    icon: "📥", desc: "Barang masuk ke Indonesia dari luar negeri",   color: "border-blue-400 bg-gradient-to-br from-blue-50 to-blue-100 text-blue-800" },
-    { label: "Ekspor",   icon: "📤", desc: "Barang keluar dari Indonesia ke luar negeri",   color: "border-emerald-400 bg-gradient-to-br from-emerald-50 to-emerald-100 text-emerald-800" },
-    { label: "Domestic", icon: "🗺️", desc: "Pengiriman kargo antar kota dalam Indonesia", color: "border-amber-400 bg-gradient-to-br from-amber-50 to-amber-100 text-amber-800" },
+    { label: "Impor",    icon: "📥", desc: t("freightForwarding.dirImporDesc", "Barang masuk ke Indonesia dari luar negeri"),   color: "border-blue-400 bg-gradient-to-br from-blue-50 to-blue-100 text-blue-800" },
+    { label: "Ekspor",   icon: "📤", desc: t("freightForwarding.dirEksporDesc", "Barang keluar dari Indonesia ke luar negeri"),   color: "border-emerald-400 bg-gradient-to-br from-emerald-50 to-emerald-100 text-emerald-800" },
+    { label: "Domestic", icon: "🗺️", desc: t("freightForwarding.dirDomesticDesc", "Pengiriman kargo antar kota dalam Indonesia"), color: "border-amber-400 bg-gradient-to-br from-amber-50 to-amber-100 text-amber-800" },
   ];
 
   /* ── STEP 2: Mode ─────────────────────────────────────────────── */
@@ -438,14 +446,14 @@ export default function FreightForwarding() {
       label: "Sea",
       icon: <Ship className="h-8 w-8 text-blue-600" />,
       desc: "Sea Freight",
-      detail: "Pengiriman via kapal laut. Kapasitas besar, biaya lebih ekonomis.",
+      detail: t("freightForwarding.seaDetail", "Pengiriman via kapal laut. Kapasitas besar, biaya lebih ekonomis."),
       defaultImg: `${import.meta.env.BASE_URL}images/sea-freight.png`,
     },
     {
       label: "Air",
       icon: <Plane className="h-8 w-8 text-sky-500" />,
       desc: "Air Freight",
-      detail: "Pengiriman via pesawat. Lebih cepat, ideal untuk barang sensitif waktu.",
+      detail: t("freightForwarding.airDetail", "Pengiriman via pesawat. Lebih cepat, ideal untuk barang sensitif waktu."),
       defaultImg: `${import.meta.env.BASE_URL}images/air-freight.png`,
     },
   ];
@@ -477,7 +485,7 @@ export default function FreightForwarding() {
             onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.72)"; (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.06)"; }}
           >
             <ArrowLeft className="w-4 h-4" />
-            {step === 1 ? "Kembali ke Layanan" : "Kembali"}
+            {step === 1 ? t("freightForwarding.backToServices", "Kembali ke Layanan") : t("freightForwarding.back", "Kembali")}
           </button>
           <div className="flex-1" />
           <div className="flex items-center gap-2">
@@ -545,8 +553,8 @@ export default function FreightForwarding() {
         {step === 1 && (
           <div className="space-y-5">
             <div>
-              <h2 className="text-[22px] font-bold text-slate-900 tracking-tight">Pilih Arah Pengiriman</h2>
-              <p className="text-sm text-slate-500 mt-1.5">Tentukan jenis pengiriman yang Anda butuhkan</p>
+              <h2 className="text-[22px] font-bold text-slate-900 tracking-tight">{t("freightForwarding.chooseDirection", "Pilih Arah Pengiriman")}</h2>
+              <p className="text-sm text-slate-500 mt-1.5">{t("freightForwarding.chooseDirectionSub", "Tentukan jenis pengiriman yang Anda butuhkan")}</p>
             </div>
             <div className="grid gap-4">
               {DIRECTIONS.map((d) => {
@@ -586,7 +594,7 @@ export default function FreightForwarding() {
                               type="button"
                               onClick={(e) => { e.stopPropagation(); logoFileRefs.current[d.label]?.click(); }}
                               className="absolute inset-0 flex flex-col items-center justify-center bg-black/50 rounded-lg opacity-0 hover:opacity-100 transition-opacity cursor-pointer"
-                              title="Upload logo"
+                              title={t("freightForwarding.uploadLogo", "Upload logo")}
                             >
                               {isUploading
                                 ? <Loader2 className="h-5 w-5 text-white animate-spin" />
@@ -604,9 +612,9 @@ export default function FreightForwarding() {
                             type="button"
                             onClick={(e) => { e.stopPropagation(); updateField(logoKey, ""); }}
                             className="ml-auto text-xs text-muted-foreground hover:text-red-500 flex-shrink-0"
-                            title="Hapus logo"
+                            title={t("freightForwarding.deleteLogo", "Hapus logo")}
                           >
-                            Hapus logo
+                            {t("freightForwarding.deleteLogo", "Hapus logo")}
                           </button>
                         )}
                       </div>
@@ -626,7 +634,7 @@ export default function FreightForwarding() {
                     {/* Edit mode badge */}
                     {editMode && (
                       <div className="absolute top-2 right-2 bg-primary/90 text-primary-foreground text-[10px] font-medium px-1.5 py-0.5 rounded pointer-events-none">
-                        Edit: hover icon untuk upload logo
+                        {t("freightForwarding.editHoverUpload", "Edit: hover icon untuk upload logo")}
                       </div>
                     )}
                   </div>
@@ -635,7 +643,7 @@ export default function FreightForwarding() {
             </div>
             {editMode && (
               <p className="text-xs text-muted-foreground text-center">
-                Hover pada icon emoji tiap card lalu klik untuk upload gambar logo. Simpan via toolbar Edit Mode.
+                {t("freightForwarding.editModeHint", "Hover pada icon emoji tiap card lalu klik untuk upload gambar logo. Simpan via toolbar Edit Mode.")}
               </p>
             )}
           </div>
@@ -658,10 +666,10 @@ export default function FreightForwarding() {
                 className="font-bold text-slate-900 tracking-tight"
                 style={{ fontSize: "clamp(20px,4vw,26px)", lineHeight: 1.25 }}
               >
-                Pilih Moda Pengiriman
+                {t("freightForwarding.chooseMode", "Pilih Moda Pengiriman")}
               </h2>
               <p className="text-slate-400 mt-1.5" style={{ fontSize: "14px" }}>
-                Pilih moda transportasi yang paling sesuai dengan kebutuhan Anda
+                {t("freightForwarding.chooseModeSub", "Pilih moda transportasi yang paling sesuai dengan kebutuhan Anda")}
               </p>
             </div>
 
@@ -766,7 +774,7 @@ export default function FreightForwarding() {
                             className="absolute inset-0 flex flex-col items-center justify-center bg-black/40 opacity-0 hover:opacity-100 transition-opacity cursor-pointer"
                           >
                             {isUploading ? <Loader2 className="h-6 w-6 text-white animate-spin" /> : <ImagePlus className="h-6 w-6 text-white" />}
-                            <span className="text-white text-xs mt-1.5">Upload gambar</span>
+                            <span className="text-white text-xs mt-1.5">{t("freightForwarding.uploadImage", "Upload gambar")}</span>
                           </button>
                         )}
                       </div>
@@ -788,7 +796,7 @@ export default function FreightForwarding() {
                             className="rounded-full"
                             style={{ width: "6px", height: "6px", background: "#0B5CAD" }}
                           />
-                          <span style={{ fontSize: "12px", color: "#0B5CAD", fontWeight: 600 }}>Dipilih</span>
+                          <span style={{ fontSize: "12px", color: "#0B5CAD", fontWeight: 600 }}>{t("freightForwarding.selected", "Dipilih")}</span>
                         </div>
                         {editMode && logoSrc && (
                           <button
@@ -796,7 +804,7 @@ export default function FreightForwarding() {
                             onClick={(e) => { e.stopPropagation(); updateField(logoKey, ""); }}
                             className="text-xs text-slate-400 hover:text-red-500 mt-2"
                           >
-                            Hapus gambar
+                            {t("freightForwarding.deleteImage", "Hapus gambar")}
                           </button>
                         )}
                       </div>
@@ -815,7 +823,7 @@ export default function FreightForwarding() {
                     />
                     {editMode && (
                       <div className="absolute top-2 right-2 bg-primary/90 text-primary-foreground text-[10px] font-medium px-1.5 py-0.5 rounded pointer-events-none">
-                        Edit: hover untuk upload
+                        {t("freightForwarding.editHoverUploadShort", "Edit: hover untuk upload")}
                       </div>
                     )}
                   </div>
@@ -833,36 +841,36 @@ export default function FreightForwarding() {
                 <Badge variant="secondary">{direction}</Badge>
                 <Badge variant="outline">{modeLabel(mode!)}</Badge>
               </div>
-              <h2 className="text-[22px] font-bold text-slate-900 tracking-tight">Pilih Jenis Layanan</h2>
-              <p className="text-sm text-slate-500 mt-1.5">Tentukan rute pengiriman dari titik asal ke tujuan</p>
+              <h2 className="text-[22px] font-bold text-slate-900 tracking-tight">{t("freightForwarding.chooseService", "Pilih Jenis Layanan")}</h2>
+              <p className="text-sm text-slate-500 mt-1.5">{t("freightForwarding.chooseServiceSub", "Tentukan rute pengiriman dari titik asal ke tujuan")}</p>
             </div>
 
             {/* ── LCL / FCL selector (Sea Freight only) ─────────── */}
             {mode === "Sea" && (
               <div className="space-y-2">
-                <p className="text-sm font-medium text-muted-foreground">Tipe Kontainer</p>
+                <p className="text-sm font-medium text-muted-foreground">{t("freightForwarding.containerType", "Tipe Kontainer")}</p>
                 <div className="flex gap-2">
-                  {(["LCL", "FCL"] as SeaType[]).map((t) => (
+                  {(["LCL", "FCL"] as SeaType[]).map((t_) => (
                     <button
-                      key={t}
-                      onClick={() => setSeaType(t)}
+                      key={t_}
+                      onClick={() => setSeaType(t_)}
                       className={`px-5 py-2 rounded-full text-sm font-bold border-2 transition-all ${
-                        seaType === t
-                          ? t === "LCL"
+                        seaType === t_
+                          ? t_ === "LCL"
                             ? "bg-amber-400 border-amber-400 text-black shadow-sm"
                             : "bg-gray-900 border-gray-900 text-white shadow-sm"
                           : "bg-card border-border text-muted-foreground hover:border-primary/40"
                       }`}
                     >
-                      {t}
+                      {t_}
                     </button>
                   ))}
                 </div>
                 {seaType && (
                   <p className="text-xs text-muted-foreground">
                     {seaType === "LCL"
-                      ? "Less than Container Load — barang digabung bersama kargo lain dalam satu kontainer (cocok untuk muatan kecil)"
-                      : "Full Container Load — satu kontainer penuh untuk kargo Anda (cocok untuk muatan besar, lebih efisien)"}
+                      ? t("freightForwarding.lclDesc", "Less than Container Load — barang digabung bersama kargo lain dalam satu kontainer (cocok untuk muatan kecil)")
+                      : t("freightForwarding.fclDesc", "Full Container Load — satu kontainer penuh untuk kargo Anda (cocok untuk muatan besar, lebih efisien)")}
                   </p>
                 )}
               </div>
@@ -908,7 +916,7 @@ export default function FreightForwarding() {
                               type="button"
                               onClick={(e) => { e.stopPropagation(); logoFileRefs.current[`variant_${v}`]?.click(); }}
                               className="absolute inset-0 flex flex-col items-center justify-center bg-black/50 rounded-lg opacity-0 hover:opacity-100 transition-opacity cursor-pointer"
-                              title="Upload logo"
+                              title={t("freightForwarding.uploadLogo", "Upload logo")}
                             >
                               {isUploading ? <Loader2 className="h-4 w-4 text-white animate-spin" /> : <ImagePlus className="h-4 w-4 text-white" />}
                             </button>
@@ -924,9 +932,9 @@ export default function FreightForwarding() {
                             type="button"
                             onClick={(e) => { e.stopPropagation(); updateField(logoKey, ""); }}
                             className="text-xs text-muted-foreground hover:text-red-500 shrink-0"
-                            title="Hapus logo"
+                            title={t("freightForwarding.deleteLogo", "Hapus logo")}
                           >
-                            Hapus
+                            {t("freightForwarding.delete", "Hapus")}
                           </button>
                         )}
                       </div>
@@ -944,7 +952,7 @@ export default function FreightForwarding() {
                     />
                     {editMode && (
                       <div className="absolute top-2 right-2 bg-primary/90 text-primary-foreground text-[10px] font-medium px-1.5 py-0.5 rounded pointer-events-none">
-                        Edit: hover icon
+                        {t("freightForwarding.editHoverIcon", "Edit: hover icon")}
                       </div>
                     )}
                   </div>
@@ -969,8 +977,8 @@ export default function FreightForwarding() {
                 )}
                 <Badge className="bg-primary/10 text-primary border-primary/20 hover:bg-primary/10">{VARIANT_LABELS[variant!]}</Badge>
               </div>
-              <h2 className="text-[22px] font-bold text-slate-900 tracking-tight">Data Pengiriman & Dokumen</h2>
-              <p className="text-sm text-slate-500 mt-1.5">Lengkapi detail pengiriman dan upload dokumen yang diperlukan</p>
+              <h2 className="text-[22px] font-bold text-slate-900 tracking-tight">{t("freightForwarding.shipmentDataTitle", "Data Pengiriman & Dokumen")}</h2>
+              <p className="text-sm text-slate-500 mt-1.5">{t("freightForwarding.shipmentDataSub", "Lengkapi detail pengiriman dan upload dokumen yang diperlukan")}</p>
             </div>
 
             {/* ── Pengirim ──────────────────── */}
@@ -979,16 +987,16 @@ export default function FreightForwarding() {
                 <div className="w-6 h-6 rounded-md bg-blue-100 text-blue-700 flex items-center justify-center">
                   <MapPin className="h-3.5 w-3.5" />
                 </div>
-                Data Pengirim
+                {t("freightForwarding.senderData", "Data Pengirim")}
               </h3>
               <div className="grid sm:grid-cols-2 gap-3">
                 <div className="sm:col-span-2 space-y-1">
-                  <Label className="text-xs">Nama Pengirim <span className="text-red-500">*</span></Label>
-                  <Input value={senderName} onChange={(e) => setSenderName(e.target.value)} placeholder="Nama perusahaan / perorangan" />
+                  <Label className="text-xs">{t("freightForwarding.senderName", "Nama Pengirim")} <span className="text-red-500">*</span></Label>
+                  <Input value={senderName} onChange={(e) => setSenderName(e.target.value)} placeholder={t("freightForwarding.senderNamePlaceholder", "Nama perusahaan / perorangan")} />
                 </div>
                 <div className="sm:col-span-2 space-y-1">
-                  <Label className="text-xs">Alamat Lengkap Pengirim <span className="text-red-500">*</span></Label>
-                  <Textarea value={senderAddress} onChange={(e) => setSenderAddress(e.target.value)} placeholder="Jl. ..., Kota, Negara, Kode Pos" rows={2} />
+                  <Label className="text-xs">{t("freightForwarding.senderAddressFull", "Alamat Lengkap Pengirim")} <span className="text-red-500">*</span></Label>
+                  <Textarea value={senderAddress} onChange={(e) => setSenderAddress(e.target.value)} placeholder={t("freightForwarding.addressPlaceholder", "Jl. ..., Kota, Negara, Kode Pos")} rows={2} />
                 </div>
               </div>
             </div>
@@ -999,16 +1007,16 @@ export default function FreightForwarding() {
                 <div className="w-6 h-6 rounded-md bg-emerald-100 text-emerald-700 flex items-center justify-center">
                   <MapPin className="h-3.5 w-3.5" />
                 </div>
-                Data Penerima
+                {t("freightForwarding.receiverData", "Data Penerima")}
               </h3>
               <div className="grid sm:grid-cols-2 gap-3">
                 <div className="sm:col-span-2 space-y-1">
-                  <Label className="text-xs">Nama Penerima <span className="text-red-500">*</span></Label>
-                  <Input value={receiverName} onChange={(e) => setReceiverName(e.target.value)} placeholder="Nama perusahaan / perorangan" />
+                  <Label className="text-xs">{t("freightForwarding.receiverName", "Nama Penerima")} <span className="text-red-500">*</span></Label>
+                  <Input value={receiverName} onChange={(e) => setReceiverName(e.target.value)} placeholder={t("freightForwarding.senderNamePlaceholder", "Nama perusahaan / perorangan")} />
                 </div>
                 <div className="sm:col-span-2 space-y-1">
-                  <Label className="text-xs">Alamat Lengkap Penerima <span className="text-red-500">*</span></Label>
-                  <Textarea value={receiverAddress} onChange={(e) => setReceiverAddress(e.target.value)} placeholder="Jl. ..., Kota, Negara, Kode Pos" rows={2} />
+                  <Label className="text-xs">{t("freightForwarding.receiverAddressFull", "Alamat Lengkap Penerima")} <span className="text-red-500">*</span></Label>
+                  <Textarea value={receiverAddress} onChange={(e) => setReceiverAddress(e.target.value)} placeholder={t("freightForwarding.addressPlaceholder", "Jl. ..., Kota, Negara, Kode Pos")} rows={2} />
                 </div>
               </div>
             </div>
@@ -1019,15 +1027,15 @@ export default function FreightForwarding() {
                 <div className="w-6 h-6 rounded-md bg-amber-100 text-amber-700 flex items-center justify-center">
                   <LayoutGrid className="h-3.5 w-3.5" />
                 </div>
-                Data Barang
+                {t("freightForwarding.goodsData", "Data Barang")}
               </h3>
               <div className="grid sm:grid-cols-2 gap-3">
                 <div className="sm:col-span-2 space-y-1">
-                  <Label className="text-xs">Nama Barang / Komoditi <span className="text-red-500">*</span></Label>
-                  <Input value={commodity} onChange={(e) => setCommodity(e.target.value)} placeholder="Elektronik, Kimia, Tekstil, dll." />
+                  <Label className="text-xs">{t("freightForwarding.commodityLabel", "Nama Barang / Komoditi")} <span className="text-red-500">*</span></Label>
+                  <Input value={commodity} onChange={(e) => setCommodity(e.target.value)} placeholder={t("freightForwarding.commodityPlaceholder", "Elektronik, Kimia, Tekstil, dll.")} />
                 </div>
                 <div className="sm:col-span-2 space-y-1">
-                  <Label className="text-xs">Kategori Barang <span className="text-red-500">*</span></Label>
+                  <Label className="text-xs">{t("freightForwarding.goodsCategory", "Kategori Barang")} <span className="text-red-500">*</span></Label>
                   <div className="flex gap-2">
                     {(["Non DG", "DG"] as GoodsCategory[]).map((cat) => (
                       <button
@@ -1042,14 +1050,14 @@ export default function FreightForwarding() {
                             : "border-border text-muted-foreground hover:border-primary/40"
                         }`}
                       >
-                        {cat === "DG" ? "⚠️ DG (Dangerous Goods)" : "✅ Non DG (Aman)"}
+                        {cat === "DG" ? t("freightForwarding.dgLabel", "⚠️ DG (Dangerous Goods)") : t("freightForwarding.nonDgLabel", "✅ Non DG (Aman)")}
                       </button>
                     ))}
                   </div>
                   {isDG && (
                     <div className="mt-2 flex items-start gap-2 text-xs text-orange-700 bg-orange-50 rounded-xl px-3 py-2.5 border border-orange-200">
                       <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                      <span>Barang DG wajib melampirkan dokumen <strong>MSDS/SDS</strong> dan <strong>COA</strong>.</span>
+                      <span>{t("freightForwarding.dgWarning", "Barang DG wajib melampirkan dokumen")} <strong>MSDS/SDS</strong> {t("freightForwarding.and", "dan")} <strong>COA</strong>.</span>
                     </div>
                   )}
                 </div>
@@ -1059,17 +1067,17 @@ export default function FreightForwarding() {
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <Label className="text-xs font-semibold flex items-center gap-1.5">
-                    <Weight className="h-3.5 w-3.5" /> Detail Item Kargo <span className="text-red-500">*</span>
+                    <Weight className="h-3.5 w-3.5" /> {t("freightForwarding.cargoItemDetail", "Detail Item Kargo")} <span className="text-red-500">*</span>
                   </Label>
                   <Button size="sm" variant="outline" onClick={addItem} className="h-7 text-xs gap-1 px-2">
-                    <Plus className="h-3.5 w-3.5" /> Tambah Item
+                    <Plus className="h-3.5 w-3.5" /> {t("freightForwarding.addItem", "Tambah Item")}
                   </Button>
                 </div>
                 <div className="space-y-3">
                   {items.map((it, idx) => (
                     <div key={it.id} className="rounded-xl border border-border bg-muted/20 p-4 space-y-3">
                       <div className="flex items-center justify-between">
-                        <span className="text-xs font-semibold text-muted-foreground">Item {idx + 1}</span>
+                        <span className="text-xs font-semibold text-muted-foreground">{t("freightForwarding.item", "Item")} {idx + 1}</span>
                         {items.length > 1 && (
                           <button type="button" onClick={() => removeItem(it.id)} className="text-destructive hover:text-destructive/80">
                             <Trash2 className="h-3.5 w-3.5" />
@@ -1078,7 +1086,7 @@ export default function FreightForwarding() {
                       </div>
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                         <div className="space-y-1">
-                          <Label className="text-[11px]">Berat Kotor (kg) <span className="text-red-500">*</span></Label>
+                          <Label className="text-[11px]">{t("freightForwarding.grossWeight", "Berat Kotor (kg)")} <span className="text-red-500">*</span></Label>
                           <Input
                             type="number" min="0" placeholder="0"
                             value={it.grossWeight}
@@ -1086,7 +1094,7 @@ export default function FreightForwarding() {
                           />
                         </div>
                         <div className="space-y-1">
-                          <Label className="text-[11px]">Jumlah Kolli <span className="text-red-500">*</span></Label>
+                          <Label className="text-[11px]">{t("freightForwarding.kolli", "Jumlah Kolli")} <span className="text-red-500">*</span></Label>
                           <Input
                             type="number" min="1" placeholder="1"
                             value={it.kolli}
@@ -1094,7 +1102,7 @@ export default function FreightForwarding() {
                           />
                         </div>
                         <div className="col-span-2 sm:col-span-1 space-y-1">
-                          <Label className="text-[11px] flex items-center gap-1"><LayoutGrid className="h-3 w-3" /> Dimensi (cm)</Label>
+                          <Label className="text-[11px] flex items-center gap-1"><LayoutGrid className="h-3 w-3" /> {t("freightForwarding.dimensions", "Dimensi (cm)")}</Label>
                           <div className="flex gap-1">
                             <Input type="number" min="0" placeholder="P" value={it.length} onChange={(e) => updateItem(it.id, "length", e.target.value)} className="text-center" />
                             <Input type="number" min="0" placeholder="L" value={it.width} onChange={(e) => updateItem(it.id, "width", e.target.value)} className="text-center" />
@@ -1111,24 +1119,24 @@ export default function FreightForwarding() {
               {(totalGrossWeight > 0 || totalVolumeCBM > 0) && (
                 <div className="rounded-xl bg-sky-50 border border-sky-200 px-4 py-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
                   <div className="space-y-0.5">
-                    <p className="text-[10px] font-semibold text-sky-600 uppercase tracking-wide">Jumlah Volume</p>
+                    <p className="text-[10px] font-semibold text-sky-600 uppercase tracking-wide">{t("freightForwarding.totalVolume", "Jumlah Volume")}</p>
                     <p className="text-sm font-bold text-sky-900">{fmtNum(totalVolumeCBM)} CBM</p>
                   </div>
                   <div className="space-y-0.5">
-                    <p className="text-[10px] font-semibold text-sky-600 uppercase tracking-wide">Total Berat Kotor</p>
+                    <p className="text-[10px] font-semibold text-sky-600 uppercase tracking-wide">{t("freightForwarding.totalGrossWeight", "Total Berat Kotor")}</p>
                     <p className="text-sm font-bold text-sky-900">{fmtNum(totalGrossWeight, 1)} kg</p>
                   </div>
                   {mode === "Air" && (
                     <>
                       <div className="space-y-0.5">
-                        <p className="text-[10px] font-semibold text-sky-600 uppercase tracking-wide">Berat Volumetrik</p>
+                        <p className="text-[10px] font-semibold text-sky-600 uppercase tracking-wide">{t("freightForwarding.volumetricWeight", "Berat Volumetrik")}</p>
                         <p className="text-sm font-bold text-sky-900">{fmtNum(volumetricWeight, 1)} kg</p>
                         <p className="text-[10px] text-sky-500">CBM × 167</p>
                       </div>
                       <div className="space-y-0.5">
                         <p className="text-[10px] font-semibold text-emerald-600 uppercase tracking-wide">Chargeable Weight</p>
                         <p className="text-sm font-bold text-emerald-800">{fmtNum(chargeableWeight, 1)} kg</p>
-                        <p className="text-[10px] text-emerald-500">maks(kotor, vol.)</p>
+                        <p className="text-[10px] text-emerald-500">{t("freightForwarding.maxOf", "maks(kotor, vol.)")}</p>
                       </div>
                     </>
                   )}
@@ -1139,7 +1147,7 @@ export default function FreightForwarding() {
               <div className="space-y-1">
                 <Label className="text-xs">
                   {freightLabel()} (IDR/{mode === "Air" ? "kg" : "CBM"})
-                  {" "}<span className="text-muted-foreground font-normal">— kosongkan jika belum ada</span>
+                  {" "}<span className="text-muted-foreground font-normal">— {t("freightForwarding.leaveEmptyIfNone", "kosongkan jika belum ada")}</span>
                 </Label>
                 <Input
                   type="number" min="0" placeholder="0"
@@ -1153,7 +1161,7 @@ export default function FreightForwarding() {
                 <div className="rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3 flex items-center justify-between gap-3">
                   <div>
                     <p className="text-xs font-semibold text-emerald-700">
-                      Estimasi Total {mode === "Air" ? "Air Freight" : "Sea Freight"}
+                      {t("freightForwarding.estimatedTotal", "Estimasi Total")} {mode === "Air" ? "Air Freight" : "Sea Freight"}
                     </p>
                     <p className="text-[10px] text-emerald-600 mt-0.5">
                       {mode === "Air"
@@ -1172,23 +1180,23 @@ export default function FreightForwarding() {
                 <div className="w-6 h-6 rounded-md bg-indigo-100 text-indigo-700 flex items-center justify-center">
                   <FileText className="h-3.5 w-3.5" />
                 </div>
-                Upload Dokumen
+                {t("freightForwarding.uploadDocuments", "Upload Dokumen")}
               </h3>
               {!isAuthenticated() && (
                 <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5 flex items-center gap-2">
                   <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                  Login terlebih dahulu untuk mengupload dokumen
+                  {t("freightForwarding.loginToUpload", "Login terlebih dahulu untuk mengupload dokumen")}
                 </div>
               )}
               <DocUploader
                 label="Invoice" required
-                hint="Dokumen invoice / commercial invoice"
+                hint={t("freightForwarding.invoiceHint", "Dokumen invoice / commercial invoice")}
                 value={docInvoice}
                 onChange={setDocInvoice}
               />
               <DocUploader
                 label="Packing List" required
-                hint="Dokumen packing list"
+                hint={t("freightForwarding.packingListHint", "Dokumen packing list")}
                 value={docPackingList}
                 onChange={setDocPackingList}
               />
@@ -1196,21 +1204,21 @@ export default function FreightForwarding() {
                 <>
                   <DocUploader
                     label="MSDS / SDS" required
-                    hint="Material Safety Data Sheet / Safety Data Sheet — wajib untuk barang DG"
+                    hint={t("freightForwarding.msdsHint", "Material Safety Data Sheet / Safety Data Sheet — wajib untuk barang DG")}
                     value={docMsds}
                     onChange={setDocMsds}
                   />
                   <DocUploader
                     label="COA (Certificate of Analysis)" required
-                    hint="Wajib untuk barang DG / kimia"
+                    hint={t("freightForwarding.coaHint", "Wajib untuk barang DG / kimia")}
                     value={docCoa}
                     onChange={setDocCoa}
                   />
                 </>
               )}
               <DocUploader
-                label="Dokumen Lainnya"
-                hint="Dokumen pendukung tambahan (opsional)"
+                label={t("freightForwarding.otherDocs", "Dokumen Lainnya")}
+                hint={t("freightForwarding.otherDocsHint", "Dokumen pendukung tambahan (opsional)")}
                 value={docOther}
                 onChange={setDocOther}
               />
@@ -1222,27 +1230,27 @@ export default function FreightForwarding() {
                 <div className="w-6 h-6 rounded-md bg-purple-100 text-purple-700 flex items-center justify-center">
                   <User className="h-3.5 w-3.5" />
                 </div>
-                Data Pemesan
+                {t("freightForwarding.ordererData", "Data Pemesan")}
               </h3>
               {portalUser && (
                 <div className="flex items-start gap-2 text-xs text-sky-700 bg-sky-50 rounded-xl px-3 py-2.5 border border-sky-200">
                   <Check className="h-3.5 w-3.5 mt-0.5 shrink-0 text-sky-500" />
-                  <span>Data diambil dari profil akun Anda. Hanya nomor telepon yang dapat diubah.</span>
+                  <span>{t("freightForwarding.profilePrefill", "Data diambil dari profil akun Anda. Hanya nomor telepon yang dapat diubah.")}</span>
                 </div>
               )}
               <div className="grid sm:grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <Label className="text-xs">Nama PIC <span className="text-red-500">*</span></Label>
+                  <Label className="text-xs">{t("freightForwarding.picName", "Nama PIC")} <span className="text-red-500">*</span></Label>
                   <Input
                     value={customerName}
                     onChange={(e) => setCustomerName(e.target.value)}
-                    placeholder="Nama lengkap"
+                    placeholder={t("freightForwarding.fullNamePlaceholder", "Nama lengkap")}
                     readOnly={!!portalUser?.name}
                     className={portalUser?.name ? "bg-muted/50 text-muted-foreground cursor-default" : ""}
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs">Nama Perusahaan</Label>
+                  <Label className="text-xs">{t("freightForwarding.companyName", "Nama Perusahaan")}</Label>
                   <Input
                     value={companyName}
                     onChange={(e) => setCompanyName(e.target.value)}
@@ -1252,7 +1260,7 @@ export default function FreightForwarding() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs">Email <span className="text-red-500">*</span></Label>
+                  <Label className="text-xs">{t("freightForwarding.email", "Email")} <span className="text-red-500">*</span></Label>
                   <Input
                     type="email"
                     value={customerEmail}
@@ -1263,12 +1271,12 @@ export default function FreightForwarding() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs">Telepon / WhatsApp <span className="text-red-500">*</span></Label>
+                  <Label className="text-xs">{t("freightForwarding.phoneWhatsapp", "Telepon / WhatsApp")} <span className="text-red-500">*</span></Label>
                   <Input value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} placeholder="+62..." />
                 </div>
                 <div className="sm:col-span-2 space-y-1">
-                  <Label className="text-xs">Catatan Tambahan</Label>
-                  <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Instruksi khusus, informasi tambahan, dll." rows={2} />
+                  <Label className="text-xs">{t("freightForwarding.additionalNotes", "Catatan Tambahan")}</Label>
+                  <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder={t("freightForwarding.additionalNotesPlaceholder", "Instruksi khusus, informasi tambahan, dll.")} rows={2} />
                 </div>
               </div>
             </div>
@@ -1280,7 +1288,7 @@ export default function FreightForwarding() {
           <div className="mt-4 rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 space-y-1.5">
             <p className="text-xs font-semibold text-orange-700 flex items-center gap-1.5">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-              Lengkapi field berikut sebelum mengirim pesanan:
+              {t("freightForwarding.completeBeforeSubmit", "Lengkapi field berikut sebelum mengirim pesanan:")}
             </p>
             <ul className="space-y-0.5 pl-5 list-disc">
               {missingFields().map((f) => (
@@ -1294,7 +1302,7 @@ export default function FreightForwarding() {
         <div className={`flex pt-5 border-t border-slate-200 ${step === 1 ? "justify-end" : "justify-between"}`}>
           {step > 1 && (
             <Button variant="outline" className="border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300" onClick={() => setStep((s) => (s - 1) as typeof step)}>
-              <ChevronLeft className="w-4 h-4 mr-1" /> Kembali
+              <ChevronLeft className="w-4 h-4 mr-1" /> {t("freightForwarding.back", "Kembali")}
             </Button>
           )}
           {step < 4 ? (
@@ -1303,7 +1311,7 @@ export default function FreightForwarding() {
               disabled={!canProceed()}
               className="bg-[#0B5CAD] hover:bg-[#0a4f98] text-white font-semibold shadow-sm hover:shadow-md transition-all"
             >
-              Lanjutkan <ChevronRight className="w-4 h-4 ml-1" />
+              {t("freightForwarding.continue", "Lanjutkan")} <ChevronRight className="w-4 h-4 ml-1" />
             </Button>
           ) : (
             <Button
@@ -1312,7 +1320,7 @@ export default function FreightForwarding() {
               className="bg-[#0B5CAD] hover:bg-[#0a4f98] text-white font-semibold gap-2 shadow-sm hover:shadow-md transition-all"
             >
               {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-              Kirim Pesanan
+              {t("freightForwarding.submitOrder", "Kirim Pesanan")}
             </Button>
           )}
         </div>

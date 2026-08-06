@@ -24,6 +24,7 @@ import {
   getAllInCodeTemplates as getAllLocalTemplates,
   validateTemplatePayload,
 } from "@workspace/product-templates";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -172,6 +173,7 @@ export default function ProductOrderPage() {
   const [step, setStep] = useState<Step>("products");
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const { t } = useLanguage();
 
   const [allTemplates, setAllTemplates] = useState<ProductTemplate[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(true);
@@ -252,7 +254,7 @@ export default function ProductOrderPage() {
     setLoadingProducts(true);
     fetchProducts(search)
       .then(setProducts)
-      .catch(() => toast({ title: "Gagal memuat produk", variant: "destructive" }))
+      .catch(() => toast({ title: t("productOrder.error.loadProducts", "Gagal memuat produk"), variant: "destructive" }))
       .finally(() => setLoadingProducts(false));
   }, [search]);
 
@@ -332,7 +334,7 @@ export default function ProductOrderPage() {
       setTruckingEstimate(null);
       setStep("trucking");
     } else {
-      setSelectedService({ serviceId: svc.id, serviceName: svc.name, estimatedCost: null, summaryLine: "Harga menyusul — tim akan konfirmasi" });
+      setSelectedService({ serviceId: svc.id, serviceName: svc.name, estimatedCost: null, summaryLine: t("productOrder.service.pricePending", "Harga menyusul — tim akan konfirmasi") });
       setStep("checkout");
     }
   }
@@ -385,12 +387,12 @@ export default function ProductOrderPage() {
   function handleConfirmTrucking() {
     if (truckingForm.mode === "detail" && !truckingForm.deliveryAddress.trim()) {
       setDeliveryAddressError(true);
-      toast({ title: "Alamat Pengiriman wajib diisi", variant: "destructive" });
+      toast({ title: t("productOrder.trucking.deliveryAddressRequired", "Alamat Pengiriman wajib diisi"), variant: "destructive" });
       return;
     }
     const cost = truckingEstimate;
     const summary = truckingForm.mode === "calculator"
-      ? `${truckingForm.origin || "Asal"} → ${truckingForm.destination || "Tujuan"}, ${truckingForm.weight} kg`
+      ? `${truckingForm.origin || t("productOrder.trucking.origin", "Asal")} → ${truckingForm.destination || t("productOrder.trucking.destination", "Tujuan")}, ${truckingForm.weight} kg`
       : `${truckingForm.pickupAddress || "Pickup"} → ${truckingForm.deliveryAddress || "Delivery"}`;
     setSelectedService({ serviceId: "trucking", serviceName: "Trucking", estimatedCost: cost, summaryLine: summary, detail: truckingForm });
     setStep("checkout");
@@ -398,11 +400,11 @@ export default function ProductOrderPage() {
 
   async function handleSubmit() {
     if (!customerName.trim() || !email.trim() || !phone.trim()) {
-      toast({ title: "Isi semua kolom data pemesan", variant: "destructive" }); return;
+      toast({ title: t("productOrder.checkout.fillAllFields", "Isi semua kolom data pemesan"), variant: "destructive" }); return;
     }
     if (selectedService && !address.trim()) {
       setCheckoutAddressError(true);
-      toast({ title: "Alamat Pengiriman wajib diisi jika menggunakan layanan pengiriman", variant: "destructive" }); return;
+      toast({ title: t("productOrder.checkout.deliveryAddressRequiredWithService", "Alamat Pengiriman wajib diisi jika menggunakan layanan pengiriman"), variant: "destructive" }); return;
     }
     const formErrors = validateTemplatePayload(template, dynamicValues);
     if (formErrors.length > 0) { toast({ title: formErrors[0], variant: "destructive" }); return; }
@@ -452,14 +454,14 @@ export default function ProductOrderPage() {
       <div className="min-h-screen bg-background">
         <div className="bg-primary text-primary-foreground py-10 px-4 text-center">
           <Package className="w-12 h-12 mx-auto mb-3 opacity-90" />
-          <h1 className="text-2xl font-bold">Pesan Produk</h1>
-          <p className="text-primary-foreground/70 text-sm mt-1">Pilih produk dan tambahkan ke keranjang</p>
+          <h1 className="text-2xl font-bold">{t("productOrder.products.title", "Pesan Produk")}</h1>
+          <p className="text-primary-foreground/70 text-sm mt-1">{t("productOrder.products.subtitle", "Pilih produk dan tambahkan ke keranjang")}</p>
         </div>
 
         <div className="max-w-4xl mx-auto px-4 py-8">
           <div className="relative mb-6">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input placeholder="Cari produk..." className="pl-9" value={search} onChange={e => setSearch(e.target.value)} />
+            <Input placeholder={t("productOrder.products.searchPlaceholder", "Cari produk...")} className="pl-9" value={search} onChange={e => setSearch(e.target.value)} />
           </div>
 
           {loadingProducts ? (
@@ -467,7 +469,7 @@ export default function ProductOrderPage() {
           ) : products.length === 0 ? (
             <div className="text-center py-16 text-muted-foreground">
               <Package className="w-12 h-12 mx-auto mb-3 opacity-40" />
-              <p>Tidak ada produk ditemukan</p>
+              <p>{t("productOrder.products.noProducts", "Tidak ada produk ditemukan")}</p>
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
@@ -499,7 +501,7 @@ export default function ProductOrderPage() {
                         </div>
                       ) : (
                         <Button size="sm" className="w-full" onClick={() => addToCart(product)}>
-                          <Plus className="w-4 h-4 mr-1" /> Tambah
+                          <Plus className="w-4 h-4 mr-1" /> {t("productOrder.products.addToCart", "Tambah")}
                         </Button>
                       )}
                     </div>
@@ -520,18 +522,18 @@ export default function ProductOrderPage() {
                 {selectedService && (
                   <div className="flex items-center justify-between text-xs text-muted-foreground border-t pt-2">
                     <span>+ {selectedService.serviceName}</span>
-                    <span>{selectedService.estimatedCost ? formatCurrency(selectedService.estimatedCost) : "Harga menyusul"}</span>
+                    <span>{selectedService.estimatedCost ? formatCurrency(selectedService.estimatedCost) : t("productOrder.service.pricePendingShort", "Harga menyusul")}</span>
                   </div>
                 )}
                 <div className="flex gap-2">
                   {!productFirstMode && (
                     <Button variant="outline" className="flex-1 gap-1.5" onClick={() => setStep("service-catalog")}>
                       <Truck className="w-4 h-4" />
-                      {selectedService ? "Ganti Layanan" : "Pilih Layanan"}
+                      {selectedService ? t("productOrder.cart.changeService", "Ganti Layanan") : t("productOrder.cart.selectService", "Pilih Layanan")}
                     </Button>
                   )}
                   <Button className="flex-1 gap-1.5" onClick={() => setStep("checkout")}>
-                    {productFirstMode ? "Lanjut Checkout" : "Lanjut ke Checkout"} <ChevronRight className="w-4 h-4" />
+                    {productFirstMode ? t("productOrder.cart.continueCheckout", "Lanjut Checkout") : t("productOrder.cart.continueToCheckout", "Lanjut ke Checkout")} <ChevronRight className="w-4 h-4" />
                   </Button>
                 </div>
                 <button
@@ -543,8 +545,8 @@ export default function ProductOrderPage() {
                   }`}
                 >
                   {productFirstMode
-                    ? "✅ Mode: Produk Dulu (pilih pengiriman nanti) — klik untuk batal"
-                    : "⚡ Pesan produk dulu, pilih pengiriman setelah dikonfirmasi"}
+                    ? t("productOrder.cart.productFirstModeActive", "✅ Mode: Produk Dulu (pilih pengiriman nanti) — klik untuk batal")
+                    : t("productOrder.cart.productFirstModeOff", "⚡ Pesan produk dulu, pilih pengiriman setelah dikonfirmasi")}
                 </button>
               </div>
             </div>
@@ -565,8 +567,8 @@ export default function ProductOrderPage() {
               <ChevronLeft className="w-4 h-4" />
             </Button>
             <div>
-              <h1 className="text-xl font-bold">Pilih Layanan Pengiriman</h1>
-              <p className="text-primary-foreground/70 text-sm">Tambahkan layanan logistik ke pesanan Anda</p>
+              <h1 className="text-xl font-bold">{t("productOrder.serviceCatalog.title", "Pilih Layanan Pengiriman")}</h1>
+              <p className="text-primary-foreground/70 text-sm">{t("productOrder.serviceCatalog.subtitle", "Tambahkan layanan logistik ke pesanan Anda")}</p>
             </div>
           </div>
         </div>
@@ -577,7 +579,7 @@ export default function ProductOrderPage() {
             onClick={() => { setSelectedService(null); setStep("checkout"); }}
             className="w-full border-2 border-dashed border-border rounded-xl p-4 text-sm text-muted-foreground hover:border-primary/40 hover:text-foreground transition-colors text-center"
           >
-            Lanjut tanpa layanan pengiriman
+            {t("productOrder.serviceCatalog.skipService", "Lanjut tanpa layanan pengiriman")}
           </button>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -594,7 +596,7 @@ export default function ProductOrderPage() {
                     <p className="text-xs opacity-70 mt-0.5">{svc.description}</p>
                     {svc.isTrucking && (
                       <span className="inline-block mt-2 text-[10px] bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-medium">
-                        Tersedia kalkulator biaya
+                        {t("productOrder.serviceCatalog.costCalculatorAvailable", "Tersedia kalkulator biaya")}
                       </span>
                     )}
                   </div>
@@ -621,8 +623,8 @@ export default function ProductOrderPage() {
             <div className="flex items-center gap-2">
               <Truck className="w-5 h-5" />
               <div>
-                <h1 className="text-xl font-bold">Layanan Trucking</h1>
-                <p className="text-white/70 text-sm">Isi detail atau hitung estimasi biaya</p>
+                <h1 className="text-xl font-bold">{t("productOrder.trucking.title", "Layanan Trucking")}</h1>
+                <p className="text-white/70 text-sm">{t("productOrder.trucking.subtitle", "Isi detail atau hitung estimasi biaya")}</p>
               </div>
             </div>
           </div>
@@ -637,7 +639,7 @@ export default function ProductOrderPage() {
                 onClick={() => setTruckingForm(f => ({ ...f, mode }))}
                 className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors flex items-center justify-center gap-1.5 ${truckingForm.mode === mode ? "bg-background shadow text-foreground" : "text-muted-foreground hover:text-foreground"}`}
               >
-                {mode === "detail" ? <><MapPin className="w-4 h-4" /> Form Pickup & Delivery</> : <><Calculator className="w-4 h-4" /> Kalkulator Estimasi</>}
+                {mode === "detail" ? <><MapPin className="w-4 h-4" /> {t("productOrder.trucking.modeDetail", "Form Pickup & Delivery")}</> : <><Calculator className="w-4 h-4" /> {t("productOrder.trucking.modeCalculator", "Kalkulator Estimasi")}</>}
               </button>
             ))}
           </div>
@@ -645,45 +647,45 @@ export default function ProductOrderPage() {
           {/* Detail Form */}
           {truckingForm.mode === "detail" && (
             <div className="border rounded-xl p-5 bg-card space-y-4">
-              <h2 className="font-semibold text-sm flex items-center gap-2"><MapPin className="w-4 h-4 text-orange-500" /> Detail Pickup & Delivery</h2>
+              <h2 className="font-semibold text-sm flex items-center gap-2"><MapPin className="w-4 h-4 text-orange-500" /> {t("productOrder.trucking.detailTitle", "Detail Pickup & Delivery")}</h2>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1.5 sm:col-span-2">
                   <Label className="text-xs flex items-center gap-1.5">
-                    <MapPin className="w-3 h-3 text-orange-500" /> Alamat Pickup
-                    <span className="ml-auto text-[10px] font-semibold text-orange-600 bg-orange-100 border border-orange-200 rounded px-1.5 py-0.5">Otomatis</span>
+                    <MapPin className="w-3 h-3 text-orange-500" /> {t("productOrder.trucking.pickupAddress", "Alamat Pickup")}
+                    <span className="ml-auto text-[10px] font-semibold text-orange-600 bg-orange-100 border border-orange-200 rounded px-1.5 py-0.5">{t("productOrder.trucking.auto", "Otomatis")}</span>
                   </Label>
                   <div className="bg-orange-50 border border-orange-200 rounded-lg p-2.5">
                     <p className="text-xs font-semibold text-slate-800">{companyOrigin?.name ?? COMPANY_CONFIG.brandName}</p>
                     <p className="text-[11px] text-slate-500 mt-0.5">{companyOrigin?.address ?? COMPANY_CONFIG.pickupAddress}</p>
-                    <p className="text-[10px] text-orange-600 mt-1">Tim kami yang akan menjemput barang dari lokasi ini.</p>
+                    <p className="text-[10px] text-orange-600 mt-1">{t("productOrder.trucking.pickupNote", "Tim kami yang akan menjemput barang dari lokasi ini.")}</p>
                   </div>
                 </div>
                 <div className="space-y-1.5 sm:col-span-2">
-                  <Label className="text-xs">Alamat Pengiriman <span className="text-destructive">*</span></Label>
+                  <Label className="text-xs">{t("productOrder.trucking.deliveryAddress", "Alamat Pengiriman")} <span className="text-destructive">*</span></Label>
                   <Textarea rows={2} placeholder="Jl. ..., Kota, Provinsi" value={truckingForm.deliveryAddress}
                     className={deliveryAddressError ? "border-destructive focus-visible:ring-destructive" : ""}
                     onChange={e => { setDeliveryAddressError(false); setTruckingForm(f => ({ ...f, deliveryAddress: e.target.value })); }} />
-                  {deliveryAddressError && <p className="text-[11px] text-destructive">Alamat pengiriman wajib diisi.</p>}
+                  {deliveryAddressError && <p className="text-[11px] text-destructive">{t("productOrder.trucking.deliveryAddressError", "Alamat pengiriman wajib diisi.")}</p>}
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-xs">Nama Kontak</Label>
-                  <Input placeholder="Nama PIC" value={truckingForm.contactName} onChange={e => setTruckingForm(f => ({ ...f, contactName: e.target.value }))} />
+                  <Label className="text-xs">{t("productOrder.trucking.contactName", "Nama Kontak")}</Label>
+                  <Input placeholder={t("productOrder.trucking.contactNamePlaceholder", "Nama PIC")} value={truckingForm.contactName} onChange={e => setTruckingForm(f => ({ ...f, contactName: e.target.value }))} />
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-xs">No. Telepon Kontak</Label>
+                  <Label className="text-xs">{t("productOrder.trucking.contactPhone", "No. Telepon Kontak")}</Label>
                   <Input type="tel" placeholder="08xxxxxxxxxx" value={truckingForm.contactPhone} onChange={e => setTruckingForm(f => ({ ...f, contactPhone: e.target.value }))} />
                 </div>
                 <div className="space-y-1.5 sm:col-span-2">
-                  <Label className="text-xs">Catatan (opsional)</Label>
-                  <Textarea rows={2} placeholder="Instruksi khusus, info tambahan untuk tim pengiriman..." value={truckingForm.notes} onChange={e => setTruckingForm(f => ({ ...f, notes: e.target.value }))} />
+                  <Label className="text-xs">{t("productOrder.trucking.notes", "Catatan (opsional)")}</Label>
+                  <Textarea rows={2} placeholder={t("productOrder.trucking.notesPlaceholder", "Instruksi khusus, info tambahan untuk tim pengiriman...")} value={truckingForm.notes} onChange={e => setTruckingForm(f => ({ ...f, notes: e.target.value }))} />
                 </div>
               </div>
               <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 text-xs text-orange-700">
-                💡 Estimasi biaya akan dikonfirmasi oleh tim setelah pesanan masuk.
+                💡 {t("productOrder.trucking.confirmNote", "Estimasi biaya akan dikonfirmasi oleh tim setelah pesanan masuk.")}
               </div>
               <Button className="w-full bg-orange-600 hover:bg-orange-700" onClick={handleConfirmTrucking}
                 disabled={!truckingForm.deliveryAddress.trim()}>
-                Tambahkan ke Pesanan <ArrowRight className="w-4 h-4 ml-2" />
+                {t("productOrder.trucking.addToOrder", "Tambahkan ke Pesanan")} <ArrowRight className="w-4 h-4 ml-2" />
               </Button>
             </div>
           )}
@@ -692,13 +694,13 @@ export default function ProductOrderPage() {
           {truckingForm.mode === "calculator" && (
             <div className="border rounded-xl p-5 bg-card space-y-4">
               <h2 className="font-semibold text-sm flex items-center gap-2">
-                <Calculator className="w-4 h-4 text-orange-500" /> Estimasi Biaya Trucking
+                <Calculator className="w-4 h-4 text-orange-500" /> {t("productOrder.trucking.estimateTitle", "Estimasi Biaya Trucking")}
               </h2>
 
               {/* Spesifikasi otomatis dari keranjang */}
               <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 space-y-2">
                 <p className="text-[11px] font-semibold text-emerald-700 flex items-center gap-1.5">
-                  <Package className="w-3.5 h-3.5" /> Spesifikasi dihitung otomatis dari pesanan Anda
+                  <Package className="w-3.5 h-3.5" /> {t("productOrder.trucking.autoSpec", "Spesifikasi dihitung otomatis dari pesanan Anda")}
                 </p>
                 {(() => {
                   const wKg = parseFloat(truckingForm.weight) || 0;
@@ -706,34 +708,34 @@ export default function ProductOrderPage() {
                   return (
                     <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
                       <div className="flex justify-between">
-                        <span className="text-slate-500">Total Berat</span>
+                        <span className="text-slate-500">{t("productOrder.trucking.totalWeight", "Total Berat")}</span>
                         <span className="font-semibold text-slate-800">
                           {truckingForm.weight} kg
                           {!cartHasWeight && (
-                            <span className="ml-1 text-[10px] text-amber-600 font-normal">(estimasi)</span>
+                            <span className="ml-1 text-[10px] text-amber-600 font-normal">({t("productOrder.trucking.estimate", "estimasi")})</span>
                           )}
                         </span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-slate-500">Jenis Barang</span>
+                        <span className="text-slate-500">{t("productOrder.trucking.goodsType", "Jenis Barang")}</span>
                         <span className="font-semibold text-slate-800">{truckingForm.goodsType || "General Cargo"}</span>
                       </div>
                       {cartHasDims && (
                         <div className="flex justify-between col-span-2">
-                          <span className="text-slate-500">Dimensi</span>
+                          <span className="text-slate-500">{t("productOrder.trucking.dimensions", "Dimensi")}</span>
                           <span className="font-semibold text-slate-800">
                             {truckingForm.length} × {truckingForm.width} × {truckingForm.height} cm
                           </span>
                         </div>
                       )}
                       <div className="flex justify-between col-span-2">
-                        <span className="text-slate-500">Kota Asal</span>
+                        <span className="text-slate-500">{t("productOrder.trucking.originCity", "Kota Asal")}</span>
                         <span className="font-semibold text-slate-800">{truckingForm.origin || companyOrigin?.originCity || "Jakarta"}</span>
                       </div>
                       {sugVehicle && (
                         <div className="flex justify-between col-span-2 pt-1 border-t border-emerald-100">
                           <span className="text-slate-500 flex items-center gap-1">
-                            <Truck className="w-3 h-3 text-orange-500" /> Kendaraan Disarankan
+                            <Truck className="w-3 h-3 text-orange-500" /> {t("productOrder.trucking.suggestedVehicle", "Kendaraan Disarankan")}
                           </span>
                           <span className="flex items-center gap-1">
                             <span className="text-orange-500 font-bold text-[10px]">★</span>
@@ -751,34 +753,34 @@ export default function ProductOrderPage() {
               <div className="space-y-1.5">
                 <Label className="text-sm font-semibold flex items-center gap-1">
                   <MapPin className="w-4 h-4 text-primary" />
-                  Kota / Alamat Tujuan <span className="text-destructive">*</span>
+                  {t("productOrder.trucking.destinationLabel", "Kota / Alamat Tujuan")} <span className="text-destructive">*</span>
                 </Label>
                 <Input
-                  placeholder="Contoh: Surabaya, Bandung, Medan..."
+                  placeholder={t("productOrder.trucking.destinationPlaceholder", "Contoh: Surabaya, Bandung, Medan...")}
                   value={truckingForm.destination}
                   onChange={e => { setTruckingForm(f => ({ ...f, destination: e.target.value })); setVehicleComparison(null); }}
                   className="border-primary/40 focus:border-primary text-base"
                   autoFocus
                 />
-                <p className="text-[11px] text-muted-foreground">Isi kota atau alamat tujuan pengiriman Anda</p>
+                <p className="text-[11px] text-muted-foreground">{t("productOrder.trucking.destinationHint", "Isi kota atau alamat tujuan pengiriman Anda")}</p>
               </div>
 
               <Button variant="outline" className="w-full border-orange-400 text-orange-600 hover:bg-orange-50"
                 disabled={!truckingForm.destination.trim() || estimating}
                 onClick={handleEstimateTrucking}>
                 {estimating
-                  ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Menghitung...</>
-                  : <><Calculator className="w-4 h-4 mr-2" /> Bandingkan Semua Kendaraan</>}
+                  ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> {t("productOrder.trucking.calculating", "Menghitung...")}</>
+                  : <><Calculator className="w-4 h-4 mr-2" /> {t("productOrder.trucking.compareVehicles", "Bandingkan Semua Kendaraan")}</>}
               </Button>
 
               {vehicleComparison && (
                 <div className="rounded-xl border overflow-hidden">
                   <div className="bg-slate-50 px-4 py-2.5 border-b flex items-center justify-between">
                     <p className="text-xs font-semibold text-slate-600 flex items-center gap-1.5">
-                      <Calculator className="w-3.5 h-3.5" /> Perbandingan Kendaraan
+                      <Calculator className="w-3.5 h-3.5" /> {t("productOrder.trucking.vehicleComparison", "Perbandingan Kendaraan")}
                     </p>
                     <p className="text-[10px] text-slate-400">
-                      {truckingForm.origin || companyOrigin?.originCity || "Asal"} → {truckingForm.destination} · {truckingForm.weight} kg
+                      {truckingForm.origin || companyOrigin?.originCity || t("productOrder.trucking.origin", "Asal")} → {truckingForm.destination} · {truckingForm.weight} kg
                     </p>
                   </div>
                   <div className="divide-y">
@@ -798,8 +800,8 @@ export default function ProductOrderPage() {
                               {isSuggested && <span className="text-orange-500 text-xs font-bold">★</span>}
                               <span className={`text-sm font-semibold ${isSelected ? "text-orange-700" : "text-slate-700"}`}>{v.type}</span>
                               <span className="text-xs text-slate-400">{v.desc}</span>
-                              {isSuggested && <span className="text-[10px] bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded-full font-semibold">Disarankan</span>}
-                              {!v.suitable && <span className="text-[10px] bg-red-100 text-red-500 px-1.5 py-0.5 rounded-full font-semibold">Melebihi kapasitas</span>}
+                              {isSuggested && <span className="text-[10px] bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded-full font-semibold">{t("productOrder.trucking.suggested", "Disarankan")}</span>}
+                              {!v.suitable && <span className="text-[10px] bg-red-100 text-red-500 px-1.5 py-0.5 rounded-full font-semibold">{t("productOrder.trucking.overCapacity", "Melebihi kapasitas")}</span>}
                             </div>
                           </div>
                           <div className="flex items-center gap-2 shrink-0">
@@ -811,7 +813,7 @@ export default function ProductOrderPage() {
                     })}
                   </div>
                   <div className="bg-slate-50 px-4 py-2 border-t">
-                    <p className="text-[10px] text-slate-400">Klik kendaraan untuk memilih. Biaya final dikonfirmasi tim logistik.</p>
+                    <p className="text-[10px] text-slate-400">{t("productOrder.trucking.comparisonNote", "Klik kendaraan untuk memilih. Biaya final dikonfirmasi tim logistik.")}</p>
                   </div>
                 </div>
               )}
@@ -819,7 +821,7 @@ export default function ProductOrderPage() {
               <Button className="w-full bg-orange-600 hover:bg-orange-700"
                 disabled={!truckingForm.destination.trim()}
                 onClick={handleConfirmTrucking}>
-                {truckingEstimate ? "Tambahkan ke Pesanan" : "Tambahkan (Harga Menyusul)"}
+                {truckingEstimate ? t("productOrder.trucking.addToOrder", "Tambahkan ke Pesanan") : t("productOrder.trucking.addPricePending", "Tambahkan (Harga Menyusul)")}
                 <ArrowRight className="w-4 h-4 ml-2" />
               </Button>
             </div>
@@ -840,8 +842,8 @@ export default function ProductOrderPage() {
               <ChevronLeft className="w-4 h-4" />
             </Button>
             <div>
-              <h1 className="text-xl font-bold">Detail Pesanan</h1>
-              <p className="text-primary-foreground/70 text-sm">Isi informasi produk dan data pengiriman</p>
+              <h1 className="text-xl font-bold">{t("productOrder.checkout.title", "Detail Pesanan")}</h1>
+              <p className="text-primary-foreground/70 text-sm">{t("productOrder.checkout.subtitle", "Isi informasi produk dan data pengiriman")}</p>
             </div>
           </div>
         </div>
@@ -851,7 +853,7 @@ export default function ProductOrderPage() {
           {/* Order Summary */}
           <div className="border rounded-xl p-5 bg-card space-y-3">
             <h2 className="font-semibold flex items-center gap-2 text-sm">
-              <ShoppingCart className="w-4 h-4" /> Ringkasan Pesanan
+              <ShoppingCart className="w-4 h-4" /> {t("productOrder.checkout.orderSummary", "Ringkasan Pesanan")}
             </h2>
 
             {/* Products */}
@@ -874,8 +876,8 @@ export default function ProductOrderPage() {
                 <div className="flex items-center gap-2 rounded-lg bg-amber-50 border border-amber-200 p-3">
                   <span className="text-amber-600 text-lg">⚡</span>
                   <div>
-                    <p className="text-xs font-semibold text-amber-700">Mode: Produk Dulu</p>
-                    <p className="text-xs text-amber-600">Pilihan pengiriman ditentukan setelah produk dikonfirmasi vendor.</p>
+                    <p className="text-xs font-semibold text-amber-700">{t("productOrder.checkout.productFirstMode", "Mode: Produk Dulu")}</p>
+                    <p className="text-xs text-amber-600">{t("productOrder.checkout.productFirstModeDesc", "Pilihan pengiriman ditentukan setelah produk dikonfirmasi vendor.")}</p>
                   </div>
                 </div>
               </>
@@ -891,18 +893,18 @@ export default function ProductOrderPage() {
                     </div>
                   </div>
                   <p className="font-semibold shrink-0 ml-2">
-                    {selectedService.estimatedCost ? formatCurrency(selectedService.estimatedCost) : <span className="text-muted-foreground text-xs">Harga menyusul</span>}
+                    {selectedService.estimatedCost ? formatCurrency(selectedService.estimatedCost) : <span className="text-muted-foreground text-xs">{t("productOrder.service.pricePendingShort", "Harga menyusul")}</span>}
                   </p>
                 </div>
                 <Button variant="ghost" size="sm" className="text-xs text-muted-foreground -mt-1 h-7 px-2" onClick={() => setStep("service-catalog")}>
-                  Ganti layanan
+                  {t("productOrder.checkout.changeService", "Ganti layanan")}
                 </Button>
               </>
             ) : (
               <>
                 <Separator />
                 <Button variant="outline" size="sm" className="w-full gap-2 text-sm border-dashed" onClick={() => setStep("service-catalog")}>
-                  <Truck className="w-4 h-4" /> + Tambah Layanan Pengiriman
+                  <Truck className="w-4 h-4" /> + {t("productOrder.checkout.addShippingService", "Tambah Layanan Pengiriman")}
                 </Button>
               </>
             )}
@@ -911,22 +913,22 @@ export default function ProductOrderPage() {
             <Separator />
             <div className="space-y-1.5 text-sm">
               <div className="flex justify-between text-muted-foreground">
-                <span>Subtotal produk</span>
+                <span>{t("productOrder.checkout.productSubtotal", "Subtotal produk")}</span>
                 <span>{formatCurrency(cartSubtotal)}</span>
               </div>
               {serviceAmt > 0 && (
                 <div className="flex justify-between text-muted-foreground">
-                  <span>Layanan pengiriman</span>
+                  <span>{t("productOrder.checkout.shippingService", "Layanan pengiriman")}</span>
                   <span>{formatCurrency(serviceAmt)}</span>
                 </div>
               )}
               <div className="flex justify-between text-muted-foreground">
-                <span>PPN 11%</span>
+                <span>{t("productOrder.checkout.vat", "PPN 11%")}</span>
                 <span>{formatCurrency(ppn)}</span>
               </div>
               <Separator />
               <div className="flex justify-between font-bold text-base">
-                <span>Total Estimasi</span>
+                <span>{t("productOrder.checkout.estimatedTotal", "Total Estimasi")}</span>
                 <span className="text-primary">{formatCurrency(grandTotal)}</span>
               </div>
             </div>
@@ -934,11 +936,11 @@ export default function ProductOrderPage() {
 
           {/* Category Selector */}
           <div className="border rounded-xl p-5 bg-card space-y-3">
-            <h2 className="font-semibold flex items-center gap-2 text-sm"><Tag className="w-4 h-4" /> Kategori Komoditas</h2>
-            <p className="text-xs text-muted-foreground">Pilih kategori untuk menampilkan field dokumen yang relevan.</p>
+            <h2 className="font-semibold flex items-center gap-2 text-sm"><Tag className="w-4 h-4" /> {t("productOrder.checkout.commodityCategory", "Kategori Komoditas")}</h2>
+            <p className="text-xs text-muted-foreground">{t("productOrder.checkout.commodityCategoryHint", "Pilih kategori untuk menampilkan field dokumen yang relevan.")}</p>
             {templatesLoading ? (
               <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
-                <Loader2 className="w-3 h-3 animate-spin" /> Memuat kategori...
+                <Loader2 className="w-3 h-3 animate-spin" /> {t("productOrder.checkout.loadingCategories", "Memuat kategori...")}
               </div>
             ) : (
               <Select value={productCategory} onValueChange={setProductCategory}>
@@ -956,49 +958,49 @@ export default function ProductOrderPage() {
 
           {/* Customer Data */}
           <div className="border rounded-xl p-5 bg-card space-y-4">
-            <h2 className="font-semibold flex items-center gap-2 text-sm"><User className="w-4 h-4" /> Data Pemesan</h2>
+            <h2 className="font-semibold flex items-center gap-2 text-sm"><User className="w-4 h-4" /> {t("productOrder.checkout.ordererData", "Data Pemesan")}</h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <Label className="text-xs">Nama Lengkap <span className="text-destructive">*</span></Label>
-                <Input value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="Nama lengkap" />
+                <Label className="text-xs">{t("productOrder.checkout.fullName", "Nama Lengkap")} <span className="text-destructive">*</span></Label>
+                <Input value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder={t("productOrder.checkout.fullNamePlaceholder", "Nama lengkap")} />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs">No. WhatsApp <span className="text-destructive">*</span></Label>
+                <Label className="text-xs">{t("productOrder.checkout.whatsapp", "No. WhatsApp")} <span className="text-destructive">*</span></Label>
                 <Input value={phone} onChange={e => setPhone(e.target.value)} placeholder="08xxxxxxxxxx" type="tel" />
               </div>
               <div className="space-y-1.5 sm:col-span-2">
-                <Label className="text-xs">Email <span className="text-destructive">*</span></Label>
+                <Label className="text-xs">{t("productOrder.checkout.email", "Email")} <span className="text-destructive">*</span></Label>
                 <Input value={email} onChange={e => setEmail(e.target.value)} placeholder="email@example.com" type="email" />
               </div>
               <div className="space-y-1.5 sm:col-span-2">
                 <Label className="text-xs">
-                  Alamat Pengiriman{" "}
+                  {t("productOrder.checkout.shippingAddress", "Alamat Pengiriman")}{" "}
                   {selectedService
                     ? <span className="text-destructive">*</span>
-                    : <span className="text-muted-foreground font-normal">(opsional — kosongkan jika ambil sendiri)</span>}
+                    : <span className="text-muted-foreground font-normal">({t("productOrder.checkout.shippingAddressOptional", "opsional — kosongkan jika ambil sendiri")})</span>}
                 </Label>
                 <Input value={address}
                   className={checkoutAddressError ? "border-destructive focus-visible:ring-destructive" : ""}
                   onChange={e => { setCheckoutAddressError(false); setAddress(e.target.value); }}
-                  placeholder={selectedService ? "Jl. ..., Kota, Provinsi" : "Kosongkan jika ambil sendiri di gudang kami"} />
-                {checkoutAddressError && <p className="text-[11px] text-destructive">Alamat pengiriman wajib diisi jika menggunakan layanan pengiriman.</p>}
+                  placeholder={selectedService ? "Jl. ..., Kota, Provinsi" : t("productOrder.checkout.selfPickupPlaceholder", "Kosongkan jika ambil sendiri di gudang kami")} />
+                {checkoutAddressError && <p className="text-[11px] text-destructive">{t("productOrder.checkout.shippingAddressRequiredError", "Alamat pengiriman wajib diisi jika menggunakan layanan pengiriman.")}</p>}
                 {!selectedService && !address.trim() && (
                   <p className="text-[11px] text-green-600 flex items-center gap-1">
-                    <Warehouse className="w-3 h-3" /> Pesanan akan disiapkan untuk diambil di gudang kami
+                    <Warehouse className="w-3 h-3" /> {t("productOrder.checkout.selfPickupNote", "Pesanan akan disiapkan untuk diambil di gudang kami")}
                   </p>
                 )}
               </div>
               <div className="space-y-1.5 sm:col-span-2">
-                <Label className="text-xs">Catatan Tambahan (opsional)</Label>
-                <Input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Catatan tambahan..." />
+                <Label className="text-xs">{t("productOrder.checkout.additionalNotes", "Catatan Tambahan (opsional)")}</Label>
+                <Input value={notes} onChange={e => setNotes(e.target.value)} placeholder={t("productOrder.checkout.notesPlaceholder", "Catatan tambahan...")} />
               </div>
             </div>
           </div>
 
           <Button className="w-full h-12 text-base gap-2" onClick={handleSubmit} disabled={submitting || templatesLoading}>
             {submitting
-              ? <><Loader2 className="w-4 h-4 animate-spin" /> Mengirim...</>
-              : <><CheckCircle2 className="w-4 h-4" /> Kirim Pesanan</>}
+              ? <><Loader2 className="w-4 h-4 animate-spin" /> {t("productOrder.checkout.sending", "Mengirim...")}</>
+              : <><CheckCircle2 className="w-4 h-4" /> {t("productOrder.checkout.submitOrder", "Kirim Pesanan")}</>}
           </Button>
         </div>
       </div>
@@ -1013,43 +1015,43 @@ export default function ProductOrderPage() {
         <div className={`border rounded-2xl p-8 ${productFirstMode ? "bg-amber-50 border-amber-200" : "bg-green-50 border-green-200"}`}>
           <CheckCircle2 className={`w-16 h-16 mx-auto mb-4 ${productFirstMode ? "text-amber-500" : "text-green-500"}`} />
           <h1 className={`text-2xl font-bold mb-2 ${productFirstMode ? "text-amber-800" : "text-green-800"}`}>
-            {productFirstMode ? "Pesanan Produk Diterima!" : "Pesanan Berhasil!"}
+            {productFirstMode ? t("productOrder.success.productFirstTitle", "Pesanan Produk Diterima!") : t("productOrder.success.title", "Pesanan Berhasil!")}
           </h1>
           <p className={`text-sm mb-4 ${productFirstMode ? "text-amber-700" : "text-green-700"}`}>
-            No. Pesanan: <strong className="font-mono">{orderNumber}</strong>
+            {t("productOrder.success.orderNumber", "No. Pesanan")}: <strong className="font-mono">{orderNumber}</strong>
           </p>
           {productFirstMode ? (
             <div className="space-y-2 text-left">
-              <p className="text-amber-700 text-sm font-medium">Langkah selanjutnya:</p>
+              <p className="text-amber-700 text-sm font-medium">{t("productOrder.success.nextSteps", "Langkah selanjutnya:")}</p>
               <ol className="text-amber-600 text-xs space-y-1 list-decimal list-inside">
-                <li>Admin akan mencari vendor produk terbaik</li>
-                <li>Anda akan menerima penawaran produk via WhatsApp</li>
-                <li>Setujui atau tolak penawaran produk</li>
-                <li>Pilih mode pengiriman yang Anda inginkan</li>
+                <li>{t("productOrder.success.step1", "Admin akan mencari vendor produk terbaik")}</li>
+                <li>{t("productOrder.success.step2", "Anda akan menerima penawaran produk via WhatsApp")}</li>
+                <li>{t("productOrder.success.step3", "Setujui atau tolak penawaran produk")}</li>
+                <li>{t("productOrder.success.step4", "Pilih mode pengiriman yang Anda inginkan")}</li>
               </ol>
             </div>
           ) : (
             <>
               {selectedService && (
                 <p className="text-green-600 text-xs mb-2">
-                  Layanan: <strong>{selectedService.serviceName}</strong>
-                  {selectedService.estimatedCost ? ` · ${formatCurrency(selectedService.estimatedCost)}` : " · Harga menyusul"}
+                  {t("productOrder.success.service", "Layanan")}: <strong>{selectedService.serviceName}</strong>
+                  {selectedService.estimatedCost ? ` · ${formatCurrency(selectedService.estimatedCost)}` : ` · ${t("productOrder.service.pricePendingShort", "Harga menyusul")}`}
                 </p>
               )}
               <p className="text-green-600 text-sm">
-                Tim kami akan menghubungi Anda via WhatsApp atau email untuk konfirmasi dan pembayaran.
+                {t("productOrder.success.contactNote", "Tim kami akan menghubungi Anda via WhatsApp atau email untuk konfirmasi dan pembayaran.")}
               </p>
             </>
           )}
         </div>
         <div className="flex flex-col sm:flex-row gap-3 justify-center">
-          <Button variant="outline" onClick={() => setLocation("/products")}>Lihat Produk Lain</Button>
+          <Button variant="outline" onClick={() => setLocation("/products")}>{t("productOrder.success.viewOtherProducts", "Lihat Produk Lain")}</Button>
           <Button onClick={() => {
             setCart([]); setStep("products"); setCustomerName(""); setEmail(""); setPhone("");
             setAddress(""); setNotes(""); setProductCategory("general"); setDynamicValues(EMPTY_FORM);
             setSelectedService(null); setTruckingForm(EMPTY_TRUCKING); setTruckingEstimate(null);
             setProductFirstMode(false);
-          }}>Pesan Lagi</Button>
+          }}>{t("productOrder.success.orderAgain", "Pesan Lagi")}</Button>
         </div>
       </div>
     </div>

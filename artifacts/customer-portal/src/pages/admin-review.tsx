@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useParams } from "wouter";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 // ── Shared types ──────────────────────────────────────────────────────────────
 
@@ -268,30 +269,32 @@ const VENDOR_LINK_STATUS: Record<string, { label: string; cls: string }> = {
 // ── Shared: loading / error / order card ─────────────────────────────────────
 
 function LoadingScreen() {
+  const { t } = useLanguage();
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50">
       <div className="flex flex-col items-center gap-3">
         <div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
-        <p className="text-slate-500 text-sm">Memuat data…</p>
-        <p className="text-slate-400 text-xs">Harap tunggu sebentar…</p>
+        <p className="text-slate-500 text-sm">{t("adminReview.loadingData", "Memuat data…")}</p>
+        <p className="text-slate-400 text-xs">{t("adminReview.loadingWait", "Harap tunggu sebentar…")}</p>
       </div>
     </div>
   );
 }
 
 function ErrorScreen({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  const { t } = useLanguage();
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
       <div className="bg-white rounded-2xl shadow-md p-8 max-w-sm w-full text-center space-y-3">
         <div className="text-5xl">⚠️</div>
-        <h2 className="text-lg font-semibold text-slate-800">Link Tidak Valid</h2>
+        <h2 className="text-lg font-semibold text-slate-800">{t("adminReview.invalidLink", "Link Tidak Valid")}</h2>
         <p className="text-slate-500 text-sm">{message}</p>
         {onRetry && (
           <button
             onClick={onRetry}
             className="mt-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700"
           >
-            Coba Lagi
+            {t("adminReview.retryBtn", "Coba Lagi")}
           </button>
         )}
       </div>
@@ -300,10 +303,11 @@ function ErrorScreen({ message, onRetry }: { message: string; onRetry?: () => vo
 }
 
 function OrderCard({ order, label = "Order" }: { order: OrderInfo; label?: string }) {
+  const { t } = useLanguage();
   const isProduct = order.orderType === "product";
   const hasRoute = !isProduct && (order.origin || order.destination);
-  const serviceLabel = isProduct ? "Tipe Order" : "Layanan";
-  const serviceValue = isProduct ? "Produk" : (order.serviceType ?? "—");
+  const serviceLabel = isProduct ? t("adminReview.orderTypeLabel", "Tipe Order") : t("adminReview.serviceLabel", "Layanan");
+  const serviceValue = isProduct ? t("adminReview.productLabel", "Produk") : (order.serviceType ?? "—");
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
@@ -332,7 +336,7 @@ function OrderCard({ order, label = "Order" }: { order: OrderInfo; label?: strin
           </div>
           {hasRoute && (
             <div className="col-span-2">
-              <p className="text-slate-400 text-xs">Rute</p>
+              <p className="text-slate-400 text-xs">{t("adminReview.routeLabel", "Rute")}</p>
               <p className="font-semibold text-slate-800">
                 {order.origin || "—"} → {order.destination || "—"}
               </p>
@@ -340,7 +344,7 @@ function OrderCard({ order, label = "Order" }: { order: OrderInfo; label?: strin
           )}
           {order.commodity && (
             <div className="col-span-2">
-              <p className="text-slate-400 text-xs">Komoditi</p>
+              <p className="text-slate-400 text-xs">{t("adminReview.commodityLabel", "Komoditi")}</p>
               <p className="font-semibold text-slate-800">{order.commodity}</p>
             </div>
           )}
@@ -361,6 +365,7 @@ function VendorRow({
   checked: boolean;
   onChange: () => void;
 }) {
+  const { t } = useLanguage();
   return (
     <label
       className={`flex items-start gap-3.5 px-5 py-3.5 cursor-pointer transition-colors ${
@@ -380,12 +385,12 @@ function VendorRow({
           <span className="font-semibold text-slate-800 text-sm">{vendor.name}</span>
           {vendor.hasCommodityMatch && (
             <span className="text-[10px] bg-orange-100 text-orange-700 font-medium px-1.5 py-0.5 rounded-full">
-              🏷️ Komoditi
+              🏷️ {t("adminReview.commodityBadge", "Komoditi")}
             </span>
           )}
           {vendor.isMatching && !vendor.hasCommodityMatch && (
             <span className="text-[10px] bg-emerald-100 text-emerald-700 font-medium px-1.5 py-0.5 rounded-full">
-              ✓ Layanan
+              ✓ {t("adminReview.serviceBadge", "Layanan")}
             </span>
           )}
         </div>
@@ -411,6 +416,7 @@ const RESPONDED_STATUSES = new Set([
 ]);
 
 function CompareVendorsView({ data, token }: { data: CompareData; token: string }) {
+  const { t } = useLanguage();
   const { order, rfq, vendors } = data;
   const responded = vendors.filter((v) => RESPONDED_STATUSES.has(v.status));
   const notResponded = vendors.filter((v) => !RESPONDED_STATUSES.has(v.status));
@@ -469,29 +475,29 @@ function CompareVendorsView({ data, token }: { data: CompareData; token: string 
         <div className="bg-white rounded-2xl shadow-md p-8 max-w-md w-full space-y-5">
           <div className="text-center space-y-2">
             <div className="text-5xl">✅</div>
-            <h2 className="text-xl font-bold text-slate-800">Vendor Dipilih!</h2>
+            <h2 className="text-xl font-bold text-slate-800">{t("adminReview.vendorSelected", "Vendor Dipilih!")}</h2>
             <p className="text-slate-500 text-sm">
-              <strong>{result.vendorName}</strong> dipilih sebagai vendor untuk order ini.
+              <strong>{result.vendorName}</strong> {t("adminReview.vendorSelectedDesc", "dipilih sebagai vendor untuk order ini.")}
             </p>
           </div>
           {result.sellingPrice && (
             <div className="bg-slate-50 rounded-xl px-4 py-3 flex items-center justify-between">
-              <span className="text-sm text-slate-500">Harga Jual ke Customer</span>
+              <span className="text-sm text-slate-500">{t("adminReview.sellingPriceLabel", "Harga Jual ke Customer")}</span>
               <span className="font-bold text-slate-800 text-lg">{idr(result.sellingPrice)}</span>
             </div>
           )}
           {result.quoteUrl && (
             <div className="rounded-xl bg-green-50 border border-green-100 p-4 space-y-2">
               <p className="text-xs text-green-700 font-semibold uppercase tracking-wide">
-                📤 Penawaran Terkirim ke Customer
+                📤 {t("adminReview.quoteSentToCustomer", "Penawaran Terkirim ke Customer")}
               </p>
               <p className="text-xs text-slate-500 break-all">{result.quoteUrl}</p>
             </div>
           )}
           <div className="rounded-xl bg-amber-50 border border-amber-100 p-4 space-y-1">
-            <p className="text-xs text-amber-700 font-semibold uppercase tracking-wide">⏳ Menunggu Persetujuan Customer</p>
+            <p className="text-xs text-amber-700 font-semibold uppercase tracking-wide">⏳ {t("adminReview.waitingCustomerApproval", "Menunggu Persetujuan Customer")}</p>
             <p className="text-sm text-slate-600">
-              Forward ke vendor akan tersedia setelah customer menyetujui penawaran.
+              {t("adminReview.forwardAfterApproval", "Forward ke vendor akan tersedia setelah customer menyetujui penawaran.")}
             </p>
           </div>
         </div>
@@ -507,20 +513,20 @@ function CompareVendorsView({ data, token }: { data: CompareData; token: string 
           <div className="max-w-2xl mx-auto px-4 py-3 flex items-center gap-3">
             <span className="text-2xl">🔍</span>
             <div>
-              <h1 className="text-base font-bold text-slate-800 leading-tight">Bandingkan Penawaran</h1>
-              <p className="text-xs text-slate-400">Admin Panel</p>
+              <h1 className="text-base font-bold text-slate-800 leading-tight">{t("adminReview.compareTitle", "Bandingkan Penawaran")}</h1>
+              <p className="text-xs text-slate-400">{t("adminReview.adminPanel", "Admin Panel")}</p>
             </div>
           </div>
         </div>
         <div className="max-w-2xl mx-auto px-4 py-5 space-y-5">
-          <OrderCard order={order} label="Order" />
+          <OrderCard order={order} label={t("adminReview.orderLabel", "Order")} />
           <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-start gap-3">
             <span className="text-xl mt-0.5">⚠️</span>
             <div>
-              <p className="text-amber-800 font-semibold text-sm">Link Sudah Digunakan</p>
+              <p className="text-amber-800 font-semibold text-sm">{t("adminReview.linkAlreadyUsed", "Link Sudah Digunakan")}</p>
               <p className="text-amber-700 text-xs mt-0.5">
-                Vendor sudah dipilih sebelumnya pada{" "}
-                {new Date(data.usedAt).toLocaleString("id-ID")}. Buka BizPortal untuk detail RFQ {rfq.rfqNumber}.
+                {t("adminReview.vendorAlreadySelected", "Vendor sudah dipilih sebelumnya pada")}{" "}
+                {new Date(data.usedAt).toLocaleString("id-ID")}. {t("adminReview.openBizPortal", "Buka BizPortal untuk detail RFQ")} {rfq.rfqNumber}.
               </p>
             </div>
           </div>
@@ -537,19 +543,19 @@ function CompareVendorsView({ data, token }: { data: CompareData; token: string 
         <div className="max-w-2xl mx-auto px-4 py-3 flex items-center gap-3">
           <span className="text-2xl">🔍</span>
           <div>
-            <h1 className="text-base font-bold text-slate-800 leading-tight">Bandingkan Penawaran Vendor</h1>
-            <p className="text-xs text-slate-400">Admin Panel</p>
+            <h1 className="text-base font-bold text-slate-800 leading-tight">{t("adminReview.compareVendorTitle", "Bandingkan Penawaran Vendor")}</h1>
+            <p className="text-xs text-slate-400">{t("adminReview.adminPanel", "Admin Panel")}</p>
           </div>
         </div>
       </div>
 
       <div className="max-w-2xl mx-auto px-4 py-5 space-y-5">
-        <OrderCard order={order} label="Order" />
+        <OrderCard order={order} label={t("adminReview.orderLabel", "Order")} />
 
         {/* RFQ Info */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 px-5 py-4 flex items-center justify-between">
           <div>
-            <p className="text-xs text-slate-400">No. RFQ</p>
+            <p className="text-xs text-slate-400">{t("adminReview.rfqNoLabel", "No. RFQ")}</p>
             <p className="font-mono font-semibold text-slate-800">{rfq.rfqNumber}</p>
           </div>
           <span className={`text-xs font-semibold px-3 py-1.5 rounded-full ${
@@ -564,9 +570,9 @@ function CompareVendorsView({ data, token }: { data: CompareData; token: string 
         {/* Summary chips */}
         <div className="grid grid-cols-3 gap-3">
           {[
-            { label: "Total Vendor", val: vendors.length, cls: "bg-slate-50" },
-            { label: "Sudah Respon", val: responded.length, cls: responded.length > 0 ? "bg-emerald-50" : "bg-slate-50" },
-            { label: "Menunggu", val: notResponded.length, cls: notResponded.length > 0 ? "bg-amber-50" : "bg-slate-50" },
+            { label: t("adminReview.totalVendors", "Total Vendor"), val: vendors.length, cls: "bg-slate-50" },
+            { label: t("adminReview.responded", "Sudah Respon"), val: responded.length, cls: responded.length > 0 ? "bg-emerald-50" : "bg-slate-50" },
+            { label: t("adminReview.waiting", "Menunggu"), val: notResponded.length, cls: notResponded.length > 0 ? "bg-amber-50" : "bg-slate-50" },
           ].map((c) => (
             <div key={c.label} className={`${c.cls} rounded-xl p-3 text-center border border-slate-100`}>
               <p className="text-2xl font-bold text-slate-800">{c.val}</p>
@@ -588,7 +594,7 @@ function CompareVendorsView({ data, token }: { data: CompareData; token: string 
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
             <div className="px-5 py-3 bg-amber-50 border-b border-amber-100">
               <p className="text-xs font-semibold text-amber-700 uppercase tracking-wide">
-                ⏳ Belum Respon ({notResponded.length})
+                ⏳ {t("adminReview.notYetResponded", "Belum Respon")} ({notResponded.length})
               </p>
             </div>
             <div className="divide-y divide-slate-50">
@@ -608,15 +614,15 @@ function CompareVendorsView({ data, token }: { data: CompareData; token: string 
         {responded.length === 0 && (
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 px-5 py-8 text-center">
             <p className="text-3xl mb-2">⏳</p>
-            <p className="text-slate-500 text-sm">Belum ada vendor yang merespon.</p>
-            <p className="text-slate-400 text-xs mt-1">Kembali ke halaman ini setelah vendor mengisi penawaran.</p>
+            <p className="text-slate-500 text-sm">{t("adminReview.noVendorResponded", "Belum ada vendor yang merespon.")}</p>
+            <p className="text-slate-400 text-xs mt-1">{t("adminReview.comeBackLater", "Kembali ke halaman ini setelah vendor mengisi penawaran.")}</p>
           </div>
         )}
 
         {/* Selling price + options */}
         {responded.length > 0 && (
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 px-5 py-5 space-y-4">
-            <h2 className="text-sm font-bold text-slate-800">💰 Harga Jual ke Customer</h2>
+            <h2 className="text-sm font-bold text-slate-800">💰 {t("adminReview.sellingPriceTitle", "Harga Jual ke Customer")}</h2>
 
             {/* Price suggestion */}
             {effectivePrice != null && (
@@ -626,23 +632,23 @@ function CompareVendorsView({ data, token }: { data: CompareData; token: string 
                 className="w-full bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-300 rounded-xl px-4 py-3 flex items-center justify-between transition-colors cursor-pointer"
               >
                 <div className="text-left">
-                  <p className="text-xs text-slate-400">Harga vendor dipilih</p>
+                  <p className="text-xs text-slate-400">{t("adminReview.selectedVendorPrice", "Harga vendor dipilih")}</p>
                   <p className="font-semibold text-slate-700">{idr(effectivePrice)}</p>
                 </div>
                 <span className="text-xs text-blue-600 font-medium">
-                  Pakai harga ini
+                  {t("adminReview.useThisPrice", "Pakai harga ini")}
                 </span>
               </button>
             )}
 
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1">
-                Harga Jual (Rp)
+                {t("adminReview.sellingPriceRp", "Harga Jual (Rp)")}
               </label>
               <input
                 type="text"
                 inputMode="numeric"
-                placeholder="Contoh: 5000000"
+                placeholder={t("adminReview.sellingPricePlaceholder", "Contoh: 5000000")}
                 value={sellingPrice}
                 onChange={(e) => setSellingPrice(e.target.value.replace(/[^0-9]/g, ""))}
                 className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
@@ -654,13 +660,13 @@ function CompareVendorsView({ data, token }: { data: CompareData; token: string 
 
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1">
-                Catatan (opsional)
+                {t("adminReview.notesOptional", "Catatan (opsional)")}
               </label>
               <textarea
                 value={quoteNotes}
                 onChange={(e) => setQuoteNotes(e.target.value)}
                 rows={2}
-                placeholder="Syarat & kondisi, catatan untuk customer…"
+                placeholder={t("adminReview.notesPlaceholder", "Syarat & kondisi, catatan untuk customer…")}
                 className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none"
               />
             </div>
@@ -675,15 +681,15 @@ function CompareVendorsView({ data, token }: { data: CompareData; token: string 
                 className="accent-emerald-600 w-4 h-4"
               />
               <div>
-                <p className="text-sm font-medium text-slate-700">📤 Kirim penawaran ke customer via WA</p>
+                <p className="text-sm font-medium text-slate-700">📤 {t("adminReview.sendQuoteViaWA", "Kirim penawaran ke customer via WA")}</p>
                 <p className="text-xs text-slate-400">
-                  Customer akan menerima link untuk menyetujui / menolak harga
+                  {t("adminReview.sendQuoteDesc", "Customer akan menerima link untuk menyetujui / menolak harga")}
                 </p>
               </div>
             </label>
 
             {sendToCustomer && !sellingPrice && (
-              <p className="text-xs text-amber-600">⚠️ Isi harga jual terlebih dahulu sebelum mengirim ke customer.</p>
+              <p className="text-xs text-amber-600">⚠️ {t("adminReview.fillPriceFirst", "Isi harga jual terlebih dahulu sebelum mengirim ke customer.")}</p>
             )}
           </div>
         )}
@@ -708,18 +714,18 @@ function CompareVendorsView({ data, token }: { data: CompareData; token: string 
             {submitting ? (
               <>
                 <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                Menyimpan…
+                {t("adminReview.saving", "Menyimpan…")}
               </>
             ) : (
               <>
-                ✅ Pilih Vendor{selectedVendor ? ` — ${selectedVendor.vendorName}` : ""}
+                ✅ {t("adminReview.selectVendorBtn", "Pilih Vendor")}{selectedVendor ? ` — ${selectedVendor.vendorName}` : ""}
               </>
             )}
           </button>
         )}
 
         <p className="text-center text-xs text-slate-400 pb-8">
-          Memilih vendor akan menandai RFQ sebagai selesai · Vendor lain ditandai tidak dipilih
+          {t("adminReview.selectVendorNote", "Memilih vendor akan menandai RFQ sebagai selesai · Vendor lain ditandai tidak dipilih")}
         </p>
       </div>
     </div>
@@ -737,15 +743,16 @@ function QuoteList({
   onSelect: (id: number) => void;
   disabled?: boolean;
 }) {
+  const { t } = useLanguage();
   const responded = vendors.filter((v) => RESPONDED_STATUSES.has(v.status));
   if (responded.length === 0) return null;
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
       <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-between">
-        <h2 className="text-sm font-bold text-slate-800">Penawaran Vendor</h2>
+        <h2 className="text-sm font-bold text-slate-800">{t("adminReview.vendorQuotes", "Penawaran Vendor")}</h2>
         <span className="text-xs text-slate-400 bg-slate-50 px-2 py-1 rounded-full">
-          Termurah di atas
+          {t("adminReview.cheapestFirst", "Termurah di atas")}
         </span>
       </div>
       <div className="divide-y divide-slate-50">
@@ -775,7 +782,7 @@ function QuoteList({
                 <div className="flex items-center gap-2 flex-wrap">
                   {idx === 0 && !disabled && (
                     <span className="text-[10px] bg-yellow-100 text-yellow-700 font-semibold px-1.5 py-0.5 rounded-full">
-                      Termurah
+                      {t("adminReview.cheapest", "Termurah")}
                     </span>
                   )}
                   <span className="font-semibold text-slate-800 text-sm">{v.vendorName}</span>
@@ -792,7 +799,7 @@ function QuoteList({
                 )}
                 {v.submittedAt && (
                   <p className="text-[10px] text-slate-400 mt-0.5">
-                    Masuk: {new Date(v.submittedAt).toLocaleString("id-ID")}
+                    {t("adminReview.submittedAt", "Masuk")}: {new Date(v.submittedAt).toLocaleString("id-ID")}
                   </p>
                 )}
               </div>
@@ -807,6 +814,7 @@ function QuoteList({
 // ── ReviewOrderView ───────────────────────────────────────────────────────────
 
 function ReviewOrderView({ data, token }: { data: ReviewData; token: string }) {
+  const { t } = useLanguage();
   const { order, vendors = [], rfqs = [] } = data;
   const pc = usePageContent().admin_review;
   const commodityMatched = vendors.filter((v) => v.hasCommodityMatch);
@@ -862,10 +870,10 @@ function ReviewOrderView({ data, token }: { data: ReviewData; token: string }) {
         <div className="bg-white rounded-2xl shadow-md p-8 max-w-md w-full space-y-5">
           <div className="text-center space-y-2">
             <div className="text-5xl">✅</div>
-            <h2 className="text-xl font-bold text-slate-800">RFQ Terkirim!</h2>
+            <h2 className="text-xl font-bold text-slate-800">{t("adminReview.rfqSent", "RFQ Terkirim!")}</h2>
             <p className="text-slate-500 text-sm">
-              {blastResult.rfqNumber} — {sentCount} vendor berhasil dihubungi
-              {failedCount > 0 && `, ${failedCount} gagal`}
+              {blastResult.rfqNumber} — {sentCount} {t("adminReview.vendorContacted", "vendor berhasil dihubungi")}
+              {failedCount > 0 && `, ${failedCount} ${t("adminReview.failed", "gagal")}`}
             </p>
           </div>
           <div className="space-y-2">
@@ -878,21 +886,21 @@ function ReviewOrderView({ data, token }: { data: ReviewData; token: string }) {
               >
                 <span>{r.sent ? "✅" : "❌"}</span>
                 <span className="font-medium">{r.vendorName}</span>
-                <span className="ml-auto text-xs">{r.sent ? "Terkirim" : "Gagal"}</span>
+                <span className="ml-auto text-xs">{r.sent ? t("adminReview.sent", "Terkirim") : t("adminReview.failedShort", "Gagal")}</span>
               </div>
             ))}
           </div>
           {blastResult.compareUrl && (
             <div className="rounded-xl bg-blue-50 border border-blue-100 p-4 space-y-2">
-              <p className="text-xs text-blue-700 font-semibold uppercase tracking-wide">Langkah Selanjutnya</p>
+              <p className="text-xs text-blue-700 font-semibold uppercase tracking-wide">{t("adminReview.nextStep", "Langkah Selanjutnya")}</p>
               <p className="text-sm text-slate-600">
-                Setelah vendor mengisi penawaran, bandingkan dan pilih vendor terbaik:
+                {t("adminReview.compareAfterBlast", "Setelah vendor mengisi penawaran, bandingkan dan pilih vendor terbaik:")}
               </p>
               <a
                 href={blastResult.compareUrl}
                 className="block text-center bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 px-4 rounded-lg text-sm transition-colors"
               >
-                🔍 Bandingkan Penawaran Vendor →
+                🔍 {t("adminReview.compareVendorBtn", "Bandingkan Penawaran Vendor")} →
               </a>
             </div>
           )}
@@ -900,7 +908,7 @@ function ReviewOrderView({ data, token }: { data: ReviewData; token: string }) {
             onClick={() => setBlastResult(null)}
             className="w-full text-center text-sm text-slate-400 hover:text-slate-600 underline"
           >
-            Kembali ke halaman review
+            {t("adminReview.backToReview", "Kembali ke halaman review")}
           </button>
         </div>
       </div>
@@ -920,19 +928,19 @@ function ReviewOrderView({ data, token }: { data: ReviewData; token: string }) {
       </div>
 
       <div className="max-w-2xl mx-auto px-4 py-5 space-y-5">
-        <OrderCard order={order} label="Order Baru" />
+        <OrderCard order={order} label={t("adminReview.newOrderLabel", "Order Baru")} />
 
         {latestRfq && (
           <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-start gap-3">
             <span className="text-xl mt-0.5">⚠️</span>
             <div>
-              <p className="text-amber-800 font-semibold text-sm">RFQ sudah pernah dibuat</p>
+              <p className="text-amber-800 font-semibold text-sm">{t("adminReview.rfqAlreadyCreated", "RFQ sudah pernah dibuat")}</p>
               <p className="text-amber-700 text-xs mt-0.5">
-                {latestRfq.rfqNumber} — Status:{" "}
+                {latestRfq.rfqNumber} — {t("adminReview.statusLabel", "Status")}:{" "}
                 <strong>{RFQ_STATUS_LABEL[latestRfq.status] ?? latestRfq.status}</strong>
               </p>
               <p className="text-amber-600 text-xs mt-1">
-                Melanjutkan blast akan menambah vendor ke RFQ yang sudah ada.
+                {t("adminReview.continueBlastNote", "Melanjutkan blast akan menambah vendor ke RFQ yang sudah ada.")}
               </p>
             </div>
           </div>
@@ -953,7 +961,7 @@ function ReviewOrderView({ data, token }: { data: ReviewData; token: string }) {
                     : "bg-white text-slate-600 border-slate-200 hover:border-blue-300"
                 }`}
               >
-                {h} jam
+                {h} {t("adminReview.hoursUnit", "jam")}
               </button>
             ))}
             <div className="flex items-center gap-1.5 flex-1">
@@ -965,7 +973,7 @@ function ReviewOrderView({ data, token }: { data: ReviewData; token: string }) {
                 max={168}
                 className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-300"
               />
-              <span className="text-slate-400 text-xs shrink-0">jam</span>
+              <span className="text-slate-400 text-xs shrink-0">{t("adminReview.hoursUnit", "jam")}</span>
             </div>
           </div>
         </div>
@@ -975,7 +983,7 @@ function ReviewOrderView({ data, token }: { data: ReviewData; token: string }) {
             <div>
               <h2 className="text-sm font-bold text-slate-800">{pc.vendorSectionTitle}</h2>
               <p className="text-xs text-slate-400 mt-0.5">
-                {selected.size} vendor dipilih · {vendors.length} total aktif
+                {selected.size} {t("adminReview.vendorSelectedCount", "vendor dipilih")} · {vendors.length} {t("adminReview.totalActive", "total aktif")}
               </p>
             </div>
             <div className="flex gap-2">
@@ -983,14 +991,14 @@ function ReviewOrderView({ data, token }: { data: ReviewData; token: string }) {
                 onClick={() => setSelected(new Set(vendors.map((v) => v.id)))}
                 className="text-xs text-blue-600 hover:underline font-medium"
               >
-                Pilih Semua
+                {t("adminReview.selectAll", "Pilih Semua")}
               </button>
               <span className="text-slate-300">|</span>
               <button
                 onClick={() => setSelected(new Set())}
                 className="text-xs text-slate-400 hover:underline"
               >
-                Reset
+                {t("adminReview.reset", "Reset")}
               </button>
             </div>
           </div>
@@ -999,7 +1007,7 @@ function ReviewOrderView({ data, token }: { data: ReviewData; token: string }) {
             <div>
               <div className="px-5 py-2 bg-orange-50 border-b border-orange-100">
                 <p className="text-xs font-semibold text-orange-700 uppercase tracking-wide">
-                  🏷️ Sesuai Komoditi ({commodityMatched.length})
+                  🏷️ {t("adminReview.matchesCommodity", "Sesuai Komoditi")} ({commodityMatched.length})
                 </p>
               </div>
               <div className="divide-y divide-slate-50">
@@ -1014,7 +1022,7 @@ function ReviewOrderView({ data, token }: { data: ReviewData; token: string }) {
             <div>
               <div className="px-5 py-2 bg-emerald-50 border-b border-emerald-100">
                 <p className="text-xs font-semibold text-emerald-700 uppercase tracking-wide">
-                  ✅ Sesuai Layanan ({serviceMatched.length})
+                  ✅ {t("adminReview.matchesService", "Sesuai Layanan")} ({serviceMatched.length})
                 </p>
               </div>
               <div className="divide-y divide-slate-50">
@@ -1032,9 +1040,9 @@ function ReviewOrderView({ data, token }: { data: ReviewData; token: string }) {
                 className="w-full px-5 py-2.5 bg-slate-50 border-t border-slate-100 flex items-center justify-between hover:bg-slate-100 transition-colors"
               >
                 <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
-                  Vendor Lain ({others.length}) — tidak sesuai tipe layanan
+                  {t("adminReview.otherVendors", "Vendor Lain")} ({others.length}) — {t("adminReview.notMatchingService", "tidak sesuai tipe layanan")}
                 </p>
-                <span className="text-xs text-slate-400">{showOthers ? "▲ Sembunyikan" : "▼ Tampilkan"}</span>
+                <span className="text-xs text-slate-400">{showOthers ? `▲ ${t("adminReview.hide", "Sembunyikan")}` : `▼ ${t("adminReview.show", "Tampilkan")}`}</span>
               </button>
               {showOthers && (
                 <>
@@ -1049,7 +1057,7 @@ function ReviewOrderView({ data, token }: { data: ReviewData; token: string }) {
                         onClick={() => setShowAll((p) => !p)}
                         className="text-xs text-blue-600 hover:underline font-medium"
                       >
-                        {showAll ? "Tampilkan lebih sedikit ▲" : `Tampilkan ${others.length - 5} vendor lainnya ▼`}
+                        {showAll ? `${t("adminReview.showLess", "Tampilkan lebih sedikit")} ▲` : `${t("adminReview.showMoreVendors", "Tampilkan")} ${others.length - 5} ${t("adminReview.moreVendors", "vendor lainnya")} ▼`}
                       </button>
                     </div>
                   )}
@@ -1060,7 +1068,7 @@ function ReviewOrderView({ data, token }: { data: ReviewData; token: string }) {
 
           {vendors.length === 0 && (
             <div className="px-5 py-8 text-center text-slate-400 text-sm">
-              Tidak ada vendor aktif dengan nomor HP yang tersimpan.
+              {t("adminReview.noActiveVendors", "Tidak ada vendor aktif dengan nomor HP yang tersimpan.")}
             </div>
           )}
         </div>
@@ -1077,15 +1085,15 @@ function ReviewOrderView({ data, token }: { data: ReviewData; token: string }) {
           {blasting ? (
             <>
               <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              Mengirim…
+              {t("adminReview.sending", "Mengirim…")}
             </>
           ) : (
-            <>📤 Blast ke {selected.size} Vendor</>
+            <>📤 {t("adminReview.blastBtn", "Blast ke")} {selected.size} {t("adminReview.vendorUnit", "Vendor")}</>
           )}
         </button>
 
         <p className="text-center text-xs text-slate-400 pb-8">
-          {pc.blastHint} · {deadlineHours} jam batas waktu
+          {pc.blastHint} · {deadlineHours} {t("adminReview.hoursUnit", "jam")} {t("adminReview.deadlineLabel", "batas waktu")}
         </p>
       </div>
     </div>
@@ -1111,6 +1119,7 @@ function FulfillmentDetailRow({ label, value }: { label: string; value: string |
 }
 
 function ConfirmFulfillmentView({ data, token }: { data: ConfirmFulfillmentData; token: string }) {
+  const { t } = useLanguage();
   const { order, vendorFulfillmentLink: vf, orderItems = [] } = data;
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
@@ -1140,10 +1149,10 @@ function ConfirmFulfillmentView({ data, token }: { data: ConfirmFulfillmentData;
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <div className="bg-white rounded-2xl shadow-md p-8 max-w-md w-full space-y-5 text-center">
           <div className="text-5xl">🚀</div>
-          <h2 className="text-xl font-bold text-slate-800">Order Dikonfirmasi!</h2>
+          <h2 className="text-xl font-bold text-slate-800">{t("adminReview.orderConfirmed", "Order Dikonfirmasi!")}</h2>
           <p className="text-slate-500 text-sm">
-            Order <strong>{order.orderNumber}</strong> sekarang berstatus <strong>In Progress</strong>.
-            Customer akan mendapat notifikasi WhatsApp.
+            {t("adminReview.orderLabel", "Order")} <strong>{order.orderNumber}</strong> {t("adminReview.nowInProgress", "sekarang berstatus")} <strong>In Progress</strong>.
+            {t("adminReview.customerWillGetWA", "Customer akan mendapat notifikasi WhatsApp.")}
           </p>
         </div>
       </div>
@@ -1153,15 +1162,15 @@ function ConfirmFulfillmentView({ data, token }: { data: ConfirmFulfillmentData;
   if (data.isUsed && data.usedAt) {
     return (
       <div className="min-h-screen bg-slate-50">
-        <PageHeader icon="✅" title="Konfirmasi Fulfillment" />
+        <PageHeader icon="✅" title={t("adminReview.confirmFulfillmentTitle", "Konfirmasi Fulfillment")} />
         <div className="max-w-2xl mx-auto px-4 py-5 space-y-5">
-          <OrderCard order={order} label="Order" />
+          <OrderCard order={order} label={t("adminReview.orderLabel", "Order")} />
           <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-start gap-3">
             <span className="text-xl mt-0.5">⚠️</span>
             <div>
-              <p className="text-amber-800 font-semibold text-sm">Sudah Dikonfirmasi</p>
+              <p className="text-amber-800 font-semibold text-sm">{t("adminReview.alreadyConfirmed", "Sudah Dikonfirmasi")}</p>
               <p className="text-amber-700 text-xs mt-0.5">
-                Order ini sudah dikonfirmasi pada{" "}
+                {t("adminReview.orderConfirmedAt", "Order ini sudah dikonfirmasi pada")}{" "}
                 {new Date(data.usedAt).toLocaleString("id-ID")}.
               </p>
             </div>
@@ -1173,15 +1182,15 @@ function ConfirmFulfillmentView({ data, token }: { data: ConfirmFulfillmentData;
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <PageHeader icon="✅" title="Konfirmasi Fulfillment Vendor" />
+      <PageHeader icon="✅" title={t("adminReview.confirmFulfillmentVendorTitle", "Konfirmasi Fulfillment Vendor")} />
       <div className="max-w-2xl mx-auto px-4 py-5 space-y-5">
-        <OrderCard order={order} label="Order" />
+        <OrderCard order={order} label={t("adminReview.orderLabel", "Order")} />
 
         {vf ? (
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
             <div className="px-5 py-3 bg-emerald-50 border-b border-emerald-100">
               <p className="text-xs font-semibold text-emerald-700 uppercase tracking-wide">
-                📦 Data Fulfillment dari Vendor
+                📦 {t("adminReview.fulfillmentDataFromVendor", "Data Fulfillment dari Vendor")}
               </p>
               {vf.submittedAt && (
                 <p className="text-[10px] text-emerald-600 mt-0.5">
@@ -1192,35 +1201,35 @@ function ConfirmFulfillmentView({ data, token }: { data: ConfirmFulfillmentData;
             {/* Item breakdown */}
             {orderItems.length > 0 && (
               <div className="px-5 py-3 border-b border-slate-100 space-y-3">
-                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Detail Barang</p>
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{t("adminReview.itemDetail", "Detail Barang")}</p>
                 {orderItems.map((it, i) => (
                   <div key={i} className="rounded-xl bg-slate-50 border border-slate-100 px-3 py-2.5 space-y-1.5">
                     <p className="text-sm font-semibold text-slate-800">{it.name}</p>
                     <div className="flex justify-between text-xs text-slate-500">
-                      <span>Qty</span>
+                      <span>{t("adminReview.qty", "Qty")}</span>
                       <span className="font-medium text-slate-700">{it.qty} {it.unit}</span>
                     </div>
                     {it.priceBase != null && (
                       <div className="flex justify-between text-xs text-slate-500">
-                        <span>Harga Dasar</span>
+                        <span>{t("adminReview.basePrice", "Harga Dasar")}</span>
                         <span className="font-medium text-slate-700">Rp {Math.round(it.priceBase).toLocaleString("id-ID")}/unit</span>
                       </div>
                     )}
                     {it.subtotal != null && (
                       <div className="flex justify-between text-xs text-slate-500">
-                        <span>Subtotal</span>
+                        <span>{t("adminReview.subtotal", "Subtotal")}</span>
                         <span className="font-medium text-slate-700">Rp {it.subtotal.toLocaleString("id-ID")}</span>
                       </div>
                     )}
                     {it.ppn != null && (
                       <div className="flex justify-between text-xs text-slate-500">
-                        <span>PPN 11%</span>
+                        <span>{t("adminReview.ppn11", "PPN 11%")}</span>
                         <span className="font-medium text-slate-700">Rp {it.ppn.toLocaleString("id-ID")}</span>
                       </div>
                     )}
                     {it.total != null && (
                       <div className="flex justify-between text-xs border-t border-slate-200 pt-1.5 mt-1">
-                        <span className="font-semibold text-slate-700">Total</span>
+                        <span className="font-semibold text-slate-700">{t("adminReview.total", "Total")}</span>
                         <span className="font-bold text-emerald-700">Rp {it.total.toLocaleString("id-ID")}</span>
                       </div>
                     )}
@@ -1230,55 +1239,55 @@ function ConfirmFulfillmentView({ data, token }: { data: ConfirmFulfillmentData;
             )}
             <div className="px-5 py-3 space-y-0.5">
               {/* Product fulfillment fields */}
-              <FulfillmentDetailRow label="Stok" value={vf.stockConfirmed ? (STOCK_LABEL[vf.stockConfirmed] ?? vf.stockConfirmed) : null} />
-              <FulfillmentDetailRow label="Qty Konfirmasi" value={vf.qtyConfirmed} />
-              <FulfillmentDetailRow label="Siap Kirim" value={vf.readyDate} />
-              <FulfillmentDetailRow label="Lead Time" value={vf.leadTime} />
-              <FulfillmentDetailRow label="Lokasi Gudang" value={vf.warehouseLocation} />
+              <FulfillmentDetailRow label={t("adminReview.stockLabel", "Stok")} value={vf.stockConfirmed ? (STOCK_LABEL[vf.stockConfirmed] ?? vf.stockConfirmed) : null} />
+              <FulfillmentDetailRow label={t("adminReview.qtyConfirmed", "Qty Konfirmasi")} value={vf.qtyConfirmed} />
+              <FulfillmentDetailRow label={t("adminReview.readyToShip", "Siap Kirim")} value={vf.readyDate} />
+              <FulfillmentDetailRow label={t("adminReview.leadTime", "Lead Time")} value={vf.leadTime} />
+              <FulfillmentDetailRow label={t("adminReview.warehouseLocation", "Lokasi Gudang")} value={vf.warehouseLocation} />
               <FulfillmentDetailRow
-                label="Harga"
+                label={t("adminReview.priceLabel", "Harga")}
                 value={
                   vf.priceConfirmed === "agree"
-                    ? "Setuju harga asal"
+                    ? t("adminReview.agreeOriginalPrice", "Setuju harga asal")
                     : vf.priceConfirmed === "revised" && vf.revisedPrice
-                    ? `Revisi: Rp ${Math.round(vf.revisedPrice).toLocaleString("id-ID")}`
+                    ? `${t("adminReview.revisedPrice", "Revisi")}: Rp ${Math.round(vf.revisedPrice).toLocaleString("id-ID")}`
                     : null
                 }
               />
               {/* Trucking fields */}
-              <FulfillmentDetailRow label="Driver" value={vf.driverName} />
-              <FulfillmentDetailRow label="HP Driver" value={vf.driverPhone} />
-              <FulfillmentDetailRow label="Plat Nomor" value={vf.plateNumber} />
-              <FulfillmentDetailRow label="Kendaraan" value={vf.vehicleType} />
-              <FulfillmentDetailRow label="Est. Pickup" value={vf.pickupTime} />
+              <FulfillmentDetailRow label={t("adminReview.driverLabel", "Driver")} value={vf.driverName} />
+              <FulfillmentDetailRow label={t("adminReview.driverPhone", "HP Driver")} value={vf.driverPhone} />
+              <FulfillmentDetailRow label={t("adminReview.plateNumber", "Plat Nomor")} value={vf.plateNumber} />
+              <FulfillmentDetailRow label={t("adminReview.vehicleType", "Kendaraan")} value={vf.vehicleType} />
+              <FulfillmentDetailRow label={t("adminReview.estPickup", "Est. Pickup")} value={vf.pickupTime} />
               {/* Freight fields */}
-              <FulfillmentDetailRow label="Carrier" value={vf.carrierName} />
-              <FulfillmentDetailRow label="AWB/BL No." value={vf.awbBlNumber} />
-              <FulfillmentDetailRow label="Booking No." value={vf.bookingNumber} />
-              <FulfillmentDetailRow label="Kapal/Flight" value={vf.flightVessel} />
-              <FulfillmentDetailRow label="ETD" value={vf.etd} />
-              <FulfillmentDetailRow label="ETA" value={vf.eta} />
+              <FulfillmentDetailRow label={t("adminReview.carrier", "Carrier")} value={vf.carrierName} />
+              <FulfillmentDetailRow label={t("adminReview.awbBlNo", "AWB/BL No.")} value={vf.awbBlNumber} />
+              <FulfillmentDetailRow label={t("adminReview.bookingNo", "Booking No.")} value={vf.bookingNumber} />
+              <FulfillmentDetailRow label={t("adminReview.shipFlight", "Kapal/Flight")} value={vf.flightVessel} />
+              <FulfillmentDetailRow label={t("adminReview.etd", "ETD")} value={vf.etd} />
+              <FulfillmentDetailRow label={t("adminReview.eta", "ETA")} value={vf.eta} />
               {/* Customs fields */}
-              <FulfillmentDetailRow label="PIC Customs" value={vf.customsPicName} />
-              <FulfillmentDetailRow label="Dokumen Customs" value={vf.customsDocuments} />
-              <FulfillmentDetailRow label="ETA Customs" value={vf.customsProcessEta} />
-              <FulfillmentDetailRow label="Catatan" value={vf.notes} />
+              <FulfillmentDetailRow label={t("adminReview.customsPic", "PIC Customs")} value={vf.customsPicName} />
+              <FulfillmentDetailRow label={t("adminReview.customsDocs", "Dokumen Customs")} value={vf.customsDocuments} />
+              <FulfillmentDetailRow label={t("adminReview.etaCustoms", "ETA Customs")} value={vf.customsProcessEta} />
+              <FulfillmentDetailRow label={t("adminReview.notes", "Catatan")} value={vf.notes} />
             </div>
             {(vf.stockPhotoUrl || vf.invoiceUrl || vf.supportingDocUrl) && (
               <div className="px-5 py-3 border-t border-slate-100 space-y-2">
-                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Dokumen</p>
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{t("adminReview.documentsLabel", "Dokumen")}</p>
                 <div className="flex flex-wrap gap-2">
                   {vf.stockPhotoUrl && (
                     <a href={vf.stockPhotoUrl} target="_blank" rel="noopener noreferrer"
-                       className="text-xs text-blue-600 underline">📷 Foto Stok</a>
+                       className="text-xs text-blue-600 underline">📷 {t("adminReview.stockPhoto", "Foto Stok")}</a>
                   )}
                   {vf.invoiceUrl && (
                     <a href={vf.invoiceUrl} target="_blank" rel="noopener noreferrer"
-                       className="text-xs text-blue-600 underline">📄 Invoice</a>
+                       className="text-xs text-blue-600 underline">📄 {t("adminReview.invoice", "Invoice")}</a>
                   )}
                   {vf.supportingDocUrl && (
                     <a href={vf.supportingDocUrl} target="_blank" rel="noopener noreferrer"
-                       className="text-xs text-blue-600 underline">📎 Dok. Pendukung</a>
+                       className="text-xs text-blue-600 underline">📎 {t("adminReview.supportingDoc", "Dok. Pendukung")}</a>
                   )}
                 </div>
               </div>
@@ -1286,7 +1295,7 @@ function ConfirmFulfillmentView({ data, token }: { data: ConfirmFulfillmentData;
           </div>
         ) : (
           <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800">
-            ⚠️ Belum ada data fulfillment dari vendor.
+            ⚠️ {t("adminReview.noFulfillmentData", "Belum ada data fulfillment dari vendor.")}
           </div>
         )}
 
@@ -1308,14 +1317,14 @@ function ConfirmFulfillmentView({ data, token }: { data: ConfirmFulfillmentData;
           {submitting ? (
             <>
               <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              Mengkonfirmasi…
+              {t("adminReview.confirming", "Mengkonfirmasi…")}
             </>
           ) : (
-            <>🚀 Konfirmasi &amp; Mulai Pengiriman</>
+            <>🚀 {t("adminReview.confirmStartShipment", "Konfirmasi & Mulai Pengiriman")}</>
           )}
         </button>
         <p className="text-center text-xs text-slate-400 pb-8">
-          Customer akan mendapat notifikasi WhatsApp setelah dikonfirmasi
+          {t("adminReview.customerWillGetWAAfterConfirm", "Customer akan mendapat notifikasi WhatsApp setelah dikonfirmasi")}
         </p>
       </div>
     </div>
@@ -1369,6 +1378,7 @@ function deriveServiceType(serviceType: string | null, orderType: string | null)
 }
 
 function ForwardVendorView({ data, token }: { data: ForwardVendorData; token: string }) {
+  const { t } = useLanguage();
   const { order, rfq, selectedVendor, selectedVendorLink } = data;
   const isProduct = (order.orderType ?? "").toLowerCase() === "product";
 
@@ -1416,15 +1426,15 @@ function ForwardVendorView({ data, token }: { data: ForwardVendorData; token: st
   if (data.isUsed && data.usedAt && !result) {
     return (
       <div className="min-h-screen bg-slate-50">
-        <PageHeader icon="📦" title="Forward ke Vendor" />
+        <PageHeader icon="📦" title={t("adminReview.forwardToVendor", "Forward ke Vendor")} />
         <div className="max-w-2xl mx-auto px-4 py-5 space-y-5">
-          <OrderCard order={order} label="Order" />
+          <OrderCard order={order} label={t("adminReview.orderLabel", "Order")} />
           <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-start gap-3">
             <span className="text-xl mt-0.5">⚠️</span>
             <div>
-              <p className="text-amber-800 font-semibold text-sm">Link Sudah Digunakan</p>
+              <p className="text-amber-800 font-semibold text-sm">{t("adminReview.linkAlreadyUsed", "Link Sudah Digunakan")}</p>
               <p className="text-amber-700 text-xs mt-0.5">
-                Tugas fulfillment sudah dikirim ke vendor pada{" "}
+                {t("adminReview.fulfillmentTaskSent", "Tugas fulfillment sudah dikirim ke vendor pada")}{" "}
                 {new Date(data.usedAt).toLocaleString("id-ID")}.
               </p>
             </div>
@@ -1444,38 +1454,38 @@ function ForwardVendorView({ data, token }: { data: ForwardVendorData; token: st
         <div className="bg-white rounded-2xl shadow-md p-8 max-w-md w-full space-y-5">
           <div className="text-center space-y-2">
             <div className="text-5xl">📦</div>
-            <h2 className="text-xl font-bold text-slate-800">Tugas Terkirim!</h2>
+            <h2 className="text-xl font-bold text-slate-800">{t("adminReview.taskSent", "Tugas Terkirim!")}</h2>
             <p className="text-slate-500 text-sm">
-              Link fulfillment berhasil dikirim ke WA{" "}
+              {t("adminReview.fulfillLinkSentViaWA", "Link fulfillment berhasil dikirim ke WA")}{" "}
               <strong>{result.vendorName}</strong>.
             </p>
           </div>
           <div className="bg-slate-50 rounded-xl px-4 py-3 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs text-slate-400">No. Order</span>
+              <span className="text-xs text-slate-400">{t("adminReview.orderNoLabel", "No. Order")}</span>
               <span className="font-mono font-semibold text-slate-800 text-sm">{order.orderNumber}</span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-xs text-slate-400">Vendor</span>
+              <span className="text-xs text-slate-400">{t("adminReview.vendorLabel", "Vendor")}</span>
               <span className="font-semibold text-slate-700 text-sm">{result.vendorName}</span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-xs text-slate-400">Layanan</span>
+              <span className="text-xs text-slate-400">{t("adminReview.serviceLabel", "Layanan")}</span>
               <span className="text-slate-600 text-sm">{effectiveService}</span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-xs text-slate-400">Batas Waktu</span>
-              <span className="text-slate-600 text-sm">{expiresInHours} jam</span>
+              <span className="text-xs text-slate-400">{t("adminReview.deadlineLabel2", "Batas Waktu")}</span>
+              <span className="text-slate-600 text-sm">{expiresInHours} {t("adminReview.hoursUnit", "jam")}</span>
             </div>
           </div>
           <div className="rounded-xl bg-green-50 border border-green-100 p-4 space-y-2">
             <p className="text-xs text-green-700 font-semibold uppercase tracking-wide">
-              ✅ Vendor Sudah Dapat Link via WA
+              ✅ {t("adminReview.vendorGotLinkViaWA", "Vendor Sudah Dapat Link via WA")}
             </p>
             <p className="text-xs text-slate-500 break-all">{result.fulfillUrl}</p>
           </div>
           <p className="text-center text-xs text-slate-400">
-            Vendor akan mengisi data pengiriman, BL, dan dokumen melalui link tersebut.
+            {t("adminReview.vendorFillDataViaLink", "Vendor akan mengisi data pengiriman, BL, dan dokumen melalui link tersebut.")}
           </p>
         </div>
       </div>
@@ -1486,15 +1496,15 @@ function ForwardVendorView({ data, token }: { data: ForwardVendorData; token: st
   if (!selectedVendor) {
     return (
       <div className="min-h-screen bg-slate-50">
-        <PageHeader icon="📦" title="Forward ke Vendor" />
+        <PageHeader icon="📦" title={t("adminReview.forwardToVendor", "Forward ke Vendor")} />
         <div className="max-w-2xl mx-auto px-4 py-5 space-y-5">
-          <OrderCard order={order} label="Order" />
+          <OrderCard order={order} label={t("adminReview.orderLabel", "Order")} />
           <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 flex items-start gap-3">
             <span className="text-xl mt-0.5">❌</span>
             <div>
-              <p className="text-red-800 font-semibold text-sm">Vendor Belum Dipilih</p>
+              <p className="text-red-800 font-semibold text-sm">{t("adminReview.vendorNotSelected", "Vendor Belum Dipilih")}</p>
               <p className="text-red-700 text-xs mt-0.5">
-                Kembali ke langkah sebelumnya untuk memilih vendor dari penawaran yang masuk.
+                {t("adminReview.goBackToSelectVendor", "Kembali ke langkah sebelumnya untuk memilih vendor dari penawaran yang masuk.")}
               </p>
             </div>
           </div>
@@ -1506,20 +1516,20 @@ function ForwardVendorView({ data, token }: { data: ForwardVendorData; token: st
   // ── Main forward screen ─────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-slate-50">
-      <PageHeader icon="📦" title={isProduct ? "Kirim Tugas Produk ke Vendor" : "Forward Tugas ke Vendor"} />
+      <PageHeader icon="📦" title={isProduct ? t("adminReview.sendProductTaskToVendor", "Kirim Tugas Produk ke Vendor") : t("adminReview.forwardTaskToVendor", "Forward Tugas ke Vendor")} />
 
       <div className="max-w-2xl mx-auto px-4 py-5 space-y-5">
-        <OrderCard order={order} label="Order" />
+        <OrderCard order={order} label={t("adminReview.orderLabel", "Order")} />
 
         {/* RFQ badge */}
         {rfq && (
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 px-5 py-4 flex items-center justify-between">
             <div>
-              <p className="text-xs text-slate-400">No. RFQ</p>
+              <p className="text-xs text-slate-400">{t("adminReview.rfqNoLabel", "No. RFQ")}</p>
               <p className="font-mono font-semibold text-slate-800">{rfq.rfqNumber}</p>
             </div>
             <span className="text-xs font-semibold px-3 py-1.5 rounded-full bg-indigo-100 text-indigo-700">
-              Vendor Dipilih
+              {t("adminReview.vendorSelectedBadge", "Vendor Dipilih")}
             </span>
           </div>
         )}
@@ -1534,8 +1544,8 @@ function ForwardVendorView({ data, token }: { data: ForwardVendorData; token: st
             <div className="bg-emerald-50 border border-emerald-200 rounded-2xl px-5 py-4 flex items-center gap-3">
               <span className="text-2xl">🛒</span>
               <div>
-                <p className="text-xs text-emerald-600 font-semibold uppercase tracking-wide">Jenis Tugas</p>
-                <p className="font-bold text-emerald-800">Pemenuhan Produk / Product Fulfillment</p>
+                <p className="text-xs text-emerald-600 font-semibold uppercase tracking-wide">{t("adminReview.taskType", "Jenis Tugas")}</p>
+                <p className="font-bold text-emerald-800">{t("adminReview.productFulfillment", "Pemenuhan Produk / Product Fulfillment")}</p>
               </div>
             </div>
 
@@ -1543,17 +1553,17 @@ function ForwardVendorView({ data, token }: { data: ForwardVendorData; token: st
             {(order.items && order.items.length > 0) ? (
               <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
                 <div className="px-5 py-3 bg-slate-50 border-b border-slate-100">
-                  <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Detail Produk</p>
+                  <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">{t("adminReview.productDetail", "Detail Produk")}</p>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="text-slate-400 text-xs border-b border-slate-100">
-                        <th className="text-left px-4 py-2 font-medium">Nama Produk</th>
-                        <th className="text-right px-4 py-2 font-medium">Qty</th>
-                        <th className="text-right px-4 py-2 font-medium">Satuan</th>
-                        <th className="text-right px-4 py-2 font-medium">Harga/Unit</th>
-                        <th className="text-right px-4 py-2 font-medium">Subtotal</th>
+                        <th className="text-left px-4 py-2 font-medium">{t("adminReview.productName", "Nama Produk")}</th>
+                        <th className="text-right px-4 py-2 font-medium">{t("adminReview.qty", "Qty")}</th>
+                        <th className="text-right px-4 py-2 font-medium">{t("adminReview.unit", "Satuan")}</th>
+                        <th className="text-right px-4 py-2 font-medium">{t("adminReview.pricePerUnit", "Harga/Unit")}</th>
+                        <th className="text-right px-4 py-2 font-medium">{t("adminReview.subtotal", "Subtotal")}</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-50">
@@ -1590,7 +1600,7 @@ function ForwardVendorView({ data, token }: { data: ForwardVendorData; token: st
                   return (
                     <div className="px-5 py-4 border-t border-slate-100 space-y-2">
                       <div className="flex justify-between text-sm">
-                        <span className="text-slate-500">DPP (Harga Dasar)</span>
+                        <span className="text-slate-500">{t("adminReview.dppBasePrice", "DPP (Harga Dasar)")}</span>
                         <span className="text-slate-700">{idr(_dpp)}</span>
                       </div>
                       <div className="flex justify-between text-sm">
@@ -1598,7 +1608,7 @@ function ForwardVendorView({ data, token }: { data: ForwardVendorData; token: st
                         <span className="text-slate-700">{idr(_ppn)}</span>
                       </div>
                       <div className="flex justify-between font-bold border-t border-slate-200 pt-2">
-                        <span className="text-slate-700">Grand Total</span>
+                        <span className="text-slate-700">{t("adminReview.grandTotal", "Grand Total")}</span>
                         <span className="text-emerald-700 text-lg">{idr(_grand)}</span>
                       </div>
                     </div>
@@ -1607,9 +1617,9 @@ function ForwardVendorView({ data, token }: { data: ForwardVendorData; token: st
               </div>
             ) : order.grandTotal && Number(order.grandTotal) > 0 ? (
               <div className="bg-white rounded-2xl shadow-sm border border-slate-100 px-5 py-4 space-y-2">
-                <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">Nilai Order</p>
+                <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">{t("adminReview.orderValue", "Nilai Order")}</p>
                 <div className="flex justify-between font-bold">
-                  <span className="text-slate-700">Grand Total</span>
+                  <span className="text-slate-700">{t("adminReview.grandTotal", "Grand Total")}</span>
                   <span className="text-emerald-700 text-lg">{idr(order.grandTotal)}</span>
                 </div>
               </div>
@@ -1617,13 +1627,13 @@ function ForwardVendorView({ data, token }: { data: ForwardVendorData; token: st
 
             {/* Instruksi vendor */}
             <div className="bg-white rounded-2xl shadow-sm border border-amber-100 px-5 py-4 space-y-3">
-              <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Instruksi untuk Vendor</p>
+              <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">{t("adminReview.vendorInstructions", "Instruksi untuk Vendor")}</p>
               <ul className="space-y-2">
                 {[
-                  "✅ Konfirmasi ketersediaan stok",
-                  "💰 Konfirmasi harga penawaran",
-                  "📅 Konfirmasi estimasi waktu siap kirim",
-                  "📎 Upload invoice / dokumen pendukung jika ada",
+                  `✅ ${t("adminReview.instrConfirmStock", "Konfirmasi ketersediaan stok")}`,
+                  `💰 ${t("adminReview.instrConfirmPrice", "Konfirmasi harga penawaran")}`,
+                  `📅 ${t("adminReview.instrConfirmEta", "Konfirmasi estimasi waktu siap kirim")}`,
+                  `📎 ${t("adminReview.instrUploadInvoice", "Upload invoice / dokumen pendukung jika ada")}`,
                 ].map((instr, i) => (
                   <li key={i} className="flex items-start gap-2 text-sm text-slate-700">
                     <span>{instr}</span>
@@ -1635,9 +1645,9 @@ function ForwardVendorView({ data, token }: { data: ForwardVendorData; token: st
         ) : (
           /* ── LOGISTICS ORDER: pilihan jenis layanan ── */
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 px-5 py-5 space-y-4">
-            <h2 className="text-sm font-bold text-slate-800">🛳 Jenis Layanan</h2>
+            <h2 className="text-sm font-bold text-slate-800">🛳 {t("adminReview.serviceTypeTitle", "Jenis Layanan")}</h2>
             <p className="text-xs text-slate-400 -mt-2">
-              Layanan yang harus dieksekusi vendor untuk order ini
+              {t("adminReview.serviceTypeDesc", "Layanan yang harus dieksekusi vendor untuk order ini")}
             </p>
 
             <div className="grid grid-cols-2 gap-2">
@@ -1662,14 +1672,14 @@ function ForwardVendorView({ data, token }: { data: ForwardVendorData; token: st
                     : "border-slate-200 bg-white text-slate-600 hover:border-blue-200 hover:bg-slate-50"
                 }`}
               >
-                ✏️ Lainnya…
+                ✏️ {t("adminReview.otherService", "Lainnya…")}
               </button>
             </div>
 
             {serviceType === "__custom__" && (
               <input
                 type="text"
-                placeholder="Ketik jenis layanan…"
+                placeholder={t("adminReview.typeServicePlaceholder", "Ketik jenis layanan…")}
                 value={customService}
                 onChange={(e) => setCustomService(e.target.value)}
                 className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
@@ -1689,7 +1699,7 @@ function ForwardVendorView({ data, token }: { data: ForwardVendorData; token: st
         {/* Deadline */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 px-5 py-4">
           <label className="block text-sm font-semibold text-slate-700 mb-2">
-            ⏰ Batas Waktu Pengisian Data
+            ⏰ {t("adminReview.dataFillDeadline", "Batas Waktu Pengisian Data")}
           </label>
           <div className="flex items-center gap-3">
             {[24, 48, 72].map((h) => (
@@ -1702,7 +1712,7 @@ function ForwardVendorView({ data, token }: { data: ForwardVendorData; token: st
                     : "bg-white text-slate-600 border-slate-200 hover:border-blue-300"
                 }`}
               >
-                {h} jam
+                {h} {t("adminReview.hoursUnit", "jam")}
               </button>
             ))}
             <div className="flex items-center gap-1.5 flex-1">
@@ -1714,7 +1724,7 @@ function ForwardVendorView({ data, token }: { data: ForwardVendorData; token: st
                 max={168}
                 className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-300"
               />
-              <span className="text-slate-400 text-xs shrink-0">jam</span>
+              <span className="text-slate-400 text-xs shrink-0">{t("adminReview.hoursUnit", "jam")}</span>
             </div>
           </div>
         </div>
@@ -1738,19 +1748,19 @@ function ForwardVendorView({ data, token }: { data: ForwardVendorData; token: st
           {submitting ? (
             <>
               <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              Mengirim…
+              {t("adminReview.sending", "Mengirim…")}
             </>
           ) : isProduct ? (
-            <>🛒 Kirim Tugas Produk ke {selectedVendor.name}</>
+            <>🛒 {t("adminReview.sendProductTaskBtn", "Kirim Tugas Produk ke")} {selectedVendor.name}</>
           ) : (
-            <>📤 Kirim Tugas ke {selectedVendor.name}</>
+            <>📤 {t("adminReview.sendTaskBtn", "Kirim Tugas ke")} {selectedVendor.name}</>
           )}
         </button>
 
         <p className="text-center text-xs text-slate-400 pb-8">
           {isProduct
-            ? "Vendor akan menerima WA dengan link form konfirmasi produk"
-            : "Vendor akan menerima WA dengan link form pengisian data fulfillment"}
+            ? t("adminReview.vendorReceiveWAProduct", "Vendor akan menerima WA dengan link form konfirmasi produk")
+            : t("adminReview.vendorReceiveWAFulfill", "Vendor akan menerima WA dengan link form pengisian data fulfillment")}
         </p>
       </div>
     </div>
@@ -1758,13 +1768,14 @@ function ForwardVendorView({ data, token }: { data: ForwardVendorData; token: st
 }
 
 function PageHeader({ icon, title }: { icon: string; title: string }) {
+  const { t } = useLanguage();
   return (
     <div className="bg-white border-b border-slate-100 sticky top-0 z-10">
       <div className="max-w-2xl mx-auto px-4 py-3 flex items-center gap-3">
         <span className="text-2xl">{icon}</span>
         <div>
           <h1 className="text-base font-bold text-slate-800 leading-tight">{title}</h1>
-          <p className="text-xs text-slate-400">Admin Panel</p>
+          <p className="text-xs text-slate-400">{t("adminReview.adminPanel", "Admin Panel")}</p>
         </div>
       </div>
     </div>
@@ -1778,12 +1789,13 @@ function VendorInfoCard({
   vendor: { id: number; name: string; phone: string | null };
   link: SelectedVendorLink | null;
 }) {
+  const { t } = useLanguage();
   const price = link?.offeredPrice ?? link?.basicPrice;
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
       <div className="px-5 py-3 bg-indigo-50 border-b border-indigo-100 flex items-center gap-2">
         <span className="text-sm font-semibold text-indigo-700 uppercase tracking-wide text-xs">
-          ★ Vendor Terpilih
+          ★ {t("adminReview.selectedVendorBadge", "Vendor Terpilih")}
         </span>
       </div>
       <div className="px-5 py-4 space-y-3">
@@ -1796,7 +1808,7 @@ function VendorInfoCard({
           </div>
           {price != null && (
             <div className="text-right shrink-0">
-              <p className="text-xs text-slate-400">Harga Penawaran</p>
+              <p className="text-xs text-slate-400">{t("adminReview.offerPrice", "Harga Penawaran")}</p>
               <p className="font-bold text-slate-800">{idr(price)}</p>
             </div>
           )}
@@ -1805,13 +1817,13 @@ function VendorInfoCard({
           <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-50">
             {link.eta && (
               <div>
-                <p className="text-xs text-slate-400">ETA</p>
+                <p className="text-xs text-slate-400">{t("adminReview.eta", "ETA")}</p>
                 <p className="text-sm font-medium text-slate-700">{link.eta}</p>
               </div>
             )}
             {link.notes && (
               <div className="col-span-2">
-                <p className="text-xs text-slate-400">Catatan Vendor</p>
+                <p className="text-xs text-slate-400">{t("adminReview.vendorNotes", "Catatan Vendor")}</p>
                 <p className="text-sm text-slate-600 italic">{link.notes}</p>
               </div>
             )}
@@ -1825,6 +1837,7 @@ function VendorInfoCard({
 // ── Root page ─────────────────────────────────────────────────────────────────
 
 export default function AdminReviewPage() {
+  const { t } = useLanguage();
   const params = useParams<{ token: string }>();
   const token = params.token ?? "";
 
@@ -1850,7 +1863,7 @@ export default function AdminReviewPage() {
       .then(setData)
       .catch((e: Error) => {
         if (e.name === "AbortError") {
-          setError("Koneksi timeout. Server lambat merespons, silakan coba lagi.");
+          setError(t("adminReview.connectionTimeout", "Koneksi timeout. Server lambat merespons, silakan coba lagi."));
         } else {
           setError(e.message);
         }

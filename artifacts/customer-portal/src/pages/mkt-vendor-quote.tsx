@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import { useLanguage } from "@/i18n/LanguageContext";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AlertCircle, CheckCircle2, Package, Clock, RotateCcw, Send, Save } from "lucide-react";
 
@@ -115,6 +116,7 @@ function buildLines(rfqLines: RfqLine[], quoteLines: QuoteLine[], edits: LineEdi
 export default function MktVendorQuotePage() {
   const { token } = useParams<{ token: string }>();
   const { toast } = useToast();
+  const { t } = useLanguage();
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
   const [lineEdits, setLineEdits] = useState<LineEdits>({});
   const [headerNotes, setHeaderNotes] = useState("");
@@ -127,7 +129,7 @@ export default function MktVendorQuotePage() {
       const res = await fetch(`/api/vendor-quote/${token}`);
       if (!res.ok) {
         const d = await res.json() as { error?: string };
-        throw new Error(d.error ?? "Gagal memuat penawaran");
+        throw new Error(d.error ?? t("mktVendorQuote.loadError", "Gagal memuat penawaran"));
       }
       return res.json() as Promise<{ ok: boolean; data: VendorQuoteData }>;
     },
@@ -164,12 +166,12 @@ export default function MktVendorQuotePage() {
       });
       if (!res.ok) {
         const d = await res.json() as { error?: string };
-        throw new Error(d.error ?? "Gagal menyimpan");
+        throw new Error(d.error ?? t("mktVendorQuote.saveError", "Gagal menyimpan"));
       }
       return res.json();
     },
     onSuccess: () => {
-      toast({ title: "Draft tersimpan" });
+      toast({ title: t("mktVendorQuote.draftSaved", "Draft tersimpan") });
       void refetch();
     },
     onError: (e: Error) => toast({ title: e.message, variant: "destructive" }),
@@ -187,12 +189,12 @@ export default function MktVendorQuotePage() {
       });
       if (!res.ok) {
         const d = await res.json() as { error?: string };
-        throw new Error(d.error ?? "Gagal submit penawaran");
+        throw new Error(d.error ?? t("mktVendorQuote.submitError", "Gagal submit penawaran"));
       }
       return res.json();
     },
     onSuccess: () => {
-      toast({ title: "Penawaran berhasil dikirim!" });
+      toast({ title: t("mktVendorQuote.submitSuccess", "Penawaran berhasil dikirim!") });
       setShowSubmitConfirm(false);
       setEditMode(false);
       void refetch();
@@ -221,10 +223,9 @@ export default function MktVendorQuotePage() {
         <Card className="max-w-md w-full mx-4">
           <CardContent className="p-8 text-center space-y-3">
             <AlertCircle className="w-12 h-12 text-red-400 mx-auto" />
-            <h2 className="text-lg font-semibold text-gray-800">Link Tidak Valid</h2>
+            <h2 className="text-lg font-semibold text-gray-800">{t("mktVendorQuote.invalidLink", "Link Tidak Valid")}</h2>
             <p className="text-sm text-gray-500">
-              Link penawaran tidak ditemukan atau sudah kadaluarsa.
-              Hubungi tim pengadaan untuk mendapatkan link baru.
+              {t("mktVendorQuote.invalidLinkDesc", "Link penawaran tidak ditemukan atau sudah kadaluarsa. Hubungi tim pengadaan untuk mendapatkan link baru.")}
             </p>
           </CardContent>
         </Card>
@@ -256,9 +257,9 @@ export default function MktVendorQuotePage() {
           <div className="w-12 h-12 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-3">
             <Package className="w-6 h-6 text-orange-500" />
           </div>
-          <h1 className="text-xl font-bold text-gray-900">Form Penawaran Harga</h1>
+          <h1 className="text-xl font-bold text-gray-900">{t("mktVendorQuote.formTitle", "Form Penawaran Harga")}</h1>
           <p className="text-sm text-gray-500">
-            Undangan dari {rfq.buyerCompany ?? rfq.buyerName}
+            {t("mktVendorQuote.invitationFrom", "Undangan dari")} {rfq.buyerCompany ?? rfq.buyerName}
           </p>
         </div>
 
@@ -267,7 +268,7 @@ export default function MktVendorQuotePage() {
             <CardContent className="p-4 space-y-2">
               <div className="flex items-center gap-2 font-semibold text-orange-800">
                 <RotateCcw className="w-4 h-4" />
-                Revisi Penawaran Diminta
+                {t("mktVendorQuote.requoteRequested", "Revisi Penawaran Diminta")}
                 {(q.requoteRound ?? 0) > 1 && (
                   <Badge className="bg-orange-200 text-orange-800 ml-auto">Round {q.requoteRound}</Badge>
                 )}
@@ -278,7 +279,7 @@ export default function MktVendorQuotePage() {
               {q.requoteDeadline && (
                 <p className="text-xs text-orange-600 flex items-center gap-1">
                   <Clock className="w-3 h-3" />
-                  Deadline: {fmtDateTime(q.requoteDeadline)}
+                  {t("mktVendorQuote.deadline", "Deadline")}: {fmtDateTime(q.requoteDeadline)}
                 </p>
               )}
             </CardContent>
@@ -290,8 +291,8 @@ export default function MktVendorQuotePage() {
             <CardContent className="p-4 flex items-center gap-3">
               <CheckCircle2 className="w-6 h-6 text-green-600 shrink-0" />
               <div>
-                <p className="font-semibold text-green-800">Penawaran Sudah Dikirim</p>
-                <p className="text-xs text-green-600">Terkirim: {fmtDateTime(q.submittedAt)}</p>
+                <p className="font-semibold text-green-800">{t("mktVendorQuote.quoteAlreadySent", "Penawaran Sudah Dikirim")}</p>
+                <p className="text-xs text-green-600">{t("mktVendorQuote.sentAt", "Terkirim")}: {fmtDateTime(q.submittedAt)}</p>
               </div>
             </CardContent>
           </Card>
@@ -300,36 +301,36 @@ export default function MktVendorQuotePage() {
         <Card>
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-base">Detail RFQ</CardTitle>
+              <CardTitle className="text-base">{t("mktVendorQuote.rfqDetail", "Detail RFQ")}</CardTitle>
               <Badge className={`text-xs ${stConf.color}`}>{stConf.label}</Badge>
             </div>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
             <div className="grid grid-cols-2 gap-y-2">
               <div>
-                <p className="text-xs text-gray-500">Nomor RFQ</p>
+                <p className="text-xs text-gray-500">{t("mktVendorQuote.rfqNumber", "Nomor RFQ")}</p>
                 <p className="font-mono font-semibold">{rfq.rfqNumber}</p>
               </div>
               <div>
-                <p className="text-xs text-gray-500">Buyer</p>
+                <p className="text-xs text-gray-500">{t("mktVendorQuote.buyer", "Buyer")}</p>
                 <p>{rfq.buyerName}</p>
               </div>
               {rfq.requiredDeliveryDate && (
                 <div>
-                  <p className="text-xs text-gray-500">Butuh Sebelum</p>
+                  <p className="text-xs text-gray-500">{t("mktVendorQuote.neededBefore", "Butuh Sebelum")}</p>
                   <p>{fmtDate(rfq.requiredDeliveryDate)}</p>
                 </div>
               )}
               {rfq.deliveryAddress && (
                 <div>
-                  <p className="text-xs text-gray-500">Alamat Pengiriman</p>
+                  <p className="text-xs text-gray-500">{t("mktVendorQuote.deliveryAddress", "Alamat Pengiriman")}</p>
                   <p className="text-gray-700">{rfq.deliveryAddress}</p>
                 </div>
               )}
             </div>
             {rfq.notes && (
               <div className="pt-2 border-t">
-                <p className="text-xs text-gray-500">Catatan Buyer</p>
+                <p className="text-xs text-gray-500">{t("mktVendorQuote.buyerNotes", "Catatan Buyer")}</p>
                 <p className="text-gray-700">{rfq.notes}</p>
               </div>
             )}
@@ -339,10 +340,10 @@ export default function MktVendorQuotePage() {
         <Card>
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-base">Daftar Item</CardTitle>
+              <CardTitle className="text-base">{t("mktVendorQuote.itemList", "Daftar Item")}</CardTitle>
               {(canEdit || isRequote) && !editMode && (
                 <Button size="sm" variant="outline" onClick={() => setEditMode(true)}>
-                  {isRequote ? "Revisi Penawaran" : "Isi Penawaran"}
+                  {isRequote ? t("mktVendorQuote.reviseQuote", "Revisi Penawaran") : t("mktVendorQuote.fillQuote", "Isi Penawaran")}
                 </Button>
               )}
             </div>
@@ -371,7 +372,7 @@ export default function MktVendorQuotePage() {
                         )}
                       </div>
                       <div className="text-right shrink-0">
-                        <p className="text-xs text-gray-500">Qty Diminta</p>
+                        <p className="text-xs text-gray-500">{t("mktVendorQuote.requestedQty", "Qty Diminta")}</p>
                         <p className="text-sm font-semibold">{rl.requestedQty} {rl.itemUnit ?? ""}</p>
                       </div>
                     </div>
@@ -379,7 +380,7 @@ export default function MktVendorQuotePage() {
                     {editMode ? (
                       <div className="grid grid-cols-2 gap-3">
                         <div>
-                          <Label className="text-xs">Harga Satuan (IDR) *</Label>
+                          <Label className="text-xs">{t("mktVendorQuote.unitPriceIdr", "Harga Satuan (IDR) *")}</Label>
                           <Input
                             type="number"
                             min={0}
@@ -392,7 +393,7 @@ export default function MktVendorQuotePage() {
                           />
                         </div>
                         <div>
-                          <Label className="text-xs">Qty Penawaran</Label>
+                          <Label className="text-xs">{t("mktVendorQuote.offeredQty", "Qty Penawaran")}</Label>
                           <Input
                             type="number"
                             min={0}
@@ -405,7 +406,7 @@ export default function MktVendorQuotePage() {
                           />
                         </div>
                         <div>
-                          <Label className="text-xs">Lead Time (hari)</Label>
+                          <Label className="text-xs">{t("mktVendorQuote.leadTimeDays", "Lead Time (hari)")}</Label>
                           <Input
                             type="number"
                             min={0}
@@ -418,13 +419,13 @@ export default function MktVendorQuotePage() {
                           />
                         </div>
                         <div>
-                          <Label className="text-xs">Subtotal</Label>
+                          <Label className="text-xs">{t("mktVendorQuote.subtotal", "Subtotal")}</Label>
                           <div className="h-8 flex items-center text-sm font-semibold text-green-700">
                             {idr((Number(e.price) || 0) * (Number(e.qty) || 0))}
                           </div>
                         </div>
                         <div className="col-span-2">
-                          <Label className="text-xs">Catatan Item</Label>
+                          <Label className="text-xs">{t("mktVendorQuote.itemNotes", "Catatan Item")}</Label>
                           <Input
                             value={e.notes}
                             onChange={(ev) => setLineEdits((prev) => ({
@@ -432,7 +433,7 @@ export default function MktVendorQuotePage() {
                               [rl.id]: { ...e, notes: ev.target.value },
                             }))}
                             className="h-8 text-sm"
-                            placeholder="Catatan opsional"
+                            placeholder={t("mktVendorQuote.optionalNotes", "Catatan opsional")}
                           />
                         </div>
                       </div>
@@ -440,32 +441,32 @@ export default function MktVendorQuotePage() {
                       ql ? (
                         <div className="grid grid-cols-3 gap-2 text-xs">
                           <div>
-                            <p className="text-gray-500">Harga Satuan</p>
+                            <p className="text-gray-500">{t("mktVendorQuote.unitPrice", "Harga Satuan")}</p>
                             <p className="font-semibold">{idr(Number(ql.offeredUnitPrice))}</p>
                           </div>
                           <div>
-                            <p className="text-gray-500">Qty</p>
+                            <p className="text-gray-500">{t("mktVendorQuote.qty", "Qty")}</p>
                             <p>{ql.offeredQty}</p>
                           </div>
                           <div>
-                            <p className="text-gray-500">Subtotal</p>
+                            <p className="text-gray-500">{t("mktVendorQuote.subtotal", "Subtotal")}</p>
                             <p className="font-semibold text-green-700">{idr(Number(ql.subtotal))}</p>
                           </div>
                           {ql.leadTimeDays && (
                             <div>
-                              <p className="text-gray-500">Lead Time</p>
-                              <p>{ql.leadTimeDays} hari</p>
+                              <p className="text-gray-500">{t("mktVendorQuote.leadTime", "Lead Time")}</p>
+                              <p>{ql.leadTimeDays} {t("mktVendorQuote.days", "hari")}</p>
                             </div>
                           )}
                           {ql.notes && (
                             <div className="col-span-3">
-                              <p className="text-gray-500">Catatan</p>
+                              <p className="text-gray-500">{t("mktVendorQuote.notes", "Catatan")}</p>
                               <p className="text-gray-700">{ql.notes}</p>
                             </div>
                           )}
                         </div>
                       ) : (
-                        <p className="text-xs text-gray-400 italic">Belum diisi</p>
+                        <p className="text-xs text-gray-400 italic">{t("mktVendorQuote.notYetFilled", "Belum diisi")}</p>
                       )
                     )}
                   </div>
@@ -476,20 +477,20 @@ export default function MktVendorQuotePage() {
             {editMode && (
               <div className="mt-4 space-y-3 pt-4 border-t">
                 <div>
-                  <Label>Syarat Pembayaran</Label>
+                  <Label>{t("mktVendorQuote.paymentTerms", "Syarat Pembayaran")}</Label>
                   <Input
                     value={paymentTerms}
                     onChange={(e) => setPaymentTerms(e.target.value)}
-                    placeholder="Contoh: 30 hari net"
+                    placeholder={t("mktVendorQuote.paymentTermsPlaceholder", "Contoh: 30 hari net")}
                     className="mt-1"
                   />
                 </div>
                 <div>
-                  <Label>Catatan Penawaran</Label>
+                  <Label>{t("mktVendorQuote.quoteNotes", "Catatan Penawaran")}</Label>
                   <Textarea
                     value={headerNotes}
                     onChange={(e) => setHeaderNotes(e.target.value)}
-                    placeholder="Catatan umum untuk penawaran ini (opsional)"
+                    placeholder={t("mktVendorQuote.quoteNotesPlaceholder", "Catatan umum untuk penawaran ini (opsional)")}
                     rows={3}
                     className="resize-none mt-1"
                   />
@@ -499,7 +500,7 @@ export default function MktVendorQuotePage() {
 
             {totalValue > 0 && (
               <div className="mt-4 pt-4 border-t flex items-center justify-between">
-                <p className="text-sm text-gray-600 font-medium">Total Estimasi</p>
+                <p className="text-sm text-gray-600 font-medium">{t("mktVendorQuote.totalEstimate", "Total Estimasi")}</p>
                 <p className="text-lg font-bold text-green-700">{idr(totalValue)}</p>
               </div>
             )}
@@ -515,7 +516,7 @@ export default function MktVendorQuotePage() {
               disabled={saveMutation.isPending}
             >
               <Save className="w-4 h-4 mr-2" />
-              {saveMutation.isPending ? "Menyimpan…" : "Simpan Draft"}
+              {saveMutation.isPending ? t("mktVendorQuote.saving", "Menyimpan…") : t("mktVendorQuote.saveDraft", "Simpan Draft")}
             </Button>
             {canSubmit && (
               <Button
@@ -523,15 +524,15 @@ export default function MktVendorQuotePage() {
                 onClick={() => setShowSubmitConfirm(true)}
               >
                 <Send className="w-4 h-4 mr-2" />
-                {isRequote ? "Kirim Revisi" : "Kirim Penawaran"}
+                {isRequote ? t("mktVendorQuote.sendRevision", "Kirim Revisi") : t("mktVendorQuote.sendQuote", "Kirim Penawaran")}
               </Button>
             )}
           </div>
         )}
 
         <div className="text-center text-xs text-gray-400 pb-6">
-          <p>Vendor: <strong className="text-gray-600">{vqd.vendor.name}</strong></p>
-          {q.validUntil && <p>Link berlaku hingga: {fmtDate(q.validUntil)}</p>}
+          <p>{t("mktVendorQuote.vendorLabel", "Vendor")}: <strong className="text-gray-600">{vqd.vendor.name}</strong></p>
+          {q.validUntil && <p>{t("mktVendorQuote.linkValidUntil", "Link berlaku hingga")}: {fmtDate(q.validUntil)}</p>}
         </div>
       </div>
 
@@ -540,29 +541,29 @@ export default function MktVendorQuotePage() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Send className="w-4 h-4 text-orange-500" />
-              Konfirmasi Kirim Penawaran
+              {t("mktVendorQuote.confirmSendTitle", "Konfirmasi Kirim Penawaran")}
             </DialogTitle>
           </DialogHeader>
           <p className="text-sm text-gray-600">
             {isRequote
-              ? "Kirim revisi penawaran untuk RFQ ini? Anda tidak bisa mengubah setelah terkirim."
-              : "Kirim penawaran untuk RFQ ini? Anda tidak bisa mengubah setelah terkirim."
+              ? t("mktVendorQuote.confirmSendRevisionDesc", "Kirim revisi penawaran untuk RFQ ini? Anda tidak bisa mengubah setelah terkirim.")
+              : t("mktVendorQuote.confirmSendDesc", "Kirim penawaran untuk RFQ ini? Anda tidak bisa mengubah setelah terkirim.")
             }
           </p>
           <div className="p-3 bg-gray-50 rounded-lg text-sm">
-            <p className="text-gray-500">Total Penawaran</p>
+            <p className="text-gray-500">{t("mktVendorQuote.totalQuote", "Total Penawaran")}</p>
             <p className="text-xl font-bold text-green-700">{idr(totalValue)}</p>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowSubmitConfirm(false)} disabled={submitMutation.isPending}>
-              Batal
+              {t("mktVendorQuote.cancel", "Batal")}
             </Button>
             <Button
               className="bg-orange-500 hover:bg-orange-600"
               onClick={() => submitMutation.mutate()}
               disabled={submitMutation.isPending}
             >
-              {submitMutation.isPending ? "Mengirim…" : "Ya, Kirim"}
+              {submitMutation.isPending ? t("mktVendorQuote.sending", "Mengirim…") : t("mktVendorQuote.confirmSendBtn", "Ya, Kirim")}
             </Button>
           </DialogFooter>
         </DialogContent>

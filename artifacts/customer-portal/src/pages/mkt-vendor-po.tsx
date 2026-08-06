@@ -36,6 +36,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { useLanguage } from "@/i18n/LanguageContext";
 import {
   CheckCircle2,
   XCircle,
@@ -202,6 +203,7 @@ function PoSkeleton() {
 // ── Error / expired states ────────────────────────────────────────────────────
 
 function TokenErrorState({ code, message }: { code?: string; message: string }) {
+  const { t } = useLanguage();
   const isExpired = code === "EXPIRED";
   const isMalformed = code === "MALFORMED";
 
@@ -217,19 +219,23 @@ function TokenErrorState({ code, message }: { code?: string; message: string }) 
         </div>
         <div>
           <h1 className="text-xl font-bold text-gray-800">
-            {isExpired ? "Link Kadaluarsa" : isMalformed ? "Link Tidak Valid" : "PO Tidak Ditemukan"}
+            {isExpired
+              ? t("mktVendorPo.errorLinkExpired", "Link Kadaluarsa")
+              : isMalformed
+              ? t("mktVendorPo.errorLinkInvalid", "Link Tidak Valid")
+              : t("mktVendorPo.errorPoNotFound", "PO Tidak Ditemukan")}
           </h1>
           <p className="text-sm text-gray-500 mt-2">
             {isExpired
-              ? "Link konfirmasi PO ini telah habis masa berlakunya. Hubungi tim pengadaan untuk mendapatkan link baru."
+              ? t("mktVendorPo.errorExpiredDesc", "Link konfirmasi PO ini telah habis masa berlakunya. Hubungi tim pengadaan untuk mendapatkan link baru.")
               : isMalformed
-              ? "Format link tidak valid. Pastikan Anda menggunakan link yang dikirimkan melalui WhatsApp."
+              ? t("mktVendorPo.errorMalformedDesc", "Format link tidak valid. Pastikan Anda menggunakan link yang dikirimkan melalui WhatsApp.")
               : message}
           </p>
         </div>
         <div className="p-3 bg-blue-50 rounded-lg text-xs text-blue-700">
           <Info className="w-4 h-4 inline mr-1" />
-          Hubungi tim pengadaan Anda untuk bantuan lebih lanjut.
+          {t("mktVendorPo.contactProcurement", "Hubungi tim pengadaan Anda untuk bantuan lebih lanjut.")}
         </div>
       </div>
     </div>
@@ -241,6 +247,7 @@ function TokenErrorState({ code, message }: { code?: string; message: string }) 
 export default function MktVendorPoPage() {
   const { token } = useParams<{ token: string }>();
   const { toast } = useToast();
+  const { t } = useLanguage();
   const queryClient = useQueryClient();
 
   // Dialog states
@@ -264,7 +271,7 @@ export default function MktVendorPoPage() {
     mutationFn: ({ action, body }: { action: "accept" | "reject" | "request-revision"; body?: Record<string, unknown> }) =>
       postVendorAction(token!, action, body ?? {}),
     onSuccess: (data) => {
-      toast({ title: "Berhasil", description: `Status PO diperbarui: ${PO_STATUS[data.status]?.label ?? data.status}` });
+      toast({ title: t("mktVendorPo.success", "Berhasil"), description: `${t("mktVendorPo.statusUpdated", "Status PO diperbarui")}: ${PO_STATUS[data.status]?.label ?? data.status}` });
       queryClient.invalidateQueries({ queryKey: ["vendor-po", token] });
       setShowAccept(false);
       setShowReject(false);
@@ -273,7 +280,7 @@ export default function MktVendorPoPage() {
       setRevisionNotes("");
     },
     onError: (err: Error) => {
-      toast({ title: "Gagal", description: err.message, variant: "destructive" });
+      toast({ title: t("mktVendorPo.failed", "Gagal"), description: err.message, variant: "destructive" });
     },
   });
 
@@ -287,7 +294,7 @@ export default function MktVendorPoPage() {
     if (status === 400 || status === 404 || status === 410) {
       return <TokenErrorState code={code} message={error.message} />;
     }
-    return <TokenErrorState message="Terjadi kesalahan. Silakan coba lagi." />;
+    return <TokenErrorState message={t("mktVendorPo.genericError", "Terjadi kesalahan. Silakan coba lagi.")} />;
   }
 
   if (!po) return null;
@@ -323,7 +330,7 @@ export default function MktVendorPoPage() {
         {po.vendorTokenExpiresAt && (
           <div className="flex items-start gap-2 p-3 bg-amber-50 rounded-lg text-xs text-amber-800">
             <Clock className="w-4 h-4 shrink-0 mt-0.5" />
-            <span>Link berlaku hingga: <strong>{fmtDateTime(po.vendorTokenExpiresAt)}</strong></span>
+            <span>{t("mktVendorPo.linkValidUntil", "Link berlaku hingga")}: <strong>{fmtDateTime(po.vendorTokenExpiresAt)}</strong></span>
           </div>
         )}
 
@@ -332,7 +339,7 @@ export default function MktVendorPoPage() {
           <div className="flex items-start gap-2 p-3 bg-orange-50 border border-orange-200 rounded-lg text-sm">
             <AlertTriangle className="w-4 h-4 text-orange-500 shrink-0 mt-0.5" />
             <div>
-              <p className="font-medium text-orange-800">Catatan Revisi dari Buyer</p>
+              <p className="font-medium text-orange-800">{t("mktVendorPo.revisionNoteFromBuyer", "Catatan Revisi dari Buyer")}</p>
               <p className="text-orange-700 mt-1">{po.revisionNotes}</p>
             </div>
           </div>
@@ -341,67 +348,67 @@ export default function MktVendorPoPage() {
         {/* PO Info Card */}
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold text-gray-700">Informasi Purchase Order</CardTitle>
+            <CardTitle className="text-sm font-semibold text-gray-700">{t("mktVendorPo.poInfoTitle", "Informasi Purchase Order")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <p className="text-xs text-gray-500">Nomor PO</p>
+                <p className="text-xs text-gray-500">{t("mktVendorPo.poNumber", "Nomor PO")}</p>
                 <p className="font-semibold">{po.poNumber}</p>
               </div>
               <div>
-                <p className="text-xs text-gray-500">Status</p>
+                <p className="text-xs text-gray-500">{t("mktVendorPo.status", "Status")}</p>
                 <Badge className={`text-xs font-medium border-0 mt-0.5 ${statusInfo.color}`}>
                   {statusInfo.label}
                 </Badge>
               </div>
               <div>
-                <p className="text-xs text-gray-500">Vendor</p>
+                <p className="text-xs text-gray-500">{t("mktVendorPo.vendor", "Vendor")}</p>
                 <p className="font-medium">{po.vendorNameSnapshot ?? "—"}</p>
               </div>
               <div>
-                <p className="text-xs text-gray-500">No. Quotation</p>
+                <p className="text-xs text-gray-500">{t("mktVendorPo.quotationNumber", "No. Quotation")}</p>
                 <p>{po.quotationNumberSnapshot ?? "—"}</p>
               </div>
               <div>
-                <p className="text-xs text-gray-500">Tanggal Quotation</p>
+                <p className="text-xs text-gray-500">{t("mktVendorPo.quotationDate", "Tanggal Quotation")}</p>
                 <p>{fmtDate(po.quotationDateSnapshot)}</p>
               </div>
               <div>
-                <p className="text-xs text-gray-500">Mata Uang</p>
+                <p className="text-xs text-gray-500">{t("mktVendorPo.currency", "Mata Uang")}</p>
                 <p className="font-medium">{currency}</p>
               </div>
               <div>
-                <p className="text-xs text-gray-500">Incoterm</p>
+                <p className="text-xs text-gray-500">{t("mktVendorPo.incoterm", "Incoterm")}</p>
                 <p>{po.incotermSnapshot ?? "—"}</p>
               </div>
               <div>
-                <p className="text-xs text-gray-500">Syarat Pembayaran</p>
+                <p className="text-xs text-gray-500">{t("mktVendorPo.paymentTerms", "Syarat Pembayaran")}</p>
                 <p>{po.paymentTermsSnapshot ?? "—"}</p>
               </div>
               <div>
-                <p className="text-xs text-gray-500">Lead Time</p>
-                <p>{po.leadTimeDaysSnapshot != null ? `${po.leadTimeDaysSnapshot} hari` : "—"}</p>
+                <p className="text-xs text-gray-500">{t("mktVendorPo.leadTime", "Lead Time")}</p>
+                <p>{po.leadTimeDaysSnapshot != null ? `${po.leadTimeDaysSnapshot} ${t("mktVendorPo.days", "hari")}` : "—"}</p>
               </div>
               <div>
-                <p className="text-xs text-gray-500">Target Selesai</p>
+                <p className="text-xs text-gray-500">{t("mktVendorPo.targetCompletion", "Target Selesai")}</p>
                 <p>{fmtDate(po.expectedCompletionDate)}</p>
               </div>
               {po.actualCompletionDate && (
                 <div>
-                  <p className="text-xs text-gray-500">Tanggal Selesai Aktual</p>
+                  <p className="text-xs text-gray-500">{t("mktVendorPo.actualCompletionDate", "Tanggal Selesai Aktual")}</p>
                   <p>{fmtDate(po.actualCompletionDate)}</p>
                 </div>
               )}
               <div>
-                <p className="text-xs text-gray-500">Diterbitkan</p>
+                <p className="text-xs text-gray-500">{t("mktVendorPo.issuedDate", "Diterbitkan")}</p>
                 <p>{fmtDate(po.createdAt)}</p>
               </div>
             </div>
 
             {po.vendorAddressSnapshot && (
               <div>
-                <p className="text-xs text-gray-500">Alamat Vendor</p>
+                <p className="text-xs text-gray-500">{t("mktVendorPo.vendorAddress", "Alamat Vendor")}</p>
                 <p className="text-xs mt-0.5 leading-relaxed">{po.vendorAddressSnapshot}</p>
               </div>
             )}
@@ -412,12 +419,12 @@ export default function MktVendorPoPage() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-semibold text-gray-700">
-              Item Purchase Order ({po.lines.length})
+              {t("mktVendorPo.itemsTitle", "Item Purchase Order")} ({po.lines.length})
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0">
             {po.lines.length === 0 ? (
-              <p className="text-sm text-gray-400 text-center py-6">Tidak ada item</p>
+              <p className="text-sm text-gray-400 text-center py-6">{t("mktVendorPo.noItems", "Tidak ada item")}</p>
             ) : (
               <div className="divide-y">
                 {po.lines.map((line, idx) => (
@@ -430,7 +437,7 @@ export default function MktVendorPoPage() {
                         )}
                       </div>
                       <div className="text-right shrink-0">
-                        <p className="text-xs text-gray-500">Qty</p>
+                        <p className="text-xs text-gray-500">{t("mktVendorPo.qty", "Qty")}</p>
                         <p className="text-sm font-semibold">
                           {line.qty} {line.unit ?? ""}
                         </p>
@@ -438,15 +445,15 @@ export default function MktVendorPoPage() {
                     </div>
                     <div className="grid grid-cols-3 gap-2 text-xs">
                       <div>
-                        <p className="text-gray-500">Harga Satuan</p>
+                        <p className="text-gray-500">{t("mktVendorPo.unitPrice", "Harga Satuan")}</p>
                         <p className="font-semibold">{formatMoney(line.unitPrice, currency)}</p>
                       </div>
                       <div>
-                        <p className="text-gray-500">Qty</p>
+                        <p className="text-gray-500">{t("mktVendorPo.qty", "Qty")}</p>
                         <p>{line.qty} {line.unit ?? ""}</p>
                       </div>
                       <div>
-                        <p className="text-gray-500">Subtotal</p>
+                        <p className="text-gray-500">{t("mktVendorPo.subtotal", "Subtotal")}</p>
                         <p className="font-semibold text-green-700">{formatMoney(line.subtotal, currency)}</p>
                       </div>
                     </div>
@@ -461,16 +468,16 @@ export default function MktVendorPoPage() {
         <Card>
           <CardContent className="pt-4 space-y-2 text-sm">
             <div className="flex justify-between text-gray-600">
-              <span>Subtotal</span>
+              <span>{t("mktVendorPo.subtotalLabel", "Subtotal")}</span>
               <span>{formatMoney(po.totalAmount, currency)}</span>
             </div>
             <div className="flex justify-between text-gray-600">
-              <span>Pajak (PPN)</span>
+              <span>{t("mktVendorPo.tax", "Pajak (PPN)")}</span>
               <span>{formatMoney(po.taxAmount, currency)}</span>
             </div>
             <Separator />
             <div className="flex justify-between font-bold text-base text-gray-800">
-              <span>Grand Total</span>
+              <span>{t("mktVendorPo.grandTotal", "Grand Total")}</span>
               <span className="text-green-700">{formatMoney(po.grandTotal, currency)}</span>
             </div>
           </CardContent>
@@ -481,10 +488,9 @@ export default function MktVendorPoPage() {
           <div className="flex items-start gap-2 p-3 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-800">
             <Truck className="w-4 h-4 shrink-0 mt-0.5 text-blue-500" />
             <div>
-              <p className="font-medium">Informasi Pengiriman</p>
+              <p className="font-medium">{t("mktVendorPo.shipmentInfo", "Informasi Pengiriman")}</p>
               <p className="mt-1">
-                Detail pengiriman dan timeline dikelola oleh tim pengadaan.
-                Hubungi buyer Anda untuk informasi status pengiriman terbaru.
+                {t("mktVendorPo.shipmentInfoDesc", "Detail pengiriman dan timeline dikelola oleh tim pengadaan. Hubungi buyer Anda untuk informasi status pengiriman terbaru.")}
               </p>
             </div>
           </div>
@@ -494,7 +500,7 @@ export default function MktVendorPoPage() {
         {isTerminal && (
           <div className="flex items-center gap-2 p-3 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-600">
             <Info className="w-4 h-4 shrink-0" />
-            <span>PO ini sudah dalam status final dan tidak dapat diubah.</span>
+            <span>{t("mktVendorPo.terminalNotice", "PO ini sudah dalam status final dan tidak dapat diubah.")}</span>
           </div>
         )}
 
@@ -504,7 +510,7 @@ export default function MktVendorPoPage() {
           "partially_delivered", "delivered"].includes(po.status) && (
           <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-100 rounded-lg text-xs text-green-700">
             <CheckCircle2 className="w-4 h-4 shrink-0" />
-            <span>Konfirmasi Anda telah diterima. Tim pengadaan sedang memproses PO ini.</span>
+            <span>{t("mktVendorPo.acceptedNotice", "Konfirmasi Anda telah diterima. Tim pengadaan sedang memproses PO ini.")}</span>
           </div>
         )}
       </div>
@@ -514,7 +520,7 @@ export default function MktVendorPoPage() {
         <div className="fixed bottom-0 left-0 right-0 bg-white border-t shadow-lg px-4 py-3 z-20">
           <div className="max-w-2xl mx-auto">
             <p className="text-xs text-gray-500 mb-2 text-center">
-              Harap tinjau PO di atas sebelum mengambil tindakan
+              {t("mktVendorPo.reviewBeforeAction", "Harap tinjau PO di atas sebelum mengambil tindakan")}
             </p>
             <div className="grid grid-cols-3 gap-2">
               <Button
@@ -525,7 +531,7 @@ export default function MktVendorPoPage() {
                 disabled={actionMutation.isPending}
               >
                 <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
-                Revisi
+                {t("mktVendorPo.revisionBtn", "Revisi")}
               </Button>
               <Button
                 variant="outline"
@@ -535,7 +541,7 @@ export default function MktVendorPoPage() {
                 disabled={actionMutation.isPending}
               >
                 <XCircle className="w-3.5 h-3.5 mr-1.5" />
-                Tolak
+                {t("mktVendorPo.rejectBtn", "Tolak")}
               </Button>
               <Button
                 size="sm"
@@ -544,7 +550,7 @@ export default function MktVendorPoPage() {
                 disabled={actionMutation.isPending}
               >
                 <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />
-                Terima
+                {t("mktVendorPo.acceptBtn", "Terima")}
               </Button>
             </div>
           </div>
@@ -557,31 +563,31 @@ export default function MktVendorPoPage() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <CheckCircle2 className="w-5 h-5 text-green-600" />
-              Terima Purchase Order
+              {t("mktVendorPo.acceptDialogTitle", "Terima Purchase Order")}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3 text-sm text-gray-600">
             <p>
-              Dengan menerima PO ini, Anda menyetujui seluruh syarat dan kondisi
-              yang tercantum dalam <strong className="text-gray-800">{po.poNumber}</strong>.
+              {t("mktVendorPo.acceptDialogDesc", "Dengan menerima PO ini, Anda menyetujui seluruh syarat dan kondisi yang tercantum dalam")}{" "}
+              <strong className="text-gray-800">{po.poNumber}</strong>.
             </p>
             <div className="p-3 bg-gray-50 rounded-lg">
               <div className="flex justify-between">
-                <span className="text-gray-500">Grand Total</span>
+                <span className="text-gray-500">{t("mktVendorPo.grandTotal", "Grand Total")}</span>
                 <span className="font-bold text-green-700">{formatMoney(po.grandTotal, currency)}</span>
               </div>
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowAccept(false)} disabled={actionMutation.isPending}>
-              Batal
+              {t("mktVendorPo.cancel", "Batal")}
             </Button>
             <Button
               className="bg-green-600 hover:bg-green-700"
               onClick={() => actionMutation.mutate({ action: "accept" })}
               disabled={actionMutation.isPending}
             >
-              {actionMutation.isPending ? "Memproses…" : "Ya, Terima PO"}
+              {actionMutation.isPending ? t("mktVendorPo.processing", "Memproses…") : t("mktVendorPo.acceptConfirm", "Ya, Terima PO")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -593,17 +599,17 @@ export default function MktVendorPoPage() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <XCircle className="w-5 h-5 text-red-600" />
-              Tolak Purchase Order
+              {t("mktVendorPo.rejectDialogTitle", "Tolak Purchase Order")}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             <p className="text-sm text-gray-600">
-              Masukkan alasan penolakan untuk <strong>{po.poNumber}</strong> (opsional).
+              {t("mktVendorPo.rejectDialogDesc", "Masukkan alasan penolakan untuk")} <strong>{po.poNumber}</strong> {t("mktVendorPo.optional", "(opsional)")}.
             </p>
             <div>
-              <Label className="text-xs text-gray-600">Alasan Penolakan</Label>
+              <Label className="text-xs text-gray-600">{t("mktVendorPo.rejectReason", "Alasan Penolakan")}</Label>
               <Textarea
-                placeholder="Contoh: Harga tidak sesuai, kapasitas tidak tersedia…"
+                placeholder={t("mktVendorPo.rejectReasonPlaceholder", "Contoh: Harga tidak sesuai, kapasitas tidak tersedia…")}
                 value={rejectReason}
                 onChange={(e) => setRejectReason(e.target.value)}
                 rows={3}
@@ -615,14 +621,14 @@ export default function MktVendorPoPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowReject(false)} disabled={actionMutation.isPending}>
-              Batal
+              {t("mktVendorPo.cancel", "Batal")}
             </Button>
             <Button
               variant="destructive"
               onClick={() => actionMutation.mutate({ action: "reject", body: { reason: rejectReason || null } })}
               disabled={actionMutation.isPending}
             >
-              {actionMutation.isPending ? "Memproses…" : "Ya, Tolak PO"}
+              {actionMutation.isPending ? t("mktVendorPo.processing", "Memproses…") : t("mktVendorPo.rejectConfirm", "Ya, Tolak PO")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -634,19 +640,19 @@ export default function MktVendorPoPage() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <RotateCcw className="w-5 h-5 text-orange-600" />
-              Minta Revisi PO
+              {t("mktVendorPo.revisionDialogTitle", "Minta Revisi PO")}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             <p className="text-sm text-gray-600">
-              Jelaskan perubahan yang Anda butuhkan untuk <strong>{po.poNumber}</strong>.
+              {t("mktVendorPo.revisionDialogDesc", "Jelaskan perubahan yang Anda butuhkan untuk")} <strong>{po.poNumber}</strong>.
             </p>
             <div>
               <Label className="text-xs text-gray-600">
-                Catatan Revisi <span className="text-red-500">*</span>
+                {t("mktVendorPo.revisionNotes", "Catatan Revisi")} <span className="text-red-500">*</span>
               </Label>
               <Textarea
-                placeholder="Contoh: Mohon ubah harga satuan item A menjadi Rp 50.000, lead time perlu diperpanjang…"
+                placeholder={t("mktVendorPo.revisionNotesPlaceholder", "Contoh: Mohon ubah harga satuan item A menjadi Rp 50.000, lead time perlu diperpanjang…")}
                 value={revisionNotes}
                 onChange={(e) => setRevisionNotes(e.target.value)}
                 rows={4}
@@ -658,20 +664,20 @@ export default function MktVendorPoPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowRevision(false)} disabled={actionMutation.isPending}>
-              Batal
+              {t("mktVendorPo.cancel", "Batal")}
             </Button>
             <Button
               className="bg-orange-500 hover:bg-orange-600"
               onClick={() => {
                 if (!revisionNotes.trim()) {
-                  toast({ title: "Catatan wajib diisi", description: "Mohon jelaskan perubahan yang dibutuhkan.", variant: "destructive" });
+                  toast({ title: t("mktVendorPo.revisionRequired", "Catatan wajib diisi"), description: t("mktVendorPo.revisionRequiredDesc", "Mohon jelaskan perubahan yang dibutuhkan."), variant: "destructive" });
                   return;
                 }
                 actionMutation.mutate({ action: "request-revision", body: { notes: revisionNotes.trim() } });
               }}
               disabled={actionMutation.isPending}
             >
-              {actionMutation.isPending ? "Memproses…" : "Kirim Permintaan Revisi"}
+              {actionMutation.isPending ? t("mktVendorPo.processing", "Memproses…") : t("mktVendorPo.revisionSubmit", "Kirim Permintaan Revisi")}
             </Button>
           </DialogFooter>
         </DialogContent>
