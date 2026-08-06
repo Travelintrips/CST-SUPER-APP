@@ -309,11 +309,13 @@ export async function repairOrphanedEntryLines(): Promise<void> {
     "sport_center_refund",
   ];
   const ALL_SPORT_SOURCES = [...SPORT_CENTER_INBOUND_SOURCES, ...SPORT_CENTER_OUTBOUND_SOURCES];
+  const TENANT_INBOUND_SOURCES = ["tenant_rent_payment"];
+
+  const ALL_KNOWN_SOURCES = [...ALL_SPORT_SOURCES, ...TENANT_INBOUND_SOURCES];
 
   try {
-    // Find posted entries that have no lines at all.
-    // Use sql.raw() for the static IN-list — these are hardcoded constants, no user input.
-    const inList = ALL_SPORT_SOURCES.map(s => `'${s}'`).join(', ');
+    // Find ALL posted entries that have no lines, across all known source types.
+    const inList = ALL_KNOWN_SOURCES.map(s => `'${s}'`).join(', ');
     const orphansRes = await db.execute(sql`
       SELECT ae.id, ae.company_id, ae.source, ae.total_debit, ae.total_credit, ae.journal_id
       FROM accounting_entries ae
@@ -351,28 +353,46 @@ export async function repairOrphanedEntryLines(): Promise<void> {
         `);
         const settings = (settingsRes.rows[0] ?? {}) as Record<string, unknown>;
 
-        const kasAccountId       = Number(settings["default_cash_account_id"] ?? settings["default_bank_account_id"] ?? 0);
-        const fallbackIncomeId   = Number(settings["sales_income_account_id"] ?? 0);
+        const kasAccountId     = Number(settings["default_cash_account_id"] ?? settings["default_bank_account_id"] ?? 0);
+        const bankAccountId    = Number(settings["default_bank_account_id"] ?? settings["default_cash_account_id"] ?? 0);
+        const fallbackIncomeId = Number(settings["sales_income_account_id"] ?? 0);
 
-        // Sport center income account: look for code LIKE '4-1017%' for this company
-        const incomeRes = await db.execute(sql`
-          SELECT id FROM chart_of_accounts
-          WHERE code LIKE '4-1017%' AND company_id = ${companyId}
-          LIMIT 1
-        `);
-        const incomeAccountId = Number((incomeRes.rows[0] as Record<string, unknown> | undefined)?.["id"] ?? fallbackIncomeId);
+        let debitAccountId: number;
+        let creditAccountId: number;
 
-        if (!kasAccountId || !incomeAccountId) {
-          logger.warn({ entryId, companyId }, "[repairOrphanedEntryLines] Akun kas/pendapatan tidak ditemukan — skip entry");
+        if (TENANT_INBOUND_SOURCES.includes(source)) {
+          // tenant_rent_payment: Bank receives → Debit Bank, Credit Pendapatan Sewa Tenant (4-1021%)
+          const rentIncomeRes = await db.execute(sql`
+            SELECT id FROM chart_of_accounts
+            WHERE code LIKE '4-1021%' AND company_id = ${companyId}
+            LIMIT 1
+          `);
+          const rentIncomeId = Number(
+            (rentIncomeRes.rows[0] as Record<string, unknown> | undefined)?.["id"] ?? fallbackIncomeId
+          );
+          debitAccountId  = bankAccountId;
+          creditAccountId = rentIncomeId;
+        } else {
+          // Sport center: look for booking income account (4-1017%)
+          const incomeRes = await db.execute(sql`
+            SELECT id FROM chart_of_accounts
+            WHERE code LIKE '4-1017%' AND company_id = ${companyId}
+            LIMIT 1
+          `);
+          const incomeAccountId = Number(
+            (incomeRes.rows[0] as Record<string, unknown> | undefined)?.["id"] ?? fallbackIncomeId
+          );
+          const isOutbound = SPORT_CENTER_OUTBOUND_SOURCES.includes(source);
+          // Inbound: Debit = Kas, Credit = Pendapatan  |  Outbound (refund): reversed
+          debitAccountId  = isOutbound ? incomeAccountId : kasAccountId;
+          creditAccountId = isOutbound ? kasAccountId    : incomeAccountId;
+        }
+
+        if (!debitAccountId || !creditAccountId) {
+          logger.warn({ entryId, companyId, source }, "[repairOrphanedEntryLines] Akun tidak ditemukan — skip entry");
           skipped++;
           continue;
         }
-
-        const isOutbound = SPORT_CENTER_OUTBOUND_SOURCES.includes(source);
-        // Inbound (booking/payment): Debit = Kas, Credit = Pendapatan
-        // Outbound (refund):         Debit = Pendapatan, Credit = Kas
-        const debitAccountId  = isOutbound ? incomeAccountId : kasAccountId;
-        const creditAccountId = isOutbound ? kasAccountId    : incomeAccountId;
         const amount          = totalDebit > 0 ? totalDebit : Number(row["total_credit"] ?? 0);
 
         // Step 1: downgrade posted → draft (trigger allows with cancel_reason + cancelled_at)
