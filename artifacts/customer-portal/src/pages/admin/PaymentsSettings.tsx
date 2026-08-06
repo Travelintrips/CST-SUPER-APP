@@ -12,6 +12,7 @@ import {
   Save, Loader2, Shield, CreditCard, CheckCircle2, Eye, EyeOff, ChevronLeft, ChevronRight, CheckCircle,
 } from "lucide-react";
 import { apiPost } from "./adminShared";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -65,6 +66,7 @@ function PaylabsKeyField({ label, value, onChange, hint, saved }: { label: strin
 
 export function PayLabsSettingTab() {
   const { toast } = useToast();
+  const { t } = useLanguage();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savingMethod, setSavingMethod] = useState(false);
@@ -114,7 +116,7 @@ export function PayLabsSettingTab() {
         }
         if (methodsRes.ok) setPaymentMethods(await methodsRes.json() as PaymentMethod[]);
       } catch {
-        toast({ title: "Gagal memuat konfigurasi Paylabs", variant: "destructive" });
+        toast({ title: t("adminPayments.loadError", "Gagal memuat konfigurasi Paylabs"), variant: "destructive" });
       } finally {
         setLoading(false);
       }
@@ -130,10 +132,10 @@ export function PayLabsSettingTab() {
         credentials: "include",
         body: JSON.stringify(form),
       });
-      if (!r.ok) throw new Error("Gagal menyimpan");
-      toast({ title: "Tersimpan", description: "Konfigurasi Paylabs berhasil disimpan." });
+      if (!r.ok) throw new Error(t("adminPayments.saveFailedError", "Gagal menyimpan"));
+      toast({ title: t("adminPayments.saved", "Tersimpan"), description: t("adminPayments.savedDesc", "Konfigurasi Paylabs berhasil disimpan.") });
     } catch {
-      toast({ title: "Gagal menyimpan", variant: "destructive" });
+      toast({ title: t("adminPayments.saveError", "Gagal menyimpan"), variant: "destructive" });
     } finally {
       setSaving(false);
     }
@@ -164,10 +166,10 @@ export function PayLabsSettingTab() {
         body: JSON.stringify(method),
       });
       if (!r.ok) throw new Error();
-      toast({ title: "Tersimpan", description: `${method.label} berhasil disimpan.` });
+      toast({ title: t("adminPayments.saved", "Tersimpan"), description: `${method.label} ${t("adminPayments.methodSavedSuffix", "berhasil disimpan.")}` });
       setSelectedCode(null);
     } catch {
-      toast({ title: "Gagal menyimpan", variant: "destructive" });
+      toast({ title: t("adminPayments.saveError", "Gagal menyimpan"), variant: "destructive" });
     } finally {
       setSavingMethod(false);
     }
@@ -176,7 +178,7 @@ export function PayLabsSettingTab() {
   if (loading) {
     return (
       <div className="flex items-center gap-3 py-12 justify-center text-muted-foreground text-sm">
-        <Loader2 className="h-4 w-4 animate-spin" /> Memuat konfigurasi…
+        <Loader2 className="h-4 w-4 animate-spin" /> {t("adminPayments.loadingConfig", "Memuat konfigurasi…")}
       </div>
     );
   }
@@ -204,24 +206,24 @@ export function PayLabsSettingTab() {
         <div className="space-y-4">
           <div className="flex items-center gap-4 p-4 rounded-lg border bg-muted/20">
             <Switch checked={selectedMethod.isActive} onCheckedChange={(v) => updateMethod(selectedMethod.code, "isActive", v)} />
-            <p className="text-sm font-medium">Aktifkan atau Nonaktifkan {selectedMethod.label}</p>
+            <p className="text-sm font-medium">{t("adminPayments.activateDeactivate", "Aktifkan atau Nonaktifkan")} {selectedMethod.label}</p>
           </div>
 
           <div className="space-y-1.5">
-            <Label className="text-sm font-medium">Judul</Label>
+            <Label className="text-sm font-medium">{t("adminPayments.titleLabel", "Judul")}</Label>
             <Input value={selectedMethod.label} onChange={(e) => updateMethod(selectedMethod.code, "label", e.target.value)} />
           </div>
 
           <div className="flex items-center gap-4 p-4 rounded-lg border bg-muted/20">
             <Switch checked={selectedMethod.iconEnabled} onCheckedChange={(v) => updateMethod(selectedMethod.code, "iconEnabled", v)} />
-            <p className="text-sm font-medium">Aktifkan Ikon</p>
+            <p className="text-sm font-medium">{t("adminPayments.enableIcon", "Aktifkan Ikon")}</p>
           </div>
 
           {selectedMethod.iconEnabled && (
             <div className="space-y-1.5">
-              <Label className="text-sm font-medium">Custom URL Ikon</Label>
+              <Label className="text-sm font-medium">{t("adminPayments.iconUrlLabel", "Custom URL Ikon")}</Label>
               <Input value={selectedMethod.iconUrl} onChange={(e) => updateMethod(selectedMethod.code, "iconUrl", e.target.value)} placeholder="https://example.com/icon.png" />
-              <p className="text-xs text-muted-foreground">URL harus berekstensi .png</p>
+              <p className="text-xs text-muted-foreground">{t("adminPayments.iconUrlHint", "URL harus berekstensi .png")}</p>
               {selectedMethod.iconUrl && (
                 <img src={selectedMethod.iconUrl} alt="preview" className="h-8 w-8 object-contain rounded border mt-1" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
               )}
@@ -229,16 +231,16 @@ export function PayLabsSettingTab() {
           )}
 
           <div className="space-y-1.5">
-            <Label className="text-sm font-medium">Deskripsi</Label>
-            <Textarea value={selectedMethod.description} onChange={(e) => updateMethod(selectedMethod.code, "description", e.target.value)} placeholder="Deskripsi yang dilihat pengguna saat checkout." rows={3} />
-            <p className="text-xs text-muted-foreground">Ini mengontrol deskripsi yang dilihat pengguna saat checkout.</p>
+            <Label className="text-sm font-medium">{t("adminPayments.descriptionLabel", "Deskripsi")}</Label>
+            <Textarea value={selectedMethod.description} onChange={(e) => updateMethod(selectedMethod.code, "description", e.target.value)} placeholder={t("adminPayments.descriptionPlaceholder", "Deskripsi yang dilihat pengguna saat checkout.")} rows={3} />
+            <p className="text-xs text-muted-foreground">{t("adminPayments.descriptionHint", "Ini mengontrol deskripsi yang dilihat pengguna saat checkout.")}</p>
           </div>
         </div>
 
         <div className="flex justify-end pb-6">
           <Button onClick={handleSaveMethod} disabled={savingMethod} className="gap-2 bg-teal-500 hover:bg-teal-600 text-white">
             {savingMethod ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            {savingMethod ? "Menyimpan…" : "Simpan Perubahan"}
+            {savingMethod ? t("adminPayments.saving", "Menyimpan…") : t("adminPayments.saveChanges", "Simpan Perubahan")}
           </Button>
         </div>
       </div>
@@ -252,7 +254,7 @@ export function PayLabsSettingTab() {
           <CreditCard className="h-5 w-5 text-blue-600" />
           Paylabs Setting
         </h2>
-        <p className="text-sm text-muted-foreground mt-1">Konfigurasi kredensial dan mode lingkungan Paylabs.</p>
+        <p className="text-sm text-muted-foreground mt-1">{t("adminPayments.paylabsSubtitle", "Konfigurasi kredensial dan mode lingkungan Paylabs.")}</p>
       </div>
 
       <Card>
@@ -265,16 +267,16 @@ export function PayLabsSettingTab() {
           <div className="flex items-start gap-4 p-4 rounded-lg border bg-muted/20">
             <Switch checked={form.sandboxMode} onCheckedChange={(v) => set("sandboxMode", v)} className="mt-0.5" />
             <div>
-              <p className="font-medium text-sm">Sandbox Mode (Testing)</p>
-              <p className="text-xs text-muted-foreground mt-0.5">Aktifkan untuk SIT/sandbox. Nonaktifkan untuk produksi.</p>
+              <p className="font-medium text-sm">{t("adminPayments.sandboxModeLabel", "Sandbox Mode (Testing)")}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">{t("adminPayments.sandboxModeHint", "Aktifkan untuk SIT/sandbox. Nonaktifkan untuk produksi.")}</p>
             </div>
           </div>
           <div className={`flex items-center gap-2 px-4 py-3 rounded-lg border text-sm font-medium ${form.sandboxMode ? "bg-amber-50 border-amber-200 text-amber-700" : "bg-emerald-50 border-emerald-200 text-emerald-700"}`}>
             <CheckCircle2 className="h-4 w-4 shrink-0" />
-            {form.sandboxMode ? "Mode sandbox aktif — transaksi hanya simulasi." : "Mode produksi aktif — transaksi nyata diproses."}
+            {form.sandboxMode ? t("adminPayments.sandboxActive", "Mode sandbox aktif — transaksi hanya simulasi.") : t("adminPayments.productionActive", "Mode produksi aktif — transaksi nyata diproses.")}
           </div>
           <div className="space-y-1.5">
-            <Label className="text-sm font-medium">Store ID <span className="text-muted-foreground font-normal">(opsional)</span></Label>
+            <Label className="text-sm font-medium">Store ID <span className="text-muted-foreground font-normal">{t("adminPayments.optional", "(opsional)")}</span></Label>
             <Input value={form.storeId} onChange={(e) => set("storeId", e.target.value)} placeholder="(opsional)" />
           </div>
         </CardContent>
@@ -284,7 +286,7 @@ export function PayLabsSettingTab() {
         <CardHeader className="pb-3">
           <CardTitle className={`text-base flex items-center gap-2 ${activeEnv === "sandbox" ? "text-amber-800" : ""}`}>
             <Shield className={`h-4 w-4 ${activeEnv === "sandbox" ? "text-amber-500" : "text-muted-foreground"}`} />
-            Kredensial Sandbox (SIT)
+            {t("adminPayments.sandboxCredentials", "Kredensial Sandbox (SIT)")}
             <span className="text-xs font-normal text-muted-foreground ml-1">— env: PAYLABS_MERCHANT_ID_SANDBOX / PAYLABS_PUBLIC_KEY_SANDBOX / PAYLABS_PRIVATE_KEY_SANDBOX</span>
           </CardTitle>
         </CardHeader>
@@ -304,11 +306,11 @@ export function PayLabsSettingTab() {
           <div className="flex items-center justify-between">
             <CardTitle className={`text-base flex items-center gap-2 ${activeEnv === "produksi" ? "text-emerald-800" : ""}`}>
               <CreditCard className={`h-4 w-4 ${activeEnv === "produksi" ? "text-emerald-600" : "text-muted-foreground"}`} />
-              Kredensial Produksi
+              {t("adminPayments.productionCredentials", "Kredensial Produksi")}
               <span className="text-xs font-normal text-muted-foreground ml-1">— env: PAYLABS_MERCHANT_ID / PAYLABS_PUBLIC_KEY / PAYLABS_PRIVATE_KEY</span>
             </CardTitle>
             {activeEnv === "produksi" && (
-              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200">Aktif</span>
+              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200">{t("adminPayments.activeLabel", "Aktif")}</span>
             )}
           </div>
         </CardHeader>
@@ -326,12 +328,12 @@ export function PayLabsSettingTab() {
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
-            <CreditCard className="h-4 w-4 text-muted-foreground" /> Metode Pembayaran
+            <CreditCard className="h-4 w-4 text-muted-foreground" /> {t("adminPayments.paymentMethodsTitle", "Metode Pembayaran")}
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
           {paymentMethods.length === 0 ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">Belum ada metode pembayaran.</div>
+            <div className="py-8 text-center text-sm text-muted-foreground">{t("adminPayments.emptyMethods", "Belum ada metode pembayaran.")}</div>
           ) : (
             <div className="divide-y">
               {paymentMethods.map((method) => (
@@ -348,15 +350,15 @@ export function PayLabsSettingTab() {
                     <p className="text-xs text-muted-foreground truncate">{method.description}</p>
                   </div>
                   <span className={`text-xs font-medium px-2 py-0.5 rounded-full border flex-shrink-0 ${method.isActive ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-muted text-muted-foreground border-border"}`}>
-                    {method.isActive ? "Aktif" : "Nonaktif"}
+                    {method.isActive ? t("adminPayments.activeLabel", "Aktif") : t("adminPayments.inactiveLabel", "Nonaktif")}
                   </span>
                   {!method.isActive && (
                     <Button size="sm" variant="outline" className="text-xs h-7 px-2 flex-shrink-0 border-teal-400 text-teal-600 hover:bg-teal-50" onClick={() => handleToggleMethod(method.code, true)}>
-                      Aktifkan
+                      {t("adminPayments.activateBtn", "Aktifkan")}
                     </Button>
                   )}
                   <Button size="sm" variant="outline" className="text-xs h-7 px-3 gap-1 flex-shrink-0" onClick={() => setSelectedCode(method.code)}>
-                    Kelola <ChevronRight className="h-3 w-3" />
+                    {t("adminPayments.manageBtn", "Kelola")} <ChevronRight className="h-3 w-3" />
                   </Button>
                 </div>
               ))}
@@ -368,7 +370,7 @@ export function PayLabsSettingTab() {
       <div className="flex justify-end pb-6">
         <Button onClick={handleSave} disabled={saving} className="gap-2">
           {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-          {saving ? "Menyimpan…" : "Simpan Perubahan"}
+          {saving ? t("adminPayments.saving", "Menyimpan…") : t("adminPayments.saveChanges", "Simpan Perubahan")}
         </Button>
       </div>
     </div>
@@ -379,6 +381,7 @@ export function PayLabsSettingTab() {
 
 export function ClaimAdminTab() {
   const { toast } = useToast();
+  const { t } = useLanguage();
   const [key, setKey] = useState("");
   const [loading, setLoading] = useState(false);
   const [, setLocation] = useLocation();
@@ -388,10 +391,10 @@ export function ClaimAdminTab() {
     setLoading(true);
     try {
       await apiPost<{ role: string }>("/api/portal/admin/claim", { key });
-      toast({ title: "Berhasil! Anda sekarang adalah admin.", description: "Halaman akan dimuat ulang." });
+      toast({ title: t("adminPayments.claimSuccess", "Berhasil! Anda sekarang adalah admin."), description: t("adminPayments.claimSuccessDesc", "Halaman akan dimuat ulang.") });
       setTimeout(() => window.location.reload(), 1200);
     } catch {
-      toast({ title: "Kunci admin tidak valid", variant: "destructive" });
+      toast({ title: t("adminPayments.claimInvalidKey", "Kunci admin tidak valid"), variant: "destructive" });
     } finally {
       setLoading(false);
     }
@@ -401,8 +404,8 @@ export function ClaimAdminTab() {
     return (
       <div className="flex flex-col items-center justify-center py-20 gap-3 text-center">
         <CheckCircle className="h-12 w-12 text-green-500" />
-        <p className="text-lg font-semibold">Anda sudah menjadi Admin</p>
-        <p className="text-muted-foreground text-sm">Semua fitur admin telah aktif.</p>
+        <p className="text-lg font-semibold">{t("adminPayments.alreadyAdmin", "Anda sudah menjadi Admin")}</p>
+        <p className="text-muted-foreground text-sm">{t("adminPayments.alreadyAdminDesc", "Semua fitur admin telah aktif.")}</p>
       </div>
     );
   }
@@ -410,22 +413,21 @@ export function ClaimAdminTab() {
   return (
     <div className="max-w-md space-y-4">
       <p className="text-sm text-muted-foreground">
-        Masukkan kunci rahasia admin untuk mengaktifkan akses admin pada akun Anda.
-        Kunci ini diatur oleh administrator sistem.
+        {t("adminPayments.claimDesc", "Masukkan kunci rahasia admin untuk mengaktifkan akses admin pada akun Anda. Kunci ini diatur oleh administrator sistem.")}
       </p>
       <div className="space-y-1.5">
-        <Label>Kunci Admin</Label>
+        <Label>{t("adminPayments.adminKeyLabel", "Kunci Admin")}</Label>
         <Input
           type="password"
           value={key}
           onChange={(e) => setKey(e.target.value)}
-          placeholder="Masukkan kunci admin..."
+          placeholder={t("adminPayments.adminKeyPlaceholder", "Masukkan kunci admin...")}
           onKeyDown={(e) => { if (e.key === "Enter") void handleClaim(); }}
         />
       </div>
       <Button onClick={handleClaim} disabled={loading || !key} className="gap-2">
         {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Shield className="h-4 w-4" />}
-        {loading ? "Memverifikasi..." : "Aktifkan Admin"}
+        {loading ? t("adminPayments.verifying", "Memverifikasi...") : t("adminPayments.activateAdmin", "Aktifkan Admin")}
       </Button>
     </div>
   );

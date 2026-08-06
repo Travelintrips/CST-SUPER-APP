@@ -10,6 +10,7 @@ import {
 import { useState } from "react";
 import type { ProductTemplate, DynamicFormValues } from "@workspace/product-templates";
 import { isFieldVisible } from "@workspace/product-templates";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 export type { DynamicFormValues };
 
@@ -31,6 +32,7 @@ function SectionHeader({ icon, title }: { icon: React.ReactNode; title: string }
 }
 
 export function DynamicProductForm({ template, values, onChange }: Props) {
+  const { t } = useLanguage();
   const [packagingOpen, setPackagingOpen] = useState(false);
 
   function setCustomField(key: string, val: string | number | boolean) {
@@ -63,7 +65,7 @@ export function DynamicProductForm({ template, values, onChange }: Props) {
 
       {/* ── Custom Fields ── */}
       <div className="border rounded-xl p-4 bg-card">
-        <SectionHeader icon={<Package className="w-3.5 h-3.5" />} title="Field Khusus Komoditas" />
+        <SectionHeader icon={<Package className="w-3.5 h-3.5" />} title={t("tmpl.customFields", "Field Khusus Komoditas")} />
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {template.customFields.map((field) => {
             if (!isFieldVisible(field.key, template, values)) return null;

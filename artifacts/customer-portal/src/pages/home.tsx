@@ -187,7 +187,7 @@ export default function Home() {
         <EditableImage
           contentKey="hero_bg"
           defaultSrc="/images/hero-bg.webp"
-          alt="Cargo ship at sea"
+          alt={t("home.altCargoShip", "Cargo ship at sea")}
           className="absolute inset-0 w-full h-full object-cover z-0"
           priority
         />
@@ -289,7 +289,7 @@ export default function Home() {
 
         {/* Scroll indicator */}
         <button
-          aria-label="Scroll down"
+          aria-label={t("home.ariaScrollDown", "Scroll down")}
           className="absolute bottom-7 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-1 text-white/40 hover:text-white/80 transition-colors duration-300 cursor-pointer"
           onClick={() => window.scrollBy({ top: window.innerHeight * 0.85, behavior: "smooth" })}
         >
@@ -671,7 +671,7 @@ export default function Home() {
                 <EditableImage
                   contentKey="about_img1"
                   defaultSrc="/api/storage/public-objects/portal/images/port-operations.png"
-                  alt="Operasi Pelabuhan"
+                  alt={t("home.altPortOperations", "Operasi Pelabuhan")}
                   className="w-full h-full object-cover"
                 />
               </div>
