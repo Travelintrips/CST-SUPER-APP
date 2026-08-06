@@ -140,6 +140,10 @@ export default function Orders() {
 
   if (!authed) return null;
 
+  // Locale-aware status label: try orderStatusLabels namespace first, fall back to static map
+  const localeStatus = (status: string) =>
+    t(`orderStatusLabels.${status}`, LOGISTIC_STATUS_ID[status] ?? status);
+
   const crmOrders = (Array.isArray(crmResponse) ? crmResponse : []).map((o) => ({
     _key: `crm-${o.id}`,
     _id: o.id,
@@ -148,7 +152,7 @@ export default function Orders() {
     displayNumber: o.docNumber,
     subtitle: t("orders.typeCrm"),
     status: o.status,
-    displayStatus: LOGISTIC_STATUS_ID[o.status] ?? o.status,
+    displayStatus: localeStatus(o.status),
     statusColor: STATUS_COLOR[o.status] ?? "bg-gray-100 text-gray-800",
     grandTotal: o.grandTotal,
     createdAt: o.createdAt,
@@ -163,7 +167,7 @@ export default function Orders() {
     displayNumber: o.orderNumber,
     subtitle: `${o.shipmentType ?? t("orders.typeLogistic")} • ${o.origin ?? ""} → ${o.destination ?? ""}`,
     status: o.status,
-    displayStatus: LOGISTIC_STATUS_ID[o.status] ?? o.status,
+    displayStatus: localeStatus(o.status),
     statusColor: LOGISTIC_STATUS_COLOR[o.status] ?? "bg-gray-100 text-gray-800",
     grandTotal: o.grandTotal,
     createdAt: o.createdAt,
@@ -178,7 +182,7 @@ export default function Orders() {
     displayNumber: o.orderNumber,
     subtitle: t("orders.typeProduct"),
     status: o.status,
-    displayStatus: LOGISTIC_STATUS_ID[o.status] ?? o.status,
+    displayStatus: localeStatus(o.status),
     statusColor: PRODUCT_ORDER_STATUS_COLOR[o.status] ?? "bg-gray-100 text-gray-800",
     grandTotal: o.grandTotal,
     createdAt: o.createdAt,
