@@ -57,46 +57,53 @@ interface CalcResult {
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
-function formatIDR(n: number) {
-  return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
+function formatIDR(n: number, loc = "id-ID") {
+  return new Intl.NumberFormat(loc, { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
 }
 
-function exportCalcCSV(result: CalcResult, serviceName: string) {
+interface CsvExportLabels {
+  columnItem: string; columnValue: string; subtotal: string; insurance: string;
+  ppn: string; grandTotal: string; filenamePrefix: string;
+}
+
+function exportCalcCSV(result: CalcResult, serviceName: string, labels: CsvExportLabels) {
   const rows: string[] = [
-    "Item,Nilai (IDR)",
+    `"${labels.columnItem}","${labels.columnValue}"`,
     ...result.items.map(i => `"${i.label}","${i.value}"`),
-    `"Subtotal","${result.subtotal}"`,
-    ...(result.insurance > 0 ? [`"Asuransi","${result.insurance}"`] : []),
-    ...(result.ppn > 0 ? [`"PPN","${result.ppn}"`] : []),
-    `"Grand Total","${result.grandTotal}"`,
+    `"${labels.subtotal}","${result.subtotal}"`,
+    ...(result.insurance > 0 ? [`"${labels.insurance}","${result.insurance}"`] : []),
+    ...(result.ppn > 0 ? [`"${labels.ppn}","${result.ppn}"`] : []),
+    `"${labels.grandTotal}","${result.grandTotal}"`,
   ];
   const blob = new Blob([rows.join("\n")], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `estimasi-${serviceName.replace(/\s+/g, "-").toLowerCase()}-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `${labels.filenamePrefix}-${serviceName.replace(/\s+/g, "-").toLowerCase()}-${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }
 
-function exportCalcJSON(result: CalcResult, serviceName: string) {
+interface JsonExportLabels { noteValue: string; filenamePrefix: string; }
+
+function exportCalcJSON(result: CalcResult, serviceName: string, labels: JsonExportLabels) {
   const data = {
     service: serviceName,
-    tanggal: new Date().toISOString(),
+    date: new Date().toISOString(),
     items: result.items,
     subtotal: result.subtotal,
-    asuransi: result.insurance,
+    insurance: result.insurance,
     ppn: result.ppn,
     grandTotal: result.grandTotal,
     ...(result.chargeableWeight !== undefined && { chargeableWeight: result.chargeableWeight }),
     ...(result.cbm !== undefined && { cbm: result.cbm }),
-    catatan: "Estimasi, belum termasuk biaya tidak terduga",
+    note: labels.noteValue,
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `estimasi-${serviceName.replace(/\s+/g, "-").toLowerCase()}-${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = `${labels.filenamePrefix}-${serviceName.replace(/\s+/g, "-").toLowerCase()}-${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -113,7 +120,9 @@ const SERVICE_CONFIG: Record<string, { icon: React.ReactNode; color: string; gra
 
 // ── Main Component ─────────────────────────────────────────────────────────────
 export default function CalculatorPage() {
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
+  /** Locale-aware IDR formatter — recreated only when locale changes. */
+  const fmtIDR = (n: number) => formatIDR(n, locale);
   const qc = useQueryClient();
 
   // Translated service labels (must be inside component so t() works)
@@ -326,9 +335,9 @@ export default function CalculatorPage() {
       const securityFee = Math.ceil(cw) * r.securityFeePerKg;
 
       calc.items = [
-        { label: t("calculator.itemAirFreightCharge", "Air Freight Charge"), value: freightCost, note: `${Math.ceil(cw)} kg × ${formatIDR(r.ratePerKg)}/kg` },
+        { label: t("calculator.itemAirFreightCharge", "Air Freight Charge"), value: freightCost, note: `${Math.ceil(cw)} kg × ${fmtIDR(r.ratePerKg)}/kg` },
         { label: t("calculator.itemFuelSurcharge", "Fuel Surcharge"), value: fuelSurcharge, note: `${r.fuelSurchargePct}% dari freight charge` },
-        { label: t("calculator.itemSecuritySurcharge", "Security Surcharge"), value: securityFee, note: `${Math.ceil(cw)} kg × ${formatIDR(r.securityFeePerKg)}/kg` },
+        { label: t("calculator.itemSecuritySurcharge", "Security Surcharge"), value: securityFee, note: `${Math.ceil(cw)} kg × ${fmtIDR(r.securityFeePerKg)}/kg` },
         { label: t("calculator.itemHandlingFee", "Handling Fee"), value: r.handlingFee * pieces },
         { label: t("calculator.itemAwbFee", "AWB Fee"), value: r.awbFee },
         { label: t("calculator.itemDocumentation", "Documentation"), value: r.documentationFee },
@@ -347,7 +356,7 @@ export default function CalculatorPage() {
         const freightCost = Math.ceil(effectiveCbm * 10) / 10 * r.ratePerCbmLcl;
         calc.cbm = Math.round(cbm * 1000) / 1000;
         calc.items = [
-          { label: t("calculator.itemOceanFreightLcl", "Ocean Freight (LCL)"), value: freightCost, note: `${effectiveCbm.toFixed(2)} CBM × ${formatIDR(r.ratePerCbmLcl)}/CBM` },
+          { label: t("calculator.itemOceanFreightLcl", "Ocean Freight (LCL)"), value: freightCost, note: `${effectiveCbm.toFixed(2)} CBM × ${fmtIDR(r.ratePerCbmLcl)}/CBM` },
           { label: t("calculator.itemThc", "THC (Terminal Handling)"), value: r.thc },
           { label: t("calculator.itemDocumentation", "Documentation"), value: r.documentationFee },
           ...(seaCustoms ? [{ label: t("calculator.itemCustomsClearance", "Customs Clearance"), value: r.customsClearance }] : []),
@@ -393,7 +402,7 @@ export default function CalculatorPage() {
 
       calc.items = [
         { label: `${t("calculator.itemBaseRate", "Base Rate")} (${truckVehicle})`, value: baseRate },
-        { label: t("calculator.itemDistanceFee", "Biaya Jarak"), value: distCost, note: `${distKm} km × ${formatIDR(r.distanceRatePerKm)}/km` },
+        { label: t("calculator.itemDistanceFee", "Biaya Jarak"), value: distCost, note: `${distKm} km × ${fmtIDR(r.distanceRatePerKm)}/km` },
         ...(truckLoading ? [{ label: t("calculator.itemLoadingService", "Loading Service"), value: r.loadingFee }] : []),
         ...(truckUnloading ? [{ label: t("calculator.itemUnloadingService", "Unloading Service"), value: r.unloadingFee }] : []),
         ...(truckOvernight ? [{ label: t("calculator.itemOvernight", "Overnight Stay"), value: r.overnightFee }] : []),
@@ -412,7 +421,7 @@ export default function CalculatorPage() {
       const unitLabel = whStorageType === "Pallet" ? "pallet" : whStorageType === "CBM" ? "CBM" : "m²";
 
       calc.items = [
-        { label: `${t("calculator.itemStorage", "Storage")} (${whStorageType})`, value: storageCost, note: `${qty} ${unitLabel} × ${days} hari × ${formatIDR(storageRate)}/hari` },
+        { label: `${t("calculator.itemStorage", "Storage")} (${whStorageType})`, value: storageCost, note: `${qty} ${unitLabel} × ${days} ${t("calculator.days", "hari")} × ${fmtIDR(storageRate)}/${t("calculator.day", "hari")}` },
         ...(whInbound ? [{ label: t("calculator.itemInboundHandling", "Inbound Handling"), value: Math.round(qty * r.inboundFee) }] : []),
         ...(whOutbound ? [{ label: t("calculator.itemOutboundHandling", "Outbound Handling"), value: Math.round(qty * r.outboundFeePerPallet) }] : []),
         ...(whInventory ? [{ label: t("calculator.itemInventoryMgmt", "Inventory Management"), value: r.inventoryFeePerMonth, note: t("calculator.perMonth", "per bulan") }] : []),
@@ -744,7 +753,7 @@ export default function CalculatorPage() {
                           <Label req>{t("calculator.containerType")}</Label>
                           <Select value={seaContainerType} onChange={e => setSeaContainerType(e.target.value)}>
                             {["20GP","40GP","40HC","Reefer","Open Top","Flat Rack"].map(ct => (
-                              <option key={ct} value={ct}>{ct} — {formatIDR(rates.seaFreight.ratePerContainer[ct] ?? 0)}</option>
+                              <option key={ct} value={ct}>{ct} — {fmtIDR(rates.seaFreight.ratePerContainer[ct] ?? 0)}</option>
                             ))}
                           </Select>
                         </div>
@@ -754,7 +763,7 @@ export default function CalculatorPage() {
                           <div>
                             <Label req>{t("calculator.volume")}</Label>
                             <Input type="number" min="0" step="0.001" value={seaCbm} onChange={e => setSeaCbm(e.target.value)} placeholder="0.000 CBM" />
-                            <p className="text-[10.5px] text-slate-400 mt-1">Tarif: {formatIDR(rates.seaFreight.ratePerCbmLcl)}/CBM</p>
+                            <p className="text-[10.5px] text-slate-400 mt-1">{t("calculator.rateLabel", "Tarif")}: {fmtIDR(rates.seaFreight.ratePerCbmLcl)}/CBM</p>
                           </div>
                           <div>
                             <Label>{t("calculator.grossWeightKg")}</Label>
@@ -774,8 +783,8 @@ export default function CalculatorPage() {
                       </div>
                       <div className="flex flex-wrap gap-2">
                         <Check checked={seaDg} onChange={setSeaDg} label={t("calculator.dangerousGoods")} sub={t("calculator.dgSurcharge")} />
-                        <Check checked={seaTrucking} onChange={setSeaTrucking} label={t("calculator.inlandTrucking")} sub={`+${formatIDR(rates.seaFreight.truckingFee)}`} />
-                        <Check checked={seaCustoms} onChange={setSeaCustoms} label={t("calculator.customsFee")} sub={`+${formatIDR(rates.seaFreight.customsClearance)}`} />
+                        <Check checked={seaTrucking} onChange={setSeaTrucking} label={t("calculator.inlandTrucking")} sub={`+${fmtIDR(rates.seaFreight.truckingFee)}`} />
+                        <Check checked={seaCustoms} onChange={setSeaCustoms} label={t("calculator.customsFee")} sub={`+${fmtIDR(rates.seaFreight.customsClearance)}`} />
                       </div>
                     </div>
                   </div>
