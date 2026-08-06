@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
+import { CreatableCombobox, type ComboboxOption } from "@/components/ui/creatable-combobox";
 import { useCompany } from "@/contexts/CompanyContext";
 import {
   SlidersHorizontal, Plus, Pencil, PowerOff, RefreshCw,
@@ -96,6 +97,94 @@ function ConfigTab({ category }: { category: "BUSINESS_TRANSACTION" | "ROUTINE_E
   const [showInactive, setShowInactive] = useState(false);
   const [form, setForm]       = useState<any>({});
 
+  // ── Dropdown options ─────────────────────────────────────────────────────
+  const [coaOptions,  setCoaOptions]  = useState<ComboboxOption[]>([]);
+  const [deptOptions, setDeptOptions] = useState<ComboboxOption[]>([]);
+  const [ccOptions,   setCcOptions]   = useState<ComboboxOption[]>([]);
+  const [loadingOpts, setLoadingOpts] = useState(false);
+
+  // Add-department dialog
+  const [showAddDept, setShowAddDept] = useState(false);
+  const [newDeptName, setNewDeptName] = useState("");
+  const [addingDept,  setAddingDept]  = useState(false);
+
+  // Add-cost-center dialog
+  const [showAddCC,  setShowAddCC]  = useState(false);
+  const [newCcCode,  setNewCcCode]  = useState("");
+  const [newCcName,  setNewCcName]  = useState("");
+  const [addingCC,   setAddingCC]   = useState(false);
+
+  const loadOptions = useCallback(async () => {
+    setLoadingOpts(true);
+    try {
+      const qp = activeCompanyId ? `?company_id=${activeCompanyId}` : "";
+      const [coaR, deptR, ccR] = await Promise.all([
+        fetch(`${API}/accounting/coa${qp}`, { credentials: "include" }),
+        fetch(`${API}/org/departments${qp}`,  { credentials: "include" }),
+        fetch(`${API}/accounting/cost-centers${qp}`, { credentials: "include" }),
+      ]);
+      const [coaJ, deptJ, ccJ] = await Promise.all([coaR.json(), deptR.json(), ccR.json()]);
+
+      const coas  = Array.isArray(coaJ)  ? coaJ  : (coaJ.data  ?? []);
+      const depts = Array.isArray(deptJ) ? deptJ : (deptJ.data ?? []);
+      const ccs   = Array.isArray(ccJ)   ? ccJ   : (ccJ.data   ?? []);
+
+      setCoaOptions(coas.map((c: any) => ({ value: c.code, label: `${c.code} — ${c.name}` })));
+      setDeptOptions(depts.map((d: any) => ({ value: d.name, label: d.code ? `${d.code} — ${d.name}` : d.name })));
+      setCcOptions(ccs.map((c: any)    => ({ value: c.code, label: `${c.code} — ${c.name}` })));
+    } catch {
+      // silently ignore — fields still work as free-text fallback
+    } finally {
+      setLoadingOpts(false);
+    }
+  }, [activeCompanyId]);
+
+  const handleAddDepartment = async () => {
+    const name = newDeptName.trim();
+    if (!name) return;
+    setAddingDept(true);
+    try {
+      const r = await fetch(`${API}/org/departments`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ companyId: activeCompanyId, name }),
+      });
+      if (!r.ok) { const e = await r.json(); alert(e.message ?? "Gagal menambah departemen."); return; }
+      const created = await r.json();
+      const opt = { value: created.name, label: created.name };
+      setDeptOptions(prev => [...prev, opt]);
+      setForm((f: any) => ({ ...f, default_department: created.name }));
+      setShowAddDept(false);
+      setNewDeptName("");
+    } finally {
+      setAddingDept(false);
+    }
+  };
+
+  const handleAddCostCenter = async () => {
+    const code = newCcCode.trim().toUpperCase();
+    const name = newCcName.trim();
+    if (!code || !name) { alert("Kode dan nama wajib diisi."); return; }
+    setAddingCC(true);
+    try {
+      const r = await fetch(`${API}/accounting/cost-centers`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code, name, companyId: activeCompanyId }),
+      });
+      if (!r.ok) { const e = await r.json(); alert(e.message ?? "Gagal menambah cost center."); return; }
+      const created = await r.json();
+      const opt = { value: created.code, label: `${created.code} — ${created.name}` };
+      setCcOptions(prev => [...prev, opt]);
+      setForm((f: any) => ({ ...f, default_cost_center: created.code }));
+      setShowAddCC(false);
+      setNewCcCode("");
+      setNewCcName("");
+    } finally {
+      setAddingCC(false);
+    }
+  };
+
   const defaultFlow =
     category === "BUSINESS_TRANSACTION"  ? "BUSINESS_MATCHING"          :
     category === "ROUTINE_EXPENSE"       ? "ROUTINE_EXPENSE_ALLOCATION"  :
@@ -125,6 +214,7 @@ function ConfigTab({ category }: { category: "BUSINESS_TRANSACTION" | "ROUTINE_E
       need_approval: false, need_invoice_number: false, need_reference_number: false,
       ai_learning_enabled: true, confidence_threshold: 0.75, keywords: [], priority: 50,
     });
+    loadOptions();
     setShowModal(true);
   };
 
@@ -135,6 +225,7 @@ function ConfigTab({ category }: { category: "BUSINESS_TRANSACTION" | "ROUTINE_E
       keywords: Array.isArray(row.keywords) ? row.keywords : JSON.parse(row.keywords ?? "[]"),
       upload_file_types: Array.isArray(row.upload_file_types) ? row.upload_file_types : JSON.parse(row.upload_file_types ?? "[]"),
     });
+    loadOptions();
     setShowModal(true);
   };
 
@@ -265,6 +356,71 @@ function ConfigTab({ category }: { category: "BUSINESS_TRANSACTION" | "ROUTINE_E
         </div>
       )}
 
+      {/* ── Add Department dialog ─────────────────────────────────────── */}
+      <Dialog open={showAddDept} onOpenChange={v => { setShowAddDept(v); if (!v) setNewDeptName(""); }}>
+        <DialogContent className="bg-slate-900 border-slate-700 text-white max-w-sm">
+          <DialogHeader><DialogTitle>Tambah Departemen Baru</DialogTitle></DialogHeader>
+          <div className="space-y-3 py-2">
+            <div>
+              <Label className="text-slate-300">Nama Departemen *</Label>
+              <Input
+                value={newDeptName}
+                onChange={e => setNewDeptName(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") handleAddDepartment(); }}
+                className="bg-slate-800 border-slate-600 text-white mt-1"
+                placeholder="cth. Finance, Operations…"
+                autoFocus
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAddDept(false)} className="border-slate-600 text-slate-300">Batal</Button>
+            <Button onClick={handleAddDepartment} disabled={addingDept || !newDeptName.trim()}
+              className="bg-orange-500 hover:bg-orange-600 text-white">
+              {addingDept ? <RefreshCw size={14} className="animate-spin mr-1" /> : null}
+              Tambah
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Add Cost Center dialog ───────────────────────────────────── */}
+      <Dialog open={showAddCC} onOpenChange={v => { setShowAddCC(v); if (!v) { setNewCcCode(""); setNewCcName(""); } }}>
+        <DialogContent className="bg-slate-900 border-slate-700 text-white max-w-sm">
+          <DialogHeader><DialogTitle>Tambah Cost Center Baru</DialogTitle></DialogHeader>
+          <div className="space-y-3 py-2">
+            <div>
+              <Label className="text-slate-300">Kode *</Label>
+              <Input
+                value={newCcCode}
+                onChange={e => setNewCcCode(e.target.value.toUpperCase())}
+                className="bg-slate-800 border-slate-600 text-white mt-1 font-mono"
+                placeholder="cth. CC-OPS"
+                autoFocus
+              />
+            </div>
+            <div>
+              <Label className="text-slate-300">Nama *</Label>
+              <Input
+                value={newCcName}
+                onChange={e => setNewCcName(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") handleAddCostCenter(); }}
+                className="bg-slate-800 border-slate-600 text-white mt-1"
+                placeholder="cth. Operasional"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAddCC(false)} className="border-slate-600 text-slate-300">Batal</Button>
+            <Button onClick={handleAddCostCenter} disabled={addingCC || !newCcCode.trim() || !newCcName.trim()}
+              className="bg-orange-500 hover:bg-orange-600 text-white">
+              {addingCC ? <RefreshCw size={14} className="animate-spin mr-1" /> : null}
+              Tambah
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={showModal} onOpenChange={setShowModal}>
         <DialogContent className="bg-slate-900 border-slate-700 text-white max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
@@ -317,18 +473,49 @@ function ConfigTab({ category }: { category: "BUSINESS_TRANSACTION" | "ROUTINE_E
             <div className="grid grid-cols-3 gap-3">
               <div>
                 <Label className="text-slate-300">Default COA Code</Label>
-                <Input value={form.default_coa_code ?? ""} onChange={e => setForm((f: any) => ({ ...f, default_coa_code: e.target.value || null }))}
-                  className="bg-slate-800 border-slate-600 text-white mt-1 font-mono" placeholder="cth. 1-1010" />
+                <div className="mt-1">
+                  <CreatableCombobox
+                    value={form.default_coa_code ?? ""}
+                    onChange={v => setForm((f: any) => ({ ...f, default_coa_code: v || null }))}
+                    options={coaOptions}
+                    placeholder="Pilih COA…"
+                    searchPlaceholder="Cari kode / nama…"
+                    loading={loadingOpts}
+                    emptyText="COA tidak ditemukan."
+                  />
+                </div>
               </div>
               <div>
                 <Label className="text-slate-300">Department</Label>
-                <Input value={form.default_department ?? ""} onChange={e => setForm((f: any) => ({ ...f, default_department: e.target.value || null }))}
-                  className="bg-slate-800 border-slate-600 text-white mt-1" />
+                <div className="mt-1">
+                  <CreatableCombobox
+                    value={form.default_department ?? ""}
+                    onChange={v => setForm((f: any) => ({ ...f, default_department: v || null }))}
+                    options={deptOptions}
+                    placeholder="Pilih departemen…"
+                    searchPlaceholder="Cari departemen…"
+                    loading={loadingOpts}
+                    emptyText="Departemen tidak ditemukan."
+                    onAddNew={q => { setNewDeptName(q); setShowAddDept(true); }}
+                    addNewLabel="Tambah departemen"
+                  />
+                </div>
               </div>
               <div>
                 <Label className="text-slate-300">Cost Center</Label>
-                <Input value={form.default_cost_center ?? ""} onChange={e => setForm((f: any) => ({ ...f, default_cost_center: e.target.value || null }))}
-                  className="bg-slate-800 border-slate-600 text-white mt-1" />
+                <div className="mt-1">
+                  <CreatableCombobox
+                    value={form.default_cost_center ?? ""}
+                    onChange={v => setForm((f: any) => ({ ...f, default_cost_center: v || null }))}
+                    options={ccOptions}
+                    placeholder="Pilih cost center…"
+                    searchPlaceholder="Cari kode / nama…"
+                    loading={loadingOpts}
+                    emptyText="Cost center tidak ditemukan."
+                    onAddNew={q => { setNewCcCode(q); setShowAddCC(true); }}
+                    addNewLabel="Tambah cost center"
+                  />
+                </div>
               </div>
             </div>
 
