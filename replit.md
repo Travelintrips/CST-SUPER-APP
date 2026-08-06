@@ -1,6 +1,6 @@
 # CST Super App
 
-B2B Marketplace and Logistics platform — pnpm monorepo with multiple services.
+B2B Marketplace and Logistics platform — a pnpm monorepo with multiple services.
 
 ## Stack
 
@@ -10,48 +10,41 @@ B2B Marketplace and Logistics platform — pnpm monorepo with multiple services.
 
 ## Services
 
-| Service | Internal Port | Description |
+| Service | Dev Port | Description |
 |---|---|---|
-| Gateway | 5000 | Reverse proxy; main entrypoint (preview pane) |
+| Gateway | 5000 | Reverse proxy — primary entry point (webview) |
 | API Server | 18444 | Express REST API |
-| BizPortal | 18442 | Business admin frontend (`/bizportal/`) |
-| Customer Portal | 23434 | Public B2B marketplace (`/`) |
-| Logistic Order | 19368 | Logistics management frontend (`/logistic-order/`) |
+| BizPortal | 18442 | Business admin frontend (`/bizportal/*`) |
+| Customer Portal | 23434 | Public-facing B2B marketplace (`/*`) |
+| Logistic Order | 19368 | Logistics management frontend (`/logistic-order/*`) |
 
-## Running on Replit
+## How to run
 
-**One workflow runs everything:** `Start application` → `bash start-dev-all.sh`
+The **"Start application"** workflow runs `APP_ENV=development bash start-dev-all.sh`, which:
+1. Installs any missing dependencies via `scripts/ensure-deps.sh`
+2. Spawns all services (api-server, bizportal, customer-portal, logistic-order) with auto-restart
+3. Starts the Gateway on port 5000 once the API server is healthy
 
-This script:
-1. Starts the Gateway on port 5000 (what the preview pane shows)
-2. Spawns the API server with GCP Secret Manager bootstrap (`dev:secure`)
-3. Spawns BizPortal, Customer Portal, and Logistic Order frontends
-4. Starts the system watchdog on port 3001
-
-### Required Replit Secrets
+## Required secrets (Replit Secrets)
 
 | Secret | Purpose |
 |---|---|
-| `GCP_PROJECT_ID` | GCP project owning the secrets |
-| `GCP_SECRET_ID` | Secret name in GCP Secret Manager |
-| `GCP_SECRET_MANAGER_BOOTSTRAP_JSON` | Service account JSON (secretAccessor role) |
-| `SUPABASE_DATABASE_URL_DEV` | Dev database URL (prevents prod DB in dev) |
+| `GCP_PROJECT_ID` | GCP project that owns the Secret Manager secrets |
+| `GCP_SECRET_ID` | Secret name in Secret Manager (e.g. `replit-app-secrets`) |
+| `GCP_SECRET_MANAGER_BOOTSTRAP_JSON` | Service account JSON with `roles/secretmanager.secretAccessor` |
+| `SUPABASE_DATABASE_URL_DEV` | Dev Supabase pooler URL (required — dev mode blocks prod DB by default) |
 
-### Required Environment Variables
+All other secrets (Supabase keys, OpenAI, etc.) are loaded automatically from GCP Secret Manager at startup.
 
-| Variable | Value |
-|---|---|
-| `APP_ENV` | `development` |
+## Architecture rules
 
-All other secrets (Supabase keys, OpenAI, Paylabs, etc.) are loaded automatically from GCP Secret Manager at startup.
+- `APP_ENV` (not `NODE_ENV`) is the source of truth for environment
+- Dev and prod are permanently separate databases — never merge
+- Accounting entries are immutable once posted (reversal only)
+- AI is advisor only — never auto-approves or auto-posts financial entries
 
-## Architecture Notes
+See `AI_ARCHITECTURE_GUARDRAILS.md`, `ARCHITECTURE_DECISIONS.md`, and `AI_RULES.md` before making changes.
 
-- **Secret loading:** `load-secrets.mjs` fetches all secrets from GCP at startup. In development, `*_DEV` keys override their canonical names (e.g. `SUPABASE_DATABASE_URL_DEV` → `SUPABASE_DATABASE_URL`).
-- **Dev/prod isolation:** `APP_ENV=development` is mandatory. The API server refuses to start if it detects a production database in development mode.
-- **Accounting immutability:** No UPDATE/DELETE on posted journal entries — reversal only.
-- **AI advisor only:** AI recommendations must never auto-approve or auto-post financial entries.
+## User preferences
 
-## User Preferences
-
-_Add any preferences here._
+- Keep the existing monorepo structure and stack
