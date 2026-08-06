@@ -3353,6 +3353,11 @@ const locale: DeepRecord = {
     addonFumigation: '훈증',
     addonCOO: '원산지 증명서',
     addonWarehouse: '창고 처리',
+
+    breakdownTHCOrigin: 'THC 출발지',
+    breakdownTHCDestination: 'THC 목적지',
+    breakdownTrucking: '트럭 운송',
+    breakdownCustomsClearance: '세관 통관',
 },
   orderStatusLabels: {
     "New Order": "신규 주문",

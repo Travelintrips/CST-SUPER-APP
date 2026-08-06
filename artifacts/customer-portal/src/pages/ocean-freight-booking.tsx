@@ -429,12 +429,12 @@ export default function OceanFreightBookingPage() {
                         {showBreakdown && (
                           <div className="mt-3 space-y-1.5 text-sm">
                             {[
-                              ["Ocean Freight",     opt.base_ocean_freight],
-                              ["THC Origin",        opt.origin_charges],
-                              ["THC Destination",   opt.destination_charges],
-                              [t("oceanFreightBooking.docCharges"),     opt.document_charges],
-                              ...(opt.trucking_charges > 0  ? [["Trucking",          opt.trucking_charges]]  : []),
-                              ...(opt.customs_charges  > 0  ? [["Customs Clearance", opt.customs_charges]]   : []),
+                              [t("oceanFreightBooking.titleOceanFreight"),        opt.base_ocean_freight],
+                              [t("oceanFreightBooking.breakdownTHCOrigin"),      opt.origin_charges],
+                              [t("oceanFreightBooking.breakdownTHCDestination"), opt.destination_charges],
+                              [t("oceanFreightBooking.docCharges"),              opt.document_charges],
+                              ...(opt.trucking_charges > 0  ? [[t("oceanFreightBooking.breakdownTrucking"),          opt.trucking_charges]]  : []),
+                              ...(opt.customs_charges  > 0  ? [[t("oceanFreightBooking.breakdownCustomsClearance"), opt.customs_charges]]   : []),
                               ...Object.entries(opt.surcharge_breakdown).map(([k, v]) => [k, v] as [string, number]),
                             ].map(([label, val]) => (
                               <div key={label as string} className="flex justify-between text-slate-600">

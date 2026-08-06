@@ -3353,6 +3353,11 @@ const locale: DeepRecord = {
     addonFumigation: 'Fumigazione',
     addonCOO: 'COO / Certificato',
     addonWarehouse: 'Gestione Magazzino',
+
+    breakdownTHCOrigin: 'THC Origine',
+    breakdownTHCDestination: 'THC Destinazione',
+    breakdownTrucking: 'Trasporto su Gomma',
+    breakdownCustomsClearance: 'Sdoganamento',
 },
   orderStatusLabels: {
     "New Order": "Nuovo ordine",

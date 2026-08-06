@@ -3353,6 +3353,11 @@ const locale: DeepRecord = {
     addonFumigation: '燻蒸',
     addonCOO: '原產地證書',
     addonWarehouse: '倉儲處理',
+
+    breakdownTHCOrigin: 'THC 出發港',
+    breakdownTHCDestination: 'THC 目的港',
+    breakdownTrucking: '卡車運輸',
+    breakdownCustomsClearance: '清關',
 },
   orderStatusLabels: {
     "New Order": "新訂單",
