@@ -74,9 +74,21 @@ aiTranslateRouter.post("/", async (req: Request, res: Response) => {
     );
     res.json({ translation });
   } catch (err) {
-    logger.error({ err, targetLang }, "[ai-translate] OpenAI call failed");
-    const message = err instanceof Error ? err.message : "Translation failed";
-    res.status(500).json({ error: message });
+    // Extract HTTP status from OpenAI error if available
+    const status = (err as { status?: number })?.status ?? 0;
+    const isAuthError = status === 401 || status === 403;
+    const isRateLimit = status === 429;
+
+    // NEVER expose raw OpenAI error messages to clients — they may contain API key fragments
+    logger.error({ err, targetLang, status }, "[ai-translate] OpenAI call failed");
+
+    if (isAuthError) {
+      res.status(503).json({ error: "Layanan terjemahan tidak tersedia saat ini." });
+    } else if (isRateLimit) {
+      res.status(503).json({ error: "Layanan terjemahan sedang sibuk, coba beberapa saat lagi." });
+    } else {
+      res.status(503).json({ error: "Terjemahan tidak tersedia saat ini." });
+    }
   }
 });
 

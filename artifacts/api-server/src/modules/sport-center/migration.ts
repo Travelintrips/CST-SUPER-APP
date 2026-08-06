@@ -612,6 +612,37 @@ export async function runSportCenterMigration(): Promise<void> {
     //   4. Hapus accounting_entries duplikat
     try {
       // 1. Redirect accounting_payments.entry_id ke keeper (scoped by company_id)
+    // ── Cleanup: hapus duplicate accounting_entries per (source, source_id) ─────
+    // Simpan entry dengan id terkecil (yang pertama diinsert), hapus sisanya.
+    // Juga hapus entry lines yang orphan dan redirect accounting_payments.entry_id.
+    //
+    // Strategi: trigger fn_block_posted_lines_mutation memblok DELETE langsung pada
+    // entry berstatus 'posted'. Solusinya:
+    //   1. Downgrade duplikat ke 'draft' (trigger mengizinkan posted→draft dengan cancel_reason)
+    //   2. Redirect accounting_payments.entry_id ke entry yang dipertahankan
+    //   3. Hapus entry lines dari duplikat (kini aman karena status = 'draft')
+    //   4. Hapus entry duplikat itu sendiri
+    try {
+      // 1. Downgrade duplikat dari 'posted'/'approved' → 'draft' agar trigger mengizinkan DELETE
+      //    Duplikat diidentifikasi per (company_id, source, source_id) — bukan global —
+      //    karena index uniknya adalah company-scoped (multi-tenant aman).
+      await db.execute(sql`
+        UPDATE accounting_entries
+        SET status        = 'draft',
+            cancel_reason = 'MIGRATION_DEDUP: entri duplikat per (company_id, source, source_id) — dihapus oleh runSportCenterMigration',
+            cancelled_at  = NOW()
+        WHERE source != 'manual'
+          AND source_id IS NOT NULL
+          AND status IN ('posted', 'approved', 'pending_approval')
+          AND id NOT IN (
+            SELECT MIN(id)
+            FROM accounting_entries
+            WHERE source != 'manual' AND source_id IS NOT NULL
+            GROUP BY company_id, source, source_id
+          )
+      `);
+
+      // 2. Pindahkan accounting_payments.entry_id ke entry yang dipertahankan (company-scoped)
       await db.execute(sql`
         UPDATE accounting_payments ap
         SET entry_id = keeper.min_id
@@ -650,6 +681,7 @@ export async function runSportCenterMigration(): Promise<void> {
       `);
 
       // 3. Hapus entry lines dari entry duplikat (sudah draft, trigger tidak lagi memblokir)
+      // 3. Hapus entry lines dari entry duplikat (aman karena sudah di-downgrade ke 'draft')
       await db.execute(sql`
         DELETE FROM accounting_entry_lines
         WHERE entry_id IN (
@@ -665,7 +697,7 @@ export async function runSportCenterMigration(): Promise<void> {
         )
       `);
 
-      // 4. Hapus entry duplikat
+      // 4. Hapus entry duplikat (company-scoped — tiap company mempertahankan MIN(id) sendiri)
       await db.execute(sql`
         DELETE FROM accounting_entries
         WHERE source != 'manual'

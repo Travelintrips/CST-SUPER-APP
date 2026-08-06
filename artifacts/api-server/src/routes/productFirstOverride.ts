@@ -19,7 +19,7 @@ import { db } from "@workspace/db";
 import { requireClerkUser } from "../lib/requireAdmin.js";
 import { transitionLogisticOrderStatus } from "../lib/services/logisticOrderStatusService.js";
 import { logOrderAudit, logOrderStatusChange } from "../lib/auditTrail.js";
-import { sendWhatsApp } from "../lib/fonnte.js";
+import { sendViaService as sendWhatsApp } from "../lib/waTransport.js";
 import { getPreferredDomain } from "../lib/domain.js";
 import { logger } from "../lib/logger.js";
 

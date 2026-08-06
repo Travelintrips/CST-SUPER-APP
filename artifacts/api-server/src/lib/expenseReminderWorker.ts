@@ -98,7 +98,7 @@ async function upsertReminder(opts: {
 async function notifyWa(message: string, refType: string, refId: number) {
   try {
     const { getAdminGroupWa } = await import("./adminWa.js");
-    const { sendWhatsApp } = await import("./fonnte.js");
+    const { sendViaService: sendWhatsApp } = await import("./waTransport.js");
     const group = await getAdminGroupWa();
     if (!group) return;
     await sendWhatsApp(group, message, { context: `expense_reminder_${refType}`, refId: String(refId) });

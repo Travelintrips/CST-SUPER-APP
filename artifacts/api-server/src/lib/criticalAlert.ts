@@ -22,7 +22,7 @@ export async function criticalAlert(
   (async () => {
     try {
       const { getAdminGroupWa } = await import("./adminWa.js");
-      const { sendWhatsApp }    = await import("./fonnte.js");
+      const { sendViaService: sendWhatsApp } = await import("./waTransport.js");
       const adminGroup = await getAdminGroupWa();
       if (!adminGroup) return;
 

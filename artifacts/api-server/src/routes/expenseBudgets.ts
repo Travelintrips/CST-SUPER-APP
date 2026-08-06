@@ -164,7 +164,8 @@ router.put("/budgets/:id", async (req: Request, res) => {
 
 router.delete("/budgets/:id", async (req: Request, res) => {
   await runMigration();
-  await db.execute(sql.raw(`DELETE FROM expense_budgets WHERE id = ${parseInt(String(req.params.id))}`));
+  const budgetId = parseInt(String(req.params.id));
+  await db.execute(sql`DELETE FROM expense_budgets WHERE id = ${budgetId}`);
   return res.json({ ok: true });
 });
 

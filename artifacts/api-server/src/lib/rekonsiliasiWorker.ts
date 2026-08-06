@@ -240,7 +240,7 @@ async function runRekonsiliasi(settingId: number, cfg: RekonScheduleConfig): Pro
 async function notifyWa(message: string, message2?: string) {
   try {
     const { getAdminGroupWa } = await import("./adminWa.js");
-    const { sendWhatsApp } = await import("./fonnte.js");
+    const { sendViaService: sendWhatsApp } = await import("./waTransport.js");
     const group = await getAdminGroupWa();
     if (!group) return;
     await sendWhatsApp(group, message, { context: "rekon_gsheet_auto" });

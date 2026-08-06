@@ -195,7 +195,7 @@ export function startDbSyncWorker(): void {
 
       const message = lines.join("\n");
       try {
-        const { sendWhatsApp } = await import("./fonnte.js");
+        const { sendViaService: sendWhatsApp } = await import("./waTransport.js");
         const adminGroup = await getAdminGroupWa();
         if (adminGroup) {
           await sendWhatsApp(adminGroup, message, { context: "db_sync_alert" });

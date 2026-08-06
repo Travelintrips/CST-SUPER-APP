@@ -5306,7 +5306,8 @@ router.post("/pipeline/dlq/:id/retry", async (req: Request, res: Response) => {
   } catch (err) {
     logger.error({ err }, "[fleet] DLQ retry error");
     // Increment retry_count in DLQ
-    await db.execute(sql.raw(`UPDATE gojek_failed_rows SET retry_count = retry_count + 1 WHERE id = ${parseInt(String(req.params.id))}`)).catch(() => {});
+    const failedRowId = parseInt(String(req.params.id));
+    await db.execute(sql`UPDATE gojek_failed_rows SET retry_count = retry_count + 1 WHERE id = ${failedRowId}`).catch(() => {});
     res.status(500).json({ error: `Retry gagal: ${(err as Error).message}` });
   }
 });

@@ -130,7 +130,8 @@ function _checkPublicOrderRate(ip: string): boolean {
   if (!entry || now > entry.resetAt) {
     entry = { count: 0, resetAt: now + 60 * 60 * 1000 }; // 1-hour window
   }
-  const cap = process.env.NODE_ENV === "production" ? 10 : 1000;
+  // BLK-02 fix: use REPLIT_DEPLOYMENT as canonical production signal (per ADR-0001 / envGuard)
+  const cap = process.env.REPLIT_DEPLOYMENT ? 10 : 1000;
   if (entry.count >= cap) return false;
   entry.count++;
   _publicOrderRateMap.set(ip, entry);

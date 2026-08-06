@@ -106,7 +106,8 @@ export async function emailPasswordLogin(email: string, password: string) {
  * Returns plain object on success (or dev-mode shortcut).
  */
 export async function sendWaOtp(rawPhone: string) {
-  const isDev = process.env.NODE_ENV !== "production";
+  // BLK-02 fix: use REPLIT_DEPLOYMENT as the canonical production signal (per ADR-0001 / envGuard)
+  const isDev = !process.env.REPLIT_DEPLOYMENT;
   const hasFonnte = !!process.env.FONNTE_TOKEN;
 
   const normalized = normalizePhoneID(rawPhone);
@@ -720,7 +721,8 @@ export async function syncProfile(
  * Security: rate-limited per IP; uses CSPRNG; stores bcrypt hash (not plaintext)
  */
 export async function requestEmailOtp(email: string) {
-  const isDev = process.env.NODE_ENV !== "production";
+  // BLK-02 fix: use REPLIT_DEPLOYMENT as the canonical production signal (per ADR-0001 / envGuard)
+  const isDev = !process.env.REPLIT_DEPLOYMENT;
   const emailLower = String(email).toLowerCase().trim();
 
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailLower)) {

@@ -129,6 +129,7 @@ interface PatternFormData {
   grossMatching:       boolean;
   feeMatching:         boolean;
   confidenceThreshold: number;
+  feeAccountId:        number | null;
 }
 
 const defaultForm = (): PatternFormData => ({
@@ -148,6 +149,7 @@ const defaultForm = (): PatternFormData => ({
   grossMatching:       true,
   feeMatching:         true,
   confidenceThreshold: 0.80,
+  feeAccountId:        null,
 });
 
 // ─── Main Component ───────────────────────────────────────────────────────────
@@ -163,7 +165,7 @@ export default function SettlementPatternPage() {
   const [editingId, setEditingId]       = useState<number | null>(null);
   const [form, setForm]                 = useState<PatternFormData>(defaultForm());
   const [saving, setSaving]             = useState(false);
-  const [filterProvider, setFilterProvider] = useState("");
+  const [filterProvider, setFilterProvider] = useState("__all__");
 
   // Keywords (for selected pattern)
   const [keywords, setKeywords]         = useState<any[]>([]);
@@ -175,6 +177,10 @@ export default function SettlementPatternPage() {
 
   // Statistics
   const [stats, setStats]               = useState<any>(null);
+
+  // COA list for fee account picker
+  const [coaAccounts, setCoaAccounts]   = useState<any[]>([]);
+  const [coaSearch, setCoaSearch]       = useState("");
 
   // Simulator
   const [simDesc, setSimDesc]           = useState("");
@@ -191,7 +197,7 @@ export default function SettlementPatternPage() {
   const fetchPatterns = useCallback(async () => {
     setLoading(true);
     try {
-      const qs = filterProvider ? `?provider=${encodeURIComponent(filterProvider)}&include_inactive=1` : "?include_inactive=1";
+      const qs = (filterProvider && filterProvider !== "__all__") ? `?provider=${encodeURIComponent(filterProvider)}&include_inactive=1` : "?include_inactive=1";
       const r = await fetch(`${API}/settlement-patterns${qs}`);
       const d = await r.json();
       setPatterns(d.data ?? []);
@@ -218,6 +224,17 @@ export default function SettlementPatternPage() {
     setExamples(d.data ?? []);
   }, []);
 
+  // Fetch COA accounts for fee account picker (expense accounts only)
+  useEffect(() => {
+    fetch(`${API}/accounting/accounts`)
+      .then(r => r.json())
+      .then((rows: any[]) => {
+        // prefer expense accounts but keep all for flexibility
+        setCoaAccounts(rows.filter((r: any) => r.isActive !== false));
+      })
+      .catch(() => {/* ignore if not logged in */});
+  }, []);
+
   useEffect(() => { fetchPatterns(); }, [fetchPatterns]);
   useEffect(() => { if (tab === "statistics") fetchStats(); }, [tab, fetchStats]);
   useEffect(() => {
@@ -239,6 +256,7 @@ export default function SettlementPatternPage() {
         terminalId:    form.terminalId    || null,
         bankName:      form.bankName      || null,
         accountNumber: form.accountNumber || null,
+        feeAccountId:  form.feeAccountId  ?? null,
       };
       const url    = editingId ? `${API}/settlement-patterns/${editingId}` : `${API}/settlement-patterns`;
       const method = editingId ? "PATCH" : "POST";
@@ -358,7 +376,7 @@ export default function SettlementPatternPage() {
                   <SelectValue placeholder="Filter provider..." />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Semua Provider</SelectItem>
+                  <SelectItem value="__all__">Semua Provider</SelectItem>
                   {PROVIDERS.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
                 </SelectContent>
               </Select>
@@ -402,7 +420,8 @@ export default function SettlementPatternPage() {
                             accountNumber: p.account_number ?? "", currency: p.currency,
                             settlementDelayDays: p.settlement_delay_days, grossMatching: p.gross_matching,
                             feeMatching: p.fee_matching, confidenceThreshold: parseFloat(p.confidence_threshold),
-                          }); setShowForm(true); }}>
+                            feeAccountId: p.fee_account_id ?? null,
+                          }); setCoaSearch(""); setShowForm(true); }}>
                             <Pencil className="h-3.5 w-3.5" />
                           </Button>
                           <Button size="sm" variant="ghost" onClick={e => { e.stopPropagation(); toggleStatus(p); }}>
@@ -887,6 +906,65 @@ export default function SettlementPatternPage() {
                   onChange={e => setForm(f => ({ ...f, confidenceThreshold: parseFloat(e.target.value) || 0.8 }))}
                   className="bg-slate-800 border-slate-700" />
               </div>
+            </div>
+
+            {/* Fee Account section */}
+            <div className="border-t border-slate-700 pt-4">
+              <div className="text-xs text-slate-400 mb-2 font-medium flex items-center gap-1">
+                Fee Account — COA Biaya MDR
+                {form.feeMatching && !form.feeAccountId && (
+                  <span className="ml-2 text-amber-400 font-normal">⚠ Wajib diisi saat Fee Matching aktif</span>
+                )}
+              </div>
+              {/* Search box */}
+              <Input
+                value={coaSearch}
+                onChange={e => setCoaSearch(e.target.value)}
+                placeholder="Cari kode atau nama akun… (misal: 6-1020 atau Biaya MDR)"
+                className="bg-slate-800 border-slate-700 text-sm mb-2"
+              />
+              {/* Current selection display */}
+              {form.feeAccountId && (() => {
+                const acc = coaAccounts.find(a => a.id === form.feeAccountId);
+                return acc ? (
+                  <div className="flex items-center justify-between bg-slate-800 border border-emerald-700 rounded px-3 py-2 mb-2">
+                    <span className="text-sm text-white font-mono">{acc.code} — {acc.name}</span>
+                    <Button size="sm" variant="ghost" className="text-red-400 h-6 px-2 text-xs"
+                      onClick={() => { setForm(f => ({ ...f, feeAccountId: null })); setCoaSearch(""); }}>
+                      ✕ Hapus
+                    </Button>
+                  </div>
+                ) : null;
+              })()}
+              {/* Dropdown list */}
+              {coaSearch.trim().length > 0 && (
+                <div className="max-h-48 overflow-y-auto border border-slate-700 rounded bg-slate-800 divide-y divide-slate-700">
+                  {coaAccounts
+                    .filter(a => {
+                      const q = coaSearch.toLowerCase();
+                      return a.code?.toLowerCase().includes(q) || a.name?.toLowerCase().includes(q);
+                    })
+                    .slice(0, 30)
+                    .map(a => (
+                      <button
+                        key={a.id}
+                        type="button"
+                        className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-700 transition-colors ${form.feeAccountId === a.id ? "bg-purple-900/40 text-purple-200" : "text-slate-200"}`}
+                        onClick={() => { setForm(f => ({ ...f, feeAccountId: a.id })); setCoaSearch(""); }}
+                      >
+                        <span className="font-mono text-xs text-slate-400 mr-2">{a.code}</span>
+                        {a.name}
+                        <span className="ml-2 text-xs text-slate-500">[{a.type}]</span>
+                      </button>
+                    ))}
+                  {coaAccounts.filter(a => {
+                    const q = coaSearch.toLowerCase();
+                    return a.code?.toLowerCase().includes(q) || a.name?.toLowerCase().includes(q);
+                  }).length === 0 && (
+                    <div className="px-3 py-2 text-xs text-slate-500">Tidak ada akun ditemukan</div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Merchant section */}
