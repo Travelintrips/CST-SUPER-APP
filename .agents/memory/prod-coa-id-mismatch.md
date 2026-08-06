@@ -20,3 +20,6 @@ If Trial Balance shows far fewer accounts than expected after data import:
 - Phase 2 (Aug 2026): full COA sync — 308 dev accounts renamed to prod IDs via 2-phase (dev→neg→prod) to avoid PK conflicts; 55 prod-only accounts inserted. All referencing tables (accounting_entry_lines, fleet_ledger_entries, accounting_settings, etc.) updated. Sequence set to 76,589. Dev now has 499 COA accounts (363 prod + 136 dev-only); entry_lines grand total still balanced 599,239,785.
 - **Future imports**: prod data now imports without remapping since dev COA IDs match prod COA IDs.
 - **Caveat**: if dev DB is reset and re-seeded, COA IDs revert to dev IDs (1,2,3…) and mismatch will recur.
+
+## Phase 3 — Journal ID mismatch (Aug 2026)
+`accounting_entries.journal_id` had prod journal IDs (8192–8218) that didn't exist in dev (dev journals: 82–105). The `hub/general-ledger` endpoint uses INNER JOIN with `accounting_journals` → 0 rows in detail despite count/summary showing 1986 (count query skips the journals join). Fix: remapped 841 entries to dev journal IDs via `session_replication_role = replica`. Only 8 prod journal IDs were actually used. **Pattern**: any future prod data import may need journal_id remap too — check with `SELECT DISTINCT journal_id FROM accounting_entries WHERE NOT EXISTS (SELECT 1 FROM accounting_journals j WHERE j.id=ae.journal_id)`.
