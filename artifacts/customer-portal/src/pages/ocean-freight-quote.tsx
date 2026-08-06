@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Ship, CheckCircle2, XCircle, Loader2, AlertCircle, Clock, ArrowLeft } from "lucide-react";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 const IDR = (n: number) =>
   new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
@@ -39,6 +40,7 @@ export default function OceanFreightQuotePage() {
   const params = useParams<{ token: string }>();
   const token  = params.token ?? "";
   const { toast } = useToast();
+  const { t } = useLanguage();
 
   const [loading,    setLoading]    = useState(true);
   const [error,      setError]      = useState("");
@@ -122,7 +124,7 @@ export default function OceanFreightQuotePage() {
           onClick={() => window.history.back()}
           className="inline-flex items-center gap-1.5 text-[12px] font-semibold px-3 py-1.5 rounded-lg text-white/60 hover:text-white bg-white/10 hover:bg-white/15 border border-white/15 transition-all"
         >
-          <ArrowLeft className="h-3.5 w-3.5" /> Kembali
+          <ArrowLeft className="h-3.5 w-3.5" /> {t("ocq.back", "Kembali")}
         </button>
 
         {/* Header */}
@@ -137,7 +139,7 @@ export default function OceanFreightQuotePage() {
 
         {/* Route Summary */}
         <div className="bg-white rounded-xl shadow p-4">
-          <h3 className="font-bold text-gray-800 mb-3">Detail Pengiriman</h3>
+          <h3 className="font-bold text-gray-800 mb-3">{t("ocq.shipmentDetail", "Detail Pengiriman")}</h3>
           <div className="grid grid-cols-2 gap-2 text-sm">
             {[
               ["Rute", `${order.origin_port} → ${order.destination_port}`],
@@ -170,7 +172,7 @@ export default function OceanFreightQuotePage() {
 
         {/* Pricing */}
         <div className="bg-white rounded-xl shadow p-4">
-          <h3 className="font-bold text-gray-800 mb-3">Harga</h3>
+          <h3 className="font-bold text-gray-800 mb-3">{t("ocq.priceTitle", "Harga")}</h3>
           {order.estimated_price_idr && (
             <div className="flex justify-between text-sm text-gray-600 pb-2">
               <span>Estimasi Awal</span>
@@ -215,7 +217,7 @@ export default function OceanFreightQuotePage() {
         {/* Booking Details (post-booking) */}
         {order.status === "booked" && (order.vessel_name || order.etd) && (
           <div className="bg-white rounded-xl shadow p-4">
-            <h3 className="font-bold text-gray-800 mb-3">Detail Booking</h3>
+            <h3 className="font-bold text-gray-800 mb-3">{t("ocq.bookingDetail", "Detail Booking")}</h3>
             <div className="grid grid-cols-2 gap-2 text-sm">
               {[
                 ["Booking No", order.booking_number],
@@ -240,7 +242,7 @@ export default function OceanFreightQuotePage() {
         {order.tracking_status && (
           <div className="bg-white rounded-xl shadow p-4">
             <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
-              <Clock className="w-4 h-4" /> Status Pengiriman
+              <Clock className="w-4 h-4" /> {t("ocq.trackingStatus", "Status Pengiriman")}
             </h3>
             <div className="space-y-2">
               {TRACKING_STEPS.map((step, idx) => {
@@ -265,21 +267,21 @@ export default function OceanFreightQuotePage() {
         {done === "approved" && (
           <div className="bg-green-50 rounded-xl p-4 text-center">
             <CheckCircle2 className="w-8 h-8 text-green-500 mx-auto mb-2" />
-            <p className="font-semibold text-green-800">Quote Disetujui</p>
-            <p className="text-sm text-green-600">Admin akan menghubungi Anda untuk konfirmasi booking.</p>
+            <p className="font-semibold text-green-800">{t("ocq.quoteApproved", "Quote Disetujui")}</p>
+            <p className="text-sm text-green-600">{t("ocq.quoteApprovedDesc", "Admin akan menghubungi Anda untuk konfirmasi booking.")}</p>
           </div>
         )}
         {done === "declined" && (
           <div className="bg-red-50 rounded-xl p-4 text-center">
             <XCircle className="w-8 h-8 text-red-500 mx-auto mb-2" />
-            <p className="font-semibold text-red-800">Quote Ditolak</p>
+            <p className="font-semibold text-red-800">{t("ocq.quoteDeclined", "Quote Ditolak")}</p>
           </div>
         )}
 
         {order.status === "quoted" && !done && (
           <div className="bg-white rounded-xl shadow p-5 space-y-3">
-            <h3 className="font-bold text-gray-800">Konfirmasi Quote</h3>
-            <p className="text-sm text-gray-600">Silakan review harga final di atas, lalu pilih tindakan:</p>
+            <h3 className="font-bold text-gray-800">{t("ocq.confirmQuoteTitle", "Konfirmasi Quote")}</h3>
+            <p className="text-sm text-gray-600">{t("ocq.confirmQuoteDesc", "Silakan review harga final di atas, lalu pilih tindakan:")}</p>
             <div className="flex gap-3">
               <Button
                 onClick={handleApprove}
@@ -301,12 +303,12 @@ export default function OceanFreightQuotePage() {
             {action === "declining" && (
               <div className="space-y-2">
                 <textarea value={declineReason} onChange={e => setDeclineReason(e.target.value)} rows={2}
-                  placeholder="Alasan penolakan (opsional)..."
+                  placeholder={t("ocq.declineReasonPh", "Alasan penolakan (opsional)...")}
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-red-400 resize-none" />
                 <div className="flex gap-2">
-                  <Button variant="outline" onClick={() => setAction("idle")} className="flex-1">Batal</Button>
+                  <Button variant="outline" onClick={() => setAction("idle")} className="flex-1">{t("ocq.cancelBtn", "Batal")}</Button>
                   <Button onClick={handleDecline} className="flex-1 bg-red-600 hover:bg-red-700 text-white">
-                    Konfirmasi Decline
+                    {t("ocq.confirmDeclineBtn", "Konfirmasi Decline")}
                   </Button>
                 </div>
               </div>
@@ -317,8 +319,8 @@ export default function OceanFreightQuotePage() {
         {["waiting_rate","rate_requested","rate_received"].includes(order.status) && (
           <div className="bg-yellow-50 rounded-xl p-4 text-center">
             <Clock className="w-8 h-8 text-yellow-500 mx-auto mb-2" />
-            <p className="font-semibold text-yellow-800">Sedang Diproses</p>
-            <p className="text-sm text-yellow-700">Tim kami sedang mendapatkan konfirmasi rate dari shipping line / partner. Kami akan menghubungi Anda segera.</p>
+            <p className="font-semibold text-yellow-800">{t("ocq.processingTitle", "Sedang Diproses")}</p>
+            <p className="text-sm text-yellow-700">{t("ocq.processingDesc", "Tim kami sedang mendapatkan konfirmasi rate dari shipping line / partner. Kami akan menghubungi Anda segera.")}</p>
           </div>
         )}
       </div>

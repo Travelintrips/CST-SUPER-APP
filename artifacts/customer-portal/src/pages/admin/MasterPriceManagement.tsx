@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 // C1: auth via cookie
+import { useLanguage } from "@/i18n/LanguageContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -103,6 +104,7 @@ function ApprovalBadge({ status }: { status: string }) {
 
 export function MasterPriceManagement() {
   const { toast } = useToast();
+  const { t } = useLanguage();
 
   // ── tabs ──────────────────────────────────────────────────────────────────
   const [tab, setTab] = useState<"overview" | "products" | "history" | "approvals" | "settings">("overview");
@@ -498,18 +500,18 @@ export function MasterPriceManagement() {
       {/* Tab nav */}
       <div className="flex gap-1.5 bg-slate-100 p-1.5 rounded-xl flex-wrap">
         <button className={tabCls("overview")}  onClick={() => setTab("overview")}>
-          <span className="flex items-center gap-1.5"><BarChart2 className="h-3.5 w-3.5" />Dashboard</span>
+          <span className="flex items-center gap-1.5"><BarChart2 className="h-3.5 w-3.5" />{t("mpm.tabDashboard", "Dashboard")}</span>
         </button>
         <button className={tabCls("products")}  onClick={() => setTab("products")}>
-          <span className="flex items-center gap-1.5"><Package className="h-3.5 w-3.5" />Produk</span>
+          <span className="flex items-center gap-1.5"><Package className="h-3.5 w-3.5" />{t("mpm.tabProducts", "Produk")}</span>
         </button>
         <button className={tabCls("history")}   onClick={() => setTab("history")}>
-          <span className="flex items-center gap-1.5"><History className="h-3.5 w-3.5" />Riwayat Harga</span>
+          <span className="flex items-center gap-1.5"><History className="h-3.5 w-3.5" />{t("mpm.tabHistory", "Riwayat Harga")}</span>
         </button>
         <button className={tabCls("approvals")} onClick={() => setTab("approvals")}>
           <span className="flex items-center gap-1.5">
             <CheckCircle className="h-3.5 w-3.5" />
-            Approval
+            {t("mpm.tabApprovals", "Approval")}
             {(stats?.pendingApproval ?? 0) > 0 && (
               <span className="ml-1 px-1.5 py-0.5 bg-amber-500 text-white rounded-full text-[10px] font-bold">
                 {stats!.pendingApproval}
@@ -518,7 +520,7 @@ export function MasterPriceManagement() {
           </span>
         </button>
         <button className={tabCls("settings")}  onClick={() => setTab("settings")}>
-          <span className="flex items-center gap-1.5"><Settings className="h-3.5 w-3.5" />Pengaturan</span>
+          <span className="flex items-center gap-1.5"><Settings className="h-3.5 w-3.5" />{t("mpm.tabSettings", "Pengaturan")}</span>
         </button>
       </div>
 
@@ -693,7 +695,7 @@ export function MasterPriceManagement() {
                 )}
                 {!loadingList && items.length === 0 && (
                   <tr><td colSpan={11} className="py-12 text-center text-slate-400">
-                    Tidak ada produk ditemukan
+                    {t("mpm.noProducts", "Tidak ada produk ditemukan")}
                   </td></tr>
                 )}
                 {!loadingList && items.map(item => (
@@ -866,7 +868,7 @@ export function MasterPriceManagement() {
           {!loadingPending && pending.length === 0 && (
             <div className="py-12 text-center text-slate-400">
               <CheckCircle className="h-8 w-8 mx-auto mb-2 text-green-400" />
-              Tidak ada perubahan yang menunggu approval
+              {t("mpm.noPendingApprovals", "Tidak ada perubahan yang menunggu approval")}
             </div>
           )}
 

@@ -80,7 +80,7 @@ export function DynamicProductForm({ template, values, onChange }: Props) {
                 {field.type === "select" ? (
                   <Select value={strVal} onValueChange={(v) => setCustomField(field.key, v)}>
                     <SelectTrigger className="h-9 text-sm">
-                      <SelectValue placeholder="Pilih..." />
+                      <SelectValue placeholder={t("tmpl.selectPlaceholder", "Pilih...")} />
                     </SelectTrigger>
                     <SelectContent>
                       {field.options?.map((opt) => (
@@ -126,21 +126,21 @@ export function DynamicProductForm({ template, values, onChange }: Props) {
       {/* ── Required Documents ── */}
       {template.requiredDocuments.length > 0 && (
         <div className="border rounded-xl p-4 bg-card">
-          <SectionHeader icon={<FileText className="w-3.5 h-3.5" />} title="Dokumen Wajib" />
+          <SectionHeader icon={<FileText className="w-3.5 h-3.5" />} title={t("tmpl.requiredDocs", "Dokumen Wajib")} />
           <p className="text-xs text-muted-foreground mb-3">
-            Masukkan nomor/referensi dokumen. Dokumen asli diserahkan saat pengiriman.
+            {t("tmpl.requiredDocsHint", "Masukkan nomor/referensi dokumen. Dokumen asli diserahkan saat pengiriman.")}
           </p>
           <div className="space-y-3">
             {template.requiredDocuments.map((doc) => (
               <div key={doc.key} className="space-y-1.5">
                 <Label className="text-xs flex items-center gap-1.5">
                   {doc.label}
-                  {doc.required && <Badge variant="destructive" className="text-[9px] py-0 h-4">Wajib</Badge>}
+                  {doc.required && <Badge variant="destructive" className="text-[9px] py-0 h-4">{t("tmpl.required", "Wajib")}</Badge>}
                 </Label>
                 <Input
                   value={getDocRef(doc.key)}
                   onChange={(e) => setDocRef(doc.key, doc.label, e.target.value)}
-                  placeholder="No. / Referensi dokumen..."
+                  placeholder={t("tmpl.docRefPlaceholder", "No. / Referensi dokumen...")}
                   className="h-9 text-sm"
                 />
               </div>
@@ -152,7 +152,7 @@ export function DynamicProductForm({ template, values, onChange }: Props) {
       {/* ── Checklist ── */}
       {template.checklist.length > 0 && (
         <div className="border rounded-xl p-4 bg-card">
-          <SectionHeader icon={<ClipboardList className="w-3.5 h-3.5" />} title="Checklist Persiapan" />
+          <SectionHeader icon={<ClipboardList className="w-3.5 h-3.5" />} title={t("tmpl.checklist", "Checklist Persiapan")} />
           <div className="space-y-2.5">
             {template.checklist.map((item) => (
               <div key={item.key} className="flex items-center gap-2.5">
@@ -177,7 +177,7 @@ export function DynamicProductForm({ template, values, onChange }: Props) {
           className="w-full flex items-center justify-between text-left"
           onClick={() => setPackagingOpen((p) => !p)}
         >
-          <SectionHeader icon={<Wrench className="w-3.5 h-3.5" />} title="Handling & Packaging" />
+          <SectionHeader icon={<Wrench className="w-3.5 h-3.5" />} title={t("tmpl.handling", "Handling & Packaging")} />
           {packagingOpen ? <ChevronUp className="w-4 h-4 text-muted-foreground shrink-0" /> : <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />}
         </button>
         {packagingOpen && (

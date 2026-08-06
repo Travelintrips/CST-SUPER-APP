@@ -8,6 +8,7 @@ import {
   Ship, MapPin, Search, Loader2, Package, Anchor, CheckCircle2,
   Navigation, Clock, XCircle, ArrowLeft,
 } from "lucide-react";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 const IDR = (n: any) =>
   n == null ? "-" : new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(Number(n));
@@ -45,6 +46,7 @@ function getTrackingProgress(trackingStatus: string): number {
 
 export default function OceanFreightTrackPage() {
   const [, navigate] = useLocation();
+  const { t } = useLanguage();
   const [, params] = useRoute("/ocean-freight/track/:orderNumber");
   const urlOrderNumber = params?.orderNumber ?? "";
 
@@ -81,15 +83,15 @@ export default function OceanFreightTrackPage() {
             onClick={() => window.history.length > 1 ? window.history.back() : navigate("/jasa")}
             className="inline-flex items-center gap-1.5 mb-4 text-[12px] font-semibold px-3 py-1.5 rounded-lg text-white/60 hover:text-white bg-white/10 hover:bg-white/15 border border-white/15 transition-all"
           >
-            <ArrowLeft className="h-3.5 w-3.5" /> Kembali
+            <ArrowLeft className="h-3.5 w-3.5" /> {t("oct.back", "Kembali")}
           </button>
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center">
               <Ship className="h-6 w-6 text-white" />
             </div>
             <div>
-              <h1 className="text-xl font-bold text-white">Tracking Ocean Freight</h1>
-              <p className="text-gray-400 text-sm">Lacak status pengiriman Anda</p>
+              <h1 className="text-xl font-bold text-white">{t("oct.pageTitle", "Tracking Ocean Freight")}</h1>
+              <p className="text-gray-400 text-sm">{t("oct.pageSubtitle", "Lacak status pengiriman Anda")}</p>
             </div>
           </div>
         </div>
@@ -100,7 +102,7 @@ export default function OceanFreightTrackPage() {
             value={inputOrderNumber}
             onChange={(e) => setInputOrderNumber(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-            placeholder="Masukkan nomor order (OCF/YYMM/XXXX)"
+            placeholder={t("oct.searchPlaceholder", "Masukkan nomor order (OCF/YYMM/XXXX)")}
             className="bg-gray-800 border-gray-600 text-white"
           />
           <Button onClick={handleSearch} disabled={isLoading || !inputOrderNumber.trim()} className="bg-blue-600 hover:bg-blue-700">
@@ -130,12 +132,12 @@ export default function OceanFreightTrackPage() {
               </div>
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <div>
-                  <p className="text-gray-500 text-xs">Rute</p>
+                  <p className="text-gray-500 text-xs">{t("oct.routeLabel", "Rute")}</p>
                   <p className="text-gray-300">{order.origin_port}</p>
                   <p className="text-gray-400">→ {order.destination_port}</p>
                 </div>
                 <div>
-                  <p className="text-gray-500 text-xs">Muatan</p>
+                  <p className="text-gray-500 text-xs">{t("oct.cargoLabel", "Muatan")}</p>
                   <p className="text-gray-300">{order.shipment_type}{order.container_type ? ` / ${order.container_type}` : ""}{order.container_qty > 1 ? ` × ${order.container_qty}` : ""}</p>
                   {order.total_cbm && <p className="text-gray-400">{order.total_cbm} CBM</p>}
                 </div>
@@ -144,7 +146,7 @@ export default function OceanFreightTrackPage() {
                   <p className="text-gray-300">{order.carrier}</p>
                 </div>}
                 {order.vessel_name && <div>
-                  <p className="text-gray-500 text-xs">Vessel / Voyage</p>
+                  <p className="text-gray-500 text-xs">{t("oct.vesselVoyage", "Vessel / Voyage")}</p>
                   <p className="text-gray-300">{order.vessel_name} / {order.voyage ?? "-"}</p>
                 </div>}
                 {order.etd && <div>
@@ -170,7 +172,7 @@ export default function OceanFreightTrackPage() {
             {order.tracking_status ? (
               <div className="bg-gray-900 rounded-xl p-5">
                 <h3 className="text-white font-semibold text-sm mb-4 flex items-center gap-2">
-                  <MapPin className="h-4 w-4 text-blue-400" /> Status Pengiriman
+                  <MapPin className="h-4 w-4 text-blue-400" /> {t("oct.trackingStatus", "Status Pengiriman")}
                 </h3>
                 <div className="space-y-3">
                   {TRACKING_STEPS.map((step, idx) => {
@@ -190,7 +192,7 @@ export default function OceanFreightTrackPage() {
                         <div className="pb-3">
                           <p className={`text-sm font-medium ${isCurrent ? "text-white" : isCompleted ? "text-green-300" : "text-gray-600"}`}>
                             {step.label}
-                            {isCurrent && <span className="ml-2 text-xs text-blue-400">● Terkini</span>}
+                            {isCurrent && <span className="ml-2 text-xs text-blue-400">● {t("oct.currentStep", "Terkini")}</span>}
                           </p>
                           {isCurrent && order.tracking_notes && (
                             <p className="text-gray-400 text-xs mt-0.5">{order.tracking_notes}</p>
@@ -217,7 +219,7 @@ export default function OceanFreightTrackPage() {
             )}
 
             <Button variant="outline" onClick={() => refetch()} className="w-full border-gray-600 text-gray-300">
-              <Search className="h-4 w-4 mr-2" /> Refresh Status
+              <Search className="h-4 w-4 mr-2" /> {t("oct.refreshBtn", "Refresh Status")}
             </Button>
           </div>
         )}

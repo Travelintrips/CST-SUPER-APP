@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useParams } from "wouter";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 type FeedbackData = {
   token: string;
@@ -21,6 +22,7 @@ function Spinner() {
 }
 
 function ErrorState({ message }: { message: string }) {
+  const { t } = useLanguage();
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-md p-8 max-w-md w-full text-center">
@@ -29,7 +31,7 @@ function ErrorState({ message }: { message: string }) {
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
           </svg>
         </div>
-        <h2 className="text-lg font-semibold text-slate-800 mb-2">Link Tidak Valid</h2>
+        <h2 className="text-lg font-semibold text-slate-800 mb-2">{t("feedback.invalidLink", "Link Tidak Valid")}</h2>
         <p className="text-sm text-slate-500">{message}</p>
       </div>
     </div>
@@ -37,6 +39,7 @@ function ErrorState({ message }: { message: string }) {
 }
 
 function SuccessState({ orderNumber }: { orderNumber?: string | null }) {
+  const { t } = useLanguage();
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-md p-8 max-w-md w-full text-center">
@@ -46,36 +49,30 @@ function SuccessState({ orderNumber }: { orderNumber?: string | null }) {
           </svg>
         </div>
         <div className="text-4xl mb-3">⭐</div>
-        <h2 className="text-xl font-semibold text-slate-800 mb-2">Terima Kasih!</h2>
+        <h2 className="text-xl font-semibold text-slate-800 mb-2">{t("feedback.thankYou", "Terima Kasih!")}</h2>
         {orderNumber && <p className="text-xs text-slate-400 mb-2">Ref: {orderNumber}</p>}
-        <p className="text-sm text-slate-500">Feedback Anda sangat berarti bagi kami untuk terus meningkatkan kualitas layanan.</p>
+        <p className="text-sm text-slate-500">{t("feedback.thankYouDesc", "Feedback Anda sangat berarti bagi kami untuk terus meningkatkan kualitas layanan.")}</p>
       </div>
     </div>
   );
 }
 
 function AlreadySubmittedState({ rating }: { rating?: number | null }) {
+  const { t } = useLanguage();
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-md p-8 max-w-md w-full text-center">
         <div className="text-4xl mb-4">{"⭐".repeat(rating ?? 5)}</div>
-        <h2 className="text-lg font-semibold text-slate-800 mb-2">Feedback Sudah Dikirim</h2>
-        <p className="text-sm text-slate-500">Anda sudah memberikan penilaian. Terima kasih atas feedback Anda!</p>
+        <h2 className="text-lg font-semibold text-slate-800 mb-2">{t("feedback.alreadySubmitted", "Feedback Sudah Dikirim")}</h2>
+        <p className="text-sm text-slate-500">{t("feedback.alreadySubmittedDesc", "Anda sudah memberikan penilaian. Terima kasih atas feedback Anda!")}</p>
       </div>
     </div>
   );
 }
 
-const STAR_LABELS: Record<number, string> = {
-  1: "Sangat Buruk 😞",
-  2: "Buruk 😕",
-  3: "Cukup 😐",
-  4: "Baik 😊",
-  5: "Sangat Baik 🤩",
-};
-
 export default function CustomerFeedbackPage() {
   const { token } = useParams<{ token: string }>();
+  const { t } = useLanguage();
   const [data, setData] = useState<FeedbackData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -87,20 +84,28 @@ export default function CustomerFeedbackPage() {
   const [submitted, setSubmitted] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
+  const starLabels: Record<number, string> = {
+    1: t("feedback.star1", "Sangat Buruk 😞"),
+    2: t("feedback.star2", "Buruk 😕"),
+    3: t("feedback.star3", "Cukup 😐"),
+    4: t("feedback.star4", "Baik 😊"),
+    5: t("feedback.star5", "Sangat Baik 🤩"),
+  };
+
   useEffect(() => {
-    if (!token) { setError("Token tidak ditemukan"); setLoading(false); return; }
+    if (!token) { setError(t("feedback.tokenMissing", "Token tidak ditemukan")); setLoading(false); return; }
     fetch(`/api/customer-feedback/${token}`)
       .then(async r => {
         const d = await r.json() as FeedbackData & { error?: string };
-        if (!r.ok) throw new Error(d.error ?? "Terjadi kesalahan");
+        if (!r.ok) throw new Error(d.error ?? t("feedback.loadError", "Terjadi kesalahan"));
         setData(d);
       })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [token]);
+  }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSubmit = async () => {
-    if (rating === 0) { setSubmitError("Pilih rating terlebih dahulu"); return; }
+    if (rating === 0) { setSubmitError(t("feedback.ratingRequired", "Pilih rating terlebih dahulu")); return; }
     setSubmitting(true);
     setSubmitError(null);
     try {
@@ -110,7 +115,7 @@ export default function CustomerFeedbackPage() {
         body: JSON.stringify({ rating, feedback: feedback.trim() || null }),
       });
       const d = await res.json() as { success?: boolean; error?: string };
-      if (!res.ok) throw new Error(d.error ?? "Gagal mengirim");
+      if (!res.ok) throw new Error(d.error ?? t("feedback.submitError", "Gagal mengirim"));
       setSubmitted(true);
     } catch (e: unknown) {
       setSubmitError((e as Error).message);
@@ -135,15 +140,15 @@ export default function CustomerFeedbackPage() {
           <div className="flex items-center gap-3 mb-2">
             <div className="w-11 h-11 bg-amber-500 rounded-xl flex items-center justify-center text-2xl flex-shrink-0">⭐</div>
             <div>
-              <h1 className="text-xl font-bold text-slate-800">Penilaian Layanan</h1>
-              {data?.orderNumber && <p className="text-xs text-amber-600 font-medium mt-0.5">📦 Order: {data.orderNumber}</p>}
+              <h1 className="text-xl font-bold text-slate-800">{t("feedback.pageTitle", "Penilaian Layanan")}</h1>
+              {data?.orderNumber && <p className="text-xs text-amber-600 font-medium mt-0.5">📦 {t("feedback.orderLabel", "Order:")} {data.orderNumber}</p>}
             </div>
           </div>
           {data?.customerName && (
-            <p className="text-sm text-slate-600 mt-1">Untuk: <span className="font-medium">{data.customerName}</span></p>
+            <p className="text-sm text-slate-600 mt-1">{t("feedback.forLabel", "Untuk:")} <span className="font-medium">{data.customerName}</span></p>
           )}
           {data?.serviceType && (
-            <p className="text-xs text-slate-400 mt-0.5">Jenis Layanan: {data.serviceType}</p>
+            <p className="text-xs text-slate-400 mt-0.5">{t("feedback.serviceTypeLabel", "Jenis Layanan:")} {data.serviceType}</p>
           )}
         </div>
 
@@ -153,13 +158,15 @@ export default function CustomerFeedbackPage() {
             <svg className="w-5 h-5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
             </svg>
-            <span className="text-sm font-semibold text-emerald-700">Order telah selesai</span>
+            <span className="text-sm font-semibold text-emerald-700">{t("feedback.orderCompleted", "Order telah selesai")}</span>
           </div>
         </div>
 
         {/* Rating stars */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-4">Berikan Penilaian Anda</p>
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-4">
+            {t("feedback.ratePrompt", "Berikan Penilaian Anda")}
+          </p>
           <div className="flex justify-center gap-3 mb-4">
             {[1, 2, 3, 4, 5].map(star => (
               <button
@@ -175,18 +182,20 @@ export default function CustomerFeedbackPage() {
             ))}
           </div>
           {activeRating > 0 && (
-            <p className="text-center text-sm font-medium text-amber-600 mb-2">{STAR_LABELS[activeRating]}</p>
+            <p className="text-center text-sm font-medium text-amber-600 mb-2">{starLabels[activeRating]}</p>
           )}
         </div>
 
         {/* Feedback text */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Komentar / Saran (opsional)</p>
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
+            {t("feedback.commentLabel", "Komentar / Saran (opsional)")}
+          </p>
           <textarea
             value={feedback}
             onChange={e => setFeedback(e.target.value)}
             rows={4}
-            placeholder="Ceritakan pengalaman Anda menggunakan layanan kami..."
+            placeholder={t("feedback.commentPlaceholder", "Ceritakan pengalaman Anda menggunakan layanan kami...")}
             className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none"
           />
         </div>
@@ -201,10 +210,12 @@ export default function CustomerFeedbackPage() {
           disabled={submitting || rating === 0}
           className="w-full h-12 bg-amber-500 hover:bg-amber-600 text-white font-semibold rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {submitting ? "Mengirim..." : "Kirim Penilaian"}
+          {submitting ? t("feedback.submitting", "Mengirim...") : t("feedback.submitBtn", "Kirim Penilaian")}
         </button>
 
-        <p className="text-center text-xs text-slate-400 pb-4">Penilaian Anda bersifat anonim dan hanya digunakan untuk peningkatan layanan.</p>
+        <p className="text-center text-xs text-slate-400 pb-4">
+          {t("feedback.disclaimer", "Penilaian Anda bersifat anonim dan hanya digunakan untuk peningkatan layanan.")}
+        </p>
       </div>
     </div>
   );
