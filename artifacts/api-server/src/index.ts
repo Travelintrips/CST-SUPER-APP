@@ -26,7 +26,7 @@ import { seedProductTemplates } from "./routes/productTemplates.js";
 import { runPortalMigration } from "./lib/portalMigration";
 import { runVendorProfileFieldsMigration } from "./lib/vendorProfileFieldsMigration";
 import { runSupplierEnhancementMigration } from "./lib/supplierEnhancementMigration";
-import { runAccountingMigration, repairKasErSportCenterEntries, repairOrphanedEntryLines } from "./lib/accountingMigration";
+import { runAccountingMigration, repairKasErSportCenterEntries, repairOrphanedEntryLines, syncAccountingSequences } from "./lib/accountingMigration";
 import { runCoaGovernanceMigration } from "./lib/coaGovernanceMigration";
 import { runCoaProposalMigration } from "./lib/coaProposalMigration.js";
 import { runAccountingHubMigration } from "./lib/accountingHubMigration";
@@ -1811,6 +1811,11 @@ async function startServer() {
     .then(() =>
       backfillVendorPerformance().catch((err) => {
         logger.warn({ err }, "Vendor performance backfill failed (non-fatal)");
+      })
+    )
+    .then(() =>
+      syncAccountingSequences().catch((err) => {
+        logger.warn({ err }, "Accounting sequence sync failed (non-fatal)");
       })
     )
     .then(() =>

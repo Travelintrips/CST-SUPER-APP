@@ -435,3 +435,37 @@ export async function repairOrphanedEntryLines(): Promise<void> {
     logger.warn({ err }, "[repairOrphanedEntryLines] Repair gagal (non-fatal)");
   }
 }
+
+/**
+ * Sync PostgreSQL serial sequences to match the actual MAX(id) in each table.
+ *
+ * WHY THIS IS NEEDED:
+ * Drizzle ORM v0.45+ changed INSERT behavior: serial/identity columns are now
+ * explicitly included as `DEFAULT` in the column list. This forces PostgreSQL to
+ * consume the sequence on every INSERT. If rows were previously bulk-imported with
+ * explicit IDs (bypassing the sequence), the sequence stays at a low value and the
+ * next auto-generated ID collides → "duplicate key value violates unique constraint".
+ *
+ * Tables to sync: accounting_entries, accounting_entry_lines (and any other tables
+ * that may have been populated via direct SQL imports).
+ *
+ * Idempotent — safe to call on every startup.
+ */
+export async function syncAccountingSequences(): Promise<void> {
+  const tables: Array<{ table: string; seq: string }> = [
+    { table: "accounting_entries",     seq: "accounting_entries_id_seq" },
+    { table: "accounting_entry_lines", seq: "accounting_entry_lines_id_seq" },
+  ];
+
+  try {
+    for (const { table, seq } of tables) {
+      const result = await db.execute(sql.raw(`
+        SELECT setval('${seq}', GREATEST((SELECT COALESCE(MAX(id), 1) FROM "${table}"), 1))
+      `));
+      const newVal = (result.rows[0] as any)?.setval;
+      logger.info({ table, seq, newVal }, "[syncAccountingSequences] Sequence synced");
+    }
+  } catch (err) {
+    logger.warn({ err }, "[syncAccountingSequences] Sequence sync gagal (non-fatal)");
+  }
+}

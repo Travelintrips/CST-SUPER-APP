@@ -1052,12 +1052,17 @@ export async function approveAndCreateJournal(
 
   } catch (e: any) {
     // captureFailedJob runs OUTSIDE tx — always fires even after rollback
+    // Drizzle v0.45+ wraps DB errors as DrizzleError { message: "Failed query: <SQL>", cause: <pgError> }.
+    // Unwrap to expose the real PostgreSQL message (e.g. "duplicate key", trigger exceptions).
+    const rootMsg: string =
+      (e as any)?.cause?.message ?? e.message ?? String(e);
+
     captureFailedJob(
       "reconciliation_approval",
       { mutationId, matchId, candidateType, candidateId, actor },
-      e.message,
+      rootMsg,
     ).catch(() => {});
-    logger.error({ err: e.message, mutationId }, "[approveAndCreateJournal] transaction rolled back");
+    logger.error({ err: rootMsg, drizzleMsg: e.message, mutationId }, "[approveAndCreateJournal] transaction rolled back");
 
     // JournalMappingError must propagate its typed code and manual_review_required
     // to the route so it can return 422 instead of swallowing it as a generic 400.
@@ -1070,7 +1075,7 @@ export async function approveAndCreateJournal(
         code: e.code,
       };
     }
-    return { ok: false, journalEntryId: null, error: e.message };
+    return { ok: false, journalEntryId: null, error: rootMsg };
   }
 
   // ── Post-commit: fire-and-forget side effects (use global db — outside tx) ──
