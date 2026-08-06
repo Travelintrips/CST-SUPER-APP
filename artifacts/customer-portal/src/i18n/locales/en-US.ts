@@ -6166,8 +6166,6 @@ const locale: DeepRecord = {
     vendorResponse: "Vendor Response",
   },
 
-};
-
   customerOrder: {
     loading: 'Loading order status...',
     notFound: 'Order not found',
@@ -6245,5 +6243,7 @@ const locale: DeepRecord = {
     tradeExport: 'Export',
     tradeImport: 'Import',
   },
+
+};
 
 export default locale;
