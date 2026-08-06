@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import { DatePicker } from "@/components/ui/date-picker";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,6 +22,7 @@ import {
   ChevronDown, ChevronUp, ArrowUpRight, ArrowDownLeft, Zap, Eye,
   BookOpen, TrendingUp, Clock, FileText, CreditCard, Users,
   CircleCheck, CircleDot, ReceiptText, X, Undo2, RotateCcw,
+  Paperclip, ImageIcon, ExternalLink,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { AIReviewSourcePanel } from "@/components/ai-review";
@@ -1116,6 +1117,63 @@ function QuickFilterBar({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Proof Upload Button — self-contained, used in MutationCard row
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ProofUploadButton({ mutationId, proofUrl }: { mutationId: number; proofUrl: string | null }) {
+  const qc          = useQueryClient();
+  const fileRef     = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const { toast }   = useToast();
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await fetch(`/api/bank-reconciliation/${mutationId}/upload-proof`, {
+        method: "POST", credentials: "include", body: fd,
+      });
+      const body = await r.json();
+      if (!r.ok) throw new Error(body.error ?? "Gagal upload");
+      toast({ title: "Bukti berhasil diupload" });
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
+    } catch (err: any) {
+      toast({ title: "Upload gagal", description: err.message, variant: "destructive" });
+    } finally {
+      setBusy(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  return (
+    <>
+      <input
+        ref={fileRef} type="file" className="hidden"
+        accept="image/jpeg,image/png,image/webp,image/gif,application/pdf"
+        onChange={handleFile}
+      />
+      <Button
+        size="sm" variant="ghost"
+        className={`h-7 w-7 p-0 relative ${proofUrl ? "text-green-600 hover:text-green-700" : "text-muted-foreground hover:text-foreground"}`}
+        title={proofUrl ? "Bukti sudah diupload — klik untuk ganti" : "Upload bukti transfer (opsional)"}
+        disabled={busy}
+        onClick={e => { e.stopPropagation(); fileRef.current?.click(); }}
+      >
+        {busy
+          ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          : <Paperclip className="w-3.5 h-3.5" />}
+        {proofUrl && !busy && (
+          <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 bg-green-500 rounded-full" />
+        )}
+      </Button>
+    </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Mutation Card
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1345,7 +1403,8 @@ function MutationCard({
               </a>
             )}
           </div>
-          <div className="flex gap-1">
+          <div className="flex gap-1 items-center">
+            <ProofUploadButton mutationId={m.id} proofUrl={m.uploaded_proof_url ?? null} />
             <Button
               size="sm" variant="ghost"
               className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
@@ -1368,6 +1427,139 @@ function MutationCard({
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Proof Section — used inside MutationDetailPanel
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ProofSection({ mutationId, initialUrl }: { mutationId: number; initialUrl: string | null }) {
+  const qc             = useQueryClient();
+  const fileRef        = useRef<HTMLInputElement>(null);
+  const [url, setUrl]  = useState<string | null>(initialUrl);
+  const [busy, setBusy] = useState(false);
+  const { toast }      = useToast();
+
+  const isImage = url ? /\.(jpe?g|png|webp|gif)(\?|$)/i.test(url) : false;
+  const isPdf   = url ? /\.pdf(\?|$)/i.test(url) : false;
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await fetch(`/api/bank-reconciliation/${mutationId}/upload-proof`, {
+        method: "POST", credentials: "include", body: fd,
+      });
+      const body = await r.json();
+      if (!r.ok) throw new Error(body.error ?? "Gagal upload");
+      setUrl(body.url);
+      toast({ title: "Bukti berhasil diupload" });
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
+    } catch (err: any) {
+      toast({ title: "Upload gagal", description: err.message, variant: "destructive" });
+    } finally {
+      setBusy(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  async function handleRemove() {
+    if (!confirm("Hapus bukti transfer ini?")) return;
+    setBusy(true);
+    try {
+      const r = await fetch(`/api/bank-reconciliation/${mutationId}/upload-proof`, {
+        method: "DELETE", credentials: "include",
+      });
+      if (!r.ok) throw new Error("Gagal hapus");
+      setUrl(null);
+      toast({ title: "Bukti dihapus" });
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
+    } catch (err: any) {
+      toast({ title: "Hapus gagal", description: err.message, variant: "destructive" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+          Bukti Transfer
+        </p>
+        <div className="flex items-center gap-1">
+          {url && (
+            <Button size="sm" variant="ghost"
+              className="h-6 text-xs px-2 text-red-500 hover:text-red-700 hover:bg-red-50"
+              disabled={busy} onClick={handleRemove}
+            >
+              <Trash2 className="w-3 h-3 mr-1" />Hapus
+            </Button>
+          )}
+          <Button size="sm" variant="outline"
+            className="h-6 text-xs px-2 gap-1"
+            disabled={busy}
+            onClick={() => fileRef.current?.click()}
+          >
+            {busy
+              ? <Loader2 className="w-3 h-3 animate-spin" />
+              : <Paperclip className="w-3 h-3" />}
+            {url ? "Ganti" : "Upload Bukti"}
+          </Button>
+          <input ref={fileRef} type="file" className="hidden"
+            accept="image/jpeg,image/png,image/webp,image/gif,application/pdf"
+            onChange={handleFile}
+          />
+        </div>
+      </div>
+
+      {url ? (
+        <div className="rounded-lg border overflow-hidden bg-muted/20">
+          {isImage ? (
+            <a href={url} target="_blank" rel="noopener noreferrer">
+              <img
+                src={url} alt="Bukti Transfer"
+                className="w-full max-h-60 object-contain bg-white"
+                onError={e => { (e.target as HTMLImageElement).style.display = "none"; }}
+              />
+              <div className="px-3 py-1.5 flex items-center gap-1 text-xs text-blue-600 border-t">
+                <ExternalLink className="w-3 h-3 shrink-0" />
+                Buka di tab baru
+              </div>
+            </a>
+          ) : isPdf ? (
+            <a href={url} target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-2 px-3 py-2.5 text-sm text-blue-600 hover:bg-blue-50"
+            >
+              <FileText className="w-4 h-4 shrink-0" />
+              <span className="truncate">Lihat PDF</span>
+              <ExternalLink className="w-3 h-3 shrink-0 ml-auto" />
+            </a>
+          ) : (
+            <a href={url} target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-2 px-3 py-2.5 text-sm text-blue-600 hover:bg-blue-50"
+            >
+              <FileText className="w-4 h-4 shrink-0" />
+              <span className="text-xs break-all">{url}</span>
+              <ExternalLink className="w-3 h-3 shrink-0 ml-auto" />
+            </a>
+          )}
+        </div>
+      ) : (
+        <div
+          className="rounded-lg border-2 border-dashed border-muted-foreground/20 py-5 flex flex-col items-center justify-center gap-1.5 text-muted-foreground cursor-pointer hover:border-muted-foreground/40 hover:bg-muted/30 transition-colors"
+          onClick={() => fileRef.current?.click()}
+        >
+          <ImageIcon className="w-6 h-6 opacity-40" />
+          <p className="text-xs">Klik untuk upload bukti transfer</p>
+          <p className="text-[10px] opacity-60">JPG, PNG, WEBP, GIF, atau PDF · maks. 10 MB</p>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1513,24 +1705,9 @@ function MutationDetailPanel({
               />
             </div>
 
-            {/* Proof */}
-            {m.uploaded_proof_url && (
-              <>
-                <Separator />
-                <div>
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Bukti Transfer</p>
-                  <a
-                    href={m.uploaded_proof_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs text-blue-600 hover:underline flex items-center gap-1 break-all"
-                  >
-                    <FileText className="w-3.5 h-3.5 shrink-0" />
-                    {m.uploaded_proof_url}
-                  </a>
-                </div>
-              </>
-            )}
+            {/* Proof — upload, preview, remove */}
+            <Separator />
+            <ProofSection mutationId={m.id} initialUrl={m.uploaded_proof_url ?? null} />
 
             {/* Lifecycle steps — driven by real backend statuses */}
             <Separator />

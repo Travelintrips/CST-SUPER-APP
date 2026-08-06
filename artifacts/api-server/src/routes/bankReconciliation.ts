@@ -51,6 +51,7 @@ import { triggerWritebackForMutation, syncOneSheetConfig } from "../lib/sheetSyn
 import { canonicalMutationKey } from "../lib/reconciliation/canonicalMutationKey.js";
 import { voidApprovedJournal } from "../lib/accounting/approveAndCreateJournal.js";
 import { trackMutationApproval, runUsageTrackingMigration } from "../lib/usageTrackingService.js";
+import { ObjectStorageService } from "../lib/objectStorage.js";
 import {
   detectFormat,
   parseMT940,
@@ -1292,6 +1293,57 @@ router.post("/:mutationId/reject", async (req, res) => {
   // Audit: MATCH_REJECTED
   await auditLog(mutId, "MATCH_REJECTED", actor, { note: note ?? null });
   audit(req, { action: "reject", module: "accounting", resourceId: `bank-mutation-${mutId}` });
+  return res.json({ ok: true });
+});
+
+// ─── POST /api/bank-reconciliation/:mutationId/upload-proof ──────────────────
+// Upload bukti transfer opsional untuk sebuah mutasi bank.
+// File disimpan ke Supabase Storage (public bucket), URL disimpan ke DB.
+router.post("/:mutationId/upload-proof", upload.single("file"), async (req, res) => {
+  await runBankReconciliationCoreMigration();
+  const mutId = parseInt(req.params.mutationId);
+  if (isNaN(mutId)) return res.status(400).json({ error: "ID tidak valid" });
+  if (!req.file)    return res.status(400).json({ error: "File wajib diupload" });
+
+  const ALLOWED = ["image/jpeg", "image/png", "image/webp", "image/gif", "application/pdf"];
+  if (!ALLOWED.includes(req.file.mimetype)) {
+    return res.status(400).json({ error: "Hanya file JPG, PNG, WEBP, GIF, atau PDF yang diizinkan" });
+  }
+
+  // Derive extension from mimetype (more reliable than originalname in prod)
+  const EXT_MAP: Record<string, string> = {
+    "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp",
+    "image/gif": "gif", "application/pdf": "pdf",
+  };
+  const ext = EXT_MAP[req.file.mimetype] ?? "bin";
+  const storagePath = `bank-proof/${mutId}/${Date.now()}.${ext}`;
+
+  try {
+    const oss = new ObjectStorageService();
+    const url = await oss.uploadPublic(storagePath, req.file.buffer, req.file.mimetype);
+
+    await db.execute(sql`UPDATE bank_mutations SET uploaded_proof_url = ${url} WHERE id = ${mutId}`);
+
+    const actor = (req as any).user?.email ?? "admin";
+    audit(req, { action: "upload_proof", module: "accounting", resourceId: `bank-mutation-${mutId}` });
+    logger.info({ mutId, url }, "[BankRecon] Bukti transfer diupload");
+
+    return res.json({ ok: true, url });
+  } catch (err) {
+    logger.error({ err }, "[BankRecon] Gagal upload bukti transfer");
+    return res.status(500).json({ error: "Gagal upload file. Coba lagi." });
+  }
+});
+
+// ─── DELETE /api/bank-reconciliation/:mutationId/upload-proof ─────────────────
+// Hapus URL bukti transfer dari mutasi (file di Storage tidak dihapus).
+router.delete("/:mutationId/upload-proof", async (req, res) => {
+  await runBankReconciliationCoreMigration();
+  const mutId = parseInt(req.params.mutationId);
+  if (isNaN(mutId)) return res.status(400).json({ error: "ID tidak valid" });
+
+  await db.execute(sql`UPDATE bank_mutations SET uploaded_proof_url = NULL WHERE id = ${mutId}`);
+  audit(req, { action: "remove_proof", module: "accounting", resourceId: `bank-mutation-${mutId}` });
   return res.json({ ok: true });
 });
 
