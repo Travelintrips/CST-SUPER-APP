@@ -356,7 +356,7 @@ function ProductInfoCard({ item }: { item: MarketplaceItem }) {
         {rows.map((r, i) => (
           <div key={i} className="flex items-center gap-3 px-4 py-2.5">
             <span className="shrink-0">{r.icon}</span>
-            <span className="text-[12px] text-slate-500 min-w-[120px] shrink-0">{r.label}</span>
+            <span className="text-[12px] text-slate-500 min-w-[120px] shrink-0">{t(r.labelKey)}</span>
             <span className="text-[13px] font-semibold text-slate-800">{r.value}</span>
           </div>
         ))}
@@ -364,6 +364,25 @@ function ProductInfoCard({ item }: { item: MarketplaceItem }) {
     </div>
   );
 }
+
+// ── Spec Field Label Translation Map ─────────────────────────────────────────
+const SPEC_FIELD_LABEL_KEYS: Record<string, string> = {
+  cut:                "marketplaceDetail.fieldSpecCut",
+  color:              "marketplaceDetail.fieldSpecColor",
+  colour:             "marketplaceDetail.fieldSpecColor",
+  species:            "marketplaceDetail.fieldSpecSpecies",
+  storage:            "marketplaceDetail.fieldSpecStorage",
+  freezing:           "marketplaceDetail.fieldSpecFreezing",
+  processing:         "marketplaceDetail.fieldSpecProcessing",
+  shelf_life:         "marketplaceDetail.fieldSpecShelfLife",
+  net_weight_carton:  "marketplaceDetail.fieldSpecNetWeightCarton",
+  net_weight:         "marketplaceDetail.fieldSpecNetWeight",
+  gross_weight:       "marketplaceDetail.fieldSpecGrossWeight",
+  thickness:          "marketplaceDetail.fieldSpecThickness",
+  length:             "marketplaceDetail.fieldSpecLength",
+  width:              "marketplaceDetail.fieldSpecWidth",
+  height:             "marketplaceDetail.fieldSpecHeight",
+};
 
 // ── Spec Table ────────────────────────────────────────────────────────────────
 // Shows remaining spec fields that are NOT already highlighted in the info cards
@@ -425,15 +444,24 @@ function SpecTable({ item }: { item: MarketplaceItem }) {
       specs[f.key] !== undefined && specs[f.key] !== null &&
       String(specs[f.key]).trim() !== ""
     )
-    .forEach((f) => rows.push({ label: f.label, value: String(specs[f.key]) }));
+    .forEach((f) => rows.push({
+      label: SPEC_FIELD_LABEL_KEYS[f.key] ? t(SPEC_FIELD_LABEL_KEYS[f.key]) : f.label,
+      value: String(specs[f.key]),
+    }));
 
-  extraKeys.forEach((k) => rows.push({ label: k, value: String(specs[k]) }));
+  extraKeys.forEach((k) => rows.push({
+    label: SPEC_FIELD_LABEL_KEYS[k] ? t(SPEC_FIELD_LABEL_KEYS[k]) : k,
+    value: String(specs[k]),
+  }));
 
   // Textarea fields shown as description
   const textareaRows: Array<{ label: string; value: string }> = [];
   fields
     .filter((f) => f.type === "textarea" && specs[f.key] !== undefined && specs[f.key] !== null && String(specs[f.key]).trim() !== "")
-    .forEach((f) => textareaRows.push({ label: f.label, value: String(specs[f.key]) }));
+    .forEach((f) => textareaRows.push({
+      label: SPEC_FIELD_LABEL_KEYS[f.key] ? t(SPEC_FIELD_LABEL_KEYS[f.key]) : f.label,
+      value: String(specs[f.key]),
+    }));
 
   if (rows.length === 0 && textareaRows.length === 0) return null;
 
