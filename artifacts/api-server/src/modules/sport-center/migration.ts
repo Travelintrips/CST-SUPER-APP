@@ -611,18 +611,6 @@ export async function runSportCenterMigration(): Promise<void> {
     //   3. Hapus accounting_entry_lines dari entry duplikat (sekarang sudah draft)
     //   4. Hapus accounting_entries duplikat
     try {
-      // 1. Redirect accounting_payments.entry_id ke keeper (scoped by company_id)
-    // ── Cleanup: hapus duplicate accounting_entries per (source, source_id) ─────
-    // Simpan entry dengan id terkecil (yang pertama diinsert), hapus sisanya.
-    // Juga hapus entry lines yang orphan dan redirect accounting_payments.entry_id.
-    //
-    // Strategi: trigger fn_block_posted_lines_mutation memblok DELETE langsung pada
-    // entry berstatus 'posted'. Solusinya:
-    //   1. Downgrade duplikat ke 'draft' (trigger mengizinkan posted→draft dengan cancel_reason)
-    //   2. Redirect accounting_payments.entry_id ke entry yang dipertahankan
-    //   3. Hapus entry lines dari duplikat (kini aman karena status = 'draft')
-    //   4. Hapus entry duplikat itu sendiri
-    try {
       // 1. Downgrade duplikat dari 'posted'/'approved' → 'draft' agar trigger mengizinkan DELETE
       //    Duplikat diidentifikasi per (company_id, source, source_id) — bukan global —
       //    karena index uniknya adalah company-scoped (multi-tenant aman).
