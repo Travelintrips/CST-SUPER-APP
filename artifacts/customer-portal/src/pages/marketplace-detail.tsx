@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useRoute, useLocation } from "wouter";
 import { useLanguage } from "@/i18n/LanguageContext";
+import { useProductTranslation } from "@/hooks/useProductTranslation";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -1366,7 +1367,7 @@ function SameProvinceSection({
 export default function MarketplaceDetailPage() {
   const [, params] = useRoute<{ id: string }>("/marketplace/:id");
   const [, setLocation] = useLocation();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const id = params?.id;
 
   const [calc, setCalc] = useState<CalcState>({ qty: 1, unit: "unit", includePpn: false });
@@ -1389,6 +1390,17 @@ export default function MarketplaceDetailPage() {
       setCalc({ qty: moq, unit: item.unit || "unit", includePpn: false });
     }
   }, [item?.id]);
+
+  // ── Auto-translation (triggers when locale is non-Indonesian) ──────────────
+  const {
+    name: translatedName,
+    description: translatedDescription,
+    isTranslating,
+    isTranslated,
+    error: translateError,
+    targetLang: translatedToLang,
+    retranslate,
+  } = useProductTranslation(item?.id, item?.name, item?.description, locale);
 
   if (isLoading) {
     return (
@@ -1471,12 +1483,39 @@ export default function MarketplaceDetailPage() {
 
                 {/* Name */}
                 <h1 className="text-[22px] md:text-[26px] font-extrabold text-slate-900 leading-tight">
-                  {item.name}
+                  {isTranslated && translatedName ? translatedName : item.name}
                 </h1>
+
+                {/* AI translation indicator */}
+                {isTranslating && (
+                  <div className="flex items-center gap-1.5 text-[12px] text-sky-600">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <span>Menerjemahkan…</span>
+                  </div>
+                )}
+                {isTranslated && translatedToLang && !isTranslating && (
+                  <div className="flex items-center gap-1.5">
+                    <span className="inline-flex items-center gap-1 text-[11px] text-sky-600 bg-sky-50 border border-sky-200 rounded-full px-2 py-0.5">
+                      <Globe className="h-3 w-3" />
+                      Diterjemahkan AI · {translatedToLang.toUpperCase()}
+                    </span>
+                    <button
+                      onClick={retranslate}
+                      className="text-[11px] text-slate-400 hover:text-slate-600 transition-colors"
+                    >
+                      ↺
+                    </button>
+                  </div>
+                )}
+                {translateError && (
+                  <p className="text-[11px] text-red-500">{translateError}</p>
+                )}
 
                 {/* Description */}
                 {item.description && (
-                  <p className="text-[14px] text-slate-600 leading-relaxed">{item.description}</p>
+                  <p className="text-[14px] text-slate-600 leading-relaxed">
+                    {isTranslated && translatedDescription ? translatedDescription : item.description}
+                  </p>
                 )}
 
                 {/* Price */}
