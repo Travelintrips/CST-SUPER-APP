@@ -23,6 +23,8 @@
  */
 
 import { Router, type Request, type Response } from "express";
+import { rateLimit } from "express-rate-limit";
+import { z } from "zod/v4";
 import { requirePortalAuth, type PortalAuthReq } from "../lib/supabaseAuth.js";
 import {
   getBuyerRfqs,
@@ -38,6 +40,46 @@ import { NotificationService } from "../lib/services/notificationService.js";
 import { logger } from "../lib/logger.js";
 
 const router = Router();
+
+// ── Rate limiters ─────────────────────────────────────────────────────────────
+// Read operations — 60 req / 15 menit per buyer
+const readLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: "RATE_LIMIT", message: "Terlalu banyak permintaan. Coba lagi dalam 15 menit." },
+  keyGenerator: (req) => {
+    const pid = (req as PortalAuthReq).portalCustomerId;
+    return `mkt-portal-read:${pid ?? req.ip}`;
+  },
+});
+
+// Write operations — 20 req / 15 menit per buyer
+const writeLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: "RATE_LIMIT", message: "Terlalu banyak permintaan write. Coba lagi dalam 15 menit." },
+  keyGenerator: (req) => {
+    const pid = (req as PortalAuthReq).portalCustomerId;
+    return `mkt-portal-write:${pid ?? req.ip}`;
+  },
+});
+
+// ── Zod input schemas ─────────────────────────────────────────────────────────
+const CancelBodySchema = z.object({
+  reason: z.string().max(500).optional(),
+});
+
+const RejectBodySchema = z.object({
+  notes: z.string().min(1, "Catatan penolakan wajib diisi").max(1000),
+});
+
+const CustomerRejectBodySchema = z.object({
+  reason: z.string().max(500).optional(),
+});
 
 // ── All routes require portal buyer/approver auth ─────────────────────────────
 router.use(requirePortalAuth);
