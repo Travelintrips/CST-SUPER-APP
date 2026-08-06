@@ -1181,7 +1181,7 @@ export default function CalculatorPage() {
                 <div className="calc-card p-5">
                   <div className="flex items-center gap-2 mb-4">
                     <Receipt className="h-4 w-4" style={{ color: svc?.color }} />
-                    <p className="text-[12px] font-bold uppercase tracking-wider" style={{ color: svc?.color }}>Rincian Biaya</p>
+                    <p className="text-[12px] font-bold uppercase tracking-wider" style={{ color: svc?.color }}>{t("calculator.costBreakdown")}</p>
                   </div>
 
                   <div className="space-y-0">
