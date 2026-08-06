@@ -2301,6 +2301,64 @@ router.post("/payments", async (req, res) => {
   }
 });
 
+// ── EDIT PAYMENT (update method + bank_account_id saja, amount tidak boleh diubah) ────
+router.patch("/payments/:id", async (req, res) => {
+  if (!await requireAdmin(req, res)) return;
+  const id = parseInt(req.params.id, 10);
+  if (!id || isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
+  try {
+    // Ambil data payment sekarang
+    const existing = await db.execute(sql`
+      SELECT id, company_id, method, bank_account_id FROM sport_payments WHERE id = ${id} LIMIT 1
+    `);
+    if (!existing.rows.length) return res.status(404).json({ error: "Pembayaran tidak ditemukan" });
+    const row = existing.rows[0] as Record<string, unknown>;
+
+    // Validasi akses company
+    const reqCompanyId = resolveCompanyId(req);
+    if (!await assertCompanyAccess(
+      row.company_id != null ? Number(row.company_id) : null,
+      reqCompanyId, req, res,
+      { resourceType: "sport_payment", resourceId: id },
+    )) return;
+
+    const newMethod: string | undefined = req.body.method ?? undefined;
+    const newBankAccountId: number | null =
+      req.body.bank_account_id != null
+        ? (req.body.bank_account_id === "" ? null : Number(req.body.bank_account_id))
+        : undefined as unknown as null;
+
+    // Bangun SET clause dinamis
+    const sets: string[] = ["updated_at = NOW()"];
+    if (newMethod !== undefined)       sets.push(`method = '${String(newMethod).replace(/'/g, "''")}'`);
+    if (newBankAccountId !== undefined) sets.push(`bank_account_id = ${newBankAccountId ?? "NULL"}`);
+
+    if (sets.length === 1) return res.status(400).json({ error: "Tidak ada field yang diubah" });
+
+    const updated = await db.execute(sql.raw(`
+      UPDATE sport_payments SET ${sets.join(", ")}
+      WHERE id = ${id}
+      RETURNING id, payment_number, method, bank_account_id, amount, status, paid_at, notes
+    `));
+
+    // Audit log
+    db.execute(sql`
+      INSERT INTO sport_audit_logs (company_id, entity_type, entity_id, action, actor, new_data)
+      VALUES (
+        ${row.company_id != null ? Number(row.company_id) : null},
+        'payment', ${id}, 'PAYMENT_UPDATED',
+        ${(req.user as { id: string } | undefined)?.id ?? null},
+        ${JSON.stringify({ method: newMethod, bank_account_id: newBankAccountId })}::jsonb
+      )
+    `).catch(() => {});
+
+    res.json(updated.rows[0]);
+  } catch (err: any) {
+    console.error("[sport-center] PATCH /payments/:id error:", err?.message);
+    res.status(500).json({ error: "Gagal menyimpan perubahan" });
+  }
+});
+
 // ── REVENUE TRANSACTIONS (untuk expandable card di dashboard) ────────────────
 router.get("/revenue-transactions", async (req, res) => {
   if (!await requireAdmin(req, res)) return;

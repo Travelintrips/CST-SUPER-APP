@@ -18,7 +18,7 @@ import { useCompany } from "@/contexts/CompanyContext";
 import { useToast } from "@/hooks/use-toast";
 import {
   Plus, Activity, DollarSign, RefreshCw, ArrowLeft,
-  Eye, XCircle, CalendarDays, Search,
+  Eye, XCircle, CalendarDays, Search, Pencil,
 } from "lucide-react";
 
 const idr = (n: number) =>
@@ -65,6 +65,10 @@ export default function SportCenterPayments() {
   const [showDialog, setShowDialog] = useState(false);
   const [detailPayment, setDetailPayment] = useState<Payment | null>(null);
   const [form, setForm] = useState({ booking_id: "", amount: "", method: "cash", notes: "", bank_account_id: "" });
+
+  // Edit transaksi lama
+  const [editPayment, setEditPayment] = useState<Payment | null>(null);
+  const [editForm, setEditForm] = useState({ method: "cash", bank_account_id: "" });
 
   const [debouncedSearch, setDebouncedSearch] = useState("");
   useEffect(() => {
@@ -132,6 +136,24 @@ export default function SportCenterPayments() {
       setForm({ booking_id: "", amount: "", method: "cash", notes: "", bank_account_id: "" });
       qc.invalidateQueries({ queryKey: ["sport-center-payments"] });
       qc.invalidateQueries({ queryKey: ["sport-center-dashboard"] });
+    },
+    onError: (e: Error) => toast({ title: e.message, variant: "destructive" }),
+  });
+
+  const editMutation = useMutation({
+    mutationFn: async ({ id, body }: { id: number; body: Record<string, unknown> }) => {
+      const r = await fetch(`/api/sport-center/payments/${id}`, {
+        method: "PATCH", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error((await r.json()).error ?? "Gagal menyimpan");
+      return r.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Transaksi diperbarui" });
+      setEditPayment(null);
+      qc.invalidateQueries({ queryKey: ["sport-center-payments"] });
     },
     onError: (e: Error) => toast({ title: e.message, variant: "destructive" }),
   });
@@ -293,13 +315,28 @@ export default function SportCenterPayments() {
                       {idr(Number(p.amount))}
                     </td>
                     <td className="py-2.5 px-3 whitespace-nowrap">
-                      <Button
-                        variant="ghost" size="sm"
-                        className="h-7 px-2 text-xs gap-1 text-muted-foreground hover:text-foreground"
-                        onClick={() => setDetailPayment(p)}
-                      >
-                        <Eye className="h-3.5 w-3.5" /> Detail
-                      </Button>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost" size="sm"
+                          className="h-7 px-2 text-xs gap-1 text-muted-foreground hover:text-foreground"
+                          onClick={() => setDetailPayment(p)}
+                        >
+                          <Eye className="h-3.5 w-3.5" /> Detail
+                        </Button>
+                        <Button
+                          variant="ghost" size="sm"
+                          className="h-7 px-2 text-xs gap-1 text-amber-500 hover:text-amber-400"
+                          onClick={() => {
+                            setEditPayment(p);
+                            setEditForm({
+                              method: p.method ?? "cash",
+                              bank_account_id: p.bank_account_id ? String(p.bank_account_id) : "",
+                            });
+                          }}
+                        >
+                          <Pencil className="h-3.5 w-3.5" /> Edit
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -408,6 +445,89 @@ export default function SportCenterPayments() {
                 })}
               >
                 {createMutation.isPending ? <RefreshCw className="h-4 w-4 animate-spin" /> : "Catat Pembayaran"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Dialog: Edit Pembayaran */}
+        <Dialog open={!!editPayment} onOpenChange={(o) => { if (!o) setEditPayment(null); }}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Pencil className="h-4 w-4 text-amber-400" />
+                Edit Metode Pembayaran
+              </DialogTitle>
+            </DialogHeader>
+            {editPayment && (
+              <div className="space-y-4 py-2">
+                <div className="rounded-md bg-muted/30 border border-border/40 p-3 text-sm space-y-1">
+                  <p className="text-xs text-muted-foreground">Transaksi</p>
+                  <p className="font-mono font-medium">{editPayment.payment_number}</p>
+                  <p className="text-muted-foreground text-xs">{editPayment.customer_name ?? "—"} · {idr(Number(editPayment.amount))}</p>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Metode Pembayaran</Label>
+                  <Select
+                    value={editForm.method}
+                    onValueChange={(v) => setEditForm((p) => ({
+                      ...p,
+                      method: v,
+                      bank_account_id: v === "cash" ? "" : p.bank_account_id,
+                    }))}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="cash">Tunai</SelectItem>
+                      <SelectItem value="transfer">Transfer Bank</SelectItem>
+                      <SelectItem value="qris">QRIS</SelectItem>
+                      <SelectItem value="card">Kartu</SelectItem>
+                      <SelectItem value="other">Lainnya</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {editForm.method !== "cash" && (
+                  <div className="space-y-1">
+                    <Label className="text-xs">Rekening Bank Tujuan</Label>
+                    <Select
+                      value={editForm.bank_account_id}
+                      onValueChange={(v) => setEditForm((p) => ({ ...p, bank_account_id: v }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Pilih rekening bank…" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {bankAccounts.length === 0 ? (
+                          <SelectItem value="" disabled>Belum ada rekening bank</SelectItem>
+                        ) : (
+                          bankAccounts.map((a) => (
+                            <SelectItem key={a.id} value={String(a.id)}>
+                              {a.name}{a.bank_name ? ` — ${a.bank_name}` : ""}{a.account_number ? ` (${a.account_number})` : ""}
+                            </SelectItem>
+                          ))
+                        )}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Wajib diisi agar cocok saat rekonsiliasi bank.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setEditPayment(null)}>Batal</Button>
+              <Button
+                disabled={editMutation.isPending || !editPayment}
+                onClick={() => editPayment && editMutation.mutate({
+                  id: editPayment.id,
+                  body: {
+                    method: editForm.method,
+                    bank_account_id: editForm.bank_account_id ? Number(editForm.bank_account_id) : null,
+                  },
+                })}
+              >
+                {editMutation.isPending ? <RefreshCw className="h-4 w-4 animate-spin" /> : "Simpan"}
               </Button>
             </DialogFooter>
           </DialogContent>
