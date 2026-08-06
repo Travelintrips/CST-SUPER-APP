@@ -102,19 +102,23 @@ function exportCalcJSON(result: CalcResult, serviceName: string) {
 }
 
 // ── Service Config ─────────────────────────────────────────────────────────────
-const SERVICE_CONFIG: Record<string, { icon: React.ReactNode; label: string; labelFull: string; color: string; gradient: string; emoji: string; }> = {
-  seaFreight:   { icon: <Ship className="h-5 w-5" />,      label: "Sea Freight",    labelFull: "Sea Freight",            color: "#1D4ED8", gradient: "linear-gradient(135deg,#1D4ED8,#3B82F6)", emoji: "🚢" },
-  airFreight:   { icon: <Plane className="h-5 w-5" />,     label: "Air Freight",    labelFull: "Air Freight",            color: "#0284C7", gradient: "linear-gradient(135deg,#0284C7,#38BDF8)", emoji: "✈️" },
-  customs:      { icon: <Package className="h-5 w-5" />,   label: "PPJK / Bea Cukai", labelFull: "PPJK / Customs Clearance", color: "#EA580C", gradient: "linear-gradient(135deg,#EA580C,#FB923C)", emoji: "📦" },
-  domestic:     { icon: <Truck className="h-5 w-5" />,     label: "Trucking",       labelFull: "Trucking / Domestik",    color: "#D97706", gradient: "linear-gradient(135deg,#D97706,#FCD34D)", emoji: "🚚" },
-  warehousing:  { icon: <Warehouse className="h-5 w-5" />, label: "Warehousing",    labelFull: "Warehousing / Gudang",   color: "#0D9488", gradient: "linear-gradient(135deg,#0D9488,#2DD4BF)", emoji: "🏭" },
-  projectCargo: { icon: <Globe className="h-5 w-5" />,     label: "Project Cargo",  labelFull: "Project Cargo",          color: "#7C3AED", gradient: "linear-gradient(135deg,#7C3AED,#A78BFA)", emoji: "🏗️" },
+const SERVICE_CONFIG: Record<string, { icon: React.ReactNode; color: string; gradient: string; emoji: string; }> = {
+  seaFreight:   { icon: <Ship className="h-5 w-5" />,      color: "#1D4ED8", gradient: "linear-gradient(135deg,#1D4ED8,#3B82F6)", emoji: "🚢" },
+  airFreight:   { icon: <Plane className="h-5 w-5" />,     color: "#0284C7", gradient: "linear-gradient(135deg,#0284C7,#38BDF8)", emoji: "✈️" },
+  customs:      { icon: <Package className="h-5 w-5" />,   color: "#EA580C", gradient: "linear-gradient(135deg,#EA580C,#FB923C)", emoji: "📦" },
+  domestic:     { icon: <Truck className="h-5 w-5" />,     color: "#D97706", gradient: "linear-gradient(135deg,#D97706,#FCD34D)", emoji: "🚚" },
+  warehousing:  { icon: <Warehouse className="h-5 w-5" />, color: "#0D9488", gradient: "linear-gradient(135deg,#0D9488,#2DD4BF)", emoji: "🏭" },
+  projectCargo: { icon: <Globe className="h-5 w-5" />,     color: "#7C3AED", gradient: "linear-gradient(135deg,#7C3AED,#A78BFA)", emoji: "🏗️" },
 };
 
 // ── Main Component ─────────────────────────────────────────────────────────────
 export default function CalculatorPage() {
   const { t } = useLanguage();
   const qc = useQueryClient();
+
+  // Translated service labels (must be inside component so t() works)
+  const svcLabel = (s: string) => t(`calculator.services.${s}` as Parameters<typeof t>[0], s);
+  const svcLabelFull = (s: string) => t(`calculator.services.${s}Full` as Parameters<typeof t>[0], s);
 
   // Pre-select service from URL ?service=X
   const initialService = useMemo<ServiceType>(() => {
@@ -300,8 +304,8 @@ export default function CalculatorPage() {
   function handleCalculate(e: React.FormEvent) {
     e.preventDefault();
     setError(""); setResult(null);
-    if (!service) { setError("Pilih jenis layanan terlebih dahulu."); return; }
-    if (!destination.trim()) { setError("Tujuan pengiriman wajib diisi."); return; }
+    if (!service) { setError(t("calculator.validationNoService")); return; }
+    if (!destination.trim()) { setError(t("calculator.validationNoDest")); return; }
 
     const cargoVal = parseFloat(cargoValue.replace(/[^0-9.]/g, "")) || 0;
 
@@ -309,7 +313,7 @@ export default function CalculatorPage() {
 
     if (service === "airFreight") {
       const gw = parseFloat(airWeight) || 0;
-      if (gw <= 0) { setError("Berat kargo (Gross Weight) wajib diisi."); return; }
+      if (gw <= 0) { setError(t("calculator.validationNoWeight")); return; }
       const r = rates.airFreight;
       const vol = airVolumetric ?? 0;
       const cw = Math.max(gw, vol);
@@ -338,7 +342,7 @@ export default function CalculatorPage() {
       const r = rates.seaFreight;
       if (seaShipmentType === "LCL") {
         const cbm = parseFloat(seaCbm) || 0;
-        if (cbm <= 0) { setError("Volume CBM wajib diisi untuk LCL."); return; }
+        if (cbm <= 0) { setError(t("calculator.validationNoCbm")); return; }
         const effectiveCbm = Math.max(cbm, 0.1);
         const freightCost = Math.ceil(effectiveCbm * 10) / 10 * r.ratePerCbmLcl;
         calc.cbm = Math.round(cbm * 1000) / 1000;
@@ -380,7 +384,7 @@ export default function CalculatorPage() {
       calc.extraData = { tradeType: customsTradeType, docType: customsDocType, hsCode: customsHsCode, commodity: customsCommodity, nilaiPabean, nomorAju: customsNomorAju, npwp: customsNpwp };
 
     } else if (service === "domestic") {
-      if (!truckDistance) { setError("Jarak (KM) wajib diisi."); return; }
+      if (!truckDistance) { setError(t("calculator.validationNoDist")); return; }
       const r = rates.domestic;
       const baseRate = r.vehicleRates[truckVehicle] ?? r.vehicleRates["CDE"];
       const distKm = parseFloat(truckDistance) || 0;
@@ -398,7 +402,7 @@ export default function CalculatorPage() {
       calc.extraData = { pickupAddress: truckPickup, deliveryAddress: truckDelivery, vehicle: truckVehicle, distanceKm: distKm, tonase: truckTonase, koli: truckKoli, loading: truckLoading, unloading: truckUnloading, overnight: truckOvernight, helperDays };
 
     } else if (service === "warehousing") {
-      if (!whQty || !whDuration) { setError("Quantity dan durasi penyimpanan wajib diisi."); return; }
+      if (!whQty || !whDuration) { setError(t("calculator.validationNoWhQty")); return; }
       const r = rates.warehousing;
       const qty = parseFloat(whQty) || 1;
       const days = parseInt(whDuration) || 1;
@@ -459,8 +463,8 @@ export default function CalculatorPage() {
   async function handleQuoteSubmit(e: React.FormEvent) {
     e.preventDefault();
     setQuoteError("");
-    if (!quoteName.trim()) { setQuoteError("Nama wajib diisi"); return; }
-    if (!quoteWa.trim()) { setQuoteError("Nomor WhatsApp wajib diisi"); return; }
+    if (!quoteName.trim()) { setQuoteError(t("calculator.validationName")); return; }
+    if (!quoteWa.trim()) { setQuoteError(t("calculator.validationWa")); return; }
     setQuoteSubmitting(true);
     try {
       const res = await fetch("/api/portal/request-quote", {
@@ -494,9 +498,9 @@ export default function CalculatorPage() {
         }),
       });
       const data = await res.json() as { ok?: boolean; error?: string };
-      if (!res.ok || !data.ok) { setQuoteError(data.error ?? "Gagal mengirim. Silakan coba lagi."); }
+      if (!res.ok || !data.ok) { setQuoteError(data.error ?? t("calculator.errorSendFail")); }
       else { setQuoteSuccess(true); setShowQuoteForm(false); }
-    } catch { setQuoteError("Tidak dapat terhubung ke server. Cek koneksi Anda."); }
+    } catch { setQuoteError(t("calculator.errorServerConnect")); }
     finally { setQuoteSubmitting(false); }
   }
 
@@ -565,7 +569,7 @@ export default function CalculatorPage() {
             className="inline-flex items-center gap-1.5 mb-3 text-[12px] font-semibold rounded-lg px-3 py-1.5 select-none"
             style={{ color:"rgba(255,255,255,0.85)", background:"rgba(255,255,255,0.10)", border:"1.5px solid rgba(255,255,255,0.20)" }}
           >
-            <ArrowLeft className="h-3.5 w-3.5" /> Kembali
+            <ArrowLeft className="h-3.5 w-3.5" /> {t("calculator.back")}
           </button>
           <div className="flex flex-col md:flex-row md:items-end gap-3 justify-between">
             <div>
@@ -573,14 +577,14 @@ export default function CalculatorPage() {
                 <Calculator className="h-3 w-3" /> Dynamic Service Calculator
               </div>
               <h1 className="font-bold text-white" style={{ fontSize:"clamp(20px,2.8vw,30px)", lineHeight:1.1, letterSpacing:"-0.02em" }}>
-                Kalkulator Biaya Logistik
+                {t("calculator.pageTitleFull")}
               </h1>
               <p className="mt-1.5 text-[13px]" style={{ color:"rgba(255,255,255,0.68)", maxWidth:"420px" }}>
-                Estimasi biaya real-time untuk semua layanan logistik. Formula berbeda untuk setiap jenis layanan.
+                {t("calculator.pageSubtitle")}
               </p>
             </div>
             <div className="hidden md:flex items-center gap-2 shrink-0">
-              {["Transparan","Formula Akurat","Tarif DB"].map(tag => (
+              {([t("calculator.badgeTransparent"), t("calculator.badgeFormula"), t("calculator.badgeLiveRates")] as string[]).map(tag => (
                 <span key={tag} className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full" style={{ background:"rgba(255,255,255,0.12)", color:"rgba(255,255,255,0.85)", border:"1px solid rgba(255,255,255,0.18)" }}>
                   <CheckCircle2 className="h-3 w-3" /> {tag}
                 </span>
@@ -595,9 +599,7 @@ export default function CalculatorPage() {
         {isUsingFallback && (
           <div className="flex items-start gap-3 mb-5 px-4 py-3 rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-[13px]">
             <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500 mt-0.5" />
-            <span>
-              <strong>Perhatian:</strong> Tarif yang ditampilkan menggunakan <em>estimasi default</em> karena data tarif terbaru tidak dapat dimuat. Angka ini belum tentu mencerminkan tarif aktual — hubungi tim kami untuk konfirmasi harga.
-            </span>
+            <span>{t("calculator.fallbackWarning")}</span>
           </div>
         )}
         <div className="grid lg:grid-cols-5 gap-6 items-start">
@@ -612,16 +614,16 @@ export default function CalculatorPage() {
                   </div>
                   <div>
                     <p className="font-bold text-slate-800 text-[14px] leading-tight">
-                      {svc ? `${svc.emoji} ${svc.labelFull}` : "Form Kalkulator"}
+                      {svc ? `${svc.emoji} ${svcLabelFull(service!)}` : t("calculator.formTitle")}
                     </p>
                     <p className="text-[11px] text-slate-400">
-                      {svc ? "Field disesuaikan untuk layanan ini" : "Pilih layanan untuk memulai kalkulasi"}
+                      {svc ? t("calculator.formSubtitleSelected") : t("calculator.formSubtitleEmpty")}
                     </p>
                   </div>
                 </div>
                 {calculated && (
                   <button onClick={handleReset} className="inline-flex items-center gap-1.5 text-[11.5px] font-semibold text-slate-500 hover:text-slate-700 px-2.5 py-1.5 rounded-lg hover:bg-slate-100 transition-all">
-                    <RefreshCw className="h-3.5 w-3.5" /> Reset
+                    <RefreshCw className="h-3.5 w-3.5" /> {t("calculator.reset")}
                   </button>
                 )}
               </div>
@@ -630,7 +632,7 @@ export default function CalculatorPage() {
 
                 {/* ── STEP 1: Service Selector ── */}
                 <div>
-                  <SectionTitle n={1}>Pilih Jenis Layanan</SectionTitle>
+                  <SectionTitle n={1}>{t("calculator.stepSelectService")}</SectionTitle>
                   <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
                     {(["seaFreight","airFreight","customs","domestic","warehousing","projectCargo"] as ServiceType[]).map(s => {
                       const cfg = SERVICE_CONFIG[s as string];
@@ -640,14 +642,14 @@ export default function CalculatorPage() {
                           className={`svc-btn${isActive ? " svc-btn-active" : ""}`}
                           style={isActive ? { background: cfg.gradient } : {}}>
                           <span style={isActive ? { color:"white" } : { color: cfg.color }}>{cfg.icon}</span>
-                          <span style={{ fontSize:"10px", lineHeight:1.2, textAlign:"center" }}>{cfg.label}</span>
+                          <span style={{ fontSize:"10px", lineHeight:1.2, textAlign:"center" }}>{svcLabel(s)}</span>
                         </button>
                       );
                     })}
                   </div>
                   {svc && (
                     <div className="mt-2 flex items-center gap-1.5 text-[11.5px] font-semibold" style={{ color: svc.color }}>
-                      <CheckCircle2 className="h-3.5 w-3.5" /> {svc.labelFull} dipilih — tampilkan field sesuai layanan ini
+                      <CheckCircle2 className="h-3.5 w-3.5" /> {t("calculator.serviceSelectedHint").replace("{service}", svcLabelFull(service!))}
                     </div>
                   )}
                 </div>
@@ -655,24 +657,24 @@ export default function CalculatorPage() {
                 {!service && (
                   <div className="rounded-xl border-2 border-dashed border-slate-200 p-8 text-center">
                     <Calculator className="h-8 w-8 text-slate-300 mx-auto mb-3" />
-                    <p className="text-slate-400 text-[13px]">Pilih jenis layanan di atas untuk melanjutkan</p>
+                    <p className="text-slate-400 text-[13px]">{t("calculator.emptyHint")}</p>
                   </div>
                 )}
 
                 {/* ── STEP 2: Common Fields ── */}
                 {service && (
                   <div>
-                    <SectionTitle n={2}>Informasi Umum</SectionTitle>
+                    <SectionTitle n={2}>{t("calculator.stepGeneralInfo")}</SectionTitle>
                     <div className="space-y-3">
                       <div className="grid sm:grid-cols-2 gap-3">
                         <div>
-                          <Label>Nama Customer / Perusahaan</Label>
-                          <Input value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="PT. Maju Bersama" />
+                          <Label>{t("calculator.customerName")}</Label>
+                          <Input value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder={t("calculator.customerNamePlaceholder")} />
                         </div>
                         <div>
-                          <Label>Incoterms</Label>
+                          <Label>{t("calculator.incoterms")}</Label>
                           <Select value={incoterms} onChange={e => setIncoterms(e.target.value)}>
-                            <option value="">Pilih Incoterms</option>
+                            <option value="">{t("calculator.selectIncotermsPlaceholder")}</option>
                             {["EXW","FOB","CIF","CFR","DAP","DDP","FCA","CPT","CIP","FAS"].map(i => <option key={i}>{i}</option>)}
                           </Select>
                         </div>
@@ -680,35 +682,38 @@ export default function CalculatorPage() {
                       <div className="grid sm:grid-cols-2 gap-3">
                         <div>
                           <Label req>
-                            {service === "domestic" ? "Kota Asal" : service === "seaFreight" ? "Port of Loading (POL)" : "Origin"}
+                            {service === "domestic" ? t("calculator.originCity") : service === "seaFreight" ? t("calculator.pol") : t("calculator.origin")}
                           </Label>
                           {companyOrigin ? (
                             <div className="calc-input flex items-center gap-2 bg-orange-50 border-orange-200 cursor-not-allowed select-none" style={{ color:"#C2410C" }}>
                               <span className="text-sm">🇮🇩</span><span className="font-medium text-[13px]">{origin}</span>
-                              <span className="ml-auto text-[10px] text-orange-400">Otomatis</span>
+                              <span className="ml-auto text-[10px] text-orange-400">{t("calculator.autoFilled")}</span>
                             </div>
                           ) : (
-                            <Input value={origin} onChange={e => setOrigin(e.target.value)} placeholder="Jakarta, Indonesia" />
+                            <Input value={origin} onChange={e => setOrigin(e.target.value)} placeholder={t("calculator.originPlaceholder")} />
                           )}
                         </div>
                         <div>
                           <Label req>
-                            {service === "domestic" ? "Kota Tujuan" : service === "seaFreight" ? "Port of Discharge (POD)" : "Destination"}
+                            {service === "domestic" ? t("calculator.destinationCity") : service === "seaFreight" ? t("calculator.pod") : t("calculator.destination")}
                           </Label>
-                          <Input value={destination} onChange={e => setDestination(e.target.value)} placeholder="Surabaya, Indonesia" style={{ borderColor: !destination && error ? "#FCA5A5" : "" }} />
+                          <Input value={destination} onChange={e => setDestination(e.target.value)} placeholder={t("calculator.destinationPlaceholder")} style={{ borderColor: !destination && error ? "#FCA5A5" : "" }} />
                         </div>
                       </div>
                       <div>
-                        <Label>Deskripsi Kargo / Komoditi</Label>
-                        <Input value={cargoDesc} onChange={e => setCargoDesc(e.target.value)} placeholder="Mesin industri, elektronik, dll." />
+                        <Label>{t("calculator.cargoDescLabel")}</Label>
+                        <Input value={cargoDesc} onChange={e => setCargoDesc(e.target.value)} placeholder={t("calculator.cargoDescPlaceholder")} />
                       </div>
                       <div className="grid sm:grid-cols-2 gap-3">
                         <div>
-                          <Label>Nilai Kargo (IDR)</Label>
-                          <Input value={cargoValue} onChange={e => setCargoValue(e.target.value)} placeholder="Rp 100.000.000" type="text" />
+                          <Label>{t("calculator.cargoValue")}</Label>
+                          <Input value={cargoValue} onChange={e => setCargoValue(e.target.value)} placeholder={t("calculator.valuePlaceholder")} type="text" />
                         </div>
                         <div className="flex flex-col justify-end">
-                          <Check checked={insured} onChange={setInsured} label="Tambah Asuransi" sub={`+${service === "airFreight" ? rates.airFreight.insurancePct : rates.seaFreight.insurancePct}% dari nilai kargo`} />
+                          <Check checked={insured} onChange={setInsured}
+                            label={t("calculator.addInsurance")}
+                            sub={t("calculator.addInsuranceSub").replace("{pct}", String(service === "airFreight" ? rates.airFreight.insurancePct : rates.seaFreight.insurancePct))}
+                          />
                         </div>
                       </div>
                     </div>
@@ -720,26 +725,26 @@ export default function CalculatorPage() {
                 {/* SEA FREIGHT */}
                 {service === "seaFreight" && (
                   <div>
-                    <SectionTitle n={3}>Detail Sea Freight</SectionTitle>
+                    <SectionTitle n={3}>{t("calculator.detailSeaFreight")}</SectionTitle>
                     <div className="space-y-3">
                       <div>
-                        <Label req>Shipment Type</Label>
+                        <Label req>{t("calculator.shipmentType")}</Label>
                         <div className="flex gap-2">
-                          {(["LCL","FCL"] as const).map(t => (
-                            <button key={t} type="button" onClick={() => setSeaShipmentType(t)}
-                              className={`shipment-type-btn${seaShipmentType === t ? " active" : ""}`}>
-                              <Box className="h-4 w-4" /> {t}
-                              <span className="text-[11px] text-slate-400">{t === "LCL" ? "— Per CBM" : "— Full Container"}</span>
+                          {(["LCL","FCL"] as const).map(st => (
+                            <button key={st} type="button" onClick={() => setSeaShipmentType(st)}
+                              className={`shipment-type-btn${seaShipmentType === st ? " active" : ""}`}>
+                              <Box className="h-4 w-4" /> {st}
+                              <span className="text-[11px] text-slate-400">{st === "LCL" ? `— ${t("calculator.perCbm")}` : `— ${t("calculator.fullContainer")}`}</span>
                             </button>
                           ))}
                         </div>
                       </div>
                       {seaShipmentType === "FCL" && (
                         <div>
-                          <Label req>Container Type</Label>
+                          <Label req>{t("calculator.containerType")}</Label>
                           <Select value={seaContainerType} onChange={e => setSeaContainerType(e.target.value)}>
-                            {["20GP","40GP","40HC","Reefer","Open Top","Flat Rack"].map(t => (
-                              <option key={t} value={t}>{t} — {formatIDR(rates.seaFreight.ratePerContainer[t] ?? 0)}</option>
+                            {["20GP","40GP","40HC","Reefer","Open Top","Flat Rack"].map(ct => (
+                              <option key={ct} value={ct}>{ct} — {formatIDR(rates.seaFreight.ratePerContainer[ct] ?? 0)}</option>
                             ))}
                           </Select>
                         </div>
@@ -747,30 +752,30 @@ export default function CalculatorPage() {
                       {seaShipmentType === "LCL" && (
                         <div className="grid sm:grid-cols-2 gap-3">
                           <div>
-                            <Label req>Volume (CBM)</Label>
+                            <Label req>{t("calculator.volume")}</Label>
                             <Input type="number" min="0" step="0.001" value={seaCbm} onChange={e => setSeaCbm(e.target.value)} placeholder="0.000 CBM" />
                             <p className="text-[10.5px] text-slate-400 mt-1">Tarif: {formatIDR(rates.seaFreight.ratePerCbmLcl)}/CBM</p>
                           </div>
                           <div>
-                            <Label>Gross Weight (kg)</Label>
-                            <Input type="number" min="0" value={seaGrossWeight} onChange={e => setSeaGrossWeight(e.target.value)} placeholder="Berat kotor (kg)" />
+                            <Label>{t("calculator.grossWeightKg")}</Label>
+                            <Input type="number" min="0" value={seaGrossWeight} onChange={e => setSeaGrossWeight(e.target.value)} placeholder={t("calculator.grossWeightPlaceholder")} />
                           </div>
                         </div>
                       )}
                       <div className="grid sm:grid-cols-2 gap-3">
                         <div>
-                          <Label>Commodity</Label>
-                          <Input value={seaCommodity} onChange={e => setSeaCommodity(e.target.value)} placeholder="Komoditi kargo" />
+                          <Label>{t("calculator.commodity")}</Label>
+                          <Input value={seaCommodity} onChange={e => setSeaCommodity(e.target.value)} placeholder={t("calculator.commodityPlaceholder")} />
                         </div>
                         <div>
-                          <Label>Ready Date</Label>
+                          <Label>{t("calculator.readyDate")}</Label>
                           <Input type="date" />
                         </div>
                       </div>
                       <div className="flex flex-wrap gap-2">
-                        <Check checked={seaDg} onChange={setSeaDg} label="Dangerous Goods" sub="Tambah DG surcharge" />
-                        <Check checked={seaTrucking} onChange={setSeaTrucking} label="Inland Trucking" sub={`+${formatIDR(rates.seaFreight.truckingFee)}`} />
-                        <Check checked={seaCustoms} onChange={setSeaCustoms} label="Customs Clearance" sub={`+${formatIDR(rates.seaFreight.customsClearance)}`} />
+                        <Check checked={seaDg} onChange={setSeaDg} label={t("calculator.dangerousGoods")} sub={t("calculator.dgSurcharge")} />
+                        <Check checked={seaTrucking} onChange={setSeaTrucking} label={t("calculator.inlandTrucking")} sub={`+${formatIDR(rates.seaFreight.truckingFee)}`} />
+                        <Check checked={seaCustoms} onChange={setSeaCustoms} label={t("calculator.customsFee")} sub={`+${formatIDR(rates.seaFreight.customsClearance)}`} />
                       </div>
                     </div>
                   </div>
