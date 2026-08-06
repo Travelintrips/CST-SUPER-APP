@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { useLocation } from "wouter";
+import { COMPANY_CONFIG } from "@/config/company";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -668,12 +669,12 @@ export default function BookPage() {
       .then((d: { companyName: string; companyAddress: string; originCity?: string; originAirport?: string; originPort?: string } | null) => {
         setCompanyOrigin(d?.companyAddress ? {
           name: d.companyName, address: d.companyAddress,
-          originCity: d.originCity ?? "Jakarta",
-          originAirport: d.originAirport ?? "CGK",
-          originPort: d.originPort ?? "Tanjung Priok, Jakarta",
-        } : { name: "B2B Marketplace and Logistic", address: "Jl. Logistik No. 1, Jakarta", originCity: "Jakarta", originAirport: "CGK", originPort: "Tanjung Priok, Jakarta" });
+          originCity: d.originCity ?? COMPANY_CONFIG.originCity,
+          originAirport: d.originAirport ?? COMPANY_CONFIG.originAirport,
+          originPort: d.originPort ?? COMPANY_CONFIG.originPort,
+        } : { name: COMPANY_CONFIG.brandName, address: COMPANY_CONFIG.pickupAddress, originCity: COMPANY_CONFIG.originCity, originAirport: COMPANY_CONFIG.originAirport, originPort: COMPANY_CONFIG.originPort });
       })
-      .catch(() => setCompanyOrigin({ name: "B2B Marketplace and Logistic", address: "Jl. Logistik No. 1, Jakarta", originCity: "Jakarta", originAirport: "CGK", originPort: "Tanjung Priok, Jakarta" }));
+      .catch(() => setCompanyOrigin({ name: COMPANY_CONFIG.brandName, address: COMPANY_CONFIG.pickupAddress, originCity: COMPANY_CONFIG.originCity, originAirport: COMPANY_CONFIG.originAirport, originPort: COMPANY_CONFIG.originPort }));
   }, []);
 
   const [customerForm, setCustomerForm] = useState({

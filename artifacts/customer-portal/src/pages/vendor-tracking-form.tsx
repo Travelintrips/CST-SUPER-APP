@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useParams } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLanguage } from "@/i18n/LanguageContext";
+import { COMPANY_CONFIG } from "@/config/company";
 
 const STATUS_VALUES = [
   "RECEIVED_DATA",

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "wouter";
+import { COMPANY_CONFIG } from "@/config/company";
 
 type StepMeta = {
   photoUrl?: string;
@@ -457,7 +458,7 @@ export default function DriverProgressPage() {
           </div>
         )}
 
-        <p className="text-center text-xs text-gray-400 pb-6">B2B Marketplace and Logistic — Driver Update Link</p>
+        <p className="text-center text-xs text-gray-400 pb-6">{COMPANY_CONFIG.brandName} — Driver Update Link</p>
       </div>
     </div>
   );

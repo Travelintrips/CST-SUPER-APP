@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { Link } from "wouter";
 import { LocationCombobox } from "@/components/LocationCombobox";
+import { COMPANY_CONFIG } from "@/config/company";
 
 interface ChatMessage {
   id: string;
@@ -128,7 +129,7 @@ const GREETING: ChatMessage = {
   id: "greeting",
   role: "assistant",
   content:
-    "Halo! 👋 Selamat datang di B2B Marketplace and Logistic.\n\n" +
+    `Halo! 👋 Selamat datang di ${COMPANY_CONFIG.brandName}.\n\n` +
     "Saya siap membantu Anda:\n" +
     "• Informasi layanan (Sea/Air/Trucking/Customs)\n" +
     "• **Buat order cepat** — ketik 'mau kirim' atau 'trucking', form langsung muncul!\n" +
@@ -1553,7 +1554,7 @@ export function ChatWidget() {
                 className="font-semibold text-white text-sm leading-tight truncate"
                 style={{ letterSpacing: "0.2px" }}
               >
-                B2B Marketplace &amp; Logistic
+                {COMPANY_CONFIG.brandName}
               </p>
               <p className="flex items-center gap-1.5 mt-0.5">
                 {isSpeaking ? (
