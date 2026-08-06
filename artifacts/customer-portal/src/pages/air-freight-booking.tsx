@@ -661,8 +661,8 @@ export default function AirFreightBookingPage() {
                   className="mt-0.5"
                 />
                 <div>
-                  <p className="text-sm font-medium text-gray-800">{svc.label}</p>
-                  <p className="text-xs text-gray-400 mt-0.5">{svc.desc}</p>
+                  <p className="text-sm font-medium text-gray-800">{t(svc.labelKey as any)}</p>
+                  <p className="text-xs text-gray-400 mt-0.5">{t(svc.descKey as any)}</p>
                 </div>
               </label>
             ))}
