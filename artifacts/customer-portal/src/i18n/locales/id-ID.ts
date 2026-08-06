@@ -1111,6 +1111,7 @@ const locale: DeepRecord = {
     metaLeadTime: "Lead Time",
     vendorRespMin: "menit",
     vendorRespHour: "jam",
+    vendorRespTime: "Waktu Respons",
   },
   catalog: {
     heroLabel: "Katalog Kami",

@@ -965,6 +965,7 @@ const locale: DeepRecord = {
     metaLeadTime: '交货期',
     vendorRespMin: '分钟',
     vendorRespHour: '小时',
+    vendorRespTime: '响应时间',
   },
   catalog: {
     heroLabel: '我们的目录',

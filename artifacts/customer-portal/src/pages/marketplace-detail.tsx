@@ -301,17 +301,17 @@ function ServiceInfoCard({ item }: { item: MarketplaceItem }) {
 }
 
 // ── Product Info Card ──────────────────────────────────────────────────────────
-const PRODUCT_FIELD_MAP: Array<{ keys: string[]; label: string; icon: React.ReactNode }> = [
-  { keys: ["commodity","komoditi","komoditas","product_type"],      label: "Komoditi",         icon: <Leaf className="h-3.5 w-3.5 text-emerald-500" /> },
-  { keys: ["grade","kualitas","kelas"],                             label: "Grade / Kualitas", icon: <Star className="h-3.5 w-3.5 text-emerald-500" /> },
-  { keys: ["origin","asal","negara_asal","country_of_origin"],     label: "Asal / Origin",    icon: <Mountain className="h-3.5 w-3.5 text-emerald-500" /> },
-  { keys: ["size","ukuran","dimensi"],                              label: "Ukuran",           icon: <Layers className="h-3.5 w-3.5 text-emerald-500" /> },
-  { keys: ["moisture","kadar_air","water_content"],                 label: "Kadar Air",        icon: <Info className="h-3.5 w-3.5 text-emerald-500" /> },
-  { keys: ["calorific_value","kalori","kcal","ncv","gcv"],          label: "Kalori",           icon: <Info className="h-3.5 w-3.5 text-emerald-500" /> },
-  { keys: ["sulfur","kandungan_sulfur","sulphur"],                  label: "Sulfur",           icon: <Info className="h-3.5 w-3.5 text-emerald-500" /> },
-  { keys: ["ash","ash_content","kadar_abu"],                        label: "Abu",              icon: <Info className="h-3.5 w-3.5 text-emerald-500" /> },
-  { keys: ["packaging","kemasan","packing"],                        label: "Kemasan",          icon: <Package className="h-3.5 w-3.5 text-emerald-500" /> },
-  { keys: ["certification","sertifikasi","sertifikat"],             label: "Sertifikasi",      icon: <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> },
+const PRODUCT_FIELD_MAP: Array<{ keys: string[]; labelKey: string; icon: React.ReactNode }> = [
+  { keys: ["commodity","komoditi","komoditas","product_type"],      labelKey: "marketplaceDetail.fieldCommodity",    icon: <Leaf className="h-3.5 w-3.5 text-emerald-500" /> },
+  { keys: ["grade","kualitas","kelas"],                             labelKey: "marketplaceDetail.fieldGrade",        icon: <Star className="h-3.5 w-3.5 text-emerald-500" /> },
+  { keys: ["origin","asal","negara_asal","country_of_origin"],     labelKey: "marketplaceDetail.fieldOrigin",       icon: <Mountain className="h-3.5 w-3.5 text-emerald-500" /> },
+  { keys: ["size","ukuran","dimensi"],                              labelKey: "marketplaceDetail.fieldSize",         icon: <Layers className="h-3.5 w-3.5 text-emerald-500" /> },
+  { keys: ["moisture","kadar_air","water_content"],                 labelKey: "marketplaceDetail.fieldMoisture",     icon: <Info className="h-3.5 w-3.5 text-emerald-500" /> },
+  { keys: ["calorific_value","kalori","kcal","ncv","gcv"],          labelKey: "marketplaceDetail.fieldCalorie",      icon: <Info className="h-3.5 w-3.5 text-emerald-500" /> },
+  { keys: ["sulfur","kandungan_sulfur","sulphur"],                  labelKey: "Sulfur",                              icon: <Info className="h-3.5 w-3.5 text-emerald-500" /> },
+  { keys: ["ash","ash_content","kadar_abu"],                        labelKey: "marketplaceDetail.fieldAsh",          icon: <Info className="h-3.5 w-3.5 text-emerald-500" /> },
+  { keys: ["packaging","kemasan","packing"],                        labelKey: "marketplaceDetail.fieldPackaging",    icon: <Package className="h-3.5 w-3.5 text-emerald-500" /> },
+  { keys: ["certification","sertifikasi","sertifikat"],             labelKey: "marketplaceDetail.fieldCertification", icon: <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> },
 ];
 
 function ProductInfoCard({ item }: { item: MarketplaceItem }) {
@@ -320,23 +320,23 @@ function ProductInfoCard({ item }: { item: MarketplaceItem }) {
     ? item.specValues as Record<string, unknown>
     : {};
 
-  const rows: Array<{ label: string; value: string; icon: React.ReactNode }> = [];
+  const rows: Array<{ labelKey: string; value: string; icon: React.ReactNode }> = [];
 
-  for (const { keys, label, icon } of PRODUCT_FIELD_MAP) {
+  for (const { keys, labelKey, icon } of PRODUCT_FIELD_MAP) {
     // Check top-level item field first (e.g. item.origin)
     const topLevelKey = keys[0] as keyof MarketplaceItem;
     const topLevelVal = item[topLevelKey];
     if (topLevelVal && typeof topLevelVal === "string" && topLevelVal.trim()) {
-      if (!rows.find((r) => r.label === label)) {
-        rows.push({ label, value: topLevelVal, icon });
+      if (!rows.find((r) => r.labelKey === labelKey)) {
+        rows.push({ labelKey, value: topLevelVal, icon });
         continue;
       }
     }
     // Then check specValues
     for (const k of keys) {
       if (specs[k] !== undefined && specs[k] !== null && String(specs[k]).trim() !== "") {
-        if (!rows.find((r) => r.label === label)) {
-          rows.push({ label, value: String(specs[k]), icon });
+        if (!rows.find((r) => r.labelKey === labelKey)) {
+          rows.push({ labelKey, value: String(specs[k]), icon });
         }
         break;
       }
@@ -738,9 +738,9 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
 
   function validatePhone(phone: string): string | null {
     const normalized = phone.trim().replace(/[\s\-().]/g, "");
-    if (!normalized) return "No. WhatsApp wajib diisi";
+    if (!normalized) return t("marketplaceDetail.rfqFieldPhone", "No. WhatsApp") + " " + t("common.required", "wajib diisi");
     if (!/^(\+?62|0)8\d{8,12}$/.test(normalized)) {
-      return "Format tidak valid. Contoh: 08123456789 atau 628123456789";
+      return t("validation.phoneFormat", "Format tidak valid. Contoh: 08123456789 atau 628123456789");
     }
     return null;
   }
@@ -954,10 +954,10 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
 
           <Button type="submit" className="w-full rounded-xl h-11" disabled={loading}>
             {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-            Kirim Permintaan Penawaran
+            {t("marketplaceDetail.ctaRfq")}
           </Button>
           <p className="text-center text-[11px] text-slate-400">
-            Permintaan Anda akan diteruskan ke tim penjualan PT Cahaya Sejati Teknologi. Kami akan menghubungi Anda melalui email atau WhatsApp setelah permintaan ditinjau.
+            {t("marketplaceDetail.rfqNoteFooter")}
           </p>
         </form>
       </DialogContent>
@@ -999,6 +999,7 @@ function StarRating({ rating }: { rating: number | null | undefined }) {
 
 // ── Vendor Profile Card ───────────────────────────────────────────────────────
 function VendorProfileCard({ vendorId, itemLocation }: { vendorId: number; itemLocation?: string | null }) {
+  const { t } = useLanguage();
   const { data, isLoading } = useQuery<VendorPublicProfile>({
     queryKey: ["vendor-public-profile", vendorId],
     queryFn: () => fetch(`/api/portal/vendors/${vendorId}/public-profile`).then((r) => r.ok ? r.json() : Promise.reject(r)),
@@ -1020,7 +1021,7 @@ function VendorProfileCard({ vendorId, itemLocation }: { vendorId: number; itemL
   if (!data) {
     return (
       <div className="border border-slate-200 rounded-2xl p-4 bg-white space-y-2">
-        <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Tentang Vendor</p>
+        <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">{t("marketplaceDetail.vendorAbout")}</p>
         <div className="flex items-center gap-2">
           <Building2 className="h-4 w-4 text-slate-400 shrink-0" />
           <span className="text-[14px] font-semibold text-slate-800">Vendor</span>
@@ -1036,8 +1037,8 @@ function VendorProfileCard({ vendorId, itemLocation }: { vendorId: number; itemL
     if (!perf) return null;
     const mins = perf.averageResponseMinutes;
     const hrs = perf.avgResponseHours;
-    if (mins != null && mins > 0 && mins < 60) return `${Math.round(mins)} menit`;
-    if (hrs != null && hrs > 0) return `${hrs.toFixed(1)} jam`;
+    if (mins != null && mins > 0 && mins < 60) return `${Math.round(mins)} ${t("marketplaceDetail.vendorRespMin")}`;
+    if (hrs != null && hrs > 0) return `${hrs.toFixed(1)} ${t("marketplaceDetail.vendorRespHour")}`;
     return null;
   })();
 
@@ -1045,7 +1046,7 @@ function VendorProfileCard({ vendorId, itemLocation }: { vendorId: number; itemL
     <div className="border border-slate-200 rounded-2xl bg-white overflow-hidden">
       {/* Header */}
       <div className="bg-gradient-to-br from-slate-50 to-slate-100 px-4 py-3 border-b border-slate-200">
-        <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Tentang Vendor</p>
+        <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">{t("marketplaceDetail.vendorAbout")}</p>
         <div className="flex items-start gap-2">
           {/* Logo */}
           <div className="w-9 h-9 rounded-xl bg-white border border-slate-200 flex items-center justify-center shrink-0 text-lg overflow-hidden">
@@ -1073,7 +1074,7 @@ function VendorProfileCard({ vendorId, itemLocation }: { vendorId: number; itemL
         {perf && (
           <div className="bg-slate-50 rounded-xl p-2.5 text-center">
             <p className="text-[18px] font-extrabold text-slate-800">{perf.completedOrders}</p>
-            <p className="text-[10px] text-slate-500 font-medium">Order Selesai</p>
+            <p className="text-[10px] text-slate-500 font-medium">{t("marketplaceDetail.vendorOrdersDone")}</p>
           </div>
         )}
         {/* On-Time */}
@@ -1090,7 +1091,7 @@ function VendorProfileCard({ vendorId, itemLocation }: { vendorId: number; itemL
           <div className="bg-sky-50 rounded-xl p-2.5 text-center">
             <p className="text-[15px] font-extrabold text-sky-700">{responseText}</p>
             <p className="text-[10px] text-sky-600 font-medium flex items-center justify-center gap-0.5">
-              <Timer className="h-2.5 w-2.5" /> Resp. Time
+              <Timer className="h-2.5 w-2.5" /> {t("marketplaceDetail.vendorRespTime", "Resp. Time")}
             </p>
           </div>
         )}
@@ -1098,7 +1099,7 @@ function VendorProfileCard({ vendorId, itemLocation }: { vendorId: number; itemL
         <div className="bg-slate-50 rounded-xl p-2.5 text-center">
           <p className="text-[15px] font-extrabold text-slate-700">{productCount + serviceCount}</p>
           <p className="text-[10px] text-slate-500 font-medium flex items-center justify-center gap-0.5">
-            <Users className="h-2.5 w-2.5" /> Item Publik
+            <Users className="h-2.5 w-2.5" /> {t("marketplaceDetail.vendorPublicItems")}
           </p>
         </div>
       </div>
@@ -1114,19 +1115,19 @@ function VendorProfileCard({ vendorId, itemLocation }: { vendorId: number; itemL
         {(productCount > 0 || serviceCount > 0) && (
           <div className="flex items-center gap-1.5">
             <Package className="h-3 w-3 shrink-0 text-emerald-400" />
-            {productCount > 0 && <span>{productCount} Produk</span>}
+            {productCount > 0 && <span>{productCount} {t("marketplaceDetail.vendorProducts")}</span>}
             {productCount > 0 && serviceCount > 0 && <span className="text-slate-300">·</span>}
-            {serviceCount > 0 && <span>{serviceCount} Layanan</span>}
+            {serviceCount > 0 && <span>{serviceCount} {t("marketplaceDetail.vendorServices")}</span>}
           </div>
         )}
         {memberYear && (
           <div className="flex items-center gap-1.5">
             <Calendar className="h-3 w-3 shrink-0" />
-            Member sejak {memberYear}
+            {t("marketplaceDetail.vendorMemberSince")} {memberYear}
           </div>
         )}
         <p className="text-[11px] text-slate-400 pt-1 leading-relaxed border-t border-slate-100 mt-1">
-          Vendor terverifikasi. Hubungi via tombol di atas untuk penawaran resmi.
+          {t("marketplaceDetail.vendorVerifiedNote")}
         </p>
       </div>
     </div>
@@ -1337,6 +1338,7 @@ function SameProvinceSection({
 export default function MarketplaceDetailPage() {
   const [, params] = useRoute<{ id: string }>("/marketplace/:id");
   const [, setLocation] = useLocation();
+  const { t } = useLanguage();
   const id = params?.id;
 
   const [calc, setCalc] = useState<CalcState>({ qty: 1, unit: "unit", includePpn: false });
@@ -1433,7 +1435,7 @@ export default function MarketplaceDetailPage() {
                   <div className="flex items-center gap-2 flex-wrap">
                     <Badge variant="outline" className={`text-[11px] gap-1 ${isProduct ? "border-emerald-300 text-emerald-700 bg-emerald-50" : "border-sky-300 text-sky-700 bg-sky-50"}`}>
                       {isProduct ? <Package className="h-3 w-3" /> : <Truck className="h-3 w-3" />}
-                      {isProduct ? "Produk" : "Layanan / Jasa"}
+                      {isProduct ? t("marketplaceDetail.typeProduct") : t("marketplaceDetail.typeService")}
                     </Badge>
                     <StockBadge status={item.stockStatus} />
                   </div>
@@ -1460,7 +1462,7 @@ export default function MarketplaceDetailPage() {
                       </div>
                     )
                     : (
-                      <p className="text-[16px] font-semibold text-slate-400 italic">Price on Request</p>
+                      <p className="text-[16px] font-semibold text-slate-400 italic">{t("marketplaceDetail.priceOnRequest")}</p>
                     )
                   }
                 </div>
@@ -1469,17 +1471,17 @@ export default function MarketplaceDetailPage() {
                 <div className="flex flex-wrap gap-2 mt-1">
                   {item.origin && (
                     <div className="flex items-center gap-1.5 text-[12px] text-slate-600 bg-slate-100 rounded-full px-3 py-1">
-                      <MapPin className="h-3 w-3" /> Asal: {item.origin}
+                      <MapPin className="h-3 w-3" /> {t("marketplaceDetail.metaOrigin")}: {item.origin}
                     </div>
                   )}
                   {item.location && (
                     <div className="flex items-center gap-1.5 text-[12px] text-slate-600 bg-slate-100 rounded-full px-3 py-1">
-                      <MapPin className="h-3 w-3" /> Lokasi: {item.location}
+                      <MapPin className="h-3 w-3" /> {t("marketplaceDetail.metaLocation")}: {item.location}
                     </div>
                   )}
                   {item.leadTime && (
                     <div className="flex items-center gap-1.5 text-[12px] text-slate-600 bg-slate-100 rounded-full px-3 py-1">
-                      <Clock className="h-3 w-3" /> Lead Time: {item.leadTime}
+                      <Clock className="h-3 w-3" /> {t("marketplaceDetail.metaLeadTime", "Lead Time")}: {item.leadTime}
                     </div>
                   )}
                   {item.moq != null ? (
@@ -1488,17 +1490,17 @@ export default function MarketplaceDetailPage() {
                     </div>
                   ) : (
                     <div className="flex items-center gap-1.5 text-[12px] text-slate-600 bg-slate-100 rounded-full px-3 py-1">
-                      <Tag className="h-3 w-3" /> MOQ: Upon Request
+                      <Tag className="h-3 w-3" /> MOQ: {t("marketplaceDetail.moqUponRequest")}
                     </div>
                   )}
                   {(item as any).validityDate && (
                     <div className="flex items-center gap-1.5 text-[12px] text-slate-600 bg-slate-100 rounded-full px-3 py-1">
-                      <Calendar className="h-3 w-3" /> Berlaku s/d: {new Date((item as any).validityDate).toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" })}
+                      <Calendar className="h-3 w-3" /> {t("marketplaceDetail.metaValidUntil")}: {new Date((item as any).validityDate).toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" })}
                     </div>
                   )}
                   {item.stockQty != null && (
                     <div className="flex items-center gap-1.5 text-[12px] text-slate-600 bg-slate-100 rounded-full px-3 py-1">
-                      <Box className="h-3 w-3" /> Stok: {item.stockQty} {item.unit || "unit"}
+                      <Box className="h-3 w-3" /> {t("marketplaceDetail.metaStock")}: {item.stockQty} {item.unit || "unit"}
                     </div>
                   )}
                 </div>
@@ -1534,7 +1536,7 @@ export default function MarketplaceDetailPage() {
                   className="w-full h-11 rounded-xl font-semibold text-[14px]"
                   disabled
                 >
-                  Item belum siap dipesan
+                  {t("marketplaceDetail.ctaNotReady")}
                 </Button>
               ) : (
                 <Button
@@ -1542,7 +1544,7 @@ export default function MarketplaceDetailPage() {
                   onClick={() => setShowRfqDialog(true)}
                 >
                   <MessageSquare className="h-4 w-4" />
-                  {isProduct ? "Kirim Permintaan Penawaran" : "Minta Penawaran"}
+                  {isProduct ? t("marketplaceDetail.ctaRfq") : t("marketplaceDetail.ctaQuote")}
                 </Button>
               )}
             </div>
@@ -1550,8 +1552,8 @@ export default function MarketplaceDetailPage() {
             {/* Estimasi total */}
             {hasPriceSell && (
               <div className="text-center text-[11px] text-slate-400">
-                Estimasi: <span className="font-semibold text-slate-700">{formatPrice(grandTotal, item.currency)}</span>
-                {calc.includePpn && " (incl. PPN 11%)"}
+                {t("marketplaceDetail.estimasiLabel")}: <span className="font-semibold text-slate-700">{formatPrice(grandTotal, item.currency)}</span>
+                {calc.includePpn && ` (${t("marketplaceDetail.inclPpn")})`}
               </div>
             )}
 
@@ -1559,18 +1561,18 @@ export default function MarketplaceDetailPage() {
             <div className="border border-slate-200 rounded-2xl bg-white overflow-hidden">
               <div className="bg-gradient-to-br from-sky-50 to-slate-50 px-4 py-3 border-b border-slate-100">
                 <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                  Cara Kerja Permintaan Penawaran
+                  {t("marketplaceDetail.rfqHowTitle")}
                 </p>
               </div>
               <div className="px-4 py-3 space-y-2.5">
                 {[
-                  { icon: <MessageSquare className="h-4 w-4 text-sky-500 shrink-0" />,   label: "Isi formulir permintaan penawaran" },
-                  { icon: <Shield className="h-4 w-4 text-slate-400 shrink-0" />,         label: "Permintaan ditinjau oleh tim penjualan" },
-                  { icon: <Clock className="h-4 w-4 text-slate-400 shrink-0" />,          label: "Tim menghubungi via WhatsApp atau email" },
-                ].map(({ icon, label }) => (
-                  <div key={label} className="flex items-center gap-2.5 text-[13px] text-slate-700 font-medium">
+                  { icon: <MessageSquare className="h-4 w-4 text-sky-500 shrink-0" />,   labelKey: "marketplaceDetail.rfqStep1" },
+                  { icon: <Shield className="h-4 w-4 text-slate-400 shrink-0" />,         labelKey: "marketplaceDetail.rfqStep2" },
+                  { icon: <Clock className="h-4 w-4 text-slate-400 shrink-0" />,          labelKey: "marketplaceDetail.rfqStep3" },
+                ].map(({ icon, labelKey }) => (
+                  <div key={labelKey} className="flex items-center gap-2.5 text-[13px] text-slate-700 font-medium">
                     {icon}
-                    {label}
+                    {t(labelKey)}
                   </div>
                 ))}
               </div>
