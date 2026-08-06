@@ -16,5 +16,7 @@ If Trial Balance shows far fewer accounts than expected after data import:
 4. Mapping approach: use accounting_settings columns (default_bank_account_id, ppn_output_account_id, tenant_rent_income_account_id, salary_expense_account_id, etc.) + source type patterns to determine each production account's functional equivalent in dev
 
 ## Key mappings built (Aug 2026, dev DB)
-Production IDs 49097–75589 → dev COA IDs for CST/WS/DV/ER companies.
-All 1984 entry lines remapped; grand total balanced at 599,239,785 (debit = credit).
+- Phase 1 (Aug 2026): manually remapped entry_lines from prod IDs to dev seeded IDs (CASE UPDATE).
+- Phase 2 (Aug 2026): full COA sync — 308 dev accounts renamed to prod IDs via 2-phase (dev→neg→prod) to avoid PK conflicts; 55 prod-only accounts inserted. All referencing tables (accounting_entry_lines, fleet_ledger_entries, accounting_settings, etc.) updated. Sequence set to 76,589. Dev now has 499 COA accounts (363 prod + 136 dev-only); entry_lines grand total still balanced 599,239,785.
+- **Future imports**: prod data now imports without remapping since dev COA IDs match prod COA IDs.
+- **Caveat**: if dev DB is reset and re-seeded, COA IDs revert to dev IDs (1,2,3…) and mismatch will recur.
