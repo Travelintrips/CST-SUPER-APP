@@ -26,7 +26,7 @@ import { seedProductTemplates } from "./routes/productTemplates.js";
 import { runPortalMigration } from "./lib/portalMigration";
 import { runVendorProfileFieldsMigration } from "./lib/vendorProfileFieldsMigration";
 import { runSupplierEnhancementMigration } from "./lib/supplierEnhancementMigration";
-import { runAccountingMigration, repairKasErSportCenterEntries, repairOrphanedEntryLines, syncAccountingSequences } from "./lib/accountingMigration";
+import { runAccountingMigration, repairKasErSportCenterEntries, repairOrphanedEntryLines, syncAccountingSequences, checkSequenceDesync } from "./lib/accountingMigration";
 import { runCoaGovernanceMigration } from "./lib/coaGovernanceMigration";
 import { runCoaProposalMigration } from "./lib/coaProposalMigration.js";
 import { runAccountingHubMigration } from "./lib/accountingHubMigration";
@@ -1816,6 +1816,13 @@ async function startServer() {
     .then(() =>
       syncAccountingSequences().catch((err) => {
         logger.warn({ err }, "Accounting sequence sync failed (non-fatal)");
+      })
+    )
+    .then(() =>
+      // Post-sync diagnostic: warn if any sequence is STILL desynced after the fix attempt.
+      // This catches edge cases (e.g. sequences that couldn't be synced due to table errors).
+      checkSequenceDesync().catch((err) => {
+        logger.warn({ err }, "Post-sync sequence desync check failed (non-fatal)");
       })
     )
     .then(() =>

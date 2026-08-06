@@ -3,6 +3,7 @@ import { pool } from "@workspace/db";
 import { getRuntimeCheckState } from "../lib/startupValidator.js";
 import { getWorkerHeartbeats, getWorkerAggregateStatus } from "../lib/workerHeartbeat.js";
 import { getE2ESafetyStatus, isProductionMode } from "../lib/e2eSafetyGuard.js";
+import { checkSequenceDesync } from "../lib/accountingMigration.js";
 
 const router: IRouter = Router();
 const startedAt = Date.now();
@@ -166,6 +167,35 @@ router.get("/healthz", async (_req, res) => {
       all: runtimeState?.integrationSecrets ?? [],
     },
   });
+});
+
+// ── GET /api/health/sequence-check ───────────────────────────────────────────
+// Manual diagnostic: returns all serial sequences where last_value < MAX(id).
+// Read-only — never mutates the database.
+// Empty desynced array means all sequences are in sync.
+router.get("/health/sequence-check", async (_req, res) => {
+  try {
+    const desynced = await checkSequenceDesync();
+    const status = desynced.length === 0 ? "ok" : "desync_detected";
+    return res.status(200).json({
+      status,
+      desyncedCount: desynced.length,
+      desynced: desynced.map(d => ({
+        table:     d.table,
+        column:    d.column,
+        sequence:  d.seq,
+        lastValue: d.lastValue,
+        maxId:     d.maxId,
+        gap:       d.gap,
+      })),
+      checkedAt: new Date().toISOString(),
+      hint: desynced.length > 0
+        ? "Restart the API server — syncAccountingSequences() runs on startup and will fix these gaps."
+        : undefined,
+    });
+  } catch (err) {
+    return res.status(500).json({ status: "error", detail: String(err) });
+  }
 });
 
 // GET /api/health/e2e-safety — read-only E2E safety status.
