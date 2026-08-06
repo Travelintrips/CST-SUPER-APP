@@ -120,6 +120,8 @@ const MktVendorQuotePage        = lazy(() => import("@/pages/mkt-vendor-quote"))
 const MktVendorPoPage           = lazy(() => import("@/pages/mkt-vendor-po"));
 // Vendor invitation landing page (public)
 const VendorRegisterPage        = lazy(() => import("@/pages/vendor-register"));
+// Translation Hub — real-time AI translation for customers, vendors & staff
+const TranslationHub            = lazy(() => import("@/pages/translation-hub"));
 
 const queryClient = new QueryClient();
 
@@ -390,6 +392,7 @@ function AppShell() {
         <Route path="/ppjk-track/:orderNumber" component={PpjkTrackPage} />
         <Route path="/service-cart">{() => <ProtectedRoute component={ServiceCartPage} />}</Route>
         <Route path="/service-cart/:requestId">{() => <ProtectedRoute component={ServiceCartPage} />}</Route>
+        <Route path="/translation-hub" component={TranslationHub} />
         <Route component={NotFound} />
       </Switch>
     </Suspense>

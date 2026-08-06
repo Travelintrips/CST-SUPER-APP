@@ -18,6 +18,7 @@ import mktQaFixtureRouter from "./routes/mktQaFixture";
 import { marketplaceRouter } from "./routes/marketplace";
 import { treasuryRouter } from "./routes/treasury.js";
 import translationsRouter from "./routes/translations";
+import { aiTranslateRouter } from "./routes/aiTranslate";
 import { authMiddleware } from "./middlewares/authMiddleware";
 import { pool as _sysPool } from "@workspace/db";
 import { bearerRateLimiter } from "./middlewares/bearerRateLimiter";
@@ -389,6 +390,7 @@ app.use(shortLinkRedirectRouter);
 app.use(adminActionRouter);
 app.use("/api/companies", companiesRouter);
 app.use("/api/translations", translationsRouter);
+app.use("/api/ai-translate", aiTranslateRouter);
 app.use("/api", treasuryRouter);
 // ── Marketplace routes (Phase 2A–2E) ─────────────────────────────────────────
 app.use("/api/marketplace", marketplaceRouter);
