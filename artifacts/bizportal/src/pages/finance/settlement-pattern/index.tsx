@@ -163,7 +163,7 @@ export default function SettlementPatternPage() {
   const [editingId, setEditingId]       = useState<number | null>(null);
   const [form, setForm]                 = useState<PatternFormData>(defaultForm());
   const [saving, setSaving]             = useState(false);
-  const [filterProvider, setFilterProvider] = useState("");
+  const [filterProvider, setFilterProvider] = useState("__all__");
 
   // Keywords (for selected pattern)
   const [keywords, setKeywords]         = useState<any[]>([]);
@@ -191,7 +191,7 @@ export default function SettlementPatternPage() {
   const fetchPatterns = useCallback(async () => {
     setLoading(true);
     try {
-      const qs = filterProvider ? `?provider=${encodeURIComponent(filterProvider)}&include_inactive=1` : "?include_inactive=1";
+      const qs = (filterProvider && filterProvider !== "__all__") ? `?provider=${encodeURIComponent(filterProvider)}&include_inactive=1` : "?include_inactive=1";
       const r = await fetch(`${API}/settlement-patterns${qs}`);
       const d = await r.json();
       setPatterns(d.data ?? []);
@@ -358,7 +358,7 @@ export default function SettlementPatternPage() {
                   <SelectValue placeholder="Filter provider..." />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Semua Provider</SelectItem>
+                  <SelectItem value="__all__">Semua Provider</SelectItem>
                   {PROVIDERS.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
                 </SelectContent>
               </Select>
