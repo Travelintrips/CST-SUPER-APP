@@ -942,8 +942,8 @@ export default function CalculatorPage() {
                         </div>
                       </div>
                       <div className="flex flex-wrap gap-2">
-                        <Check checked={truckLoading} onChange={setTruckLoading} label={t("calculator.inboundHandling").replace("Inbound", "Loading")} sub={formatIDR(rates.domestic.loadingFee)} />
-                        <Check checked={truckUnloading} onChange={setTruckUnloading} label={t("calculator.outboundHandling").replace("Outbound", "Unloading")} sub={formatIDR(rates.domestic.unloadingFee)} />
+                        <Check checked={truckLoading} onChange={setTruckLoading} label="Loading" sub={formatIDR(rates.domestic.loadingFee)} />
+                        <Check checked={truckUnloading} onChange={setTruckUnloading} label="Unloading" sub={formatIDR(rates.domestic.unloadingFee)} />
                         <Check checked={truckOvernight} onChange={setTruckOvernight} label="Overnight" sub={formatIDR(rates.domestic.overnightFee)} />
                         <div className="flex items-center gap-2 option-toggle" style={{ flex:"0 0 auto" }}>
                           <span className="text-[12.5px] font-semibold text-slate-700">{t("calculator.helperDays")}</span>
@@ -1150,7 +1150,7 @@ export default function CalculatorPage() {
                 {/* Cargo Metrics */}
                 {(result.chargeableWeight !== undefined || result.cbm !== undefined) && (
                   <div className="calc-card p-4" style={{ border:`1.5px solid ${svc?.color}40` }}>
-                    <p className="text-[10.5px] font-bold uppercase tracking-widest mb-3" style={{ color: svc?.color }}>Metrik Kargo</p>
+                    <p className="text-[10.5px] font-bold uppercase tracking-widest mb-3" style={{ color: svc?.color }}>{t("calculator.cargoMetrics")}</p>
                     <div className="grid grid-cols-2 gap-3">
                       {result.volumetricWeight !== undefined && (
                         <div className="rounded-xl p-3 text-center bg-slate-50">
@@ -1198,12 +1198,12 @@ export default function CalculatorPage() {
 
                   <div className="mt-3 pt-3 border-t border-slate-200 space-y-2">
                     <div className="flex justify-between text-[13px]">
-                      <span className="text-slate-600">Subtotal</span>
+                      <span className="text-slate-600">{t("calculator.subtotal")}</span>
                       <span className="font-semibold">{formatIDR(result.subtotal)}</span>
                     </div>
                     {result.insurance > 0 && (
                       <div className="flex justify-between text-[13px]">
-                        <span className="text-slate-600 flex items-center gap-1"><Shield className="h-3 w-3 text-green-500" /> Asuransi</span>
+                        <span className="text-slate-600 flex items-center gap-1"><Shield className="h-3 w-3 text-green-500" /> {t("calculator.insuranceLabel")}</span>
                         <span className="font-semibold">{formatIDR(result.insurance)}</span>
                       </div>
                     )}
@@ -1216,35 +1216,35 @@ export default function CalculatorPage() {
                   </div>
 
                   <div className="mt-4 rounded-xl p-4 text-center" style={{ background:`linear-gradient(135deg,${svc?.color}12,${svc?.color}06)`, border:`1.5px solid ${svc?.color}30` }}>
-                    <p className="text-[10.5px] font-bold uppercase tracking-widest mb-1" style={{ color: svc?.color }}>Estimasi Grand Total</p>
+                    <p className="text-[10.5px] font-bold uppercase tracking-widest mb-1" style={{ color: svc?.color }}>{t("calculator.estimateGrandTotal")}</p>
                     <p className="text-[28px] font-black" style={{ color: svc?.color }}>{formatIDR(result.grandTotal)}</p>
-                    <p className="text-[10.5px] mt-1" style={{ color: `${svc?.color}80` }}>*Estimasi, belum termasuk biaya tidak terduga</p>
+                    <p className="text-[10.5px] mt-1" style={{ color: `${svc?.color}80` }}>{t("calculator.grandTotalNote")}</p>
                   </div>
 
                   <div className="mt-4 space-y-2">
                     <button onClick={() => setShowQuoteForm(true)} className="w-full h-11 flex items-center justify-center gap-2 rounded-xl font-bold text-[13.5px] text-white transition-all"
                       style={{ background:`linear-gradient(135deg,#0B5CAD,#1A73D4)`, boxShadow:"0 4px 14px rgba(11,92,173,0.35)" }}>
-                      <FileText className="h-4 w-4" /> Request Official Quotation
+                      <FileText className="h-4 w-4" /> {t("calculator.requestQuoteFull")}
                     </button>
                     <div className="grid grid-cols-2 gap-2">
-                      <a href={buildWaHref(`Estimasi ${svc?.labelFull}: ${formatIDR(result.grandTotal)}\nRute: ${origin} → ${destination}`)}
+                      <a href={buildWaHref(`Estimasi ${svcLabelFull(service!)}: ${formatIDR(result.grandTotal)}\nRute: ${origin} → ${destination}`)}
                         target="_blank" rel="noreferrer"
                         className="h-9 flex items-center justify-center gap-1.5 rounded-xl font-semibold text-[12px] border border-green-300 text-green-700 hover:bg-green-50 transition-colors">
                         <MessageCircle className="h-3.5 w-3.5" /> WhatsApp
                       </a>
                       <button onClick={() => window.print()}
                         className="h-9 flex items-center justify-center gap-1.5 rounded-xl font-semibold text-[12px] border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors">
-                        <Receipt className="h-3.5 w-3.5" /> Simpan PDF
+                        <Receipt className="h-3.5 w-3.5" /> {t("calculator.savePdf")}
                       </button>
                     </div>
                     <div className="grid grid-cols-2 gap-2">
-                      <button onClick={() => exportCalcCSV(result, svc?.labelFull ?? service)}
+                      <button onClick={() => exportCalcCSV(result, svcLabelFull(service!))}
                         className="h-9 flex items-center justify-center gap-1.5 rounded-xl font-semibold text-[12px] border border-emerald-200 text-emerald-700 hover:bg-emerald-50 transition-colors">
-                        <Download className="h-3.5 w-3.5" /> Export CSV
+                        <Download className="h-3.5 w-3.5" /> {t("calculator.exportCsv")}
                       </button>
-                      <button onClick={() => exportCalcJSON(result, svc?.labelFull ?? service)}
+                      <button onClick={() => exportCalcJSON(result, svcLabelFull(service!))}
                         className="h-9 flex items-center justify-center gap-1.5 rounded-xl font-semibold text-[12px] border border-violet-200 text-violet-700 hover:bg-violet-50 transition-colors">
-                        <Download className="h-3.5 w-3.5" /> Export JSON
+                        <Download className="h-3.5 w-3.5" /> {t("calculator.exportJson")}
                       </button>
                     </div>
                   </div>
@@ -1256,8 +1256,8 @@ export default function CalculatorPage() {
             {quoteSuccess && (
               <div className="calc-card p-6 text-center result-appear" style={{ border:"1.5px solid #BBF7D0" }}>
                 <CheckCircle2 className="h-10 w-10 text-green-500 mx-auto mb-3" />
-                <h3 className="font-bold text-[15px] text-slate-800 mb-2">Permintaan Terkirim!</h3>
-                <p className="text-slate-500 text-[12.5px] leading-relaxed">Tim B2B Marketplace and Logistic akan menghubungi Anda dalam 1×24 jam kerja.</p>
+                <h3 className="font-bold text-[15px] text-slate-800 mb-2">{t("calculator.quoteSentTitle")}</h3>
+                <p className="text-slate-500 text-[12.5px] leading-relaxed">{t("calculator.quoteSentDesc")}</p>
               </div>
             )}
 
@@ -1271,8 +1271,8 @@ export default function CalculatorPage() {
           <div className="calc-card w-full max-w-md p-6 result-appear">
             <div className="flex items-center justify-between mb-5">
               <div>
-                <h2 className="font-bold text-slate-800 text-[16px]">Request Official Quotation</h2>
-                <p className="text-[11.5px] text-slate-400 mt-0.5">Tim kami akan menyiapkan penawaran resmi untuk Anda</p>
+                <h2 className="font-bold text-slate-800 text-[16px]">{t("calculator.quoteModalTitle")}</h2>
+                <p className="text-[11.5px] text-slate-400 mt-0.5">{t("calculator.quoteModalSubtitle")}</p>
               </div>
               <button onClick={() => setShowQuoteForm(false)} className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition-colors">
                 <X className="h-4 w-4 text-slate-500" />
@@ -1283,7 +1283,7 @@ export default function CalculatorPage() {
             {result && (
               <div className="rounded-xl p-3 mb-5" style={{ background:`linear-gradient(135deg,${svc?.color}10,${svc?.color}06)`, border:`1px solid ${svc?.color}20` }}>
                 <div className="flex items-center justify-between text-[12.5px]">
-                  <span className="font-semibold text-slate-700">{svc?.emoji} {svc?.labelFull}</span>
+                  <span className="font-semibold text-slate-700">{svc?.emoji} {service ? svcLabelFull(service) : ""}</span>
                   <span className="font-bold" style={{ color: svc?.color }}>
                     {result.isProjectCargo ? `${formatIDR(result.budgetMin ?? 0)} – ${formatIDR(result.budgetMax ?? 0)}` : formatIDR(result.grandTotal)}
                   </span>
@@ -1294,15 +1294,15 @@ export default function CalculatorPage() {
 
             <form onSubmit={handleQuoteSubmit} className="space-y-3">
               <div>
-                <Label req>Nama Lengkap</Label>
-                <Input value={quoteName} onChange={e => setQuoteName(e.target.value)} placeholder="Budi Santoso" />
+                <Label req>{t("calculator.fullName")}</Label>
+                <Input value={quoteName} onChange={e => setQuoteName(e.target.value)} placeholder={t("calculator.fullNamePlaceholder")} />
               </div>
               <div>
-                <Label>Email</Label>
+                <Label>{t("calculator.email")}</Label>
                 <Input type="email" value={quoteEmail} onChange={e => setQuoteEmail(e.target.value)} placeholder="budi@perusahaan.com" />
               </div>
               <div>
-                <Label req>Nomor WhatsApp</Label>
+                <Label req>{t("calculator.whatsapp")}</Label>
                 <Input type="tel" value={quoteWa} onChange={e => setQuoteWa(e.target.value)} placeholder="081234567890" />
               </div>
               {quoteError && (
@@ -1310,12 +1310,12 @@ export default function CalculatorPage() {
               )}
               <div className="grid grid-cols-2 gap-2 pt-1">
                 <button type="button" onClick={() => setShowQuoteForm(false)} className="h-11 rounded-xl font-semibold text-[13px] border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors">
-                  Batal
+                  {t("calculator.cancel")}
                 </button>
                 <button type="submit" disabled={quoteSubmitting} className="h-11 rounded-xl font-bold text-[13px] text-white flex items-center justify-center gap-2 transition-all"
                   style={{ background:"linear-gradient(135deg,#0B5CAD,#1A73D4)", boxShadow:"0 4px 14px rgba(11,92,173,0.30)", opacity: quoteSubmitting ? 0.7 : 1 }}>
                   {quoteSubmitting ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                  {quoteSubmitting ? "Mengirim..." : "Kirim Request"}
+                  {quoteSubmitting ? t("calculator.sending") : t("calculator.sendRequest")}
                 </button>
               </div>
             </form>

@@ -658,14 +658,6 @@ const locale: DeepRecord = {
     ctaContact: '聯絡管理員',
     ctaSend: '傳送貨運詳情',
     projectNote: '專案貨物請聯絡我們的團隊，以取得根據您專案需求量身訂製的專屬報價。',
-    services: {
-      seaFreight: '海運',
-      airFreight: '空運',
-      customs: '報關代理',
-      domestic: '國內運輸',
-      warehousing: '倉儲',
-      projectCargo: '專案貨物',
-    },
     validation: {
       selectService: '請先選擇服務類型',
       enterWeight: '請輸入貨物重量',

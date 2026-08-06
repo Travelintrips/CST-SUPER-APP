@@ -662,14 +662,6 @@ const locale: DeepRecord = {
     ctaContact: "Contact Admin",
     ctaSend: "Send Shipment Details",
     projectNote: "For Project Cargo, please contact our team for a customized quote tailored to your project requirements.",
-    services: {
-      seaFreight: "Sea Freight",
-      airFreight: "Air Freight",
-      customs: "Customs Brokerage",
-      domestic: "Domestic",
-      warehousing: "Warehousing",
-      projectCargo: "Project Cargo",
-    },
     validation: {
       selectService: "Please select a service type first",
       enterWeight: "Please enter the cargo weight",
