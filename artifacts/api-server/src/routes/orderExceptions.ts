@@ -14,7 +14,7 @@ import { eq, and, desc, sql } from "drizzle-orm";
 import { requireAdmin } from "../lib/requireAdmin.js";
 import { logOrderAudit } from "../lib/auditTrail.js";
 import { getAdminGroupWa } from "../lib/adminWa.js";
-import { sendWhatsApp } from "../lib/fonnte.js";
+import { sendViaService as sendWhatsApp } from "../lib/waTransport.js";
 import { logger } from "../lib/logger.js";
 
 export const orderExceptionsRouter = Router();

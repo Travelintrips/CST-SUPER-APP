@@ -1468,7 +1468,7 @@ router.post("/", async (req: Request, res) => {
 
       try {
         const { getAdminGroupWa } = await import("../lib/adminWa.js");
-        const { sendWhatsApp } = await import("../lib/fonnte.js");
+        const { sendViaService: sendWhatsApp } = await import("../lib/waTransport.js");
         const adminGroup = await getAdminGroupWa();
         if (adminGroup) {
           const approverInfo = l1Name ? `Menunggu persetujuan: *${l1Name}*` : "Tidak ada approver yang dikonfigurasi";

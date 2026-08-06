@@ -4599,7 +4599,7 @@ router.post("/rekonsiliasi-gsheet", async (req, res) => {
   (async () => {
     try {
       const { getAdminGroupWa } = await import("../lib/adminWa.js");
-      const { sendWhatsApp } = await import("../lib/fonnte.js");
+      const { sendViaService: sendWhatsApp } = await import("../lib/waTransport.js");
       const group = await getAdminGroupWa();
       if (!group) return;
       const todayStr = new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });

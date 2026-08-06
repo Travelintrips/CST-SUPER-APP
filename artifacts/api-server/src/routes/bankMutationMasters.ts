@@ -226,7 +226,8 @@ router.put("/coa-mapping/:id", async (req, res) => {
 
 router.delete("/coa-mapping/:id", async (req, res) => {
   await runBankMutationMastersMigration();
-  await db.execute(sql.raw(`DELETE FROM master_coa_mapping WHERE id = ${parseInt(req.params.id)}`));
+  const coaMappingId = parseInt(String(req.params.id));
+  await db.execute(sql`DELETE FROM master_coa_mapping WHERE id = ${coaMappingId}`);
   return res.json({ success: true });
 });
 
@@ -344,7 +345,8 @@ router.put("/bank-accounts/:id", async (req, res) => {
 
 router.delete("/bank-accounts/:id", async (req, res) => {
   await runBankMutationMastersMigration();
-  await db.execute(sql.raw(`UPDATE master_bank_accounts SET is_active = FALSE WHERE id = ${parseInt(req.params.id)}`));
+  const bankAccountId = parseInt(String(req.params.id));
+  await db.execute(sql`UPDATE master_bank_accounts SET is_active = FALSE WHERE id = ${bankAccountId}`);
   return res.json({ success: true });
 });
 

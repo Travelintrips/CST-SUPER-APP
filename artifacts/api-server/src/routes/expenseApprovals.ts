@@ -59,7 +59,7 @@ async function runMigration() { if (!migrated) { await ensureTables(); migrated 
 async function notifyApproverWa(ar: any, action: "created" | "approved" | "rejected") {
   try {
     const { getAdminGroupWa } = await import("../lib/adminWa.js");
-    const { sendWhatsApp } = await import("../lib/fonnte.js");
+    const { sendViaService: sendWhatsApp } = await import("../lib/waTransport.js");
     const adminGroup = await getAdminGroupWa();
     if (!adminGroup) return;
 
@@ -183,7 +183,8 @@ router.put("/limits/:id", async (req: Request, res) => {
 
 router.delete("/limits/:id", async (req: Request, res) => {
   await runMigration();
-  await db.execute(sql.raw(`DELETE FROM expense_approval_limits WHERE id = ${parseInt(String(req.params.id))}`));
+  const limitId = parseInt(String(req.params.id));
+  await db.execute(sql`DELETE FROM expense_approval_limits WHERE id = ${limitId}`);
   res.json({ ok: true });
 });
 

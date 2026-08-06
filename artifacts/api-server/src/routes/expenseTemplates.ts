@@ -136,7 +136,8 @@ router.put("/:id", async (req: Request, res) => {
 // ─── DELETE /api/expense-templates/:id ───────────────────────────────────────
 router.delete("/:id", async (req: Request, res) => {
   await runMigration();
-  await db.execute(sql.raw(`DELETE FROM expense_templates WHERE id = ${parseInt(String(req.params.id))}`));
+  const templateId = parseInt(String(req.params.id));
+  await db.execute(sql`DELETE FROM expense_templates WHERE id = ${templateId}`);
   return res.json({ ok: true });
 });
 

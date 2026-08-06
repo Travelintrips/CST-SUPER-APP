@@ -4,7 +4,7 @@ import { systemErrorLogs } from "@workspace/db/schema";
 import { sql, desc, eq, gte, and } from "drizzle-orm";
 import { z } from "zod";
 import { requireAdmin } from "../lib/requireAdmin.js";
-import { sendWhatsApp } from "../lib/fonnte.js";
+import { sendViaService as sendWhatsApp } from "../lib/waTransport.js";
 import {
   getLastHealthSnapshot,
   getRecentHealthSnapshots,
