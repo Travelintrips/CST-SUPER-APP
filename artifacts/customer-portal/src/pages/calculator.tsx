@@ -784,35 +784,35 @@ export default function CalculatorPage() {
                 {/* AIR FREIGHT */}
                 {service === "airFreight" && (
                   <div>
-                    <SectionTitle n={3}>Detail Air Freight</SectionTitle>
+                    <SectionTitle n={3}>{t("calculator.detailAirFreight")}</SectionTitle>
                     <div className="space-y-3">
                       <div className="grid sm:grid-cols-2 gap-3">
                         <div>
-                          <Label req>Airport Asal</Label>
+                          <Label req>{t("calculator.originAirport")}</Label>
                           <Input value={airOriginAirport} onChange={e => setAirOriginAirport(e.target.value)} placeholder="CGK — Soekarno-Hatta" />
                         </div>
                         <div>
-                          <Label req>Airport Tujuan</Label>
+                          <Label req>{t("calculator.destAirport")}</Label>
                           <Input value={airDestAirport} onChange={e => setAirDestAirport(e.target.value)} placeholder="SIN — Changi Singapore" />
                         </div>
                       </div>
                       <div className="grid sm:grid-cols-3 gap-3">
                         <div>
-                          <Label req>Gross Weight (kg)</Label>
+                          <Label req>{t("calculator.grossWeightKg")}</Label>
                           <Input type="number" min="0" step="0.1" value={airWeight} onChange={e => setAirWeight(e.target.value)} placeholder="0.0 kg" />
                         </div>
                         <div>
-                          <Label>Jumlah Koli</Label>
+                          <Label>{t("calculator.piecesCount")}</Label>
                           <Input type="number" min="1" value={airPieces} onChange={e => setAirPieces(e.target.value)} placeholder="1" />
                         </div>
                         <div>
-                          <Label>Airline</Label>
-                          <Input value={airAirline} onChange={e => setAirAirline(e.target.value)} placeholder="Garuda, Lion Air..." />
+                          <Label>{t("calculator.airline")}</Label>
+                          <Input value={airAirline} onChange={e => setAirAirline(e.target.value)} placeholder={t("calculator.airlinePlaceholder")} />
                         </div>
                       </div>
                       <div>
                         <label className="calc-label flex items-center gap-2">
-                          Dimensi Per Koli (cm)
+                          {t("calculator.dimensionsPerPiece")}
                           {airVolumetric !== null && (
                             <span className="inline-flex items-center gap-1 text-[10.5px] font-bold px-2 py-0.5 rounded-full" style={{ background:"#EFF6FF", color:"#1D4ED8", border:"1px solid #BFDBFE" }}>
                               <Sparkles className="h-2.5 w-2.5" /> Vol. Weight: {airVolumetric.toFixed(2)} kg
@@ -829,17 +829,15 @@ export default function CalculatorPage() {
                           <Input type="number" min="0" step="0.1" value={airWidth} onChange={e => setAirWidth(e.target.value)} placeholder="L (cm)" />
                           <Input type="number" min="0" step="0.1" value={airHeight} onChange={e => setAirHeight(e.target.value)} placeholder="T (cm)" />
                         </div>
-                        <p className="text-[10.5px] text-slate-400 mt-1.5">
-                          Volumetric Weight = (P × L × T) / 6000 &nbsp;|&nbsp; Chargeable Weight = max(Gross, Volumetric)
-                        </p>
+                        <p className="text-[10.5px] text-slate-400 mt-1.5">{t("calculator.volWeightNote")}</p>
                       </div>
                       <div>
-                        <Label>Commodity</Label>
-                        <Input value={airCommodity} onChange={e => setAirCommodity(e.target.value)} placeholder="Jenis komoditi" />
+                        <Label>{t("calculator.commodity")}</Label>
+                        <Input value={airCommodity} onChange={e => setAirCommodity(e.target.value)} placeholder={t("calculator.commodityPlaceholder")} />
                       </div>
                       <div className="flex flex-wrap gap-2">
-                        <Check checked={airDg} onChange={setAirDg} label="DG (Dangerous Goods)" sub="+IDR 2.000.000" />
-                        <Check checked={airTempControlled} onChange={setAirTempControlled} label="Temperature Controlled" sub="+IDR 1.500.000" />
+                        <Check checked={airDg} onChange={setAirDg} label={`${t("calculator.dangerousGoods")} (DG)`} sub="+IDR 2.000.000" />
+                        <Check checked={airTempControlled} onChange={setAirTempControlled} label={t("calculator.temperatureControlled")} sub="+IDR 1.500.000" />
                       </div>
                     </div>
                   </div>
@@ -848,22 +846,22 @@ export default function CalculatorPage() {
                 {/* PPJK / CUSTOMS */}
                 {service === "customs" && (
                   <div>
-                    <SectionTitle n={3}>Detail PPJK / Customs Clearance</SectionTitle>
+                    <SectionTitle n={3}>{t("calculator.detailCustoms")}</SectionTitle>
                     <div className="space-y-3">
                       <div className="grid sm:grid-cols-2 gap-3">
                         <div>
-                          <Label req>Jenis Perdagangan</Label>
+                          <Label req>{t("calculator.tradeType")}</Label>
                           <div className="flex gap-2">
-                            {(["import","export"] as const).map(t => (
-                              <button key={t} type="button" onClick={() => { setCustomsTradeType(t); setCustomsDocType(t === "import" ? "PIB" : "PEB"); }}
-                                className={`shipment-type-btn${customsTradeType === t ? " active" : ""}`}>
-                                {t === "import" ? "📥" : "📤"} {t.charAt(0).toUpperCase() + t.slice(1)}
+                            {(["import","export"] as const).map(tt => (
+                              <button key={tt} type="button" onClick={() => { setCustomsTradeType(tt); setCustomsDocType(tt === "import" ? "PIB" : "PEB"); }}
+                                className={`shipment-type-btn${customsTradeType === tt ? " active" : ""}`}>
+                                {tt === "import" ? "📥" : "📤"} {tt.charAt(0).toUpperCase() + tt.slice(1)}
                               </button>
                             ))}
                           </div>
                         </div>
                         <div>
-                          <Label>Dokumen</Label>
+                          <Label>{t("calculator.document")}</Label>
                           <Select value={customsDocType} onChange={e => setCustomsDocType(e.target.value as "PIB"|"PEB")}>
                             <option value="PIB">PIB — Pemberitahuan Impor Barang</option>
                             <option value="PEB">PEB — Pemberitahuan Ekspor Barang</option>
@@ -872,30 +870,30 @@ export default function CalculatorPage() {
                       </div>
                       <div className="grid sm:grid-cols-2 gap-3">
                         <div>
-                          <Label req>HS Code</Label>
+                          <Label req>{t("calculator.hsCode")}</Label>
                           <Input value={customsHsCode} onChange={e => setCustomsHsCode(e.target.value)} placeholder="8471.30.00.00" />
                         </div>
                         <div>
-                          <Label>Commodity</Label>
-                          <Input value={customsCommodity} onChange={e => setCustomsCommodity(e.target.value)} placeholder="Laptop, mesin, dll." />
+                          <Label>{t("calculator.commodity")}</Label>
+                          <Input value={customsCommodity} onChange={e => setCustomsCommodity(e.target.value)} placeholder={t("calculator.commodityPlaceholder")} />
                         </div>
                       </div>
                       <div className="grid sm:grid-cols-2 gap-3">
                         <div>
-                          <Label>Nilai Pabean (CIF, IDR)</Label>
+                          <Label>{t("calculator.customsValue")}</Label>
                           <Input value={customsNilaiPabean} onChange={e => setCustomsNilaiPabean(e.target.value)} placeholder="Rp 500.000.000" />
-                          <p className="text-[10.5px] text-slate-400 mt-1">Digunakan untuk hitung est. bea masuk & PPN impor</p>
+                          <p className="text-[10.5px] text-slate-400 mt-1">{t("calculator.customsValueNote")}</p>
                         </div>
                         <div>
-                          <Label>NPWP Importir</Label>
+                          <Label>{t("calculator.npwp")}</Label>
                           <Input value={customsNpwp} onChange={e => setCustomsNpwp(e.target.value)} placeholder="XX.XXX.XXX.X-XXX.XXX" />
                         </div>
                       </div>
                       <div>
-                        <Label>Nomor Aju (Opsional)</Label>
+                        <Label>{t("calculator.applicationNumber")}</Label>
                         <Input value={customsNomorAju} onChange={e => setCustomsNomorAju(e.target.value)} placeholder="Diisi jika sudah ada" />
                       </div>
-                      <Check checked={customsAddlService} onChange={setCustomsAddlService} label="Additional Services" sub={`+${formatIDR(rates.customs.additionalServiceFee)} (pengawalan, pemeriksaan fisik, dll.)`} />
+                      <Check checked={customsAddlService} onChange={setCustomsAddlService} label={t("calculator.additionalServices")} sub={`+${formatIDR(rates.customs.additionalServiceFee)}`} />
                     </div>
                   </div>
                 )}
@@ -903,20 +901,20 @@ export default function CalculatorPage() {
                 {/* TRUCKING */}
                 {service === "domestic" && (
                   <div>
-                    <SectionTitle n={3}>Detail Trucking / Domestik</SectionTitle>
+                    <SectionTitle n={3}>{t("calculator.detailTrucking")}</SectionTitle>
                     <div className="space-y-3">
                       <div className="grid sm:grid-cols-2 gap-3">
                         <div>
-                          <Label req>Alamat Pickup</Label>
+                          <Label req>{t("calculator.pickupAddress")}</Label>
                           <Input value={truckPickup} onChange={e => setTruckPickup(e.target.value)} placeholder="Jl. Raya No. 1, Tangerang" />
                         </div>
                         <div>
-                          <Label req>Alamat Delivery</Label>
+                          <Label req>{t("calculator.deliveryAddress")}</Label>
                           <Input value={truckDelivery} onChange={e => setTruckDelivery(e.target.value)} placeholder="Jl. Industri No. 5, Surabaya" />
                         </div>
                       </div>
                       <div>
-                        <Label req>Tipe Kendaraan</Label>
+                        <Label req>{t("calculator.vehicleType")}</Label>
                         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                           {Object.entries(rates.domestic.vehicleRates).map(([v, r]) => (
                             <button key={v} type="button" onClick={() => setTruckVehicle(v)}
@@ -930,25 +928,25 @@ export default function CalculatorPage() {
                       </div>
                       <div className="grid sm:grid-cols-3 gap-3">
                         <div>
-                          <Label req>Jarak (KM)</Label>
+                          <Label req>{t("calculator.distanceKm")}</Label>
                           <Input type="number" min="0" value={truckDistance} onChange={e => setTruckDistance(e.target.value)} placeholder="0 km" />
                           <p className="text-[10.5px] text-slate-400 mt-1">+{formatIDR(rates.domestic.distanceRatePerKm)}/km</p>
                         </div>
                         <div>
-                          <Label>Tonase (ton)</Label>
+                          <Label>{t("calculator.tonnage")}</Label>
                           <Input type="number" min="0" step="0.1" value={truckTonase} onChange={e => setTruckTonase(e.target.value)} placeholder="0.0 ton" />
                         </div>
                         <div>
-                          <Label>Jumlah Koli</Label>
+                          <Label>{t("calculator.koli")}</Label>
                           <Input type="number" min="0" value={truckKoli} onChange={e => setTruckKoli(e.target.value)} placeholder="0 koli" />
                         </div>
                       </div>
                       <div className="flex flex-wrap gap-2">
-                        <Check checked={truckLoading} onChange={setTruckLoading} label="Loading" sub={formatIDR(rates.domestic.loadingFee)} />
-                        <Check checked={truckUnloading} onChange={setTruckUnloading} label="Unloading" sub={formatIDR(rates.domestic.unloadingFee)} />
+                        <Check checked={truckLoading} onChange={setTruckLoading} label={t("calculator.inboundHandling").replace("Inbound", "Loading")} sub={formatIDR(rates.domestic.loadingFee)} />
+                        <Check checked={truckUnloading} onChange={setTruckUnloading} label={t("calculator.outboundHandling").replace("Outbound", "Unloading")} sub={formatIDR(rates.domestic.unloadingFee)} />
                         <Check checked={truckOvernight} onChange={setTruckOvernight} label="Overnight" sub={formatIDR(rates.domestic.overnightFee)} />
                         <div className="flex items-center gap-2 option-toggle" style={{ flex:"0 0 auto" }}>
-                          <span className="text-[12.5px] font-semibold text-slate-700">Helper (hari):</span>
+                          <span className="text-[12.5px] font-semibold text-slate-700">{t("calculator.helperDays")}</span>
                           <button type="button" onClick={() => setTruckHelperDays(d => String(Math.max(0, parseInt(d)-1)))} className="w-6 h-6 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition-colors"><Minus className="h-3 w-3" /></button>
                           <span className="font-bold w-6 text-center text-[13px]">{truckHelperDays}</span>
                           <button type="button" onClick={() => setTruckHelperDays(d => String(parseInt(d)+1))} className="w-6 h-6 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition-colors"><Plus className="h-3 w-3" /></button>
@@ -961,21 +959,21 @@ export default function CalculatorPage() {
                 {/* WAREHOUSING */}
                 {service === "warehousing" && (
                   <div>
-                    <SectionTitle n={3}>Detail Warehousing</SectionTitle>
+                    <SectionTitle n={3}>{t("calculator.detailWarehousing")}</SectionTitle>
                     <div className="space-y-3">
                       <div>
-                        <Label>Lokasi Gudang</Label>
-                        <Input value={whLocation} onChange={e => setWhLocation(e.target.value)} placeholder="Tangerang, Cikarang, Surabaya..." />
+                        <Label>{t("calculator.warehouseLocation")}</Label>
+                        <Input value={whLocation} onChange={e => setWhLocation(e.target.value)} placeholder={t("calculator.warehouseLocationPlaceholder")} />
                       </div>
                       <div>
-                        <Label req>Tipe Penyimpanan</Label>
+                        <Label req>{t("calculator.storageType")}</Label>
                         <div className="flex gap-2">
-                          {(["Pallet","CBM","SQM"] as const).map(t => (
-                            <button key={t} type="button" onClick={() => setWhStorageType(t)}
-                              className={`shipment-type-btn flex-col gap-0.5 py-3${whStorageType === t ? " active" : ""}`}>
-                              <span className="text-[12.5px] font-bold">{t}</span>
+                          {(["Pallet","CBM","SQM"] as const).map(st => (
+                            <button key={st} type="button" onClick={() => setWhStorageType(st)}
+                              className={`shipment-type-btn flex-col gap-0.5 py-3${whStorageType === st ? " active" : ""}`}>
+                              <span className="text-[12.5px] font-bold">{st}</span>
                               <span className="text-[10px] text-slate-400 font-normal">
-                                {t === "Pallet" ? formatIDR(rates.warehousing.palletRatePerDay) : t === "CBM" ? formatIDR(rates.warehousing.cbmRatePerDay) : formatIDR(rates.warehousing.sqmRatePerDay)}/hari
+                                {st === "Pallet" ? formatIDR(rates.warehousing.palletRatePerDay) : st === "CBM" ? formatIDR(rates.warehousing.cbmRatePerDay) : formatIDR(rates.warehousing.sqmRatePerDay)}{t("calculator.perDay")}
                               </span>
                             </button>
                           ))}
@@ -983,18 +981,18 @@ export default function CalculatorPage() {
                       </div>
                       <div className="grid sm:grid-cols-2 gap-3">
                         <div>
-                          <Label req>Jumlah ({whStorageType === "Pallet" ? "pallet" : whStorageType === "CBM" ? "CBM" : "m²"})</Label>
+                          <Label req>{t("calculator.quantity")} ({whStorageType === "Pallet" ? "pallet" : whStorageType === "CBM" ? "CBM" : "m²"})</Label>
                           <Input type="number" min="0" step={whStorageType === "CBM" ? "0.01" : "1"} value={whQty} onChange={e => setWhQty(e.target.value)} placeholder="0" />
                         </div>
                         <div>
-                          <Label req>Durasi (hari)</Label>
-                          <Input type="number" min="1" value={whDuration} onChange={e => setWhDuration(e.target.value)} placeholder="30 hari" />
+                          <Label req>{t("calculator.duration")}</Label>
+                          <Input type="number" min="1" value={whDuration} onChange={e => setWhDuration(e.target.value)} placeholder={t("calculator.durationPlaceholder")} />
                         </div>
                       </div>
                       <div className="flex flex-wrap gap-2">
-                        <Check checked={whInbound} onChange={setWhInbound} label="Inbound Handling" sub={`${formatIDR(rates.warehousing.inboundFee)}/unit`} />
-                        <Check checked={whOutbound} onChange={setWhOutbound} label="Outbound Handling" sub={`${formatIDR(rates.warehousing.outboundFeePerPallet)}/unit`} />
-                        <Check checked={whInventory} onChange={setWhInventory} label="Inventory Management" sub={`${formatIDR(rates.warehousing.inventoryFeePerMonth)}/bulan`} />
+                        <Check checked={whInbound} onChange={setWhInbound} label={t("calculator.inboundHandling")} sub={`${formatIDR(rates.warehousing.inboundFee)}/unit`} />
+                        <Check checked={whOutbound} onChange={setWhOutbound} label={t("calculator.outboundHandling")} sub={`${formatIDR(rates.warehousing.outboundFeePerPallet)}/unit`} />
+                        <Check checked={whInventory} onChange={setWhInventory} label={t("calculator.inventoryManagement")} sub={`${formatIDR(rates.warehousing.inventoryFeePerMonth)}/bulan`} />
                       </div>
                     </div>
                   </div>
@@ -1003,15 +1001,15 @@ export default function CalculatorPage() {
                 {/* PROJECT CARGO */}
                 {service === "projectCargo" && (
                   <div>
-                    <SectionTitle n={3}>Detail Project Cargo</SectionTitle>
+                    <SectionTitle n={3}>{t("calculator.detailProjectCargo")}</SectionTitle>
                     <div className="space-y-3">
                       <div className="bg-violet-50 border border-violet-200 rounded-xl px-4 py-3 flex items-start gap-2.5">
                         <AlertTriangle className="h-4 w-4 text-violet-500 mt-0.5 shrink-0" />
-                        <p className="text-[12px] text-violet-700">Project Cargo bersifat custom. Kalkulasi ini menghasilkan <strong>Estimated Budget Range</strong>, bukan fixed quotation.</p>
+                        <p className="text-[12px] text-violet-700">{t("calculator.projectCargoWarning")}</p>
                       </div>
                       <div className="grid sm:grid-cols-2 gap-3">
                         <div>
-                          <label className="calc-label">Dimensi Kargo (meter)</label>
+                          <label className="calc-label">{t("calculator.cargoDimensions")}</label>
                           <div className="grid grid-cols-3 gap-2">
                             <Input type="number" min="0" step="0.01" value={pcLength} onChange={e => setPcLength(e.target.value)} placeholder="P (m)" />
                             <Input type="number" min="0" step="0.01" value={pcWidth} onChange={e => setPcWidth(e.target.value)} placeholder="L (m)" />
@@ -1019,18 +1017,18 @@ export default function CalculatorPage() {
                           </div>
                         </div>
                         <div>
-                          <Label>Berat Per Piece (ton)</Label>
+                          <Label>{t("calculator.weightPerPiece")}</Label>
                           <Input type="number" min="0" step="0.1" value={pcWeight} onChange={e => setPcWeight(e.target.value)} placeholder="0.0 ton" />
                         </div>
                       </div>
                       <div>
-                        <label className="calc-label">Kebutuhan Khusus (pilih semua yang sesuai)</label>
+                        <label className="calc-label">{t("calculator.specialRequirements")}</label>
                         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                          <Check checked={pcHeavyLift} onChange={setPcHeavyLift} label="Heavy Lift" sub="Muatan sangat berat" />
-                          <Check checked={pcOversize} onChange={setPcOversize} label="Oversize" sub="Dimensi melebihi standar" />
-                          <Check checked={pcCrane} onChange={setPcCrane} label="Crane Required" sub="Perlu crane khusus" />
-                          <Check checked={pcRouteSurvey} onChange={setPcRouteSurvey} label="Route Survey" sub="Survey jalur khusus" />
-                          <Check checked={pcEscort} onChange={setPcEscort} label="Escort Required" sub="Pengawalan khusus" />
+                          <Check checked={pcHeavyLift} onChange={setPcHeavyLift} label={t("calculator.heavyLift")} sub={t("calculator.heavyLiftSub")} />
+                          <Check checked={pcOversize} onChange={setPcOversize} label={t("calculator.oversize")} sub={t("calculator.oversizeSub")} />
+                          <Check checked={pcCrane} onChange={setPcCrane} label={t("calculator.craneRequired")} sub={t("calculator.craneSub")} />
+                          <Check checked={pcRouteSurvey} onChange={setPcRouteSurvey} label={t("calculator.routeSurvey")} sub={t("calculator.routeSurveySub")} />
+                          <Check checked={pcEscort} onChange={setPcEscort} label={t("calculator.escortRequired")} sub={t("calculator.escortSub")} />
                         </div>
                       </div>
                     </div>
@@ -1040,10 +1038,10 @@ export default function CalculatorPage() {
                 {/* ── STEP 4: Notes ── */}
                 {service && (
                   <div>
-                    <SectionTitle n={4}>Catatan Tambahan</SectionTitle>
+                    <SectionTitle n={4}>{t("calculator.additionalNotes")}</SectionTitle>
                     <textarea
                       value={notes} onChange={e => setNotes(e.target.value)}
-                      placeholder="Instruksi khusus, persyaratan tambahan, deadline, dll."
+                      placeholder={t("calculator.notesPlaceholder")}
                       className="calc-input" rows={2} style={{ resize:"vertical" }}
                     />
                   </div>
@@ -1062,7 +1060,7 @@ export default function CalculatorPage() {
                     style={{ height:"48px", fontSize:"14.5px", background:"linear-gradient(135deg,#0B5CAD 0%,#1A73D4 50%,#2B8FE8 100%)", color:"white", boxShadow:"0 4px 20px rgba(11,92,173,0.35),inset 0 1px 0 rgba(255,255,255,0.18)", border:"none" }}
                     onMouseEnter={e => { const el=e.currentTarget as HTMLElement; el.style.transform="translateY(-1px)"; el.style.boxShadow="0 8px 28px rgba(11,92,173,0.40),inset 0 1px 0 rgba(255,255,255,0.18)"; }}
                     onMouseLeave={e => { const el=e.currentTarget as HTMLElement; el.style.transform="translateY(0)"; el.style.boxShadow="0 4px 20px rgba(11,92,173,0.35),inset 0 1px 0 rgba(255,255,255,0.18)"; }}>
-                    <Calculator className="h-5 w-5" /> Hitung Estimasi Biaya <ChevronRight className="h-4 w-4 opacity-70" />
+                    <Calculator className="h-5 w-5" /> {t("calculator.calculateButton")} <ChevronRight className="h-4 w-4 opacity-70" />
                   </button>
                 )}
 
@@ -1079,9 +1077,9 @@ export default function CalculatorPage() {
                 <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4" style={{ background:"linear-gradient(135deg,#EFF6FF,#DBEAFE)" }}>
                   <Calculator className="h-7 w-7" style={{ color:"#3B82F6" }} />
                 </div>
-                <h3 className="font-bold text-slate-700 text-[15px] mb-1.5">Hasil Estimasi</h3>
+                <h3 className="font-bold text-slate-700 text-[15px] mb-1.5">{t("calculator.result")}</h3>
                 <p className="text-slate-400 text-[12.5px] leading-relaxed max-w-[220px] mx-auto">
-                  Isi form di sebelah kiri, lalu tekan tombol Hitung Estimasi
+                  {t("calculator.resultEmpty")}
                 </p>
                 <div className="mt-5 pt-4 border-t border-slate-100">
                   <div className="space-y-2.5">
@@ -1091,7 +1089,7 @@ export default function CalculatorPage() {
                         <button key={s} type="button" onClick={() => handleServiceChange(s)}
                           className="w-full text-left flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-slate-50 transition-colors">
                           <span className="text-base">{cfg.emoji}</span>
-                          <span className="text-[12.5px] font-semibold text-slate-700">{cfg.labelFull}</span>
+                          <span className="text-[12.5px] font-semibold text-slate-700">{svcLabelFull(s)}</span>
                           <ArrowRight className="h-3.5 w-3.5 text-slate-300 ml-auto" />
                         </button>
                       );
@@ -1109,13 +1107,13 @@ export default function CalculatorPage() {
                     <Globe className="h-5 w-5 text-white" />
                   </div>
                   <div>
-                    <p className="font-bold text-[14px] text-slate-800">Project Cargo</p>
-                    <p className="text-[11px] text-slate-400">Estimated Budget Range</p>
+                    <p className="font-bold text-[14px] text-slate-800">{t("calculator.projectCargoResultTitle")}</p>
+                    <p className="text-[11px] text-slate-400">{t("calculator.estimatedBudgetRange")}</p>
                   </div>
                 </div>
                 {result.cbm && (
                   <div className="bg-violet-50 rounded-xl p-3 mb-4 text-center">
-                    <p className="text-[10.5px] text-violet-600 font-semibold uppercase mb-1">Volume Kargo</p>
+                    <p className="text-[10.5px] text-violet-600 font-semibold uppercase mb-1">{t("calculator.cargoVolume")}</p>
                     <p className="text-[24px] font-bold text-violet-800">{result.cbm} <span className="text-[14px]">m³</span></p>
                   </div>
                 )}
