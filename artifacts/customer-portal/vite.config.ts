@@ -123,9 +123,7 @@ export default defineConfig({
         path.resolve(import.meta.dirname, "../mockup-sandbox/**"),
       ],
     },
-    hmr: process.env.REPLIT_DEV_DOMAIN
-      ? { clientPort: 443, host: process.env.REPLIT_DEV_DOMAIN, protocol: "wss" }
-      : true,
+    hmr: false,
     proxy: {
       "/api": {
         target: `http://localhost:${process.env.API_PORT ?? process.env.FORWARDER_PORT ?? 18444}`,
