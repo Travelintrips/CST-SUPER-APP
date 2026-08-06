@@ -8,50 +8,48 @@ B2B Marketplace and Logistics platform — pnpm monorepo with multiple services.
 - **Frontend:** React 19, Vite 7, Tailwind CSS 4, Radix UI, TanStack Query
 - **Monorepo:** pnpm workspaces, TypeScript
 
-## Services
-
-| Service | Internal Port | Description |
-|---|---|---|
-| Gateway | 5000 | Reverse proxy; main entrypoint (preview pane) |
-| API Server | 18444 | Express REST API |
-| BizPortal | 18442 | Business admin frontend (`/bizportal/`) |
-| Customer Portal | 23434 | Public B2B marketplace (`/`) |
-| Logistic Order | 19368 | Logistics management frontend (`/logistic-order/`) |
-
 ## Running on Replit
-
-**One workflow runs everything:** `Start application` → `bash start-dev-all.sh`
-
-This script:
-1. Starts the Gateway on port 5000 (what the preview pane shows)
-2. Spawns the API server with GCP Secret Manager bootstrap (`dev:secure`)
-3. Spawns BizPortal, Customer Portal, and Logistic Order frontends
-4. Starts the system watchdog on port 3001
 
 ### Required Replit Secrets
 
 | Secret | Purpose |
 |---|---|
-| `GCP_PROJECT_ID` | GCP project owning the secrets |
-| `GCP_SECRET_ID` | Secret name in GCP Secret Manager |
-| `GCP_SECRET_MANAGER_BOOTSTRAP_JSON` | Service account JSON (secretAccessor role) |
-| `SUPABASE_DATABASE_URL_DEV` | Dev database URL (prevents prod DB in dev) |
+| `GCP_PROJECT_ID` | GCP project that owns the Secret Manager secrets |
+| `GCP_SECRET_ID` | Secret name in Secret Manager (e.g. `replit-app-secrets`) |
+| `GCP_SECRET_MANAGER_BOOTSTRAP_JSON` | Service account JSON with `roles/secretmanager.secretAccessor` |
+| `SUPABASE_DATABASE_URL_DEV` | PostgreSQL connection string for the **dev** Supabase project |
+| `SUPABASE_URL_DEV` | Supabase API URL for the dev project |
+| `SUPABASE_ANON_KEY_DEV` | Anon key for the dev project |
+| `SUPABASE_SERVICE_ROLE_KEY_DEV` | Service role key for the dev project |
 
-### Required Environment Variables
+All other application secrets (OpenAI, Paylabs, SMTP, etc.) are loaded automatically from Google Cloud Secret Manager at startup via `load-secrets.mjs`. The `_DEV` Supabase keys above are read from Replit Secrets directly as a local override.
 
-| Variable | Value |
-|---|---|
-| `APP_ENV` | `development` |
+### Services & Ports
 
-All other secrets (Supabase keys, OpenAI, Paylabs, etc.) are loaded automatically from GCP Secret Manager at startup.
+| Service | Dev Port | Workflow name |
+|---|---|---|
+| API Server | 18444 | `artifacts/api-server: API Server` |
+| BizPortal (admin) | 18442 | `artifacts/bizportal: web` |
+| Customer Portal | 23434 | `artifacts/customer-portal: web` |
+| Logistic Order | varies | `artifacts/logistic-order: web` |
+| CST Driver (Expo) | — | `artifacts/cst-driver: expo` |
+
+### Start / Restart
+
+Each service has its own workflow. Start or restart them from the Workflows panel. The API server must be running for the frontends to function fully.
+
+```bash
+# Install all dependencies (run once after cloning or adding packages)
+pnpm install
+```
 
 ## Architecture Notes
 
-- **Secret loading:** `load-secrets.mjs` fetches all secrets from GCP at startup. In development, `*_DEV` keys override their canonical names (e.g. `SUPABASE_DATABASE_URL_DEV` → `SUPABASE_DATABASE_URL`).
-- **Dev/prod isolation:** `APP_ENV=development` is mandatory. The API server refuses to start if it detects a production database in development mode.
-- **Accounting immutability:** No UPDATE/DELETE on posted journal entries — reversal only.
-- **AI advisor only:** AI recommendations must never auto-approve or auto-post financial entries.
+- `APP_ENV=development` is enforced in every `start-dev.sh` — never change this.
+- `load-secrets.mjs` runs before the server starts and injects secrets. `*_DEV` keys from GCP (or Replit Secrets) are promoted to their canonical names in dev mode.
+- The API server will **refuse to start** if it detects a production database in development mode. Always ensure `SUPABASE_DATABASE_URL_DEV` is set.
+- See `AI_ARCHITECTURE_GUARDRAILS.md` and `ARCHITECTURE_DECISIONS.md` for immutable architecture rules.
 
 ## User Preferences
 
-_Add any preferences here._
+- Keep existing project structure and stack intact — do not restructure or migrate without explicit request.
