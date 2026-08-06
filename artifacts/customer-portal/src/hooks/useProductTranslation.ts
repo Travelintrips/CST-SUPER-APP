@@ -34,9 +34,25 @@ async function callTranslate(text: string, targetLang: string): Promise<string> 
   return data.translation as string;
 }
 
+async function callTranslateBatch(
+  texts: Record<string, string>,
+  targetLang: string,
+): Promise<Record<string, string>> {
+  if (Object.keys(texts).length === 0) return {};
+  const res = await fetch("/api/ai-translate/batch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ texts, targetLang }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "Batch translation failed");
+  return (data.translations ?? {}) as Record<string, string>;
+}
+
 interface TranslationState {
   name: string | null;
   description: string | null;
+  specValues: Record<string, string> | null;
   isTranslating: boolean;
   isTranslated: boolean;
   error: string | null;
@@ -49,18 +65,20 @@ interface UseProductTranslationResult extends TranslationState {
 }
 
 /**
- * Auto-translates product name + description when the app locale
- * is not Indonesian. Triggers once per item+locale combination.
+ * Auto-translates product name + description + spec values when the app locale
+ * is not Indonesian or English. Triggers once per item+locale combination.
  */
 export function useProductTranslation(
   itemId: number | string | undefined,
   name: string | undefined,
   description: string | undefined,
-  locale: string
+  locale: string,
+  rawSpecValues?: Record<string, unknown>,
 ): UseProductTranslationResult {
   const [state, setState] = useState<TranslationState>({
     name: null,
     description: null,
+    specValues: null,
     isTranslating: false,
     isTranslated: false,
     error: null,
@@ -71,16 +89,36 @@ export function useProductTranslation(
   const lastKeyRef = useRef<string>("");
 
   const doTranslate = useCallback(
-    async (itemName: string, itemDesc: string | undefined, langCode: string) => {
+    async (
+      itemName: string,
+      itemDesc: string | undefined,
+      langCode: string,
+      specVals?: Record<string, unknown>,
+    ) => {
       setState((s) => ({ ...s, isTranslating: true, error: null }));
       try {
-        const [translatedName, translatedDesc] = await Promise.all([
+        // Build batch of spec values (string values only)
+        const specTexts: Record<string, string> = {};
+        if (specVals && typeof specVals === "object") {
+          for (const [k, v] of Object.entries(specVals)) {
+            if (typeof v === "string" && v.trim()) {
+              specTexts[k] = v.trim();
+            }
+          }
+        }
+
+        const [translatedName, translatedDesc, translatedSpecBatch] = await Promise.all([
           callTranslate(itemName, langCode),
           itemDesc ? callTranslate(itemDesc, langCode) : Promise.resolve(null),
+          Object.keys(specTexts).length > 0
+            ? callTranslateBatch(specTexts, langCode)
+            : Promise.resolve<Record<string, string>>({}),
         ]);
+
         setState({
           name: translatedName,
           description: translatedDesc,
+          specValues: Object.keys(translatedSpecBatch).length > 0 ? translatedSpecBatch : null,
           isTranslating: false,
           isTranslated: true,
           error: null,
@@ -94,34 +132,34 @@ export function useProductTranslation(
         }));
       }
     },
-    []
+    [],
   );
 
   useEffect(() => {
     if (!itemId || !name) return;
     const langCode = localeToLangCode(locale);
     if (!langCode) {
-      // Back to Indonesian — clear any prior translation
-      setState({ name: null, description: null, isTranslating: false, isTranslated: false, error: null, targetLang: null });
+      // Back to Indonesian/English — clear any prior translation
+      setState({ name: null, description: null, specValues: null, isTranslating: false, isTranslated: false, error: null, targetLang: null });
       lastKeyRef.current = "";
       return;
     }
     const key = `${itemId}::${langCode}`;
     if (lastKeyRef.current === key) return; // already done
     lastKeyRef.current = key;
-    void doTranslate(name, description, langCode);
-  }, [itemId, name, description, locale, doTranslate]);
+    void doTranslate(name, description, langCode, rawSpecValues);
+  }, [itemId, name, description, locale, rawSpecValues, doTranslate]);
 
   const retranslate = useCallback(() => {
     if (!itemId || !name) return;
     const langCode = localeToLangCode(locale);
     if (!langCode) return;
     lastKeyRef.current = ""; // force re-run
-    void doTranslate(name, description, langCode);
-  }, [itemId, name, description, locale, doTranslate]);
+    void doTranslate(name, description, langCode, rawSpecValues);
+  }, [itemId, name, description, locale, rawSpecValues, doTranslate]);
 
   const dismiss = useCallback(() => {
-    setState({ name: null, description: null, isTranslating: false, isTranslated: false, error: null, targetLang: null });
+    setState({ name: null, description: null, specValues: null, isTranslating: false, isTranslated: false, error: null, targetLang: null });
     lastKeyRef.current = "";
   }, []);
 

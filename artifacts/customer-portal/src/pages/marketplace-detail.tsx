@@ -252,7 +252,7 @@ const SERVICE_FIELD_MAP: Array<{ keys: string[]; label: string; icon: React.Reac
   { keys: ["incoterm","syarat_pengiriman"],                       label: "Incoterm",         icon: <ClipboardList className="h-3.5 w-3.5 text-sky-500" /> },
 ];
 
-function ServiceInfoCard({ item }: { item: MarketplaceItem }) {
+function ServiceInfoCard({ item, translatedSpecValues }: { item: MarketplaceItem; translatedSpecValues?: Record<string, string> | null }) {
   const { t } = useLanguage();
   const specs = item.specValues && typeof item.specValues === "object"
     ? item.specValues as Record<string, unknown>
@@ -272,7 +272,9 @@ function ServiceInfoCard({ item }: { item: MarketplaceItem }) {
       if (specs[k] !== undefined && specs[k] !== null && String(specs[k]).trim() !== "") {
         // Avoid duplicate label
         if (!rows.find((r) => r.label === label)) {
-          rows.push({ label, value: String(specs[k]), icon });
+          const rawVal = String(specs[k]);
+          const val = translatedSpecValues?.[k] ?? rawVal;
+          rows.push({ label, value: val, icon });
         }
         break;
       }
@@ -315,7 +317,7 @@ const PRODUCT_FIELD_MAP: Array<{ keys: string[]; labelKey: string; icon: React.R
   { keys: ["certification","sertifikasi","sertifikat"],             labelKey: "marketplaceDetail.fieldCertification", icon: <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> },
 ];
 
-function ProductInfoCard({ item }: { item: MarketplaceItem }) {
+function ProductInfoCard({ item, translatedSpecValues }: { item: MarketplaceItem; translatedSpecValues?: Record<string, string> | null }) {
   const { t } = useLanguage();
   const specs = item.specValues && typeof item.specValues === "object"
     ? item.specValues as Record<string, unknown>
@@ -329,7 +331,9 @@ function ProductInfoCard({ item }: { item: MarketplaceItem }) {
     const topLevelVal = item[topLevelKey];
     if (topLevelVal && typeof topLevelVal === "string" && topLevelVal.trim()) {
       if (!rows.find((r) => r.labelKey === labelKey)) {
-        rows.push({ labelKey, value: topLevelVal, icon });
+        // top-level fields use the first matching key for lookup in translatedSpecValues
+        const translated = keys.map((k) => translatedSpecValues?.[k]).find(Boolean);
+        rows.push({ labelKey, value: translated ?? topLevelVal, icon });
         continue;
       }
     }
@@ -337,7 +341,9 @@ function ProductInfoCard({ item }: { item: MarketplaceItem }) {
     for (const k of keys) {
       if (specs[k] !== undefined && specs[k] !== null && String(specs[k]).trim() !== "") {
         if (!rows.find((r) => r.labelKey === labelKey)) {
-          rows.push({ labelKey, value: String(specs[k]), icon });
+          const rawVal = String(specs[k]);
+          const val = translatedSpecValues?.[k] ?? rawVal;
+          rows.push({ labelKey, value: val, icon });
         }
         break;
       }
@@ -412,7 +418,7 @@ const HIGHLIGHTED_PRODUCT_KEYS = new Set([
   "certification","sertifikasi","sertifikat",
 ]);
 
-function SpecTable({ item }: { item: MarketplaceItem }) {
+function SpecTable({ item, translatedSpecValues }: { item: MarketplaceItem; translatedSpecValues?: Record<string, string> | null }) {
   const { t } = useLanguage();
   const isProduct = item.templateKind === "product";
   const highlightedKeys = isProduct ? HIGHLIGHTED_PRODUCT_KEYS : HIGHLIGHTED_SERVICE_KEYS;
@@ -447,12 +453,12 @@ function SpecTable({ item }: { item: MarketplaceItem }) {
     )
     .forEach((f) => rows.push({
       label: SPEC_FIELD_LABEL_KEYS[f.key] ? t(SPEC_FIELD_LABEL_KEYS[f.key]) : f.label,
-      value: String(specs[f.key]),
+      value: translatedSpecValues?.[f.key] ?? String(specs[f.key]),
     }));
 
   extraKeys.forEach((k) => rows.push({
     label: SPEC_FIELD_LABEL_KEYS[k] ? t(SPEC_FIELD_LABEL_KEYS[k]) : k,
-    value: String(specs[k]),
+    value: translatedSpecValues?.[k] ?? String(specs[k]),
   }));
 
   // Textarea fields shown as description
@@ -461,7 +467,7 @@ function SpecTable({ item }: { item: MarketplaceItem }) {
     .filter((f) => f.type === "textarea" && specs[f.key] !== undefined && specs[f.key] !== null && String(specs[f.key]).trim() !== "")
     .forEach((f) => textareaRows.push({
       label: SPEC_FIELD_LABEL_KEYS[f.key] ? t(SPEC_FIELD_LABEL_KEYS[f.key]) : f.label,
-      value: String(specs[f.key]),
+      value: translatedSpecValues?.[f.key] ?? String(specs[f.key]),
     }));
 
   if (rows.length === 0 && textareaRows.length === 0) return null;
@@ -1392,15 +1398,20 @@ export default function MarketplaceDetailPage() {
   }, [item?.id]);
 
   // ── Auto-translation (triggers when locale is non-Indonesian) ──────────────
+  const rawSpecValues = item?.specValues && typeof item.specValues === "object"
+    ? (item.specValues as Record<string, unknown>)
+    : undefined;
+
   const {
     name: translatedName,
     description: translatedDescription,
+    specValues: translatedSpecValues,
     isTranslating,
     isTranslated,
     error: translateError,
     targetLang: translatedToLang,
     retranslate,
-  } = useProductTranslation(item?.id, item?.name, item?.description, locale);
+  } = useProductTranslation(item?.id, item?.name, item?.description, locale, rawSpecValues);
 
   if (isLoading) {
     return (
@@ -1579,12 +1590,12 @@ export default function MarketplaceDetailPage() {
 
             {/* Specific info cards */}
             {isProduct
-              ? <ProductInfoCard item={item} />
-              : <ServiceInfoCard item={item} />
+              ? <ProductInfoCard item={item} translatedSpecValues={translatedSpecValues} />
+              : <ServiceInfoCard item={item} translatedSpecValues={translatedSpecValues} />
             }
 
             {/* Remaining spec table */}
-            <SpecTable item={item} />
+            <SpecTable item={item} translatedSpecValues={translatedSpecValues} />
 
             {/* Documents (products only — template docs + uploaded media_assets docs) */}
             <DocumentList docs={(item as any).documents} mediaDocs={(item as any).mediaDocuments} />
