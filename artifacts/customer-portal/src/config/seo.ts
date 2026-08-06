@@ -1,8 +1,10 @@
-const BASE_URL = "https://cstlogistic.co.id";
+import { COMPANY_CONFIG } from "@/config/company";
+
+const BASE_URL = COMPANY_CONFIG.domain;
 const OG_IMAGE = `${BASE_URL}/api/storage/public-objects/portal/images/og-cover.png`;
 const OG_IMAGE_ALT =
-  "B2B Marketplace and Logistic — Layanan ekspor impor, freight forwarding, dan logistik terpadu Indonesia";
-const SITE_NAME = "B2B Marketplace and Logistic";
+  `${COMPANY_CONFIG.brandName} — Layanan ekspor impor, freight forwarding, dan logistik terpadu Indonesia`;
+const SITE_NAME = COMPANY_CONFIG.brandName;
 
 export interface PageSeoConfig {
   title: string;

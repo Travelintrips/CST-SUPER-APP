@@ -217,7 +217,9 @@ const FREIGHT_SVC_META: Record<FreightSvcId, { name: string; calcType: string; c
   additional:{ name: "Asuransi & Lainnya", calcType: "additional",  color: "purple"  },
 };
 
-const DEFAULT_PICKUP = "Jl. Logistik No. 1, Jakarta";
+import { COMPANY_CONFIG } from "@/config/company";
+
+const DEFAULT_PICKUP = COMPANY_CONFIG.pickupAddress;
 
 export function CartDrawer() {
   const [open, setOpen]        = useState(false);
@@ -324,13 +326,13 @@ export function CartDrawer() {
       .then(r => r.ok ? r.json() : null)
       .then((d: { companyName: string; companyAddress: string; originCity?: string } | null) => {
         if (d?.companyAddress) {
-          setCompanyPickup({ name: d.companyName, address: d.companyAddress, originCity: d.originCity ?? "Jakarta" });
+          setCompanyPickup({ name: d.companyName, address: d.companyAddress, originCity: d.originCity ?? COMPANY_CONFIG.originCity });
         } else {
-          setCompanyPickup({ name: "B2B Marketplace and Logistic", address: DEFAULT_PICKUP, originCity: "Jakarta" });
+          setCompanyPickup({ name: COMPANY_CONFIG.brandName, address: DEFAULT_PICKUP, originCity: COMPANY_CONFIG.originCity });
         }
       })
       .catch(() => {
-        setCompanyPickup({ name: "B2B Marketplace and Logistic", address: DEFAULT_PICKUP, originCity: "Jakarta" });
+        setCompanyPickup({ name: COMPANY_CONFIG.brandName, address: DEFAULT_PICKUP, originCity: COMPANY_CONFIG.originCity });
         setCompanyFetchFailed(true);
       });
   }, [open, companyPickup]);
@@ -353,7 +355,7 @@ export function CartDrawer() {
         localStorage.setItem("logistic_product_shipping", JSON.stringify({
           method: selectedShipping ?? "pickup",
           estimate: selectedShipping === "darat" ? daratEstimate : null,
-          companyName: companyPickup?.name ?? "B2B Marketplace and Logistic",
+          companyName: companyPickup?.name ?? COMPANY_CONFIG.brandName,
           companyAddress: companyPickup?.address ?? DEFAULT_PICKUP,
         }));
       } catch { /**/ }
@@ -378,7 +380,7 @@ export function CartDrawer() {
         ? { pickupCity: pickupAddr, destCity: truckData.deliveryAddress,
             vehicleType: "CDD", pickupDate: truckData.pickupDate, pickupTime: truckData.pickupTime,
             receiver_name: truckData.contactName, receiver_phone: truckData.contactPhone }
-        : { ...truckData, pickupCity: companyPickup?.originCity ?? "Jakarta" },
+        : { ...truckData, pickupCity: companyPickup?.originCity ?? COMPANY_CONFIG.originCity },
       calculationResult: truckEstimate ? { estimated_price: truckEstimate } : {},
       subtotal: 0,
     });
@@ -500,7 +502,7 @@ export function CartDrawer() {
     const wi = parseFloat(truckData.width   || "0") || 0;
     const h  = parseFloat(truckData.height  || "0") || 0;
     const volW = (l && wi && h) ? (l * wi * h) / 4000 : 0;
-    const origin = companyPickup?.originCity ?? "Jakarta";
+    const origin = companyPickup?.originCity ?? COMPANY_CONFIG.originCity;
 
     const vehicleList = (apiRates && apiRates.length > 0)
       ? apiRates.map(r => ({
@@ -705,7 +707,7 @@ export function CartDrawer() {
                     {selectedShipping === "pickup" && (
                       <div className="mt-2 rounded-lg border border-green-200 bg-green-50/80 px-3 py-2.5">
                         <p className="text-[10px] font-bold text-green-600 uppercase tracking-wide mb-1">Lokasi Pengambilan</p>
-                        <p className="text-[11px] font-semibold text-green-800 leading-snug">🏭 {companyPickup?.name ?? "B2B Marketplace and Logistic"}</p>
+                        <p className="text-[11px] font-semibold text-green-800 leading-snug">🏭 {companyPickup?.name ?? COMPANY_CONFIG.brandName}</p>
                         <p className="text-[11px] text-green-700 mt-0.5 leading-snug">{companyPickup?.address ?? DEFAULT_PICKUP}</p>
                       </div>
                     )}
@@ -847,7 +849,7 @@ export function CartDrawer() {
                     </Label>
                     <div className="rounded-lg border border-orange-200 bg-orange-50/70 px-3 py-2.5">
                       <p className="text-[11px] font-semibold text-orange-700 leading-snug">
-                        🏭 {companyPickup?.name ?? "B2B Marketplace and Logistic"}
+                        🏭 {companyPickup?.name ?? COMPANY_CONFIG.brandName}
                       </p>
                       <p className="text-[11px] text-orange-600 mt-0.5 leading-snug">
                         {companyPickup?.address ?? DEFAULT_PICKUP}
@@ -907,7 +909,7 @@ export function CartDrawer() {
                         <span className="ml-auto text-[10px] font-semibold bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded-full">Otomatis</span>
                       </Label>
                       <div className="h-8 rounded-md border border-orange-200 bg-orange-50 px-3 flex items-center">
-                        <span className="text-xs font-medium text-orange-700">{companyPickup?.originCity ?? "Jakarta"}</span>
+                        <span className="text-xs font-medium text-orange-700">{companyPickup?.originCity ?? COMPANY_CONFIG.originCity}</span>
                       </div>
                     </div>
                     <div>
@@ -1255,7 +1257,7 @@ export function CartDrawer() {
                     <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
                       <div className="flex justify-between">
                         <span className="text-slate-500">Bandara Asal</span>
-                        <span className="font-semibold text-slate-800">{freightData.originAirport || (companyPickup as any)?.originAirport || "CGK"} — Jakarta</span>
+                        <span className="font-semibold text-slate-800">{freightData.originAirport || (companyPickup as any)?.originAirport || "CGK"} — {COMPANY_CONFIG.originCity}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-slate-500">Negara Asal</span>

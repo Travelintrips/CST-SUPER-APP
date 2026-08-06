@@ -87,7 +87,7 @@ export default function PageSeoDynamic<P extends DynamicSeoParams>({
     title: fallback?.title ?? SITE_NAME,
     description:
       fallback?.description ??
-      "B2B Marketplace dan platform logistik terpadu Indonesia. Layanan ekspor impor, freight forwarding udara & laut, customs clearance PPJK, dan trucking untuk bisnis Anda.",
+      `${SITE_NAME} — platform logistik terpadu Indonesia. Layanan ekspor impor, freight forwarding udara & laut, customs clearance PPJK, dan trucking untuk bisnis Anda.`,
     canonical: fallback?.canonical ?? BASE_URL,
     ...fallback,
   };

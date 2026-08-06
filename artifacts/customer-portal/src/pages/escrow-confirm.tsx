@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useParams } from "wouter";
+import { COMPANY_CONFIG } from "@/config/company";
 
 const idr = (n: number | string | null | undefined) =>
   n == null ? "—" : `Rp ${Math.round(Number(n)).toLocaleString("id-ID")}`;
@@ -65,7 +66,7 @@ export default function EscrowConfirmPage() {
   const BRAND_HEADER = (
     <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
       <div style={{ width: 38, height: 38, background: "#0ea5e9", borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 13 }}>CST</div>
-      <span style={{ fontWeight: 700, color: "#0f172a", fontSize: 16 }}>B2B Marketplace and Logistic</span>
+      <span style={{ fontWeight: 700, color: "#0f172a", fontSize: 16 }}>{COMPANY_CONFIG.brandName}</span>
     </div>
   );
 

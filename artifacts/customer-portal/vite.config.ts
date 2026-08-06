@@ -25,6 +25,13 @@ export default defineConfig({
     "import.meta.env.VITE_SUPABASE_ANON_KEY_DEV": JSON.stringify(process.env.VITE_SUPABASE_ANON_KEY_DEV ?? process.env.SUPABASE_ANON_KEY_DEV ?? ""),
     "import.meta.env.VITE_REPLIT_DEV_DOMAIN": JSON.stringify(process.env.REPLIT_DEV_DOMAIN ?? ""),
     "import.meta.env.VITE_GOOGLE_MAPS_API_KEY": JSON.stringify(process.env.GOOGLE_MAPS_API_KEY ?? ""),
+    // External map/routing service URLs — override via env var in production
+    "import.meta.env.VITE_OSRM_URL": JSON.stringify(
+      process.env.VITE_OSRM_URL ?? "https://router.project-osrm.org"
+    ),
+    "import.meta.env.VITE_MAP_TILE_URL": JSON.stringify(
+      process.env.VITE_MAP_TILE_URL ?? "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+    ),
   },
   plugins: [
     react(),
@@ -127,17 +134,17 @@ export default defineConfig({
       },
       // BizPortal dev server — proxied so /bizportal/* works via main entry port
       "/bizportal": {
-        target: "http://localhost:4200",
+        target: `http://localhost:${process.env.BIZPORTAL_PORT ?? 4200}`,
         changeOrigin: true,
         ws: true,
       },
       "/logistic-order": {
-        target: "http://localhost:19368",
+        target: `http://localhost:${process.env.LOGISTIC_ORDER_PORT ?? 19368}`,
         changeOrigin: true,
         ws: true,
       },
       "/wa-gateway": {
-        target: "http://localhost:8000",
+        target: `http://localhost:${process.env.WA_GATEWAY_PORT ?? 8000}`,
         changeOrigin: true,
         ws: true,
       },

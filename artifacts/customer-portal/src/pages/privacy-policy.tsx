@@ -1,5 +1,6 @@
 import PageSeo from "@/components/PageSeo";
 import { useLanguage } from "@/i18n/LanguageContext";
+import { COMPANY_CONFIG } from "@/config/company";
 
 export default function PrivacyPolicy() {
   const { t } = useLanguage();
@@ -89,9 +90,9 @@ export default function PrivacyPolicy() {
             <h2 className="text-xl font-semibold text-slate-800 mb-3">{t("privacy.contactTitle", "8. Kontak")}</h2>
             <p>{t("privacy.contactIntro", "Jika Anda memiliki pertanyaan mengenai kebijakan privasi ini, hubungi:")}</p>
             <address className="not-italic mt-3 text-slate-600 space-y-1">
-              <p className="font-medium text-slate-800">PT. Cahaya Sejati Teknologi</p>
-              <p>GEDUNG SPORT CENTER, Sport Center Soekarno Hatta, Jl. C3 No. 831 RT 001 RW 010, Belakang Masjid Nurul Barkah, Pajang Benda, Tangerang Kota, Banten 15126</p>
-              <p>Email: <a href="mailto:info@cstlogistic.co.id" className="text-sky-600 hover:underline">info@cstlogistic.co.id</a></p>
+              <p className="font-medium text-slate-800">{COMPANY_CONFIG.legalName}</p>
+              <p>{COMPANY_CONFIG.office.lines.join(", ")}</p>
+              <p>Email: <a href={`mailto:${COMPANY_CONFIG.email}`} className="text-sky-600 hover:underline">{COMPANY_CONFIG.email}</a></p>
             </address>
           </section>
         </div>

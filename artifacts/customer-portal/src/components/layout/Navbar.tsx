@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
+import { COMPANY_CONFIG } from "@/config/company";
 import { Button } from "@/components/ui/button";
 import {
   Menu, X, LogOut, LayoutDashboard, ShoppingCart, Shield,
@@ -466,8 +467,8 @@ export function Navbar() {
     (location.startsWith("/marketplace") && location.includes("type=service"));
 
   const brandName = company?.name
-    ? company.name.length > 22 ? "B2B Marketplace and Logistic" : company.name
-    : "B2B Marketplace and Logistic";
+    ? company.name.length > COMPANY_CONFIG.brandNameMaxLength ? COMPANY_CONFIG.brandName : company.name
+    : COMPANY_CONFIG.brandName;
 
   return (
     <>

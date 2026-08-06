@@ -19,6 +19,7 @@ import { formatDate } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 import PageSeo from "@/components/PageSeo";
 import { useLanguage } from "@/i18n/LanguageContext";
+import { UI_TIMING } from "@/config/constants";
 
 const BASE = import.meta.env.BASE_URL?.replace(/\/$/, "") ?? "";
 
@@ -799,7 +800,7 @@ function StatusChangeBanner({
   statusLabels: Record<string, string>;
 }) {
   useEffect(() => {
-    const timer = setTimeout(onDismiss, 6000);
+    const timer = setTimeout(onDismiss, UI_TIMING.TRACK_NOTIFICATION_DISMISS_MS);
     return () => clearTimeout(timer);
   }, [onDismiss]);
 
@@ -986,7 +987,7 @@ function GpsMapEmbed({ events, locale }: { events: ProgressEvent[]; locale: stri
 <script>
   var pts = ${JSON.stringify(markers)};
   var map = L.map('map', { zoomControl:true, attributionControl:false });
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19 }).addTo(map);
+  L.tileLayer('${import.meta.env.VITE_MAP_TILE_URL ?? "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"}', { maxZoom:19 }).addTo(map);
 
   var latlngs = pts.map(function(p){ return [p.lat, p.lng]; });
 
@@ -1507,7 +1508,7 @@ export default function TrackPage() {
                 rfqQuote={tracking.rfqQuote}
                 orderNumber={tracking.orderNumber}
                 onRespond={() => {
-                  setTimeout(() => refetch(), 1000);
+                  setTimeout(() => refetch(), UI_TIMING.TRACK_REFRESH_DELAY_MS);
                 }}
               />
             )}

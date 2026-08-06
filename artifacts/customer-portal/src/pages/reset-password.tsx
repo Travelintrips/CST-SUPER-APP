@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
+import { UI_TIMING } from "@/config/constants";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -75,7 +76,7 @@ export default function ResetPassword() {
         if (!res.ok) { setError(json.message ?? "Link tidak valid atau sudah kadaluarsa."); }
         else {
           setSuccess(true);
-          setTimeout(() => setLocation("/login"), 3000);
+          setTimeout(() => setLocation("/login"), UI_TIMING.RESET_PASSWORD_REDIRECT_MS);
         }
       } catch {
         setError("Gagal menghubungi server. Coba lagi.");
@@ -88,7 +89,7 @@ export default function ResetPassword() {
       else {
         setSuccess(true);
         await supabase.auth.signOut();
-        setTimeout(() => setLocation("/login"), 3000);
+        setTimeout(() => setLocation("/login"), UI_TIMING.RESET_PASSWORD_REDIRECT_MS);
       }
     }
     setLoading(false);

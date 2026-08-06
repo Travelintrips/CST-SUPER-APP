@@ -407,7 +407,8 @@ export default function JasaDetail() {
   const fetchDistance = useCallback(async (from: GeoLocation, to: GeoLocation) => {
     setCalcDist(true);
     try {
-      const url = `https://router.project-osrm.org/route/v1/driving/${from.lon},${from.lat};${to.lon},${to.lat}?overview=false`;
+      const osrmBase = import.meta.env.VITE_OSRM_URL ?? "https://router.project-osrm.org";
+      const url = `${osrmBase}/route/v1/driving/${from.lon},${from.lat};${to.lon},${to.lat}?overview=false`;
       const res = await fetch(url);
       const data = await res.json() as { routes?: Array<{ distance: number }> };
       if (data.routes && data.routes.length > 0) {
