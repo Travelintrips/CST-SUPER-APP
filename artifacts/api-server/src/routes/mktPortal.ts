@@ -39,6 +39,7 @@ import { enqueueNotification } from "../lib/services/marketplaceNotificationQueu
 import { NotificationService } from "../lib/services/notificationService.js";
 import { logger } from "../lib/logger.js";
 import { validateBody } from "../lib/middleware/validateBody.js";
+import { logActivity } from "../lib/activityLog.js";
 
 const router = Router();
 
@@ -105,6 +106,11 @@ const SelectVendorBodySchema = z.object({
 });
 
 const SendToCustomerReviewBodySchema = z.object({
+  notes: z.string().max(1000).optional(),
+});
+
+// Sprint 3 — customer approval (notes opsional, strip identity fields via Zod)
+const CustomerApproveBodySchema = z.object({
   notes: z.string().max(1000).optional(),
 });
 
@@ -836,7 +842,7 @@ router.get("/rfqs/:id/quotation", async (req: Request, res: Response) => {
 
 // ── POST /api/mkt/portal/rfqs/:id/customer-approve ───────────────────────────
 // Customer menyetujui quotation → PO dibuat otomatis via selectVendorAndCreatePo.
-router.post("/rfqs/:id/customer-approve", async (req: Request, res: Response) => {
+router.post("/rfqs/:id/customer-approve", writeLimiter, validateBody(CustomerApproveBodySchema), async (req: Request, res: Response) => {
   const portalCustomerId = (req as PortalAuthReq).portalCustomerId;
   const rfqId = Number(req.params["id"]);
   if (!Number.isInteger(rfqId) || rfqId <= 0)
@@ -879,8 +885,30 @@ router.post("/rfqs/:id/customer-approve", async (req: Request, res: Response) =>
     });
 
     if (!result.ok) {
-      if (result.code === "RFQ_ALREADY_AWARDED")
+      if (result.code === "RFQ_ALREADY_AWARDED") {
+        // Idempotency: RFQ sudah pernah di-award — kembalikan PO yang sudah ada
+        try {
+          const { db: idempDb, mktPurchaseOrdersTable: potbl } = await import("@workspace/db");
+          const { eq: idempEq } = await import("drizzle-orm");
+          const [existingPo] = await idempDb
+            .select({ id: potbl.id, poNumber: potbl.poNumber, vendorNameSnapshot: potbl.vendorNameSnapshot })
+            .from(potbl)
+            .where(idempEq(potbl.rfqId, rfqId))
+            .limit(1);
+          if (existingPo) {
+            return res.json({
+              ok: true,
+              data: {
+                poId:           existingPo.id,
+                poNumber:       existingPo.poNumber,
+                vendorName:     existingPo.vendorNameSnapshot ?? null,
+                alreadyApproved: true,
+              },
+            });
+          }
+        } catch { /* non-fatal — fall through to 409 */ }
         return res.status(409).json({ ok: false, error: result.message });
+      }
       return res.status(500).json({ ok: false, error: result.message });
     }
 
@@ -913,6 +941,19 @@ router.post("/rfqs/:id/customer-approve", async (req: Request, res: Response) =>
       poId:         result.poId,
       poNumber:     result.poNumber,
     });
+
+    // Fire-and-forget: activity log untuk customer approval (distinct dari admin mkt_vendor_selected)
+    void logActivity({
+      mktRfqId:           rfqId,
+      mktVendorQuoteId:   proposedQuoteId,
+      mktPurchaseOrderId: result.poId,
+      actorType:          "customer",
+      actorId:            `portal:${portalCustomerId}`,
+      actorName:          String(rfq["buyer_name"] ?? "Customer Portal"),
+      action:             "mkt_customer_approved",
+      description:        `Customer menyetujui quotation RFQ ${rfq["rfq_number"]} → PO ${result.poNumber} dibuat`,
+      newValue:           { rfqId, poId: result.poId, poNumber: result.poNumber, portalCustomerId },
+    }).catch(() => {});
 
     logger.info({ rfqId, portalCustomerId, poId: result.poId }, "[mktPortal] customerApprove → PO created");
     return res.json({
