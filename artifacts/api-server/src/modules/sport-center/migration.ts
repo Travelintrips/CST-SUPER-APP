@@ -600,29 +600,56 @@ export async function runSportCenterMigration(): Promise<void> {
       logger.warn({ err: repairErr }, "Sport Center migration: repair orphan accounting_payments gagal (non-fatal)");
     }
 
-    // ── Cleanup: hapus duplicate accounting_entries per (source, source_id) ─────
-    // Simpan entry dengan id terkecil (yang pertama diinsert), hapus sisanya.
-    // Juga hapus entry lines yang orphan dan redirect accounting_payments.entry_id.
+    // ── Cleanup: hapus duplicate accounting_entries per (company_id, source, source_id) ──
+    // Scoped by company_id untuk multi-tenant isolation: setiap company menyimpan MIN(id)-nya
+    // sendiri; entry milik company lain tidak pernah disentuh.
+    // Urutan operasi:
+    //   1. Redirect accounting_payments.entry_id ke keeper
+    //   2. Downgrade duplicate posted entries → draft (trigger fn_block_posted_lines_mutation
+    //      memblokir DELETE pada lines dari posted entries, tapi mengizinkan transisi
+    //      posted→draft jika cancel_reason + cancelled_at disediakan)
+    //   3. Hapus accounting_entry_lines dari entry duplikat (sekarang sudah draft)
+    //   4. Hapus accounting_entries duplikat
     try {
-      // 1. Identifikasi entry duplikat (bukan yang MIN per source+source_id)
-      // 2. Pindahkan accounting_payments.entry_id ke entry yang dipertahankan
+      // 1. Redirect accounting_payments.entry_id ke keeper (scoped by company_id)
       await db.execute(sql`
         UPDATE accounting_payments ap
         SET entry_id = keeper.min_id
         FROM (
-          SELECT source, source_id, MIN(id) AS min_id
+          SELECT company_id, source, source_id, MIN(id) AS min_id
           FROM accounting_entries
           WHERE source != 'manual' AND source_id IS NOT NULL
-          GROUP BY source, source_id
+          GROUP BY company_id, source, source_id
           HAVING COUNT(*) > 1
         ) keeper
-        JOIN accounting_entries dup ON dup.source = keeper.source
+        JOIN accounting_entries dup ON dup.company_id = keeper.company_id
+          AND dup.source = keeper.source
           AND dup.source_id = keeper.source_id
           AND dup.id != keeper.min_id
         WHERE ap.entry_id = dup.id
       `);
 
-      // 3. Hapus entry lines dari entry duplikat
+      // 2. Downgrade duplicate posted entries → draft sebelum menghapus lines-nya.
+      //    Trigger fn_block_posted_lines_mutation memblokir DELETE pada lines posted entries
+      //    tetapi mengizinkan transisi posted→draft jika cancel_reason + cancelled_at diisi.
+      await db.execute(sql`
+        UPDATE accounting_entries
+        SET
+          status       = 'draft',
+          cancel_reason = 'Duplicate entry cleanup — downgraded before deletion',
+          cancelled_at  = NOW()
+        WHERE source != 'manual'
+          AND source_id IS NOT NULL
+          AND status = 'posted'
+          AND id NOT IN (
+            SELECT MIN(id)
+            FROM accounting_entries
+            WHERE source != 'manual' AND source_id IS NOT NULL
+            GROUP BY company_id, source, source_id
+          )
+      `);
+
+      // 3. Hapus entry lines dari entry duplikat (sudah draft, trigger tidak lagi memblokir)
       await db.execute(sql`
         DELETE FROM accounting_entry_lines
         WHERE entry_id IN (
@@ -633,7 +660,7 @@ export async function runSportCenterMigration(): Promise<void> {
               SELECT MIN(id)
               FROM accounting_entries
               WHERE source != 'manual' AND source_id IS NOT NULL
-              GROUP BY source, source_id
+              GROUP BY company_id, source, source_id
             )
         )
       `);
@@ -647,7 +674,7 @@ export async function runSportCenterMigration(): Promise<void> {
             SELECT MIN(id)
             FROM accounting_entries
             WHERE source != 'manual' AND source_id IS NOT NULL
-            GROUP BY source, source_id
+            GROUP BY company_id, source, source_id
           )
       `);
       logger.info("Sport Center migration: cleanup duplikat accounting_entries selesai");
