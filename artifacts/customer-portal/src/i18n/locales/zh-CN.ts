@@ -3597,7 +3597,6 @@ const locale: DeepRecord = {
     linkPendingDesc: "订单确认后，我们的团队将通过 WhatsApp/邮件发送支付链接。",
   },
 
-};
 
   customerOrder: {
     loading: '正在加载订单状态...',
@@ -3676,5 +3675,7 @@ const locale: DeepRecord = {
     tradeExport: '出口',
     tradeImport: '进口',
   },
+
+};
 
 export default locale;

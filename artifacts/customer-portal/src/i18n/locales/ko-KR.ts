@@ -3367,7 +3367,6 @@ const locale: DeepRecord = {
     "Completed": "완료",
     "Cancelled": "취소",
   },
-};
 
   customerOrder: {
     loading: '주문 상태 불러오는 중...',
@@ -3446,5 +3445,7 @@ const locale: DeepRecord = {
     tradeExport: '수출',
     tradeImport: '수입',
   },
+
+};
 
 export default locale;

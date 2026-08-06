@@ -3367,7 +3367,6 @@ const locale: DeepRecord = {
     "Completed": "Completado",
     "Cancelled": "Cancelado",
   },
-};
 
   customerOrder: {
     loading: 'Cargando estado del pedido...',
@@ -3446,5 +3445,7 @@ const locale: DeepRecord = {
     tradeExport: 'Exportación',
     tradeImport: 'Importación',
   },
+
+};
 
 export default locale;

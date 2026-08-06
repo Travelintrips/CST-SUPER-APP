@@ -3518,7 +3518,6 @@ const locale: DeepRecord = {
     refreshBtn: "Actualiser",
   },
 
-};
 
   customerOrder: {
     loading: 'Chargement du statut de commande...',
@@ -3597,5 +3596,7 @@ const locale: DeepRecord = {
     tradeExport: 'Exportation',
     tradeImport: 'Importation',
   },
+
+};
 
 export default locale;

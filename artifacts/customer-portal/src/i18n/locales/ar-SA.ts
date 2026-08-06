@@ -3596,7 +3596,6 @@ const locale: DeepRecord = {
     linkPendingDesc: "سيرسل فريقنا رابط الدفع عبر واتساب/البريد الإلكتروني بعد تأكيد الطلب.",
   },
 
-};
 
   customerOrder: {
     loading: 'جارٍ تحميل حالة الطلب...',
@@ -3675,5 +3674,7 @@ const locale: DeepRecord = {
     tradeExport: 'تصدير',
     tradeImport: 'استيراد',
   },
+
+};
 
 export default locale;
