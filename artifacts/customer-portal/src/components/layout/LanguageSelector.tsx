@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { Globe, Check } from "lucide-react";
 import { useLanguage } from "@/i18n/LanguageContext";
 
+
 const LANGUAGES = [
   { code: "id-ID", flag: "🇮🇩", language: "Bahasa Indonesia", country: "Indonesia", label: "ID" },
   { code: "en-US", flag: "🇺🇸", language: "English", country: "United States", label: "EN" },
@@ -28,7 +29,7 @@ interface LanguageSelectorProps {
 }
 
 export function LanguageSelector({ compact = false }: LanguageSelectorProps) {
-  const { locale, setLanguage } = useLanguage();
+  const { locale, setLanguage, t } = useLanguage();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -65,7 +66,7 @@ export function LanguageSelector({ compact = false }: LanguageSelectorProps) {
         }`}
         aria-expanded={open}
         aria-haspopup="listbox"
-        aria-label="Select language"
+        aria-label={t("langSelector.ariaLabel", "Select language")}
         title={current.language}
       >
         <Globe className="h-[15px] w-[15px] shrink-0" />
@@ -80,7 +81,7 @@ export function LanguageSelector({ compact = false }: LanguageSelectorProps) {
         <div
           className="absolute right-0 top-full z-50 mt-2 w-60 rounded-2xl overflow-hidden"
           role="listbox"
-          aria-label="Select language"
+          aria-label={t("langSelector.ariaLabel", "Select language")}
           style={{
             background: "rgba(255,255,255,0.98)",
             backdropFilter: "blur(16px)",

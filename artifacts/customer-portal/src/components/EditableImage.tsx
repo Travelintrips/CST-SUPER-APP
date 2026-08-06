@@ -3,6 +3,7 @@ import { useEditMode } from "@/contexts/EditModeContext";
 import { ImagePlus, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { resolveImageUrl } from "@/lib/utils";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 interface EditableImageProps {
   contentKey: string;
@@ -18,6 +19,7 @@ interface EditableImageProps {
 
 export function EditableImage({ contentKey, defaultSrc, alt, className = "", priority = false }: EditableImageProps) {
   const { editMode, content, updateField, uploadImage } = useEditMode();
+  const { t } = useLanguage();
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   // If the CMS-provided (or cached) URL fails to load — e.g. a stale
@@ -41,7 +43,7 @@ export function EditableImage({ contentKey, defaultSrc, alt, className = "", pri
       const path = await uploadImage(file);
       updateField(contentKey, path);
     } catch {
-      alert("Gagal upload gambar");
+      alert(t("editableImage.uploadFailed", "Gagal upload gambar"));
     } finally {
       setUploading(false);
     }
@@ -73,7 +75,7 @@ export function EditableImage({ contentKey, defaultSrc, alt, className = "", pri
         ) : (
           <>
             <ImagePlus className="h-8 w-8 text-white mb-2" />
-            <span className="text-white text-sm font-medium">Ganti Gambar</span>
+            <span className="text-white text-sm font-medium">{t("editableImage.changeImage", "Ganti Gambar")}</span>
           </>
         )}
       </button>

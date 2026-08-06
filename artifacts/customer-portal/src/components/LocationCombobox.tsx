@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { Input } from "@/components/ui/input";
 import { MapPin, Loader2 } from "lucide-react";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 export type GeoLocation = {
   label: string;
@@ -17,7 +18,9 @@ type Props = {
   countryCode?: string;
 };
 
-export function LocationCombobox({ value, onChange, placeholder = "Ketik nama kota...", className, countryCode }: Props) {
+export function LocationCombobox({ value, onChange, placeholder, className, countryCode }: Props) {
+  const { t } = useLanguage();
+  const resolvedPlaceholder = placeholder ?? t("combobox.searchCity", "Ketik nama kota...");
   const [query, setQuery] = useState(value || "");
   const [open, setOpen] = useState(false);
   const [results, setResults] = useState<GeoLocation[]>([]);
@@ -119,7 +122,7 @@ export function LocationCombobox({ value, onChange, placeholder = "Ketik nama ko
     >
       {loading && results.length === 0 && (
         <div className="flex items-center gap-2 px-4 py-3 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" /> Mencari lokasi...
+          <Loader2 className="h-4 w-4 animate-spin" /> {t("combobox.searching", "Mencari lokasi...")}
         </div>
       )}
       {results.map((geo, idx) => {
@@ -158,7 +161,7 @@ export function LocationCombobox({ value, onChange, placeholder = "Ketik nama ko
             setOpen(true);
             if (query.length >= 3) search(query);
           }}
-          placeholder={placeholder}
+          placeholder={resolvedPlaceholder}
           className="mt-1 pl-9"
           autoComplete="off"
         />

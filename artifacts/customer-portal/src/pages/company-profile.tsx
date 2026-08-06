@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, Link } from "wouter";
+import { useLanguage } from "@/i18n/LanguageContext";
 import { getAuthToken, getAuthHeaders } from "@/lib/auth";
 import { useGetPortalMe } from "@workspace/api-client-react";
 import {
@@ -13,6 +14,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 
 export default function CompanyProfile() {
+  const { t } = useLanguage();
   const [, setLocation] = useLocation();
   const token = getAuthToken();
   const headers = getAuthHeaders() as Record<string, string>;

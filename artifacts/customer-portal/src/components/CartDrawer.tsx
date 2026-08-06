@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { useLocation } from "wouter";
+import { useLanguage } from "@/i18n/LanguageContext";
 import {
   X, Trash2, Plus, ShoppingCart, ArrowRight,
   Package, Truck, Ship, Plane, FileCheck, Warehouse, FileText, Zap,
@@ -143,6 +144,7 @@ function groupItems(items: CartItem[]): [string, CartItem[]][] {
 // ── CartItemCard ──────────────────────────────────────────────────────────────
 
 function CartItemCard({ item, onRemove }: { item: CartItem; onRemove: (id: string) => void }) {
+  const { t }  = useLanguage();
   const meta   = getTypeMeta(item.calculatorType);
   const Icon   = meta.icon;
   const details = getItemDetails(item);
@@ -165,7 +167,7 @@ function CartItemCard({ item, onRemove }: { item: CartItem; onRemove: (id: strin
                 </span>
                 {isVendorCatalog && (
                   <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-semibold border bg-sky-50 text-sky-700 border-sky-200">
-                    Vendor Marketplace
+                    {t("cartDrawer.vendorMarketplace", "Vendor Marketplace")}
                   </span>
                 )}
               </div>
@@ -194,9 +196,9 @@ function CartItemCard({ item, onRemove }: { item: CartItem; onRemove: (id: strin
           ) : item.subtotal > 0 ? (
             <p className="text-xs font-bold text-sky-700 mt-1.5">{formatCurrency(item.subtotal)}</p>
           ) : isTrucking ? (
-            <span className="inline-block mt-1.5 text-[10px] font-semibold text-blue-600 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5">Harga menyusul</span>
+            <span className="inline-block mt-1.5 text-[10px] font-semibold text-blue-600 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5">{t("cartDrawer.pricePending", "Harga menyusul")}</span>
           ) : (
-            <span className="inline-block mt-1.5 text-[10px] font-semibold text-amber-600 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">Harga nego</span>
+            <span className="inline-block mt-1.5 text-[10px] font-semibold text-amber-600 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">{t("cartDrawer.priceNego", "Harga nego")}</span>
           )}
         </div>
       </div>
@@ -220,6 +222,7 @@ const FREIGHT_SVC_META: Record<FreightSvcId, { name: string; calcType: string; c
 const DEFAULT_PICKUP = "Jl. Logistik No. 1, Jakarta";
 
 export function CartDrawer() {
+  const { t }                  = useLanguage();
   const [open, setOpen]        = useState(false);
   const [view, setView]        = useState<DrawerView>("cart");
   const [truckMode, setTruckMode] = useState<"detail" | "calculator">("detail");
@@ -365,10 +368,10 @@ export function CartDrawer() {
   function handleAddTruckingItem() {
     if (truckMode === "detail" && !truckData.deliveryAddress?.trim()) {
       setDeliveryAddressError(true);
-      toast({ title: "Alamat Pengiriman wajib diisi", variant: "destructive" });
+      toast({ title: t("cartDrawer.toastDeliveryRequired", "Alamat Pengiriman wajib diisi"), variant: "destructive" });
       return;
     }
-    const name = truckMode === "detail" ? "Trucking — Pickup & Delivery" : "Trucking — Kargo";
+    const name = truckMode === "detail" ? t("cartDrawer.truckingService", "Trucking — Pickup & Delivery") : t("cartDrawer.truckingCargo", "Trucking — Kargo");
     const pickupAddr = companyPickup?.address ?? DEFAULT_PICKUP;
     replaceItemByType({
       category: "Trucking",
@@ -382,7 +385,7 @@ export function CartDrawer() {
       calculationResult: truckEstimate ? { estimated_price: truckEstimate } : {},
       subtotal: 0,
     });
-    toast({ title: `${name} diperbarui di keranjang` });
+    toast({ title: `${name} ${t("cartDrawer.toastUpdated", "diperbarui di keranjang")}` });
     setTruckData({});
     setTruckEstimate(null);
     setView("cart");
@@ -417,12 +420,12 @@ export function CartDrawer() {
     // Validasi destination sebelum hitung estimasi
     if (freightSvc === "sea" && !freightData.destCountry?.trim()) {
       setFreightDestError(true);
-      toast({ title: "Isi Negara Tujuan terlebih dahulu", variant: "destructive" });
+      toast({ title: t("cartDrawer.toastDestRequired", "Isi Negara Tujuan terlebih dahulu"), variant: "destructive" });
       return;
     }
     if (freightSvc === "air" && !freightData.destAirport?.trim()) {
       setFreightDestError(true);
-      toast({ title: "Isi Bandara Tujuan terlebih dahulu", variant: "destructive" });
+      toast({ title: t("cartDrawer.toastAirportRequired", "Isi Bandara Tujuan terlebih dahulu"), variant: "destructive" });
       return;
     }
     setFreightDestError(false);
@@ -463,12 +466,12 @@ export function CartDrawer() {
     // Validasi destination wajib untuk sea/air
     if (freightSvc === "sea" && !freightData.destCountry?.trim()) {
       setFreightDestError(true);
-      toast({ title: "Negara Tujuan wajib diisi", variant: "destructive" });
+      toast({ title: t("cartDrawer.toastDestCountryRequired", "Negara Tujuan wajib diisi"), variant: "destructive" });
       return;
     }
     if (freightSvc === "air" && !freightData.destAirport?.trim()) {
       setFreightDestError(true);
-      toast({ title: "Bandara Tujuan wajib diisi", variant: "destructive" });
+      toast({ title: t("cartDrawer.toastDestAirportRequired", "Bandara Tujuan wajib diisi"), variant: "destructive" });
       return;
     }
     const meta = FREIGHT_SVC_META[freightSvc];
@@ -485,7 +488,7 @@ export function CartDrawer() {
       calculationResult: freightEstimate ? { estimated_price: freightEstimate } : {},
       subtotal: freightEstimate ?? 0,
     });
-    toast({ title: `${name} diperbarui di keranjang` });
+    toast({ title: `${name} ${t("cartDrawer.toastUpdated", "diperbarui di keranjang")}` });
     setFreightData({});
     setFreightEstimate(null);
     setFreightAutoFilled(false);
@@ -571,14 +574,14 @@ export function CartDrawer() {
   const hasNegotiable = grandTotal === 0 && items.length > 0;
 
   // ── Header title / back button ──────────────────────────────────────────────
-  const headerTitle = view === "service-catalog" ? "Pilih Layanan"
-    : view === "trucking" ? "Layanan Trucking"
+  const headerTitle = view === "service-catalog" ? t("cartDrawer.pickService", "Pilih Layanan")
+    : view === "trucking" ? t("cartDrawer.truckingTitle", "Layanan Trucking")
     : view === "freight"  ? FREIGHT_SVC_META[freightSvc].name
-    : "Keranjang Pesanan";
-  const headerSub = view === "service-catalog" ? "Pilih layanan logistik Anda"
-    : view === "trucking" ? "Isi detail atau hitung estimasi"
-    : view === "freight"  ? "Isi detail & hitung estimasi biaya"
-    : items.length === 0 ? "Belum ada item" : `${items.length} item · 1 pesanan`;
+    : t("cartDrawer.title", "Keranjang Pesanan");
+  const headerSub = view === "service-catalog" ? t("cartDrawer.pickServiceSub", "Pilih layanan logistik Anda")
+    : view === "trucking" ? t("cartDrawer.truckingSub", "Isi detail atau hitung estimasi")
+    : view === "freight"  ? t("cartDrawer.freightSub", "Isi detail & hitung estimasi biaya")
+    : items.length === 0 ? t("cartDrawer.noItems", "Belum ada item") : `${items.length} item · 1 pesanan`;
 
   return (
     <>
@@ -634,7 +637,7 @@ export function CartDrawer() {
                 <div className="w-20 h-20 rounded-2xl bg-slate-100 flex items-center justify-center mb-4">
                   <ShoppingCart className="w-10 h-10 text-slate-300" />
                 </div>
-                <p className="text-sm font-semibold text-slate-600 mt-2">Keranjang kosong</p>
+                <p className="text-sm font-semibold text-slate-600 mt-2">{t("cartDrawer.empty", "Keranjang kosong")}</p>
                 <p className="text-xs text-slate-400 mt-1 mb-6 leading-relaxed">
                   Tambahkan produk atau pilih layanan logistik — trucking, air freight, atau sea freight.
                 </p>
@@ -693,7 +696,7 @@ export function CartDrawer() {
                             {m.id !== "pickup" && (m.estimate ? (
                               <p className="text-xs font-bold text-slate-800">{formatCurrency(m.estimate)}</p>
                             ) : (
-                              <p className="text-[10px] text-slate-400 italic">Sesuai rute</p>
+                              <p className="text-[10px] text-slate-400 italic">{t("cartDrawer.sesuaiRute", "Sesuai rute")}</p>
                             ))}
                             <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${selectedShipping === m.id ? "border-primary bg-primary" : "border-slate-300 bg-white"}`}>
                               {selectedShipping === m.id && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
@@ -704,7 +707,7 @@ export function CartDrawer() {
                     </div>
                     {selectedShipping === "pickup" && (
                       <div className="mt-2 rounded-lg border border-green-200 bg-green-50/80 px-3 py-2.5">
-                        <p className="text-[10px] font-bold text-green-600 uppercase tracking-wide mb-1">Lokasi Pengambilan</p>
+                        <p className="text-[10px] font-bold text-green-600 uppercase tracking-wide mb-1">{t("cartDrawer.pickupLocation", "Lokasi Pengambilan")}</p>
                         <p className="text-[11px] font-semibold text-green-800 leading-snug">🏭 {companyPickup?.name ?? "B2B Marketplace and Logistic"}</p>
                         <p className="text-[11px] text-green-700 mt-0.5 leading-snug">{companyPickup?.address ?? DEFAULT_PICKUP}</p>
                       </div>
@@ -733,7 +736,7 @@ export function CartDrawer() {
               </button>
 
               <Separator />
-              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide px-1">Layanan Logistik</p>
+              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide px-1">{t("cartDrawer.logisticServices", "Layanan Logistik")}</p>
 
               <div className="grid grid-cols-2 gap-2.5">
                 {DRAWER_SERVICES.map(svc => (
@@ -830,7 +833,7 @@ export function CartDrawer() {
                     }}
                     className={`flex-1 py-2 px-2 rounded-md text-xs font-medium transition-colors flex items-center justify-center gap-1 ${truckMode === mode ? "bg-white shadow text-slate-800" : "text-slate-400 hover:text-slate-600"}`}
                   >
-                    {mode === "detail" ? <><MapPin className="w-3 h-3" /> Pickup &amp; Delivery</> : <><Calculator className="w-3 h-3" /> Kalkulator Estimasi</>}
+                    {mode === "detail" ? <><MapPin className="w-3 h-3" /> {t("cartDrawer.pickupDelivery", "Pickup & Delivery")}</> : <><Calculator className="w-3 h-3" /> {t("cartDrawer.estimateCalc", "Kalkulator Estimasi")}</>}
                   </button>
                 ))}
               </div>
@@ -853,37 +856,37 @@ export function CartDrawer() {
                         {companyPickup?.address ?? DEFAULT_PICKUP}
                       </p>
                       <p className="text-[10px] text-orange-400 mt-1">
-                        Tim kami yang akan menentukan lokasi pengambilan barang
+                        {t("cartDrawer.teamDecides", "Tim kami yang akan menentukan lokasi pengambilan barang")}
                       </p>
                     </div>
                   </div>
 
                   <div>
                     <Label className="text-[11px] mb-1 block">
-                      Alamat Pengiriman <span className="text-destructive">*</span>
+                      {t("cartDrawer.deliveryAddress", "Alamat Pengiriman")} <span className="text-destructive">*</span>
                     </Label>
-                    <Textarea rows={2} placeholder="Jl. ..., Kota, Provinsi — alamat tujuan pengiriman"
+                    <Textarea rows={2} placeholder={t("cartDrawer.deliveryAddressPh", "Jl. ..., Kota, Provinsi — alamat tujuan pengiriman")}
                       className={`text-xs resize-none${deliveryAddressError ? " border-destructive focus-visible:ring-destructive" : ""}`}
                       value={truckData.deliveryAddress||""}
                       onChange={e => { setDeliveryAddressError(false); setTruckData(p => ({ ...p, deliveryAddress: e.target.value })); }} />
-                    {deliveryAddressError && <p className="text-[11px] text-destructive mt-1">Alamat pengiriman wajib diisi.</p>}
+                    {deliveryAddressError && <p className="text-[11px] text-destructive mt-1">{t("cartDrawer.deliveryAddressError", "Alamat pengiriman wajib diisi.")}</p>}
                   </div>
                   <div className="grid grid-cols-2 gap-2.5">
                     <div>
-                      <Label className="text-[11px] mb-1 block">Nama Kontak</Label>
-                      <Input className="h-8 text-xs" placeholder="Nama PIC" value={truckData.contactName||""} onChange={e => setTruckData(p => ({ ...p, contactName: e.target.value }))} />
+                      <Label className="text-[11px] mb-1 block">{t("cartDrawer.contactName", "Nama Kontak")}</Label>
+                      <Input className="h-8 text-xs" placeholder={t("cartDrawer.namePicPh", "Nama PIC")} value={truckData.contactName||""} onChange={e => setTruckData(p => ({ ...p, contactName: e.target.value }))} />
                     </div>
                     <div>
-                      <Label className="text-[11px] mb-1 block">No. Telepon</Label>
+                      <Label className="text-[11px] mb-1 block">{t("cartDrawer.contactPhone", "No. Telepon")}</Label>
                       <Input type="tel" className="h-8 text-xs" placeholder="08xxxxxxxxxx" value={truckData.contactPhone||""} onChange={e => setTruckData(p => ({ ...p, contactPhone: e.target.value }))} />
                     </div>
                   </div>
                   <div>
-                    <Label className="text-[11px] mb-1 block">Catatan (opsional)</Label>
-                    <Textarea rows={2} placeholder="Instruksi khusus untuk tim pengiriman..." className="text-xs resize-none" value={truckData.notes||""} onChange={e => setTruckData(p => ({ ...p, notes: e.target.value }))} />
+                    <Label className="text-[11px] mb-1 block">{t("cartDrawer.notesOpt", "Catatan (opsional)")}</Label>
+                    <Textarea rows={2} placeholder={t("cartDrawer.notesPh", "Instruksi khusus untuk tim pengiriman...")} className="text-xs resize-none" value={truckData.notes||""} onChange={e => setTruckData(p => ({ ...p, notes: e.target.value }))} />
                   </div>
                   <div className="bg-orange-50 border border-orange-200 rounded-lg p-2.5 text-[11px] text-orange-700">
-                    💡 Estimasi biaya dikonfirmasi tim setelah pesanan masuk.
+                    {t("cartDrawer.estimateNote", "💡 Estimasi biaya dikonfirmasi tim setelah pesanan masuk.")}
                   </div>
                 </div>
               )}
@@ -895,15 +898,15 @@ export function CartDrawer() {
                     <div className="bg-sky-50 border border-sky-200 rounded-lg px-3 py-2 flex items-start gap-2">
                       <span className="text-sky-500 mt-0.5 shrink-0">✦</span>
                       <div>
-                        <p className="text-[11px] font-semibold text-sky-700">Diisi otomatis dari produk pesanan</p>
-                        <p className="text-[10px] text-sky-500 mt-0.5">Berat &amp; dimensi dihitung dari item di keranjang. Masukkan kota tujuan lalu klik Hitung Estimasi.</p>
+                        <p className="text-[11px] font-semibold text-sky-700">{t("cartDrawer.autoFilled", "Diisi otomatis dari produk pesanan")}</p>
+                        <p className="text-[10px] text-sky-500 mt-0.5">{t("cartDrawer.autoFilledNote", "Berat & dimensi dihitung dari item di keranjang. Masukkan kota tujuan lalu klik Hitung Estimasi.")}</p>
                       </div>
                     </div>
                   )}
                   <div className="grid grid-cols-2 gap-2.5">
                     <div>
                       <Label className="text-[11px] mb-1 flex items-center gap-1">
-                        <MapPin className="w-3 h-3 text-orange-500" /> Kota Asal
+                        <MapPin className="w-3 h-3 text-orange-500" /> {t("cartDrawer.originCity", "Kota Asal")}
                         <span className="ml-auto text-[10px] font-semibold bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded-full">Otomatis</span>
                       </Label>
                       <div className="h-8 rounded-md border border-orange-200 bg-orange-50 px-3 flex items-center">
@@ -911,7 +914,7 @@ export function CartDrawer() {
                       </div>
                     </div>
                     <div>
-                      <Label className="text-[11px] mb-1 flex items-center gap-1"><MapPin className="w-3 h-3 text-blue-500" /> Kota Tujuan <span className="text-destructive">*</span></Label>
+                      <Label className="text-[11px] mb-1 flex items-center gap-1"><MapPin className="w-3 h-3 text-blue-500" /> {t("cartDrawer.destCity", "Kota Tujuan")} <span className="text-destructive">*</span></Label>
                       <Input
                         className={`h-8 text-xs ${!truckData.destCity && vehicleComparison !== null ? "border-destructive" : ""}`}
                         placeholder="Surabaya, Medan, Makassar..."
@@ -1493,7 +1496,7 @@ export function CartDrawer() {
                 <span className="font-medium text-slate-700">
                   {selectedShipping === "darat" && daratEstimate
                     ? formatCurrency(daratEstimate)
-                    : <span className="text-slate-400 text-xs italic">Sesuai rute</span>}
+                    : <span className="text-slate-400 text-xs italic">{t("cartDrawer.sesuaiRute", "Sesuai rute")}</span>}
                 </span>
               </div>
             )}
@@ -1534,7 +1537,7 @@ export function CartDrawer() {
               }
               onClick={handleAddTruckingItem}
             >
-              {truckEstimate || truckMode === "detail" ? "Tambahkan ke Pesanan" : "Tambahkan (Harga Menyusul)"}
+              {truckEstimate || truckMode === "detail" ? t("cartDrawer.addToOrder", "Tambahkan ke Pesanan") : t("cartDrawer.addPricePending", "Tambahkan (Harga Menyusul)")}
               <ArrowRight className="w-4 h-4" />
             </Button>
           </div>
@@ -1559,7 +1562,7 @@ export function CartDrawer() {
               }
               onClick={handleAddFreightItem}
             >
-              {freightEstimate && freightSvc !== "additional" ? "Tambahkan ke Pesanan" : "Tambahkan (Harga Menyusul)"}
+              {freightEstimate && freightSvc !== "additional" ? t("cartDrawer.addToOrder", "Tambahkan ke Pesanan") : t("cartDrawer.addPricePending", "Tambahkan (Harga Menyusul)")}
               <ArrowRight className="w-4 h-4" />
             </Button>
           </div>

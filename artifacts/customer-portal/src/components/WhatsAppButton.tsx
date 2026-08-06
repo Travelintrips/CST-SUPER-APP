@@ -1,7 +1,7 @@
 import { useGetPortalCompany } from "@workspace/api-client-react";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 const FALLBACK_PHONE = "6281234567890";
-const WA_MESSAGE = encodeURIComponent("Halo, saya ingin bertanya mengenai layanan B2B Marketplace and Logistic.");
 
 function normalizePhone(raw: string): string {
   const digits = raw.replace(/\D/g, "");
@@ -17,13 +17,15 @@ const WaSvg = () => (
 );
 
 function WaButtonAnchor({ phone }: { phone: string }) {
-  const href = `https://wa.me/${phone}?text=${WA_MESSAGE}`;
+  const { t } = useLanguage();
+  const waMessage = encodeURIComponent(t("waButton.message", "Halo, saya ingin bertanya mengenai layanan B2B Marketplace and Logistic."));
+  const href = `https://wa.me/${phone}?text=${waMessage}`;
   return (
     <a
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      aria-label="Chat via WhatsApp"
+      aria-label={t("waButton.ariaLabel", "Chat via WhatsApp")}
       className="group fixed z-[9997] flex items-center justify-center rounded-full transition-all duration-300 hover:-translate-y-1 active:scale-95"
       style={{
         bottom: 88,

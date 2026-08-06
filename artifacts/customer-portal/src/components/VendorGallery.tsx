@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { X, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, ImageOff, Images } from "lucide-react";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -29,6 +30,7 @@ function Lightbox({
   startIndex: number;
   onClose: () => void;
 }) {
+  const { t } = useLanguage();
   const [idx, setIdx] = useState(startIndex);
   const [zoom, setZoom] = useState(1);
   const touchStartX = useRef<number | null>(null);
@@ -97,7 +99,7 @@ function Lightbox({
             onClick={() => setZoom((z) => Math.max(z - 0.5, 1))}
             className="p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors disabled:opacity-30"
             disabled={zoom <= 1}
-            title="Perkecil (−)"
+            title={t("gallery.zoomOut", "Perkecil (−)")}
           >
             <ZoomOut className="h-4 w-4" />
           </button>
@@ -108,14 +110,14 @@ function Lightbox({
             onClick={() => setZoom((z) => Math.min(z + 0.5, 4))}
             className="p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors disabled:opacity-30"
             disabled={zoom >= 4}
-            title="Perbesar (+)"
+            title={t("gallery.zoomIn", "Perbesar (+)")}
           >
             <ZoomIn className="h-4 w-4" />
           </button>
           <button
             onClick={onClose}
             className="ml-2 p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors"
-            title="Tutup (Esc)"
+            title={t("gallery.close", "Tutup (Esc)")}
           >
             <X className="h-5 w-5" />
           </button>
@@ -128,7 +130,7 @@ function Lightbox({
           <button
             onClick={prev}
             className="absolute left-2 md:left-4 z-10 p-3 rounded-full bg-white/10 hover:bg-white/25 text-white transition-all shadow-lg"
-            title="Sebelumnya (←)"
+            title={t("gallery.prev", "Sebelumnya (←)")}
           >
             <ChevronLeft className="h-6 w-6" />
           </button>
@@ -150,7 +152,7 @@ function Lightbox({
           ) : (
             <div className="flex flex-col items-center gap-3 text-slate-500">
               <ImageOff className="h-16 w-16" />
-              <p className="text-[14px]">Gambar tidak tersedia</p>
+              <p className="text-[14px]">{t("gallery.imageUnavailable", "Gambar tidak tersedia")}</p>
             </div>
           )}
         </div>
@@ -159,7 +161,7 @@ function Lightbox({
           <button
             onClick={next}
             className="absolute right-2 md:right-4 z-10 p-3 rounded-full bg-white/10 hover:bg-white/25 text-white transition-all shadow-lg"
-            title="Berikutnya (→)"
+            title={t("gallery.next", "Berikutnya (→)")}
           >
             <ChevronRight className="h-6 w-6" />
           </button>
@@ -202,6 +204,7 @@ function Lightbox({
 // ── Main Gallery Component ────────────────────────────────────────────────────
 
 export function VendorGallery({ images }: VendorGalleryProps) {
+  const { t } = useLanguage();
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
   const validImages = images.filter((img) => !!img.fileUrl);
@@ -214,7 +217,7 @@ export function VendorGallery({ images }: VendorGalleryProps) {
       <div className="flex items-center gap-2 mb-3">
         <Images className="h-3.5 w-3.5 text-slate-400" />
         <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-          {validImages.length} foto
+          {validImages.length} {t("gallery.photoAlt", "foto")}
         </p>
       </div>
 
@@ -228,7 +231,7 @@ export function VendorGallery({ images }: VendorGalleryProps) {
           >
             <img
               src={(img.thumbnailUrl ?? img.fileUrl)!}
-              alt={img.title ?? img.itemName ?? "Foto vendor"}
+              alt={img.title ?? img.itemName ?? t("gallery.photoAlt", "Foto vendor")}
               loading="lazy"
               className="w-full h-auto object-cover group-hover:scale-105 transition-transform duration-300"
               onError={(e) => {

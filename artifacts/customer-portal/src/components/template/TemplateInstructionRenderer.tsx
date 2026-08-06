@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 const IC = "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400";
 
@@ -17,6 +18,7 @@ export function TemplateInstructionRenderer({
   readOnly,
   accentColor = "indigo",
 }: Props) {
+  const { t } = useLanguage();
   const [open, setOpen] = useState(false);
   if (!instructions) return null;
 
@@ -30,7 +32,7 @@ export function TemplateInstructionRenderer({
         onClick={() => setOpen((v) => !v)}
       >
         <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
-          📦 Handling &amp; Packaging Instructions
+          {t("tmpl.packaging", "📦 Handling & Packaging Instructions")}
         </h2>
         <span className="text-slate-400 text-sm">{open ? "▲" : "▼"}</span>
       </button>
@@ -43,12 +45,12 @@ export function TemplateInstructionRenderer({
           {!readOnly && onNotesChange && (
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">
-                Catatan Packaging (opsional)
+                {t("tmpl.packagingNotes", "Catatan Packaging (opsional)")}
               </label>
               <textarea
                 value={notes ?? ""}
                 onChange={(e) => onNotesChange(e.target.value)}
-                placeholder="Instruksi khusus packaging..."
+                placeholder={t("tmpl.packagingNotesPh", "Instruksi khusus packaging...")}
                 rows={2}
                 className={`${IC.replace("focus:ring-indigo-400", ringColor)} resize-none`}
               />
@@ -56,7 +58,7 @@ export function TemplateInstructionRenderer({
           )}
           {readOnly && notes && (
             <div className="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2 text-xs text-slate-600">
-              <span className="font-medium text-slate-700">Catatan: </span>
+              <span className="font-medium text-slate-700">{t("tmpl.packagingLabel", "Catatan:")} </span>
               {notes}
             </div>
           )}

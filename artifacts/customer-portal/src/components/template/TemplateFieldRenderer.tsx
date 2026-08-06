@@ -1,5 +1,6 @@
 import type { ProductTemplate, DynamicFormValues } from "@workspace/product-templates";
 import { isFieldVisible } from "@workspace/product-templates";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 const IC = "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:bg-slate-50 disabled:text-slate-500";
 
@@ -12,6 +13,7 @@ interface Props {
 }
 
 export function TemplateFieldRenderer({ template, values, onChange, readOnly, accentColor = "indigo" }: Props) {
+  const { t } = useLanguage();
   const customFields = template?.customFields ?? [];
   if (!customFields.length) return null;
 
@@ -31,7 +33,7 @@ export function TemplateFieldRenderer({ template, values, onChange, readOnly, ac
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
       <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-4">
-        📦 Spesifikasi {template.label}
+        {"📦 "}{t("tmpl.specLabel", "Spesifikasi")} {template.label}
       </h2>
       <div className="space-y-4">
         {customFields.map((field) => {
@@ -53,7 +55,7 @@ export function TemplateFieldRenderer({ template, values, onChange, readOnly, ac
                   disabled={readOnly}
                   className={`${cls} bg-white`}
                 >
-                  <option value="">— Pilih —</option>
+                  <option value="">{t("tmpl.selectOption", "— Pilih —")}</option>
                   {field.options?.map((opt) => (
                     <option key={opt} value={opt}>{opt}</option>
                   ))}

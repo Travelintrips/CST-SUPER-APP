@@ -6,6 +6,7 @@
  *      PATCH /api/portal/admin/vendor-catalog-items/:id/media-assets
  */
 import { useState, useRef, useCallback, useEffect } from "react";
+import { useLanguage } from "@/i18n/LanguageContext";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";

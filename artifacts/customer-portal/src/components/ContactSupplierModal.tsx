@@ -12,6 +12,7 @@ import {
   Send, CheckCircle2, User, Building2, Mail, Phone,
   Globe, Package, Hash, MessageSquare, Loader2, X,
 } from "lucide-react";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -82,12 +83,14 @@ export function ContactSupplierModal({
     };
   }
 
+  const { t } = useLanguage();
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
 
-    if (!form.name.trim()) { setError("Nama wajib diisi"); return; }
-    if (!form.phone.trim()) { setError("Nomor telepon wajib diisi"); return; }
+    if (!form.name.trim()) { setError(t("contactSupplier.errorNameRequired", "Nama wajib diisi")); return; }
+    if (!form.phone.trim()) { setError(t("contactSupplier.errorPhoneRequired", "Nomor telepon wajib diisi")); return; }
 
     setIsSubmitting(true);
     try {
@@ -107,12 +110,12 @@ export function ContactSupplierModal({
       });
       const data = await r.json();
       if (!r.ok) {
-        setError(data?.error ?? "Gagal mengirim inquiry. Silakan coba lagi.");
+        setError(data?.error ?? t("contactSupplier.errorGeneral", "Gagal mengirim inquiry. Silakan coba lagi."));
         return;
       }
       setInquiryNumber(data.inquiryNumber);
     } catch {
-      setError("Terjadi kesalahan jaringan. Silakan coba lagi.");
+      setError(t("contactSupplier.errorNetwork", "Terjadi kesalahan jaringan. Silakan coba lagi."));
     } finally {
       setIsSubmitting(false);
     }
@@ -278,7 +281,7 @@ export function ContactSupplierModal({
                 <MessageSquare className="h-3.5 w-3.5" />Pesan
               </Label>
               <textarea
-                placeholder="Ceritakan kebutuhan Anda secara singkat..."
+                placeholder={t("contactSupplier.messagePh", "Ceritakan kebutuhan Anda secara singkat...")}
                 rows={4}
                 className="w-full rounded-xl border border-slate-200 focus:border-sky-400 text-[13px] px-3 py-2 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-200 transition-colors resize-none"
                 value={form.message}
@@ -302,7 +305,7 @@ export function ContactSupplierModal({
                 onClick={handleClose}
                 disabled={isSubmitting}
               >
-                Batal
+                {t("contactSupplier.cancelBtn", "Batal")}
               </Button>
               <Button
                 type="submit"
@@ -310,9 +313,9 @@ export function ContactSupplierModal({
                 disabled={isSubmitting}
               >
                 {isSubmitting ? (
-                  <><Loader2 className="h-4 w-4 animate-spin" />Mengirim...</>
+                  <><Loader2 className="h-4 w-4 animate-spin" />{t("contactSupplier.sending", "Mengirim...")}</>
                 ) : (
-                  <><Send className="h-4 w-4" />Kirim Inquiry</>
+                  <><Send className="h-4 w-4" />{t("contactSupplier.sendBtn", "Kirim Inquiry")}</>
                 )}
               </Button>
             </div>

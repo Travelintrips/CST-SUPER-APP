@@ -1,4 +1,5 @@
 import type { ChecklistItem } from "@workspace/product-templates";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 interface Props {
   checklist: ChecklistItem[];
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export function TemplateChecklistRenderer({ checklist, values, onChange, readOnly, accentColor = "indigo" }: Props) {
+  const { t } = useLanguage();
   if (!checklist.length) return null;
 
   const checkColor =
@@ -20,7 +22,7 @@ export function TemplateChecklistRenderer({ checklist, values, onChange, readOnl
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-      <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-4">✅ Checklist Persiapan</h2>
+      <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-4">{t("tmpl.checklist", "✅ Checklist Persiapan")}</h2>
       <div className="space-y-3">
         {checklist.map((item) => {
           const checked = values[item.key] ?? false;
@@ -47,7 +49,7 @@ export function TemplateChecklistRenderer({ checklist, values, onChange, readOnl
       </div>
       {!readOnly && (
         <p className="text-xs text-slate-400 mt-3">
-          Centang semua item yang sudah selesai dipersiapkan.
+          {t("tmpl.checkAllDone", "Centang semua item yang sudah selesai dipersiapkan.")}
         </p>
       )}
     </div>
