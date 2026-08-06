@@ -2,15 +2,20 @@
 
 B2B Marketplace and Logistics platform — a pnpm monorepo with multiple services.
 
-## Stack
+## Architecture
 
-- **Backend:** Node.js 20, Express, Drizzle ORM, PostgreSQL (Supabase)
-- **Frontend:** React 19, Vite 7, Tailwind CSS 4, Radix UI, TanStack Query
-- **Monorepo:** pnpm workspaces, TypeScript
+### Sub-apps (`artifacts/`)
+| App | Port | Purpose |
+|-----|------|---------|
+| `api-server` | 18444 | Core REST API (Express + Drizzle ORM + Supabase Postgres) |
+| `bizportal` | 18442 | Admin/back-office UI (React + Vite) |
+| `customer-portal` | 23434 | Customer-facing storefront/booking UI |
+| `logistic-order` | 19368 | Logistics order management UI |
+| `cst-driver` | — | Driver app (React Native / Expo) |
+| `customer-poster` | — | Customer poster/print generation |
+| `qr-menu` | — | QR-code menu viewer |
+| `mockup-sandbox` | — | UI component mockup sandbox |
 
-## Running on Replit
-
-### Required Replit Secrets
 ## Services
 
 | Service | Dev Port | Description |
@@ -60,9 +65,6 @@ Each service has its own workflow. Start or restart them from the Workflows pane
 # Install all dependencies (run once after cloning or adding packages)
 pnpm install
 ```
-| `SUPABASE_DATABASE_URL_DEV` | Dev Supabase pooler URL (required — dev mode blocks prod DB by default) |
-
-All other secrets (Supabase keys, OpenAI, etc.) are loaded automatically from GCP Secret Manager at startup.
 
 ## Architecture rules
 
@@ -71,16 +73,12 @@ All other secrets (Supabase keys, OpenAI, etc.) are loaded automatically from GC
 - Accounting entries are immutable once posted (reversal only)
 - AI is advisor only — never auto-approves or auto-posts financial entries
 
-See `AI_ARCHITECTURE_GUARDRAILS.md`, `ARCHITECTURE_DECISIONS.md`, and `AI_RULES.md` before making changes.
-
 - `APP_ENV=development` is enforced in every `start-dev.sh` — never change this.
 - `load-secrets.mjs` runs before the server starts and injects secrets. `*_DEV` keys from GCP (or Replit Secrets) are promoted to their canonical names in dev mode.
 - The API server will **refuse to start** if it detects a production database in development mode. Always ensure `SUPABASE_DATABASE_URL_DEV` is set.
 - See `AI_ARCHITECTURE_GUARDRAILS.md` and `ARCHITECTURE_DECISIONS.md` for immutable architecture rules.
 
-## User Preferences
-
-- Keep existing project structure and stack intact — do not restructure or migrate without explicit request.
 ## User preferences
 
 - Keep the existing monorepo structure and stack
+- Use pnpm (not npm or yarn)
