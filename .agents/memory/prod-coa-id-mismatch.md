@@ -1,0 +1,20 @@
+---
+name: Production COA ID mismatch after data migration
+description: When production data (accounting_entry_lines) is imported to dev, the account_ids reference production COA IDs that don't exist in the dev chart_of_accounts. This makes the Trial Balance blank or incomplete.
+---
+
+## Rule
+When importing production accounting_entries + accounting_entry_lines to dev, ALSO import chart_of_accounts from production OR remap account_ids in entry_lines to dev COA equivalents by COA code.
+
+**Why:** Production COA uses auto-generated IDs (49xxx–75xxx range). Dev COA is re-seeded with different IDs (1–6xxx range). The Trial Balance query maps lines → COA by account_id, so mismatched IDs result in invisible entries (INNER JOIN drops them silently).
+
+## How to apply
+If Trial Balance shows far fewer accounts than expected after data import:
+1. Check: `SELECT DISTINCT ael.account_id FROM accounting_entry_lines ael WHERE NOT EXISTS (SELECT 1 FROM chart_of_accounts c WHERE c.id=ael.account_id)`
+2. If results exist → production COA IDs not in dev
+3. Fix: Use `SET session_replication_role = replica` to bypass triggers, then UPDATE accounting_entry_lines with a CASE mapping (prod_id → dev_id)
+4. Mapping approach: use accounting_settings columns (default_bank_account_id, ppn_output_account_id, tenant_rent_income_account_id, salary_expense_account_id, etc.) + source type patterns to determine each production account's functional equivalent in dev
+
+## Key mappings built (Aug 2026, dev DB)
+Production IDs 49097–75589 → dev COA IDs for CST/WS/DV/ER companies.
+All 1984 entry lines remapped; grand total balanced at 599,239,785 (debit = credit).
