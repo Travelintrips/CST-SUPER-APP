@@ -30,6 +30,9 @@ const locale: DeepRecord = {
     profile: '资料',
     importTariffCalc: '进口关税计算器',
     logisticCostCalc: '物流成本计算器',
+    myRfqs: '我的询价单',
+    myPurchaseOrders: '我的采购订单',
+    pendingApprovals: '待审批',
   },
   navbar: {
     searchPlaceholder: '搜索服务、产品…',

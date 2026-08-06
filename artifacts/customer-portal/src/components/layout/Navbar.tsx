@@ -563,7 +563,7 @@ export function Navbar() {
                           onClick={() => setMktOpen(false)}
                         >
                           <span className="w-6 h-6 rounded-lg bg-blue-50 flex items-center justify-center text-blue-500 text-xs">📋</span>
-                          My RFQs
+                          {t("nav.myRfqs")}
                         </Link>
                         <Link
                           href="/marketplace/my-purchase-orders"
@@ -571,7 +571,7 @@ export function Navbar() {
                           onClick={() => setMktOpen(false)}
                         >
                           <span className="w-6 h-6 rounded-lg bg-emerald-50 flex items-center justify-center text-emerald-500 text-xs">🛒</span>
-                          My Purchase Orders
+                          {t("nav.myPurchaseOrders")}
                         </Link>
                         <Link
                           href="/marketplace/pending-approvals"
@@ -579,7 +579,7 @@ export function Navbar() {
                           onClick={() => setMktOpen(false)}
                         >
                           <span className="w-6 h-6 rounded-lg bg-amber-50 flex items-center justify-center text-amber-500 text-xs">⏳</span>
-                          Pending Approvals
+                          {t("nav.pendingApprovals")}
                         </Link>
                       </div>
                     )}
@@ -1199,7 +1199,7 @@ export function Navbar() {
                 const mobileNavItems = [
                   { href: dashHref,           icon: LayoutDashboard, label: "Dashboard",           color: "#6366f1" },
                   { href: "/marketplace",                   icon: Store,          label: "Marketplace",          color: "#f59e0b" },
-                  { href: "/marketplace/my-purchase-orders", icon: ShoppingCart,   label: "My Purchase Orders",   color: "#f97316" },
+                  { href: "/marketplace/my-purchase-orders", icon: ShoppingCart,   label: t("nav.myPurchaseOrders"),   color: "#f97316" },
                   { href: "/jasa",            icon: Plus,            label: t("nav.createRequest"),   color: "#0ea5e9" },
                   { href: "/orders",          icon: ClipboardList,   label: t("nav.myShipments"),     color: "#f59e0b" },
                   { href: "/portal-dokumen",  icon: FolderOpen,      label: t("nav.documents"),       color: "#8b5cf6" },

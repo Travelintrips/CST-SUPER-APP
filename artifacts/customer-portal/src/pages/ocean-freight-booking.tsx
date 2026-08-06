@@ -15,6 +15,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import PageSeo from "@/components/PageSeo";
+import { useLanguage } from "@/i18n/LanguageContext";
 
 /* ─── Types ──────────────────────────────────────────────── */
 interface EstimateOption {
@@ -81,6 +82,7 @@ export default function OceanFreightBookingPage() {
   const [, setLocation] = useLocation();
   const { toast }       = useToast();
   const { data: me }    = useGetPortalMe({ query: { retry: false, queryKey: getGetPortalMeQueryKey() } });
+  const { t }           = useLanguage();
 
   const [step, setStep]               = useState<"form"|"results"|"inquiry"|"success">("form");
   const [loading, setLoading]         = useState(false);

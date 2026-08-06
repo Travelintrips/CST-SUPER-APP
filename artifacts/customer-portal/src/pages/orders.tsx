@@ -236,9 +236,9 @@ export default function Orders() {
     product: "bg-emerald-50 text-emerald-700",
   };
   const TYPE_LABEL: Record<string, string> = {
-    logistic: "Logistik",
-    crm: "Sales Order",
-    product: "Produk",
+    logistic: t("orders.typeLogistic"),
+    crm: t("orders.typeCrm"),
+    product: t("orders.typeProduct"),
   };
 
   return (
@@ -249,17 +249,17 @@ export default function Orders() {
           onClick={() => window.history.length > 1 ? window.history.back() : setLocation("/dashboard")}
           className="inline-flex items-center gap-1.5 mb-4 text-[12px] font-semibold px-3 py-1.5 rounded-lg text-slate-500 hover:text-slate-800 bg-white hover:bg-slate-50 border border-slate-200 transition-all shadow-sm"
         >
-          <ArrowLeft className="h-3.5 w-3.5" /> Kembali
+          <ArrowLeft className="h-3.5 w-3.5" /> {t("orders.back")}
         </button>
 
         <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-4 gap-4">
           <div>
             <h1 className="text-3xl font-display font-bold mb-2 flex items-center gap-2">
               <Package className="h-7 w-7 text-primary" />
-              Pesanan Saya
+              {t("orders.myOrders")}
             </h1>
             <p className="text-muted-foreground">
-              Semua pesanan logistik, produk, dan sales order Anda dalam satu tempat.
+              {t("orders.myOrdersDesc")}
             </p>
           </div>
           <div className="relative w-full md:w-72">

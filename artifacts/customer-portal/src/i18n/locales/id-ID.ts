@@ -31,6 +31,9 @@ const locale: DeepRecord = {
     profile: "Profil",
     importTariffCalc: "Kalkulator Tarif Impor",
     logisticCostCalc: "Kalkulator Biaya Logistik",
+    myRfqs: 'RFQ Saya',
+    myPurchaseOrders: 'Pesanan Pembelian',
+    pendingApprovals: 'Menunggu Persetujuan',
   },
   navbar: {
     searchPlaceholder: "Cari layanan, produk…",
