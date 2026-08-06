@@ -645,6 +645,54 @@ export async function runUnifiedMatching(
  * Period lock: enforced by _postEntryCore — throws PERIOD_CLOSED for closed periods.
  * Auto-post intentionally disabled — admin must post the draft journal.
  */
+
+/**
+ * Translate a raw PostgreSQL / trigger error into a user-friendly Indonesian message.
+ * The raw message is logged separately; only the friendly string is shown to the user.
+ */
+function mapDbErrorToUserMessage(rootMsg: string, originalError: any): string {
+  // PostgreSQL error code lives on the cause object (Drizzle unwrap) or the error itself.
+  const pgCode: string | undefined =
+    originalError?.cause?.code ?? originalError?.code;
+
+  // 23505 — unique_violation (duplicate key)
+  if (pgCode === "23505") {
+    return "Jurnal untuk mutasi ini sudah ada. Silakan refresh halaman.";
+  }
+
+  // 23503 — foreign_key_violation (invalid COA or related record)
+  if (pgCode === "23503") {
+    return "Akun COA tidak valid. Pastikan kode akun benar.";
+  }
+
+  // P0001 — raise_exception (custom trigger / function errors)
+  if (pgCode === "P0001") {
+    if (rootMsg.includes("IMMUTABILITY_VIOLATION")) {
+      return "Jurnal sudah diposting dan tidak bisa diubah. Gunakan reversal untuk koreksi.";
+    }
+    if (rootMsg.includes("PERIOD_CLOSED")) {
+      return "Periode keuangan sudah ditutup. Gunakan entri di periode baru.";
+    }
+  }
+
+  // Trigger message strings (some DBs surface via message, not code)
+  if (rootMsg.includes("IMMUTABILITY_VIOLATION") || rootMsg.includes("immutability")) {
+    return "Jurnal sudah diposting dan tidak bisa diubah. Gunakan reversal untuk koreksi.";
+  }
+  if (rootMsg.includes("PERIOD_CLOSED") || rootMsg.includes("period is closed")) {
+    return "Periode keuangan sudah ditutup. Gunakan entri di periode baru.";
+  }
+  if (rootMsg.includes("duplicate key") || rootMsg.includes("unique constraint")) {
+    return "Jurnal untuk mutasi ini sudah ada. Silakan refresh halaman.";
+  }
+  if (rootMsg.includes("foreign key") || rootMsg.includes("violates foreign key")) {
+    return "Akun COA tidak valid. Pastikan kode akun benar.";
+  }
+
+  // Fallback: generic but still non-technical
+  return "Terjadi kesalahan saat membuat jurnal. Silakan coba lagi atau hubungi tim teknis.";
+}
+
 export async function approveAndCreateJournal(
   mutationId: number,
   matchId: number | null,
@@ -1075,7 +1123,10 @@ export async function approveAndCreateJournal(
         code: e.code,
       };
     }
-    return { ok: false, journalEntryId: null, error: rootMsg };
+
+    // Map raw PostgreSQL / trigger error codes to user-friendly Indonesian messages.
+    const userFriendlyError = mapDbErrorToUserMessage(rootMsg, e);
+    return { ok: false, journalEntryId: null, error: userFriendlyError };
   }
 
   // ── Post-commit: fire-and-forget side effects (use global db — outside tx) ──
