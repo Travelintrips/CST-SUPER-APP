@@ -106,6 +106,7 @@ import { runProductMediaMigration } from "./lib/productMediaMigration.js";
 import { runAdvanceMigration } from "./routes/advances.js";
 import { runCoaGovernanceMigration } from "./lib/coaGovernanceMigration.js";
 import { runCoaProposalMigration } from "./lib/coaProposalMigration.js";
+import { syncDevCoaToFixture } from "./lib/coaDevSync.js";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -275,6 +276,7 @@ async function main() {
     CREATE UNIQUE INDEX IF NOT EXISTS expense_categories_code_uniq ON expense_categories (code)
   `).catch(() => {});
   await runSafe("seedAccountingDefaults", () => seedAccountingDefaults());
+  await runSafe("syncDevCoaToFixture", () => syncDevCoaToFixture());
   await runSafe("seedAdditionalTaxes", () => seedAdditionalTaxes());
   await runSafe("backfillExpenseCategoryAccounts", () => backfillExpenseCategoryAccounts());
 

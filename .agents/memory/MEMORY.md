@@ -22,3 +22,4 @@
 - [Ledger trigger conflict ae_immutability](ledger-trigger-conflict.md) — ae_immutability_fn (ledgerGuard) is stricter than fn_block_posted_entry_update; both must allow posted→draft with cancel_reason for repair to work.
 - [Drizzle sql array ANY syntax](drizzle-sql-array-any.md) — sql`= ANY(${jsArray})` generates tuple ($1,$2,…) not ARRAY[$1,…]; use sql.raw(inList) for static IN-lists.
 - [Production COA ID mismatch](prod-coa-id-mismatch.md) — import data produksi tanpa COA → Trial Balance kosong; remap account_id via session_replication_role + CASE UPDATE.
+- [Dev COA ID sync on startup](coa-dev-sync.md) — syncDevCoaToFixture() auto-remaps dev IDs to prod IDs after DB reset; fixture in coa-prod-fixture.json; refresh with generate-coa-fixture.mjs.
