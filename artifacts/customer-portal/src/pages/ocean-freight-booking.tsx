@@ -56,14 +56,34 @@ const PORTS = [
   "Busan New Port","Tokyo Port","Jebel Ali","Rotterdam","Hamburg","Long Beach",
 ];
 const CONTAINER_TYPES = ["20ft","40ft","40HC","Reefer 20ft","Reefer 40ft","Open Top","Flat Rack"];
-const TRADE_TYPES     = [{ v:"export",l:"Export" },{ v:"import",l:"Import" },{ v:"domestic",l:"Domestic" },{ v:"cross_border",l:"Cross Border" }];
-const SERVICE_MODES   = [{ v:"port_to_port",l:"Port to Port" },{ v:"door_to_port",l:"Door to Port" },{ v:"port_to_door",l:"Port to Door" },{ v:"door_to_door",l:"Door to Door" }];
-const CARGO_CONDITIONS= [{ v:"general",l:"General Cargo" },{ v:"dg",l:"DG Cargo" },{ v:"reefer",l:"Reefer" },{ v:"fragile",l:"Fragile" },{ v:"oversize",l:"Oversize" },{ v:"high_value",l:"High Value" }];
+const TRADE_TYPES = [
+  { v:"export",       labelKey:"oceanFreightBooking.tradeTypeExport"      },
+  { v:"import",       labelKey:"oceanFreightBooking.tradeTypeImport"      },
+  { v:"domestic",     labelKey:"oceanFreightBooking.tradeTypeDomestic"    },
+  { v:"cross_border", labelKey:"oceanFreightBooking.tradeTypeCrossBorder" },
+];
+const SERVICE_MODES = [
+  { v:"port_to_port", labelKey:"oceanFreightBooking.serviceModePortPort" },
+  { v:"door_to_port", labelKey:"oceanFreightBooking.serviceModeDoorPort" },
+  { v:"port_to_door", labelKey:"oceanFreightBooking.serviceModePortDoor" },
+  { v:"door_to_door", labelKey:"oceanFreightBooking.serviceModeDoorDoor" },
+];
+const CARGO_CONDITIONS = [
+  { v:"general",    labelKey:"oceanFreightBooking.cargoGeneral"   },
+  { v:"dg",         labelKey:"oceanFreightBooking.cargoDG"        },
+  { v:"reefer",     labelKey:"oceanFreightBooking.cargoReefer"    },
+  { v:"fragile",    labelKey:"oceanFreightBooking.cargoFragile"   },
+  { v:"oversize",   labelKey:"oceanFreightBooking.cargoOversize"  },
+  { v:"high_value", labelKey:"oceanFreightBooking.cargoHighValue" },
+];
 const ADDITIONAL_SERVICES = [
-  { v:"trucking_pickup",l:"Trucking Pickup" },{ v:"trucking_delivery",l:"Trucking Delivery" },
-  { v:"customs_clearance",l:"Customs Clearance" },{ v:"insurance",l:"Insurance" },
-  { v:"fumigation",l:"Fumigation" },{ v:"coo_certificate",l:"COO / Certificate" },
-  { v:"warehouse_handling",l:"Warehouse Handling" },
+  { v:"trucking_pickup",    labelKey:"oceanFreightBooking.addonTruckingPickup"   },
+  { v:"trucking_delivery",  labelKey:"oceanFreightBooking.addonTruckingDelivery" },
+  { v:"customs_clearance",  labelKey:"oceanFreightBooking.addonCustoms"          },
+  { v:"insurance",          labelKey:"oceanFreightBooking.addonInsurance"        },
+  { v:"fumigation",         labelKey:"oceanFreightBooking.addonFumigation"       },
+  { v:"coo_certificate",    labelKey:"oceanFreightBooking.addonCOO"              },
+  { v:"warehouse_handling", labelKey:"oceanFreightBooking.addonWarehouse"        },
 ];
 
 /* shared style tokens */
@@ -213,7 +233,7 @@ export default function OceanFreightBookingPage() {
             className="flex-1 py-3 rounded-xl border-2 border-slate-200 text-slate-700 font-semibold text-sm hover:border-slate-400 transition-all flex items-center justify-center gap-1.5 bg-white"
             onClick={() => setLocation(`/ocean-freight/track/${orderNumber}`)}
           >
-            <MapPin className="h-4 w-4" /> Tracking
+            <MapPin className="h-4 w-4" /> {t("oceanFreightBooking.tracking")}
           </button>
           <button
             className="flex-1 py-3 rounded-xl text-white font-bold text-sm flex items-center justify-center gap-1.5 transition-all"
@@ -248,7 +268,7 @@ export default function OceanFreightBookingPage() {
             <h2 className="text-xl font-extrabold text-slate-900">{t("oceanFreightBooking.senderTitle")}</h2>
             {selectedOption && (
               <p className="text-slate-500 text-sm">
-                {t("estimate")}: <span className="font-bold text-blue-700">{IDR(selectedOption.total_estimate_idr)}</span>
+                {t("oceanFreightBooking.estimate")}: <span className="font-bold text-blue-700">{IDR(selectedOption.total_estimate_idr)}</span>
                 {" · "}{t((OPTION_META[selectedOption.estimate_option] ?? { labelKey: "oceanFreightBooking.optionStandard" }).labelKey as any)}
               </p>
             )}
@@ -382,7 +402,7 @@ export default function OceanFreightBookingPage() {
                           )}
                           <span className="flex items-center gap-1">
                             <Globe className="w-3 h-3" />
-                            {opt.direct_or_transshipment === "transshipment" ? "Via T/S" : "Direct"}
+                            {opt.direct_or_transshipment === "transshipment" ? t("oceanFreightBooking.transshipmentViaTS") : t("oceanFreightBooking.transshipmentDirect")}
                           </span>
                         </div>
                       </div>
@@ -479,7 +499,7 @@ export default function OceanFreightBookingPage() {
               <Ship className="h-6 w-6 text-white" />
             </div>
             <div>
-              <h1 className="text-2xl font-extrabold text-slate-900">Ocean Freight</h1>
+              <h1 className="text-2xl font-extrabold text-slate-900">{t("oceanFreightBooking.titleOceanFreight")}</h1>
               <p className="text-slate-500 text-sm">{t("oceanFreightBooking.subtitle")}</p>
             </div>
           </div>
@@ -494,7 +514,7 @@ export default function OceanFreightBookingPage() {
           <div className="p-5 space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className={labelCls}>Origin Port *</label>
+                <label className={labelCls}>{t("oceanFreightBooking.labelOriginPort")}</label>
                 <Select value={originPort} onValueChange={setOriginPort}>
                   <SelectTrigger className={inputCls + " mt-0 h-10"}>
                     <SelectValue />
@@ -505,7 +525,7 @@ export default function OceanFreightBookingPage() {
                 </Select>
               </div>
               <div>
-                <label className={labelCls}>Destination Port *</label>
+                <label className={labelCls}>{t("oceanFreightBooking.labelDestPort")}</label>
                 <Select value={destPort} onValueChange={setDestPort}>
                   <SelectTrigger className={inputCls + " mt-0 h-10"}>
                     <SelectValue placeholder={t("oceanFreightBooking.selectPort")} />
@@ -516,20 +536,20 @@ export default function OceanFreightBookingPage() {
                 </Select>
               </div>
               <div>
-                <label className={labelCls}>Trade Type</label>
+                <label className={labelCls}>{t("oceanFreightBooking.labelTradeType")}</label>
                 <Select value={tradeType} onValueChange={setTradeType}>
                   <SelectTrigger className={inputCls + " mt-0 h-10"}><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {TRADE_TYPES.map(t => <SelectItem key={t.v} value={t.v}>{t.l}</SelectItem>)}
+                    {TRADE_TYPES.map(item => <SelectItem key={item.v} value={item.v}>{t(item.labelKey as any)}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
               <div>
-                <label className={labelCls}>Service Mode</label>
+                <label className={labelCls}>{t("oceanFreightBooking.labelServiceMode")}</label>
                 <Select value={serviceMode} onValueChange={setServiceMode}>
                   <SelectTrigger className={inputCls + " mt-0 h-10"}><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {SERVICE_MODES.map(s => <SelectItem key={s.v} value={s.v}>{s.l}</SelectItem>)}
+                    {SERVICE_MODES.map(item => <SelectItem key={item.v} value={item.v}>{t(item.labelKey as any)}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
@@ -566,7 +586,7 @@ export default function OceanFreightBookingPage() {
             {shipmentType === "FCL" ? (
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className={labelCls}>Container Type *</label>
+                  <label className={labelCls}>{t("oceanFreightBooking.labelContainerType")}</label>
                   <Select value={containerType} onValueChange={setContainerType}>
                     <SelectTrigger className={inputCls + " mt-0 h-10"}><SelectValue /></SelectTrigger>
                     <SelectContent>
@@ -586,7 +606,7 @@ export default function OceanFreightBookingPage() {
             ) : (
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className={labelCls}>Volume (CBM)</label>
+                  <label className={labelCls}>{t("oceanFreightBooking.labelVolumeCbm")}</label>
                   <Input type="number" min="0" step="0.01" value={totalCbm} onChange={e => setTotalCbm(e.target.value)} placeholder="0.00" className={inputCls} />
                 </div>
                 <div>
@@ -605,7 +625,7 @@ export default function OceanFreightBookingPage() {
               <Select value={cargoCondition} onValueChange={setCargoCondition}>
                 <SelectTrigger className={inputCls + " mt-0 h-10"}><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {CARGO_CONDITIONS.map(c => <SelectItem key={c.v} value={c.v}>{c.l}</SelectItem>)}
+                  {CARGO_CONDITIONS.map(item => <SelectItem key={item.v} value={item.v}>{t(item.labelKey as any)}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -636,7 +656,7 @@ export default function OceanFreightBookingPage() {
                     className="accent-blue-600 w-3.5 h-3.5 shrink-0"
                   />
                   <span className={`text-[12px] font-medium ${selectedSvc.includes(s.v) ? "text-blue-700" : "text-slate-600"}`}>
-                    {s.l}
+                    {t(s.labelKey as any)}
                   </span>
                 </label>
               ))}
