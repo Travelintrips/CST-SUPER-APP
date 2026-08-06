@@ -1653,22 +1653,22 @@ export default function MarketplacePage() {
                       <p className="text-[13px] font-bold text-slate-500 uppercase tracking-wider mb-4">{t("marketplace.comingSoonCategories")}</p>
                       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
                         {[
-                          { img: "https://images.unsplash.com/photo-1447933601403-0c6688de566e?w=400&q=80&fit=crop&h=220",                                                                     catKey: "coffee"     },
+                          { img: "/api/storage/public-objects/portal/images/categories/coffee.jpg",                                                                                           catKey: "coffee"     },
                           { img: "/api/storage/public-objects/portal/images/products/batubara-coal.png",                                                                         catKey: "coal"       },
-                          { img: "https://images.unsplash.com/photo-1504328345606-18bbc8c9d7d1?w=400&q=80&fit=crop&h=220",                                                                     catKey: "iron_steel" },
+                          { img: "/api/storage/public-objects/portal/images/categories/iron-steel.jpg",                                                                                      catKey: "iron_steel" },
                           { img: "/api/storage/public-objects/portal/images/products/sawit-palm-oil.png",                                                                          catKey: "palm_oil"   },
                           { img: "/api/storage/public-objects/portal/images/products/nikel.png",                                                                               catKey: "nickel"     },
-                          { img: "https://images.pexels.com/photos/3721272/pexels-photo-3721272.jpeg?auto=compress&cs=tinysrgb&w=400&h=220&fit=crop",                               catKey: "copper"     },
+                          { img: "/api/storage/public-objects/portal/images/categories/copper.jpg",                                                                                         catKey: "copper"     },
                           { img: "/api/storage/public-objects/portal/images/products/beras-rice.png",                                                                            catKey: "rice"       },
-                          { img: "https://images.unsplash.com/photo-1559181567-c3190bebb531?w=400&q=80&fit=crop&h=220",                                                                        catKey: "sugar"      },
-                          { img: "https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2?w=400&q=80&fit=crop&h=220",                                                                     catKey: "seafood"    },
-                          { img: "https://images.pexels.com/photos/32755398/pexels-photo-32755398.jpeg?auto=compress&cs=tinysrgb&w=400&h=220&fit=crop",                             catKey: "rubber"     },
-                          { img: "https://images.pexels.com/photos/36353684/pexels-photo-36353684.jpeg?auto=compress&cs=tinysrgb&w=400&h=220&fit=crop",                             catKey: "live_fish"  },
-                          { img: "https://images.pexels.com/photos/32838465/pexels-photo-32838465.jpeg?auto=compress&cs=tinysrgb&w=400&h=220&fit=crop",                             catKey: "bird_nest"  },
-                          { img: "https://images.pexels.com/photos/5498222/pexels-photo-5498222.jpeg?auto=compress&cs=tinysrgb&w=400&h=220&fit=crop",                               catKey: "frozen_food"},
-                          { img: "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?w=400&q=80&fit=crop&h=220",                                                                        catKey: "furniture"  },
-                          { img: "https://images.unsplash.com/photo-1532187863486-abf9dbad1b69?w=400&q=80&fit=crop&h=220",                                                                     catKey: "chemical"   },
-                          { img: "https://images.unsplash.com/photo-1558171813-0ed5d0fba39a?w=400&q=80&fit=crop&h=220",                                                                        catKey: "textile"    },
+                          { img: "/api/storage/public-objects/portal/images/categories/sugar.jpg",                                                                                           catKey: "sugar"      },
+                          { img: "/api/storage/public-objects/portal/images/categories/seafood.jpg",                                                                                         catKey: "seafood"    },
+                          { img: "/api/storage/public-objects/portal/images/categories/rubber.jpg",                                                                                         catKey: "rubber"     },
+                          { img: "/api/storage/public-objects/portal/images/categories/live-fish.jpg",                                                                                    catKey: "live_fish"  },
+                          { img: "/api/storage/public-objects/portal/images/categories/bird-nest.jpg",                                                                                   catKey: "bird_nest"  },
+                          { img: "/api/storage/public-objects/portal/images/categories/frozen-food.jpg",                                                                                 catKey: "frozen_food"},
+                          { img: "/api/storage/public-objects/portal/images/categories/furniture.jpg",                                                                                       catKey: "furniture"  },
+                          { img: "/api/storage/public-objects/portal/images/categories/chemical.jpg",                                                                                        catKey: "chemical"   },
+                          { img: "/api/storage/public-objects/portal/images/categories/textile.jpg",                                                                                         catKey: "textile"    },
                         ].map(({ img, catKey }) => {
                           const sub = t(`marketplace.catSub_${catKey}`, catKey);
                           const label = t(`marketplace.cat_${catKey}`);

@@ -32,6 +32,10 @@ export default defineConfig({
     "import.meta.env.VITE_MAP_TILE_URL": JSON.stringify(
       process.env.VITE_MAP_TILE_URL ?? "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
     ),
+    // OSM iframe embed base URL — used by order-track LiveMapSection
+    "import.meta.env.VITE_OSM_EMBED_BASE_URL": JSON.stringify(
+      process.env.VITE_OSM_EMBED_BASE_URL ?? "https://www.openstreetmap.org/export/embed.html"
+    ),
   },
   plugins: [
     react(),
