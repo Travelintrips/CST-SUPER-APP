@@ -16,7 +16,8 @@ import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "./logger.js";
 import { getAdminGroupWa } from "./adminWa.js";
-import { sendWhatsApp } from "./fonnte.js";
+// BLK-03 fix: route all WA sends through canonical waTransport layer
+import { sendViaService } from "./waTransport.js";
 
 const PREFIX = "[ProductFirstReminderWorker]";
 const INTERVAL_MS = 4 * 60 * 60 * 1000; // setiap 4 jam
@@ -70,7 +71,7 @@ async function notifyAdminWa(msg: string, context: string, refId: number) {
   try {
     const group = await getAdminGroupWa();
     if (!group) return;
-    await sendWhatsApp(group, msg, { context, refId: String(refId) });
+    await sendViaService(group, msg, { context, refId: String(refId) });
   } catch { /* non-fatal */ }
 }
 

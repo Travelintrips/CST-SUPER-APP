@@ -17,6 +17,9 @@ router.use(async (req, res, next) => {
 });
 
 // ─── Inline migration ────────────────────────────────────────────────────────
+// JUSTIFICATION for sql.raw() here: DDL statements (CREATE TABLE IF NOT EXISTS)
+// contain no user input — they are static strings. Drizzle's parameterized sql``
+// cannot be used for DDL. This is the only legitimate use of sql.raw() in this file.
 async function ensureTables() {
   await db.execute(sql.raw(`
     CREATE TABLE IF NOT EXISTS bank_loans (
@@ -68,9 +71,11 @@ function loanCoaCode(loanType: string, isLongTerm = false): string {
 async function nextLoanNumber(companyId: number | null): Promise<string> {
   const prefix = "HBK";
   const year = new Date().getFullYear();
-  const rows = await db.execute(sql.raw(
-    `SELECT loan_number FROM bank_loans WHERE loan_number LIKE '${prefix}/${year}/%' ORDER BY id DESC LIMIT 1`
-  ));
+  // Parameterized: prefix/year/% is a safe literal string built from local constants only (no user input)
+  const likePattern = `${prefix}/${year}/%`;
+  const rows = await db.execute(
+    sql`SELECT loan_number FROM bank_loans WHERE loan_number LIKE ${likePattern} ORDER BY id DESC LIMIT 1`
+  );
   const last = (rows.rows[0] as any)?.loan_number as string | undefined;
   let seq = 1;
   if (last) { const parts = last.split("/"); seq = (parseInt(parts[2] ?? "0", 10) || 0) + 1; }
@@ -81,9 +86,9 @@ async function nextLoanNumber(companyId: number | null): Promise<string> {
 router.get("/", async (req: Request, res) => {
   await runMigration();
   const companyId = await resolveCompanyId(req);
-  const rows = await db.execute(sql.raw(
-    `SELECT * FROM bank_loans ${companyId ? `WHERE company_id = ${companyId}` : ""} ORDER BY id DESC`
-  ));
+  const rows = companyId
+    ? await db.execute(sql`SELECT * FROM bank_loans WHERE company_id = ${companyId} ORDER BY id DESC`)
+    : await db.execute(sql`SELECT * FROM bank_loans ORDER BY id DESC`);
   res.json(rows.rows);
 });
 
@@ -91,12 +96,13 @@ router.get("/", async (req: Request, res) => {
 router.get("/:id", async (req: Request, res) => {
   await runMigration();
   const id = parseInt(String(req.params.id));
-  const loanResult = await db.execute(sql.raw(`SELECT * FROM bank_loans WHERE id = ${id}`));
+  if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid." });
+  const loanResult = await db.execute(sql`SELECT * FROM bank_loans WHERE id = ${id}`);
   const loan = loanResult.rows[0];
   if (!loan) return res.status(404).json({ message: "Pinjaman tidak ditemukan." });
-  const paymentsResult = await db.execute(sql.raw(
-    `SELECT * FROM bank_loan_payments WHERE loan_id = ${id} ORDER BY payment_date, id`
-  ));
+  const paymentsResult = await db.execute(
+    sql`SELECT * FROM bank_loan_payments WHERE loan_id = ${id} ORDER BY payment_date, id`
+  );
   res.json({ ...(loan as any), payments: paymentsResult.rows });
 });
 
@@ -162,20 +168,22 @@ router.post("/", async (req: Request, res) => {
     const journalEntryId: number = je.id;
 
     // ── Insert loan — only reached if journal succeeded ───────────────────────
-    const insertResult = await db.execute(sql.raw(`
+    const interestRateNum = parseFloat(String(interestRate)) || 0;
+    const adminFeeNum = parseFloat(String(adminFee)) || 0;
+    const insertResult = await db.execute(sql`
       INSERT INTO bank_loans
         (company_id, loan_number, loan_type, lender_name, principal_amount, outstanding_amount,
          paid_amount, payment_method, disbursement_date, tenor_months, interest_rate,
          admin_fee, notes, status, journal_entry_id, created_by_id)
       VALUES
-        (${companyId ?? "NULL"}, '${loanNumber}', '${loanType}',
-         '${lenderName.replace(/'/g, "''")}', ${amount}, ${amount}, 0,
-         '${paymentMethod}', '${disbursementDate}',
-         ${tenorMonths ?? "NULL"}, ${parseFloat(interestRate) || 0}, ${parseFloat(adminFee) || 0},
-         ${notes ? `'${String(notes).replace(/'/g, "''")}'` : "NULL"},
-         'active', ${journalEntryId}, ${userId ? `'${userId}'` : "NULL"})
+        (${companyId ?? null}, ${loanNumber}, ${loanType}, ${String(lenderName).trim()},
+         ${amount}, ${amount}, ${0},
+         ${paymentMethod}, ${disbursementDate},
+         ${tenorMonths ?? null}, ${interestRateNum}, ${adminFeeNum},
+         ${notes ? String(notes) : null},
+         ${'active'}, ${journalEntryId}, ${userId ?? null})
       RETURNING *
-    `));
+    `);
     return res.status(201).json(insertResult.rows[0]);
 
   } catch (err) {
@@ -196,7 +204,8 @@ router.post("/", async (req: Request, res) => {
 router.post("/:id/pay", async (req: Request, res) => {
   await runMigration();
   const id = parseInt(String(req.params.id));
-  const loanResult = await db.execute(sql.raw(`SELECT * FROM bank_loans WHERE id = ${id}`));
+  if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid." });
+  const loanResult = await db.execute(sql`SELECT * FROM bank_loans WHERE id = ${id}`);
   const loan = loanResult.rows[0] as any;
   if (!loan) return res.status(404).json({ message: "Pinjaman tidak ditemukan." });
   if (loan.status === "paid") return res.status(400).json({ message: "Pinjaman sudah lunas." });
@@ -260,30 +269,32 @@ router.post("/:id/pay", async (req: Request, res) => {
     const journalEntryId: number = je.id;
 
     // ── Insert payment — only reached if journal succeeded ─────────────────
-    await db.execute(sql.raw(`
+    await db.execute(sql`
       INSERT INTO bank_loan_payments
         (loan_id, payment_date, principal_amount, interest_amount, total_amount,
          payment_method, reference, notes, journal_entry_id)
       VALUES
-        (${id}, '${date}', ${principal}, ${interest}, ${total},
-         '${paymentMethod}',
-         ${reference ? `'${String(reference).replace(/'/g, "''")}'` : "NULL"},
-         ${notes ? `'${String(notes).replace(/'/g, "''")}'` : "NULL"},
+        (${id}, ${date}, ${principal}, ${interest}, ${total},
+         ${paymentMethod},
+         ${reference ? String(reference) : null},
+         ${notes ? String(notes) : null},
          ${journalEntryId})
-    `));
+    `);
 
     // ── Update loan balance ────────────────────────────────────────────────
     const newOutstanding = Math.max(0, outstanding - principal);
     const newPaid = parseFloat(loan.paid_amount) + principal;
     const newStatus = newOutstanding <= 0.01 ? "paid" : newPaid > 0 ? "partial" : "active";
-    await db.execute(sql.raw(`
+    await db.execute(sql`
       UPDATE bank_loans
-      SET outstanding_amount = ${newOutstanding}, paid_amount = ${newPaid}, status = '${newStatus}'
+      SET outstanding_amount = ${newOutstanding}, paid_amount = ${newPaid}, status = ${newStatus}
       WHERE id = ${id}
-    `));
+    `);
 
-    const updatedResult = await db.execute(sql.raw(`SELECT * FROM bank_loans WHERE id = ${id}`));
-    const paymentsResult = await db.execute(sql.raw(`SELECT * FROM bank_loan_payments WHERE loan_id = ${id} ORDER BY payment_date, id`));
+    const updatedResult = await db.execute(sql`SELECT * FROM bank_loans WHERE id = ${id}`);
+    const paymentsResult = await db.execute(
+      sql`SELECT * FROM bank_loan_payments WHERE loan_id = ${id} ORDER BY payment_date, id`
+    );
     return res.json({ loan: updatedResult.rows[0], payments: paymentsResult.rows });
 
   } catch (err) {
@@ -302,11 +313,12 @@ router.post("/:id/pay", async (req: Request, res) => {
 router.delete("/:id", async (req: Request, res) => {
   await runMigration();
   const id = parseInt(String(req.params.id));
-  const rows = await db.execute(sql.raw(`SELECT * FROM bank_loans WHERE id = ${id}`));
+  if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid." });
+  const rows = await db.execute(sql`SELECT * FROM bank_loans WHERE id = ${id}`);
   const loan = rows.rows[0] as any;
   if (!loan) return res.status(404).json({ message: "Pinjaman tidak ditemukan." });
   if (parseFloat(loan.paid_amount) > 0) return res.status(400).json({ message: "Pinjaman yang sudah ada cicilan tidak dapat dihapus." });
-  await db.execute(sql.raw(`DELETE FROM bank_loans WHERE id = ${id}`));
+  await db.execute(sql`DELETE FROM bank_loans WHERE id = ${id}`);
   res.json({ ok: true });
 });
 
