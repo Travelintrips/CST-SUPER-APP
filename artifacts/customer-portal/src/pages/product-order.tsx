@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { getPortalProfile } from "@/lib/auth";
+import { COMPANY_CONFIG } from "@/config/company";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -222,12 +223,12 @@ export default function ProductOrderPage() {
       .then((d: { companyName: string; companyAddress: string; originCity?: string; originAirport?: string; originPort?: string } | null) => {
         setCompanyOrigin(d?.companyAddress ? {
           name: d.companyName, address: d.companyAddress,
-          originCity: d.originCity ?? "Jakarta",
-          originAirport: d.originAirport ?? "CGK",
-          originPort: d.originPort ?? "Tanjung Priok, Jakarta",
-        } : { name: "B2B Marketplace and Logistic", address: "", originCity: "Jakarta", originAirport: "CGK", originPort: "Tanjung Priok, Jakarta" });
+          originCity: d.originCity ?? COMPANY_CONFIG.originCity,
+          originAirport: d.originAirport ?? COMPANY_CONFIG.originAirport,
+          originPort: d.originPort ?? COMPANY_CONFIG.originPort,
+        } : { name: COMPANY_CONFIG.brandName, address: "", originCity: COMPANY_CONFIG.originCity, originAirport: COMPANY_CONFIG.originAirport, originPort: COMPANY_CONFIG.originPort });
       })
-      .catch(() => setCompanyOrigin({ name: "B2B Marketplace and Logistic", address: "", originCity: "Jakarta", originAirport: "CGK", originPort: "Tanjung Priok, Jakarta" }));
+      .catch(() => setCompanyOrigin({ name: COMPANY_CONFIG.brandName, address: "", originCity: COMPANY_CONFIG.originCity, originAirport: COMPANY_CONFIG.originAirport, originPort: COMPANY_CONFIG.originPort }));
   }, []);
 
   useEffect(() => {
@@ -652,8 +653,8 @@ export default function ProductOrderPage() {
                     <span className="ml-auto text-[10px] font-semibold text-orange-600 bg-orange-100 border border-orange-200 rounded px-1.5 py-0.5">Otomatis</span>
                   </Label>
                   <div className="bg-orange-50 border border-orange-200 rounded-lg p-2.5">
-                    <p className="text-xs font-semibold text-slate-800">{companyOrigin?.name ?? "B2B Marketplace and Logistic"}</p>
-                    <p className="text-[11px] text-slate-500 mt-0.5">{companyOrigin?.address ?? "Jl. Logistik No. 1, Jakarta"}</p>
+                    <p className="text-xs font-semibold text-slate-800">{companyOrigin?.name ?? COMPANY_CONFIG.brandName}</p>
+                    <p className="text-[11px] text-slate-500 mt-0.5">{companyOrigin?.address ?? COMPANY_CONFIG.pickupAddress}</p>
                     <p className="text-[10px] text-orange-600 mt-1">Tim kami yang akan menjemput barang dari lokasi ini.</p>
                   </div>
                 </div>

@@ -31,7 +31,13 @@ export const COMPANY_CONFIG = {
   /** Kota asal default untuk kalkulasi biaya pengiriman */
   originCity: "Jakarta",
 
-  /** Alamat pickup default untuk order truk */
+  /** Default IATA airport code untuk air freight */
+  originAirport: "CGK",
+
+  /** Default origin seaport / pelabuhan asal */
+  originPort: "Tanjung Priok, Jakarta",
+
+  /** Default pickup address untuk order truk */
   pickupAddress: "Jl. Logistik No. 1, Jakarta",
 
   /** Panjang maksimal nama perusahaan sebelum fallback ke brandName di navbar */

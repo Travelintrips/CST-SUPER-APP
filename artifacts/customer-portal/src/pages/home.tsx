@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Link } from "wouter";
+import { COMPANY_CONFIG } from "@/config/company";
 import { Button } from "@/components/ui/button";
 import { useGetPortalCompany } from "@workspace/api-client-react";
 import { Globe, ShieldCheck, Clock, Package, CheckCircle2, Mail, Phone, MapPin, ArrowRight, Ship, FileCheck, Truck, Sparkles, Calculator, Tag, ChevronRight, Star, X, ShoppingCart, Plane, ClipboardList, BookOpen } from "lucide-react";
@@ -640,7 +641,7 @@ export default function Home() {
                   <EditableText contentKey="about.title" defaultValue={t("about.title")} />
                 </h2>
                 <p className="text-muted-foreground text-lg leading-relaxed">
-                  <EditableText contentKey="about.description" defaultValue={`${company?.name || "PT. Cahaya Sejati Teknologi"} ${t("about.description")}`} multiline />
+                  <EditableText contentKey="about.description" defaultValue={`${company?.name || COMPANY_CONFIG.legalName} ${t("about.description")}`} multiline />
                 </p>
               </div>
 
@@ -813,7 +814,7 @@ export default function Home() {
             className="mx-auto"
             style={{ fontSize: "clamp(18px, 2vw, 22px)", lineHeight: 1.65, fontWeight: 500, maxWidth: "760px", margin: "0 auto 40px", color: "rgba(255,255,255,0.92)", textShadow: "0 4px 14px rgba(15,23,42,0.35)" }}
           >
-            <EditableText contentKey="cta.description" defaultValue={`${t("cta.prefix")} ${t("cta.description")} ${company?.name || "B2B Marketplace and Logistic"}. ${t("cta.suffix")}`} multiline />
+            <EditableText contentKey="cta.description" defaultValue={`${t("cta.prefix")} ${t("cta.description")} ${company?.name || COMPANY_CONFIG.brandName}. ${t("cta.suffix")}`} multiline />
           </p>
 
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
@@ -906,7 +907,7 @@ export default function Home() {
                       <div>
                         <p className="font-semibold mb-0.5">{t("contact.emailLabel")}</p>
                         <p className="text-muted-foreground">
-                          <EditableText contentKey="contact_email" defaultValue={content["contact_email"] || "info@cstlogistic.co.id"} />
+                          <EditableText contentKey="contact_email" defaultValue={content["contact_email"] || COMPANY_CONFIG.email} />
                         </p>
                       </div>
                     </li>

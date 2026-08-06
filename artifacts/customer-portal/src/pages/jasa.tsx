@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { COMPANY_CONFIG } from "@/config/company";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/lib/supabase";
 import { Link, useLocation } from "wouter";
@@ -269,8 +270,8 @@ export default function Jasa() {
   useServicesRealtime("listPortalServicesJasa");
 
   useEffect(() => {
-    document.title = "Jasa & Layanan Logistik — B2B Marketplace and Logistic";
-    return () => { document.title = "B2B Marketplace and Logistic"; };
+    document.title = `Jasa & Layanan Logistik — ${COMPANY_CONFIG.brandName}`;
+    return () => { document.title = COMPANY_CONFIG.brandName; };
   }, []);
 
   useEffect(() => {
