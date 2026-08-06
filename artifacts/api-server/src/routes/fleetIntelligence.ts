@@ -138,6 +138,9 @@ export async function runFleetIntelligenceMigration() {
       await db.execute(sql.raw(`CREATE INDEX IF NOT EXISTS fleet_drivers_partner_idx ON fleet_drivers(partner_id)`));
     }
     await db.execute(sql.raw(`CREATE INDEX IF NOT EXISTS fleet_drivers_status_idx  ON fleet_drivers(status)`));
+    // Guard: add driver_external_id column if the fleet_drivers table predates this column
+    // (older schema may not have it; CREATE TABLE IF NOT EXISTS won't add missing columns)
+    await db.execute(sql.raw(`ALTER TABLE fleet_drivers ADD COLUMN IF NOT EXISTS driver_external_id TEXT`));
     await db.execute(sql.raw(`CREATE INDEX IF NOT EXISTS fleet_drivers_ext_id_idx  ON fleet_drivers(driver_external_id)`));
     // fleet_vehicles
     await db.execute(sql.raw(`CREATE TABLE IF NOT EXISTS fleet_vehicles (id SERIAL PRIMARY KEY, company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE, partner_id INTEGER REFERENCES fleet_partners(id) ON DELETE SET NULL, driver_id INTEGER REFERENCES fleet_drivers(id) ON DELETE SET NULL, plate TEXT NOT NULL, vehicle_type TEXT NOT NULL DEFAULT 'motor', brand TEXT, model TEXT, year INTEGER, color TEXT, status TEXT NOT NULL DEFAULT 'active', last_service_date DATE, notes TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`));
