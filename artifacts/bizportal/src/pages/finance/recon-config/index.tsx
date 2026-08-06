@@ -444,12 +444,12 @@ function ConfigTab({ category }: { category: "BUSINESS_TRANSACTION" | "ROUTINE_E
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label className="text-slate-300">Tipe</Label>
-                <Select value={form.type ?? ""} onValueChange={v => setForm((f: any) => ({ ...f, type: v || null }))}>
+                <Select value={form.type ?? "__none__"} onValueChange={v => setForm((f: any) => ({ ...f, type: v === "__none__" ? null : v }))}>
                   <SelectTrigger className="bg-slate-800 border-slate-600 text-white mt-1">
                     <SelectValue placeholder="Pilih tipe…" />
                   </SelectTrigger>
                   <SelectContent className="bg-slate-800 border-slate-600 text-white">
-                    <SelectItem value="">— Tidak ditentukan —</SelectItem>
+                    <SelectItem value="__none__">— Tidak ditentukan —</SelectItem>
                     <SelectItem value="income">income</SelectItem>
                     <SelectItem value="expense">expense</SelectItem>
                     <SelectItem value="transfer">transfer</SelectItem>
@@ -780,10 +780,10 @@ function AiRulesTab() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label className="text-slate-300">Action Flow</Label>
-                <Select value={form.action_flow ?? ""} onValueChange={v => setForm((f: any) => ({ ...f, action_flow: v || null }))}>
+                <Select value={form.action_flow ?? "__none__"} onValueChange={v => setForm((f: any) => ({ ...f, action_flow: v === "__none__" ? null : v }))}>
                   <SelectTrigger className="bg-slate-800 border-slate-600 text-white mt-1"><SelectValue placeholder="—" /></SelectTrigger>
                   <SelectContent className="bg-slate-800 border-slate-600 text-white">
-                    <SelectItem value="">— Tidak ditentukan —</SelectItem>
+                    <SelectItem value="__none__">— Tidak ditentukan —</SelectItem>
                     {FLOWS.map(f => <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>)}
                   </SelectContent>
                 </Select>
