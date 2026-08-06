@@ -2,7 +2,7 @@ import app from "./app";
 import { logger } from "./lib/logger";
 import { bootstrapConfigFromSupabase } from "./lib/configBootstrap";
 import { runTranslationsMigration } from "./lib/translationsMigration";
-import { seedAccountingDefaults, seedAdditionalTaxes, backfillExpenseCategoryAccounts } from "./lib/accountingSeed";
+import { seedAccountingDefaults, seedAdditionalTaxes, backfillExpenseCategoryAccounts, backfillMdrExpenseCategory } from "./lib/accountingSeed";
 import { syncDevCoaToFixture } from "./lib/coaDevSync";
 import { seedLogisticsServiceItems } from "./lib/seedLogisticsItems";
 import { seedCatalogProducts } from "./lib/seedCatalogProducts";
@@ -1785,6 +1785,9 @@ async function startServer() {
     }))
     .then(() => backfillExpenseCategoryAccounts().catch((err) => {
       logger.warn({ err }, "Expense category account backfill failed (non-fatal)");
+    }))
+    .then(() => backfillMdrExpenseCategory().catch((err) => {
+      logger.warn({ err }, "MDR expense category backfill failed (non-fatal)");
     }))
     .then(() => seedUom().catch((err) => {
       logger.warn({ err }, "UOM seed failed (non-fatal)");

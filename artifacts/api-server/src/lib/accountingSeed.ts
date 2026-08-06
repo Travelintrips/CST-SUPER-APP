@@ -194,6 +194,7 @@ const COA_LEAF_TEMPLATES: SeedAccount[] = [
   { code: "5-3010", name: "Beban Bunga & Administrasi Bank",  type: "expense", parentCode: "5-3000" },
   { code: "5-3020", name: "Beban Pajak & Perijinan",          type: "expense", parentCode: "5-3000" },
   { code: "5-3030", name: "Kerugian Selisih Kurs",            type: "expense", parentCode: "5-3000" },
+  { code: "5-3050", name: "Biaya MDR & Payment Gateway",      type: "expense", parentCode: "5-3000" },
 ];
 
 /** All leaf accounts (for backward compat export) */
@@ -920,6 +921,7 @@ async function seedExpenseCategories(
     { code: "EXP-BUNGA",   name: "Beban Bunga & Adm. Bank",     expenseAccountId: get("5-3010"), payableAccountId: apAccountId },
     { code: "EXP-PAJAK",   name: "Pajak & Perijinan",           expenseAccountId: get("5-3020"), payableAccountId: apAccountId },
     { code: "EXP-OPS",     name: "Beban Operasional Lainnya",   expenseAccountId: get("5-2040"), payableAccountId: apAccountId },
+    { code: "EXP-MDR",     name: "Biaya MDR & Payment Gateway", expenseAccountId: get("5-3050"), payableAccountId: apAccountId },
   ];
   const validCats = cats.filter((c) => c.expenseAccountId !== null);
   if (validCats.length > 0) {
@@ -951,6 +953,7 @@ const LEGACY_CATEGORY_ACCOUNT_CODE: Record<string, string> = {
   "EXP-BUNGA": "5-3010",
   "EXP-PAJAK": "5-3020",
   "EXP-OPS": "5-2040",
+  "EXP-MDR": "5-3050",
   "BIAYA-OCEAN-FREIGHT": "5-1021",
   "BIAYA-AIR-FREIGHT": "5-1022",
   "BIAYA-TRUCKING": "5-1023",
@@ -998,6 +1001,44 @@ export async function backfillExpenseCategoryAccounts(): Promise<void> {
     }
   } catch (err) {
     logger.warn({ err }, "backfillExpenseCategoryAccounts: failed (non-fatal)");
+  }
+}
+
+// ── Backfill EXP-MDR expense category for existing companies ─────────────────
+// Runs unconditionally on every boot; is idempotent via ON CONFLICT DO NOTHING.
+export async function backfillMdrExpenseCategory(): Promise<void> {
+  try {
+    await populateDynamicCompanies();
+    for (const companyId of ALL_COMPANY_IDS) {
+      const abbr = COMPANY_ABBR[companyId]!;
+      // Find the MDR account for this company
+      const mdrCode = `5-3050-${abbr}`;
+      const [mdrAccount] = await db
+        .select({ id: chartOfAccountsTable.id })
+        .from(chartOfAccountsTable)
+        .where(sql`${chartOfAccountsTable.code} = ${mdrCode} AND ${chartOfAccountsTable.companyId} = ${companyId}`)
+        .limit(1);
+      if (!mdrAccount) {
+        logger.warn({ mdrCode, companyId }, "backfillMdrExpenseCategory: account not found, skip");
+        continue;
+      }
+      // Find AP account for this company
+      const apCode = `2-1010-${abbr}`;
+      const [apAccount] = await db
+        .select({ id: chartOfAccountsTable.id })
+        .from(chartOfAccountsTable)
+        .where(sql`${chartOfAccountsTable.code} = ${apCode} AND ${chartOfAccountsTable.companyId} = ${companyId}`)
+        .limit(1);
+
+      await db.execute(sql.raw(`
+        INSERT INTO expense_categories (code, name, expense_account_id, payable_account_id, company_id)
+        VALUES ('EXP-MDR', 'Biaya MDR & Payment Gateway', ${mdrAccount.id}, ${apAccount?.id ?? "NULL"}, ${companyId})
+        ON CONFLICT DO NOTHING
+      `));
+    }
+    logger.info("backfillMdrExpenseCategory: done");
+  } catch (err) {
+    logger.warn({ err }, "backfillMdrExpenseCategory: failed (non-fatal)");
   }
 }
 
