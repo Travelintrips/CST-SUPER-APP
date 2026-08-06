@@ -3,6 +3,7 @@ import { logger } from "./lib/logger";
 import { bootstrapConfigFromSupabase } from "./lib/configBootstrap";
 import { runTranslationsMigration } from "./lib/translationsMigration";
 import { seedAccountingDefaults, seedAdditionalTaxes, backfillExpenseCategoryAccounts } from "./lib/accountingSeed";
+import { syncDevCoaToFixture } from "./lib/coaDevSync";
 import { seedLogisticsServiceItems } from "./lib/seedLogisticsItems";
 import { seedCatalogProducts } from "./lib/seedCatalogProducts";
 import { seedDemoData, seedDemoDrivers, seedAirFreightRates } from "./lib/seedDemoData";
@@ -1775,6 +1776,9 @@ async function startServer() {
     })
     .then(() => seedAccountingDefaults().catch((err) => {
       logger.error({ err }, "Accounting seed failed");
+    }))
+    .then(() => syncDevCoaToFixture().catch((err) => {
+      logger.warn({ err }, "COA dev sync failed (non-fatal)");
     }))
     .then(() => seedAdditionalTaxes().catch((err) => {
       logger.warn({ err }, "Additional tax seed failed (non-fatal)");

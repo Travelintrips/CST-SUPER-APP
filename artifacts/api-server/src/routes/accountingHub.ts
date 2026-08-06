@@ -63,6 +63,7 @@ function parseFilters(query: Record<string, any>) {
     dateTo:    query.date_to    as string | undefined,
     sourceModule: query.source_module as string | undefined,
     accountId: query.account_id ? Number(query.account_id) : undefined,
+    paymentMethod: query.payment_method as string | undefined,
     page:  Math.max(1, Number(query.page  ?? 1)),
     limit: Math.min(500, Number(query.limit ?? 50)),
     sortBy,
@@ -318,28 +319,50 @@ router.get("/hub/general-ledger", async (req, res) => {
       LEFT JOIN opening_bal ob    ON ob.account_id = el.account_id
       LEFT JOIN LATERAL (
         SELECT partner_name,
-               COALESCE(ref, source_module) AS source_doc_number
+               COALESCE(ref, source_module) AS source_doc_number,
+               payment_method
         FROM accounting_payments
         WHERE entry_id = e.id
         ORDER BY id ASC
         LIMIT 1
       ) ap ON true
-      ${displayWhere}
+      ${(() => {
+        const mainConds = f.paymentMethod
+          ? [...displayConds, sql`ap.payment_method = ${f.paymentMethod}`]
+          : displayConds;
+        return mainConds.length ? sql`WHERE ${sql.join(mainConds, sql` AND `)}` : sql``;
+      })()}
       ORDER BY ${orderBy}, el.id ASC
       LIMIT ${f.limit} OFFSET ${offset}
     `).then(r => r.rows);
 
     // ── Summary stats (all display-filtered rows, all pages) ────────────────
-    const [displaySummary] = await db.execute<any>(sql`
-      SELECT
-        COUNT(el.id)::int                       AS total,
-        COALESCE(SUM(el.debit::numeric),  0)    AS total_debit,
-        COALESCE(SUM(el.credit::numeric), 0)    AS total_credit
-      FROM accounting_entry_lines el
-      JOIN accounting_entries e ON e.id = el.entry_id
-      JOIN chart_of_accounts coa ON coa.id = el.account_id
-      ${displayWhere}
-    `).then(r => r.rows);
+    // When filtering by payment_method we need the LATERAL join in the summary query too.
+    const [displaySummary] = await db.execute<any>(
+      f.paymentMethod
+        ? sql`
+          SELECT
+            COUNT(el.id)::int                       AS total,
+            COALESCE(SUM(el.debit::numeric),  0)    AS total_debit,
+            COALESCE(SUM(el.credit::numeric), 0)    AS total_credit
+          FROM accounting_entry_lines el
+          JOIN accounting_entries e ON e.id = el.entry_id
+          JOIN chart_of_accounts coa ON coa.id = el.account_id
+          LEFT JOIN LATERAL (
+            SELECT payment_method FROM accounting_payments
+            WHERE entry_id = e.id ORDER BY id ASC LIMIT 1
+          ) ap ON true
+          WHERE ${sql.join([...displayConds, sql`ap.payment_method = ${f.paymentMethod}`], sql` AND `)}`
+        : sql`
+          SELECT
+            COUNT(el.id)::int                       AS total,
+            COALESCE(SUM(el.debit::numeric),  0)    AS total_debit,
+            COALESCE(SUM(el.credit::numeric), 0)    AS total_credit
+          FROM accounting_entry_lines el
+          JOIN accounting_entries e ON e.id = el.entry_id
+          JOIN chart_of_accounts coa ON coa.id = el.account_id
+          ${displayWhere}`
+    ).then(r => r.rows);
 
     // ── Opening balance for summary panel ────────────────────────────────────
     // Sum of ALL posted entries before dateFrom (ignores source_module).

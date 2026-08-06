@@ -26,6 +26,7 @@ interface GLRow {
   debit: string; credit: string; created_at: string; posted_at: string | null;
   partner_name: string | null;
   source_doc_number: string | null;
+  payment_method: string | null;
   /** Running balance after this row (chronological). Null for non-posted entries. */
   running_balance: string | null;
   /** Opening balance of this account before the filter period. */
@@ -49,6 +50,16 @@ const fmtBalance = (v: number) => {
 };
 
 const MODULES = ["manual","sales","purchase","tenant","sport_center","pos","logistics","expense","hrd","ecommerce"];
+
+const PAYMENT_METHODS: { value: string; label: string }[] = [
+  { value: "cash",        label: "Cash / Tunai" },
+  { value: "bank",        label: "Transfer Bank" },
+  { value: "qris",        label: "QRIS" },
+  { value: "credit_card", label: "Kartu Kredit" },
+  { value: "debit_card",  label: "Kartu Debit" },
+  { value: "cheque",      label: "Cek / Giro" },
+  { value: "other",       label: "Lainnya" },
+];
 
 const MODULE_LABELS: Record<string, string> = {
   manual:                       "Jurnal Manual",
@@ -122,12 +133,13 @@ export default function AccountingHubGLPage() {
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState({
-    company_id:    urlParams.get("company_id")  ?? "",
-    date_from:     urlParams.get("date_from")   ?? "",
-    date_to:       urlParams.get("date_to")     ?? "",
-    source_module: urlParams.get("source_module") ?? "",
-    account_id:    urlParams.get("account_id")  ?? "",
-    account_name:  urlParams.get("account_name") ?? "",
+    company_id:     urlParams.get("company_id")     ?? "",
+    date_from:      urlParams.get("date_from")      ?? "",
+    date_to:        urlParams.get("date_to")        ?? "",
+    source_module:  urlParams.get("source_module")  ?? "",
+    account_id:     urlParams.get("account_id")     ?? "",
+    account_name:   urlParams.get("account_name")   ?? "",
+    payment_method: urlParams.get("payment_method") ?? "",
   });
   const [month, setMonth] = useState(urlParams.get("month") ?? "");
   const [sortBy,  setSortBy]  = useState<SortCol>(DEFAULT_SORT_COL);
@@ -182,6 +194,7 @@ export default function AccountingHubGLPage() {
       Object.entries(filters).forEach(([k, v]) => {
         if (v && k !== "account_name") params.set(k, v);
       });
+      // payment_method is already included via the loop above
       const res = await fetch(`/api/accounting/hub/general-ledger?${params}`, { credentials: "include" });
       if (!res.ok) {
         const msg = await res.text().catch(() => "");
@@ -418,11 +431,18 @@ export default function AccountingHubGLPage() {
               onChange={e => setFilters(f => ({...f, account_id: e.target.value, account_name: ""}))}
               className="w-32"
             />
+            <Select value={filters.payment_method || "__all"} onValueChange={v => setFilters(f => ({...f, payment_method: v === "__all" ? "" : v}))}>
+              <SelectTrigger className="w-44"><SelectValue placeholder="Metode Pembayaran" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all">Semua Metode</SelectItem>
+                {PAYMENT_METHODS.map(pm => <SelectItem key={pm.value} value={pm.value}>{pm.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
             <Button size="sm" onClick={applyFilters}>Terapkan</Button>
-            {(filters.account_id || filters.date_from || filters.date_to || filters.source_module || filters.company_id || month || sortBy !== DEFAULT_SORT_COL || sortDir !== DEFAULT_SORT_DIR) && (
+            {(filters.account_id || filters.date_from || filters.date_to || filters.source_module || filters.company_id || filters.payment_method || month || sortBy !== DEFAULT_SORT_COL || sortDir !== DEFAULT_SORT_DIR) && (
               <Button size="sm" variant="ghost" onClick={() => {
                 setMonth("");
-                setFilters({ company_id: "", date_from: "", date_to: "", source_module: "", account_id: "", account_name: "" });
+                setFilters({ company_id: "", date_from: "", date_to: "", source_module: "", account_id: "", account_name: "", payment_method: "" });
                 setSortBy(DEFAULT_SORT_COL);
                 setSortDir(DEFAULT_SORT_DIR);
                 setPage(1);
@@ -504,6 +524,7 @@ export default function AccountingHubGLPage() {
               <Th col="account_type">Tipe</Th>
               <Th col="partner_name">Sumber / Entitas</Th>
               <Th col="ref">Ref / Keterangan</Th>
+              <th className="px-3 py-2 text-left text-xs select-none whitespace-nowrap">Metode Bayar</th>
               <ThRight col="debit">Debit</ThRight>
               <ThRight col="credit">Kredit</ThRight>
               <th className="px-3 py-2 text-right text-xs select-none whitespace-nowrap">Saldo</th>
@@ -513,7 +534,7 @@ export default function AccountingHubGLPage() {
           </thead>
           <tbody>
             {rows.length === 0 ? (
-              <tr><td colSpan={13} className="text-center py-8 text-muted-foreground">{loading ? "Memuat..." : "Tidak ada data"}</td></tr>
+              <tr><td colSpan={14} className="text-center py-8 text-muted-foreground">{loading ? "Memuat..." : "Tidak ada data"}</td></tr>
             ) : rows.map((r) => {
               const isFirstLineOfEntry = !seenEntries.has(r.entry_id);
               if (isFirstLineOfEntry) seenEntries.add(r.entry_id);
@@ -580,6 +601,25 @@ export default function AccountingHubGLPage() {
                     {r.ref && <div className="font-mono truncate">{r.ref}</div>}
                     {(r.line_description) && (
                       <div className="truncate text-foreground/60 mt-0.5">{r.line_description}</div>
+                    )}
+                  </td>
+
+                  {/* Metode Pembayaran */}
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    {r.payment_method ? (
+                      <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
+                        r.payment_method === "cash"        ? "bg-emerald-100 text-emerald-700" :
+                        r.payment_method === "bank"        ? "bg-blue-100 text-blue-700" :
+                        r.payment_method === "qris"        ? "bg-violet-100 text-violet-700" :
+                        r.payment_method === "credit_card" ? "bg-orange-100 text-orange-700" :
+                        r.payment_method === "debit_card"  ? "bg-sky-100 text-sky-700" :
+                        r.payment_method === "cheque"      ? "bg-amber-100 text-amber-700" :
+                        "bg-slate-100 text-slate-600"
+                      }`}>
+                        {PAYMENT_METHODS.find(pm => pm.value === r.payment_method)?.label ?? r.payment_method}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-muted-foreground/40">—</span>
                     )}
                   </td>
 
@@ -736,11 +776,29 @@ export default function AccountingHubGLPage() {
               </div>
 
               {/* Entitas */}
-              {(detailRow.partner_name || detailRow.source_doc_number) && (
+              {(detailRow.partner_name || detailRow.source_doc_number || detailRow.payment_method) && (
                 <div className="rounded-md border bg-muted/30 p-3 space-y-2">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Sumber / Entitas</p>
                   {detailRow.partner_name && <Row label="Nama" value={detailRow.partner_name} />}
                   {detailRow.source_doc_number && <Row label="No. Dokumen" value={<span className="font-mono">{detailRow.source_doc_number}</span>} />}
+                  {detailRow.payment_method && (
+                    <Row
+                      label="Metode Pembayaran"
+                      value={
+                        <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
+                          detailRow.payment_method === "cash"        ? "bg-emerald-100 text-emerald-700" :
+                          detailRow.payment_method === "bank"        ? "bg-blue-100 text-blue-700" :
+                          detailRow.payment_method === "qris"        ? "bg-violet-100 text-violet-700" :
+                          detailRow.payment_method === "credit_card" ? "bg-orange-100 text-orange-700" :
+                          detailRow.payment_method === "debit_card"  ? "bg-sky-100 text-sky-700" :
+                          detailRow.payment_method === "cheque"      ? "bg-amber-100 text-amber-700" :
+                          "bg-slate-100 text-slate-600"
+                        }`}>
+                          {PAYMENT_METHODS.find(pm => pm.value === detailRow.payment_method)?.label ?? detailRow.payment_method}
+                        </span>
+                      }
+                    />
+                  )}
                 </div>
               )}
 
