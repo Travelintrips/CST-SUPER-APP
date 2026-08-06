@@ -127,6 +127,7 @@ import { customerDataFormPublicRouter, customerDataFormAdminRouter } from "./cus
 import { paymentProofRouter } from "./paymentProof.js";
 import { publicTokenRateLimiter, aiRateLimiter, tokenGetRateLimiter, tokenPostRateLimiter } from "../middlewares/securityRateLimiter.js";
 
+import { settlementPatternsRouter } from "./settlementPatterns.js";
 import { systemObservabilityRouter } from "./systemObservability.js";
 import { exceptionsRouter } from "./exceptions.js";
 import { orderExceptionsRouter } from "./orderExceptions.js";
@@ -482,6 +483,8 @@ router.use("/expense-rules", expenseRulesRouter);
 // Phase 6D — Expense Classification (normalizer → rule engine → AI pipeline)
 router.use("/bank-recon", expenseClassificationRouter);
 router.use("/recon-classification", reconClassificationRouter);
+// Settlement Pattern Engine — configurable provider recognition (advisory only)
+router.use("/settlement-patterns", settlementPatternsRouter);
 router.use("/accounting/wa-report", waReportSettingsRouter);
 router.use("/fixed-assets", fixedAssetsRouter);
 router.use("/expense-approvals", expenseApprovalsRouter);

@@ -12,6 +12,7 @@ const MasterDataWorkspacePage = React.lazy(() => import("@/pages/master-data/wor
 const FinanceHubPage = React.lazy(() => import("@/pages/finance/index"));
 const FinanceModuleWorkspacePage = React.lazy(() => import("@/pages/finance/workspace"));
 const ReconClassificationConfigPage = React.lazy(() => import("@/pages/finance/recon-config/index"));
+const SettlementPatternPage = React.lazy(() => import("@/pages/finance/settlement-pattern/index"));
 const CfoOverviewPage = React.lazy(() => import("@/pages/finance/cfo-overview"));
 const LogisticsHubPage = React.lazy(() => import("@/pages/logistics/hub"));
 const LogisticsWorkspacePage = React.lazy(() => import("@/pages/logistics/workspace"));
@@ -576,6 +577,7 @@ export function AppRoutes({ rootGuard }: { rootGuard?: React.ComponentType }) {
       <Route path="/reports/inventory-valuation" component={PR(InventoryValuationPage)} />
 
       {/* ── Finance CFO ────────────────────────────────────────────────── */}
+      <Route path="/finance/settlement-pattern" component={PR(SettlementPatternPage)} />
       <Route path="/finance/allocation/create" component={PR(AllocationCreatePage)} />
       <Route path="/finance/allocation" component={PR(AllocationCenterPage)} />
       <Route path="/finance/bank-allocation" component={PR(BankAllocationPage)} />
