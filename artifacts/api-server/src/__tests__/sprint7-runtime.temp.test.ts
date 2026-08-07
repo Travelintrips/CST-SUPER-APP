@@ -190,7 +190,7 @@ describe("Sprint 7 runtime vendor invoice gates", () => {
       ["S7-CURRENCY", { currency: "USD" }],
     ] as const;
     for (const [ref, lineOverride, headerOverride] of failedCases) {
-      const draft = await createMarketplaceVendorInvoice(input(fixture, ref, { ...lineOverride, ...headerOverride }));
+      const draft = await createMarketplaceVendorInvoice(input(fixture, ref, { ...lineOverride, ...headerOverride }), actor);
       expect(draft.ok).toBe(true);
       if (!draft.ok) continue;
       created.invoices.push(draft.invoice.id);
