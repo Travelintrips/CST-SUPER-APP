@@ -33,6 +33,7 @@ import { runExpenseClassificationMigration } from "./lib/expenseClassificationMi
 import { runCostCenterMigration } from "./lib/costCenterMigration.js";
 import { runFreightAuditMigration } from "./lib/freightAuditMigration.js";
 import { runAuditFixMigration } from "./lib/auditFixMigration.js";
+import { runMktVendorInvoiceMigration } from "./lib/mktVendorInvoiceMigration.js";
 import { seedAccountingDefaults, seedAdditionalTaxes, backfillExpenseCategoryAccounts } from "./lib/accountingSeed.js";
 
 // ── Core / Org / Auth migrations ─────────────────────────────────────────────
@@ -212,6 +213,7 @@ async function main() {
   await runSafe("vendorCompanyAssignments", runVendorCompanyAssignmentsMigration);
   await runSafe("vendorCatalogSchema", runVendorCatalogSchemaMigration);
   await runSafe("featuredProduct", runFeaturedProductMigration);
+  await runSafe("marketplaceVendorInvoice", runMktVendorInvoiceMigration);
   await runSafe("logisticVendorFulfillments", runLogisticVendorFulfillmentsMigration);
   await runSafe("productFirstFlow", runProductFirstFlowMigration);
   await runSafe("step4Template", runStep4TemplateMigration);

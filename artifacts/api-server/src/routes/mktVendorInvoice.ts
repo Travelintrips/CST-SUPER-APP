@@ -154,6 +154,10 @@ router.post("/:token", tokenPostRateLimiter, upload.single("file"), async (req, 
       actorName: po.vendorNameSnapshot,
     });
     if (result.ok) {
+      if (result.alreadyExists) {
+        await storage.tryDeletePrivateEntity(objectPath);
+        objectPath = null;
+      }
       return res.status(result.alreadyExists ? 200 : 201).json({
         ok: true,
         alreadyExists: result.alreadyExists === true,
