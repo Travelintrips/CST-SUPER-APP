@@ -833,8 +833,9 @@ router.get("/mutations", async (req, res) => {
       total: Number((countRows[0] as any)?.total ?? 0),
     });
   } catch (e: any) {
-    logger.error({ err: e.message }, "[bankRecon] GET /mutations failed");
-    return res.status(500).json({ error: e.message });
+    const dbMsg = e.cause?.message ?? e.cause ?? e.message;
+    logger.error({ err: dbMsg, sql_hint: String(dbMsg).substring(0, 400) }, "[bankRecon] GET /mutations failed");
+    return res.status(500).json({ error: dbMsg });
   }
 });
 
