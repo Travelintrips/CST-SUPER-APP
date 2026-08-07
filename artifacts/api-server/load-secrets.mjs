@@ -251,9 +251,39 @@ export function injectSecrets(payload, appEnv, legacyMode, target) {
       );
     }
 
-    // Inject all string keys (APP_ENV excluded by inject())
-    for (const [key, value] of Object.entries(payload)) {
-      inject(key, value);
+    // Development bundles may still use the shared-bundle naming convention
+    // (`*_DEV`) even when they are fetched through the environment-specific
+    // bundle path. Map those values to the canonical names consumed by the
+    // application, while keeping production-only values isolated.
+    if (appEnv === "development") {
+      const hasDevVariant = new Set(
+        Object.keys(payload)
+          .filter((key) => key.endsWith("_DEV"))
+          .map((key) => key.slice(0, -4)),
+      );
+
+      // Prefer the development value and expose it under the canonical name.
+      for (const [rawKey, value] of Object.entries(payload)) {
+        if (!rawKey.endsWith("_DEV")) continue;
+        // Keep the suffixed key available for the runtime environment guard
+        // and other code paths that explicitly select the development DB.
+        inject(rawKey, value);
+        inject(rawKey.slice(0, -4), value);
+      }
+
+      // Shared values are still available when no development-specific
+      // counterpart exists (for example SESSION_SECRET).
+      for (const [rawKey, value] of Object.entries(payload)) {
+        if (rawKey === "APP_ENV" || rawKey.endsWith("_DEV")) continue;
+        if (hasDevVariant.has(rawKey)) continue;
+        inject(rawKey, value);
+      }
+    } else {
+      // Production bundles use canonical, non-suffixed names only.
+      for (const [key, value] of Object.entries(payload)) {
+        if (key.endsWith("_DEV")) continue;
+        inject(key, value);
+      }
     }
   } else {
     // ── LEGACY MODE ───────────────────────────────────────────────────────────

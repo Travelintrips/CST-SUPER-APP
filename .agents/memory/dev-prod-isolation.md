@@ -15,6 +15,12 @@ Production deployment has `REPLIT_DEPLOYMENT=1` set automatically.
 - `lib/db/src/index.ts`: in dev mode (`NODE_ENV=development`), tries `SUPABASE_DATABASE_URL_DEV` first, then `SUPABASE_DATABASE_URL`
 - GCP Secret Manager stores `SUPABASE_DATABASE_URL_DEV` (dev DB URL) alongside `SUPABASE_DATABASE_URL` (prod)
 
+Environment-specific bundles may still contain the legacy `_DEV` key names. The development loader must preserve those suffixed keys for runtime guards while also exposing their values under canonical names consumed by the application.
+
+**Why:** The API's environment safety banner checks for `SUPABASE_DATABASE_URL_DEV`; mapping only to `SUPABASE_DATABASE_URL` makes the development database look like an unsafe production fallback and aborts startup.
+
+**How to apply:** When loading a development bundle, inject both `FOO_DEV` and canonical `FOO` from the development value, then inject only non-suffixed shared keys that have no `_DEV` counterpart.
+
 ## Isolation contract
 - Keys WITH `_DEV` variant in GCP → strict isolation (only `_DEV` version used in dev)
 - Keys WITHOUT `_DEV` variant → shared between dev and prod (e.g., OPENAI_API_KEY, GOOGLE_SERVICE_ACCOUNT_JSON)
