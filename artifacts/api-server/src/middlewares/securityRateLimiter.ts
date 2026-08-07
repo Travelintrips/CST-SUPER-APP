@@ -11,6 +11,7 @@
 
 import { rateLimit } from "express-rate-limit";
 import type { Request, Response, NextFunction } from "express";
+import { createHash } from "node:crypto";
 import { writeAuditLog, extractRequestMeta } from "../lib/auditLog.js";
 import { trackSuspiciousActivity } from "../lib/suspiciousActivity.js";
 
@@ -90,8 +91,7 @@ export const publicTokenRateLimiter = rateLimit({
 
 // ── Part D — Token GET Rate Limiter (P0.3) ───────────────────────────────────
 // 5 req/min per IP+path for GET (view) — prevents token enumeration.
-// Keyed on IP+path (not params.token) because at router.use level, params are unavailable.
-// The path already encodes the token slug so the key is still sufficiently specific.
+// The token-bearing path is hashed before it becomes a limiter key.
 export const tokenGetRateLimiter = rateLimit({
   windowMs: 60_000,
   max: IS_DEV ? 200 : 5,
@@ -99,9 +99,9 @@ export const tokenGetRateLimiter = rateLimit({
   legacyHeaders: false,
   validate: false,
   keyGenerator: (req: Request) => {
-    // Use path segment as key — contains the token value for public endpoints
     const pathKey = req.path.slice(0, 128);
-    return `tokenget:${getIp(req)}:${pathKey}`;
+    const pathDigest = createHash("sha256").update(pathKey).digest("hex").slice(0, 16);
+    return `tokenget:${getIp(req)}:${pathDigest}`;
   },
   handler: (req: Request, res: Response, _next: NextFunction) => {
     const meta = extractRequestMeta(req);
@@ -125,7 +125,8 @@ export const tokenGetRateLimiter = rateLimit({
 });
 
 // ── Part E — Token POST Rate Limiter (P0.3) ──────────────────────────────────
-// 10 req/hour per IP+path for POST (submit) — prevents brute-force submission
+// 10 req/hour per IP+path for POST (submit) — prevents brute-force submission.
+// The token-bearing path is hashed before it becomes a limiter key.
 export const tokenPostRateLimiter = rateLimit({
   windowMs: 60 * 60_000,   // 1 jam
   max: IS_DEV ? 200 : 10,
@@ -134,7 +135,8 @@ export const tokenPostRateLimiter = rateLimit({
   validate: false,
   keyGenerator: (req: Request) => {
     const pathKey = req.path.slice(0, 128);
-    return `tokenpost:${getIp(req)}:${pathKey}`;
+    const pathDigest = createHash("sha256").update(pathKey).digest("hex").slice(0, 16);
+    return `tokenpost:${getIp(req)}:${pathDigest}`;
   },
   handler: (req: Request, res: Response, _next: NextFunction) => {
     const meta = extractRequestMeta(req);

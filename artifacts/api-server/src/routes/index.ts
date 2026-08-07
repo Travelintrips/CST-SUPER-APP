@@ -529,7 +529,7 @@ router.use("/mkt/guest", mktGuestRouter);
 // Phase 2D — Vendor Quote Submission (public, token-based)
 router.use("/vendor-quote", vendorQuotePublicRouter);
 // Phase 2G — Vendor PO confirmation (public, token-based)
-router.use("/mkt/vendor-po", publicTokenRateLimiter, mktVendorPoRouter);
+router.use("/mkt/vendor-po", mktVendorPoRouter);
 router.get("/alerts/stream", async (req: Request, res: Response) => {
   const ok = await requireAdmin(req, res);
   if (!ok) return;

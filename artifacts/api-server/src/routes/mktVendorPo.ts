@@ -17,6 +17,7 @@
  */
 
 import { Router, type IRouter } from "express";
+import { z } from "zod/v4";
 import {
   getVendorPoView,
   vendorAcceptPo,
@@ -24,8 +25,15 @@ import {
   vendorRequestRevision,
 } from "../lib/services/mktPoLifecycleService.js";
 import { logger } from "../lib/logger.js";
+import { validateBody } from "../lib/middleware/validateBody.js";
+import { tokenGetRateLimiter, tokenPostRateLimiter } from "../middlewares/securityRateLimiter.js";
 
 const router: IRouter = Router();
+
+const AcceptVendorPoSchema = z.object({}).strict();
+const RejectVendorPoSchema = z.object({
+  reason: z.string().trim().max(1000).optional().nullable(),
+}).strict();
 
 function mapTokenFailureStatus(code: string): number {
   switch (code) {
@@ -44,7 +52,7 @@ function mapTokenFailureStatus(code: string): number {
   }
 }
 
-router.get("/:token", async (req, res) => {
+router.get("/:token", tokenGetRateLimiter, async (req, res) => {
   try {
     const result = await getVendorPoView(req.params.token);
     if (!result.ok) {
@@ -57,34 +65,33 @@ router.get("/:token", async (req, res) => {
   }
 });
 
-router.post("/:token/accept", async (req, res) => {
+router.post("/:token/accept", tokenPostRateLimiter, validateBody(AcceptVendorPoSchema), async (req, res) => {
   try {
     const result = await vendorAcceptPo(req.params.token);
     if (!result.ok) {
       return res.status(mapTokenFailureStatus(result.code)).json({ message: "Aksi tidak dapat diproses", code: result.code, currentStatus: (result as any).currentStatus });
     }
-    res.json({ ok: true, status: result.po.status, poNumber: result.po.poNumber });
+    res.json({ ok: true, status: result.po.status, poNumber: result.po.poNumber, alreadyAccepted: result.alreadyAccepted === true });
   } catch (err) {
     logger.warn({ err }, "[mktVendorPo] POST /:token/accept error");
     res.status(500).json({ message: "Internal server error" });
   }
 });
 
-router.post("/:token/reject", async (req, res) => {
+router.post("/:token/reject", tokenPostRateLimiter, validateBody(RejectVendorPoSchema), async (req, res) => {
   try {
-    const reason = typeof req.body?.reason === "string" ? req.body.reason.slice(0, 2000) : null;
-    const result = await vendorRejectPo(req.params.token, reason);
+    const result = await vendorRejectPo(req.params.token, req.body.reason ?? null);
     if (!result.ok) {
       return res.status(mapTokenFailureStatus(result.code)).json({ message: "Aksi tidak dapat diproses", code: result.code, currentStatus: (result as any).currentStatus });
     }
-    res.json({ ok: true, status: result.po.status, poNumber: result.po.poNumber });
+    res.json({ ok: true, status: result.po.status, poNumber: result.po.poNumber, alreadyRejected: result.alreadyRejected === true });
   } catch (err) {
     logger.warn({ err }, "[mktVendorPo] POST /:token/reject error");
     res.status(500).json({ message: "Internal server error" });
   }
 });
 
-router.post("/:token/request-revision", async (req, res) => {
+router.post("/:token/request-revision", tokenPostRateLimiter, async (req, res) => {
   try {
     const notes = typeof req.body?.notes === "string" ? req.body.notes.trim() : "";
     if (!notes) {

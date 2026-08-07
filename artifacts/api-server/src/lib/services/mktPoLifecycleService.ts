@@ -50,25 +50,27 @@ async function guardedTransition(
   to: PoStatus,
   extra: Partial<typeof mktPurchaseOrdersTable.$inferInsert> = {},
 ): Promise<TransitionResult> {
-  const rows = await db
-    .select()
-    .from(mktPurchaseOrdersTable)
-    .where(eq(mktPurchaseOrdersTable.id, poId))
-    .limit(1);
-  const current = rows[0];
-  if (!current) return { ok: false, code: "NOT_FOUND" };
-  if (!from.includes(current.status)) {
-    return { ok: false, code: "INVALID_TRANSITION", currentStatus: current.status };
-  }
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .select()
+      .from(mktPurchaseOrdersTable)
+      .where(eq(mktPurchaseOrdersTable.id, poId))
+      .limit(1);
+    const current = rows[0];
+    if (!current) return { ok: false, code: "NOT_FOUND" as const };
+    if (!from.includes(current.status)) {
+      return { ok: false, code: "INVALID_TRANSITION" as const, currentStatus: current.status };
+    }
 
-  const [updated] = await db
-    .update(mktPurchaseOrdersTable)
-    .set({ status: to, updatedAt: new Date(), ...extra })
-    .where(and(eq(mktPurchaseOrdersTable.id, poId), eq(mktPurchaseOrdersTable.status, current.status)))
-    .returning();
+    const [updated] = await tx
+      .update(mktPurchaseOrdersTable)
+      .set({ status: to, updatedAt: new Date(), ...extra })
+      .where(and(eq(mktPurchaseOrdersTable.id, poId), eq(mktPurchaseOrdersTable.status, current.status)))
+      .returning();
 
-  if (!updated) return { ok: false, code: "CONCURRENT_UPDATE" };
-  return { ok: true, po: updated, previousStatus: current.status };
+    if (!updated) return { ok: false, code: "CONCURRENT_UPDATE" as const };
+    return { ok: true as const, po: updated, previousStatus: current.status };
+  });
 }
 
 function logStatusChange(poId: number, action: string, prev: PoStatus, next: PoStatus, actor: ActorInfo, description: string, extra?: Record<string, unknown>) {
@@ -165,11 +167,16 @@ export type VendorActionFailure =
   | { ok: false; code: TokenLookupFailure }
   | { ok: false; code: TransitionFailureCode; currentStatus?: PoStatus };
 
-export async function vendorAcceptPo(token: string): Promise<{ ok: true; po: PoRow } | VendorActionFailure> {
+export async function vendorAcceptPo(token: string): Promise<{ ok: true; po: PoRow; alreadyAccepted?: boolean } | VendorActionFailure> {
   const lookup = await findPoByVendorToken(token);
   if (!lookup.ok) return lookup;
+  if (lookup.po.status === "vendor_accepted") {
+    return { ok: true, po: lookup.po, alreadyAccepted: true };
+  }
 
-  const guard = await guardedTransition(lookup.po.id, ["issued"], "vendor_accepted");
+  const guard = await guardedTransition(lookup.po.id, ["issued"], "vendor_accepted", {
+    confirmedAt: new Date(),
+  });
   if (!guard.ok) return guard;
 
   await markVendorTokenUsed(guard.po.id);
@@ -179,14 +186,18 @@ export async function vendorAcceptPo(token: string): Promise<{ ok: true; po: PoR
     recipientType: "admin",
     purchaseOrderId: guard.po.id,
     payloadJson: { poNumber: guard.po.poNumber, vendorId: guard.po.vendorId },
+    deduplicationKey: `mkt_po_vendor_accepted:${guard.po.id}`,
   }).catch(() => {});
 
   return { ok: true, po: guard.po };
 }
 
-export async function vendorRejectPo(token: string, reason?: string | null): Promise<{ ok: true; po: PoRow } | VendorActionFailure> {
+export async function vendorRejectPo(token: string, reason?: string | null): Promise<{ ok: true; po: PoRow; alreadyRejected?: boolean } | VendorActionFailure> {
   const lookup = await findPoByVendorToken(token);
   if (!lookup.ok) return lookup;
+  if (lookup.po.status === "vendor_rejected") {
+    return { ok: true, po: lookup.po, alreadyRejected: true };
+  }
 
   const guard = await guardedTransition(lookup.po.id, ["issued"], "vendor_rejected", {
     cancelReason: reason ?? null,
@@ -200,6 +211,7 @@ export async function vendorRejectPo(token: string, reason?: string | null): Pro
     recipientType: "admin",
     purchaseOrderId: guard.po.id,
     payloadJson: { poNumber: guard.po.poNumber, vendorId: guard.po.vendorId, reason: reason ?? null },
+    deduplicationKey: `mkt_po_vendor_rejected:${guard.po.id}`,
   }).catch(() => {});
 
   return { ok: true, po: guard.po };
@@ -278,6 +290,18 @@ export async function getVendorPoView(token: string): Promise<{ ok: true; view: 
     .from(mktPurchaseOrderLinesTable)
     .where(eq(mktPurchaseOrderLinesTable.poId, po.id))
     .orderBy(asc(mktPurchaseOrderLinesTable.id));
+
+  void logActivity({
+    mktPurchaseOrderId: po.id,
+    mktRfqId: po.rfqId,
+    mktVendorQuoteId: po.quoteId,
+    actorType: "vendor",
+    actorId: `vendor:${po.vendorId}`,
+    actorName: po.vendorNameSnapshot,
+    action: "mkt_po_viewed_by_vendor",
+    description: `Vendor melihat PO ${po.poNumber}`,
+    newValue: { status: po.status },
+  });
 
   return {
     ok: true,
