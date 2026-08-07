@@ -18,13 +18,13 @@
       "purpose": "any maskable"
     },
     {
-      "src": "/images/logo-baru.png",
+      "src": "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo-baru.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/images/logo-baru.png",
+      "src": "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo-baru.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
@@ -32,7 +32,7 @@
   ],
   "screenshots": [
     {
-      "src": "/images/og-cover.png",
+      "src": "/api/storage/public-objects/portal-assets/static/customer-portal/images/og-cover.png",
       "sizes": "1200x630",
       "type": "image/png",
       "form_factor": "wide",

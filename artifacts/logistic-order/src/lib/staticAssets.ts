@@ -5,6 +5,6 @@ export function staticAsset(path: string): string {
 }
 
 export const LOGISTIC_ORDER_ASSETS = {
-  logo: staticAsset("logocst-new.webp"),
+  logo: staticAsset("logocst-new.jpg"),
   favicon: staticAsset("favicon.svg"),
 } as const;

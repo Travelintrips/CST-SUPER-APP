@@ -326,7 +326,7 @@ export default function JasaKategori() {
     return 0;
   });
 
-  const heroBg = CAT_PHOTOS[categoryId ?? ""] ?? "/images/port-operations.png";
+  const heroBg = CAT_PHOTOS[categoryId ?? ""] ?? "/api/storage/public-objects/portal-assets/static/customer-portal/images/port-operations.png";
 
   if (!cat) {
     return (

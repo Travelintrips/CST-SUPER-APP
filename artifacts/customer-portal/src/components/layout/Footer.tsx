@@ -5,6 +5,7 @@ import { useLanguage } from "@/i18n/LanguageContext";
 import { useEditMode } from "@/contexts/EditModeContext";
 import { resolveImageUrl } from "@/lib/utils";
 import { COMPANY_CONFIG } from "@/config/company";
+import { staticAsset } from "@/lib/staticAssets";
 
 function normalizePhone(raw: string): string {
   const digits = raw.replace(/\D/g, "");
@@ -89,7 +90,7 @@ export function Footer() {
   const rawLogoSrc = content["footer_logo"] ?? content["navbar_logo"];
   const logoSrc = rawLogoSrc
     ? (rawLogoSrc.startsWith("/") ? (resolveImageUrl(rawLogoSrc) ?? rawLogoSrc) : rawLogoSrc)
-    : `${import.meta.env.BASE_URL}images/logo.png`;
+    : staticAsset("images/logo.png");
 
   const brandName = company?.name
     ? company.name.length > COMPANY_CONFIG.brandNameMaxLengthFooter

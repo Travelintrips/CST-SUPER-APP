@@ -10,6 +10,7 @@ import { EditableImage } from "@/components/EditableImage";
 import { useLanguage } from "@/i18n/LanguageContext";
 import { CART_KEY } from "@/lib/logistic-cart";
 import PageSeo from "@/components/PageSeo";
+import { CUSTOMER_ASSETS } from "@/lib/staticAssets";
 
 export default function Home() {
   const { data: company } = useGetPortalCompany({
@@ -186,7 +187,7 @@ export default function Home() {
         {/* Background image */}
         <EditableImage
           contentKey="hero_bg"
-          defaultSrc="/images/hero-bg.webp"
+          defaultSrc={CUSTOMER_ASSETS.hero}
           alt={t("home.altCargoShip", "Cargo ship at sea")}
           className="absolute inset-0 w-full h-full object-cover z-0"
           priority
@@ -670,7 +671,7 @@ export default function Home() {
               <div className="relative aspect-[4/3] lg:aspect-[4/5] rounded-2xl overflow-hidden shadow-2xl">
                 <EditableImage
                   contentKey="about_img1"
-                  defaultSrc="/api/storage/public-objects/portal/images/port-operations.png"
+                  defaultSrc={CUSTOMER_ASSETS.portOperations}
                   alt={t("home.altPortOperations", "Operasi Pelabuhan")}
                   className="w-full h-full object-cover"
                 />
@@ -678,7 +679,7 @@ export default function Home() {
               <div className="hidden lg:block absolute -bottom-4 -left-6 aspect-square w-2/3 rounded-2xl overflow-hidden shadow-2xl border-4 border-white">
                 <EditableImage
                   contentKey="about_img2"
-                  defaultSrc="/api/storage/public-objects/portal/images/customs.png"
+                  defaultSrc={CUSTOMER_ASSETS.customs}
                   alt="Dokumen Kepabeanan"
                   className="w-full h-full object-cover"
                 />
@@ -687,7 +688,7 @@ export default function Home() {
               <div className="lg:hidden mt-3 aspect-video rounded-2xl overflow-hidden shadow-lg">
                 <EditableImage
                   contentKey="about_img2"
-                  defaultSrc="/api/storage/public-objects/portal/images/customs.png"
+                  defaultSrc={CUSTOMER_ASSETS.customs}
                   alt="Dokumen Kepabeanan"
                   className="w-full h-full object-cover"
                 />
@@ -792,7 +793,7 @@ export default function Home() {
         style={{
           backgroundImage: [
             "linear-gradient(90deg, rgba(15,23,42,0.72) 0%, rgba(15,23,42,0.48) 45%, rgba(14,165,233,0.28) 100%)",
-            `url(/images/warehouse.webp)`,
+            `url(${CUSTOMER_ASSETS.warehouse})`,
           ].join(", "),
           backgroundSize: "cover",
           backgroundPosition: "center",

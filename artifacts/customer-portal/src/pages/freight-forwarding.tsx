@@ -17,6 +17,7 @@ import {
   MapPin, User, Weight, LayoutGrid, ImagePlus,
 } from "lucide-react";
 import PageSeo from "@/components/PageSeo";
+import { staticAsset } from "@/lib/staticAssets";
 
 /* ─── Types ──────────────────────────────────────────────────────── */
 type Direction = "Impor" | "Ekspor" | "Domestic";
@@ -447,14 +448,14 @@ export default function FreightForwarding() {
       icon: <Ship className="h-8 w-8 text-blue-600" />,
       desc: "Sea Freight",
       detail: t("freightForwarding.seaDetail", "Pengiriman via kapal laut. Kapasitas besar, biaya lebih ekonomis."),
-      defaultImg: `${import.meta.env.BASE_URL}images/sea-freight.png`,
+      defaultImg: staticAsset("images/sea-freight.png"),
     },
     {
       label: "Air",
       icon: <Plane className="h-8 w-8 text-sky-500" />,
       desc: "Air Freight",
       detail: t("freightForwarding.airDetail", "Pengiriman via pesawat. Lebih cepat, ideal untuk barang sensitif waktu."),
-      defaultImg: `${import.meta.env.BASE_URL}images/air-freight.png`,
+      defaultImg: staticAsset("images/air-freight.png"),
     },
   ];
 

@@ -5,15 +5,15 @@ export function staticAsset(path: string): string {
 }
 
 export const CUSTOMER_ASSETS = {
-  logo: staticAsset("images/logo.webp"),
-  logoBrand: staticAsset("images/logo-baru.webp"),
-  ogCover: staticAsset("images/og-cover.webp"),
+  logo: staticAsset("images/logo.png"),
+  logoBrand: staticAsset("images/logo-baru.png"),
+  ogCover: staticAsset("images/og-cover.png"),
   hero: staticAsset("images/hero-bg.webp"),
   warehouse: staticAsset("images/warehouse.webp"),
   portOperations: staticAsset("images/port-operations.webp"),
-  customs: staticAsset("images/customs.webp"),
-  customsDocument: staticAsset("images/customs-document.webp"),
-  airFreight: staticAsset("images/air-freight.webp"),
-  seaFreight: staticAsset("images/sea-freight.webp"),
+  customs: staticAsset("images/customs.png"),
+  customsDocument: staticAsset("images/customs-document.png"),
+  airFreight: staticAsset("images/air-freight.png"),
+  seaFreight: staticAsset("images/sea-freight.png"),
   logisticsRoutes: staticAsset("images/logistics-routes.svg"),
 } as const;

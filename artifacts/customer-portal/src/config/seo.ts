@@ -1,7 +1,7 @@
 import { COMPANY_CONFIG } from "@/config/company";
 
 const BASE_URL = COMPANY_CONFIG.domain;
-const OG_IMAGE = `${BASE_URL}/api/storage/public-objects/portal/images/og-cover.png`;
+const OG_IMAGE = `${BASE_URL}/api/storage/public-objects/portal-assets/static/customer-portal/images/og-cover.png`;
 const OG_IMAGE_ALT =
   `${COMPANY_CONFIG.brandName} — Layanan ekspor impor, freight forwarding, dan logistik terpadu Indonesia`;
 const SITE_NAME = COMPANY_CONFIG.brandName;

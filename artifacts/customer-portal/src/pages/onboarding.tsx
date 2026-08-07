@@ -356,7 +356,7 @@ export default function OnboardingPage() {
         {/* Header */}
         <div className="text-center mb-6">
           <div className="inline-flex mb-4" style={{ background: "rgba(255,255,255,0.95)", borderRadius: "14px", padding: "10px 14px", boxShadow: "0 4px 16px rgba(15,23,42,0.10)" }}>
-            <img src="/api/storage/public-objects/portal/images/logo.png" alt="Logo" className="h-8 w-auto object-contain" onError={(e) => { const el = e.currentTarget; const fb = el.src.replace("/api/storage/public-objects/portal/images/", "/images/"); if (el.src !== fb) el.src = fb; }} />
+            <img src="/api/storage/public-objects/portal/images/logo.png" alt="Logo" className="h-8 w-auto object-contain" onError={(e) => { const el = e.currentTarget; const fb = el.src.replace("/api/storage/public-objects/portal/images/", "/api/storage/public-objects/portal-assets/static/customer-portal/images/"); if (el.src !== fb) el.src = fb; }} />
           </div>
           <h1 className="text-2xl font-bold text-gray-900">{t("onboarding.header.title", "Lengkapi Profil Anda")}</h1>
           <p className="text-muted-foreground text-sm mt-1">{t("onboarding.header.subtitle", "Isi data berikut untuk mengaktifkan akun Anda")}</p>

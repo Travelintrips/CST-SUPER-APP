@@ -29,6 +29,7 @@ import type { MarketplaceItem, FilterFieldDef, ActiveFilters, ServiceCategoryOpt
 import { buildCatalogFilters, matchVendorCatalog } from "@/lib/catalogFilters";
 import { CompareTray, CompareModal } from "@/components/VendorComparison";
 import PageSeo from "@/components/PageSeo";
+import { CUSTOMER_ASSETS } from "@/lib/staticAssets";
 
 // ── Hero category tile type (from DB) ─────────────────────────────────────────
 interface HeroCategoryTile {
@@ -1226,7 +1227,7 @@ export default function MarketplacePage() {
         <div
           className="absolute inset-0 bg-cover bg-center"
           style={{
-            backgroundImage: "url('/api/storage/public-objects/portal/images/gambar-baru.png')",
+            backgroundImage: `url('/api/storage/public-objects/portal-assets/static/customer-portal/images/gambar-baru.png')`,
             transform: "scale(1.04)",
             filter: "brightness(0.38) saturate(1.15)",
           }}
@@ -1234,11 +1235,11 @@ export default function MarketplacePage() {
         {/* Fallback bg layers: local first (deepest), then Supabase port-operations, then gambar-baru on top */}
         <div
           className="absolute inset-0 bg-cover bg-center -z-0"
-          style={{ backgroundImage: "url('/images/port-operations.png')", filter: "brightness(0.38)" }}
+          style={{ backgroundImage: "url('/api/storage/public-objects/portal-assets/static/customer-portal/images/port-operations.png')", filter: "brightness(0.38)" }}
         />
         <div
           className="absolute inset-0 bg-cover bg-center -z-0"
-          style={{ backgroundImage: "url('/api/storage/public-objects/portal/images/port-operations.png')", filter: "brightness(0.38)" }}
+          style={{ backgroundImage: `url('${CUSTOMER_ASSETS.portOperations}')`, filter: "brightness(0.38)" }}
         />
 
         {/* Gradient overlays */}
@@ -1685,7 +1686,7 @@ export default function MarketplacePage() {
                                 className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
                                 onError={(e) => {
                                   const el = e.currentTarget;
-                                  const fb = el.src.replace("/api/storage/public-objects/portal/images/", "/images/");
+                                  const fb = el.src.replace("/api/storage/public-objects/portal/images/", "/api/storage/public-objects/portal-assets/static/customer-portal/images/");
                                   if (el.src !== fb) { el.src = fb; return; }
                                   el.style.display = "none";
                                   if (el.parentElement) el.parentElement.style.background = "linear-gradient(145deg,#1a2a3a,#2a4060)";

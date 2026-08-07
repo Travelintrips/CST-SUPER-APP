@@ -19,6 +19,7 @@ import { useLanguage } from "@/i18n/LanguageContext";
 import { translateServiceName, translateCategory } from "@/i18n/serviceData";
 import { GROUPED_DISPLAY_CATEGORIES } from "@workspace/logistics-constants";
 import PageSeo from "@/components/PageSeo";
+import { CUSTOMER_ASSETS, staticAsset } from "@/lib/staticAssets";
 
 const formatIDR = (v: number) =>
   new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(v);
@@ -214,7 +215,7 @@ export default function Services() {
             top: "22%",
             width: "48%",
             height: "56%",
-            backgroundImage: "url(/images/logistics-routes.svg)",
+            backgroundImage: `url(${CUSTOMER_ASSETS.logisticsRoutes})`,
             backgroundRepeat: "no-repeat",
             backgroundSize: "contain",
             backgroundPosition: "center right",
@@ -233,7 +234,7 @@ export default function Services() {
             top: "22%",
             width: "48%",
             height: "56%",
-            backgroundImage: "url(/api/storage/public-objects/portal/images/logistics-routes.svg)",
+            backgroundImage: `url(${CUSTOMER_ASSETS.logisticsRoutes})`,
             backgroundRepeat: "no-repeat",
             backgroundSize: "contain",
             backgroundPosition: "center right",
@@ -422,7 +423,7 @@ export default function Services() {
                 {/* Visual: premium banner image */}
                 <div className="aspect-video w-full overflow-hidden relative">
                   <img
-                    src={`${import.meta.env.BASE_URL}images/banner-trucking-container.png`}
+                    src={staticAsset("images/banner-trucking-container.png")}
                     alt="Trucking & Container"
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                     onError={(e) => {
@@ -523,7 +524,7 @@ export default function Services() {
           </div>
         ) : (
           <div className="text-center py-24 bg-white rounded-xl border border-dashed border-border">
-            <img src={`${import.meta.env.BASE_URL}images/logo.png`} alt="B2B Marketplace and Logistic" className="h-12 w-auto mx-auto mb-4 object-contain opacity-35" />
+            <img src={staticAsset("images/logo.png")} alt="B2B Marketplace and Logistic" className="h-12 w-auto mx-auto mb-4 object-contain opacity-35" />
             <h3 className="text-xl font-medium mb-2">{t("services.noServices")}</h3>
             <p className="text-muted-foreground">
               {searchQuery ? t("services.tryOther") : t("services.noResults")}

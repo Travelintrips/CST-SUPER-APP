@@ -20,6 +20,7 @@ import { CART_KEY } from "@/lib/logistic-cart";
 import { LanguageSelector } from "@/components/layout/LanguageSelector";
 import { useLanguage } from "@/i18n/LanguageContext";
 import { useEditMode } from "@/contexts/EditModeContext";
+import { staticAsset } from "@/lib/staticAssets";
 
 interface NavServiceItem {
   icon: LucideIcon;
@@ -319,7 +320,7 @@ export function Navbar() {
 
   const logoSrc = content["navbar_logo"]
     ? content["navbar_logo"]
-    : `${import.meta.env.BASE_URL}images/logo.png`;
+    : staticAsset("images/logo.png");
 
   async function handleLogoUpload(file: File) {
     setLogoUploading(true);

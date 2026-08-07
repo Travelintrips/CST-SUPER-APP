@@ -27,10 +27,12 @@ import {
 } from "@/lib/jasa-shared";
 import PageSeo from "@/components/PageSeo";
 
+import { staticAsset, CUSTOMER_ASSETS } from "@/lib/staticAssets";
+
 const BUNDLE_PHOTOS: Record<string, string> = {
-  "Full Forwarding":         `/images/air-freight.png`,
-  "Sea Freight Bundle":      `/images/sea-freight.png`,
-  "Warehousing+Distribusi":  `/images/banner-trucking-container.png`,
+  "Full Forwarding":         staticAsset("images/air-freight.png"),
+  "Sea Freight Bundle":      staticAsset("images/sea-freight.png"),
+  "Warehousing+Distribusi":  staticAsset("images/banner-trucking-container.png"),
 };
 
 interface SubService {
@@ -389,7 +391,7 @@ export default function Jasa() {
         <div
           className="absolute inset-0 bg-cover bg-center"
           style={{
-            backgroundImage: "url('/images/port-operations.png')",
+            backgroundImage: `url('${CUSTOMER_ASSETS.portOperations}')`,
             transform: "scale(1.04)",
             filter: "brightness(0.45) saturate(1.1)",
           }}
@@ -397,7 +399,7 @@ export default function Jasa() {
         <div
           className="absolute inset-0 bg-cover bg-center"
           style={{
-            backgroundImage: "url('/api/storage/public-objects/portal/images/port-operations.png')",
+            backgroundImage: `url('${CUSTOMER_ASSETS.portOperations}')`,
             transform: "scale(1.04)",
             filter: "brightness(0.45) saturate(1.1)",
           }}
@@ -754,7 +756,7 @@ export default function Jasa() {
             {/* Hero strip */}
             <div className="relative h-52 rounded-3xl overflow-hidden mb-8 shadow-xl">
               <img
-                src="/images/port-operations.png"
+                src={CUSTOMER_ASSETS.portOperations}
                 alt="Paket Borongan"
                 className="absolute inset-0 w-full h-full object-cover"
                 style={{ filter: "brightness(0.35) saturate(1.1)" }}

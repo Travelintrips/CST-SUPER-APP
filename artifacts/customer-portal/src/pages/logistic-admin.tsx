@@ -27,6 +27,7 @@ import {
 import { supabase } from "@/lib/supabase";
 import { fetchAndStoreProfile } from "@/lib/auth";
 import { useLanguage } from "@/i18n/LanguageContext";
+import { staticAsset } from "@/lib/staticAssets";
 
 // Security: all admin API calls attach the Supabase Bearer token obtained from the
 // current session. No shared secret or hardcoded password is embedded in this bundle.
@@ -522,7 +523,7 @@ export default function AdminPage() {
                       <p className="text-xs text-primary-foreground/60 mb-1">{t("logisticAdmin.summary.totalOrders", "Total Pesanan")}</p>
                       <p className="text-4xl font-bold">{summary.totalOrders}</p>
                     </div>
-                    <img src={`${import.meta.env.BASE_URL}images/logo.png`} alt="" className="w-10 h-auto object-contain opacity-25" />
+                    <img src={staticAsset("images/logo.png")} alt="" className="w-10 h-auto object-contain opacity-25" />
                   </div>
                   <div className="bg-accent text-accent-foreground rounded-xl p-5 flex items-center justify-between">
                     <div>
@@ -600,7 +601,7 @@ export default function AdminPage() {
                 <div className="text-center py-10 text-muted-foreground text-sm">{t("logisticAdmin.loading", "Memuat data...")}</div>
               ) : orders.length === 0 ? (
                 <div className="text-center py-12">
-                  <img src={`${import.meta.env.BASE_URL}images/logo.png`} alt="" className="w-10 h-auto mx-auto mb-3 object-contain opacity-35" />
+                  <img src={staticAsset("images/logo.png")} alt="" className="w-10 h-auto mx-auto mb-3 object-contain opacity-35" />
                   <p className="font-medium text-foreground">{t("logisticAdmin.orders.empty", "Tidak ada pesanan")}</p>
                   <p className="text-sm text-muted-foreground mt-1">{t("logisticAdmin.orders.emptyHint", "Belum ada pesanan masuk")}</p>
                 </div>

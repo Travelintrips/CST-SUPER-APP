@@ -15,6 +15,7 @@ import { Link } from "wouter";
 import { useLanguage } from "@/i18n/LanguageContext";
 import { useCart } from "@/lib/logistic-cart";
 import { OPEN_CART_EVENT } from "@/components/CartDrawer";
+import { staticAsset } from "@/lib/staticAssets";
 
 type MediaItem = { type: "image" | "video"; url: string };
 
@@ -503,7 +504,7 @@ function ProductModal({ product, onClose }: { product: Product; onClose: () => v
 }
 
 // ── Product hero background — swap this path to change the image ───────────
-const PRODUCT_HERO_BG = `${import.meta.env.BASE_URL}images/product-hero-brand.png`;
+const PRODUCT_HERO_BG = "/api/storage/public-objects/portal-assets/static/customer-portal/images/product-hero-brand.png";
 
 // ── Main page ──────────────────────────────────────────────────────────────
 export default function Products() {
@@ -953,7 +954,7 @@ export default function Products() {
             style={{ border: "1.5px dashed #CBD5E1", boxShadow: "0 1px 4px rgba(15,23,42,0.05)" }}
           >
             <img
-              src={`${import.meta.env.BASE_URL}images/logo.png`}
+              src={staticAsset("images/logo.png")}
               alt="B2B Marketplace and Logistic"
               className="h-14 w-auto mx-auto mb-5 object-contain opacity-30"
             />

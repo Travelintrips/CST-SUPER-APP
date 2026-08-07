@@ -20,6 +20,7 @@ import { GooglePlacesAutocomplete } from "@/components/ui/google-places-autocomp
 import { RouteMapPreview } from "@/components/ui/route-map-preview";
 import PageSeo from "@/components/PageSeo";
 import { useLanguage } from "@/i18n/LanguageContext";
+import { staticAsset } from "@/lib/staticAssets";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -103,7 +104,7 @@ function TruckSVG({ size = "sm", variant = "default" }: { size?: "sm" | "lg"; va
 }
 
 // ─── Static vehicle photos ────────────────────────────────────────────────────
-const _SBV = "/images/vehicles";
+const _SBV = staticAsset("images/vehicles");
 const VEHICLE_PHOTOS: Record<string, string> = {
   "mobil":          `${_SBV}/mobil-ai.png`,
   "mobil-xl":       `${_SBV}/mobil-xl-ai.png`,

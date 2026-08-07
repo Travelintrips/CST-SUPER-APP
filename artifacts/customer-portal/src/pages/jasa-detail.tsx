@@ -28,6 +28,7 @@ import { formatCurrency } from "@/lib/utils";
 import { isAuthenticated } from "@/lib/auth";
 import { AirportCombobox } from "@/components/AirportCombobox";
 import { LocationCombobox, type GeoLocation } from "@/components/LocationCombobox";
+import { staticAsset } from "@/lib/staticAssets";
 
 const stripJasa = (name: string) => name.replace(/^Jasa\s+/i, "");
 
@@ -463,7 +464,7 @@ export default function JasaDetail() {
         `}</style>
         <div className="flex flex-col items-center gap-5">
           <img
-            src={`${import.meta.env.BASE_URL}images/logo.png`}
+            src={staticAsset("images/logo.png")}
             alt="B2B Marketplace and Logistic"
             className="cst-logo-loading"
             style={{ width: "clamp(60px, 9vw, 88px)", height: "auto" }}
@@ -482,7 +483,7 @@ export default function JasaDetail() {
   if (!item) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-4">
-        <img src={`${import.meta.env.BASE_URL}images/logo.png`} alt="B2B Marketplace and Logistic" className="h-16 w-auto object-contain opacity-40" />
+        <img src={staticAsset("images/logo.png")} alt="B2B Marketplace and Logistic" className="h-16 w-auto object-contain opacity-40" />
         <h2 className="text-2xl font-bold">{t("jasa.serviceNotFound")}</h2>
         <Link href="/jasa">
           <Button variant="outline"><ArrowLeft className="h-4 w-4 mr-2" /> {t("jasa.backToCatalog")}</Button>
@@ -766,7 +767,7 @@ export default function JasaDetail() {
       badgeText:   "#1e40af",
       glowA:       "#3B82F6",
       glowB:       "#60A5FA",
-      image:       "/api/storage/public-objects/portal/images/services/jasa-freight.jpg",
+      image:       "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/freight-udara.png",
       iconBg:      "linear-gradient(135deg,rgba(255,255,255,0.88) 0%,rgba(219,234,254,0.72) 100%)",
       tintOverlay: "rgba(59,130,246,0.07)",
       features:    ["Air Freight", "Sea FCL / LCL", "Door-to-Door", "Multi-Modal"],
@@ -780,7 +781,7 @@ export default function JasaDetail() {
       badgeText:   "#065F46",
       glowA:       "#10B981",
       glowB:       "#34D399",
-      image:       "/api/storage/public-objects/portal/images/services/jasa-customs.jpg",
+      image:       "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/customs-clearance.png",
       iconBg:      "linear-gradient(135deg,rgba(255,255,255,0.88) 0%,rgba(167,243,208,0.72) 100%)",
       tintOverlay: "rgba(16,185,129,0.06)",
       features:    ["Import & Export", "PIB / PEB", "HS Code Konsultasi", "PPJK Resmi"],
@@ -794,7 +795,7 @@ export default function JasaDetail() {
       badgeText:   "#5B21B6",
       glowA:       "#8B5CF6",
       glowB:       "#A78BFA",
-      image:       "/api/storage/public-objects/portal/images/services/jasa-handling.jpg",
+      image:       "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/handling-cargo-laut.png",
       iconBg:      "linear-gradient(135deg,rgba(255,255,255,0.88) 0%,rgba(221,214,254,0.72) 100%)",
       tintOverlay: "rgba(109,40,217,0.06)",
       features:    ["Origin Handling", "Destination Handling", "Kargo Berbahaya", "Tim Profesional"],
@@ -808,7 +809,7 @@ export default function JasaDetail() {
       badgeText:   "#0F766E",
       glowA:       "#14B8A6",
       glowB:       "#2DD4BF",
-      image:       "/api/storage/public-objects/portal/images/services/jasa-storage.jpg",
+      image:       "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/biaya-storage.png",
       iconBg:      "linear-gradient(135deg,rgba(255,255,255,0.88) 0%,rgba(153,246,228,0.72) 100%)",
       tintOverlay: "rgba(13,148,136,0.06)",
       features:    ["Gudang Umum", "Bonded Warehouse", "Cold Storage", "Sewa Fleksibel"],
@@ -822,7 +823,7 @@ export default function JasaDetail() {
       badgeText:   "#92400E",
       glowA:       "#F59E0B",
       glowB:       "#FCD34D",
-      image:       "/api/storage/public-objects/portal/images/services/jasa-trucking.jpg",
+      image:       "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/trucking-container.png",
       iconBg:      "linear-gradient(135deg,rgba(255,255,255,0.88) 0%,rgba(253,230,138,0.72) 100%)",
       tintOverlay: "rgba(245,158,11,0.07)",
       features:    ["5 Jenis Armada", "Kalkulasi Otomatis", "Harga Transparan", "Berlisensi & Profesional"],
@@ -836,7 +837,7 @@ export default function JasaDetail() {
       badgeText:   "#3730A3",
       glowA:       "#6366F1",
       glowB:       "#818CF8",
-      image:       "/api/storage/public-objects/portal/images/services/jasa-document.jpg",
+      image:       "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/pengurusan-dokumen-ppjk.png",
       iconBg:      "linear-gradient(135deg,rgba(255,255,255,0.88) 0%,rgba(199,210,254,0.72) 100%)",
       tintOverlay: "rgba(99,102,241,0.06)",
       features:    ["Bill of Lading", "Air Waybill", "COO / SKA", "Packing List"],
@@ -850,7 +851,7 @@ export default function JasaDetail() {
       badgeText:   "#9F1239",
       glowA:       "#F43F5E",
       glowB:       "#FB7185",
-      image:       "/api/storage/public-objects/portal/images/services/jasa-additional.jpg",
+      image:       "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/asuransi-kargo.png",
       iconBg:      "linear-gradient(135deg,rgba(255,255,255,0.88) 0%,rgba(253,164,175,0.72) 100%)",
       tintOverlay: "rgba(244,63,94,0.06)",
       features:    ["Asuransi Kargo", "Surveyor", "Perizinan", "BPOM / SNI"],
@@ -1092,7 +1093,7 @@ export default function JasaDetail() {
               }}
             >
               {ct === "trucking" ? (
-                <img src={`${import.meta.env.BASE_URL}images/logo-baru.png`} alt="CST Logistic" className="h-10 w-auto max-w-[90px] object-contain" />
+                <img src={staticAsset("images/logo-baru.png")} alt="CST Logistic" className="h-10 w-auto max-w-[90px] object-contain" />
               ) : (
                 <div style={{ color: hero.accentColor, filter: `drop-shadow(0 4px 12px ${hero.accentColor}40)` }}>
                   <IconComp className="h-10 w-10" />

@@ -586,7 +586,7 @@ export default function LogisticsPage() {
               </div>
             ) : recentFreight.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-10 text-muted-foreground gap-2">
-                <img src="/images/logo.png" alt="B2B Marketplace and Logistic" className="h-8 w-auto object-contain opacity-50" />
+                <img src="/api/storage/public-objects/portal-assets/static/customer-portal/images/logo.png" alt="B2B Marketplace and Logistic" className="h-8 w-auto object-contain opacity-50" />
                 <p className="text-sm">
                   {freightStatusFilter !== "all" && freightDateFilter !== "all"
                     ? `${t.logistics.noShipments} (${FREIGHT_STATUS_LABELS[freightStatusFilter] ?? freightStatusFilter})`

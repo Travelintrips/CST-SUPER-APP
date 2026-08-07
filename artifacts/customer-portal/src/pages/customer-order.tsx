@@ -82,28 +82,6 @@ const PROGRESS_STEP_KEYS = [
 export default function CustomerOrderPage() {
   const { token } = useParams<{ token: string }>();
   const { t, locale } = useLanguage();
-const STATUS_LABELS: Record<string, { labelKey: string; label: string; icon: string; color: string }> = {
-  order_confirmed:     { labelKey: "customerOrder.statusOrderConfirmed",    label: "Order Dikonfirmasi",       icon: "✅", color: "text-green-700 bg-green-50" },
-  assigned_to_vendor:  { labelKey: "customerOrder.statusAssignedToVendor",  label: "Ditugaskan ke Vendor",     icon: "🏷️", color: "text-blue-700 bg-blue-50" },
-  waiting_pickup:      { labelKey: "customerOrder.statusWaitingPickup",      label: "Menunggu Pickup",          icon: "⏳", color: "text-amber-700 bg-amber-50" },
-  picked_up:           { labelKey: "customerOrder.statusPickedUp",           label: "Sudah Pickup",             icon: "📦", color: "text-blue-700 bg-blue-50" },
-  in_progress:         { labelKey: "customerOrder.statusInProgress",         label: "Dalam Perjalanan",         icon: "🚚", color: "text-indigo-700 bg-indigo-50" },
-  delivered:           { labelKey: "customerOrder.statusDelivered",          label: "Terkirim",                 icon: "📍", color: "text-teal-700 bg-teal-50" },
-  pod_uploaded:        { labelKey: "customerOrder.statusPodUploaded",        label: "Bukti Pengiriman Diupload",icon: "📄", color: "text-teal-700 bg-teal-50" },
-  invoice_created:     { labelKey: "customerOrder.statusInvoiceCreated",     label: "Invoice Dibuat",           icon: "🧾", color: "text-slate-700 bg-slate-50" },
-  payment_pending:     { labelKey: "customerOrder.statusPaymentPending",     label: "Menunggu Pembayaran",      icon: "💳", color: "text-orange-700 bg-orange-50" },
-  paid:                { labelKey: "customerOrder.statusPaid",               label: "Sudah Dibayar",            icon: "💚", color: "text-green-700 bg-green-50" },
-  completed:           { labelKey: "customerOrder.statusCompleted",          label: "Selesai",                  icon: "🎉", color: "text-green-700 bg-green-50" },
-  cancelled:           { labelKey: "customerOrder.statusCancelled",          label: "Dibatalkan",               icon: "❌", color: "text-red-700 bg-red-50" },
-};
-
-function getStatusMeta(status: string) {
-  return STATUS_LABELS[status] ?? { labelKey: status, label: status, icon: "📋", color: "text-slate-700 bg-slate-50" };
-}
-
-export default function CustomerOrderPage() {
-  const { token } = useParams<{ token: string }>();
-  const { t } = useLanguage();
   const [data, setData] = useState<OrderData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -150,7 +128,6 @@ export default function CustomerOrderPage() {
       <div className="flex flex-col items-center gap-3 text-slate-400">
         <div className="h-8 w-8 border-4 border-teal-500 border-t-transparent rounded-full animate-spin" />
         <span className="text-sm">{t("customerOrder.loading", "Memuat status order...")}</span>
-        <span className="text-sm">{t("customerOrder.loadingStatus", "Memuat status order...")}</span>
       </div>
     </div>
   );
@@ -160,7 +137,6 @@ export default function CustomerOrderPage() {
       <div className="bg-white rounded-2xl p-8 text-center max-w-sm w-full shadow-sm">
         <div className="text-4xl mb-3">⚠️</div>
         <p className="text-sm text-slate-600">{error ?? t("customerOrder.notFound", "Data tidak ditemukan")}</p>
-        <p className="text-sm text-slate-600">{error ?? t("customerOrder.dataNotFound", "Data tidak ditemukan")}</p>
       </div>
     </div>
   );
@@ -195,8 +171,6 @@ export default function CustomerOrderPage() {
             {data.etaFinal && (
               <p className="text-xs mt-0.5 opacity-75">{t("customerOrder.estimatedArrival", "Estimasi")}: {data.etaFinal}</p>
             )}
-            <p className="text-sm font-semibold">{statusMeta.icon} {t(statusMeta.labelKey, statusMeta.label)}</p>
-            {data.etaFinal && <p className="text-xs mt-0.5 opacity-75">{t("customerOrder.eta", "Estimasi")}: {data.etaFinal}</p>}
           </div>
 
           <div className="space-y-2">
@@ -206,26 +180,21 @@ export default function CustomerOrderPage() {
               label={t("customerOrder.orderDate", "Tanggal Order")}
               value={fmtDateLong(data.createdAt)}
             />
-            <InfoRow label={t("customerOrder.orderDate", "Tanggal Order")} value={new Date(data.createdAt).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })} />
           </div>
         </div>
 
         {/* Visual progress */}
-        <ProgressBar status={data.status} t={t} />
+        <ProgressBar status={data.status} />
 
         {/* Price summary card */}
         {(data.productPrice != null || data.truckPrice != null || data.totalPrice != null) && (
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
             <h2 className="font-semibold text-slate-800 mb-3">💰 {t("customerOrder.priceSummary", "Ringkasan Harga")}</h2>
-            <h2 className="font-semibold text-slate-800 mb-3">{t("customerOrder.priceSummary", "💰 Ringkasan Harga")}</h2>
             <div className="space-y-2 text-sm">
               {data.productPrice != null && (
                 <div className="flex justify-between">
                   <span className="text-slate-500">{t("customerOrder.productService", "Produk / Jasa")}</span>
                   <span className="font-medium text-slate-800">{fmtCurrency(data.productPrice)}</span>
-                  <span className="font-medium text-slate-800">
-                    {data.productPrice.toLocaleString("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 })}
-                  </span>
                 </div>
               )}
               {data.truckPrice != null && (
@@ -241,7 +210,6 @@ export default function CustomerOrderPage() {
                         {data.truckSource === "internal"
                           ? t("customerOrder.internal", "Internal")
                           : t("customerOrder.external", "Eksternal")}
-                        {data.truckSource === "internal" ? t("customerOrder.internal", "Internal") : t("customerOrder.external", "Eksternal")}
                       </span>
                     )}
                   </span>
@@ -252,9 +220,6 @@ export default function CustomerOrderPage() {
                 <div className="flex justify-between pt-2 border-t border-slate-100">
                   <span className="font-semibold text-slate-700">{t("customerOrder.total", "Total")}</span>
                   <span className="font-bold text-teal-700 text-base">{fmtCurrency(data.totalPrice)}</span>
-                  <span className="font-bold text-teal-700 text-base">
-                    {data.totalPrice.toLocaleString("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 })}
-                  </span>
                 </div>
               )}
             </div>
@@ -265,7 +230,6 @@ export default function CustomerOrderPage() {
         {data.timeline.length > 0 ? (
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
             <h2 className="font-semibold text-slate-800 mb-4">📅 {t("customerOrder.journeyHistory", "Riwayat Perjalanan")}</h2>
-            <h2 className="font-semibold text-slate-800 mb-4">{t("customerOrder.journeyHistory", "📅 Riwayat Perjalanan")}</h2>
             <div className="relative pl-5">
               <div className="absolute left-2 top-0 bottom-0 w-0.5 bg-slate-100" />
               <div className="space-y-5">
@@ -278,7 +242,7 @@ export default function CustomerOrderPage() {
                       <div>
                         {m && (
                           <span className={`text-xs rounded-full px-2.5 py-0.5 font-medium ${m.color}`}>
-                            {m.icon} {t(m.labelKey, m.label)}
+                            {m.icon} {m.label}
                           </span>
                         )}
                         {item.notes && (
@@ -288,7 +252,6 @@ export default function CustomerOrderPage() {
                           <a href={item.attachmentUrl} target="_blank" rel="noopener noreferrer"
                             className="text-xs text-blue-600 underline mt-1 block">
                             📎 {t("customerOrder.viewDocument", "Lihat Dokumen")}
-                            {t("customerOrder.viewDocument", "📎 Lihat Dokumen")}
                           </a>
                         )}
                         <p className="text-xs text-slate-400 mt-1">{fmtDate(item.createdAt)}</p>
@@ -302,7 +265,6 @@ export default function CustomerOrderPage() {
         ) : (
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 text-center text-slate-400 text-sm">
             {t("customerOrder.noHistory", "Belum ada riwayat perjalanan.")}
-            {t("customerOrder.noJourneyHistory", "Belum ada riwayat perjalanan.")}
           </div>
         )}
 
@@ -311,19 +273,9 @@ export default function CustomerOrderPage() {
   );
 }
 
-function ProgressBar({ status, t }: { status: string; t: (key: Parameters<typeof import("@/i18n/LanguageContext").useLanguage>[0] extends never ? string : string, fallback?: string) => string }) {
-  const stepKeys = PROGRESS_STEP_KEYS.map(s => s.key);
-const PROGRESS_STEPS = [
-  { key: "order_confirmed", labelKey: "customerOrder.progressConfirm",  label: "Konfirmasi" },
-  { key: "picked_up",       labelKey: "customerOrder.progressPickup",   label: "Pickup" },
-  { key: "in_progress",     labelKey: "customerOrder.progressOnTheWay", label: "Perjalanan" },
-  { key: "delivered",       labelKey: "customerOrder.progressDelivered",label: "Terkirim" },
-  { key: "completed",       labelKey: "customerOrder.progressDone",     label: "Selesai" },
-];
-
 function ProgressBar({ status }: { status: string }) {
   const { t } = useLanguage();
-  const stepKeys = PROGRESS_STEPS.map(s => s.key);
+  const stepKeys = PROGRESS_STEP_KEYS.map(s => s.key);
   const currentIdx = stepKeys.indexOf(status);
   const activeIdx = currentIdx >= 0 ? currentIdx : (status === "cancelled" ? -1 : 0);
 
@@ -341,7 +293,6 @@ function ProgressBar({ status }: { status: string }) {
             </div>
             <span className={`text-xs text-center ${idx <= activeIdx ? "text-teal-700 font-medium" : "text-slate-400"}`}>
               {t(step.labelKey as Parameters<typeof t>[0], step.key)}
-              {t(step.labelKey, step.label)}
             </span>
             {idx < PROGRESS_STEP_KEYS.length - 1 && (
               <div className={`absolute h-0.5 w-full ${idx < activeIdx ? "bg-teal-400" : "bg-slate-100"}`} />

@@ -16,6 +16,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { AlertCircle, CheckCircle2, Mail, Smartphone } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useLanguage } from "@/i18n/LanguageContext";
+import { CUSTOMER_ASSETS } from "@/lib/staticAssets";
 
 const IS_DEV = import.meta.env.DEV;
 
@@ -322,19 +323,18 @@ export default function Login() {
         className="hidden md:flex flex-col justify-center p-12 lg:p-16 relative overflow-hidden"
       >
         {/* Bg: local fallback behind, Supabase Storage on top — fallback shows when storage not connected */}
-        <div className="absolute inset-0 bg-cover bg-center" style={{ backgroundImage: "url('/images/warehouse.png')" }} />
-        <div className="absolute inset-0 bg-cover bg-center" style={{ backgroundImage: "url('/api/storage/public-objects/portal/images/warehouse.png')" }} />
+        <div className="absolute inset-0 bg-cover bg-center" style={{ backgroundImage: `url('${CUSTOMER_ASSETS.warehouse}')` }} />
         {/* Gradient + vignette */}
         <div className="absolute inset-0" style={{ backgroundImage: "linear-gradient(120deg, rgba(15,23,42,0.72) 0%, rgba(14,165,233,0.55) 45%, rgba(14,165,233,0.32) 100%)" }} />
         <div aria-hidden className="absolute inset-0 pointer-events-none" style={{ boxShadow: "inset 0 0 80px 12px rgba(11,29,50,0.50)" }} />
         <div className="relative z-10" style={{ maxWidth: "480px" }}>
           <div className="inline-flex mb-10" style={{ background: "rgba(255,255,255,0.90)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", borderRadius: "18px", padding: "12px 16px", boxShadow: "0 12px 35px rgba(15,23,42,0.22)" }}>
             <img
-              src="/api/storage/public-objects/portal/images/logo.png"
+              src={CUSTOMER_ASSETS.logo}
               alt="Logo"
               className="h-12 w-auto object-contain"
               style={{ maxWidth: "160px" }}
-              onError={(e) => { const el = e.currentTarget; const fb = el.src.replace("/api/storage/public-objects/portal/images/", "/images/"); if (el.src !== fb) el.src = fb; }}
+              onError={(e) => { const el = e.currentTarget; const fb = el.src.replace("/api/storage/public-objects/portal/images/", "/api/storage/public-objects/portal-assets/static/customer-portal/images/"); if (el.src !== fb) el.src = fb; }}
             />
           </div>
           <h1 className="font-display mb-6" style={{ fontWeight: 800, fontSize: "clamp(36px, 4vw, 56px)", lineHeight: 1.08, letterSpacing: "-0.04em", color: "#ffffff", textShadow: "0 6px 24px rgba(15,23,42,0.55)" }}>

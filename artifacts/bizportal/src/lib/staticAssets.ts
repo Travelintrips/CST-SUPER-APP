@@ -5,6 +5,6 @@ export function staticAsset(path: string): string {
 }
 
 export const BIZ_ASSETS = {
-  logo: staticAsset("logocst.webp"),
+  logo: staticAsset("logocst.png"),
   favicon: staticAsset("favicon.svg"),
 } as const;

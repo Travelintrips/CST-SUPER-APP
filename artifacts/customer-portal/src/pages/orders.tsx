@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency } from "@/lib/utils";
 import { useLanguage } from "@/i18n/LanguageContext";
+import { staticAsset } from "@/lib/staticAssets";
 
 function Highlight({ text, query }: { text: string; query: string }) {
   if (!query.trim()) return <>{text}</>;
@@ -347,7 +348,7 @@ export default function Orders() {
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-3">
                           <div className="bg-primary/5 p-2 rounded-lg shrink-0">
-                            <img src={`${import.meta.env.BASE_URL}images/logo.png`} alt="" className="h-5 w-auto object-contain" />
+                            <img src={staticAsset("images/logo.png")} alt="" className="h-5 w-auto object-contain" />
                           </div>
                           <div>
                             <div className="font-semibold text-primary flex items-center gap-1.5">

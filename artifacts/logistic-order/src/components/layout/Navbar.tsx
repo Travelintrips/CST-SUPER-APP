@@ -4,6 +4,7 @@ import { Menu, X, Ship } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { LanguageSelector } from "@/components/layout/LanguageSelector";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { LOGISTIC_ORDER_ASSETS } from "@/lib/staticAssets";
 
 export function Navbar() {
   const [location] = useLocation();
@@ -35,7 +36,7 @@ export function Navbar() {
           {/* Logo */}
           <Link href="/" className="flex items-center gap-3 group">
             <img
-              src={`${import.meta.env.BASE_URL}logocst_nobg.png`}
+              src={LOGISTIC_ORDER_ASSETS.logo}
               alt="B2B Marketplace and Logistic"
               className="h-9 w-auto object-contain"
               onError={(e) => {

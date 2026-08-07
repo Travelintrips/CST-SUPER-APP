@@ -221,7 +221,7 @@ export default function TradingPage() {
                       <TableRow>
                         <TableCell colSpan={6} className="h-24 text-center">
                           <div className="flex flex-col items-center justify-center text-muted-foreground">
-                            <img src="/images/logo.png" alt="B2B Marketplace and Logistic" className="h-8 w-auto mb-2 object-contain opacity-50 mx-auto" />
+                            <img src="/api/storage/public-objects/portal-assets/static/customer-portal/images/logo.png" alt="B2B Marketplace and Logistic" className="h-8 w-auto mb-2 object-contain opacity-50 mx-auto" />
                             <p>{t.trading.noStock}</p>
                           </div>
                         </TableCell>
@@ -261,7 +261,7 @@ export default function TradingPage() {
                 ))
               ) : !stocks || stocks.length === 0 ? (
                 <Card><CardContent className="p-8 text-center">
-                  <img src="/images/logo.png" alt="B2B Marketplace and Logistic" className="h-8 w-auto mb-2 object-contain opacity-50 mx-auto" />
+                  <img src="/api/storage/public-objects/portal-assets/static/customer-portal/images/logo.png" alt="B2B Marketplace and Logistic" className="h-8 w-auto mb-2 object-contain opacity-50 mx-auto" />
                   <p className="text-sm text-muted-foreground">{t.trading.noStock}</p>
                 </CardContent></Card>
               ) : (

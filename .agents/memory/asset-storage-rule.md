@@ -24,21 +24,24 @@ Semua gambar, PDF, dan file biner harus disimpan di **Supabase Storage** dan dir
 | `*/public/opengraph.jpg` | OG image statis untuk SEO (jika <200KB) |
 | Logo vector (`*.svg`) | Ukuran kecil, bukan foto |
 
-## Status migrasi (Agustus 2026) — BELUM dilakukan
+## Status migrasi (Agustus 2026) — SELESAI
 
-Total ±223 file gambar masih di git, belum dipindah ke Supabase Storage:
+231 file gambar telah diupload ke Supabase Storage (`public-assets` bucket) dan di-rm dari git tracking. Semua referensi kode di-update ke storage URLs.
 
-| Folder | File | Ukuran | Prioritas |
-|--------|------|--------|-----------|
-| `customer-portal/public/images/` | ~150 | 152MB | 🔴 Tinggi |
-| `customer-portal/public/menu/` | ~20 | ~5MB | 🔴 Tinggi |
-| `bizportal/public/menu/` | ~10 | ~2MB | 🟡 Sedang |
-| `api-server/public/pos-images/` | 2 | ~400KB | 🟡 Sedang |
-| `bizportal/public/Screenshot_*.jpg` | 4 | ~1MB | 🟡 Hapus |
-| `cst-driver/assets/hero-*.png` | 4 | ~3MB | 🟢 Rendah |
-| `logistic-order/public/logocst*.jpg` | 2 | ~200KB | 🟢 Rendah |
+| Folder | Status | Storage path prefix |
+|--------|--------|---------------------|
+| `customer-portal/public/images/` | ✅ Selesai | `portal-assets/static/customer-portal/images/` |
+| `customer-portal/public/menu/` | ✅ Selesai | `portal-assets/static/customer-portal/menu/` |
+| `bizportal/public/menu/` | ✅ Selesai | `portal-assets/static/bizportal/menu/` |
+| `api-server/public/pos-images/` | ✅ Selesai | `pos-images/` |
+| `bizportal/public/Screenshot_*.jpg` | ✅ Dihapus | — |
+| `cst-driver/assets/hero-*.png` | ✅ Selesai | `portal-assets/static/cst-driver/assets/` |
+| `logistic-order/public/logocst*.jpg` | ✅ Selesai | `portal-assets/static/logistic-order/` |
 
-Migrasi ini belum dikerjakan karena memerlukan: upload setiap file ke Supabase Storage, update semua referensi kode (src/href dari path lokal ke URL Supabase), kemudian hapus dari git + rewrite history.
+URL format untuk frontend: `/api/storage/public-objects/{storagePath}`
+staticAssets.ts canonical root: `/api/storage/public-objects/portal-assets/static/customer-portal/`
+
+**Catatan:** File masih ada di disk lokal (tidak dihapus fisik) agar dev lokal tidak rusak, tapi tidak di-track git. Jika repo di-clone ulang, file tidak ada — itu benar.
 
 ## Aturan untuk agen AI
 
