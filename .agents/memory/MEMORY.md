@@ -30,3 +30,4 @@
 - [Sport payment reconciliation](sport-payment-reconciliation-canonical.md) — sport_payments is the canonical candidate; accounting_payments only links the existing journal.
 - [Marketplace invoice upload idempotency](marketplace-invoice-upload-idempotency.md) — hapus attachment private baru pada duplicate/failure; hanya pertahankan setelah invoice baru commit.
 - [Bank recon SQL column audit](bank-recon-sql-column-audit.md) — candidateDetailsSql had wrong column names on 4 tables; UNION ALL type mismatch (ENUM vs TEXT); Drizzle hides real error in e.cause?.message; DROP VIEW before CREATE OR REPLACE VIEW.
+- [Sprint 7 runtime evidence](sprint7-runtime-evidence.md) — invoice lifecycle runtime E2E passes on dev DB; legacy quote harness imports unavailable declaration-only lib/db output.
