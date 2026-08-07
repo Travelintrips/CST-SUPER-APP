@@ -700,26 +700,25 @@ router.get("/mutations", async (req, res) => {
         SELECT jsonb_build_object(
           'amount', sp.amount,
           'date', COALESCE(sp.paid_at::date, sp.created_at::date),
-          'name', COALESCE(c.name, sb.customer_name),
+          'name', COALESCE(sb.customer_name, c.name),
           'reference', CONCAT('SPORT-', sp.booking_id::text),
           'paymentNumber', sp.payment_number,
           'memo', sp.notes,
           'method', sp.method,
           'status', sp.status,
-          'bookingId', sp.booking_id,
-          'paymentType', sp.payment_type
+          'bookingId', sp.booking_id
         )
         FROM sport_payments sp
-        LEFT JOIN customers c ON c.id = sp.customer_id
         LEFT JOIN sport_bookings sb ON sb.id = sp.booking_id
+        LEFT JOIN customers c ON c.id = sb.customer_id
         WHERE sp.id = m.candidate_id
       )
       WHEN 'invoice' THEN (
         SELECT jsonb_build_object(
           'amount', sd.total_amount,
-          'date', sd.issue_date,
+          'date', COALESCE(sd.invoice_date::text, sd.created_at::date::text),
           'reference', sd.doc_number,
-          'documentType', sd.doc_type
+          'documentType', sd.kind
         )
         FROM sales_documents sd
         WHERE sd.id = m.candidate_id
@@ -736,9 +735,9 @@ router.get("/mutations", async (req, res) => {
       )
       WHEN 'logistic_order' THEN (
         SELECT jsonb_build_object(
-          'amount', lo.total_price,
+          'amount', lo.grand_total,
           'date', lo.created_at::date,
-          'name', lo.sender_name,
+          'name', COALESCE(lo.sender_name, lo.customer_name),
           'reference', lo.order_number,
           'status', lo.status
         )
@@ -748,8 +747,8 @@ router.get("/mutations", async (req, res) => {
       WHEN 'tenant_invoice' THEN (
         SELECT jsonb_build_object(
           'amount', ti.total_amount,
-          'date', ti.issued_date,
-          'name', COALESCE(t.name, ti.tenant_name),
+          'date', ti.issued_date::text,
+          'name', COALESCE(t.business_name, t.owner_name),
           'reference', ti.invoice_number
         )
         FROM tenant_invoices ti
@@ -763,11 +762,11 @@ router.get("/mutations", async (req, res) => {
   // ── Query SQL UNION ALL ────────────────────────────────────────────────────
   const bmSelect = `
     SELECT
-      bm.id, bm.transaction_date, bm.description,
-      bm.credit_amount, bm.debit_amount, bm.amount, bm.direction,
+      bm.id, bm.transaction_date::text, bm.description,
+      bm.credit_amount, bm.debit_amount, bm.amount, bm.direction::text,
       bm.mutation_key, bm.normalized_description,
       bm.provider_name, bm.provider_order_id,
-      bm.status, bm.journal_entry_id, bm.company_id,
+      bm.status::text, bm.journal_entry_id, bm.company_id,
       bm.uploaded_proof_url, bm.source,
        'bank_mutations' AS _source_table,
        (SELECT json_agg(
@@ -833,8 +832,9 @@ router.get("/mutations", async (req, res) => {
       total: Number((countRows[0] as any)?.total ?? 0),
     });
   } catch (e: any) {
-    logger.error({ err: e.message }, "[bankRecon] GET /mutations failed");
-    return res.status(500).json({ error: e.message });
+    const dbMsg = e.cause?.message ?? e.cause ?? e.message;
+    logger.error({ err: dbMsg, sql_hint: String(dbMsg).substring(0, 400) }, "[bankRecon] GET /mutations failed");
+    return res.status(500).json({ error: dbMsg });
   }
 });
 
@@ -2589,12 +2589,12 @@ router.post("/mutations/:mutationId/multi-invoice-match", async (req, res) => {
              COALESCE(c.name, '') AS customer_name
       FROM sales_documents sd
       LEFT JOIN customers c ON c.id = sd.customer_id
-      WHERE sd.doc_type = 'invoice'
+      WHERE sd.kind = 'invoice'
         AND sd.company_id = ${companyId}
         AND sd.status NOT IN ('paid','cancelled','void')
         AND sd.total_amount <= ${amount} * 1.05
         AND sd.total_amount >= ${amount} * 0.01
-        AND sd.issue_date >= '${txDate}'::date - 90
+        AND COALESCE(sd.invoice_date, sd.created_at::date) >= '${txDate}'::date - 90
       ORDER BY sd.total_amount DESC
       LIMIT 100
     `)).catch(() => ({ rows: [] as unknown[] }));
