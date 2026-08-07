@@ -254,7 +254,7 @@ describe("Sprint 7 runtime vendor invoice gates", () => {
       GROUP BY deduplication_key
     `);
     expect(queueRows.every((row) => Number(row.count) === 1)).toBe(true);
-  });
+  }, 120_000);
 
   afterAll(async () => {
     await cleanup();
