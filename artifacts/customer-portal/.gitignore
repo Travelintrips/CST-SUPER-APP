@@ -4,6 +4,10 @@ node_modules/
 # Build output
 dist/
 
+# Images & binary assets — wajib di Supabase Storage, bukan git
+public/images/
+public/menu/
+
 # Dev tools & junk — jangan masuk ke src/
 src/**/*.bak
 src/**/*.py
