@@ -296,6 +296,7 @@ async function applyRuntimeMigrations(): Promise<void> {
   try { await db.execute(sql.raw(`ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'fund_transfer'`)); } catch { /* already exists */ }
   try { await db.execute(sql.raw(`ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'sport_center_booking'`)); } catch { /* already exists */ }
   try { await db.execute(sql.raw(`ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'sport_center_booking_reversal'`)); } catch { /* already exists */ }
+  try { await db.execute(sql.raw(`ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'sport_center_qris_mdr'`)); } catch { /* already exists */ }
   // Deduplicate chart_of_accounts keeping lowest id per (company_id, code) before creating unique index
   try {
     await db.execute(sql.raw(`
@@ -1143,6 +1144,7 @@ const ENUM_PATCHES = [
   `ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'tenant_rent_reversal'`,
   `ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'sport_center_booking'`,
   `ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'sport_center_booking_reversal'`,
+  `ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'sport_center_qris_mdr'`,
 ];
 
 let _enumPatchApplied = false;

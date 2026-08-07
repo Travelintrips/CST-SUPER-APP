@@ -197,6 +197,7 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
         ON CONFLICT (payment_number) DO UPDATE SET
           status     = EXCLUDED.status,
           amount     = EXCLUDED.amount,
+          method     = EXCLUDED.method,
           booking_id = COALESCE(sport_payments.booking_id, EXCLUDED.booking_id),
           updated_at = NOW()
       `);

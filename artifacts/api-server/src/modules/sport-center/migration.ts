@@ -250,6 +250,30 @@ export async function runSportCenterMigration(): Promise<void> {
         ADD COLUMN IF NOT EXISTS tax_rate    NUMERIC(5,2)  NOT NULL DEFAULT 0,
         ADD COLUMN IF NOT EXISTS tax_amount  NUMERIC(14,2) NOT NULL DEFAULT 0
     `);
+    // QRIS settlement detail. `amount` remains the gross customer payment;
+    // net_amount is the expected bank settlement after MDR.
+    await db.execute(sql`
+      ALTER TABLE sport_payments
+        ADD COLUMN IF NOT EXISTS mdr_rate             NUMERIC(7,4)  NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS mdr_amount           NUMERIC(14,2) NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS net_amount           NUMERIC(14,2) NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS settlement_reference TEXT,
+        ADD COLUMN IF NOT EXISTS settlement_date      DATE,
+        ADD COLUMN IF NOT EXISTS settlement_status    TEXT NOT NULL DEFAULT 'unsettled',
+        ADD COLUMN IF NOT EXISTS mdr_posting_status   TEXT NOT NULL DEFAULT 'unposted',
+        ADD COLUMN IF NOT EXISTS mdr_accounting_entry_id INTEGER,
+        ADD COLUMN IF NOT EXISTS mdr_posted_at        TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS mdr_posting_error     TEXT
+    `);
+    await db.execute(sql`
+      UPDATE sport_payments
+      SET net_amount = GREATEST(0, amount - COALESCE(mdr_amount, 0))
+      WHERE net_amount IS NULL OR net_amount = 0
+    `).catch(() => {});
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS idx_sport_payments_settlement
+      ON sport_payments(settlement_status, settlement_date)
+    `).catch(() => {});
     await db.execute(sql`
       ALTER TABLE sport_payments
         ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'SPORT_CENTER'

@@ -1981,6 +1981,7 @@ router.get("/payments", async (req, res) => {
           -- Sumber 1: canonical sport_center.sport_payments
           -- Semua field di-cast ke text/numeric/timestamptz agar UNION type-safe
           SELECT
+            p.id::int                                      AS id,
             ('SCPAY-' || p.id::text)::text                AS payment_number,
             p.booking_id::int                              AS sc_booking_id,
             b.order_number::text                           AS booking_number,
@@ -1989,6 +1990,14 @@ router.get("/payments", async (req, res) => {
             COALESCE(f.name, '')::text                     AS facility_name,
             p.amount::numeric                              AS amount,
             p.payment_method::text                         AS method,
+            COALESCE(local_b.tax_amount, 0)::numeric       AS tax_amount,
+            COALESCE(mirror.mdr_rate, 0)::numeric          AS mdr_rate,
+            COALESCE(mirror.mdr_amount, 0)::numeric        AS mdr_amount,
+            GREATEST(0, p.amount - COALESCE(mirror.mdr_amount, 0))::numeric AS net_amount,
+            mirror.settlement_reference::text              AS settlement_reference,
+            mirror.settlement_date::date                   AS settlement_date,
+            COALESCE(mirror.settlement_status, 'unsettled')::text AS settlement_status,
+            COALESCE(mirror.mdr_posting_status, 'unposted')::text AS mdr_posting_status,
             CASE
               WHEN lower(p.status::text) IN ('confirmed','paid','settlement','capture') THEN 'paid'
               ELSE 'pending'
@@ -2002,11 +2011,14 @@ router.get("/payments", async (req, res) => {
           FROM sport_center.sport_payments p
           LEFT JOIN sport_center.sport_bookings  b ON b.id = p.booking_id
           LEFT JOIN sport_center.sport_facilities f ON f.id = b.facility_id
+          LEFT JOIN public.sport_payments mirror ON mirror.payment_number = ('SCPAY-' || p.id::text)
+          LEFT JOIN public.sport_bookings local_b ON local_b.sc_booking_id = p.booking_id
         ),
         bz_pay AS (
           -- Sumber 2: BizPortal-created payments (bukan mirror dari sport_center)
           -- payment_number NOT LIKE 'SCPAY-%' = dibuat via POST /payments BizPortal
           SELECT
+            sp.id::int                                     AS id,
             sp.payment_number::text,
             sb.sc_booking_id::int,
             sb.booking_number::text                        AS booking_number,
@@ -2015,6 +2027,14 @@ router.get("/payments", async (req, res) => {
             COALESCE(sf.name, sb.facility_name, '')::text  AS facility_name,
             sp.amount::numeric                             AS amount,
             sp.method::text                                AS method,
+            COALESCE(sb.tax_amount, 0)::numeric             AS tax_amount,
+            COALESCE(sp.mdr_rate, 0)::numeric               AS mdr_rate,
+            COALESCE(sp.mdr_amount, 0)::numeric             AS mdr_amount,
+            GREATEST(0, sp.amount - COALESCE(sp.mdr_amount, 0))::numeric AS net_amount,
+            sp.settlement_reference::text                   AS settlement_reference,
+            sp.settlement_date::date                        AS settlement_date,
+            COALESCE(sp.settlement_status, 'unsettled')::text AS settlement_status,
+            COALESCE(sp.mdr_posting_status, 'unposted')::text AS mdr_posting_status,
             sp.status::text                                AS status,
             sp.status::text                                AS raw_status,
             COALESCE(sp.paid_at, sp.created_at)::timestamptz AS paid_at,
@@ -2309,7 +2329,11 @@ router.patch("/payments/:id", async (req, res) => {
   try {
     // Ambil data payment sekarang
     const existing = await db.execute(sql`
-      SELECT id, company_id, method, bank_account_id FROM sport_payments WHERE id = ${id} LIMIT 1
+      SELECT id, company_id, method, bank_account_id,
+             amount, mdr_rate, mdr_amount, mdr_posting_status
+      FROM sport_payments
+      WHERE id = ${id}
+      LIMIT 1
     `);
     if (!existing.rows.length) return res.status(404).json({ error: "Pembayaran tidak ditemukan" });
     const row = existing.rows[0] as Record<string, unknown>;
@@ -2327,18 +2351,65 @@ router.patch("/payments/:id", async (req, res) => {
       req.body.bank_account_id != null
         ? (req.body.bank_account_id === "" ? null : Number(req.body.bank_account_id))
         : undefined as unknown as null;
+    const newMdrRate: number | undefined = req.body.mdr_rate != null && req.body.mdr_rate !== ""
+      ? Number(req.body.mdr_rate) : undefined;
+    const newMdrAmount: number | undefined = req.body.mdr_amount != null && req.body.mdr_amount !== ""
+      ? Number(req.body.mdr_amount) : undefined;
+    const newSettlementReference: string | undefined =
+      req.body.settlement_reference != null ? String(req.body.settlement_reference).trim() : undefined;
+    const newSettlementDate: string | null | undefined =
+      req.body.settlement_date != null
+        ? (req.body.settlement_date === "" ? null : String(req.body.settlement_date))
+        : undefined;
+    const newSettlementStatus: string | undefined =
+      req.body.settlement_status != null ? String(req.body.settlement_status) : undefined;
+
+    if (newMdrRate !== undefined && (!Number.isFinite(newMdrRate) || newMdrRate < 0 || newMdrRate > 100)) {
+      return res.status(400).json({ error: "mdr_rate harus antara 0 dan 100" });
+    }
+    if (newMdrAmount !== undefined && (!Number.isFinite(newMdrAmount) || newMdrAmount < 0 || newMdrAmount > Number(row.amount))) {
+      return res.status(400).json({ error: "mdr_amount tidak valid" });
+    }
+    if ((newMdrRate !== undefined || newMdrAmount !== undefined)
+      && String(row.mdr_posting_status ?? "unposted") === "posted") {
+      return res.status(409).json({ error: "MDR sudah diposting dan tidak dapat diubah; buat jurnal pembalik terlebih dahulu" });
+    }
 
     // Bangun SET clause dinamis
     const sets: string[] = ["updated_at = NOW()"];
     if (newMethod !== undefined)       sets.push(`method = '${String(newMethod).replace(/'/g, "''")}'`);
     if (newBankAccountId !== undefined) sets.push(`bank_account_id = ${newBankAccountId ?? "NULL"}`);
+    if (newMdrRate !== undefined)       sets.push(`mdr_rate = ${newMdrRate}`);
+    if (newMdrAmount !== undefined) {
+      sets.push(`mdr_amount = ${newMdrAmount}`);
+      sets.push(`net_amount = GREATEST(0, amount - ${newMdrAmount})`);
+      sets.push(`mdr_posting_status = 'unposted'`);
+      sets.push(`mdr_posting_error = NULL`);
+      sets.push(`mdr_accounting_entry_id = NULL`);
+      sets.push(`mdr_posted_at = NULL`);
+    }
+    if (newSettlementReference !== undefined) {
+      sets.push(`settlement_reference = '${newSettlementReference.replace(/'/g, "''")}'`);
+    }
+    if (newSettlementDate !== undefined) {
+      sets.push(`settlement_date = ${newSettlementDate == null ? "NULL" : `'${newSettlementDate.replace(/'/g, "''")}'::date`}`);
+    }
+    if (newSettlementStatus !== undefined) {
+      if (!["unsettled", "settled", "partial", "exception"].includes(newSettlementStatus)) {
+        return res.status(400).json({ error: "settlement_status tidak valid" });
+      }
+      sets.push(`settlement_status = '${newSettlementStatus}'`);
+    }
 
     if (sets.length === 1) return res.status(400).json({ error: "Tidak ada field yang diubah" });
 
     const updated = await db.execute(sql.raw(`
       UPDATE sport_payments SET ${sets.join(", ")}
       WHERE id = ${id}
-      RETURNING id, payment_number, method, bank_account_id, amount, status, paid_at, notes
+      RETURNING id, payment_number, method, bank_account_id, amount, status, paid_at, notes,
+                tax_rate, tax_amount, mdr_rate, mdr_amount, net_amount,
+                settlement_reference, settlement_date, settlement_status,
+                mdr_posting_status, mdr_accounting_entry_id, mdr_posting_error
     `));
 
     // Audit log
@@ -2356,6 +2427,117 @@ router.patch("/payments/:id", async (req, res) => {
   } catch (err: any) {
     console.error("[sport-center] PATCH /payments/:id error:", err?.message);
     res.status(500).json({ error: "Gagal menyimpan perubahan" });
+  }
+});
+
+// ── POST MDR JOURNAL (QRIS settlement adjustment) ───────────────────────────
+// Gross payment remains unchanged. This entry reduces bank by MDR:
+// Debit  5-3050 Biaya MDR
+// Credit Bank QRIS
+router.post("/payments/:id/mdr/post", async (req, res) => {
+  if (!await requireAdmin(req, res)) return;
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "ID tidak valid" });
+
+  try {
+    const paymentRes = await db.execute(sql`
+      SELECT sp.id, sp.company_id, sp.payment_number, sp.amount, sp.method,
+             sp.mdr_amount, sp.mdr_posting_status, sp.mdr_accounting_entry_id,
+             sp.settlement_date, sp.booking_id, sb.booking_number, sb.customer_name
+      FROM sport_payments sp
+      LEFT JOIN sport_bookings sb ON sb.id = sp.booking_id
+      WHERE sp.id = ${id}
+      LIMIT 1
+    `);
+    if (!paymentRes.rows.length) return res.status(404).json({ error: "Pembayaran tidak ditemukan" });
+    const p = paymentRes.rows[0] as Record<string, unknown>;
+
+    const reqCompanyId = resolveCompanyId(req);
+    if (!await assertCompanyAccess(
+      p.company_id != null ? Number(p.company_id) : null,
+      reqCompanyId, req, res,
+      { resourceType: "sport_payment_mdr", resourceId: id },
+    )) return;
+
+    const mdrAmount = Number(p.mdr_amount ?? 0);
+    if (String(p.method ?? "").toLowerCase() !== "qris") {
+      return res.status(400).json({ error: "Jurnal MDR hanya dapat dibuat untuk payment QRIS" });
+    }
+    if (!Number.isFinite(mdrAmount) || mdrAmount <= 0) {
+      return res.status(400).json({ error: "Isi MDR terlebih dahulu sebelum posting jurnal" });
+    }
+    if (String(p.mdr_posting_status ?? "unposted") === "posted") {
+      return res.json({ ok: true, skipped: true, entryId: p.mdr_accounting_entry_id });
+    }
+
+    const companyId = p.company_id != null ? Number(p.company_id) : 1;
+    const settings = await ensureAccountingSettings(companyId);
+    const journalId = settings.bankJournalId ?? settings.cashJournalId;
+    const journalCode = settings.bankJournalId ? "BNK" : "CSH";
+    if (!journalId) {
+      return res.status(422).json({ error: "Jurnal Bank/Kas belum dikonfigurasi" });
+    }
+
+    const expenseRes = await db.execute(sql`
+      SELECT id
+      FROM chart_of_accounts
+      WHERE code LIKE '5-3050%'
+        AND (company_id = ${companyId} OR company_id IS NULL)
+      ORDER BY CASE WHEN company_id = ${companyId} THEN 0 ELSE 1 END, id
+      LIMIT 1
+    `);
+    const expenseAccountId = Number((expenseRes.rows[0] as Record<string, unknown> | undefined)?.id ?? 0);
+    const bankAccountId = settings.defaultBankAccountId ?? settings.defaultCashAccountId;
+    if (!expenseAccountId || !bankAccountId) {
+      return res.status(422).json({ error: "COA biaya MDR atau akun Bank belum dikonfigurasi" });
+    }
+
+    const settlementDate = String(p.settlement_date ?? new Date().toISOString().slice(0, 10)).slice(0, 10);
+    const entry = await postEntry({
+      journalId,
+      date: new Date(settlementDate),
+      ref: `${String(p.payment_number)}-MDR`,
+      description: `Biaya MDR QRIS ${String(p.booking_number ?? p.payment_number)}`,
+      source: "sport_center_qris_mdr",
+      sourceId: id,
+      companyId,
+      costCenterId: await resolveCostCenterId("SPORT_CENTER", companyId),
+      expenseCategory: "EXP-MDR",
+      lines: [
+        {
+          accountId: expenseAccountId,
+          debit: mdrAmount,
+          credit: 0,
+          description: `Biaya MDR QRIS ${String(p.payment_number)}`,
+        },
+        {
+          accountId: bankAccountId,
+          debit: 0,
+          credit: mdrAmount,
+          description: `Pengurang settlement bank QRIS ${String(p.payment_number)}`,
+        },
+      ],
+    }, journalCode);
+
+    await db.execute(sql`
+      UPDATE sport_payments
+      SET mdr_posting_status = 'posted',
+          mdr_accounting_entry_id = ${entry.id},
+          mdr_posted_at = NOW(),
+          mdr_posting_error = NULL,
+          updated_at = NOW()
+      WHERE id = ${id}
+    `);
+    res.json({ ok: true, entryId: entry.id, mdrAmount });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    await db.execute(sql`
+      UPDATE sport_payments
+      SET mdr_posting_status = 'failed', mdr_posting_error = ${message.slice(0, 1000)}, updated_at = NOW()
+      WHERE id = ${id}
+    `).catch(() => {});
+    console.error("[sport-center] POST /payments/:id/mdr/post error:", message);
+    res.status(500).json({ error: "Gagal posting jurnal MDR", detail: message });
   }
 });
 
