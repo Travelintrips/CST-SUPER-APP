@@ -434,6 +434,7 @@ interface Candidate {
   order_id_match: boolean;
   proof_match: boolean;
   status: string;
+  customer_name?: string | null;
   details?: CandidateDetails | null;
 }
 
@@ -1736,6 +1737,19 @@ function MutationDetailPanel({
                         </Badge>
                         <ScoreBadge score={c.match_score} />
                       </div>
+                      {/* Identitas kandidat — selalu tampil jika ada */}
+                      {(c.details?.name || c.customer_name || c.details?.reference || c.details?.date) && (
+                        <div className="text-xs rounded bg-muted/50 px-2 py-1.5 space-y-0.5">
+                          {(c.details?.name || c.customer_name) && (
+                            <p className="font-semibold text-foreground">{c.details?.name ?? c.customer_name}</p>
+                          )}
+                          <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-muted-foreground">
+                            {c.details?.date      && <span>📅 {fmtDate(String(c.details.date))}</span>}
+                            {c.details?.reference && <span>🔖 {c.details.reference}</span>}
+                            {c.details?.amount != null && <span>💰 {idr(c.details.amount)}</span>}
+                          </div>
+                        </div>
+                      )}
                       <p className="text-xs text-muted-foreground">{c.match_reason}</p>
                       <div className="flex flex-wrap gap-1">
                         {c.amount_match   && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950/30 px-1.5 py-0.5 rounded">✓ Nominal</span>}
@@ -2695,6 +2709,19 @@ export default function BankReconciliationPage() {
                         </span>
                         <ScoreBadge score={c.match_score} />
                       </div>
+                      {/* Identitas kandidat — selalu tampil jika ada */}
+                      {(c.details?.name || c.customer_name || c.details?.reference || c.details?.date) && (
+                        <div className="text-xs rounded bg-muted/50 px-2 py-1.5 space-y-0.5">
+                          {(c.details?.name || c.customer_name) && (
+                            <p className="font-semibold text-foreground">{c.details?.name ?? c.customer_name}</p>
+                          )}
+                          <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-muted-foreground">
+                            {c.details?.date      && <span>📅 {fmtDate(String(c.details.date))}</span>}
+                            {c.details?.reference && <span>🔖 {c.details.reference}</span>}
+                            {c.details?.amount != null && <span>💰 {idr(c.details.amount)}</span>}
+                          </div>
+                        </div>
+                      )}
                       <p className="text-xs text-muted-foreground">{c.match_reason}</p>
                       <div className="flex gap-1.5 mt-1 flex-wrap">
                         {c.amount_match   && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950/30 px-1.5 py-0.5 rounded">✓ Nominal</span>}
