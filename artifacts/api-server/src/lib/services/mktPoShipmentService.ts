@@ -21,6 +21,7 @@ import { enqueueNotification } from "./marketplaceNotificationQueueService.js";
 import { logger } from "../logger.js";
 import type { ActorInfo } from "./mktPoLifecycleService.js";
 import { findPoByVendorToken, type TokenLookupFailure } from "./mktVendorPoTokenService.js";
+import { ObjectStorageService } from "../objectStorage.js";
 
 type PoRow = typeof mktPurchaseOrdersTable.$inferSelect;
 type ShipmentRow = typeof mktPoShipmentsTable.$inferSelect;
@@ -54,6 +55,7 @@ const SHIPMENT_EVENT_ALLOWED_FROM: Record<string, string[]> = {
   warehouse: ["customs"],
   arrived: ["warehouse", "customs", "in_transit"],
   delivered: ["in_transit", "arrived", "warehouse"],
+  pod_uploaded: ["delivered"],
   completed: ["delivered"],
   cancelled: ["planned", "packing", "loading", "ready_to_ship", "in_transit", "customs", "warehouse", "arrived"],
 };
@@ -64,6 +66,7 @@ const SHIPMENT_ACTIVITY_ACTION: Record<string, string> = {
   loaded: "mkt_po_shipment_pickup",
   departed: "mkt_po_shipment_in_transit",
   delivered: "mkt_po_shipment_delivered",
+  pod_uploaded: "mkt_po_pod_uploaded",
 };
 
 const SHIPMENT_NOTIFICATION_EVENT: Record<string, string> = {
@@ -71,6 +74,7 @@ const SHIPMENT_NOTIFICATION_EVENT: Record<string, string> = {
   loaded: "mkt_po_shipment_pickup_notification",
   departed: "mkt_po_shipment_in_transit_notification",
   delivered: "mkt_po_shipment_delivered_notification",
+  pod_uploaded: "mkt_po_pod_uploaded_notification",
 };
 
 export interface CreateShipmentItemInput {
@@ -355,6 +359,17 @@ export interface AppendShipmentEventInput {
   attachmentObjectPath?: string | null;
 }
 
+export interface UploadProofOfDeliveryInput {
+  shipmentId: number;
+  buffer: Buffer;
+  mimeType: string;
+  note?: string | null;
+}
+
+export type UploadProofOfDeliveryResult =
+  | { ok: true; event: ShipmentEventRow; alreadyUploaded?: boolean }
+  | { ok: false; code: "SHIPMENT_NOT_FOUND" | "SHIPMENT_NOT_DELIVERED" | "POD_ALREADY_EXISTS" };
+
 export type AppendShipmentEventResult =
   | { ok: true; event: ShipmentEventRow; alreadyAppended?: boolean }
   | { ok: false; code: "SHIPMENT_NOT_FOUND" | "INVALID_TRANSITION" | "INVALID_EVENT"; currentStatus?: string };
@@ -464,6 +479,73 @@ export async function appendShipmentEvent(input: AppendShipmentEventInput, actor
   }
 
   return { ok: true, event, alreadyAppended: result.alreadyAppended };
+}
+
+/**
+ * Upload one canonical POD for a delivered shipment.
+ *
+ * The POD is represented by the existing append-only shipment event table
+ * (`pod_uploaded` + attachment_object_path), so no second evidence pipeline or
+ * new table is introduced. The shipment lock in appendShipmentEvent serializes
+ * concurrent retries; the losing upload is deleted from private storage.
+ */
+export async function uploadProofOfDelivery(
+  input: UploadProofOfDeliveryInput,
+  actor: ActorInfo,
+): Promise<UploadProofOfDeliveryResult> {
+  const [shipment] = await db
+    .select()
+    .from(mktPoShipmentsTable)
+    .where(eq(mktPoShipmentsTable.id, input.shipmentId))
+    .limit(1);
+  if (!shipment) return { ok: false, code: "SHIPMENT_NOT_FOUND" };
+  if (shipment.shipmentStatus !== "delivered") {
+    return { ok: false, code: "SHIPMENT_NOT_DELIVERED" };
+  }
+
+  const [existingPod] = await db
+    .select()
+    .from(mktPoShipmentEventsTable)
+    .where(and(
+      eq(mktPoShipmentEventsTable.shipmentId, input.shipmentId),
+      eq(mktPoShipmentEventsTable.eventType, "pod_uploaded"),
+    ))
+    .orderBy(desc(mktPoShipmentEventsTable.eventSequence))
+    .limit(1);
+  if (existingPod) return { ok: true, event: existingPod, alreadyUploaded: true };
+
+  const storage = new ObjectStorageService();
+  let objectPath: string | null = null;
+  try {
+    objectPath = await storage.uploadPrivateEntity(input.buffer, input.mimeType);
+    const result = await appendShipmentEvent(
+      {
+        shipmentId: input.shipmentId,
+        eventType: "pod_uploaded",
+        note: input.note ?? null,
+        attachmentObjectPath: objectPath,
+      },
+      actor,
+    );
+    if (!result.ok) {
+      if (result.code === "INVALID_TRANSITION") {
+        return { ok: false, code: "SHIPMENT_NOT_DELIVERED" };
+      }
+      return { ok: false, code: "SHIPMENT_NOT_FOUND" };
+    }
+    if (result.alreadyAppended && objectPath) {
+      await storage.tryDeletePrivateEntity(objectPath);
+    }
+    return {
+      ok: true,
+      event: result.event,
+      alreadyUploaded: result.alreadyAppended === true,
+    };
+  } catch (err) {
+    if (objectPath) await storage.tryDeletePrivateEntity(objectPath);
+    logger.warn({ err, shipmentId: input.shipmentId }, "[mktPoShipment] upload POD gagal");
+    throw err;
+  }
 }
 
 export type VendorShipmentEventResult =

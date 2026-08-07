@@ -16,8 +16,8 @@
  *   partially_delivered — never overrides a manually-completed/closed PO.
  */
 
-import { db, mktPurchaseOrdersTable, mktPoGoodsReceiptsTable, mktPoGoodsReceiptItemsTable, mktPoShipmentItemsTable, mktPoShipmentsTable, mktPurchaseOrderLinesTable } from "@workspace/db";
-import { eq, and, inArray, sql } from "drizzle-orm";
+import { db, mktPurchaseOrdersTable, mktPoGoodsReceiptsTable, mktPoGoodsReceiptItemsTable, mktPoShipmentItemsTable, mktPoShipmentsTable, mktPoShipmentEventsTable, mktPurchaseOrderLinesTable } from "@workspace/db";
+import { eq, and, inArray, sql, desc } from "drizzle-orm";
 import { logActivity } from "../activityLog.js";
 import { enqueueNotification } from "./marketplaceNotificationQueueService.js";
 import { logger } from "../logger.js";
@@ -47,8 +47,8 @@ export interface CreateGoodsReceiptInput {
 }
 
 export type CreateGoodsReceiptResult =
-  | { ok: true; receipt: GoodsReceiptRow; items: GoodsReceiptItemRow[]; poStatusUpdatedTo: string | null }
-  | { ok: false; code: "SHIPMENT_NOT_FOUND" | "NO_ITEMS" | "INVALID_SHIPMENT_ITEM" | "QTY_MISMATCH"; message?: string; details?: unknown };
+  | { ok: true; receipt: GoodsReceiptRow; items: GoodsReceiptItemRow[]; poStatusUpdatedTo: string | null; alreadyExists?: boolean }
+  | { ok: false; code: "SHIPMENT_NOT_FOUND" | "SHIPMENT_NOT_DELIVERED" | "POD_REQUIRED" | "NO_ITEMS" | "INVALID_SHIPMENT_ITEM" | "QTY_MISMATCH"; message?: string; details?: unknown };
 
 function toNum(v: string | number): number {
   return typeof v === "number" ? v : parseFloat(v);
@@ -57,21 +57,6 @@ function toNum(v: string | number): number {
 export async function createGoodsReceipt(input: CreateGoodsReceiptInput, actor: ActorInfo): Promise<CreateGoodsReceiptResult> {
   if (!input.items || input.items.length === 0) {
     return { ok: false, code: "NO_ITEMS", message: "Goods receipt harus punya minimal 1 item" };
-  }
-
-  const shipmentRows = await db.select().from(mktPoShipmentsTable).where(eq(mktPoShipmentsTable.id, input.shipmentId)).limit(1);
-  const shipment = shipmentRows[0];
-  if (!shipment) return { ok: false, code: "SHIPMENT_NOT_FOUND" };
-
-  const shipmentItemIds = input.items.map((i) => i.shipmentItemId);
-  const validShipmentItems = await db
-    .select({ id: mktPoShipmentItemsTable.id, poLineId: mktPoShipmentItemsTable.poLineId })
-    .from(mktPoShipmentItemsTable)
-    .where(and(eq(mktPoShipmentItemsTable.shipmentId, input.shipmentId), inArray(mktPoShipmentItemsTable.id, shipmentItemIds)));
-  const validIdSet = new Set(validShipmentItems.map((i) => i.id));
-  const invalid = shipmentItemIds.find((id) => !validIdSet.has(id));
-  if (invalid !== undefined) {
-    return { ok: false, code: "INVALID_SHIPMENT_ITEM", message: `shipment_item_id ${invalid} tidak ditemukan pada shipment ini` };
   }
 
   // Validate accepted + rejected = received per item, unless explicitly bypassed.
@@ -94,6 +79,77 @@ export async function createGoodsReceipt(input: CreateGoodsReceiptInput, actor: 
   const yyyymm = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
 
   const result = await db.transaction(async (tx) => {
+    const [shipment] = await tx
+      .select()
+      .from(mktPoShipmentsTable)
+      .where(eq(mktPoShipmentsTable.id, input.shipmentId))
+      .for("update")
+      .limit(1);
+    if (!shipment) return { kind: "failure" as const, result: { ok: false as const, code: "SHIPMENT_NOT_FOUND" as const } };
+    if (shipment.shipmentStatus !== "delivered") {
+      return {
+        kind: "failure" as const,
+        result: { ok: false as const, code: "SHIPMENT_NOT_DELIVERED" as const, message: "Goods receipt hanya boleh setelah shipment delivered" },
+      };
+    }
+
+    const [pod] = await tx
+      .select({ id: mktPoShipmentEventsTable.id })
+      .from(mktPoShipmentEventsTable)
+      .where(and(
+        eq(mktPoShipmentEventsTable.shipmentId, input.shipmentId),
+        eq(mktPoShipmentEventsTable.eventType, "pod_uploaded"),
+      ))
+      .orderBy(desc(mktPoShipmentEventsTable.eventSequence))
+      .limit(1);
+    if (!pod) {
+      return {
+        kind: "failure" as const,
+        result: { ok: false as const, code: "POD_REQUIRED" as const, message: "POD wajib diunggah sebelum goods receipt" },
+      };
+    }
+
+    const shipmentItemIds = input.items.map((i) => i.shipmentItemId);
+    const validShipmentItems = await tx
+      .select({ id: mktPoShipmentItemsTable.id, poLineId: mktPoShipmentItemsTable.poLineId })
+      .from(mktPoShipmentItemsTable)
+      .where(and(eq(mktPoShipmentItemsTable.shipmentId, input.shipmentId), inArray(mktPoShipmentItemsTable.id, shipmentItemIds)));
+    const validIdSet = new Set(validShipmentItems.map((i) => i.id));
+    const invalid = shipmentItemIds.find((id) => !validIdSet.has(id));
+    if (invalid !== undefined) {
+      return {
+        kind: "failure" as const,
+        result: { ok: false as const, code: "INVALID_SHIPMENT_ITEM" as const, message: `shipment_item_id ${invalid} tidak ditemukan pada shipment ini` },
+      };
+    }
+
+    // The shipment row lock serializes retries/concurrent receives. A matching
+    // receipt fingerprint is returned instead of creating a duplicate header.
+    const existingReceipts = await tx
+      .select()
+      .from(mktPoGoodsReceiptsTable)
+      .where(eq(mktPoGoodsReceiptsTable.shipmentId, input.shipmentId));
+    for (const existingReceipt of existingReceipts) {
+      if (existingReceipt.receiptType !== input.receiptType || existingReceipt.notes !== (input.notes ?? null)) continue;
+      const existingItems = await tx
+        .select()
+        .from(mktPoGoodsReceiptItemsTable)
+        .where(eq(mktPoGoodsReceiptItemsTable.goodsReceiptId, existingReceipt.id));
+      const same = existingItems.length === input.items.length
+        && input.items.every((item) => {
+          const found = existingItems.find((row) => row.shipmentItemId === item.shipmentItemId);
+          return found
+            && Number(found.receivedQty) === toNum(item.receivedQty)
+            && Number(found.acceptedQty) === toNum(item.acceptedQty)
+            && Number(found.rejectedQty) === toNum(item.rejectedQty)
+            && found.condition === (item.condition ?? "GOOD")
+            && found.notes === (item.notes ?? null);
+        });
+      if (same) {
+        return { kind: "success" as const, receipt: existingReceipt, items: existingItems, alreadyExists: true, shipment };
+      }
+    }
+
     const [inserted] = await tx
       .insert(mktPoGoodsReceiptsTable)
       .values({
@@ -101,7 +157,7 @@ export async function createGoodsReceipt(input: CreateGoodsReceiptInput, actor: 
         receiptNumber: `MKT-GR-${yyyymm}-PENDING`,
         receiptType: input.receiptType,
         inspectionStatus: input.inspectionStatus ?? "pending",
-        receivedBy: input.receivedBy ?? actor.actorId ?? null,
+        receivedBy: actor.actorId ?? null,
         receivedAt: input.receivedAt ?? now,
         notes: input.notes ?? null,
       })
@@ -131,29 +187,35 @@ export async function createGoodsReceipt(input: CreateGoodsReceiptInput, actor: 
       )
       .returning();
 
-    return { receipt, items };
+    return { receipt, items, shipment, alreadyExists: false };
   });
 
-  logActivity({
-    mktPurchaseOrderId: shipment.poId,
-    actorType: actor.actorType,
-    actorId: actor.actorId ?? null,
-    actorName: actor.actorName ?? null,
-    action: "mkt_po_goods_receipt_created",
-    description: `Goods receipt ${result.receipt.receiptNumber} dibuat untuk shipment ${shipment.shipmentNumber}`,
-    newValue: { goodsReceiptId: result.receipt.id, receiptNumber: result.receipt.receiptNumber, receiptType: input.receiptType, itemCount: result.items.length },
-  }).catch(() => {});
+  if (result.kind === "failure") return result.result;
+  const { shipment } = result;
 
-  void enqueueNotification({
-    eventType: "mkt_po_goods_receipt_notification",
-    recipientType: "admin",
-    purchaseOrderId: shipment.poId,
-    payloadJson: { poId: shipment.poId, shipmentNumber: shipment.shipmentNumber, receiptNumber: result.receipt.receiptNumber, receiptType: input.receiptType },
-  }).catch(() => {});
+  if (!result.alreadyExists) {
+    logActivity({
+      mktPurchaseOrderId: shipment.poId,
+      actorType: actor.actorType,
+      actorId: actor.actorId ?? null,
+      actorName: actor.actorName ?? null,
+      action: "mkt_po_goods_received",
+      description: `Goods receipt ${result.receipt.receiptNumber} dibuat untuk shipment ${shipment.shipmentNumber}`,
+      newValue: { goodsReceiptId: result.receipt.id, receiptNumber: result.receipt.receiptNumber, receiptType: input.receiptType, itemCount: result.items.length },
+    }).catch(() => {});
 
-  const poStatusUpdatedTo = await updatePoAggregateStatusFromReceipts(shipment.poId, actor);
+    void enqueueNotification({
+      eventType: "mkt_po_goods_received_notification",
+      recipientType: "admin",
+      purchaseOrderId: shipment.poId,
+      payloadJson: { poId: shipment.poId, shipmentNumber: shipment.shipmentNumber, receiptNumber: result.receipt.receiptNumber, receiptType: input.receiptType },
+      deduplicationKey: `mkt_po_goods_received:${result.receipt.id}`,
+    }).catch(() => {});
+  }
 
-  return { ok: true, receipt: result.receipt, items: result.items, poStatusUpdatedTo };
+  const poStatusUpdatedTo = result.alreadyExists ? null : await updatePoAggregateStatusFromReceipts(shipment.poId, actor);
+
+  return { ok: true, receipt: result.receipt, items: result.items, poStatusUpdatedTo, alreadyExists: result.alreadyExists };
 }
 
 /**
