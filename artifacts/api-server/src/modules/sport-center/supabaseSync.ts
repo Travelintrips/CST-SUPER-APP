@@ -774,23 +774,32 @@ export async function pullPaymentsFromSupabase(companyId = 1): Promise<{ pulled:
 
       // Cek apakah payment sudah ada — jika ada, UPDATE status/amount dari Supabase (jangan skip)
       const existingRes = await db.execute(sql`
-        SELECT id, booking_id, status FROM sport_payments WHERE payment_number = ${scPaymentNumber} LIMIT 1
+        SELECT id, booking_id, status, method
+        FROM sport_payments
+        WHERE payment_number = ${scPaymentNumber}
+        LIMIT 1
       `);
       if (existingRes.rows.length > 0) {
         const existingRow = existingRes.rows[0] as any;
         const existingBookingId = existingRow.booking_id;
         const existingStatus = existingRow.status;
+        const existingMethod = existingRow.method;
         const statusRaw2 = pay.status?.toLowerCase() ?? "";
         const mappedStatus2 = PAID_STATUSES.has(statusRaw2) ? "paid" : (UNPAID_STATUSES.has(statusRaw2) ? "pending" : "paid");
+        const mappedMethod2 = String(pay.payment_method ?? "cash").trim().toLowerCase() || "cash";
 
         // Selalu update payment record dari Supabase (status terbaru menimpa)
         if (existingStatus !== mappedStatus2) {
           console.log(`${PREFIX} pullPayments [KONFLIK STATUS] ${scPaymentNumber}: local=${existingStatus} supabase=${mappedStatus2} → update ke ${mappedStatus2}`);
         }
+        if (String(existingMethod ?? "").toLowerCase() !== mappedMethod2) {
+          console.log(`${PREFIX} pullPayments [KONFLIK METHOD] ${scPaymentNumber}: local=${existingMethod ?? "-"} supabase=${mappedMethod2} → update ke ${mappedMethod2}`);
+        }
         await db.execute(sql`
           UPDATE sport_payments SET
             status   = ${mappedStatus2},
-            amount   = ${String(Number(pay.amount))}
+            amount   = ${String(Number(pay.amount))},
+            method   = ${mappedMethod2}
           WHERE payment_number = ${scPaymentNumber}
         `);
 
