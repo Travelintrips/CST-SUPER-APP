@@ -84,6 +84,11 @@ import {
   listGoodsReceiptItems,
 } from "../lib/services/mktPoGoodsReceiptService.js";
 import { logger } from "../lib/logger.js";
+import {
+  getMarketplaceVendorInvoice,
+  safeMarketplaceVendorInvoiceView,
+  submitMarketplaceVendorInvoice,
+} from "../lib/services/mktVendorInvoiceService.js";
 
 const router = Router();
 const fulfillmentWriteLimiter = rateLimit({
@@ -1021,6 +1026,63 @@ function getActorFromReq(req: any) {
     actorName: req.user?.name ?? req.user?.username ?? null,
   };
 }
+
+// ── Sprint 7B — Marketplace vendor invoice / 3-way match ───────────────────
+
+router.get("/vendor-invoices/:id", async (req, res) => {
+  const ok = await requireAdmin(req, res);
+  if (!ok) return;
+  const invoiceId = Number(req.params["id"]);
+  if (!Number.isInteger(invoiceId) || invoiceId <= 0) {
+    return res.status(400).json({ ok: false, error: "invoiceId harus berupa integer positif" });
+  }
+  try {
+    const detail = await getMarketplaceVendorInvoice(invoiceId);
+    if (!detail || !detail.invoice.mktPurchaseOrderId) {
+      return res.status(404).json({ ok: false, error: "INVOICE_NOT_FOUND" });
+    }
+    return res.json({
+      ok: true,
+      data: safeMarketplaceVendorInvoiceView(detail.invoice, detail.lines),
+    });
+  } catch (err) {
+    logger.warn({ err, invoiceId }, "[mktAdmin] get marketplace vendor invoice error");
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+router.post("/vendor-invoices/:id/match", fulfillmentWriteLimiter, async (req, res) => {
+  const ok = await requireAdmin(req, res);
+  if (!ok) return;
+  const invoiceId = Number(req.params["id"]);
+  if (!Number.isInteger(invoiceId) || invoiceId <= 0) {
+    return res.status(400).json({ ok: false, error: "invoiceId harus berupa integer positif" });
+  }
+  try {
+    const detail = await getMarketplaceVendorInvoice(invoiceId);
+    if (!detail || !detail.invoice.mktPurchaseOrderId) {
+      return res.status(404).json({ ok: false, error: "INVOICE_NOT_FOUND" });
+    }
+    const result = await submitMarketplaceVendorInvoice(invoiceId, getActorFromReq(req));
+    if (!result.ok) {
+      const status = ["PO_NOT_FOUND", "GR_NOT_FOUND", "GR_NOT_FOR_PO"].includes(result.code)
+        ? 404
+        : ["INVALID_STATUS", "SHIPMENT_NOT_DELIVERED", "RECEIPT_NOT_ACCEPTED"].includes(result.code)
+          ? 409
+          : 422;
+      return res.status(status).json({ ok: false, error: result.code, message: result.message });
+    }
+    return res.json({
+      ok: true,
+      alreadyMatched: result.alreadyExists === true,
+      data: safeMarketplaceVendorInvoiceView(result.invoice, result.lines),
+      match: result.match,
+    });
+  } catch (err) {
+    logger.warn({ err, invoiceId }, "[mktAdmin] execute marketplace vendor invoice match error");
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
 
 function mapLifecycleFailureStatus(code: string): number {
   switch (code) {

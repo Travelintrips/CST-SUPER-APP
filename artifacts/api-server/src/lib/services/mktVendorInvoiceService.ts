@@ -65,6 +65,10 @@ type FailureCode =
   | "INVALID_LINE"
   | "INVALID_TOTAL"
   | "INVALID_CURRENCY"
+  | "INVALID_DATE"
+  | "INVALID_REFERENCE"
+  | "SHIPMENT_NOT_DELIVERED"
+  | "RECEIPT_NOT_ACCEPTED"
   | "INVALID_STATUS"
   | "MATCH_FAILED"
   | "CONCURRENT_UPDATE";
@@ -135,7 +139,7 @@ export function safeMarketplaceVendorInvoiceView(
 
 async function getInvoiceWithLines(
   invoiceId: number,
-  tx: typeof db = db,
+  tx: any = db,
 ): Promise<{ invoice: InvoiceRow; lines: InvoiceLineRow[] } | null> {
   const invoices = await tx.select().from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, invoiceId)).limit(1);
   const invoice = invoices[0];
@@ -150,6 +154,13 @@ export async function createMarketplaceVendorInvoice(
   input: CreateMarketplaceVendorInvoiceInput,
   actor: ActorInfo,
 ): Promise<InvoiceServiceResult> {
+  const invoiceRef = input.vendorInvoiceRef.trim();
+  if (!invoiceRef || invoiceRef.length > 120) {
+    return { ok: false, code: "INVALID_REFERENCE", message: "Nomor invoice vendor wajib diisi dan maksimal 120 karakter" };
+  }
+  if (!(input.invoiceDate instanceof Date) || Number.isNaN(input.invoiceDate.getTime())) {
+    return { ok: false, code: "INVALID_DATE", message: "Tanggal invoice tidak valid" };
+  }
   if (!input.lines.length) return { ok: false, code: "NO_LINES", message: "Invoice wajib memiliki minimal satu line" };
   const currency = normalizeCurrency(input.currency);
   if (!/^[A-Z]{3}$/.test(currency)) return { ok: false, code: "INVALID_CURRENCY" };
@@ -176,10 +187,32 @@ export async function createMarketplaceVendorInvoice(
       const [shipment] = await tx.select().from(mktPoShipmentsTable)
         .where(eq(mktPoShipmentsTable.id, gr.shipmentId)).limit(1);
       if (!shipment || shipment.poId !== po.id) return { ok: false as const, code: "GR_NOT_FOR_PO" as const };
+      if (shipment.shipmentStatus !== "delivered") {
+        return { ok: false as const, code: "SHIPMENT_NOT_DELIVERED" as const };
+      }
+
+      const receiptItems = await tx.select().from(mktPoGoodsReceiptItemsTable)
+        .where(eq(mktPoGoodsReceiptItemsTable.goodsReceiptId, gr.id));
+      if (!receiptItems.length || gr.inspectionStatus !== "passed") {
+        return { ok: false as const, code: "RECEIPT_NOT_ACCEPTED" as const };
+      }
+      const poLines = await tx.select().from(mktPurchaseOrderLinesTable)
+        .where(eq(mktPurchaseOrderLinesTable.poId, po.id));
+      const poLineIds = new Set(poLines.map((line) => line.id));
+      if (input.lines.some((line) =>
+        !Number.isInteger(line.poLineId) || line.poLineId <= 0 ||
+        !poLineIds.has(line.poLineId) ||
+        !Number.isFinite(line.quantity) || line.quantity <= 0 ||
+        !Number.isFinite(line.unitPrice) || line.unitPrice < 0 ||
+        !Number.isFinite(line.subtotal) || line.subtotal < 0 ||
+        !closeEnough(money(line.subtotal), money(line.quantity * line.unitPrice)),
+      )) {
+        return { ok: false as const, code: "INVALID_LINE" as const, message: "Invoice line tidak valid atau tidak berasal dari PO" };
+      }
 
       const duplicate = await tx.select().from(vendorInvoicesTable).where(and(
         eq(vendorInvoicesTable.supplierId, input.supplierId),
-        eq(vendorInvoicesTable.vendorInvoiceRef, input.vendorInvoiceRef),
+        eq(vendorInvoicesTable.vendorInvoiceRef, invoiceRef),
         eq(vendorInvoicesTable.mktPurchaseOrderId, po.id),
       )).limit(1);
       if (duplicate[0]) {
@@ -194,7 +227,7 @@ export async function createMarketplaceVendorInvoice(
 
       const [inserted] = await tx.insert(vendorInvoicesTable).values({
         invoiceNumber: newInvoiceNumber(),
-        vendorInvoiceRef: input.vendorInvoiceRef,
+        vendorInvoiceRef: invoiceRef,
         companyId: input.companyId ?? po.companyId ?? null,
         supplierId: input.supplierId,
         supplierName: input.supplierName,
@@ -260,7 +293,6 @@ interface MatchResult {
   reasons: Array<{ code: string; message: string; poLineId?: number }>;
 }
 
-async function evaluateThreeWayMatch(tx: any, invoice: InvoiceRow, lines: InvoiceLineRow): Promise<MatchResult>;
 async function evaluateThreeWayMatch(tx: any, invoice: InvoiceRow, lines: InvoiceLineRow[]): Promise<MatchResult> {
   const reasons: MatchResult["reasons"] = [];
   const poId = invoice.mktPurchaseOrderId;
@@ -278,17 +310,27 @@ async function evaluateThreeWayMatch(tx: any, invoice: InvoiceRow, lines: Invoic
     reasons.push({ code: "GR_NOT_FOR_PO", message: "Goods Receipt tidak terkait dengan PO" });
     return { ok: false, status: "failed", reasons };
   }
+  if (shipment.shipmentStatus !== "delivered") {
+    reasons.push({ code: "SHIPMENT_NOT_DELIVERED", message: "Shipment belum berstatus delivered" });
+  }
+  if (gr.inspectionStatus !== "passed") {
+    reasons.push({ code: "RECEIPT_NOT_ACCEPTED", message: "Goods Receipt belum lolos inspection" });
+  }
 
   const poLines = await tx.select().from(mktPurchaseOrderLinesTable).where(eq(mktPurchaseOrderLinesTable.poId, po.id));
   const shipmentItems = await tx.select().from(mktPoShipmentItemsTable).where(eq(mktPoShipmentItemsTable.shipmentId, shipment.id));
   const receiptItems = await tx.select().from(mktPoGoodsReceiptItemsTable).where(eq(mktPoGoodsReceiptItemsTable.goodsReceiptId, gr.id));
-  const shipmentToPo = new Map(shipmentItems.map((item) => [item.id, item.poLineId]));
+  const shipmentToPo = new Map<number, number>(
+    shipmentItems.map((item: typeof mktPoShipmentItemsTable.$inferSelect) => [item.id, item.poLineId]),
+  );
   const acceptedByPoLine = new Map<number, number>();
   for (const item of receiptItems) {
     const poLineId = shipmentToPo.get(item.shipmentItemId);
     if (poLineId) acceptedByPoLine.set(poLineId, (acceptedByPoLine.get(poLineId) ?? 0) + Number(item.acceptedQty));
   }
-  const poLineMap = new Map(poLines.map((line) => [line.id, line]));
+  const poLineMap = new Map<number, typeof mktPurchaseOrderLinesTable.$inferSelect>(
+    poLines.map((line: typeof mktPurchaseOrderLinesTable.$inferSelect) => [line.id, line]),
+  );
   const seen = new Set<number>();
   let computedTotal = 0;
   let computedTax = 0;
@@ -304,7 +346,7 @@ async function evaluateThreeWayMatch(tx: any, invoice: InvoiceRow, lines: Invoic
     const unitPrice = Number(line.unitCost);
     const subtotal = Number(line.subtotal);
     const acceptedQty = acceptedByPoLine.get(poLineId!) ?? 0;
-    if (qty <= 0 || qty - acceptedQty > QTY_TOLERANCE) {
+    if (qty <= 0 || qty - acceptedQty > QTY_TOLERANCE || acceptedQty - qty > QTY_TOLERANCE) {
       reasons.push({ code: "QUANTITY_MISMATCH", message: "Quantity invoice melebihi quantity diterima", poLineId: poLineId! });
     }
     if (!closeEnough(unitPrice, Number(poLine.unitPrice))) {
@@ -374,15 +416,19 @@ export async function submitMarketplaceVendorInvoice(
       description: `Vendor invoice ${result.invoice.vendorInvoiceRef} berstatus ${result.invoice.status}`,
       newValue: { invoiceId: result.invoice.id, status: result.invoice.status, matchStatus: result.invoice.threeWayMatchStatus },
     });
-    if (result.match?.ok) {
-      void logActivity({
-        mktPurchaseOrderId: result.invoice.mktPurchaseOrderId,
-        actorType: "system",
-        action: "invoice_matched",
-        description: `3-Way Match invoice ${result.invoice.vendorInvoiceRef} berhasil`,
-        newValue: { invoiceId: result.invoice.id, status: "matched" },
-      });
-    }
+    void logActivity({
+      mktPurchaseOrderId: result.invoice.mktPurchaseOrderId,
+      actorType: "system",
+      action: result.match?.ok ? "three_way_match_passed" : "three_way_match_failed",
+      description: result.match?.ok
+        ? `3-Way Match invoice ${result.invoice.vendorInvoiceRef} berhasil`
+        : `3-Way Match invoice ${result.invoice.vendorInvoiceRef} gagal`,
+      newValue: {
+        invoiceId: result.invoice.id,
+        status: result.match?.status,
+        reasons: result.match?.reasons ?? [],
+      },
+    });
     void enqueueNotification({
       eventType: result.match?.ok ? "mkt_vendor_invoice_ready_for_ap" : "mkt_vendor_invoice_submitted",
       recipientType: "admin",
