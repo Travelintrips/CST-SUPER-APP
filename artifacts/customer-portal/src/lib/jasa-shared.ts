@@ -28,22 +28,20 @@ export const CATEGORY_PLACEHOLDER: Record<string, { emoji: string; from: string;
   exim_service:{ emoji: "🌍", from: "#1a4a4a", to: "#2a7070" },
 };
 
-// Local images (public/images/) are used as primary source so they always
-// render, even when Supabase Storage is not yet seeded in this environment.
-// The API storage paths (${SB}/…) are kept as comments for reference.
-// const SB = "/api/storage/public-objects/portal/images";
+const SB = "/api/storage/public-objects/portal-assets/static/customer-portal/images";
+const image = (path: string) => `${SB}/${path.replace(/\.(png|jpe?g)$/i, ".webp")}`;
 
 export const SERVICE_PHOTOS: Record<string, string> = {
-  "Sea Freight":             `/images/sea-freight.png`,
-  "Air Freight":             `/images/air-freight.png`,
-  "Domestik":                `/images/banner-trucking-container.png`,
-  "Custom Clearance Proses": `/images/customs.png`,
-  "Konsultan Pabean":        `/images/customs-document.png`,
+  "Sea Freight":             image("sea-freight.png"),
+  "Air Freight":             image("air-freight.png"),
+  "Domestik":                image("banner-trucking-container.png"),
+  "Custom Clearance Proses": image("customs.png"),
+  "Konsultan Pabean":        image("customs-document.png"),
 };
 
 export const CAT_PHOTOS: Record<string, string> = {
-  forwarding: `/images/port-operations.png`,
-  ppjk:       `/images/customs.png`,
+  forwarding: image("port-operations.png"),
+  ppjk:       image("customs.png"),
 };
 
 export const formatIDR = (v: number): string =>

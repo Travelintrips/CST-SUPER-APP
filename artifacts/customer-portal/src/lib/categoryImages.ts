@@ -2,7 +2,7 @@ const BASE = "https://images.unsplash.com/photo-";
 const W = "?w=800&q=80&auto=format&fit=crop";
 
 // Local HD images bundled with the app (always available, no external dependency)
-const LOCAL = (path: string) => `${import.meta.env.BASE_URL}images/${path}`;
+const LOCAL = (path: string) => `/api/storage/public-objects/portal-assets/static/customer-portal/images/${path.replace(/\.(png|jpe?g)$/i, ".webp")}`;
 
 // ── Product-specific images (exact product name match, case-insensitive) ─────
 const PRODUCT_SPECIFIC: Array<{ names: string[]; url: string }> = [
@@ -122,7 +122,7 @@ const SERVICE_IMAGES: Array<{ keywords: string[]; url: string }> = [
 ];
 
 // Default service image — upload to Supabase Storage portal bucket at this path
-const DEFAULT_SERVICE = `/api/storage/public-objects/portal/images/services/default-service.jpg`;
+const DEFAULT_SERVICE = LOCAL("services/default-service.jpg");
 
 // ── Product images (order: most-specific first) ──────────────────────────────
 // All IDs below are verified HTTP 200 as of 2026-05.
@@ -177,7 +177,7 @@ const PRODUCT_IMAGES: Array<{ keywords: string[]; url: string }> = [
   {
     // Rice / beras
     keywords: ["beras", "rice", "ir64", "ir 64", "padi", "gabah"],
-    url: `/api/storage/public-objects/portal/images/products/beras-rice.png`,
+    url: LOCAL("products/beras-rice.png"),
   },
   {
     // Food / pantry
