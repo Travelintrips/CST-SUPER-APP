@@ -44,7 +44,6 @@ pnpm             = v10.26.1
 | BizPortal | 6800 (proxy → 18442) | ✅ RUNNING |
 | Customer Portal | 23434 (proxy → 23435) | ✅ RUNNING |
 | Logistic Order | 19368 | ✅ RUNNING |
-| CST Driver (Metro) | N/A | ⬜ NOT STARTED (mobile, tidak dibutuhkan UAT) |
 
 ---
 

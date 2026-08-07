@@ -791,8 +791,6 @@ vendorFulfillmentPublicRouter.post("/:token", async (req: Request, res: Response
     }, "[WA-driver] cek kirim WA ke driver");
 
     if (_driverPhone) {
-      const domain       = getPreferredDomain() || "";
-      const driverAppUrl = domain ? `https://${domain}/api/driver/open-app` : "";
       const driverMsg = [
         `🚚 *Penugasan Order — ${order.orderNumber}*`,
         ``,
@@ -808,7 +806,7 @@ vendorFulfillmentPublicRouter.post("/:token", async (req: Request, res: Response
         body.notes?.trim()       ? `📝 Catatan   : ${body.notes.trim()}` : null,
         ``,
         `Mohon segera hubungi tim B2B Marketplace and Logistic untuk koordinasi lebih lanjut.`,
-        driverAppUrl ? `\nBuka aplikasi driver:\n${driverAppUrl}` : null,
+        `Mohon konfirmasi penugasan melalui WhatsApp.`,
       ].filter(Boolean).join("\n");
 
       logger.info({
@@ -901,7 +899,7 @@ vendorFulfillmentPublicRouter.post("/:token", async (req: Request, res: Response
               const domain = getPreferredDomain() || "";
               const progressLink = job.waProgressToken
                 ? `https://${domain}/driver-progress/${job.waProgressToken}`
-                : domain ? `https://${domain}/api/driver/open-app` : null;
+                : null;
 
               const driverMsg = [
                 `🚚 *Penugasan Order — ${_bodyOrder.orderNumber}*`,
@@ -918,7 +916,7 @@ vendorFulfillmentPublicRouter.post("/:token", async (req: Request, res: Response
                 _bodyExtra.notes        ? `📝 Catatan   : ${_bodyExtra.notes}` : null,
                 ``,
                 `Mohon segera hubungi tim B2B Marketplace and Logistic untuk koordinasi lebih lanjut.`,
-                progressLink ? `\nBuka aplikasi driver:\n${progressLink}` : null,
+                progressLink ? `\nLihat progres penugasan:\n${progressLink}` : null,
               ].filter(Boolean).join("\n");
 
               sendWhatsApp(resolvedPhone, driverMsg, {

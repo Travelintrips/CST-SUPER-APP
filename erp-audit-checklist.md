@@ -356,17 +356,17 @@
 
 ---
 
-## MODUL 8 — DRIVER APP (CST Driver Mobile)
+## MODUL 8 — DRIVER OPERATIONS (SERVER-SIDE)
 
 ### 8.1 Fungsionalitas Driver
 | # | Item Audit | Status | Temuan |
 |---|-----------|--------|--------|
-| 8.1.1 | Driver hanya bisa melihat job yang di-assign ke mereka | | |
+| 8.1.1 | Driver hanya bisa menerima job yang di-assign ke mereka | | |
 | 8.1.2 | Driver tidak bisa mengakses data order driver lain | | |
-| 8.1.3 | Update status job dari driver tersinkron ke BizPortal | | |
-| 8.1.4 | Upload foto (POD, general) berfungsi dan tersimpan di object storage | | |
-| 8.1.5 | GPS location tracking aktif dan akurat saat job berlangsung | | |
-| 8.1.6 | Alert geofence berfungsi ketika driver keluar zona | | |
+| 8.1.3 | Update status job tersinkron ke BizPortal | | |
+| 8.1.4 | Upload foto POD tersimpan di object storage | | |
+| 8.1.5 | Link progres driver menggunakan token dan masa berlaku yang benar | | |
+| 8.1.6 | Notifikasi penugasan melalui WhatsApp tercatat dan dapat ditelusuri | | |
 
 ---
 

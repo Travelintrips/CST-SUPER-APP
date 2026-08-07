@@ -2213,8 +2213,6 @@ vendorMiniFormRouter.post("/op-confirm/:token", async (req: Request, res: Respon
       const plateNumber = String(payload["plate_number"] ?? "").trim();
       const vehicleType = String(payload["vehicle_type"] ?? "").trim();
       const pickupTime = String(payload["pickup_time"] ?? "").trim();
-      const domain = (await import("../lib/domain.js").then(m => m.getPreferredDomain())) || "";
-      const driverAppUrl = domain ? `https://${domain}/api/driver/open-app` : "";
       const driverMsg = [
         `🚚 *Penugasan Order — ${conf.orderNumber ?? "—"}*`,
         ``,
@@ -2228,7 +2226,7 @@ vendorMiniFormRouter.post("/op-confirm/:token", async (req: Request, res: Respon
         pickupTime   ? `⏰ Est. Pickup: ${pickupTime}` : null,
         ``,
         `Mohon segera hubungi tim B2B Marketplace and Logistic untuk koordinasi lebih lanjut.`,
-        driverAppUrl ? `\nBuka aplikasi driver:\n${driverAppUrl}` : null,
+        `Mohon konfirmasi penugasan melalui WhatsApp.`,
       ].filter(Boolean).join("\n");
       req.log?.info({ orderId: conf.orderId, driverPhoneRaw, driverPhoneNorm: driverPhone, driverName }, "[WA-driver] op-confirm mengirim WA ke driver...");
       sendWhatsApp(driverPhone, driverMsg, { context: "op-confirm-driver", refType: "vendor_op_confirm", refId: String(conf.id) })

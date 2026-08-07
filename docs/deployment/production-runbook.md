@@ -1,7 +1,7 @@
 # Production Operations Runbook
 
 **Last Updated:** 2026-07-24  
-**Applies to:** CST Super App — all services (API Server, BizPortal, Customer Portal, Logistic Order, CST Driver)  
+**Applies to:** CST Super App — all services (API Server, BizPortal, Customer Portal, Logistic Order)
 **Platform:** Replit (development + deployment) · Supabase (PostgreSQL + Storage) · Fonnte/WATI (WA) · Paylabs (payment)
 
 ---
@@ -32,7 +32,6 @@
 │                  ──proxy──► Logistic Order :19368           │
 │                  ──proxy──► API Server :18444               │
 │                                                             │
-│  CST Driver (Expo mobile app)                               │
 └───────────────────────────┬─────────────────────────────────┘
                             │
               ┌─────────────▼─────────────┐
@@ -58,7 +57,6 @@ External integrations:
 | BizPortal | `artifacts/bizportal` | 18442 | `pnpm --filter @workspace/bizportal run dev` |
 | Customer Portal | `artifacts/customer-portal` | 23434 | `pnpm --filter @workspace/customer-portal run dev` |
 | Logistic Order | `artifacts/logistic-order` | 19368 | `pnpm --filter @workspace/logistic-order run dev` |
-| CST Driver | `artifacts/cst-driver` | Expo | `pnpm --filter @workspace/cst-driver run dev` |
 | Gateway | root | 5000 | `bash start-dev-all.sh` |
 
 ---

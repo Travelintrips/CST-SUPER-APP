@@ -39,7 +39,7 @@ const DEEP_TRACE_TABLES = new Set([
 
 // ── Pola scan per layer ───────────────────────────────────────────────────────
 const LAYER_PATTERNS = {
-  frontend:   { dirs: ["artifacts/bizportal/src", "artifacts/customer-portal/src", "artifacts/cst-driver"], exts: [".ts", ".tsx"] },
+  frontend:   { dirs: ["artifacts/bizportal/src", "artifacts/customer-portal/src"], exts: [".ts", ".tsx"] },
   api_routes: { dirs: ["artifacts/api-server/src/routes", "artifacts/api-server/src/modules"], exts: [".ts"] },
   api_lib:    { dirs: ["artifacts/api-server/src/lib", "artifacts/api-server/src/services"], exts: [".ts"] },
   schema:     { dirs: ["lib/db/src/schema", "lib/db/src"], exts: [".ts"] },
@@ -129,7 +129,7 @@ function classifyFilesByLayer(files) {
     const fp = f.replace(/\\/g, "/");
     const base = path.basename(f).toLowerCase();
 
-    if (fp.includes("bizportal/src") || fp.includes("customer-portal/src") || fp.includes("cst-driver/src")) {
+    if (fp.includes("bizportal/src") || fp.includes("customer-portal/src")) {
       refs.frontend.push(f);
     } else if (fp.includes("api-server/src/routes") || fp.includes("api-server/src/modules")) {
       const isWorker = KNOWN_WORKERS.some(w => base.includes(w.toLowerCase().replace(".ts", "")));

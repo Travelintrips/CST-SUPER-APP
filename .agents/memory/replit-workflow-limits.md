@@ -30,6 +30,6 @@ await configureWorkflow({ name: "Watchdog Service", ... });
 ## Current layout (as of June 2026)
 
 Root-level (configurable): API Server, Gateway, Watchdog Service  
-Artifact-managed (cannot remove): api-server, bizportal, customer-portal, cst-driver, logistic-order, mockup-sandbox
+Artifact-managed (cannot remove): api-server, bizportal, customer-portal, logistic-order, mockup-sandbox
 
 Note: Replit may re-add removed root-level workflows within minutes. The system auto-restores them.

@@ -118,7 +118,6 @@ export default defineConfig({
         "**/node_modules/**",
         path.resolve(import.meta.dirname, "../api-server/**"),
         path.resolve(import.meta.dirname, "../bizportal/**"),
-        path.resolve(import.meta.dirname, "../cst-driver/**"),
         path.resolve(import.meta.dirname, "../logistic-order/**"),
         path.resolve(import.meta.dirname, "../mockup-sandbox/**"),
       ],

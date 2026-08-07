@@ -87,7 +87,7 @@ Holding
 | `trading` | Modul procurement & vendor |
 | `logistics` | Modul logistik & driver |
 | Portal Customer | Scope customer portal saja |
-| Driver | Scope mobile CST Driver saja |
+| Driver | Operasional driver melalui API, BizPortal, dan WhatsApp |
 
 ---
 
@@ -758,7 +758,6 @@ Infrastructure Layer:
 - ✅ AI COA & Tax Classification
 - ✅ Customer Portal
 - 🔄 Sport Center (dalam pengembangan)
-- 🔄 CST Driver Mobile App (dalam pengembangan)
 - 📋 Auto-start workflows setelah restart
 
 ### Tahun 2 (2027) — Ekspansi & Integrasi
@@ -781,7 +780,6 @@ Infrastructure Layer:
 ### Tahun 4 (2029) — Ecosystem
 - Marketplace terbuka untuk third-party seller
 - Open API platform (developer ecosystem)
-- Mobile app CST Driver production-ready
 - Advanced warehouse management (WMS)
 - Automated 3-way match dengan AI
 - Carbon footprint tracking per shipment
@@ -803,7 +801,6 @@ Infrastructure Layer:
 | Gap | Dampak | Prioritas |
 |---|---|---|
 | Auto-start workflows setelah restart | App mati setelah Replit restart | 🔴 Critical |
-| CST Driver mobile app tidak dapat dijalankan | Driver tidak bisa akses app | 🔴 Critical |
 | Customer Portal build error (esbuild scan) | Potensi silent build failure | 🟡 High |
 
 ### Gap Fungsional (Medium term)
@@ -834,8 +831,8 @@ Infrastructure Layer:
 **1. Stabilisasi Infrastruktur (Segera)**
 Aktifkan `autoStart: true` pada semua workflow agar app tidak mati setelah restart.
 
-**2. Selesaikan CST Driver (Q3 2026)**
-Mobile app driver adalah komponen kritis untuk operasional logistik. Harus bisa dijalankan dan ditest.
+**2. Perkuat operasi driver melalui portal dan WhatsApp (Q3 2026)**
+Penugasan, pembaruan progres, dan komunikasi driver harus tetap dapat diaudit melalui API, BizPortal, dan WhatsApp.
 
 **3. Perkuat AI Governance (Q3 2026)**
 Audit semua titik di mana AI memberikan rekomendasi — pastikan tidak ada yang auto-execute tanpa konfirmasi manusia.
@@ -874,7 +871,6 @@ Public API dengan dokumentasi (OpenAPI/Swagger) untuk memungkinkan integrasi pih
 | Logistics | ⭐⭐⭐⭐☆ | Shipping API belum terintegrasi |
 | AI Engine | ⭐⭐⭐⭐☆ | Governance kuat, perlu fraud detection |
 | CRM | ⭐⭐⭐☆☆ | Lead/Opportunity belum lengkap |
-| Mobile (CST Driver) | ⭐⭐☆☆☆ | Perlu selesaikan dan test |
 | Analytics | ⭐⭐⭐☆☆ | Perlu consolidated holding view |
 | Security | ⭐⭐⭐⭐⭐ | Best practices diterapkan |
 | Document Management | ⭐⭐⭐☆☆ | Versioning belum ada |

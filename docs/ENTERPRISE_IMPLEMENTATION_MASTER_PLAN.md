@@ -1124,7 +1124,7 @@ Paralel dengan Phase 7:
 
 ### Situasi Saat Ini
 
-CST Super App adalah platform ERP B2B enterprise dengan 5 service aktif (API Server, BizPortal, Customer Portal, Logistic Order, CST Driver). Core accounting, procurement, dan inventory sudah production-ready. Vendor Blueprint v1.2 untuk Marketplace sudah FINAL. Enterprise Master Blueprint sudah selesai mencakup 18 modul.
+CST Super App adalah platform ERP B2B enterprise dengan 4 service aktif (API Server, BizPortal, Customer Portal, Logistic Order). Operasi driver tetap ditangani oleh API Server, BizPortal, dan WhatsApp. Core accounting, procurement, dan inventory sudah production-ready. Vendor Blueprint v1.2 untuk Marketplace sudah FINAL. Enterprise Master Blueprint sudah selesai mencakup 18 modul.
 
 **Kekuatan:**
 - Accounting immutable (ADR-0002) — audit-proof

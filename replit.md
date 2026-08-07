@@ -9,7 +9,6 @@ artifacts/
   api-server/       — Express REST API, Drizzle ORM, Supabase Postgres
   bizportal/        — Admin/back-office dashboard (React + Vite)
   customer-portal/  — Public-facing customer app (React + Vite)
-  cst-driver/       — Driver-side app
   logistic-order/   — Logistics order management
   qr-menu/          — QR-based menu/ordering
   mockup-sandbox/   — UI prototyping sandbox
@@ -25,7 +24,6 @@ docs/               — Architecture and deployment documentation
 | `bizportal` | 18442 | Admin/back-office UI (React + Vite) |
 | `customer-portal` | 23434 | Customer-facing storefront/booking UI |
 | `logistic-order` | 19368 | Logistics order management UI |
-| `cst-driver` | — | Driver app (React Native / Expo) |
 | `customer-poster` | — | Customer poster/print generation |
 | `qr-menu` | — | QR-code menu viewer |
 | `mockup-sandbox` | — | UI component mockup sandbox |
@@ -74,7 +72,6 @@ All other application secrets (OpenAI, Paylabs, SMTP, etc.) are loaded automatic
 | BizPortal (admin) | 18442 | `artifacts/bizportal: web` |
 | Customer Portal | 23434 | `artifacts/customer-portal: web` |
 | Logistic Order | varies | `artifacts/logistic-order: web` |
-| CST Driver (Expo) | — | `artifacts/cst-driver: expo` |
 
 ### Start / Restart
 
@@ -124,7 +121,6 @@ Semua gambar, foto produk, foto menu, ilustrasi, dan file biner **WAJIB** disimp
 | File | Alasan |
 |------|--------|
 | `favicon.svg` | Icon kecil, bagian dari build |
-| `cst-driver/assets/images/icon.png` | Wajib ada untuk Expo build |
 | `*/public/opengraph.jpg` | OG image statis untuk SEO — boleh di git jika <200KB |
 | Logo vector (`*.svg`) | Ukuran kecil, bukan foto |
 
@@ -149,7 +145,6 @@ Semua gambar, foto produk, foto menu, ilustrasi, dan file biner **WAJIB** disimp
 | `bizportal/public/menu/` | ❌ Belum | ~10 file | 🟡 Sedang |
 | `api-server/public/pos-images/` | ❌ Belum | 2 file | 🟡 Sedang |
 | `bizportal/public/Screenshot_*.jpg` | ❌ Hapus | 4 file | 🟡 Sedang |
-| `cst-driver/assets/hero-*.png` | ❌ Belum | 4 file | 🟢 Rendah |
 | `logistic-order/public/logocst*.jpg` | ❌ Belum | 2 file | 🟢 Rendah |
 
 **Total gambar yang harus dimigrasikan: ±223 file**

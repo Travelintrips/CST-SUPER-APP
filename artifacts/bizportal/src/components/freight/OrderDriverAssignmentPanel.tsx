@@ -418,7 +418,7 @@ export function OrderDriverAssignmentPanel({ orderId, orderNumber, customerName,
                   >
                     {m === "INTERNAL" ? <MessageCircle className="w-5 h-5" /> : <Smartphone className="w-5 h-5" />}
                     <span className="font-medium">{m === "INTERNAL" ? "Driver Internal" : "Driver Eksternal"}</span>
-                    <span className="text-xs opacity-70">{m === "INTERNAL" ? "Via WA Mini Form" : "Via CST Driver App"}</span>
+                    <span className="text-xs opacity-70">{m === "INTERNAL" ? "Via WA Mini Form" : "Via WhatsApp"}</span>
                   </button>
                 ))}
               </div>
@@ -451,7 +451,7 @@ export function OrderDriverAssignmentPanel({ orderId, orderNumber, customerName,
             ) : (
               <div className="space-y-3">
                 <div className="p-2.5 rounded-lg bg-sky-50 border border-sky-100 text-xs text-sky-700">
-                  Driver terdaftar di CST Driver App. Notifikasi dikirim via WA dan app.
+                  Driver terdaftar. Detail penugasan dikirim melalui WhatsApp.
                 </div>
                 <div>
                   <Label className="text-xs">Pilih Driver <span className="text-red-500">*</span></Label>

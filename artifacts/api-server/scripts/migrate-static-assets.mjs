@@ -74,7 +74,7 @@ const supabase = createClient(normalizeSupabaseUrl(rawUrl), rawKey, {
 });
 
 const artifactDirs = (await fs.readdir(path.join(workspaceRoot, "artifacts"), { withFileTypes: true }))
-  .filter((entry) => entry.isDirectory() && entry.name !== "mockup-sandbox" && entry.name !== "cst-driver")
+  .filter((entry) => entry.isDirectory() && entry.name !== "mockup-sandbox")
   .map((entry) => path.join(workspaceRoot, "artifacts", entry.name));
 
 const files = [];

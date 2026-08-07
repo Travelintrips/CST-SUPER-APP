@@ -65,7 +65,7 @@
 
 ### 2.1 Route alias `/inventory/warehouses`
 - **Alias dari:** `inventoryStockRouter` (sama dengan `/inventory/stock`)
-- **Callers aktif di frontend:** ❌ Tidak ada (grep: 0 hasil di bizportal + customer-portal + cst-driver)
+- **Callers aktif di frontend:** ❌ Tidak ada (grep: 0 hasil di bizportal + customer-portal)
 - **Aksi Phase 5:** Tambahkan middleware deprecation warning header (`Deprecation: true`, `X-Deprecated-Route`)
 - **Aksi selanjutnya:** Drop mount dari `routes/index.ts` pada release berikutnya
 - **Risiko breaking change:** ❌ Sangat rendah — tidak ada frontend caller aktif

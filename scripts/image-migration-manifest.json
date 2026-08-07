@@ -226,8 +226,5 @@
   "artifacts/api-server/public/pos-images/f6e7b55a-9ea0-4006-8529-bbf7ac4cd35d.png": "/api/storage/public-objects/pos-images/f6e7b55a-9ea0-4006-8529-bbf7ac4cd35d.png",
   "artifacts/logistic-order/public/logocst-new.jpg": "/api/storage/public-objects/portal-assets/static/logistic-order/logocst-new.jpg",
   "artifacts/logistic-order/public/logocst.jpg": "/api/storage/public-objects/portal-assets/static/logistic-order/logocst.jpg",
-  "artifacts/logistic-order/public/logocst.png": "/api/storage/public-objects/portal-assets/static/logistic-order/logocst.png",
-  "artifacts/cst-driver/assets/hero-desktop.png": "/api/storage/public-objects/portal-assets/static/cst-driver/assets/hero-desktop.png",
-  "artifacts/cst-driver/assets/hero-mobile.png": "/api/storage/public-objects/portal-assets/static/cst-driver/assets/hero-mobile.png",
-  "artifacts/cst-driver/assets/hero-square.png": "/api/storage/public-objects/portal-assets/static/cst-driver/assets/hero-square.png"
+  "artifacts/logistic-order/public/logocst.png": "/api/storage/public-objects/portal-assets/static/logistic-order/logocst.png"
 }

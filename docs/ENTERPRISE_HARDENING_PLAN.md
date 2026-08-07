@@ -533,7 +533,7 @@ users, companies, sessions
 | **Vendor Auto Matching** | 🟡 30% | Data supplier + service type ada. Gap: scoring engine, ML/rule-based matcher | MEDIUM |
 | **Full Accounting Integration** | 🟢 70% | Sudah ada `sales_documents`, journal entry, Chart of Accounts. Gap: AR aging, AP tracking, reporting | MEDIUM |
 | **Multi-Company** | 🟢 85% | `company_id` sudah di semua tabel + holding structure. Gap: tenant isolation di beberapa query | LOW |
-| **Mobile App** | 🟢 75% | `cst-driver` Expo app sudah ada, SSE driver channel sudah ada. Gap: customer mobile app | MEDIUM |
+| **Driver Operations** | 🟢 75% | Driver API, assignment flow, dan realtime channel tersedia. Gap: penguatan monitoring operasional | MEDIUM |
 | **Customer Tracking Realtime** | 🟢 80% | SSE portal channel sudah ada, `order_track` endpoint public. Gap: map integration, driver location push | LOW |
 | **Warehouse/TPS Integration** | 🟡 30% | `warehouse.ts` + `inventoryStock.ts` ada tapi belum mature. Gap: TPS-specific schema, API integration | HIGH |
 | **Customs Integration** | 🟡 20% | Service type "custom_clearance" ada. Gap: EDI/XML format, Bea Cukai API | HIGH |

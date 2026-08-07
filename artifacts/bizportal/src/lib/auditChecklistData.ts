@@ -449,7 +449,7 @@ export const AUDIT_MODULES: AuditModule[] = [
   },
   {
     id: "8",
-    title: "Driver App (CST Driver Mobile)",
+    title: "Driver operations",
     icon: "🚗",
     sections: [
       {

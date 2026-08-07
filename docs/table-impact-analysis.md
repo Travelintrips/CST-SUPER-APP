@@ -26,7 +26,7 @@
 
 | # | Layer | Scope |
 |---|-------|-------|
-| 1 | **Frontend React** | `artifacts/bizportal/src/`, `artifacts/customer-portal/src/`, `artifacts/cst-driver/src/` |
+| 1 | **Frontend React** | `artifacts/bizportal/src/`, `artifacts/customer-portal/src/` |
 | 2 | **API Routes Express** | `artifacts/api-server/src/routes/`, `artifacts/api-server/src/modules/` |
 | 3 | **API Lib / Workers** | `artifacts/api-server/src/lib/` |
 | 4 | **Drizzle Schema** | `lib/db/src/schema/` |

@@ -16,10 +16,9 @@ if [ -x "$PNPM_V9" ]; then
 fi
 echo "[pnpm] using: $(pnpm --version)"
 
-# Install all workspace packages except cst-driver (which pulls in react-native ->
-# react-devtools-core -> shell-quote, a package blocked by Replit's package firewall)
+# Install all workspace packages.
 echo "[1/4] Installing dependencies..."
-pnpm install --no-frozen-lockfile --filter '!@workspace/cst-driver'
+pnpm install --no-frozen-lockfile
 
 # Ensure @uppy/* packages are symlinked into lib/object-storage-web/node_modules.
 mkdir -p lib/object-storage-web/node_modules/@uppy

@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-BizPortal adalah ERP multi-modul berbasis monorepo TypeScript/Node.js dengan backend Express (`artifacts/api-server`), frontend internal BizPortal (`artifacts/bizportal`), customer portal publik (`artifacts/customer-portal`), dan aplikasi driver (`artifacts/cst-driver`). Data utama disimpan di PostgreSQL via Drizzle, file disimpan di Replit Object Storage/Supabase Storage, dan beberapa alur publik memanggil OpenAI untuk OCR/chat.
+BizPortal adalah ERP multi-modul berbasis monorepo TypeScript/Node.js dengan backend Express (`artifacts/api-server`), frontend internal BizPortal (`artifacts/bizportal`), dan customer portal publik (`artifacts/customer-portal`). Data utama disimpan di PostgreSQL via Drizzle, file disimpan di Replit Object Storage/Supabase Storage, dan beberapa alur publik memanggil OpenAI untuk OCR/chat.
 
 Dalam scope produksi, trust boundary terpenting ada pada API `artifacts/api-server/src/app.ts`, karena proses ini melayani route API, sesi BizPortal berbasis cookie, bearer token Supabase untuk portal/mobile, static customer portal, dan static BizPortal. `mockup-sandbox` diperlakukan dev-only dan diabaikan kecuali nanti terbukti production-reachable.
 

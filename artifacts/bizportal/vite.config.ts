@@ -190,7 +190,6 @@ if (h.indexOf('access_token') !== -1 || h.indexOf('error=') !== -1 ||
         "**/node_modules/**",
         path.resolve(import.meta.dirname, "../api-server/**"),
         path.resolve(import.meta.dirname, "../customer-portal/**"),
-        path.resolve(import.meta.dirname, "../cst-driver/**"),
         path.resolve(import.meta.dirname, "../logistic-order/**"),
         path.resolve(import.meta.dirname, "../mockup-sandbox/**"),
       ],

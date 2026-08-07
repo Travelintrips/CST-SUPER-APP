@@ -939,7 +939,7 @@ TIDAK BOLEH:
 | Customer Portal | API Server | HTTP/REST | Via Gateway (port 5000) |
 | BizPortal | API Server | HTTP/REST | Via Gateway (port 5000) |
 | Logistic Order | API Server | HTTP/REST | Via Gateway (port 5000) |
-| CST Driver App | API Server | HTTP/REST | Direct + JWT |
+| Driver Operations | API Server | HTTP/REST | Via BizPortal, WhatsApp, and tokenized progress links |
 | API Server | API Server | Internal function call | Direct module import |
 
 ### 14.2 External Integration Matrix
@@ -1164,8 +1164,6 @@ BizPortal (18442)
 Logistic Order (19368)
     └─► API Server (18444) ── via Gateway (5000)
 
-CST Driver (Expo)
-    └─► API Server (18444) ── Direct
 ```
 
 ### 17.2 Domain Dependency Map
@@ -1228,7 +1226,6 @@ Phase 7: Full Integration + API Governance
 | **Q1 2027** | Multi-currency full implementation |
 | **Q1 2027** | Inventory: FIFO costing |
 | **Q2 2027** | CEO/Director analytics dashboard |
-| **Q2 2027** | Mobile app CST Driver production release |
 | **Q3 2027** | Intercompany transactions |
 | **Q3 2027** | AI Demand Forecasting (Inventory + Procurement) |
 | **Q4 2027** | Business Unit level (organizational) |

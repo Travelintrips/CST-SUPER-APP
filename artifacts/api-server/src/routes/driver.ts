@@ -1455,7 +1455,7 @@ adminRouter.post("/jobs", async (req, res) => {
     const [d] = await db.select().from(driversTable).where(eq(driversTable.id, Number(driverId)));
     if (!d) { res.status(404).json({ message: "Driver not found" }); return; }
     if (resolvedDriverType === "EXTERNAL" && !d.isActive) {
-      res.status(400).json({ message: "Driver belum memiliki akun CST Driver App aktif." });
+      res.status(400).json({ message: "Driver eksternal belum memiliki akun driver aktif." });
       return;
     }
     driver = d;
@@ -1576,7 +1576,7 @@ adminRouter.post("/jobs", async (req, res) => {
         req.log?.warn?.({ err, phone: normalizedPhone, jobId: job.id }, "[WA-driver] WA ke driver INTERNAL GAGAL — akan di-retry oleh waRetryWorker");
       });
   } else if (resolvedDriverType === "EXTERNAL" && driver?.phone) {
-    // EXTERNAL: kirim WA link buka CST Driver App
+    // EXTERNAL: kirim detail penugasan melalui WhatsApp
     const { normalizePhone } = await import("../lib/phoneUtils.js");
     const normalizedDriverPhone = normalizePhone(driver.phone);
     const pickup = job.pickupAddress ?? "-";
@@ -1592,8 +1592,7 @@ adminRouter.post("/jobs", async (req, res) => {
       job.cargoDescription ? `Muatan: ${job.cargoDescription}` : null,
       job.specialInstruction ? `Catatan: ${job.specialInstruction}` : null,
       ``,
-      `Buka aplikasi CST Driver:`,
-      `https://${domain}/api/driver/open-app`,
+      `Mohon konfirmasi penugasan melalui WhatsApp.`,
     ].filter(Boolean).join("\n");
     sendWhatsApp(normalizedDriverPhone, msg, {
       context: "driver-job-assigned-external",
@@ -1710,32 +1709,6 @@ adminRouter.delete("/:id", async (req, res) => {
   const [driver] = await db.update(driversTable).set({ isActive: false }).where(eq(driversTable.id, id)).returning();
   if (!driver) { res.status(404).json({ message: "Driver not found" }); return; }
   res.json({ ok: true });
-});
-
-// GET /api/driver/open-app — redirect WA link ke deep link CST Driver app
-router.get("/open-app", (_req: Request, res: Response) => {
-  const html = `<!DOCTYPE html>
-<html lang="id">
-<head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Buka CST Driver</title>
-  <style>
-    body{font-family:sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#0F3460;color:#fff;text-align:center;padding:24px;box-sizing:border-box}
-    h1{font-size:1.4rem;margin-bottom:8px}
-    p{color:#cdd;margin-bottom:24px;font-size:.95rem}
-    a.btn{display:inline-block;background:#FF6B00;color:#fff;text-decoration:none;padding:14px 32px;border-radius:8px;font-size:1rem;font-weight:600}
-  </style>
-</head>
-<body>
-  <h1>🚛 CST Driver</h1>
-  <p>Ketuk tombol di bawah untuk membuka aplikasi</p>
-  <a class="btn" href="cst-driver://jobs">Buka Aplikasi</a>
-  <script>setTimeout(()=>{window.location.href='cst-driver://jobs'},500);</script>
-</body>
-</html>`;
-  res.setHeader("Content-Type", "text/html");
-  res.send(html);
 });
 
 export { router as driverRouter, adminRouter as driversAdminRouter };

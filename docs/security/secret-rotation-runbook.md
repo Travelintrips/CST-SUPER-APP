@@ -156,7 +156,6 @@ Supabase does not support reverting a JWT regeneration. If the new key is incorr
    ```
 4. **Impact of SESSION_SECRET rotation:** all active browser sessions are invalidated. Users must log in again.
 5. **Impact of PORTAL_JWT_SECRET / DRIVER_JWT_SECRET rotation:** all issued JWTs become invalid immediately.
-   Mobile app users (CST Driver) must re-authenticate.
 6. **Impact of CASHIER_TOKEN_SECRET rotation:** all active POS cashier tokens are invalidated.
 
 ### 2.3 Smoke test

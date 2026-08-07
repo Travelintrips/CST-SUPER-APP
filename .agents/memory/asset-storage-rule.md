@@ -20,7 +20,6 @@ Semua gambar, PDF, dan file biner harus disimpan di **Supabase Storage** dan dir
 | File | Alasan |
 |------|--------|
 | `favicon.svg` | Icon kecil, bagian dari build |
-| `cst-driver/assets/images/icon.png` | Wajib ada untuk Expo build |
 | `*/public/opengraph.jpg` | OG image statis untuk SEO (jika <200KB) |
 | Logo vector (`*.svg`) | Ukuran kecil, bukan foto |
 
@@ -35,7 +34,6 @@ Semua gambar, PDF, dan file biner harus disimpan di **Supabase Storage** dan dir
 | `bizportal/public/menu/` | ✅ Selesai | `portal-assets/static/bizportal/menu/` |
 | `api-server/public/pos-images/` | ✅ Selesai | `pos-images/` |
 | `bizportal/public/Screenshot_*.jpg` | ✅ Dihapus | — |
-| `cst-driver/assets/hero-*.png` | ✅ Selesai | `portal-assets/static/cst-driver/assets/` |
 | `logistic-order/public/logocst*.jpg` | ✅ Selesai | `portal-assets/static/logistic-order/` |
 
 URL format untuk frontend: `/api/storage/public-objects/{storagePath}`

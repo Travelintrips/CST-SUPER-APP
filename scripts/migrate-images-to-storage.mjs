@@ -90,11 +90,6 @@ const UPLOAD_JOBS = [
     storagePrefix: "portal-assets/static/logistic-order",
     filter: (f) => /logocst/i.test(f) || /logo/i.test(f),
   },
-  {
-    localDir: "artifacts/cst-driver/assets",
-    storagePrefix: "portal-assets/static/cst-driver/assets",
-    filter: (f) => f.startsWith("hero-"),
-  },
 ];
 
 // ── Recursive file lister ─────────────────────────────────────────────────────
