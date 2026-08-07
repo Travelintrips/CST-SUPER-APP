@@ -528,6 +528,7 @@ export async function uploadProofOfDelivery(
       actor,
     );
     if (!result.ok) {
+      if (objectPath) await storage.tryDeletePrivateEntity(objectPath);
       if (result.code === "INVALID_TRANSITION") {
         return { ok: false, code: "SHIPMENT_NOT_DELIVERED" };
       }

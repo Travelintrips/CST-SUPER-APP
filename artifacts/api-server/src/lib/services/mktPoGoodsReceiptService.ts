@@ -17,7 +17,7 @@
  */
 
 import { db, mktPurchaseOrdersTable, mktPoGoodsReceiptsTable, mktPoGoodsReceiptItemsTable, mktPoShipmentItemsTable, mktPoShipmentsTable, mktPoShipmentEventsTable, mktPurchaseOrderLinesTable } from "@workspace/db";
-import { eq, and, inArray, sql, desc } from "drizzle-orm";
+import { eq, and, inArray, sql, desc, isNotNull } from "drizzle-orm";
 import { logActivity } from "../activityLog.js";
 import { enqueueNotification } from "./marketplaceNotificationQueueService.js";
 import { logger } from "../logger.js";
@@ -48,7 +48,7 @@ export interface CreateGoodsReceiptInput {
 
 export type CreateGoodsReceiptResult =
   | { ok: true; receipt: GoodsReceiptRow; items: GoodsReceiptItemRow[]; poStatusUpdatedTo: string | null; alreadyExists?: boolean }
-  | { ok: false; code: "SHIPMENT_NOT_FOUND" | "SHIPMENT_NOT_DELIVERED" | "POD_REQUIRED" | "NO_ITEMS" | "INVALID_SHIPMENT_ITEM" | "QTY_MISMATCH"; message?: string; details?: unknown };
+  | { ok: false; code: "PO_NOT_FOUND" | "PO_CANCELLED" | "SHIPMENT_NOT_FOUND" | "SHIPMENT_CANCELLED" | "SHIPMENT_NOT_DELIVERED" | "POD_REQUIRED" | "NO_ITEMS" | "INVALID_SHIPMENT_ITEM" | "QTY_MISMATCH"; message?: string; details?: unknown };
 
 function toNum(v: string | number): number {
   return typeof v === "number" ? v : parseFloat(v);
@@ -86,6 +86,31 @@ export async function createGoodsReceipt(input: CreateGoodsReceiptInput, actor: 
       .for("update")
       .limit(1);
     if (!shipment) return { kind: "failure" as const, result: { ok: false as const, code: "SHIPMENT_NOT_FOUND" as const } };
+
+    // Lock the PO as well as the shipment. This serializes aggregate status
+    // recalculation across split shipments belonging to the same PO.
+    const [po] = await tx
+      .select()
+      .from(mktPurchaseOrdersTable)
+      .where(eq(mktPurchaseOrdersTable.id, shipment.poId))
+      .for("update")
+      .limit(1);
+    if (!po) {
+      return { kind: "failure" as const, result: { ok: false as const, code: "PO_NOT_FOUND" as const } };
+    }
+    if (po.status === "cancelled") {
+      return {
+        kind: "failure" as const,
+        result: { ok: false as const, code: "PO_CANCELLED" as const, message: "Goods receipt tidak boleh dibuat untuk PO yang dibatalkan" },
+      };
+    }
+    if (shipment.shipmentStatus === "cancelled") {
+      return {
+        kind: "failure" as const,
+        result: { ok: false as const, code: "SHIPMENT_CANCELLED" as const, message: "Goods receipt tidak boleh dibuat untuk shipment yang dibatalkan" },
+      };
+    }
+
     if (shipment.shipmentStatus !== "delivered") {
       return {
         kind: "failure" as const,
@@ -99,6 +124,7 @@ export async function createGoodsReceipt(input: CreateGoodsReceiptInput, actor: 
       .where(and(
         eq(mktPoShipmentEventsTable.shipmentId, input.shipmentId),
         eq(mktPoShipmentEventsTable.eventType, "pod_uploaded"),
+        isNotNull(mktPoShipmentEventsTable.attachmentObjectPath),
       ))
       .orderBy(desc(mktPoShipmentEventsTable.eventSequence))
       .limit(1);
@@ -146,7 +172,14 @@ export async function createGoodsReceipt(input: CreateGoodsReceiptInput, actor: 
             && found.notes === (item.notes ?? null);
         });
       if (same) {
-        return { kind: "success" as const, receipt: existingReceipt, items: existingItems, alreadyExists: true, shipment };
+        return {
+          kind: "success" as const,
+          receipt: existingReceipt,
+          items: existingItems,
+          alreadyExists: true,
+          shipment,
+          poStatusUpdatedTo: null,
+        };
       }
     }
 
@@ -187,7 +220,48 @@ export async function createGoodsReceipt(input: CreateGoodsReceiptInput, actor: 
       )
       .returning();
 
-    return { receipt, items, shipment, alreadyExists: false };
+    // Recompute the PO aggregate while the PO lock is still held. Keeping this
+    // mutation in the same transaction prevents a committed GR with a stale
+    // PO status when concurrent receipts target split shipments.
+    const ELIGIBLE: string[] = ["ready_to_ship", "in_transit", "partially_delivered"];
+    let poStatusUpdatedTo: string | null = null;
+    if (ELIGIBLE.includes(po.status)) {
+      const [{ orderedTotal }] = await tx
+        .select({ orderedTotal: sql<string>`COALESCE(SUM(${mktPurchaseOrderLinesTable.qty}), 0)` })
+        .from(mktPurchaseOrderLinesTable)
+        .where(eq(mktPurchaseOrderLinesTable.poId, po.id));
+      const [{ acceptedTotal, rejectedTotal }] = await tx
+        .select({
+          acceptedTotal: sql<string>`COALESCE(SUM(${mktPoGoodsReceiptItemsTable.acceptedQty}), 0)`,
+          rejectedTotal: sql<string>`COALESCE(SUM(${mktPoGoodsReceiptItemsTable.rejectedQty}), 0)`,
+        })
+        .from(mktPoGoodsReceiptItemsTable)
+        .innerJoin(mktPoGoodsReceiptsTable, eq(mktPoGoodsReceiptItemsTable.goodsReceiptId, mktPoGoodsReceiptsTable.id))
+        .innerJoin(mktPoShipmentsTable, eq(mktPoGoodsReceiptsTable.shipmentId, mktPoShipmentsTable.id))
+        .where(eq(mktPoShipmentsTable.poId, po.id));
+
+      const ordered = parseFloat(orderedTotal) || 0;
+      const accepted = parseFloat(acceptedTotal) || 0;
+      const rejected = parseFloat(rejectedTotal) || 0;
+      const nextStatus = ordered > 0 && accepted <= 0 && rejected > 0
+        ? "rejected_goods"
+        : ordered > 0 && accepted >= ordered
+          ? "delivered"
+          : accepted > 0 || rejected > 0
+            ? "partially_delivered"
+            : null;
+
+      if (nextStatus && nextStatus !== po.status) {
+        const [updatedPo] = await tx
+          .update(mktPurchaseOrdersTable)
+          .set({ status: nextStatus as typeof po.status, updatedAt: new Date() })
+          .where(and(eq(mktPurchaseOrdersTable.id, po.id), eq(mktPurchaseOrdersTable.status, po.status)))
+          .returning({ id: mktPurchaseOrdersTable.id });
+        if (updatedPo) poStatusUpdatedTo = nextStatus;
+      }
+    }
+
+    return { receipt, items, shipment, po, poStatusUpdatedTo, alreadyExists: false };
   });
 
   if (result.kind === "failure") return result.result;
@@ -211,11 +285,38 @@ export async function createGoodsReceipt(input: CreateGoodsReceiptInput, actor: 
       payloadJson: { poId: shipment.poId, shipmentNumber: shipment.shipmentNumber, receiptNumber: result.receipt.receiptNumber, receiptType: input.receiptType },
       deduplicationKey: `mkt_po_goods_received:${result.receipt.id}`,
     }).catch(() => {});
+
+    if (result.poStatusUpdatedTo) {
+      void logActivity({
+        mktPurchaseOrderId: shipment.poId,
+        actorType: actor.actorType,
+        actorId: actor.actorId ?? null,
+        actorName: actor.actorName ?? null,
+        action: "mkt_po_status_auto_updated",
+        description: `Status PO diperbarui otomatis setelah goods receipt ${result.receipt.receiptNumber}`,
+        newValue: { status: result.poStatusUpdatedTo, goodsReceiptId: result.receipt.id },
+      });
+    }
+    if (input.inspectionStatus === "passed") {
+      void logActivity({
+        mktPurchaseOrderId: shipment.poId,
+        actorType: actor.actorType,
+        actorId: actor.actorId ?? null,
+        actorName: actor.actorName ?? null,
+        action: "mkt_po_receipt_completed",
+        description: `Goods receipt ${result.receipt.receiptNumber} selesai diperiksa`,
+        newValue: { goodsReceiptId: result.receipt.id, inspectionStatus: input.inspectionStatus },
+      });
+    }
   }
 
-  const poStatusUpdatedTo = result.alreadyExists ? null : await updatePoAggregateStatusFromReceipts(shipment.poId, actor);
-
-  return { ok: true, receipt: result.receipt, items: result.items, poStatusUpdatedTo, alreadyExists: result.alreadyExists };
+  return {
+    ok: true,
+    receipt: result.receipt,
+    items: result.items,
+    poStatusUpdatedTo: result.alreadyExists ? null : result.poStatusUpdatedTo,
+    alreadyExists: result.alreadyExists,
+  };
 }
 
 /**

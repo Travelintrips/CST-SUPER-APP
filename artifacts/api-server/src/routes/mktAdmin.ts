@@ -24,8 +24,13 @@
  */
 
 import { Router } from "express";
+import { rateLimit } from "express-rate-limit";
+import { z } from "zod/v4";
 import { requireAdmin } from "../lib/requireAdmin.js";
 import { ObjectStorageService } from "../lib/objectStorage.js";
+import { imagePdfUpload } from "../lib/uploadMiddleware.js";
+import { validateMagicBytes } from "../lib/uploadValidation.js";
+import { validateBody } from "../lib/middleware/validateBody.js";
 import { logActivity } from "../lib/activityLog.js";
 import {
   inviteVendorToRfq,
@@ -71,6 +76,7 @@ import {
   listShipmentsForPo,
   listShipmentItems,
   getShipmentById,
+  uploadProofOfDelivery,
 } from "../lib/services/mktPoShipmentService.js";
 import {
   createGoodsReceipt,
@@ -80,6 +86,36 @@ import {
 import { logger } from "../lib/logger.js";
 
 const router = Router();
+const fulfillmentWriteLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: "RATE_LIMIT", message: "Terlalu banyak permintaan fulfillment." },
+});
+const podUpload = imagePdfUpload(20);
+const GoodsReceiptBodySchema = z.object({
+  receiptType: z.enum(["full", "partial", "rejected"]),
+  inspectionStatus: z.enum(["pending", "passed", "failed"]).optional(),
+  receivedAt: z.coerce.date().optional().nullable(),
+  notes: z.string().trim().max(4000).optional().nullable(),
+  allowMismatch: z.boolean().optional(),
+  items: z.array(z.object({
+    shipmentItemId: z.coerce.number().int().positive(),
+    receivedQty: z.coerce.number().finite().nonnegative(),
+    acceptedQty: z.coerce.number().finite().nonnegative(),
+    rejectedQty: z.coerce.number().finite().nonnegative(),
+    condition: z.enum(["GOOD", "DAMAGED", "SHORTAGE", "REJECTED"]).optional().nullable(),
+    notes: z.string().trim().max(2000).optional().nullable(),
+  }).strict()).min(1).max(500),
+}).strict();
+const PodNoteSchema = z.object({
+  note: z.string().trim().max(2000).optional().nullable(),
+}).strict();
+
+async function requireAdminMiddleware(req: any, res: any, next: () => void): Promise<void> {
+  if (await requireAdmin(req, res)) next();
+}
 
 // ── GET /api/mkt/admin/dual-write/stats ───────────────────────────────────────
 
@@ -1152,34 +1188,96 @@ router.get("/shipments/:shipmentId/timeline", async (req, res) => {
 // GET  /api/mkt/admin/shipments/:shipmentId/goods-receipts   — list receipts for shipment
 // GET  /api/mkt/admin/goods-receipts/:id/items               — list items for a receipt
 
-router.post("/shipments/:shipmentId/goods-receipts", async (req, res) => {
-  const ok = await requireAdmin(req, res);
-  if (!ok) return;
-
+router.post(
+  "/shipments/:shipmentId/goods-receipts",
+  fulfillmentWriteLimiter,
+  requireAdminMiddleware,
+  validateBody(GoodsReceiptBodySchema),
+  async (req, res) => {
   const shipmentId = Number(req.params["shipmentId"]);
   if (!Number.isInteger(shipmentId) || shipmentId <= 0) {
     return res.status(400).json({ ok: false, error: "shipmentId harus berupa integer positif" });
   }
-  const body = req.body ?? {};
-  if (!Array.isArray(body.items) || body.items.length === 0) {
-    return res.status(400).json({ ok: false, error: "items wajib diisi (minimal 1 item)" });
-  }
-  if (!["full", "partial", "rejected"].includes(body.receiptType)) {
-    return res.status(400).json({ ok: false, error: "receiptType harus salah satu dari: full, partial, rejected" });
-  }
 
   try {
+    const body = req.body as z.infer<typeof GoodsReceiptBodySchema>;
     const result = await createGoodsReceipt({ shipmentId, ...body }, getActorFromReq(req));
     if (!result.ok) {
-      const status = result.code === "SHIPMENT_NOT_FOUND" ? 404 : 422;
+      const status = result.code === "SHIPMENT_NOT_FOUND" || result.code === "PO_NOT_FOUND" ? 404 : 422;
       return res.status(status).json({ ok: false, error: result.code, message: result.message, details: result.details });
     }
-    return res.status(201).json({ ok: true, receipt: result.receipt, items: result.items, poStatusUpdatedTo: result.poStatusUpdatedTo });
+    return res.status(result.alreadyExists ? 200 : 201).json({
+      ok: true,
+      alreadyExists: result.alreadyExists === true,
+      receipt: result.receipt,
+      items: result.items,
+      poStatusUpdatedTo: result.poStatusUpdatedTo,
+    });
   } catch (err: unknown) {
     logger.warn({ err, shipmentId }, "[mktAdmin] createGoodsReceipt error");
     return res.status(500).json({ ok: false, error: "Internal server error" });
   }
-});
+  },
+);
+
+// POST /api/mkt/admin/shipments/:shipmentId/pod — canonical POD upload.
+// The client filename is intentionally ignored; ObjectStorageService creates
+// the server-side object path. The private path is never returned to clients.
+router.post(
+  "/shipments/:shipmentId/pod",
+  fulfillmentWriteLimiter,
+  requireAdminMiddleware,
+  podUpload.single("file"),
+  async (req, res) => {
+    const shipmentId = Number(req.params["shipmentId"]);
+    if (!Number.isInteger(shipmentId) || shipmentId <= 0) {
+      return res.status(400).json({ ok: false, error: "shipmentId harus berupa integer positif" });
+    }
+
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ ok: false, error: "file POD wajib diisi" });
+    }
+    const magic = validateMagicBytes(file.buffer, file.mimetype);
+    if (!magic.ok) {
+      return res.status(400).json({ ok: false, error: "INVALID_FILE", message: magic.errorMessage });
+    }
+
+    const parsedBody = PodNoteSchema.safeParse(req.body ?? {});
+    if (!parsedBody.success) {
+      return res.status(400).json({ ok: false, error: "INVALID_BODY", details: parsedBody.error.flatten() });
+    }
+
+    try {
+      const result = await uploadProofOfDelivery({
+        shipmentId,
+        buffer: file.buffer,
+        mimeType: file.mimetype,
+        note: parsedBody.data.note,
+      }, getActorFromReq(req));
+      if (!result.ok) {
+        const status = result.code === "SHIPMENT_NOT_FOUND" ? 404 : 422;
+        return res.status(status).json({ ok: false, error: result.code });
+      }
+
+      return res.status(result.alreadyUploaded ? 200 : 201).json({
+        ok: true,
+        alreadyUploaded: result.alreadyUploaded === true,
+        event: {
+          id: result.event.id,
+          shipmentId: result.event.shipmentId,
+          eventSequence: result.event.eventSequence,
+          eventType: result.event.eventType,
+          note: result.event.note,
+          createdAt: result.event.createdAt,
+        },
+      });
+    } catch (err: unknown) {
+      logger.warn({ err, shipmentId }, "[mktAdmin] uploadProofOfDelivery error");
+      return res.status(500).json({ ok: false, error: "Internal server error" });
+    }
+  },
+);
 
 router.get("/shipments/:shipmentId/goods-receipts", async (req, res) => {
   const ok = await requireAdmin(req, res);
