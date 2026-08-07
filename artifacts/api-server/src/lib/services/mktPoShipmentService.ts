@@ -57,6 +57,21 @@ const SHIPMENT_EVENT_ALLOWED_FROM: Record<string, string[]> = {
   completed: ["delivered"],
   cancelled: ["planned", "packing", "loading", "ready_to_ship", "in_transit", "customs", "warehouse", "arrived"],
 };
+const SHIPMENT_EVENT_TYPES = new Set(Object.keys(SHIPMENT_EVENT_ALLOWED_FROM));
+
+const SHIPMENT_ACTIVITY_ACTION: Record<string, string> = {
+  packing: "mkt_po_shipment_started",
+  loaded: "mkt_po_shipment_pickup",
+  departed: "mkt_po_shipment_in_transit",
+  delivered: "mkt_po_shipment_delivered",
+};
+
+const SHIPMENT_NOTIFICATION_EVENT: Record<string, string> = {
+  packing: "mkt_po_shipment_started_notification",
+  loaded: "mkt_po_shipment_pickup_notification",
+  departed: "mkt_po_shipment_in_transit_notification",
+  delivered: "mkt_po_shipment_delivered_notification",
+};
 
 export interface CreateShipmentItemInput {
   poLineId: number;
@@ -134,7 +149,7 @@ async function createShipmentInternal(
       if (!po) return { kind: "failure" as const, result: { ok: false as const, code: "PO_NOT_FOUND" as const } };
 
       const eligibleStatuses = options.eligiblePoStatuses ?? SHIPMENT_ELIGIBLE_PO_STATUSES;
-      if (!eligibleStatuses.includes(po.status)) {
+      if (!eligibleStatuses.includes(po.status) && !options.reuseExisting) {
         return {
           kind: "failure" as const,
           result: {
@@ -173,6 +188,17 @@ async function createShipmentInternal(
             alreadyExists: true,
           };
         }
+      }
+
+      if (!eligibleStatuses.includes(po.status)) {
+        return {
+          kind: "failure" as const,
+          result: {
+            ok: false as const,
+            code: "PO_NOT_ELIGIBLE" as const,
+            message: `PO berstatus '${po.status}', tidak eligible untuk shipment`,
+          },
+        };
       }
 
       // Validate every referenced po_line actually belongs to this PO while
@@ -263,17 +289,17 @@ async function createShipmentInternal(
 
     if (result.kind === "failure") return result.result;
 
-    logActivity({
-      mktPurchaseOrderId: input.poId,
-      actorType: actor.actorType,
-      actorId: actor.actorId ?? null,
-      actorName: actor.actorName ?? null,
-      action: "mkt_po_shipment_created",
-      description: `Shipment ${result.shipment.shipmentNumber} dibuat untuk PO ${result.po.poNumber}`,
-      newValue: { shipmentId: result.shipment.id, shipmentNumber: result.shipment.shipmentNumber, itemCount: result.items.length, alreadyExists: result.alreadyExists },
-    }).catch(() => {});
-
     if (!result.alreadyExists) {
+      logActivity({
+        mktPurchaseOrderId: input.poId,
+        actorType: actor.actorType,
+        actorId: actor.actorId ?? null,
+        actorName: actor.actorName ?? null,
+        action: "mkt_po_shipment_created",
+        description: `Shipment ${result.shipment.shipmentNumber} dibuat untuk PO ${result.po.poNumber}`,
+        newValue: { shipmentId: result.shipment.id, shipmentNumber: result.shipment.shipmentNumber, itemCount: result.items.length },
+      }).catch(() => {});
+
       void enqueueNotification({
         eventType: "mkt_po_shipment_created_notification",
         recipientType: "vendor",
@@ -330,9 +356,8 @@ export interface AppendShipmentEventInput {
 }
 
 export type AppendShipmentEventResult =
-  | { ok: true; event: ShipmentEventRow }
   | { ok: true; event: ShipmentEventRow; alreadyAppended?: boolean }
-  | { ok: false; code: "SHIPMENT_NOT_FOUND" | "INVALID_TRANSITION"; currentStatus?: string };
+  | { ok: false; code: "SHIPMENT_NOT_FOUND" | "INVALID_TRANSITION" | "INVALID_EVENT"; currentStatus?: string };
 
 /**
  * appendShipmentEvent — APPEND-ONLY insert. event_sequence computed as
@@ -341,6 +366,10 @@ export type AppendShipmentEventResult =
  * collide (a conflicting insert throws, and the caller may retry).
  */
 export async function appendShipmentEvent(input: AppendShipmentEventInput, actor: ActorInfo): Promise<AppendShipmentEventResult> {
+  if (!SHIPMENT_EVENT_TYPES.has(input.eventType)) {
+    return { ok: false, code: "INVALID_EVENT" };
+  }
+
   const shipmentRows = await db.select().from(mktPoShipmentsTable).where(eq(mktPoShipmentsTable.id, input.shipmentId)).limit(1);
   const shipment = shipmentRows[0];
   if (!shipment) return { ok: false, code: "SHIPMENT_NOT_FOUND" };
@@ -414,19 +443,19 @@ export async function appendShipmentEvent(input: AppendShipmentEventInput, actor
   if (result.kind === "failure") return result.result;
   const event = result.event;
 
-  logActivity({
-    mktPurchaseOrderId: shipment.poId,
-    actorType: actor.actorType,
-    actorId: actor.actorId ?? null,
-    actorName: actor.actorName ?? null,
-    action: "mkt_po_shipment_event_appended",
-    description: `Event '${input.eventType}' ditambahkan pada shipment ${shipment.shipmentNumber}`,
-    newValue: { shipmentId: shipment.id, eventType: input.eventType, eventSequence: event.eventSequence },
-  }).catch(() => {});
-
   if (!result.alreadyAppended) {
+    logActivity({
+      mktPurchaseOrderId: shipment.poId,
+      actorType: actor.actorType,
+      actorId: actor.actorId ?? null,
+      actorName: actor.actorName ?? null,
+      action: SHIPMENT_ACTIVITY_ACTION[input.eventType] ?? "mkt_po_shipment_event_appended",
+      description: `Event '${input.eventType}' ditambahkan pada shipment ${shipment.shipmentNumber}`,
+      newValue: { shipmentId: shipment.id, eventType: input.eventType, eventSequence: event.eventSequence },
+    }).catch(() => {});
+
     void enqueueNotification({
-      eventType: "mkt_po_shipment_event_notification",
+      eventType: SHIPMENT_NOTIFICATION_EVENT[input.eventType] ?? "mkt_po_shipment_event_notification",
       recipientType: "admin",
       purchaseOrderId: shipment.poId,
       payloadJson: { shipmentNumber: shipment.shipmentNumber, eventType: input.eventType },

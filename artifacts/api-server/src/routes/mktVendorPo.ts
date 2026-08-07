@@ -41,6 +41,9 @@ const AcceptVendorPoSchema = z.object({}).strict();
 const RejectVendorPoSchema = z.object({
   reason: z.string().trim().max(1000).optional().nullable(),
 }).strict();
+const RequestRevisionSchema = z.object({
+  notes: z.string().trim().min(1).max(4000),
+}).strict();
 
 const VendorShipmentItemSchema = z.object({
   poLineId: z.coerce.number().int().positive(),
@@ -96,7 +99,6 @@ function normalizeVendorEventType(eventType: string): "packing" | "loaded" | "de
 function safeShipmentView(row: typeof mktPoShipmentsTable.$inferSelect) {
   return {
     id: row.id,
-    poId: row.poId,
     shipmentNumber: row.shipmentNumber,
     shipmentStatus: row.shipmentStatus,
     shipmentType: row.shipmentType,
@@ -194,14 +196,11 @@ router.post("/:token/reject", tokenPostRateLimiter, validateBody(RejectVendorPoS
   }
 });
 
-router.post("/:token/request-revision", tokenPostRateLimiter, async (req, res) => {
+router.post("/:token/request-revision", tokenPostRateLimiter, validateBody(RequestRevisionSchema), async (req, res) => {
   try {
-    const notes = typeof req.body?.notes === "string" ? req.body.notes.trim() : "";
-    if (!notes) {
-      return res.status(400).json({ message: "notes wajib diisi untuk permintaan revisi" });
-    }
+    const { notes } = req.body as z.infer<typeof RequestRevisionSchema>;
     const token = typeof req.params.token === "string" ? req.params.token : "";
-    const result = await vendorRequestRevision(token, notes.slice(0, 4000));
+    const result = await vendorRequestRevision(token, notes);
     if (!result.ok) {
       return res.status(mapTokenFailureStatus(result.code)).json({ message: "Aksi tidak dapat diproses", code: result.code, currentStatus: (result as any).currentStatus });
     }
@@ -352,7 +351,11 @@ router.post("/:token/shipments/:shipmentId/events", tokenPostRateLimiter, valida
     });
     if (!result.ok) {
       return res.status(mapTokenFailureStatus(result.code)).json({
-        message: result.code === "INVALID_TRANSITION" ? "Urutan status shipment tidak valid" : "Shipment tidak ditemukan",
+        message: result.code === "INVALID_TRANSITION"
+          ? "Urutan status shipment tidak valid"
+          : result.code === "INVALID_EVENT"
+            ? "Event shipment tidak valid"
+            : "Shipment tidak ditemukan",
         code: result.code,
         currentStatus: "currentStatus" in result ? result.currentStatus : undefined,
       });
