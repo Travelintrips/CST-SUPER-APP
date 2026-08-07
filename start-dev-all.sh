@@ -24,6 +24,7 @@ node artifacts/api-server/kill-port.mjs 5000 2>/dev/null || true
 sleep 0.5
 
 export PORT=5000
+export APP_ENV=development
 export API_PORT=18444
 export BIZPORTAL_PORT=18442
 export BIZPORTAL_VITE_PORT=18449
