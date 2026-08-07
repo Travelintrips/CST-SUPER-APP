@@ -241,9 +241,32 @@ async function fetchActiveCandidates(
   const dateFrom = `'${txDate}'::date - ${dateTolerance}`;
   const dateTo   = `'${txDate}'::date + ${dateTolerance}`;
   const amtCond  = (col: string) => `ABS(${col}::numeric - ${Number(amount)}) < 0.01`;
-  const sportNet = "GREATEST(0, sp.amount - COALESCE(sp.mdr_amount, 0) - COALESCE(sp.tax_withheld_amount, 0) - COALESCE(sp.other_fee_amount, 0))";
+  const qrisSettlementTablesAvailable = mutationIsQris
+    ? await db.execute(sql.raw(`
+        SELECT to_regclass('public.qris_settlements') AS settlements,
+               to_regclass('public.qris_settlement_items') AS items
+      `)).then(({ rows }) => Boolean((rows[0] as any)?.settlements && (rows[0] as any)?.items))
+      .catch(() => false)
+    : false;
+  const calculatedSportNet = "GREATEST(0, sp.amount - COALESCE(sp.mdr_amount, 0) - COALESCE(sp.tax_withheld_amount, 0) - COALESCE(sp.other_fee_amount, 0))";
+  const sportNet = `(CASE
+    WHEN COALESCE(sp.net_amount, 0) > 0
+      AND COALESCE(sp.settlement_status, 'unsettled') NOT IN ('unsettled', 'pending')
+    THEN sp.net_amount
+    ELSE ${calculatedSportNet}
+  END)`;
   const sportAmount = mutationIsQris ? sportNet : "sp.amount";
   const sportSettlementDate = "COALESCE(sp.settlement_date, COALESCE(sp.paid_at::date, sp.created_at::date) + 1)";
+  const aggregateMatchFilter = qrisSettlementTablesAvailable ? `
+           AND NOT EXISTS (
+             SELECT 1
+             FROM qris_settlement_items qsi_member
+             JOIN qris_settlements qs_member ON qs_member.id = qsi_member.settlement_id
+             WHERE qsi_member.sport_payment_id = sp.id
+               AND ABS(qs_member.net_amount::numeric - ${Number(amount)}) < 0.01
+               AND qs_member.settlement_date BETWEEN ${dateFrom} AND ${dateTo}
+               AND COALESCE(qs_member.status, 'unsettled') NOT IN ('cancelled', 'reversed')
+           )` : "";
 
   type SourceQuery = { type: ActiveErpSourceType; q: string };
 
@@ -417,10 +440,11 @@ async function fetchActiveCandidates(
           AND sp.company_id = ${companyId}
           AND ${sportSettlementDate} BETWEEN ${dateFrom} AND ${dateTo}
           AND COALESCE(sp.status, 'pending') = 'paid'
-          AND COALESCE(sp.method, '') ILIKE '%qris%'
+           AND COALESCE(sp.method, '') ILIKE '%qris%'
+           ${mutationIsQris ? aggregateMatchFilter : ""}
       `,
     }] : []),
-    ...(direction === "IN" ? [{
+    ...(direction === "IN" && mutationIsQris && qrisSettlementTablesAvailable ? [{
       type: "qris_settlements" as ActiveErpSourceType,
       q: `
         SELECT
@@ -601,8 +625,8 @@ function scoreCandidate(
  * 4. Kembalikan best match + semua kandidat untuk diagnostik.
  *
  * TIDAK memanggil AI, membuat jurnal, membuat expense, atau tax automation.
- * Cross-entity sources (sport_payments, tenant_invoices) DIKECUALIKAN dari active
- * matching karena tidak memiliki company_id untuk isolation.
+ * Tenant invoices remain informational-only; Sport Center payments and QRIS
+ * settlements are company-scoped active sources.
  */
 export async function runErpDocumentMatching(
   mutation: ErpMatchInput,

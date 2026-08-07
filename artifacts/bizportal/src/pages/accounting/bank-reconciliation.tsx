@@ -458,6 +458,8 @@ interface CandidateDetails {
   netAmount?: number | string | null;
   settlementDate?: string | null;
   settlementReference?: string | null;
+  settlementStatus?: string | null;
+  settlementPartial?: boolean;
   settlementItemCount?: number | null;
 }
 
@@ -521,6 +523,7 @@ const CANDIDATE_TYPE_LABELS: Record<string, string> = {
   invoice: "Invoice",
   expense: "Expense",
   sport_payment: "Sport",
+  qris_settlement: "QRIS Settlement",
   tenant_invoice: "Tenant Invoice",
   vendor_payment: "Vendor Payment",
   kasbon: "Kasbon",
@@ -625,6 +628,7 @@ function CandidateDetailsBlock({
     { label: "Net settlement", value: d.netAmount != null ? idr(d.netAmount) : null },
     { label: "Tanggal", value: d.date ? fmtDate(String(d.date)) : null },
     { label: "Tanggal settlement", value: d.settlementDate ? fmtDate(String(d.settlementDate)) : null },
+    { label: "Status settlement", value: d.settlementStatus },
     { label: "Nama / Partner", value: d.name },
     { label: "No. Pembayaran", value: d.paymentNumber },
     { label: "Referensi", value: d.reference },
@@ -643,6 +647,11 @@ function CandidateDetailsBlock({
       <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
         Detail transaksi sumber
       </p>
+      {d.settlementPartial && (
+        <p className="text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+          Settlement QRIS PARTIAL — hanya sebagian dana/provider batch yang sudah tersettle; perlu review sebelum dianggap lunas.
+        </p>
+      )}
       <div className={`grid ${compact ? "grid-cols-1" : "grid-cols-[auto_1fr]"} gap-x-3 gap-y-1`}>
         {rows.map(row => (
           <React.Fragment key={row.label}>

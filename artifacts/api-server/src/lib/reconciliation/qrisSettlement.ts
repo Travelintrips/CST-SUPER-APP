@@ -48,3 +48,14 @@ export function resolveSettlementDate(
 export function settlementVariance(bankAmount: number, expectedNet: number): number {
   return Number(((Number(bankAmount) || 0) - (Number(expectedNet) || 0)).toFixed(2));
 }
+
+/**
+ * A partial QRIS settlement is a valid operational state: the provider has
+ * settled only part of the expected batch, so it must remain reviewable rather
+ * than being treated as a fully settled source.
+ */
+export function isPartialQrisSettlement(status: string | null | undefined): boolean {
+  return ["partial", "partially_settled", "partially-settled"].includes(
+    String(status ?? "").trim().toLowerCase(),
+  );
+}

@@ -4,6 +4,7 @@ import {
   isQrisPaymentMethod,
   resolveSettlementDate,
   settlementVariance,
+  isPartialQrisSettlement,
 } from "../lib/reconciliation/qrisSettlement.js";
 
 describe("QRIS settlement contract", () => {
@@ -33,5 +34,11 @@ describe("QRIS settlement contract", () => {
     expect(isQrisPaymentMethod("QRIS")).toBe(true);
     expect(isQrisPaymentMethod("qris_dynamic")).toBe(true);
     expect(isQrisPaymentMethod("transfer bank")).toBe(false);
+  });
+
+  it("keeps partial settlement explicitly reviewable", () => {
+    expect(isPartialQrisSettlement("PARTIAL")).toBe(true);
+    expect(isPartialQrisSettlement("partially_settled")).toBe(true);
+    expect(isPartialQrisSettlement("settled")).toBe(false);
   });
 });
