@@ -87,7 +87,6 @@ echo "[PORT CHECK] PID=$PROXY_PID PORT=$GW_PORT SERVICE=bizportal-proxy"
 APP_ENV=${APP_ENV:-development} NODE_ENV=development \
   node ../api-server/load-secrets.mjs node node_modules/vite/bin/vite.js \
   --config vite.config.ts --host 0.0.0.0 --port "${VITE_PORT}"
-API_PORT=${API_PORT:-18444} node node_modules/vite/bin/vite.js --config vite.config.ts --host 0.0.0.0 --port "${VITE_PORT}"
 
 # If vite exits, also kill the proxy
 kill $PROXY_PID 2>/dev/null
