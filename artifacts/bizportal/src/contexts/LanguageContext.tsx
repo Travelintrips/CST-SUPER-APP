@@ -100,7 +100,10 @@ function buildTranslations(locale: Locale, remoteFlatOrNull: Record<string, stri
   const base = getTranslations(locale);
   if (!remoteFlatOrNull || Object.keys(remoteFlatOrNull).length === 0) return base;
   const remoteNested = unflatten(remoteFlatOrNull);
-  return deepMerge(base, remoteNested as Record<string, unknown>) as unknown as Translations;
+  return deepMerge(
+    base as unknown as Record<string, unknown>,
+    remoteNested,
+  ) as unknown as Translations;
 }
 
 // ── Context ───────────────────────────────────────────────────────────────────

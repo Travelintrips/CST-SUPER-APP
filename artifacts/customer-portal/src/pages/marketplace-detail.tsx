@@ -1411,7 +1411,7 @@ export default function MarketplaceDetailPage() {
     error: translateError,
     targetLang: translatedToLang,
     retranslate,
-  } = useProductTranslation(item?.id, item?.name, item?.description, locale, rawSpecValues);
+  } = useProductTranslation(item?.id, item?.name, item?.description ?? undefined, locale, rawSpecValues);
 
   if (isLoading) {
     return (

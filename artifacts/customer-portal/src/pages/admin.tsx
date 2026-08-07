@@ -519,7 +519,7 @@ export default function AdminPage() {
                         <CardTitle className="flex items-center gap-2"><UserCheck className="h-5 w-5 text-indigo-500" />{t("adminPage.tab.approvals.title", "Approval Vendor & Pelanggan")}</CardTitle>
                         <CardDescription>{t("adminPage.tab.approvals.desc", "Tinjau dan setujui atau tolak permohonan akun vendor, driver, dan employee yang mendaftar melalui portal.")}</CardDescription>
                       </CardHeader>
-                      <CardContent><ApprovalsTab getAuthHeaders={getAuthHeaders} /></CardContent>
+                      <CardContent><ApprovalsTab /></CardContent>
                     </Card>
                   </TabsContent>
 
@@ -529,7 +529,7 @@ export default function AdminPage() {
                         <CardTitle className="flex items-center gap-2"><Users className="h-5 w-5 text-indigo-500" />{t("adminPage.tab.customers.title", "Data Pelanggan Portal")}</CardTitle>
                         <CardDescription>{t("adminPage.tab.customers.desc", "Daftar semua akun yang terdaftar di portal — customer, vendor, driver, dan admin.")}</CardDescription>
                       </CardHeader>
-                      <CardContent><CustomersTab getAuthHeaders={getAuthHeaders} /></CardContent>
+                      <CardContent><CustomersTab /></CardContent>
                     </Card>
                   </TabsContent>
 
@@ -539,12 +539,12 @@ export default function AdminPage() {
                         <CardTitle className="flex items-center gap-2"><MessageCircle className="h-5 w-5 text-indigo-500" />{t("adminPage.tab.waLogs.title", "Log Notifikasi WhatsApp")}</CardTitle>
                         <CardDescription>{t("adminPage.tab.waLogs.desc", "Pantau status pengiriman notifikasi WhatsApp — terkirim, gagal, atau deduplikasi — dan kirim ulang pesan yang gagal secara manual.")}</CardDescription>
                       </CardHeader>
-                      <CardContent><WaLogsTab getAuthHeaders={getAuthHeaders} /></CardContent>
+                      <CardContent><WaLogsTab /></CardContent>
                     </Card>
                   </TabsContent>
 
                   <TabsContent value="paylabs-setting">
-                    <PayLabsSettingTab getAuthHeaders={getAuthHeaders} />
+                    <PayLabsSettingTab />
                   </TabsContent>
 
                   <TabsContent value="utilities">

@@ -66,7 +66,21 @@ interface CsvExportLabels {
   ppn: string; grandTotal: string; filenamePrefix: string;
 }
 
-function exportCalcCSV(result: CalcResult, serviceName: string, labels: CsvExportLabels) {
+const DEFAULT_CSV_EXPORT_LABELS: CsvExportLabels = {
+  columnItem: "Item",
+  columnValue: "Value",
+  subtotal: "Subtotal",
+  insurance: "Insurance",
+  ppn: "PPN",
+  grandTotal: "Grand Total",
+  filenamePrefix: "logistics-estimate",
+};
+
+function exportCalcCSV(
+  result: CalcResult,
+  serviceName: string,
+  labels: CsvExportLabels = DEFAULT_CSV_EXPORT_LABELS,
+) {
   const rows: string[] = [
     `"${labels.columnItem}","${labels.columnValue}"`,
     ...result.items.map(i => `"${i.label}","${i.value}"`),
@@ -86,7 +100,16 @@ function exportCalcCSV(result: CalcResult, serviceName: string, labels: CsvExpor
 
 interface JsonExportLabels { noteValue: string; filenamePrefix: string; }
 
-function exportCalcJSON(result: CalcResult, serviceName: string, labels: JsonExportLabels) {
+const DEFAULT_JSON_EXPORT_LABELS: JsonExportLabels = {
+  noteValue: "Generated from logistics calculator",
+  filenamePrefix: "logistics-estimate",
+};
+
+function exportCalcJSON(
+  result: CalcResult,
+  serviceName: string,
+  labels: JsonExportLabels = DEFAULT_JSON_EXPORT_LABELS,
+) {
   const data = {
     service: serviceName,
     date: new Date().toISOString(),

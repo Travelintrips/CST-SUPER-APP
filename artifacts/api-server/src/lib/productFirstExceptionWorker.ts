@@ -18,7 +18,7 @@ import { sql } from "drizzle-orm";
 import { logger } from "./logger.js";
 import { getAdminGroupWa } from "./adminWa.js";
 // BLK-03 fix: route all WA sends through canonical waTransport layer
-import { sendViaService } from "./waTransport.js";
+import { sendViaService as sendWhatsApp } from "./waTransport.js";
 
 const PREFIX = "[ProductFirstExceptionWorker]";
 const INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 jam

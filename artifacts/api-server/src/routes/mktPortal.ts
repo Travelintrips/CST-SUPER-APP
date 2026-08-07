@@ -1122,7 +1122,6 @@ router.get("/rfqs/:id/quotes", readLimiter, async (req: Request, res: Response) 
       .innerJoin(suppliersTable, eq(mktVendorQuotesTable.vendorId, suppliersTable.id))
       .where(and(
         eq(mktVendorQuotesTable.rfqId, rfqId),
-        ne(mktVendorQuotesTable.status, "draft"),
       ));
 
     // 3. Ambil lines untuk setiap quote (buyer-safe — no commission/vendor_catalog_item_id)
@@ -1435,6 +1434,7 @@ router.post("/rfqs/:id/send-to-customer-review", writeLimiter, validateBody(Send
     void NotificationService.saveAndBroadcast("admin_notification", {
       type:        "mkt_rfq_sent_to_customer_review",
       orderNumber: String(pre["rfq_number"] ?? rfqId),
+      customerName: String(pre["buyer_name"] ?? "Customer"),
       title:       "RFQ Dikirim ke Customer Review",
       body:        `Buyer mengirim RFQ ${pre["rfq_number"]} ke customer review. Menunggu persetujuan customer.`,
       targetRole:  "admin",

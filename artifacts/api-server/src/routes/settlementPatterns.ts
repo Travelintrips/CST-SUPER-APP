@@ -550,7 +550,10 @@ settlementPatternsRouter.post("/simulate/batch", async (req, res) => {
     }
     const { items, companyId } = parsed.data;
 
-    const results = await batchMatchSettlementPatterns(items, companyId);
+    const results = await batchMatchSettlementPatterns(
+      items.map((item) => ({ ...item, amount: item.amount ?? undefined })),
+      companyId,
+    );
 
     const summary = {
       total:       results.length,

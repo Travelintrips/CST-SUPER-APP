@@ -607,7 +607,7 @@ describe("Security and data integrity", () => {
     // Query: WHERE id = rfqId AND portal_customer_id = 42
     // Jika RFQ milik customer 99 → rows=[] → 404 (tidak membedakan not-found vs not-owned)
     const sessionId = 42;
-    const rfqOwner  = 99; // bukan milik session buyer
+    const rfqOwner: number = 99; // bukan milik session buyer
     const wouldBeFound = rfqOwner === sessionId;
     expect(wouldBeFound).toBe(false);
     // Response: 404 generic — tidak bocorkan bahwa RFQ exist tapi bukan milik mereka

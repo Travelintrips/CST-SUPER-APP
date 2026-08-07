@@ -48,6 +48,9 @@ export default function AirFreightApprovalPage() {
     enabled: !!token,
     retry: false,
   });
+  const approvedOrderNumber = typeof order?.order_number === "string" || typeof order?.order_number === "number"
+    ? String(order.order_number)
+    : null;
 
   const approveMut = useMutation({
     mutationFn: async () => {
@@ -91,10 +94,10 @@ export default function AirFreightApprovalPage() {
               : t("af.declinedTitle", "Penawaran Ditolak")}
           </h1>
           <p className="text-sm text-white/70">{doneMsg}</p>
-          {done === "approved" && (order as Record<string, unknown>)?.order_number && (
+          {done === "approved" && approvedOrderNumber && (
             <Button
               className="w-full bg-sky-600 hover:bg-sky-700"
-              onClick={() => setLocation(`/air-freight/track/${(order as Record<string, unknown>).order_number}`)}
+              onClick={() => setLocation(`/air-freight/track/${approvedOrderNumber}`)}
             >
               {t("af.viewTrackingBtn", "Lihat Status Pengiriman")}
             </Button>
@@ -181,28 +184,28 @@ export default function AirFreightApprovalPage() {
           {o.transit_days != null && (
             <Row label={t("af.transitDaysLabel", "Transit Days")} value={`${o.transit_days} ${t("af.days", "hari")}`} />
           )}
-          {o.admin_notes && (
+          {typeof o.admin_notes === "string" && o.admin_notes.length > 0 && (
             <Row label={t("af.adminNotesLabel", "Catatan Admin")} value={o.admin_notes as string} />
           )}
         </div>
 
         {/* Pricing */}
         <div className="bg-white/5 border border-white/10 rounded-2xl p-5 space-y-0">
-          {o.estimated_price_idr && (
+          {Number(o.estimated_price_idr) > 0 && (
             <Row label={t("af.estimatedPrice", "Estimasi Awal")} value={IDR(o.estimated_price_idr as number)} />
           )}
           <Row label={t("af.finalPrice", "Harga Final")}         value={IDR(o.final_price_idr as number)} />
-          {o.markup_amount && Number(o.markup_amount) > 0 && (
+          {Number(o.markup_amount) > 0 && (
             <Row label={t("af.markup", "Markup")}                value={IDR(o.markup_amount as number)} />
           )}
-          {o.ppn_amount && Number(o.ppn_amount) > 0 && (
+          {Number(o.ppn_amount) > 0 && (
             <Row label={t("af.ppn", "PPN (11%)")}                value={IDR(o.ppn_amount as number)} />
           )}
           <div className="flex gap-3 py-3 border-t border-white/10 mt-2">
             <span className="text-base font-bold text-white min-w-[160px]">{t("af.totalBill", "Total Tagihan")}</span>
             <span className="text-base font-bold text-emerald-400">{IDR(o.grand_total as number)}</span>
           </div>
-          {selisih !== 0 && o.estimated_price_idr && (
+          {selisih !== 0 && Number(o.estimated_price_idr) > 0 && (
             <p className={`text-xs ${selisih > 0 ? "text-amber-400" : "text-emerald-400"}`}>
               {selisih > 0 ? "▲" : "▼"} {IDR(Math.abs(selisih))} {t("af.fromEstimate", "dari estimasi awal")}
             </p>

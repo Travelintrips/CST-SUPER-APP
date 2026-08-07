@@ -7,15 +7,22 @@
  */
 
 import type { Request, Response, NextFunction } from "express";
-import type { ZodSchema } from "zod";
 
-export function validateBody<T>(schema: ZodSchema<T>) {
+type SafeParseResult<T> =
+  | { success: true; data: T }
+  | { success: false; error: { flatten: () => unknown } };
+
+type BodySchema<T> = {
+  safeParse: (input: unknown) => SafeParseResult<T>;
+};
+
+export function validateBody<T>(schema: BodySchema<T>) {
   return (req: Request, res: Response, next: NextFunction): void => {
     const result = schema.safeParse(req.body ?? {});
     if (!result.success) {
       res.status(400).json({
         message: "Validasi gagal",
-        errors: result.error.flatten().fieldErrors,
+        errors: result.error.flatten(),
       });
       return;
     }

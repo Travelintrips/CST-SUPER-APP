@@ -241,37 +241,37 @@ export function FloatingNigiri() {
                 title: "Sakizuke", 
                 subtitle: "Nodoguro & Ponzu",
                 desc: "Lightly seared blackthroat seaperch from Ishikawa, served with a bright sudachi ponzu to awaken the palate.",
-                img: {imgCourseSakizuke}
+                img: imgCourseSakizuke
               },
               { 
                 title: "Sashimi", 
                 subtitle: "Aged Akami & Shima Aji",
                 desc: "Lean bluefin tuna aged for 12 days to concentrate its umami, paired with crisp striped jack. Served with freshly grated Gotemba wasabi.",
-                img: {imgCourseSashimi}
+                img: imgCourseSashimi
               },
               { 
                 title: "Yakimono", 
                 subtitle: "Binchotan Tachiuo",
                 desc: "Beltfish slowly grilled over white binchotan charcoal. The skin is blistered and crisp, the meat infused with subtle smoke and sea salt.",
-                img: {imgCourseYakimono}
+                img: imgCourseYakimono
               },
               { 
                 title: "Nigiri", 
                 subtitle: "The Chef's Selection",
                 desc: "A progression of 12-14 pieces shaped to the precise moment. Featuring Kohada (trevally), Kuruma Ebi (tiger prawn), and our signature Otoro scored and brushed with nikiri.",
-                img: {imgCourseNigiri}
+                img: imgCourseNigiri
               },
               { 
                 title: "Wanmono", 
                 subtitle: "Clear Dashi & Asari",
                 desc: "A restorative clear broth made from pristine kombu and katsuobushi, featuring a single littleneck clam. A moment of pause.",
-                img: {imgCourseWanmono}
+                img: imgCourseWanmono
               },
               { 
                 title: "Kanmi", 
                 subtitle: "Matcha & Seasonal Fruit",
                 desc: "Ceremonial grade Uji matcha whisked tableside, accompanied by a slice of perfectly ripe Shizuoka crown melon and a delicate wagashi.",
-                img: {imgCourseKanmi}
+                img: imgCourseKanmi
               }
             ].map((course, idx) => (
               <div 

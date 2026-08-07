@@ -72,6 +72,7 @@ const mockTx = {
 
 const mockDb = {
   execute: vi.fn(),
+  select: vi.fn(),
   transaction: vi.fn(async (fn: (tx: typeof mockTx) => Promise<unknown>) => fn(mockTx)),
   insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue(undefined) })),
 };
@@ -443,7 +444,7 @@ describe("Guest Claim — atomic ownership transfer", () => {
     const { logActivity } = await import("../lib/activityLog.js");
 
     // Simulate claim success → logActivity dipanggil
-    await (logActivity as ReturnType<typeof vi.fn>)({
+    await logActivity({
       mktRfqId: 1,
       actorType: "customer",
       actorId: String(sessionBuyerId),
@@ -709,15 +710,15 @@ describe("Vendor Selection — POST /rfqs/:id/select-vendor", () => {
   // TC-S2-07: quote tidak ditemukan di RFQ ini → 404 (cross-tenant/isolation)
   it("TC-S2-07: quote dari RFQ lain ditolak (cross-tenant isolation)", () => {
     // Simulasi: quote.rfq_id = 999, rfqId request = 10 → tidak match → 404
-    const quoteRfqId = 999;
-    const requestRfqId = 10;
+    const quoteRfqId: number = 999;
+    const requestRfqId: number = 10;
     const crossTenantBlocked = quoteRfqId !== requestRfqId;
     expect(crossTenantBlocked).toBe(true);
   });
 
   // TC-S2-08: quote berstatus 'draft' ditolak — hanya 'submitted' yang bisa dipilih
   it("TC-S2-08: memilih quote berstatus draft → 422", () => {
-    const quoteStatus = "draft";
+    const quoteStatus: string = "draft";
     const isSelectable = quoteStatus === "submitted";
     expect(isSelectable).toBe(false);
   });

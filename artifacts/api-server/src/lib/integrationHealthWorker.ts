@@ -28,7 +28,7 @@ import {
   type SmokeResult,
 } from "./integrationHealthService.js";
 // BLK-03 fix: route all WA sends through canonical waTransport layer
-import { sendViaService } from "./waTransport.js";
+import { sendViaService as sendWhatsApp } from "./waTransport.js";
 import { getAdminWa } from "./adminWa.js";
 
 const PREFIX = "[integrationHealth]";

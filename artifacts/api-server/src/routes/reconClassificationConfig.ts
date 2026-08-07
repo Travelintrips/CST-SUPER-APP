@@ -158,7 +158,7 @@ reconClassificationRouter.get("/configs", async (req, res) => {
 
     res.json({ data: rows.rows });
   } catch (err) {
-    logger.error("[ReconClassification] GET /configs error:", err instanceof Error ? err.message : String(err));
+    logger.error({ err }, "[ReconClassification] GET /configs error:");
     res.status(500).json({ error: "Gagal mengambil konfigurasi." });
   }
 });
@@ -171,7 +171,7 @@ reconClassificationRouter.post("/configs/seed", async (req, res) => {
     await ensureTables();
     res.json({ ok: true, message: "Seed berhasil dijalankan ulang." });
   } catch (err) {
-    logger.error("[ReconClassification] POST /configs/seed error:", err instanceof Error ? err.message : String(err));
+    logger.error({ err }, "[ReconClassification] POST /configs/seed error:");
     res.status(500).json({ error: "Gagal menjalankan seed." });
   }
 });
@@ -229,7 +229,7 @@ reconClassificationRouter.post("/configs", async (req, res) => {
     }
     res.status(201).json({ data: result.rows[0] });
   } catch (err) {
-    logger.error("[ReconClassification] POST /configs error:", err instanceof Error ? err.message : String(err));
+    logger.error({ err }, "[ReconClassification] POST /configs error:");
     res.status(500).json({ error: "Gagal membuat konfigurasi." });
   }
 });
@@ -276,7 +276,7 @@ reconClassificationRouter.patch("/configs/:id", async (req, res) => {
     if (!result.rows[0]) return res.status(404).json({ error: "Konfigurasi tidak ditemukan." });
     res.json({ data: result.rows[0] });
   } catch (err) {
-    logger.error("[ReconClassification] PATCH /configs/:id error:", err instanceof Error ? err.message : String(err));
+    logger.error({ err }, "[ReconClassification] PATCH /configs/:id error:");
     res.status(500).json({ error: "Gagal memperbarui konfigurasi." });
   }
 });
@@ -308,7 +308,7 @@ reconClassificationRouter.post("/configs/:id/deactivate", async (req, res) => {
       usage_count: usageCount,
     });
   } catch (err) {
-    logger.error("[ReconClassification] POST /configs/:id/deactivate error:", err instanceof Error ? err.message : String(err));
+    logger.error({ err }, "[ReconClassification] POST /configs/:id/deactivate error:");
     res.status(500).json({ error: "Gagal menonaktifkan konfigurasi." });
   }
 });
@@ -336,7 +336,7 @@ reconClassificationRouter.get("/ai-rules", async (req, res) => {
     `));
     res.json({ data: rows.rows });
   } catch (err) {
-    logger.error("[ReconClassification] GET /ai-rules error:", err instanceof Error ? err.message : String(err));
+    logger.error({ err }, "[ReconClassification] GET /ai-rules error:");
     res.status(500).json({ error: "Gagal mengambil AI rules." });
   }
 });
@@ -373,7 +373,7 @@ reconClassificationRouter.post("/ai-rules", async (req, res) => {
     `));
     res.status(201).json({ data: result.rows[0] });
   } catch (err) {
-    logger.error("[ReconClassification] POST /ai-rules error:", err instanceof Error ? err.message : String(err));
+    logger.error({ err }, "[ReconClassification] POST /ai-rules error:");
     res.status(500).json({ error: "Gagal membuat AI rule." });
   }
 });
@@ -438,7 +438,7 @@ reconClassificationRouter.patch("/ai-rules/:id", async (req, res) => {
     if (!result.rows[0]) return res.status(404).json({ error: "Rule tidak ditemukan." });
     res.json({ data: result.rows[0] });
   } catch (err) {
-    logger.error("[ReconClassification] PATCH /ai-rules/:id error:", err instanceof Error ? err.message : String(err));
+    logger.error({ err }, "[ReconClassification] PATCH /ai-rules/:id error:");
     res.status(500).json({ error: "Gagal memperbarui AI rule." });
   }
 });
@@ -451,7 +451,7 @@ reconClassificationRouter.delete("/ai-rules/:id", async (req, res) => {
     await db.execute(sql.raw(`UPDATE recon_ai_classification_rules SET is_active = FALSE WHERE id = ${id}`));
     res.json({ ok: true });
   } catch (err) {
-    logger.error("[ReconClassification] DELETE /ai-rules/:id error:", err instanceof Error ? err.message : String(err));
+    logger.error({ err }, "[ReconClassification] DELETE /ai-rules/:id error:");
     res.status(500).json({ error: "Gagal menonaktifkan AI rule." });
   }
 });
@@ -481,7 +481,7 @@ reconClassificationRouter.get("/keywords", async (req, res) => {
     `));
     res.json({ data: rows.rows });
   } catch (err) {
-    logger.error("[ReconClassification] GET /keywords error:", err instanceof Error ? err.message : String(err));
+    logger.error({ err }, "[ReconClassification] GET /keywords error:");
     res.status(500).json({ error: "Gagal mengambil keyword dictionary." });
   }
 });
@@ -507,7 +507,7 @@ reconClassificationRouter.post("/keywords", async (req, res) => {
     `));
     res.status(201).json({ data: result.rows[0] });
   } catch (err) {
-    logger.error("[ReconClassification] POST /keywords error:", err instanceof Error ? err.message : String(err));
+    logger.error({ err }, "[ReconClassification] POST /keywords error:");
     res.status(500).json({ error: "Gagal membuat keyword." });
   }
 });
@@ -534,7 +534,7 @@ reconClassificationRouter.patch("/keywords/:id", async (req, res) => {
     if (!result.rows[0]) return res.status(404).json({ error: "Keyword tidak ditemukan." });
     res.json({ data: result.rows[0] });
   } catch (err) {
-    logger.error("[ReconClassification] PATCH /keywords/:id error:", err instanceof Error ? err.message : String(err));
+    logger.error({ err }, "[ReconClassification] PATCH /keywords/:id error:");
     res.status(500).json({ error: "Gagal memperbarui keyword." });
   }
 });
@@ -547,7 +547,7 @@ reconClassificationRouter.delete("/keywords/:id", async (req, res) => {
     await db.execute(sql.raw(`UPDATE recon_keyword_dictionary SET is_active = FALSE WHERE id = ${id}`));
     res.json({ ok: true });
   } catch (err) {
-    logger.error("[ReconClassification] DELETE /keywords/:id error:", err instanceof Error ? err.message : String(err));
+    logger.error({ err }, "[ReconClassification] DELETE /keywords/:id error:");
     res.status(500).json({ error: "Gagal menghapus keyword." });
   }
 });
@@ -575,7 +575,7 @@ reconClassificationRouter.get("/approval-rules", async (req, res) => {
     `));
     res.json({ data: rows.rows });
   } catch (err) {
-    logger.error("[ReconClassification] GET /approval-rules error:", err instanceof Error ? err.message : String(err));
+    logger.error({ err }, "[ReconClassification] GET /approval-rules error:");
     res.status(500).json({ error: "Gagal mengambil approval rules." });
   }
 });
@@ -605,7 +605,7 @@ reconClassificationRouter.post("/approval-rules", async (req, res) => {
     `));
     res.status(201).json({ data: result.rows[0] });
   } catch (err) {
-    logger.error("[ReconClassification] POST /approval-rules error:", err instanceof Error ? err.message : String(err));
+    logger.error({ err }, "[ReconClassification] POST /approval-rules error:");
     res.status(500).json({ error: "Gagal membuat approval rule." });
   }
 });
@@ -634,7 +634,7 @@ reconClassificationRouter.patch("/approval-rules/:id", async (req, res) => {
     if (!result.rows[0]) return res.status(404).json({ error: "Approval rule tidak ditemukan." });
     res.json({ data: result.rows[0] });
   } catch (err) {
-    logger.error("[ReconClassification] PATCH /approval-rules/:id error:", err instanceof Error ? err.message : String(err));
+    logger.error({ err }, "[ReconClassification] PATCH /approval-rules/:id error:");
     res.status(500).json({ error: "Gagal memperbarui approval rule." });
   }
 });
@@ -647,7 +647,7 @@ reconClassificationRouter.delete("/approval-rules/:id", async (req, res) => {
     await db.execute(sql.raw(`UPDATE recon_approval_rules_config SET is_active = FALSE WHERE id = ${id}`));
     res.json({ ok: true });
   } catch (err) {
-    logger.error("[ReconClassification] DELETE /approval-rules/:id error:", err instanceof Error ? err.message : String(err));
+    logger.error({ err }, "[ReconClassification] DELETE /approval-rules/:id error:");
     res.status(500).json({ error: "Gagal menghapus approval rule." });
   }
 });
@@ -773,7 +773,7 @@ reconClassificationRouter.get("/usage-stats", async (req, res) => {
       recentUsage: recentUsage.rows,
     });
   } catch (err) {
-    logger.error("[ReconClassification] GET /usage-stats error:", err instanceof Error ? err.message : String(err));
+    logger.error({ err }, "[ReconClassification] GET /usage-stats error:");
     res.status(500).json({ error: "Gagal mengambil statistik penggunaan." });
   }
 });

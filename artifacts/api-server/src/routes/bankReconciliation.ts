@@ -756,7 +756,7 @@ router.get("/mutations", async (req, res) => {
 // RULE 5: Kegagalan otomatis ter-capture ke failed_financial_jobs.
 router.post("/:mutationId/approve", async (req, res) => {
   await runBankReconciliationCoreMigration();
-  const mutId = parseInt(req.params.mutationId);
+  const mutId = parseInt(String(req.params.mutationId ?? ""), 10);
   if (isNaN(mutId)) return res.status(400).json({ error: "ID tidak valid" });
 
   // RULE 4: Idempotency — cegah double-approve dari retry request yang sama
@@ -1301,7 +1301,7 @@ router.post("/:mutationId/reject", async (req, res) => {
 // File disimpan ke Supabase Storage (public bucket), URL disimpan ke DB.
 router.post("/:mutationId/upload-proof", upload.single("file"), async (req, res) => {
   await runBankReconciliationCoreMigration();
-  const mutId = parseInt(req.params.mutationId);
+  const mutId = parseInt(String(req.params.mutationId ?? ""), 10);
   if (isNaN(mutId)) return res.status(400).json({ error: "ID tidak valid" });
   if (!req.file)    return res.status(400).json({ error: "File wajib diupload" });
 

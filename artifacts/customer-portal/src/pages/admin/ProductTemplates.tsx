@@ -431,7 +431,7 @@ export function PortalProductTemplateEngine() {
             {links.length > 0 && <span className="text-xs font-normal bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded-full">{links.length}</span>}
           </h3>
           <span className="text-xs text-muted-foreground">
-            {links.filter(l => l.isActive).length} {t("adminTemplates.aktifExpired", "aktif · expired", { count: links.filter(l => l.expiresAt && new Date(l.expiresAt) < new Date()).length })}
+            {links.filter(l => l.isActive).length} {t("adminTemplates.aktifExpired", "aktif · expired")} ({links.filter(l => l.expiresAt && new Date(l.expiresAt) < new Date()).length} expired)
           </span>
         </div>
 
