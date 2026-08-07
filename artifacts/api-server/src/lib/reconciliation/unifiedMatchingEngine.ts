@@ -30,6 +30,7 @@ export type CandidateType =
   | "invoice"
   | "expense"
   | "sport_payment"
+  | "qris_settlement"
   | "tenant_invoice";
 
 export interface MatchCandidate {
@@ -39,6 +40,14 @@ export interface MatchCandidate {
   date: string;
   ref?: string | null;
   name?: string | null;
+  gross_amount?: number | null;
+  mdr_amount?: number | null;
+  tax_withheld_amount?: number | null;
+  other_fee_amount?: number | null;
+  settlement_date?: string | null;
+  settlement_reference?: string | null;
+  payment_method?: string | null;
+  settlement_item_count?: number | null;
 }
 
 export interface UnifiedScoredMatch {
@@ -65,6 +74,7 @@ export interface MutationInput {
   transaction_date: string;
   mutation_key: string;
   provider_order_id?: string | null;
+  provider_name?: string | null;
   normalized_description?: string | null;
   uploaded_proof_url?: string | null;
   company_id?: number | null;
@@ -385,7 +395,7 @@ export function confidenceLabel(score: number): "high" | "medium" | "low" | "non
 // ─── Fetch candidates (amount-first filter) ───────────────────────────────────
 
 export async function fetchCandidates(
-  mutation: Pick<MutationInput, "amount" | "transaction_date" | "company_id" | "direction" | "bank_account_id">,
+  mutation: Pick<MutationInput, "amount" | "transaction_date" | "company_id" | "direction" | "bank_account_id" | "provider_order_id" | "normalized_description">,
 ): Promise<MatchCandidate[]> {
   const candidates: MatchCandidate[] = [];
   const { amount, transaction_date, company_id } = mutation;
@@ -394,6 +404,14 @@ export async function fetchCandidates(
   const dateFrom = `'${transaction_date}'::date - 3`;
   const dateTo   = `'${transaction_date}'::date + 3`;
   const amtFilter = `ABS(##AMT##::numeric - ${Number(amount)}) < 0.01`;
+  const mutationLooksQris =
+    String(mutation.provider_name ?? "").toUpperCase() === "QRIS" ||
+    (mutation.normalized_description ?? "").toLowerCase().includes("qris");
+  const qrisAmountFilter = `(ABS(GREATEST(0, sp.amount - COALESCE(sp.mdr_amount, 0) - COALESCE(sp.tax_withheld_amount, 0) - COALESCE(sp.other_fee_amount, 0))::numeric - ${Number(amount)}) < 0.01)`;
+  const sportAmountFilter = mutationLooksQris
+    ? qrisAmountFilter
+    : `ABS(sp.amount::numeric - ${Number(amount)}) < 0.01`;
+  const settlementDateExpr = `COALESCE(sp.settlement_date, COALESCE(sp.paid_at::date, sp.created_at::date) + 1)`;
 
   // R5 fix: isolasi per perusahaan — hanya ambil kandidat dari company yang sama
   const coFilter = company_id ? `AND ##TBL##.company_id = ${Number(company_id)}` : "";
@@ -466,22 +484,57 @@ export async function fetchCandidates(
       // sport_payment: filter per company + bank_account jika tersedia
       type: "sport_payment",
       q: `
-        SELECT sp.id, sp.amount,
-               COALESCE(sp.paid_at::date, sp.created_at::date)::text AS date,
+        SELECT sp.id,
+               ${mutationLooksQris ? "GREATEST(0, sp.amount - COALESCE(sp.mdr_amount, 0) - COALESCE(sp.tax_withheld_amount, 0) - COALESCE(sp.other_fee_amount, 0))" : "sp.amount"} AS amount,
+               ${settlementDateExpr}::text AS date,
                COALESCE(c.name, sb.customer_name, '') AS name,
-               CONCAT('SPORT-', sp.booking_id::text) AS ref
+               CONCAT('SPORT-', sp.booking_id::text) AS ref,
+               sp.amount AS gross_amount,
+               COALESCE(sp.mdr_amount, 0) AS mdr_amount,
+               COALESCE(sp.tax_withheld_amount, 0) AS tax_withheld_amount,
+               COALESCE(sp.other_fee_amount, 0) AS other_fee_amount,
+               ${settlementDateExpr}::text AS settlement_date,
+               sp.settlement_reference,
+               sp.method AS payment_method,
+               1 AS settlement_item_count
         FROM sport_payments sp
         LEFT JOIN customers c ON c.id = sp.customer_id
         LEFT JOIN sport_bookings sb ON sb.id = sp.booking_id
-        WHERE ${amtFilter.replace("##AMT##", "sp.amount")}
+        WHERE ${sportAmountFilter}
           AND '${direction}' = 'IN'
           ${company_id ? `AND sp.company_id = ${Number(company_id)}` : ""}
-          AND COALESCE(sp.paid_at::date, sp.created_at::date) BETWEEN ${dateFrom} AND ${dateTo}
+          AND ${settlementDateExpr} BETWEEN ${dateFrom} AND ${dateTo}
           AND sp.status = 'paid'
           AND (
             sp.bank_account_id IS NULL
             OR ${mutationBankAccountId != null ? `sp.bank_account_id = ${mutationBankAccountId}` : "TRUE"}
           )
+      `,
+    },
+    {
+      type: "qris_settlement",
+      q: `
+        SELECT qs.id,
+               qs.net_amount AS amount,
+               qs.settlement_date::text AS date,
+               COALESCE(qs.settlement_reference, 'QRIS settlement') AS name,
+               qs.settlement_reference AS ref,
+               qs.gross_amount,
+               qs.mdr_amount,
+               qs.tax_withheld_amount,
+               qs.other_fee_amount,
+               qs.settlement_date::text AS settlement_date,
+               qs.settlement_reference,
+               'qris' AS payment_method,
+               COUNT(qsi.id)::int AS settlement_item_count
+        FROM qris_settlements qs
+        LEFT JOIN qris_settlement_items qsi ON qsi.settlement_id = qs.id
+        WHERE ABS(qs.net_amount::numeric - ${Number(amount)}) < 0.01
+          AND '${direction}' = 'IN'
+          AND qs.company_id = ${company_id ?? "NULL"}
+          AND qs.settlement_date BETWEEN ${dateFrom} AND ${dateTo}
+          AND COALESCE(qs.status, 'unsettled') NOT IN ('cancelled', 'reversed')
+        GROUP BY qs.id
       `,
     },
     {
@@ -512,6 +565,14 @@ export async function fetchCandidates(
           date: String(r.date ?? ""),
           name: r.name ?? null,
           ref: r.ref ?? null,
+          gross_amount: r.gross_amount != null ? Number(r.gross_amount) : null,
+          mdr_amount: r.mdr_amount != null ? Number(r.mdr_amount) : null,
+          tax_withheld_amount: r.tax_withheld_amount != null ? Number(r.tax_withheld_amount) : null,
+          other_fee_amount: r.other_fee_amount != null ? Number(r.other_fee_amount) : null,
+          settlement_date: r.settlement_date ? String(r.settlement_date) : null,
+          settlement_reference: r.settlement_reference ? String(r.settlement_reference) : null,
+          payment_method: r.payment_method ? String(r.payment_method) : null,
+          settlement_item_count: r.settlement_item_count != null ? Number(r.settlement_item_count) : null,
         });
       }
     } catch (e: any) {
@@ -768,6 +829,7 @@ export async function approveAndCreateJournal(
          "invoice",
          "expense",
          "sport_payment",
+        "qris_settlement",
          "tenant_invoice",
        ]);
        if (selectedType && !allowedCandidateTypes.has(selectedType)) {

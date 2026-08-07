@@ -594,6 +594,7 @@ router.post("/import", upload.single("file"), async (req, res) => {
             transaction_date: p.transaction_date,
             mutation_key: p.mutation_key,
             provider_order_id: p.provider_order_id,
+            provider_name: p.provider_name,
             normalized_description: p.normalized_description,
             direction: p.direction,
           }, actor);
@@ -698,8 +699,15 @@ router.get("/mutations", async (req, res) => {
       )
       WHEN 'sport_payment' THEN (
         SELECT jsonb_build_object(
-          'amount', sp.amount,
+          'amount', GREATEST(0, sp.amount - COALESCE(sp.mdr_amount, 0) - COALESCE(sp.tax_withheld_amount, 0) - COALESCE(sp.other_fee_amount, 0)),
+          'grossAmount', sp.amount,
+          'mdrAmount', COALESCE(sp.mdr_amount, 0),
+          'taxWithheldAmount', COALESCE(sp.tax_withheld_amount, 0),
+          'otherFeeAmount', COALESCE(sp.other_fee_amount, 0),
+          'netAmount', GREATEST(0, sp.amount - COALESCE(sp.mdr_amount, 0) - COALESCE(sp.tax_withheld_amount, 0) - COALESCE(sp.other_fee_amount, 0)),
           'date', COALESCE(sp.paid_at::date, sp.created_at::date),
+          'settlementDate', COALESCE(sp.settlement_date, COALESCE(sp.paid_at::date, sp.created_at::date) + 1),
+          'settlementReference', sp.settlement_reference,
           'name', COALESCE(sb.customer_name, c.name),
           'reference', CONCAT('SPORT-', sp.booking_id::text),
           'paymentNumber', sp.payment_number,
@@ -712,6 +720,26 @@ router.get("/mutations", async (req, res) => {
         LEFT JOIN sport_bookings sb ON sb.id = sp.booking_id
         LEFT JOIN customers c ON c.id = sb.customer_id
         WHERE sp.id = m.candidate_id
+      )
+      WHEN 'qris_settlement' THEN (
+        SELECT jsonb_build_object(
+          'amount', qs.net_amount,
+          'grossAmount', qs.gross_amount,
+          'mdrAmount', qs.mdr_amount,
+          'taxWithheldAmount', qs.tax_withheld_amount,
+          'otherFeeAmount', qs.other_fee_amount,
+          'netAmount', qs.net_amount,
+          'date', qs.settlement_date,
+          'settlementDate', qs.settlement_date,
+          'settlementReference', qs.settlement_reference,
+          'name', qs.settlement_reference,
+          'reference', qs.settlement_reference,
+          'method', 'qris',
+          'status', qs.status,
+          'settlementItemCount', (SELECT COUNT(*) FROM qris_settlement_items qsi WHERE qsi.settlement_id = qs.id)
+        )
+        FROM qris_settlements qs
+        WHERE qs.id = m.candidate_id
       )
       WHEN 'invoice' THEN (
         SELECT jsonb_build_object(
@@ -1552,6 +1580,7 @@ router.post("/run-matching", async (req, res) => {
         amount: Number(m.amount),
         mutation_key: m.mutation_key,
         provider_order_id: m.provider_order_id,
+        provider_name: m.provider_name,
         normalized_description: m.normalized_description,
         uploaded_proof_url: m.uploaded_proof_url ?? null,
         company_id: m.company_id ?? null,
@@ -2077,6 +2106,7 @@ router.post("/smart-import", upload.single("file"), async (req, res) => {
           transaction_date: pr.date,
           direction: pr.direction,
           company_id: companyId,
+          provider_name: detectProvider(pr.description),
         });
         const scored = candidates.map(c => scoreUnified({
           amount: pr.amount,

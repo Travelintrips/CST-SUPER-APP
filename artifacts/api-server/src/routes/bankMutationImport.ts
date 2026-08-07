@@ -1101,6 +1101,7 @@ async function postBatchFromNormalized(
           const _result = await runUnifiedMatching({
             id: _mutId, amount: _amount, transaction_date: _txDate,
             mutation_key: _mk, company_id: _effCoId ?? null,
+            provider_name: null,
             direction: _dir,
           }, actor).catch(() => ({ status: 'unmatched' as const, all: [] }));
 

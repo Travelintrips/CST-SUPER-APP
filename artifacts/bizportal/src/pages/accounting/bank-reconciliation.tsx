@@ -451,6 +451,14 @@ interface CandidateDetails {
   sourceType?: string | null;
   bookingId?: number | null;
   documentType?: string | null;
+  grossAmount?: number | string | null;
+  mdrAmount?: number | string | null;
+  taxWithheldAmount?: number | string | null;
+  otherFeeAmount?: number | string | null;
+  netAmount?: number | string | null;
+  settlementDate?: string | null;
+  settlementReference?: string | null;
+  settlementItemCount?: number | null;
 }
 
 interface JournalLine {
@@ -610,10 +618,18 @@ function CandidateDetailsBlock({
 
   const rows = [
     { label: "Nominal", value: d.amount != null ? idr(d.amount) : null },
+    { label: "Gross payment", value: d.grossAmount != null ? idr(d.grossAmount) : null },
+    { label: "MDR", value: d.mdrAmount != null ? idr(d.mdrAmount) : null },
+    { label: "Pajak provider", value: d.taxWithheldAmount != null ? idr(d.taxWithheldAmount) : null },
+    { label: "Potongan provider lain", value: d.otherFeeAmount != null ? idr(d.otherFeeAmount) : null },
+    { label: "Net settlement", value: d.netAmount != null ? idr(d.netAmount) : null },
     { label: "Tanggal", value: d.date ? fmtDate(String(d.date)) : null },
+    { label: "Tanggal settlement", value: d.settlementDate ? fmtDate(String(d.settlementDate)) : null },
     { label: "Nama / Partner", value: d.name },
     { label: "No. Pembayaran", value: d.paymentNumber },
     { label: "Referensi", value: d.reference },
+    { label: "Referensi settlement", value: d.settlementReference },
+    { label: "Jumlah transaksi settlement", value: d.settlementItemCount },
     { label: "Metode", value: d.method },
     { label: "Tipe", value: d.paymentType ?? d.documentType },
     { label: "Status", value: d.status },

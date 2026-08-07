@@ -744,6 +744,27 @@ export async function pullPaymentsFromSupabase(companyId = 1): Promise<{ pulled:
     return { pulled: 0, deleted: 0, skipped: 0, errors: 1, total: 0 };
   }
 
+  // Provider settlement fields are optional in older Sport Center databases.
+  // Fetch them separately so an older schema does not disable the whole payment
+  // sync; when present, they are copied to the local reconciliation mirror.
+  const settlementMeta = new Map<number, {
+    mdr_rate?: number | null;
+    mdr_amount?: number | null;
+    tax_withheld_amount?: number | null;
+    other_fee_amount?: number | null;
+    settlement_reference?: string | null;
+    settlement_date?: string | null;
+    settlement_status?: string | null;
+  }>();
+  const settlementMetaRes = await (client as any).schema("sport_center")
+    .from("sport_payments")
+    .select("id, mdr_rate, mdr_amount, tax_withheld_amount, other_fee_amount, settlement_reference, settlement_date, settlement_status");
+  if (!settlementMetaRes.error) {
+    for (const row of (settlementMetaRes.data ?? []) as any[]) {
+      settlementMeta.set(Number(row.id), row);
+    }
+  }
+
   const allPayments = (paymentsRes.data ?? []) as Array<{
     id: number; booking_id: number; amount: number;
     payment_method: string | null; status: string | null;
@@ -795,6 +816,7 @@ export async function pullPaymentsFromSupabase(companyId = 1): Promise<{ pulled:
         const statusRaw2 = pay.status?.toLowerCase() ?? "";
         const mappedStatus2 = PAID_STATUSES.has(statusRaw2) ? "paid" : (UNPAID_STATUSES.has(statusRaw2) ? "pending" : "paid");
         const mappedMethod2 = String(pay.payment_method ?? "cash").trim().toLowerCase() || "cash";
+      const meta2 = settlementMeta.get(Number(pay.id)) ?? {};
 
         // Selalu update payment record dari Supabase (status terbaru menimpa)
         if (existingStatus !== mappedStatus2) {
@@ -807,7 +829,21 @@ export async function pullPaymentsFromSupabase(companyId = 1): Promise<{ pulled:
           UPDATE sport_payments SET
             status   = ${mappedStatus2},
             amount   = ${String(Number(pay.amount))},
-            method   = ${mappedMethod2}
+            method   = ${mappedMethod2},
+            mdr_rate = COALESCE(${meta2.mdr_rate ?? null}, mdr_rate),
+            mdr_amount = COALESCE(${meta2.mdr_amount ?? null}, mdr_amount),
+            tax_withheld_amount = COALESCE(${meta2.tax_withheld_amount ?? null}, tax_withheld_amount),
+            other_fee_amount = COALESCE(${meta2.other_fee_amount ?? null}, other_fee_amount),
+            settlement_reference = COALESCE(${meta2.settlement_reference ?? null}, settlement_reference),
+            settlement_date = COALESCE(${meta2.settlement_date ?? null}::date, settlement_date),
+            settlement_status = COALESCE(${meta2.settlement_status ?? null}, settlement_status),
+            net_amount = GREATEST(
+              0,
+              ${String(Number(pay.amount))}
+              - COALESCE(${meta2.mdr_amount ?? null}, mdr_amount)
+              - COALESCE(${meta2.tax_withheld_amount ?? null}, tax_withheld_amount)
+              - COALESCE(${meta2.other_fee_amount ?? null}, other_fee_amount)
+            )
           WHERE payment_number = ${scPaymentNumber}
         `);
 
@@ -876,15 +912,27 @@ export async function pullPaymentsFromSupabase(companyId = 1): Promise<{ pulled:
       const mappedStatus = PAID_STATUSES.has(statusRaw) ? "paid" : (UNPAID_STATUSES.has(statusRaw) ? "pending" : "paid");
       const paidAt = pay.confirmed_at ?? pay.created_at ?? new Date().toISOString();
       const method = pay.payment_method ?? "cash";
+      const meta = settlementMeta.get(Number(pay.id)) ?? {};
 
       await db.execute(sql`
         INSERT INTO sport_payments
           (company_id, booking_id, payment_number, amount, method, status,
-           paid_at, source, payment_type)
+           paid_at, source, payment_type, mdr_rate, mdr_amount,
+           tax_withheld_amount, other_fee_amount, net_amount,
+           settlement_reference, settlement_date, settlement_status)
         VALUES
           (${companyId}, ${localBookingId}, ${scPaymentNumber}, ${String(Number(pay.amount))},
            ${method}, ${mappedStatus}, ${paidAt}::TIMESTAMPTZ,
-           'SPORT_CENTER_SUPABASE', 'booking')
+           'SPORT_CENTER_SUPABASE', 'booking',
+           ${meta.mdr_rate ?? 0}, ${meta.mdr_amount ?? 0},
+           ${meta.tax_withheld_amount ?? 0}, ${meta.other_fee_amount ?? 0},
+           GREATEST(0, ${String(Number(pay.amount))}
+             - ${meta.mdr_amount ?? 0}
+             - ${meta.tax_withheld_amount ?? 0}
+             - ${meta.other_fee_amount ?? 0}),
+           ${meta.settlement_reference ?? null},
+           ${meta.settlement_date ?? null}::date,
+           ${meta.settlement_status ?? "unsettled"})
       `);
 
       // Update payment_status di sport_bookings jika status = paid
