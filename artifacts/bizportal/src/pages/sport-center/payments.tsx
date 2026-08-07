@@ -43,6 +43,13 @@ type Payment = {
   amount: number; method: string; status: string; paid_at: string | null;
   notes: string | null; facility_name: string | null; payment_type: string | null;
   bank_account_id: number | null; bank_account_name: string | null;
+  local_payment_id: number | null;
+  tax_rate: number; tax_amount: number;
+  mdr_rate: number; mdr_amount: number; net_amount: number;
+  settlement_reference: string | null; settlement_date: string | null;
+  settlement_status: "unsettled" | "settled" | "partial" | "exception" | string;
+  mdr_posting_status: "unposted" | "posted" | "failed" | string;
+  mdr_accounting_entry_id: number | null; mdr_posting_error: string | null;
 };
 
 const METHOD_LABEL: Record<string, string> = {
@@ -68,7 +75,10 @@ export default function SportCenterPayments() {
 
   // Edit transaksi lama
   const [editPayment, setEditPayment] = useState<Payment | null>(null);
-  const [editForm, setEditForm] = useState({ method: "cash", bank_account_id: "" });
+  const [editForm, setEditForm] = useState({
+    method: "cash", bank_account_id: "", mdr_rate: "", mdr_amount: "",
+    settlement_reference: "", settlement_date: "", settlement_status: "unsettled",
+  });
 
   const [debouncedSearch, setDebouncedSearch] = useState("");
   useEffect(() => {
@@ -154,6 +164,25 @@ export default function SportCenterPayments() {
       toast({ title: "Transaksi diperbarui" });
       setEditPayment(null);
       qc.invalidateQueries({ queryKey: ["sport-center-payments"] });
+    },
+    onError: (e: Error) => toast({ title: e.message, variant: "destructive" }),
+  });
+
+  const mdrPostMutation = useMutation({
+    mutationFn: async (id: number) => {
+      const r = await fetch(`/api/sport-center/payments/${id}/mdr/post`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!r.ok) throw new Error((await r.json()).error ?? "Gagal posting jurnal MDR");
+      return r.json();
+    },
+    onSuccess: (result) => {
+      toast({ title: `Jurnal MDR berhasil diposting${result.entryId ? ` (#${result.entryId})` : ""}` });
+      setEditPayment(null);
+      setDetailPayment(null);
+      qc.invalidateQueries({ queryKey: ["sport-center-payments"] });
+      qc.invalidateQueries({ queryKey: ["sport-center-dashboard"] });
     },
     onError: (e: Error) => toast({ title: e.message, variant: "destructive" }),
   });
@@ -274,7 +303,7 @@ export default function SportCenterPayments() {
                   {[
                     "No. Pembayaran", "No. Booking", "Pelanggan",
                     "Fasilitas", "Tgl Booking", "Tgl Pembayaran",
-                    "Metode", "Status", "Jumlah", "",
+                    "Metode", "Status", "Gross", "PPN", "MDR", "Net Settlement", "",
                   ].map((h) => (
                     <th key={h} className="text-left py-3 px-3 text-xs text-muted-foreground font-medium whitespace-nowrap">{h}</th>
                   ))}
@@ -282,9 +311,9 @@ export default function SportCenterPayments() {
               </thead>
               <tbody>
                 {isLoading ? (
-                  <tr><td colSpan={10} className="py-10 text-center text-muted-foreground">Memuat…</td></tr>
+                  <tr><td colSpan={13} className="py-10 text-center text-muted-foreground">Memuat…</td></tr>
                 ) : displayedRows.length === 0 ? (
-                  <tr><td colSpan={10} className="py-10 text-center text-muted-foreground">
+                  <tr><td colSpan={13} className="py-10 text-center text-muted-foreground">
                     {searchQuery ? `Tidak ada hasil untuk "${searchQuery}"` : "Belum ada pembayaran"}
                   </td></tr>
                 ) : displayedRows.map((p) => (
@@ -314,6 +343,15 @@ export default function SportCenterPayments() {
                     <td className="py-2.5 px-3 font-medium text-foreground text-right whitespace-nowrap">
                       {idr(Number(p.amount))}
                     </td>
+                    <td className="py-2.5 px-3 text-muted-foreground text-right whitespace-nowrap">
+                      {idr(Number(p.tax_amount ?? 0))}
+                    </td>
+                    <td className="py-2.5 px-3 text-amber-300 text-right whitespace-nowrap">
+                      {Number(p.mdr_amount ?? 0) > 0 ? idr(Number(p.mdr_amount)) : "—"}
+                    </td>
+                    <td className="py-2.5 px-3 text-sky-300 text-right whitespace-nowrap">
+                      {idr(Number(p.net_amount ?? p.amount))}
+                    </td>
                     <td className="py-2.5 px-3 whitespace-nowrap">
                       <div className="flex items-center gap-1">
                         <Button
@@ -326,11 +364,19 @@ export default function SportCenterPayments() {
                         <Button
                           variant="ghost" size="sm"
                           className="h-7 px-2 text-xs gap-1 text-amber-500 hover:text-amber-400"
+                          disabled={p.local_payment_id == null}
+                          title={p.local_payment_id == null ? "Mirror lokal belum tersedia untuk diedit" : "Edit metode dan settlement"}
                           onClick={() => {
+                            if (p.local_payment_id == null) return;
                             setEditPayment(p);
                             setEditForm({
                               method: p.method ?? "cash",
                               bank_account_id: p.bank_account_id ? String(p.bank_account_id) : "",
+                               mdr_rate: p.mdr_rate ? String(p.mdr_rate) : "",
+                               mdr_amount: p.mdr_amount ? String(p.mdr_amount) : "",
+                               settlement_reference: p.settlement_reference ?? "",
+                               settlement_date: p.settlement_date?.slice(0, 10) ?? "",
+                               settlement_status: p.settlement_status ?? "unsettled",
                             });
                           }}
                         >
@@ -513,6 +559,75 @@ export default function SportCenterPayments() {
                     </p>
                   </div>
                 )}
+                {editForm.method === "qris" && (
+                  <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 space-y-3">
+                    <div>
+                      <p className="text-sm font-medium text-amber-200">Settlement QRIS</p>
+                      <p className="text-xs text-muted-foreground">
+                        Gross tetap mengikuti transaksi pelanggan. Isi MDR aktual dari settlement provider untuk menghitung net bank.
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <Label className="text-xs">MDR (%)</Label>
+                        <Input
+                          type="number" min={0} max={100} step="0.0001"
+                          value={editForm.mdr_rate}
+                          onChange={(e) => setEditForm((p) => ({ ...p, mdr_rate: e.target.value }))}
+                          placeholder="Contoh: 0.7"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">MDR (IDR)</Label>
+                        <Input
+                          type="number" min={0} step="1"
+                          value={editForm.mdr_amount}
+                          onChange={(e) => setEditForm((p) => ({ ...p, mdr_amount: e.target.value }))}
+                          placeholder="Nominal aktual"
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Reference Settlement</Label>
+                      <Input
+                        value={editForm.settlement_reference}
+                        onChange={(e) => setEditForm((p) => ({ ...p, settlement_reference: e.target.value }))}
+                        placeholder="Reference dari provider/bank"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <Label className="text-xs">Tanggal Settlement</Label>
+                        <Input
+                          type="date"
+                          value={editForm.settlement_date}
+                          onChange={(e) => setEditForm((p) => ({ ...p, settlement_date: e.target.value }))}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Status Settlement</Label>
+                        <Select
+                          value={editForm.settlement_status}
+                          onValueChange={(v) => setEditForm((p) => ({ ...p, settlement_status: v }))}
+                        >
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="unsettled">Belum settle</SelectItem>
+                            <SelectItem value="partial">Partial</SelectItem>
+                            <SelectItem value="settled">Settled</SelectItem>
+                            <SelectItem value="exception">Exception</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    <div className="flex justify-between text-xs text-muted-foreground border-t border-border/30 pt-2">
+                      <span>Net settlement</span>
+                      <span className="font-medium text-sky-300">
+                        {idr(Math.max(0, Number(editPayment.amount) - (Number(editForm.mdr_amount) || 0)))}
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
             <DialogFooter>
@@ -520,10 +635,19 @@ export default function SportCenterPayments() {
               <Button
                 disabled={editMutation.isPending || !editPayment}
                 onClick={() => editPayment && editMutation.mutate({
-                  id: editPayment.id,
+                  id: editPayment.local_payment_id ?? editPayment.id,
                   body: {
                     method: editForm.method,
                     bank_account_id: editForm.bank_account_id ? Number(editForm.bank_account_id) : null,
+                    ...(editPayment.method === "qris" || editForm.method === "qris"
+                      ? {
+                          mdr_rate: editForm.mdr_rate === "" ? 0 : Number(editForm.mdr_rate),
+                          mdr_amount: editForm.mdr_amount === "" ? 0 : Number(editForm.mdr_amount),
+                          settlement_reference: editForm.settlement_reference.trim(),
+                          settlement_date: editForm.settlement_date || null,
+                          settlement_status: editForm.settlement_status,
+                        }
+                      : {}),
                   },
                 })}
               >
@@ -535,7 +659,7 @@ export default function SportCenterPayments() {
 
         {/* Dialog: Detail Pembayaran */}
         <Dialog open={!!detailPayment} onOpenChange={(o) => { if (!o) setDetailPayment(null); }}>
-          <DialogContent className="max-w-md">
+          <DialogContent className="max-w-lg">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <DollarSign className="h-4 w-4 text-emerald-400" />
@@ -591,9 +715,50 @@ export default function SportCenterPayments() {
                       <p>{detailPayment.bank_account_name ?? `ID #${detailPayment.bank_account_id}`}</p>
                     </div>
                   )}
-                  <div className="col-span-2 border-t border-border/30 pt-2">
-                    <p className="text-xs text-muted-foreground">Jumlah</p>
-                    <p className="text-xl font-bold text-emerald-400">{idr(Number(detailPayment.amount))}</p>
+                  <div className="col-span-2 border-t border-border/30 pt-3 space-y-2">
+                    <p className="text-xs font-medium text-muted-foreground">Rincian Settlement</p>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
+                      <span className="text-muted-foreground">Gross</span>
+                      <span className="text-right font-medium">{idr(Number(detailPayment.amount))}</span>
+                      <span className="text-muted-foreground">PPN{Number(detailPayment.tax_rate ?? 0) > 0 ? ` (${Number(detailPayment.tax_rate)}%)` : ""}</span>
+                      <span className="text-right">{idr(Number(detailPayment.tax_amount ?? 0))}</span>
+                      <span className="text-muted-foreground">MDR{Number(detailPayment.mdr_rate ?? 0) > 0 ? ` (${Number(detailPayment.mdr_rate)}%)` : ""}</span>
+                      <span className="text-right text-amber-300">- {idr(Number(detailPayment.mdr_amount ?? 0))}</span>
+                      <span className="font-medium text-sky-300">Net settlement</span>
+                      <span className="text-right text-lg font-bold text-sky-300">{idr(Number(detailPayment.net_amount ?? detailPayment.amount))}</span>
+                    </div>
+                  </div>
+                  <div className="col-span-2 grid grid-cols-2 gap-x-4 gap-y-2 border-t border-border/30 pt-3">
+                    <div>
+                      <p className="text-xs text-muted-foreground">Status Settlement</p>
+                      <Badge className="mt-1 bg-slate-800 text-slate-200 border-slate-600 text-xs">
+                        {detailPayment.settlement_status === "settled" ? "Settled" : detailPayment.settlement_status === "partial" ? "Partial" : detailPayment.settlement_status === "exception" ? "Exception" : "Belum settle"}
+                      </Badge>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Posting MDR</p>
+                      <Badge className={`mt-1 text-xs ${
+                        detailPayment.mdr_posting_status === "posted"
+                          ? "bg-emerald-900/30 text-emerald-300 border-emerald-700"
+                          : detailPayment.mdr_posting_status === "failed"
+                          ? "bg-red-900/30 text-red-300 border-red-700"
+                          : "bg-amber-900/30 text-amber-300 border-amber-700"
+                      }`}>
+                        {detailPayment.mdr_posting_status === "posted" ? `Posted${detailPayment.mdr_accounting_entry_id ? ` #${detailPayment.mdr_accounting_entry_id}` : ""}` : detailPayment.mdr_posting_status === "failed" ? "Gagal" : "Belum diposting"}
+                      </Badge>
+                    </div>
+                    {detailPayment.settlement_reference && (
+                      <div className="col-span-2">
+                        <p className="text-xs text-muted-foreground">Reference Settlement</p>
+                        <p className="font-mono text-xs">{detailPayment.settlement_reference}</p>
+                      </div>
+                    )}
+                    {detailPayment.settlement_date && (
+                      <div>
+                        <p className="text-xs text-muted-foreground">Tanggal Settlement</p>
+                        <p>{fmtDate(detailPayment.settlement_date)}</p>
+                      </div>
+                    )}
                   </div>
                   {detailPayment.notes && (
                     <div className="col-span-2">
@@ -602,6 +767,25 @@ export default function SportCenterPayments() {
                     </div>
                   )}
                 </div>
+
+                {detailPayment.method === "qris"
+                  && Number(detailPayment.mdr_amount ?? 0) > 0
+                  && detailPayment.mdr_posting_status !== "posted"
+                  && detailPayment.local_payment_id != null && (
+                  <div className="pt-2 border-t border-border/30 space-y-2">
+                    {detailPayment.mdr_posting_error && (
+                      <p className="text-xs text-red-300">{detailPayment.mdr_posting_error}</p>
+                    )}
+                    <Button
+                      size="sm"
+                      className="w-full gap-1 bg-amber-600 hover:bg-amber-700"
+                      disabled={mdrPostMutation.isPending}
+                      onClick={() => mdrPostMutation.mutate(detailPayment.local_payment_id!)}
+                    >
+                      {mdrPostMutation.isPending ? <RefreshCw className="h-4 w-4 animate-spin" /> : "Posting Jurnal Biaya MDR"}
+                    </Button>
+                  </div>
+                )}
 
                 {detailPayment.booking_id && (
                   <div className="pt-2 border-t border-border/30">

@@ -22,3 +22,4 @@ After loading, GCP injects: `SUPABASE_DATABASE_URL`, `SUPABASE_ANON_KEY`, `SUPAB
 - `pnpm-workspace.yaml` must have `allowBuilds: core-js: true, esbuild: true, protobufjs: true, sharp: true` for pnpm v11+ (fixed Aug 2026).
 - The unified development workflow must export `APP_ENV=development` before spawning the secure API process; `NODE_ENV` alone is intentionally rejected.
 - The gateway workflow must explicitly run with `APP_ENV=development`; otherwise its spawned secure API process fails closed before binding port 18444.
+- A clean `pnpm install --frozen-lockfile` may be needed when runtime packages (for example Secret Manager) are missing from `node_modules`; it restores the lockfile without changing manifests. After that, the API still needs the bootstrap secret to start.

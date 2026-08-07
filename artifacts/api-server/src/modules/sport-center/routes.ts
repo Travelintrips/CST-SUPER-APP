@@ -1983,6 +1983,7 @@ router.get("/payments", async (req, res) => {
           SELECT
             p.id::int                                      AS id,
             ('SCPAY-' || p.id::text)::text                AS payment_number,
+            mirror.id::int                                 AS local_payment_id,
             p.booking_id::int                              AS sc_booking_id,
             b.order_number::text                           AS booking_number,
             b.customer_name::text                          AS customer_name,
@@ -1990,6 +1991,7 @@ router.get("/payments", async (req, res) => {
             COALESCE(f.name, '')::text                     AS facility_name,
             p.amount::numeric                              AS amount,
             p.payment_method::text                         AS method,
+            COALESCE(local_b.tax_rate, 0)::numeric          AS tax_rate,
             COALESCE(local_b.tax_amount, 0)::numeric       AS tax_amount,
             COALESCE(mirror.mdr_rate, 0)::numeric          AS mdr_rate,
             COALESCE(mirror.mdr_amount, 0)::numeric        AS mdr_amount,
@@ -1998,6 +2000,8 @@ router.get("/payments", async (req, res) => {
             mirror.settlement_date::date                   AS settlement_date,
             COALESCE(mirror.settlement_status, 'unsettled')::text AS settlement_status,
             COALESCE(mirror.mdr_posting_status, 'unposted')::text AS mdr_posting_status,
+            mirror.mdr_accounting_entry_id::int             AS mdr_accounting_entry_id,
+            mirror.mdr_posting_error::text                  AS mdr_posting_error,
             CASE
               WHEN lower(p.status::text) IN ('confirmed','paid','settlement','capture') THEN 'paid'
               ELSE 'pending'
@@ -2020,6 +2024,7 @@ router.get("/payments", async (req, res) => {
           SELECT
             sp.id::int                                     AS id,
             sp.payment_number::text,
+            sp.id::int                                     AS local_payment_id,
             sb.sc_booking_id::int,
             sb.booking_number::text                        AS booking_number,
             sb.customer_name::text                         AS customer_name,
@@ -2027,6 +2032,7 @@ router.get("/payments", async (req, res) => {
             COALESCE(sf.name, sb.facility_name, '')::text  AS facility_name,
             sp.amount::numeric                             AS amount,
             sp.method::text                                AS method,
+            COALESCE(sb.tax_rate, 0)::numeric               AS tax_rate,
             COALESCE(sb.tax_amount, 0)::numeric             AS tax_amount,
             COALESCE(sp.mdr_rate, 0)::numeric               AS mdr_rate,
             COALESCE(sp.mdr_amount, 0)::numeric             AS mdr_amount,
@@ -2035,6 +2041,8 @@ router.get("/payments", async (req, res) => {
             sp.settlement_date::date                        AS settlement_date,
             COALESCE(sp.settlement_status, 'unsettled')::text AS settlement_status,
             COALESCE(sp.mdr_posting_status, 'unposted')::text AS mdr_posting_status,
+            sp.mdr_accounting_entry_id::int                 AS mdr_accounting_entry_id,
+            sp.mdr_posting_error::text                      AS mdr_posting_error,
             sp.status::text                                AS status,
             sp.status::text                                AS raw_status,
             COALESCE(sp.paid_at, sp.created_at)::timestamptz AS paid_at,
@@ -2181,6 +2189,7 @@ router.post("/payments", async (req, res) => {
     }
     const b = bookingRes.rows[0] as Record<string, unknown>;
     const bCompanyId: number = b.company_id != null ? Number(b.company_id) : 1;
+    const bTaxRate = Number(b.tax_rate ?? 0);
     const bTaxAmount = Number(b.tax_amount ?? 0);
     const bTotalAmount = Number(b.total_amount ?? amount);
     const bBookingDate = String(b.booking_date ?? new Date().toISOString().slice(0, 10));
@@ -2210,11 +2219,11 @@ router.post("/payments", async (req, res) => {
         const r = await tx.execute(sql`
           INSERT INTO sport_payments
             (company_id, booking_id, payment_number, amount, method, status,
-             paid_at, notes, source, payment_type, bank_account_id)
+             paid_at, notes, source, payment_type, bank_account_id, tax_rate, tax_amount)
           VALUES
             (${bCompanyId}, ${booking_id}, ${paymentNumber}, ${amount}, ${finalMethod},
              'paid', COALESCE(${paidAt}::timestamptz, NOW()), ${notes ?? null},
-             'SPORT_CENTER', 'booking', ${bankAccountId})
+             'SPORT_CENTER', 'booking', ${bankAccountId}, ${bTaxRate}, ${bTaxAmount})
           RETURNING *
         `);
         const row = r.rows[0] as Record<string, unknown>;
