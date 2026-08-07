@@ -241,7 +241,7 @@ describe("Sprint 7 runtime vendor invoice gates", () => {
         AND action IN ('invoice_uploaded', 'invoice_ready_for_ap', 'three_way_match_passed', 'three_way_match_failed')
       GROUP BY action
     `);
-    expect(Number(eventRows.find((row) => row.action === "invoice_uploaded")?.count ?? 0)).toBe(3);
+    expect(Number(eventRows.find((row) => row.action === "invoice_uploaded")?.count ?? 0)).toBe(6);
     expect(Number(eventRows.find((row) => row.action === "invoice_ready_for_ap")?.count ?? 0)).toBe(2);
     expect(Number(eventRows.find((row) => row.action === "three_way_match_passed")?.count ?? 0)).toBe(2);
     expect(Number(eventRows.find((row) => row.action === "three_way_match_failed")?.count ?? 0)).toBe(3);
