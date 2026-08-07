@@ -94,3 +94,17 @@ artifacts/bizportal/public/thai-tea-cst-logo.jpeg
 artifacts/api-server/public/pos-images/
 artifacts/logistic-order/public/logocst*.jpg
 artifacts/logistic-order/public/logocst*.png
+
+# Asset gambar dari artifacts yang dihapus / canvas / QR sementara
+artifacts/cst-driver/assets/
+artifacts/customer-poster/public/images/
+artifacts/mockup-sandbox/src/components/mockups/templates/*/assets/
+.canvas/assets/
+docs/verification/
+public/images/
+qr.png
+qr-new.png
+
+# Generated API client & lockfile snapshots besar — jangan commit ulang jika di-regenerate
+# (file ini tetap di git, tapi dicegah jika ada versi baru yang lebih besar)
+artifacts/api-server/dist/
