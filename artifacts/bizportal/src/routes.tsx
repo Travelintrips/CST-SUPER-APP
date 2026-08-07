@@ -18,8 +18,6 @@ const LogisticsHubPage = React.lazy(() => import("@/pages/logistics/hub"));
 const LogisticsWorkspacePage = React.lazy(() => import("@/pages/logistics/workspace"));
 const TenantHubPage = React.lazy(() => import("@/pages/tenant/hub"));
 const TenantWorkspacePage = React.lazy(() => import("@/pages/tenant/workspace"));
-const PosHubPage = React.lazy(() => import("@/pages/pos/index"));
-const PosWorkspacePage = React.lazy(() => import("@/pages/pos/workspace"));
 const AdministrationHubPage = React.lazy(() => import("@/pages/administration/index"));
 const AdministrationWorkspacePage = React.lazy(() => import("@/pages/administration/workspace"));
 const CrossCompanyAccessPage = React.lazy(() => import("@/pages/administration/cross-company-access"));
@@ -349,17 +347,6 @@ const TenantBookings = React.lazy(() => import("@/pages/tenant/bookings"));
 const TenantPayments = React.lazy(() => import("@/pages/tenant/payments"));
 const TenantInvoices = React.lazy(() => import("@/pages/tenant/invoices"));
 const TenantMallUnits = React.lazy(() => import("@/pages/tenant/mall-units"));
-const PosTenant = React.lazy(() => import("@/pages/tenant/pos-tenant"));
-const KasirCompanies = React.lazy(() => import("@/pages/tenant/kasir-companies"));
-const KasirBranches = React.lazy(() => import("@/pages/tenant/kasir-branches"));
-const KasirUsers = React.lazy(() => import("@/pages/tenant/kasir-users"));
-const KasirProducts = React.lazy(() => import("@/pages/tenant/kasir-products"));
-const KasirDevices = React.lazy(() => import("@/pages/tenant/kasir-devices"));
-const PosBranches = React.lazy(() => import("@/pages/tenant/pos-branches"));
-const PosCashiers = React.lazy(() => import("@/pages/tenant/pos-cashiers"));
-const PosProducts = React.lazy(() => import("@/pages/tenant/pos-products"));
-const PosRoles = React.lazy(() => import("@/pages/tenant/pos-roles"));
-const PosSettings = React.lazy(() => import("@/pages/tenant/pos-settings"));
 const TenantRekap = React.lazy(() => import("@/pages/tenant/rekap"));
 const TenantLaporanKeuangan = React.lazy(() => import("@/pages/tenant/laporan-keuangan"));
 const TenantRekonsiliasi = React.lazy(() => import("@/pages/tenant/rekonsiliasi"));
@@ -794,20 +781,6 @@ export function AppRoutes({ rootGuard }: { rootGuard?: React.ComponentType }) {
       <Route path="/tenant/payments" component={PR(TenantPayments)} />
       <Route path="/tenant/invoices" component={PR(TenantInvoices)} />
       <Route path="/tenant/mall-units" component={PR(TenantMallUnits)} />
-      <Route path="/tenant/pos-tenant" component={PR(PosTenant)} />
-      <Route path="/tenant/kasir/companies" component={PR(KasirCompanies)} />
-      <Route path="/tenant/kasir/branches" component={PR(KasirBranches)} />
-      <Route path="/tenant/kasir/users" component={PR(KasirUsers)} />
-      <Route path="/tenant/kasir/products" component={PR(KasirProducts)} />
-      <Route path="/tenant/kasir/devices" component={PR(KasirDevices)} />
-      <Route path="/tenant/kasir/workspace/:section" component={({ params }) => <ProtectedRoute component={() => <PosWorkspacePage section={params.section} />} />} />
-      <Route path="/tenant/kasir/workspace" component={PR(PosWorkspacePage)} />
-      <Route path="/tenant/kasir" component={PR(PosHubPage)} />
-      <Route path="/tenant/pos/branches" component={PR(PosBranches)} />
-      <Route path="/tenant/pos/cashiers" component={PR(PosCashiers)} />
-      <Route path="/tenant/pos/products" component={PR(PosProducts)} />
-      <Route path="/tenant/pos/roles" component={PR(PosRoles)} />
-      <Route path="/tenant/pos/settings" component={PR(PosSettings)} />
       <Route path="/tenant/rekap" component={PR(TenantRekap)} />
       <Route path="/tenant/laporan-keuangan" component={PR(TenantLaporanKeuangan)} />
       <Route path="/tenant/rekonsiliasi" component={PR(TenantRekonsiliasi)} />

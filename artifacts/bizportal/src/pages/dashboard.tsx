@@ -26,7 +26,6 @@ import { AiInsightsWidget } from "@/components/dashboard/AiInsightsWidget";
 import { OrderPipelineWidget } from "@/components/dashboard/OrderPipelineWidget";
 import { QuickActionsWidget } from "@/components/dashboard/QuickActionsWidget";
 import { SportCenterWidget } from "@/components/dashboard/SportCenterWidget";
-import { PosWidget } from "@/components/dashboard/PosWidget";
 import { AccountingWidget } from "@/components/dashboard/AccountingWidget";
 import { LogisticsWidget } from "@/components/dashboard/LogisticsWidget";
 import { PurchasingWidget } from "@/components/dashboard/PurchasingWidget";
@@ -142,7 +141,6 @@ interface DashboardSummary {
   totalRevenue: number;
   totalShipments: number;
   totalStockValue: number;
-  todayTransactions: number;
   lowStockCount: number;
   activeFreightCount: number;
   awaitingQuoteCount: number;
@@ -1067,15 +1065,6 @@ export default function DashboardPage() {
           />
 
           <StatCard
-            title={t.pos.txCount}
-            href="/kasir"
-            icon={<Activity className="h-4 w-4 text-amber-500" />}
-            isLoading={isLoading}
-            value={formatNumber(summary?.todayTransactions || 0)}
-            testId="stat-today-tx"
-          />
-
-          <StatCard
             title={t.dashboard.activeCustomers}
             href="/trading"
             icon={<AlertTriangle className="h-4 w-4 text-destructive" />}
@@ -1147,7 +1136,6 @@ export default function DashboardPage() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <SalesWidget />
           <SportCenterWidget />
-          <PosWidget />
           <AccountingWidget />
           <ProfitLossComparisonWidget />
           <LogisticsWidget />

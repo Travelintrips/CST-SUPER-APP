@@ -513,17 +513,6 @@ async function runCriticalPreStartMigrations() {
     END $$;
   `);
 
-  // Add company_id to pos_orders (needed for multi-company POS reports)
-  await db.execute(sql`
-    DO $$ BEGIN
-      IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'pos_orders') THEN
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='pos_orders' AND column_name='company_id') THEN
-          ALTER TABLE pos_orders ADD COLUMN company_id INTEGER;
-        END IF;
-      END IF;
-    END $$;
-  `);
-
   // Add missing columns to drivers table
   await db.execute(sql`
     DO $$ BEGIN

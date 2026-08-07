@@ -317,18 +317,7 @@ export function AppShell({ children, noPadding }: AppShellProps) {
       activePaths: ["/tenant", "/sport-center"],
     },
 
-    // ── 8. POS ────────────────────────────────────────────────────────
-    {
-      type: "flat",
-      titleKey: "POS",
-      href: "/tenant/kasir",
-      icon: CreditCard,
-      roles: ["admin", "owner", "super_admin"],
-      allowedCompanyIds: [1, 4],
-      activePaths: ["/tenant/kasir", "/tenant/pos"],
-    },
-
-    // ── 9. FINANCE ────────────────────────────────────────────────────
+    // ── 8. FINANCE ────────────────────────────────────────────────────
     {
       type: "group",
       titleKey: "Finance",

@@ -54,31 +54,7 @@ function parseCompanyParam(req: Request): { isConsolidated: boolean; companyId: 
 // Returns breakdown metrics per branch, division, or department
 router.get("/org-breakdown", async (req, res) => {
   const { isConsolidated, companyId } = parseCompanyParam(req);
-  const branchId = typeof req.query["branchId"] === "string" ? Number(req.query["branchId"]) : null;
   const dimension = (req.query["dimension"] as string) || "branch"; // branch | division | department
-
-  const companyFilter = (!isConsolidated && companyId !== null)
-    ? sql` AND o.company_id = ${companyId}`
-    : sql``;
-  const branchFilter = branchId ? sql` AND o.branch_id = ${branchId}` : sql``;
-
-  // POS revenue breakdown by branch
-  const posBranchRows = await db.execute<{
-    branch_id: string; branch_name: string;
-    revenue: string; order_count: string;
-  }>(sql`
-    SELECT
-      b.id::text AS branch_id,
-      b.name AS branch_name,
-      COALESCE(SUM(o.total::numeric), 0)::text AS revenue,
-      COUNT(o.id)::text AS order_count
-    FROM pos_branches b
-    LEFT JOIN pos_orders o ON o.branch_id = b.id AND o.status = 'paid'
-      AND o.created_at >= date_trunc('month', NOW())
-    WHERE 1=1 ${companyFilter}
-    GROUP BY b.id, b.name
-    ORDER BY revenue DESC NULLS LAST
-  `);
 
   // Sales revenue breakdown by division (via created_by user's division)
   const salesDivisionRows = await db.execute<{
@@ -121,12 +97,6 @@ router.get("/org-breakdown", async (req, res) => {
   `);
 
   return res.json({
-    byBranch: posBranchRows.rows.map((r) => ({
-      branchId: Number(r.branch_id),
-      branchName: r.branch_name,
-      revenue: Number(r.revenue),
-      orderCount: Number(r.order_count),
-    })),
     byDivision: salesDivisionRows.rows.map((r) => ({
       divisionId: Number(r.division_id),
       divisionName: r.division_name,
@@ -171,7 +141,6 @@ router.get("/summary", async (req, res) => {
     [revenue],
     [shipmentCount],
     [stockValue],
-    [todayTx],
     [lowStock],
     [activeFreight],
     [awaitingQuote],
@@ -196,8 +165,6 @@ router.get("/summary", async (req, res) => {
     db.select({ count: sql<number>`count(*)` }).from(freightShipmentsTable)
       .where(freightCompanyFilter),
     db.select({ total: sql<number>`coalesce(sum(cost_price * quantity), 0)` }).from(stocksTable),
-    db.select({ count: sql<number>`count(*)` }).from(transactionsTable)
-      .where(sql`created_at >= ${today.toISOString()}`),
     db.select({ count: sql<number>`count(*)` }).from(productsTable)
       .where(sql`stock < 10`),
     db.select({ count: sql<number>`count(*)` }).from(freightShipmentsTable)
@@ -357,7 +324,6 @@ router.get("/summary", async (req, res) => {
     totalRevenue: Number(revenue?.total ?? 0),
     totalShipments: Number(shipmentCount?.count ?? 0),
     totalStockValue: Number(stockValue?.total ?? 0),
-    todayTransactions: Number(todayTx?.count ?? 0),
     lowStockCount: Number(lowStock?.count ?? 0),
     activeFreightCount: Number(activeFreight?.count ?? 0),
     awaitingQuoteCount: Number(awaitingQuote?.count ?? 0),
