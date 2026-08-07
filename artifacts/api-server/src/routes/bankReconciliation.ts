@@ -700,18 +700,17 @@ router.get("/mutations", async (req, res) => {
         SELECT jsonb_build_object(
           'amount', sp.amount,
           'date', COALESCE(sp.paid_at::date, sp.created_at::date),
-          'name', COALESCE(c.name, sb.customer_name),
+          'name', COALESCE(sb.customer_name, c.name),
           'reference', CONCAT('SPORT-', sp.booking_id::text),
           'paymentNumber', sp.payment_number,
           'memo', sp.notes,
           'method', sp.method,
           'status', sp.status,
-          'bookingId', sp.booking_id,
-          'paymentType', sp.payment_type
+          'bookingId', sp.booking_id
         )
         FROM sport_payments sp
-        LEFT JOIN customers c ON c.id = sp.customer_id
         LEFT JOIN sport_bookings sb ON sb.id = sp.booking_id
+        LEFT JOIN customers c ON c.id = sb.customer_id
         WHERE sp.id = m.candidate_id
       )
       WHEN 'invoice' THEN (
@@ -736,9 +735,9 @@ router.get("/mutations", async (req, res) => {
       )
       WHEN 'logistic_order' THEN (
         SELECT jsonb_build_object(
-          'amount', lo.total_price,
+          'amount', lo.grand_total,
           'date', lo.created_at::date,
-          'name', lo.sender_name,
+          'name', COALESCE(lo.sender_name, lo.customer_name),
           'reference', lo.order_number,
           'status', lo.status
         )
@@ -748,8 +747,8 @@ router.get("/mutations", async (req, res) => {
       WHEN 'tenant_invoice' THEN (
         SELECT jsonb_build_object(
           'amount', ti.total_amount,
-          'date', ti.issued_date,
-          'name', COALESCE(t.name, ti.tenant_name),
+          'date', ti.issued_date::text,
+          'name', COALESCE(t.business_name, t.owner_name),
           'reference', ti.invoice_number
         )
         FROM tenant_invoices ti
