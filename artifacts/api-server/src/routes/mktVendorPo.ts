@@ -54,7 +54,8 @@ function mapTokenFailureStatus(code: string): number {
 
 router.get("/:token", tokenGetRateLimiter, async (req, res) => {
   try {
-    const result = await getVendorPoView(req.params.token);
+    const token = typeof req.params.token === "string" ? req.params.token : "";
+    const result = await getVendorPoView(token);
     if (!result.ok) {
       return res.status(mapTokenFailureStatus(result.code)).json({ message: "Token tidak valid atau kadaluarsa", code: result.code });
     }
@@ -67,7 +68,8 @@ router.get("/:token", tokenGetRateLimiter, async (req, res) => {
 
 router.post("/:token/accept", tokenPostRateLimiter, validateBody(AcceptVendorPoSchema), async (req, res) => {
   try {
-    const result = await vendorAcceptPo(req.params.token);
+    const token = typeof req.params.token === "string" ? req.params.token : "";
+    const result = await vendorAcceptPo(token);
     if (!result.ok) {
       return res.status(mapTokenFailureStatus(result.code)).json({ message: "Aksi tidak dapat diproses", code: result.code, currentStatus: (result as any).currentStatus });
     }
@@ -80,7 +82,8 @@ router.post("/:token/accept", tokenPostRateLimiter, validateBody(AcceptVendorPoS
 
 router.post("/:token/reject", tokenPostRateLimiter, validateBody(RejectVendorPoSchema), async (req, res) => {
   try {
-    const result = await vendorRejectPo(req.params.token, req.body.reason ?? null);
+    const token = typeof req.params.token === "string" ? req.params.token : "";
+    const result = await vendorRejectPo(token, req.body.reason ?? null);
     if (!result.ok) {
       return res.status(mapTokenFailureStatus(result.code)).json({ message: "Aksi tidak dapat diproses", code: result.code, currentStatus: (result as any).currentStatus });
     }
@@ -97,7 +100,8 @@ router.post("/:token/request-revision", tokenPostRateLimiter, async (req, res) =
     if (!notes) {
       return res.status(400).json({ message: "notes wajib diisi untuk permintaan revisi" });
     }
-    const result = await vendorRequestRevision(req.params.token, notes.slice(0, 4000));
+    const token = typeof req.params.token === "string" ? req.params.token : "";
+    const result = await vendorRequestRevision(token, notes.slice(0, 4000));
     if (!result.ok) {
       return res.status(mapTokenFailureStatus(result.code)).json({ message: "Aksi tidak dapat diproses", code: result.code, currentStatus: (result as any).currentStatus });
     }
