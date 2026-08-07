@@ -129,6 +129,7 @@ export const accountingEntrySourceEnum = pgEnum("accounting_entry_source", [
   "hrd_salary_payment",     // HRD salary payment — already in DB enum
   "sport_center_ppn_correction",    // Koreksi PPN double-count sport center
   "sport_center_amount_correction", // Koreksi jumlah jurnal ≠ harga fasilitas
+  "sport_center_qris_mdr",           // Jurnal biaya MDR QRIS
 ]);
 
 export const accountingPaymentTypeEnum = pgEnum("accounting_payment_type", [

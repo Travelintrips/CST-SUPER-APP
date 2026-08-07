@@ -109,6 +109,7 @@ export interface PostingInput {
     | "sport_center_refund"
     | "sport_center_membership"
     | "sport_center_operational_expense"
+    | "sport_center_qris_mdr"
     | "logistic_vendor_cost"
     | "tenant_rent_payment"
     | "bank_mutation_import"
