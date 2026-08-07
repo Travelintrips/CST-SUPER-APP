@@ -147,18 +147,34 @@ File: `docs/db-dev-prod-safety.md` — kebijakan lengkap
 
 ## SECTION 5 — SECRET MANAGEMENT
 
-### Matrix Secret per Environment:
+### Bootstrap Credential (Replit Secret)
 
-| Secret | Dev | Production |
+**New mode (ADR-0005) — ONE Replit Secret:**
+
+| Secret | Status | Description |
 |---|---|---|
-| GCP_PROJECT_ID | ✅ Replit Secret | ✅ Replit Secret |
-| GCP_SECRET_ID | ✅ Replit Secret | ✅ Replit Secret |
-| GCP_SECRET_MANAGER_BOOTSTRAP_JSON | ✅ Replit Secret | ✅ Replit Secret |
-| SUPABASE_DATABASE_URL | ❌ Jangan di Replit | ❌ Jangan di Replit |
-| SUPABASE_DATABASE_URL_DEV | ✅ Replit Secret (opsional override) | ❌ Tidak ada |
-| OPENAI_API_KEY | 🔒 GCP Sec. Mgr | 🔒 GCP Sec. Mgr |
-| PAYLABS_PRIVATE_KEY | 🔒 GCP Sec. Mgr | 🔒 GCP Sec. Mgr |
-| Semua secret lainnya | 🔒 GCP Sec. Mgr | 🔒 GCP Sec. Mgr |
+| `GCP_SECRET_MANAGER_BOOTSTRAP_JSON` | ✅ Replit Secret (REQUIRED) | SA JSON — project_id extracted from it |
+| `GCP_PROJECT_ID` | ⚠ Deprecated (legacy compat) | Remove after migrating to new-mode bundles |
+| `GCP_SECRET_ID` | ⚠ Deprecated (legacy compat) | Remove after migrating to new-mode bundles |
+
+### GCP Bundle Matrix
+
+| GCP Bundle Name | Fetched when | Contains |
+|---|---|---|
+| `cst-super-app-development` | `APP_ENV=development` | All dev secrets, flat JSON, `APP_ENV="development"` |
+| `cst-super-app-production` | `APP_ENV=production` | All prod secrets, flat JSON, `APP_ENV="production"` |
+
+### Application Secrets (NEVER in Replit)
+
+| Secret | Location |
+|---|---|
+| `SUPABASE_DATABASE_URL` | 🔒 GCP bundle (dev: dev URL, prod: prod URL) |
+| `SESSION_SECRET` | 🔒 GCP bundle |
+| `OPENAI_API_KEY` | 🔒 GCP bundle |
+| `PAYLABS_PRIVATE_KEY` | 🔒 GCP bundle |
+| `FONNTE_TOKEN` | 🔒 GCP bundle |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | 🔒 GCP bundle |
+| Semua secret lainnya | 🔒 GCP bundle |
 
 ### AI DILARANG:
 
@@ -167,6 +183,11 @@ File: `docs/db-dev-prod-safety.md` — kebijakan lengkap
 - ❌ Mengganti GCP Secret Manager dengan Replit Secrets
 - ❌ Menghapus `load-secrets.mjs`
 - ❌ Menggabungkan mekanisme secret dev dan production
+- ❌ Menyarankan developer menambah `GCP_PROJECT_ID` atau `GCP_SECRET_ID` sebagai Replit Secret baru
+- ❌ Menggabungkan `cst-super-app-development` dan `cst-super-app-production` menjadi satu bundle
+- ❌ Menghapus verifikasi `payload.APP_ENV` dari loader
+- ❌ Menggunakan `NODE_ENV` sebagai pengganti `APP_ENV` untuk memilih GCP bundle
+- ❌ Menulis `APP_ENV` dari bundle ke `process.env` (APP_ENV harus tidak pernah di-overwrite)
 
 ---
 

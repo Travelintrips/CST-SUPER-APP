@@ -9,9 +9,9 @@
 
 ## ADR-0001 — Development dan Production Dipisahkan Secara Permanen
 
-**Status:** ACCEPTED  
-**Tanggal:** 2026-08-03  
-**Deciders:** Engineering Lead  
+**Status:** ACCEPTED
+**Tanggal:** 2026-08-03
+**Deciders:** Engineering Lead
 
 ### Konteks
 
@@ -74,9 +74,9 @@ AI agent sebelumnya telah mencoba:
 
 ## ADR-0002 — Accounting Bersifat Immutable (Append-Only)
 
-**Status:** ACCEPTED  
-**Tanggal:** 2026-08-03  
-**Deciders:** Finance Lead, Engineering Lead  
+**Status:** ACCEPTED
+**Tanggal:** 2026-08-03
+**Deciders:** Finance Lead, Engineering Lead
 
 ### Konteks
 
@@ -131,9 +131,9 @@ UPDATE accounting_entry_lines SET debit = 500 WHERE id = 1;
 
 ## ADR-0003 — Universal Journal Reuse (No Duplicate Journal)
 
-**Status:** ACCEPTED  
-**Tanggal:** 2026-08-03  
-**Deciders:** Engineering Lead  
+**Status:** ACCEPTED
+**Tanggal:** 2026-08-03
+**Deciders:** Engineering Lead
 
 ### Konteks
 
@@ -196,9 +196,9 @@ Lihat `SPORT_CENTER_DOUBLE_JOURNAL_ROOT_CAUSE.md` untuk detail lengkap.
 
 ## ADR-0004 — AI Governance: Human Approval Required
 
-**Status:** ACCEPTED  
-**Tanggal:** 2026-08-03  
-**Deciders:** Finance Lead  
+**Status:** ACCEPTED
+**Tanggal:** 2026-08-03
+**Deciders:** Finance Lead
 
 ### Konteks
 
@@ -251,6 +251,83 @@ Bukan:
 
 ---
 
+---
+
+## ADR-0005 — Single-Credential GCP Bootstrap Architecture
+
+**Status:** ACCEPTED
+**Tanggal:** 2026-08-07
+**Deciders:** Engineering Lead
+
+### Konteks
+
+Setiap kali repository di-import dari GitHub ke Replit baru, developer harus
+memasukkan puluhan secret secara manual. Ini lambat, rawan kesalahan, dan menciptakan
+risiko bahwa developer salah memasukkan secret production ke Replit development.
+
+### Keputusan
+
+GCP Secret Manager bootstrap architecture diupgrade dari **tiga Replit Secrets** ke
+**satu Replit Secret**:
+
+```
+BEFORE (legacy):
+  GCP_PROJECT_ID + GCP_SECRET_ID + GCP_SECRET_MANAGER_BOOTSTRAP_JSON
+  Single GCP bundle with mixed *_DEV / prod keys
+  Client-side key selection based on APP_ENV
+
+AFTER (new mode):
+  GCP_SECRET_MANAGER_BOOTSTRAP_JSON only
+  project_id extracted from bootstrap JSON (no GCP_PROJECT_ID needed)
+  Separate GCP bundles per environment:
+    cst-super-app-development  →  APP_ENV=development
+    cst-super-app-production   →  APP_ENV=production
+  Bundle APP_ENV field cross-verified at startup (fail-closed on mismatch)
+```
+
+### Aturan Implementasi
+
+1. `GCP_SECRET_MANAGER_BOOTSTRAP_JSON` is the **only** allowed Replit Secret for bootstrap
+2. `project_id` is extracted from the bootstrap SA JSON — `GCP_PROJECT_ID` is deprecated
+3. Bundle name is derived as `{prefix}-{APP_ENV}` (default prefix: `cst-super-app`)
+4. Each bundle MUST contain an `APP_ENV` field — loader cross-verifies it
+5. `APP_ENV` in process.env is NEVER overwritten by the bundle payload
+6. `APP_ENV` must be exactly `development` or `production` — startup fails otherwise
+7. `NODE_ENV` must NOT be used as fallback for APP_ENV in secret bundle selection
+8. Backward compat: if `GCP_PROJECT_ID` + `GCP_SECRET_ID` present → legacy mode (deprecated, logs warning)
+
+### Fail-Closed Conditions (startup aborted)
+
+- APP_ENV missing or invalid
+- Bootstrap JSON missing, invalid, or missing required SA fields
+- GCP access denied
+- Bundle not found
+- Bundle payload.APP_ENV mismatches runtime APP_ENV
+- Required secrets (SESSION_SECRET, SUPABASE_DATABASE_URL) missing after load
+
+### Konsekuensi
+
+**Positif:**
+- Fresh GitHub import: one secret to add (was 3+)
+- Cross-environment contamination is impossible (separate bundles + APP_ENV verification)
+- Secret rotation via GCP Console only — no code or Replit changes
+- `--validate` mode for dry-run verification without starting app
+
+**Negatif (yang diterima):**
+- One-time GCP setup: create two new secret bundles
+- Existing environments must migrate from single-bundle to two-bundle structure
+- Legacy mode continues to work during migration (backward compat)
+
+### Pelanggaran yang TIDAK Boleh Terjadi
+
+- ❌ Adding `GCP_PROJECT_ID` or `GCP_SECRET_ID` back as required Replit Secrets
+- ❌ Merging dev and prod bundles back into one
+- ❌ Removing APP_ENV cross-verification from the loader
+- ❌ Using NODE_ENV to select the GCP bundle
+- ❌ Defaulting to production bundle when APP_ENV is missing
+
+---
+
 ## ADR Log
 
 | ADR | Judul | Status | Tanggal |
@@ -259,8 +336,9 @@ Bukan:
 | ADR-0002 | Accounting Immutability | ACCEPTED | 2026-08-03 |
 | ADR-0003 | Universal Journal Reuse | ACCEPTED | 2026-08-03 |
 | ADR-0004 | AI Governance: Human Approval | ACCEPTED | 2026-08-03 |
+| ADR-0005 | Single-Credential GCP Bootstrap | ACCEPTED | 2026-08-07 |
 
 ---
 
-*Untuk mengajukan ADR baru: buat PR dengan format di atas, status awal PROPOSED.*  
+*Untuk mengajukan ADR baru: buat PR dengan format di atas, status awal PROPOSED.*
 *ADR yang sudah ACCEPTED tidak boleh diubah — buat ADR baru yang supersede.*

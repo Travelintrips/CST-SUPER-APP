@@ -3,235 +3,488 @@
  *
  * Bootstrap secret loader — runs ONCE at startup before the API server starts.
  *
- * ┌─────────────────────────────────────────────────────────────────────────┐
- * │  ARCHITECTURE                                                           │
- * │                                                                         │
- * │  Replit Secrets (bootstrap only)                                        │
- * │    GCP_PROJECT_ID                                                       │
- * │    GCP_SECRET_ID                                                        │
- * │    GCP_SECRET_MANAGER_BOOTSTRAP_JSON                                    │
- * │         ↓                                                               │
- * │  Google Cloud Secret Manager                                            │
- * │    projects/{GCP_PROJECT_ID}/secrets/{GCP_SECRET_ID}/versions/latest   │
- * │         ↓                                                               │
- * │  load-secrets.mjs (this file)                                           │
- * │    – selects env-appropriate keys (_DEV for dev, normal for prod)       │
- * │    – injects into process.env                                           │
- * │         ↓                                                               │
- * │  Application (API Server / Frontend)                                    │
- * │    reads process.env.SUPABASE_DATABASE_URL  (never *_DEV)               │
- * └─────────────────────────────────────────────────────────────────────────┘
+ * ┌─────────────────────────────────────────────────────────────────────────────┐
+ * │  NEW ARCHITECTURE (single-credential — Phase 5 GCP Bootstrap)               │
+ * │                                                                             │
+ * │  Replit Secrets (ONE bootstrap credential)                                  │
+ * │    GCP_SECRET_MANAGER_BOOTSTRAP_JSON   ← Service Account JSON               │
+ * │         ↓ project_id extracted from JSON                                    │
+ * │  Google Cloud Secret Manager                                                │
+ * │    projects/{project_id}/secrets/cst-super-app-{APP_ENV}/versions/latest   │
+ * │         ↓                                                                   │
+ * │  load-secrets.mjs (this file)                                               │
+ * │    – verifies payload.APP_ENV matches runtime APP_ENV                       │
+ * │    – injects all keys into process.env (never overwrites APP_ENV itself)    │
+ * │         ↓                                                                   │
+ * │  Application (API Server)                                                   │
+ * │    reads process.env.SUPABASE_DATABASE_URL (canonical, no _DEV)            │
+ * └─────────────────────────────────────────────────────────────────────────────┘
  *
- * Environment resolution (per SECRET_MANAGER_RULES.md §ENVIRONMENT_RESOLUTION):
- *   APP_ENV=production  → inject keys WITHOUT _DEV suffix
- *   APP_ENV=development → inject KEY_DEV values under canonical KEY name
- *   Fallback: NODE_ENV
- *   If neither APP_ENV nor NODE_ENV is set → STARTUP FAILS (no fallback)
+ * ┌─────────────────────────────────────────────────────────────────────────────┐
+ * │  LEGACY ARCHITECTURE (three-credential — backward compat)                   │
+ * │                                                                             │
+ * │  Replit Secrets                                                             │
+ * │    GCP_PROJECT_ID + GCP_SECRET_ID + GCP_SECRET_MANAGER_BOOTSTRAP_JSON       │
+ * │         ↓                                                                   │
+ * │  Google Cloud Secret Manager                                                │
+ * │    projects/{GCP_PROJECT_ID}/secrets/{GCP_SECRET_ID}/versions/latest        │
+ * │    (single bundle with both prod keys and *_DEV keys mixed)                 │
+ * │         ↓                                                                   │
+ * │  load-secrets.mjs selects env-appropriate keys                              │
+ * │    dev: inject *_DEV keys as canonical names                                │
+ * │    prod: inject production keys only                                        │
+ * └─────────────────────────────────────────────────────────────────────────────┘
  *
- * Strict isolation (per SECRET_MANAGER_RULES.md §STRICT_ISOLATION):
- *   Development NEVER reads production keys.
- *   Production  NEVER reads _DEV keys.
- *   No cross-environment fallback is permitted.
+ * Architecture rules (per SECRET_MANAGER_RULES.md):
+ *   APP_ENV=production  → production bundle (new) or prod keys (legacy)
+ *   APP_ENV=development → dev bundle (new) or *_DEV keys (legacy)
+ *   Missing APP_ENV     → STARTUP FAILS (no fallback, no NODE_ENV substitution)
+ *   Invalid APP_ENV     → STARTUP FAILS
  *
- * Fail-fast (per SECRET_MANAGER_RULES.md §STARTUP_VALIDATION):
- *   Any missing bootstrap credential → process.exit(1).
- *   Any GCP fetch failure            → process.exit(1).
- *   Empty or invalid payload         → process.exit(1).
+ * Fail-closed (per SECRET_MANAGER_RULES.md §STARTUP_VALIDATION):
+ *   Any missing bootstrap credential → process.exit(1)
+ *   Invalid bootstrap JSON          → process.exit(1)
+ *   GCP fetch failure               → process.exit(1)
+ *   Bundle APP_ENV mismatch (new)   → process.exit(1)
+ *   Required secret missing         → process.exit(1)
  *
- * Usage (invoked by start:secure in package.json):
- *   node load-secrets.mjs node --enable-source-maps ./dist/index.mjs
+ * Usage:
+ *   node load-secrets.mjs node ./dist/index.mjs        # start app
+ *   node load-secrets.mjs --validate                    # dry-run validation only
  */
 
 import { SecretManagerServiceClient } from "@google-cloud/secret-manager";
 import { spawn } from "node:child_process";
 
-// ── Command to exec after secrets are injected ────────────────────────────────
-const [, , ...cmd] = process.argv;
+// ─────────────────────────────────────────────────────────────────────────────
+// CONSTANTS
+// ─────────────────────────────────────────────────────────────────────────────
 
-if (!cmd.length) {
-  console.error("[load-secrets] ERROR: No command provided.");
-  console.error("  Usage: node load-secrets.mjs <cmd> [args...]");
-  process.exit(1);
-}
+const ALLOWED_ENVIRONMENTS = ["development", "production"];
 
-// ── Resolve environment ───────────────────────────────────────────────────────
-// Per rules: APP_ENV takes priority over NODE_ENV.
-// If neither is set, startup fails — never default to production.
-const appEnv = process.env.APP_ENV ?? process.env.NODE_ENV;
+/** Default bundle name prefix for new-architecture bundles. */
+const DEFAULT_BUNDLE_PREFIX = "cst-super-app";
 
-if (!appEnv) {
-  console.error("[load-secrets] ERROR: APP_ENV (or NODE_ENV) is not set.");
-  console.error("  Allowed values: production | development");
-  console.error("  Startup aborted — no environment fallback allowed.");
-  process.exit(1);
-}
+/**
+ * Required secrets that MUST be present in process.env after loading.
+ * Startup fails if any of these is missing or empty.
+ */
+const REQUIRED_SECRETS = [
+  { name: "SESSION_SECRET",          minLen: 32, feature: "Express session signing" },
+  { name: "SUPABASE_DATABASE_URL",   minLen: 10, feature: "Database connection" },
+];
 
-const isDev = appEnv === "development";
-console.log(`[load-secrets] Environment: ${appEnv}`);
-console.log(`[load-secrets] Key strategy: ${isDev ? "inject *_DEV keys as canonical names" : "inject production keys only"}`);
+// ─────────────────────────────────────────────────────────────────────────────
+// EXPORTED CORE FUNCTIONS (testable without GCP calls)
+// ─────────────────────────────────────────────────────────────────────────────
 
-// ── Bootstrap credentials ─────────────────────────────────────────────────────
-// ONLY these three keys belong in Replit Secrets.
-// All other application secrets must live in Google Cloud Secret Manager.
-const PROJECT_ID     = process.env.GCP_PROJECT_ID;
-const SECRET_ID      = process.env.GCP_SECRET_ID;
-// Accept both the canonical name and the legacy alias set in Replit Secrets
-const BOOTSTRAP_JSON =
-  process.env.GCP_SECRET_MANAGER_BOOTSTRAP_JSON ??
-  process.env.GOOGLE_SECRET_MANAGER_SERVICE_ACCOUNT_JSON;
+/**
+ * Resolve and validate APP_ENV.
+ *
+ * NOTE: NODE_ENV is intentionally NOT used as a fallback for secret bundle
+ * selection (per master prompt Phase 3 / SECRET_MANAGER_RULES.md).
+ * NODE_ENV may still be used by framework libraries for their own purposes.
+ *
+ * @param {NodeJS.ProcessEnv} env
+ * @returns {{ appEnv: string }}
+ * @throws if APP_ENV is missing or not in ALLOWED_ENVIRONMENTS
+ */
+export function resolveEnvironment(env) {
+  const appEnv = env.APP_ENV;
 
-const missingBootstrap = [];
-if (!PROJECT_ID)     missingBootstrap.push("GCP_PROJECT_ID");
-if (!SECRET_ID)      missingBootstrap.push("GCP_SECRET_ID");
-if (!BOOTSTRAP_JSON) missingBootstrap.push("GCP_SECRET_MANAGER_BOOTSTRAP_JSON (or GOOGLE_SECRET_MANAGER_SERVICE_ACCOUNT_JSON)");
-
-if (missingBootstrap.length) {
-  console.error("[load-secrets] ERROR: Bootstrap credentials missing:");
-  for (const key of missingBootstrap) console.error(`  Missing: ${key}`);
-  console.error("");
-  console.error("  These are the ONLY secrets that belong in Replit Secrets.");
-  console.error("  All application secrets must be stored in Google Cloud Secret Manager.");
-  console.error("  Startup aborted — no fallback allowed.");
-  process.exit(1);
-}
-
-// ── Parse bootstrap JSON (fail if invalid) ────────────────────────────────────
-let credentials;
-try {
-  credentials = JSON.parse(BOOTSTRAP_JSON);
-} catch (err) {
-  console.error("[load-secrets] ERROR: GCP_SECRET_MANAGER_BOOTSTRAP_JSON is not valid JSON:", err.message);
-  process.exit(1);
-}
-
-// ── Fetch secret payload from GCP Secret Manager ──────────────────────────────
-const client     = new SecretManagerServiceClient({ credentials });
-const secretName = `projects/${PROJECT_ID}/secrets/${SECRET_ID}/versions/latest`;
-
-console.log(`[load-secrets] Fetching: ${secretName}`);
-
-let secretPayload;
-try {
-  const [version] = await client.accessSecretVersion({ name: secretName });
-  secretPayload   = version.payload?.data?.toString("utf8");
-} catch (err) {
-  console.error(`[load-secrets] ERROR: Failed to fetch "${secretName}":`, err.message);
-  console.error("  Verify GCP_PROJECT_ID, GCP_SECRET_ID, and GCP_SECRET_MANAGER_BOOTSTRAP_JSON.");
-  process.exit(1);
-}
-
-if (!secretPayload) {
-  console.error("[load-secrets] ERROR: Secret payload is empty.");
-  process.exit(1);
-}
-
-// ── Parse payload ─────────────────────────────────────────────────────────────
-let raw;
-try {
-  raw = JSON.parse(secretPayload);
-  if (typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error("Payload must be a flat JSON object of string key-value pairs");
+  if (!appEnv) {
+    throw new Error(
+      "APP_ENV is not set.\n" +
+      "  Allowed values: development | production\n" +
+      "  NODE_ENV is NOT a fallback for secret bundle selection.\n" +
+      "  Startup aborted — no environment fallback allowed."
+    );
   }
-} catch (err) {
-  console.error("[load-secrets] ERROR: Secret payload is not a valid JSON object:", err.message);
-  process.exit(1);
+
+  if (!ALLOWED_ENVIRONMENTS.includes(appEnv)) {
+    throw new Error(
+      `APP_ENV="${appEnv}" is not valid.\n` +
+      `  Allowed values: ${ALLOWED_ENVIRONMENTS.join(" | ")}\n` +
+      "  Startup aborted."
+    );
+  }
+
+  return { appEnv };
 }
 
-// ── Environment-aware key selection ──────────────────────────────────────────
-//
-//  Development mode (APP_ENV=development):
-//    Payload key  SUPABASE_DATABASE_URL_DEV  →  process.env.SUPABASE_DATABASE_URL
-//    Payload key  OPENAI_API_KEY_DEV         →  process.env.OPENAI_API_KEY
-//    Non-_DEV keys are IGNORED (strict isolation)
-//
-//  Production mode (APP_ENV=production):
-//    Payload key  SUPABASE_DATABASE_URL      →  process.env.SUPABASE_DATABASE_URL
-//    Payload key  OPENAI_API_KEY             →  process.env.OPENAI_API_KEY
-//    _DEV keys are IGNORED (strict isolation)
-//
-//  Application code always reads the canonical name (no _DEV suffix).
-//  Secret Manager is authoritative for application secrets. Existing env
-//  values are intentionally overwritten so stale Replit secrets cannot shadow
-//  rotated values from Google Cloud Secret Manager.
+/**
+ * Parse and validate the bootstrap Service Account JSON.
+ *
+ * Required fields: project_id, client_email, private_key.
+ * Never logs the value — only reports which fields are missing.
+ *
+ * @param {string|undefined} raw  Raw string value of GCP_SECRET_MANAGER_BOOTSTRAP_JSON
+ * @returns {{ credentials: object, projectId: string }}
+ * @throws if missing, not valid JSON, or missing required SA fields
+ */
+export function validateBootstrapJson(raw) {
+  if (!raw) {
+    throw new Error(
+      "GCP_SECRET_MANAGER_BOOTSTRAP_JSON is not set.\n" +
+      "  This is the ONLY bootstrap credential required in Replit Secrets.\n" +
+      "  It must be a GCP Service Account JSON with Secret Manager Secret Accessor role."
+    );
+  }
 
-const merged     = { ...process.env };
-let   injected   = 0;
-let   overridden = 0;
-const loadedKeys = [];
+  let credentials;
+  try {
+    credentials = JSON.parse(raw);
+  } catch {
+    throw new Error(
+      "GCP_SECRET_MANAGER_BOOTSTRAP_JSON is not valid JSON.\n" +
+      "  Verify the secret value in Replit Secrets is the full Service Account JSON."
+    );
+  }
 
-function injectSecret(key, value) {
-  if (merged[key] !== undefined) overridden++;
-  else injected++;
-  merged[key] = value;
-  loadedKeys.push(key);
+  if (typeof credentials !== "object" || Array.isArray(credentials)) {
+    throw new Error("GCP_SECRET_MANAGER_BOOTSTRAP_JSON must be a JSON object.");
+  }
+
+  const requiredFields = ["project_id", "client_email", "private_key"];
+  const missingFields = requiredFields.filter((f) => !credentials[f]);
+  if (missingFields.length > 0) {
+    throw new Error(
+      `GCP_SECRET_MANAGER_BOOTSTRAP_JSON is missing required fields: ${missingFields.join(", ")}\n` +
+      "  Ensure the credential is a full GCP Service Account JSON."
+    );
+  }
+
+  return { credentials, projectId: credentials.project_id };
 }
 
-if (isDev) {
-  // Step 1: collect canonical names that have a _DEV counterpart — from either
-  // the GCP payload OR process.env (e.g. a Replit Secret like SUPABASE_DATABASE_URL_DEV).
-  const hasDevVariant = new Set();
-  for (const rawKey of Object.keys(raw)) {
-    if (rawKey.endsWith("_DEV")) {
-      hasDevVariant.add(rawKey.slice(0, -4)); // "SUPABASE_DATABASE_URL_DEV" → "SUPABASE_DATABASE_URL"
+/**
+ * Determine which bundle to load and whether we are in legacy mode.
+ *
+ * New mode  (recommended, single credential):
+ *   GCP_PROJECT_ID and GCP_SECRET_ID are NOT set.
+ *   Bundle name = "{bundlePrefix}-{APP_ENV}" (e.g. "cst-super-app-development").
+ *   project_id comes from the bootstrap JSON.
+ *
+ * Legacy mode (backward compat, three credentials):
+ *   GCP_PROJECT_ID and GCP_SECRET_ID are set.
+ *   Bundle name = GCP_SECRET_ID (single mixed bundle with *_DEV suffix keys).
+ *   project_id comes from GCP_PROJECT_ID (or bootstrap JSON if different).
+ *
+ * @param {string} appEnv
+ * @param {object} credentials  Parsed bootstrap JSON
+ * @param {NodeJS.ProcessEnv} env
+ * @returns {{ secretName: string, projectId: string, legacyMode: boolean, bundlePrefix?: string }}
+ */
+export function resolveBundleName(appEnv, credentials, env) {
+  const legacyProjectId = env.GCP_PROJECT_ID;
+  const legacySecretId  = env.GCP_SECRET_ID;
+  const legacyMode      = !!(legacyProjectId && legacySecretId);
+
+  const projectId = legacyProjectId ?? credentials.project_id;
+
+  if (legacyMode) {
+    // Legacy: single bundle, _DEV suffix key selection done in injectSecrets()
+    const secretName = `projects/${projectId}/secrets/${legacySecretId}/versions/latest`;
+    return { secretName, projectId, legacyMode: true };
+  }
+
+  // New mode: separate bundle per environment
+  const bundlePrefix = env.GCP_SECRET_BUNDLE_PREFIX ?? DEFAULT_BUNDLE_PREFIX;
+  const bundleName   = `${bundlePrefix}-${appEnv}`;
+  const secretName   = `projects/${projectId}/secrets/${bundleName}/versions/latest`;
+  return { secretName, projectId, legacyMode: false, bundlePrefix, bundleName };
+}
+
+/**
+ * Inject secret payload into the target env object.
+ *
+ * New-mode bundles:
+ *   Payload has flat keys (no _DEV suffix) and an APP_ENV field.
+ *   - Verify payload.APP_ENV === runtime appEnv (fail-closed).
+ *   - Inject all string keys EXCEPT APP_ENV (APP_ENV must not be overwritten).
+ *
+ * Legacy-mode bundles (single mixed bundle):
+ *   Same _DEV suffix selection logic as the previous architecture.
+ *   - Dev:  inject *_DEV keys as canonical names; inject shared keys (no _DEV variant).
+ *   - Prod: inject non-_DEV keys only.
+ *
+ * @param {Record<string, unknown>} payload  Parsed bundle JSON
+ * @param {string}                  appEnv
+ * @param {boolean}                 legacyMode
+ * @param {Record<string, string>}  target    Mutable env object to inject into
+ * @returns {{ injected: number, overridden: number, loadedKeys: string[] }}
+ * @throws if new-mode payload.APP_ENV mismatches runtime appEnv
+ */
+export function injectSecrets(payload, appEnv, legacyMode, target) {
+  if (typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("Secret payload must be a flat JSON object of key-value pairs.");
+  }
+
+  let injected   = 0;
+  let overridden = 0;
+  const loadedKeys = [];
+
+  function inject(key, value) {
+    if (key === "APP_ENV") return; // never overwrite runtime APP_ENV
+    if (typeof value !== "string") return;
+    if (target[key] !== undefined) overridden++;
+    else injected++;
+    target[key] = value;
+    loadedKeys.push(key);
+  }
+
+  if (!legacyMode) {
+    // ── NEW MODE ──────────────────────────────────────────────────────────────
+    // Verify bundle is for the correct environment
+    const payloadEnv = payload["APP_ENV"];
+    if (payloadEnv && payloadEnv !== appEnv) {
+      throw new Error(
+        `Bundle environment mismatch: runtime APP_ENV="${appEnv}" but bundle contains APP_ENV="${payloadEnv}".\n` +
+        "  This means the wrong bundle was fetched. Startup aborted to prevent cross-environment contamination."
+      );
+    }
+    if (!payloadEnv) {
+      // Bundle lacks APP_ENV field — warn but continue (supports bundles created before this requirement)
+      console.warn(
+        "[load-secrets] WARN: Bundle does not contain APP_ENV field.\n" +
+        "  Add APP_ENV to the bundle payload to enable cross-verification."
+      );
+    }
+
+    // Inject all string keys (APP_ENV excluded by inject())
+    for (const [key, value] of Object.entries(payload)) {
+      inject(key, value);
+    }
+  } else {
+    // ── LEGACY MODE ───────────────────────────────────────────────────────────
+    const isDev = appEnv === "development";
+
+    if (isDev) {
+      // Collect canonical names that have a _DEV counterpart in payload or process.env
+      const hasDevVariant = new Set();
+      for (const rawKey of Object.keys(payload)) {
+        if (rawKey.endsWith("_DEV")) hasDevVariant.add(rawKey.slice(0, -4));
+      }
+      for (const envKey of Object.keys(target)) {
+        if (envKey.endsWith("_DEV")) hasDevVariant.add(envKey.slice(0, -4));
+      }
+
+      // Step 1: inject _DEV keys as canonical names (GCP payload wins)
+      for (const [rawKey, value] of Object.entries(payload)) {
+        if (!rawKey.endsWith("_DEV")) continue;
+        const canonical = rawKey.slice(0, -4);
+        inject(canonical, value);
+      }
+      // Fill gaps from process.env _DEV keys
+      for (const [envKey, value] of Object.entries(target)) {
+        if (!envKey.endsWith("_DEV")) continue;
+        const canonical = envKey.slice(0, -4);
+        if (loadedKeys.includes(canonical)) continue; // GCP already set it
+        if (typeof value === "string" && value) {
+          // Already in target from process.env spread; mark as loaded
+          loadedKeys.push(canonical);
+        }
+      }
+
+      // Step 2: inject non-_DEV keys that have no _DEV counterpart (shared keys)
+      for (const [rawKey, value] of Object.entries(payload)) {
+        if (rawKey.endsWith("_DEV")) continue;
+        if (hasDevVariant.has(rawKey)) continue; // isolation enforced
+        inject(rawKey, value);
+      }
+    } else {
+      // Production: inject non-_DEV keys only
+      for (const [rawKey, value] of Object.entries(payload)) {
+        if (rawKey.endsWith("_DEV")) continue;
+        inject(rawKey, value);
+      }
     }
   }
-  // Also register _DEV keys that live only in process.env (Replit Secrets).
-  for (const envKey of Object.keys(process.env)) {
-    if (envKey.endsWith("_DEV")) {
-      hasDevVariant.add(envKey.slice(0, -4));
+
+  return { injected, overridden, loadedKeys };
+}
+
+/**
+ * Validate that all REQUIRED_SECRETS are present in the env object.
+ *
+ * @param {Record<string, string|undefined>} env
+ * @returns {{ missing: string[], weak: string[] }}
+ */
+export function validateRequiredSecrets(env) {
+  const missing = [];
+  const weak    = [];
+
+  for (const { name, minLen = 1 } of REQUIRED_SECRETS) {
+    const val = env[name] ?? "";
+    if (!val) {
+      missing.push(name);
+    } else if (val.length < minLen) {
+      weak.push(`${name} (length ${val.length} < required ${minLen})`);
     }
   }
 
-  // Step 2: inject _DEV keys as their canonical name (strict DB isolation).
-  // GCP payload takes priority; process.env _DEV keys fill in any gaps.
-  for (const [rawKey, value] of Object.entries(raw)) {
-    if (typeof value !== "string") continue;
-    if (!rawKey.endsWith("_DEV")) continue;
-    const canonicalKey = rawKey.slice(0, -4);
-    injectSecret(canonicalKey, value);
-  }
-  // Inject _DEV keys from process.env that were NOT already provided by GCP.
-  for (const [envKey, value] of Object.entries(process.env)) {
-    if (!envKey.endsWith("_DEV")) continue;
-    const canonicalKey = envKey.slice(0, -4);
-    if (merged[canonicalKey] !== undefined && loadedKeys.includes(canonicalKey)) continue; // GCP already set it
-    merged[canonicalKey] = value; // inject silently (already in merged from process.env spread)
-  }
-
-  // Step 3: inject non-_DEV keys that have NO _DEV counterpart.
-  // These are shared service API keys (OpenAI, Google Sheets, Fonnte, etc.)
-  // that are identical across environments and safe to use in dev.
-  for (const [rawKey, value] of Object.entries(raw)) {
-    if (typeof value !== "string") continue;
-    if (rawKey.endsWith("_DEV")) continue;       // already handled above
-    if (hasDevVariant.has(rawKey)) continue;     // has _DEV version → isolation enforced
-    injectSecret(rawKey, value);
-  }
-} else {
-  for (const [rawKey, value] of Object.entries(raw)) {
-    if (typeof value !== "string") continue;
-    if (rawKey.endsWith("_DEV")) continue;         // skip dev keys
-    injectSecret(rawKey, value);
-  }
+  return { missing, weak };
 }
 
-// Log key names only — never log values (per SECRET_MANAGER_RULES.md §LOGGING)
-console.log(`[load-secrets] Secrets loaded — new: ${injected}, overridden: ${overridden}`);
-if (loadedKeys.length > 0) {
-  console.log("[load-secrets] Injected keys:", loadedKeys.join(", "));
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN ENTRY POINT
+// ─────────────────────────────────────────────────────────────────────────────
 
-// ── Exec target command with merged env ───────────────────────────────────────
-execCmd(cmd, merged);
+async function main() {
+  const args = process.argv.slice(2);
+  const validateOnly = args[0] === "--validate";
+  const cmd          = validateOnly ? [] : args;
 
-function execCmd(argv, env) {
-  const [bin, ...args] = argv;
-  console.log(`[load-secrets] Starting: ${bin} ${args.join(" ")}`);
-  const child = spawn(bin, args, { env, stdio: "inherit" });
+  if (!validateOnly && cmd.length === 0) {
+    console.error("[load-secrets] ERROR: No command provided.");
+    console.error("  Usage: node load-secrets.mjs <cmd> [args...]");
+    console.error("         node load-secrets.mjs --validate");
+    process.exit(1);
+  }
+
+  // ── Phase 1: Resolve APP_ENV ────────────────────────────────────────────────
+  let appEnv;
+  try {
+    ({ appEnv } = resolveEnvironment(process.env));
+  } catch (err) {
+    console.error("[load-secrets] ERROR:", err.message);
+    process.exit(1);
+  }
+  console.log(`[load-secrets] Environment: ${appEnv}`);
+
+  // ── Phase 2: Validate bootstrap JSON ────────────────────────────────────────
+  let credentials, projectId;
+  try {
+    ({ credentials, projectId } = validateBootstrapJson(
+      process.env.GCP_SECRET_MANAGER_BOOTSTRAP_JSON ??
+      process.env.GOOGLE_SECRET_MANAGER_SERVICE_ACCOUNT_JSON
+    ));
+  } catch (err) {
+    console.error("[load-secrets] ERROR:", err.message);
+    process.exit(1);
+  }
+
+  // ── Phase 3: Determine bundle name ──────────────────────────────────────────
+  const { secretName, legacyMode, bundleName } = resolveBundleName(appEnv, credentials, process.env);
+
+  if (legacyMode) {
+    console.warn(
+      "[load-secrets] WARN: Running in LEGACY MODE (GCP_PROJECT_ID + GCP_SECRET_ID detected).\n" +
+      "  To use single-credential mode, create separate GCP bundles:\n" +
+      `    cst-super-app-development   (for APP_ENV=development)\n` +
+      `    cst-super-app-production    (for APP_ENV=production)\n` +
+      "  Then remove GCP_PROJECT_ID and GCP_SECRET_ID from Replit Secrets.\n" +
+      "  See docs/GCP_BOOTSTRAP_SECRET_SETUP.md for migration steps."
+    );
+    console.log(`[load-secrets] GCP project: ${projectId} (from GCP_PROJECT_ID)`);
+    console.log(`[load-secrets] Bundle (legacy): ${secretName}`);
+    console.log(`[load-secrets] Key strategy: ${appEnv === "development" ? "inject *_DEV keys as canonical names" : "inject production keys only"}`);
+  } else {
+    console.log(`[load-secrets] GCP project: ${projectId} (from bootstrap JSON)`);
+    console.log(`[load-secrets] Bundle: ${bundleName}`);
+  }
+
+  // ── Phase 4: Initialize GCP client + fetch secret ───────────────────────────
+  console.log(`[load-secrets] Fetching: ${secretName}`);
+
+  const client = new SecretManagerServiceClient({ credentials });
+
+  let secretPayload;
+  try {
+    const [version] = await client.accessSecretVersion({ name: secretName });
+    secretPayload = version.payload?.data?.toString("utf8");
+  } catch (err) {
+    console.error(`[load-secrets] ERROR: Failed to fetch "${secretName}": ${err.message}`);
+    console.error(
+      legacyMode
+        ? "  Verify GCP_PROJECT_ID, GCP_SECRET_ID, and GCP_SECRET_MANAGER_BOOTSTRAP_JSON."
+        : `  Verify the bundle "${bundleName ?? secretName}" exists in GCP Secret Manager\n` +
+          "  and the Service Account has Secret Manager Secret Accessor role.\n" +
+          "  See docs/GCP_BOOTSTRAP_SECRET_SETUP.md for bundle creation steps."
+    );
+    process.exit(1);
+  }
+
+  if (!secretPayload) {
+    console.error("[load-secrets] ERROR: Secret payload is empty.");
+    process.exit(1);
+  }
+
+  // ── Phase 5: Parse payload ───────────────────────────────────────────────────
+  let payload;
+  try {
+    payload = JSON.parse(secretPayload);
+    if (typeof payload !== "object" || Array.isArray(payload)) {
+      throw new Error("Payload must be a flat JSON object.");
+    }
+  } catch (err) {
+    console.error(`[load-secrets] ERROR: Secret payload is not a valid JSON object: ${err.message}`);
+    process.exit(1);
+  }
+
+  // ── Phase 6: Inject secrets ─────────────────────────────────────────────────
+  const merged = { ...process.env };
+  let injectedCount, overriddenCount, loadedKeys;
+
+  try {
+    ({ injected: injectedCount, overridden: overriddenCount, loadedKeys } =
+      injectSecrets(payload, appEnv, legacyMode, merged));
+  } catch (err) {
+    console.error("[load-secrets] ERROR:", err.message);
+    process.exit(1);
+  }
+
+  // ── Phase 7: Validate required secrets ─────────────────────────────────────
+  const { missing, weak } = validateRequiredSecrets(merged);
+
+  if (missing.length > 0 || weak.length > 0) {
+    if (missing.length > 0) {
+      console.error("[load-secrets] ERROR: Required secrets missing after loading:");
+      for (const name of missing) console.error(`  Missing: ${name}`);
+      console.error(
+        legacyMode
+          ? `  Ensure these exist in the GCP bundle (with _DEV suffix for development).`
+          : `  Ensure these exist in the "${bundleName ?? secretName}" GCP bundle.`
+      );
+    }
+    if (weak.length > 0) {
+      console.error("[load-secrets] ERROR: Required secrets are too short (possibly placeholder values):");
+      for (const w of weak) console.error(`  Weak: ${w}`);
+    }
+    process.exit(1);
+  }
+
+  // ── Phase 8: Log summary (no values, key names only) ────────────────────────
+  console.log(`[load-secrets] Secrets loaded — new: ${injectedCount}, overridden: ${overriddenCount}`);
+  if (loadedKeys.length > 0) {
+    console.log(`[load-secrets] Injected keys: ${loadedKeys.join(", ")}`);
+  }
+  console.log("[load-secrets] Required secrets: OK ✓");
+
+  // ── Validate-only mode: stop here ────────────────────────────────────────────
+  if (validateOnly) {
+    console.log("[load-secrets] --validate complete. All checks passed. Application NOT started.");
+    process.exit(0);
+  }
+
+  // ── Phase 9: Exec target command with merged env ─────────────────────────────
+  const [bin, ...binArgs] = cmd;
+  console.log(`[load-secrets] Starting: ${bin} ${binArgs.join(" ")}`);
+
+  const child = spawn(bin, binArgs, { env: merged, stdio: "inherit" });
   child.on("exit", (code, signal) => {
     if (signal) process.kill(process.pid, signal);
-    else        process.exit(code ?? 0);
+    else process.exit(code ?? 0);
   });
   process.on("SIGTERM", () => child.kill("SIGTERM"));
   process.on("SIGINT",  () => child.kill("SIGINT"));
+}
+
+// Run main only when executed directly (not when imported by tests)
+const isMain = process.argv[1]?.endsWith("load-secrets.mjs");
+if (isMain) {
+  main().catch((err) => {
+    console.error("[load-secrets] Unexpected error:", err.message);
+    process.exit(1);
+  });
 }

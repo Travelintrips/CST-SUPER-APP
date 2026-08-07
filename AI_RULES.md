@@ -8,13 +8,19 @@ Rules for AI agents (Replit Agent, Cursor, Copilot, Claude, etc.) working on thi
 
 ### NEVER instruct developers to add application secrets to Replit Secrets
 
-The **only** secrets that belong in Replit are:
+The **only** secret that belongs in Replit for a fresh import is:
 
 ```
-GCP_PROJECT_ID
-GCP_SECRET_ID
 GCP_SECRET_MANAGER_BOOTSTRAP_JSON
 ```
+
+The loader extracts `project_id` from the bootstrap JSON and derives the bundle name
+from `APP_ENV`. No other Replit Secrets are required.
+
+> **Legacy note:** `GCP_PROJECT_ID` and `GCP_SECRET_ID` may still be present in older
+> environments. When both are set, the loader runs in backward-compat legacy mode.
+> They should be removed after migrating to separate GCP bundles.
+> See `docs/GCP_BOOTSTRAP_SECRET_SETUP.md`.
 
 **All other secrets come from Google Cloud Secret Manager automatically.**
 
@@ -45,12 +51,14 @@ When a developer needs a new secret:
 When asked how to run this project, always say:
 
 ```
-1. Add GCP_PROJECT_ID, GCP_SECRET_ID, GCP_SECRET_MANAGER_BOOTSTRAP_JSON to Replit Secrets
+1. Add GCP_SECRET_MANAGER_BOOTSTRAP_JSON to Replit Secrets (ONE secret only)
 2. Run: pnpm run dev
 3. All secrets are loaded automatically from Google Cloud Secret Manager
+   (loader reads project_id from the JSON, fetches cst-super-app-development bundle)
 ```
 
 Never say: "Add SUPABASE_DATABASE_URL to Replit Secrets" or equivalent.
+Never say: "Add GCP_PROJECT_ID or GCP_SECRET_ID to Replit Secrets" — they are deprecated.
 
 ---
 
