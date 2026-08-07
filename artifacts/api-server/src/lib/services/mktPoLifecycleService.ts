@@ -73,6 +73,15 @@ async function guardedTransition(
   });
 }
 
+async function findCurrentPo(poId: number): Promise<PoRow | null> {
+  const [po] = await db
+    .select()
+    .from(mktPurchaseOrdersTable)
+    .where(eq(mktPurchaseOrdersTable.id, poId))
+    .limit(1);
+  return po ?? null;
+}
+
 function logStatusChange(poId: number, action: string, prev: PoStatus, next: PoStatus, actor: ActorInfo, description: string, extra?: Record<string, unknown>) {
   logActivity({
     mktPurchaseOrderId: poId,
@@ -177,7 +186,13 @@ export async function vendorAcceptPo(token: string): Promise<{ ok: true; po: PoR
   const guard = await guardedTransition(lookup.po.id, ["issued"], "vendor_accepted", {
     confirmedAt: new Date(),
   });
-  if (!guard.ok) return guard;
+  if (!guard.ok) {
+    const current = await findCurrentPo(lookup.po.id);
+    if (current?.status === "vendor_accepted") {
+      return { ok: true, po: current, alreadyAccepted: true };
+    }
+    return guard;
+  }
 
   await markVendorTokenUsed(guard.po.id);
   logStatusChange(guard.po.id, "vendor_accepted", guard.previousStatus, "vendor_accepted", { actorType: "vendor", actorId: `vendor:${guard.po.vendorId}`, actorName: guard.po.vendorNameSnapshot }, `Vendor ${guard.po.vendorNameSnapshot ?? ""} menerima PO ${guard.po.poNumber}`);
@@ -202,7 +217,13 @@ export async function vendorRejectPo(token: string, reason?: string | null): Pro
   const guard = await guardedTransition(lookup.po.id, ["issued"], "vendor_rejected", {
     cancelReason: reason ?? null,
   });
-  if (!guard.ok) return guard;
+  if (!guard.ok) {
+    const current = await findCurrentPo(lookup.po.id);
+    if (current?.status === "vendor_rejected") {
+      return { ok: true, po: current, alreadyRejected: true };
+    }
+    return guard;
+  }
 
   await markVendorTokenUsed(guard.po.id);
   logStatusChange(guard.po.id, "vendor_rejected", guard.previousStatus, "vendor_rejected", { actorType: "vendor", actorId: `vendor:${guard.po.vendorId}`, actorName: guard.po.vendorNameSnapshot }, `Vendor ${guard.po.vendorNameSnapshot ?? ""} menolak PO ${guard.po.poNumber}`, { reason: reason ?? null });
