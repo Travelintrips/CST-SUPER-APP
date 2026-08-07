@@ -21,3 +21,4 @@ After loading, GCP injects: `SUPABASE_DATABASE_URL`, `SUPABASE_ANON_KEY`, `SUPAB
 - If `SUPABASE_DATABASE_URL_DEV` is NOT in GCP secrets and the project only has one Supabase instance: set `ALLOW_PRODUCTION_DB_IN_DEVELOPMENT=true` as a shared env var (already set Aug 2026).
 - `PORTAL_ADMIN_KEY` and `CASHIER_TOKEN_SECRET` are non-fatal warnings — server still starts.
 - `pnpm-workspace.yaml` must have `allowBuilds: core-js: true, esbuild: true, protobufjs: true, sharp: true` for pnpm v11+ (fixed Aug 2026).
+- The gateway workflow must explicitly run with `APP_ENV=development`; otherwise its spawned secure API process fails closed before binding port 18444.
