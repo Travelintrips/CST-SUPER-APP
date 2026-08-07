@@ -76,6 +76,7 @@ import { runExceptionEnumMigration, runOrderExceptionsMigration } from "./lib/se
 import { runVendorCompanyAssignmentsMigration } from "./lib/vendorCompanyAssignmentsMigration.js";
 import { runVendorCatalogSchemaMigration } from "./lib/vendorCatalogSchemaMigration.js";
 import { runFeaturedProductMigration } from "./lib/featuredProductMigration.js";
+import { runMktVendorInvoiceMigration } from "./lib/mktVendorInvoiceMigration.js";
 import { startFeaturedProductExpiryWorker } from "./lib/services/featuredProductExpiryWorker.js";
 import { runLogisticVendorFulfillmentsMigration } from "./lib/logisticVendorFulfillmentsMigration.js";
 import { runProductFirstFlowMigration } from "./lib/productFirstFlowMigration.js";
@@ -1672,6 +1673,7 @@ async function startServer() {
     .then(() => runWithRetry("Vendor catalog schema migration", runVendorCatalogSchemaMigration))
     .then(() => runWithRetry("Vendor profile hardening migration (Phase Final)", runVendorProfileMigration))
     .then(() => runWithRetry("Featured product migration", runFeaturedProductMigration))
+      .then(() => runWithRetry("Marketplace vendor invoice migration", runMktVendorInvoiceMigration))
     .then(() => runWithRetry("Logistic vendor fulfillments migration", runLogisticVendorFulfillmentsMigration))
     .then(() => runWithRetry("Product media migration", runProductMediaMigration))
     .then(() => runWithRetry("Tax rules migration", runTaxRulesMigration))
