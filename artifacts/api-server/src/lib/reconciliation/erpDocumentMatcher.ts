@@ -295,6 +295,10 @@ async function fetchActiveCandidates(
         WHERE ${amtCond("ap.amount")}
           AND ap.date::date BETWEEN ${dateFrom} AND ${dateTo}
           AND ap.company_id = ${companyId}
+          -- sport_payments is the canonical reconciliation candidate for
+          -- Sport Center payments; accounting_payments only links the source
+          -- payment to its accounting journal.
+          AND (ap.source_type IS NULL OR ap.source_type <> 'sport_center')
           AND COALESCE(ap.status::text, 'posted') NOT IN ('cancelled','rejected','void','voided')
           AND ap.voided_at IS NULL
           AND (

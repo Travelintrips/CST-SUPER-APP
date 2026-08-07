@@ -411,6 +411,10 @@ export async function fetchCandidates(
           AND ap.date BETWEEN ${dateFrom} AND ${dateTo}
           AND ap.status = 'posted'
           AND ap.payment_type = '${direction === "IN" ? "inbound" : "outbound"}'
+          -- Sport Center payments are represented canonically by sport_payments.
+          -- Their accounting_payments row is only the accounting/journal link;
+          -- including it here would create a second candidate for one event.
+          AND (ap.source_type IS NULL OR ap.source_type <> 'sport_center')
           ${coFilter.replace("##TBL##", "ap")}
       `,
     },
