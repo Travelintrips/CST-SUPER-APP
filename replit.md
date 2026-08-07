@@ -104,3 +104,61 @@ pnpm install
 
 - Keep the existing monorepo structure and stack
 - Use pnpm (not npm or yarn)
+
+---
+
+## ⚠️ Aturan Wajib: Aset Gambar & File Biner
+
+### DILARANG keras: menyimpan gambar/biner di git
+
+Semua gambar, foto produk, foto menu, ilustrasi, dan file biner **WAJIB** disimpan di **Supabase Storage**, bukan di dalam repository git. Ini aturan permanen yang tidak boleh dilanggar oleh agen maupun developer.
+
+**Yang DILARANG di-commit ke git:**
+- File `*.png`, `*.jpg`, `*.jpeg`, `*.webp`, `*.gif` di dalam folder `public/` atau `assets/` manapun (kecuali yang dikecualikan di bawah)
+- File upload hasil user (`pos-images/`, `portal/images/`, dsb.)
+- Foto menu, foto produk, foto marketing, foto testimonial
+- Screenshot atau gambar dokumentasi besar (>100KB)
+- File biner apapun yang bisa berubah-ubah
+
+**Yang BOLEH tetap di git (bawaan framework/build tool):**
+| File | Alasan |
+|------|--------|
+| `favicon.svg` | Icon kecil, bagian dari build |
+| `cst-driver/assets/images/icon.png` | Wajib ada untuk Expo build |
+| `*/public/opengraph.jpg` | OG image statis untuk SEO — boleh di git jika <200KB |
+| Logo vector (`*.svg`) | Ukuran kecil, bukan foto |
+
+### Cara benar menyimpan gambar
+
+```
+1. Upload ke Supabase Storage via API:
+   PUT /api/storage/upload  (bucket: portal/images/, pos-images/, menu/, dll.)
+
+2. Simpan URL Supabase ke database (tabel products, menu_items, dst.)
+
+3. Di frontend: gunakan URL Supabase langsung (bukan path lokal /public/...)
+   Contoh: https://<project>.supabase.co/storage/v1/object/public/portal/images/hero.webp
+```
+
+### Status migrasi (per Agustus 2026)
+
+| Folder | Status | Jumlah file | Prioritas |
+|--------|--------|-------------|-----------|
+| `customer-portal/public/images/` | ❌ Belum | ~150 file, 152MB | 🔴 Tinggi |
+| `customer-portal/public/menu/` | ❌ Belum | ~20 file | 🔴 Tinggi |
+| `bizportal/public/menu/` | ❌ Belum | ~10 file | 🟡 Sedang |
+| `api-server/public/pos-images/` | ❌ Belum | 2 file | 🟡 Sedang |
+| `bizportal/public/Screenshot_*.jpg` | ❌ Hapus | 4 file | 🟡 Sedang |
+| `cst-driver/assets/hero-*.png` | ❌ Belum | 4 file | 🟢 Rendah |
+| `logistic-order/public/logocst*.jpg` | ❌ Belum | 2 file | 🟢 Rendah |
+
+**Total gambar yang harus dimigrasikan: ±223 file**
+
+### Untuk agen AI: instruksi wajib
+
+Jika kamu (agen AI) perlu menambah gambar ke project ini:
+1. **JANGAN** copy file ke folder `public/` atau `assets/`
+2. **JANGAN** commit file gambar ke git
+3. **WAJIB** gunakan Supabase Storage: upload via `uploadToSupabase()` di `artifacts/api-server/src/lib/supabaseStorage.ts`
+4. Simpan URL hasil upload ke database, bukan path lokal
+5. Jika ragu, tanya dulu sebelum menyimpan file biner apapun
