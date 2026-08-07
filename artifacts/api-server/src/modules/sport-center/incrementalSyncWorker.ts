@@ -202,6 +202,18 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
           updated_at = NOW()
       `);
 
+      // Propagate source method changes to Accounting Hub, including records
+      // that were created before this incremental sync ran.
+      await db.execute(sql`
+        UPDATE accounting_payments ap
+        SET payment_method = ${pay.payment_method ?? "cash"}
+        WHERE ap.source_type = 'sport_center'
+          AND ap.source_doc_id = (
+            SELECT id FROM sport_payments
+            WHERE payment_number = ${scPaymentNumber}
+            LIMIT 1
+          )
+      `).catch(() => {});
       // Update booking payment_status jika sekarang paid
       if (mappedStatus === "paid" && localBookingId) {
         await db.execute(sql`

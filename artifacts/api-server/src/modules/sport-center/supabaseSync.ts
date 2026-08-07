@@ -614,6 +614,13 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
 
       if (existing.rows.length > 0) {
         const existingRow = existing.rows[0] as any;
+        // Method adalah metadata transaksi yang harus selalu mengikuti sumber
+        // Sport Center, termasuk bila payment sudah pernah diposting.
+        await db.execute(sql`
+          UPDATE accounting_payments
+          SET payment_method = ${row.method ?? "cash"}
+          WHERE id = ${existingRow.id}
+        `).catch(() => {});
         // Jika entry_id belum terhubung, coba link sekarang
         if (!existingRow.entry_id) {
           const entryRes = await db.execute(sql`
@@ -672,11 +679,12 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
       const insertRes = await db.execute(sql`
         INSERT INTO accounting_payments
           (company_id, payment_number, payment_type, status, amount, journal_id,
-           partner_name, date, ref, memo, source_type, source_doc_id, entry_id)
+           partner_name, date, ref, memo, payment_method, source_type, source_doc_id, entry_id)
         VALUES
           (${companyId}, ${acctPayNumber}, 'inbound', 'posted', ${String(Number(row.amount))},
            ${journalId ?? null}, ${row.customer_name ?? "Customer"}, ${payDate}::date,
            ${row.booking_number}, ${'Sport Center: ' + row.booking_number},
+           ${row.method ?? "cash"},
            'sport_center', ${row.sp_id}, ${entryId})
         ON CONFLICT DO NOTHING
         RETURNING id

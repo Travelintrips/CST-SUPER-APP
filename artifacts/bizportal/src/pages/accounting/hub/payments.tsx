@@ -15,6 +15,7 @@ interface PaymentRow {
   payment_number: string | null; payment_type: string; status: string;
   amount: string; date: string; ref: string | null; memo: string | null;
   partner_name: string | null; journal_name: string; journal_type: string;
+  payment_method: string | null;
   source_type: string | null; posted_at: string | null; voided_at: string | null;
   source_posting_status: string | null; source_posting_error: string | null; source_reference: string | null;
 }
@@ -130,6 +131,7 @@ export default function AccountingHubPaymentsPage() {
               <th className="px-3 py-2 text-left">Tipe</th>
               <th className="px-3 py-2 text-left">Jurnal</th>
               <th className="px-3 py-2 text-left">Mitra</th>
+              <th className="px-3 py-2 text-left">Metode</th>
               <th className="px-3 py-2 text-right">Jumlah</th>
               <th className="px-3 py-2 text-left">Status</th>
               <th className="px-3 py-2 text-left">Referensi / Error</th>
@@ -138,7 +140,7 @@ export default function AccountingHubPaymentsPage() {
           </thead>
           <tbody>
             {rows.length === 0 ? (
-              <tr><td colSpan={10} className="text-center py-8 text-muted-foreground">{loading ? "Memuat..." : "Tidak ada data"}</td></tr>
+              <tr><td colSpan={11} className="text-center py-8 text-muted-foreground">{loading ? "Memuat..." : "Tidak ada data"}</td></tr>
             ) : rows.map(r => (
               <tr key={r.id} className="border-t hover:bg-muted/40">
                 <td className="px-3 py-2 whitespace-nowrap text-xs">{r.date}</td>
@@ -151,6 +153,7 @@ export default function AccountingHubPaymentsPage() {
                 </td>
                 <td className="px-3 py-2 text-xs">{r.journal_name}</td>
                 <td className="px-3 py-2 text-xs">{r.partner_name ?? "—"}</td>
+                <td className="px-3 py-2 text-xs">{r.payment_method ?? "—"}</td>
                 <td className="px-3 py-2 text-right font-mono text-xs font-semibold">{fmt(r.amount)}</td>
                 <td className="px-3 py-2">
                   <Badge

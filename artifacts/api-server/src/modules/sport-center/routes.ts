@@ -35,6 +35,7 @@ async function insertAccountingPaymentForSportCenter(args: {
   partnerName: string;
   ref: string;
   memo: string;
+  paymentMethod?: string | null;
   sourceDocId: number;
   date?: string;
   createdById?: string | null;
@@ -87,6 +88,7 @@ async function insertAccountingPaymentForSportCenter(args: {
       date: payDate,
       ref: args.ref || null,
       memo: args.memo || null,
+      paymentMethod: args.paymentMethod ?? args.method ?? null,
       entryId: null,
       sourceType: "sport_center",
       sourceDocId: args.sourceDocId,
@@ -220,6 +222,7 @@ async function ensurePaymentForPaidBooking(
       partnerName: String(row.customer_name ?? ""),
       ref: bookingCodeStr,
       memo: 'Auto-created (paid booking)',
+      paymentMethod: acctMethod,
       sourceDocId: sportPaymentId,
       date: acctDate,
       createdById,
@@ -5378,7 +5381,7 @@ router.post("/sync/full-audit", async (req, res) => {
             const seq = Number((cntRes.rows[0] as any)?.seq ?? 0);
             const acctPayNumber = `SCPAY/${year}/${(seq + 1).toString().padStart(4, "0")}`;
             const bk = bkMap[pay.booking_id] ? { order_number: bkMap[pay.booking_id], customer_name: "Customer" } : { order_number: `SC-PAY-${pay.id}`, customer_name: "Customer" };
-            await db.execute(sql`INSERT INTO accounting_payments (company_id, payment_number, payment_type, status, amount, journal_id, partner_name, date, ref, memo, source_type, source_doc_id) VALUES (1, ${acctPayNumber}, 'inbound', 'posted', ${String(Number(pay.amount))}, ${journalId}, ${bk.customer_name}, ${payDate}, ${bk.order_number}, ${'Sport Center: ' + bk.order_number}, 'sport_center', ${pay.id})`);
+            await db.execute(sql`INSERT INTO accounting_payments (company_id, payment_number, payment_type, status, amount, journal_id, partner_name, date, ref, memo, payment_method, source_type, source_doc_id) VALUES (1, ${acctPayNumber}, 'inbound', 'posted', ${String(Number(pay.amount))}, ${journalId}, ${bk.customer_name}, ${payDate}, ${bk.order_number}, ${'Sport Center: ' + bk.order_number}, ${pay.payment_method ?? "cash"}, 'sport_center', ${pay.id})`);
             accountingResult.synced++;
           } catch (err: any) {
             const msg = err?.message ?? String(err);

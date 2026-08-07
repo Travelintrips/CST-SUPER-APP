@@ -49,6 +49,7 @@ export interface PostingRequest {
   amount?: string;
   partnerName?: string;
   paymentRef?: string;
+  paymentMethod?: string | null;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -203,6 +204,7 @@ export async function postToAccountingHub(req: PostingRequest): Promise<{ entryI
         date,
         ref,
         description,
+        paymentMethod: req.paymentMethod ?? null,
         status: "draft",
         source: resolvedSource as any,
         sourceId: ctx.sourceId ?? null,
@@ -251,6 +253,7 @@ export async function postToAccountingHub(req: PostingRequest): Promise<{ entryI
           date,
           ref: req.paymentRef ?? ref,
           memo: description,
+          paymentMethod: req.paymentMethod ?? null,
           partnerName: req.partnerName ?? null,
           entryId,
           sourceType: ctx.sourceModule,

@@ -284,6 +284,8 @@ export const accountingEntriesTable = pgTable("accounting_entries", {
   date: date("date").notNull(),
   ref: text("ref"),
   description: text("description"),
+  /** Metode pembayaran sumber, mis. cash, transfer, qris. Metadata immutable jurnal. */
+  paymentMethod: text("payment_method"),
   status: accountingEntryStatusEnum("status").notNull().default("posted"),
   source: accountingEntrySourceEnum("source").notNull().default("manual"),
   sourceId: integer("source_id"),
@@ -460,6 +462,8 @@ export const accountingPaymentsTable = pgTable("accounting_payments", {
   date: date("date").notNull(),
   ref: text("ref"),
   memo: text("memo"),
+  /** Metode pembayaran sumber yang disalin dari modul transaksi. */
+  paymentMethod: text("payment_method"),
   entryId: integer("entry_id").references(() => accountingEntriesTable.id, {
     onDelete: "set null",
   }),

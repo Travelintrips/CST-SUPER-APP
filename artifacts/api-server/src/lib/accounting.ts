@@ -86,6 +86,8 @@ export interface PostingInput {
   date: Date;
   ref?: string | null;
   description?: string | null;
+  /** Metode pembayaran sumber, disalin ke metadata header jurnal. */
+  paymentMethod?: string | null;
   source?:
     | "manual"
     | "sales_invoice"
@@ -380,6 +382,7 @@ async function _postEntryCore(
     date: dateStr,
     ref: input.ref ?? null,
     description: input.description ?? null,
+    paymentMethod: input.paymentMethod ?? null,
     // Always insert as 'draft' first so trg_block_lines_mutation allows line inserts.
     // After lines are inserted, we'll UPDATE to initialStatus (draft→posted is allowed).
     status: "draft" as "posted",
@@ -2548,6 +2551,7 @@ export async function postSportCenterPaymentAtomic(
       date:        new Date(args.date),
       ref:         args.sourceRef,
       description,
+      paymentMethod: args.method,
       source:      entrySource,
       sourceId:    args.sourceId,
       createdById: args.createdById ?? null,
@@ -2592,12 +2596,13 @@ export async function postSportCenterPaymentAtomic(
     INSERT INTO accounting_payments
       (company_id, payment_number, payment_type, status, amount,
        journal_id, partner_name, date, ref, memo,
-       entry_id, source_type, source_doc_id, created_by_id)
+       payment_method, entry_id, source_type, source_doc_id, created_by_id)
     VALUES
       (${args.companyId}, ${acctPayNumber}, 'inbound', 'posted', ${String(amt)},
        ${journalId}, ${args.customerName || null}, ${args.date},
        ${args.sourceRef || null},
        ${"Pembayaran sport center " + args.type + " " + args.sourceRef},
+       ${args.method || null},
        ${entry.id}, 'sport_center', ${args.paymentId}, ${args.createdById ?? null})
     RETURNING id
   `);

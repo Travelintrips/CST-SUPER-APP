@@ -20,7 +20,8 @@ export async function runAccountingHubMigration(): Promise<void> {
         ADD COLUMN IF NOT EXISTS source_table  TEXT,
         ADD COLUMN IF NOT EXISTS posted_at     TIMESTAMP,
         ADD COLUMN IF NOT EXISTS voided_at     TIMESTAMP,
-        ADD COLUMN IF NOT EXISTS void_entry_id INTEGER
+        ADD COLUMN IF NOT EXISTS void_entry_id INTEGER,
+        ADD COLUMN IF NOT EXISTS payment_method TEXT
     `);
 
     // ── 2. accounting_payments: tambah kolom hub ────────────────────────────
@@ -31,8 +32,22 @@ export async function runAccountingHubMigration(): Promise<void> {
         ADD COLUMN IF NOT EXISTS source_schema TEXT,
         ADD COLUMN IF NOT EXISTS source_module TEXT,
         ADD COLUMN IF NOT EXISTS posted_at     TIMESTAMP,
-        ADD COLUMN IF NOT EXISTS voided_at     TIMESTAMP
+        ADD COLUMN IF NOT EXISTS voided_at     TIMESTAMP,
+        ADD COLUMN IF NOT EXISTS payment_method TEXT
     `);
+
+    // ── 2b. Backfill source payment method ───────────────────────────────────
+    // Sport Center is canonical in sport_center.sport_payments, while the
+    // accounting mirror uses public.sport_payments.method.
+    await db.execute(sql`
+      UPDATE accounting_payments ap
+      SET payment_method = sp.method
+      FROM sport_payments sp
+      WHERE ap.source_type = 'sport_center'
+        AND ap.source_doc_id = sp.id
+        AND sp.method IS NOT NULL
+        AND ap.payment_method IS DISTINCT FROM sp.method
+    `).catch((err) => logger.warn({ err }, "[AccountingHub] Sport Center payment method backfill failed"));
 
     // ── 3. accounting_posting_errors ─────────────────────────────────────────
     await db.execute(sql`
@@ -212,6 +227,7 @@ export async function runAccountingHubMigration(): Promise<void> {
         p.date,
         p.ref,
         p.memo,
+        p.payment_method,
         p.partner_name,
         p.source_type,
         p.source_doc_id,

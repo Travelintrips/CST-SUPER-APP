@@ -304,7 +304,7 @@ router.get("/hub/general-ledger", async (req, res) => {
         coa.id AS account_id, coa.code AS account_code, coa.name AS account_name,
         coa.type AS account_type, coa.normal_balance,
         el.debit, el.credit, e.created_at, e.posted_at,
-        ap.partner_name, ap.source_doc_number,
+        ap.partner_name, ap.source_doc_number, ap.payment_method,
         -- running_balance: null for non-posted rows (they don't affect balance)
         CASE WHEN e.status = 'posted'
              THEN COALESCE(ob.opening_balance, 0) + rb.cum_balance
