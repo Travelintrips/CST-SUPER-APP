@@ -717,9 +717,9 @@ router.get("/mutations", async (req, res) => {
       WHEN 'invoice' THEN (
         SELECT jsonb_build_object(
           'amount', sd.total_amount,
-          'date', sd.issue_date,
+          'date', COALESCE(sd.invoice_date::text, sd.created_at::date::text),
           'reference', sd.doc_number,
-          'documentType', sd.doc_type
+          'documentType', sd.kind
         )
         FROM sales_documents sd
         WHERE sd.id = m.candidate_id
@@ -763,11 +763,11 @@ router.get("/mutations", async (req, res) => {
   // ── Query SQL UNION ALL ────────────────────────────────────────────────────
   const bmSelect = `
     SELECT
-      bm.id, bm.transaction_date, bm.description,
-      bm.credit_amount, bm.debit_amount, bm.amount, bm.direction,
+      bm.id, bm.transaction_date::text, bm.description,
+      bm.credit_amount, bm.debit_amount, bm.amount, bm.direction::text,
       bm.mutation_key, bm.normalized_description,
       bm.provider_name, bm.provider_order_id,
-      bm.status, bm.journal_entry_id, bm.company_id,
+      bm.status::text, bm.journal_entry_id, bm.company_id,
       bm.uploaded_proof_url, bm.source,
        'bank_mutations' AS _source_table,
        (SELECT json_agg(
@@ -2590,12 +2590,12 @@ router.post("/mutations/:mutationId/multi-invoice-match", async (req, res) => {
              COALESCE(c.name, '') AS customer_name
       FROM sales_documents sd
       LEFT JOIN customers c ON c.id = sd.customer_id
-      WHERE sd.doc_type = 'invoice'
+      WHERE sd.kind = 'invoice'
         AND sd.company_id = ${companyId}
         AND sd.status NOT IN ('paid','cancelled','void')
         AND sd.total_amount <= ${amount} * 1.05
         AND sd.total_amount >= ${amount} * 0.01
-        AND sd.issue_date >= '${txDate}'::date - 90
+        AND COALESCE(sd.invoice_date, sd.created_at::date) >= '${txDate}'::date - 90
       ORDER BY sd.total_amount DESC
       LIMIT 100
     `)).catch(() => ({ rows: [] as unknown[] }));

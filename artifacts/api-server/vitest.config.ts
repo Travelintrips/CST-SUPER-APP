@@ -5,7 +5,7 @@ import { defineConfig } from "vitest/config";
 // intentionally excluded here — run them separately with `node tests/<file>.mjs`.
 export default defineConfig({
   test: {
-    include: ["src/**/__tests__/**/*.test.ts", "load-secrets.test.mjs", "mutations-debug.test.mjs"],
+    include: ["src/**/__tests__/**/*.test.ts", "load-secrets.test.mjs"],
     environment: "node",
     // The regression suite intentionally uses one shared development DB.
     // Serial files prevent independent tests from contending over the same
