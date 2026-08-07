@@ -434,6 +434,22 @@ interface Candidate {
   order_id_match: boolean;
   proof_match: boolean;
   status: string;
+  details?: CandidateDetails | null;
+}
+
+interface CandidateDetails {
+  amount?: number | string | null;
+  date?: string | null;
+  name?: string | null;
+  reference?: string | null;
+  paymentNumber?: string | null;
+  memo?: string | null;
+  method?: string | null;
+  status?: string | null;
+  paymentType?: string | null;
+  sourceType?: string | null;
+  bookingId?: number | null;
+  documentType?: string | null;
 }
 
 interface JournalLine {
@@ -578,6 +594,49 @@ function ScoreBadge({ score }: { score: number }) {
     <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-white text-xs font-bold ${color}`}>
       {score}%
     </span>
+  );
+}
+
+function CandidateDetailsBlock({
+  candidate,
+  compact = false,
+}: {
+  candidate: Candidate;
+  compact?: boolean;
+}) {
+  const d = candidate.details;
+  if (!d) return null;
+
+  const rows = [
+    { label: "Nominal", value: d.amount != null ? idr(d.amount) : null },
+    { label: "Tanggal", value: d.date ? fmtDate(String(d.date)) : null },
+    { label: "Nama / Partner", value: d.name },
+    { label: "No. Pembayaran", value: d.paymentNumber },
+    { label: "Referensi", value: d.reference },
+    { label: "Metode", value: d.method },
+    { label: "Tipe", value: d.paymentType ?? d.documentType },
+    { label: "Status", value: d.status },
+    { label: "Memo / Catatan", value: d.memo },
+  ].filter(row => row.value != null && String(row.value).trim() !== "");
+
+  if (rows.length === 0) return null;
+
+  return (
+    <div className={`rounded-md bg-muted/35 border border-dashed space-y-1 ${compact ? "p-2 mt-1.5" : "p-2.5 mt-2"}`}>
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        Detail transaksi sumber
+      </p>
+      <div className={`grid ${compact ? "grid-cols-1" : "grid-cols-[auto_1fr]"} gap-x-3 gap-y-1`}>
+        {rows.map(row => (
+          <React.Fragment key={row.label}>
+            <span className="text-[10px] text-muted-foreground">{row.label}</span>
+            <span className={`text-xs font-medium ${compact ? "" : "text-right"} break-words`}>
+              {String(row.value)}
+            </span>
+          </React.Fragment>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -1685,6 +1744,7 @@ function MutationDetailPanel({
                         {c.order_id_match && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950/30 px-1.5 py-0.5 rounded">✓ Order ID</span>}
                         {c.proof_match    && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950/30 px-1.5 py-0.5 rounded">✓ Bukti Transfer</span>}
                       </div>
+                       <CandidateDetailsBlock candidate={c} />
                     </div>
                   ))}
                 </div>
@@ -2643,6 +2703,7 @@ export default function BankReconciliationPage() {
                         {c.order_id_match && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950/30 px-1.5 py-0.5 rounded">✓ Order ID</span>}
                         {c.proof_match    && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950/30 px-1.5 py-0.5 rounded">✓ Bukti Transfer</span>}
                       </div>
+                       <CandidateDetailsBlock candidate={c} compact />
                     </div>
                   ))}
                   <div

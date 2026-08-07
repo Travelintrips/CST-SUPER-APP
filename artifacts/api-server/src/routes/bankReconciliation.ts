@@ -675,6 +675,91 @@ router.get("/mutations", async (req, res) => {
   bmiFilters.push(`NOT EXISTS (SELECT 1 FROM bank_mutations bm2 WHERE bm2.mutation_key = COALESCE(bmi.unique_key, bmi.id::text))`);
   const bmiWhere = `WHERE ${bmiFilters.join(" AND ")}`;
 
+  // Enrich candidate rows with the source transaction details that the user
+  // needs to verify a match.  The match table intentionally stores only the
+  // stable type/id and scoring evidence; these details are read live so the
+  // panel does not show stale payment information.
+  const candidateDetailsSql = `
+    CASE m.candidate_type
+      WHEN 'accounting_payment' THEN (
+        SELECT jsonb_build_object(
+          'amount', ap.amount,
+          'date', ap.date,
+          'name', ap.partner_name,
+          'reference', ap.ref,
+          'paymentNumber', ap.payment_number,
+          'memo', ap.memo,
+          'status', ap.status,
+          'paymentType', ap.payment_type,
+          'sourceType', ap.source_type
+        )
+        FROM accounting_payments ap
+        WHERE ap.id = m.candidate_id
+      )
+      WHEN 'sport_payment' THEN (
+        SELECT jsonb_build_object(
+          'amount', sp.amount,
+          'date', COALESCE(sp.paid_at::date, sp.created_at::date),
+          'name', COALESCE(c.name, sb.customer_name),
+          'reference', CONCAT('SPORT-', sp.booking_id::text),
+          'paymentNumber', sp.payment_number,
+          'memo', sp.notes,
+          'method', sp.method,
+          'status', sp.status,
+          'bookingId', sp.booking_id,
+          'paymentType', sp.payment_type
+        )
+        FROM sport_payments sp
+        LEFT JOIN customers c ON c.id = sp.customer_id
+        LEFT JOIN sport_bookings sb ON sb.id = sp.booking_id
+        WHERE sp.id = m.candidate_id
+      )
+      WHEN 'invoice' THEN (
+        SELECT jsonb_build_object(
+          'amount', sd.total_amount,
+          'date', sd.issue_date,
+          'reference', sd.doc_number,
+          'documentType', sd.doc_type
+        )
+        FROM sales_documents sd
+        WHERE sd.id = m.candidate_id
+      )
+      WHEN 'expense' THEN (
+        SELECT jsonb_build_object(
+          'amount', e.total,
+          'date', e.date,
+          'name', e.description,
+          'reference', e.expense_number
+        )
+        FROM expenses e
+        WHERE e.id = m.candidate_id
+      )
+      WHEN 'logistic_order' THEN (
+        SELECT jsonb_build_object(
+          'amount', lo.total_price,
+          'date', lo.created_at::date,
+          'name', lo.sender_name,
+          'reference', lo.order_number,
+          'status', lo.status
+        )
+        FROM logistic_orders lo
+        WHERE lo.id = m.candidate_id
+      )
+      WHEN 'tenant_invoice' THEN (
+        SELECT jsonb_build_object(
+          'amount', ti.total_amount,
+          'date', ti.issued_date,
+          'name', COALESCE(t.name, ti.tenant_name),
+          'reference', ti.invoice_number
+        )
+        FROM tenant_invoices ti
+        LEFT JOIN tenants t ON t.id = ti.tenant_id
+        WHERE ti.id = m.candidate_id
+      )
+      ELSE NULL
+    END
+  `;
+
   // ── Query SQL UNION ALL ────────────────────────────────────────────────────
   const bmSelect = `
     SELECT
@@ -684,8 +769,11 @@ router.get("/mutations", async (req, res) => {
       bm.provider_name, bm.provider_order_id,
       bm.status, bm.journal_entry_id, bm.company_id,
       bm.uploaded_proof_url, bm.source,
-      'bank_mutations' AS _source_table,
-      (SELECT json_agg(m ORDER BY m.match_score DESC)
+       'bank_mutations' AS _source_table,
+       (SELECT json_agg(
+          to_jsonb(m) || jsonb_build_object('details', ${candidateDetailsSql})
+          ORDER BY m.match_score DESC
+        )
        FROM bank_reconciliation_matches m
        WHERE m.mutation_id = bm.id
       ) AS candidates
