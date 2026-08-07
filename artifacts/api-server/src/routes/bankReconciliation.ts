@@ -22,7 +22,7 @@ import ExcelJS from "exceljs";
 import { Readable } from "stream";
 import multer from "multer";
 import { emitFinancialEvent } from "../lib/financialEventBus.js";
-import { checkIdempotency, recordIdempotency } from "../lib/financial/idempotency.js";
+import { createIdempotencyMiddleware } from "../lib/financial/idempotency.js";
 import {
   runUnifiedMatching,
   approveAndCreateJournal,
@@ -754,22 +754,10 @@ router.get("/mutations", async (req, res) => {
 // RULE 3: Wrapped dalam real DB transaction (SELECT FOR UPDATE efektif).
 // RULE 4: Idempotency check via x-idempotency-key header.
 // RULE 5: Kegagalan otomatis ter-capture ke failed_financial_jobs.
-router.post("/:mutationId/approve", async (req, res) => {
+router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:approve"), async (req, res) => {
   await runBankReconciliationCoreMigration();
   const mutId = parseInt(String(req.params.mutationId ?? ""), 10);
   if (isNaN(mutId)) return res.status(400).json({ error: "ID tidak valid" });
-
-  // RULE 4: Idempotency — cegah double-approve dari retry request yang sama
-  const idempotencyKey = req.headers["x-idempotency-key"] as string | undefined;
-  if (idempotencyKey?.trim()) {
-    const cached = await checkIdempotency(idempotencyKey, "reconciliation:approve");
-    if (cached.hit) {
-      return res.status(cached.code ?? 200).json({
-        ...(cached.body as Record<string, unknown>),
-        __idempotency: { cached: true, key: idempotencyKey },
-      });
-    }
-  }
 
   const { match_id, candidate_type, candidate_id, note, manual_coa_code } = req.body;
   const actor = (req as any).user?.email ?? "admin";
@@ -859,11 +847,6 @@ router.post("/:mutationId/approve", async (req, res) => {
   }
 
   const responseBody = { ok: true, journal_entry_id: result.journalEntryId };
-
-  // Record idempotency key — future duplicate requests mendapat cached response
-  if (idempotencyKey?.trim()) {
-    recordIdempotency(idempotencyKey, "reconciliation:approve", 200, responseBody, actor).catch(() => {});
-  }
 
   audit(req, { action: "approve", module: "accounting", resourceId: `bank-mutation-${mutId}`, after: { journal_entry_id: result.journalEntryId } });
 
