@@ -857,8 +857,15 @@ menetapkan batas total pembayaran sebelum desain data dipilih.
 **Decision Owner**  
 Finance owner.
 
+**Selected Option**  
+Option C — Multi-payment terhadap satu AP Preparation hanya diperbolehkan
+apabila mengikuti installment/payment schedule yang telah disetujui. Setiap
+termin diproses melalui Payment Module existing, mengikuti approval hierarchy,
+dan outstanding balance dihitung secara server-side. Marketplace tidak
+mengelola schedule pembayaran maupun outstanding secara mandiri.
+
 **Status**  
-PENDING
+APPROVED
 
 ### BD-09-006
 
@@ -1593,8 +1600,15 @@ Tidak memilih opsi. Bedakan business multi-payment dari provider retry dahulu.
 **Decision Required From Product Owner**  
 Tetapkan cardinality payment, batas aggregate, dan definisi completion.
 
+**Selected Option**  
+Option C — Multi-payment terhadap satu AP Preparation hanya diperbolehkan
+apabila mengikuti installment/payment schedule yang telah disetujui. Setiap
+termin diproses melalui Payment Module existing, mengikuti approval hierarchy,
+dan outstanding balance dihitung secara server-side. Marketplace tidak
+mengelola schedule pembayaran maupun outstanding secara mandiri.
+
 **Status**  
-PENDING
+APPROVED
 
 ### BD-09-006
 
@@ -2174,7 +2188,7 @@ PENDING
 | BD-09-002 | APPROVED | NO | Product Owner + Finance Owner |
 | BD-09-003 | APPROVED | NO | Product Owner + Finance/Treasury Owner |
 | BD-09-004 | APPROVED | NO | Product Owner + Finance Owner |
-| BD-09-005 | PENDING | YES | Finance Owner |
+| BD-09-005 | APPROVED | NO | Finance Owner |
 | BD-09-006 | PENDING | YES | Finance/Treasury Owner |
 | BD-09-007 | PENDING | YES | Finance/Treasury Owner + Payment Integration Owner |
 | BD-09-008 | PENDING | YES | Finance/Treasury Owner + Payment Integration Owner |
@@ -2186,12 +2200,13 @@ PENDING
 ## Decision Status Summary
 
 - Total business decision: **12**
-- Total blocking: **8**
-- Total ready: **4**
-- Total pending: **8**
+- Total blocking: **7**
+- Total ready: **5**
+- Total pending: **7**
 - BD-09-001 telah menyetujui Option A, BD-09-002 telah menyetujui Option B,
-  BD-09-003 telah menyetujui Option A, dan BD-09-004 telah menyetujui
-  Option C; decision lain tetap belum disetujui.
+  BD-09-003 telah menyetujui Option A, BD-09-004 telah menyetujui Option C,
+  dan BD-09-005 telah menyetujui Option C; decision lain tetap belum
+  disetujui.
 - Sprint 09 tetap **NOT STARTED** dan **NO GO** sampai seluruh decision owner
   menetapkan boundary payment, approval/execution authority, accounting,
   reconciliation, serta acceptance criteria.
