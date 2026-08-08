@@ -12,7 +12,7 @@ import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "./logger.js";
 import { getPostingEngine } from "./posting-engine/index.js";
-import { isCashPaymentMethod, normalizePaymentMethod } from "./accounting.js";
+import { isCashPaymentMethod, normalizePaymentMethod, resolvePaymentDestination } from "./accounting.js";
 
 export type ModuleType = "sport_center" | "tenant" | "logistics";
 
@@ -51,8 +51,11 @@ async function resolveJournal(companyId: number, method: string): Promise<number
   if (settings) {
     const cashJId = settings["cash_journal_id"] ? Number(settings["cash_journal_id"]) : null;
     const bankJId = settings["bank_journal_id"] ? Number(settings["bank_journal_id"]) : null;
-    if (isCash && cashJId) return cashJId;
-    if (!isCash && bankJId) return bankJId;
+    const destination = resolvePaymentDestination(method, {
+      cashJournalId: cashJId,
+      bankJournalId: bankJId,
+    });
+    if (destination.journalId) return destination.journalId;
     if (cashJId) return cashJId;
     if (bankJId) return bankJId;
   }
@@ -128,7 +131,7 @@ async function getAccountName(accountId: number): Promise<string | null> {
  * memposting ke akun yang salah kategori.
  */
 async function resolveBankAccount(companyId: number, method: string): Promise<number | null> {
-  const isCash = ["cash", "tunai"].includes(method.toLowerCase());
+  const isCash = isCashPaymentMethod(method);
   const wantCategory: "kas" | "bank" = isCash ? "kas" : "bank";
 
   const settingsRes = await db.execute(sql`

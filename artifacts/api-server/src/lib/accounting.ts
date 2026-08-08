@@ -158,6 +158,42 @@ export function isCashPaymentMethod(method: string | null | undefined): boolean 
   return normalizePaymentMethod(method) === "cash";
 }
 
+export interface PaymentDestinationSettings {
+  defaultCashAccountId?: number | null;
+  defaultBankAccountId?: number | null;
+  cashJournalId?: number | null;
+  bankJournalId?: number | null;
+}
+
+/**
+ * Shared destination policy for payment posting.
+ *
+ * QRIS is intentionally treated as non-cash until a dedicated QRIS account
+ * mapping exists. This keeps webhook, Sport Center, and bulk-ingest postings
+ * on the same bank account/journal path.
+ */
+export function resolvePaymentDestination(
+  method: string | null | undefined,
+  settings: PaymentDestinationSettings,
+): {
+  paymentMethod: string;
+  isCash: boolean;
+  accountId: number | null;
+  journalId: number | null;
+  journalCode: "CSH" | "BNK";
+} {
+  const paymentMethod = normalizePaymentMethod(method) ?? "cash";
+  const isCash = paymentMethod === "cash";
+  const accountId = isCash
+    ? (settings.defaultCashAccountId ?? settings.defaultBankAccountId ?? null)
+    : (settings.defaultBankAccountId ?? settings.defaultCashAccountId ?? null);
+  const journalId = isCash
+    ? (settings.cashJournalId ?? settings.bankJournalId ?? null)
+    : (settings.bankJournalId ?? settings.cashJournalId ?? null);
+  const journalCode = isCash && settings.cashJournalId ? "CSH" : "BNK";
+  return { paymentMethod, isCash, accountId, journalId, journalCode };
+}
+
 /**
  * Resolve akun Pendapatan Sewa Tenant (4-1021) dari settings lalu fallback ke COA lookup.
  * Urutan: settings.tenantRentIncomeAccountId → COA LIKE '4-1021%' → fallbackId.
@@ -1868,19 +1904,8 @@ export async function postPaymentReceived(args: {
 }): Promise<boolean> {
   try {
     const settings = await ensureAccountingSettings(args.companyId ?? undefined);
-    const paymentMethod = normalizePaymentMethod(args.paymentMethod);
-
-    // Tentukan apakah tunai (kas) atau non-tunai (bank transfer / QRIS)
-    // QRIS = non-cash → masuk ke Bank journal (BNK), bukan Cash journal (CSH)
-    const isCash = isCashPaymentMethod(paymentMethod);
-
-    const targetAccountId = isCash
-      ? (settings.defaultCashAccountId ?? settings.defaultBankAccountId)
-      : settings.defaultBankAccountId;
-    const targetJournalId = isCash
-      ? (settings.cashJournalId ?? settings.bankJournalId)
-      : settings.bankJournalId;
-    const journalCode = isCash ? "CSH" : "BNK";
+    const destination = resolvePaymentDestination(args.paymentMethod, settings);
+    const { paymentMethod, accountId: targetAccountId, journalId: targetJournalId, journalCode } = destination;
 
     if (!targetJournalId || !targetAccountId) {
       logger.warn(
@@ -2347,17 +2372,9 @@ export async function postSportCenterBooking(args: {
     }
 
     const settings = await ensureAccountingSettings(args.companyId ?? 1);
-    const paymentMethod = normalizePaymentMethod(args.paymentMethod);
-
-    const isCash = isCashPaymentMethod(paymentMethod);
-    const debitAccountId = isCash
-      ? (settings.defaultCashAccountId ?? settings.defaultBankAccountId)
-      : (settings.defaultBankAccountId ?? settings.defaultCashAccountId);
+    const destination = resolvePaymentDestination(args.paymentMethod, settings);
+    const { paymentMethod, accountId: debitAccountId, journalId, journalCode } = destination;
     const creditAccountId = await resolveSportCenterBookingAccountId(args.companyId, settings.salesIncomeAccountId);
-    const journalId = isCash
-      ? (settings.cashJournalId ?? settings.bankJournalId)
-      : (settings.bankJournalId ?? settings.cashJournalId);
-    const journalCode = isCash && settings.cashJournalId ? "CSH" : "BNK";
 
     if (!debitAccountId || !creditAccountId || !journalId) {
       logger.warn(
@@ -2503,20 +2520,8 @@ export async function postSportCenterPaymentAtomic(
   // ── 2. Resolve COA + journal — THROW (not silent void) on missing ────────
   const settings = await ensureAccountingSettings(args.companyId);
 
-  const paymentMethod = normalizePaymentMethod(args.method) ?? "cash";
-  const isCash = isCashPaymentMethod(paymentMethod);
-  const journalId = isCash
-    ? (settings.cashJournalId  ?? settings.bankJournalId)
-    : (settings.bankJournalId ?? settings.cashJournalId);
-  const journalCode = (settings.cashJournalId && (isCash || !settings.bankJournalId))
-    ? "CSH" : "BNK";
-
-  // Pilih akun debit berdasarkan metode pembayaran:
-  // - cash/tunai → defaultCashAccountId (Kas kecil CST)
-  // - qris/transfer/card/other → defaultBankAccountId (Bank Mandiri CST)
-  const debitAccountId = isCash
-    ? (settings.defaultCashAccountId ?? settings.defaultBankAccountId)
-    : (settings.defaultBankAccountId ?? settings.defaultCashAccountId);
+  const destination = resolvePaymentDestination(args.method, settings);
+  const { paymentMethod, journalId, journalCode, accountId: debitAccountId } = destination;
 
   // COA for credit side: 4-1017 booking, 4-1016 membership
   // B1 FIX: gunakan client (transaction context) bukan global db agar lookup

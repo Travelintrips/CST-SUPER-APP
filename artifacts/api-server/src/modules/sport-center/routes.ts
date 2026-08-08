@@ -5,7 +5,7 @@ import { requireAdmin } from "../../lib/requireAdmin.js";
 import { resolveCompanyId } from "../../lib/resolveCompany.js";
 import { assertCompanyAccess } from "../../lib/assertCompanyAccess.js";
 import { handleSportCenterSse, broadcastSportCenterEvent } from "./broadcast.js";
-import { normalizePaymentMethod, postSportCenterBooking, postSportCenterBookingReversal, postSportCenterRefund, postSportCenterMembershipPayment, postSportCenterBookingRefundDirect, postSportCenterExpenseEntry, postEntry, resolveSportCenterBookingAccountId, resolveCostCenterId, postSportCenterPaymentAtomic, type DbClient as SportDbClient } from "../../lib/accounting.js";
+import { normalizePaymentMethod, resolvePaymentDestination, postSportCenterBooking, postSportCenterBookingReversal, postSportCenterRefund, postSportCenterMembershipPayment, postSportCenterBookingRefundDirect, postSportCenterExpenseEntry, postEntry, resolveSportCenterBookingAccountId, resolveCostCenterId, postSportCenterPaymentAtomic, type DbClient as SportDbClient } from "../../lib/accounting.js";
 import { ensureAccountingSettings } from "../../lib/accountingSeed.js";
 import { syncFacilityUpsert, syncFacilityDelete, syncAllFacilities, syncBookingUpsert, syncAllBookings, getLastSyncLogs, pullLegacyBookingsFromSupabase, syncPaymentsToAccounting, pullPaymentsFromSupabase, pullFacilitiesFromSupabase, runDailyPaymentSync } from "./supabaseSync.js";
 import { saveAndBroadcast } from "../../lib/notificationStore.js";
@@ -57,11 +57,8 @@ async function insertAccountingPaymentForSportCenter(args: {
 
     // Resolve journal — THROW (not silent return) so missing config surfaces as a real error.
     const settings = await ensureAccountingSettings(args.companyId);
-    const paymentMethod = normalizePaymentMethod(args.paymentMethod ?? args.method) ?? "cash";
-    const isCash = paymentMethod === "cash";
-    const journalId = isCash
-      ? (settings.cashJournalId ?? settings.bankJournalId)
-      : (settings.bankJournalId ?? settings.cashJournalId);
+    const destination = resolvePaymentDestination(args.paymentMethod ?? args.method, settings);
+    const { paymentMethod, journalId } = destination;
     if (!journalId) {
       throw new Error(
         `JOURNAL_MISSING: Tidak ada jurnal Kas/Bank untuk company_id=${args.companyId} method=${args.method}. ` +
@@ -163,7 +160,14 @@ async function ensurePaymentForPaidBooking(
   // These hold the values to use for the accounting insert — either from the
   // existing sport_payments row (backfill path) or the booking defaults (new path).
   let acctAmount = bTotalAmount;
-  let acctMethod = "cash";
+  const bookingPaymentMethod = normalizePaymentMethod(
+    row.payment_method != null
+      ? String(row.payment_method)
+      : row.method != null
+        ? String(row.method)
+        : null,
+  ) ?? "cash";
+  let acctMethod = bookingPaymentMethod;
   let acctDate   = bookingDateStr;
 
   let createdPayRow: Record<string, unknown> | null = null;
@@ -191,7 +195,7 @@ async function ensurePaymentForPaidBooking(
     const spData = (spRow.rows[0] as Record<string, unknown> | undefined) ?? {};
     paymentNumber = String(spData["payment_number"] ?? `PAY-${id}`);
     acctAmount = spData["amount"] != null ? Number(spData["amount"]) : bTotalAmount;
-    acctMethod = spData["method"] != null ? String(spData["method"]) : "cash";
+    acctMethod = normalizePaymentMethod(spData["method"] != null ? String(spData["method"]) : null) ?? "cash";
     acctDate   = spData["paid_at"] != null ? String(spData["paid_at"]).slice(0, 10) : bookingDateStr;
     console.log(`[sport-center] ensurePaymentForPaidBooking: backfilling missing accounting for sport_payment_id=${sportPaymentId} amount=${acctAmount} method=${acctMethod}`);
   } else {
@@ -202,7 +206,7 @@ async function ensurePaymentForPaidBooking(
         (company_id, booking_id, payment_number, amount, method, status,
          paid_at, notes, source, payment_type)
       VALUES
-        (${bCompanyId}, ${id}, ${paymentNumber}, ${bTotalAmount}, 'cash', 'paid',
+        (${bCompanyId}, ${id}, ${paymentNumber}, ${bTotalAmount}, ${bookingPaymentMethod}, 'paid',
          NOW(), 'Auto-created (paid booking)', 'SPORT_CENTER', 'booking')
       RETURNING *
     `);
@@ -255,7 +259,8 @@ async function ensurePaymentForPaidBooking(
       customerName: String(row.customer_name ?? ""),
       facilityName: String(row.facility_name ?? ""),
       date: bookingDateStr,
-      totalPrice: bTotalAmount,
+       totalPrice: bTotalAmount,
+       paymentMethod: acctMethod,
       createdById,
       companyId: bCompanyId,
     }).catch((err: unknown) => console.error('[sport-center] postSportCenterBooking (ensurePayment) failed:', err));
@@ -2360,7 +2365,9 @@ router.patch("/payments/:id", async (req, res) => {
       { resourceType: "sport_payment", resourceId: id },
     )) return;
 
-    const newMethod: string | undefined = req.body.method ?? undefined;
+    const newMethod: string | undefined = req.body.method != null
+      ? (normalizePaymentMethod(String(req.body.method)) ?? "cash")
+      : undefined;
     const newBankAccountId: number | null =
       req.body.bank_account_id != null
         ? (req.body.bank_account_id === "" ? null : Number(req.body.bank_account_id))
@@ -2391,7 +2398,7 @@ router.patch("/payments/:id", async (req, res) => {
 
     // Bangun SET clause dinamis
     const sets: string[] = ["updated_at = NOW()"];
-    if (newMethod !== undefined)       sets.push(`method = '${String(newMethod).replace(/'/g, "''")}'`);
+    if (newMethod !== undefined)       sets.push(`method = '${newMethod.replace(/'/g, "''")}'`);
     if (newBankAccountId !== undefined) sets.push(`bank_account_id = ${newBankAccountId ?? "NULL"}`);
     if (newMdrRate !== undefined)       sets.push(`mdr_rate = ${newMdrRate}`);
     if (newMdrAmount !== undefined) {
@@ -5369,9 +5376,11 @@ router.post("/sync/full-audit", async (req, res) => {
             if (existing.rows.length > 0) { accountingResult.skipped++; continue; }
             const settingsRes = await db.execute(sql`SELECT cash_journal_id, bank_journal_id FROM accounting_settings WHERE company_id = 1 LIMIT 1`);
             const settings = settingsRes.rows[0] as any;
-            const method = (pay.payment_method ?? "").toLowerCase();
-            const isCash = ["cash", "tunai", "cash on hand"].includes(method);
-            const journalId = isCash ? (settings?.cash_journal_id ?? settings?.bank_journal_id ?? null) : (settings?.bank_journal_id ?? settings?.cash_journal_id ?? null);
+            const destination = resolvePaymentDestination(pay.payment_method, {
+              cashJournalId: settings?.cash_journal_id ?? null,
+              bankJournalId: settings?.bank_journal_id ?? null,
+            });
+            const { paymentMethod, journalId } = destination;
             if (!journalId) {
               auditErrors.push({ module: "accounting", operation: "accounting_payments insert", entityId: pay.id, entityName: `pay.id=${pay.id}`, errorCode: "BUSINESS_RULE", errorMessage: "Tidak ada journal kas/bank di accounting_settings company_id=1", category: "other", retryable: false });
               accountingResult.errors++;
@@ -5383,7 +5392,7 @@ router.post("/sync/full-audit", async (req, res) => {
             const seq = Number((cntRes.rows[0] as any)?.seq ?? 0);
             const acctPayNumber = `SCPAY/${year}/${(seq + 1).toString().padStart(4, "0")}`;
             const bk = bkMap[pay.booking_id] ? { order_number: bkMap[pay.booking_id], customer_name: "Customer" } : { order_number: `SC-PAY-${pay.id}`, customer_name: "Customer" };
-            await db.execute(sql`INSERT INTO accounting_payments (company_id, payment_number, payment_type, status, amount, journal_id, partner_name, date, ref, memo, payment_method, source_type, source_doc_id) VALUES (1, ${acctPayNumber}, 'inbound', 'posted', ${String(Number(pay.amount))}, ${journalId}, ${bk.customer_name}, ${payDate}, ${bk.order_number}, ${'Sport Center: ' + bk.order_number}, ${pay.payment_method ?? "cash"}, 'sport_center', ${pay.id})`);
+            await db.execute(sql`INSERT INTO accounting_payments (company_id, payment_number, payment_type, status, amount, journal_id, partner_name, date, ref, memo, payment_method, source_type, source_doc_id) VALUES (1, ${acctPayNumber}, 'inbound', 'posted', ${String(Number(pay.amount))}, ${journalId}, ${bk.customer_name}, ${payDate}, ${bk.order_number}, ${'Sport Center: ' + bk.order_number}, ${paymentMethod}, 'sport_center', ${pay.id})`);
             accountingResult.synced++;
           } catch (err: any) {
             const msg = err?.message ?? String(err);

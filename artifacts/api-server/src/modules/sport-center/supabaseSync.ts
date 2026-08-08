@@ -1,7 +1,7 @@
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { notifySyncError } from "./sportSyncNotifier.js";
-import { normalizePaymentMethod, postSportCenterBooking } from "../../lib/accounting.js";
+import { normalizePaymentMethod, resolvePaymentDestination, postSportCenterBooking } from "../../lib/accounting.js";
 
 const PREFIX = "[SportSync]";
 
@@ -618,7 +618,7 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
         // Sport Center, termasuk bila payment sudah pernah diposting.
         await db.execute(sql`
           UPDATE accounting_payments
-          SET payment_method = ${row.method ?? "cash"}
+          SET payment_method = ${normalizePaymentMethod(row.method) ?? "cash"}
           WHERE id = ${existingRow.id}
         `).catch(() => {});
         // Jika entry_id belum terhubung, coba link sekarang
@@ -672,11 +672,11 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
       const seq = Number((cntRes.rows[0] as any)?.seq ?? 0);
       const acctPayNumber = `SCPAY/${year}/${(seq + 1).toString().padStart(4, "0")}`;
 
-      const paymentMethod = normalizePaymentMethod(row.method) ?? "cash";
-      const isCash = paymentMethod === "cash";
-      const journalId = isCash
-        ? (settings?.cash_journal_id ?? settings?.bank_journal_id ?? null)
-        : (settings?.bank_journal_id ?? settings?.cash_journal_id ?? null);
+      const destination = resolvePaymentDestination(row.method, {
+        cashJournalId: settings?.cash_journal_id ?? null,
+        bankJournalId: settings?.bank_journal_id ?? null,
+      });
+      const { paymentMethod, journalId } = destination;
 
       const insertRes = await db.execute(sql`
         INSERT INTO accounting_payments
@@ -817,7 +817,7 @@ export async function pullPaymentsFromSupabase(companyId = 1): Promise<{ pulled:
         const existingMethod = existingRow.method;
         const statusRaw2 = pay.status?.toLowerCase() ?? "";
         const mappedStatus2 = PAID_STATUSES.has(statusRaw2) ? "paid" : (UNPAID_STATUSES.has(statusRaw2) ? "pending" : "paid");
-        const mappedMethod2 = String(pay.payment_method ?? "cash").trim().toLowerCase() || "cash";
+        const mappedMethod2 = normalizePaymentMethod(pay.payment_method) ?? "cash";
       const meta2 = settlementMeta.get(Number(pay.id)) ?? {};
 
         // Selalu update payment record dari Supabase (status terbaru menimpa)
@@ -913,7 +913,7 @@ export async function pullPaymentsFromSupabase(companyId = 1): Promise<{ pulled:
       const statusRaw = pay.status?.toLowerCase() ?? "";
       const mappedStatus = PAID_STATUSES.has(statusRaw) ? "paid" : (UNPAID_STATUSES.has(statusRaw) ? "pending" : "paid");
       const paidAt = pay.confirmed_at ?? pay.created_at ?? new Date().toISOString();
-      const method = pay.payment_method ?? "cash";
+      const method = normalizePaymentMethod(pay.payment_method) ?? "cash";
       const meta = settlementMeta.get(Number(pay.id)) ?? {};
 
       await db.execute(sql`
@@ -1542,7 +1542,7 @@ export async function pullTenantPaymentsFromSportCenter(
       const payDate = (tp.paid_at ?? tp.created_at ?? "").split("T")[0]
         ?? new Date().toISOString().split("T")[0]!;
       const amt = Math.round(Number(tp.amount) * 100) / 100;
-      const method = tp.payment_method ?? "tunai";
+      const method = normalizePaymentMethod(tp.payment_method) ?? "cash";
 
       await db.execute(sql`
         INSERT INTO tenant_payments
