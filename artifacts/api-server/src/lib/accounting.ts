@@ -161,16 +161,18 @@ export function isCashPaymentMethod(method: string | null | undefined): boolean 
 export interface PaymentDestinationSettings {
   defaultCashAccountId?: number | null;
   defaultBankAccountId?: number | null;
+  qrisAccountId?: number | null;
   cashJournalId?: number | null;
   bankJournalId?: number | null;
+  qrisJournalId?: number | null;
 }
 
 /**
  * Shared destination policy for payment posting.
  *
- * QRIS is intentionally treated as non-cash until a dedicated QRIS account
- * mapping exists. This keeps webhook, Sport Center, and bulk-ingest postings
- * on the same bank account/journal path.
+ * QRIS uses its dedicated clearing account/journal when configured. Existing
+ * installations without the new mapping fall back to the bank destination,
+ * preserving legacy posting behavior while keeping all QRIS callers aligned.
  */
 export function resolvePaymentDestination(
   method: string | null | undefined,
@@ -180,17 +182,26 @@ export function resolvePaymentDestination(
   isCash: boolean;
   accountId: number | null;
   journalId: number | null;
-  journalCode: "CSH" | "BNK";
+  journalCode: "CSH" | "BNK" | "QRIS";
 } {
   const paymentMethod = normalizePaymentMethod(method) ?? "cash";
   const isCash = paymentMethod === "cash";
-  const accountId = isCash
-    ? (settings.defaultCashAccountId ?? settings.defaultBankAccountId ?? null)
-    : (settings.defaultBankAccountId ?? settings.defaultCashAccountId ?? null);
-  const journalId = isCash
-    ? (settings.cashJournalId ?? settings.bankJournalId ?? null)
-    : (settings.bankJournalId ?? settings.cashJournalId ?? null);
-  const journalCode = isCash && settings.cashJournalId ? "CSH" : "BNK";
+  const isQris = paymentMethod === "qris";
+  const accountId = isQris
+    ? (settings.qrisAccountId ?? settings.defaultBankAccountId ?? null)
+    : isCash
+      ? (settings.defaultCashAccountId ?? null)
+      : (settings.defaultBankAccountId ?? null);
+  const journalId = isQris
+    ? (settings.qrisJournalId ?? settings.bankJournalId ?? null)
+    : isCash
+      ? (settings.cashJournalId ?? null)
+      : (settings.bankJournalId ?? null);
+  const journalCode = isQris && settings.qrisJournalId
+    ? "QRIS"
+    : isCash && settings.cashJournalId
+      ? "CSH"
+      : "BNK";
   return { paymentMethod, isCash, accountId, journalId, journalCode };
 }
 
@@ -1909,7 +1920,7 @@ export async function postPaymentReceived(args: {
 
     if (!targetJournalId || !targetAccountId) {
       logger.warn(
-        { paymentId: args.paymentId, isCash },
+        { paymentId: args.paymentId, paymentMethod, isCash: destination.isCash },
         "Skipping auto-post payment: bank/cash account or journal settings missing",
       );
       await recordAccountingPostingFailure({

@@ -598,7 +598,8 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
   let errors = 0;
 
   const settingsRes = await db.execute(sql`
-    SELECT cash_journal_id, bank_journal_id FROM accounting_settings WHERE company_id = ${companyId} LIMIT 1
+    SELECT cash_journal_id, bank_journal_id, qris_journal_id, qris_account_id
+    FROM accounting_settings WHERE company_id = ${companyId} LIMIT 1
   `).catch(() => ({ rows: [] }));
   const settings = settingsRes.rows[0] as any;
 
@@ -675,6 +676,8 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
       const destination = resolvePaymentDestination(row.method, {
         cashJournalId: settings?.cash_journal_id ?? null,
         bankJournalId: settings?.bank_journal_id ?? null,
+        qrisJournalId: settings?.qris_journal_id ?? null,
+        qrisAccountId: settings?.qris_account_id ?? null,
       });
       const { paymentMethod, journalId } = destination;
 
@@ -1602,21 +1605,18 @@ export async function syncTenantPaymentsFromSportCenter(
   let errors = 0;
 
   const settingsRes = await db.execute(sql`
-    SELECT cash_journal_id, bank_journal_id, default_cash_account_id, default_bank_account_id,
+    SELECT cash_journal_id, bank_journal_id, qris_journal_id, qris_account_id,
+           default_cash_account_id, default_bank_account_id,
            sales_income_account_id
     FROM accounting_settings WHERE company_id = ${companyId} LIMIT 1
   `).catch(() => ({ rows: [] }));
   const settings = (settingsRes.rows[0] as any) ?? {};
-  const journalId = settings.cash_journal_id ?? settings.bank_journal_id;
-  const debitAccountId = settings.default_cash_account_id ?? settings.default_bank_account_id;
   const creditAccountId = settings.sales_income_account_id;
 
-  if (!journalId || !debitAccountId || !creditAccountId) {
-    console.warn(`${PREFIX} syncTenantPaymentsFromSportCenter: akun/jurnal akuntansi belum dikonfigurasi — skip`);
+  if (!creditAccountId) {
+    console.warn(`${PREFIX} syncTenantPaymentsFromSportCenter: akun pendapatan belum dikonfigurasi — skip`);
     return { synced: 0, skipped: payments.length, errors: 0 };
   }
-
-  const journalCode = settings.cash_journal_id ? "CSH" : "BNK";
 
   for (const tp of payments as Array<{
     id: number; company_id: number; tenant_id: number | null;
@@ -1639,6 +1639,19 @@ export async function syncTenantPaymentsFromSportCenter(
       const seq = Number((cntRes.rows[0] as any)?.seq ?? 0);
       const payNum = tp.payment_number ?? `TCPAY/${year}/${(seq + 1).toString().padStart(4, "0")}`;
       const amt = Math.round(Number(tp.amount) * 100) / 100;
+      const paymentMethod = normalizePaymentMethod(tp.payment_method) ?? "cash";
+      const destination = resolvePaymentDestination(paymentMethod, {
+        defaultCashAccountId: settings.default_cash_account_id ?? null,
+        defaultBankAccountId: settings.default_bank_account_id ?? null,
+        qrisAccountId: settings.qris_account_id ?? null,
+        cashJournalId: settings.cash_journal_id ?? null,
+        bankJournalId: settings.bank_journal_id ?? null,
+        qrisJournalId: settings.qris_journal_id ?? null,
+      });
+      const { accountId: debitAccountId, journalId, journalCode } = destination;
+      if (!journalId || !debitAccountId) {
+        throw new Error(`ACCOUNTING_CONFIG_INCOMPLETE: journal/account missing for payment method=${paymentMethod}`);
+      }
 
       // 1. Insert accounting_payments
       await db.execute(sql`
@@ -1647,7 +1660,7 @@ export async function syncTenantPaymentsFromSportCenter(
            payment_method, partner_name, journal_id, created_at, updated_at)
         VALUES
           (${companyId}, ${payNum}, ${payDate}::date, ${amt}, 'tenant_sc', ${tp.id},
-           'posted', ${tp.payment_method ?? "tunai"}, 'Tenant #' || COALESCE(${tp.tenant_id}::text, '?'),
+           'posted', ${paymentMethod}, 'Tenant #' || COALESCE(${tp.tenant_id}::text, '?'),
            ${journalId}, NOW(), NOW())
         ON CONFLICT DO NOTHING
       `);
@@ -1671,6 +1684,7 @@ export async function syncTenantPaymentsFromSportCenter(
             date: new Date(payDate),
             ref: payNum,
             description: `Pembayaran Sewa Tenant #${tp.tenant_id ?? "?"} (${payNum})`,
+            paymentMethod,
             source: "tenant_rent_payment",
             sourceId: tp.id,
             createdById: null,

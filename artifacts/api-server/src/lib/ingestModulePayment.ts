@@ -42,7 +42,7 @@ const JOURNAL_PREFERENCE_ORDER = ["cash", "bank", "general"];
 async function resolveJournal(companyId: number, method: string): Promise<number | null> {
   const isCash = isCashPaymentMethod(method);
   const settingsRes = await db.execute(sql`
-    SELECT cash_journal_id, bank_journal_id
+    SELECT cash_journal_id, bank_journal_id, qris_journal_id
     FROM accounting_settings
     WHERE company_id = ${companyId}
     LIMIT 1
@@ -51,9 +51,11 @@ async function resolveJournal(companyId: number, method: string): Promise<number
   if (settings) {
     const cashJId = settings["cash_journal_id"] ? Number(settings["cash_journal_id"]) : null;
     const bankJId = settings["bank_journal_id"] ? Number(settings["bank_journal_id"]) : null;
+    const qrisJId = settings["qris_journal_id"] ? Number(settings["qris_journal_id"]) : null;
     const destination = resolvePaymentDestination(method, {
       cashJournalId: cashJId,
       bankJournalId: bankJId,
+      qrisJournalId: qrisJId,
     });
     if (destination.journalId) return destination.journalId;
     if (cashJId) return cashJId;

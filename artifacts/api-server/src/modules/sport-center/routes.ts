@@ -5374,11 +5374,16 @@ router.post("/sync/full-audit", async (req, res) => {
           try {
             const existing = await db.execute(sql`SELECT id FROM accounting_payments WHERE source_type = 'sport_center' AND source_doc_id = ${pay.id} LIMIT 1`);
             if (existing.rows.length > 0) { accountingResult.skipped++; continue; }
-            const settingsRes = await db.execute(sql`SELECT cash_journal_id, bank_journal_id FROM accounting_settings WHERE company_id = 1 LIMIT 1`);
+            const settingsRes = await db.execute(sql`
+              SELECT cash_journal_id, bank_journal_id, qris_journal_id, qris_account_id
+              FROM accounting_settings WHERE company_id = 1 LIMIT 1
+            `);
             const settings = settingsRes.rows[0] as any;
             const destination = resolvePaymentDestination(pay.payment_method, {
               cashJournalId: settings?.cash_journal_id ?? null,
               bankJournalId: settings?.bank_journal_id ?? null,
+              qrisJournalId: settings?.qris_journal_id ?? null,
+              qrisAccountId: settings?.qris_account_id ?? null,
             });
             const { paymentMethod, journalId } = destination;
             if (!journalId) {

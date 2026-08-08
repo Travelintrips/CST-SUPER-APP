@@ -195,6 +195,17 @@ function serializePayment(p: typeof paymentsTable.$inferSelect) {
   };
 }
 
+function getPaymentMethodFromPayload(payload: Record<string, unknown> | null | undefined): string | null {
+  return normalizePaymentMethod(
+    payload?.paymentMethod
+      ?? payload?.payment_method
+      ?? payload?.method
+      ?? payload?.payMethod
+      ?? payload?.paymentType
+      ?? payload?.channel,
+  );
+}
+
 export async function runPaylabsConfigMigration() {
   // Paylabs payments need to retain the selected channel so webhook posting
   // and later reconciliation do not have to infer QRIS from raw provider JSON.
@@ -656,14 +667,7 @@ paymentsWebhookRouter.post("/paylabs/webhook", async (req, res) => {
 
   // Provider payloads differ by channel. Prefer the explicit channel fields,
   // but never overwrite a method already selected when the callback omits it.
-  const webhookPaymentMethod = normalizePaymentMethod(
-    req.body?.paymentMethod
-      ?? req.body?.payment_method
-      ?? req.body?.method
-      ?? req.body?.payMethod
-      ?? req.body?.paymentType
-      ?? req.body?.channel,
-  );
+  const webhookPaymentMethod = getPaymentMethodFromPayload(req.body as Record<string, unknown>);
 
   const status: string = req.body?.status ?? "";
   let newStatus: "pending" | "paid" | "expired" | "cancelled" | "failed" = payment.status;

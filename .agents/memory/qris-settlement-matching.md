@@ -7,3 +7,9 @@ QRIS settlement reconciliation requires a payment source with `method=qris`, a s
 **Why:** The current data model and matcher paths do not consistently carry QRIS semantics: one matching path filters accounting payments to `posted`, another ERP document path does not include Sport Center payments as an active source, and exact-amount matching rejects net settlement amounts.
 
 **How to apply:** When implementing QRIS reconciliation, preserve provider/reference and gross amount, record MDR/settlement net separately, include company-scoped Sport Center payments in the active matcher, and allow an explicit settlement relation rather than weakening exact matching globally. Treat `sport_center.sport_payments.payment_method` as the user-selected source of truth; mirror its value to local payment records during both full and incremental sync.
+
+QRIS posting uses dedicated `accounting_settings` account/journal mappings when configured. Legacy fallback is bank-only; QRIS and other non-cash methods must never fall back to a cash account or cash journal.
+
+**Why:** QRIS receipts are economically non-cash and may settle through a clearing account. Falling back to cash when bank configuration is incomplete can misstate the ledger and make settlement reconciliation misleading.
+
+**How to apply:** Normalize provider and Sport Center method labels to `qris` before posting. Resolve the QRIS destination centrally for webhook, Sport Center atomic posting, incremental/bulk sync, and module ingest. Keep gross payment and MDR/net settlement as separate values.

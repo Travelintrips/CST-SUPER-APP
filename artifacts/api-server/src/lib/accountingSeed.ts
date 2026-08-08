@@ -222,6 +222,8 @@ async function applyRuntimeMigrations(): Promise<void> {
     `ALTER TABLE accounting_taxes ADD COLUMN IF NOT EXISTS company_id INTEGER`,
     `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS company_id INTEGER`,
     `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS grir_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
+    `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS qris_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
+    `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS qris_journal_id INTEGER REFERENCES accounting_journals(id) ON DELETE SET NULL`,
     `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS gsheet_spreadsheet_id TEXT`,
     `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS tenant_rent_income_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
     `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS salary_expense_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
@@ -1115,6 +1117,8 @@ const ACCOUNTING_SETTINGS_COL_PATCHES = [
   `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS fleet_driver_receivable_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
   `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS tenant_rent_income_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
   `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS grir_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
+  `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS qris_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE SET NULL`,
+  `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS qris_journal_id INTEGER REFERENCES accounting_journals(id) ON DELETE SET NULL`,
   `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS gsheet_spreadsheet_id TEXT`,
   `ALTER TABLE accounting_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()`,
 ];

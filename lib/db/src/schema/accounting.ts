@@ -383,6 +383,15 @@ export const accountingSettingsTable = pgTable("accounting_settings", {
     () => accountingJournalsTable.id,
     { onDelete: "set null" },
   ),
+  /** Dedicated clearing/bank account and journal for QRIS receipts. */
+  qrisAccountId: integer("qris_account_id").references(
+    () => chartOfAccountsTable.id,
+    { onDelete: "set null" },
+  ),
+  qrisJournalId: integer("qris_journal_id").references(
+    () => accountingJournalsTable.id,
+    { onDelete: "set null" },
+  ),
   cashJournalId: integer("cash_journal_id").references(
     () => accountingJournalsTable.id,
     { onDelete: "set null" },
