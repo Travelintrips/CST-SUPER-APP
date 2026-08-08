@@ -21,6 +21,7 @@ import {
   resolveJournalForEconomicEvent,
   JournalReuseErrorCode,
 } from "./journalReuseEngine.js";
+import { isQrisSettlementDescription } from "./qrisSettlement.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -408,7 +409,7 @@ export async function fetchCandidates(
   const amtFilter = `ABS(##AMT##::numeric - ${Number(amount)}) < 0.01`;
   const mutationLooksQris =
     String(mutation.provider_name ?? "").toUpperCase() === "QRIS" ||
-    (mutation.normalized_description ?? "").toLowerCase().includes("qris");
+    isQrisSettlementDescription(mutation.normalized_description);
   // The aggregate tables may not exist yet on older runtime databases. Keep
   // the source query fail-safe and only add the aggregate candidate when both
   // tables are present.

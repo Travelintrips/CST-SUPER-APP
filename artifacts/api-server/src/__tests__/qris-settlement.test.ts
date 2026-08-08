@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   calculateQrisNetAmount,
   isQrisPaymentMethod,
+  isQrisSettlementDescription,
   resolveSettlementDate,
   settlementVariance,
   isPartialQrisSettlement,
@@ -34,6 +35,13 @@ describe("QRIS settlement contract", () => {
     expect(isQrisPaymentMethod("QRIS")).toBe(true);
     expect(isQrisPaymentMethod("qris_dynamic")).toBe(true);
     expect(isQrisPaymentMethod("transfer bank")).toBe(false);
+  });
+
+  it("recognizes provider QRIS labels that omit the literal QRIS word", () => {
+    expect(isQrisSettlementDescription(
+      "7177632488799999999111111111111QRTRAVELI DR 0000029511812 KR 1640006707220 99106",
+    )).toBe(true);
+    expect(isQrisSettlementDescription("TRANSFER BCA REGULER")).toBe(false);
   });
 
   it("keeps partial settlement explicitly reviewable", () => {

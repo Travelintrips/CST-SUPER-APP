@@ -68,6 +68,7 @@ import { findBestMultiInvoiceMatch } from "../lib/reconciliation/multiInvoiceMat
 import { buildAllocationPlan, getCompanyAllocationStrategy, applyAllocationPlan } from "../lib/reconciliation/paymentAllocationEngine.js";
 import { resolveCompanyId } from "../lib/resolveCompany.js";
 import { runQrisSettlementMigration } from "../lib/reconciliation/qrisSettlementMigration.js";
+import { isQrisSettlementDescription } from "../lib/reconciliation/qrisSettlement.js";
 
 const router = Router();
 router.use(async (req, res, next) => {
@@ -391,7 +392,7 @@ function detectProvider(desc: string): string | null {
   if (d.includes("DANA")) return "DANA";
   if (d.includes("LINKAJA") || d.includes("LINK AJA")) return "LINKAJA";
   if (d.includes("SHOPEE")) return "SHOPEEPAY";
-  if (d.includes("QRIS")) return "QRIS";
+  if (isQrisSettlementDescription(d)) return "QRIS";
   return null;
 }
 

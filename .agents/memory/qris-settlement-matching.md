@@ -13,7 +13,7 @@ QRIS posting uses dedicated `accounting_settings` account/journal mappings when 
 
 **Why:** QRIS receipts are economically non-cash and may settle through a clearing account. Falling back to cash when bank configuration is incomplete can misstate the ledger and make settlement reconciliation misleading.
 
-**How to apply:** Normalize provider and Sport Center method labels to `qris` before posting. Resolve the QRIS destination centrally for webhook, Sport Center atomic posting, incremental/bulk sync, and module ingest. Keep gross payment and MDR/net settlement as separate values.
+**How to apply:** Normalize provider and Sport Center method labels to `qris` before posting. Resolve the QRIS destination centrally for webhook, Sport Center atomic posting, incremental/bulk sync, and module ingest. Keep gross payment and MDR/net settlement as separate values. Bank descriptions may omit the literal `QRIS`; labels such as `QRTRAVELI` must still activate QRIS detection.
 Important operational distinction: a paid `sport_payments` row is not itself a bank mutation. Matching runs from imported bank mutations toward candidate payments; every payment can only appear as a candidate when a corresponding bank credit/settlement has been imported. For unsettled payments, do not blindly treat `paid_at + 1 day` as the settlement date when the bank mutation is on the payment date.
 
 **Why:** A runtime investigation found four paid QRIS Sport Center payments but only one QRIS bank mutation. The one candidate scored 70 because its null settlement date was derived as the next day, while the other three had no bank mutation to match at all.

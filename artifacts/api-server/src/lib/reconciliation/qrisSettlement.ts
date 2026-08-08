@@ -27,6 +27,27 @@ export function isQrisPaymentMethod(method: string | null | undefined): boolean 
 }
 
 /**
+ * Detect QRIS/provider settlement descriptions from bank statements.
+ *
+ * Banks do not always print the literal word "QRIS".  Provider/merchant
+ * labels such as `QRTRAVELI` are common in BCA-style statements, and the
+ * settlement matcher must classify those rows as QRIS before choosing the
+ * amount/date filters.
+ */
+export function isQrisSettlementDescription(
+  description: string | null | undefined,
+): boolean {
+  const value = String(description ?? "").trim().toUpperCase();
+  if (!value) return false;
+
+  return (
+    value.includes("QRIS") ||
+    /QR[A-Z0-9]{4,}/.test(value) ||
+    /\bQR\s*(?:CODE|PAY|PAYMENT)\b/.test(value)
+  );
+}
+
+/**
  * Settlement date is authoritative when supplied. Otherwise QRIS uses the
  * provider's default next-day settlement window, while non-QRIS payments use
  * their payment date.

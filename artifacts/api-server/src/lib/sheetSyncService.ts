@@ -18,6 +18,7 @@ import { readSheet, batchUpdateSheet, ensureSheets, clearAndWriteSheet, formatRo
 import { runUnifiedMatching } from "./reconciliation/unifiedMatchingEngine.js";
 import { logger } from "./logger.js";
 import { canonicalMutationKey, canonicalNormalizeDesc } from "./reconciliation/canonicalMutationKey.js";
+import { isQrisSettlementDescription } from "./reconciliation/qrisSettlement.js";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -54,7 +55,7 @@ function detectProvider(d: string): string | null {
   if (u.includes("DANA"))   return "DANA";
   if (u.includes("LINKAJA") || u.includes("LINK AJA")) return "LINKAJA";
   if (u.includes("SHOPEE")) return "SHOPEEPAY";
-  if (u.includes("QRIS"))   return "QRIS";
+  if (isQrisSettlementDescription(u)) return "QRIS";
   return null;
 }
 
@@ -484,7 +485,7 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
         mutation_key: p.mutation_key, normalized_description: p.normalized_description,
         direction: p.direction,
         company_id,
-        provider_name: null,
+        provider_name: p.provider_name,
       }, "sheet-sync");
     } catch (err: any) {
       logger.warn({ err: err.message, id }, "[sheetSync] Matching gagal (non-fatal)");
