@@ -13,6 +13,74 @@ export interface QrisSettlementAmounts {
   otherFee?: number | null;
 }
 
+export type BankMutationSourceClassification =
+  | "actual_bank_mutation"
+  | "synthetic"
+  | "unknown";
+
+const ACTUAL_BANK_SOURCES = new Set([
+  "actual_bank_mutation",
+  "bank_import",
+  "csv_excel",
+  "google_sheet",
+  "statement_import",
+  "mt940",
+  "camt053",
+]);
+
+const SYNTHETIC_BANK_SOURCES = new Set([
+  "synthetic",
+  "generated",
+  "sport_center",
+  "sport-center",
+  "qris_settlement",
+]);
+
+export function classifyBankMutationSource(
+  source: string | null | undefined,
+  explicitClassification: string | null | undefined = null,
+): BankMutationSourceClassification {
+  const explicit = String(explicitClassification ?? "").trim().toLowerCase();
+  if (explicit === "synthetic") return "synthetic";
+  if (explicit === "actual_bank_mutation") return "actual_bank_mutation";
+
+  const normalized = String(source ?? "").trim().toLowerCase();
+  if (SYNTHETIC_BANK_SOURCES.has(normalized)) return "synthetic";
+  if (ACTUAL_BANK_SOURCES.has(normalized)) return "actual_bank_mutation";
+  return "unknown";
+}
+
+export function isActualBankMutation(
+  source: string | null | undefined,
+  explicitClassification: string | null | undefined = null,
+): boolean {
+  return classifyBankMutationSource(source, explicitClassification) === "actual_bank_mutation";
+}
+
+export interface ObservedDeduction {
+  gross: number;
+  bankCredit: number;
+  observedDeduction: number;
+  effectiveDeductionRate: number | null;
+}
+
+export function calculateObservedDeduction(
+  gross: number,
+  bankCredit: number,
+): ObservedDeduction {
+  const normalizedGross = Math.max(0, Number(gross) || 0);
+  const normalizedBankCredit = Math.max(0, Number(bankCredit) || 0);
+  const observedDeduction = Number((normalizedGross - normalizedBankCredit).toFixed(2));
+  return {
+    gross: normalizedGross,
+    bankCredit: normalizedBankCredit,
+    observedDeduction,
+    effectiveDeductionRate: normalizedGross > 0
+      ? Number((observedDeduction / normalizedGross).toFixed(8))
+      : null,
+  };
+}
+
 export function calculateQrisNetAmount(amounts: QrisSettlementAmounts): number {
   const gross = Math.max(0, Number(amounts.gross) || 0);
   const deductions =

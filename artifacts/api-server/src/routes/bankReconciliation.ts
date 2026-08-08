@@ -69,6 +69,11 @@ import { buildAllocationPlan, getCompanyAllocationStrategy, applyAllocationPlan 
 import { resolveCompanyId } from "../lib/resolveCompany.js";
 import { runQrisSettlementMigration } from "../lib/reconciliation/qrisSettlementMigration.js";
 import { isQrisSettlementDescription } from "../lib/reconciliation/qrisSettlement.js";
+import { normalizeQrisProvider } from "../lib/reconciliation/providerSettlementRules.js";
+import {
+  generateQrisCandidates,
+  listQrisCandidates,
+} from "../lib/reconciliation/qrisCandidateService.js";
 
 const router = Router();
 router.use(async (req, res, next) => {
@@ -886,6 +891,15 @@ router.post("/qris-settlements/import", async (req, res) => {
               updated_at = NOW()
           WHERE id = ${item.paymentId} AND company_id = ${companyId}
         `));
+        const providerCode = normalizeQrisProvider(payload.providerName);
+        if (providerCode !== "unknown") {
+          await tx.execute(sql.raw(`
+            UPDATE sport_payments
+            SET provider_code = '${qrisEsc(providerCode)}',
+                updated_at = NOW()
+            WHERE id = ${item.paymentId} AND company_id = ${companyId}
+          `)).catch(() => {});
+        }
       }
       return { id: settlementId, idempotent: false, settlement, items: payload.items };
     });
@@ -958,6 +972,64 @@ router.get("/qris-settlements/:settlementId", async (req, res) => {
     return res.json({ settlement: settlements[0], items });
   } catch (e: any) {
     return res.status(500).json({ error: e?.message ?? "Gagal mengambil detail settlement QRIS" });
+  }
+});
+
+// ─── QRIS provider-aware candidate audit (dry-run/review only) ───────────────
+// This flow deliberately does not approve a mutation, create a journal, mark a
+// settlement as final, or consume bank evidence. A reviewer must use the
+// existing approval mechanism explicitly after verifying the candidate.
+router.get("/qris-candidates", async (req, res) => {
+  await runQrisSettlementMigration();
+  try {
+    const companyId = resolveCompanyId(req);
+    const status = req.query.status ? String(req.query.status).toUpperCase() : null;
+    const candidates = await listQrisCandidates({
+      companyId,
+      status,
+      limit: Number(req.query.limit ?? 100),
+    });
+    return res.json({
+      mode: "candidate_review",
+      automaticFinalReconciliation: false,
+      candidates,
+    });
+  } catch (e: any) {
+    logger.error({ err: e?.cause?.message ?? e?.message }, "[bankRecon] GET /qris-candidates failed");
+    return res.status(500).json({ error: e?.message ?? "Gagal mengambil kandidat QRIS" });
+  }
+});
+
+router.post("/qris-candidates/generate", async (req, res) => {
+  await runQrisSettlementMigration();
+  try {
+    const companyId = req.body?.companyId ?? req.body?.company_id ?? resolveCompanyId(req);
+    const dryRun = req.body?.dryRun !== false && req.body?.dry_run !== false;
+    const result = await generateQrisCandidates({
+      companyId: companyId == null ? null : Number(companyId),
+      from: req.body?.from ?? null,
+      to: req.body?.to ?? null,
+      dryRun,
+    });
+    audit(req, {
+      action: "qris_candidate_generation",
+      module: "accounting",
+      resourceId: `qris-candidates-${Date.now()}`,
+      after: {
+        dryRun: result.dryRun,
+        generated: result.generated,
+        automaticFinalReconciliation: false,
+      },
+    });
+    return res.json({
+      ok: true,
+      mode: "candidate_review",
+      automaticFinalReconciliation: false,
+      ...result,
+    });
+  } catch (e: any) {
+    logger.error({ err: e?.cause?.message ?? e?.message }, "[bankRecon] POST /qris-candidates/generate failed");
+    return res.status(500).json({ error: e?.message ?? "Gagal membuat kandidat QRIS" });
   }
 });
 

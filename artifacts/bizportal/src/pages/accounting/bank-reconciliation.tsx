@@ -511,6 +511,24 @@ interface BankMutation {
   posted_by?: string | null;
 }
 
+interface QrisCandidateAudit {
+  id?: number;
+  mutation_id: number;
+  provider_code: string;
+  mutation_source_classification: string;
+  source_date: string;
+  estimated_settlement_date: string;
+  gross_amount: number | string;
+  net_amount: number | string;
+  observed_deduction: number | string;
+  effective_deduction_rate: number | string | null;
+  reconciliation_status: string;
+  confidence: number | string;
+  review_reason?: string | null;
+  payment_items?: Array<{ paymentId?: number; payment_id?: number }>;
+  description?: string | null;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2300,6 +2318,40 @@ export default function BankReconciliationPage() {
     refetchInterval: 30_000,
   });
 
+  const { data: qrisAuditData, isLoading: qrisAuditLoading } = useQuery({
+    queryKey: ["qris-candidate-audit"],
+    queryFn: async () => {
+      const r = await fetch("/api/bank-reconciliation/qris-candidates?limit=50", { credentials: "include" });
+      if (!r.ok) throw new Error(await r.text());
+      return r.json() as Promise<{
+        mode: string;
+        automaticFinalReconciliation: boolean;
+        candidates: QrisCandidateAudit[];
+      }>;
+    },
+    refetchInterval: 30_000,
+  });
+
+  const qrisDryRunMut = useMutation({
+    mutationFn: async () => {
+      const r = await fetch("/api/bank-reconciliation/qris-candidates/generate", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        // Persist only the candidate/review row. This is not final
+        // reconciliation and does not create a journal or consume evidence.
+        body: JSON.stringify({ dryRun: false }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      return r.json() as Promise<{ generated: number; candidates: QrisCandidateAudit[] }>;
+    },
+    onSuccess: (result) => {
+      toast({ title: `Dry-run QRIS selesai: ${result.generated} kandidat` });
+      qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] });
+    },
+    onError: (e: Error) => toast({ title: "Dry-run QRIS gagal", description: e.message, variant: "destructive" }),
+  });
+
   const summaryMap: Record<string, { count: number; amount: number }> = {};
   for (const s of summary?.summary ?? []) {
     summaryMap[s.status] = { count: Number(s.count), amount: Number(s.total_amount) };
@@ -2606,6 +2658,89 @@ export default function BankReconciliationPage() {
 
         {/* ── Summary Cards ─────────────────────────────────── */}
         <SummaryCards summaryMap={summaryMap} activeFilter={filterStatus} onFilter={v => { setFilterStatus(v); setPage(0); }} />
+
+        {/* ── QRIS provider-aware audit: candidate/review only ── */}
+        <Card className="border-indigo-200/70 dark:border-indigo-900/70">
+          <CardHeader className="pb-3">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <CreditCard className="w-4 h-4 text-indigo-600" />
+                  QRIS Settlement Audit
+                </CardTitle>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Mode candidate/review. Tidak membuat jurnal dan tidak menandai settlement final.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                onClick={() => qrisDryRunMut.mutate()}
+                disabled={qrisDryRunMut.isPending}
+              >
+                {qrisDryRunMut.isPending
+                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  : <Play className="w-3.5 h-3.5" />}
+                {qrisDryRunMut.isPending ? "Menganalisis..." : "Buat Kandidat Review"}
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="pt-0">
+            {qrisAuditLoading ? (
+              <div className="text-xs text-muted-foreground py-2">Memuat kandidat QRIS...</div>
+            ) : (qrisAuditData?.candidates?.length ?? 0) === 0 ? (
+              <div className="text-xs text-muted-foreground py-2">
+                Belum ada kandidat QRIS. Jalankan dry-run setelah mutasi bank aktual diimpor.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="flex gap-2 flex-wrap text-xs">
+                  {(["MATCHED", "REVIEW", "UNMATCHED"] as const).map((status) => {
+                    const count = qrisAuditData?.candidates.filter(c => c.reconciliation_status === status).length ?? 0;
+                    return (
+                      <Badge key={status} variant="outline" className={
+                        status === "MATCHED"
+                          ? "border-green-200 text-green-700"
+                          : status === "REVIEW"
+                            ? "border-amber-200 text-amber-700"
+                            : "border-slate-200 text-slate-600"
+                      }>
+                        {status}: {count}
+                      </Badge>
+                    );
+                  })}
+                </div>
+                <div className="divide-y rounded-md border text-xs">
+                  {qrisAuditData?.candidates.slice(0, 5).map((candidate) => (
+                    <div key={`${candidate.mutation_id}-${candidate.id ?? "candidate"}`} className="p-2.5 flex items-center justify-between gap-3 flex-wrap">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <Badge variant="outline">{candidate.provider_code}</Badge>
+                          <Badge variant="outline">{candidate.reconciliation_status}</Badge>
+                          <span className="text-muted-foreground">Mutasi #{candidate.mutation_id}</span>
+                        </div>
+                        <p className="mt-1 truncate max-w-[560px]">{candidate.review_reason ?? candidate.description ?? "—"}</p>
+                        <p className="text-muted-foreground mt-0.5">
+                          Settlement {fmtDate(candidate.estimated_settlement_date)} · {candidate.payment_items?.length ?? 0} payment
+                        </p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="font-semibold">{idr(candidate.net_amount)}</p>
+                        <p className="text-muted-foreground">
+                          Deduction {idr(candidate.observed_deduction)}
+                          {candidate.effective_deduction_rate != null
+                            ? ` (${(Number(candidate.effective_deduction_rate) * 100).toFixed(2)}%)`
+                            : ""}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         {/* ── Google Sheet (collapsed) ──────────────────────── */}
         <SheetConfigCollapsed />
