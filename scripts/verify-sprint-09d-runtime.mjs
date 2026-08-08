@@ -61,18 +61,33 @@ async function api(path, options = {}) {
 }
 
 async function devLogin() {
-  const response = await fetch(`${API_BASE}/api/portal/auth/dev-login`, {
+  const usersResponse = await fetch(`${API_BASE}/api/dev-users`);
+  assert(usersResponse.ok, `dev-users failed: HTTP ${usersResponse.status}`);
+  const usersBody = await usersResponse.json();
+  const adminUser = usersBody?.users?.find((user) => user?.role === "admin" && typeof user?.email === "string");
+  assert(adminUser, "dev-users did not return an existing admin user for the official internal session flow");
+
+  const response = await fetch(`${API_BASE}/api/dev-login`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ role: "admin" }),
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: `email=${encodeURIComponent(adminUser.email)}`,
   });
   assert(response.ok, `dev-login failed: HTTP ${response.status}`);
   const body = await response.json();
-  assert(typeof body?.token === "string" && body.token.length > 0, "dev-login did not return a token");
-  // Node's built-in fetch does not expose Set-Cookie consistently across
-  // supported runtimes. The endpoint's token is the same value used by the
-  // official portal_session cookie, and remains process-local.
-  cookie = `portal_session=${body.token}`;
+  assert(body?.ok === true && body?.role === "admin", `dev-login did not create an admin session: ${JSON.stringify(body)}`);
+  // Follow the official BizPortal authentication contract: /api/dev-login
+  // creates the internal server-side session and sets the `sid` cookie.
+  // Keep only the cookie pair for subsequent requests; never invent a
+  // different auth mechanism or bypass middleware. Node 20 exposes
+  // getSetCookie(), while the split fallback supports older runtimes.
+  const setCookies = typeof response.headers.getSetCookie === "function"
+    ? response.headers.getSetCookie()
+    : (response.headers.get("set-cookie") ?? "").split(/,(?=[^;]+?=)/);
+  const sessionCookie = setCookies
+    .map((value) => value.split(";", 1)[0])
+    .find((value) => value.startsWith("sid="));
+  assert(sessionCookie, "dev-login did not set the official internal sid cookie");
+  cookie = sessionCookie;
 }
 
 async function createFixture() {
