@@ -6,7 +6,78 @@ Mendokumentasikan logical next phase Marketplace setelah lifecycle Sprint 8
 berakhir pada `waiting_payment`, tanpa menetapkan requirement implementasi yang
 belum didukung repository.
 
-**Specification requires business clarification.**
+**Status dokumentasi: READY FOR IMPLEMENTATION.**
+
+Seluruh 12 Business Decision Sprint 09 telah disetujui Product Owner.
+Dokumen ini hanya menutup dokumentasi dan belum memulai implementasi Sprint 09.
+
+## Executive Summary
+
+- **Total business decision:** 12
+- **Approved:** 12
+- **Pending:** 0
+- **Status Sprint 09:** READY FOR IMPLEMENTATION
+
+### Keputusan Product Owner
+
+| Decision | Keputusan yang disetujui |
+|---|---|
+| BD-09-001 | Marketplace berhenti pada `waiting_payment` dan melakukan handoff ke Payment Module existing. |
+| BD-09-002 | Approval payment bertingkat berdasarkan nominal, perusahaan, dan kategori; rule dikelola terpusat di Payment Module. |
+| BD-09-003 | Finance/Treasury mengeksekusi payment melalui Payment Module existing. |
+| BD-09-004 | Partial payment hanya melalui installment/payment schedule yang telah disetujui; outstanding dihitung server-side oleh Payment Module. |
+| BD-09-005 | Multi-payment hanya melalui installment/payment schedule yang telah disetujui; setiap termin diproses melalui Payment Module. |
+| BD-09-006 | Payment gagal mempertahankan AP pada `waiting_payment`; failed attempt dicatat dan Treasury dapat retry tanpa approval ulang. |
+| BD-09-007 | Retry membuat execution attempt baru setelah attempt sebelumnya dipastikan gagal atau tidak lagi pending; business payment tidak dibuat ulang. |
+| BD-09-008 | Business idempotency key mengembalikan payment existing untuk request yang sama; payload berbeda ditolak dan payment baru memerlukan dasar bisnis yang sah. |
+| BD-09-009 | Cancellation hanya diperbolehkan sebelum payment execution dimulai; setelahnya mengikuti failed-payment atau reversal/refund workflow. |
+| BD-09-010 | Void sebelum settlement, refund setelah settlement, dan accounting reversal untuk journal yang sudah diposting; payment asli tetap immutable. |
+| BD-09-011 | Marketplace melakukan handoff ke Accounting; Accounting menjadi source of truth untuk journal, payable, settlement, COA, period lock, dan reversal. |
+| BD-09-012 | Rekonsiliasi mengikuti rantai provider settlement → payment → accounting journal → bank statement dengan kontrol uniqueness dan gross-net fee. |
+
+### Architecture Summary
+
+Sprint 09 menggunakan bounded-context handoff, bukan payment engine Marketplace
+baru. Marketplace menyelesaikan AP preparation sampai `waiting_payment` dan
+menyerahkan konteks bisnis yang telah disetujui ke Payment Module. Payment
+Module menjadi pemilik payment approval, execution, installment, retry,
+idempotency, settlement, dan payment correction. Accounting menjadi pemilik
+journal dan posting, sedangkan Bank Reconciliation menjadi pemilik matching
+settlement dan bank movement. Setiap handoff dan corrective action harus
+idempotent, terotorisasi, dapat diaudit, dan tidak mengubah record immutable
+secara langsung.
+
+### Boundary Marketplace
+
+Marketplace memiliki tanggung jawab sampai AP preparation berstatus
+`waiting_payment`, termasuk validasi vendor invoice, PO, Goods Receipt,
+3-Way Match, snapshot AP, finance review, dan handoff reference. Marketplace
+tidak membuat payment engine, tidak menghitung outstanding secara mandiri,
+tidak mengeksekusi payment, dan tidak membuat atau mem-posting journal.
+
+### Boundary Payment Module
+
+Payment Module menerima handoff dari Marketplace dan memiliki kewenangan atas
+payment request, approval bertingkat, execution oleh Finance/Treasury,
+installment/payment schedule, outstanding balance, failed attempt, retry,
+duplicate protection, provider settlement, void, refund, dan execution audit.
+Retry tidak boleh membuat business payment baru, dan status provider yang belum
+pasti tidak boleh langsung dieksekusi ulang.
+
+### Boundary Accounting
+
+Accounting menjadi satu-satunya source of truth untuk payable recognition,
+settlement journal, COA mapping, posting, period lock, reversal, serta status
+dan error posting. Marketplace dan Payment Module hanya melakukan handoff atau
+mengonsumsi status Accounting sesuai contract; posted journal tetap immutable
+dan koreksi dilakukan melalui reversal.
+
+### Boundary Bank Reconciliation
+
+Bank Reconciliation memproses rantai provider settlement → payment →
+accounting journal → bank statement. Matching harus mempertahankan source
+uniqueness, reference yang dapat ditelusuri, perlakuan gross-net fee, serta
+exception handling untuk returned, reversed, refund, chargeback, dan mismatch.
 
 ## BUSINESS DECISION REQUIRED
 
@@ -56,7 +127,7 @@ Business Owner Marketplace bersama Finance Process Owner (nama pemilik belum
 ditetapkan).
 
 **Status**
-PENDING
+APPROVED
 
 ## BUSINESS DECISION REQUIRED
 
@@ -102,7 +173,7 @@ atau nyatakan secara resmi bahwa keduanya adalah satu kontrol yang sama.
 Finance Controller dan Business Owner Marketplace.
 
 **Status**
-PENDING
+APPROVED
 
 ## BUSINESS DECISION REQUIRED
 
@@ -147,7 +218,7 @@ secara eksplisit menyetujui pengecualian dan kontrol penggantinya.
 Treasury/Finance Operations Owner bersama Security atau Compliance Owner.
 
 **Status**
-PENDING
+APPROVED
 
 ## BUSINESS DECISION REQUIRED
 
@@ -192,7 +263,7 @@ exception; jangan menurunkan perilaku dari payment status generik yang ada.
 Finance Process Owner dan Marketplace Procurement Owner.
 
 **Status**
-PENDING
+APPROVED
 
 ## BUSINESS DECISION REQUIRED
 
@@ -235,7 +306,7 @@ Tetapkan cardinality canonical terlebih dahulu; jangan mengandalkan
 Finance Process Owner bersama Accounting Owner dan Marketplace Owner.
 
 **Status**
-PENDING
+APPROVED
 
 ## BUSINESS DECISION REQUIRED
 
@@ -280,7 +351,7 @@ menetapkan satu state atau satu jalur pemulihan.
 Treasury/Finance Operations Owner dan Accounting Owner.
 
 **Status**
-PENDING
+APPROVED
 
 ## BUSINESS DECISION REQUIRED
 
@@ -325,8 +396,19 @@ mengizinkan retry otomatis.
 **Decision Owner**
 Treasury/Finance Operations Owner bersama Payment Integration Owner.
 
+**Selected Option**
+Option B — Retry membuat execution attempt baru yang terhubung ke attempt
+sebelumnya, hanya setelah attempt lama dipastikan gagal atau tidak lagi pending.
+Retry tidak membuat business payment baru.
+
+**Product Owner Notes**
+Retry dikelola oleh Payment Module dengan business idempotency key dan provider
+reference yang tetap dapat ditelusuri. Status provider yang belum pasti tidak
+boleh langsung di-retry. Setiap retry wajib memiliki authorization, alasan,
+audit trail, dan concurrency guard untuk mencegah double execution.
+
 **Status**
-PENDING
+APPROVED
 
 ## BUSINESS DECISION REQUIRED
 
@@ -372,8 +454,19 @@ dan invoice reference saja tidak cukup untuk semua retry/concurrency scenario.
 **Decision Owner**
 Finance Controller, Treasury Owner, dan Payment Integration Owner.
 
+**Selected Option**
+Option B — Payment Module menggunakan business idempotency key untuk request
+yang sama dan execution attempt terpisah untuk retry yang sah.
+
+**Product Owner Notes**
+Request dengan idempotency key yang sama mengembalikan business payment yang
+sama. Payload berbeda dengan key yang sama ditolak. Payment baru hanya boleh
+berasal dari installment/payment schedule atau business approval yang berbeda.
+Provider reference, execution attempt, duplicate detection, dan retry dicatat
+dalam audit trail.
+
 **Status**
-PENDING
+APPROVED
 
 ## BUSINESS DECISION REQUIRED
 
@@ -417,8 +510,17 @@ action secara terpisah dari tombol cancellation.
 **Decision Owner**
 Finance Controller dan Treasury/Finance Operations Owner.
 
+**Selected Option**
+Option A — Cancellation hanya boleh sebelum payment execution dimulai.
+
+**Product Owner Notes**
+Setelah Treasury memulai execution, koreksi tidak dilakukan melalui cancellation
+AP. Payment gagal mengikuti failed-payment workflow; payment yang berhasil
+dieksekusi mengikuti reversal/refund workflow. Cancellation memerlukan
+authorization, alasan tervalidasi, idempotency, dan audit trail lengkap.
+
 **Status**
-PENDING
+APPROVED
 
 ## BUSINESS DECISION REQUIRED
 
@@ -464,8 +566,18 @@ reversal sebelum menetapkan status atau endpoint.
 **Decision Owner**
 Accounting Owner bersama Treasury/Finance Operations Owner.
 
+**Selected Option**
+Option C — Void sebelum settlement, refund setelah settlement, dan accounting
+reversal untuk journal yang sudah diposting.
+
+**Product Owner Notes**
+Payment asli tetap immutable. Void, refund, reversal, dan chargeback dipisahkan
+sesuai tahap lifecycle, masing-masing memerlukan authorization, alasan,
+idempotency, dan audit trail. Refund dianggap selesai setelah settlement
+provider atau cash movement berhasil direkonsiliasi.
+
 **Status**
-PENDING
+APPROVED
 
 ## BUSINESS DECISION REQUIRED
 
@@ -512,8 +624,18 @@ Marketplace.
 **Decision Owner**
 Chief/Head of Accounting bersama Finance Process Owner dan Marketplace Owner.
 
+**Selected Option**
+Option C — Sprint 09 melakukan handoff ke Accounting; posting tetap menjadi
+proses dan kewenangan Accounting.
+
+**Product Owner Notes**
+Accounting menjadi source of truth untuk payable recognition, settlement
+journal, COA mapping, period lock, reversal, dan posting failure. Marketplace
+hanya mengirim evidence dan menampilkan status handoff tanpa membuat atau
+mem-posting journal secara langsung.
+
 **Status**
-PENDING
+APPROVED
 
 ## BUSINESS DECISION REQUIRED
 
@@ -559,8 +681,18 @@ mapping batch sebelum membuka automated reconciliation.
 **Decision Owner**
 Bank Reconciliation Owner bersama Accounting Owner dan Treasury Owner.
 
+**Selected Option**
+Option C — Rekonsiliasi menggunakan rantai provider settlement → payment →
+accounting journal → bank statement.
+
+**Product Owner Notes**
+Payment/provider settlement diverifikasi terlebih dahulu, kemudian dihubungkan
+ke journal dan bank mutation. Source uniqueness, gross-net fee treatment,
+settlement reference, serta exception ownership mengikuti kontrol Bank
+Reconciliation dan Accounting yang berlaku.
+
 **Status**
-PENDING
+APPROVED
 
 ## Business Goal
 
@@ -596,28 +728,21 @@ Implementasi yang menjadi bukti:
 
 ## Target State
 
-Target state yang dapat diturunkan secara logis adalah adanya keputusan bisnis
-untuk tahap sesudah `waiting_payment`, kemungkinan pada boundary pembayaran
-vendor Marketplace.
+Target state Sprint 09 telah ditetapkan melalui seluruh Business Decision:
 
-Target state tersebut **belum dapat dispesifikasikan** secara resmi dari
-repository. Repository belum menetapkan:
-
-- apakah tahap berikutnya adalah payment request, payment approval, payment
-  execution, atau handoff ke modul payment yang sudah ada;
-- siapa actor/role yang berwenang;
-- status dan transisi yang harus berlaku;
-- apakah payment membuat journal/accounting entry;
-- bagaimana partial payment, retry, failure, reversal, dan reconciliation
-  diperlakukan.
-
-**Specification requires business clarification.**
+- Marketplace berhenti pada `waiting_payment` dan melakukan handoff ke Payment
+  Module existing;
+- approval, execution, retry, correction, dan settlement dikelola sesuai
+  boundary Payment Module, Accounting, dan Bank Reconciliation;
+- accounting journal tetap menjadi kewenangan Accounting;
+- reconciliation mengikuti rantai provider settlement → payment → journal →
+  bank statement.
 
 ## Business Decision Register
 
-Setiap keputusan di bawah ini wajib diputuskan oleh pemilik bisnis sebelum
-Sprint 09 dapat masuk ke tahap implementasi. Opsi-opsi berikut adalah ruang
-keputusan yang perlu dipilih, bukan requirement yang sudah disetujui.
+Setiap keputusan di bawah ini telah disetujui oleh Product Owner dan menjadi
+dasar dokumentasi untuk tahap implementasi berikutnya. Opsi yang tidak dipilih
+tetap dicatat sebagai konteks keputusan, bukan requirement.
 
 ### BD-09-001
 
@@ -954,7 +1079,7 @@ harus menentukan siapa yang melakukan retry, kapan, dan dengan reference apa.
 Finance/Treasury owner dan pemilik integrasi payment.
 
 **Status**  
-PENDING
+APPROVED
 
 ### BD-09-008
 
@@ -1232,7 +1357,7 @@ bukan keputusan baru untuk Marketplace.
 Accounting/Reconciliation owner dan Finance/Treasury owner.
 
 **Status**  
-PENDING
+APPROVED
 
 ## Decision Review
 
@@ -1840,7 +1965,7 @@ Tetapkan retry owner, trigger, limit, idempotency semantics, dan terminal
 failure behavior.
 
 **Status**  
-PENDING
+APPROVED
 
 ### BD-09-008
 
@@ -1923,7 +2048,7 @@ Tetapkan duplicate rule, idempotency response, dan pengecualian untuk
 multi-payment bila ada.
 
 **Status**  
-PENDING
+APPROVED
 
 ### BD-09-009
 
@@ -2003,7 +2128,7 @@ Tetapkan cancellation cut-off, actor, reason requirement, dan post-execution
 handling.
 
 **Status**  
-PENDING
+APPROVED
 
 ### BD-09-010
 
@@ -2085,7 +2210,7 @@ Tetapkan aturan void, refund, chargeback, reversal, authority, dan hubungan
 ke accounting.
 
 **Status**  
-PENDING
+APPROVED
 
 ### BD-09-011
 
@@ -2167,7 +2292,7 @@ Tetapkan source canonical, posting timing, COA ownership, failure visibility,
 dan apakah accounting termasuk Sprint 09.
 
 **Status**  
-PENDING
+APPROVED
 
 ### BD-09-012
 
@@ -2252,7 +2377,7 @@ Tetapkan canonical reconciliation source, matching sequence, fee treatment, dan
 owner exception.
 
 **Status**  
-PENDING
+APPROVED
 
 ## Decision Matrix
 
@@ -2264,26 +2389,22 @@ PENDING
 | BD-09-004 | APPROVED | NO | Product Owner + Finance Owner |
 | BD-09-005 | APPROVED | NO | Finance Owner |
 | BD-09-006 | APPROVED | NO | Finance/Treasury Owner |
-| BD-09-007 | PENDING | YES | Finance/Treasury Owner + Payment Integration Owner |
-| BD-09-008 | PENDING | YES | Finance/Treasury Owner + Payment Integration Owner |
-| BD-09-009 | PENDING | YES | Product Owner + Finance Owner |
-| BD-09-010 | PENDING | YES | Finance/Accounting Owner + Payment Integration Owner |
-| BD-09-011 | PENDING | YES | Product Owner + Accounting/Finance Owner |
-| BD-09-012 | PENDING | YES | Accounting/Reconciliation Owner + Finance/Treasury Owner |
+| BD-09-007 | APPROVED | NO | Finance/Treasury Owner + Payment Integration Owner |
+| BD-09-008 | APPROVED | NO | Finance/Treasury Owner + Payment Integration Owner |
+| BD-09-009 | APPROVED | NO | Product Owner + Finance Owner |
+| BD-09-010 | APPROVED | NO | Finance/Accounting Owner + Payment Integration Owner |
+| BD-09-011 | APPROVED | NO | Product Owner + Accounting/Finance Owner |
+| BD-09-012 | APPROVED | NO | Accounting/Reconciliation Owner + Finance/Treasury Owner |
 
 ## Decision Status Summary
 
 - Total business decision: **12**
-- Total blocking: **6**
-- Total ready: **6**
-- Total pending: **6**
-- BD-09-001 telah menyetujui Option A, BD-09-002 telah menyetujui Option B,
-  BD-09-003 telah menyetujui Option A, BD-09-004 dan BD-09-005 telah
-  menyetujui Option C, serta BD-09-006 telah menyetujui Option A; decision
-  lain tetap belum disetujui.
-- Sprint 09 tetap **NOT STARTED** dan **NO GO** sampai seluruh decision owner
-  menetapkan boundary payment, approval/execution authority, accounting,
-  reconciliation, serta acceptance criteria.
+- Total approved: **12**
+- Total pending: **0**
+- Total blocking: **0**
+- Semua keputusan BD-09-001 sampai BD-09-012 telah disetujui Product Owner.
+- Sprint 09 berstatus **READY FOR IMPLEMENTATION**. Implementasi belum dimulai
+  dalam penutupan dokumentasi ini.
 
 ## Scope
 
@@ -2291,8 +2412,8 @@ Scope dokumen ini hanya:
 
 - mencatat lifecycle Marketplace yang sudah terbukti;
 - mengidentifikasi boundary terakhir Sprint 8;
-- mencatat logical next phase sebagai kandidat untuk keputusan bisnis;
-- mengunci bahwa implementasi Sprint 9 belum boleh dimulai tanpa klarifikasi.
+- mencatat logical next phase dan boundary yang telah disetujui;
+- menjadi baseline dokumentasi sebelum implementasi Sprint 09 dimulai.
 
 ## Out of Scope
 
@@ -2310,8 +2431,8 @@ Tanpa spesifikasi bisnis tambahan, hal-hal berikut berada di luar scope:
 
 ## Existing Components to Reuse
 
-Komponen berikut adalah bukti existing boundary dan hanya boleh dipakai setelah
-business clarification menetapkan requirement:
+Komponen berikut adalah bukti existing boundary dan menjadi referensi untuk
+tahap implementasi sesuai keputusan yang telah disetujui:
 
 - `mktVendorInvoiceService` untuk vendor invoice dan 3-Way Match;
 - `mktApPreparationService` untuk AP preparation sampai `waiting_payment`;
@@ -2346,14 +2467,16 @@ Marketplace PO
   → waiting_payment
 ```
 
-Kandidat logical next phase:
+Logical next phase yang telah disetujui:
 
 ```text
-waiting_payment → [business decision required]
+waiting_payment → Payment Module handoff
+  → approval → execution → settlement
+  → Accounting → Bank Reconciliation
 ```
 
-Tidak boleh ditambahkan status atau transisi sesudah `waiting_payment` hanya
-berdasarkan dokumen ini.
+Marketplace tidak menambahkan payment engine baru. Status dan transisi payment
+berikutnya berada pada boundary Payment Module.
 
 ## Server Authority
 
@@ -2366,9 +2489,12 @@ Boundary yang sudah terbukti server-authoritative:
 - duplicate AP preparation dicegah berdasarkan vendor invoice;
 - client tidak boleh menentukan hasil match atau snapshot finansial.
 
-Authority untuk tahap sesudah `waiting_payment` belum ditentukan.
+Authority tahap sesudah `waiting_payment` telah ditentukan:
 
-**Specification requires business clarification.**
+- Payment Module berwenang atas approval, execution, settlement, retry, dan
+  payment correction;
+- Accounting berwenang atas journal, posting, COA, period lock, dan reversal;
+- Bank Reconciliation berwenang atas matching settlement dengan bank movement.
 
 ## Validation
 
@@ -2383,7 +2509,9 @@ prasyarat:
 - invoice berstatus `ready_for_ap` sebelum AP preparation dibuat;
 - AP preparation memiliki reference PO, Goods Receipt, supplier, dan invoice.
 
-Validation tambahan untuk tahap pembayaran belum dapat ditetapkan.
+Validation tambahan tahap pembayaran mengikuti approval hierarchy, installment
+schedule, idempotency, execution-attempt guard, settlement, dan reconciliation
+rules yang telah disetujui.
 
 ## Idempotency
 
@@ -2395,8 +2523,9 @@ Existing idempotency yang terbukti:
 - transition yang sudah tercapai dikembalikan sebagai already-exists state;
 - notification queue menggunakan deduplication key.
 
-Idempotency untuk payment request, payment execution, atau payment retry belum
-memiliki requirement resmi.
+Idempotency payment request, payment execution, dan payment retry mengikuti
+business idempotency key, provider reference, serta execution-attempt rules
+yang telah disetujui.
 
 ## Concurrency
 
@@ -2407,8 +2536,9 @@ Existing concurrency controls yang terbukti:
 - AP transition memakai expected current status di `UPDATE`;
 - concurrent transition yang kalah dilaporkan sebagai conflict.
 
-Locking, race behavior, dan retry semantics untuk tahap sesudah
-`waiting_payment` belum ditentukan.
+Locking dan race behavior wajib mencegah duplicate execution. Retry membuat
+execution attempt baru hanya setelah attempt sebelumnya dipastikan gagal atau
+tidak lagi pending.
 
 ## Activity Log
 
@@ -2422,16 +2552,17 @@ Existing audit events mencakup antara lain:
 - `mkt_ap_finance_reviewed`;
 - `mkt_ap_waiting_payment`.
 
-Event audit untuk payment execution atau settlement Marketplace belum boleh
-ditentukan tanpa business clarification.
+Event audit payment execution, settlement, retry, correction, accounting
+handoff, dan reconciliation wajib tercatat sesuai boundary owner masing-masing.
 
 ## Notification
 
 Existing notification queue mencatat event invoice dan AP preparation untuk
 recipient admin dengan deduplication key.
 
-Recipient, event type, channel, retry behavior, dan template untuk tahap sesudah
-`waiting_payment` belum ditentukan.
+Recipient, event type, channel, retry behavior, dan template tahap sesudah
+`waiting_payment` diturunkan dari owner Payment Module, Accounting, dan Bank
+Reconciliation pada tahap implementasi.
 
 ## Security
 
@@ -2444,22 +2575,20 @@ Security boundary yang sudah terbukti:
 - status transition dijaga server-side dan concurrency-safe.
 
 Role separation untuk payment approval/execution, segregation of duties,
-authorization scope, dan anti-duplicate payment belum ditentukan.
+authorization scope, dan anti-duplicate payment mengikuti approval hierarchy
+serta idempotency rules yang telah disetujui.
 
 ## Runtime Evidence
 
 Dokumen ini adalah specification-only. Tidak ada test, build, typecheck, atau
 runtime verification yang dijalankan sebagai bagian dari authoring ini.
 
-Runtime evidence yang diperlukan untuk Sprint 9 belum dapat didefinisikan
-sebelum business clarification menetapkan scope dan acceptance criteria.
+Runtime evidence belum dikumpulkan karena permintaan ini hanya menutup
+dokumentasi; pengumpulan evidence dilakukan pada tahap implementasi.
 
 ## Regression Scope
 
-Belum ada regression scope Sprint 9 yang sah untuk ditetapkan.
-
-Setelah business clarification tersedia, regression scope minimal harus
-diturunkan dari boundary yang dipilih dan tetap menjaga:
+Regression scope minimal implementasi harus menjaga:
 
 - Marketplace PO/vendor lifecycle;
 - shipment, POD, dan Goods Receipt;
@@ -2469,23 +2598,19 @@ diturunkan dari boundary yang dipilih dan tetap menjaga:
 
 ## Acceptance Criteria
 
-Acceptance criteria Sprint 9 **belum dapat ditetapkan**.
+Acceptance criteria dokumentasi Sprint 09:
 
-Business clarification minimal harus menjawab:
-
-1. Apa nama dan tujuan fase setelah `waiting_payment`?
-2. Apakah fase tersebut membuat payment request, payment, atau hanya handoff?
-3. Apa status machine dan terminal states-nya?
-4. Siapa yang dapat membuat, menyetujui, mengeksekusi, membatalkan, dan
-   merekonsiliasi pembayaran?
-5. Apa relasi canonical ke `vendor_invoices`, `mkt_ap_preparations`, dan
-   accounting?
-6. Bagaimana idempotency, concurrency, partial payment, failure, retry,
-   reversal, dan duplicate payment ditangani?
-7. Apakah payment execution dan accounting termasuk scope Sprint 9 atau fase
-   terpisah?
-
-**Specification requires business clarification.**
+1. Seluruh BD-09-001 sampai BD-09-012 berstatus `APPROVED`.
+2. Marketplace berhenti pada `waiting_payment` dan melakukan handoff ke
+   Payment Module existing.
+3. Payment approval, execution, installment, failure, retry, duplicate
+   protection, cancellation, dan reversal/refund mengikuti keputusan yang
+   disetujui.
+4. Accounting menjadi source of truth untuk journal dan posting.
+5. Bank Reconciliation menggunakan rantai provider settlement → payment →
+   accounting journal → bank statement.
+6. Implementasi tidak membuat payment engine Marketplace baru dan tidak
+   mem-posting journal dari Marketplace.
 
 ## Final Evidence Matrix
 
@@ -2495,16 +2620,16 @@ Business clarification minimal harus menjawab:
 | Last status | `waiting_payment` | Confirmed |
 | Last entity | `mkt_ap_preparations` linked to vendor invoice, PO, and GR | Confirmed |
 | Last business boundary | AP handoff before payment/accounting execution | Confirmed |
-| Logical next phase | Payment-side processing after `waiting_payment` | Candidate only |
-| Payment contract | No Marketplace-specific post-`waiting_payment` contract found | Requires clarification |
-| Acceptance criteria | Not present in repository | Requires clarification |
-| Implementation authority | No approved Sprint 9 specification | Do not start |
+| Logical next phase | Payment-side processing after `waiting_payment` | Approved Payment Module handoff |
+| Payment contract | Handoff ke Payment Module existing | Approved boundary |
+| Acceptance criteria | Business Decision dan boundary telah ditetapkan | Approved |
+| Implementation authority | Product Owner telah menyetujui Sprint 09 | Ready for implementation |
 | Runtime evidence | Not applicable to authoring-only task | Not collected |
 
-## GO / NO GO
+## Implementation Readiness
 
-**NO GO — Specification requires business clarification.**
+**READY FOR IMPLEMENTATION**
 
-Sprint 9 implementation must not start until the business owner confirms the
-post-`waiting_payment` scope, lifecycle, authority, payment/accounting
-boundary, and acceptance criteria.
+Sprint 09 implementation belum dimulai dalam penutupan dokumentasi ini.
+Implementasi berikutnya wajib mengikuti seluruh Business Decision, Decision
+Matrix, Executive Summary, dan boundary yang telah disetujui.
