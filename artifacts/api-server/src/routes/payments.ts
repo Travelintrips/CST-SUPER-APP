@@ -196,13 +196,15 @@ function serializePayment(p: typeof paymentsTable.$inferSelect) {
 }
 
 function getPaymentMethodFromPayload(payload: Record<string, unknown> | null | undefined): string | null {
+  const rawMethod = payload?.paymentMethod
+    ?? payload?.payment_method
+    ?? payload?.method
+    ?? payload?.payMethod
+    ?? payload?.paymentType
+    ?? payload?.channel;
+
   return normalizePaymentMethod(
-    payload?.paymentMethod
-      ?? payload?.payment_method
-      ?? payload?.method
-      ?? payload?.payMethod
-      ?? payload?.paymentType
-      ?? payload?.channel,
+    typeof rawMethod === "string" ? rawMethod : null,
   );
 }
 
@@ -745,7 +747,7 @@ paymentsWebhookRouter.post("/paylabs/webhook", async (req, res) => {
       refKind: payment.refKind,
       refDocNumber: payment.refDocNumber,
       amount: Number(payment.amount),
-      paymentMethod: webhookPaymentMethod ?? payment.paymentMethod,
+      paymentMethod: webhookPaymentMethod ?? payment.paymentMethod ?? undefined,
       companyId: webhookDerivedCompanyId ?? payment.companyId,
     });
     if (!paymentPosted) {
@@ -830,7 +832,7 @@ router.post("/:id/simulate-paid", async (req, res) => {
       refKind: payment.refKind,
       refDocNumber: payment.refDocNumber,
       amount: Number(payment.amount),
-      paymentMethod: payment.paymentMethod,
+      paymentMethod: payment.paymentMethod ?? undefined,
       companyId: derivedCompanyId,
     });
     if (!paymentPosted) {
