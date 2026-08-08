@@ -1108,8 +1108,24 @@ immutable.
 **Decision Owner**  
 Finance/Accounting owner dan pemilik integrasi payment.
 
+**Selected Option**  
+Option C.
+
+**Product Owner Notes**  
+Koreksi payment mengikuti lifecycle pembayaran. Void hanya diperbolehkan
+sebelum provider settlement dan sebelum payment menjadi final. Setelah provider
+melakukan settlement, koreksi dilakukan melalui Refund Provider. Accounting entry
+yang telah diposting wajib dikoreksi menggunakan Accounting Reversal sesuai
+prinsip immutable ledger. Payment asli tetap immutable. Setiap void, refund,
+reversal, maupun chargeback wajib memiliki authorization, alasan yang
+tervalidasi, idempotency, serta audit trail lengkap. Full maupun partial refund
+harus divalidasi terhadap amount settled dan outstanding refundable balance.
+Status refund dianggap selesai hanya setelah settlement provider atau bukti
+cash movement berhasil direkonsiliasi. Chargeback diperlakukan sebagai
+corrective event tersendiri dan tidak disamakan dengan refund biasa.
+
 **Status**  
-PENDING
+APPROVED
 
 ### BD-09-011
 
