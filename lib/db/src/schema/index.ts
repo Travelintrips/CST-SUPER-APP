@@ -149,6 +149,7 @@ export * from "./mktPoGoodsReceipts";
 export * from "./mktPoGoodsReceiptItems";
 export * from "./mktApPreparations";
 export * from "./mktPaymentExecutionAttempts";
+export * from "./mktAccountingHandoffs";
 
 // ── Notification tables (Drizzle-tracked) ─────────────────────────────────────
 export * from "./adminNotifications";
