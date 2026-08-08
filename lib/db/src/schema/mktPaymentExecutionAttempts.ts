@@ -19,6 +19,8 @@ export const mktPaymentExecutionAttemptsTable = pgTable("mkt_payment_execution_a
   idempotencyKey: text("idempotency_key").notNull(),
   failureCode: text("failure_code"),
   failureReason: text("failure_reason"),
+  failedAt: timestamp("failed_at"),
+  failedBy: text("failed_by"),
   providerReference: text("provider_reference"),
   startedAt: timestamp("started_at"),
   completedAt: timestamp("completed_at"),

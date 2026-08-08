@@ -71,8 +71,9 @@ const TRUCKING_SNAPSHOT = {
 // ── Insert / cleanup helpers using raw SQL via pool ───────────────────────────
 async function insertSupplier(name: string): Promise<number> {
   const res = await pool.query(
-    `INSERT INTO suppliers (name, service_type, is_active, logo, sort_order)
-     VALUES ($1, 'test', true, '🧪', 999)
+    `INSERT INTO suppliers
+       (name, service_type, is_active, is_verified, marketplace_status, logo, sort_order)
+     VALUES ($1, 'test', true, true, 'published', '🧪', 999)
      RETURNING id`,
     [name],
   );

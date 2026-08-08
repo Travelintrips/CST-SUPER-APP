@@ -49,6 +49,25 @@ export type MarketplacePaymentLifecycleResult =
       message?: string;
     };
 
+class MarketplacePaymentTransactionError extends Error {
+  readonly code = "CONCURRENT_UPDATE" as const;
+}
+
+function rollbackLifecycleTransaction(message: string): never {
+  throw new MarketplacePaymentTransactionError(message);
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === "object"
+    && error !== null
+    && "code" in error
+    && (error as { code?: unknown }).code === "23505";
+}
+
+function concurrentUpdateResult(message: string): MarketplacePaymentLifecycleResult {
+  return { ok: false, code: "CONCURRENT_UPDATE", message };
+}
+
 function isMarketplaceRequest(row: PaymentRequestRow): boolean {
   // Legacy 09A rows may have the Marketplace source marker without the later
   // AP-preparation foreign key. The source marker remains authoritative for
@@ -141,7 +160,9 @@ async function transition(
   actor: Actor,
   fields: Record<string, unknown>,
 ): Promise<MarketplacePaymentLifecycleResult> {
-  const result = await db.transaction(async (tx) => {
+  let result: MarketplacePaymentLifecycleResult;
+  try {
+    result = await db.transaction(async (tx) => {
     const [current] = await tx
       .select()
       .from(paymentRequestsTable)
@@ -174,9 +195,13 @@ async function transition(
         eq(paymentRequestsTable.mktLifecycleStatus, expectedStatus),
       ))
       .returning();
-    if (!updated) return { ok: false as const, code: "CONCURRENT_UPDATE" as const };
+    if (!updated) rollbackLifecycleTransaction("Payment request berubah saat transisi lifecycle");
     return { ok: true as const, paymentRequest: updated, alreadyExists: false };
-  });
+    });
+  } catch (error) {
+    if (error instanceof MarketplacePaymentTransactionError) return concurrentUpdateResult(error.message);
+    throw error;
+  }
 
   if (!result.ok || result.alreadyExists) return result;
   await recordLifecycleEvent(result.paymentRequest, actor, `mkt_payment_${nextStatus}`, expectedStatus, nextStatus);
@@ -246,7 +271,9 @@ export async function startMarketplacePaymentExecution(
     return { ok: false, code: "IDEMPOTENCY_CONFLICT", message: "Idempotency-Key wajib 8-128 karakter" };
   }
 
-  const result = await db.transaction(async (tx) => {
+  let result: MarketplacePaymentLifecycleResult;
+  try {
+    result = await db.transaction(async (tx) => {
     const [current] = await tx
       .select()
       .from(paymentRequestsTable)
@@ -255,6 +282,17 @@ export async function startMarketplacePaymentExecution(
       .limit(1);
     if (!current || !isMarketplaceRequest(current)) {
       return { ok: false as const, code: "NOT_FOUND" as const };
+    }
+    const [existingForKey] = await tx
+      .select()
+      .from(mktPaymentExecutionAttemptsTable)
+      .where(eq(mktPaymentExecutionAttemptsTable.idempotencyKey, idempotencyKey))
+      .limit(1);
+    if (existingForKey) {
+      if (existingForKey.paymentRequestId !== paymentRequestId) {
+        return { ok: false as const, code: "IDEMPOTENCY_CONFLICT" as const };
+      }
+      return { ok: true as const, paymentRequest: current, attempt: existingForKey, alreadyExists: true };
     }
     if (current.mktLifecycleStatus === "processing") {
       const [existing] = await tx
@@ -291,7 +329,7 @@ export async function startMarketplacePaymentExecution(
         createdBy: actor.actorId ?? null,
       })
       .returning();
-    if (!attempt) return { ok: false as const, code: "CONCURRENT_UPDATE" as const };
+    if (!attempt) rollbackLifecycleTransaction("Execution attempt tidak terbentuk");
     const [updated] = await tx
       .update(paymentRequestsTable)
       .set({ mktLifecycleStatus: "processing", mktExecutionStartedAt: new Date(), updatedAt: new Date() })
@@ -300,17 +338,24 @@ export async function startMarketplacePaymentExecution(
         eq(paymentRequestsTable.mktLifecycleStatus, "treasury_ready"),
       ))
       .returning();
-    if (!updated) return { ok: false as const, code: "CONCURRENT_UPDATE" as const };
+    if (!updated) rollbackLifecycleTransaction("Payment request gagal masuk status processing");
     return { ok: true as const, paymentRequest: updated, attempt, alreadyExists: false };
-  });
+    });
+  } catch (error) {
+    if (error instanceof MarketplacePaymentTransactionError) return concurrentUpdateResult(error.message);
+    if (isUniqueViolation(error)) return { ok: false, code: "IDEMPOTENCY_CONFLICT", message: "Idempotency-Key sudah digunakan" };
+    throw error;
+  }
   if (!result.ok || result.alreadyExists) return result;
+  const processingAttempt = result.attempt;
+  if (!processingAttempt) return concurrentUpdateResult("Execution attempt tidak ditemukan setelah processing");
   await recordLifecycleEvent(result.paymentRequest, actor, "mkt_payment_processing", "treasury_ready", "processing", {
-    attemptId: result.attempt.id,
-    attemptNumber: result.attempt.attemptNumber,
+    attemptId: processingAttempt.id,
+    attemptNumber: processingAttempt.attemptNumber,
     idempotencyKey,
   });
   queueLifecycleNotification(result.paymentRequest, "mkt_payment_processing", "processing", {
-    attemptId: result.attempt.id,
+    attemptId: processingAttempt.id,
   });
   return result;
 }
@@ -320,7 +365,9 @@ export async function completeMarketplacePayment(
   attemptId: number,
   actor: Actor,
 ): Promise<MarketplacePaymentLifecycleResult> {
-  const result = await db.transaction(async (tx) => {
+  let result: MarketplacePaymentLifecycleResult;
+  try {
+    result = await db.transaction(async (tx) => {
     const [current] = await tx
       .select()
       .from(paymentRequestsTable)
@@ -328,8 +375,6 @@ export async function completeMarketplacePayment(
       .for("update")
       .limit(1);
     if (!current || !isMarketplaceRequest(current)) return { ok: false as const, code: "NOT_FOUND" as const };
-    if (current.mktLifecycleStatus === "completed") return { ok: true as const, paymentRequest: current, alreadyExists: true };
-    if (current.mktLifecycleStatus !== "processing") return { ok: false as const, code: "INVALID_STATUS" as const, currentStatus: current.mktLifecycleStatus };
     const [attempt] = await tx
       .select()
       .from(mktPaymentExecutionAttemptsTable)
@@ -337,6 +382,13 @@ export async function completeMarketplacePayment(
       .for("update")
       .limit(1);
     if (!attempt) return { ok: false as const, code: "ATTEMPT_NOT_FOUND" as const };
+    if (current.mktLifecycleStatus === "completed") {
+      if (attempt.status === "completed") {
+        return { ok: true as const, paymentRequest: current, attempt, alreadyExists: true };
+      }
+      return { ok: false as const, code: "INVALID_STATUS" as const, currentStatus: current.mktLifecycleStatus };
+    }
+    if (current.mktLifecycleStatus !== "processing") return { ok: false as const, code: "INVALID_STATUS" as const, currentStatus: current.mktLifecycleStatus };
     if (attempt.status === "completed") return { ok: true as const, paymentRequest: current, attempt, alreadyExists: true };
     if (attempt.status !== "processing") return { ok: false as const, code: "INVALID_STATUS" as const, message: "Execution attempt bukan processing" };
     const [updatedAttempt] = await tx
@@ -349,9 +401,13 @@ export async function completeMarketplacePayment(
       .set({ status: "paid", mktLifecycleStatus: "completed", paidAmount: current.totalAmount, paymentDate: new Date(), mktCompletedAt: new Date(), updatedAt: new Date() })
       .where(and(eq(paymentRequestsTable.id, paymentRequestId), eq(paymentRequestsTable.mktLifecycleStatus, "processing")))
       .returning();
-    if (!updated || !updatedAttempt) return { ok: false as const, code: "CONCURRENT_UPDATE" as const };
+    if (!updated || !updatedAttempt) rollbackLifecycleTransaction("Completion transaction tidak lengkap");
     return { ok: true as const, paymentRequest: updated, attempt: updatedAttempt, alreadyExists: false };
-  });
+    });
+  } catch (error) {
+    if (error instanceof MarketplacePaymentTransactionError) return concurrentUpdateResult(error.message);
+    throw error;
+  }
   if (!result.ok || result.alreadyExists) return result;
   const completedAttempt = result.attempt;
   if (!completedAttempt) return { ok: false, code: "CONCURRENT_UPDATE", message: "Execution attempt tidak ditemukan setelah completion" };
@@ -370,19 +426,31 @@ export async function failMarketplacePayment(
   const failureCode = normalizeReason(failureCodeInput);
   const failureReason = normalizeReason(failureReasonInput);
   if (!failureCode || !failureReason) return { ok: false, code: "INVALID_REASON", message: "failureCode dan failureReason wajib diisi" };
-  const result = await db.transaction(async (tx) => {
+  let result: MarketplacePaymentLifecycleResult;
+  try {
+    result = await db.transaction(async (tx) => {
     const [current] = await tx.select().from(paymentRequestsTable).where(eq(paymentRequestsTable.id, paymentRequestId)).for("update").limit(1);
     if (!current || !isMarketplaceRequest(current)) return { ok: false as const, code: "NOT_FOUND" as const };
-    if (current.mktLifecycleStatus === "failed") return { ok: true as const, paymentRequest: current, alreadyExists: true };
-    if (current.mktLifecycleStatus !== "processing") return { ok: false as const, code: "INVALID_STATUS" as const, currentStatus: current.mktLifecycleStatus };
     const [attempt] = await tx.select().from(mktPaymentExecutionAttemptsTable).where(and(eq(mktPaymentExecutionAttemptsTable.id, attemptId), eq(mktPaymentExecutionAttemptsTable.paymentRequestId, paymentRequestId))).for("update").limit(1);
     if (!attempt) return { ok: false as const, code: "ATTEMPT_NOT_FOUND" as const };
+    if (current.mktLifecycleStatus === "failed") {
+      if (attempt.status === "failed") {
+        return { ok: true as const, paymentRequest: current, attempt, alreadyExists: true };
+      }
+      return { ok: false as const, code: "INVALID_STATUS" as const, currentStatus: current.mktLifecycleStatus };
+    }
+    if (current.mktLifecycleStatus !== "processing") return { ok: false as const, code: "INVALID_STATUS" as const, currentStatus: current.mktLifecycleStatus };
     if (attempt.status !== "processing") return { ok: false as const, code: "INVALID_STATUS" as const, message: "Execution attempt bukan processing" };
-    const [updatedAttempt] = await tx.update(mktPaymentExecutionAttemptsTable).set({ status: "failed", failureCode, failureReason, updatedAt: new Date() }).where(eq(mktPaymentExecutionAttemptsTable.id, attemptId)).returning();
-    const [updated] = await tx.update(paymentRequestsTable).set({ mktLifecycleStatus: "failed", mktFailureCode: failureCode, mktFailureReason: failureReason, updatedAt: new Date() }).where(and(eq(paymentRequestsTable.id, paymentRequestId), eq(paymentRequestsTable.mktLifecycleStatus, "processing"))).returning();
-    if (!updated || !updatedAttempt) return { ok: false as const, code: "CONCURRENT_UPDATE" as const };
+    const failedAt = new Date();
+    const [updatedAttempt] = await tx.update(mktPaymentExecutionAttemptsTable).set({ status: "failed", failureCode, failureReason, failedAt, failedBy: actor.actorId ?? null, updatedAt: failedAt }).where(eq(mktPaymentExecutionAttemptsTable.id, attemptId)).returning();
+    const [updated] = await tx.update(paymentRequestsTable).set({ mktLifecycleStatus: "failed", mktFailureCode: failureCode, mktFailureReason: failureReason, mktFailureAt: failedAt, mktFailedBy: actor.actorId ?? null, updatedAt: failedAt }).where(and(eq(paymentRequestsTable.id, paymentRequestId), eq(paymentRequestsTable.mktLifecycleStatus, "processing"))).returning();
+    if (!updated || !updatedAttempt) rollbackLifecycleTransaction("Failure transaction tidak lengkap");
     return { ok: true as const, paymentRequest: updated, attempt: updatedAttempt, alreadyExists: false };
-  });
+    });
+  } catch (error) {
+    if (error instanceof MarketplacePaymentTransactionError) return concurrentUpdateResult(error.message);
+    throw error;
+  }
   if (!result.ok || result.alreadyExists) return result;
   const failedAttempt = result.attempt;
   if (!failedAttempt) return { ok: false, code: "CONCURRENT_UPDATE", message: "Execution attempt tidak ditemukan setelah failure" };
@@ -398,7 +466,9 @@ export async function retryMarketplacePayment(
 ): Promise<MarketplacePaymentLifecycleResult> {
   const idempotencyKey = normalizeIdempotencyKey(idempotencyKeyInput);
   if (!idempotencyKey) return { ok: false, code: "IDEMPOTENCY_CONFLICT", message: "Idempotency-Key wajib 8-128 karakter" };
-  const result = await db.transaction(async (tx) => {
+  let result: MarketplacePaymentLifecycleResult;
+  try {
+    result = await db.transaction(async (tx) => {
     const [locked] = await tx.select().from(paymentRequestsTable).where(eq(paymentRequestsTable.id, paymentRequestId)).for("update").limit(1);
     if (!locked || !isMarketplaceRequest(locked)) return { ok: false as const, code: "NOT_FOUND" as const };
     const [sameKey] = await tx.select().from(mktPaymentExecutionAttemptsTable).where(eq(mktPaymentExecutionAttemptsTable.idempotencyKey, idempotencyKey)).limit(1);
@@ -419,12 +489,19 @@ export async function retryMarketplacePayment(
       createdBy: actor.actorId ?? null,
     }).returning();
     const [updated] = await tx.update(paymentRequestsTable).set({ mktLifecycleStatus: "processing", mktExecutionStartedAt: new Date(), mktFailureCode: null, mktFailureReason: null, updatedAt: new Date() }).where(and(eq(paymentRequestsTable.id, paymentRequestId), eq(paymentRequestsTable.mktLifecycleStatus, "failed"))).returning();
-    if (!attempt || !updated) return { ok: false as const, code: "CONCURRENT_UPDATE" as const };
+    if (!attempt || !updated) rollbackLifecycleTransaction("Retry transaction tidak lengkap");
     return { ok: true as const, paymentRequest: updated, attempt, alreadyExists: false };
-  });
+    });
+  } catch (error) {
+    if (error instanceof MarketplacePaymentTransactionError) return concurrentUpdateResult(error.message);
+    if (isUniqueViolation(error)) return { ok: false, code: "IDEMPOTENCY_CONFLICT", message: "Idempotency-Key sudah digunakan" };
+    throw error;
+  }
   if (!result.ok || result.alreadyExists) return result;
-  await recordLifecycleEvent(result.paymentRequest, actor, "mkt_payment_retry_processing", "failed", "processing", { attemptId: result.attempt.id, idempotencyKey });
-  queueLifecycleNotification(result.paymentRequest, "mkt_payment_retry_processing", "processing", { attemptId: result.attempt.id });
+  const retryAttempt = result.attempt;
+  if (!retryAttempt) return concurrentUpdateResult("Execution attempt tidak ditemukan setelah retry");
+  await recordLifecycleEvent(result.paymentRequest, actor, "mkt_payment_retry_processing", "failed", "processing", { attemptId: retryAttempt.id, idempotencyKey });
+  queueLifecycleNotification(result.paymentRequest, "mkt_payment_retry_processing", "processing", { attemptId: retryAttempt.id });
   return result;
 }
 

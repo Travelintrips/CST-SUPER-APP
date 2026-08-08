@@ -27,6 +27,8 @@ export async function runMktPaymentHandoffMigration(): Promise<void> {
       ADD COLUMN IF NOT EXISTS mkt_completed_at TIMESTAMP,
       ADD COLUMN IF NOT EXISTS mkt_failure_code TEXT,
       ADD COLUMN IF NOT EXISTS mkt_failure_reason TEXT,
+       ADD COLUMN IF NOT EXISTS mkt_failure_at TIMESTAMP,
+       ADD COLUMN IF NOT EXISTS mkt_failed_by TEXT,
       ADD COLUMN IF NOT EXISTS mkt_cancellation_idempotency_key TEXT,
       ADD COLUMN IF NOT EXISTS mkt_cancelled_by TEXT,
       ADD COLUMN IF NOT EXISTS mkt_cancellation_reason TEXT
@@ -121,6 +123,8 @@ export async function runMktPaymentHandoffMigration(): Promise<void> {
       idempotency_key TEXT NOT NULL,
       failure_code TEXT,
       failure_reason TEXT,
+       failed_at TIMESTAMP,
+       failed_by TEXT,
       provider_reference TEXT,
       started_at TIMESTAMP,
       completed_at TIMESTAMP,
@@ -132,6 +136,11 @@ export async function runMktPaymentHandoffMigration(): Promise<void> {
       CONSTRAINT mkt_payment_attempt_idempotency_unique
         UNIQUE (idempotency_key)
     )
+  `);
+  await db.execute(sql`
+    ALTER TABLE IF EXISTS mkt_payment_execution_attempts
+      ADD COLUMN IF NOT EXISTS failed_at TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS failed_by TEXT
   `);
   await db.execute(sql`
     CREATE INDEX IF NOT EXISTS mkt_payment_attempt_request_idx

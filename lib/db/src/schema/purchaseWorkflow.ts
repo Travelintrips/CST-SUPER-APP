@@ -379,6 +379,8 @@ export const paymentRequestsTable = pgTable("payment_requests", {
   mktCompletedAt: timestamp("mkt_completed_at"),
   mktFailureCode: text("mkt_failure_code"),
   mktFailureReason: text("mkt_failure_reason"),
+  mktFailureAt: timestamp("mkt_failure_at"),
+  mktFailedBy: text("mkt_failed_by"),
   mktCancellationIdempotencyKey: text("mkt_cancellation_idempotency_key"),
   mktCancelledBy: text("mkt_cancelled_by"),
   mktCancellationReason: text("mkt_cancellation_reason"),
