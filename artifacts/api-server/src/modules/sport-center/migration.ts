@@ -467,6 +467,7 @@ export async function runSportCenterMigration(): Promise<void> {
         ADD COLUMN IF NOT EXISTS net_amount           NUMERIC(14,2) NOT NULL DEFAULT 0,
         ADD COLUMN IF NOT EXISTS settlement_reference TEXT,
         ADD COLUMN IF NOT EXISTS settlement_date      DATE,
+        ADD COLUMN IF NOT EXISTS settlement_rule_version TEXT,
         ADD COLUMN IF NOT EXISTS settlement_status    TEXT NOT NULL DEFAULT 'unsettled',
         ADD COLUMN IF NOT EXISTS mdr_posting_status   TEXT NOT NULL DEFAULT 'unposted',
         ADD COLUMN IF NOT EXISTS mdr_accounting_entry_id INTEGER,

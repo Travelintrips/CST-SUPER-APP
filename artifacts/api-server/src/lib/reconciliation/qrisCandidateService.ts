@@ -6,7 +6,12 @@ import {
   type QrisMutationCandidateInput,
   type QrisPaymentCandidateInput,
 } from "./qrisCandidateEngine.js";
-import { expectedQrisSettlementDate, providerRulesFromRows } from "./providerSettlementRules.js";
+import {
+  expectedQrisSettlementDate,
+  normalizeQrisProvider,
+  providerRulesByBankAccountFromRows,
+  providerRulesFromRows,
+} from "./providerSettlementRules.js";
 
 function esc(value: unknown): string {
   return String(value ?? "").replace(/'/g, "''");
@@ -42,7 +47,8 @@ export async function generateQrisCandidates(options: {
     db.execute(sql.raw(`
       SELECT
         sp.id, sp.company_id, sp.amount, sp.method, sp.status, sp.paid_at,
-        sp.provider_code, sp.settlement_date,
+        sp.provider_code, sp.settlement_date, sp.settlement_rule_version,
+        sp.settlement_reference, sp.bank_account_id,
         EXISTS (
           SELECT 1 FROM qris_settlement_items qsi
           WHERE qsi.sport_payment_id = sp.id
@@ -54,9 +60,9 @@ export async function generateQrisCandidates(options: {
     `)),
     db.execute(sql.raw(`
       SELECT
-        bm.id, bm.company_id, bm.transaction_date, bm.amount, bm.direction,
-        bm.source, bm.source_classification, bm.provider_name, bm.description,
-        bm.status
+        bm.id, bm.company_id, bm.bank_account_id, bm.transaction_date, bm.amount,
+        bm.direction, bm.source, bm.source_classification, bm.provider_name,
+        bm.provider_order_id, bm.description, bm.status
       FROM bank_mutations bm
       WHERE bm.direction = 'IN'
         AND COALESCE(bm.source_classification, 'unknown') <> 'synthetic'
@@ -74,8 +80,9 @@ export async function generateQrisCandidates(options: {
         AND (company_id IS NULL OR company_id = ${options.companyId ? Number(options.companyId) : "0"})
     `)).catch(() => ({ rows: [] as unknown[] })),
     db.execute(sql.raw(`
-      SELECT provider_code, settlement_delay_business_days,
-             match_window_business_days, max_effective_deduction_rate
+      SELECT company_id, bank_account_id, provider_code, rule_version,
+             settlement_delay_business_days, match_window_business_days,
+             max_effective_deduction_rate
       FROM qris_provider_settlement_rules
       WHERE is_active = TRUE
         AND (company_id IS NULL OR company_id = ${options.companyId ? Number(options.companyId) : "0"})
@@ -83,7 +90,6 @@ export async function generateQrisCandidates(options: {
     db.execute(sql.raw(`
       SELECT mutation_id
       FROM qris_mutation_batch_candidates
-      WHERE reconciliation_status = 'MATCHED'
     `)).catch(() => ({ rows: [] as unknown[] })),
   ]);
 
@@ -91,31 +97,43 @@ export async function generateQrisCandidates(options: {
     .map((row) => asDate(row.holiday_date))
     .filter((value): value is string => Boolean(value));
   const rules = providerRulesFromRows(ruleRows.rows as Array<Record<string, unknown>>);
+  const accountRules = providerRulesByBankAccountFromRows(
+    ruleRows.rows as Array<Record<string, unknown>>,
+  );
 
   const payments: QrisPaymentCandidateInput[] = (paymentRows.rows as Array<Record<string, unknown>>).map((row) => {
-    const providerCode = String(row.provider_code ?? "unknown");
+    const providerCode = normalizeQrisProvider(String(row.provider_code ?? "unknown"));
+    const providerRule = accountRules[String(row.bank_account_id)]?.[providerCode]
+      ?? rules[providerCode];
     return {
       id: Number(row.id),
       companyId: row.company_id == null ? null : Number(row.company_id),
+      bankAccountId: row.bank_account_id == null ? null : Number(row.bank_account_id),
       amount: Number(row.amount ?? 0),
       method: String(row.method ?? ""),
       status: String(row.status ?? ""),
       paidAt: row.paid_at as string | null,
       expectedSettlementDate: asDate(row.settlement_date)
-        ?? expectedQrisSettlementDate(row.paid_at as string, providerCode as any, holidays, rules[providerCode as keyof typeof rules]),
+        ?? expectedQrisSettlementDate(row.paid_at as string, providerCode, holidays, providerRule),
+      settlementRuleVersion: row.settlement_rule_version == null
+        ? providerRule?.ruleVersion ?? "legacy-v1"
+        : String(row.settlement_rule_version),
       providerName: providerCode,
+      providerReference: row.settlement_reference == null ? null : String(row.settlement_reference),
       alreadyReconciled: Boolean(row.already_reconciled),
     };
   });
   const mutations: QrisMutationCandidateInput[] = (mutationRows.rows as Array<Record<string, unknown>>).map((row) => ({
     id: Number(row.id),
     companyId: row.company_id == null ? null : Number(row.company_id),
+    bankAccountId: row.bank_account_id == null ? null : Number(row.bank_account_id),
     transactionDate: asDate(row.transaction_date) ?? "",
     amount: Number(row.amount ?? 0),
     direction: String(row.direction ?? ""),
     source: row.source == null ? null : String(row.source),
     sourceClassification: row.source_classification == null ? null : String(row.source_classification),
     providerName: row.provider_name == null ? null : String(row.provider_name),
+    providerOrderId: row.provider_order_id == null ? null : String(row.provider_order_id),
     description: row.description == null ? null : String(row.description),
     status: row.status == null ? null : String(row.status),
   })).filter((row) => row.transactionDate);
@@ -125,6 +143,7 @@ export async function generateQrisCandidates(options: {
     mutations,
     holidays,
     providerRules: rules,
+    accountProviderRules: accountRules,
     existingMutationIds: (existingRows.rows as Array<Record<string, unknown>>).map((row) => Number(row.mutation_id)),
   });
 
@@ -134,7 +153,8 @@ export async function generateQrisCandidates(options: {
       await db.execute(sql.raw(`
         INSERT INTO qris_mutation_batch_candidates (
           mutation_id, company_id, source_date, estimated_settlement_date,
-          provider_code, mutation_source_classification, gross_amount,
+          bank_account_id, provider_code, provider_detection_source,
+          settlement_rule_version, mutation_source_classification, gross_amount,
           mdr_amount, other_fee_amount, net_amount, payment_items, status,
           reconciliation_status, confidence, observed_deduction,
           effective_deduction_rate, review_reason, generated_at, updated_at
@@ -143,7 +163,10 @@ export async function generateQrisCandidates(options: {
           ${candidate.companyId == null ? "NULL" : candidate.companyId},
           '${esc(candidate.sourceDate)}',
           '${esc(candidate.estimatedSettlementDate)}',
+          ${candidate.bankAccountId == null ? "NULL" : candidate.bankAccountId},
           '${esc(candidate.providerCode)}',
+          '${esc(candidate.providerDetectionSource)}',
+          '${esc(candidate.settlementRuleVersion)}',
           '${esc(candidate.mutationSourceClassification)}',
           ${candidate.grossAmount},
           ${candidate.observedDeduction},
@@ -159,24 +182,7 @@ export async function generateQrisCandidates(options: {
           NOW(),
           NOW()
         )
-        ON CONFLICT (mutation_id) DO UPDATE SET
-          company_id = EXCLUDED.company_id,
-          source_date = EXCLUDED.source_date,
-          estimated_settlement_date = EXCLUDED.estimated_settlement_date,
-          provider_code = EXCLUDED.provider_code,
-          mutation_source_classification = EXCLUDED.mutation_source_classification,
-          gross_amount = EXCLUDED.gross_amount,
-          mdr_amount = EXCLUDED.mdr_amount,
-          other_fee_amount = EXCLUDED.other_fee_amount,
-          net_amount = EXCLUDED.net_amount,
-          payment_items = EXCLUDED.payment_items,
-          reconciliation_status = EXCLUDED.reconciliation_status,
-          confidence = EXCLUDED.confidence,
-          observed_deduction = EXCLUDED.observed_deduction,
-          effective_deduction_rate = EXCLUDED.effective_deduction_rate,
-          review_reason = EXCLUDED.review_reason,
-          generated_at = NOW(),
-          updated_at = NOW()
+        ON CONFLICT (mutation_id) DO NOTHING
       `));
     }
   }
@@ -198,6 +204,7 @@ export async function listQrisCandidates(options: {
   const limit = Math.min(Math.max(Number(options.limit ?? 100), 1), 500);
   const { rows } = await db.execute(sql.raw(`
     SELECT c.*, bm.description, bm.transaction_date, bm.amount AS bank_amount,
+           bm.bank_account_id,
            bm.source, bm.provider_name AS bank_provider_name
     FROM qris_mutation_batch_candidates c
     LEFT JOIN bank_mutations bm ON bm.id = c.mutation_id

@@ -4,6 +4,8 @@ export type QrisProviderCode = "mandiri_direct" | "paylabs" | "unknown";
 
 export interface QrisProviderRule {
   providerCode: QrisProviderCode;
+  bankAccountId?: number | null;
+  ruleVersion?: string | null;
   settlementDelayBusinessDays: number;
   matchWindowBusinessDays: number;
   maxEffectiveDeductionRate: number;
@@ -12,18 +14,21 @@ export interface QrisProviderRule {
 export const DEFAULT_QRIS_PROVIDER_RULES: Record<QrisProviderCode, QrisProviderRule> = {
   mandiri_direct: {
     providerCode: "mandiri_direct",
+    ruleVersion: "default-v1",
     settlementDelayBusinessDays: 1,
     matchWindowBusinessDays: 1,
     maxEffectiveDeductionRate: 0.1,
   },
   paylabs: {
     providerCode: "paylabs",
+    ruleVersion: "default-v1",
     settlementDelayBusinessDays: 1,
     matchWindowBusinessDays: 1,
     maxEffectiveDeductionRate: 0.1,
   },
   unknown: {
     providerCode: "unknown",
+    ruleVersion: "default-v1",
     settlementDelayBusinessDays: 1,
     matchWindowBusinessDays: 1,
     maxEffectiveDeductionRate: 0.1,
@@ -73,19 +78,72 @@ export function expectedQrisSettlementDate(
 }
 
 export function providerRulesFromRows(
-  rows: Array<Partial<QrisProviderRule> & { provider_code?: string }>,
+  rows: Array<Partial<QrisProviderRule> & {
+    provider_code?: string;
+    rule_version?: string | null;
+    settlement_delay_business_days?: number;
+    match_window_business_days?: number;
+    max_effective_deduction_rate?: number;
+  }>,
 ): Record<QrisProviderCode, QrisProviderRule> {
   const result = { ...DEFAULT_QRIS_PROVIDER_RULES };
   for (const row of rows) {
+    if (row.bankAccountId != null || (row as { bank_account_id?: number | null }).bank_account_id != null) {
+      continue;
+    }
     const provider = normalizeQrisProvider(row.providerCode ?? row.provider_code);
     if (provider === "unknown") continue;
     result[provider] = {
       ...result[provider],
       providerCode: provider,
-      settlementDelayBusinessDays: Number(row.settlementDelayBusinessDays ?? result[provider].settlementDelayBusinessDays),
-      matchWindowBusinessDays: Number(row.matchWindowBusinessDays ?? result[provider].matchWindowBusinessDays),
-      maxEffectiveDeductionRate: Number(row.maxEffectiveDeductionRate ?? result[provider].maxEffectiveDeductionRate),
+      ruleVersion: row.ruleVersion ?? row.rule_version ?? result[provider].ruleVersion ?? "legacy-v1",
+      settlementDelayBusinessDays: Number(row.settlementDelayBusinessDays
+        ?? row.settlement_delay_business_days
+        ?? result[provider].settlementDelayBusinessDays),
+      matchWindowBusinessDays: Number(row.matchWindowBusinessDays
+        ?? row.match_window_business_days
+        ?? result[provider].matchWindowBusinessDays),
+      maxEffectiveDeductionRate: Number(row.maxEffectiveDeductionRate
+        ?? row.max_effective_deduction_rate
+        ?? result[provider].maxEffectiveDeductionRate),
     };
+  }
+  return result;
+}
+
+export function providerRulesByBankAccountFromRows(
+  rows: Array<Partial<QrisProviderRule> & {
+    provider_code?: string;
+    bank_account_id?: number | null;
+    rule_version?: string | null;
+    settlement_delay_business_days?: number;
+    match_window_business_days?: number;
+    max_effective_deduction_rate?: number;
+  }>,
+): Record<string, Record<QrisProviderCode, QrisProviderRule>> {
+  const result: Record<string, Record<QrisProviderCode, QrisProviderRule>> = {};
+  for (const row of rows) {
+    const accountId = row.bankAccountId ?? row.bank_account_id;
+    if (accountId == null) continue;
+    const provider = normalizeQrisProvider(row.providerCode ?? row.provider_code);
+    if (provider === "unknown") continue;
+    const accountRules = result[String(accountId)] ?? { ...DEFAULT_QRIS_PROVIDER_RULES };
+    accountRules[provider] = {
+      ...accountRules[provider],
+      providerCode: provider,
+      bankAccountId: Number(accountId),
+      ruleVersion: row.ruleVersion ?? row.rule_version ?? "legacy-v1",
+      settlementDelayBusinessDays: Number(row.settlementDelayBusinessDays
+        ?? row.settlement_delay_business_days
+        ?? accountRules[provider].settlementDelayBusinessDays),
+      matchWindowBusinessDays: Number(row.matchWindowBusinessDays
+        ?? row.match_window_business_days
+        ?? accountRules[provider].matchWindowBusinessDays),
+      maxEffectiveDeductionRate: Number(row.maxEffectiveDeductionRate
+        ?? row.max_effective_deduction_rate
+        ?? accountRules[provider].maxEffectiveDeductionRate),
+    };
+    result[String(accountId)] = accountRules;
   }
   return result;
 }
