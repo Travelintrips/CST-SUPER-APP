@@ -40,4 +40,5 @@
 - [Sprint 09A runtime migration](sprint9a-runtime-migration.md) — legacy runtime snapshots may miss PK constraints required by new handoff foreign keys.
 - [Sprint 09A live harness](sprint9a-live-harness.md) — live proof needs ESM bundling with pino externalized and runtime invoice status `ready_for_ap`.
 - [Sprint 09D verification evidence](sprint-09d-verification-evidence.md) — build shared declarations first; separate additive handoff schema proof from global API readiness.
+- [Sprint 09E runtime proof](sprint-09e-runtime-proof.md) — 09D handoff proof does not prove 09E reconciliation links; wait for sequential startup readiness before runtime writes.
 - [Sport Center audit contract](sport-center-audit-contract.md) — mirror trigger tetap owner; payment hanya posted setelah entry_id valid; jangan menambah relasi jurnal paralel.
