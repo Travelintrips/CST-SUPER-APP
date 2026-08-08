@@ -1,7 +1,7 @@
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../../lib/logger.js";
-import { normalizePaymentMethod } from "../../lib/accounting.js";
+import { syncPaymentsToAccounting } from "./supabaseSync.js";
 
 const PREFIX = "[SportIncrementalSync]";
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 menit
@@ -139,9 +139,9 @@ async function syncNewBookings(client: any, sinceAt: Date): Promise<number> {
 /**
  * Trigger PostgreSQL di sport_center.sport_payments adalah pemilik mirror
  * public.sport_payments. Worker ini hanya memverifikasi mirror trigger dan
- * menyegarkan relasi/status booking lokal; worker tidak boleh INSERT/UPDATE
- * metadata payment mirror karena dapat menimpa hasil trigger atau payment
- * yang sudah diposting/failed.
+ * melengkapi booking_id mirror bila masih kosong; worker tidak boleh
+ * INSERT/UPDATE metadata payment mirror karena dapat menimpa hasil trigger
+ * atau payment yang sudah diposting/failed.
  */
 async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
   const sinceIso = new Date(sinceAt.getTime() - LOOKBACK_BUFFER_MS).toISOString();
@@ -181,7 +181,7 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
       // intentionally not inserted here; the source must be updated/replayed
       // so PostgreSQL can execute the trigger.
       const mirrorRes = await db.execute(sql`
-        SELECT id, booking_id, status, method
+        SELECT id, booking_id
         FROM sport_payments
         WHERE payment_number = ${scPaymentNumber}
         LIMIT 1
@@ -189,8 +189,6 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
       const mirror = mirrorRes.rows[0] as {
         id?: number;
         booking_id?: number | null;
-        status?: string | null;
-        method?: string | null;
       } | undefined;
 
       if (!mirror) {
@@ -201,22 +199,53 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
         continue;
       }
 
-      // Propagate only the local booking status and accounting metadata. The
-      // mirror row itself remains exclusively owned by the database trigger.
-      await db.execute(sql`
-        UPDATE sport_bookings
-        SET payment_status = 'paid', updated_at = NOW()
-        WHERE id = ${mirror.booking_id ?? null}
-          AND ${String(mirror.status ?? "").toLowerCase()} IN ('paid', 'confirmed')
-          AND payment_status != 'paid'
-      `).catch(() => {});
+      if (mirror.booking_id == null && pay.booking_id != null) {
+        const bookingOrder = await client
+          .schema("sport_center")
+          .from("sport_bookings")
+          .select("order_number")
+          .eq("id", pay.booking_id)
+          .maybeSingle();
+        const orderNumber = bookingOrder.data?.order_number ?? null;
+        let localBookingId: number | null = null;
 
-      await db.execute(sql`
-        UPDATE accounting_payments ap
-        SET payment_method = ${normalizePaymentMethod(String(mirror.method ?? pay.payment_method ?? "cash")) ?? "cash"}
-        WHERE ap.source_type = 'sport_center'
-          AND ap.source_doc_id = ${Number(mirror.id)}
-      `).catch(() => {});
+        if (orderNumber) {
+          const localByNumber = await db.execute(sql`
+            SELECT id FROM sport_bookings
+            WHERE booking_number = ${orderNumber}
+            LIMIT 1
+          `).catch(() => ({ rows: [] }));
+          if (localByNumber.rows.length > 0) {
+            localBookingId = Number((localByNumber.rows[0] as any).id);
+          }
+        }
+
+        if (!localBookingId) {
+          const localByScId = await db.execute(sql`
+            SELECT id FROM sport_bookings
+            WHERE sc_booking_id = ${pay.booking_id}
+            LIMIT 1
+          `).catch(() => ({ rows: [] }));
+          if (localByScId.rows.length > 0) {
+            localBookingId = Number((localByScId.rows[0] as any).id);
+          }
+        }
+
+        if (localBookingId) {
+          await db.execute(sql`
+            UPDATE sport_payments
+            SET booking_id = ${localBookingId}
+            WHERE id = ${Number(mirror.id)}
+              AND booking_id IS NULL
+          `);
+        } else {
+          logger.warn(
+            { sportCenterPaymentId: pay.id, paymentNumber: scPaymentNumber },
+            `${PREFIX} booking lokal belum tersedia; mirror dipertahankan tanpa posting`,
+          );
+          continue;
+        }
+      }
 
       synced++;
     } catch (err) {
@@ -251,9 +280,17 @@ async function runIncrementalSync(): Promise<void> {
     lastBookingSyncAt = now;
     lastPaymentSyncAt = now;
 
-    if (bookingSynced > 0 || paymentSynced > 0) {
+    let accountingSynced = 0;
+    if (paymentSynced > 0) {
+      // Posting membaca mirror public.sport_payments dan memakai mirror.id
+      // sebagai accounting_payments.source_doc_id.
+      const accounting = await syncPaymentsToAccounting(1);
+      accountingSynced = accounting.synced;
+    }
+
+    if (bookingSynced > 0 || paymentSynced > 0 || accountingSynced > 0) {
       logger.info(
-        { bookingSynced, paymentSynced },
+        { bookingSynced, paymentSynced, accountingSynced },
         `${PREFIX} Incremental sync selesai — ada perubahan`
       );
     }
@@ -292,6 +329,9 @@ export async function triggerIncrementalSync(): Promise<{ bookingSynced: number;
     syncNewBookings(client, since),
     syncNewPayments(client, since),
   ]);
+  if (paymentSynced > 0) {
+    await syncPaymentsToAccounting(1);
+  }
 
   lastBookingSyncAt = new Date();
   lastPaymentSyncAt = new Date();

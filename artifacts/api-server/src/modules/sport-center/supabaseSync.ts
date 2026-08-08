@@ -608,11 +608,12 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
 
   for (const row of rows) {
     try {
-      // Idempoten: cek apakah accounting_payments sudah ada untuk payment ini
+      // Idempoten: accounting payment harus menunjuk langsung ke ID mirror
+      // public.sport_payments; jangan fallback ke ref booking.
       const existing = await db.execute(sql`
         SELECT id, entry_id FROM accounting_payments
         WHERE source_type = 'sport_center'
-          AND (source_doc_id = ${row.sp_id} OR ref = ${row.booking_number})
+          AND source_doc_id = ${row.sp_id}
         LIMIT 1
       `);
 
@@ -755,35 +756,12 @@ export async function pullPaymentsFromSupabase(companyId = 1): Promise<{ pulled:
     return { pulled: 0, deleted: 0, skipped: 0, errors: 1, total: 0 };
   }
 
-  // Provider settlement fields are optional in older Sport Center databases.
-  // Fetch them separately so an older schema does not disable the whole payment
-  // sync; when present, they are copied to the local reconciliation mirror.
-  const settlementMeta = new Map<number, {
-    mdr_rate?: number | null;
-    mdr_amount?: number | null;
-    tax_withheld_amount?: number | null;
-    other_fee_amount?: number | null;
-    settlement_reference?: string | null;
-    settlement_date?: string | null;
-    settlement_status?: string | null;
-  }>();
-  const settlementMetaRes = await (client as any).schema("sport_center")
-    .from("sport_payments")
-    .select("id, mdr_rate, mdr_amount, tax_withheld_amount, other_fee_amount, settlement_reference, settlement_date, settlement_status");
-  if (!settlementMetaRes.error) {
-    for (const row of (settlementMetaRes.data ?? []) as any[]) {
-      settlementMeta.set(Number(row.id), row);
-    }
-  }
-
   const allPayments = (paymentsRes.data ?? []) as Array<{
     id: number; booking_id: number; amount: number;
     payment_method: string | null; status: string | null;
     confirmed_at: string | null; created_at: string | null;
   }>;
 
-  const PAID_STATUSES = new Set(["confirmed", "paid", "settlement", "capture", "success", "complete", "lunas"]);
-  const UNPAID_STATUSES = new Set(["pending", "cancelled", "canceled", "refunded", "failed", "expired"]);
   if (allPayments.length > 0) {
     const statusCounts: Record<string, number> = {};
     for (const p of allPayments) {
@@ -810,59 +788,23 @@ export async function pullPaymentsFromSupabase(companyId = 1): Promise<{ pulled:
 
   for (const pay of scPayments) {
     try {
-      const scPaymentNumber = `SCPAY-${pay.id}`;
+      const scPaymentNumber = `SCPAY-SC-${pay.id}`;
 
-      // Cek apakah payment sudah ada — jika ada, UPDATE status/amount dari Supabase (jangan skip)
+      // Cari mirror trigger; jika ada, hanya lengkapi booking_id yang masih
+      // kosong. Metadata payment lain tetap dimiliki oleh trigger.
       const existingRes = await db.execute(sql`
-        SELECT id, booking_id, status, method
+        SELECT id, booking_id
         FROM sport_payments
         WHERE payment_number = ${scPaymentNumber}
         LIMIT 1
       `);
       if (existingRes.rows.length > 0) {
         const existingRow = existingRes.rows[0] as any;
-        const existingBookingId = existingRow.booking_id;
-        const existingStatus = existingRow.status;
-        const existingMethod = existingRow.method;
-        const statusRaw2 = pay.status?.toLowerCase() ?? "";
-        const mappedStatus2 = PAID_STATUSES.has(statusRaw2) ? "paid" : (UNPAID_STATUSES.has(statusRaw2) ? "pending" : "paid");
-        const mappedMethod2 = normalizePaymentMethod(pay.payment_method) ?? "cash";
-      const meta2 = settlementMeta.get(Number(pay.id)) ?? {};
-
-        // Selalu update payment record dari Supabase (status terbaru menimpa)
-        if (existingStatus !== mappedStatus2) {
-          console.log(`${PREFIX} pullPayments [KONFLIK STATUS] ${scPaymentNumber}: local=${existingStatus} supabase=${mappedStatus2} → update ke ${mappedStatus2}`);
-        }
-        if (String(existingMethod ?? "").toLowerCase() !== mappedMethod2) {
-          console.log(`${PREFIX} pullPayments [KONFLIK METHOD] ${scPaymentNumber}: local=${existingMethod ?? "-"} supabase=${mappedMethod2} → update ke ${mappedMethod2}`);
-        }
-        await db.execute(sql`
-          UPDATE sport_payments SET
-            status   = ${mappedStatus2},
-            amount   = ${String(Number(pay.amount))},
-            method   = ${mappedMethod2},
-            mdr_rate = COALESCE(${meta2.mdr_rate ?? null}, mdr_rate),
-            mdr_amount = COALESCE(${meta2.mdr_amount ?? null}, mdr_amount),
-            tax_withheld_amount = COALESCE(${meta2.tax_withheld_amount ?? null}, tax_withheld_amount),
-            other_fee_amount = COALESCE(${meta2.other_fee_amount ?? null}, other_fee_amount),
-            settlement_reference = COALESCE(${meta2.settlement_reference ?? null}, settlement_reference),
-            settlement_date = COALESCE(${meta2.settlement_date ?? null}::date, settlement_date),
-            settlement_status = COALESCE(${meta2.settlement_status ?? null}, settlement_status),
-            net_amount = GREATEST(
-              0,
-              ${String(Number(pay.amount))}
-              - COALESCE(${meta2.mdr_amount ?? null}, mdr_amount)
-              - COALESCE(${meta2.tax_withheld_amount ?? null}, tax_withheld_amount)
-              - COALESCE(${meta2.other_fee_amount ?? null}, other_fee_amount)
-            )
-          WHERE payment_number = ${scPaymentNumber}
-        `);
-
-        // Pastikan booking payment_status ikut terupdate
-        // Jika existingBookingId null (insert lama tanpa booking link), resolve dulu via order_number / sc_booking_id
-        let resolvedBookingId: number | null = existingBookingId ?? null;
-        if (!resolvedBookingId && pay.booking_id) {
+        if (existingRow.booking_id == null && pay.booking_id) {
+          // Hanya lengkapi relasi lokal yang belum diisi. Semua metadata
+          // payment lainnya tetap menjadi milik trigger.
           const orderNumber = scBkMap[pay.booking_id];
+          let resolvedBookingId: number | null = null;
           if (orderNumber) {
             const bkRes = await db.execute(sql`SELECT id FROM sport_bookings WHERE booking_number = ${orderNumber} LIMIT 1`).catch(() => ({ rows: [] }));
             if (bkRes.rows.length > 0) resolvedBookingId = Number((bkRes.rows[0] as any).id);
@@ -873,150 +815,40 @@ export async function pullPaymentsFromSupabase(companyId = 1): Promise<{ pulled:
           }
           if (resolvedBookingId) {
             console.log(`${PREFIX} pullPayments [FIX NULL BOOKING_ID] ${scPaymentNumber}: resolved booking_id=${resolvedBookingId}`);
-            await db.execute(sql`UPDATE sport_payments SET booking_id = ${resolvedBookingId} WHERE payment_number = ${scPaymentNumber}`);
-          }
-        }
-        if (resolvedBookingId && mappedStatus2 === "paid") {
-          const bkBefore = await db.execute(sql`SELECT payment_status FROM sport_bookings WHERE id = ${resolvedBookingId} LIMIT 1`).catch(() => ({ rows: [] }));
-          const prevStatus = (bkBefore.rows[0] as any)?.payment_status;
-          if (prevStatus !== "paid") {
-            console.log(`${PREFIX} pullPayments [KONFLIK BOOKING] booking_id=${resolvedBookingId}: payment_status=${prevStatus} → paid (dari Supabase)`);
             await db.execute(sql`
-              UPDATE sport_bookings SET payment_status = 'paid', updated_at = NOW()
-              WHERE id = ${resolvedBookingId}
+              UPDATE sport_payments
+              SET booking_id = ${resolvedBookingId}
+              WHERE id = ${existingRow.id}
+                AND booking_id IS NULL
             `);
           }
         }
+        console.log(`${PREFIX} pullPayments mirror OK → ${scPaymentNumber} (mirror_id=${existingRow.id})`);
+        pulled++;
         skipped++;
         continue;
       }
 
-      // resolve local booking_id: coba via order_number dulu, fallback via sc_booking_id
-      const orderNumber = scBkMap[pay.booking_id];
-      let localBookingId: number | null = null;
-
-      if (orderNumber) {
-        const bkRes = await db.execute(sql`
-          SELECT id FROM sport_bookings WHERE booking_number = ${orderNumber} LIMIT 1
-        `);
-        if (bkRes.rows.length > 0) localBookingId = Number((bkRes.rows[0] as any).id);
-      }
-
-      if (!localBookingId && pay.booking_id) {
-        // Fallback: cari via sc_booking_id — hanya jika kolom sudah ada di DB
-        try {
-          const bkRes2 = await db.execute(sql`
-            SELECT id FROM sport_bookings WHERE sc_booking_id = ${pay.booking_id} LIMIT 1
-          `);
-          if (bkRes2.rows.length > 0) localBookingId = Number((bkRes2.rows[0] as any).id);
-        } catch { /* sc_booking_id belum ada — skip fallback ini */ }
-      }
-
-      if (!localBookingId) {
-        // Booking belum ada di lokal — skip, akan retry setelah pull bookings
-        console.warn(`${PREFIX} pullPayments: booking ${orderNumber ?? pay.booking_id} belum ada lokal, skip pay.id=${pay.id}`);
-        skipped++;
-        continue;
-      }
-
-      const statusRaw = pay.status?.toLowerCase() ?? "";
-      const mappedStatus = PAID_STATUSES.has(statusRaw) ? "paid" : (UNPAID_STATUSES.has(statusRaw) ? "pending" : "paid");
-      const paidAt = pay.confirmed_at ?? pay.created_at ?? new Date().toISOString();
-      const method = normalizePaymentMethod(pay.payment_method) ?? "cash";
-      const meta = settlementMeta.get(Number(pay.id)) ?? {};
-
-      await db.execute(sql`
-        INSERT INTO sport_payments
-          (company_id, booking_id, payment_number, amount, method, status,
-           paid_at, source, payment_type, mdr_rate, mdr_amount,
-           tax_withheld_amount, other_fee_amount, net_amount,
-           settlement_reference, settlement_date, settlement_status)
-        VALUES
-          (${companyId}, ${localBookingId}, ${scPaymentNumber}, ${String(Number(pay.amount))},
-           ${method}, ${mappedStatus}, ${paidAt}::TIMESTAMPTZ,
-           'SPORT_CENTER_SUPABASE', 'booking',
-           ${meta.mdr_rate ?? 0}, ${meta.mdr_amount ?? 0},
-           ${meta.tax_withheld_amount ?? 0}, ${meta.other_fee_amount ?? 0},
-           GREATEST(0, ${String(Number(pay.amount))}
-             - ${meta.mdr_amount ?? 0}
-             - ${meta.tax_withheld_amount ?? 0}
-             - ${meta.other_fee_amount ?? 0}),
-           ${meta.settlement_reference ?? null},
-           ${meta.settlement_date ?? null}::date,
-           ${meta.settlement_status ?? "unsettled"})
-      `);
-
-      // Update payment_status di sport_bookings jika status = paid
-      if (mappedStatus === "paid") {
-        await db.execute(sql`
-          UPDATE sport_bookings SET payment_status = 'paid', updated_at = NOW()
-          WHERE id = ${localBookingId} AND payment_status != 'paid'
-        `);
-
-        // Buat jurnal akuntansi (accounting_entries) jika belum ada
-        const bkInfoRes = await db.execute(sql`
-          SELECT booking_number, customer_name, facility_name, booking_date, company_id, total_amount
-          FROM sport_bookings WHERE id = ${localBookingId} LIMIT 1
-        `).catch(() => ({ rows: [] }));
-        const bkInfo = bkInfoRes.rows[0] as any;
-        // Gunakan total_amount dari booking (harga fasilitas) — bukan pay.amount
-        // agar jurnal tidak mengandung PPN yang sudah ditambahkan di luar.
-        const journalAmount = bkInfo?.total_amount != null
-          ? Number(bkInfo.total_amount)
-          : Number(pay.amount);
-        postSportCenterBooking({
-          bookingId: localBookingId,
-          bookingCode: orderNumber ?? bkInfo?.booking_number ?? scPaymentNumber,
-          customerName: bkInfo?.customer_name ?? "Customer",
-          facilityName: bkInfo?.facility_name ?? "Sport Center",
-          date: (paidAt ?? new Date().toISOString()).slice(0, 10),
-          totalPrice: journalAmount,
-          paymentMethod: normalizePaymentMethod(method),
-          companyId: bkInfo?.company_id ?? companyId,
-        }).catch((err: unknown) => console.error(`${PREFIX} postSportCenterBooking gagal pay.id=${pay.id}:`, err));
-      }
-
-      console.log(`${PREFIX} pullPayments OK → ${scPaymentNumber} (local_booking=${localBookingId}) Rp${pay.amount}`);
-      pulled++;
+      console.warn(
+        `${PREFIX} pullPayments: mirror ${scPaymentNumber} belum tersedia; ` +
+        `tidak melakukan INSERT dari worker (pay.id=${pay.id})`,
+      );
+      skipped++;
     } catch (err) {
       console.error(`${PREFIX} pullPayments gagal pay.id=${pay.id}:`, err);
       errors++;
     }
   }
 
-  // ── Deletion sync: hapus local SCPAY payments yang sudah didelete dari Supabase ──
-  let paymentDeleted = 0;
-  if (scPayments.length > 0) {
-    try {
-      const supabasePayNumbers = new Set(scPayments.map(p => `SCPAY-${p.id}`));
-      const localRes = await db.execute(sql`
-        SELECT id, payment_number FROM sport_payments WHERE payment_number LIKE 'SCPAY-%'
-      `).catch(() => ({ rows: [] as any[] }));
-      const toDeletePay = (localRes.rows as any[]).filter(
-        row => !supabasePayNumbers.has(String(row.payment_number))
-      );
-      for (const pay of toDeletePay) {
-        const payId = Number(pay.id);
-        await db.execute(sql`DELETE FROM accounting_payments WHERE source_type = 'sport_center' AND source_doc_id = ${payId}`).catch(() => {});
-        await db.execute(sql`DELETE FROM sport_payments WHERE id = ${payId}`).catch(() => {});
-        console.log(`${PREFIX} pullPayments [DELETE] ${pay.payment_number} → dihapus dari BizPortal (sudah tidak ada di Supabase)`);
-        paymentDeleted++;
-      }
-      if (paymentDeleted > 0) {
-        console.log(`${PREFIX} pullPayments: ${paymentDeleted} payment dihapus (sudah tidak ada di Supabase Sport Center)`);
-      }
-    } catch (err) {
-      console.error(`${PREFIX} pullPayments deletion sync gagal (non-fatal):`, err);
-    }
-  }
-
-  console.log(`${PREFIX} pullPayments selesai: pulled=${pulled} deleted=${paymentDeleted} skipped=${skipped} errors=${errors} total=${scPayments.length}`);
+  // Trigger-created mirror rows are never removed by application sync.
+  const paymentDeleted = 0;
+  console.log(`${PREFIX} pullPayments selesai: pulled=${pulled} deleted=0 skipped=${skipped} errors=${errors} total=${scPayments.length}`);
   void writeSyncLog({
     entity: "booking",
     action: "resync",
     entityId: null,
     status: errors === 0 ? "ok" : "error",
-    detail: `payment pull: ${pulled} pulled, ${paymentDeleted} deleted, ${skipped} skipped, ${errors} errors`,
+    detail: `payment mirror verify: ${pulled} verified, ${skipped} skipped, ${errors} errors; trigger-owned rows retained`,
   });
 
   return { pulled, deleted: paymentDeleted, skipped, errors, total: scPayments.length };
@@ -1241,7 +1073,26 @@ export async function pullLegacyBookingsFromSupabase(): Promise<{ pulled: number
       for (const bk of toDelete) {
         const bkId = Number(bk.id);
         // Ambil sport_payments untuk booking ini
-        const payRes = await db.execute(sql`SELECT id FROM sport_payments WHERE booking_id = ${bkId}`).catch(() => ({ rows: [] as any[] }));
+        const payRes = await db.execute(sql`
+          SELECT id, payment_number, source
+          FROM sport_payments
+          WHERE booking_id = ${bkId}
+        `).catch(() => ({ rows: [] as any[] }));
+        // Jangan menghapus booking yang masih memiliki mirror trigger.
+        // DELETE booking akan cascade ke sport_payments, sehingga hal ini
+        // juga melindungi row SCPAY-SC-* dari deletion sync aplikasi.
+        const hasTriggerMirror = (payRes.rows as any[]).some(
+          pay =>
+            String(pay.payment_number ?? "").startsWith("SCPAY-SC-") ||
+            String(pay.source ?? "").toUpperCase() === "SPORT_CENTER_SUPABASE",
+        );
+        if (hasTriggerMirror) {
+          console.warn(
+            `${PREFIX} pullLegacyBookings [RETAIN] ${bk.booking_number}: ` +
+            "memiliki trigger-created payment mirror, tidak dihapus oleh sync aplikasi",
+          );
+          continue;
+        }
         for (const pay of payRes.rows as any[]) {
           const payId = Number(pay.id);
           // Hapus accounting_payments dulu

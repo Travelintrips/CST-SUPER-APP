@@ -919,7 +919,7 @@ router.get("/bookings", async (req, res) => {
                   JOIN public.sport_payments sp ON sp.booking_id = sb.id
                   WHERE sb.sc_booking_id = b.id
                     AND sp.status = 'paid'
-                    AND sp.payment_number NOT LIKE 'SCPAY-%'
+                    AND sp.payment_number NOT LIKE 'SCPAY-SC-%'
                 ) THEN 'paid'
                 ELSE 'unpaid'
               END AS payment_status
@@ -950,7 +950,7 @@ router.get("/bookings", async (req, res) => {
                   JOIN public.sport_payments sp ON sp.booking_id = sb.id
                   WHERE sb.sc_booking_id = b.id
                     AND sp.status = 'paid'
-                    AND sp.payment_number NOT LIKE 'SCPAY-%'
+                    AND sp.payment_number NOT LIKE 'SCPAY-SC-%'
                 ) THEN 'paid'
                 ELSE 'unpaid'
               END AS payment_status,
@@ -1981,8 +1981,8 @@ router.get("/payments", async (req, res) => {
 
     // PAYMENT SOURCE: UNION dari dua sumber:
     //   1. sport_center.sport_payments (canonical — dari aplikasi Sport Center asli)
-    //   2. public.sport_payments WHERE payment_number NOT LIKE 'SCPAY-%' (BizPortal-created, belum ada di canonical)
-    // Payments dengan prefix SCPAY- di public.sport_payments adalah mirror dari sport_center.sport_payments → tidak di-UNION ulang.
+    //   2. public.sport_payments WHERE payment_number NOT LIKE 'SCPAY-SC-%' (BizPortal-created, belum ada di canonical)
+    // Payments dengan prefix SCPAY-SC- di public.sport_payments adalah mirror dari sport_center.sport_payments → tidak di-UNION ulang.
     console.log(`[PAYMENT SOURCE] GET /payments page=${page} status=${statusFilter} dateFrom=${dateFrom} dateTo=${dateTo} search=${search ?? '-'}`);
     const [dataRes, countRes, revenueRes] = await Promise.all([
       db.execute(sql`
@@ -1992,7 +1992,7 @@ router.get("/payments", async (req, res) => {
           -- Semua field di-cast ke text/numeric/timestamptz agar UNION type-safe
           SELECT
             p.id::int                                      AS id,
-            ('SCPAY-' || p.id::text)::text                AS payment_number,
+            ('SCPAY-SC-' || p.id::text)::text             AS payment_number,
             mirror.id::int                                 AS local_payment_id,
             p.booking_id::int                              AS sc_booking_id,
             b.order_number::text                           AS booking_number,
@@ -2025,12 +2025,12 @@ router.get("/payments", async (req, res) => {
           FROM sport_center.sport_payments p
           LEFT JOIN sport_center.sport_bookings  b ON b.id = p.booking_id
           LEFT JOIN sport_center.sport_facilities f ON f.id = b.facility_id
-          LEFT JOIN public.sport_payments mirror ON mirror.payment_number = ('SCPAY-' || p.id::text)
+          LEFT JOIN public.sport_payments mirror ON mirror.payment_number = ('SCPAY-SC-' || p.id::text)
           LEFT JOIN public.sport_bookings local_b ON local_b.sc_booking_id = p.booking_id
         ),
         bz_pay AS (
           -- Sumber 2: BizPortal-created payments (bukan mirror dari sport_center)
-          -- payment_number NOT LIKE 'SCPAY-%' = dibuat via POST /payments BizPortal
+          -- payment_number NOT LIKE 'SCPAY-SC-%' = dibuat via POST /payments BizPortal
           SELECT
             sp.id::int                                     AS id,
             sp.payment_number::text,
@@ -2064,7 +2064,7 @@ router.get("/payments", async (req, res) => {
           LEFT JOIN public.sport_bookings  sb ON sb.id = sp.booking_id
           LEFT JOIN public.sport_facilities sf ON sf.id = sb.facility_id
           LEFT JOIN public.company_bank_accounts cba ON cba.id = sp.bank_account_id
-          WHERE sp.payment_number NOT LIKE 'SCPAY-%'
+          WHERE sp.payment_number NOT LIKE 'SCPAY-SC-%'
         ),
         combined AS (
           SELECT * FROM sc_pay
@@ -2103,7 +2103,7 @@ router.get("/payments", async (req, res) => {
           FROM public.sport_payments sp
           LEFT JOIN public.sport_bookings  sb ON sb.id = sp.booking_id
           LEFT JOIN public.sport_facilities sf ON sf.id = sb.facility_id
-          WHERE sp.payment_number NOT LIKE 'SCPAY-%'
+          WHERE sp.payment_number NOT LIKE 'SCPAY-SC-%'
         ) u
         WHERE (${statusFilter}::text IS NULL OR status = ${statusFilter})
           AND (${dateFrom}::date IS NULL OR paid_at::date >= ${dateFrom}::date)
@@ -2136,7 +2136,7 @@ router.get("/payments", async (req, res) => {
           FROM public.sport_payments sp
           LEFT JOIN public.sport_bookings  sb ON sb.id = sp.booking_id
           LEFT JOIN public.sport_facilities sf ON sf.id = sb.facility_id
-          WHERE sp.payment_number NOT LIKE 'SCPAY-%'
+          WHERE sp.payment_number NOT LIKE 'SCPAY-SC-%'
         ) u
         WHERE status = 'paid'
           AND (${statusFilter}::text IS NULL OR status = ${statusFilter})
@@ -5353,59 +5353,34 @@ router.post("/sync/full-audit", async (req, res) => {
   // ─── 3. Sync Akuntansi ──────────────────────────────────────────────────────
   let accountingResult = { synced: 0, skipped: 0, errors: 0 };
   try {
-    let client: any = null;
-    try { const m = await import("../../lib/supabaseAdminSportCenter.js" as any); client = m.getSportCenterSupabaseClient?.() ?? null; } catch { }
-
-    if (!client) {
-      auditErrors.push({ module: "accounting", operation: "pullPaymentsFromSupabase", entityId: null, entityName: "ALL", errorCode: "CLIENT_NULL", errorMessage: "Supabase client null — SUPABASE_URL/KEY tidak dikonfigurasi untuk sync akuntansi", category: "auth", retryable: false });
-    } else {
-      const [paymentsRes, bookingsRes] = await Promise.all([
-        (client as any).schema("sport_center").from("payments").select("id, booking_id, amount, payment_method, status, confirmed_at, created_at").eq("status", "confirmed"),
-        (client as any).schema("sport_center").from("bookings").select("id, order_number, grand_total, total_price, booking_date"),
-      ]);
-      if (paymentsRes.error) {
-        auditErrors.push({ module: "accounting", operation: "fetch sport_center.sport_payments", entityId: null, entityName: "ALL", errorCode: "SUPABASE_FETCH_ERROR", errorMessage: paymentsRes.error.message, category: categorize(paymentsRes.error.message), retryable: isRetryable(categorize(paymentsRes.error.message)) });
-      } else {
-        const payments = paymentsRes.data ?? [];
-        const bkMap: Record<number, string> = {};
-        for (const b of (bookingsRes.data ?? [])) { if (b.id && b.order_number) bkMap[b.id] = b.order_number; }
-
-        for (const pay of payments as any[]) {
-          try {
-            const existing = await db.execute(sql`SELECT id FROM accounting_payments WHERE source_type = 'sport_center' AND source_doc_id = ${pay.id} LIMIT 1`);
-            if (existing.rows.length > 0) { accountingResult.skipped++; continue; }
-            const settingsRes = await db.execute(sql`
-              SELECT cash_journal_id, bank_journal_id, qris_journal_id, qris_account_id
-              FROM accounting_settings WHERE company_id = 1 LIMIT 1
-            `);
-            const settings = settingsRes.rows[0] as any;
-            const destination = resolvePaymentDestination(pay.payment_method, {
-              cashJournalId: settings?.cash_journal_id ?? null,
-              bankJournalId: settings?.bank_journal_id ?? null,
-              qrisJournalId: settings?.qris_journal_id ?? null,
-              qrisAccountId: settings?.qris_account_id ?? null,
-            });
-            const { paymentMethod, journalId } = destination;
-            if (!journalId) {
-              auditErrors.push({ module: "accounting", operation: "accounting_payments insert", entityId: pay.id, entityName: `pay.id=${pay.id}`, errorCode: "BUSINESS_RULE", errorMessage: "Tidak ada journal kas/bank di accounting_settings company_id=1", category: "other", retryable: false });
-              accountingResult.errors++;
-              continue;
-            }
-            const payDate = (pay.confirmed_at ?? pay.created_at ?? "").split("T")[0] ?? new Date().toISOString().split("T")[0]!;
-            const year = payDate.slice(0, 4);
-            const cntRes = await db.execute(sql`SELECT CAST(COUNT(*) AS int) AS seq FROM accounting_payments WHERE company_id = 1`);
-            const seq = Number((cntRes.rows[0] as any)?.seq ?? 0);
-            const acctPayNumber = `SCPAY/${year}/${(seq + 1).toString().padStart(4, "0")}`;
-            const bk = bkMap[pay.booking_id] ? { order_number: bkMap[pay.booking_id], customer_name: "Customer" } : { order_number: `SC-PAY-${pay.id}`, customer_name: "Customer" };
-            await db.execute(sql`INSERT INTO accounting_payments (company_id, payment_number, payment_type, status, amount, journal_id, partner_name, date, ref, memo, payment_method, source_type, source_doc_id) VALUES (1, ${acctPayNumber}, 'inbound', 'posted', ${String(Number(pay.amount))}, ${journalId}, ${bk.customer_name}, ${payDate}, ${bk.order_number}, ${'Sport Center: ' + bk.order_number}, ${paymentMethod}, 'sport_center', ${pay.id})`);
-            accountingResult.synced++;
-          } catch (err: any) {
-            const msg = err?.message ?? String(err);
-            auditErrors.push({ module: "accounting", operation: "accounting_payments insert", entityId: pay.id, entityName: `pay.id=${pay.id}`, errorCode: categorize(msg).toUpperCase(), errorMessage: msg, category: categorize(msg), retryable: isRetryable(categorize(msg)) });
-            accountingResult.errors++;
-          }
-        }
-      }
+    // Gunakan pipeline canonical: verifikasi mirror trigger terlebih dahulu,
+    // lalu posting dari public.sport_payments. Tidak ada INSERT accounting
+    // langsung dari ID payment di schema sport_center.
+    const payments = await pullPaymentsFromSupabase(1);
+    if (payments.errors > 0) {
+      auditErrors.push({
+        module: "accounting",
+        operation: "pullPaymentsFromSupabase",
+        entityId: null,
+        entityName: "ALL",
+        errorCode: "PAYMENT_MIRROR_VERIFY_ERROR",
+        errorMessage: `${payments.errors} payment mirror gagal diverifikasi`,
+        category: "database",
+        retryable: true,
+      });
+    }
+    accountingResult = await syncPaymentsToAccounting(1);
+    if (accountingResult.errors > 0) {
+      auditErrors.push({
+        module: "accounting",
+        operation: "syncPaymentsToAccounting",
+        entityId: null,
+        entityName: "ALL",
+        errorCode: "ACCOUNTING_SYNC_ERROR",
+        errorMessage: `${accountingResult.errors} payment gagal diposting`,
+        category: "other",
+        retryable: true,
+      });
     }
   } catch (err: any) {
     auditErrors.push({ module: "accounting", operation: "syncPaymentsToAccounting", entityId: null, entityName: "ALL", errorCode: "SYNC_FATAL", errorMessage: err?.message ?? String(err), category: categorize(err?.message ?? ""), retryable: false });
@@ -5477,7 +5452,7 @@ router.get("/sync/accounting-debug", async (req, res) => {
     // Trace pullPaymentsFromSupabase for each SC payment
     const pullTrace: any[] = [];
     for (const pay of scSupabasePayments) {
-      const scPayNum = `SCPAY-${pay.id}`;
+      const scPayNum = `SCPAY-SC-${pay.id}`;
       const existRes = await db.execute(sql`SELECT id FROM sport_payments WHERE payment_number = ${scPayNum} LIMIT 1`).catch(() => ({ rows: [] }));
       const alreadyIn = existRes.rows.length > 0;
 
@@ -5547,41 +5522,19 @@ router.post("/cleanup-orphaned-accounting", async (req, res) => {
   try {
     const dryRun = req.body?.dryRun !== false; // default dry run untuk safety
 
-    // PAY/ entries: orphaned jika source_doc_id tidak ada di public.sport_payments
+    // Semua accounting_payments Sport Center sekarang menunjuk ke ID mirror
+    // public.sport_payments, baik payment BizPortal maupun SCPAY-SC-*.
     const orphanedPayRes = await db.execute(sql`
       SELECT ap.id, ap.payment_number, ap.partner_name, ap.amount, ap.date, ap.source_doc_id
       FROM accounting_payments ap
       WHERE ap.source_type = 'sport_center'
         AND ap.source_doc_id IS NOT NULL
-        AND ap.payment_number NOT LIKE 'SCPAY%'
         AND NOT EXISTS (
           SELECT 1 FROM sport_payments sp WHERE sp.id = ap.source_doc_id
         )
       ORDER BY ap.date DESC
     `);
-
-    // SCPAY/ entries: orphaned jika source_doc_id tidak ada di sport_center.sport_payments
-    // (canonical schema dari aplikasi Sport Center terpisah)
-    let orphanedScpayRows: any[] = [];
-    try {
-      const orphanedScpayRes = await db.execute(sql`
-        SELECT ap.id, ap.payment_number, ap.partner_name, ap.amount, ap.date, ap.source_doc_id
-        FROM accounting_payments ap
-        WHERE ap.source_type = 'sport_center'
-          AND ap.source_doc_id IS NOT NULL
-          AND ap.payment_number LIKE 'SCPAY%'
-          AND NOT EXISTS (
-            SELECT 1 FROM sport_center.sport_payments sp WHERE sp.id = ap.source_doc_id
-          )
-        ORDER BY ap.date DESC
-      `);
-      orphanedScpayRows = orphanedScpayRes.rows as any[];
-    } catch {
-      // Jika sport_center schema tidak accessible → skip SCPAY cleanup untuk keamanan
-      console.warn("[sport-center] cleanup-orphaned-accounting: sport_center schema tidak accessible, skip SCPAY check");
-    }
-
-    const orphanedAp = [...(orphanedPayRes.rows as any[]), ...orphanedScpayRows];
+    const orphanedAp = orphanedPayRes.rows as any[];
 
     // accounting_entries orphaned: booking_id tidak ada di sport_bookings
     const orphanedAeRes = await db.execute(sql`

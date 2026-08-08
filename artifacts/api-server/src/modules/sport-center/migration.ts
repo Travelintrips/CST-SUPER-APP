@@ -632,7 +632,7 @@ export async function runSportCenterMigration(): Promise<void> {
       // Step 1: Reset posting_status pada sport_payments yang punya orphan accounting_payment.
       // Tangani dua kasus:
       //   a) source_doc_id = sp.id   (payment non-SCPAY yang dibuat via BizPortal)
-      //   b) source_doc_id = canonical ID dari SCPAY-{n} (tidak sama dengan sp.id lokal)
+      //   b) trigger mirror juga memakai source_doc_id = public.sport_payments.id
       await db.execute(sql`
         UPDATE sport_payments sp
         SET    posting_status = 'unposted',
@@ -643,15 +643,6 @@ export async function runSportCenterMigration(): Promise<void> {
             WHERE  ap.source_type   = 'sport_center'
               AND  ap.source_doc_id = sp.id
               AND  ap.entry_id      IS NULL
-          )
-          OR (
-            sp.payment_number LIKE 'SCPAY-%'
-            AND EXISTS (
-              SELECT 1 FROM accounting_payments ap
-              WHERE  ap.source_type   = 'sport_center'
-                AND  ap.source_doc_id = SPLIT_PART(sp.payment_number, '-', 2)::integer
-                AND  ap.entry_id      IS NULL
-            )
           )
         )
       `);
