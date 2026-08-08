@@ -214,10 +214,13 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
            ${pay.created_at ?? new Date().toISOString()}::TIMESTAMPTZ, NOW(),
            ${meta.mdr_rate ?? 0}, ${meta.mdr_amount ?? 0},
            ${meta.tax_withheld_amount ?? 0}, ${meta.other_fee_amount ?? 0},
-           GREATEST(0, ${String(Number(pay.amount))}
-             - ${meta.mdr_amount ?? 0}
-             - ${meta.tax_withheld_amount ?? 0}
-             - ${meta.other_fee_amount ?? 0}),
+           GREATEST(
+             0::numeric,
+             ${Number(pay.amount)}::numeric
+             - ${Number(meta.mdr_amount ?? 0)}::numeric
+             - ${Number(meta.tax_withheld_amount ?? 0)}::numeric
+             - ${Number(meta.other_fee_amount ?? 0)}::numeric
+           ),
            ${meta.settlement_reference ?? null}, ${meta.settlement_date ?? null}::date,
            ${meta.settlement_status ?? "unsettled"})
         ON CONFLICT (payment_number) DO UPDATE SET
