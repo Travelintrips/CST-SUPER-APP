@@ -228,6 +228,15 @@ async function runWithRetry<T>(
 // ── Pre-startup critical schema migrations (run BEFORE accepting requests) ────
 // These ensure Drizzle ORM columns exist before any query can be executed.
 async function runCriticalPreStartMigrations() {
+  // Sprint 8B AP handoff must be available before the API accepts lifecycle
+  // writes. Run it first so unrelated legacy DDL cannot delay this scope.
+  try {
+    await runMktApPreparationMigration();
+  } catch (err) {
+    logger.error({ err }, "Marketplace AP preparation migration failed");
+    throw err;
+  }
+
   // Buat wa_otp_codes dan trusted_devices PERTAMA — diperlukan untuk WA OTP login
   // Gunakan try/catch terpisah agar tidak menghalangi migrasi lain
   try {
@@ -1446,6 +1455,7 @@ async function runCriticalPreStartMigrations() {
   } catch (err) {
     logger.warn({ err }, "journal_sequences migration failed (non-fatal)");
   }
+
 }
 
 // Flag set to true once the full migration + seed chain completes.
