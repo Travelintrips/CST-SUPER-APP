@@ -19,3 +19,9 @@ Important operational distinction: a paid `sport_payments` row is not itself a b
 **Why:** A runtime investigation found four paid QRIS Sport Center payments but only one QRIS bank mutation. The one candidate scored 70 because its null settlement date was derived as the next day, while the other three had no bank mutation to match at all.
 
 **How to apply:** Diagnose both directions: first confirm a bank mutation exists for the expected amount/date (or a grouped `qris_settlements` row), then inspect candidate filters. Use explicit settlement data when available; otherwise use `paid_at` for unsettled direct credits and reserve next-day logic for a documented settlement rule.
+
+Provider aliases such as `QRTRAVELI` must be treated as QRIS by the unified bank matcher, not only by the settlement-pattern module. Even after alias detection is fixed, an aggregate bank credit still requires an explicit `qris_settlements` row and item links; it must not be inferred from individual payments solely by amount.
+
+**Why:** The UI can show a provider settlement description without the literal word `QRIS`, while the bank amount represents multiple Sport Center payments net of MDR. Literal-only QRIS detection sends the mutation through the wrong candidate path.
+
+**How to apply:** Keep provider-alias detection shared across import, unified matching, and ERP matching. Match aggregate credits through an explicit settlement relation and preserve gross, fees, and net amounts separately.
