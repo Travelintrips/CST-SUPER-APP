@@ -551,7 +551,8 @@ export async function syncAllBookings(): Promise<{ synced: number; errors: numbe
  */
 export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced: number; skipped: number; errors: number }> {
   // Baca dari local mirror (public.sport_payments + public.sport_bookings)
-  // — tidak perlu koneksi Supabase, sudah di-mirror oleh pullPaymentsFromSupabase / incrementalSyncWorker
+  // — mirror dibuat oleh trigger PostgreSQL di sport_center.sport_payments.
+  // Service ini hanya mem-posting mirror yang sudah tersedia.
   const paidRes = await db.execute(sql`
     SELECT
       sp.id          AS sp_id,
@@ -570,6 +571,8 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
     FROM sport_payments sp
     JOIN sport_bookings sb ON sb.id = sp.booking_id
     WHERE sp.status = 'paid'
+      AND sp.payment_number LIKE 'SCPAY-SC-%'
+      AND sp.source = 'SPORT_CENTER_SUPABASE'
       AND (sb.company_id = ${companyId} OR sb.company_id IS NULL)
   `).catch(() => ({ rows: [] }));
 
@@ -722,8 +725,11 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
 /**
  * pullPaymentsFromSupabase
  * Tarik sport_center.sport_payments (Supabase) → sport_payments (lokal BizPortal).
- * Idempoten: cek via payment_number = 'SCPAY-{sc_payment_id}'.
- * Status mapping: confirmed/paid → 'paid', lainnya → 'pending'.
+ * Opsi A: trigger PostgreSQL di sport_center.sport_payments adalah satu-satunya
+ * pemilik mirror public.sport_payments. Fungsi ini hanya memverifikasi mirror
+ * trigger dan tidak INSERT/DELETE row mirror.
+ *
+ * Trigger mirror key: SCPAY-SC-{sc_payment_id}.
  */
 export async function pullPaymentsFromSupabase(companyId = 1): Promise<{ pulled: number; deleted: number; skipped: number; errors: number; total: number }> {
   let client: import("@supabase/supabase-js").SupabaseClient | null = null;

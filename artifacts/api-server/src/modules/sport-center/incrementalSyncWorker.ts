@@ -137,8 +137,11 @@ async function syncNewBookings(client: any, sinceAt: Date): Promise<number> {
 }
 
 /**
- * Tarik payment baru/diupdate dari sport_center.sport_payments sejak lastSyncAt,
- * upsert ke public.sport_payments dan update payment_status booking terkait.
+ * Trigger PostgreSQL di sport_center.sport_payments adalah pemilik mirror
+ * public.sport_payments. Worker ini hanya memverifikasi mirror trigger dan
+ * menyegarkan relasi/status booking lokal; worker tidak boleh INSERT/UPDATE
+ * metadata payment mirror karena dapat menimpa hasil trigger atau payment
+ * yang sudah diposting/failed.
  */
 async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
   const sinceIso = new Date(sinceAt.getTime() - LOOKBACK_BUFFER_MS).toISOString();
@@ -155,19 +158,6 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
     return 0;
   }
 
-  // Settlement columns were added after the original Sport Center schema.
-  // Keep this best-effort so an older source schema still syncs core payments.
-  const settlementMeta = new Map<number, any>();
-  const settlementMetaRes = await client
-    .schema("sport_center")
-    .from("sport_payments")
-    .select("id, mdr_rate, mdr_amount, tax_withheld_amount, other_fee_amount, settlement_reference, settlement_date, settlement_status");
-  if (!settlementMetaRes.error) {
-    for (const row of (settlementMetaRes.data ?? []) as any[]) {
-      settlementMeta.set(Number(row.id), row);
-    }
-  }
-
   const payments = (data ?? []) as Array<{
     id: number;
     booking_id: number | null;
@@ -181,84 +171,52 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
 
   if (payments.length === 0) return 0;
 
-  const PAID_STATUSES = new Set(["confirmed", "paid", "settlement", "capture", "success", "complete", "lunas"]);
   let synced = 0;
 
   for (const pay of payments) {
-    const scPaymentNumber = `SCPAY-${pay.id}`;
-    const paymentMethod = normalizePaymentMethod(pay.payment_method) ?? "cash";
-    const statusRaw = pay.status?.toLowerCase() ?? "";
-    const mappedStatus = PAID_STATUSES.has(statusRaw) ? "paid" : "pending";
-    const payDate = (pay.confirmed_at ?? pay.created_at ?? new Date().toISOString()).split("T")[0]!;
-    const meta = settlementMeta.get(Number(pay.id)) ?? {};
+    const scPaymentNumber = `SCPAY-SC-${pay.id}`;
 
     try {
-      // Resolve local booking_id via sc_booking_id link
-      let localBookingId: number | null = null;
-      if (pay.booking_id) {
-        const bkRes = await db.execute(sql`
-          SELECT id FROM sport_bookings WHERE sc_booking_id = ${pay.booking_id} LIMIT 1
-        `).catch(() => ({ rows: [] }));
-        if (bkRes.rows.length > 0) localBookingId = Number((bkRes.rows[0] as any).id);
+      // The trigger uses this exact idempotency key. Missing mirrors are
+      // intentionally not inserted here; the source must be updated/replayed
+      // so PostgreSQL can execute the trigger.
+      const mirrorRes = await db.execute(sql`
+        SELECT id, booking_id, status, method
+        FROM sport_payments
+        WHERE payment_number = ${scPaymentNumber}
+        LIMIT 1
+      `);
+      const mirror = mirrorRes.rows[0] as {
+        id?: number;
+        booking_id?: number | null;
+        status?: string | null;
+        method?: string | null;
+      } | undefined;
+
+      if (!mirror) {
+        logger.warn(
+          { sportCenterPaymentId: pay.id, paymentNumber: scPaymentNumber, sourceStatus: pay.status },
+          `${PREFIX} mirror trigger belum tersedia; tidak melakukan INSERT dari worker`,
+        );
+        continue;
       }
 
+      // Propagate only the local booking status and accounting metadata. The
+      // mirror row itself remains exclusively owned by the database trigger.
       await db.execute(sql`
-        INSERT INTO sport_payments
-        (booking_id, payment_number, amount, method, status, paid_at, created_at, updated_at,
-         mdr_rate, mdr_amount, tax_withheld_amount, other_fee_amount, net_amount,
-         settlement_reference, settlement_date, settlement_status)
-        VALUES
-          (${localBookingId}, ${scPaymentNumber}, ${String(Number(pay.amount))},
-            ${paymentMethod}, ${mappedStatus},
-           ${payDate}::DATE,
-           ${pay.created_at ?? new Date().toISOString()}::TIMESTAMPTZ, NOW(),
-           ${meta.mdr_rate ?? 0}, ${meta.mdr_amount ?? 0},
-           ${meta.tax_withheld_amount ?? 0}, ${meta.other_fee_amount ?? 0},
-           GREATEST(
-             0::numeric,
-             ${Number(pay.amount)}::numeric
-             - ${Number(meta.mdr_amount ?? 0)}::numeric
-             - ${Number(meta.tax_withheld_amount ?? 0)}::numeric
-             - ${Number(meta.other_fee_amount ?? 0)}::numeric
-           ),
-           ${meta.settlement_reference ?? null}, ${meta.settlement_date ?? null}::date,
-           ${meta.settlement_status ?? "unsettled"})
-        ON CONFLICT (payment_number) DO UPDATE SET
-          status     = EXCLUDED.status,
-          amount     = EXCLUDED.amount,
-          method     = EXCLUDED.method,
-          mdr_rate   = EXCLUDED.mdr_rate,
-          mdr_amount = EXCLUDED.mdr_amount,
-          tax_withheld_amount = EXCLUDED.tax_withheld_amount,
-          other_fee_amount = EXCLUDED.other_fee_amount,
-          net_amount = EXCLUDED.net_amount,
-          settlement_reference = EXCLUDED.settlement_reference,
-          settlement_date = EXCLUDED.settlement_date,
-          settlement_status = EXCLUDED.settlement_status,
-          booking_id = COALESCE(sport_payments.booking_id, EXCLUDED.booking_id),
-          updated_at = NOW()
-      `);
+        UPDATE sport_bookings
+        SET payment_status = 'paid', updated_at = NOW()
+        WHERE id = ${mirror.booking_id ?? null}
+          AND ${String(mirror.status ?? "").toLowerCase()} IN ('paid', 'confirmed')
+          AND payment_status != 'paid'
+      `).catch(() => {});
 
-      // Propagate source method changes to Accounting Hub, including records
-      // that were created before this incremental sync ran.
       await db.execute(sql`
         UPDATE accounting_payments ap
-        SET payment_method = ${paymentMethod}
+        SET payment_method = ${normalizePaymentMethod(String(mirror.method ?? pay.payment_method ?? "cash")) ?? "cash"}
         WHERE ap.source_type = 'sport_center'
-          AND ap.source_doc_id = (
-            SELECT id FROM sport_payments
-            WHERE payment_number = ${scPaymentNumber}
-            LIMIT 1
-          )
+          AND ap.source_doc_id = ${Number(mirror.id)}
       `).catch(() => {});
-      // Update booking payment_status jika sekarang paid
-      if (mappedStatus === "paid" && localBookingId) {
-        await db.execute(sql`
-          UPDATE sport_bookings
-          SET payment_status = 'paid', updated_at = NOW()
-          WHERE id = ${localBookingId} AND payment_status != 'paid'
-        `);
-      }
 
       synced++;
     } catch (err) {
