@@ -42,6 +42,27 @@ export async function runQrisSettlementMigration(): Promise<void> {
     )
   `);
 
+  // Provisional candidates are derived only from imported bank mutations.
+  // They are deliberately separate from provider-confirmed settlements so
+  // reviewers can see a likely batch without treating it as authoritative.
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS qris_mutation_batch_candidates (
+      id SERIAL PRIMARY KEY,
+      mutation_id INTEGER NOT NULL UNIQUE REFERENCES bank_mutations(id) ON DELETE CASCADE,
+      company_id INTEGER,
+      source_date DATE NOT NULL,
+      estimated_settlement_date DATE NOT NULL,
+      gross_amount NUMERIC(16,2) NOT NULL DEFAULT 0,
+      mdr_amount NUMERIC(16,2) NOT NULL DEFAULT 0,
+      other_fee_amount NUMERIC(16,2) NOT NULL DEFAULT 0,
+      net_amount NUMERIC(16,2) NOT NULL DEFAULT 0,
+      payment_items JSONB NOT NULL DEFAULT '[]'::jsonb,
+      status TEXT NOT NULL DEFAULT 'estimated_from_bank_mutation',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
   await db.execute(sql`
     CREATE INDEX IF NOT EXISTS idx_qris_settlements_company_date
       ON qris_settlements(company_id, settlement_date)
