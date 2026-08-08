@@ -1134,10 +1134,1009 @@ Accounting/Reconciliation owner dan Finance/Treasury owner.
 **Status**  
 PENDING
 
+## Decision Review
+
+### BD-09-001
+
+**Topic**  
+Payment lifecycle setelah `waiting_payment`.
+
+**Repository Evidence**  
+`mktApPreparationService` dan `mkt_ap_preparations.status` membuktikan lifecycle
+`ap_preparation → finance_review → waiting_payment`. Modul generik `payments`
+memiliki status `pending`, `paid`, `expired`, `cancelled`, dan `failed`, tetapi
+repository tidak membuktikan relasi Marketplace AP ke tabel tersebut.
+
+**Current Implementation**  
+AP preparation dapat dibuat dari invoice `ready_for_ap`, direview, lalu
+dipindahkan ke `waiting_payment`. Tidak ada status, service, atau route
+Marketplace yang menjalankan fase setelahnya.
+
+**Business Gap**  
+Nama fase berikutnya, entity canonical, status machine, terminal state, serta
+boundary antara Marketplace, payment, dan accounting belum ditetapkan.
+
+**Why clarification is required**  
+Repository does not provide sufficient evidence.
+
+**Possible Option A**
+
+**Keuntungan**  
+Memakai modul payment existing dan mengurangi duplikasi lifecycle.
+
+**Konsekuensi**  
+Kontrak relasi Marketplace, ownership, dan batas kewenangan modul payment harus
+ditetapkan lebih dahulu; status generik belum cukup sebagai kontrak bisnis.
+
+**Possible Option B**
+
+**Keuntungan**  
+Payment request Marketplace dapat menyimpan konteks AP secara eksplisit sebelum
+handoff ke executor.
+
+**Konsekuensi**  
+Membutuhkan entity, status, dan integrasi baru serta berisiko tumpang tindih
+dengan modul payment existing.
+
+**Possible Option C**
+
+**Keuntungan**  
+Marketplace dapat mengontrol lifecycle sampai settlement dan menyediakan audit
+yang spesifik untuk transaksi vendor.
+
+**Konsekuensi**  
+Scope, data model, security boundary, dan tanggung jawab accounting/
+reconciliation menjadi lebih besar.
+
+**Architecture Impact**  
+Menentukan bounded context dan source of truth untuk lifecycle payment.
+
+**Database Impact**  
+Kemungkinan memerlukan relasi, status, terminal state, dan constraint baru;
+belum boleh ditentukan sebelum keputusan bisnis.
+
+**API Impact**  
+Menentukan apakah route baru dibuat, route payment existing diperluas, atau
+hanya dibuat handoff contract.
+
+**Marketplace Impact**  
+Menentukan kapan AP preparation dianggap selesai dan bagaimana status vendor
+invoice ditampilkan.
+
+**Accounting Impact**  
+Menentukan kapan kewajiban dan cash movement dapat diteruskan ke accounting.
+
+**Security Impact**  
+Menentukan actor yang boleh membuat, mengubah, atau mengeksekusi payment.
+
+**Regression Risk**  
+Perubahan boundary dapat memengaruhi invoice, AP preparation, notification,
+activity log, dan payment generic flow.
+
+**Recommendation**  
+Tidak memilih opsi. Product Owner harus menetapkan boundary dan scope Sprint 09.
+
+**Decision Required From Product Owner**  
+Tetapkan fase, entity canonical, status machine, terminal states, dan apakah
+payment execution termasuk Sprint 09.
+
+**Status**  
+PENDING
+
+### BD-09-002
+
+**Topic**  
+Payment approval hierarchy.
+
+**Repository Evidence**  
+AP preparation memakai admin authorization serta mencatat
+`financeReviewedBy` dan `financeReviewedAt`. Tidak ditemukan hierarchy
+approval payment, threshold nominal, atau segregation-of-duties contract.
+
+**Current Implementation**  
+Finance review AP preparation adalah transition tersendiri. Repository tidak
+menunjukkan bahwa transition tersebut sama dengan approval payment.
+
+**Business Gap**  
+Role, hierarchy, threshold, company scope, dan maker-checker rule untuk
+payment belum ditetapkan.
+
+**Why clarification is required**  
+Approval AP dan approval payment dapat memiliki risiko, actor, dan audit
+berbeda. Repository does not provide sufficient evidence untuk menyamakan
+keduanya.
+
+**Possible Option A**
+
+**Keuntungan**  
+Alur sederhana dan mudah diaudit untuk setiap payment.
+
+**Konsekuensi**  
+Tidak membedakan nominal, company, atau risiko; approval tunggal dapat tidak
+sesuai kontrol internal.
+
+**Possible Option B**
+
+**Keuntungan**  
+Dapat menyesuaikan approval dengan nominal, perusahaan, atau kategori.
+
+**Konsekuensi**  
+Membutuhkan konfigurasi hierarchy dan evaluasi rule yang belum ada.
+
+**Possible Option C**
+
+**Keuntungan**  
+Memisahkan maker dan checker serta memperkuat segregation of duties.
+
+**Konsekuensi**  
+Membutuhkan actor identity, fallback/escalation, dan penanganan konflik role.
+
+**Architecture Impact**  
+Menentukan authorization policy dan workflow approval yang menjadi sumber
+kebenaran.
+
+**Database Impact**  
+Kemungkinan memerlukan approval records, approver assignments, threshold, dan
+audit metadata.
+
+**API Impact**  
+Menentukan endpoint approval, actor validation, status guard, dan error
+response.
+
+**Marketplace Impact**  
+Menentukan kapan AP waiting payment dapat diproses oleh payment boundary.
+
+**Accounting Impact**  
+Approval payment dapat menjadi prasyarat posting atau settlement, tetapi
+hubungan tersebut belum ditetapkan.
+
+**Security Impact**  
+Risiko utama adalah privilege escalation dan maker-checker bypass.
+
+**Regression Risk**  
+Salah menyamakan finance review dengan payment approval dapat membuka
+execution tanpa approval yang dimaksud.
+
+**Recommendation**  
+Tidak memilih opsi dan tidak menganggap `admin` sebagai payment approver
+default.
+
+**Decision Required From Product Owner**  
+Tetapkan role, hierarchy, threshold, company scope, dan segregation-of-duties.
+
+**Status**  
+PENDING
+
+### BD-09-003
+
+**Topic**  
+Payment execution authority.
+
+**Repository Evidence**  
+Repository memiliki provider Paylabs dan model payment generic, tetapi tidak
+menunjukkan actor atau service yang mengeksekusi payment vendor Marketplace
+setelah `waiting_payment`.
+
+**Current Implementation**  
+Tidak ada Marketplace payment execution route, callback contract, treasury
+workflow, atau handoff contract yang terbukti.
+
+**Business Gap**  
+Belum jelas apakah executor adalah Finance/Treasury, provider, service
+internal, bank, atau sistem eksternal.
+
+**Why clarification is required**  
+Pembuatan request, approval, dan execution merupakan tindakan berbeda.
+Repository does not provide sufficient evidence untuk menetapkan authority.
+
+**Possible Option A**
+
+**Keuntungan**  
+Kontrol execution tetap berada pada Finance/Treasury internal.
+
+**Konsekuensi**  
+Memerlukan operational workflow dan kemungkinan integrasi bank/provider yang
+belum ditentukan.
+
+**Possible Option B**
+
+**Keuntungan**  
+Provider menangani execution setelah instruction yang disetujui dikirim.
+
+**Konsekuensi**  
+Memerlukan callback, idempotency, credential boundary, dan penanganan status
+provider.
+
+**Possible Option C**
+
+**Keuntungan**  
+Aplikasi tetap menjadi system of record tanpa mengambil alih execution
+eksternal.
+
+**Konsekuensi**  
+Memerlukan contract handoff dan mekanisme sinkronisasi status/reference.
+
+**Architecture Impact**  
+Menentukan ownership antara Marketplace, payment service, Treasury, dan
+provider.
+
+**Database Impact**  
+Kemungkinan memerlukan execution attempt, provider reference, executor, dan
+timestamps.
+
+**API Impact**  
+Menentukan endpoint instruction, execute, callback, atau status inquiry.
+
+**Marketplace Impact**  
+Menentukan status vendor invoice/AP setelah instruksi dikirim dan setelah
+settlement diketahui.
+
+**Accounting Impact**  
+Menentukan event yang menjadi dasar pencatatan cash movement.
+
+**Security Impact**  
+Mempengaruhi secret scope, permission, callback authentication, dan audit
+actor.
+
+**Regression Risk**  
+Execution authority yang salah dapat menyebabkan payment tidak dapat diaudit
+atau dieksekusi lebih dari sekali.
+
+**Recommendation**  
+Tidak memilih opsi. Authority harus ditetapkan oleh owner kontrol operasional.
+
+**Decision Required From Product Owner**  
+Tetapkan executor, approval prerequisite, callback/status source, dan owner
+atas kegagalan execution.
+
+**Status**  
+PENDING
+
+### BD-09-004
+
+**Topic**  
+Partial payment.
+
+**Repository Evidence**  
+AP preparation menyimpan snapshot total invoice dan berhenti pada
+`waiting_payment`. Tidak ditemukan paid amount, outstanding balance, atau
+allocation Marketplace.
+
+**Current Implementation**  
+Modul payment generic memiliki `amount`, tetapi tidak ada bukti bahwa amount
+tersebut dialokasikan ke vendor invoice Marketplace.
+
+**Business Gap**  
+Belum ditentukan apakah partial payment boleh, bagaimana outstanding dihitung,
+dan kapan kewajiban dianggap selesai.
+
+**Why clarification is required**  
+Repository does not provide sufficient evidence untuk menganggap payment
+generic sebagai dukungan partial payment Marketplace.
+
+**Possible Option A**
+
+**Keuntungan**  
+Model dan kontrol lebih sederhana; kewajiban selalu dilunasi penuh.
+
+**Konsekuensi**  
+Tidak mendukung kebutuhan bisnis yang memerlukan pembayaran bertahap.
+
+**Possible Option B**
+
+**Keuntungan**  
+Mendukung pembayaran sebagian dengan outstanding balance server-side.
+
+**Konsekuensi**  
+Memerlukan allocation, total-limit guard, status tambahan, dan rekonsiliasi
+saldo.
+
+**Possible Option C**
+
+**Keuntungan**  
+Installment dapat direncanakan dan disetujui sebelum payment dibuat.
+
+**Konsekuensi**  
+Memerlukan schedule, due date, approval, dan failure semantics tambahan.
+
+**Architecture Impact**  
+Menentukan apakah payment adalah settlement tunggal atau kumpulan allocation.
+
+**Database Impact**  
+Kemungkinan memerlukan allocation/settlement records dan saldo tersisa.
+
+**API Impact**  
+Amount payment tidak boleh menjadi authority client tanpa perhitungan server.
+
+**Marketplace Impact**  
+Status AP dan vendor invoice perlu merepresentasikan paid/remaining amount.
+
+**Accounting Impact**  
+Partial settlement dapat memengaruhi payable balance dan jurnal settlement.
+
+**Security Impact**  
+Amount over-allocation dan client tampering harus dicegah server-side.
+
+**Regression Risk**  
+Perubahan amount semantics dapat memengaruhi payment generic dan reconciliation.
+
+**Recommendation**  
+Tidak memilih opsi dan tidak mengasumsikan partial payment didukung.
+
+**Decision Required From Product Owner**  
+Tetapkan izin partial payment, formula outstanding, dan definisi full settlement.
+
+**Status**  
+PENDING
+
+### BD-09-005
+
+**Topic**  
+Multi-payment terhadap satu invoice/AP preparation.
+
+**Repository Evidence**  
+`mkt_ap_preparations.vendorInvoiceId` unik. Tidak ditemukan allocation atau
+relasi yang membuktikan lebih dari satu payment untuk satu kewajiban Marketplace.
+
+**Current Implementation**  
+Satu invoice hanya memiliki satu AP preparation; belum ada model yang
+membedakan multi-payment bisnis dari retry teknis.
+
+**Business Gap**  
+Belum ditentukan apakah satu AP preparation boleh memiliki banyak payment,
+serta batas total nominalnya.
+
+**Why clarification is required**  
+Repository does not provide sufficient evidence untuk memilih single-payment,
+multi-payment, atau installment.
+
+**Possible Option A**
+
+**Keuntungan**  
+Constraint dan audit lebih sederhana.
+
+**Konsekuensi**  
+Tidak mendukung installment atau partial settlement.
+
+**Possible Option B**
+
+**Keuntungan**  
+Fleksibel untuk beberapa payment selama outstanding tidak terlampaui.
+
+**Konsekuensi**  
+Memerlukan allocation, concurrency guard, dan perhitungan aggregate.
+
+**Possible Option C**
+
+**Keuntungan**  
+Membedakan payment yang direncanakan melalui schedule yang eksplisit.
+
+**Konsekuensi**  
+Menambah lifecycle dan kewajiban operasional untuk mengelola schedule.
+
+**Architecture Impact**  
+Menentukan one-to-one atau one-to-many antara AP dan payment.
+
+**Database Impact**  
+Kemungkinan memerlukan child payment/allocation table dan unique business key.
+
+**API Impact**  
+Create payment, list payments, dan status AP harus menangani aggregate state.
+
+**Marketplace Impact**  
+Invoice/AP tidak dapat memakai status `paid` tanpa definisi semua allocation.
+
+**Accounting Impact**  
+Setiap settlement dapat menghasilkan event accounting/reconciliation berbeda.
+
+**Security Impact**  
+Race condition harus mencegah total payment melewati outstanding.
+
+**Regression Risk**  
+Unique relation existing dapat bertentangan dengan desain multi-payment baru.
+
+**Recommendation**  
+Tidak memilih opsi. Bedakan business multi-payment dari provider retry dahulu.
+
+**Decision Required From Product Owner**  
+Tetapkan cardinality payment, batas aggregate, dan definisi completion.
+
+**Status**  
+PENDING
+
+### BD-09-006
+
+**Topic**  
+Failed payment.
+
+**Repository Evidence**  
+Modul `payments` memiliki status `failed`, tetapi AP preparation tidak memiliki
+status failed payment atau transition yang menggunakannya.
+
+**Current Implementation**  
+Failure pada payment generic belum memiliki dampak yang terbukti terhadap
+Marketplace invoice atau AP preparation.
+
+**Business Gap**  
+Belum jelas apakah AP tetap actionable, kembali ke approval, atau memerlukan
+payment request baru.
+
+**Why clarification is required**  
+Repository does not provide sufficient evidence tentang perbedaan failure
+provider, bank, validation, callback, dan business rejection.
+
+**Possible Option A**
+
+**Keuntungan**  
+AP tetap berada pada boundary `waiting_payment` dan dapat diproses kembali.
+
+**Konsekuensi**  
+Status AP mungkin tidak cukup untuk membedakan attempt gagal dari payment
+yang belum dimulai.
+
+**Possible Option B**
+
+**Keuntungan**  
+Failure memaksa review/approval ulang sebelum retry.
+
+**Konsekuensi**  
+Menambah transition dan operational work.
+
+**Possible Option C**
+
+**Keuntungan**  
+Setiap attempt memiliki audit terpisah dan request baru tidak menimpa histori.
+
+**Konsekuensi**  
+Membutuhkan relasi attempt, duplicate guard, dan rekonsiliasi antar-attempt.
+
+**Architecture Impact**  
+Menentukan apakah failure adalah state payment, state AP, atau keduanya.
+
+**Database Impact**  
+Kemungkinan memerlukan failure reason, attempt, dan error metadata.
+
+**API Impact**  
+Response harus membedakan failed, retryable, dan terminal failure bila owner
+memilihnya.
+
+**Marketplace Impact**  
+Menentukan visibilitas dan tindakan lanjutan pada invoice vendor.
+
+**Accounting Impact**  
+Payment gagal tidak boleh dianggap settled; timing pencatatan harus ditentukan.
+
+**Security Impact**  
+Failure detail dapat mengandung provider information yang perlu dibatasi.
+
+**Regression Risk**  
+Mapping failure yang keliru dapat menandai kewajiban lunas atau membuat retry
+ganda.
+
+**Recommendation**  
+Tidak memilih opsi. Status generic `failed` bukan keputusan lifecycle
+Marketplace.
+
+**Decision Required From Product Owner**  
+Tetapkan state setelah failure, retryability, owner review, dan error visibility.
+
+**Status**  
+PENDING
+
+### BD-09-007
+
+**Topic**  
+Retry pembayaran.
+
+**Repository Evidence**  
+Notification queue memiliki retry/deduplication untuk notifikasi. Tidak
+ditemukan retry semantics atau batas attempt untuk payment execution
+Marketplace.
+
+**Current Implementation**  
+Retry queue notifikasi tidak dapat menjadi bukti retry payment karena objek,
+risiko, dan idempotency-nya berbeda.
+
+**Business Gap**  
+Belum ditentukan siapa yang retry, kapan retry aman, apakah attempt baru dibuat,
+dan berapa batas retry.
+
+**Why clarification is required**  
+Repository does not provide sufficient evidence untuk memilih automatic,
+manual, atau external retry.
+
+**Possible Option A**
+
+**Keuntungan**  
+Mengurangi intervensi manual untuk failure transient.
+
+**Konsekuensi**  
+Memerlukan provider idempotency, backoff, limit, dan observability.
+
+**Possible Option B**
+
+**Keuntungan**  
+Setiap retry melewati review manusia dan failure reason.
+
+**Konsekuensi**  
+Lebih lambat dan membutuhkan operational queue/process.
+
+**Possible Option C**
+
+**Keuntungan**  
+Sistem internal tidak mengambil tanggung jawab retry provider.
+
+**Konsekuensi**  
+Status aplikasi dapat tertunda atau memerlukan sinkronisasi eksternal.
+
+**Architecture Impact**  
+Menentukan ownership scheduler, retry worker, atau external handoff.
+
+**Database Impact**  
+Kemungkinan memerlukan attempt count, next retry time, idempotency key, dan
+retry reason.
+
+**API Impact**  
+Menentukan apakah retry endpoint manual tersedia dan siapa actor-nya.
+
+**Marketplace Impact**  
+Menentukan availability payment dan notifikasi kepada Finance/vendor.
+
+**Accounting Impact**  
+Retry tidak boleh membuat settlement/accounting duplicate.
+
+**Security Impact**  
+Retry harus membatasi abuse dan mencegah executor tidak berwenang mengulang.
+
+**Regression Risk**  
+Retry tanpa idempotency dapat menyebabkan double payment.
+
+**Recommendation**  
+Tidak memilih opsi. Notification retry tidak boleh dipakai sebagai payment
+retry policy.
+
+**Decision Required From Product Owner**  
+Tetapkan retry owner, trigger, limit, idempotency semantics, dan terminal
+failure behavior.
+
+**Status**  
+PENDING
+
+### BD-09-008
+
+**Topic**  
+Duplicate payment.
+
+**Repository Evidence**  
+Duplicate invoice reference dan duplicate AP preparation memiliki proteksi.
+`payments.providerMerchantTradeNo` unik, tetapi belum ada duplicate contract
+yang mengikat payment ke Marketplace AP/invoice.
+
+**Current Implementation**  
+Proteksi duplicate existing berlaku pada invoice/AP atau provider reference
+generic; belum membuktikan proteksi untuk business payment reference
+Marketplace.
+
+**Business Gap**  
+Belum ditentukan perbedaan antara repeated request, repeated provider
+reference, retry, dan dua payment sah.
+
+**Why clarification is required**  
+Repository does not provide sufficient evidence tentang business definition
+duplicate pada boundary Marketplace.
+
+**Possible Option A**
+
+**Keuntungan**  
+Mencegah payment kedua secara konservatif.
+
+**Konsekuensi**  
+Dapat memblok partial/multi-payment yang nantinya dianggap sah.
+
+**Possible Option B**
+
+**Keuntungan**  
+Request identik idempotent, sedangkan payment baru membutuhkan approval baru.
+
+**Konsekuensi**  
+Membutuhkan stable idempotency key dan definisi request equivalence.
+
+**Possible Option C**
+
+**Keuntungan**  
+Mengizinkan payment kedua bila outstanding masih tersedia dan rule bisnis
+memang membolehkan.
+
+**Konsekuensi**  
+Risiko overpayment lebih tinggi dan membutuhkan locking/aggregate validation.
+
+**Architecture Impact**  
+Menentukan idempotency boundary antara Marketplace, payment, dan provider.
+
+**Database Impact**  
+Kemungkinan memerlukan unique business key dan constraint aggregate.
+
+**API Impact**  
+Create/retry harus mengembalikan existing record secara konsisten bila
+idempotent.
+
+**Marketplace Impact**  
+Menentukan apakah invoice/AP dapat memiliki payment aktif atau final lebih dari
+sekali.
+
+**Accounting Impact**  
+Duplicate settlement dapat menghasilkan cash dan liability yang salah.
+
+**Security Impact**  
+Harus mencegah replay dan concurrent duplicate execution.
+
+**Regression Risk**  
+Constraint terlalu ketat dapat merusak partial payment; terlalu longgar dapat
+menyebabkan duplicate disbursement.
+
+**Recommendation**  
+Tidak memilih opsi. Owner harus menetapkan definisi duplicate pada tiga level:
+business reference, provider reference, dan execution attempt.
+
+**Decision Required From Product Owner**  
+Tetapkan duplicate rule, idempotency response, dan pengecualian untuk
+multi-payment bila ada.
+
+**Status**  
+PENDING
+
+### BD-09-009
+
+**Topic**  
+Cancellation.
+
+**Repository Evidence**  
+Modul generic `payments` memiliki status `cancelled`, sedangkan enum AP
+preparation hanya mencakup `ap_preparation`, `finance_review`, dan
+`waiting_payment`. Tidak ditemukan cancellation rule Marketplace.
+
+**Current Implementation**  
+Tidak ada transition cancellation Marketplace setelah AP menunggu payment.
+Status generic `cancelled` belum memiliki arti terhadap AP obligation.
+
+**Business Gap**  
+Belum ditentukan cut-off cancellation, actor, reason, dan dampaknya bila
+instruction sudah dikirim atau provider sudah menerima.
+
+**Why clarification is required**  
+Repository does not provide sufficient evidence untuk menyamakan cancellation
+sebelum execution dengan reversal/refund setelah settlement.
+
+**Possible Option A**
+
+**Keuntungan**  
+Cancellation dibatasi pada titik yang risiko eksternalnya lebih rendah.
+
+**Konsekuensi**  
+Kasus setelah execution membutuhkan proses lain yang belum ditetapkan.
+
+**Possible Option B**
+
+**Keuntungan**  
+Memberi kontrol manual selama payment masih pending.
+
+**Konsekuensi**  
+Memerlukan provider cancel contract dan approval/reason audit.
+
+**Possible Option C**
+
+**Keuntungan**  
+Menghindari pembatalan ambiguous setelah AP waiting payment.
+
+**Konsekuensi**  
+Semua koreksi setelahnya bergantung pada reversal/refund process.
+
+**Architecture Impact**  
+Menentukan apakah cancellation adalah AP transition, payment transition, atau
+external instruction.
+
+**Database Impact**  
+Kemungkinan memerlukan cancelled actor/time/reason dan relation ke attempt.
+
+**API Impact**  
+Menentukan cancel endpoint, authorization, current-status guard, dan response.
+
+**Marketplace Impact**  
+Menentukan apakah vendor invoice tetap payable atau perlu proses ulang.
+
+**Accounting Impact**  
+Cancellation sebelum posting berbeda dari reversal setelah posting.
+
+**Security Impact**  
+Cancellation adalah financial action dan memerlukan least privilege serta
+audit.
+
+**Regression Risk**  
+Cancellation yang terlalu luas dapat membatalkan kewajiban atau payment yang
+telah settlement.
+
+**Recommendation**  
+Tidak memilih opsi dan tidak menyalin status generic `cancelled` ke Marketplace.
+
+**Decision Required From Product Owner**  
+Tetapkan cancellation cut-off, actor, reason requirement, dan post-execution
+handling.
+
+**Status**  
+PENDING
+
+### BD-09-010
+
+**Topic**  
+Reversal atau refund setelah payment.
+
+**Repository Evidence**  
+Architecture repository menyatakan posted accounting entries immutable dan
+reversal-only. Accounting payment memiliki status `voided`, tetapi tidak ada
+Marketplace payment settlement/reversal/refund contract.
+
+**Current Implementation**  
+Tidak ada Marketplace-specific operation untuk void, refund, chargeback, atau
+reversal setelah payment.
+
+**Business Gap**  
+Istilah, trigger, authority, dan accounting consequence untuk void, refund,
+chargeback, dan reversal belum dibedakan.
+
+**Why clarification is required**  
+Repository hanya memberi constraint accounting immutability; repository does
+not provide sufficient evidence untuk payment provider behavior.
+
+**Possible Option A**
+
+**Keuntungan**  
+Konsisten dengan prinsip ledger immutable dan audit reversal.
+
+**Konsekuensi**  
+Tidak dengan sendirinya mengembalikan dana dari provider.
+
+**Possible Option B**
+
+**Keuntungan**  
+Menangani refund/chargeback melalui provider dan mengikuti settlement aktual.
+
+**Konsekuensi**  
+Memerlukan provider contract, callback, fee handling, dan exception process.
+
+**Possible Option C**
+
+**Keuntungan**  
+Membedakan void sebelum settlement, refund sesudah settlement, dan reversal
+accounting sesuai tahapnya.
+
+**Konsekuensi**  
+State machine dan audit menjadi lebih kompleks.
+
+**Architecture Impact**  
+Menentukan lifecycle correction lintas payment, provider, accounting, dan
+reconciliation.
+
+**Database Impact**  
+Kemungkinan memerlukan relation original-to-reversal/refund dan immutable
+event records.
+
+**API Impact**  
+Menentukan operation endpoint, approval, provider callback, dan status inquiry.
+
+**Marketplace Impact**  
+Menentukan bagaimana invoice/AP dan vendor settlement ditampilkan setelah
+koreksi.
+
+**Accounting Impact**  
+Reversal harus mengikuti immutable posted-entry rule dan period controls.
+
+**Security Impact**  
+Refund/reversal memerlukan authority kuat, reason, dan anti-replay controls.
+
+**Regression Risk**  
+Salah membedakan void/refund/reversal dapat merusak ledger atau saldo bank.
+
+**Recommendation**  
+Tidak memilih opsi. Product Owner harus menetapkan terminology dan trigger
+masing-masing operasi.
+
+**Decision Required From Product Owner**  
+Tetapkan aturan void, refund, chargeback, reversal, authority, dan hubungan
+ke accounting.
+
+**Status**  
+PENDING
+
+### BD-09-011
+
+**Topic**  
+Relationship dengan Accounting.
+
+**Repository Evidence**  
+AP preparation hanya menyimpan snapshot invoice/PO/GR dan tidak membuat journal.
+Repository memiliki accounting payment dengan status approval/posting, tetapi
+tidak memiliki source contract Marketplace AP-to-accounting.
+
+**Current Implementation**  
+Boundary Marketplace yang terbukti berhenti di `waiting_payment`; posting
+timing, COA mapping, dan source canonical untuk vendor payment belum tersedia.
+
+**Business Gap**  
+Belum ditentukan kapan payable dan cash movement dicatat, siapa yang posting,
+serta bagaimana posting failure terlihat pada payment/AP.
+
+**Why clarification is required**  
+Repository does not provide sufficient evidence untuk memilih posting saat AP
+approval, payment execution, settlement, atau handoff.
+
+**Possible Option A**
+
+**Keuntungan**  
+Payable dapat diakui lebih awal dan settlement payment dicatat terpisah.
+
+**Konsekuensi**  
+Memerlukan mapping AP liability serta korelasi settlement.
+
+**Possible Option B**
+
+**Keuntungan**  
+Journal mengikuti execution/settlement aktual.
+
+**Konsekuensi**  
+Kewajiban dapat belum tercermin selama menunggu payment dan failure semantics
+menjadi penting.
+
+**Possible Option C**
+
+**Keuntungan**  
+Accounting tetap menjadi owner posting melalui handoff contract.
+
+**Konsekuensi**  
+Membutuhkan interface yang jelas dan penanganan status handoff.
+
+**Architecture Impact**  
+Menentukan boundary antara Marketplace AP, payment, Accounting, dan posting
+service.
+
+**Database Impact**  
+Kemungkinan memerlukan source link, posting status/error, journal reference,
+dan correlation key.
+
+**API Impact**  
+Menentukan handoff/post/retry endpoint dan authority atas posting.
+
+**Marketplace Impact**  
+Menentukan kapan AP preparation dianggap handed off atau settled.
+
+**Accounting Impact**  
+Menentukan COA, journal timing, immutability, period lock, dan reversal.
+
+**Security Impact**  
+Posting dan approval harus dipisahkan sesuai authority yang disetujui.
+
+**Regression Risk**  
+Posting timing yang salah dapat membuat payable, cash, dan reconciliation tidak
+sinkron.
+
+**Recommendation**  
+Tidak memilih opsi dan tidak membuat journal dari AP preparation tanpa keputusan
+Accounting owner.
+
+**Decision Required From Product Owner**  
+Tetapkan source canonical, posting timing, COA ownership, failure visibility,
+dan apakah accounting termasuk Sprint 09.
+
+**Status**  
+PENDING
+
+### BD-09-012
+
+**Topic**  
+Relationship dengan Bank Reconciliation.
+
+**Repository Evidence**  
+Bank reconciliation mencegah satu payment source direconcile ke lebih dari satu
+ledger line. QRIS reconciliation memiliki aturan provider/reference dan
+gross-net fee. Tidak ditemukan settlement mapping Marketplace setelah
+`waiting_payment`.
+
+**Current Implementation**  
+Tidak ada Marketplace-specific mapping yang menentukan apakah yang direconcile
+adalah payment instruction, provider settlement, accounting journal, atau
+kombinasi.
+
+**Business Gap**  
+Canonical source, matching order, fee/net treatment, settlement timing, dan
+exception ownership belum ditetapkan.
+
+**Why clarification is required**  
+Repository does not provide sufficient evidence untuk memilih source atau
+urutan reconciliation Marketplace.
+
+**Possible Option A**
+
+**Keuntungan**  
+Bank statement langsung dikaitkan dengan accounting journal sebagai record
+financial utama.
+
+**Konsekuensi**  
+Payment/provider reference menjadi supporting data dan settlement intermediary
+harus tetap dapat ditelusuri.
+
+**Possible Option B**
+
+**Keuntungan**  
+Provider settlement dapat diverifikasi ke payment sebelum dikaitkan ke journal.
+
+**Konsekuensi**  
+Memerlukan provider settlement feed dan korelasi berlapis.
+
+**Possible Option C**
+
+**Keuntungan**  
+Menyediakan chain provider settlement → payment → journal → bank statement.
+
+**Konsekuensi**  
+Arsitektur dan exception handling paling kompleks.
+
+**Architecture Impact**  
+Menentukan source-of-truth chain dan urutan matching antar sistem.
+
+**Database Impact**  
+Kemungkinan memerlukan settlement reference, fee, net amount, dan source links.
+
+**API Impact**  
+Menentukan import/callback/status API dan exception resolution route.
+
+**Marketplace Impact**  
+Menentukan kapan payment vendor dianggap settled dan bagaimana mismatch
+ditampilkan.
+
+**Accounting Impact**  
+Memengaruhi journal link, fee posting, period close, dan reversal.
+
+**Security Impact**  
+Settlement data dan bank references memerlukan scope, audit, dan anti-duplicate
+controls.
+
+**Regression Risk**  
+Mapping yang salah dapat membuat satu source direconcile dua kali atau
+meninggalkan cash movement tanpa supporting payment.
+
+**Recommendation**  
+Tidak memilih opsi. Existing uniqueness dan gross-net rules dipertahankan
+sebagai constraints, bukan keputusan Marketplace baru.
+
+**Decision Required From Product Owner**  
+Tetapkan canonical reconciliation source, matching sequence, fee treatment, dan
+owner exception.
+
+**Status**  
+PENDING
+
+## Decision Matrix
+
+| Decision | Status | Blocking Sprint 9 | Owner |
+|---|---|---|---|
+| BD-09-001 | PENDING | YES | Product Owner + Finance Owner |
+| BD-09-002 | PENDING | YES | Product Owner + Finance Owner |
+| BD-09-003 | PENDING | YES | Product Owner + Finance/Treasury Owner |
+| BD-09-004 | PENDING | YES | Product Owner + Finance Owner |
+| BD-09-005 | PENDING | YES | Finance Owner |
+| BD-09-006 | PENDING | YES | Finance/Treasury Owner |
+| BD-09-007 | PENDING | YES | Finance/Treasury Owner + Payment Integration Owner |
+| BD-09-008 | PENDING | YES | Finance/Treasury Owner + Payment Integration Owner |
+| BD-09-009 | PENDING | YES | Product Owner + Finance Owner |
+| BD-09-010 | PENDING | YES | Finance/Accounting Owner + Payment Integration Owner |
+| BD-09-011 | PENDING | YES | Product Owner + Accounting/Finance Owner |
+| BD-09-012 | PENDING | YES | Accounting/Reconciliation Owner + Finance/Treasury Owner |
+
 ## Decision Status Summary
 
 - Total business decision: **12**
-- Status: **12 PENDING**
+- Total blocking: **12**
+- Total ready: **0**
+- Total pending: **12**
 - Tidak ada opsi yang dianggap disetujui oleh dokumen ini.
 - Sprint 09 tetap **NOT STARTED** dan **NO GO** sampai seluruh decision owner
   menetapkan boundary payment, approval/execution authority, accounting,
