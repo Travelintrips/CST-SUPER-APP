@@ -997,8 +997,22 @@ provider reference, dan execution attempt sebelum constraint dibuat.
 **Decision Owner**  
 Finance/Treasury owner dan pemilik integrasi payment.
 
+**Selected Option**  
+Option B.
+
+**Product Owner Notes**  
+Payment Module menggunakan business idempotency key untuk mencegah duplicate
+request. Request dengan idempotency key yang sama harus mengembalikan payment
+existing. Idempotency key yang sama dengan payload berbeda harus ditolak.
+Payment baru hanya boleh dibuat apabila berasal dari installment/payment schedule
+atau business approval yang berbeda. Retry execution setelah payment gagal
+membuat execution attempt baru tanpa membuat business payment baru. Seluruh
+payment, execution attempt, duplicate detection, dan retry wajib tercatat dalam
+audit trail. Provider reference tetap unique dan bukan satu-satunya mekanisme
+pencegahan duplicate payment.
+
 **Status**  
-PENDING
+APPROVED
 
 ### BD-09-009
 
