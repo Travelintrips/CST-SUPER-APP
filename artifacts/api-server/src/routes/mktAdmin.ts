@@ -104,6 +104,11 @@ import {
 } from "../lib/services/mktPaymentHandoffService.js";
 import { validatePaymentHandoffIdempotencyKey } from "../lib/mktPaymentHandoffContract.js";
 import {
+  getMarketplaceAccountingHandoff,
+  handoffMarketplacePaymentToAccounting,
+} from "../lib/services/mktAccountingHandoffService.js";
+import { validateAccountingHandoffKey } from "../lib/mktAccountingHandoffContract.js";
+import {
   approveMarketplacePayment,
   cancelMarketplacePayment,
   completeMarketplacePayment,
@@ -1473,6 +1478,71 @@ router.post("/payment-requests/:id/cancel", fulfillmentWriteLimiter, async (req,
     return res.json({ ok: true, alreadyExists: result.alreadyExists, data: result.paymentRequest });
   } catch (err) {
     logger.warn({ err, paymentRequestId }, "[mktAdmin] marketplace payment cancellation error");
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+// ── Sprint 09D — Marketplace → Accounting handoff ────────────────────────────
+// This endpoint creates only an evidence/status handoff record. It never posts
+// or mutates an Accounting journal; Accounting remains the posting authority.
+router.get("/payment-requests/:id/accounting-handoff", async (req, res) => {
+  const ok = await requireAdmin(req, res);
+  if (!ok) return;
+  const paymentRequestId = Number(req.params["id"]);
+  if (!Number.isInteger(paymentRequestId) || paymentRequestId <= 0) {
+    return res.status(400).json({ ok: false, error: "INVALID_ID" });
+  }
+  try {
+    const lifecycle = await getScopedMarketplacePayment(req, res, paymentRequestId);
+    if (!lifecycle) return;
+    const handoff = await getMarketplaceAccountingHandoff(lifecycle.paymentRequest.mktApPreparationId ?? 0);
+    return res.json({ ok: true, data: handoff });
+  } catch (err) {
+    logger.warn({ err, paymentRequestId }, "[mktAdmin] accounting handoff read error");
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+router.post("/payment-requests/:id/accounting-handoff", fulfillmentWriteLimiter, async (req, res) => {
+  const ok = await requireAdmin(req, res);
+  if (!ok) return;
+  const paymentRequestId = Number(req.params["id"]);
+  if (!Number.isInteger(paymentRequestId) || paymentRequestId <= 0) {
+    return res.status(400).json({ ok: false, error: "INVALID_ID" });
+  }
+  const rawKey = req.get("Idempotency-Key") ?? req.body?.idempotencyKey;
+  if (!validateAccountingHandoffKey(rawKey)) {
+    return res.status(422).json({ ok: false, error: "INVALID_KEY", message: "Idempotency-Key wajib 8-128 karakter" });
+  }
+  try {
+    const lifecycle = await getScopedMarketplacePayment(req, res, paymentRequestId);
+    if (!lifecycle) return;
+    const result = await handoffMarketplacePaymentToAccounting(
+      paymentRequestId,
+      rawKey,
+      getActorFromReq(req),
+      resolveCompanyId(req),
+    );
+    if (!result.ok) {
+      const status = result.code === "NOT_FOUND" ? 404
+        : result.code === "COMPANY_MISMATCH" ? 403
+          : result.code === "INVALID_KEY" || result.code === "INVALID_REFERENCE"
+            || result.code === "AMOUNT_MISMATCH" || result.code === "CURRENCY_MISMATCH" ? 422
+            : 409;
+      return res.status(status).json({
+        ok: false,
+        error: result.code,
+        currentStatus: result.currentStatus,
+        message: result.message,
+      });
+    }
+    return res.status(result.alreadyExists ? 200 : 201).json({
+      ok: true,
+      alreadyExists: result.alreadyExists,
+      data: result.handoff,
+    });
+  } catch (err) {
+    logger.warn({ err, paymentRequestId }, "[mktAdmin] accounting handoff error");
     return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
