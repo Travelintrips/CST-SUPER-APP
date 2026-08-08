@@ -84,6 +84,8 @@ import {
   listGoodsReceiptItems,
 } from "../lib/services/mktPoGoodsReceiptService.js";
 import { logger } from "../lib/logger.js";
+import { assertCompanyAccess } from "../lib/assertCompanyAccess.js";
+import { resolveCompanyId } from "../lib/resolveCompany.js";
 import {
   getMarketplaceVendorInvoice,
   safeMarketplaceVendorInvoiceView,
@@ -97,6 +99,10 @@ import {
   reviewApPreparation,
   safeApView,
 } from "../lib/services/mktApPreparationService.js";
+import {
+  handoffApPreparationToPayment,
+} from "../lib/services/mktPaymentHandoffService.js";
+import { validatePaymentHandoffIdempotencyKey } from "../lib/mktPaymentHandoffContract.js";
 
 const router = Router();
 const fulfillmentWriteLimiter = rateLimit({
@@ -1207,6 +1213,83 @@ router.post("/ap-preparations/:id/waiting-payment", fulfillmentWriteLimiter, asy
     return res.json({ ok: true, alreadyWaitingPayment: result.alreadyExists, data: safeApView(result.preparation) });
   } catch (err) {
     logger.warn({ err, id }, "[mktAdmin] waiting payment AP preparation error");
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+// ── Sprint 09A — Marketplace -> Payment Module handoff ──────────────────────
+// Marketplace owns only the waiting_payment boundary. This endpoint creates
+// or reuses the canonical Payment Module request and performs no execution,
+// provider call, accounting posting, treasury, settlement, refund, or recon.
+router.post("/ap-preparations/:id/payment-handoff", fulfillmentWriteLimiter, async (req, res) => {
+  const ok = await requireAdmin(req, res);
+  if (!ok) return;
+
+  const id = Number(req.params["id"]);
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ ok: false, error: "id harus berupa integer positif" });
+  }
+
+  const idempotencyKey = validatePaymentHandoffIdempotencyKey(
+    req.get("Idempotency-Key") ?? (req.body as Record<string, unknown> | undefined)?.idempotencyKey,
+  );
+  if (!idempotencyKey) {
+    return res.status(400).json({
+      ok: false,
+      error: "IDEMPOTENCY_KEY_REQUIRED",
+      message: "Idempotency-Key wajib berupa string 8-128 karakter",
+    });
+  }
+
+  try {
+    const preparation = await getApPreparation(id);
+    if (!preparation) {
+      return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+    }
+    const companyId = resolveCompanyId(req);
+    if (!await assertCompanyAccess(preparation.companyId, companyId, req, res, {
+      resourceType: "mkt_ap_preparation",
+      resourceId: id,
+    })) return;
+
+    const result = await handoffApPreparationToPayment(
+      id,
+      idempotencyKey,
+      getActorFromReq(req),
+      companyId,
+    );
+    if (!result.ok) {
+      const status = result.code === "NOT_FOUND"
+        ? 404
+        : result.code === "INVALID_STATUS" || result.code === "CONCURRENT_UPDATE" || result.code === "IDEMPOTENCY_CONFLICT"
+          ? 409
+          : result.code === "COMPANY_MISMATCH" ? 403 : 400;
+      return res.status(status).json({
+        ok: false,
+        error: result.code,
+        currentStatus: result.currentStatus,
+        message: result.message,
+      });
+    }
+
+    return res.status(result.alreadyExists ? 200 : 201).json({
+      ok: true,
+      alreadyExists: result.alreadyExists,
+      data: {
+        paymentRequestId: result.paymentRequest.id,
+        payReqNumber: result.paymentRequest.payReqNumber,
+        sourceType: result.paymentRequest.sourceType,
+        sourceId: result.paymentRequest.sourceId,
+        mktApPreparationId: result.paymentRequest.mktApPreparationId,
+        status: result.paymentRequest.status,
+        companyId: result.paymentRequest.companyId,
+        supplierId: result.paymentRequest.supplierId,
+        totalAmount: result.paymentRequest.totalAmount,
+        currency: result.paymentRequest.currency,
+      },
+    });
+  } catch (err) {
+    logger.warn({ err, id }, "[mktAdmin] payment handoff error");
     return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });

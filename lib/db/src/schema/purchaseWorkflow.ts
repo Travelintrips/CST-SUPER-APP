@@ -355,17 +355,29 @@ export const paymentRequestsTable = pgTable("payment_requests", {
   approvedAt: timestamp("approved_at"),
   totalAmount: numeric("total_amount", { precision: 14, scale: 2 }).notNull().default("0"),
   paidAmount: numeric("paid_amount", { precision: 14, scale: 2 }).notNull().default("0"),
+  currency: text("currency").notNull().default("IDR"),
   paymentMethod: text("payment_method"),
   bankAccount: text("bank_account"),
   paymentDate: timestamp("payment_date"),
   journalEntryId: integer("journal_entry_id"),
   notes: text("notes"),
+  // Marketplace AP handoff metadata. These fields are additive and do not
+  // authorize, execute, post, or settle a payment.
+  sourceType: text("source_type"),
+  sourceId: integer("source_id"),
+  mktApPreparationId: integer("mkt_ap_preparation_id"),
+  idempotencyKey: text("idempotency_key"),
+  payloadFingerprint: text("payload_fingerprint"),
   cancelledAt: timestamp("cancelled_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => [
   index("pay_req_supplier_idx").on(t.supplierId),
   index("pay_req_status_idx").on(t.status),
+  index("pay_req_source_idx").on(t.sourceType, t.sourceId),
+  index("pay_req_mkt_ap_idx").on(t.mktApPreparationId),
+  unique("pay_req_idempotency_unique").on(t.idempotencyKey),
+  unique("pay_req_mkt_ap_unique").on(t.mktApPreparationId),
 ]);
 
 export const paymentRequestItemsTable = pgTable("payment_request_items", {

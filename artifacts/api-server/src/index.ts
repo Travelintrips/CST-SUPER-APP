@@ -78,6 +78,7 @@ import { runVendorCatalogSchemaMigration } from "./lib/vendorCatalogSchemaMigrat
 import { runFeaturedProductMigration } from "./lib/featuredProductMigration.js";
 import { runMktVendorInvoiceMigration } from "./lib/mktVendorInvoiceMigration.js";
 import { runMktApPreparationMigration } from "./lib/mktApPreparationMigration.js";
+import { runMktPaymentHandoffMigration } from "./lib/mktPaymentHandoffMigration.js";
 import { startFeaturedProductExpiryWorker } from "./lib/services/featuredProductExpiryWorker.js";
 import { runLogisticVendorFulfillmentsMigration } from "./lib/logisticVendorFulfillmentsMigration.js";
 import { runProductFirstFlowMigration } from "./lib/productFirstFlowMigration.js";
@@ -235,6 +236,12 @@ async function runCriticalPreStartMigrations() {
     await runMktApPreparationMigration();
   } catch (err) {
     logger.error({ err }, "Marketplace AP preparation migration failed");
+    throw err;
+  }
+  try {
+    await runMktPaymentHandoffMigration();
+  } catch (err) {
+    logger.error({ err }, "Marketplace payment handoff migration failed");
     throw err;
   }
 

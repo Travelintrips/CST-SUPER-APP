@@ -12,6 +12,7 @@ import {
 import { companiesTable } from "./companies";
 import { suppliersTable } from "./suppliers";
 import { vendorInvoicesTable } from "./purchaseWorkflow";
+import { paymentRequestsTable } from "./purchaseWorkflow";
 import { mktPurchaseOrdersTable } from "./mktPurchaseOrders";
 import { mktPoGoodsReceiptsTable } from "./mktPoGoodsReceipts";
 
@@ -49,6 +50,10 @@ export const mktApPreparationsTable = pgTable("mkt_ap_preparations", {
   financeReviewedBy: text("finance_reviewed_by"),
   financeReviewedAt: timestamp("finance_reviewed_at"),
   waitingPaymentAt: timestamp("waiting_payment_at"),
+  paymentRequestId: integer("payment_request_id")
+    .references(() => paymentRequestsTable.id, { onDelete: "set null" }),
+  paymentHandoffAt: timestamp("payment_handoff_at"),
+  paymentHandoffBy: text("payment_handoff_by"),
   createdBy: text("created_by"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -57,6 +62,7 @@ export const mktApPreparationsTable = pgTable("mkt_ap_preparations", {
   index("mkt_ap_preparations_status_idx").on(t.status),
   index("mkt_ap_preparations_company_idx").on(t.companyId),
   index("mkt_ap_preparations_vendor_idx").on(t.supplierId),
+  uniqueIndex("mkt_ap_preparations_payment_request_unique").on(t.paymentRequestId),
 ]);
 
 export type MktApPreparation = typeof mktApPreparationsTable.$inferSelect;
