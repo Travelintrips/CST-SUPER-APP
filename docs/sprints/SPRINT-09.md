@@ -762,8 +762,14 @@ execution authority.
 **Decision Owner**  
 Finance/Treasury owner dan pemilik kontrol operasional.
 
+**Selected Option**  
+Option A — Payment execution dilakukan oleh Finance/Treasury melalui Payment
+Module existing. Marketplace hanya melakukan handoff setelah status
+`waiting_payment`. Payment Module mengelola approval, eksekusi, audit trail,
+dan integrasi dengan kanal pembayaran yang tersedia.
+
 **Status**  
-PENDING
+APPROVED
 
 ### BD-09-004
 
@@ -1417,8 +1423,14 @@ Tidak memilih opsi. Authority harus ditetapkan oleh owner kontrol operasional.
 Tetapkan executor, approval prerequisite, callback/status source, dan owner
 atas kegagalan execution.
 
+**Selected Option**  
+Option A — Payment execution dilakukan oleh Finance/Treasury melalui Payment
+Module existing. Marketplace hanya melakukan handoff setelah status
+`waiting_payment`. Payment Module mengelola approval, eksekusi, audit trail,
+dan integrasi dengan kanal pembayaran yang tersedia.
+
 **Status**  
-PENDING
+APPROVED
 
 ### BD-09-004
 
@@ -2148,7 +2160,7 @@ PENDING
 |---|---|---|---|
 | BD-09-001 | APPROVED | NO | Product Owner + Finance Owner |
 | BD-09-002 | APPROVED | NO | Product Owner + Finance Owner |
-| BD-09-003 | PENDING | YES | Product Owner + Finance/Treasury Owner |
+| BD-09-003 | APPROVED | NO | Product Owner + Finance/Treasury Owner |
 | BD-09-004 | PENDING | YES | Product Owner + Finance Owner |
 | BD-09-005 | PENDING | YES | Finance Owner |
 | BD-09-006 | PENDING | YES | Finance/Treasury Owner |
@@ -2162,11 +2174,12 @@ PENDING
 ## Decision Status Summary
 
 - Total business decision: **12**
-- Total blocking: **10**
-- Total ready: **2**
-- Total pending: **10**
-- BD-09-001 telah menyetujui Option A dan BD-09-002 telah menyetujui Option B;
-  decision lain tetap belum disetujui.
+- Total blocking: **9**
+- Total ready: **3**
+- Total pending: **9**
+- BD-09-001 telah menyetujui Option A, BD-09-002 telah menyetujui Option B,
+  dan BD-09-003 telah menyetujui Option A; decision lain tetap belum
+  disetujui.
 - Sprint 09 tetap **NOT STARTED** dan **NO GO** sampai seluruh decision owner
   menetapkan boundary payment, approval/execution authority, accounting,
   reconciliation, serta acceptance criteria.
