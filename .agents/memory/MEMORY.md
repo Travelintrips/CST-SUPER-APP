@@ -32,5 +32,6 @@
 - [Marketplace invoice upload idempotency](marketplace-invoice-upload-idempotency.md) — hapus attachment private baru pada duplicate/failure; hanya pertahankan setelah invoice baru commit.
 - [Bank recon SQL column audit](bank-recon-sql-column-audit.md) — candidateDetailsSql had wrong column names on 4 tables; UNION ALL type mismatch (ENUM vs TEXT); Drizzle hides real error in e.cause?.message; DROP VIEW before CREATE OR REPLACE VIEW.
 - [Sprint 7 runtime evidence](sprint7-runtime-evidence.md) — invoice lifecycle runtime E2E passes on dev DB; legacy quote harness imports unavailable declaration-only lib/db output.
+- [Sprint 9 cancellation policy](sprint9-cancellation-policy.md) — AP cancellation is allowed only before Treasury starts execution; later correction uses failure or reversal/refund workflows.
 - [Recon validation environment](recon-validation-environment.md) — restore with frozen pnpm lockfile and build shared declarations before API typecheck; two isolation tests require missing dev tables.
 - [Sprint 8 release decision evidence](sprint8-release-decision.md) — classify legacy cross-project regressions separately; only AP handoff-stage failures block Sprint 8.

@@ -1052,8 +1052,21 @@ cut-off execution dan konsekuensi accounting.
 **Decision Owner**  
 Finance owner dan business owner.
 
+**Selected Option**  
+Option A.
+
+**Product Owner Notes**  
+Cancellation hanya diperbolehkan sebelum payment execution dimulai. Setelah
+Treasury memulai payment execution, cancellation tidak lagi diperbolehkan
+melalui workflow AP. Jika payment gagal, proses mengikuti BD-09-006 (Failed
+Payment). Jika payment telah berhasil dieksekusi, koreksi hanya dapat dilakukan
+melalui workflow Reversal/Refund (BD-09-010). Setiap cancellation wajib
+memiliki authorization, alasan yang tervalidasi, idempotency, dan audit trail
+lengkap. Cancellation tidak boleh mengubah nominal, vendor, rekening,
+allocation, atau business payment secara langsung.
+
 **Status**  
-PENDING
+APPROVED
 
 ### BD-09-010
 
