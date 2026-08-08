@@ -137,6 +137,14 @@ export async function handoffApPreparationToPayment(
             message: "AP preparation sudah di-handoff dengan idempotency key atau payload berbeda",
           };
         }
+        if (existing.mktLifecycleStatus == null) {
+          const [backfilled] = await tx
+            .update(paymentRequestsTable)
+            .set({ mktLifecycleStatus: "payment_request_created", updatedAt: new Date() })
+            .where(eq(paymentRequestsTable.id, existing.id))
+            .returning();
+          if (backfilled) return { ok: true as const, paymentRequest: backfilled, alreadyExists: true, preparation };
+        }
         return { ok: true as const, paymentRequest: existing, alreadyExists: true, preparation };
       }
 
@@ -153,6 +161,14 @@ export async function handoffApPreparationToPayment(
             code: "IDEMPOTENCY_CONFLICT" as const,
             message: "Idempotency key sudah digunakan untuk handoff berbeda",
           };
+        }
+        if (sameKey.mktLifecycleStatus == null) {
+          const [backfilled] = await tx
+            .update(paymentRequestsTable)
+            .set({ mktLifecycleStatus: "payment_request_created", updatedAt: new Date() })
+            .where(eq(paymentRequestsTable.id, sameKey.id))
+            .returning();
+          if (backfilled) return { ok: true as const, paymentRequest: backfilled, alreadyExists: true, preparation };
         }
         const [linked] = await tx
           .update(mktApPreparationsTable)
@@ -189,6 +205,7 @@ export async function handoffApPreparationToPayment(
           mktApPreparationId: preparation.id,
           idempotencyKey,
           payloadFingerprint: fingerprint,
+          mktLifecycleStatus: "payment_request_created",
         })
         .returning();
       if (!created) return { ok: false as const, code: "CONCURRENT_UPDATE" as const };

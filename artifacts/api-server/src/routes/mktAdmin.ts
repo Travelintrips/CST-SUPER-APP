@@ -103,6 +103,17 @@ import {
   handoffApPreparationToPayment,
 } from "../lib/services/mktPaymentHandoffService.js";
 import { validatePaymentHandoffIdempotencyKey } from "../lib/mktPaymentHandoffContract.js";
+import {
+  approveMarketplacePayment,
+  cancelMarketplacePayment,
+  completeMarketplacePayment,
+  failMarketplacePayment,
+  getMarketplacePaymentLifecycle,
+  markMarketplacePaymentTreasuryReady,
+  reviewMarketplacePayment,
+  retryMarketplacePayment,
+  startMarketplacePaymentExecution,
+} from "../lib/services/mktPaymentLifecycleService.js";
 
 const router = Router();
 const fulfillmentWriteLimiter = rateLimit({
@@ -1290,6 +1301,178 @@ router.post("/ap-preparations/:id/payment-handoff", fulfillmentWriteLimiter, asy
     });
   } catch (err) {
     logger.warn({ err, id }, "[mktAdmin] payment handoff error");
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+// ── Sprint 09B — Marketplace Payment Lifecycle ─────────────────────────────
+// These endpoints operate only on payment_requests created by the Marketplace
+// AP handoff. They reuse the canonical Payment Module record and never accept
+// amount/vendor/company/currency authority from the client.
+function lifecycleStatus(code: string): number {
+  if (code === "NOT_FOUND" || code === "ATTEMPT_NOT_FOUND") return 404;
+  if (code === "CANCELLATION_NOT_ALLOWED" || code === "INVALID_STATUS" || code === "CONCURRENT_UPDATE" || code === "IDEMPOTENCY_CONFLICT") return 409;
+  if (code === "INVALID_REASON") return 422;
+  return 400;
+}
+
+async function getScopedMarketplacePayment(req: any, res: any, paymentRequestId: number) {
+  const lifecycle = await getMarketplacePaymentLifecycle(paymentRequestId);
+  if (!lifecycle) {
+    res.status(404).json({ ok: false, error: "PAYMENT_REQUEST_NOT_FOUND" });
+    return null;
+  }
+  const companyId = resolveCompanyId(req);
+  if (!await assertCompanyAccess(lifecycle.paymentRequest.companyId, companyId, req, res, {
+    resourceType: "marketplace_payment_request",
+    resourceId: paymentRequestId,
+  })) return null;
+  return lifecycle;
+}
+
+router.get("/payment-requests/:id/lifecycle", async (req, res) => {
+  const ok = await requireAdmin(req, res);
+  if (!ok) return;
+  const paymentRequestId = Number(req.params["id"]);
+  if (!Number.isInteger(paymentRequestId) || paymentRequestId <= 0) {
+    return res.status(400).json({ ok: false, error: "paymentRequestId harus berupa integer positif" });
+  }
+  try {
+    const lifecycle = await getScopedMarketplacePayment(req, res, paymentRequestId);
+    if (!lifecycle) return;
+    return res.json({ ok: true, data: lifecycle });
+  } catch (err) {
+    logger.warn({ err, paymentRequestId }, "[mktAdmin] marketplace payment lifecycle read error");
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+router.post("/payment-requests/:id/finance-review", fulfillmentWriteLimiter, async (req, res) => {
+  const ok = await requireAdmin(req, res);
+  if (!ok) return;
+  const paymentRequestId = Number(req.params["id"]);
+  if (!Number.isInteger(paymentRequestId) || paymentRequestId <= 0) return res.status(400).json({ ok: false, error: "INVALID_ID" });
+  try {
+    if (!await getScopedMarketplacePayment(req, res, paymentRequestId)) return;
+    const result = await reviewMarketplacePayment(paymentRequestId, getActorFromReq(req));
+    if (!result.ok) return res.status(lifecycleStatus(result.code)).json({ ok: false, error: result.code, currentStatus: result.currentStatus, message: result.message });
+    return res.json({ ok: true, alreadyExists: result.alreadyExists, data: result.paymentRequest });
+  } catch (err) {
+    logger.warn({ err, paymentRequestId }, "[mktAdmin] marketplace payment finance review error");
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+router.post("/payment-requests/:id/approve", fulfillmentWriteLimiter, async (req, res) => {
+  const ok = await requireAdmin(req, res);
+  if (!ok) return;
+  const paymentRequestId = Number(req.params["id"]);
+  if (!Number.isInteger(paymentRequestId) || paymentRequestId <= 0) return res.status(400).json({ ok: false, error: "INVALID_ID" });
+  try {
+    if (!await getScopedMarketplacePayment(req, res, paymentRequestId)) return;
+    const result = await approveMarketplacePayment(paymentRequestId, getActorFromReq(req));
+    if (!result.ok) return res.status(lifecycleStatus(result.code)).json({ ok: false, error: result.code, currentStatus: result.currentStatus, message: result.message });
+    return res.json({ ok: true, alreadyExists: result.alreadyExists, data: result.paymentRequest });
+  } catch (err) {
+    logger.warn({ err, paymentRequestId }, "[mktAdmin] marketplace payment approval error");
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+router.post("/payment-requests/:id/treasury-ready", fulfillmentWriteLimiter, async (req, res) => {
+  const ok = await requireAdmin(req, res);
+  if (!ok) return;
+  const paymentRequestId = Number(req.params["id"]);
+  if (!Number.isInteger(paymentRequestId) || paymentRequestId <= 0) return res.status(400).json({ ok: false, error: "INVALID_ID" });
+  try {
+    if (!await getScopedMarketplacePayment(req, res, paymentRequestId)) return;
+    const result = await markMarketplacePaymentTreasuryReady(paymentRequestId, getActorFromReq(req));
+    if (!result.ok) return res.status(lifecycleStatus(result.code)).json({ ok: false, error: result.code, currentStatus: result.currentStatus, message: result.message });
+    return res.json({ ok: true, alreadyExists: result.alreadyExists, data: result.paymentRequest });
+  } catch (err) {
+    logger.warn({ err, paymentRequestId }, "[mktAdmin] marketplace payment treasury-ready error");
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+router.post("/payment-requests/:id/process", fulfillmentWriteLimiter, async (req, res) => {
+  const ok = await requireAdmin(req, res);
+  if (!ok) return;
+  const paymentRequestId = Number(req.params["id"]);
+  if (!Number.isInteger(paymentRequestId) || paymentRequestId <= 0) return res.status(400).json({ ok: false, error: "INVALID_ID" });
+  try {
+    if (!await getScopedMarketplacePayment(req, res, paymentRequestId)) return;
+    const result = await startMarketplacePaymentExecution(paymentRequestId, req.get("Idempotency-Key") ?? req.body?.idempotencyKey, getActorFromReq(req));
+    if (!result.ok) return res.status(lifecycleStatus(result.code)).json({ ok: false, error: result.code, currentStatus: result.currentStatus, message: result.message });
+    return res.status(result.alreadyExists ? 200 : 201).json({ ok: true, alreadyExists: result.alreadyExists, data: result.paymentRequest, attempt: result.attempt });
+  } catch (err) {
+    logger.warn({ err, paymentRequestId }, "[mktAdmin] marketplace payment processing start error");
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+router.post("/payment-requests/:id/complete", fulfillmentWriteLimiter, async (req, res) => {
+  const ok = await requireAdmin(req, res);
+  if (!ok) return;
+  const paymentRequestId = Number(req.params["id"]);
+  const attemptId = Number(req.body?.attemptId);
+  if (!Number.isInteger(paymentRequestId) || paymentRequestId <= 0 || !Number.isInteger(attemptId) || attemptId <= 0) return res.status(400).json({ ok: false, error: "paymentRequestId dan attemptId wajib valid" });
+  try {
+    if (!await getScopedMarketplacePayment(req, res, paymentRequestId)) return;
+    const result = await completeMarketplacePayment(paymentRequestId, attemptId, getActorFromReq(req));
+    if (!result.ok) return res.status(lifecycleStatus(result.code)).json({ ok: false, error: result.code, currentStatus: result.currentStatus, message: result.message });
+    return res.json({ ok: true, alreadyExists: result.alreadyExists, data: result.paymentRequest, attempt: result.attempt });
+  } catch (err) {
+    logger.warn({ err, paymentRequestId, attemptId }, "[mktAdmin] marketplace payment completion error");
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+router.post("/payment-requests/:id/fail", fulfillmentWriteLimiter, async (req, res) => {
+  const ok = await requireAdmin(req, res);
+  if (!ok) return;
+  const paymentRequestId = Number(req.params["id"]);
+  const attemptId = Number(req.body?.attemptId);
+  if (!Number.isInteger(paymentRequestId) || paymentRequestId <= 0 || !Number.isInteger(attemptId) || attemptId <= 0) return res.status(400).json({ ok: false, error: "paymentRequestId dan attemptId wajib valid" });
+  try {
+    if (!await getScopedMarketplacePayment(req, res, paymentRequestId)) return;
+    const result = await failMarketplacePayment(paymentRequestId, attemptId, req.body?.failureCode, req.body?.failureReason, getActorFromReq(req));
+    if (!result.ok) return res.status(lifecycleStatus(result.code)).json({ ok: false, error: result.code, currentStatus: result.currentStatus, message: result.message });
+    return res.json({ ok: true, alreadyExists: result.alreadyExists, data: result.paymentRequest, attempt: result.attempt });
+  } catch (err) {
+    logger.warn({ err, paymentRequestId, attemptId }, "[mktAdmin] marketplace payment failure error");
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+router.post("/payment-requests/:id/retry", fulfillmentWriteLimiter, async (req, res) => {
+  const ok = await requireAdmin(req, res);
+  if (!ok) return;
+  const paymentRequestId = Number(req.params["id"]);
+  if (!Number.isInteger(paymentRequestId) || paymentRequestId <= 0) return res.status(400).json({ ok: false, error: "INVALID_ID" });
+  try {
+    if (!await getScopedMarketplacePayment(req, res, paymentRequestId)) return;
+    const result = await retryMarketplacePayment(paymentRequestId, req.get("Idempotency-Key") ?? req.body?.idempotencyKey, getActorFromReq(req));
+    if (!result.ok) return res.status(lifecycleStatus(result.code)).json({ ok: false, error: result.code, currentStatus: result.currentStatus, message: result.message });
+    return res.status(result.alreadyExists ? 200 : 201).json({ ok: true, alreadyExists: result.alreadyExists, data: result.paymentRequest, attempt: result.attempt });
+  } catch (err) {
+    logger.warn({ err, paymentRequestId }, "[mktAdmin] marketplace payment retry error");
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+router.post("/payment-requests/:id/cancel", fulfillmentWriteLimiter, async (req, res) => {
+  const ok = await requireAdmin(req, res);
+  if (!ok) return;
+  const paymentRequestId = Number(req.params["id"]);
+  if (!Number.isInteger(paymentRequestId) || paymentRequestId <= 0) return res.status(400).json({ ok: false, error: "INVALID_ID" });
+  try {
+    if (!await getScopedMarketplacePayment(req, res, paymentRequestId)) return;
+    const result = await cancelMarketplacePayment(paymentRequestId, req.get("Idempotency-Key") ?? req.body?.idempotencyKey, req.body?.reason, getActorFromReq(req));
+    if (!result.ok) return res.status(lifecycleStatus(result.code)).json({ ok: false, error: result.code, currentStatus: result.currentStatus, message: result.message });
+    return res.json({ ok: true, alreadyExists: result.alreadyExists, data: result.paymentRequest });
+  } catch (err) {
+    logger.warn({ err, paymentRequestId }, "[mktAdmin] marketplace payment cancellation error");
     return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
