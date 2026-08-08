@@ -1168,8 +1168,25 @@ sebelum implementation scope ditetapkan.
 **Decision Owner**  
 Accounting owner dan Finance owner.
 
+**Selected Option**  
+Option C.
+
+**Product Owner Notes**  
+Marketplace hanya bertanggung jawab menyiapkan AP Preparation dan melakukan
+handoff ke Accounting melalui contract resmi. Accounting Module menjadi satu-
+satunya source of truth untuk accounting journal, payable recognition, settlement
+journal, reversal, period lock, dan COA mapping. Marketplace tidak boleh
+membuat, mengubah, atau mem-posting journal secara langsung. Handoff wajib
+menggunakan business reference yang unik, idempotency key, correlation
+reference, approval state, company, currency, amount, vendor invoice, dan AP
+Preparation sebagai evidence. Accounting wajib mengembalikan status handoff,
+posting, maupun kegagalan agar Marketplace dapat menampilkan status operasional
+tanpa mengambil alih kewenangan Accounting. Duplicate handoff tidak boleh
+menghasilkan duplicate journal, dan seluruh handoff, retry, posting, reversal,
+refund, maupun chargeback wajib tercatat dalam audit trail.
+
 **Status**  
-PENDING
+APPROVED
 
 ### BD-09-012
 
