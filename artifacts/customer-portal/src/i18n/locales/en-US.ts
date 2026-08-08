@@ -6260,4 +6260,16 @@ const locale: DeepRecord = {
 
 };
 
+
+
+// Auto-patched missing keys — propagated from en-US/id-ID baseline
+if (!locale["marketplaceDetail"] || typeof locale["marketplaceDetail"] !== 'object') locale["marketplaceDetail"] = {};
+locale["marketplaceDetail"]["rfqFieldPhonePlaceholder"] = "+628xxxxxxxxxx";
+if (!locale["marketplaceDetail"] || typeof locale["marketplaceDetail"] !== 'object') locale["marketplaceDetail"] = {};
+locale["marketplaceDetail"]["rfqFieldEmail"] = "Email";
+if (!locale["marketplaceDetail"] || typeof locale["marketplaceDetail"] !== 'object') locale["marketplaceDetail"] = {};
+locale["marketplaceDetail"]["rfqFieldEmailPlaceholder"] = "email@example.com";
+if (!locale["marketplaceDetail"] || typeof locale["marketplaceDetail"] !== 'object') locale["marketplaceDetail"] = {};
+locale["marketplaceDetail"]["vendorRespTime"] = "Response Time";
+
 export default locale;
