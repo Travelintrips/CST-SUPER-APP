@@ -80,6 +80,7 @@ import { runMktVendorInvoiceMigration } from "./lib/mktVendorInvoiceMigration.js
 import { runMktApPreparationMigration } from "./lib/mktApPreparationMigration.js";
 import { runMktPaymentHandoffMigration } from "./lib/mktPaymentHandoffMigration.js";
 import { runMktAccountingHandoffMigration } from "./lib/mktAccountingHandoffMigration.js";
+import { runMktReconciliationLinkMigration } from "./lib/mktReconciliationLinkMigration.js";
 import { startFeaturedProductExpiryWorker } from "./lib/services/featuredProductExpiryWorker.js";
 import { runLogisticVendorFulfillmentsMigration } from "./lib/logisticVendorFulfillmentsMigration.js";
 import { runProductFirstFlowMigration } from "./lib/productFirstFlowMigration.js";
@@ -242,6 +243,13 @@ async function runCriticalPreStartMigrations() {
   try {
     await runMktPaymentHandoffMigration();
     await runMktAccountingHandoffMigration();
+    // Sprint 09E development-only verification schema. Production schema
+    // changes are applied through the publish flow, never startup DDL.
+    const isDevelopment = process.env["NODE_ENV"] !== "production"
+      && !process.env["REPLIT_DEPLOYMENT"];
+    if (isDevelopment) {
+      await runMktReconciliationLinkMigration();
+    }
   } catch (err) {
     logger.error({ err }, "Marketplace payment handoff migration failed");
     throw err;

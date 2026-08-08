@@ -109,6 +109,11 @@ import {
 } from "../lib/services/mktAccountingHandoffService.js";
 import { validateAccountingHandoffKey } from "../lib/mktAccountingHandoffContract.js";
 import {
+  createMarketplaceReconciliationLink,
+  getMarketplaceReconciliationLink,
+} from "../lib/services/mktReconciliationLinkService.js";
+import { validateReconciliationLinkKey } from "../lib/mktReconciliationLinkContract.js";
+import {
   approveMarketplacePayment,
   cancelMarketplacePayment,
   completeMarketplacePayment,
@@ -1543,6 +1548,75 @@ router.post("/payment-requests/:id/accounting-handoff", fulfillmentWriteLimiter,
     });
   } catch (err) {
     logger.warn({ err, paymentRequestId }, "[mktAdmin] accounting handoff error");
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+// ── Sprint 09E — Marketplace → Bank Reconciliation link ──────────────────────
+// This endpoint creates only a canonical reference. It never matches,
+// approves, posts, settles, or reconciles a bank transaction.
+router.get("/payment-requests/:id/reconciliation-link", async (req, res) => {
+  const ok = await requireAdmin(req, res);
+  if (!ok) return;
+  const paymentRequestId = Number(req.params["id"]);
+  if (!Number.isInteger(paymentRequestId) || paymentRequestId <= 0) {
+    return res.status(400).json({ ok: false, error: "INVALID_ID" });
+  }
+  try {
+    const lifecycle = await getScopedMarketplacePayment(req, res, paymentRequestId);
+    if (!lifecycle) return;
+    const link = await getMarketplaceReconciliationLink(paymentRequestId);
+    return res.json({ ok: true, data: link });
+  } catch (err) {
+    logger.warn({ err, paymentRequestId }, "[mktAdmin] reconciliation link read error");
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+router.post("/payment-requests/:id/reconciliation-link", fulfillmentWriteLimiter, async (req, res) => {
+  const ok = await requireAdmin(req, res);
+  if (!ok) return;
+  const paymentRequestId = Number(req.params["id"]);
+  if (!Number.isInteger(paymentRequestId) || paymentRequestId <= 0) {
+    return res.status(400).json({ ok: false, error: "INVALID_ID" });
+  }
+  const rawKey = req.get("Idempotency-Key") ?? req.body?.idempotencyKey;
+  if (!validateReconciliationLinkKey(rawKey)) {
+    return res.status(422).json({
+      ok: false,
+      error: "INVALID_KEY",
+      message: "Idempotency-Key wajib 8-128 karakter",
+    });
+  }
+  try {
+    const lifecycle = await getScopedMarketplacePayment(req, res, paymentRequestId);
+    if (!lifecycle) return;
+    const result = await createMarketplaceReconciliationLink(
+      paymentRequestId,
+      rawKey,
+      getActorFromReq(req),
+      resolveCompanyId(req),
+    );
+    if (!result.ok) {
+      const status = result.code === "NOT_FOUND" ? 404
+        : result.code === "COMPANY_MISMATCH" ? 403
+          : result.code === "INVALID_STATUS" || result.code === "INVALID_SOURCE"
+            || result.code === "INVALID_REFERENCE" || result.code === "INVALID_KEY" ? 422
+            : 409;
+      return res.status(status).json({
+        ok: false,
+        error: result.code,
+        currentStatus: result.currentStatus,
+        message: result.message,
+      });
+    }
+    return res.status(result.alreadyExists ? 200 : 201).json({
+      ok: true,
+      alreadyExists: result.alreadyExists,
+      data: result.link,
+    });
+  } catch (err) {
+    logger.warn({ err, paymentRequestId }, "[mktAdmin] reconciliation link error");
     return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });

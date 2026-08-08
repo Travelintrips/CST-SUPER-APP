@@ -150,6 +150,7 @@ export * from "./mktPoGoodsReceiptItems";
 export * from "./mktApPreparations";
 export * from "./mktPaymentExecutionAttempts";
 export * from "./mktAccountingHandoffs";
+export * from "./mktReconciliationLinks";
 
 // ── Notification tables (Drizzle-tracked) ─────────────────────────────────────
 export * from "./adminNotifications";

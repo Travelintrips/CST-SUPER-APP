@@ -38,6 +38,7 @@ import { runMktVendorInvoiceMigration } from "./lib/mktVendorInvoiceMigration.js
 import { runMktApPreparationMigration } from "./lib/mktApPreparationMigration.js";
 import { runMktPaymentHandoffMigration } from "./lib/mktPaymentHandoffMigration.js";
 import { runMktAccountingHandoffMigration } from "./lib/mktAccountingHandoffMigration.js";
+import { runMktReconciliationLinkMigration } from "./lib/mktReconciliationLinkMigration.js";
 import { seedAccountingDefaults, seedAdditionalTaxes, backfillExpenseCategoryAccounts } from "./lib/accountingSeed.js";
 
 // ── Core / Org / Auth migrations ─────────────────────────────────────────────
@@ -223,6 +224,7 @@ async function main() {
   await runSafe("marketplaceApPreparation", runMktApPreparationMigration);
   await runSafe("marketplacePaymentHandoff", runMktPaymentHandoffMigration);
   await runSafe("marketplaceAccountingHandoff", runMktAccountingHandoffMigration);
+  await runSafe("marketplaceReconciliationLink", runMktReconciliationLinkMigration);
   await runSafe("logisticVendorFulfillments", runLogisticVendorFulfillmentsMigration);
   await runSafe("productFirstFlow", runProductFirstFlowMigration);
   await runSafe("step4Template", runStep4TemplateMigration);
