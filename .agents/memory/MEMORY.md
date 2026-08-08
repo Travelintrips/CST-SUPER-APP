@@ -35,3 +35,4 @@
 - [Sprint 9 cancellation policy](sprint9-cancellation-policy.md) — AP cancellation is allowed only before Treasury starts execution; later correction uses failure or reversal/refund workflows.
 - [Recon validation environment](recon-validation-environment.md) — restore with frozen pnpm lockfile and build shared declarations before API typecheck; two isolation tests require missing dev tables.
 - [Sprint 8 release decision evidence](sprint8-release-decision.md) — classify legacy cross-project regressions separately; only AP handoff-stage failures block Sprint 8.
+- [Sprint 09A runtime migration](sprint9a-runtime-migration.md) — legacy runtime snapshots may miss PK constraints required by new handoff foreign keys.
