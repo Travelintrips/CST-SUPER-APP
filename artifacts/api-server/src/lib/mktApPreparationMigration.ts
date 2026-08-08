@@ -17,6 +17,27 @@ export async function runMktApPreparationMigration(): Promise<void> {
       WHEN duplicate_object THEN NULL;
     END $$
   `);
+  // Older Development DB snapshots can retain vendor_invoices.id as a
+  // non-null serial column without its primary-key constraint. PostgreSQL
+  // requires the referenced column to be PK/UNIQUE before creating the AP FK.
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'vendor_invoices'
+      ) AND NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = 'public.vendor_invoices'::regclass
+          AND contype = 'p'
+      ) THEN
+        ALTER TABLE "public"."vendor_invoices"
+          ADD CONSTRAINT "vendor_invoices_pkey" PRIMARY KEY ("id");
+      END IF;
+    END $$
+  `);
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS mkt_ap_preparations (
       id SERIAL PRIMARY KEY,

@@ -124,6 +124,7 @@ async function runSafe(name: string, fn: () => Promise<unknown>) {
 
 // Pre-startup: critical schema items (mirrors index.ts logic)
 async function runCriticalPreStartMigrations() {
+  await runMktApPreparationMigration();
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS wa_otp_codes (
       id SERIAL PRIMARY KEY, phone TEXT NOT NULL, code_hash TEXT NOT NULL,
