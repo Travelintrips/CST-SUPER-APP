@@ -39,3 +39,4 @@
 - [Sprint 8 release decision evidence](sprint8-release-decision.md) — classify legacy cross-project regressions separately; only AP handoff-stage failures block Sprint 8.
 - [Sprint 09A runtime migration](sprint9a-runtime-migration.md) — legacy runtime snapshots may miss PK constraints required by new handoff foreign keys.
 - [Sprint 09A live harness](sprint9a-live-harness.md) — live proof needs ESM bundling with pino externalized and runtime invoice status `ready_for_ap`.
+- [Sport Center audit contract](sport-center-audit-contract.md) — mirror trigger tetap owner; payment hanya posted setelah entry_id valid; jangan menambah relasi jurnal paralel.

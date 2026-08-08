@@ -546,8 +546,12 @@ export async function syncAllBookings(): Promise<{ synced: number; errors: numbe
 /**
  * syncPaymentsToAccounting
  * Sinkronisasi payment paid di public.sport_payments → accounting_payments + accounting_entries.
- * Menggunakan postSportCenterBooking (canonical path) untuk membuat journal entry,
- * sehingga tidak ada manual INSERT ke accounting_entries yang bisa bypass trigger guard.
+ * Mirror payment dibuat oleh trigger PostgreSQL. Scheduler hanya memastikan journal
+ * booking tersedia lalu membuat accounting_payment yang selalu menunjuk ke journal itu.
+ *
+ * Penting: jangan pernah membuat accounting_payment berstatus posted dengan entry_id
+ * NULL. Baris seperti itu membuat payment terlihat selesai, tetapi ledger belum ada,
+ * dan pada retry dapat memicu jurnal ganda.
  */
 export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced: number; skipped: number; errors: number }> {
   // Baca dari local mirror (public.sport_payments + public.sport_bookings)
@@ -619,6 +623,7 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
 
       if (existing.rows.length > 0) {
         const existingRow = existing.rows[0] as any;
+        const payDate = (row.paid_at ?? row.sp_created_at ?? row.booking_date ?? new Date().toISOString()).slice(0, 10);
         // Method adalah metadata transaksi yang harus selalu mengikuti sumber
         // Sport Center, termasuk bila payment sudah pernah diposting.
         await db.execute(sql`
@@ -626,8 +631,36 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
           SET payment_method = ${normalizePaymentMethod(row.method) ?? "cash"}
           WHERE id = ${existingRow.id}
         `).catch(() => {});
-        // Jika entry_id belum terhubung, coba link sekarang
+        if (existingRow.entry_id) {
+          await db.execute(sql`
+            UPDATE sport_payments
+            SET posting_status = 'posted',
+                accounting_payment_id = ${existingRow.id},
+                posting_error = NULL,
+                updated_at = NOW()
+            WHERE id = ${row.sp_id}
+          `).catch(() => {});
+        }
+        // Jika entry_id belum terhubung, coba pastikan jurnal dibuat lalu link
+        // kembali ke accounting_payment yang sudah ada. Ini memulihkan orphan
+        // legacy tanpa membuat payment accounting kedua.
         if (!existingRow.entry_id) {
+          const bookingDate = row.booking_date ?? payDate;
+          try {
+            await postSportCenterBooking({
+              bookingId: row.local_booking_id,
+              bookingCode: row.booking_number,
+              customerName: row.customer_name ?? "Customer",
+              facilityName: row.facility_name ?? "Sport Center",
+              date: bookingDate,
+              totalPrice: Number(row.booking_total_amount ?? row.amount),
+              paymentMethod: normalizePaymentMethod(row.method),
+              companyId: row.bk_company_id ?? companyId,
+            });
+          } catch (postErr) {
+            console.warn(`${PREFIX} syncPaymentsToAccounting: retry post orphan gagal booking_id=${row.local_booking_id}:`, postErr);
+          }
+
           const entryRes = await db.execute(sql`
             SELECT id FROM accounting_entries
             WHERE source = 'sport_center_booking' AND source_id = ${row.local_booking_id}
@@ -636,6 +669,27 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
           if (entryRes.rows.length > 0) {
             const entryId = Number((entryRes.rows[0] as any).id);
             await db.execute(sql`UPDATE accounting_payments SET entry_id = ${entryId} WHERE id = ${existingRow.id}`).catch(() => {});
+            await db.execute(sql`
+              UPDATE sport_payments
+              SET posting_status = 'posted',
+                  accounting_payment_id = ${existingRow.id},
+                  posting_error = NULL,
+                  updated_at = NOW()
+              WHERE id = ${row.sp_id}
+            `).catch(() => {});
+          } else {
+            const error = "Accounting payment sudah ada tetapi journal entry belum tersedia";
+            await db.execute(sql`
+              UPDATE sport_payments
+              SET posting_status = 'failed',
+                  accounting_payment_id = ${existingRow.id},
+                  posting_error = ${error},
+                  updated_at = NOW()
+              WHERE id = ${row.sp_id}
+            `).catch(() => {});
+            console.error(`${PREFIX} syncPaymentsToAccounting: ${error} sp_id=${row.sp_id}`);
+            errors++;
+            continue;
           }
         }
         skipped++;
@@ -671,6 +725,23 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
       `).catch(() => ({ rows: [] }));
       const entryId = entryRes.rows.length > 0 ? Number((entryRes.rows[0] as any).id) : null;
 
+      // postSportCenterBooking historically logged/swallowed its own errors.
+      // Treat a missing entry as a hard sync failure and do not create a
+      // split-brain accounting_payment with status='posted' and entry_id=NULL.
+      if (!entryId) {
+        const error = "Journal Sport Center belum berhasil dibuat";
+        await db.execute(sql`
+          UPDATE sport_payments
+          SET posting_status = 'failed',
+              posting_error = ${error},
+              updated_at = NOW()
+          WHERE id = ${row.sp_id}
+        `).catch(() => {});
+        console.error(`${PREFIX} syncPaymentsToAccounting: ${error} sp_id=${row.sp_id} booking_id=${row.local_booking_id}`);
+        errors++;
+        continue;
+      }
+
       // ── Langkah 3: Buat accounting_payments ──────────────────────────────────
       const year = payDate.slice(0, 4);
       const cntRes = await db.execute(sql`SELECT CAST(COUNT(*) AS int) AS seq FROM accounting_payments WHERE company_id = ${companyId}`);
@@ -700,6 +771,15 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
       `);
 
       if ((insertRes.rows[0] as any)?.id) {
+        const accountingPaymentId = Number((insertRes.rows[0] as any).id);
+        await db.execute(sql`
+          UPDATE sport_payments
+          SET posting_status = 'posted',
+              accounting_payment_id = ${accountingPaymentId},
+              posting_error = NULL,
+              updated_at = NOW()
+          WHERE id = ${row.sp_id}
+        `);
         console.log(`${PREFIX} syncPaymentsToAccounting OK → ${row.payment_number} (${row.booking_number}) Rp${row.amount}`);
         synced++;
       } else {

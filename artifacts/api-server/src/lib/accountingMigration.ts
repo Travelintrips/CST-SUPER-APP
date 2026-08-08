@@ -226,6 +226,24 @@ export async function runAccountingMigration(): Promise<void> {
       logger.warn({ err }, "Accounting migration: gagal buat core source_id unique index — lanjut (mungkin masih ada duplikat)");
     });
 
+    // ── CORE UNIQUE INDEX: one module payment → one accounting payment ─────────
+    // Application-side SELECT-then-INSERT checks are not race-safe. This guard
+    // covers the module payment sources without changing the accounting status
+    // enum or deleting historical duplicates. If an old database still contains
+    // duplicates, the index creation is logged and the migration continues so
+    // operators can review those rows explicitly before enforcing the constraint.
+    await db.execute(sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS accounting_payments_company_source_doc_uniq
+        ON accounting_payments (company_id, source_type, source_doc_id)
+        WHERE source_type IN ('sport_center', 'tenant', 'logistics')
+          AND source_doc_id IS NOT NULL
+    `).catch(async (err: unknown) => {
+      logger.warn(
+        { err },
+        "Accounting migration: gagal buat unique payment source guard (mungkin masih ada duplikat historis) — lanjut",
+      );
+    });
+
     // ── Drop ALL legacy non-company-scoped source dedup indexes (R-1 remediation) ───────
     // These indexes enforce uniqueness on (source, source_id) WITHOUT company_id, which
     // prevents the same source_id from appearing in two different companies — wrong for
