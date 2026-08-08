@@ -66,6 +66,7 @@ export async function runEnterpriseMigration(): Promise<void> {
         new_value JSONB,
         description TEXT,
         ip_address TEXT,
+        deduplication_key TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);

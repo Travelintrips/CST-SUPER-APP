@@ -31,6 +31,12 @@ export interface LogActivityOptions {
   oldValue?: unknown;
   newValue?: unknown;
   ipAddress?: string | null;
+  /**
+   * Optional logical-event key. Marketplace handoff uses this to make
+   * retries/concurrent replays produce one audit row without changing the
+   * behavior of existing callers.
+   */
+  deduplicationKey?: string | null;
   // Marketplace audit trail — Phase 2A (2026-07-02)
   mktRfqId?: number | null;
   mktVendorQuoteId?: number | null;
@@ -43,6 +49,7 @@ export async function logActivity(opts: LogActivityOptions): Promise<void> {
       INSERT INTO activity_logs (
         rfq_id, order_id, actor_type, actor_id, actor_name,
         action, description, old_value, new_value, ip_address,
+        deduplication_key,
         mkt_rfq_id, mkt_vendor_quote_id, mkt_purchase_order_id
       )
       VALUES (
@@ -56,6 +63,7 @@ export async function logActivity(opts: LogActivityOptions): Promise<void> {
         ${opts.oldValue != null ? JSON.stringify(opts.oldValue) : null}::jsonb,
         ${opts.newValue != null ? JSON.stringify(opts.newValue) : null}::jsonb,
         ${opts.ipAddress ?? null},
+        ${opts.deduplicationKey ?? null},
         ${opts.mktRfqId ?? null},
         ${opts.mktVendorQuoteId ?? null},
         ${opts.mktPurchaseOrderId ?? null}

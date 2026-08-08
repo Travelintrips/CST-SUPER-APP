@@ -58,6 +58,9 @@ async function auditHandoff(
     description: description ?? `${preparation.preparationNumber}: payment handoff`,
     oldValue: { apPreparationId: preparation.id, status: preparation.status },
     newValue: { apPreparationId: preparation.id, paymentRequestId: paymentRequestId ?? null },
+    deduplicationKey: paymentRequestId != null
+      ? `mkt_ap_payment_handoff:${preparation.id}:${paymentRequestId}`
+      : null,
   });
 }
 

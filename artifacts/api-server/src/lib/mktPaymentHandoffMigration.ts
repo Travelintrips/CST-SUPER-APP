@@ -24,6 +24,46 @@ export async function runMktPaymentHandoffMigration(): Promise<void> {
       ADD COLUMN IF NOT EXISTS payment_handoff_by TEXT
   `);
   await db.execute(sql`
+    ALTER TABLE IF EXISTS activity_logs
+      ADD COLUMN IF NOT EXISTS deduplication_key TEXT
+  `);
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF to_regclass('public.activity_logs') IS NOT NULL THEN
+        CREATE UNIQUE INDEX IF NOT EXISTS activity_logs_deduplication_key_unique
+          ON activity_logs (deduplication_key)
+          WHERE deduplication_key IS NOT NULL;
+      END IF;
+    END $$
+  `);
+  // Some older runtime snapshots have payment_requests.id as a plain NOT NULL
+  // serial column without its primary-key constraint. PostgreSQL requires the
+  // referenced column to be PK/UNIQUE before creating the handoff FK.
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'payment_requests'
+      ) AND NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint c
+        JOIN pg_attribute a
+          ON a.attrelid = c.conrelid
+         AND a.attnum = c.conkey[1]
+        WHERE c.conrelid = 'public.payment_requests'::regclass
+          AND c.contype IN ('p', 'u')
+          AND array_length(c.conkey, 1) = 1
+          AND a.attname = 'id'
+      ) THEN
+        ALTER TABLE "public"."payment_requests"
+          ADD CONSTRAINT "payment_requests_id_key" UNIQUE ("id");
+      END IF;
+    END $$
+  `);
+  await db.execute(sql`
     CREATE UNIQUE INDEX IF NOT EXISTS pay_req_idempotency_unique
       ON payment_requests (idempotency_key)
       WHERE idempotency_key IS NOT NULL
