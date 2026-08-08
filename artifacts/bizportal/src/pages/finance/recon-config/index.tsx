@@ -224,6 +224,11 @@ function ConfigTab({ category }: { category: "BUSINESS_TRANSACTION" | "ROUTINE_E
       ...row,
       keywords: Array.isArray(row.keywords) ? row.keywords : JSON.parse(row.keywords ?? "[]"),
       upload_file_types: Array.isArray(row.upload_file_types) ? row.upload_file_types : JSON.parse(row.upload_file_types ?? "[]"),
+      // NUMERIC columns come back as strings from pg; coerce to number
+      confidence_threshold: Number(row.confidence_threshold ?? 0.75),
+      upload_max_files: Number(row.upload_max_files ?? 5),
+      upload_max_size_mb: Number(row.upload_max_size_mb ?? 10),
+      priority: Number(row.priority ?? 50),
     });
     loadOptions();
     setShowModal(true);

@@ -79,16 +79,16 @@ const ConfigUpsertSchema = z.object({
   default_cost_center:  z.string().optional().nullable(),
   need_upload:          z.enum(["none", "optional", "required"]).default("none"),
   upload_file_types:    z.array(z.enum(["PDF", "JPG", "PNG", "WEBP"])).default([]),
-  upload_max_files:     z.number().int().min(1).max(20).default(5),
-  upload_max_size_mb:   z.number().int().min(1).max(100).default(10),
+  upload_max_files:     z.coerce.number().int().min(1).max(20).default(5),
+  upload_max_size_mb:   z.coerce.number().int().min(1).max(100).default(10),
   need_approval:        z.boolean().default(false),
   need_invoice_number:  z.boolean().default(false),
   need_reference_number: z.boolean().default(false),
   ai_learning_enabled:  z.boolean().default(true),
-  confidence_threshold: z.number().min(0).max(1).default(0.75),
+  confidence_threshold: z.coerce.number().min(0).max(1).default(0.75),
   keywords:             z.array(z.string()).default([]),
   regex_pattern:        z.string().optional().nullable(),
-  priority:             z.number().int().min(1).max(999).default(50),
+  priority:             z.coerce.number().int().min(1).max(999).default(50),
   company_id:           z.number().int().optional().nullable(),
 });
 
@@ -102,15 +102,15 @@ const AiRuleSchema = z.object({
   action_flow:         z.enum(["BUSINESS_MATCHING", "ROUTINE_EXPENSE_ALLOCATION", "INCOME_ALLOCATION", "MANUAL_REVIEW", "BLOCKED"]).optional().nullable(),
   action_coa_code:     z.string().optional().nullable(),
   action_config_code:  z.string().optional().nullable(),
-  confidence:          z.number().min(0).max(1).default(0.8),
-  priority:            z.number().int().min(1).max(999).default(50),
+  confidence:          z.coerce.number().min(0).max(1).default(0.8),
+  priority:            z.coerce.number().int().min(1).max(999).default(50),
   source:              z.enum(["manual", "ai_generated"]).default("manual"),
   company_id:          z.number().int().optional().nullable(),
 });
 
 const KeywordSchema = z.object({
   term:       z.string().min(1).max(200),
-  weight:     z.number().min(0).max(1).default(0.8),
+  weight:     z.coerce.number().min(0).max(1).default(0.8),
   config_id:  z.number().int().optional().nullable(),
   company_id: z.number().int().optional().nullable(),
 });
