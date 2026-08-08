@@ -461,6 +461,17 @@ interface CandidateDetails {
   settlementStatus?: string | null;
   settlementPartial?: boolean;
   settlementItemCount?: number | null;
+  settlementItems?: Array<{
+    id?: number;
+    sportPaymentId?: number;
+    paymentNumber?: string | null;
+    bookingId?: number | null;
+    grossAmount?: number | string | null;
+    mdrAmount?: number | string | null;
+    taxWithheldAmount?: number | string | null;
+    otherFeeAmount?: number | string | null;
+    netAmount?: number | string | null;
+  }>;
 }
 
 interface JournalLine {
@@ -651,6 +662,38 @@ function CandidateDetailsBlock({
         <p className="text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
           Settlement QRIS PARTIAL — hanya sebagian dana/provider batch yang sudah tersettle; perlu review sebelum dianggap lunas.
         </p>
+      )}
+      {d.settlementItems && d.settlementItems.length > 0 && (
+        <div className="border-t pt-1.5 mt-1.5 space-y-1.5">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Rincian payment settlement
+          </p>
+          <div className="space-y-1">
+            {d.settlementItems.map((item, index) => (
+              <div
+                key={item.id ?? item.sportPaymentId ?? index}
+                className="rounded border bg-background/70 px-2 py-1.5 text-[10px]"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium">
+                    {item.paymentNumber ?? `Payment #${item.sportPaymentId ?? "—"}`}
+                  </span>
+                  {item.bookingId != null && (
+                    <span className="text-muted-foreground">Booking #{item.bookingId}</span>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-2 gap-y-0.5 mt-1 text-muted-foreground">
+                  <span>Gross: <b className="text-foreground">{item.grossAmount != null ? idr(item.grossAmount) : "—"}</b></span>
+                  <span>MDR: <b className="text-foreground">{item.mdrAmount != null ? idr(item.mdrAmount) : "—"}</b></span>
+                  <span>Pajak/fee: <b className="text-foreground">
+                    {idr(Number(item.taxWithheldAmount ?? 0) + Number(item.otherFeeAmount ?? 0))}
+                  </b></span>
+                  <span>Net: <b className="text-foreground">{item.netAmount != null ? idr(item.netAmount) : "—"}</b></span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
       <div className={`grid ${compact ? "grid-cols-1" : "grid-cols-[auto_1fr]"} gap-x-3 gap-y-1`}>
         {rows.map(row => (

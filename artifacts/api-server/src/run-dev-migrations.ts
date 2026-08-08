@@ -13,6 +13,7 @@ import { runAccountingHubMigration } from "./lib/accountingHubMigration.js";
 import { runGuardMigration as runLedgerGuardMigration } from "./lib/accounting/ledgerGuard.js";
 import { runFreightAccountingMigration } from "./lib/freightAccountingMigration.js";
 import { runBankReconciliationCoreMigration } from "./routes/bankReconciliation.js";
+import { runQrisSettlementMigration } from "./lib/reconciliation/qrisSettlementMigration.js";
 import { runBankMutationMastersMigration } from "./routes/bankMutationMasters.js";
 import { runBankMutationImportMigration } from "./routes/bankMutationImport.js";
 import { runFinancialPeriodMigration } from "./lib/financialPeriodMigration.js";
@@ -253,6 +254,7 @@ async function main() {
   await runSafe("ledgerGuard", runLedgerGuardMigration);
   await runSafe("freightAccounting", runFreightAccountingMigration);
   await runSafe("bankReconciliationCore", runBankReconciliationCoreMigration);
+  await runSafe("qrisSettlement", runQrisSettlementMigration);
   await runSafe("bankMutationMasters", runBankMutationMastersMigration);
   await runSafe("bankMutationImport", runBankMutationImportMigration);
   await runSafe("financialPeriod", runFinancialPeriodMigration);
