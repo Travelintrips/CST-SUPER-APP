@@ -398,16 +398,16 @@ export async function retryMarketplacePayment(
 ): Promise<MarketplacePaymentLifecycleResult> {
   const idempotencyKey = normalizeIdempotencyKey(idempotencyKeyInput);
   if (!idempotencyKey) return { ok: false, code: "IDEMPOTENCY_CONFLICT", message: "Idempotency-Key wajib 8-128 karakter" };
-  const current = await getPaymentRequest(paymentRequestId);
-  if (!current || !isMarketplaceRequest(current)) return { ok: false, code: "NOT_FOUND" };
-  if (current.mktLifecycleStatus !== "failed") return { ok: false, code: "INVALID_STATUS", currentStatus: current.mktLifecycleStatus, message: "Retry hanya setelah payment failed" };
   const result = await db.transaction(async (tx) => {
     const [locked] = await tx.select().from(paymentRequestsTable).where(eq(paymentRequestsTable.id, paymentRequestId)).for("update").limit(1);
-    if (!locked || locked.mktLifecycleStatus !== "failed") return { ok: false as const, code: "CONCURRENT_UPDATE" as const };
+    if (!locked || !isMarketplaceRequest(locked)) return { ok: false as const, code: "NOT_FOUND" as const };
     const [sameKey] = await tx.select().from(mktPaymentExecutionAttemptsTable).where(eq(mktPaymentExecutionAttemptsTable.idempotencyKey, idempotencyKey)).limit(1);
     if (sameKey) {
       if (sameKey.paymentRequestId !== paymentRequestId) return { ok: false as const, code: "IDEMPOTENCY_CONFLICT" as const };
       return { ok: true as const, paymentRequest: locked, attempt: sameKey, alreadyExists: true };
+    }
+    if (locked.mktLifecycleStatus !== "failed") {
+      return { ok: false as const, code: "INVALID_STATUS" as const, currentStatus: locked.mktLifecycleStatus, message: "Retry hanya setelah payment failed" };
     }
     const [last] = await tx.select({ attemptNumber: mktPaymentExecutionAttemptsTable.attemptNumber }).from(mktPaymentExecutionAttemptsTable).where(eq(mktPaymentExecutionAttemptsTable.paymentRequestId, paymentRequestId)).orderBy(desc(mktPaymentExecutionAttemptsTable.attemptNumber)).limit(1);
     const [attempt] = await tx.insert(mktPaymentExecutionAttemptsTable).values({
