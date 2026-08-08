@@ -332,11 +332,12 @@ export async function handoffMarketplacePaymentToAccounting(
   }
 
   if (!result.ok) {
+    const context = failureContext as { apPreparationId: number; mktPurchaseOrderId: number | null } | null;
     const message = result.message ?? failureMessage(result.code);
-    if (failureContext) {
+    if (context) {
       await auditFailure(
-        failureContext.apPreparationId,
-        failureContext.mktPurchaseOrderId,
+        context.apPreparationId,
+        context.mktPurchaseOrderId,
         actor,
         idempotencyKey,
         result.code,
@@ -346,12 +347,12 @@ export async function handoffMarketplacePaymentToAccounting(
         null,
         "marketplace_accounting_handoff_failed",
         {
-          apPreparationId: failureContext.apPreparationId,
+          apPreparationId: context.apPreparationId,
           paymentRequestId,
           code: result.code,
           message,
         },
-        `mkt_accounting_handoff_failed:${failureContext.apPreparationId}:${idempotencyKey}:${result.code}`,
+        `mkt_accounting_handoff_failed:${context.apPreparationId}:${idempotencyKey}:${result.code}`,
       );
     }
     return { ...result, message };
