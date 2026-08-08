@@ -3,6 +3,212 @@ import { sql } from "drizzle-orm";
 import { logger } from "../../lib/logger.js";
 import { pullLegacyBookingsFromSupabase, pullFacilitiesFromSupabase, pullPaymentsFromSupabase } from "./supabaseSync.js";
 
+/**
+ * The canonical Sport Center payment table lives in the Supabase
+ * `sport_center` schema.  The local/public payment row is deliberately owned
+ * by PostgreSQL so that a retried confirmation cannot create two accounting
+ * candidates.
+ *
+ * This is kept in the runtime migration (rather than only in a one-off SQL
+ * script) because the incremental worker refuses to INSERT a missing mirror.
+ * The guard below makes fresh/reset environments explicit: if the source
+ * schema is not present, we skip provisioning with a warning instead of
+ * creating a trigger that can never work.
+ */
+export async function ensureSportPaymentMirrorTrigger(): Promise<void> {
+  const requiredObjects = await db.execute(sql`
+    SELECT
+      EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'sport_center'
+          AND table_name = 'sport_payments'
+      ) AS source_payments_exists,
+      EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'sport_center'
+          AND table_name = 'sport_bookings'
+      ) AS source_bookings_exists,
+      EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name = 'sport_payments'
+      ) AS public_payments_exists,
+      EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name = 'sport_bookings'
+      ) AS public_bookings_exists,
+      (
+        SELECT COUNT(*) = 8
+        FROM information_schema.columns
+        WHERE table_schema = 'sport_center'
+          AND table_name = 'sport_payments'
+          AND column_name IN (
+            'id', 'booking_id', 'amount', 'status',
+            'payment_method', 'payment_type', 'confirmed_at', 'created_at'
+          )
+      ) AS source_payment_columns_complete,
+      (
+        SELECT COUNT(*) = 2
+        FROM information_schema.columns
+        WHERE table_schema = 'sport_center'
+          AND table_name = 'sport_bookings'
+          AND column_name IN ('id', 'ppn_rate')
+      ) AS source_booking_columns_complete,
+      (
+        SELECT COUNT(*) = 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'sport_bookings'
+          AND column_name = 'sc_booking_id'
+      ) AS public_booking_columns_complete,
+      (
+        SELECT COUNT(*) = 12
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'sport_payments'
+          AND column_name IN (
+            'booking_id', 'payment_number', 'amount', 'method', 'status',
+            'paid_at', 'payment_type', 'tax_rate', 'tax_amount', 'source',
+            'posting_status', 'updated_at'
+          )
+      ) AS public_payment_columns_complete
+  `);
+
+  const objects = requiredObjects.rows[0] as Record<string, boolean> | undefined;
+  const ready =
+    objects?.source_payments_exists === true &&
+    objects.source_bookings_exists === true &&
+    objects.public_payments_exists === true &&
+    objects.public_bookings_exists === true &&
+    objects.source_payment_columns_complete === true &&
+    objects.source_booking_columns_complete === true &&
+    objects.public_booking_columns_complete === true &&
+    objects.public_payment_columns_complete === true;
+
+  if (!ready) {
+    logger.warn(
+      { objects },
+      "Sport Center payment mirror trigger: schema/kolom wajib belum tersedia — provisioning dilewati",
+    );
+    return;
+  }
+
+  // The trigger uses this key as its idempotency boundary.  Let a duplicate
+  // existing value fail loudly instead of silently weakening the guarantee.
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_sport_payments_payment_number
+      ON public.sport_payments(payment_number)
+  `);
+
+  await db.execute(sql`
+    CREATE OR REPLACE FUNCTION sport_center.mirror_confirmed_payment_to_public()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'sport_center', 'public'
+    AS $function$
+    DECLARE
+      v_public_booking_id integer;
+      v_booking_tax_rate numeric;
+      v_payment_number text;
+    BEGIN
+      IF NEW.status::text <> 'confirmed' THEN
+        RETURN NEW;
+      END IF;
+
+      v_payment_number := 'SCPAY-SC-' || NEW.id::text;
+
+      SELECT pb.id
+        INTO v_public_booking_id
+        FROM public.sport_bookings pb
+       WHERE pb.sc_booking_id = NEW.booking_id
+       ORDER BY pb.id DESC
+       LIMIT 1;
+
+      SELECT sb.ppn_rate
+        INTO v_booking_tax_rate
+        FROM sport_center.sport_bookings sb
+       WHERE sb.id = NEW.booking_id;
+
+      INSERT INTO public.sport_payments
+        (booking_id, payment_number, amount, method, status, paid_at,
+         payment_type, tax_rate, tax_amount, source, posting_status,
+         created_at, updated_at)
+      VALUES
+        (v_public_booking_id,
+         v_payment_number,
+         NEW.amount,
+         COALESCE(NEW.payment_method, 'Transfer Bank'),
+         'paid',
+         COALESCE(NEW.confirmed_at, NEW.created_at),
+         COALESCE(NEW.payment_type::text, 'full_payment'),
+         COALESCE(v_booking_tax_rate, 0),
+         0,
+         'SPORT_CENTER_SUPABASE',
+         'unposted',
+         NEW.created_at,
+         now())
+      ON CONFLICT (payment_number) DO UPDATE
+        SET booking_id = COALESCE(public.sport_payments.booking_id, EXCLUDED.booking_id),
+            amount = CASE
+              WHEN public.sport_payments.posting_status IN ('unposted', 'failed')
+                THEN EXCLUDED.amount
+              ELSE public.sport_payments.amount
+            END,
+            method = CASE
+              WHEN public.sport_payments.posting_status IN ('unposted', 'failed')
+                THEN EXCLUDED.method
+              ELSE public.sport_payments.method
+            END,
+            paid_at = CASE
+              WHEN public.sport_payments.posting_status IN ('unposted', 'failed')
+                THEN EXCLUDED.paid_at
+              ELSE public.sport_payments.paid_at
+            END,
+            payment_type = CASE
+              WHEN public.sport_payments.posting_status IN ('unposted', 'failed')
+                THEN EXCLUDED.payment_type
+              ELSE public.sport_payments.payment_type
+            END,
+            tax_rate = CASE
+              WHEN public.sport_payments.posting_status IN ('unposted', 'failed')
+                THEN EXCLUDED.tax_rate
+              ELSE public.sport_payments.tax_rate
+            END,
+            updated_at = now();
+
+      RETURN NEW;
+    END;
+    $function$
+  `);
+
+  // CREATE TRIGGER has no IF NOT EXISTS. Recreate this named trigger on every
+  // migration run so an old definition cannot survive a code/schema upgrade.
+  await db.execute(sql`
+    DO $migration$
+    BEGIN
+      EXECUTE 'DROP TRIGGER IF EXISTS trg_mirror_confirmed_payment_to_public
+               ON sport_center.sport_payments';
+      EXECUTE 'CREATE TRIGGER trg_mirror_confirmed_payment_to_public
+               AFTER INSERT OR UPDATE OF status, amount, payment_method, payment_type, confirmed_at
+               ON sport_center.sport_payments
+               FOR EACH ROW
+               WHEN (NEW.status::text = ''confirmed'')
+               EXECUTE FUNCTION sport_center.mirror_confirmed_payment_to_public()';
+    END;
+    $migration$
+  `);
+
+  logger.info(
+    "Sport Center payment mirror trigger: function, unique idempotency index, dan trigger aktif",
+  );
+}
+
 export async function runSportCenterMigration(): Promise<void> {
   try {
     await db.execute(sql`
@@ -549,6 +755,10 @@ export async function runSportCenterMigration(): Promise<void> {
       ALTER TABLE sport_bookings ADD COLUMN IF NOT EXISTS sc_booking_id INTEGER;
       CREATE INDEX IF NOT EXISTS idx_sport_bookings_sc_id ON sport_bookings(sc_booking_id) WHERE sc_booking_id IS NOT NULL;
     `);
+
+    // PostgreSQL owns mirrors from sport_center.sport_payments.  This must run
+    // after both local payment/booking schemas are ready.
+    await ensureSportPaymentMirrorTrigger();
 
     // ── FASE 6C: facility_id + expense_category di accounting_entries ──────────
     await db.execute(sql`
