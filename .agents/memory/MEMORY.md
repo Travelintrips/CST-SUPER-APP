@@ -29,6 +29,7 @@
 - [QRIS settlement matching](qris-settlement-matching.md) — QRIS reconciliation needs provider/reference, gross-net fee handling, and a matcher path that includes Sport Center payments.
 - [Sport payment trigger provenance](sport-payment-trigger-provenance.md) — mirror trigger is verified in Supabase runtime but not defined in the current repository migration chain.
 - [Sport payment reconciliation](sport-payment-reconciliation-canonical.md) — sport_payments is the canonical candidate; accounting_payments only links the existing journal.
+- [Sport payment legacy cleanup](sport-payment-legacy-cleanup.md) — production SCPAY cleanup needs runtime Supabase schema introspection and a guarded delete that preserves posted rows.
 - [Reconciliation source uniqueness](reconciliation-source-uniqueness.md) — one payment source may reconcile to only one ledger line, enforced server-side for concurrent auto-match safety.
 - [Marketplace invoice upload idempotency](marketplace-invoice-upload-idempotency.md) — hapus attachment private baru pada duplicate/failure; hanya pertahankan setelah invoice baru commit.
 - [Bank recon SQL column audit](bank-recon-sql-column-audit.md) — candidateDetailsSql had wrong column names on 4 tables; UNION ALL type mismatch (ENUM vs TEXT); Drizzle hides real error in e.cause?.message; DROP VIEW before CREATE OR REPLACE VIEW.
