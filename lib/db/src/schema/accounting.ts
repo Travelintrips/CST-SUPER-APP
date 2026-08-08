@@ -145,6 +145,11 @@ export const accountingPaymentStatusEnum = pgEnum("accounting_payment_status", [
   "approved",
   "rejected",
 ]);
+export const reconciliationStatusEnum = pgEnum("reconciliation_status", [
+  "unreconciled",
+  "suggested",
+  "reconciled",
+]);
 
 export const chartOfAccountsTable = pgTable("chart_of_accounts", {
   id: serial("id").primaryKey(),
@@ -378,6 +383,15 @@ export const accountingSettingsTable = pgTable("accounting_settings", {
     () => accountingJournalsTable.id,
     { onDelete: "set null" },
   ),
+  /** Dedicated clearing/bank account and journal for QRIS receipts. */
+  qrisAccountId: integer("qris_account_id").references(
+    () => chartOfAccountsTable.id,
+    { onDelete: "set null" },
+  ),
+  qrisJournalId: integer("qris_journal_id").references(
+    () => accountingJournalsTable.id,
+    { onDelete: "set null" },
+  ),
   cashJournalId: integer("cash_journal_id").references(
     () => accountingJournalsTable.id,
     { onDelete: "set null" },
@@ -447,6 +461,39 @@ export const accountingSettingsTable = pgTable("accounting_settings", {
   ),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
+
+/**
+ * Server-side reconciliation state for a ledger line.
+ *
+ * The source columns are intentionally polymorphic: reconciliation candidates
+ * come from accounting_payments, Paylabs payments, or Sport Center payments.
+ * Keeping the relation here avoids adding a foreign key to one particular
+ * payment module and preserves an audit-friendly snapshot of the match.
+ */
+export const accountingReconciliationsTable = pgTable("accounting_reconciliations", {
+  id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull(),
+  lineId: integer("line_id")
+    .notNull()
+    .references(() => accountingEntryLinesTable.id, { onDelete: "cascade" }),
+  status: reconciliationStatusEnum("status").notNull().default("unreconciled"),
+  matchSourceType: text("match_source_type"),
+  matchSourceId: integer("match_source_id"),
+  matchMethod: text("match_method"),
+  matchScore: numeric("match_score", { precision: 5, scale: 2 }),
+  matchDetails: jsonb("match_details"),
+  reconciledBy: text("reconciled_by"),
+  reconciledAt: timestamp("reconciled_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  lineUniq: uniqueIndex("accounting_reconciliations_line_uniq").on(t.lineId),
+  companyStatusIdx: index("accounting_reconciliations_company_status_idx").on(t.companyId, t.status),
+  sourceIdx: index("accounting_reconciliations_source_idx").on(t.matchSourceType, t.matchSourceId),
+  reconciledSourceUniq: uniqueIndex("accounting_reconciliations_reconciled_source_uniq")
+    .on(t.companyId, t.matchSourceType, t.matchSourceId)
+    .where(drizzleSql`${t.status} = 'reconciled' AND ${t.matchSourceType} IS NOT NULL AND ${t.matchSourceId} IS NOT NULL`),
+}));
 
 export const accountingPaymentsTable = pgTable("accounting_payments", {
   id: serial("id").primaryKey(),
@@ -568,6 +615,7 @@ export type AccountingJournal = typeof accountingJournalsTable.$inferSelect;
 export type AccountingTax = typeof accountingTaxesTable.$inferSelect;
 export type AccountingEntry = typeof accountingEntriesTable.$inferSelect;
 export type AccountingEntryLine = typeof accountingEntryLinesTable.$inferSelect;
+export type AccountingReconciliation = typeof accountingReconciliationsTable.$inferSelect;
 export type AccountingSettings = typeof accountingSettingsTable.$inferSelect;
 export type AccountingPayment = typeof accountingPaymentsTable.$inferSelect;
 export type CostCenter = typeof costCentersTable.$inferSelect;

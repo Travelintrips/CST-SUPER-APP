@@ -434,6 +434,7 @@ interface Candidate {
   order_id_match: boolean;
   proof_match: boolean;
   status: string;
+  customer_name?: string | null;
   details?: CandidateDetails | null;
 }
 
@@ -450,6 +451,27 @@ interface CandidateDetails {
   sourceType?: string | null;
   bookingId?: number | null;
   documentType?: string | null;
+  grossAmount?: number | string | null;
+  mdrAmount?: number | string | null;
+  taxWithheldAmount?: number | string | null;
+  otherFeeAmount?: number | string | null;
+  netAmount?: number | string | null;
+  settlementDate?: string | null;
+  settlementReference?: string | null;
+  settlementStatus?: string | null;
+  settlementPartial?: boolean;
+  settlementItemCount?: number | null;
+  settlementItems?: Array<{
+    id?: number;
+    sportPaymentId?: number;
+    paymentNumber?: string | null;
+    bookingId?: number | null;
+    grossAmount?: number | string | null;
+    mdrAmount?: number | string | null;
+    taxWithheldAmount?: number | string | null;
+    otherFeeAmount?: number | string | null;
+    netAmount?: number | string | null;
+  }>;
 }
 
 interface JournalLine {
@@ -512,6 +534,7 @@ const CANDIDATE_TYPE_LABELS: Record<string, string> = {
   invoice: "Invoice",
   expense: "Expense",
   sport_payment: "Sport",
+  qris_settlement: "QRIS Settlement",
   tenant_invoice: "Tenant Invoice",
   vendor_payment: "Vendor Payment",
   kasbon: "Kasbon",
@@ -609,10 +632,19 @@ function CandidateDetailsBlock({
 
   const rows = [
     { label: "Nominal", value: d.amount != null ? idr(d.amount) : null },
+    { label: "Gross payment", value: d.grossAmount != null ? idr(d.grossAmount) : null },
+    { label: "MDR", value: d.mdrAmount != null ? idr(d.mdrAmount) : null },
+    { label: "Pajak provider", value: d.taxWithheldAmount != null ? idr(d.taxWithheldAmount) : null },
+    { label: "Potongan provider lain", value: d.otherFeeAmount != null ? idr(d.otherFeeAmount) : null },
+    { label: "Net settlement", value: d.netAmount != null ? idr(d.netAmount) : null },
     { label: "Tanggal", value: d.date ? fmtDate(String(d.date)) : null },
+    { label: "Tanggal settlement", value: d.settlementDate ? fmtDate(String(d.settlementDate)) : null },
+    { label: "Status settlement", value: d.settlementStatus },
     { label: "Nama / Partner", value: d.name },
     { label: "No. Pembayaran", value: d.paymentNumber },
     { label: "Referensi", value: d.reference },
+    { label: "Referensi settlement", value: d.settlementReference },
+    { label: "Jumlah transaksi settlement", value: d.settlementItemCount },
     { label: "Metode", value: d.method },
     { label: "Tipe", value: d.paymentType ?? d.documentType },
     { label: "Status", value: d.status },
@@ -626,6 +658,43 @@ function CandidateDetailsBlock({
       <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
         Detail transaksi sumber
       </p>
+      {d.settlementPartial && (
+        <p className="text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+          Settlement QRIS PARTIAL — hanya sebagian dana/provider batch yang sudah tersettle; perlu review sebelum dianggap lunas.
+        </p>
+      )}
+      {d.settlementItems && d.settlementItems.length > 0 && (
+        <div className="border-t pt-1.5 mt-1.5 space-y-1.5">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Rincian payment settlement
+          </p>
+          <div className="space-y-1">
+            {d.settlementItems.map((item, index) => (
+              <div
+                key={item.id ?? item.sportPaymentId ?? index}
+                className="rounded border bg-background/70 px-2 py-1.5 text-[10px]"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium">
+                    {item.paymentNumber ?? `Payment #${item.sportPaymentId ?? "—"}`}
+                  </span>
+                  {item.bookingId != null && (
+                    <span className="text-muted-foreground">Booking #{item.bookingId}</span>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-2 gap-y-0.5 mt-1 text-muted-foreground">
+                  <span>Gross: <b className="text-foreground">{item.grossAmount != null ? idr(item.grossAmount) : "—"}</b></span>
+                  <span>MDR: <b className="text-foreground">{item.mdrAmount != null ? idr(item.mdrAmount) : "—"}</b></span>
+                  <span>Pajak/fee: <b className="text-foreground">
+                    {idr(Number(item.taxWithheldAmount ?? 0) + Number(item.otherFeeAmount ?? 0))}
+                  </b></span>
+                  <span>Net: <b className="text-foreground">{item.netAmount != null ? idr(item.netAmount) : "—"}</b></span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className={`grid ${compact ? "grid-cols-1" : "grid-cols-[auto_1fr]"} gap-x-3 gap-y-1`}>
         {rows.map(row => (
           <React.Fragment key={row.label}>
@@ -1736,6 +1805,19 @@ function MutationDetailPanel({
                         </Badge>
                         <ScoreBadge score={c.match_score} />
                       </div>
+                      {/* Identitas kandidat — selalu tampil jika ada */}
+                      {(c.details?.name || c.customer_name || c.details?.reference || c.details?.date) && (
+                        <div className="text-xs rounded bg-muted/50 px-2 py-1.5 space-y-0.5">
+                          {(c.details?.name || c.customer_name) && (
+                            <p className="font-semibold text-foreground">{c.details?.name ?? c.customer_name}</p>
+                          )}
+                          <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-muted-foreground">
+                            {c.details?.date      && <span>📅 {fmtDate(String(c.details.date))}</span>}
+                            {c.details?.reference && <span>🔖 {c.details.reference}</span>}
+                            {c.details?.amount != null && <span>💰 {idr(c.details.amount)}</span>}
+                          </div>
+                        </div>
+                      )}
                       <p className="text-xs text-muted-foreground">{c.match_reason}</p>
                       <div className="flex flex-wrap gap-1">
                         {c.amount_match   && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950/30 px-1.5 py-0.5 rounded">✓ Nominal</span>}
@@ -2695,6 +2777,19 @@ export default function BankReconciliationPage() {
                         </span>
                         <ScoreBadge score={c.match_score} />
                       </div>
+                      {/* Identitas kandidat — selalu tampil jika ada */}
+                      {(c.details?.name || c.customer_name || c.details?.reference || c.details?.date) && (
+                        <div className="text-xs rounded bg-muted/50 px-2 py-1.5 space-y-0.5">
+                          {(c.details?.name || c.customer_name) && (
+                            <p className="font-semibold text-foreground">{c.details?.name ?? c.customer_name}</p>
+                          )}
+                          <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-muted-foreground">
+                            {c.details?.date      && <span>📅 {fmtDate(String(c.details.date))}</span>}
+                            {c.details?.reference && <span>🔖 {c.details.reference}</span>}
+                            {c.details?.amount != null && <span>💰 {idr(c.details.amount)}</span>}
+                          </div>
+                        </div>
+                      )}
                       <p className="text-xs text-muted-foreground">{c.match_reason}</p>
                       <div className="flex gap-1.5 mt-1 flex-wrap">
                         {c.amount_match   && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950/30 px-1.5 py-0.5 rounded">✓ Nominal</span>}

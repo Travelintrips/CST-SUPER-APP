@@ -211,6 +211,8 @@ export async function runAccountingHubMigration(): Promise<void> {
     `);
 
     // ── 9. View: accounting_payments_v ────────────────────────────────────────
+    // DROP first so column renames / reordering don't block CREATE OR REPLACE
+    await db.execute(sql`DROP VIEW IF EXISTS accounting_payments_v`).catch(() => {});
     await db.execute(sql`
       CREATE OR REPLACE VIEW accounting_payments_v AS
       SELECT

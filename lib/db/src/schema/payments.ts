@@ -20,6 +20,8 @@ export const paymentsTable = pgTable("payments", {
   amount: numeric("amount", { precision: 14, scale: 2 }).notNull(),
   status: paymentStatusEnum("status").notNull().default("pending"),
   provider: paymentProviderEnum("provider").notNull().default("paylabs"),
+  /** Metode pembayaran yang dipilih di provider, mis. qris, transfer, atau cash. */
+  paymentMethod: text("payment_method"),
   providerOrderId: text("provider_order_id"),
   providerMerchantTradeNo: text("provider_merchant_trade_no").notNull().unique(),
   paymentUrl: text("payment_url"),
@@ -31,6 +33,8 @@ export const paymentsTable = pgTable("payments", {
 }, (t) => [
   index("payments_company_idx").on(t.companyId),
   index("payments_ref_idx").on(t.refKind, t.refId),
+  index("payments_paid_at_idx").on(t.paidAt),
+  index("payments_status_paid_at_idx").on(t.status, t.paidAt),
 ]);
 
 export type Payment = typeof paymentsTable.$inferSelect;

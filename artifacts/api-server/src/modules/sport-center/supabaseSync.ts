@@ -1,7 +1,7 @@
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { notifySyncError } from "./sportSyncNotifier.js";
-import { postSportCenterBooking } from "../../lib/accounting.js";
+import { normalizePaymentMethod, resolvePaymentDestination, postSportCenterBooking } from "../../lib/accounting.js";
 
 const PREFIX = "[SportSync]";
 
@@ -598,7 +598,8 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
   let errors = 0;
 
   const settingsRes = await db.execute(sql`
-    SELECT cash_journal_id, bank_journal_id FROM accounting_settings WHERE company_id = ${companyId} LIMIT 1
+    SELECT cash_journal_id, bank_journal_id, qris_journal_id, qris_account_id
+    FROM accounting_settings WHERE company_id = ${companyId} LIMIT 1
   `).catch(() => ({ rows: [] }));
   const settings = settingsRes.rows[0] as any;
 
@@ -618,7 +619,7 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
         // Sport Center, termasuk bila payment sudah pernah diposting.
         await db.execute(sql`
           UPDATE accounting_payments
-          SET payment_method = ${row.method ?? "cash"}
+          SET payment_method = ${normalizePaymentMethod(row.method) ?? "cash"}
           WHERE id = ${existingRow.id}
         `).catch(() => {});
         // Jika entry_id belum terhubung, coba link sekarang
@@ -651,6 +652,7 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
           // Gunakan total_amount dari booking (harga fasilitas) — bukan sp.amount
           // yang bisa berbeda jika pembayaran dicatat dengan PPN ditambahkan di luar
           totalPrice: Number(row.booking_total_amount ?? row.amount),
+          paymentMethod: normalizePaymentMethod(row.method),
           companyId: row.bk_company_id ?? companyId,
         });
       } catch (postErr) {
@@ -671,10 +673,13 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
       const seq = Number((cntRes.rows[0] as any)?.seq ?? 0);
       const acctPayNumber = `SCPAY/${year}/${(seq + 1).toString().padStart(4, "0")}`;
 
-      const isCash = ["cash", "tunai", "cash on hand"].includes((row.method ?? "").toLowerCase());
-      const journalId = isCash
-        ? (settings?.cash_journal_id ?? settings?.bank_journal_id ?? null)
-        : (settings?.bank_journal_id ?? settings?.cash_journal_id ?? null);
+      const destination = resolvePaymentDestination(row.method, {
+        cashJournalId: settings?.cash_journal_id ?? null,
+        bankJournalId: settings?.bank_journal_id ?? null,
+        qrisJournalId: settings?.qris_journal_id ?? null,
+        qrisAccountId: settings?.qris_account_id ?? null,
+      });
+      const { paymentMethod, journalId } = destination;
 
       const insertRes = await db.execute(sql`
         INSERT INTO accounting_payments
@@ -684,7 +689,7 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
           (${companyId}, ${acctPayNumber}, 'inbound', 'posted', ${String(Number(row.amount))},
            ${journalId ?? null}, ${row.customer_name ?? "Customer"}, ${payDate}::date,
            ${row.booking_number}, ${'Sport Center: ' + row.booking_number},
-           ${row.method ?? "cash"},
+            ${paymentMethod},
            'sport_center', ${row.sp_id}, ${entryId})
         ON CONFLICT DO NOTHING
         RETURNING id
@@ -744,6 +749,27 @@ export async function pullPaymentsFromSupabase(companyId = 1): Promise<{ pulled:
     return { pulled: 0, deleted: 0, skipped: 0, errors: 1, total: 0 };
   }
 
+  // Provider settlement fields are optional in older Sport Center databases.
+  // Fetch them separately so an older schema does not disable the whole payment
+  // sync; when present, they are copied to the local reconciliation mirror.
+  const settlementMeta = new Map<number, {
+    mdr_rate?: number | null;
+    mdr_amount?: number | null;
+    tax_withheld_amount?: number | null;
+    other_fee_amount?: number | null;
+    settlement_reference?: string | null;
+    settlement_date?: string | null;
+    settlement_status?: string | null;
+  }>();
+  const settlementMetaRes = await (client as any).schema("sport_center")
+    .from("sport_payments")
+    .select("id, mdr_rate, mdr_amount, tax_withheld_amount, other_fee_amount, settlement_reference, settlement_date, settlement_status");
+  if (!settlementMetaRes.error) {
+    for (const row of (settlementMetaRes.data ?? []) as any[]) {
+      settlementMeta.set(Number(row.id), row);
+    }
+  }
+
   const allPayments = (paymentsRes.data ?? []) as Array<{
     id: number; booking_id: number; amount: number;
     payment_method: string | null; status: string | null;
@@ -794,7 +820,8 @@ export async function pullPaymentsFromSupabase(companyId = 1): Promise<{ pulled:
         const existingMethod = existingRow.method;
         const statusRaw2 = pay.status?.toLowerCase() ?? "";
         const mappedStatus2 = PAID_STATUSES.has(statusRaw2) ? "paid" : (UNPAID_STATUSES.has(statusRaw2) ? "pending" : "paid");
-        const mappedMethod2 = String(pay.payment_method ?? "cash").trim().toLowerCase() || "cash";
+        const mappedMethod2 = normalizePaymentMethod(pay.payment_method) ?? "cash";
+      const meta2 = settlementMeta.get(Number(pay.id)) ?? {};
 
         // Selalu update payment record dari Supabase (status terbaru menimpa)
         if (existingStatus !== mappedStatus2) {
@@ -807,7 +834,21 @@ export async function pullPaymentsFromSupabase(companyId = 1): Promise<{ pulled:
           UPDATE sport_payments SET
             status   = ${mappedStatus2},
             amount   = ${String(Number(pay.amount))},
-            method   = ${mappedMethod2}
+            method   = ${mappedMethod2},
+            mdr_rate = COALESCE(${meta2.mdr_rate ?? null}, mdr_rate),
+            mdr_amount = COALESCE(${meta2.mdr_amount ?? null}, mdr_amount),
+            tax_withheld_amount = COALESCE(${meta2.tax_withheld_amount ?? null}, tax_withheld_amount),
+            other_fee_amount = COALESCE(${meta2.other_fee_amount ?? null}, other_fee_amount),
+            settlement_reference = COALESCE(${meta2.settlement_reference ?? null}, settlement_reference),
+            settlement_date = COALESCE(${meta2.settlement_date ?? null}::date, settlement_date),
+            settlement_status = COALESCE(${meta2.settlement_status ?? null}, settlement_status),
+            net_amount = GREATEST(
+              0,
+              ${String(Number(pay.amount))}
+              - COALESCE(${meta2.mdr_amount ?? null}, mdr_amount)
+              - COALESCE(${meta2.tax_withheld_amount ?? null}, tax_withheld_amount)
+              - COALESCE(${meta2.other_fee_amount ?? null}, other_fee_amount)
+            )
           WHERE payment_number = ${scPaymentNumber}
         `);
 
@@ -875,16 +916,28 @@ export async function pullPaymentsFromSupabase(companyId = 1): Promise<{ pulled:
       const statusRaw = pay.status?.toLowerCase() ?? "";
       const mappedStatus = PAID_STATUSES.has(statusRaw) ? "paid" : (UNPAID_STATUSES.has(statusRaw) ? "pending" : "paid");
       const paidAt = pay.confirmed_at ?? pay.created_at ?? new Date().toISOString();
-      const method = pay.payment_method ?? "cash";
+      const method = normalizePaymentMethod(pay.payment_method) ?? "cash";
+      const meta = settlementMeta.get(Number(pay.id)) ?? {};
 
       await db.execute(sql`
         INSERT INTO sport_payments
           (company_id, booking_id, payment_number, amount, method, status,
-           paid_at, source, payment_type)
+           paid_at, source, payment_type, mdr_rate, mdr_amount,
+           tax_withheld_amount, other_fee_amount, net_amount,
+           settlement_reference, settlement_date, settlement_status)
         VALUES
           (${companyId}, ${localBookingId}, ${scPaymentNumber}, ${String(Number(pay.amount))},
            ${method}, ${mappedStatus}, ${paidAt}::TIMESTAMPTZ,
-           'SPORT_CENTER_SUPABASE', 'booking')
+           'SPORT_CENTER_SUPABASE', 'booking',
+           ${meta.mdr_rate ?? 0}, ${meta.mdr_amount ?? 0},
+           ${meta.tax_withheld_amount ?? 0}, ${meta.other_fee_amount ?? 0},
+           GREATEST(0, ${String(Number(pay.amount))}
+             - ${meta.mdr_amount ?? 0}
+             - ${meta.tax_withheld_amount ?? 0}
+             - ${meta.other_fee_amount ?? 0}),
+           ${meta.settlement_reference ?? null},
+           ${meta.settlement_date ?? null}::date,
+           ${meta.settlement_status ?? "unsettled"})
       `);
 
       // Update payment_status di sport_bookings jika status = paid
@@ -912,6 +965,7 @@ export async function pullPaymentsFromSupabase(companyId = 1): Promise<{ pulled:
           facilityName: bkInfo?.facility_name ?? "Sport Center",
           date: (paidAt ?? new Date().toISOString()).slice(0, 10),
           totalPrice: journalAmount,
+          paymentMethod: normalizePaymentMethod(method),
           companyId: bkInfo?.company_id ?? companyId,
         }).catch((err: unknown) => console.error(`${PREFIX} postSportCenterBooking gagal pay.id=${pay.id}:`, err));
       }
@@ -1491,7 +1545,7 @@ export async function pullTenantPaymentsFromSportCenter(
       const payDate = (tp.paid_at ?? tp.created_at ?? "").split("T")[0]
         ?? new Date().toISOString().split("T")[0]!;
       const amt = Math.round(Number(tp.amount) * 100) / 100;
-      const method = tp.payment_method ?? "tunai";
+      const method = normalizePaymentMethod(tp.payment_method) ?? "cash";
 
       await db.execute(sql`
         INSERT INTO tenant_payments
@@ -1551,21 +1605,18 @@ export async function syncTenantPaymentsFromSportCenter(
   let errors = 0;
 
   const settingsRes = await db.execute(sql`
-    SELECT cash_journal_id, bank_journal_id, default_cash_account_id, default_bank_account_id,
+    SELECT cash_journal_id, bank_journal_id, qris_journal_id, qris_account_id,
+           default_cash_account_id, default_bank_account_id,
            sales_income_account_id
     FROM accounting_settings WHERE company_id = ${companyId} LIMIT 1
   `).catch(() => ({ rows: [] }));
   const settings = (settingsRes.rows[0] as any) ?? {};
-  const journalId = settings.cash_journal_id ?? settings.bank_journal_id;
-  const debitAccountId = settings.default_cash_account_id ?? settings.default_bank_account_id;
   const creditAccountId = settings.sales_income_account_id;
 
-  if (!journalId || !debitAccountId || !creditAccountId) {
-    console.warn(`${PREFIX} syncTenantPaymentsFromSportCenter: akun/jurnal akuntansi belum dikonfigurasi — skip`);
+  if (!creditAccountId) {
+    console.warn(`${PREFIX} syncTenantPaymentsFromSportCenter: akun pendapatan belum dikonfigurasi — skip`);
     return { synced: 0, skipped: payments.length, errors: 0 };
   }
-
-  const journalCode = settings.cash_journal_id ? "CSH" : "BNK";
 
   for (const tp of payments as Array<{
     id: number; company_id: number; tenant_id: number | null;
@@ -1588,6 +1639,19 @@ export async function syncTenantPaymentsFromSportCenter(
       const seq = Number((cntRes.rows[0] as any)?.seq ?? 0);
       const payNum = tp.payment_number ?? `TCPAY/${year}/${(seq + 1).toString().padStart(4, "0")}`;
       const amt = Math.round(Number(tp.amount) * 100) / 100;
+      const paymentMethod = normalizePaymentMethod(tp.payment_method) ?? "cash";
+      const destination = resolvePaymentDestination(paymentMethod, {
+        defaultCashAccountId: settings.default_cash_account_id ?? null,
+        defaultBankAccountId: settings.default_bank_account_id ?? null,
+        qrisAccountId: settings.qris_account_id ?? null,
+        cashJournalId: settings.cash_journal_id ?? null,
+        bankJournalId: settings.bank_journal_id ?? null,
+        qrisJournalId: settings.qris_journal_id ?? null,
+      });
+      const { accountId: debitAccountId, journalId, journalCode } = destination;
+      if (!journalId || !debitAccountId) {
+        throw new Error(`ACCOUNTING_CONFIG_INCOMPLETE: journal/account missing for payment method=${paymentMethod}`);
+      }
 
       // 1. Insert accounting_payments
       await db.execute(sql`
@@ -1596,7 +1660,7 @@ export async function syncTenantPaymentsFromSportCenter(
            payment_method, partner_name, journal_id, created_at, updated_at)
         VALUES
           (${companyId}, ${payNum}, ${payDate}::date, ${amt}, 'tenant_sc', ${tp.id},
-           'posted', ${tp.payment_method ?? "tunai"}, 'Tenant #' || COALESCE(${tp.tenant_id}::text, '?'),
+           'posted', ${paymentMethod}, 'Tenant #' || COALESCE(${tp.tenant_id}::text, '?'),
            ${journalId}, NOW(), NOW())
         ON CONFLICT DO NOTHING
       `);
@@ -1620,6 +1684,7 @@ export async function syncTenantPaymentsFromSportCenter(
             date: new Date(payDate),
             ref: payNum,
             description: `Pembayaran Sewa Tenant #${tp.tenant_id ?? "?"} (${payNum})`,
+            paymentMethod,
             source: "tenant_rent_payment",
             sourceId: tp.id,
             createdById: null,

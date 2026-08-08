@@ -831,6 +831,38 @@ async function lookupExistingEntry(
   switch (candidateType) {
     case "sport_payment":
       return resolveSportPaymentEntry(client, companyId, candidateId);
+    case "qris_settlement": {
+      // A settlement aggregate is not itself a revenue event. Reuse is only
+      // safe when a dedicated settlement journal was explicitly created.
+      const companyFilter = companyId != null ? `AND ae.company_id = ${companyId}` : "";
+      const { rows } = await client.execute(sql.raw(`
+        SELECT ae.id, ae.entry_number, ae.status, ae.company_id, ae.total_debit,
+               COALESCE(ae.is_voided, FALSE) AS is_voided,
+               COALESCE(ae.is_reversed, FALSE) AS is_reversed,
+               bm_linked.id AS reconciled_mutation_id
+        FROM accounting_entries ae
+        LEFT JOIN bank_mutations bm_linked
+          ON bm_linked.journal_entry_id = ae.id
+         AND bm_linked.status IN ('approved', 'posted')
+        WHERE ae.source = 'qris_settlement'
+          AND ae.source_id = ${candidateId}
+          ${companyFilter}
+        ORDER BY ae.id DESC
+        LIMIT 1
+      `));
+      if (!rows[0]) return null;
+      const r = rows[0] as Record<string, unknown>;
+      return {
+        id: Number(r.id),
+        entryNumber: String(r.entry_number ?? ""),
+        status: String(r.status ?? ""),
+        companyId: r.company_id != null ? Number(r.company_id) : null,
+        totalDebit: Number(r.total_debit ?? 0),
+        isVoided: Boolean(r.is_voided),
+        isReversed: Boolean(r.is_reversed),
+        reconciledMutationId: r.reconciled_mutation_id != null ? Number(r.reconciled_mutation_id) : null,
+      };
+    }
     case "accounting_payment":
       return resolveAccountingPaymentEntry(client, companyId, candidateId);
     case "invoice":

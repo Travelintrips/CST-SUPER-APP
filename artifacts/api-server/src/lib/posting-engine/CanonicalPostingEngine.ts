@@ -55,6 +55,7 @@ export class CanonicalPostingEngine {
       date: request.date,
       ref: request.ref ?? null,
       description: request.description ?? null,
+      paymentMethod: request.paymentMethod ?? null,
       source: request.source,
       sourceId: request.sourceId,
       companyId: request.companyId,

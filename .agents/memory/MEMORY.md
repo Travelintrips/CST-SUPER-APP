@@ -27,3 +27,11 @@
 - [Customer Portal bootstrap secrets](customer-portal-bootstrap-secrets.md) — Customer Portal startup invokes Secret Manager loader and fails closed when bootstrap credentials are unavailable.
 - [Activity log runtime schema](activity-log-runtime-schema.md) — Supabase dev activity_logs can lag the app schema and block marketplace E2E setup/cleanup.
 - [QRIS settlement matching](qris-settlement-matching.md) — QRIS reconciliation needs provider/reference, gross-net fee handling, and a matcher path that includes Sport Center payments.
+- [Sport payment reconciliation](sport-payment-reconciliation-canonical.md) — sport_payments is the canonical candidate; accounting_payments only links the existing journal.
+- [Reconciliation source uniqueness](reconciliation-source-uniqueness.md) — one payment source may reconcile to only one ledger line, enforced server-side for concurrent auto-match safety.
+- [Marketplace invoice upload idempotency](marketplace-invoice-upload-idempotency.md) — hapus attachment private baru pada duplicate/failure; hanya pertahankan setelah invoice baru commit.
+- [Bank recon SQL column audit](bank-recon-sql-column-audit.md) — candidateDetailsSql had wrong column names on 4 tables; UNION ALL type mismatch (ENUM vs TEXT); Drizzle hides real error in e.cause?.message; DROP VIEW before CREATE OR REPLACE VIEW.
+- [Sprint 7 runtime evidence](sprint7-runtime-evidence.md) — invoice lifecycle runtime E2E passes on dev DB; legacy quote harness imports unavailable declaration-only lib/db output.
+- [Sprint 9 cancellation policy](sprint9-cancellation-policy.md) — AP cancellation is allowed only before Treasury starts execution; later correction uses failure or reversal/refund workflows.
+- [Recon validation environment](recon-validation-environment.md) — restore with frozen pnpm lockfile and build shared declarations before API typecheck; two isolation tests require missing dev tables.
+- [Sprint 8 release decision evidence](sprint8-release-decision.md) — classify legacy cross-project regressions separately; only AP handoff-stage failures block Sprint 8.

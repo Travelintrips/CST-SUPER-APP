@@ -117,7 +117,14 @@ describe("Paylabs accounting consistency", () => {
       .mockResolvedValueOnce({ ...settings, defaultBankAccountId: null, bankJournalId: null } as never)
       .mockResolvedValueOnce(settings as never);
     const accounting = await import("../lib/accounting.js");
-    const args = { paymentId: 12, refKind: "sales" as const, refDocNumber: "PAY/12", amount: 100, companyId: 1 };
+    const args = {
+      paymentId: 12,
+      refKind: "sales" as const,
+      refDocNumber: "PAY/12",
+      amount: 100,
+      paymentMethod: "transfer",
+      companyId: 1,
+    };
     await expect(accounting.postPaymentReceived(args)).resolves.toBe(false);
     await expect(accounting.postPaymentReceived(args)).resolves.toBe(true);
   });
@@ -128,5 +135,29 @@ describe("Paylabs accounting consistency", () => {
     expect(isNewPaidTransition("pending", "paid")).toBe(true);
     expect(isNewPaidTransition("paid", "paid")).toBe(false);
     expect(isNewPaidTransition("failed", "paid")).toBe(true);
+  });
+
+  it("uses the dedicated QRIS destination and preserves the legacy fallback", async () => {
+    const { resolvePaymentDestination } = await import("../lib/accounting.js");
+    expect(resolvePaymentDestination("QRIS", {
+      defaultBankAccountId: 12,
+      bankJournalId: 16,
+      qrisAccountId: 22,
+      qrisJournalId: 26,
+    })).toMatchObject({
+      paymentMethod: "qris",
+      accountId: 22,
+      journalId: 26,
+      journalCode: "QRIS",
+    });
+    expect(resolvePaymentDestination("qris", {
+      defaultBankAccountId: 12,
+      bankJournalId: 16,
+    })).toMatchObject({
+      paymentMethod: "qris",
+      accountId: 12,
+      journalId: 16,
+      journalCode: "BNK",
+    });
   });
 });

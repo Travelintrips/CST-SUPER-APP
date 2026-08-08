@@ -1,6 +1,7 @@
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../../lib/logger.js";
+import { normalizePaymentMethod } from "../../lib/accounting.js";
 
 const PREFIX = "[SportIncrementalSync]";
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 menit
@@ -154,6 +155,19 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
     return 0;
   }
 
+  // Settlement columns were added after the original Sport Center schema.
+  // Keep this best-effort so an older source schema still syncs core payments.
+  const settlementMeta = new Map<number, any>();
+  const settlementMetaRes = await client
+    .schema("sport_center")
+    .from("sport_payments")
+    .select("id, mdr_rate, mdr_amount, tax_withheld_amount, other_fee_amount, settlement_reference, settlement_date, settlement_status");
+  if (!settlementMetaRes.error) {
+    for (const row of (settlementMetaRes.data ?? []) as any[]) {
+      settlementMeta.set(Number(row.id), row);
+    }
+  }
+
   const payments = (data ?? []) as Array<{
     id: number;
     booking_id: number | null;
@@ -172,9 +186,11 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
 
   for (const pay of payments) {
     const scPaymentNumber = `SCPAY-${pay.id}`;
+    const paymentMethod = normalizePaymentMethod(pay.payment_method) ?? "cash";
     const statusRaw = pay.status?.toLowerCase() ?? "";
     const mappedStatus = PAID_STATUSES.has(statusRaw) ? "paid" : "pending";
     const payDate = (pay.confirmed_at ?? pay.created_at ?? new Date().toISOString()).split("T")[0]!;
+    const meta = settlementMeta.get(Number(pay.id)) ?? {};
 
     try {
       // Resolve local booking_id via sc_booking_id link
@@ -188,16 +204,34 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
 
       await db.execute(sql`
         INSERT INTO sport_payments
-          (booking_id, payment_number, amount, method, status, paid_at, created_at, updated_at)
+        (booking_id, payment_number, amount, method, status, paid_at, created_at, updated_at,
+         mdr_rate, mdr_amount, tax_withheld_amount, other_fee_amount, net_amount,
+         settlement_reference, settlement_date, settlement_status)
         VALUES
           (${localBookingId}, ${scPaymentNumber}, ${String(Number(pay.amount))},
-           ${pay.payment_method ?? "cash"}, ${mappedStatus},
+            ${paymentMethod}, ${mappedStatus},
            ${payDate}::DATE,
-           ${pay.created_at ?? new Date().toISOString()}::TIMESTAMPTZ, NOW())
+           ${pay.created_at ?? new Date().toISOString()}::TIMESTAMPTZ, NOW(),
+           ${meta.mdr_rate ?? 0}, ${meta.mdr_amount ?? 0},
+           ${meta.tax_withheld_amount ?? 0}, ${meta.other_fee_amount ?? 0},
+           GREATEST(0, ${String(Number(pay.amount))}
+             - ${meta.mdr_amount ?? 0}
+             - ${meta.tax_withheld_amount ?? 0}
+             - ${meta.other_fee_amount ?? 0}),
+           ${meta.settlement_reference ?? null}, ${meta.settlement_date ?? null}::date,
+           ${meta.settlement_status ?? "unsettled"})
         ON CONFLICT (payment_number) DO UPDATE SET
           status     = EXCLUDED.status,
           amount     = EXCLUDED.amount,
           method     = EXCLUDED.method,
+          mdr_rate   = EXCLUDED.mdr_rate,
+          mdr_amount = EXCLUDED.mdr_amount,
+          tax_withheld_amount = EXCLUDED.tax_withheld_amount,
+          other_fee_amount = EXCLUDED.other_fee_amount,
+          net_amount = EXCLUDED.net_amount,
+          settlement_reference = EXCLUDED.settlement_reference,
+          settlement_date = EXCLUDED.settlement_date,
+          settlement_status = EXCLUDED.settlement_status,
           booking_id = COALESCE(sport_payments.booking_id, EXCLUDED.booking_id),
           updated_at = NOW()
       `);
@@ -206,7 +240,7 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
       // that were created before this incremental sync ran.
       await db.execute(sql`
         UPDATE accounting_payments ap
-        SET payment_method = ${pay.payment_method ?? "cash"}
+        SET payment_method = ${paymentMethod}
         WHERE ap.source_type = 'sport_center'
           AND ap.source_doc_id = (
             SELECT id FROM sport_payments

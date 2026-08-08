@@ -484,6 +484,7 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
         mutation_key: p.mutation_key, normalized_description: p.normalized_description,
         direction: p.direction,
         company_id,
+        provider_name: null,
       }, "sheet-sync");
     } catch (err: any) {
       logger.warn({ err: err.message, id }, "[sheetSync] Matching gagal (non-fatal)");

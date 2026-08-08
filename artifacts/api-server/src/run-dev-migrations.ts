@@ -13,6 +13,7 @@ import { runAccountingHubMigration } from "./lib/accountingHubMigration.js";
 import { runGuardMigration as runLedgerGuardMigration } from "./lib/accounting/ledgerGuard.js";
 import { runFreightAccountingMigration } from "./lib/freightAccountingMigration.js";
 import { runBankReconciliationCoreMigration } from "./routes/bankReconciliation.js";
+import { runQrisSettlementMigration } from "./lib/reconciliation/qrisSettlementMigration.js";
 import { runBankMutationMastersMigration } from "./routes/bankMutationMasters.js";
 import { runBankMutationImportMigration } from "./routes/bankMutationImport.js";
 import { runFinancialPeriodMigration } from "./lib/financialPeriodMigration.js";
@@ -33,6 +34,8 @@ import { runExpenseClassificationMigration } from "./lib/expenseClassificationMi
 import { runCostCenterMigration } from "./lib/costCenterMigration.js";
 import { runFreightAuditMigration } from "./lib/freightAuditMigration.js";
 import { runAuditFixMigration } from "./lib/auditFixMigration.js";
+import { runMktVendorInvoiceMigration } from "./lib/mktVendorInvoiceMigration.js";
+import { runMktApPreparationMigration } from "./lib/mktApPreparationMigration.js";
 import { seedAccountingDefaults, seedAdditionalTaxes, backfillExpenseCategoryAccounts } from "./lib/accountingSeed.js";
 
 // ── Core / Org / Auth migrations ─────────────────────────────────────────────
@@ -122,6 +125,7 @@ async function runSafe(name: string, fn: () => Promise<unknown>) {
 
 // Pre-startup: critical schema items (mirrors index.ts logic)
 async function runCriticalPreStartMigrations() {
+  await runMktApPreparationMigration();
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS wa_otp_codes (
       id SERIAL PRIMARY KEY, phone TEXT NOT NULL, code_hash TEXT NOT NULL,
@@ -212,6 +216,8 @@ async function main() {
   await runSafe("vendorCompanyAssignments", runVendorCompanyAssignmentsMigration);
   await runSafe("vendorCatalogSchema", runVendorCatalogSchemaMigration);
   await runSafe("featuredProduct", runFeaturedProductMigration);
+  await runSafe("marketplaceVendorInvoice", runMktVendorInvoiceMigration);
+  await runSafe("marketplaceApPreparation", runMktApPreparationMigration);
   await runSafe("logisticVendorFulfillments", runLogisticVendorFulfillmentsMigration);
   await runSafe("productFirstFlow", runProductFirstFlowMigration);
   await runSafe("step4Template", runStep4TemplateMigration);
@@ -248,6 +254,7 @@ async function main() {
   await runSafe("ledgerGuard", runLedgerGuardMigration);
   await runSafe("freightAccounting", runFreightAccountingMigration);
   await runSafe("bankReconciliationCore", runBankReconciliationCoreMigration);
+  await runSafe("qrisSettlement", runQrisSettlementMigration);
   await runSafe("bankMutationMasters", runBankMutationMastersMigration);
   await runSafe("bankMutationImport", runBankMutationImportMigration);
   await runSafe("financialPeriod", runFinancialPeriodMigration);

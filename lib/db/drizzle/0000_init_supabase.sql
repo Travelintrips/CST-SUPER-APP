@@ -417,6 +417,7 @@ CREATE TABLE "payments" (
 	"amount" numeric(14, 2) NOT NULL,
 	"status" "payment_status" DEFAULT 'pending' NOT NULL,
 	"provider" "payment_provider" DEFAULT 'paylabs' NOT NULL,
+	"payment_method" text,
 	"provider_order_id" text,
 	"provider_merchant_trade_no" text NOT NULL,
 	"payment_url" text,

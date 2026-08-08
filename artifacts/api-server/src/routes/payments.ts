@@ -12,7 +12,7 @@ import crypto from "node:crypto";
 import { requireAdmin } from "../lib/requireAdmin.js";
 import { requirePortalAdmin } from "../lib/supabaseAuth.js";
 import { resolveCompanyScope } from "../lib/resolveCompany.js";
-import { postPaymentReceived, postSalesInvoice } from "../lib/accounting.js";
+import { normalizePaymentMethod, postPaymentReceived, postSalesInvoice } from "../lib/accounting.js";
 import { markSalesInvoiced, recalculatePaymentStatus } from "../lib/services/index.js";
 import { transitionLogisticOrderStatus } from "../lib/services/logisticOrderStatusService.js";
 import { sendPaymentProofWaLink } from "../lib/paymentProofService.js";
@@ -195,7 +195,25 @@ function serializePayment(p: typeof paymentsTable.$inferSelect) {
   };
 }
 
+function getPaymentMethodFromPayload(payload: Record<string, unknown> | null | undefined): string | null {
+  const rawMethod = payload?.paymentMethod
+    ?? payload?.payment_method
+    ?? payload?.method
+    ?? payload?.payMethod
+    ?? payload?.paymentType
+    ?? payload?.channel;
+
+  return normalizePaymentMethod(
+    typeof rawMethod === "string" ? rawMethod : null,
+  );
+}
+
 export async function runPaylabsConfigMigration() {
+  // Paylabs payments need to retain the selected channel so webhook posting
+  // and later reconciliation do not have to infer QRIS from raw provider JSON.
+  await db.execute(sql`
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_method TEXT
+  `).catch(() => {});
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS paylabs_configurations (
       id SERIAL PRIMARY KEY,
@@ -494,6 +512,12 @@ router.post("/sales/:id/create-link", async (req, res) => {
 
   const merchantTradeNo = `BIZ-${doc.id}-${Date.now()}`;
   const amount = Number(doc.grandTotal ?? doc.totalAmount);
+  const requestedPaymentMethod = normalizePaymentMethod(
+    (req.body as { paymentMethod?: string; payment_method?: string; method?: string } | undefined)
+      ?.paymentMethod
+      ?? (req.body as { payment_method?: string } | undefined)?.payment_method
+      ?? (req.body as { method?: string } | undefined)?.method,
+  );
 
   if (!paylabsConfigured()) {
     // TODO Phase 3E: add createOrderLink(sales_documents → payments) here after simulation insert
@@ -509,6 +533,7 @@ router.post("/sales/:id/create-link", async (req, res) => {
         amount: String(amount),
         status: "pending",
         provider: "paylabs",
+        paymentMethod: requestedPaymentMethod,
         providerMerchantTradeNo: merchantTradeNo,
         paymentUrl: null,
         raw: { simulation: true, reason: "PAYLABS credentials not configured" },
@@ -594,6 +619,7 @@ router.post("/sales/:id/create-link", async (req, res) => {
       amount: String(amount),
       status: "pending",
       provider: "paylabs",
+      paymentMethod: requestedPaymentMethod,
       providerOrderId: paylabsResp?.platformTradeNo ?? null,
       providerMerchantTradeNo: merchantTradeNo,
       paymentUrl: paylabsResp?.url ?? paylabsResp?.h5Url ?? null,
@@ -641,6 +667,10 @@ paymentsWebhookRouter.post("/paylabs/webhook", async (req, res) => {
     .where(eq(paymentsTable.providerMerchantTradeNo, merchantTradeNo));
   if (!payment) return res.status(404).json({ errCode: "404", errMsg: "Payment not found" });
 
+  // Provider payloads differ by channel. Prefer the explicit channel fields,
+  // but never overwrite a method already selected when the callback omits it.
+  const webhookPaymentMethod = getPaymentMethodFromPayload(req.body as Record<string, unknown>);
+
   const status: string = req.body?.status ?? "";
   let newStatus: "pending" | "paid" | "expired" | "cancelled" | "failed" = payment.status;
   let paidAt: Date | null = payment.paidAt;
@@ -666,6 +696,7 @@ paymentsWebhookRouter.post("/paylabs/webhook", async (req, res) => {
       paidAt,
       raw: req.body,
       updatedAt: new Date(),
+      ...(webhookPaymentMethod ? { paymentMethod: webhookPaymentMethod } : {}),
       ...(webhookDerivedCompanyId != null ? { companyId: webhookDerivedCompanyId } : {}),
     })
     .where(eq(paymentsTable.id, payment.id));
@@ -716,6 +747,7 @@ paymentsWebhookRouter.post("/paylabs/webhook", async (req, res) => {
       refKind: payment.refKind,
       refDocNumber: payment.refDocNumber,
       amount: Number(payment.amount),
+      paymentMethod: webhookPaymentMethod ?? payment.paymentMethod ?? undefined,
       companyId: webhookDerivedCompanyId ?? payment.companyId,
     });
     if (!paymentPosted) {
@@ -800,6 +832,7 @@ router.post("/:id/simulate-paid", async (req, res) => {
       refKind: payment.refKind,
       refDocNumber: payment.refDocNumber,
       amount: Number(payment.amount),
+      paymentMethod: payment.paymentMethod ?? undefined,
       companyId: derivedCompanyId,
     });
     if (!paymentPosted) {

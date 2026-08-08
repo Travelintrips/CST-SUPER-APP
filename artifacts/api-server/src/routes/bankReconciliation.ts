@@ -66,6 +66,8 @@ import { getCalibrationReport, recordMatchOutcome } from "../lib/reconciliation/
 import { buildGraphFromMutation, buildGraphFromInvoice } from "../lib/reconciliation/paymentRelationshipGraph.js";
 import { findBestMultiInvoiceMatch } from "../lib/reconciliation/multiInvoiceMatchingEngine.js";
 import { buildAllocationPlan, getCompanyAllocationStrategy, applyAllocationPlan } from "../lib/reconciliation/paymentAllocationEngine.js";
+import { resolveCompanyId } from "../lib/resolveCompany.js";
+import { runQrisSettlementMigration } from "../lib/reconciliation/qrisSettlementMigration.js";
 
 const router = Router();
 router.use(async (req, res, next) => {
@@ -594,6 +596,7 @@ router.post("/import", upload.single("file"), async (req, res) => {
             transaction_date: p.transaction_date,
             mutation_key: p.mutation_key,
             provider_order_id: p.provider_order_id,
+            provider_name: p.provider_name,
             normalized_description: p.normalized_description,
             direction: p.direction,
           }, actor);
@@ -622,6 +625,338 @@ router.post("/import", upload.single("file"), async (req, res) => {
   } catch (e: any) {
     logger.error({ err: e }, "[bankRecon] import error");
     return res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── QRIS settlement aggregate API ────────────────────────────────────────────
+// A settlement is imported separately from a bank mutation.  The settlement
+// represents the provider batch; sport_payments remain the canonical source
+// items and must never be copied into accounting_payments as another candidate.
+type QrisSettlementItemInput = {
+  sportPaymentId?: unknown;
+  paymentId?: unknown;
+  grossAmount?: unknown;
+  mdrAmount?: unknown;
+  taxWithheldAmount?: unknown;
+  otherFeeAmount?: unknown;
+  netAmount?: unknown;
+};
+
+function qrisMoney(value: unknown, field: string, fallback = 0): number {
+  if (value === undefined || value === null || value === "") return fallback;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0 || Math.round(n * 100) !== n * 100) {
+    throw new Error(`${field} harus berupa angka >= 0 dengan maksimal 2 desimal`);
+  }
+  return Math.round(n * 100) / 100;
+}
+
+function qrisDate(value: unknown, field: string): string {
+  const date = String(value ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`${field} harus berformat YYYY-MM-DD`);
+  const parsed = new Date(`${date}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date) {
+    throw new Error(`${field} tidak valid`);
+  }
+  return date;
+}
+
+function qrisEsc(value: string): string {
+  return value.replace(/'/g, "''");
+}
+
+function qrisAssertClose(actual: number, expected: number, label: string): void {
+  if (Math.abs(actual - expected) > 0.01) {
+    throw new Error(`${label} tidak cocok: ${actual.toFixed(2)} vs ${expected.toFixed(2)}`);
+  }
+}
+
+function qrisSettlementPayload(body: Record<string, unknown>) {
+  const settlementReference = String(body.settlementReference ?? body.settlement_reference ?? "").trim();
+  if (!settlementReference || settlementReference.length > 180) {
+    throw new Error("settlementReference wajib diisi dan maksimal 180 karakter");
+  }
+  const settlementDate = qrisDate(body.settlementDate ?? body.settlement_date, "settlementDate");
+  const rawItems = body.items;
+  if (!Array.isArray(rawItems) || rawItems.length === 0 || rawItems.length > 1000) {
+    throw new Error("items wajib berisi minimal satu payment dan maksimal 1.000 item");
+  }
+  const status = String(body.status ?? "settled").trim().toLowerCase();
+  const allowedStatuses = new Set(["unsettled", "pending", "settled", "partial", "partially_settled", "cancelled", "reversed"]);
+  if (!allowedStatuses.has(status)) throw new Error("status settlement tidak valid");
+
+  const items = rawItems.map((raw, index) => {
+    const item = (raw ?? {}) as QrisSettlementItemInput;
+    const paymentId = Number(item.sportPaymentId ?? item.paymentId);
+    if (!Number.isInteger(paymentId) || paymentId <= 0) throw new Error(`items[${index}].sportPaymentId tidak valid`);
+    const grossAmount = qrisMoney(item.grossAmount, `items[${index}].grossAmount`);
+    const mdrAmount = qrisMoney(item.mdrAmount, `items[${index}].mdrAmount`);
+    const taxWithheldAmount = qrisMoney(item.taxWithheldAmount, `items[${index}].taxWithheldAmount`);
+    const otherFeeAmount = qrisMoney(item.otherFeeAmount, `items[${index}].otherFeeAmount`);
+    const netAmount = qrisMoney(item.netAmount, `items[${index}].netAmount`);
+    return { paymentId, grossAmount, mdrAmount, taxWithheldAmount, otherFeeAmount, netAmount, index };
+  });
+  const ids = new Set<number>();
+  for (const item of items) {
+    if (ids.has(item.paymentId)) throw new Error(`Payment ${item.paymentId} muncul lebih dari sekali`);
+    ids.add(item.paymentId);
+  }
+  const grossAmount = qrisMoney(body.grossAmount ?? body.gross_amount, "grossAmount",
+    items.reduce((sum, item) => sum + item.grossAmount, 0));
+  const mdrAmount = qrisMoney(body.mdrAmount ?? body.mdr_amount, "mdrAmount",
+    items.reduce((sum, item) => sum + item.mdrAmount, 0));
+  const taxWithheldAmount = qrisMoney(body.taxWithheldAmount ?? body.tax_withheld_amount, "taxWithheldAmount",
+    items.reduce((sum, item) => sum + item.taxWithheldAmount, 0));
+  const otherFeeAmount = qrisMoney(body.otherFeeAmount ?? body.other_fee_amount, "otherFeeAmount",
+    items.reduce((sum, item) => sum + item.otherFeeAmount, 0));
+  const netAmount = qrisMoney(body.netAmount ?? body.net_amount, "netAmount",
+    items.reduce((sum, item) => sum + item.netAmount, 0));
+  const expectedNet = grossAmount - mdrAmount - taxWithheldAmount - otherFeeAmount;
+  if (expectedNet < -0.01) throw new Error("Potongan settlement melebihi gross amount");
+  qrisAssertClose(grossAmount, items.reduce((sum, item) => sum + item.grossAmount, 0), "grossAmount header/item");
+  qrisAssertClose(mdrAmount, items.reduce((sum, item) => sum + item.mdrAmount, 0), "mdrAmount header/item");
+  qrisAssertClose(taxWithheldAmount, items.reduce((sum, item) => sum + item.taxWithheldAmount, 0), "taxWithheldAmount header/item");
+  qrisAssertClose(otherFeeAmount, items.reduce((sum, item) => sum + item.otherFeeAmount, 0), "otherFeeAmount header/item");
+  qrisAssertClose(netAmount, items.reduce((sum, item) => sum + item.netAmount, 0), "netAmount header/item");
+  qrisAssertClose(netAmount, Math.max(0, expectedNet), "netAmount gross/fee");
+  return {
+    settlementReference,
+    settlementDate,
+    providerName: (body.providerName ?? body.provider_name)
+      ? String(body.providerName ?? body.provider_name).trim()
+      : null,
+    grossAmount,
+    mdrAmount,
+    taxWithheldAmount,
+    otherFeeAmount,
+    netAmount,
+    status,
+    bankMutationId: (body.bankMutationId ?? body.bank_mutation_id) != null
+      ? Number(body.bankMutationId ?? body.bank_mutation_id)
+      : null,
+    items,
+  };
+}
+
+router.post("/qris-settlements/import", async (req, res) => {
+  await runQrisSettlementMigration();
+  try {
+    const payload = qrisSettlementPayload((req.body ?? {}) as Record<string, unknown>);
+    const companyId = resolveCompanyId(req);
+    if (!Number.isInteger(companyId) || companyId <= 0) {
+      return res.status(400).json({ error: "companyId tidak valid" });
+    }
+    if (payload.bankMutationId != null && (!Number.isInteger(payload.bankMutationId) || payload.bankMutationId <= 0)) {
+      return res.status(400).json({ error: "bankMutationId tidak valid" });
+    }
+
+    const result = await db.transaction(async (tx) => {
+      const ref = qrisEsc(payload.settlementReference);
+      const { rows: existing } = await tx.execute(sql.raw(`
+        SELECT id, company_id, settlement_reference, provider_name, settlement_date,
+               gross_amount, mdr_amount, tax_withheld_amount, other_fee_amount,
+               net_amount, status, bank_mutation_id
+        FROM qris_settlements
+        WHERE company_id = ${companyId} AND settlement_reference = '${ref}'
+        FOR UPDATE
+      `));
+      if (existing[0]) {
+        const row = existing[0] as Record<string, unknown>;
+        qrisAssertClose(Number(row.gross_amount), payload.grossAmount, "grossAmount existing");
+        qrisAssertClose(Number(row.net_amount), payload.netAmount, "netAmount existing");
+        const { rows: existingItems } = await tx.execute(sql.raw(`
+          SELECT qsi.id, qsi.sport_payment_id, qsi.gross_amount, qsi.mdr_amount,
+                 qsi.tax_withheld_amount, qsi.other_fee_amount, qsi.net_amount,
+                 sp.payment_number
+          FROM qris_settlement_items qsi
+          JOIN sport_payments sp ON sp.id = qsi.sport_payment_id
+          WHERE qsi.settlement_id = ${Number(row.id)}
+          ORDER BY qsi.id
+        `));
+        return { id: Number(row.id), idempotent: true, settlement: row, items: existingItems };
+      }
+
+      const paymentIds = payload.items.map((item) => item.paymentId).join(",");
+      const { rows: payments } = await tx.execute(sql.raw(`
+        SELECT sp.id, sp.company_id, sp.amount, sp.method, sp.status, sp.payment_number,
+               sp.mdr_amount, sp.tax_withheld_amount, sp.other_fee_amount, sp.net_amount,
+               EXISTS (
+                 SELECT 1 FROM qris_settlement_items prior
+                 WHERE prior.sport_payment_id = sp.id
+               ) AS already_settled
+        FROM sport_payments sp
+        WHERE sp.id IN (${paymentIds})
+        FOR UPDATE
+      `));
+      const byId = new Map((payments as Array<Record<string, unknown>>).map((row) => [Number(row.id), row]));
+      if (byId.size !== payload.items.length) {
+        const missing = payload.items.filter((item) => !byId.has(item.paymentId)).map((item) => item.paymentId);
+        throw new Error(`sport_payment tidak ditemukan: ${missing.join(", ")}`);
+      }
+      for (const item of payload.items) {
+        const payment = byId.get(item.paymentId)!;
+        if (payment.company_id == null || Number(payment.company_id) !== companyId) {
+          throw new Error(`Payment ${item.paymentId} bukan milik company aktif`);
+        }
+        if (String(payment.status).toLowerCase() !== "paid") {
+          throw new Error(`Payment ${item.paymentId} belum berstatus paid`);
+        }
+        if (!String(payment.method ?? "").toLowerCase().includes("qris")) {
+          throw new Error(`Payment ${item.paymentId} bukan payment QRIS`);
+        }
+        if (Boolean(payment.already_settled)) {
+          throw new Error(`Payment ${item.paymentId} sudah tergabung dalam settlement lain`);
+        }
+      }
+
+      let bankMutationId = payload.bankMutationId;
+      if (bankMutationId != null) {
+        const { rows: mutations } = await tx.execute(sql.raw(`
+          SELECT id, company_id, amount, direction, transaction_date
+          FROM bank_mutations
+          WHERE id = ${bankMutationId}
+          FOR UPDATE
+        `));
+        const mutation = mutations[0] as Record<string, unknown> | undefined;
+        if (!mutation) throw new Error("Mutasi bank tidak ditemukan");
+        if (mutation.company_id != null && Number(mutation.company_id) !== companyId) {
+          throw new Error("Mutasi bank bukan milik company aktif");
+        }
+        if (String(mutation.direction).toUpperCase() !== "IN") throw new Error("Settlement QRIS hanya dapat ditautkan ke mutasi IN");
+        qrisAssertClose(Number(mutation.amount), payload.netAmount, "nominal mutasi/net settlement");
+      } else {
+        const { rows: possible } = await tx.execute(sql.raw(`
+          SELECT id, amount, transaction_date
+          FROM bank_mutations
+          WHERE (company_id = ${companyId} OR company_id IS NULL)
+            AND direction = 'IN'
+            AND ABS(amount::numeric - ${payload.netAmount}) < 0.01
+            AND transaction_date BETWEEN '${payload.settlementDate}'::date - 1
+                                      AND '${payload.settlementDate}'::date + 1
+            AND status NOT IN ('void', 'rejected')
+          ORDER BY id
+          LIMIT 2
+          FOR UPDATE
+        `));
+        if (possible.length === 1) bankMutationId = Number((possible[0] as any).id);
+      }
+      if (bankMutationId != null) {
+        const { rows: linked } = await tx.execute(sql.raw(`
+          SELECT id, settlement_reference
+          FROM qris_settlements
+          WHERE bank_mutation_id = ${bankMutationId}
+          LIMIT 1
+        `));
+        if (linked[0]) throw new Error(`Mutasi bank sudah ditautkan ke settlement ${String((linked[0] as any).settlement_reference)}`);
+      }
+
+      const { rows: inserted } = await tx.execute(sql.raw(`
+        INSERT INTO qris_settlements
+          (company_id, settlement_reference, provider_name, settlement_date,
+           gross_amount, mdr_amount, tax_withheld_amount, other_fee_amount,
+           net_amount, status, bank_mutation_id)
+        VALUES
+          (${companyId}, '${ref}', ${payload.providerName ? `'${qrisEsc(payload.providerName)}'` : "NULL"},
+           '${payload.settlementDate}', ${payload.grossAmount}, ${payload.mdrAmount},
+           ${payload.taxWithheldAmount}, ${payload.otherFeeAmount}, ${payload.netAmount},
+           '${qrisEsc(payload.status)}', ${bankMutationId ?? "NULL"})
+        RETURNING *
+      `));
+      const settlement = inserted[0] as Record<string, unknown>;
+      const settlementId = Number(settlement.id);
+      for (const item of payload.items) {
+        await tx.execute(sql.raw(`
+          INSERT INTO qris_settlement_items
+            (settlement_id, sport_payment_id, gross_amount, mdr_amount,
+             tax_withheld_amount, other_fee_amount, net_amount)
+          VALUES
+            (${settlementId}, ${item.paymentId}, ${item.grossAmount}, ${item.mdrAmount},
+             ${item.taxWithheldAmount}, ${item.otherFeeAmount}, ${item.netAmount})
+        `));
+        await tx.execute(sql.raw(`
+          UPDATE sport_payments
+          SET mdr_amount = ${item.mdrAmount},
+              tax_withheld_amount = ${item.taxWithheldAmount},
+              other_fee_amount = ${item.otherFeeAmount},
+              net_amount = ${item.netAmount},
+              settlement_reference = '${ref}',
+              settlement_date = '${payload.settlementDate}',
+              settlement_status = '${qrisEsc(payload.status)}',
+              updated_at = NOW()
+          WHERE id = ${item.paymentId} AND company_id = ${companyId}
+        `));
+      }
+      return { id: settlementId, idempotent: false, settlement, items: payload.items };
+    });
+
+    audit(req, {
+      action: "qris_settlement_import",
+      module: "accounting",
+      resourceId: `qris-settlement-${result.id}`,
+      after: { companyId, settlementReference: payload.settlementReference, itemCount: payload.items.length, idempotent: result.idempotent },
+    });
+    return res.status(result.idempotent ? 200 : 201).json({ ok: true, ...result });
+  } catch (e: any) {
+    logger.warn({ err: e?.message }, "[bankRecon] QRIS settlement import rejected");
+    const message = e?.message ?? "Import settlement QRIS gagal";
+    return res.status(/wajib|valid|tidak cocok|bukan|sudah|belum|tidak ditemukan|melebihi|muncul/.test(message) ? 400 : 500)
+      .json({ error: message });
+  }
+});
+
+router.get("/qris-settlements", async (req, res) => {
+  await runQrisSettlementMigration();
+  try {
+    const companyId = resolveCompanyId(req);
+    const limit = Math.min(Math.max(Number(req.query.limit ?? 100), 1), 500);
+    const offset = Math.max(Number(req.query.offset ?? 0), 0);
+    const { rows } = await db.execute(sql.raw(`
+      SELECT qs.*,
+             COUNT(qsi.id)::int AS item_count,
+             COALESCE(json_agg(
+               jsonb_build_object(
+                 'id', qsi.id, 'sportPaymentId', qsi.sport_payment_id,
+                 'paymentNumber', sp.payment_number, 'grossAmount', qsi.gross_amount,
+                 'mdrAmount', qsi.mdr_amount, 'taxWithheldAmount', qsi.tax_withheld_amount,
+                 'otherFeeAmount', qsi.other_fee_amount, 'netAmount', qsi.net_amount
+               ) ORDER BY qsi.id
+             ) FILTER (WHERE qsi.id IS NOT NULL), '[]'::json) AS items
+      FROM qris_settlements qs
+      LEFT JOIN qris_settlement_items qsi ON qsi.settlement_id = qs.id
+      LEFT JOIN sport_payments sp ON sp.id = qsi.sport_payment_id
+      WHERE qs.company_id = ${companyId}
+      GROUP BY qs.id
+      ORDER BY qs.settlement_date DESC, qs.id DESC
+      LIMIT ${limit} OFFSET ${offset}
+    `));
+    return res.json({ settlements: rows });
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message ?? "Gagal mengambil settlement QRIS" });
+  }
+});
+
+router.get("/qris-settlements/:settlementId", async (req, res) => {
+  await runQrisSettlementMigration();
+  try {
+    const companyId = resolveCompanyId(req);
+    const settlementId = Number(req.params.settlementId);
+    if (!Number.isInteger(settlementId) || settlementId <= 0) return res.status(400).json({ error: "settlementId tidak valid" });
+    const { rows: settlements } = await db.execute(sql.raw(`
+      SELECT * FROM qris_settlements
+      WHERE id = ${settlementId} AND company_id = ${companyId}
+    `));
+    if (!settlements[0]) return res.status(404).json({ error: "Settlement QRIS tidak ditemukan" });
+    const { rows: items } = await db.execute(sql.raw(`
+      SELECT qsi.*, sp.payment_number, sp.booking_id, sp.amount AS payment_amount,
+             sp.method, sp.status AS payment_status
+      FROM qris_settlement_items qsi
+      JOIN sport_payments sp ON sp.id = qsi.sport_payment_id
+      WHERE qsi.settlement_id = ${settlementId}
+      ORDER BY qsi.id
+    `));
+    return res.json({ settlement: settlements[0], items });
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message ?? "Gagal mengambil detail settlement QRIS" });
   }
 });
 
@@ -698,28 +1033,74 @@ router.get("/mutations", async (req, res) => {
       )
       WHEN 'sport_payment' THEN (
         SELECT jsonb_build_object(
-          'amount', sp.amount,
+          'amount', GREATEST(0, sp.amount - COALESCE(sp.mdr_amount, 0) - COALESCE(sp.tax_withheld_amount, 0) - COALESCE(sp.other_fee_amount, 0)),
+          'grossAmount', sp.amount,
+          'mdrAmount', COALESCE(sp.mdr_amount, 0),
+          'taxWithheldAmount', COALESCE(sp.tax_withheld_amount, 0),
+          'otherFeeAmount', COALESCE(sp.other_fee_amount, 0),
+          'netAmount', GREATEST(0, sp.amount - COALESCE(sp.mdr_amount, 0) - COALESCE(sp.tax_withheld_amount, 0) - COALESCE(sp.other_fee_amount, 0)),
           'date', COALESCE(sp.paid_at::date, sp.created_at::date),
-          'name', COALESCE(c.name, sb.customer_name),
+          'settlementDate', COALESCE(sp.settlement_date, COALESCE(sp.paid_at::date, sp.created_at::date) + 1),
+          'settlementReference', sp.settlement_reference,
+           'settlementStatus', sp.settlement_status,
+           'settlementPartial', COALESCE(sp.settlement_status, 'unsettled') IN ('partial', 'partially_settled', 'partially-settled'),
+          'name', COALESCE(sb.customer_name, c.name),
           'reference', CONCAT('SPORT-', sp.booking_id::text),
           'paymentNumber', sp.payment_number,
           'memo', sp.notes,
           'method', sp.method,
           'status', sp.status,
-          'bookingId', sp.booking_id,
-          'paymentType', sp.payment_type
+          'bookingId', sp.booking_id
         )
         FROM sport_payments sp
-        LEFT JOIN customers c ON c.id = sp.customer_id
         LEFT JOIN sport_bookings sb ON sb.id = sp.booking_id
+        LEFT JOIN customers c ON c.id = sb.customer_id
         WHERE sp.id = m.candidate_id
+      )
+      WHEN 'qris_settlement' THEN (
+        SELECT jsonb_build_object(
+          'amount', qs.net_amount,
+          'grossAmount', qs.gross_amount,
+          'mdrAmount', qs.mdr_amount,
+          'taxWithheldAmount', qs.tax_withheld_amount,
+          'otherFeeAmount', qs.other_fee_amount,
+          'netAmount', qs.net_amount,
+          'date', qs.settlement_date,
+          'settlementDate', qs.settlement_date,
+          'settlementReference', qs.settlement_reference,
+           'settlementStatus', qs.status,
+           'settlementPartial', COALESCE(qs.status, 'unsettled') IN ('partial', 'partially_settled', 'partially-settled'),
+          'name', qs.settlement_reference,
+          'reference', qs.settlement_reference,
+          'method', 'qris',
+          'status', qs.status,
+           'settlementItemCount', (SELECT COUNT(*) FROM qris_settlement_items qsi WHERE qsi.settlement_id = qs.id),
+           'settlementItems', COALESCE((
+             SELECT jsonb_agg(jsonb_build_object(
+               'id', qsi.id,
+               'sportPaymentId', qsi.sport_payment_id,
+               'paymentNumber', sp.payment_number,
+               'bookingId', sp.booking_id,
+               'grossAmount', qsi.gross_amount,
+               'mdrAmount', qsi.mdr_amount,
+               'taxWithheldAmount', qsi.tax_withheld_amount,
+               'otherFeeAmount', qsi.other_fee_amount,
+               'netAmount', qsi.net_amount
+             ) ORDER BY qsi.id)
+             FROM qris_settlement_items qsi
+             JOIN sport_payments sp ON sp.id = qsi.sport_payment_id
+             WHERE qsi.settlement_id = qs.id
+           ), '[]'::jsonb)
+        )
+        FROM qris_settlements qs
+        WHERE qs.id = m.candidate_id
       )
       WHEN 'invoice' THEN (
         SELECT jsonb_build_object(
           'amount', sd.total_amount,
-          'date', sd.issue_date,
+          'date', COALESCE(sd.invoice_date::text, sd.created_at::date::text),
           'reference', sd.doc_number,
-          'documentType', sd.doc_type
+          'documentType', sd.kind
         )
         FROM sales_documents sd
         WHERE sd.id = m.candidate_id
@@ -736,9 +1117,9 @@ router.get("/mutations", async (req, res) => {
       )
       WHEN 'logistic_order' THEN (
         SELECT jsonb_build_object(
-          'amount', lo.total_price,
+          'amount', lo.grand_total,
           'date', lo.created_at::date,
-          'name', lo.sender_name,
+          'name', COALESCE(lo.sender_name, lo.customer_name),
           'reference', lo.order_number,
           'status', lo.status
         )
@@ -748,8 +1129,8 @@ router.get("/mutations", async (req, res) => {
       WHEN 'tenant_invoice' THEN (
         SELECT jsonb_build_object(
           'amount', ti.total_amount,
-          'date', ti.issued_date,
-          'name', COALESCE(t.name, ti.tenant_name),
+          'date', ti.issued_date::text,
+          'name', COALESCE(t.business_name, t.owner_name),
           'reference', ti.invoice_number
         )
         FROM tenant_invoices ti
@@ -763,11 +1144,11 @@ router.get("/mutations", async (req, res) => {
   // ── Query SQL UNION ALL ────────────────────────────────────────────────────
   const bmSelect = `
     SELECT
-      bm.id, bm.transaction_date, bm.description,
-      bm.credit_amount, bm.debit_amount, bm.amount, bm.direction,
+      bm.id, bm.transaction_date::text, bm.description,
+      bm.credit_amount, bm.debit_amount, bm.amount, bm.direction::text,
       bm.mutation_key, bm.normalized_description,
       bm.provider_name, bm.provider_order_id,
-      bm.status, bm.journal_entry_id, bm.company_id,
+      bm.status::text, bm.journal_entry_id, bm.company_id,
       bm.uploaded_proof_url, bm.source,
        'bank_mutations' AS _source_table,
        (SELECT json_agg(
@@ -833,8 +1214,9 @@ router.get("/mutations", async (req, res) => {
       total: Number((countRows[0] as any)?.total ?? 0),
     });
   } catch (e: any) {
-    logger.error({ err: e.message }, "[bankRecon] GET /mutations failed");
-    return res.status(500).json({ error: e.message });
+    const dbMsg = e.cause?.message ?? e.cause ?? e.message;
+    logger.error({ err: dbMsg, sql_hint: String(dbMsg).substring(0, 400) }, "[bankRecon] GET /mutations failed");
+    return res.status(500).json({ error: dbMsg });
   }
 });
 
@@ -1552,6 +1934,7 @@ router.post("/run-matching", async (req, res) => {
         amount: Number(m.amount),
         mutation_key: m.mutation_key,
         provider_order_id: m.provider_order_id,
+        provider_name: m.provider_name,
         normalized_description: m.normalized_description,
         uploaded_proof_url: m.uploaded_proof_url ?? null,
         company_id: m.company_id ?? null,
@@ -2077,6 +2460,7 @@ router.post("/smart-import", upload.single("file"), async (req, res) => {
           transaction_date: pr.date,
           direction: pr.direction,
           company_id: companyId,
+          provider_name: detectProvider(pr.description),
         });
         const scored = candidates.map(c => scoreUnified({
           amount: pr.amount,
@@ -2589,12 +2973,12 @@ router.post("/mutations/:mutationId/multi-invoice-match", async (req, res) => {
              COALESCE(c.name, '') AS customer_name
       FROM sales_documents sd
       LEFT JOIN customers c ON c.id = sd.customer_id
-      WHERE sd.doc_type = 'invoice'
+      WHERE sd.kind = 'invoice'
         AND sd.company_id = ${companyId}
         AND sd.status NOT IN ('paid','cancelled','void')
         AND sd.total_amount <= ${amount} * 1.05
         AND sd.total_amount >= ${amount} * 0.01
-        AND sd.issue_date >= '${txDate}'::date - 90
+        AND COALESCE(sd.invoice_date, sd.created_at::date) >= '${txDate}'::date - 90
       ORDER BY sd.total_amount DESC
       LIMIT 100
     `)).catch(() => ({ rows: [] as unknown[] }));

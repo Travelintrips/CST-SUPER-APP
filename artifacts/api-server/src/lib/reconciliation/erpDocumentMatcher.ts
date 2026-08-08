@@ -4,11 +4,11 @@
  * Mencari kecocokan di dokumen ERP yang sudah ada untuk mutasi bank masuk.
  *
  * Sumber aktif (memiliki company_id — isolation terjamin):
- *   expenses, accounting_payments, cash_advances, logistic_orders, sales_documents
+ *   expenses, accounting_payments, cash_advances, logistic_orders, sales_documents,
+ *   sport_payments, qris_settlements
  *
- * Sumber cross-entity (TIDAK memiliki company_id — dikecualikan dari active matching):
- *   sport_payments, tenant_invoices → disertakan sebagai informational hints saja
- *   dan tidak bisa menjadi finalRecommendation.
+ * Tenant invoices tetap cross-entity; Sport Center payments dan QRIS settlements
+ * sudah company-scoped dan boleh menjadi active matching source.
  *
  * Rules:
  *  - company_id isolation WAJIB untuk active sources.
@@ -80,14 +80,15 @@ export type ActiveErpSourceType =
   | "accounting_payments"
   | "cash_advances"
   | "logistic_orders"
-  | "sales_documents";
+  | "sales_documents"
+  | "sport_payments"
+  | "qris_settlements";
 
 /**
  * Sumber ERP cross-entity tanpa company_id (informational only — tidak bisa jadi
  * finalRecommendation karena company isolation tidak dapat dijamin).
  */
 export type CrossEntitySourceType =
-  | "sport_payments"
   | "tenant_invoices";
 
 export type ErpSourceType = ActiveErpSourceType | CrossEntitySourceType;
@@ -182,6 +183,7 @@ const LEGACY_TYPE_MAP: Record<ErpSourceType, string> = {
   logistic_orders:      "logistic_order",
   sales_documents:      "invoice",
   sport_payments:       "sport_payment",
+  qris_settlements:     "qris_settlement",
   tenant_invoices:      "tenant_invoice",
 };
 
@@ -225,8 +227,7 @@ async function fetchAlreadyReconciled(companyId: number): Promise<Set<string>> {
 
 /**
  * Fetch kandidat dari sumber AKTIF (memiliki company_id).
- * Cross-entity sources (sport_payments, tenant_invoices) tidak di-fetch di sini
- * karena tidak dapat dijamin company isolation-nya.
+ * Semua source yang memiliki company_id di-fetch dengan filter perusahaan.
  */
 async function fetchActiveCandidates(
   companyId: number,
@@ -234,11 +235,38 @@ async function fetchActiveCandidates(
   direction: "IN" | "OUT",
   transactionDate: string,
   dateTolerance: number,
+  mutationIsQris: boolean,
 ): Promise<ErpCandidateRaw[]> {
   const txDate   = isoDate(transactionDate);
   const dateFrom = `'${txDate}'::date - ${dateTolerance}`;
   const dateTo   = `'${txDate}'::date + ${dateTolerance}`;
   const amtCond  = (col: string) => `ABS(${col}::numeric - ${Number(amount)}) < 0.01`;
+  const qrisSettlementTablesAvailable = mutationIsQris
+    ? await db.execute(sql.raw(`
+        SELECT to_regclass('public.qris_settlements') AS settlements,
+               to_regclass('public.qris_settlement_items') AS items
+      `)).then(({ rows }) => Boolean((rows[0] as any)?.settlements && (rows[0] as any)?.items))
+      .catch(() => false)
+    : false;
+  const calculatedSportNet = "GREATEST(0, sp.amount - COALESCE(sp.mdr_amount, 0) - COALESCE(sp.tax_withheld_amount, 0) - COALESCE(sp.other_fee_amount, 0))";
+  const sportNet = `(CASE
+    WHEN COALESCE(sp.net_amount, 0) > 0
+      AND COALESCE(sp.settlement_status, 'unsettled') NOT IN ('unsettled', 'pending')
+    THEN sp.net_amount
+    ELSE ${calculatedSportNet}
+  END)`;
+  const sportAmount = mutationIsQris ? sportNet : "sp.amount";
+  const sportSettlementDate = "COALESCE(sp.settlement_date, COALESCE(sp.paid_at::date, sp.created_at::date) + 1)";
+  const aggregateMatchFilter = qrisSettlementTablesAvailable ? `
+           AND NOT EXISTS (
+             SELECT 1
+             FROM qris_settlement_items qsi_member
+             JOIN qris_settlements qs_member ON qs_member.id = qsi_member.settlement_id
+             WHERE qsi_member.sport_payment_id = sp.id
+               AND ABS(qs_member.net_amount::numeric - ${Number(amount)}) < 0.01
+               AND qs_member.settlement_date BETWEEN ${dateFrom} AND ${dateTo}
+               AND COALESCE(qs_member.status, 'unsettled') NOT IN ('cancelled', 'reversed')
+           )` : "";
 
   type SourceQuery = { type: ActiveErpSourceType; q: string };
 
@@ -295,6 +323,10 @@ async function fetchActiveCandidates(
         WHERE ${amtCond("ap.amount")}
           AND ap.date::date BETWEEN ${dateFrom} AND ${dateTo}
           AND ap.company_id = ${companyId}
+          -- sport_payments is the canonical reconciliation candidate for
+          -- Sport Center payments; accounting_payments only links the source
+          -- payment to its accounting journal.
+          AND (ap.source_type IS NULL OR ap.source_type <> 'sport_center')
           AND COALESCE(ap.status::text, 'posted') NOT IN ('cancelled','rejected','void','voided')
           AND ap.voided_at IS NULL
           AND (
@@ -388,6 +420,51 @@ async function fetchActiveCandidates(
           AND COALESCE(sd.status, 'draft') NOT IN ('cancelled','rejected','void','deleted','voided')
       `,
     }] : []),
+    ...(direction === "IN" ? [{
+      type: "sport_payments" as ActiveErpSourceType,
+      q: `
+        SELECT
+          sp.id,
+          'sport_payments'::text AS source_type,
+          ${sportAmount}::numeric AS amount,
+          ${sportSettlementDate}::date::text AS doc_date,
+          COALESCE(sp.settlement_reference, CONCAT('SPORT-', sp.booking_id::text)) AS ref,
+          COALESCE(sb.customer_name, '') AS vendor_name,
+          sp.method AS payment_method,
+          sp.bank_account_id,
+          COALESCE(sp.status, 'pending') AS status,
+          (sp.accounting_payment_id IS NOT NULL)::boolean AS has_payment_link
+        FROM sport_payments sp
+        LEFT JOIN sport_bookings sb ON sb.id = sp.booking_id
+        WHERE ${amtCond(sportAmount)}
+          AND sp.company_id = ${companyId}
+          AND ${sportSettlementDate} BETWEEN ${dateFrom} AND ${dateTo}
+          AND COALESCE(sp.status, 'pending') = 'paid'
+           AND COALESCE(sp.method, '') ILIKE '%qris%'
+           ${mutationIsQris ? aggregateMatchFilter : ""}
+      `,
+    }] : []),
+    ...(direction === "IN" && mutationIsQris && qrisSettlementTablesAvailable ? [{
+      type: "qris_settlements" as ActiveErpSourceType,
+      q: `
+        SELECT
+          qs.id,
+          'qris_settlements'::text AS source_type,
+          qs.net_amount::numeric AS amount,
+          qs.settlement_date::date::text AS doc_date,
+          qs.settlement_reference AS ref,
+          qs.settlement_reference AS vendor_name,
+          'qris'::text AS payment_method,
+          NULL::integer AS bank_account_id,
+          COALESCE(qs.status, 'unsettled') AS status,
+          (qs.bank_mutation_id IS NOT NULL)::boolean AS has_payment_link
+        FROM qris_settlements qs
+        WHERE ${amtCond("qs.net_amount")}
+          AND qs.company_id = ${companyId}
+          AND qs.settlement_date BETWEEN ${dateFrom} AND ${dateTo}
+          AND COALESCE(qs.status, 'unsettled') NOT IN ('cancelled','reversed')
+      `,
+    }] : []),
   ];
 
   const results: ErpCandidateRaw[] = [];
@@ -408,7 +485,7 @@ async function fetchActiveCandidates(
           status:           String(r.status ?? ""),
           alreadyReconciled: false,  // diisi setelah batch check
           hasPaymentLink:   Boolean(r.has_payment_link),
-          isCompanyScoped:  true,    // semua active sources dijamin company_id
+        isCompanyScoped:  true,
         });
       }
     } catch (e: any) {
@@ -548,8 +625,8 @@ function scoreCandidate(
  * 4. Kembalikan best match + semua kandidat untuk diagnostik.
  *
  * TIDAK memanggil AI, membuat jurnal, membuat expense, atau tax automation.
- * Cross-entity sources (sport_payments, tenant_invoices) DIKECUALIKAN dari active
- * matching karena tidak memiliki company_id untuk isolation.
+ * Tenant invoices remain informational-only; Sport Center payments and QRIS
+ * settlements are company-scoped active sources.
  */
 export async function runErpDocumentMatching(
   mutation: ErpMatchInput,
@@ -576,7 +653,13 @@ export async function runErpDocumentMatching(
 
   // Fetch dari active sources (company-scoped)
   const allRaw = await fetchActiveCandidates(
-    companyId, amount, direction, transactionDate, dateTolerance,
+    companyId,
+    amount,
+    direction,
+    transactionDate,
+    dateTolerance,
+    mutation.providerName === "QRIS" ||
+      (mutation.normalizedDescription ?? "").toLowerCase().includes("qris"),
   );
 
   if (!allRaw.length) return empty;

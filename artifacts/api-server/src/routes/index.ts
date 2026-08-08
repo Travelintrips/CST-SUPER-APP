@@ -144,6 +144,7 @@ import mktPortalRouter from "./mktPortal.js";
 import mktGuestRouter from "./mktGuest.js";
 import { vendorQuotePublicRouter } from "./vendorQuotePublic.js";
 import mktVendorPoRouter from "./mktVendorPo.js";
+import mktVendorInvoiceRouter from "./mktVendorInvoice.js";
 import { systemRouter } from "./system.js";
 import rbacRouter from "./rbac.js";
 import importAdvisorRouter from "./importAdvisor.js";
@@ -530,6 +531,7 @@ router.use("/mkt/guest", mktGuestRouter);
 router.use("/vendor-quote", vendorQuotePublicRouter);
 // Phase 2G — Vendor PO confirmation (public, token-based)
 router.use("/mkt/vendor-po", mktVendorPoRouter);
+router.use("/mkt/vendor-invoice", mktVendorInvoiceRouter);
 router.get("/alerts/stream", async (req: Request, res: Response) => {
   const ok = await requireAdmin(req, res);
   if (!ok) return;

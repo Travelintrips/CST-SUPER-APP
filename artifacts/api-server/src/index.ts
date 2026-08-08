@@ -76,6 +76,8 @@ import { runExceptionEnumMigration, runOrderExceptionsMigration } from "./lib/se
 import { runVendorCompanyAssignmentsMigration } from "./lib/vendorCompanyAssignmentsMigration.js";
 import { runVendorCatalogSchemaMigration } from "./lib/vendorCatalogSchemaMigration.js";
 import { runFeaturedProductMigration } from "./lib/featuredProductMigration.js";
+import { runMktVendorInvoiceMigration } from "./lib/mktVendorInvoiceMigration.js";
+import { runMktApPreparationMigration } from "./lib/mktApPreparationMigration.js";
 import { startFeaturedProductExpiryWorker } from "./lib/services/featuredProductExpiryWorker.js";
 import { runLogisticVendorFulfillmentsMigration } from "./lib/logisticVendorFulfillmentsMigration.js";
 import { runProductFirstFlowMigration } from "./lib/productFirstFlowMigration.js";
@@ -139,6 +141,7 @@ import { runTaxCoretaxMigration } from "./lib/taxCoretaxMigration.js";
 import { backfillSportCenterAccountingPayments } from "./lib/backfillSportCenterPayments.js";
 import { runFreightAccountingMigration } from "./lib/freightAccountingMigration.js";
 import { runBankReconciliationCoreMigration } from "./routes/bankReconciliation.js";
+import { runQrisSettlementMigration } from "./lib/reconciliation/qrisSettlementMigration.js";
 import { runUsageTrackingMigration } from "./lib/usageTrackingService.js";
 import { runBankMutationMastersMigration } from "./routes/bankMutationMasters.js";
 import { runBankMutationImportMigration } from "./routes/bankMutationImport.js";
@@ -226,6 +229,15 @@ async function runWithRetry<T>(
 // ── Pre-startup critical schema migrations (run BEFORE accepting requests) ────
 // These ensure Drizzle ORM columns exist before any query can be executed.
 async function runCriticalPreStartMigrations() {
+  // Sprint 8B AP handoff must be available before the API accepts lifecycle
+  // writes. Run it first so unrelated legacy DDL cannot delay this scope.
+  try {
+    await runMktApPreparationMigration();
+  } catch (err) {
+    logger.error({ err }, "Marketplace AP preparation migration failed");
+    throw err;
+  }
+
   // Buat wa_otp_codes dan trusted_devices PERTAMA — diperlukan untuk WA OTP login
   // Gunakan try/catch terpisah agar tidak menghalangi migrasi lain
   try {
@@ -1444,6 +1456,7 @@ async function runCriticalPreStartMigrations() {
   } catch (err) {
     logger.warn({ err }, "journal_sequences migration failed (non-fatal)");
   }
+
 }
 
 // Flag set to true once the full migration + seed chain completes.
@@ -1672,6 +1685,8 @@ async function startServer() {
     .then(() => runWithRetry("Vendor catalog schema migration", runVendorCatalogSchemaMigration))
     .then(() => runWithRetry("Vendor profile hardening migration (Phase Final)", runVendorProfileMigration))
     .then(() => runWithRetry("Featured product migration", runFeaturedProductMigration))
+       .then(() => runWithRetry("Marketplace vendor invoice migration", runMktVendorInvoiceMigration))
+       .then(() => runWithRetry("Marketplace AP preparation migration", runMktApPreparationMigration))
     .then(() => runWithRetry("Logistic vendor fulfillments migration", runLogisticVendorFulfillmentsMigration))
     .then(() => runWithRetry("Product media migration", runProductMediaMigration))
     .then(() => runWithRetry("Tax rules migration", runTaxRulesMigration))
@@ -1681,6 +1696,7 @@ async function startServer() {
     .then(() => runWithRetry("Freight accounting migration", runFreightAccountingMigration))
     .then(() => runWithRetry("Logistics rates migration", runLogisticsRatesMigration))
     .then(() => runWithRetry("Bank reconciliation core migration", runBankReconciliationCoreMigration))
+    .then(() => runWithRetry("QRIS settlement migration", runQrisSettlementMigration))
     .then(() => runWithRetry("Usage tracking migration", runUsageTrackingMigration))
     .then(() => runWithRetry("Bank mutation masters migration", runBankMutationMastersMigration))
     .then(() => runWithRetry("Bank mutation import migration", runBankMutationImportMigration))

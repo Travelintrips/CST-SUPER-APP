@@ -256,6 +256,8 @@ export async function runSportCenterMigration(): Promise<void> {
       ALTER TABLE sport_payments
         ADD COLUMN IF NOT EXISTS mdr_rate             NUMERIC(7,4)  NOT NULL DEFAULT 0,
         ADD COLUMN IF NOT EXISTS mdr_amount           NUMERIC(14,2) NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS tax_withheld_amount  NUMERIC(14,2) NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS other_fee_amount     NUMERIC(14,2) NOT NULL DEFAULT 0,
         ADD COLUMN IF NOT EXISTS net_amount           NUMERIC(14,2) NOT NULL DEFAULT 0,
         ADD COLUMN IF NOT EXISTS settlement_reference TEXT,
         ADD COLUMN IF NOT EXISTS settlement_date      DATE,
@@ -267,12 +269,59 @@ export async function runSportCenterMigration(): Promise<void> {
     `);
     await db.execute(sql`
       UPDATE sport_payments
-      SET net_amount = GREATEST(0, amount - COALESCE(mdr_amount, 0))
+      SET net_amount = GREATEST(
+        0,
+        amount
+        - COALESCE(mdr_amount, 0)
+        - COALESCE(tax_withheld_amount, 0)
+        - COALESCE(other_fee_amount, 0)
+      )
       WHERE net_amount IS NULL OR net_amount = 0
     `).catch(() => {});
     await db.execute(sql`
       CREATE INDEX IF NOT EXISTS idx_sport_payments_settlement
       ON sport_payments(settlement_status, settlement_date)
+    `).catch(() => {});
+    // A provider settlement may contain many Sport Center payments. The
+    // settlement row is the bank-facing aggregate; items retain the source
+    // payment relationship and deduction breakdown.
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS qris_settlements (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER NOT NULL,
+        settlement_reference TEXT NOT NULL,
+        provider_name TEXT,
+        settlement_date DATE NOT NULL,
+        gross_amount NUMERIC(16,2) NOT NULL DEFAULT 0,
+        mdr_amount NUMERIC(16,2) NOT NULL DEFAULT 0,
+        tax_withheld_amount NUMERIC(16,2) NOT NULL DEFAULT 0,
+        other_fee_amount NUMERIC(16,2) NOT NULL DEFAULT 0,
+        net_amount NUMERIC(16,2) NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'unsettled',
+        bank_mutation_id INTEGER,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (company_id, settlement_reference)
+      )
+    `).catch(() => {});
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS qris_settlement_items (
+        id SERIAL PRIMARY KEY,
+        settlement_id INTEGER NOT NULL REFERENCES qris_settlements(id) ON DELETE CASCADE,
+        sport_payment_id INTEGER NOT NULL REFERENCES sport_payments(id) ON DELETE RESTRICT,
+        gross_amount NUMERIC(16,2) NOT NULL DEFAULT 0,
+        mdr_amount NUMERIC(16,2) NOT NULL DEFAULT 0,
+        tax_withheld_amount NUMERIC(16,2) NOT NULL DEFAULT 0,
+        other_fee_amount NUMERIC(16,2) NOT NULL DEFAULT 0,
+        net_amount NUMERIC(16,2) NOT NULL DEFAULT 0,
+        UNIQUE (settlement_id, sport_payment_id)
+      )
+    `).catch(() => {});
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS idx_qris_settlements_company_date
+        ON qris_settlements(company_id, settlement_date);
+      CREATE INDEX IF NOT EXISTS idx_qris_settlement_items_payment
+        ON qris_settlement_items(sport_payment_id);
     `).catch(() => {});
     await db.execute(sql`
       ALTER TABLE sport_payments

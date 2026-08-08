@@ -10,6 +10,9 @@ import { companiesTable } from "./companies";
 import { purchaseDocumentsTable, purchaseDocumentLinesTable } from "./purchaseDocuments";
 import { warehousesTable, warehouseRacksTable } from "./inventory";
 import { uomTable, uomConversionsTable } from "./uom";
+import { mktPurchaseOrdersTable } from "./mktPurchaseOrders";
+import { mktPurchaseOrderLinesTable } from "./mktPurchaseOrderLines";
+import { mktPoGoodsReceiptsTable } from "./mktPoGoodsReceipts";
 
 // Backward-compat aliases so route files using uomMasterTable keep working
 export { uomTable as uomMasterTable, uomConversionsTable };
@@ -41,7 +44,7 @@ export const prReturnStatusEnum = pgEnum("pr_return_status", [
 ]);
 
 export const viStatusEnum = pgEnum("vi_status", [
-  "draft", "posted", "matched", "paid", "cancelled",
+  "draft", "submitted", "posted", "matched", "ready_for_ap", "paid", "cancelled",
 ]);
 
 export const payReqStatusEnum = pgEnum("pay_req_status", [
@@ -286,10 +289,13 @@ export const vendorInvoicesTable = pgTable("vendor_invoices", {
   supplierName: text("supplier_name").notNull(),
   poId: integer("po_id").references(() => purchaseDocumentsTable.id, { onDelete: "set null" }),
   grId: integer("gr_id").references(() => goodsReceiptsTable.id, { onDelete: "set null" }),
+  mktPurchaseOrderId: integer("mkt_purchase_order_id").references(() => mktPurchaseOrdersTable.id, { onDelete: "set null" }),
+  mktGoodsReceiptId: integer("mkt_goods_receipt_id").references(() => mktPoGoodsReceiptsTable.id, { onDelete: "set null" }),
   status: viStatusEnum("status").notNull().default("draft"),
   invoiceDate: timestamp("invoice_date").defaultNow().notNull(),
   dueDate: timestamp("due_date"),
   paymentTermDays: integer("payment_term_days").default(30),
+  currency: text("currency").notNull().default("IDR"),
   totalAmount: numeric("total_amount", { precision: 14, scale: 2 }).notNull().default("0"),
   taxAmount: numeric("tax_amount", { precision: 14, scale: 2 }).notNull().default("0"),
   grandTotal: numeric("grand_total", { precision: 14, scale: 2 }).notNull().default("0"),
@@ -298,6 +304,10 @@ export const vendorInvoicesTable = pgTable("vendor_invoices", {
   matchNotes: text("match_notes"),
   journalEntryId: integer("journal_entry_id"),
   notes: text("notes"),
+  attachmentObjectPath: text("attachment_object_path"),
+  attachmentFileName: text("attachment_file_name"),
+  attachmentContentType: text("attachment_content_type"),
+  attachmentSize: integer("attachment_size"),
   categoryKey: text("category_key"),
   templateId: text("template_id"),
   templateVersion: text("template_version"),
@@ -318,6 +328,7 @@ export const vendorInvoicesTable = pgTable("vendor_invoices", {
 export const vendorInvoiceLinesTable = pgTable("vendor_invoice_lines", {
   id: serial("id").primaryKey(),
   invoiceId: integer("invoice_id").notNull().references(() => vendorInvoicesTable.id, { onDelete: "cascade" }),
+  mktPurchaseOrderLineId: integer("mkt_purchase_order_line_id").references(() => mktPurchaseOrderLinesTable.id, { onDelete: "set null" }),
   productId: integer("product_id").references(() => productsTable.id, { onDelete: "set null" }),
   name: text("name").notNull(),
   quantity: numeric("quantity", { precision: 12, scale: 3 }).notNull().default("1"),
