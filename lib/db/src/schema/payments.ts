@@ -31,6 +31,8 @@ export const paymentsTable = pgTable("payments", {
 }, (t) => [
   index("payments_company_idx").on(t.companyId),
   index("payments_ref_idx").on(t.refKind, t.refId),
+  index("payments_paid_at_idx").on(t.paidAt),
+  index("payments_status_paid_at_idx").on(t.status, t.paidAt),
 ]);
 
 export type Payment = typeof paymentsTable.$inferSelect;

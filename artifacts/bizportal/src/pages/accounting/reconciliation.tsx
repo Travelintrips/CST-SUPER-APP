@@ -11,12 +11,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import {
   useListAccounts,
-  useListAccountingEntryLines,
-  getListAccountingEntryLinesQueryKey,
 } from "@workspace/api-client-react";
 import {
   ArrowLeft, CheckCircle2, Circle, GitMerge, Printer, Download,
   FileSpreadsheet, RefreshCw, AlertTriangle, XCircle, Info, Clock, Save,
+  Sparkles, Link2,
 } from "lucide-react";
 import { exportXlsx, printWindow } from "@/lib/export";
 import { Link } from "wouter";
@@ -24,14 +23,45 @@ import { Link } from "wouter";
 const idr = (n: number) =>
   new Intl.NumberFormat("id-ID", { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(n);
 
-const STORAGE_KEY = (accountId: number, from: string, to: string) =>
-  `recon_${accountId}_${from}_${to}`;
-function loadReconciled(key: string): Set<number> {
-  try { const raw = localStorage.getItem(key); if (!raw) return new Set(); return new Set(JSON.parse(raw) as number[]); }
-  catch { return new Set(); }
+interface ReconCandidate {
+  sourceType: string;
+  sourceId: number;
+  amount: number;
+  grossAmount?: number;
+  date: string;
+  ref: string | null;
+  label: string;
+  paymentMethod: string | null;
+  direction: "IN" | "OUT";
+  score: number;
+  reasons: string[];
+  available: boolean;
 }
-function saveReconciled(key: string, set: Set<number>) {
-  localStorage.setItem(key, JSON.stringify([...set]));
+
+interface ReconLine {
+  id: number;
+  entryId: number;
+  accountId: number;
+  description: string | null;
+  debit: number;
+  credit: number;
+  entryNumber: string;
+  entryDate: string;
+  entrySource: string;
+  journalId: number;
+  ref: string | null;
+  paymentMethod: string | null;
+  status: "unreconciled" | "suggested" | "reconciled";
+  match: {
+    sourceType: string | null;
+    sourceId: number | null;
+    method: string | null;
+    score: number | null;
+    details: { reasons?: string[] } | null;
+    reconciledAt: string | null;
+  } | null;
+  suggestion: ReconCandidate | null;
+  candidateCount: number;
 }
 
 // ─── Tab: Manual ──────────────────────────────────────────────────────────────
@@ -42,48 +72,107 @@ function ManualTab() {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [bankBalance, setBankBalance] = useState("");
-  const [reconciled, setReconciled] = useState<Set<number>>(new Set());
+  const [rows, setRows] = useState<ReconLine[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [savingId, setSavingId] = useState<number | null>(null);
+  const [autoMatching, setAutoMatching] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const params = useMemo(() => ({
-    ...(accountId ? { accountId } : {}),
-    ...(from ? { from: new Date(from).toISOString() } : {}),
-    ...(to ? { to: new Date(to + "T23:59:59").toISOString() } : {}),
-  }), [accountId, from, to]);
-
-  const { data: lines, isLoading } = useListAccountingEntryLines(params, {
-    query: { queryKey: getListAccountingEntryLinesQueryKey(params), enabled: !!accountId },
-  });
-
-  const storageKey = accountId ? STORAGE_KEY(accountId, from, to) : "";
-  function toggleReconcile(id: number) {
-    setReconciled((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      if (storageKey) saveReconciled(storageKey, next);
-      return next;
-    });
+  async function loadReconciliation() {
+    if (!accountId) {
+      setRows([]);
+      return;
+    }
+    setIsLoading(true);
+    setError(null);
+    try {
+      const query = new URLSearchParams({ accountId: String(accountId) });
+      if (from) query.set("from", new Date(from).toISOString());
+      if (to) query.set("to", new Date(`${to}T23:59:59`).toISOString());
+      const response = await fetch(`/api/accounting/reconciliation/lines?${query}`, { credentials: "include" });
+      const json = await response.json() as ReconLine[] | { message?: string };
+      if (!response.ok) throw new Error("message" in json ? json.message : "Gagal memuat rekonsiliasi");
+      setRows(json as ReconLine[]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Gagal memuat rekonsiliasi");
+    } finally {
+      setIsLoading(false);
+    }
   }
-  function loadFromStorage() { if (storageKey) setReconciled(loadReconciled(storageKey)); }
 
-  const rows = lines ?? [];
+  useEffect(() => {
+    void loadReconciliation();
+  }, [accountId, from, to]);
+
+  async function saveStatus(line: ReconLine, status: "unreconciled" | "reconciled", candidate?: ReconCandidate | null) {
+    setSavingId(line.id);
+    setError(null);
+    try {
+      const response = await fetch("/api/accounting/reconciliation/status", {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lineId: line.id,
+          status,
+          sourceType: candidate?.sourceType ?? null,
+          sourceId: candidate?.sourceId ?? null,
+          matchMethod: candidate ? "manual-confirm" : "manual",
+          matchScore: candidate?.score ?? null,
+          matchDetails: candidate ? { reasons: candidate.reasons, amount: candidate.amount, date: candidate.date, ref: candidate.ref } : {},
+        }),
+      });
+      const json = await response.json() as { message?: string };
+      if (!response.ok) throw new Error(json.message ?? "Gagal menyimpan status");
+      await loadReconciliation();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Gagal menyimpan status");
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  async function runAutoMatch() {
+    if (!accountId) return;
+    setAutoMatching(true);
+    setError(null);
+    try {
+      const query = new URLSearchParams({ accountId: String(accountId) });
+      if (from) query.set("from", new Date(from).toISOString());
+      if (to) query.set("to", new Date(`${to}T23:59:59`).toISOString());
+      const response = await fetch(`/api/accounting/reconciliation/auto-match?${query}`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const json = await response.json() as { message?: string; matched?: number };
+      if (!response.ok) throw new Error(json.message ?? "Gagal menjalankan pencocokan otomatis");
+      await loadReconciliation();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Gagal menjalankan pencocokan otomatis");
+    } finally {
+      setAutoMatching(false);
+    }
+  }
+
+  const reconciledRows = rows.filter((r) => r.status === "reconciled");
+  const unreconciledRows = rows.filter((r) => r.status !== "reconciled");
+  const reconciled = new Set(reconciledRows.map((r) => r.id));
   const totalDebit = rows.reduce((s, l) => s + l.debit, 0);
   const totalCredit = rows.reduce((s, l) => s + l.credit, 0);
   const bookBalance = totalDebit - totalCredit;
   const bankBal = parseFloat(bankBalance.replace(/[^0-9.-]/g, "")) || 0;
   const difference = bankBal - bookBalance;
-  const reconciledRows = rows.filter((r) => reconciled.has(r.id));
-  const unreconciledRows = rows.filter((r) => !reconciled.has(r.id));
   const selectedAccount = accounts?.find((a) => a.id === accountId);
 
   function handleExportXlsx() {
     exportXlsx("Rekonsiliasi_" + (selectedAccount?.code ?? ""),
       ["No. Entry", "Tanggal", "Sumber", "Referensi", "Deskripsi", "Debit", "Kredit", "Status"],
-      rows.map((l) => [l.entryNumber, new Date(l.entryDate).toLocaleDateString("id-ID"), l.entrySource, l.ref ?? "", l.description ?? "", l.debit || "", l.credit || "", reconciled.has(l.id) ? "Reconciled" : "Unreconciled"]));
+      rows.map((l) => [l.entryNumber, new Date(l.entryDate).toLocaleDateString("id-ID"), l.entrySource, l.ref ?? "", l.description ?? "", l.debit || "", l.credit || "", l.status]));
   }
   function handlePrint() {
     printWindow(`Rekonsiliasi — ${selectedAccount?.code ?? ""} ${selectedAccount?.name ?? ""}`,
       ["No. Entry", "Tanggal", "Sumber", "Referensi", "Deskripsi", "Debit", "Kredit", "Status"],
-      rows.map((l) => [l.entryNumber, new Date(l.entryDate).toLocaleDateString("id-ID"), l.entrySource, l.ref ?? "", l.description ?? "", l.debit || "", l.credit || "", reconciled.has(l.id) ? "✓ Reconciled" : "Unreconciled"]),
+      rows.map((l) => [l.entryNumber, new Date(l.entryDate).toLocaleDateString("id-ID"), l.entrySource, l.ref ?? "", l.description ?? "", l.debit || "", l.credit || "", l.status]),
       [5, 6]);
   }
 
@@ -98,7 +187,7 @@ function ManualTab() {
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="md:col-span-2">
               <Label>Akun Bank / Kas</Label>
-              <Select value={accountId ? String(accountId) : ""} onValueChange={(v) => { setAccountId(parseInt(v)); setTimeout(loadFromStorage, 50); }}>
+              <Select value={accountId ? String(accountId) : ""} onValueChange={(v) => setAccountId(parseInt(v))}>
                 <SelectTrigger><SelectValue placeholder="Pilih akun..." /></SelectTrigger>
                 <SelectContent>
                   {(accounts ?? []).filter((a) => a.isActive && a.type === "asset").map((a) => (
@@ -145,10 +234,14 @@ function ManualTab() {
               <div className="flex items-center justify-between mb-3">
                 <p className="text-sm font-semibold">Mutasi Buku Besar</p>
                 <div className="flex gap-2">
-                  <Button size="sm" variant="outline" onClick={() => { const all = new Set(rows.map((r) => r.id)); if (storageKey) saveReconciled(storageKey, all); setReconciled(all); }}>Centang Semua</Button>
-                  <Button size="sm" variant="ghost" onClick={() => { const e = new Set<number>(); if (storageKey) saveReconciled(storageKey, e); setReconciled(e); }}>Reset</Button>
+                  <Button size="sm" variant="outline" onClick={runAutoMatch} disabled={autoMatching || isLoading || rows.length === 0}>
+                    <Sparkles className={`h-4 w-4 mr-1.5 ${autoMatching ? "animate-pulse" : ""}`} />
+                    {autoMatching ? "Mencocokkan..." : "Cocokkan Otomatis"}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => Promise.all(reconciledRows.map((row) => saveStatus(row, "unreconciled")))} disabled={savingId !== null || reconciledRows.length === 0}>Reset</Button>
                 </div>
               </div>
+              {error && <div className="mb-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700 flex gap-2"><XCircle className="h-4 w-4 mt-0.5 shrink-0" />{error}</div>}
               {isLoading ? <p className="text-muted-foreground text-sm py-8 text-center">Memuat data...</p>
                 : rows.length === 0 ? <p className="text-muted-foreground text-sm py-8 text-center">Tidak ada mutasi untuk akun dan periode ini</p>
                 : (
@@ -165,22 +258,45 @@ function ManualTab() {
                       </TableHeader>
                       <TableBody>
                         {rows.map((line) => {
-                          const isRec = reconciled.has(line.id);
+                           const isRec = line.status === "reconciled";
+                           const candidate = line.suggestion;
+                           const isSaving = savingId === line.id;
                           return (
                             <TableRow key={line.id} className={isRec ? "bg-emerald-50/60" : ""}>
                               <TableCell>
-                                <button onClick={() => toggleReconcile(line.id)} className="text-muted-foreground hover:text-emerald-600 transition-colors">
+                                 <button
+                                   onClick={() => void saveStatus(line, isRec ? "unreconciled" : "reconciled", isRec ? null : candidate)}
+                                   disabled={isSaving}
+                                   title={candidate ? `Cocokkan dengan ${candidate.label}` : "Tandai manual"}
+                                   className="text-muted-foreground hover:text-emerald-600 transition-colors disabled:opacity-50"
+                                 >
                                   {isRec ? <CheckCircle2 className="h-5 w-5 text-emerald-600" /> : <Circle className="h-5 w-5" />}
                                 </button>
                               </TableCell>
                               <TableCell className="font-mono text-xs font-semibold">{line.entryNumber}</TableCell>
                               <TableCell className="text-xs whitespace-nowrap">{new Date(line.entryDate).toLocaleDateString("id-ID")}</TableCell>
                               <TableCell><Badge variant="secondary" className="text-xs">{line.entrySource}</Badge></TableCell>
-                              <TableCell className="text-xs text-muted-foreground">{line.ref ?? "—"}</TableCell>
+                               <TableCell className="text-xs text-muted-foreground">{line.ref ?? "—"}{line.paymentMethod && <span className="ml-1 text-[10px] uppercase text-violet-600">({line.paymentMethod})</span>}</TableCell>
                               <TableCell className="text-xs max-w-[180px] truncate">{line.description ?? "—"}</TableCell>
                               <TableCell className="text-right font-mono text-xs">{line.debit > 0 && <span className="text-blue-700 font-semibold">{idr(line.debit)}</span>}</TableCell>
                               <TableCell className="text-right font-mono text-xs">{line.credit > 0 && <span className="text-emerald-700 font-semibold">{idr(line.credit)}</span>}</TableCell>
-                              <TableCell>{isRec ? <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs">✓ Reconciled</Badge> : <Badge variant="outline" className="text-xs text-muted-foreground">Pending</Badge>}</TableCell>
+                               <TableCell className="min-w-[240px]">
+                                 {isRec
+                                   ? <div className="space-y-1">
+                                       <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 text-xs">✓ Reconciled</Badge>
+                                       {line.match?.sourceType && <p className="text-[10px] text-muted-foreground flex items-center gap-1"><Link2 className="h-3 w-3" />{line.match.sourceType} #{line.match.sourceId} · {line.match.method}</p>}
+                                     </div>
+                                   : candidate
+                                   ? <div className="space-y-1">
+                                       <div className="flex items-center gap-1.5">
+                                         <Badge variant="outline" className="border-blue-200 text-blue-700 text-xs">Saran {candidate.score}%</Badge>
+                                         <span className="text-[10px] text-muted-foreground">{line.candidateCount} kandidat</span>
+                                       </div>
+                                       <p className="text-[10px] text-muted-foreground truncate max-w-[220px]" title={candidate.label}>{candidate.label}</p>
+                                       <p className="text-[10px] text-blue-700">{candidate.reasons.join(" · ")}</p>
+                                     </div>
+                                   : <Badge variant="outline" className="text-xs text-muted-foreground">Belum cocok</Badge>}
+                               </TableCell>
                             </TableRow>
                           );
                         })}

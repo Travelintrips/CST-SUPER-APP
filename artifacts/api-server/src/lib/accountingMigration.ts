@@ -34,6 +34,53 @@ export async function runAccountingMigration(): Promise<void> {
         ADD COLUMN IF NOT EXISTS payment_number TEXT
     `);
 
+    // ── Server-side ledger reconciliation state ───────────────────────────
+    // Keep this migration additive and idempotent because the API runs it on
+    // every startup in both development and production environments.
+    await db.execute(sql`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_type WHERE typname = 'reconciliation_status'
+        ) THEN
+          CREATE TYPE reconciliation_status AS ENUM ('unreconciled', 'suggested', 'reconciled');
+        END IF;
+      END $$;
+    `);
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS accounting_reconciliations (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER NOT NULL,
+        line_id INTEGER NOT NULL UNIQUE
+          REFERENCES accounting_entry_lines(id) ON DELETE CASCADE,
+        status reconciliation_status NOT NULL DEFAULT 'unreconciled',
+        match_source_type TEXT,
+        match_source_id INTEGER,
+        match_method TEXT,
+        match_score NUMERIC(5,2),
+        match_details JSONB,
+        reconciled_by TEXT,
+        reconciled_at TIMESTAMP,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS accounting_reconciliations_company_status_idx
+        ON accounting_reconciliations(company_id, status)
+    `);
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS accounting_reconciliations_source_idx
+        ON accounting_reconciliations(match_source_type, match_source_id)
+    `);
+    await db.execute(sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS accounting_reconciliations_reconciled_source_uniq
+        ON accounting_reconciliations(company_id, match_source_type, match_source_id)
+        WHERE status = 'reconciled'
+          AND match_source_type IS NOT NULL
+          AND match_source_id IS NOT NULL
+    `);
+
     // ── accounting_entry_source enum: tambahkan 'reversal' jika belum ada ──
     await db.execute(sql`
       DO $$ BEGIN

@@ -884,6 +884,395 @@ router.get("/entry-lines", async (req, res) => {
   );
 });
 
+// ============ Ledger reconciliation ===========================================
+//
+// This flow reconciles posted ledger lines. Sport Center payments are sourced
+// from sport_payments only; accounting_payments rows with source_type
+// "sport_center" are deliberately excluded because they are mirrors.
+type ReconciliationCandidate = {
+  sourceType: string;
+  sourceId: number;
+  amount: number;
+  grossAmount?: number;
+  date: string;
+  ref: string | null;
+  label: string;
+  paymentMethod: string | null;
+  direction: "IN" | "OUT";
+  score: number;
+  reasons: string[];
+  available: boolean;
+};
+
+function normalizeReconText(value: unknown): string {
+  return String(value ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function reconDateDiffDays(left: string, right: string): number {
+  const a = new Date(`${left.slice(0, 10)}T00:00:00Z`).getTime();
+  const b = new Date(`${right.slice(0, 10)}T00:00:00Z`).getTime();
+  return Math.round(Math.abs(a - b) / 86_400_000);
+}
+
+function reconIsQris(...values: unknown[]): boolean {
+  return values.some((value) => String(value ?? "").toLowerCase().includes("qris"));
+}
+
+function scoreReconCandidate(
+  line: {
+    entryDate: string;
+    ref: string | null;
+    description: string | null;
+    paymentMethod: string | null;
+    debit: number;
+    credit: number;
+  },
+  candidate: Omit<ReconciliationCandidate, "score" | "reasons" | "available">,
+  usedSourceKeys: Set<string>,
+): ReconciliationCandidate | null {
+  const lineAmount = line.debit > 0 ? line.debit : line.credit;
+  if (Math.abs(lineAmount - candidate.amount) > 0.01) return null;
+  const dateDiff = reconDateDiffDays(line.entryDate, candidate.date);
+  if (dateDiff > 3) return null;
+
+  const lineText = normalizeReconText(`${line.ref ?? ""} ${line.description ?? ""}`);
+  const candidateText = normalizeReconText(`${candidate.ref ?? ""} ${candidate.label}`);
+  const refMatch = candidateText.length >= 4 &&
+    (lineText.includes(candidateText) || candidateText.includes(lineText));
+  const qrisMatch = reconIsQris(line.paymentMethod, line.ref, line.description) &&
+    reconIsQris(candidate.paymentMethod, candidate.ref, candidate.label);
+
+  let score = 50;
+  const reasons = ["Nominal sama"];
+  if (dateDiff === 0) {
+    score += 20;
+    reasons.push("Tanggal sama");
+  } else {
+    score += 10;
+    reasons.push(`Tanggal ±${dateDiff} hari`);
+  }
+  if (refMatch) {
+    score += 25;
+    reasons.push("Referensi cocok");
+  }
+  if (qrisMatch) {
+    score += 15;
+    reasons.push("Metode QRIS cocok");
+  }
+
+  return {
+    ...candidate,
+    score: Math.min(score, 100),
+    reasons,
+    available: !usedSourceKeys.has(`${candidate.sourceType}:${candidate.sourceId}`),
+  };
+}
+
+async function getReconciliationLines(req: Request, companyId: number) {
+  const range = parseDateRange(req);
+  if (range.error) throw new Error(range.error);
+  const conditions: SQL<unknown>[] = [eq(accountingEntriesTable.companyId, companyId)];
+  if (range.from) conditions.push(gte(accountingEntriesTable.date, range.from.toISOString().slice(0, 10)));
+  if (range.to) conditions.push(lte(accountingEntriesTable.date, range.to.toISOString().slice(0, 10)));
+
+  const accountId = req.query["accountId"] ? Number(req.query["accountId"]) : null;
+  if (accountId && !Number.isNaN(accountId)) {
+    conditions.push(eq(accountingEntryLinesTable.accountId, accountId));
+  }
+
+  const lines = await db.select({
+    id: accountingEntryLinesTable.id,
+    entryId: accountingEntryLinesTable.entryId,
+    accountId: accountingEntryLinesTable.accountId,
+    description: accountingEntryLinesTable.description,
+    debit: accountingEntryLinesTable.debit,
+    credit: accountingEntryLinesTable.credit,
+    entryNumber: accountingEntriesTable.entryNumber,
+    entryDate: accountingEntriesTable.date,
+    entrySource: accountingEntriesTable.source,
+    journalId: accountingEntriesTable.journalId,
+    ref: accountingEntriesTable.ref,
+    paymentMethod: accountingEntriesTable.paymentMethod,
+  })
+    .from(accountingEntryLinesTable)
+    .innerJoin(accountingEntriesTable, eq(accountingEntryLinesTable.entryId, accountingEntriesTable.id))
+    .where(and(...conditions))
+    .orderBy(desc(accountingEntriesTable.date), desc(accountingEntriesTable.id), accountingEntryLinesTable.id)
+    .limit(1000);
+
+  if (lines.length === 0) return [];
+  const dates = lines.map((line) => String(line.entryDate).slice(0, 10)).sort();
+  const fromDateValue = new Date(`${dates[0]}T00:00:00Z`);
+  fromDateValue.setUTCDate(fromDateValue.getUTCDate() - 3);
+  const toDateValue = new Date(`${dates[dates.length - 1]}T00:00:00Z`);
+  toDateValue.setUTCDate(toDateValue.getUTCDate() + 3);
+  const fromDate = fromDateValue.toISOString().slice(0, 10);
+  const toDate = toDateValue.toISOString().slice(0, 10);
+
+  const [accountingRows, paymentRows] = await Promise.all([
+    db.execute(sql`
+      SELECT ap.id AS source_id, ap.amount::numeric AS amount,
+             ap.date::date::text AS match_date,
+             COALESCE(ap.ref, ap.payment_number, ap.memo) AS match_ref,
+             COALESCE(ap.partner_name, ap.memo, ap.payment_number, 'Accounting payment') AS label,
+             COALESCE(ap.payment_method, '') AS payment_method,
+             CASE WHEN ap.payment_type::text = 'outbound' THEN 'OUT' ELSE 'IN' END AS direction
+      FROM accounting_payments ap
+      WHERE ap.company_id = ${companyId}
+        AND ap.date BETWEEN ${fromDate}::date AND ${toDate}::date
+        AND COALESCE(ap.status::text, 'posted') NOT IN ('voided', 'cancelled', 'rejected')
+        AND ap.voided_at IS NULL
+        AND (ap.source_type IS NULL OR ap.source_type <> 'sport_center')
+    `),
+    db.execute(sql`
+      SELECT p.id AS source_id, p.amount::numeric AS amount,
+             p.paid_at::date::text AS match_date,
+             COALESCE(p.provider_order_id, p.provider_merchant_trade_no, p.ref_doc_number) AS match_ref,
+             COALESCE(p.ref_doc_number, p.provider_merchant_trade_no, 'Paylabs payment') AS label,
+             CASE WHEN p.raw::text ILIKE '%qris%' THEN 'qris' ELSE 'paylabs' END AS payment_method
+      FROM payments p
+      WHERE p.company_id = ${companyId}
+        AND p.status = 'paid'
+        AND p.paid_at IS NOT NULL
+        AND p.paid_at::date BETWEEN ${fromDate}::date AND ${toDate}::date
+    `),
+  ]);
+
+  const pool: Array<Omit<ReconciliationCandidate, "score" | "reasons" | "available">> = [
+    ...(accountingRows.rows as any[]).map((row) => ({
+      sourceType: "accounting_payment",
+      sourceId: Number(row.source_id),
+      amount: Number(row.amount),
+      date: String(row.match_date),
+      ref: row.match_ref ? String(row.match_ref) : null,
+      label: String(row.label),
+      paymentMethod: row.payment_method ? String(row.payment_method) : null,
+      direction: row.direction === "OUT" ? "OUT" as const : "IN" as const,
+    })),
+    ...(paymentRows.rows as any[]).map((row) => ({
+      sourceType: "payment",
+      sourceId: Number(row.source_id),
+      amount: Number(row.amount),
+      date: String(row.match_date),
+      ref: row.match_ref ? String(row.match_ref) : null,
+      label: String(row.label),
+      paymentMethod: row.payment_method ? String(row.payment_method) : null,
+      direction: "IN" as const,
+    })),
+  ];
+
+  try {
+    const sportRows = await db.execute(sql`
+      SELECT sp.id AS source_id, sp.amount::numeric AS gross_amount,
+             COALESCE(NULLIF(sp.net_amount, 0), sp.amount)::numeric AS amount,
+             COALESCE(sp.settlement_date, sp.paid_at::date, sp.created_at::date)::text AS match_date,
+             COALESCE(sp.settlement_reference, sp.payment_number) AS match_ref,
+             COALESCE(sp.payment_number, 'Sport Center payment') AS label,
+             sp.method AS payment_method
+      FROM sport_payments sp
+      WHERE sp.company_id = ${companyId}
+        AND sp.status = 'paid'
+        AND COALESCE(sp.settlement_date, sp.paid_at::date, sp.created_at::date)
+          BETWEEN ${fromDate}::date AND ${toDate}::date
+    `);
+    pool.push(...(sportRows.rows as any[]).map((row) => ({
+      sourceType: "sport_payment",
+      sourceId: Number(row.source_id),
+      amount: Number(row.amount),
+      grossAmount: Number(row.gross_amount),
+      date: String(row.match_date),
+      ref: row.match_ref ? String(row.match_ref) : null,
+      label: String(row.label),
+      paymentMethod: row.payment_method ? String(row.payment_method) : null,
+      direction: "IN" as const,
+    })));
+  } catch (err) {
+    logger.warn({ err }, "[reconciliation] sport_payments unavailable");
+  }
+
+  const saved = await db.execute(sql`
+    SELECT line_id, status, match_source_type, match_source_id, match_method,
+           match_score, match_details, reconciled_at
+    FROM accounting_reconciliations
+    WHERE company_id = ${companyId}
+  `).catch(() => ({ rows: [] as any[] }));
+  const savedByLine = new Map<number, any>();
+  const usedSources = new Set<string>();
+  for (const row of saved.rows as any[]) {
+    savedByLine.set(Number(row.line_id), row);
+    if (row.status === "reconciled" && row.match_source_type && row.match_source_id != null) {
+      usedSources.add(`${row.match_source_type}:${Number(row.match_source_id)}`);
+    }
+  }
+
+  return lines.map((line) => {
+    const debit = Number(line.debit);
+    const credit = Number(line.credit);
+    const direction = debit > 0 ? "IN" as const : "OUT" as const;
+    const current = savedByLine.get(line.id);
+    const candidates = pool
+      .filter((candidate) => candidate.direction === direction)
+      .map((candidate) => scoreReconCandidate({
+        entryDate: String(line.entryDate),
+        ref: line.ref,
+        description: line.description,
+        paymentMethod: line.paymentMethod,
+        debit,
+        credit,
+      }, candidate, usedSources))
+      .filter((candidate): candidate is ReconciliationCandidate => Boolean(candidate))
+      .sort((a, b) => b.score - a.score);
+    const suggestion = candidates.find((candidate) => candidate.available) ?? candidates[0] ?? null;
+    return {
+      ...line,
+      debit,
+      credit,
+      entryDate: String(line.entryDate),
+      status: current?.status === "reconciled" || current?.status === "suggested" ? current.status : "unreconciled",
+      match: current ? {
+        sourceType: current.match_source_type ?? null,
+        sourceId: current.match_source_id == null ? null : Number(current.match_source_id),
+        method: current.match_method ?? null,
+        score: current.match_score == null ? null : Number(current.match_score),
+        details: current.match_details ?? null,
+        reconciledAt: current.reconciled_at ? new Date(current.reconciled_at).toISOString() : null,
+      } : null,
+      suggestion,
+      candidateCount: candidates.length,
+    };
+  });
+}
+
+router.get("/reconciliation/lines", async (req, res) => {
+  try {
+    return res.json(await getReconciliationLines(req, resolveCompanyId(req)));
+  } catch (err) {
+    logger.error({ err: (err as any)?.cause?.message ?? err }, "[reconciliation] load failed");
+    return res.status(500).json({ message: "Gagal memuat data rekonsiliasi" });
+  }
+});
+
+router.put("/reconciliation/status", async (req, res) => {
+  const companyId = resolveCompanyId(req);
+  const body = req.body as {
+    lineId?: number;
+    status?: "unreconciled" | "suggested" | "reconciled";
+    sourceType?: string | null;
+    sourceId?: number | null;
+    matchMethod?: string | null;
+    matchScore?: number | null;
+    matchDetails?: unknown;
+  };
+  const lineId = Number(body.lineId);
+  if (!Number.isInteger(lineId) || !["unreconciled", "suggested", "reconciled"].includes(body.status ?? "")) {
+    return res.status(400).json({ message: "lineId dan status rekonsiliasi tidak valid" });
+  }
+  try {
+    const line = await db.execute(sql`
+      SELECT ael.id
+      FROM accounting_entry_lines ael
+      JOIN accounting_entries ae ON ae.id = ael.entry_id
+      WHERE ael.id = ${lineId} AND ae.company_id = ${companyId}
+      LIMIT 1
+    `);
+    if (line.rows.length === 0) return res.status(404).json({ message: "Entry line tidak ditemukan" });
+
+    if (body.status === "reconciled" && body.sourceType && body.sourceId != null) {
+      const duplicate = await db.execute(sql`
+        SELECT line_id
+        FROM accounting_reconciliations
+        WHERE company_id = ${companyId}
+          AND status = 'reconciled'
+          AND match_source_type = ${body.sourceType}
+          AND match_source_id = ${Number(body.sourceId)}
+          AND line_id <> ${lineId}
+        LIMIT 1
+      `);
+      if (duplicate.rows.length > 0) {
+        return res.status(409).json({ message: "Sumber transaksi sudah direkonsiliasi dengan entry line lain" });
+      }
+    }
+
+    const actor = String((req.user as any)?.email ?? (req.user as any)?.id ?? "admin");
+    await db.execute(sql`
+      INSERT INTO accounting_reconciliations (
+        company_id, line_id, status, match_source_type, match_source_id,
+        match_method, match_score, match_details, reconciled_by, reconciled_at, updated_at
+      ) VALUES (
+        ${companyId}, ${lineId}, ${body.status}::reconciliation_status,
+        ${body.status === "unreconciled" ? null : body.sourceType ?? null},
+        ${body.status === "unreconciled" ? null : (body.sourceId == null ? null : Number(body.sourceId))},
+        ${body.status === "unreconciled" ? null : body.matchMethod ?? "manual"},
+        ${body.status === "unreconciled" ? null : (body.matchScore == null ? null : Number(body.matchScore))},
+        ${body.status === "unreconciled" ? null : JSON.stringify(body.matchDetails ?? {})}::jsonb,
+        ${body.status === "reconciled" ? actor : null},
+        ${body.status === "reconciled" ? sql`NOW()` : sql`NULL`},
+        NOW()
+      )
+      ON CONFLICT (line_id) DO UPDATE SET
+        status = EXCLUDED.status,
+        match_source_type = EXCLUDED.match_source_type,
+        match_source_id = EXCLUDED.match_source_id,
+        match_method = EXCLUDED.match_method,
+        match_score = EXCLUDED.match_score,
+        match_details = EXCLUDED.match_details,
+        reconciled_by = EXCLUDED.reconciled_by,
+        reconciled_at = EXCLUDED.reconciled_at,
+        updated_at = NOW()
+    `);
+    return res.json({ ok: true, lineId, status: body.status });
+  } catch (err) {
+    logger.error({ err: (err as any)?.cause?.message ?? err }, "[reconciliation] save failed");
+    return res.status(500).json({ message: "Gagal menyimpan status rekonsiliasi" });
+  }
+});
+
+router.post("/reconciliation/auto-match", async (req, res) => {
+  const companyId = resolveCompanyId(req);
+  try {
+    const lines = await getReconciliationLines(req, companyId);
+    let matched = 0;
+    let skipped = 0;
+    const claimedSources = new Set<string>();
+    for (const line of lines) {
+      if (line.status === "reconciled" || !line.suggestion || !line.suggestion.available || line.suggestion.score < 70) {
+        skipped++;
+        continue;
+      }
+      const suggestion = line.suggestion;
+      const sourceKey = `${suggestion.sourceType}:${suggestion.sourceId}`;
+      if (claimedSources.has(sourceKey)) {
+        skipped++;
+        continue;
+      }
+      const inserted = await db.execute(sql`
+        INSERT INTO accounting_reconciliations (
+          company_id, line_id, status, match_source_type, match_source_id,
+          match_method, match_score, match_details, reconciled_by, reconciled_at, updated_at
+        ) VALUES (
+          ${companyId}, ${line.id}, 'reconciled'::reconciliation_status,
+          ${suggestion.sourceType}, ${suggestion.sourceId}, 'auto',
+          ${suggestion.score},
+          ${JSON.stringify({ reasons: suggestion.reasons, amount: suggestion.amount, date: suggestion.date, ref: suggestion.ref })}::jsonb,
+          ${String((req.user as any)?.email ?? (req.user as any)?.id ?? "admin")}, NOW(), NOW()
+        )
+        ON CONFLICT DO NOTHING
+        RETURNING id
+      `);
+      if ((inserted.rows as any[]).length === 0) {
+        skipped++;
+        continue;
+      }
+      claimedSources.add(sourceKey);
+      matched++;
+    }
+    return res.json({ ok: true, matched, skipped });
+  } catch (err) {
+    logger.error({ err: (err as any)?.cause?.message ?? err }, "[reconciliation] auto-match failed");
+    return res.status(500).json({ message: "Gagal menjalankan pencocokan otomatis" });
+  }
+});
+
 // ============ Payments & Receipts ============
 function serializePayment(p: typeof accountingPaymentsTable.$inferSelect) {
   return {
