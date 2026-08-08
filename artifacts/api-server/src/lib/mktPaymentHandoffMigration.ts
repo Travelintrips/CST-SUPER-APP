@@ -104,7 +104,6 @@ export async function runMktPaymentHandoffMigration(): Promise<void> {
     SET mkt_lifecycle_status = 'payment_request_created',
         updated_at = NOW()
     WHERE source_type = 'marketplace_ap_preparation'
-      AND mkt_ap_preparation_id IS NOT NULL
       AND mkt_lifecycle_status IS NULL
   `);
   await db.execute(sql`

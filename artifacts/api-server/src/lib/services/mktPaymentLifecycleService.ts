@@ -50,7 +50,10 @@ export type MarketplacePaymentLifecycleResult =
     };
 
 function isMarketplaceRequest(row: PaymentRequestRow): boolean {
-  return row.sourceType === "marketplace_ap_preparation" && row.mktApPreparationId != null;
+  // Legacy 09A rows may have the Marketplace source marker without the later
+  // AP-preparation foreign key. The source marker remains authoritative for
+  // lifecycle scope; the preparation link is optional for legacy context.
+  return row.sourceType === "marketplace_ap_preparation";
 }
 
 function normalizeIdempotencyKey(value: unknown): string | null {
