@@ -16,7 +16,7 @@ const connStr =
 if (!connStr) throw new Error("No DB connection string found");
 
 const pool = new Pool({ connectionString: connStr, max: 3 });
-const API_BASE = "http://localhost:8080";
+const API_BASE = (process.env.API_BASE_URL ?? "http://127.0.0.1:18444").replace(/\/$/, "");
 
 // ── Result tracking ──────────────────────────────────────────────────────────
 interface TestResult { name: string; passed: boolean; detail: string; }
