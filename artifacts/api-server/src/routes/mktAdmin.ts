@@ -89,6 +89,14 @@ import {
   safeMarketplaceVendorInvoiceView,
   submitMarketplaceVendorInvoice,
 } from "../lib/services/mktVendorInvoiceService.js";
+import {
+  createApPreparation,
+  getApPreparation,
+  listApPreparations,
+  markApPreparationWaitingPayment,
+  reviewApPreparation,
+  safeApView,
+} from "../lib/services/mktApPreparationService.js";
 
 const router = Router();
 const fulfillmentWriteLimiter = rateLimit({
@@ -1080,6 +1088,125 @@ router.post("/vendor-invoices/:id/match", fulfillmentWriteLimiter, async (req, r
     });
   } catch (err) {
     logger.warn({ err, invoiceId }, "[mktAdmin] execute marketplace vendor invoice match error");
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+// ── Sprint 8B — AP preparation handoff ─────────────────────────────────────
+// This lifecycle ends at waiting_payment. It deliberately does not create
+// payment, journal, accounting, cash-disbursement, or bank-reconciliation rows.
+const ApPreparationActionSchema = z.object({}).strict();
+
+function mapApFailureStatus(code: string): number {
+  if (code === "NOT_FOUND") return 404;
+  if (code === "INVALID_STATUS" || code === "CONCURRENT_UPDATE") return 409;
+  if (code === "MATCH_NOT_PASSED" || code === "MISSING_REFERENCE") return 422;
+  return 400;
+}
+
+router.get("/ap-preparations", async (req, res) => {
+  const ok = await requireAdmin(req, res);
+  if (!ok) return;
+  try {
+    const rawCompanyId = req.query.companyId;
+    const companyId = rawCompanyId == null ? null : Number(rawCompanyId);
+    if (companyId != null && (!Number.isInteger(companyId) || companyId <= 0)) {
+      return res.status(400).json({ ok: false, error: "companyId harus berupa integer positif" });
+    }
+    const rows = await listApPreparations(companyId);
+    return res.json({ ok: true, data: rows.map(safeApView) });
+  } catch (err) {
+    logger.warn({ err }, "[mktAdmin] list AP preparations error");
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+router.get("/ap-preparations/:id", async (req, res) => {
+  const ok = await requireAdmin(req, res);
+  if (!ok) return;
+  const id = Number(req.params["id"]);
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ ok: false, error: "id harus berupa integer positif" });
+  }
+  try {
+    const row = await getApPreparation(id);
+    if (!row) return res.status(404).json({ ok: false, error: "AP_PREPARATION_NOT_FOUND" });
+    return res.json({ ok: true, data: safeApView(row) });
+  } catch (err) {
+    logger.warn({ err, id }, "[mktAdmin] get AP preparation error");
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+router.post("/vendor-invoices/:id/ap-preparation", fulfillmentWriteLimiter, async (req, res) => {
+  const ok = await requireAdmin(req, res);
+  if (!ok) return;
+  const invoiceId = Number(req.params["id"]);
+  if (!Number.isInteger(invoiceId) || invoiceId <= 0) {
+    return res.status(400).json({ ok: false, error: "invoiceId harus berupa integer positif" });
+  }
+  const body = ApPreparationActionSchema.safeParse(req.body ?? {});
+  if (!body.success) {
+    return res.status(422).json({ ok: false, error: "INVALID_BODY", details: body.error.flatten() });
+  }
+  try {
+    const result = await createApPreparation(invoiceId, getActorFromReq(req));
+    if (!result.ok) {
+      return res.status(mapApFailureStatus(result.code)).json({ ok: false, error: result.code, message: result.message });
+    }
+    return res.status(result.alreadyExists ? 200 : 201).json({
+      ok: true,
+      alreadyExists: result.alreadyExists,
+      data: safeApView(result.preparation),
+    });
+  } catch (err) {
+    logger.warn({ err, invoiceId }, "[mktAdmin] create AP preparation error");
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+router.post("/ap-preparations/:id/finance-review", fulfillmentWriteLimiter, async (req, res) => {
+  const ok = await requireAdmin(req, res);
+  if (!ok) return;
+  const id = Number(req.params["id"]);
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ ok: false, error: "id harus berupa integer positif" });
+  }
+  const body = ApPreparationActionSchema.safeParse(req.body ?? {});
+  if (!body.success) {
+    return res.status(422).json({ ok: false, error: "INVALID_BODY", details: body.error.flatten() });
+  }
+  try {
+    const result = await reviewApPreparation(id, getActorFromReq(req));
+    if (!result.ok) {
+      return res.status(mapApFailureStatus(result.code)).json({ ok: false, error: result.code, currentStatus: result.currentStatus, message: result.message });
+    }
+    return res.json({ ok: true, alreadyReviewed: result.alreadyExists, data: safeApView(result.preparation) });
+  } catch (err) {
+    logger.warn({ err, id }, "[mktAdmin] finance review AP preparation error");
+    return res.status(500).json({ ok: false, error: "Internal server error" });
+  }
+});
+
+router.post("/ap-preparations/:id/waiting-payment", fulfillmentWriteLimiter, async (req, res) => {
+  const ok = await requireAdmin(req, res);
+  if (!ok) return;
+  const id = Number(req.params["id"]);
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ ok: false, error: "id harus berupa integer positif" });
+  }
+  const body = ApPreparationActionSchema.safeParse(req.body ?? {});
+  if (!body.success) {
+    return res.status(422).json({ ok: false, error: "INVALID_BODY", details: body.error.flatten() });
+  }
+  try {
+    const result = await markApPreparationWaitingPayment(id, getActorFromReq(req));
+    if (!result.ok) {
+      return res.status(mapApFailureStatus(result.code)).json({ ok: false, error: result.code, currentStatus: result.currentStatus, message: result.message });
+    }
+    return res.json({ ok: true, alreadyWaitingPayment: result.alreadyExists, data: safeApView(result.preparation) });
+  } catch (err) {
+    logger.warn({ err, id }, "[mktAdmin] waiting payment AP preparation error");
     return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
