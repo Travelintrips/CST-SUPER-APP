@@ -718,6 +718,7 @@ router.post("/hub/posting-errors/:id/retry", async (req, res) => {
         refKind: payment.refKind,
         refDocNumber: payment.refDocNumber,
         amount: Number(payment.amount),
+        paymentMethod: payment.paymentMethod,
         companyId: payment.companyId,
       });
     } else {

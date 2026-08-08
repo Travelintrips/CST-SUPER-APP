@@ -139,6 +139,26 @@ export interface PostingInput {
 }
 
 /**
+ * Canonical payment-method values used by payment, Sport Center, and
+ * accounting flows. Provider labels are deliberately collapsed to the
+ * business method so QRIS mapping cannot diverge between modules.
+ */
+export function normalizePaymentMethod(method: string | null | undefined): string | null {
+  const value = String(method ?? "").trim().toLowerCase();
+  if (!value) return null;
+  if (value.includes("qris") || value === "qr") return "qris";
+  if (["cash", "tunai", "cash on hand", "kas"].includes(value)) return "cash";
+  if (["bank transfer", "transfer bank", "transfer", "bank"].includes(value)) return "transfer";
+  if (["debit", "debit card"].includes(value)) return "debit";
+  if (["credit", "credit card", "card", "kartu"].includes(value)) return "credit";
+  return value;
+}
+
+export function isCashPaymentMethod(method: string | null | undefined): boolean {
+  return normalizePaymentMethod(method) === "cash";
+}
+
+/**
  * Resolve akun Pendapatan Sewa Tenant (4-1021) dari settings lalu fallback ke COA lookup.
  * Urutan: settings.tenantRentIncomeAccountId → COA LIKE '4-1021%' → fallbackId.
  */
@@ -1848,12 +1868,11 @@ export async function postPaymentReceived(args: {
 }): Promise<boolean> {
   try {
     const settings = await ensureAccountingSettings(args.companyId ?? undefined);
+    const paymentMethod = normalizePaymentMethod(args.paymentMethod);
 
     // Tentukan apakah tunai (kas) atau non-tunai (bank transfer / QRIS)
     // QRIS = non-cash → masuk ke Bank journal (BNK), bukan Cash journal (CSH)
-    const isCash =
-      args.paymentMethod === "cash" ||
-      args.paymentMethod === "tunai";
+    const isCash = isCashPaymentMethod(paymentMethod);
 
     const targetAccountId = isCash
       ? (settings.defaultCashAccountId ?? settings.defaultBankAccountId)
@@ -1942,6 +1961,7 @@ export async function postPaymentReceived(args: {
         date: new Date(),
         ref: args.refDocNumber,
         description: `Pembayaran ${args.refDocNumber}`,
+        paymentMethod,
         source,
         sourceId: args.paymentId,
         companyId: args.companyId ?? null,
@@ -2296,6 +2316,7 @@ export async function postSportCenterBooking(args: {
   facilityName: string;
   date: string;
   totalPrice: number;
+  paymentMethod?: string | null;
   createdById?: string | null;
   companyId?: number | null;
 }): Promise<void> {
@@ -2326,11 +2347,17 @@ export async function postSportCenterBooking(args: {
     }
 
     const settings = await ensureAccountingSettings(args.companyId ?? 1);
+    const paymentMethod = normalizePaymentMethod(args.paymentMethod);
 
-    const debitAccountId = settings.defaultCashAccountId ?? settings.defaultBankAccountId;
+    const isCash = isCashPaymentMethod(paymentMethod);
+    const debitAccountId = isCash
+      ? (settings.defaultCashAccountId ?? settings.defaultBankAccountId)
+      : (settings.defaultBankAccountId ?? settings.defaultCashAccountId);
     const creditAccountId = await resolveSportCenterBookingAccountId(args.companyId, settings.salesIncomeAccountId);
-    const journalId = settings.cashJournalId ?? settings.bankJournalId;
-    const journalCode = settings.cashJournalId ? "CSH" : "BNK";
+    const journalId = isCash
+      ? (settings.cashJournalId ?? settings.bankJournalId)
+      : (settings.bankJournalId ?? settings.cashJournalId);
+    const journalCode = isCash && settings.cashJournalId ? "CSH" : "BNK";
 
     if (!debitAccountId || !creditAccountId || !journalId) {
       logger.warn(
@@ -2360,6 +2387,7 @@ export async function postSportCenterBooking(args: {
         date: new Date(args.date),
         ref: args.bookingCode,
         description: `Booking Sport Center: ${args.facilityName} — ${args.customerName} (${args.date})`,
+        paymentMethod,
         source: "sport_center_booking",
         sourceId: args.bookingId,
         createdById: args.createdById ?? null,
@@ -2475,7 +2503,8 @@ export async function postSportCenterPaymentAtomic(
   // ── 2. Resolve COA + journal — THROW (not silent void) on missing ────────
   const settings = await ensureAccountingSettings(args.companyId);
 
-  const isCash = ["cash", "tunai"].includes((args.method ?? "").toLowerCase());
+  const paymentMethod = normalizePaymentMethod(args.method) ?? "cash";
+  const isCash = isCashPaymentMethod(paymentMethod);
   const journalId = isCash
     ? (settings.cashJournalId  ?? settings.bankJournalId)
     : (settings.bankJournalId ?? settings.cashJournalId);
@@ -2551,7 +2580,7 @@ export async function postSportCenterPaymentAtomic(
       date:        new Date(args.date),
       ref:         args.sourceRef,
       description,
-      paymentMethod: args.method,
+       paymentMethod,
       source:      entrySource,
       sourceId:    args.sourceId,
       createdById: args.createdById ?? null,
@@ -2602,7 +2631,7 @@ export async function postSportCenterPaymentAtomic(
        ${journalId}, ${args.customerName || null}, ${args.date},
        ${args.sourceRef || null},
        ${"Pembayaran sport center " + args.type + " " + args.sourceRef},
-       ${args.method || null},
+        ${paymentMethod},
        ${entry.id}, 'sport_center', ${args.paymentId}, ${args.createdById ?? null})
     RETURNING id
   `);

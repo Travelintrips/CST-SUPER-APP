@@ -27,6 +27,7 @@ export interface PostingRequest {
   date: Date;
   ref?: string | null;
   description?: string | null;
+  paymentMethod?: string | null;
   source: PostingSource;
   sourceId: number;
   companyId: number;

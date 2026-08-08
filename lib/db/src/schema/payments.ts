@@ -20,6 +20,8 @@ export const paymentsTable = pgTable("payments", {
   amount: numeric("amount", { precision: 14, scale: 2 }).notNull(),
   status: paymentStatusEnum("status").notNull().default("pending"),
   provider: paymentProviderEnum("provider").notNull().default("paylabs"),
+  /** Metode pembayaran yang dipilih di provider, mis. qris, transfer, atau cash. */
+  paymentMethod: text("payment_method"),
   providerOrderId: text("provider_order_id"),
   providerMerchantTradeNo: text("provider_merchant_trade_no").notNull().unique(),
   paymentUrl: text("payment_url"),

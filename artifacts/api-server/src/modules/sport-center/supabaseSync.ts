@@ -1,7 +1,7 @@
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { notifySyncError } from "./sportSyncNotifier.js";
-import { postSportCenterBooking } from "../../lib/accounting.js";
+import { normalizePaymentMethod, postSportCenterBooking } from "../../lib/accounting.js";
 
 const PREFIX = "[SportSync]";
 
@@ -651,6 +651,7 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
           // Gunakan total_amount dari booking (harga fasilitas) — bukan sp.amount
           // yang bisa berbeda jika pembayaran dicatat dengan PPN ditambahkan di luar
           totalPrice: Number(row.booking_total_amount ?? row.amount),
+          paymentMethod: normalizePaymentMethod(row.method),
           companyId: row.bk_company_id ?? companyId,
         });
       } catch (postErr) {
@@ -671,7 +672,8 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
       const seq = Number((cntRes.rows[0] as any)?.seq ?? 0);
       const acctPayNumber = `SCPAY/${year}/${(seq + 1).toString().padStart(4, "0")}`;
 
-      const isCash = ["cash", "tunai", "cash on hand"].includes((row.method ?? "").toLowerCase());
+      const paymentMethod = normalizePaymentMethod(row.method) ?? "cash";
+      const isCash = paymentMethod === "cash";
       const journalId = isCash
         ? (settings?.cash_journal_id ?? settings?.bank_journal_id ?? null)
         : (settings?.bank_journal_id ?? settings?.cash_journal_id ?? null);
@@ -684,7 +686,7 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
           (${companyId}, ${acctPayNumber}, 'inbound', 'posted', ${String(Number(row.amount))},
            ${journalId ?? null}, ${row.customer_name ?? "Customer"}, ${payDate}::date,
            ${row.booking_number}, ${'Sport Center: ' + row.booking_number},
-           ${row.method ?? "cash"},
+            ${paymentMethod},
            'sport_center', ${row.sp_id}, ${entryId})
         ON CONFLICT DO NOTHING
         RETURNING id
@@ -960,6 +962,7 @@ export async function pullPaymentsFromSupabase(companyId = 1): Promise<{ pulled:
           facilityName: bkInfo?.facility_name ?? "Sport Center",
           date: (paidAt ?? new Date().toISOString()).slice(0, 10),
           totalPrice: journalAmount,
+          paymentMethod: normalizePaymentMethod(method),
           companyId: bkInfo?.company_id ?? companyId,
         }).catch((err: unknown) => console.error(`${PREFIX} postSportCenterBooking gagal pay.id=${pay.id}:`, err));
       }

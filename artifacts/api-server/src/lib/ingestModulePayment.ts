@@ -12,6 +12,7 @@ import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "./logger.js";
 import { getPostingEngine } from "./posting-engine/index.js";
+import { isCashPaymentMethod, normalizePaymentMethod } from "./accounting.js";
 
 export type ModuleType = "sport_center" | "tenant" | "logistics";
 
@@ -39,7 +40,7 @@ export interface IngestResult {
 const JOURNAL_PREFERENCE_ORDER = ["cash", "bank", "general"];
 
 async function resolveJournal(companyId: number, method: string): Promise<number | null> {
-  const isCash = ["cash", "tunai"].includes(method.toLowerCase());
+  const isCash = isCashPaymentMethod(method);
   const settingsRes = await db.execute(sql`
     SELECT cash_journal_id, bank_journal_id
     FROM accounting_settings
@@ -241,7 +242,8 @@ async function updatePostingStatus(
 }
 
 export async function ingestModulePayment(input: IngestModulePaymentInput): Promise<IngestResult> {
-  const { moduleType, sourceDocId, companyId, amount, method, partnerName, date, ref, description, actorId } = input;
+  const { moduleType, sourceDocId, companyId, amount, partnerName, date, ref, description, actorId } = input;
+  const method = normalizePaymentMethod(input.method) ?? "cash";
 
   try {
     const existing = await db.execute(sql`
@@ -270,11 +272,12 @@ export async function ingestModulePayment(input: IngestModulePaymentInput): Prom
     const insertRes = await db.execute(sql`
       INSERT INTO accounting_payments
         (company_id, payment_number, payment_type, status, amount, journal_id,
-         partner_name, date, ref, memo, source_type, source_doc_id, created_by_id, created_at)
+         partner_name, date, ref, memo, payment_method, source_type, source_doc_id, created_by_id, created_at)
       VALUES
         (${companyId}, ${paymentNumber}, 'inbound', 'posted', ${amountStr}, ${journalId},
          ${partnerName ?? null}, ${date}::date, ${ref ?? null},
          ${description ?? `Pembayaran ${moduleType.replace("_", " ")}`},
+         ${method},
          ${moduleType}, ${sourceDocId}, ${actorId ?? null}, NOW())
       RETURNING id
     `);
@@ -333,7 +336,8 @@ export async function ingestModulePayment(input: IngestModulePaymentInput): Prom
             source: sourceLabel(moduleType) as "sport_center_booking" | "sales_payment",
             sourceId: sourceDocId,
             companyId,
-            createdById: actorId ?? null,
+              createdById: actorId ?? null,
+              paymentMethod: method,
             lines: [
               { accountId: bankAccountId, debit: Number(amountStr), credit: 0, description: description ?? "Penerimaan kas/bank" },
               { accountId: revenueAccountId, debit: 0, credit: Number(amountStr), description: description ?? "Pendapatan modul" },
@@ -470,7 +474,7 @@ export async function bulkIngestModule(
       sourceDocId: rowSourceDocId,
       companyId: rowCompanyId,
       amount: Number(row["amount"] ?? 0),
-      method: String(row["method"] ?? "cash"),
+       method: normalizePaymentMethod(String(row["method"] ?? "cash")) ?? "cash",
       partnerName: String(row["customer_name"] ?? row["business_name"] ?? ""),
       date: row["paid_at"] ? String(row["paid_at"]).slice(0, 10) : new Date().toISOString().slice(0, 10),
       ref: String(row["payment_number"] ?? row["id"]),

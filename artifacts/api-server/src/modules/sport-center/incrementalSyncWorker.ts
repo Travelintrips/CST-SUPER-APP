@@ -1,6 +1,7 @@
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../../lib/logger.js";
+import { normalizePaymentMethod } from "../../lib/accounting.js";
 
 const PREFIX = "[SportIncrementalSync]";
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 menit
@@ -185,6 +186,7 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
 
   for (const pay of payments) {
     const scPaymentNumber = `SCPAY-${pay.id}`;
+    const paymentMethod = normalizePaymentMethod(pay.payment_method) ?? "cash";
     const statusRaw = pay.status?.toLowerCase() ?? "";
     const mappedStatus = PAID_STATUSES.has(statusRaw) ? "paid" : "pending";
     const payDate = (pay.confirmed_at ?? pay.created_at ?? new Date().toISOString()).split("T")[0]!;
@@ -207,7 +209,7 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
          settlement_reference, settlement_date, settlement_status)
         VALUES
           (${localBookingId}, ${scPaymentNumber}, ${String(Number(pay.amount))},
-           ${pay.payment_method ?? "cash"}, ${mappedStatus},
+            ${paymentMethod}, ${mappedStatus},
            ${payDate}::DATE,
            ${pay.created_at ?? new Date().toISOString()}::TIMESTAMPTZ, NOW(),
            ${meta.mdr_rate ?? 0}, ${meta.mdr_amount ?? 0},
@@ -238,7 +240,7 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
       // that were created before this incremental sync ran.
       await db.execute(sql`
         UPDATE accounting_payments ap
-        SET payment_method = ${pay.payment_method ?? "cash"}
+        SET payment_method = ${paymentMethod}
         WHERE ap.source_type = 'sport_center'
           AND ap.source_doc_id = (
             SELECT id FROM sport_payments

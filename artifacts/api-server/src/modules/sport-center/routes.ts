@@ -5,7 +5,7 @@ import { requireAdmin } from "../../lib/requireAdmin.js";
 import { resolveCompanyId } from "../../lib/resolveCompany.js";
 import { assertCompanyAccess } from "../../lib/assertCompanyAccess.js";
 import { handleSportCenterSse, broadcastSportCenterEvent } from "./broadcast.js";
-import { postSportCenterBooking, postSportCenterBookingReversal, postSportCenterRefund, postSportCenterMembershipPayment, postSportCenterBookingRefundDirect, postSportCenterExpenseEntry, postEntry, resolveSportCenterBookingAccountId, resolveCostCenterId, postSportCenterPaymentAtomic, type DbClient as SportDbClient } from "../../lib/accounting.js";
+import { normalizePaymentMethod, postSportCenterBooking, postSportCenterBookingReversal, postSportCenterRefund, postSportCenterMembershipPayment, postSportCenterBookingRefundDirect, postSportCenterExpenseEntry, postEntry, resolveSportCenterBookingAccountId, resolveCostCenterId, postSportCenterPaymentAtomic, type DbClient as SportDbClient } from "../../lib/accounting.js";
 import { ensureAccountingSettings } from "../../lib/accountingSeed.js";
 import { syncFacilityUpsert, syncFacilityDelete, syncAllFacilities, syncBookingUpsert, syncAllBookings, getLastSyncLogs, pullLegacyBookingsFromSupabase, syncPaymentsToAccounting, pullPaymentsFromSupabase, pullFacilitiesFromSupabase, runDailyPaymentSync } from "./supabaseSync.js";
 import { saveAndBroadcast } from "../../lib/notificationStore.js";
@@ -57,7 +57,8 @@ async function insertAccountingPaymentForSportCenter(args: {
 
     // Resolve journal — THROW (not silent return) so missing config surfaces as a real error.
     const settings = await ensureAccountingSettings(args.companyId);
-    const isCash = ["cash", "tunai"].includes(args.method?.toLowerCase() ?? "");
+    const paymentMethod = normalizePaymentMethod(args.paymentMethod ?? args.method) ?? "cash";
+    const isCash = paymentMethod === "cash";
     const journalId = isCash
       ? (settings.cashJournalId ?? settings.bankJournalId)
       : (settings.bankJournalId ?? settings.cashJournalId);
@@ -88,7 +89,7 @@ async function insertAccountingPaymentForSportCenter(args: {
       date: payDate,
       ref: args.ref || null,
       memo: args.memo || null,
-      paymentMethod: args.paymentMethod ?? args.method ?? null,
+       paymentMethod,
       entryId: null,
       sourceType: "sport_center",
       sourceDocId: args.sourceDocId,
@@ -1667,6 +1668,7 @@ router.post("/members/:id/payment", async (req, res) => {
       payment_method?: string;
       notes?: string;
     };
+    const normalizedPaymentMethod = normalizePaymentMethod(payment_method) ?? "cash";
 
     // Validasi amount
     const amt = Number(amount);
@@ -1705,7 +1707,7 @@ router.post("/members/:id/payment", async (req, res) => {
             (company_id, payment_number, payment_type, member_id, customer_id, amount, method, status, paid_at, notes, created_by)
           VALUES
             (${companyId}, ${paymentNumber}, 'membership', ${memberId},
-             ${member.customer_id ?? null}, ${amt}, ${payment_method}, 'paid', NOW(),
+             ${member.customer_id ?? null}, ${amt}, ${normalizedPaymentMethod}, 'paid', NOW(),
              ${notes ?? null}, ${actorId})
           RETURNING *
         `);
@@ -1720,7 +1722,7 @@ router.post("/members/:id/payment", async (req, res) => {
           customerName: String(member.name ?? ""),
           memberNumber: String(member.member_number ?? `MBR-${memberId}`),
           amount:       amt,
-          method:       payment_method,
+           method:       normalizedPaymentMethod,
           date:         new Date().toISOString().slice(0, 10),
           companyId,
           createdById:  actorId,
@@ -1748,7 +1750,7 @@ router.post("/members/:id/payment", async (req, res) => {
       VALUES (
         ${companyId}, 'member', ${memberId},
         'MEMBERSHIP_PAYMENT_CREATED', ${actorId},
-        ${JSON.stringify({ member_id: memberId, amount: amt, payment_method, payment_number: paymentNumber, entry_id: membershipAcctResult.entryId })}::jsonb
+        ${JSON.stringify({ member_id: memberId, amount: amt, payment_method: normalizedPaymentMethod, payment_number: paymentNumber, entry_id: membershipAcctResult.entryId })}::jsonb
       )
     `).catch((err: unknown) => console.error("[sport-center] audit log (membership) failed:", err));
 
@@ -2170,7 +2172,7 @@ router.post("/payments", async (req, res) => {
     // Terima amount ATAU total_amount (alias)
     const amount = req.body.amount ?? req.body.total_amount;
     // Terima payment_method ATAU method (alias), default cash
-    const finalMethod: string = req.body.payment_method ?? req.body.method ?? "cash";
+    const finalMethod: string = normalizePaymentMethod(req.body.payment_method ?? req.body.method) ?? "cash";
     // Rekening bank tujuan (wajib untuk metode non-tunai agar rekonsiliasi bank berfungsi)
     const bankAccountId: number | null =
       req.body.bank_account_id != null ? Number(req.body.bank_account_id) : null;
