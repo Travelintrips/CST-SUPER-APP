@@ -662,8 +662,15 @@ scope Sprint 09.
 Business owner dan Finance owner; nama role final belum ditetapkan di
 repository.
 
+**Selected Option**  
+Option A — Marketplace berhenti pada status `waiting_payment` dan melakukan
+handoff ke Payment Module existing. Seluruh payment execution, approval,
+journal posting, cash disbursement, settlement, dan bank reconciliation tetap
+dikelola oleh Payment Module existing. Marketplace tidak membuat payment engine
+baru.
+
 **Status**  
-PENDING
+APPROVED
 
 ### BD-09-002
 
@@ -1220,8 +1227,15 @@ Tidak memilih opsi. Product Owner harus menetapkan boundary dan scope Sprint 09.
 Tetapkan fase, entity canonical, status machine, terminal states, dan apakah
 payment execution termasuk Sprint 09.
 
+**Selected Option**  
+Option A — Marketplace berhenti pada status `waiting_payment` dan melakukan
+handoff ke Payment Module existing. Seluruh payment execution, approval,
+journal posting, cash disbursement, settlement, dan bank reconciliation tetap
+dikelola oleh Payment Module existing. Marketplace tidak membuat payment engine
+baru.
+
 **Status**  
-PENDING
+APPROVED
 
 ### BD-09-002
 
@@ -2118,7 +2132,7 @@ PENDING
 
 | Decision | Status | Blocking Sprint 9 | Owner |
 |---|---|---|---|
-| BD-09-001 | PENDING | YES | Product Owner + Finance Owner |
+| BD-09-001 | APPROVED | NO | Product Owner + Finance Owner |
 | BD-09-002 | PENDING | YES | Product Owner + Finance Owner |
 | BD-09-003 | PENDING | YES | Product Owner + Finance/Treasury Owner |
 | BD-09-004 | PENDING | YES | Product Owner + Finance Owner |
@@ -2134,10 +2148,10 @@ PENDING
 ## Decision Status Summary
 
 - Total business decision: **12**
-- Total blocking: **12**
-- Total ready: **0**
-- Total pending: **12**
-- Tidak ada opsi yang dianggap disetujui oleh dokumen ini.
+- Total blocking: **11**
+- Total ready: **1**
+- Total pending: **11**
+- BD-09-001 telah menyetujui Option A; decision lain tetap belum disetujui.
 - Sprint 09 tetap **NOT STARTED** dan **NO GO** sampai seluruh decision owner
   menetapkan boundary payment, approval/execution authority, accounting,
   reconciliation, serta acceptance criteria.
