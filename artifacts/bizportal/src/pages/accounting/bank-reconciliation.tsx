@@ -529,6 +529,7 @@ interface QrisCandidateAudit {
   review_reason?: string | null;
   payment_items?: Array<{ paymentId?: number; payment_id?: number }>;
   description?: string | null;
+  status?: string | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1340,6 +1341,7 @@ function MutationCard({
   onReopen,
   onDelete,
   onDetail,
+  onApproveQris,
   mappingError,
 }: {
   m: BankMutation;
@@ -1350,6 +1352,7 @@ function MutationCard({
   onReopen:  (m: BankMutation) => void;
   onDelete:  (id: number) => void;
   onDetail:  (m: BankMutation) => void;
+  onApproveQris: (m: BankMutation) => void;
   mappingError?: MappingRequiredError;
 }) {
   const cands  = m.candidates ?? [];
@@ -1441,6 +1444,17 @@ function MutationCard({
                 <p className="mt-1 text-[11px] text-slate-600 dark:text-slate-400">
                   Audit ini hanya membantu verifikasi. Tidak melakukan approve, posting, atau membuat jurnal.
                 </p>
+                {qrisAudit.id && qrisAudit.status !== "approved" && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="mt-2 h-7 text-xs border-amber-400 text-amber-900 hover:bg-amber-100 dark:text-amber-200"
+                    onClick={() => onApproveQris(m)}
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
+                    Approve batch QRIS
+                  </Button>
+                )}
               </div>
             )}
 
@@ -1771,6 +1785,7 @@ function MutationDetailPanel({
   onReject,
   onReverse,
   onReopen,
+  onApproveQris,
   mappingError,
 }: {
   mutation: BankMutation | null;
@@ -1781,6 +1796,7 @@ function MutationDetailPanel({
   onReject:  (m: BankMutation) => void;
   onReverse: (m: BankMutation) => void;
   onReopen:  (m: BankMutation) => void;
+  onApproveQris: (m: BankMutation) => void;
   mappingError?: MappingRequiredError;
 }) {
   if (!mutation) return null;
@@ -1918,6 +1934,17 @@ function MutationDetailPanel({
                     Gunanya: memberi alasan mengapa sistem belum mencocokkan mutasi ini secara otomatis.
                     Audit ini tidak membuat jurnal dan tidak mengubah status posting.
                   </p>
+                  {qrisAudit.id && qrisAudit.status !== "approved" && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-full border-amber-400 text-amber-900 hover:bg-amber-100 dark:text-amber-200"
+                      onClick={() => onApproveQris(m)}
+                    >
+                      <CheckCircle2 className="w-4 h-4 mr-1.5" />
+                      Approve batch QRIS
+                    </Button>
+                  )}
                 </div>
               </>
             )}
@@ -2437,6 +2464,13 @@ export default function BankReconciliationPage() {
     qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] });
   };
 
+  const refreshMutationDetail = async (mutationId: number) => {
+    await qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
+    const refreshed = await refetch();
+    const next = refreshed.data?.mutations.find((item) => item.id === mutationId);
+    if (next) setDetailMutation(next);
+  };
+
   // ── Mutation hooks ────────────────────────────────────────────────────────
 
   const importMut = useMutation({
@@ -2461,6 +2495,30 @@ export default function BankReconciliationPage() {
     },
     onSuccess: (d) => { toast({ title: `AI Matching selesai: ${d.processed} mutasi diproses` }); invalidate(); },
     onError: (e: Error) => toast({ title: "Gagal matching", description: e.message, variant: "destructive" }),
+  });
+
+  const approveQrisBatchMut = useMutation({
+    mutationFn: async ({ candidateId, mutationId }: { candidateId: number; mutationId: number }) => {
+      const r = await fetch(`/api/bank-reconciliation/qris-candidates/${candidateId}/approve`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mutationId }),
+      });
+      const body = await r.json().catch(() => ({ error: "Unknown error" }));
+      if (!r.ok) throw new Error(body.error ?? r.statusText);
+      return body as { mutationId: number; matching?: { status?: string } | null };
+    },
+    onSuccess: async (result) => {
+      toast({
+        title: result.matching?.status === "auto_matched" || result.matching?.status === "manual_review"
+          ? "Batch QRIS disetujui — mutasi sudah di-matching ✓"
+          : "Batch QRIS disetujui ✓",
+      });
+      await refreshMutationDetail(result.mutationId);
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] });
+    },
+    onError: (e: Error) => toast({ title: "Gagal approve batch QRIS", description: e.message, variant: "destructive" }),
   });
 
   const sheetSyncMut = useMutation({
@@ -2613,6 +2671,14 @@ export default function BankReconciliationPage() {
   const handleOpenReject   = (m: BankMutation) => setActionDialog({ mutation: m, mode: "reject" });
   const handleOpenReverse  = (m: BankMutation) => { setReverseReason(""); setActionDialog({ mutation: m, mode: "reverse" }); };
   const handleOpenReopen   = (m: BankMutation) => reopenMut.mutate(m.id);
+  const handleApproveQris = (m: BankMutation) => {
+    const candidateId = m.qris_candidate_audit?.id;
+    if (!candidateId) {
+      toast({ title: "Kandidat QRIS tidak tersedia", variant: "destructive" });
+      return;
+    }
+    approveQrisBatchMut.mutate({ candidateId, mutationId: m.id });
+  };
 
   const handleConfirmApprove = () => {
     if (!actionDialog) return;
@@ -2797,6 +2863,7 @@ export default function BankReconciliationPage() {
                   onReopen={handleOpenReopen}
                   onDelete={id => deleteMut.mutate(id)}
                   onDetail={setDetailMutation}
+                  onApproveQris={handleApproveQris}
                   mappingError={mappingRequiredErrors.get(m.id)}
                 />
               ))}
@@ -2826,6 +2893,7 @@ export default function BankReconciliationPage() {
         onReject={handleOpenReject}
         onReverse={handleOpenReverse}
         onReopen={handleOpenReopen}
+        onApproveQris={handleApproveQris}
         mappingError={detailMutation ? mappingRequiredErrors.get(detailMutation.id) : undefined}
       />
 
