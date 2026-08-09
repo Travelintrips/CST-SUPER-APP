@@ -2,8 +2,148 @@ import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { notifySyncError } from "./sportSyncNotifier.js";
 import { normalizePaymentMethod, resolvePaymentDestination, postSportCenterBooking } from "../../lib/accounting.js";
+import {
+  validateSportPaymentPosting,
+  type SportPaymentPostingEvidence,
+} from "./sportPaymentValidation.js";
 
 const PREFIX = "[SportSync]";
+
+type PaymentEvidenceRow = Record<string, unknown>;
+
+function paymentEvidenceFromRow(row: PaymentEvidenceRow): SportPaymentPostingEvidence {
+  return {
+    sourcePaymentId: row.source_payment_id as number | null | undefined,
+    mirrorPaymentId: row.mirror_payment_id as number | null | undefined,
+    sourceAmount: row.source_amount as number | null | undefined,
+    mirrorAmount: row.mirror_amount as number | null | undefined,
+    accountingPaymentAmount: row.accounting_payment_amount as number | null | undefined,
+    journalTotalDebit: row.journal_total_debit as number | null | undefined,
+    journalTotalCredit: row.journal_total_credit as number | null | undefined,
+    sourceBookingId: row.source_booking_id as number | null | undefined,
+    sourceBookingNumber: row.source_booking_number as string | null | undefined,
+    mirrorBookingId: row.mirror_booking_id as number | null | undefined,
+    mirrorSourceBookingId: row.mirror_source_booking_id as number | null | undefined,
+    mirrorBookingNumber: row.mirror_booking_number as string | null | undefined,
+    accountingSourceType: row.accounting_source_type as string | null | undefined,
+    accountingSourceDocId: row.accounting_source_doc_id as number | null | undefined,
+    accountingReference: row.accounting_reference as string | null | undefined,
+    journalSource: row.journal_source as string | null | undefined,
+    journalSourceId: row.journal_source_id as number | null | undefined,
+    duplicateMirrorCount: Number(row.duplicate_mirror_count ?? 0),
+    duplicateBookingMirrorCount: Number(row.duplicate_booking_mirror_count ?? 0),
+    duplicateAccountingPaymentCount: Number(row.duplicate_accounting_payment_count ?? 0),
+  };
+}
+
+async function loadPaymentPostingEvidence(
+  mirrorPaymentId: number,
+): Promise<SportPaymentPostingEvidence | null> {
+  const result = await db.execute(sql`
+    SELECT
+      sp.id AS mirror_payment_id,
+      sp.amount AS mirror_amount,
+      sp.booking_id AS mirror_booking_id,
+      sb.sc_booking_id AS mirror_source_booking_id,
+      sb.booking_number AS mirror_booking_number,
+      source_sp.id AS source_payment_id,
+      source_sp.amount AS source_amount,
+      source_sp.booking_id AS source_booking_id,
+      source_sb.order_number AS source_booking_number,
+      ap.amount AS accounting_payment_amount,
+      ap.source_type AS accounting_source_type,
+      ap.source_doc_id AS accounting_source_doc_id,
+      ap.ref AS accounting_reference,
+      ae.source AS journal_source,
+      ae.source_id AS journal_source_id,
+      ae.total_debit AS journal_total_debit,
+      ae.total_credit AS journal_total_credit,
+      (
+        SELECT COUNT(*)
+        FROM sport_payments duplicate_sp
+        WHERE duplicate_sp.payment_number = sp.payment_number
+      ) AS duplicate_mirror_count,
+      (
+        SELECT COUNT(*)
+        FROM sport_bookings duplicate_sb
+        WHERE sb.sc_booking_id IS NOT NULL
+          AND duplicate_sb.sc_booking_id = sb.sc_booking_id
+      ) AS duplicate_booking_mirror_count,
+      (
+        SELECT COUNT(*)
+        FROM accounting_payments duplicate_ap
+        WHERE duplicate_ap.source_type = 'sport_center'
+          AND duplicate_ap.source_doc_id = sp.id
+      ) AS duplicate_accounting_payment_count
+    FROM sport_payments sp
+    LEFT JOIN sport_bookings sb ON sb.id = sp.booking_id
+    LEFT JOIN sport_center.sport_payments source_sp
+      ON source_sp.id = CASE
+        WHEN sp.payment_number ~ '^SCPAY-SC-[0-9]+$'
+          THEN SUBSTRING(sp.payment_number FROM 10)::integer
+        ELSE NULL
+      END
+    LEFT JOIN sport_center.sport_bookings source_sb ON source_sb.id = source_sp.booking_id
+    LEFT JOIN accounting_payments ap
+      ON ap.source_type = 'sport_center'
+     AND ap.source_doc_id = sp.id
+    LEFT JOIN accounting_entries ae ON ae.id = ap.entry_id
+    WHERE sp.id = ${mirrorPaymentId}
+    ORDER BY ap.id ASC, ae.id ASC
+    LIMIT 1
+  `).catch(() => ({ rows: [] }));
+
+  const row = result.rows[0] as PaymentEvidenceRow | undefined;
+  return row ? paymentEvidenceFromRow(row) : null;
+}
+
+async function persistPostingValidationFailure(
+  mirrorPaymentId: number,
+  accountingPaymentId: number | null,
+  validation: { state: "failed" | "manual_review"; error: string },
+): Promise<void> {
+  await db.execute(sql`
+    UPDATE sport_payments
+    SET posting_status = ${validation.state},
+        accounting_payment_id = COALESCE(${accountingPaymentId}, accounting_payment_id),
+        posting_error = ${validation.error.slice(0, 1000)},
+        updated_at = NOW()
+    WHERE id = ${mirrorPaymentId}
+  `).catch(() => {});
+}
+
+async function validateAndMarkSportPaymentPosted(
+  mirrorPaymentId: number,
+  accountingPaymentId: number,
+): Promise<boolean> {
+  const evidence = await loadPaymentPostingEvidence(mirrorPaymentId);
+  if (!evidence) {
+    await persistPostingValidationFailure(mirrorPaymentId, accountingPaymentId, {
+      state: "failed",
+      error: "Validasi posting gagal: evidence payment tidak tersedia",
+    });
+    return false;
+  }
+
+  const validation = validateSportPaymentPosting(evidence);
+  if (!validation.ok) {
+    await persistPostingValidationFailure(mirrorPaymentId, accountingPaymentId, validation);
+    console.error(
+      `${PREFIX} posting validation ${validation.state} sp_id=${mirrorPaymentId}: ${validation.error}`,
+    );
+    return false;
+  }
+
+  await db.execute(sql`
+    UPDATE sport_payments
+    SET posting_status = 'posted',
+        accounting_payment_id = ${accountingPaymentId},
+        posting_error = NULL,
+        updated_at = NOW()
+    WHERE id = ${mirrorPaymentId}
+  `);
+  return true;
+}
 
 async function sleep(ms: number) {
   return new Promise(r => setTimeout(r, ms));
@@ -577,6 +717,7 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
     WHERE sp.status = 'paid'
       AND sp.payment_number LIKE 'SCPAY-SC-%'
       AND sp.source = 'SPORT_CENTER_SUPABASE'
+      AND COALESCE(sp.posting_status, 'unposted') <> 'manual_review'
       AND (sb.company_id = ${companyId} OR sb.company_id IS NULL)
   `).catch(() => ({ rows: [] }));
 
@@ -645,14 +786,14 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
           `).catch(() => {});
         }
         if (existingRow.entry_id) {
-          await db.execute(sql`
-            UPDATE sport_payments
-            SET posting_status = 'posted',
-                accounting_payment_id = ${existingRow.id},
-                posting_error = NULL,
-                updated_at = NOW()
-            WHERE id = ${row.sp_id}
-          `).catch(() => {});
+          const validated = await validateAndMarkSportPaymentPosted(
+            row.sp_id,
+            Number(existingRow.id),
+          );
+          if (!validated) {
+            errors++;
+            continue;
+          }
         }
         // Jika entry_id belum terhubung, coba pastikan jurnal dibuat lalu link
         // kembali ke accounting_payment yang sudah ada. Ini memulihkan orphan
@@ -688,14 +829,14 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
                 AND (payment_method IS NULL OR payment_method = 'cash')
             `).catch(() => {});
             await db.execute(sql`UPDATE accounting_payments SET entry_id = ${entryId} WHERE id = ${existingRow.id}`).catch(() => {});
-            await db.execute(sql`
-              UPDATE sport_payments
-              SET posting_status = 'posted',
-                  accounting_payment_id = ${existingRow.id},
-                  posting_error = NULL,
-                  updated_at = NOW()
-              WHERE id = ${row.sp_id}
-            `).catch(() => {});
+            const validated = await validateAndMarkSportPaymentPosted(
+              row.sp_id,
+              Number(existingRow.id),
+            );
+            if (!validated) {
+              errors++;
+              continue;
+            }
           } else {
             const error = "Accounting payment sudah ada tetapi journal entry belum tersedia";
             await db.execute(sql`
@@ -791,16 +932,16 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
 
       if ((insertRes.rows[0] as any)?.id) {
         const accountingPaymentId = Number((insertRes.rows[0] as any).id);
-        await db.execute(sql`
-          UPDATE sport_payments
-          SET posting_status = 'posted',
-              accounting_payment_id = ${accountingPaymentId},
-              posting_error = NULL,
-              updated_at = NOW()
-          WHERE id = ${row.sp_id}
-        `);
-        console.log(`${PREFIX} syncPaymentsToAccounting OK → ${row.payment_number} (${row.booking_number}) Rp${row.amount}`);
-        synced++;
+        const validated = await validateAndMarkSportPaymentPosted(
+          row.sp_id,
+          accountingPaymentId,
+        );
+        if (validated) {
+          console.log(`${PREFIX} syncPaymentsToAccounting OK → ${row.payment_number} (${row.booking_number}) Rp${row.amount}`);
+          synced++;
+        } else {
+          errors++;
+        }
       } else {
         skipped++;
       }
