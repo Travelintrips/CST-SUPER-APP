@@ -47,6 +47,7 @@ export async function generateQrisCandidates(options: {
     db.execute(sql.raw(`
       SELECT
         sp.id, sp.company_id, sp.amount, sp.method, sp.status, sp.paid_at,
+        sp.payment_number, sp.booking_id, sb.booking_number,
         sp.provider_code, sp.settlement_date, sp.settlement_rule_version,
         sp.settlement_reference, sp.bank_account_id,
         EXISTS (
@@ -54,6 +55,7 @@ export async function generateQrisCandidates(options: {
           WHERE qsi.sport_payment_id = sp.id
         ) AS already_reconciled
       FROM sport_payments sp
+      LEFT JOIN sport_bookings sb ON sb.id = sp.booking_id
       WHERE LOWER(COALESCE(sp.method, '')) LIKE '%qris%'
         AND LOWER(COALESCE(sp.status, '')) = 'paid'
         ${companyFilter}
@@ -120,6 +122,12 @@ export async function generateQrisCandidates(options: {
         : String(row.settlement_rule_version),
       providerName: providerCode,
       providerReference: row.settlement_reference == null ? null : String(row.settlement_reference),
+      paymentNumber: row.payment_number == null ? null : String(row.payment_number),
+      bookingId: row.booking_id == null ? null : Number(row.booking_id),
+      bookingNumber: row.booking_number == null ? null : String(row.booking_number),
+      paymentDate: row.paid_at == null
+        ? null
+        : String(row.paid_at),
       alreadyReconciled: Boolean(row.already_reconciled),
     };
   });

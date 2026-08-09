@@ -31,6 +31,7 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
       }],
       mutations: [{
         id: 25, companyId: 10, bankAccountId: 77, amount: 150_000,
+        transactionDate: "2026-08-07",
         direction: "IN", source: "bank_import",
         sourceClassification: "actual_bank_mutation",
         providerName: null,
@@ -49,6 +50,7 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
       }],
       mutations: [{
         id: 27, companyId: 10, bankAccountId: 77, amount: 150_000,
+        transactionDate: "2026-08-07",
         direction: "IN", source: "bank_import",
         sourceClassification: "actual_bank_mutation",
         providerName: null,
@@ -110,8 +112,8 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
   it("supports one bank mutation for many payments, excludes reconciled payments, and is rerun-safe", () => {
     const base = {
       payments: [
-        { id: 1, companyId: 10, amount: 5_000_000, bankAccountId: 77, method: "QRIS", status: "paid", paidAt: "2026-08-06", expectedSettlementDate: "2026-08-07", providerName: "paylabs" },
-        { id: 2, companyId: 10, amount: 4_930_000, bankAccountId: 77, method: "QRIS", status: "paid", paidAt: "2026-08-06", expectedSettlementDate: "2026-08-07", providerName: "paylabs" },
+        { id: 1, companyId: 10, amount: 5_000_000, bankAccountId: 77, method: "QRIS", status: "paid", paidAt: "2026-08-06", expectedSettlementDate: "2026-08-07", providerName: "paylabs", paymentNumber: "PAY-001", bookingId: 101, bookingNumber: "BK-001", paymentDate: "2026-08-06" },
+        { id: 2, companyId: 10, amount: 4_930_000, bankAccountId: 77, method: "QRIS", status: "paid", paidAt: "2026-08-06", expectedSettlementDate: "2026-08-07", providerName: "paylabs", paymentNumber: "PAY-002", bookingId: 102, bookingNumber: "BK-002", paymentDate: "2026-08-06" },
         { id: 3, companyId: 10, amount: 70_000, bankAccountId: 77, method: "QRIS", status: "paid", paidAt: "2026-08-06", expectedSettlementDate: "2026-08-07", providerName: "paylabs", alreadyReconciled: true },
       ],
       mutations: [{
@@ -124,6 +126,10 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     const first = generateQrisMutationBatchCandidates(base);
     expect(first[0]?.status).toBe("MATCHED");
     expect(first[0]?.paymentItems.map((item) => item.paymentId)).toEqual([1, 2]);
+    expect(first[0]?.paymentItems).toMatchObject([
+      { paymentId: 1, paymentNumber: "PAY-001", bookingId: 101, bookingNumber: "BK-001", paymentDate: "2026-08-06" },
+      { paymentId: 2, paymentNumber: "PAY-002", bookingId: 102, bookingNumber: "BK-002", paymentDate: "2026-08-06" },
+    ]);
     expect(generateQrisMutationBatchCandidates({ ...base, existingMutationIds: [8] })).toEqual([]);
   });
 

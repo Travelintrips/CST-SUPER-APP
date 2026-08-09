@@ -31,6 +31,10 @@ export interface QrisPaymentCandidateInput {
   settlementRuleVersion?: string | null;
   providerName?: string | null;
   providerReference?: string | null;
+  paymentNumber?: string | null;
+  bookingId?: number | null;
+  bookingNumber?: string | null;
+  paymentDate?: string | null;
   taxAmount?: number | null;
   alreadyReconciled?: boolean;
 }
@@ -72,6 +76,10 @@ export interface QrisMutationBatchCandidate {
     grossAmount: number;
     expectedSettlementDate: string | null;
     settlementRuleVersion: string | null;
+    paymentNumber?: string | null;
+    bookingId?: number | null;
+    bookingNumber?: string | null;
+    paymentDate?: string | null;
   }>;
   status: QrisReconciliationStatus;
   confidence: number;
@@ -330,6 +338,12 @@ export function generateQrisMutationBatchCandidates(input: {
         grossAmount: roundMoney(Number(payment.amount) || 0),
         expectedSettlementDate: payment.expectedSettlementDate,
         settlementRuleVersion: payment.settlementRuleVersion ?? ruleVersion,
+        paymentNumber: payment.paymentNumber ?? null,
+        bookingId: payment.bookingId ?? null,
+        bookingNumber: payment.bookingNumber ?? null,
+        paymentDate: payment.paymentDate ?? (
+          payment.paidAt == null ? null : String(payment.paidAt)
+        ),
       })),
       status: matched ? "MATCHED" : evidence.providerCode === "unknown"
         ? "REVIEW"
