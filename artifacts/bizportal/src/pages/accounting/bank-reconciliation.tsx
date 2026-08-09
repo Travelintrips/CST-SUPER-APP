@@ -584,6 +584,12 @@ const STATUS_COLORS: Record<string, string> = {
   void:                    "bg-gray-100 text-gray-500 border-gray-200 dark:bg-gray-900/30 dark:text-gray-400",
 };
 
+const QRIS_AUDIT_STATUS_LABELS: Record<string, string> = {
+  MATCHED: "Ada kecocokan",
+  REVIEW: "Perlu verifikasi",
+  UNMATCHED: "Belum cocok",
+};
+
 const CARD_BORDER: Record<string, string> = {
   unmatched:               "border-l-4 border-l-amber-400",
   matched:                 "border-l-4 border-l-blue-400",
@@ -1413,20 +1419,27 @@ function MutationCard({
             )}
 
             {qrisAudit && (
-              <div className="mt-2 rounded-md border border-indigo-200 bg-indigo-50/70 dark:border-indigo-900 dark:bg-indigo-950/20 px-2.5 py-2 text-xs">
+              <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-2 text-xs dark:border-amber-800 dark:bg-amber-950/20">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-semibold text-indigo-800 dark:text-indigo-300">QRIS candidate audit</span>
-                  <Badge variant="outline" className="border-amber-300 text-amber-700">
-                    {qrisAudit.reconciliation_status}
+                  <span className="font-semibold text-slate-900 dark:text-slate-100">
+                    Pemeriksaan QRIS
+                  </span>
+                  <Badge variant="outline" className="border-amber-400 bg-amber-100 text-amber-900 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-200">
+                    {QRIS_AUDIT_STATUS_LABELS[qrisAudit.reconciliation_status] ?? qrisAudit.reconciliation_status}
                   </Badge>
-                  <span className="text-muted-foreground">{qrisAudit.provider_code}</span>
+                  <span className="text-slate-700 dark:text-slate-300">
+                    Provider: {qrisAudit.provider_code || "belum dikenali"}
+                  </span>
                 </div>
-                <p className="mt-1 text-indigo-900/80 dark:text-indigo-200/80">
+                <p className="mt-1 font-medium text-amber-950 dark:text-amber-100">
                   {qrisAudit.review_reason ?? "Kandidat QRIS tersedia untuk review."}
                 </p>
-                <p className="mt-1 text-muted-foreground">
-                  Gross {idr(qrisAudit.gross_amount)} · Bank credit {idr(qrisAudit.net_amount)} ·
-                  {" "}{qrisAudit.payment_items?.length ?? 0} payment
+                <p className="mt-1 text-slate-700 dark:text-slate-300">
+                  Gross {idr(qrisAudit.gross_amount)} · Dana masuk {idr(qrisAudit.net_amount)} ·{" "}
+                  {qrisAudit.payment_items?.length ?? 0} payment teridentifikasi
+                </p>
+                <p className="mt-1 text-[11px] text-slate-600 dark:text-slate-400">
+                  Audit ini hanya membantu verifikasi. Tidak melakukan approve, posting, atau membuat jurnal.
                 </p>
               </div>
             )}
@@ -1877,29 +1890,33 @@ function MutationDetailPanel({
             {qrisAudit && (
               <>
                 <Separator />
-                <div className="rounded-lg border border-indigo-200 bg-indigo-50/70 dark:border-indigo-900 dark:bg-indigo-950/20 p-3 space-y-2">
+                <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2 dark:border-amber-800 dark:bg-amber-950/20">
                   <div className="flex items-center justify-between gap-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-indigo-800 dark:text-indigo-300">
-                      QRIS Settlement Candidate Audit
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-900 dark:text-slate-100">
+                      Pemeriksaan QRIS — perlu verifikasi
                     </p>
-                    <Badge variant="outline" className="border-amber-300 text-amber-700">
-                      {qrisAudit.reconciliation_status}
+                    <Badge variant="outline" className="border-amber-400 bg-amber-100 text-amber-900 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-200">
+                      {QRIS_AUDIT_STATUS_LABELS[qrisAudit.reconciliation_status] ?? qrisAudit.reconciliation_status}
                     </Badge>
                   </div>
                   <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-                    <span className="text-muted-foreground">Provider</span>
-                    <span className="font-medium text-right">{qrisAudit.provider_code}</span>
-                    <span className="text-muted-foreground">Expected settlement</span>
-                    <span className="font-medium text-right">{fmtDate(qrisAudit.estimated_settlement_date)}</span>
-                    <span className="text-muted-foreground">Gross payment</span>
-                    <span className="font-medium text-right">{idr(qrisAudit.gross_amount)}</span>
-                    <span className="text-muted-foreground">Bank credit</span>
-                    <span className="font-medium text-right">{idr(qrisAudit.net_amount)}</span>
-                    <span className="text-muted-foreground">Payment items</span>
-                    <span className="font-medium text-right">{qrisAudit.payment_items?.length ?? 0}</span>
+                    <span className="text-slate-700 dark:text-slate-300">Provider</span>
+                    <span className="font-medium text-right text-slate-950 dark:text-white">{qrisAudit.provider_code || "Belum dikenali"}</span>
+                    <span className="text-slate-700 dark:text-slate-300">Perkiraan settlement</span>
+                    <span className="font-medium text-right text-slate-950 dark:text-white">{fmtDate(qrisAudit.estimated_settlement_date)}</span>
+                    <span className="text-slate-700 dark:text-slate-300">Total pembayaran</span>
+                    <span className="font-medium text-right text-slate-950 dark:text-white">{idr(qrisAudit.gross_amount)}</span>
+                    <span className="text-slate-700 dark:text-slate-300">Dana masuk bank</span>
+                    <span className="font-medium text-right text-slate-950 dark:text-white">{idr(qrisAudit.net_amount)}</span>
+                    <span className="text-slate-700 dark:text-slate-300">Payment teridentifikasi</span>
+                    <span className="font-medium text-right text-slate-950 dark:text-white">{qrisAudit.payment_items?.length ?? 0}</span>
                   </div>
-                  <p className="text-xs text-amber-800 dark:text-amber-300">
+                  <p className="rounded-md border border-amber-200 bg-amber-100/80 px-2 py-1.5 text-xs font-medium text-amber-950 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100">
                     {qrisAudit.review_reason ?? "Kandidat ini hanya untuk review dan tidak menjadi kandidat approve/post."}
+                  </p>
+                  <p className="text-[11px] text-slate-700 dark:text-slate-300">
+                    Gunanya: memberi alasan mengapa sistem belum mencocokkan mutasi ini secara otomatis.
+                    Audit ini tidak membuat jurnal dan tidak mengubah status posting.
                   </p>
                 </div>
               </>
@@ -2714,7 +2731,7 @@ export default function BankReconciliationPage() {
         <SummaryCards summaryMap={summaryMap} activeFilter={filterStatus} onFilter={v => { setFilterStatus(v); setPage(0); }} />
 
         {/* ── QRIS provider-aware audit: candidate/review only ── */}
-        <Card className="border-indigo-200/70 dark:border-indigo-900/70">
+         <Card className="border-indigo-200/70 dark:border-indigo-900/70">
           <CardHeader className="pb-3">
             <div className="flex items-start justify-between gap-3 flex-wrap">
               <div>
@@ -2722,8 +2739,8 @@ export default function BankReconciliationPage() {
                   <CreditCard className="w-4 h-4 text-indigo-600" />
                   QRIS Settlement Audit
                 </CardTitle>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Mode candidate/review. Tidak membuat jurnal dan tidak menandai settlement final.
+                 <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">
+                   Pemeriksaan awal untuk menjelaskan kemungkinan settlement QRIS. Tidak membuat jurnal dan tidak menandai settlement final.
                 </p>
               </div>
               <Button
@@ -2742,10 +2759,10 @@ export default function BankReconciliationPage() {
           </CardHeader>
           <CardContent className="pt-0">
             {qrisAuditLoading ? (
-              <div className="text-xs text-muted-foreground py-2">Memuat kandidat QRIS...</div>
+               <div className="text-xs text-slate-600 dark:text-slate-400 py-2">Memuat pemeriksaan QRIS...</div>
             ) : (qrisAuditData?.candidates?.length ?? 0) === 0 ? (
-              <div className="text-xs text-muted-foreground py-2">
-                Belum ada kandidat QRIS. Jalankan dry-run setelah mutasi bank aktual diimpor.
+              <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-300">
+                Belum ada hasil pemeriksaan QRIS. Jalankan analisis setelah mutasi bank aktual diimpor.
               </div>
             ) : (
               <div className="space-y-2">
@@ -2755,12 +2772,12 @@ export default function BankReconciliationPage() {
                     return (
                       <Badge key={status} variant="outline" className={
                         status === "MATCHED"
-                          ? "border-green-200 text-green-700"
+                           ? "border-green-300 bg-green-50 text-green-800 dark:border-green-800 dark:bg-green-950/30 dark:text-green-300"
                           : status === "REVIEW"
-                            ? "border-amber-200 text-amber-700"
-                            : "border-slate-200 text-slate-600"
+                             ? "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300"
+                             : "border-slate-300 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300"
                       }>
-                        {status}: {count}
+                         {QRIS_AUDIT_STATUS_LABELS[status]}: {count}
                       </Badge>
                     );
                   })}
@@ -2770,18 +2787,24 @@ export default function BankReconciliationPage() {
                     <div key={`${candidate.mutation_id}-${candidate.id ?? "candidate"}`} className="p-2.5 flex items-center justify-between gap-3 flex-wrap">
                       <div className="min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <Badge variant="outline">{candidate.provider_code}</Badge>
-                          <Badge variant="outline">{candidate.reconciliation_status}</Badge>
-                          <span className="text-muted-foreground">Mutasi #{candidate.mutation_id}</span>
+                           <Badge variant="outline" className="border-slate-300 bg-white text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
+                             {candidate.provider_code || "Provider belum dikenali"}
+                           </Badge>
+                           <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+                             {QRIS_AUDIT_STATUS_LABELS[candidate.reconciliation_status] ?? candidate.reconciliation_status}
+                           </Badge>
+                           <span className="text-slate-600 dark:text-slate-400">Mutasi #{candidate.mutation_id}</span>
                         </div>
-                        <p className="mt-1 truncate max-w-[560px]">{candidate.review_reason ?? candidate.description ?? "—"}</p>
-                        <p className="text-muted-foreground mt-0.5">
-                          Settlement {fmtDate(candidate.estimated_settlement_date)} · {candidate.payment_items?.length ?? 0} payment
+                         <p className="mt-1 truncate max-w-[560px] font-medium text-slate-900 dark:text-slate-100">
+                           {candidate.review_reason ?? candidate.description ?? "Belum ada alasan tambahan."}
+                         </p>
+                         <p className="text-slate-600 dark:text-slate-400 mt-0.5">
+                           Settlement {fmtDate(candidate.estimated_settlement_date)} · {candidate.payment_items?.length ?? 0} payment teridentifikasi
                         </p>
                       </div>
                       <div className="text-right shrink-0">
-                        <p className="font-semibold">{idr(candidate.net_amount)}</p>
-                        <p className="text-muted-foreground">
+                         <p className="font-semibold text-slate-950 dark:text-white">{idr(candidate.net_amount)}</p>
+                         <p className="text-slate-600 dark:text-slate-400">
                           Deduction {idr(candidate.observed_deduction)}
                           {candidate.effective_deduction_rate != null
                             ? ` (${(Number(candidate.effective_deduction_rate) * 100).toFixed(2)}%)`
