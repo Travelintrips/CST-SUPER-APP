@@ -631,6 +631,17 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
           SET payment_method = ${normalizePaymentMethod(row.method) ?? "cash"}
           WHERE id = ${existingRow.id}
         `).catch(() => {});
+        // The booking journal may have been created by an older code path
+        // before payment_method was propagated to accounting_entries. Repair
+        // only a missing header value; posted journal amounts remain immutable.
+        if (existingRow.entry_id) {
+          await db.execute(sql`
+            UPDATE accounting_entries
+            SET payment_method = ${normalizePaymentMethod(row.method) ?? "cash"}
+            WHERE id = ${existingRow.entry_id}
+              AND payment_method IS NULL
+          `).catch(() => {});
+        }
         if (existingRow.entry_id) {
           await db.execute(sql`
             UPDATE sport_payments
@@ -668,6 +679,12 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
           `).catch(() => ({ rows: [] }));
           if (entryRes.rows.length > 0) {
             const entryId = Number((entryRes.rows[0] as any).id);
+            await db.execute(sql`
+              UPDATE accounting_entries
+              SET payment_method = ${normalizePaymentMethod(row.method) ?? "cash"}
+              WHERE id = ${entryId}
+                AND payment_method IS NULL
+            `).catch(() => {});
             await db.execute(sql`UPDATE accounting_payments SET entry_id = ${entryId} WHERE id = ${existingRow.id}`).catch(() => {});
             await db.execute(sql`
               UPDATE sport_payments

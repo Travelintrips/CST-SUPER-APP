@@ -49,6 +49,36 @@ export async function runAccountingHubMigration(): Promise<void> {
         AND ap.payment_method IS DISTINCT FROM sp.method
     `).catch((err) => logger.warn({ err }, "[AccountingHub] Sport Center payment method backfill failed"));
 
+    // Backfill journal headers as well. Older Sport Center postings may have
+    // payment_method on accounting_payments (or on the public mirror) while
+    // accounting_entries.payment_method is still NULL. The journal is linked
+    // through accounting_payments.entry_id; do not alter any financial values.
+    await db.execute(sql`
+      UPDATE accounting_entries ae
+      SET payment_method = COALESCE(sp.method, ap.payment_method)
+      FROM accounting_payments ap
+      LEFT JOIN sport_payments sp
+        ON ap.source_type = 'sport_center'
+       AND ap.source_doc_id = sp.id
+      WHERE ae.id = ap.entry_id
+        AND ap.source_type = 'sport_center'
+        AND ae.payment_method IS NULL
+        AND COALESCE(sp.method, ap.payment_method) IS NOT NULL
+    `).catch((err) => logger.warn({ err }, "[AccountingHub] Sport Center journal payment method backfill failed"));
+
+    // Fallback for legacy booking journals that were created before an
+    // accounting_payments row existed. Current Sport Center contract is one
+    // payment per booking, so source_id can safely resolve the mirror row.
+    await db.execute(sql`
+      UPDATE accounting_entries ae
+      SET payment_method = sp.method
+      FROM sport_payments sp
+      WHERE ae.source = 'sport_center_booking'
+        AND ae.source_id = sp.booking_id
+        AND ae.payment_method IS NULL
+        AND sp.method IS NOT NULL
+    `).catch((err) => logger.warn({ err }, "[AccountingHub] Legacy Sport Center journal payment method backfill failed"));
+
     // ── 3. accounting_posting_errors ─────────────────────────────────────────
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS accounting_posting_errors (
