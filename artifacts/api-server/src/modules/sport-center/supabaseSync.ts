@@ -633,13 +633,15 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
         `).catch(() => {});
         // The booking journal may have been created by an older code path
         // before payment_method was propagated to accounting_entries. Repair
-        // only a missing header value; posted journal amounts remain immutable.
+        // any missing or generic-default value; 'cash' is a fallback that gets
+        // overwritten when the source has a more specific method (QRIS, transfer).
+        // Posted journal amounts remain immutable — only the metadata is updated.
         if (existingRow.entry_id) {
           await db.execute(sql`
             UPDATE accounting_entries
             SET payment_method = ${normalizePaymentMethod(row.method) ?? "cash"}
             WHERE id = ${existingRow.entry_id}
-              AND payment_method IS NULL
+              AND (payment_method IS NULL OR payment_method = 'cash')
           `).catch(() => {});
         }
         if (existingRow.entry_id) {
@@ -683,7 +685,7 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
               UPDATE accounting_entries
               SET payment_method = ${normalizePaymentMethod(row.method) ?? "cash"}
               WHERE id = ${entryId}
-                AND payment_method IS NULL
+                AND (payment_method IS NULL OR payment_method = 'cash')
             `).catch(() => {});
             await db.execute(sql`UPDATE accounting_payments SET entry_id = ${entryId} WHERE id = ${existingRow.id}`).catch(() => {});
             await db.execute(sql`

@@ -51,8 +51,11 @@ export async function runAccountingHubMigration(): Promise<void> {
 
     // Backfill journal headers as well. Older Sport Center postings may have
     // payment_method on accounting_payments (or on the public mirror) while
-    // accounting_entries.payment_method is still NULL. The journal is linked
-    // through accounting_payments.entry_id; do not alter any financial values.
+    // accounting_entries.payment_method is still NULL or set to the generic
+    // 'cash' default. 'cash' is a fallback — overwrite it when the Sport Center
+    // source has a more specific method (QRIS, transfer, etc.).
+    // The journal is linked through accounting_payments.entry_id; do not alter
+    // any financial values (debit/credit amounts).
     await db.execute(sql`
       UPDATE accounting_entries ae
       SET payment_method = COALESCE(sp.method, ap.payment_method)
@@ -62,10 +65,13 @@ export async function runAccountingHubMigration(): Promise<void> {
        AND ap.source_doc_id = sp.id
       WHERE ae.id = ap.entry_id
         AND ap.source_type = 'sport_center'
-        AND ae.payment_method IS NULL
+        AND (ae.payment_method IS NULL OR ae.payment_method = 'cash')
         AND COALESCE(sp.method, ap.payment_method) IS NOT NULL
+        AND COALESCE(sp.method, ap.payment_method) <> 'cash'
     `).catch((err) => logger.warn({ err }, "[AccountingHub] Sport Center journal payment method backfill failed"));
 
+    // Also repair entries where payment_method = 'cash' but a non-cash source
+    // is now known (handles backfills where 'cash' was set as a generic default).
     // Fallback for legacy booking journals that were created before an
     // accounting_payments row existed. Current Sport Center contract is one
     // payment per booking, so source_id can safely resolve the mirror row.
@@ -75,8 +81,9 @@ export async function runAccountingHubMigration(): Promise<void> {
       FROM sport_payments sp
       WHERE ae.source = 'sport_center_booking'
         AND ae.source_id = sp.booking_id
-        AND ae.payment_method IS NULL
+        AND (ae.payment_method IS NULL OR ae.payment_method = 'cash')
         AND sp.method IS NOT NULL
+        AND sp.method <> 'cash'
     `).catch((err) => logger.warn({ err }, "[AccountingHub] Legacy Sport Center journal payment method backfill failed"));
 
     // ── 3. accounting_posting_errors ─────────────────────────────────────────
