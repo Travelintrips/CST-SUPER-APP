@@ -191,15 +191,9 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
         booking_id?: number | null;
       } | undefined;
 
-      if (!mirror) {
-        logger.warn(
-          { sportCenterPaymentId: pay.id, paymentNumber: scPaymentNumber, sourceStatus: pay.status },
-          `${PREFIX} mirror trigger belum tersedia; tidak melakukan INSERT dari worker`,
-        );
-        continue;
-      }
-
-      if (mirror.booking_id == null && pay.booking_id != null) {
+      // ── Resolve local booking_id (shared by mirror-create and booking_id-backfill) ──
+      const resolveLocalBookingId = async (): Promise<number | null> => {
+        if (pay.booking_id == null) return null;
         const bookingOrder = await client
           .schema("sport_center")
           .from("sport_bookings")
@@ -207,29 +201,55 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
           .eq("id", pay.booking_id)
           .maybeSingle();
         const orderNumber = bookingOrder.data?.order_number ?? null;
-        let localBookingId: number | null = null;
-
         if (orderNumber) {
-          const localByNumber = await db.execute(sql`
-            SELECT id FROM sport_bookings
-            WHERE booking_number = ${orderNumber}
-            LIMIT 1
+          const r = await db.execute(sql`
+            SELECT id FROM sport_bookings WHERE booking_number = ${orderNumber} LIMIT 1
           `).catch(() => ({ rows: [] }));
-          if (localByNumber.rows.length > 0) {
-            localBookingId = Number((localByNumber.rows[0] as any).id);
-          }
+          if (r.rows.length > 0) return Number((r.rows[0] as any).id);
+        }
+        const r2 = await db.execute(sql`
+          SELECT id FROM sport_bookings WHERE sc_booking_id = ${pay.booking_id} LIMIT 1
+        `).catch(() => ({ rows: [] }));
+        return r2.rows.length > 0 ? Number((r2.rows[0] as any).id) : null;
+      };
+
+      if (!mirror) {
+        if (pay.status !== "confirmed") {
+          // Belum confirmed → trigger belum seharusnya fire; expected untuk pending payments.
+          logger.debug(
+            { sportCenterPaymentId: pay.id, paymentNumber: scPaymentNumber, sourceStatus: pay.status },
+            `${PREFIX} payment belum confirmed, mirror belum diperlukan`,
+          );
+          continue;
         }
 
-        if (!localBookingId) {
-          const localByScId = await db.execute(sql`
-            SELECT id FROM sport_bookings
-            WHERE sc_booking_id = ${pay.booking_id}
-            LIMIT 1
-          `).catch(() => ({ rows: [] }));
-          if (localByScId.rows.length > 0) {
-            localBookingId = Number((localByScId.rows[0] as any).id);
-          }
-        }
+        // Payment confirmed tapi mirror belum ada → trigger tidak aktif saat dikonfirmasi
+        // (misal QRIS yang dikonfirmasi sebelum trigger diinstall). Insert mirror manual.
+        logger.info(
+          { sportCenterPaymentId: pay.id, paymentNumber: scPaymentNumber },
+          `${PREFIX} payment confirmed tanpa mirror → insert mirror manual`,
+        );
+        const localBookingId = await resolveLocalBookingId();
+        const paidAt   = pay.confirmed_at ?? pay.created_at ?? new Date().toISOString();
+        const method   = pay.payment_method ?? "Transfer Bank";
+
+        await db.execute(sql`
+          INSERT INTO sport_payments
+            (company_id, booking_id, payment_number, amount, method, status, paid_at,
+             payment_type, source, posting_status, created_at, updated_at)
+          VALUES
+            (1, ${localBookingId}, ${scPaymentNumber}, ${pay.amount},
+             ${method}, 'paid', ${paidAt}::timestamptz,
+             'full_payment', 'SPORT_CENTER_SUPABASE', 'unposted',
+             ${pay.created_at ?? new Date().toISOString()}::timestamptz, NOW())
+          ON CONFLICT (payment_number) DO NOTHING
+        `);
+        synced++;
+        continue;
+      }
+
+      if (mirror.booking_id == null && pay.booking_id != null) {
+        const localBookingId = await resolveLocalBookingId();
 
         if (localBookingId) {
           await db.execute(sql`
@@ -245,6 +265,22 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
           );
           continue;
         }
+      }
+
+      // Patch method jika sport_center payment adalah QRIS tapi mirror belum reflect itu.
+      // Hanya update jika posting_status masih unposted/failed (belum diposting ke jurnal).
+      if (
+        pay.payment_method &&
+        String(pay.payment_method).toLowerCase().includes("qris")
+      ) {
+        await db.execute(sql`
+          UPDATE sport_payments
+          SET method     = ${pay.payment_method},
+              updated_at = NOW()
+          WHERE id       = ${Number(mirror.id)}
+            AND LOWER(COALESCE(method, '')) NOT LIKE '%qris%'
+            AND posting_status IN ('unposted', 'failed')
+        `).catch(() => {/* non-fatal */});
       }
 
       synced++;
