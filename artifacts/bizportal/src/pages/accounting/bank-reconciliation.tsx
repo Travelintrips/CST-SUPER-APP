@@ -2042,7 +2042,7 @@ function MutationDetailPanel({
                                   <span className="font-mono text-[10px] text-slate-500">
                                     {paymentNo ? paymentNo : `#${pid}`}
                                   </span>
-                                  {gross > 0 && (
+                                  {Number(gross) > 0 && (
                                     <span className="font-semibold text-right">{idr(gross)}</span>
                                   )}
                                 </div>
@@ -2100,24 +2100,6 @@ function MutationDetailPanel({
                     <p className="text-[11px] text-green-700 dark:text-green-400 text-center">
                       Batch ini sudah disetujui. Settlement QRIS telah dibuat dan siap dicocokkan ke mutasi bank.
                     </p>
-                  <p className="rounded-md border border-amber-200 bg-amber-100/80 px-2 py-1.5 text-xs font-medium text-amber-950 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100">
-                    {qrisAudit.review_reason ?? "Kandidat ini hanya untuk review dan tidak menjadi kandidat approve/post."}
-                  </p>
-                  <QrisPaymentItemsSummary items={qrisAudit.payment_items} />
-                  <p className="text-[11px] text-slate-700 dark:text-slate-300">
-                    Gunanya: memberi alasan mengapa sistem belum mencocokkan mutasi ini secara otomatis.
-                    Audit ini tidak membuat jurnal dan tidak mengubah status posting.
-                  </p>
-                  {qrisAudit.id && qrisAudit.status !== "approved" && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="w-full border-amber-400 text-amber-900 hover:bg-amber-100 dark:text-amber-200"
-                      onClick={() => onApproveQris(m)}
-                    >
-                      <CheckCircle2 className="w-4 h-4 mr-1.5" />
-                      Approve batch QRIS
-                    </Button>
                   )}
                 </div>
               </>
@@ -2622,31 +2604,6 @@ export default function BankReconciliationPage() {
       qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] });
     },
     onError: (e: Error) => toast({ title: "Dry-run QRIS gagal", description: e.message, variant: "destructive" }),
-  });
-
-  const approveQrisBatchMut = useMutation({
-    mutationFn: async ({ candidateId }: { candidateId: number; mutationId: number }) => {
-      const r = await fetch(`/api/bank-reconciliation/qris-candidates/${candidateId}/approve`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      const body = await r.json().catch(() => ({ error: "Unknown error" }));
-      if (!r.ok) throw new Error(body.error ?? "Gagal menyetujui batch QRIS");
-      return body as { ok: boolean; settlementId: number; settlementReference: string; itemCount: number };
-    },
-    onSuccess: (result) => {
-      toast({
-        title: "QRIS Batch disetujui",
-        description: `Settlement ${result.settlementReference} dibuat (${result.itemCount} payment)`,
-      });
-      qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] });
-      qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
-      // Refresh detail panel so the button reflects approved state
-      setDetailMutation(null);
-    },
-    onError: (e: Error) => toast({ title: "Gagal menyetujui batch QRIS", description: e.message, variant: "destructive" }),
   });
 
   const [qrisBatchConfirm, setQrisBatchConfirm] = useState<{

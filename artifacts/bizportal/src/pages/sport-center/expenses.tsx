@@ -137,7 +137,7 @@ export default function SportCenterExpenses() {
 
   // ── Summary ─────────────────────────────────────────────────────────────────
   const { data: summary = [], isLoading: summaryLoading } = useQuery<SummaryRow[]>({
-    enabled: cId != null,
+    enabled: cId != null && tab === "summary",
     queryKey: ["sc-expenses-summary", cId, facilityFilter, dateFrom, dateTo],
     queryFn: async () => {
       const qs = new URLSearchParams({ companyId: String(cId) });
@@ -147,7 +147,6 @@ export default function SportCenterExpenses() {
       const r = await fetch(`/api/sport-center/expenses/summary?${qs}`, { credentials: "include" });
       return r.json();
     },
-    enabled: tab === "summary",
   });
 
   const filtered = expenses.filter((e) => {
