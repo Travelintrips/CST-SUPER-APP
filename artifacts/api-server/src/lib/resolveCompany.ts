@@ -48,7 +48,8 @@ function logCompanyContextSwitch(
  *    that company. The client-supplied ?companyId / ?company param is ignored.
  *  - Admin users and users without an assigned company may override via query
  *    param (e.g. for multi-company admin or holding-group views).
- *  - Unauthenticated requests fall back to the client param, then 1.
+ *  - Requests without an authenticated company context must provide an
+ *    explicit company parameter; otherwise resolution fails closed.
  *
  * Side-effect: when an admin overrides to a company different from their own,
  * logs COMPANY_CONTEXT_SWITCH (severity: HIGH) to erp_audit_logs.
@@ -66,17 +67,23 @@ export function resolveCompanyId(req: Request): number {
     (req.body as Record<string, unknown> | undefined)?.["companyId"]
   ) as string | undefined;
   const n = raw ? parseInt(String(raw), 10) : NaN;
-  let resolved = Number.isNaN(n) ? (user?.companyId ?? 1) : n;
+  let resolved = Number.isNaN(n) ? user?.companyId : n;
+
+  if (resolved == null || !Number.isInteger(resolved) || resolved <= 0) {
+    const error = new Error("Company context is required");
+    (error as Error & { statusCode?: number }).statusCode = 400;
+    throw error;
+  }
 
   // ── Allowed-company guard ──────────────────────────────────────────────────
   // If this admin has an explicit company allowlist, clamp the resolved company
   // to one of the permitted IDs. Falls back to the user's own company, then the
-  // first allowed company, then 1 — never leaks data to an unauthorised company.
+  // first allowed company — never leaks data to an unauthorised company.
   const allowedIds = (user as any)?.allowedCompanyIds as number[] | undefined;
   if (allowedIds && allowedIds.length > 0 && !allowedIds.includes(resolved)) {
     resolved = user?.companyId != null && allowedIds.includes(user.companyId)
       ? user.companyId
-      : (allowedIds[0] ?? 1);
+      : allowedIds[0]!;
   }
 
   // Detect context switch: admin/unassigned user targeting a different company
@@ -116,18 +123,24 @@ export function resolveCompanyScope(req: Request): number | "all" {
     if (allowedIds && allowedIds.length > 0) {
       return user?.companyId != null && allowedIds.includes(user.companyId)
         ? user.companyId
-        : (allowedIds[0] ?? 1);
+        : allowedIds[0]!;
     }
     return "all";
   }
   const n = raw ? parseInt(String(raw), 10) : NaN;
-  const resolved = Number.isNaN(n) ? (user?.companyId ?? 1) : n;
+  const resolved = Number.isNaN(n) ? user?.companyId : n;
+
+  if (resolved == null || !Number.isInteger(resolved) || resolved <= 0) {
+    const error = new Error("Company context is required");
+    (error as Error & { statusCode?: number }).statusCode = 400;
+    throw error;
+  }
 
   // Clamp to allowed companies
   if (allowedIds && allowedIds.length > 0 && !allowedIds.includes(resolved)) {
     return user?.companyId != null && allowedIds.includes(user.companyId)
       ? user.companyId
-      : (allowedIds[0] ?? 1);
+      : allowedIds[0]!;
   }
 
   return resolved;

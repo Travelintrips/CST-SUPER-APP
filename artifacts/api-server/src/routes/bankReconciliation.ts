@@ -1467,7 +1467,23 @@ router.get("/mutations", async (req, res) => {
        WHERE m.mutation_id = bm.id
        ) AS candidates,
        (
-         SELECT to_jsonb(qc)
+         SELECT to_jsonb(qc) || jsonb_build_object(
+           'payment_items', COALESCE((
+             SELECT jsonb_agg(
+               item || jsonb_build_object(
+                 'payment_number', sp.payment_number,
+                 'booking_id',     sp.booking_id,
+                 'booking_number', sb.booking_number,
+                 'paid_at',        sp.paid_at
+               )
+             )
+             FROM jsonb_array_elements(COALESCE(qc.payment_items, '[]'::jsonb)) AS item
+             LEFT JOIN sport_payments sp
+               ON sp.id = ((item->>'paymentId')::int)
+             LEFT JOIN sport_bookings sb
+               ON sb.id = sp.booking_id
+           ), '[]'::jsonb)
+         )
          FROM qris_mutation_batch_candidates qc
          WHERE qc.mutation_id = bm.id
             AND (

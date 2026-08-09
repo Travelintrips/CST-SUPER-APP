@@ -344,7 +344,7 @@ export default function CustomClearance() {
   const [pibPebHsCode, setPibPebHsCode] = useState("");
   const [pibPebNilai, setPibPebNilai] = useState("");
   const [pibPebMataUang, setPibPebMataUang] = useState("USD");
-  const [pibPebKurs, setPibPebKurs] = useState("15900");
+  const [pibPebKurs, setPibPebKurs] = useState("");
   const [pibPebBMRate, setPibPebBMRate] = useState("5");
   const [pibPebBerat, setPibPebBerat] = useState("");
   const [pibPebPelabuhan, setPibPebPelabuhan] = useState("Tanjung Priok");
@@ -365,7 +365,7 @@ export default function CustomClearance() {
   const [unHsCode, setUnHsCode] = useState("");
   const [unNilaiAngka, setUnNilaiAngka] = useState("");
   const [unMataUang, setUnMataUang] = useState("USD");
-  const [unKurs, setUnKurs] = useState("15900");
+  const [unKurs, setUnKurs] = useState("");
   const [unBMRate, setUnBMRate] = useState("5");
   const [unBerat, setUnBerat] = useState("");
   const [unNegara, setUnNegara] = useState("");
@@ -375,7 +375,8 @@ export default function CustomClearance() {
   /* ── PIB/PEB Estimator (memoized) ─────────────────────────────── */
   const pibEstimasi = useMemo(() => {
     const nilaiNum = parseFloat(pibPebNilai.replace(/,/g, "")) || 0;
-    const kurs = pibPebMataUang === "IDR" ? 1 : (parseFloat(pibPebKurs) || 15900);
+    const kurs = pibPebMataUang === "IDR" ? 1 : parseFloat(pibPebKurs);
+    if (!Number.isFinite(kurs) || kurs <= 0) return null;
     const cifIdr = nilaiNum * kurs;
     if (cifIdr <= 0) return null;
 
@@ -401,7 +402,8 @@ export default function CustomClearance() {
   /* ── Undername Estimator (memoized) ───────────────────────────── */
   const unEstimasi = useMemo(() => {
     const nilaiNum = parseFloat(unNilaiAngka.replace(/,/g, "")) || 0;
-    const kurs = unMataUang === "IDR" ? 1 : (parseFloat(unKurs) || 15900);
+    const kurs = unMataUang === "IDR" ? 1 : parseFloat(unKurs);
+    if (!Number.isFinite(kurs) || kurs <= 0) return null;
     const cifIdr = nilaiNum * kurs;
     if (cifIdr <= 0) return null;
 
@@ -474,12 +476,14 @@ export default function CustomClearance() {
     if (selectedServices.includes("pib_peb")) {
       if (!pibPebJenisBarang.trim()) m.push("Jenis/Nama Barang (PIB/PEB)");
       if (!pibPebNilai.trim()) m.push(`Nilai ${pibPebArah === "Impor" ? "CIF" : "FOB"}`);
+      if (pibPebMataUang !== "IDR" && (!pibPebKurs.trim() || Number(pibPebKurs) <= 0)) m.push("Kurs valuta PIB/PEB");
     }
     if (selectedServices.includes("handling_clearance")) {
       if (!hcJenisBarang.trim()) m.push("Jenis/Nama Barang (Handling)");
     }
     if (selectedServices.includes("undername")) {
       if (!unJenisBarang.trim()) m.push("Jenis/Nama Barang (Undername)");
+      if (unMataUang !== "IDR" && (!unKurs.trim() || Number(unKurs) <= 0)) m.push("Kurs valuta Undername");
       if (!unNilaiAngka.trim()) m.push("Nilai CIF/FOB (Undername)");
       if (!unNegara.trim()) m.push("Negara Asal/Tujuan (Undername)");
     }

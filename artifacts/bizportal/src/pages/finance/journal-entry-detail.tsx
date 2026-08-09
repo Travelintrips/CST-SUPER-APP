@@ -201,7 +201,7 @@ export default function JournalEntryDetailPage() {
                           accountCode: line.accountCode ?? "",
                           startDate: entry.date,
                           endDate: entry.date,
-                          company: String(entry.companyId ?? 1),
+                          company: String(entry.companyId),
                         });
                         return (
                           <tr key={line.id} className="hover:bg-white/5 transition-colors duration-150 group">

@@ -25,7 +25,7 @@ import {
   chartOfAccountsTable,
 } from "@workspace/db";
 import { eq, sql, desc, and, or, inArray, type SQL } from "drizzle-orm";
-import { getPreferredDomain } from "../lib/domain.js";
+import { getRequiredPublicDomain } from "../lib/domain.js";
 
 /** Kirim WA ke semua admin (ADMIN_WA_PHONES + FONNTE_ADMIN_WA), fire-and-forget. */
 function notifyAdminWa(message: string, context?: string, refType?: string, refId?: string): void {
@@ -730,18 +730,20 @@ router.post("/documents/:id/action", async (req, res) => {
             companyId: doc.companyId ?? null,
           });
         }
-        if (taxAmount > 0) {
+        if (taxAmount > 0 && doc.companyId != null) {
           const { recordTransactionTax } = await import("../lib/taxAutoService.js");
           const grandTotalPO = Number(doc.grandTotal ?? doc.totalAmount ?? 0);
           const baseAmountPO = grandTotalPO > taxAmount ? grandTotalPO - taxAmount : Number(doc.totalAmount ?? 0);
           void recordTransactionTax({
-            companyId: doc.companyId ?? 1,
+            companyId: doc.companyId,
             transactionType: "purchase_order",
             transactionId: doc.id,
             transactionRef: doc.docNumber,
             baseAmount: baseAmountPO,
             taxAmount,
           });
+        } else if (taxAmount > 0) {
+          console.warn(`[purchase] tax capture skipped for ${doc.docNumber}: company context is missing`);
         }
         // Notifikasi WA admin setelah bill diposting
         const grandTotal = Number(doc.grandTotal ?? doc.totalAmount ?? 0);
@@ -1076,8 +1078,7 @@ router.post("/documents/:id/generate-vendor-token", async (req, res) => {
   { const _cid = resolveCompanyId(req); if (!await assertCompanyAccess(doc.companyId, _cid, req, res, { resourceType: "purchase_document", resourceId: id })) return; }
   if (doc.kind !== "order") return res.status(400).json({ message: "Hanya PO yang bisa dibuat link vendor accept" });
 
-  const _domain = getPreferredDomain();
-  const baseUrl = _domain ? `https://${_domain}` : `http://localhost:5000`;
+  const baseUrl = `https://${getRequiredPublicDomain()}`;
 
   const existingToken = (doc as any).vendor_accept_token as string | null | undefined;
   const token = existingToken ?? randomBytes(24).toString("hex");

@@ -237,5 +237,66 @@ export async function listQrisCandidates(options: {
     ORDER BY c.source_date DESC, c.id DESC
     LIMIT ${limit}
   `));
-  return rows;
+
+  // Enrich payment_items with booking details from sport_payments + sport_bookings
+  const candidates = rows as Array<Record<string, unknown>>;
+  const allPaymentIds: number[] = [];
+  for (const row of candidates) {
+    const items = parsePaymentItems(row.payment_items);
+    for (const item of items) {
+      const pid = item.paymentId ?? item.payment_id;
+      if (pid != null && Number.isInteger(Number(pid))) {
+        allPaymentIds.push(Number(pid));
+      }
+    }
+  }
+
+  const paymentDetailMap = new Map<number, {
+    payment_number: string | null;
+    booking_id: number | null;
+    booking_number: string | null;
+    paid_at: string | null;
+  }>();
+
+  if (allPaymentIds.length > 0) {
+    const idList = [...new Set(allPaymentIds)].join(",");
+    const { rows: spRows } = await db.execute(sql.raw(`
+      SELECT sp.id, sp.payment_number, sp.booking_id, sp.paid_at,
+             sb.booking_number
+      FROM sport_payments sp
+      LEFT JOIN sport_bookings sb ON sb.id = sp.booking_id
+      WHERE sp.id IN (${idList})
+    `)).catch(() => ({ rows: [] as unknown[] }));
+
+    for (const r of spRows as Array<Record<string, unknown>>) {
+      paymentDetailMap.set(Number(r.id), {
+        payment_number: r.payment_number == null ? null : String(r.payment_number),
+        booking_id: r.booking_id == null ? null : Number(r.booking_id),
+        booking_number: r.booking_number == null ? null : String(r.booking_number),
+        paid_at: r.paid_at == null ? null : String(r.paid_at),
+      });
+    }
+  }
+
+  // Merge booking details into payment_items of each candidate
+  return candidates.map((row) => {
+    const items = parsePaymentItems(row.payment_items);
+    if (items.length === 0) return row;
+    const enriched = items.map((item) => {
+      const pid = item.paymentId ?? item.payment_id;
+      const detail = pid != null ? paymentDetailMap.get(Number(pid)) : undefined;
+      return detail ? { ...item, ...detail } : item;
+    });
+    return { ...row, payment_items: enriched };
+  });
+}
+
+function parsePaymentItems(raw: unknown): Array<Record<string, unknown>> {
+  if (raw == null) return [];
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    return Array.isArray(parsed) ? parsed as Array<Record<string, unknown>> : [];
+  } catch {
+    return [];
+  }
 }

@@ -535,6 +535,10 @@ interface QrisCandidateAudit {
     gross_amount?: number;
     expectedSettlementDate?: string | null;
     settlementRuleVersion?: string | null;
+    payment_number?: string | null;
+    booking_id?: number | null;
+    booking_number?: string | null;
+    paid_at?: string | null;
   }>;
   description?: string | null;
 }
@@ -1938,15 +1942,32 @@ function MutationDetailPanel({
                         <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 mb-1">
                           {qrisAudit.payment_items!.length} Sport Payment dalam Batch
                         </p>
-                        <div className="rounded border divide-y text-xs max-h-40 overflow-y-auto bg-white dark:bg-slate-900">
+                        <div className="rounded border divide-y text-xs max-h-48 overflow-y-auto bg-white dark:bg-slate-900">
                           {qrisAudit.payment_items!.map((item, idx) => {
                             const pid = item.paymentId ?? item.payment_id ?? 0;
                             const gross = item.grossAmount ?? item.gross_amount ?? 0;
+                            const paymentNo = item.payment_number;
+                            const bookingNo = item.booking_number;
+                            const paidAt = item.paid_at;
                             return (
-                              <div key={idx} className="flex items-center justify-between px-2 py-1 gap-2">
-                                <span className="text-slate-500 font-mono text-[10px]">#{pid}</span>
-                                {gross > 0 && (
-                                  <span className="font-medium text-right">{idr(gross)}</span>
+                              <div key={idx} className="px-2 py-1.5 space-y-0.5">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="font-mono text-[10px] text-slate-500">
+                                    {paymentNo ? paymentNo : `#${pid}`}
+                                  </span>
+                                  {gross > 0 && (
+                                    <span className="font-semibold text-right">{idr(gross)}</span>
+                                  )}
+                                </div>
+                                {bookingNo && (
+                                  <p className="text-[10px] text-slate-500 truncate">
+                                    Booking: <span className="font-medium text-slate-700 dark:text-slate-300">{bookingNo}</span>
+                                  </p>
+                                )}
+                                {paidAt && (
+                                  <p className="text-[10px] text-slate-400">
+                                    Bayar: {fmtDate(paidAt)}
+                                  </p>
                                 )}
                               </div>
                             );

@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { resolveCompanyId } from "../lib/resolveCompany.js";
 import { requireAdmin } from "../lib/requireAdmin.js";
 import { ensureAccountingSettings } from "../lib/accountingSeed.js";
 import { sendViaService as sendWhatsApp, sendToAdminGroup } from "../lib/waTransport.js";
@@ -81,14 +82,6 @@ async function nextSeq(table: string, prefix: string, col: string): Promise<stri
   const row = (result as any).rows?.[0] ?? (Array.isArray(result) ? result[0] : undefined);
   const seq = (Number(row?.seq ?? 0) + 1).toString().padStart(5, "0");
   return `${prefix}/${year}/${seq}`;
-}
-
-// resolveCompanyId is imported from lib/resolveCompany — it enforces the allowed-company
-// allowlist for restricted admins, so the local shadow has been removed.
-function resolveCompanyId(req: { query: Record<string, unknown>; body: Record<string, unknown> }): number {
-  const raw = (req.query["company"] ?? req.query["companyId"] ?? req.body?.["companyId"]) as string | undefined;
-  const n = raw ? parseInt(String(raw), 10) : NaN;
-  return Number.isNaN(n) ? 1 : n;
 }
 
 const PR_ACTION_EMOJI: Record<string, string> = {
@@ -658,7 +651,7 @@ router.post("/vq/:id/select", async (req, res) => {
     docNumber: poNumber,
     kind: "order",
     status: "confirmed",
-    companyId: rfq?.companyId ?? 1,
+    companyId: rfq?.companyId ?? cid,
     supplierId: vq.supplierId ?? undefined,
     supplierName: vq.supplierName,
     totalAmount: vq.totalAmount,
@@ -877,7 +870,7 @@ router.post("/gr/:id/confirm", async (req, res) => {
   // Post accounting journal: Dr Inventory / Cr GR/IR (proper 3-way match accrual)
   // GR/IR (2-1045) acts as clearing account; cleared when vendor invoice (bill) is posted.
   try {
-    const settings = await ensureAccountingSettings(gr.companyId ?? 1);
+    const settings = await ensureAccountingSettings(gr.companyId ?? cid);
     const totalCost = lines.reduce((s, l) => s + num(l.qtyReceived) * num(l.unitCost), 0);
 
     // Resolve GR/IR account — settings first, fallback: langsung cari akun 2-1045
@@ -902,7 +895,7 @@ router.post("/gr/:id/confirm", async (req, res) => {
         description: `Penerimaan Barang ${gr.grNumber}`,
         source: "grn_receipt",
         sourceId: id,
-        companyId: gr.companyId ?? 1,
+        companyId: gr.companyId ?? cid,
         lines: [
           { accountId: settings.inventoryAccountId, debit: totalCost, credit: 0, description: `Persediaan masuk: ${gr.grNumber}` },
           { accountId: effectiveGrirId, debit: 0, credit: totalCost, description: `GR/IR accrual: ${gr.grNumber}` },
@@ -1452,7 +1445,8 @@ router.post("/vendor-invoices/:id/post", async (req, res) => {
 
   // Post journal
   try {
-    const settings = await ensureAccountingSettings(vi.companyId ?? 1);
+    const invoiceCompanyId = vi.companyId ?? resolveCompanyId(req);
+    const settings = await ensureAccountingSettings(invoiceCompanyId);
     const grandTotal = num(vi.grandTotal);
     const taxAmount = num(vi.taxAmount);
     const netAmount = grandTotal - taxAmount;
@@ -1467,7 +1461,7 @@ router.post("/vendor-invoices/:id/post", async (req, res) => {
       const expenseCategory = classifyExpense(firstItemName);
 
       // FASE 6C: resolve SPORT_CENTER cost center ID
-      const scCostCenterId = await resolveCostCenterId("SPORT_CENTER", vi.companyId ?? 1);
+      const scCostCenterId = await resolveCostCenterId("SPORT_CENTER", invoiceCompanyId);
 
       // FASE 6B: validasi wajib — reject jika cost_center tidak ditemukan
       if (!scCostCenterId) {
@@ -1497,7 +1491,7 @@ router.post("/vendor-invoices/:id/post", async (req, res) => {
           description: `[SPORT_CENTER] Vendor Invoice ${vi.invoiceNumber} — ${vi.supplierName}`,
           source: "sport_center_operational_expense",
           sourceId: id,
-          companyId: vi.companyId ?? 1,
+          companyId: invoiceCompanyId,
           costCenterId: scCostCenterId,
           facilityId: scFacilityId,
           expenseCategory,
@@ -1525,7 +1519,7 @@ router.post("/vendor-invoices/:id/post", async (req, res) => {
       if (taxAmount > 0 && settings.ppnInputAccountId) lines.push({ accountId: settings.ppnInputAccountId!, debit: taxAmount, credit: 0, description: "VAT in" });
       if (settings.apAccountId) lines.push({ accountId: settings.apAccountId!, debit: 0, credit: grandTotal, description: "AP vendor invoice" });
       if (lines.length >= 2) {
-        const entry = await postEntry({ journalId: settings.purchaseJournalId!, date: new Date(), ref: vi.invoiceNumber, description: `Vendor Invoice ${vi.invoiceNumber}`, source: "purchase_bill", sourceId: id, companyId: vi.companyId ?? 1, lines }, "PUR");
+         const entry = await postEntry({ journalId: settings.purchaseJournalId!, date: new Date(), ref: vi.invoiceNumber, description: `Vendor Invoice ${vi.invoiceNumber}`, source: "purchase_bill", sourceId: id, companyId: invoiceCompanyId, lines }, "PUR");
         await db.update(vendorInvoicesTable).set({ status: "posted", isLocked: true, threeWayMatchStatus: matchStatus, matchNotes, journalEntryId: entry.id, updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, id));
       } else {
         await db.update(vendorInvoicesTable).set({ status: "posted", isLocked: true, threeWayMatchStatus: matchStatus, matchNotes, updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, id));
@@ -1658,7 +1652,7 @@ router.post("/payment-requests/:id/action", async (req, res) => {
 
     // Verifikasi BD exists dan statusnya posted
     const [bdRow] = await db.execute<{ id: number; status: string; disbursement_number: string; total_amount: string }>(
-      sql`SELECT id, status, disbursement_number, total_amount FROM bank_disbursements WHERE id = ${Number(bdId)} AND company_id = ${pr.companyId ?? 1}`
+      sql`SELECT id, status, disbursement_number, total_amount FROM bank_disbursements WHERE id = ${Number(bdId)} AND company_id = ${pr.companyId ?? cid}`
     ).then((r) => (Array.isArray(r) ? r : (r as any).rows ?? []) as Array<{ id: number; status: string; disbursement_number: string; total_amount: string }>);
 
     if (!bdRow) {

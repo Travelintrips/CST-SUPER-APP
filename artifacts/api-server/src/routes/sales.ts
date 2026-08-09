@@ -1062,16 +1062,18 @@ router.post("/documents/:id/action", async (req, res) => {
       taxAccountId: null,
       companyId: doc.companyId ?? null,
     });
-    if (taxAmount > 0) {
+    if (taxAmount > 0 && doc.companyId != null) {
       const { recordTransactionTax } = await import("../lib/taxAutoService.js");
       void recordTransactionTax({
-        companyId: doc.companyId ?? 1,
+        companyId: doc.companyId,
         transactionType: "sales_order",
         transactionId: doc.id,
         transactionRef: doc.docNumber,
         baseAmount: net,
         taxAmount,
       });
+    } else if (taxAmount > 0) {
+      console.warn(`[sales] tax capture skipped for ${doc.docNumber}: company context is missing`);
     }
   }
 

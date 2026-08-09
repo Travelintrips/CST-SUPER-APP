@@ -77,7 +77,7 @@ export default function SportCenterCompanyInvoices() {
   const qc = useQueryClient();
   const { activeCompanyId } = useCompany();
   const { toast } = useToast();
-  const cId = typeof activeCompanyId === "number" ? activeCompanyId : 1;
+  const cId = typeof activeCompanyId === "number" && activeCompanyId > 0 ? activeCompanyId : null;
 
   const [tab, setTab] = useState<"invoices" | "clients">("invoices");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -91,6 +91,7 @@ export default function SportCenterCompanyInvoices() {
 
   // ── Clients query ───────────────────────────────────────────────────────────
   const { data: clients = [] } = useQuery<Client[]>({
+    enabled: cId != null,
     queryKey: ["sc-company-clients", cId],
     queryFn: async () => {
       const r = await fetch(`/api/sport-center/company-clients?companyId=${cId}`, { credentials: "include" });
@@ -100,6 +101,7 @@ export default function SportCenterCompanyInvoices() {
 
   // ── Invoices query ──────────────────────────────────────────────────────────
   const { data: invoiceData, isLoading: invLoading } = useQuery<{ data: Invoice[]; total: number }>({
+    enabled: cId != null,
     queryKey: ["sc-company-invoices", cId, statusFilter, debouncedSearch],
     queryFn: async () => {
       const qs = new URLSearchParams({ companyId: String(cId) });
@@ -127,7 +129,7 @@ export default function SportCenterCompanyInvoices() {
     client_id: "",
     period_month: String(now.getMonth() + 1),
     period_year: String(now.getFullYear()),
-    tax_rate: "11",
+    tax_rate: "",
     notes: "",
   });
   const [unbilledBookings, setUnbilledBookings] = useState<UnbilledBooking[]>([]);
@@ -155,6 +157,7 @@ export default function SportCenterCompanyInvoices() {
 
   const generateMutation = useMutation({
     mutationFn: async () => {
+      if (cId == null) throw new Error("Pilih perusahaan terlebih dahulu");
       const r = await fetch("/api/sport-center/company-invoices/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -165,7 +168,7 @@ export default function SportCenterCompanyInvoices() {
           client_id: Number(genForm.client_id),
           period_month: Number(genForm.period_month),
           period_year: Number(genForm.period_year),
-          tax_rate: Number(genForm.tax_rate),
+          ...(genForm.tax_rate.trim() ? { tax_rate: Number(genForm.tax_rate) } : {}),
           booking_ids: selectedBookingIds.length ? selectedBookingIds : undefined,
         }),
       });
