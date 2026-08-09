@@ -432,7 +432,10 @@ app.use((err: Error, req: express.Request, res: express.Response, _next: express
   );
   if (res.headersSent) return;
   const isProd = process.env["NODE_ENV"] === "production";
-  res.status(500).json({
+  const statusCode = Number((err as Error & { statusCode?: number }).statusCode);
+  res.status(
+    Number.isInteger(statusCode) && statusCode >= 400 && statusCode < 500 ? statusCode : 500,
+  ).json({
     message: "Internal Server Error",
     reqId,
     ...(isProd ? {} : { error: err.message }),

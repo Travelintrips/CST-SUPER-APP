@@ -14,6 +14,13 @@ import { ensureAccountingSettings, applyAccountingEnumPatches } from "./accounti
 import { logger } from "./logger.js";
 import { validateMultiCurrencyBalance } from "./currencyTolerance.js";
 
+function requireAccountingCompanyId(companyId: number | null | undefined): number {
+  if (!Number.isInteger(companyId) || companyId == null || companyId <= 0) {
+    throw new Error("Company context is required for accounting operations");
+  }
+  return companyId;
+}
+
 /**
  * Generate SHA-256 audit hash dari ledger snapshot rows.
  * Hash mencakup: companyId + period + sorted account balances.
@@ -215,7 +222,7 @@ async function resolveTenantRentIncomeAccountId(
   settingsOverride?: number | null,
 ): Promise<number | null> {
   if (settingsOverride) return settingsOverride;
-  const cFilter = companyId ?? 1;
+  const cFilter = requireAccountingCompanyId(companyId);
   let [row] = await db
     .select({ id: chartOfAccountsTable.id })
     .from(chartOfAccountsTable)
@@ -244,7 +251,7 @@ export async function resolveSportCenterBookingAccountId(
   client?: DbClient,
 ): Promise<number | null> {
   const q = client ?? db;
-  const cFilter = companyId ?? 1;
+  const cFilter = requireAccountingCompanyId(companyId);
   // Akun disimpan dengan suffix abbr perusahaan: "4-1017-CST", "4-1017-WS", dst.
   // Gunakan LIKE '4-1017%' agar cocok dengan format kode yang sebenarnya.
   let [row] = await q
@@ -459,15 +466,7 @@ async function _postEntryCore(
     totalDebit: String(totalDebit),
     totalCredit: String(totalCredit),
     createdById: input.createdById ?? null,
-    // RC2.1 Blocker 3 — guard against missing companyId.
-    // Callers MUST always pass an explicit companyId. The ?? 1 fallback is kept
-    // as a last resort but triggers a warning so the missing caller can be fixed.
-    companyId: (() => {
-      if (input.companyId == null) {
-        logger.warn({ source, sourceId }, "[_postEntryCore] companyId missing — defaulting to 1. Fix the caller to pass an explicit companyId.");
-      }
-      return input.companyId ?? 1;
-    })(),
+    companyId: requireAccountingCompanyId(input.companyId),
     costCenterId: input.costCenterId ?? null,
     facilityId: input.facilityId ?? null,
     expenseCategory: input.expenseCategory ?? null,
@@ -596,7 +595,7 @@ async function _postEntryCore(
   const entryPeriod = input.date.toISOString().slice(0, 7);
   const eventType = (source === "reversal") ? "REVERSE" : "POST";
   await postLedgerEvent({
-    companyId:  Number(input.companyId ?? 1),
+    companyId:  requireAccountingCompanyId(input.companyId),
     eventType,
     period:     entryPeriod,
     entryId:    entry!.id,
@@ -620,7 +619,7 @@ async function _postEntryCore(
     sourceId,
     totalDebit,
     totalCredit,
-    companyId: Number(input.companyId ?? 1),
+    companyId: requireAccountingCompanyId(input.companyId),
     date: dateStr,
   });
   const checksumHash = createHash("sha256").update(checksumPayload).digest("hex");
@@ -709,7 +708,7 @@ export async function postEntry(
     Promise.all([
       import("./errorContainment.js").then(({ queueIntegrityError }) =>
         queueIntegrityError({
-          companyId: input.companyId ?? 1,
+          companyId: requireAccountingCompanyId(input.companyId),
           classification: "HIGH",
           module: "accounting_governance",
           errorCode: "DIRECT_POST_BYPASS",
@@ -1236,7 +1235,7 @@ async function resolveServiceTypeAccountId(
   const baseCode = serviceType ? SERVICE_TYPE_COA_CODES[serviceType.toLowerCase().trim()] : null;
   if (!baseCode) return fallbackId ?? null;
 
-  const cFilter = companyId ?? 1;
+  const cFilter = requireAccountingCompanyId(companyId);
   // Coba company-specific (code LIKE "4-1011%" + company filter)
   let [row] = await db
     .select({ id: chartOfAccountsTable.id })
@@ -1423,7 +1422,7 @@ async function resolveServiceTypeCOGSAccountId(
   const baseCode = serviceType ? SERVICE_TYPE_COGS_CODES[serviceType.toLowerCase().trim()] : null;
   if (!baseCode) {
     // Fallback: HPP Jasa Logistik (5-1020)
-    const cFilter = companyId ?? 1;
+    const cFilter = requireAccountingCompanyId(companyId);
     let [row] = await db
       .select({ id: chartOfAccountsTable.id })
       .from(chartOfAccountsTable)
@@ -1439,7 +1438,7 @@ async function resolveServiceTypeCOGSAccountId(
     return row?.id ?? fallbackId ?? null;
   }
 
-  const cFilter = companyId ?? 1;
+  const cFilter = requireAccountingCompanyId(companyId);
   let [row] = await db
     .select({ id: chartOfAccountsTable.id })
     .from(chartOfAccountsTable)
@@ -1652,7 +1651,7 @@ export async function postPurchaseBill(args: {
       if (!grirAccountId) {
         const grirRows = await db.execute(sql`
           SELECT id FROM chart_of_accounts
-          WHERE code LIKE '2-1045%' AND company_id = ${args.companyId ?? 1}
+          WHERE code LIKE '2-1045%' AND company_id = ${requireAccountingCompanyId(args.companyId)}
           ORDER BY code LIMIT 1
         `);
         const grirRow = (grirRows as unknown as Record<string, unknown>[])[0];
@@ -2189,7 +2188,7 @@ export async function postDamageJournal(args: {
         description: `Kerugian barang rusak/hilang: ${args.reportNumber}`,
         source: "damage_adjust",
         sourceId: args.damageReportId,
-        companyId: args.companyId ?? 1,
+        companyId: requireAccountingCompanyId(args.companyId),
         createdById: args.createdById ?? null,
         lines: [
           { accountId: settings.cogsAccountId, debit: amt, credit: 0, description: `Beban kerusakan ${args.reportNumber}` },
@@ -2374,7 +2373,7 @@ export async function postSportCenterBooking(args: {
       const [existingByRef] = await db
         .select()
         .from(accountingEntriesTable)
-        .where(sql`${accountingEntriesTable.source} = 'sport_center_booking' AND ${accountingEntriesTable.ref} = ${args.bookingCode} AND ${accountingEntriesTable.companyId} = ${args.companyId ?? 1}`)
+        .where(sql`${accountingEntriesTable.source} = 'sport_center_booking' AND ${accountingEntriesTable.ref} = ${args.bookingCode} AND ${accountingEntriesTable.companyId} = ${requireAccountingCompanyId(args.companyId)}`)
         .limit(1);
       if (existingByRef) {
         logger.info({ bookingId: args.bookingId, ref: args.bookingCode }, "Sport Center booking journal already posted (by ref) — skipping duplicate");
@@ -2382,7 +2381,7 @@ export async function postSportCenterBooking(args: {
       }
     }
 
-    const settings = await ensureAccountingSettings(args.companyId ?? 1);
+    const settings = await ensureAccountingSettings(requireAccountingCompanyId(args.companyId));
     const destination = resolvePaymentDestination(args.paymentMethod, settings);
     const { paymentMethod, accountId: debitAccountId, journalId, journalCode } = destination;
     const creditAccountId = await resolveSportCenterBookingAccountId(args.companyId, settings.salesIncomeAccountId);
@@ -2419,7 +2418,7 @@ export async function postSportCenterBooking(args: {
         source: "sport_center_booking",
         sourceId: args.bookingId,
         createdById: args.createdById ?? null,
-        companyId: args.companyId ?? 1,
+        companyId: requireAccountingCompanyId(args.companyId),
         costCenterId,
         lines: [
           {
@@ -2681,14 +2680,14 @@ export async function postTenantRentPayment(args: {
     const [existingEntry] = await db
       .select()
       .from(accountingEntriesTable)
-      .where(sql`${accountingEntriesTable.source} = 'tenant_rent_payment' AND ${accountingEntriesTable.sourceId} = ${args.paymentId} AND ${accountingEntriesTable.companyId} = ${args.companyId ?? 1}`)
+        .where(sql`${accountingEntriesTable.source} = 'tenant_rent_payment' AND ${accountingEntriesTable.sourceId} = ${args.paymentId} AND ${accountingEntriesTable.companyId} = ${requireAccountingCompanyId(args.companyId)}`)
       .limit(1);
     if (existingEntry) {
       logger.info({ paymentId: args.paymentId, companyId: args.companyId }, "Tenant rent payment journal already posted — skipping");
       return;
     }
 
-    const settings = await ensureAccountingSettings(args.companyId ?? 1);
+    const settings = await ensureAccountingSettings(requireAccountingCompanyId(args.companyId));
 
     const debitAccountId = settings.defaultCashAccountId ?? settings.defaultBankAccountId;
     const creditAccountId = await resolveTenantRentIncomeAccountId(args.companyId, settings.salesIncomeAccountId, settings.tenantRentIncomeAccountId);
@@ -2714,7 +2713,7 @@ export async function postTenantRentPayment(args: {
         source: "tenant_rent_payment",
         sourceId: args.paymentId,
         createdById: args.createdById ?? null,
-        companyId: args.companyId ?? 1,
+        companyId: requireAccountingCompanyId(args.companyId),
         costCenterId,
         lines: [
           { accountId: debitAccountId, debit: amt, credit: 0, description: `Penerimaan sewa ${args.paymentNumber}` },
@@ -2762,7 +2761,7 @@ export async function reverseSportCenterBooking(args: {
   try {
     if (args.amountReversed <= 0) return;
 
-    const settings = await ensureAccountingSettings(args.companyId ?? 1);
+    const settings = await ensureAccountingSettings(requireAccountingCompanyId(args.companyId));
     const debitAccountId = await resolveSportCenterBookingAccountId(args.companyId, settings.salesIncomeAccountId); // Pendapatan (di-debit untuk reversal)
     const creditAccountId = settings.defaultCashAccountId ?? settings.defaultBankAccountId; // Kas (di-kredit untuk reversal)
     const journalId = settings.cashJournalId ?? settings.bankJournalId;
@@ -2787,7 +2786,7 @@ export async function reverseSportCenterBooking(args: {
         source: "sport_center_booking_reversal",
         sourceId: args.bookingId,
         createdById: args.createdById ?? null,
-        companyId: args.companyId ?? 1,
+        companyId: requireAccountingCompanyId(args.companyId),
         costCenterId,
         lines: [
           {
@@ -3010,7 +3009,7 @@ export async function postSportCenterBookingReversal(args: {
   companyId?: number | null;
 }): Promise<void> {
   try {
-    const settings = await ensureAccountingSettings(args.companyId ?? 1);
+    const settings = await ensureAccountingSettings(requireAccountingCompanyId(args.companyId));
     const journalId = settings.cashJournalId ?? settings.bankJournalId;
     const journalCode = settings.cashJournalId ? "CSH" : "BNK";
 
@@ -3091,7 +3090,7 @@ export async function postSportCenterRefund(args: {
   companyId?: number | null;
 }): Promise<void> {
   try {
-    const settings = await ensureAccountingSettings(args.companyId ?? 1);
+    const settings = await ensureAccountingSettings(requireAccountingCompanyId(args.companyId));
     const cashAccountId = settings.defaultCashAccountId ?? settings.defaultBankAccountId;
     const journalId = settings.cashJournalId ?? settings.bankJournalId;
     const journalCode = settings.cashJournalId ? "CSH" : "BNK";
@@ -3103,7 +3102,7 @@ export async function postSportCenterRefund(args: {
 
     // Task #6: fail-closed — hanya cari COA spesifik milik company ini.
     // TIDAK ada fallback ke company lain atau ke akun beban generik apapun.
-    const companyFilter = args.companyId ?? 1;
+    const companyFilter = requireAccountingCompanyId(args.companyId);
     const [expenseAccount] = await db
       .select()
       .from(chartOfAccountsTable)
@@ -3183,7 +3182,7 @@ export async function postSportCenterMembershipPayment(args: {
   companyId?: number | null;
 }): Promise<void> {
   try {
-    const settings = await ensureAccountingSettings(args.companyId ?? 1);
+    const settings = await ensureAccountingSettings(requireAccountingCompanyId(args.companyId));
     const cashAccountId = settings.defaultCashAccountId;
     const journalId = settings.cashJournalId;
 
@@ -3194,7 +3193,7 @@ export async function postSportCenterMembershipPayment(args: {
 
     // Cari akun Pendapatan Membership Sport Center (4-1016-CST / 4-1016-WS / dst.)
     // Gunakan LIKE agar cocok dengan semua varian suffix perusahaan.
-    const cFilter = args.companyId ?? 1;
+    const cFilter = requireAccountingCompanyId(args.companyId);
     let [membershipAcc] = await db
       .select()
       .from(chartOfAccountsTable)
@@ -3241,7 +3240,7 @@ export async function postSportCenterMembershipPayment(args: {
         description: `Membership Payment ${args.memberNumber} — ${args.memberName}`,
         source: "sport_center_membership",
         sourceId: args.paymentId,
-        companyId: args.companyId ?? 1,
+        companyId: requireAccountingCompanyId(args.companyId),
         costCenterId,
         lines: [
           {
@@ -3290,7 +3289,7 @@ export async function postSportCenterBookingWithTax(args: {
   companyId?: number | null;
 }): Promise<void> {
   try {
-    const settings = await ensureAccountingSettings(args.companyId ?? 1);
+    const settings = await ensureAccountingSettings(requireAccountingCompanyId(args.companyId));
     const cashAccountId = settings.defaultCashAccountId ?? settings.defaultBankAccountId;
     const incomeAccountId = await resolveSportCenterBookingAccountId(args.companyId, settings.salesIncomeAccountId);
     const journalId = settings.cashJournalId ?? settings.bankJournalId;
@@ -3317,7 +3316,7 @@ export async function postSportCenterBookingWithTax(args: {
       const [existingByRef] = await db
         .select()
         .from(accountingEntriesTable)
-        .where(sql`${accountingEntriesTable.source} = 'sport_center_booking' AND ${accountingEntriesTable.ref} = ${args.bookingCode} AND ${accountingEntriesTable.companyId} = ${args.companyId ?? 1}`)
+        .where(sql`${accountingEntriesTable.source} = 'sport_center_booking' AND ${accountingEntriesTable.ref} = ${args.bookingCode} AND ${accountingEntriesTable.companyId} = ${requireAccountingCompanyId(args.companyId)}`)
         .limit(1);
       if (existingByRef) {
         logger.info({ bookingId: args.bookingId, ref: args.bookingCode }, "Sport center booking (tax) journal already posted (by ref) — skipping duplicate");
@@ -3364,7 +3363,7 @@ export async function postSportCenterBookingWithTax(args: {
         source: "sport_center_booking",
         sourceId: args.bookingId,
         createdById: args.createdById ?? null,
-        companyId: args.companyId ?? 1,
+        companyId: requireAccountingCompanyId(args.companyId),
         costCenterId,
         lines,
       },
@@ -3391,7 +3390,7 @@ export async function postSportCenterBookingRefundDirect(args: {
   companyId?: number | null;
 }): Promise<void> {
   try {
-    const settings = await ensureAccountingSettings(args.companyId ?? 1);
+    const settings = await ensureAccountingSettings(requireAccountingCompanyId(args.companyId));
     const cashAccountId = settings.defaultCashAccountId ?? settings.defaultBankAccountId;
     const incomeAccountId = await resolveSportCenterBookingAccountId(args.companyId, settings.salesIncomeAccountId);
     const journalId = settings.cashJournalId ?? settings.bankJournalId;
@@ -3467,7 +3466,7 @@ export async function postSportCenterExpenseEntry(args: {
   companyId?: number | null;
 }): Promise<number | null> {
   try {
-    const settings = await ensureAccountingSettings(args.companyId ?? 1);
+    const settings = await ensureAccountingSettings(requireAccountingCompanyId(args.companyId));
     const journalId = settings.cashJournalId ?? settings.bankJournalId;
     const journalCode = settings.cashJournalId ? "CSH" : "BNK";
 
@@ -3491,7 +3490,7 @@ export async function postSportCenterExpenseEntry(args: {
 
     // Task #6: fail-closed — hanya cari COA spesifik milik company ini.
     // TIDAK ada fallback ke company lain atau ke akun beban generik apapun.
-    const companyFilter = args.companyId ?? 1;
+    const companyFilter = requireAccountingCompanyId(args.companyId);
     const [expenseAccount] = await db
       .select()
       .from(chartOfAccountsTable)

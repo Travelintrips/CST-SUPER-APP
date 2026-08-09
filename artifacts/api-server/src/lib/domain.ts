@@ -25,3 +25,17 @@ export function getPreferredDomain(): string {
   );
   return custom ?? domains[0];
 }
+
+/**
+ * Returns the configured public hostname or fails closed.
+ *
+ * Public links must never silently point at localhost or an unrelated
+ * production domain when URL configuration is missing.
+ */
+export function getRequiredPublicDomain(): string {
+  const domain = getPreferredDomain();
+  if (!domain) {
+    throw new Error("Public URL is not configured");
+  }
+  return domain;
+}

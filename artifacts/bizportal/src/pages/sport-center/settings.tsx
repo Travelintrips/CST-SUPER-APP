@@ -28,7 +28,7 @@ export default function SportCenterSettings() {
   const [form, setForm] = useState({
     center_name: "", address: "", phone: "",
     open_time: "06:00", close_time: "22:00",
-    booking_advance_days: "30", min_booking_hours: "1", cancellation_hours: "2",
+    booking_advance_days: "", min_booking_hours: "", cancellation_hours: "",
   });
 
   const [reminderDays, setReminderDays] = useState<number[]>([4, 1]);
@@ -42,6 +42,7 @@ export default function SportCenterSettings() {
       const r = await fetch(`/api/sport-center/settings${qs}`, { credentials: "include" });
       return r.json();
     },
+    enabled: activeCompanyId != null,
   });
 
   useEffect(() => {
@@ -52,9 +53,9 @@ export default function SportCenterSettings() {
         phone: data.phone ?? "",
         open_time: data.open_time ?? "06:00",
         close_time: data.close_time ?? "22:00",
-        booking_advance_days: String(data.booking_advance_days ?? 30),
-        min_booking_hours: String(data.min_booking_hours ?? 1),
-        cancellation_hours: String(data.cancellation_hours ?? 2),
+        booking_advance_days: data.booking_advance_days == null ? "" : String(data.booking_advance_days),
+        min_booking_hours: data.min_booking_hours == null ? "" : String(data.min_booking_hours),
+        cancellation_hours: data.cancellation_hours == null ? "" : String(data.cancellation_hours),
       });
       if (data.reminder_days) {
         const parsed = String(data.reminder_days)
@@ -142,6 +143,19 @@ export default function SportCenterSettings() {
   });
 
   const handleSave = () => {
+    if (activeCompanyId == null) {
+      toast({ title: "Pilih perusahaan terlebih dahulu", variant: "destructive" });
+      return;
+    }
+    const bookingAdvanceDays = Number(form.booking_advance_days);
+    const minBookingHours = Number(form.min_booking_hours);
+    const cancellationHours = Number(form.cancellation_hours);
+    if (!Number.isFinite(bookingAdvanceDays) || bookingAdvanceDays < 1
+      || !Number.isFinite(minBookingHours) || minBookingHours <= 0
+      || !Number.isFinite(cancellationHours) || cancellationHours < 0) {
+      toast({ title: "Lengkapi aturan booking dari pengaturan perusahaan", variant: "destructive" });
+      return;
+    }
     saveMutation.mutate({
       company_id: activeCompanyId,
       center_name: form.center_name,
@@ -149,9 +163,9 @@ export default function SportCenterSettings() {
       phone: form.phone,
       open_time: form.open_time,
       close_time: form.close_time,
-      booking_advance_days: Number(form.booking_advance_days),
-      min_booking_hours: Number(form.min_booking_hours),
-      cancellation_hours: Number(form.cancellation_hours),
+      booking_advance_days: bookingAdvanceDays,
+      min_booking_hours: minBookingHours,
+      cancellation_hours: cancellationHours,
       reminder_days: reminderDays.join(","),
       wa_template: waTemplate || DEFAULT_WA_TEMPLATE,
     });

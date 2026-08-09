@@ -10,6 +10,7 @@ import { validateNpwp, formatNpwp, stripNpwp } from "../lib/npwpValidator.js";
 import { validateFakturPajak, formatFaktur } from "../lib/fakturPajakValidator.js";
 import { calculatePph21, calculatePph21NonPegawai, PTKP_OPTIONS, type PtkpStatus } from "../lib/pph21Calculator.js";
 import { assertCompanyAccess } from "../lib/assertCompanyAccess.js";
+import { resolveCompanyId } from "../lib/resolveCompany.js";
 import {
   runTaxReconciliation,
   generateFakturNumbers,
@@ -37,10 +38,6 @@ router.use(async (req, res, next) => {
   const ok = await requireAdmin(req, res);
   if (ok) next();
 });
-
-function resolveCompanyId(req: any): number {
-  return Number(req.query.companyId ?? req.body?.companyId ?? 1) || 1;
-}
 
 function currentPeriod(): string {
   const d = new Date();
@@ -728,14 +725,9 @@ router.post("/transactions/calculate", async (req, res) => {
 // COMPLIANCE ENDPOINTS — laporan kepatuhan pajak
 // ─────────────────────────────────────────────────────────────────────────────
 
-function resolveCompanyIdAudit(req: import("express").Request): number {
-  const q = (req.query as Record<string, string>).companyId;
-  return q ? parseInt(q, 10) : 1;
-}
-
 // GET /api/tax/npwp-missing?companyId=N&period=YYYY-MM&limit=200
 router.get("/npwp-missing", async (req, res) => {
-  const companyId = resolveCompanyIdAudit(req);
+  const companyId = resolveCompanyId(req);
   const { period, limit: limitQ, direction } = req.query as Record<string, string>;
   const limit = Math.min(parseInt(limitQ ?? "200", 10), 500);
 
@@ -773,7 +765,7 @@ router.get("/npwp-missing", async (req, res) => {
 // GET /api/tax/faktur-missing?companyId=N&period=YYYY-MM&limit=200
 // Cek PPN output tanpa faktur pajak, PPh withholding tanpa bukti potong
 router.get("/faktur-missing", async (req, res) => {
-  const companyId = resolveCompanyIdAudit(req);
+  const companyId = resolveCompanyId(req);
   const { period, limit: limitQ } = req.query as Record<string, string>;
   const limit = Math.min(parseInt(limitQ ?? "200", 10), 500);
 
@@ -846,7 +838,7 @@ router.get("/faktur-missing", async (req, res) => {
 
 // GET /api/tax/unpaid?companyId=N&period=YYYY-MM&direction=output|withholding&limit=200
 router.get("/unpaid", async (req, res) => {
-  const companyId = resolveCompanyIdAudit(req);
+  const companyId = resolveCompanyId(req);
   const { period, direction, limit: limitQ } = req.query as Record<string, string>;
   const limit = Math.min(parseInt(limitQ ?? "200", 10), 500);
 
@@ -1886,8 +1878,8 @@ router.get("/gl-reconcile", async (req, res) => {
 
 // POST /api/tax/gl-reconcile/run — jalankan rekonsiliasi beberapa periode sekaligus
 router.post("/gl-reconcile/run", async (req, res) => {
-  const { companyId: cidBody, periods } = req.body ?? {};
-  const companyId = Number(cidBody ?? req.query.companyId ?? 1) || 1;
+  const { periods } = req.body ?? {};
+  const companyId = resolveCompanyId(req);
   const periodList: string[] = Array.isArray(periods) && periods.length > 0
     ? (periods as string[]).slice(0, 12)
     : [currentPeriod()];
@@ -1912,8 +1904,8 @@ router.post("/gl-reconcile/run", async (req, res) => {
 // POST /api/tax/faktur/auto-generate
 // Body: { companyId, period, kodeTransaksi?, limit? }
 router.post("/faktur/auto-generate", async (req, res) => {
-  const { companyId: cidBody, period, kodeTransaksi, limit } = req.body ?? {};
-  const companyId = Number(cidBody ?? 1) || 1;
+  const { period, kodeTransaksi, limit } = req.body ?? {};
+  const companyId = resolveCompanyId(req);
   if (!period) {
     return res.status(400).json({ message: "period (YYYY-MM) wajib diisi" });
   }

@@ -18,7 +18,7 @@ export interface Company {
 // Must not clash with any real company id (positive integers starting from 1).
 export const CONSOLIDATED_ID = 0;
 
-export type CompanyScope = number | typeof CONSOLIDATED_ID;
+export type CompanyScope = number | typeof CONSOLIDATED_ID | null;
 
 interface CompanyContextValue {
   companies: Company[];
@@ -39,15 +39,15 @@ interface CompanyContextValue {
 const CompanyContext = createContext<CompanyContextValue>({
   companies: [],
   activeCompany: null,
-  activeCompanyId: 1,
-  selectedCompanyId: 1,
+  activeCompanyId: null,
+  selectedCompanyId: null,
   isConsolidated: false,
   setActiveCompany: () => {},
   setConsolidated: () => {},
   setConsolidatedMode: () => {},
   isLoading: false,
   refetch: () => {},
-  companyQueryParam: "companyId=1",
+  companyQueryParam: "",
 });
 
 const STORAGE_KEY = "biz_active_company_id";
@@ -61,9 +61,9 @@ export function CompanyProvider({ children }: { children: React.ReactNode }) {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored === CONSOLIDATED_STORAGE_VALUE) return CONSOLIDATED_ID;
-      return stored ? Number(stored) : 1;
+      return stored ? Number(stored) : null;
     } catch {
-      return 1;
+      return null;
     }
   });
 
@@ -81,7 +81,7 @@ export function CompanyProvider({ children }: { children: React.ReactNode }) {
           try { return localStorage.getItem(STORAGE_KEY); } catch { return null; }
         })();
         if (storedRaw === CONSOLIDATED_STORAGE_VALUE) return;
-        const storedId = storedRaw ? Number(storedRaw) : 1;
+        const storedId = storedRaw ? Number(storedRaw) : null;
         if (!data.find((c) => c.id === storedId)) {
           setActiveCompanyIdState(data[0].id);
         }
@@ -127,7 +127,11 @@ export function CompanyProvider({ children }: { children: React.ReactNode }) {
     ? CONSOLIDATED_ID
     : (activeCompany?.id ?? activeCompanyId);
 
-  const companyQueryParam = isConsolidated ? "companyId=all" : `companyId=${resolvedId}`;
+  const companyQueryParam = isConsolidated
+    ? "companyId=all"
+    : resolvedId != null
+      ? `companyId=${resolvedId}`
+      : "";
 
   return (
     <CompanyContext.Provider

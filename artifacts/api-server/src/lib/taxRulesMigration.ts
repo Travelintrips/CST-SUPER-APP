@@ -188,3 +188,30 @@ export async function seedDefaultTaxRules(companyId: number): Promise<void> {
   }
   logger.info({ companyId }, "Tax rules: default rules seeded");
 }
+
+/**
+ * Resolve an active tax rule for a company. Callers must not invent a tax
+ * rate when configuration is missing; returning null lets them fail clearly.
+ */
+export async function getActiveTaxRate(
+  companyId: number,
+  transactionTypes: string[],
+  taxType = "PPN_KELUARAN",
+): Promise<number | null> {
+  if (!Number.isInteger(companyId) || companyId <= 0) {
+    throw new Error("Company context is required to resolve tax rules");
+  }
+  const types = transactionTypes.map((type) => `'${type.replace(/'/g, "''")}'`).join(", ");
+  const result = await db.execute(sql.raw(`
+    SELECT tax_rate
+    FROM tax_rules
+    WHERE company_id = ${companyId}
+      AND is_active = true
+      AND tax_type = '${taxType.replace(/'/g, "''")}'
+      AND transaction_type IN (${types})
+    ORDER BY effective_from DESC NULLS LAST, id DESC
+    LIMIT 1
+  `));
+  const rate = Number((result.rows[0] as { tax_rate?: unknown } | undefined)?.tax_rate);
+  return Number.isFinite(rate) && rate >= 0 ? rate : null;
+}
