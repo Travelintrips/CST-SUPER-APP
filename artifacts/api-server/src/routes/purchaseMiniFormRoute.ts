@@ -41,6 +41,10 @@ async function postVendorInvoiceAccounting(
     logger.info({ vendorInvoiceId, status: vi.status }, "postVendorInvoiceAccounting: sudah diposting, skip");
     return;
   }
+  if (!Number.isInteger(vi.companyId) || vi.companyId == null || vi.companyId <= 0) {
+    logger.error({ vendorInvoiceId, companyId: vi.companyId }, "postVendorInvoiceAccounting: company context missing — refusing to post");
+    return;
+  }
 
   // Update nomor invoice vendor dari data submission jika ada
   const vendorRef = submissionData.vendorInvoiceRef as string | undefined;
@@ -84,7 +88,7 @@ async function postVendorInvoiceAccounting(
 
   // Post jurnal akuntansi: Dr GR/IR (clearing) → Cr AP
   try {
-    const settings = await ensureAccountingSettings(vi.companyId ?? 1);
+    const settings = await ensureAccountingSettings(vi.companyId);
     const grandTotal = Number(vi.grandTotal ?? 0);
     const taxAmount = Number(vi.taxAmount ?? 0);
     const netAmount = grandTotal - taxAmount;
@@ -116,7 +120,7 @@ async function postVendorInvoiceAccounting(
           description: `Vendor Invoice ${vi.invoiceNumber} (via Mini Form)`,
           source: "purchase_bill",
           sourceId: vendorInvoiceId,
-          companyId: vi.companyId ?? 1,
+          companyId: vi.companyId,
           lines,
         },
         "PUR",
@@ -244,6 +248,10 @@ async function autoPostVendorInvoice(
     logger.info({ viId: vi.id, status: vi.status }, "autoPostVendorInvoice: VI sudah diposting — skip");
     return;
   }
+  if (!Number.isInteger(vi.companyId) || vi.companyId == null || vi.companyId <= 0) {
+    logger.error({ viId: vi.id, companyId: vi.companyId }, "autoPostVendorInvoice: company context missing — refusing to post");
+    return;
+  }
 
   // 3. Update VI dengan referensi invoice dari vendor (opsional)
   const vendorInvoiceRef = body.vendorInvoiceRef as string | undefined;
@@ -286,7 +294,7 @@ async function autoPostVendorInvoice(
 
   // 5. Post journal: Dr GR/IR (atau Beban Pembelian) / Cr AP
   try {
-    const settings = await ensureAccountingSettings(vi.companyId ?? 1);
+    const settings = await ensureAccountingSettings(vi.companyId);
     const grandTotal = Number(vi.grandTotal ?? 0);
     const taxAmount = Number(vi.taxAmount ?? 0);
     const netAmount = grandTotal - taxAmount;
@@ -317,7 +325,7 @@ async function autoPostVendorInvoice(
           description: `Vendor Invoice ${vi.invoiceNumber} (mini form)`,
           source: "purchase_bill",
           sourceId: vi.id,
-          companyId: vi.companyId ?? 1,
+          companyId: vi.companyId,
           lines,
         },
         "PUR",

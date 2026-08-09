@@ -272,9 +272,10 @@ export default function TaxMissingCompliancePage() {
   const [period, setPeriod] = useState("all");
   const [editItem, setEditItem] = useState<TaxItem | null>(null);
 
-  const companyId = typeof activeCompanyId === "number" ? activeCompanyId : 1;
+  const companyId = typeof activeCompanyId === "number" && activeCompanyId > 0 ? activeCompanyId : null;
 
-  const summaryParams = new URLSearchParams({ companyId: String(companyId) });
+  const summaryParams = new URLSearchParams();
+  if (companyId != null) summaryParams.set("companyId", String(companyId));
   if (period !== "all") summaryParams.set("period", period);
 
   const { data: summary, refetch: refetchSummary } = useQuery<ComplianceSummary>({
@@ -282,7 +283,8 @@ export default function TaxMissingCompliancePage() {
     queryFn: () => fetch(`/api/tax/compliance-summary?${summaryParams}`, { credentials: "include" }).then((r) => r.json()),
   });
 
-  const npwpParams = new URLSearchParams({ companyId: String(companyId), limit: "200" });
+  const npwpParams = new URLSearchParams({ limit: "200" });
+  if (companyId != null) npwpParams.set("companyId", String(companyId));
   if (period !== "all") npwpParams.set("period", period);
 
   const { data: npwpData, isLoading: npwpLoading, refetch: refetchNpwp } = useQuery<{ total: number; items: TaxItem[] }>({
@@ -291,7 +293,8 @@ export default function TaxMissingCompliancePage() {
     enabled: activeTab === "npwp",
   });
 
-  const fakturParams = new URLSearchParams({ companyId: String(companyId), limit: "200" });
+  const fakturParams = new URLSearchParams({ limit: "200" });
+  if (companyId != null) fakturParams.set("companyId", String(companyId));
   if (period !== "all") fakturParams.set("period", period);
 
   const { data: fakturData, isLoading: fakturLoading, refetch: refetchFaktur } = useQuery<{
@@ -304,7 +307,8 @@ export default function TaxMissingCompliancePage() {
     enabled: activeTab === "faktur",
   });
 
-  const unpaidParams = new URLSearchParams({ companyId: String(companyId), limit: "200" });
+  const unpaidParams = new URLSearchParams({ limit: "200" });
+  if (companyId != null) unpaidParams.set("companyId", String(companyId));
   if (period !== "all") unpaidParams.set("period", period);
 
   const { data: unpaidData, isLoading: unpaidLoading, refetch: refetchUnpaid } = useQuery<{ total: number; items: TaxItem[] }>({

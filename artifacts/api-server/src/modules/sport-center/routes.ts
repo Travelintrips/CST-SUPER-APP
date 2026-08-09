@@ -7,6 +7,7 @@ import { assertCompanyAccess } from "../../lib/assertCompanyAccess.js";
 import { handleSportCenterSse, broadcastSportCenterEvent } from "./broadcast.js";
 import { normalizePaymentMethod, resolvePaymentDestination, postSportCenterBooking, postSportCenterBookingReversal, postSportCenterRefund, postSportCenterMembershipPayment, postSportCenterBookingRefundDirect, postSportCenterExpenseEntry, postEntry, resolveSportCenterBookingAccountId, resolveCostCenterId, postSportCenterPaymentAtomic, type DbClient as SportDbClient } from "../../lib/accounting.js";
 import { ensureAccountingSettings } from "../../lib/accountingSeed.js";
+import { getActiveTaxRate, seedDefaultTaxRules } from "../../lib/taxRulesMigration.js";
 import { syncFacilityUpsert, syncFacilityDelete, syncAllFacilities, syncBookingUpsert, syncAllBookings, getLastSyncLogs, pullLegacyBookingsFromSupabase, syncPaymentsToAccounting, pullPaymentsFromSupabase, pullFacilitiesFromSupabase, runDailyPaymentSync } from "./supabaseSync.js";
 import { saveAndBroadcast } from "../../lib/notificationStore.js";
 
@@ -787,7 +788,7 @@ router.post("/sync/push-bookings", async (req, res) => {
     if (!Array.isArray(bookings) || bookings.length === 0) {
       return res.json({ success: true, pushed: 0, errors: 0, total: 0 });
     }
-    const cId = companyId ?? 1;
+    const cId = resolveCompanyId(req);
     let pushed = 0;
     let errors = 0;
     for (const row of bookings) {
@@ -3100,7 +3101,7 @@ router.post("/facilities/:id/request-maintenance", async (req, res) => {
     const cIdRm = resolveCompanyId(req);
     if (!await assertCompanyAccess(facility["company_id"] as number | null, cIdRm, req, res, { resourceType: "sport_facility", resourceId: facilityId })) return;
 
-    const cmpId = Number(company_id ?? facility.company_id ?? 1);
+    const cmpId = cIdRm;
     const actorId = (req.user as { id: string } | undefined)?.id ?? null;
     const actorName = (req.user as { name?: string; email?: string } | undefined)?.name
       ?? (req.user as { name?: string; email?: string } | undefined)?.email
@@ -3192,7 +3193,7 @@ router.post("/facilities/:id/purchase-request", async (req, res) => {
     const cIdPrOp = resolveCompanyId(req);
     if (!await assertCompanyAccess(facility["company_id"] as number | null, cIdPrOp, req, res, { resourceType: "sport_facility", resourceId: facilityId })) return;
 
-    const cmpId = Number(company_id ?? facility.company_id ?? 1);
+    const cmpId = cIdPrOp;
     const actorId = (req.user as { id: string } | undefined)?.id ?? null;
     const actorName = (req.user as { name?: string; email?: string } | undefined)?.name
       ?? (req.user as { name?: string; email?: string } | undefined)?.email
@@ -3343,8 +3344,8 @@ router.get("/purchase-requests", async (req, res) => {
 router.get("/settings", async (req, res) => {
   if (!await requireAdmin(req, res)) return;
   try {
-    const cId = req.query.companyId ? Number(req.query.companyId) : null;
-    const r = await db.execute(sql`SELECT * FROM sport_settings WHERE (${cId}::int IS NULL OR company_id = ${cId}) LIMIT 1`);
+    const cId = resolveCompanyId(req);
+    const r = await db.execute(sql`SELECT * FROM sport_settings WHERE company_id = ${cId} LIMIT 1`);
     res.json(r.rows[0] ?? null);
   } catch {
     res.status(500).json({ error: "Gagal" });
@@ -3393,7 +3394,7 @@ async function upsertSettings(body: Record<string, unknown>) {
 router.post("/settings", async (req, res) => {
   if (!await requireAdmin(req, res)) return;
   try {
-    const r = await upsertSettings(req.body);
+    const r = await upsertSettings({ ...req.body, company_id: resolveCompanyId(req) });
     res.json(r.rows[0]);
   } catch {
     res.status(500).json({ error: "Gagal menyimpan settings" });
@@ -3403,7 +3404,7 @@ router.post("/settings", async (req, res) => {
 router.put("/settings", async (req, res) => {
   if (!await requireAdmin(req, res)) return;
   try {
-    const r = await upsertSettings(req.body);
+    const r = await upsertSettings({ ...req.body, company_id: resolveCompanyId(req) });
     res.json(r.rows[0]);
   } catch {
     res.status(500).json({ error: "Gagal menyimpan settings" });
@@ -3784,7 +3785,7 @@ router.post("/recurring-expenses", async (req, res) => {
       INSERT INTO recurring_expenses
         (company_id, facility_id, name, description, amount, frequency, next_run, is_active, category)
       VALUES
-        (${company_id ?? 1}, ${facility_id}, ${name}, ${description ?? null},
+        (${resolveCompanyId(req)}, ${facility_id}, ${name}, ${description ?? null},
          ${String(amount)}, ${frequency}, ${next_run ?? null}, ${is_active}, ${category ?? null})
       RETURNING *
     `);
@@ -4460,10 +4461,18 @@ router.post("/company-invoices/generate", async (req, res) => {
     if (!client_id || !period_month || !period_year) {
       return res.status(400).json({ error: "client_id, period_month, period_year wajib diisi" });
     }
-    const cId = company_id ? Number(company_id) : 1;
+    const cId = resolveCompanyId(req);
     const month = Number(period_month);
     const year = Number(period_year);
-    const taxRate = Number(tax_rate ?? 11);
+    await seedDefaultTaxRules(cId);
+    const configuredTaxRate = await getActiveTaxRate(cId, ["sport_center", "sales_order"]);
+    if (configuredTaxRate == null) {
+      return res.status(409).json({ error: "Aturan PPN Sport Center belum dikonfigurasi untuk perusahaan ini" });
+    }
+    const taxRate = tax_rate == null ? configuredTaxRate : Number(tax_rate);
+    if (!Number.isFinite(taxRate) || taxRate < 0) {
+      return res.status(400).json({ error: "tax_rate tidak valid" });
+    }
 
     // Cek klien
     const clientRes = await db.execute(sql`SELECT * FROM sport_company_clients WHERE id = ${Number(client_id)} AND company_id = ${cId}`);

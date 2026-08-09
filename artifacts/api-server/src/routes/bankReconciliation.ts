@@ -1277,6 +1277,229 @@ router.post("/qris-candidates/:id/approve", async (req, res) => {
       return { settlementId, mutationId, itemCount: items.length };
     });
 
+// ─── Approve QRIS candidate → provider-confirmed settlement ──────────────────
+// Approval is explicit and idempotent. The settlement is committed first; only
+// then is unified matching rerun so a matching failure cannot roll back the
+// provider-confirmed batch.
+router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
+  await runQrisSettlementMigration();
+  try {
+    const companyId = resolveCompanyId(req);
+    const candidateId = Number(req.params.candidateId);
+    if (!Number.isInteger(candidateId) || candidateId <= 0) {
+      return res.status(400).json({ error: "candidateId tidak valid" });
+    }
+    if (!Number.isInteger(companyId) || companyId <= 0) {
+      return res.status(400).json({ error: "companyId tidak valid" });
+    }
+
+    const actor = (req as any).user?.email ?? "system";
+    const result = await db.transaction(async (tx) => {
+      const { rows: candidateRows } = await tx.execute(sql.raw(`
+        SELECT c.*, bm.description AS bank_description,
+               bm.normalized_description AS bank_normalized_description,
+               bm.transaction_date AS bank_transaction_date,
+               bm.amount AS bank_amount,
+               bm.direction AS bank_direction,
+               bm.company_id AS bank_company_id,
+               bm.bank_account_id AS bank_account_id,
+               bm.provider_name AS bank_provider_name,
+               bm.provider_order_id AS bank_provider_order_id,
+               bm.mutation_key AS bank_mutation_key,
+               bm.uploaded_proof_url AS bank_uploaded_proof_url
+        FROM qris_mutation_batch_candidates c
+        JOIN bank_mutations bm ON bm.id = c.mutation_id
+        WHERE c.id = ${candidateId}
+          AND c.company_id = ${companyId}
+        FOR UPDATE OF c, bm
+      `));
+      const candidate = candidateRows[0] as Record<string, unknown> | undefined;
+      if (!candidate) throw new Error("Kandidat QRIS tidak ditemukan");
+
+      const mutationId = Number(candidate.mutation_id);
+      if (String(candidate.bank_direction).toUpperCase() !== "IN") {
+        throw new Error("Settlement QRIS hanya dapat ditautkan ke mutasi IN");
+      }
+      if (
+        candidate.bank_company_id != null &&
+        Number(candidate.bank_company_id) !== companyId
+      ) {
+        throw new Error("Mutasi bank bukan milik company aktif");
+      }
+
+      const existingRows = await tx.execute(sql.raw(`
+        SELECT *
+        FROM qris_settlements
+        WHERE company_id = ${companyId}
+          AND bank_mutation_id = ${mutationId}
+        LIMIT 1
+        FOR UPDATE
+      `));
+      const existing = (existingRows.rows[0] ?? null) as Record<string, unknown> | null;
+
+      let settlement: Record<string, unknown>;
+      let settlementId: number;
+      let idempotent = false;
+
+      if (existing) {
+        settlement = existing;
+        settlementId = Number(existing.id);
+        idempotent = true;
+      } else {
+        let paymentItems: Array<{ paymentId: number; grossAmount: number }> = [];
+        try {
+          const raw = typeof candidate.payment_items === "string"
+            ? JSON.parse(candidate.payment_items)
+            : candidate.payment_items;
+          if (Array.isArray(raw)) {
+            paymentItems = raw.map((item: any) => ({
+              paymentId: Number(item.paymentId ?? item.payment_id),
+              grossAmount: Number(item.grossAmount ?? item.gross_amount ?? 0),
+            }));
+          }
+        } catch {
+          throw new Error("Data payment_items kandidat QRIS tidak valid");
+        }
+        paymentItems = paymentItems.filter((item) =>
+          Number.isInteger(item.paymentId) && item.paymentId > 0
+            && Number.isFinite(item.grossAmount) && item.grossAmount >= 0,
+        );
+        if (!paymentItems.length) throw new Error("Kandidat QRIS tidak memiliki payment");
+
+        const paymentIds = [...new Set(paymentItems.map((item) => item.paymentId))];
+        const { rows: paymentRows } = await tx.execute(sql.raw(`
+          SELECT id, company_id, amount, method, status,
+                 mdr_amount, tax_withheld_amount, other_fee_amount, net_amount
+          FROM sport_payments
+          WHERE company_id = ${companyId}
+            AND id IN (${paymentIds.join(",")})
+          FOR UPDATE
+        `));
+        const byId = new Map(
+          (paymentRows as Array<Record<string, unknown>>).map((row) => [Number(row.id), row]),
+        );
+        if (byId.size !== paymentIds.length) {
+          const missing = paymentIds.filter((id) => !byId.has(id));
+          throw new Error(`sport_payment tidak ditemukan: ${missing.join(", ")}`);
+        }
+
+        for (const item of paymentItems) {
+          const payment = byId.get(item.paymentId)!;
+          if (String(payment.status ?? "").toLowerCase() !== "paid") {
+            throw new Error(`Payment ${item.paymentId} belum berstatus paid`);
+          }
+          if (!String(payment.method ?? "").toLowerCase().includes("qris")) {
+            throw new Error(`Payment ${item.paymentId} bukan payment QRIS`);
+          }
+          const sourceGross = Number(payment.amount ?? 0);
+          if (Math.abs(sourceGross - item.grossAmount) > 0.01) {
+            throw new Error(`Gross payment ${item.paymentId} berubah sejak kandidat dibuat`);
+          }
+        }
+
+        const settlementReference = `QRIS-MUTATION-${mutationId}`;
+        const settlementDate = String(
+          candidate.estimated_settlement_date ?? candidate.source_date,
+        ).slice(0, 10);
+        const grossAmount = Number(candidate.gross_amount ?? 0);
+        const netAmount = Number(candidate.net_amount ?? candidate.bank_amount ?? 0);
+        const observedDeduction = Math.max(0, Number(candidate.observed_deduction ?? 0));
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(settlementDate)) {
+          throw new Error("Tanggal settlement kandidat QRIS tidak valid");
+        }
+        if (!(grossAmount > 0) || !(netAmount >= 0)) {
+          throw new Error("Nominal settlement kandidat QRIS tidak valid");
+        }
+
+        const providerName = String(
+          candidate.bank_provider_name ?? candidate.provider_code ?? "",
+        ).trim();
+        const { rows: inserted } = await tx.execute(sql.raw(`
+          INSERT INTO qris_settlements
+            (company_id, settlement_reference, provider_name, settlement_date,
+             gross_amount, mdr_amount, tax_withheld_amount, other_fee_amount,
+             net_amount, status, bank_mutation_id)
+          VALUES
+            (${companyId}, '${qrisEsc(settlementReference)}',
+             ${providerName ? `'${qrisEsc(providerName)}'` : "NULL"},
+             '${settlementDate}', ${grossAmount}, 0, 0, ${observedDeduction},
+             ${netAmount}, 'settled', ${mutationId})
+          RETURNING *
+        `));
+        settlement = inserted[0] as Record<string, unknown>;
+        settlementId = Number(settlement.id);
+
+        for (const item of paymentItems) {
+          const payment = byId.get(item.paymentId)!;
+          const mdrAmount = Math.max(0, Number(payment.mdr_amount ?? 0));
+          const taxWithheldAmount = Math.max(0, Number(payment.tax_withheld_amount ?? 0));
+          const otherFeeAmount = Math.max(0, Number(payment.other_fee_amount ?? 0));
+          const sourceNet = Number(payment.net_amount ?? 0);
+          const netItem = sourceNet > 0
+            ? sourceNet
+            : Math.max(0, item.grossAmount - mdrAmount - taxWithheldAmount - otherFeeAmount);
+          await tx.execute(sql.raw(`
+            INSERT INTO qris_settlement_items
+              (settlement_id, sport_payment_id, gross_amount, mdr_amount,
+               tax_withheld_amount, other_fee_amount, net_amount)
+            VALUES
+              (${settlementId}, ${item.paymentId}, ${item.grossAmount},
+               ${mdrAmount}, ${taxWithheldAmount}, ${otherFeeAmount}, ${netItem})
+          `));
+          await tx.execute(sql.raw(`
+            UPDATE sport_payments
+            SET settlement_reference = '${qrisEsc(settlementReference)}',
+                settlement_date = '${settlementDate}',
+                settlement_status = 'settled',
+                updated_at = NOW()
+            WHERE id = ${item.paymentId} AND company_id = ${companyId}
+          `));
+        }
+      }
+
+      await tx.execute(sql.raw(`
+        UPDATE qris_mutation_batch_candidates
+        SET status = 'approved',
+            reconciliation_status = 'MATCHED',
+            review_reason = 'Batch QRIS disetujui dan dipromosikan ke qris_settlements.',
+            updated_at = NOW()
+        WHERE id = ${candidateId}
+      `));
+
+      return {
+        candidate,
+        settlement,
+        settlementId,
+        mutationId,
+        idempotent,
+      };
+    });
+
+    let matching: unknown = null;
+    const mutationRows = await db.execute(sql.raw(`
+      SELECT id, amount, transaction_date, mutation_key, provider_order_id,
+             provider_name, normalized_description, uploaded_proof_url,
+             company_id, bank_account_id, direction
+      FROM bank_mutations
+      WHERE id = ${result.mutationId} AND company_id = ${companyId}
+    `));
+    const mutation = mutationRows.rows[0] as Record<string, unknown> | undefined;
+    if (mutation) {
+      matching = await runUnifiedMatching({
+        id: Number(mutation.id),
+        amount: Number(mutation.amount),
+        transaction_date: String(mutation.transaction_date).slice(0, 10),
+        mutation_key: String(mutation.mutation_key ?? ""),
+        provider_order_id: mutation.provider_order_id == null ? null : String(mutation.provider_order_id),
+        provider_name: mutation.provider_name == null ? null : String(mutation.provider_name),
+        normalized_description: mutation.normalized_description == null ? null : String(mutation.normalized_description),
+        uploaded_proof_url: mutation.uploaded_proof_url == null ? null : String(mutation.uploaded_proof_url),
+        company_id: mutation.company_id == null ? companyId : Number(mutation.company_id),
+        bank_account_id: mutation.bank_account_id == null ? null : Number(mutation.bank_account_id),
+        direction: String(mutation.direction ?? "IN"),
+      }, actor);
+    }
+
     audit(req, {
       action: "qris_candidate_approved",
       module: "accounting",
@@ -1319,6 +1542,27 @@ router.post("/qris-candidates/:id/approve", async (req, res) => {
       "[bankRecon] POST /qris-candidates/:id/approve failed",
     );
     return res.status(500).json({ error: error?.message ?? "Approval kandidat QRIS gagal" });
+      after: {
+        settlementId: result.settlementId,
+        mutationId: result.mutationId,
+        idempotent: result.idempotent,
+        matchingStatus: (matching as any)?.status ?? null,
+      },
+    });
+    return res.json({
+      ok: true,
+      candidateId,
+      mutationId: result.mutationId,
+      settlementId: result.settlementId,
+      idempotent: result.idempotent,
+      settlement: result.settlement,
+      matching,
+    });
+  } catch (e: any) {
+    logger.warn({ err: e?.cause?.message ?? e?.message }, "[bankRecon] QRIS candidate approval rejected");
+    const message = e?.message ?? "Approve kandidat QRIS gagal";
+    return res.status(/wajib|valid|tidak cocok|bukan|sudah|belum|tidak ditemukan|berubah|tidak memiliki|tidak valid/.test(message) ? 400 : 500)
+      .json({ error: message });
   }
 });
 

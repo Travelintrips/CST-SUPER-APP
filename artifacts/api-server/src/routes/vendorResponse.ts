@@ -12,7 +12,7 @@ import { sendViaService as sendWhatsApp } from "../lib/waTransport.js";
 import { ObjectStorageService } from "../lib/objectStorage";
 import { verifyVendorResponseToken } from "../lib/vendorResponseToken";
 import { getAdminGroupWa } from "../lib/adminWa";
-import { getPreferredDomain } from "../lib/domain";
+import { getRequiredPublicDomain } from "../lib/domain";
 import { imageUpload } from "../lib/uploadMiddleware.js";
 
 const router: IRouter = Router();
@@ -68,7 +68,7 @@ function formatWaAdminNotification(response: {
 }): string {
   const statusEmoji = response.status === "READY" ? "✅" : "❌";
   const statusLabel = response.status === "READY" ? "READY" : "NOT READY";
-  const domain = getPreferredDomain() || "cstlogistic.co.id";
+  const domain = getRequiredPublicDomain();
   const approveUrl = `https://${domain}/approve/${response.orderNumber}`;
 
   const lines = [

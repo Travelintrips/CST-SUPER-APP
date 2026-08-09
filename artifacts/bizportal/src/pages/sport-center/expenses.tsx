@@ -93,7 +93,7 @@ export default function SportCenterExpenses() {
   const qc = useQueryClient();
   const { activeCompanyId } = useCompany();
   const { toast } = useToast();
-  const cId = typeof activeCompanyId === "number" ? activeCompanyId : 1;
+  const cId = typeof activeCompanyId === "number" && activeCompanyId > 0 ? activeCompanyId : null;
 
   const [tab, setTab] = useState<"list" | "summary">("list");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -111,6 +111,7 @@ export default function SportCenterExpenses() {
 
   // ── Facilities ──────────────────────────────────────────────────────────────
   const { data: facilities = [] } = useQuery<Facility[]>({
+    enabled: cId != null,
     queryKey: ["sc-facilities", cId],
     queryFn: async () => {
       const r = await fetch(`/api/sport-center/facilities?companyId=${cId}`, { credentials: "include" });
@@ -120,6 +121,7 @@ export default function SportCenterExpenses() {
 
   // ── Expenses list ──────────────────────────────────────────────────────────
   const { data: expenses = [], isLoading, refetch } = useQuery<Expense[]>({
+    enabled: cId != null,
     queryKey: ["sc-expenses", cId, statusFilter, categoryFilter, facilityFilter, dateFrom, dateTo],
     queryFn: async () => {
       const qs = new URLSearchParams({ companyId: String(cId) });
@@ -135,6 +137,7 @@ export default function SportCenterExpenses() {
 
   // ── Summary ─────────────────────────────────────────────────────────────────
   const { data: summary = [], isLoading: summaryLoading } = useQuery<SummaryRow[]>({
+    enabled: cId != null,
     queryKey: ["sc-expenses-summary", cId, facilityFilter, dateFrom, dateTo],
     queryFn: async () => {
       const qs = new URLSearchParams({ companyId: String(cId) });
