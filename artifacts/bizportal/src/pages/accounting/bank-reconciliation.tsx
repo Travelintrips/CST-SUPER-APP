@@ -13,6 +13,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -527,9 +528,19 @@ interface QrisCandidateAudit {
   reconciliation_status: string;
   confidence: number | string;
   review_reason?: string | null;
-  payment_items?: Array<{ paymentId?: number; payment_id?: number }>;
+  payment_items?: QrisPaymentItem[];
   description?: string | null;
   status?: string | null;
+}
+
+interface QrisPaymentItem {
+  paymentId?: number;
+  payment_id?: number;
+  grossAmount?: number | string | null;
+  gross_amount?: number | string | null;
+  bookingNumber?: string | null;
+  paymentNumber?: string | null;
+  paymentDate?: string | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -733,6 +744,71 @@ function CandidateDetailsBlock({
         ))}
       </div>
     </div>
+  );
+}
+
+function QrisPaymentItemsSummary({
+  items,
+  compact = false,
+}: {
+  items?: QrisPaymentItem[];
+  compact?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  if (!items?.length) return null;
+
+  const visibleItems = open ? items : items.slice(0, 4);
+  const remainingCount = items.length - visibleItems.length;
+  const hasBookingDetails = items.some(item => item.bookingNumber || item.paymentNumber || item.paymentDate);
+
+  return (
+    <Collapsible open={open} onOpenChange={setOpen} className={compact ? "mt-1.5" : "mt-2"}>
+      <CollapsibleTrigger asChild>
+        <button
+          type="button"
+          className="flex w-full items-center justify-between gap-2 rounded border border-amber-200 bg-amber-100/70 px-2 py-1.5 text-left text-[11px] font-medium text-amber-950 transition-colors hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100"
+          onClick={event => event.stopPropagation()}
+          onKeyDown={event => event.stopPropagation()}
+          aria-label={`${open ? "Sembunyikan" : "Lihat"} daftar booking QRIS`}
+        >
+          <span>
+            {open ? "Sembunyikan detail booking" : `Lihat ${items.length} booking / payment`}
+          </span>
+          {open ? <ChevronUp className="h-3.5 w-3.5 shrink-0" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0" />}
+        </button>
+      </CollapsibleTrigger>
+      <CollapsibleContent onClick={event => event.stopPropagation()}>
+        <div className="mt-1 space-y-1 rounded border border-amber-200/80 bg-background/70 p-1.5 dark:border-amber-800/70">
+          {!hasBookingDetails && (
+            <p className="px-1 text-[10px] text-muted-foreground">
+              Metadata booking belum tersedia
+            </p>
+          )}
+          {visibleItems.map((item, index) => (
+            <div key={`${item.paymentId ?? item.payment_id ?? "payment"}-${index}`} className="rounded bg-muted/40 px-1.5 py-1 text-[10px]">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                <span className="font-semibold">
+                  Booking: {item.bookingNumber ?? "—"}
+                </span>
+                <span className="text-muted-foreground">
+                  Payment: {item.paymentNumber ?? `#${item.paymentId ?? item.payment_id ?? "—"}`}
+                </span>
+              </div>
+              {item.paymentDate && (
+                <span className="text-muted-foreground">
+                  Dibayar {fmtDate(String(item.paymentDate))}
+                </span>
+              )}
+            </div>
+          ))}
+          {remainingCount > 0 && (
+            <p className="px-1 pt-0.5 text-[10px] text-muted-foreground">
+              +{remainingCount} booking/payment lainnya
+            </p>
+          )}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -1441,6 +1517,7 @@ function MutationCard({
                   Gross {idr(qrisAudit.gross_amount)} · Dana masuk {idr(qrisAudit.net_amount)} ·{" "}
                   {qrisAudit.payment_items?.length ?? 0} payment teridentifikasi
                 </p>
+                <QrisPaymentItemsSummary items={qrisAudit.payment_items} compact />
                 <p className="mt-1 text-[11px] text-slate-600 dark:text-slate-400">
                   Audit ini hanya membantu verifikasi. Tidak melakukan approve, posting, atau membuat jurnal.
                 </p>
@@ -1930,6 +2007,7 @@ function MutationDetailPanel({
                   <p className="rounded-md border border-amber-200 bg-amber-100/80 px-2 py-1.5 text-xs font-medium text-amber-950 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100">
                     {qrisAudit.review_reason ?? "Kandidat ini hanya untuk review dan tidak menjadi kandidat approve/post."}
                   </p>
+                  <QrisPaymentItemsSummary items={qrisAudit.payment_items} />
                   <p className="text-[11px] text-slate-700 dark:text-slate-300">
                     Gunanya: memberi alasan mengapa sistem belum mencocokkan mutasi ini secara otomatis.
                     Audit ini tidak membuat jurnal dan tidak mengubah status posting.

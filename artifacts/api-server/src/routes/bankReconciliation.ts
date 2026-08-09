@@ -1482,8 +1482,28 @@ router.get("/mutations", async (req, res) => {
        FROM bank_reconciliation_matches m
        WHERE m.mutation_id = bm.id
        ) AS candidates,
-       (
-         SELECT to_jsonb(qc)
+        (
+          SELECT to_jsonb(qc) || jsonb_build_object(
+            'payment_items',
+            COALESCE((
+              SELECT jsonb_agg(
+                item.value || jsonb_build_object(
+                  'bookingNumber', sb.booking_number,
+                  'paymentNumber', sp.payment_number,
+                  'paymentDate', COALESCE(sp.paid_at::date, sp.created_at::date)
+                )
+                ORDER BY sp.paid_at NULLS LAST, sp.id
+              )
+              FROM jsonb_array_elements(COALESCE(qc.payment_items, '[]'::jsonb)) AS item(value)
+              LEFT JOIN sport_payments sp
+                ON sp.id = CASE
+                  WHEN COALESCE(item.value->>'paymentId', item.value->>'payment_id') ~ '^[0-9]+$'
+                    THEN (COALESCE(item.value->>'paymentId', item.value->>'payment_id'))::integer
+                  ELSE NULL
+                END
+              LEFT JOIN sport_bookings sb ON sb.id = sp.booking_id
+            ), '[]'::jsonb)
+          )
          FROM qris_mutation_batch_candidates qc
          WHERE qc.mutation_id = bm.id
             AND (
