@@ -49,4 +49,41 @@ describe("QRIS settlement contract", () => {
     expect(isPartialQrisSettlement("partially_settled")).toBe(true);
     expect(isPartialQrisSettlement("settled")).toBe(false);
   });
+
+  it("allows only one winner when overlapping approvals race on the same payment", async () => {
+    // This models the database invariant used by the approval transaction:
+    // both requests may pass the advisory pre-check, but the unique
+    // qris_settlement_items(sport_payment_id) insert has one winner.
+    const settledPaymentIds = new Set<number>();
+    let prechecksFinished = 0;
+    let releasePrechecks!: () => void;
+    const allPrechecksFinished = new Promise<void>((resolve) => {
+      releasePrechecks = resolve;
+    });
+
+    const approve = async (batchId: string) => {
+      const paymentId = 9001;
+      const alreadySettled = settledPaymentIds.has(paymentId);
+      prechecksFinished += 1;
+      if (prechecksFinished === 2) releasePrechecks();
+      await allPrechecksFinished;
+
+      if (alreadySettled || settledPaymentIds.has(paymentId)) {
+        return {
+          status: 409,
+          code: "QRIS_PAYMENT_ALREADY_SETTLED",
+          error: `Payment QRIS ${paymentId} sudah tersettle pada batch lain (${batchId}).`,
+        };
+      }
+      // The atomic unique insert is the winner-selection point.
+      settledPaymentIds.add(paymentId);
+      return { status: 201, code: "OK", error: null };
+    };
+
+    const results = await Promise.all([approve("batch-a"), approve("batch-b")]);
+    expect(results.map((result) => result.status).sort()).toEqual([201, 409]);
+    expect(results.filter((result) => result.code === "QRIS_PAYMENT_ALREADY_SETTLED")).toHaveLength(1);
+    expect(results.find((result) => result.status === 409)?.error).toContain("sudah tersettle");
+    expect(settledPaymentIds).toEqual(new Set([9001]));
+  });
 });

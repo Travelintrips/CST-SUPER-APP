@@ -45,3 +45,4 @@
 - [Sport Center audit contract](sport-center-audit-contract.md) — mirror trigger tetap owner; payment hanya posted setelah entry_id valid; jangan menambah relasi jurnal paralel.
 - [Sport Center payment method backfill](sport-center-payment-method-backfill.md) — legacy sync mengisi accounting_payments tetapi journal header bisa tetap NULL; backfill keduanya dari mirror source.
 - [Sport payment_method NULL fix](sport-payment-method-backfill.md) — fn_block_posted_entry_update memblok metadata backfill; patch inline di accountingHubMigration + journal-code path (aj.code→method) adalah solusi.
+- [QRIS approval race guard](qris-approval-race-guard.md) — approval batch harus mengunci payment dan tetap mengandalkan unique index sebagai invariant double-settlement.

@@ -185,6 +185,9 @@ export async function runQrisSettlementMigration(): Promise<void> {
   `).catch(() => {});
   // One payment cannot be part of two provider-confirmed final settlements.
   // Candidate generation itself remains provisional and never posts.
+  // A Sport Center payment can only be consumed by one final provider
+  // settlement. This is the race-condition backstop for concurrent approvals:
+  // the EXISTS pre-check is advisory, while this unique index is authoritative.
   await db.execute(sql`
     CREATE UNIQUE INDEX IF NOT EXISTS uq_qris_settlement_items_payment
       ON qris_settlement_items(sport_payment_id)
