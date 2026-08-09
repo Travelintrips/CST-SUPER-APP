@@ -135,6 +135,12 @@ async function validateAndMarkSportPaymentPosted(
   }
 
   await db.execute(sql`
+    UPDATE accounting_payments
+    SET status = 'posted'
+    WHERE id = ${accountingPaymentId}
+      AND status IN ('pending_approval', 'approved', 'draft')
+  `).catch(() => {});
+  await db.execute(sql`
     UPDATE sport_payments
     SET posting_status = 'posted',
         accounting_payment_id = ${accountingPaymentId},
@@ -717,7 +723,7 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
     WHERE sp.status = 'paid'
       AND sp.payment_number LIKE 'SCPAY-SC-%'
       AND sp.source = 'SPORT_CENTER_SUPABASE'
-      AND COALESCE(sp.posting_status, 'unposted') <> 'manual_review'
+      AND COALESCE(sp.posting_status, 'unposted') IN ('unposted', 'failed')
       AND (sb.company_id = ${companyId} OR sb.company_id IS NULL)
   `).catch(() => ({ rows: [] }));
 
@@ -921,7 +927,7 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
           (company_id, payment_number, payment_type, status, amount, journal_id,
            partner_name, date, ref, memo, payment_method, source_type, source_doc_id, entry_id)
         VALUES
-          (${companyId}, ${acctPayNumber}, 'inbound', 'posted', ${String(Number(row.amount))},
+          (${companyId}, ${acctPayNumber}, 'inbound', 'pending_approval', ${String(Number(row.amount))},
            ${journalId ?? null}, ${row.customer_name ?? "Customer"}, ${payDate}::date,
            ${row.booking_number}, ${'Sport Center: ' + row.booking_number},
             ${paymentMethod},

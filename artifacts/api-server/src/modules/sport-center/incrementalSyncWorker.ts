@@ -259,11 +259,11 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
          WHERE payment_number = ${scPaymentNumber}
          ORDER BY id ASC
        `);
-       const mirrorRows = mirrorRes.rows as Array<{
-        id?: number;
-        booking_id?: number | null;
-         amount?: number | string | null;
-      } | undefined;
+        const mirrorRows = mirrorRes.rows as Array<{
+          id?: number;
+          booking_id?: number | null;
+          amount?: number | string | null;
+        }>;
        const mirror = mirrorRows[0];
 
        if (mirrorRows.length > 1) {
@@ -293,42 +293,51 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
          bookingNumber: string | null;
        }> => {
          if (pay.booking_id == null) return { id: null, duplicateCount: 0, bookingNumber: null };
-        const bookingOrder = await client
+          const bookingOrder = await client
           .schema("sport_center")
           .from("sport_bookings")
           .select("order_number")
           .eq("id", pay.booking_id)
           .maybeSingle();
-        const orderNumber = bookingOrder.data?.order_number ?? null;
-         if (orderNumber) {
-          const r = await db.execute(sql`
-             SELECT id, booking_number
-             FROM sport_bookings
-             WHERE booking_number = ${orderNumber}
-             ORDER BY id ASC
+          const orderNumber = bookingOrder.data?.order_number ?? null;
+
+          // Source identity is authoritative. Do this lookup first so a
+          // unique order_number cannot hide duplicate public mirrors that
+          // share the same sport_center booking id.
+          const bySourceId = await db.execute(sql`
+            SELECT id, booking_number
+            FROM sport_bookings
+            WHERE sc_booking_id = ${pay.booking_id}
+            ORDER BY id ASC
           `).catch(() => ({ rows: [] }));
-           if (r.rows.length > 0) {
-             return {
-               id: Number((r.rows[0] as any).id),
-               duplicateCount: r.rows.length,
-               bookingNumber: String((r.rows[0] as any).booking_number ?? orderNumber),
-             };
-           }
-        }
-        const r2 = await db.execute(sql`
-           SELECT id, booking_number
-           FROM sport_bookings
-           WHERE sc_booking_id = ${pay.booking_id}
-           ORDER BY id ASC
-        `).catch(() => ({ rows: [] }));
-         return {
-           id: r2.rows.length > 0 ? Number((r2.rows[0] as any).id) : null,
-           duplicateCount: r2.rows.length,
-           bookingNumber: r2.rows.length > 0
-             ? String((r2.rows[0] as any).booking_number ?? "")
-             : null,
-         };
-      };
+          if (bySourceId.rows.length > 0) {
+            return {
+              id: Number((bySourceId.rows[0] as any).id),
+              duplicateCount: bySourceId.rows.length,
+              bookingNumber: String((bySourceId.rows[0] as any).booking_number ?? orderNumber ?? ""),
+            };
+          }
+
+          // Legacy rows may predate sc_booking_id; use the source order
+          // number only as a fallback.
+          if (orderNumber) {
+            const byOrderNumber = await db.execute(sql`
+              SELECT id, booking_number
+              FROM sport_bookings
+              WHERE booking_number = ${orderNumber}
+              ORDER BY id ASC
+            `).catch(() => ({ rows: [] }));
+            return {
+              id: byOrderNumber.rows.length > 0 ? Number((byOrderNumber.rows[0] as any).id) : null,
+              duplicateCount: byOrderNumber.rows.length,
+              bookingNumber: byOrderNumber.rows.length > 0
+                ? String((byOrderNumber.rows[0] as any).booking_number ?? orderNumber)
+                : null,
+            };
+          }
+
+          return { id: null, duplicateCount: 0, bookingNumber: null };
+        };
 
       if (!mirror) {
         if (pay.status !== "confirmed") {
@@ -453,6 +462,11 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
            { sportCenterPaymentId: pay.id, error: mirrorValidation.error },
            `${PREFIX} mirror validation failed`,
          );
+          // Never continue to method patching or accounting sync after an
+          // amount/identity mismatch. The next run may retry failed rows;
+          // manual_review rows remain blocked until an operator resolves them.
+          synced++;
+          continue;
        }
 
       // Patch method jika sport_center payment adalah QRIS tapi mirror belum reflect itu.
