@@ -500,6 +500,8 @@ interface BankMutation {
   matched_payment_id: number | null;
   matched_order_id: number | null;
   candidates: Candidate[] | null;
+  /** Provider-aware QRIS candidate. Audit-only; never used by approve/post. */
+  qris_candidate_audit?: QrisCandidateAudit | null;
   uploaded_proof_url?: string | null;
   source?: string;
   import_batch_id?: number | null;
@@ -1345,6 +1347,7 @@ function MutationCard({
   mappingError?: MappingRequiredError;
 }) {
   const cands  = m.candidates ?? [];
+  const qrisAudit = m.qris_candidate_audit;
   const best   = cands[0];
   const amount = Number(m.amount) || 0;
   const isIN   = m.direction === "IN";
@@ -1406,6 +1409,25 @@ function MutationCard({
                   {best.name_match     && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950/30 px-1.5 py-0.5 rounded">✓ Nama</span>}
                   {best.order_id_match && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950/30 px-1.5 py-0.5 rounded">✓ Order ID</span>}
                 </div>
+              </div>
+            )}
+
+            {qrisAudit && (
+              <div className="mt-2 rounded-md border border-indigo-200 bg-indigo-50/70 dark:border-indigo-900 dark:bg-indigo-950/20 px-2.5 py-2 text-xs">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-semibold text-indigo-800 dark:text-indigo-300">QRIS candidate audit</span>
+                  <Badge variant="outline" className="border-amber-300 text-amber-700">
+                    {qrisAudit.reconciliation_status}
+                  </Badge>
+                  <span className="text-muted-foreground">{qrisAudit.provider_code}</span>
+                </div>
+                <p className="mt-1 text-indigo-900/80 dark:text-indigo-200/80">
+                  {qrisAudit.review_reason ?? "Kandidat QRIS tersedia untuk review."}
+                </p>
+                <p className="mt-1 text-muted-foreground">
+                  Gross {idr(qrisAudit.gross_amount)} · Bank credit {idr(qrisAudit.net_amount)} ·
+                  {" "}{qrisAudit.payment_items?.length ?? 0} payment
+                </p>
               </div>
             )}
 
@@ -1751,6 +1773,7 @@ function MutationDetailPanel({
   if (!mutation) return null;
   const m     = mutation;
   const cands = m.candidates ?? [];
+  const qrisAudit = m.qris_candidate_audit;
   const isIN  = m.direction === "IN";
   const currentStep = getLifecycleIndex(m.status);
 
@@ -1850,6 +1873,37 @@ function MutationDetailPanel({
                 </div>
               )}
             </div>
+
+            {qrisAudit && (
+              <>
+                <Separator />
+                <div className="rounded-lg border border-indigo-200 bg-indigo-50/70 dark:border-indigo-900 dark:bg-indigo-950/20 p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-indigo-800 dark:text-indigo-300">
+                      QRIS Settlement Candidate Audit
+                    </p>
+                    <Badge variant="outline" className="border-amber-300 text-amber-700">
+                      {qrisAudit.reconciliation_status}
+                    </Badge>
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                    <span className="text-muted-foreground">Provider</span>
+                    <span className="font-medium text-right">{qrisAudit.provider_code}</span>
+                    <span className="text-muted-foreground">Expected settlement</span>
+                    <span className="font-medium text-right">{fmtDate(qrisAudit.estimated_settlement_date)}</span>
+                    <span className="text-muted-foreground">Gross payment</span>
+                    <span className="font-medium text-right">{idr(qrisAudit.gross_amount)}</span>
+                    <span className="text-muted-foreground">Bank credit</span>
+                    <span className="font-medium text-right">{idr(qrisAudit.net_amount)}</span>
+                    <span className="text-muted-foreground">Payment items</span>
+                    <span className="font-medium text-right">{qrisAudit.payment_items?.length ?? 0}</span>
+                  </div>
+                  <p className="text-xs text-amber-800 dark:text-amber-300">
+                    {qrisAudit.review_reason ?? "Kandidat ini hanya untuk review dan tidak menjadi kandidat approve/post."}
+                  </p>
+                </div>
+              </>
+            )}
 
             <Separator />
 

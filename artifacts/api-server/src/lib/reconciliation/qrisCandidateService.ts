@@ -138,13 +138,17 @@ export async function generateQrisCandidates(options: {
     status: row.status == null ? null : String(row.status),
   })).filter((row) => row.transactionDate);
 
+  // Recompute existing provisional rows as well. A bank mutation can be
+  // imported before the Sport Center payment sync finishes; skipping an
+  // existing mutation would permanently preserve an empty/stale candidate.
+  // This table is provisional only, so refreshing it does not approve, post,
+  // or consume any bank evidence.
   const candidates = generateQrisMutationBatchCandidates({
     payments,
     mutations,
     holidays,
     providerRules: rules,
     accountProviderRules: accountRules,
-    existingMutationIds: (existingRows.rows as Array<Record<string, unknown>>).map((row) => Number(row.mutation_id)),
   });
 
   if (!options.dryRun) {
@@ -182,7 +186,28 @@ export async function generateQrisCandidates(options: {
           NOW(),
           NOW()
         )
-        ON CONFLICT (mutation_id) DO NOTHING
+           ON CONFLICT (mutation_id) DO UPDATE SET
+             company_id = EXCLUDED.company_id,
+             source_date = EXCLUDED.source_date,
+             estimated_settlement_date = EXCLUDED.estimated_settlement_date,
+             bank_account_id = EXCLUDED.bank_account_id,
+             provider_code = EXCLUDED.provider_code,
+             provider_detection_source = EXCLUDED.provider_detection_source,
+             settlement_rule_version = EXCLUDED.settlement_rule_version,
+             mutation_source_classification = EXCLUDED.mutation_source_classification,
+             gross_amount = EXCLUDED.gross_amount,
+             mdr_amount = EXCLUDED.mdr_amount,
+             other_fee_amount = EXCLUDED.other_fee_amount,
+             net_amount = EXCLUDED.net_amount,
+             payment_items = EXCLUDED.payment_items,
+             status = EXCLUDED.status,
+             reconciliation_status = EXCLUDED.reconciliation_status,
+             confidence = EXCLUDED.confidence,
+             observed_deduction = EXCLUDED.observed_deduction,
+             effective_deduction_rate = EXCLUDED.effective_deduction_rate,
+             review_reason = EXCLUDED.review_reason,
+             generated_at = EXCLUDED.generated_at,
+             updated_at = NOW()
       `));
     }
   }

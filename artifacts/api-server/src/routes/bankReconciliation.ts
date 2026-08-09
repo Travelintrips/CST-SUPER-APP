@@ -1230,7 +1230,14 @@ router.get("/mutations", async (req, res) => {
         )
        FROM bank_reconciliation_matches m
        WHERE m.mutation_id = bm.id
-      ) AS candidates
+       ) AS candidates,
+       (
+         SELECT to_jsonb(qc)
+         FROM qris_mutation_batch_candidates qc
+         WHERE qc.mutation_id = bm.id
+         ORDER BY qc.updated_at DESC, qc.id DESC
+         LIMIT 1
+       ) AS qris_candidate_audit
     FROM bank_mutations bm
     ${bmWhere}
   `;
@@ -1257,7 +1264,8 @@ router.get("/mutations", async (req, res) => {
       NULL::text AS uploaded_proof_url,
       'bank_import' AS source,
       'bank_import' AS _source_table,
-      NULL::json AS candidates
+       NULL::json AS candidates,
+       NULL::jsonb AS qris_candidate_audit
     FROM bank_mutation_imports bmi
     ${bmiWhere}
   ` : "";
