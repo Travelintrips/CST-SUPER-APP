@@ -49,6 +49,41 @@ export async function runAccountingHubMigration(): Promise<void> {
         AND ap.payment_method IS DISTINCT FROM sp.method
     `).catch((err) => logger.warn({ err }, "[AccountingHub] Sport Center payment method backfill failed"));
 
+    // ── 2b-pre. Patch fn_block_posted_entry_update SEBELUM backfill ────────────
+    // accountingHubMigration runs before financeGovernanceMigration in the
+    // startup chain, so the OLD trigger (blocks ALL posted-entry updates) is still
+    // active when the backfills below execute.  Patch it here to allow
+    // metadata-only changes (no financial-field or status change) so the backfill
+    // can fill NULL payment_method on already-posted Sport Center entries.
+    // financeGovernanceMigration will later install the same definition idempotently.
+    await db.execute(sql.raw(`
+      CREATE OR REPLACE FUNCTION fn_block_posted_entry_update()
+      RETURNS TRIGGER LANGUAGE plpgsql AS $$
+      BEGIN
+        IF OLD.status = 'posted' THEN
+          -- Izinkan cancellation: status posted → draft dengan cancel_reason terisi
+          IF NEW.status = 'draft' AND NEW.cancel_reason IS NOT NULL AND NEW.cancelled_at IS NOT NULL THEN
+            RETURN NEW;
+          END IF;
+          -- Izinkan metadata-only update (payment_method dll.) selama data finansial
+          -- dan status tidak berubah.
+          IF NEW.status IS NOT DISTINCT FROM OLD.status
+            AND NEW.total_debit  IS NOT DISTINCT FROM OLD.total_debit
+            AND NEW.total_credit IS NOT DISTINCT FROM OLD.total_credit
+            AND NEW.journal_id   IS NOT DISTINCT FROM OLD.journal_id
+            AND NEW.date         IS NOT DISTINCT FROM OLD.date
+            AND NEW.source       IS NOT DISTINCT FROM OLD.source
+            AND NEW.source_id    IS NOT DISTINCT FROM OLD.source_id
+          THEN
+            RETURN NEW;
+          END IF;
+          RAISE EXCEPTION 'IMMUTABILITY_VIOLATION: Cannot modify a posted journal entry (id=%). Posted entries are immutable. Use a reversal entry.', OLD.id;
+        END IF;
+        RETURN NEW;
+      END;
+      $$
+    `)).catch((err) => logger.warn({ err }, "[AccountingHub] Trigger patch fn_block_posted_entry_update failed (non-fatal)"));
+
     // Backfill journal headers as well. Older Sport Center postings may have
     // payment_method on accounting_payments (or on the public mirror) while
     // accounting_entries.payment_method is still NULL or set to the generic
@@ -68,7 +103,10 @@ export async function runAccountingHubMigration(): Promise<void> {
         AND (ae.payment_method IS NULL OR ae.payment_method = 'cash')
         AND COALESCE(sp.method, ap.payment_method) IS NOT NULL
         AND COALESCE(sp.method, ap.payment_method) <> 'cash'
-    `).catch((err) => logger.warn({ err }, "[AccountingHub] Sport Center journal payment method backfill failed"));
+    `).then((r) => {
+      const n = (r as { rowCount?: number }).rowCount ?? 0;
+      if (n > 0) logger.info({ updated: n }, "[AccountingHub] Sport Center journal payment method backfill via accounting_payments");
+    }).catch((err) => logger.warn({ err }, "[AccountingHub] Sport Center journal payment method backfill failed"));
 
     // Also repair entries where payment_method = 'cash' but a non-cash source
     // is now known (handles backfills where 'cash' was set as a generic default).
@@ -84,7 +122,53 @@ export async function runAccountingHubMigration(): Promise<void> {
         AND (ae.payment_method IS NULL OR ae.payment_method = 'cash')
         AND sp.method IS NOT NULL
         AND sp.method <> 'cash'
-    `).catch((err) => logger.warn({ err }, "[AccountingHub] Legacy Sport Center journal payment method backfill failed"));
+    `).then((r) => {
+      const n = (r as { rowCount?: number }).rowCount ?? 0;
+      if (n > 0) logger.info({ updated: n }, "[AccountingHub] Legacy Sport Center journal payment method backfill via source_id");
+    }).catch((err) => logger.warn({ err }, "[AccountingHub] Legacy Sport Center journal payment method backfill failed"));
+
+    // ── 2c. Journal-code backfill (most reliable path) ───────────────────────
+    // When sport_payments.booking_id is NULL (trigger couldn't resolve the
+    // public booking), all join-based paths above fail. Derive the payment
+    // method directly from the journal code used when the entry was posted:
+    //   CSH  → 'cash'  | BNK → 'transfer'  | QRIS → 'qris'
+    // Only fills NULL values — does not overwrite explicit methods.
+    await db.execute(sql`
+      UPDATE accounting_entries ae
+      SET payment_method = CASE aj.code
+        WHEN 'CSH'  THEN 'cash'
+        WHEN 'QRIS' THEN 'qris'
+        ELSE 'transfer'
+      END
+      FROM accounting_journals aj
+      WHERE ae.journal_id = aj.id
+        AND ae.source = 'sport_center_booking'
+        AND ae.payment_method IS NULL
+    `).then((r) => {
+      const n = (r as { rowCount?: number }).rowCount ?? 0;
+      if (n > 0) logger.info({ updated: n }, "[AccountingHub] Sport Center journal-code payment method backfill (journal code → method)");
+    }).catch((err) => logger.warn({ err }, "[AccountingHub] Sport Center journal-code payment method backfill failed"));
+
+    // ── 2d. Booking-number ref path via sport_payments ────────────────────────
+    // Matches accounting_entries.ref (= booking_number) → sport_bookings →
+    // sport_payments (via SCPAY-SC-{sc_booking_id} when booking_id is NULL).
+    // Overrides 'cash' default when actual method is more specific.
+    await db.execute(sql`
+      UPDATE accounting_entries ae
+      SET payment_method = sp.method
+      FROM sport_bookings sb
+      JOIN sport_payments sp
+        ON sp.payment_number = 'SCPAY-SC-' || sb.sc_booking_id::text
+      WHERE ae.source = 'sport_center_booking'
+        AND ae.ref = sb.booking_number
+        AND sb.sc_booking_id IS NOT NULL
+        AND (ae.payment_method IS NULL OR ae.payment_method = 'cash')
+        AND sp.method IS NOT NULL
+        AND sp.method <> 'cash'
+    `).then((r) => {
+      const n = (r as { rowCount?: number }).rowCount ?? 0;
+      if (n > 0) logger.info({ updated: n }, "[AccountingHub] Sport Center payment method backfill via booking-number ref");
+    }).catch((err) => logger.warn({ err }, "[AccountingHub] Booking-number Sport Center payment method backfill failed"));
 
     // ── 3. accounting_posting_errors ─────────────────────────────────────────
     await db.execute(sql`
