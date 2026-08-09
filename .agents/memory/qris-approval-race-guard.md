@@ -8,3 +8,9 @@ QRIS settlement approval must lock all referenced Sport Center payments in a sta
 **Why:** Two overlapping batch approvals can both observe no existing settlement before either transaction inserts its item. The database constraint is the authoritative winner selector; the losing approval must roll back and return HTTP 409 with an informative double-settlement error.
 
 **How to apply:** Keep `uq_qris_settlement_items_payment` active in the runtime migration and map PostgreSQL `23505` for that constraint to `QRIS_PAYMENT_ALREADY_SETTLED`/409. Do not use `ON CONFLICT DO NOTHING`, because silently dropping an item would leave an apparently approved but incomplete settlement.
+
+Before editing this flow, verify that `bankReconciliation.ts` contains exactly one QRIS approval route and no orphaned raw SQL block; merged snapshots may contain concatenated historical implementations that fail the parser before runtime behavior can be tested.
+
+**Why:** A duplicated route fragment and an unclosed SQL template can make the whole API fail to build, masking the actual settlement implementation.
+
+**How to apply:** Run the API build and search for duplicate `/qris-candidates/*/approve` declarations before restarting the application workflow.

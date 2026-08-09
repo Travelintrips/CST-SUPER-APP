@@ -2100,6 +2100,7 @@ function MutationDetailPanel({
                     <p className="text-[11px] text-green-700 dark:text-green-400 text-center">
                       Batch ini sudah disetujui. Settlement QRIS telah dibuat dan siap dicocokkan ke mutasi bank.
                     </p>
+                   )}
                   <p className="rounded-md border border-amber-200 bg-amber-100/80 px-2 py-1.5 text-xs font-medium text-amber-950 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100">
                     {qrisAudit.review_reason ?? "Kandidat ini hanya untuk review dan tidak menjadi kandidat approve/post."}
                   </p>
