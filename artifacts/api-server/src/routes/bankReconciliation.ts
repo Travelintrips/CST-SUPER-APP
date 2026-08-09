@@ -1083,12 +1083,14 @@ router.post("/qris-candidates/generate", async (req, res) => {
 // rows are locked in a stable order before the already-settled check, so two
 // overlapping batches cannot both pass the check. The unique index on
 // qris_settlement_items is the final database-level invariant.
+/*
 router.post("/qris-candidates/:id/approve", async (req, res) => {
   await runQrisSettlementMigration();
   const candidateId = Number.parseInt(String(req.params.id ?? ""), 10);
   if (!Number.isInteger(candidateId) || candidateId <= 0) {
     return res.status(400).json({ error: "ID kandidat QRIS tidak valid" });
   }
+*/
 
 // ─── POST /qris-candidates/:id/approve ──────────────────────────────────────
 // Mempromosikan qris_mutation_batch_candidates ke qris_settlements +
@@ -1293,7 +1295,22 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       return { settlementId, mutationId, itemCount: items.length };
     });
 
+    return res.status(201).json({
+      ok: true,
+      settlementId: result.settlementId,
+      mutationId: result.mutationId,
+      itemCount: result.itemCount,
+    });
+  } catch (e: any) {
+    const message = e?.message ?? "Gagal menyetujui kandidat QRIS";
+    logger.warn({ err: e?.cause?.message ?? message }, "[bankRecon] QRIS candidate approval rejected");
+    return res.status(
+      /tidak ditemukan|tidak valid|bukan|sudah|belum|tidak memiliki/.test(message) ? 400 : 500,
+    ).json({ error: message });
+  }
+});
 
+/*
   const qEsc = (s: string) => String(s ?? "").replace(/'/g, "''");
 
   try {
@@ -1781,6 +1798,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       .json({ error: message });
   }
 });
+*/
 
 // ─── GET /api/bank-reconciliation/mutations ───────────────────────────────────
 // D4 fix: replace JS-level merge (N+1 key fetch + in-memory dedup + JS sort)

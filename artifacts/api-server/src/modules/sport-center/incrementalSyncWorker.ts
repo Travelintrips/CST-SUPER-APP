@@ -2,6 +2,7 @@ import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../../lib/logger.js";
 import { syncPaymentsToAccounting } from "./supabaseSync.js";
+import { validateSportPaymentMirror } from "./sportPaymentValidation.js";
 
 const PREFIX = "[SportIncrementalSync]";
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 menit
@@ -252,38 +253,91 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
       // The trigger uses this exact idempotency key. Missing mirrors are
       // intentionally not inserted here; the source must be updated/replayed
       // so PostgreSQL can execute the trigger.
-      const mirrorRes = await db.execute(sql`
-        SELECT id, booking_id
-        FROM sport_payments
-        WHERE payment_number = ${scPaymentNumber}
-        LIMIT 1
-      `);
-      const mirror = mirrorRes.rows[0] as {
-        id?: number;
-        booking_id?: number | null;
-      } | undefined;
+       const mirrorRes = await db.execute(sql`
+         SELECT id, booking_id, amount
+         FROM sport_payments
+         WHERE payment_number = ${scPaymentNumber}
+         ORDER BY id ASC
+       `);
+        const mirrorRows = mirrorRes.rows as Array<{
+          id?: number;
+          booking_id?: number | null;
+          amount?: number | string | null;
+        }>;
+       const mirror = mirrorRows[0];
+
+       if (mirrorRows.length > 1) {
+         const error = `duplicate payment mirrors for ${scPaymentNumber} (${mirrorRows.length})`;
+         for (const duplicate of mirrorRows) {
+           if (duplicate?.id == null) continue;
+           await db.execute(sql`
+             UPDATE sport_payments
+             SET posting_status = 'manual_review',
+                 posting_error = ${error},
+                 updated_at = NOW()
+             WHERE id = ${Number(duplicate.id)}
+           `).catch(() => {});
+         }
+         logger.warn(
+           { sportCenterPaymentId: pay.id, mirrorCount: mirrorRows.length },
+           `${PREFIX} duplicate payment mirrors — posting diblokir`,
+         );
+         synced++;
+         continue;
+       }
 
       // ── Resolve local booking_id (shared by mirror-create and booking_id-backfill) ──
-      const resolveLocalBookingId = async (): Promise<number | null> => {
-        if (pay.booking_id == null) return null;
-        const bookingOrder = await client
+       const resolveLocalBooking = async (): Promise<{
+         id: number | null;
+         duplicateCount: number;
+         bookingNumber: string | null;
+       }> => {
+         if (pay.booking_id == null) return { id: null, duplicateCount: 0, bookingNumber: null };
+          const bookingOrder = await client
           .schema("sport_center")
           .from("sport_bookings")
           .select("order_number")
           .eq("id", pay.booking_id)
           .maybeSingle();
-        const orderNumber = bookingOrder.data?.order_number ?? null;
-        if (orderNumber) {
-          const r = await db.execute(sql`
-            SELECT id FROM sport_bookings WHERE booking_number = ${orderNumber} LIMIT 1
+          const orderNumber = bookingOrder.data?.order_number ?? null;
+
+          // Source identity is authoritative. Do this lookup first so a
+          // unique order_number cannot hide duplicate public mirrors that
+          // share the same sport_center booking id.
+          const bySourceId = await db.execute(sql`
+            SELECT id, booking_number
+            FROM sport_bookings
+            WHERE sc_booking_id = ${pay.booking_id}
+            ORDER BY id ASC
           `).catch(() => ({ rows: [] }));
-          if (r.rows.length > 0) return Number((r.rows[0] as any).id);
-        }
-        const r2 = await db.execute(sql`
-          SELECT id FROM sport_bookings WHERE sc_booking_id = ${pay.booking_id} LIMIT 1
-        `).catch(() => ({ rows: [] }));
-        return r2.rows.length > 0 ? Number((r2.rows[0] as any).id) : null;
-      };
+          if (bySourceId.rows.length > 0) {
+            return {
+              id: Number((bySourceId.rows[0] as any).id),
+              duplicateCount: bySourceId.rows.length,
+              bookingNumber: String((bySourceId.rows[0] as any).booking_number ?? orderNumber ?? ""),
+            };
+          }
+
+          // Legacy rows may predate sc_booking_id; use the source order
+          // number only as a fallback.
+          if (orderNumber) {
+            const byOrderNumber = await db.execute(sql`
+              SELECT id, booking_number
+              FROM sport_bookings
+              WHERE booking_number = ${orderNumber}
+              ORDER BY id ASC
+            `).catch(() => ({ rows: [] }));
+            return {
+              id: byOrderNumber.rows.length > 0 ? Number((byOrderNumber.rows[0] as any).id) : null,
+              duplicateCount: byOrderNumber.rows.length,
+              bookingNumber: byOrderNumber.rows.length > 0
+                ? String((byOrderNumber.rows[0] as any).booking_number ?? orderNumber)
+                : null,
+            };
+          }
+
+          return { id: null, duplicateCount: 0, bookingNumber: null };
+        };
 
       if (!mirror) {
         if (pay.status !== "confirmed") {
@@ -301,7 +355,15 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
           { sportCenterPaymentId: pay.id, paymentNumber: scPaymentNumber },
           `${PREFIX} payment confirmed tanpa mirror → insert mirror manual`,
         );
-        const localBookingId = await resolveLocalBookingId();
+         const localBooking = await resolveLocalBooking();
+         if (localBooking.duplicateCount > 1) {
+           logger.warn(
+             { sportCenterPaymentId: pay.id, duplicateBookingCount: localBooking.duplicateCount },
+             `${PREFIX} duplicate local booking mirrors — mirror tidak dibuat`,
+           );
+           continue;
+         }
+         const localBookingId = localBooking.id;
         const paidAt   = pay.confirmed_at ?? pay.created_at ?? new Date().toISOString();
         const method   = pay.payment_method ?? "Transfer Bank";
 
@@ -316,17 +378,34 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
              ${pay.created_at ?? new Date().toISOString()}::timestamptz, NOW())
           ON CONFLICT (payment_number) DO NOTHING
         `);
-        synced++;
+         synced++;
         continue;
       }
 
       if (mirror.booking_id == null && pay.booking_id != null) {
-        const localBookingId = await resolveLocalBookingId();
+         const localBooking = await resolveLocalBooking();
 
-        if (localBookingId) {
+         if (localBooking.duplicateCount > 1) {
+           const error = `duplicate local booking mirrors for Sport Center booking ${pay.booking_id} (${localBooking.duplicateCount})`;
+           await db.execute(sql`
+             UPDATE sport_payments
+             SET posting_status = 'manual_review',
+                 posting_error = ${error},
+                 updated_at = NOW()
+             WHERE id = ${Number(mirror.id)}
+           `).catch(() => {});
+           logger.warn(
+             { sportCenterPaymentId: pay.id, duplicateBookingCount: localBooking.duplicateCount },
+             `${PREFIX} duplicate local booking mirrors — posting diblokir`,
+           );
+           synced++;
+           continue;
+         }
+
+         if (localBooking.id) {
           await db.execute(sql`
-            UPDATE sport_payments
-            SET booking_id = ${localBookingId}
+             UPDATE sport_payments
+             SET booking_id = ${localBooking.id}
             WHERE id = ${Number(mirror.id)}
               AND booking_id IS NULL
           `);
@@ -338,6 +417,57 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
           continue;
         }
       }
+
+       const mirrorEvidenceRes = await db.execute(sql`
+         SELECT
+           sp.id AS mirror_payment_id,
+           sp.amount AS mirror_amount,
+           sp.booking_id AS mirror_booking_id,
+           sb.sc_booking_id AS mirror_source_booking_id,
+           sb.booking_number AS mirror_booking_number,
+           COUNT(*) OVER (
+             PARTITION BY sb.sc_booking_id
+           ) AS duplicate_booking_mirror_count
+         FROM sport_payments sp
+         LEFT JOIN sport_bookings sb ON sb.id = sp.booking_id
+         WHERE sp.id = ${Number(mirror.id)}
+       `).catch(() => ({ rows: [] }));
+       const mirrorEvidence = mirrorEvidenceRes.rows[0] as any;
+       const mirrorValidation = validateSportPaymentMirror({
+         sourcePaymentId: pay.id,
+         mirrorPaymentId: Number(mirror.id),
+         sourceAmount: pay.amount,
+         mirrorAmount: mirrorEvidence?.mirror_amount,
+         sourceBookingId: pay.booking_id,
+         sourceBookingNumber: (await client
+           .schema("sport_center")
+           .from("sport_bookings")
+           .select("order_number")
+           .eq("id", pay.booking_id)
+           .maybeSingle()).data?.order_number ?? null,
+         mirrorBookingId: mirrorEvidence?.mirror_booking_id,
+         mirrorSourceBookingId: mirrorEvidence?.mirror_source_booking_id,
+         mirrorBookingNumber: mirrorEvidence?.mirror_booking_number,
+         duplicateBookingMirrorCount: Number(mirrorEvidence?.duplicate_booking_mirror_count ?? 0),
+       });
+       if (!mirrorValidation.ok) {
+         await db.execute(sql`
+           UPDATE sport_payments
+           SET posting_status = ${mirrorValidation.state},
+               posting_error = ${mirrorValidation.error.slice(0, 1000)},
+               updated_at = NOW()
+           WHERE id = ${Number(mirror.id)}
+         `).catch(() => {});
+         logger.warn(
+           { sportCenterPaymentId: pay.id, error: mirrorValidation.error },
+           `${PREFIX} mirror validation failed`,
+         );
+          // Never continue to method patching or accounting sync after an
+          // amount/identity mismatch. The next run may retry failed rows;
+          // manual_review rows remain blocked until an operator resolves them.
+          synced++;
+          continue;
+       }
 
       // Patch method jika sport_center payment adalah QRIS tapi mirror belum reflect itu.
       // Hanya update jika posting_status masih unposted/failed (belum diposting ke jurnal).
