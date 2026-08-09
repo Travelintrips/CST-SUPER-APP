@@ -7,6 +7,78 @@ const PREFIX = "[SportIncrementalSync]";
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 menit
 const LOOKBACK_BUFFER_MS = 60 * 1000;   // 1 menit lookback buffer untuk menangani clock skew
 
+/**
+ * Fallback tanpa Supabase client: query sport_center schema langsung via
+ * SECURITY DEFINER function yang di-install oleh migration trigger setup.
+ * Tidak membutuhkan service role key — cukup koneksi DB biasa.
+ */
+async function syncUnmirroredViaDbFunction(): Promise<number> {
+  let synced = 0;
+  try {
+    const unmirroredRes = await db.execute(sql`
+      SELECT sc_payment_id, sc_booking_id, amount, payment_method, confirmed_at, created_at
+      FROM sport_center.get_unmirrored_confirmed_payments()
+    `).catch(() => ({ rows: [] as unknown[] }));
+
+    const rows = unmirroredRes.rows as Array<{
+      sc_payment_id: number;
+      sc_booking_id: number | null;
+      amount: string | number;
+      payment_method: string | null;
+      confirmed_at: string | null;
+      created_at: string | null;
+    }>;
+
+    if (rows.length === 0) return 0;
+
+    logger.info({ count: rows.length }, `${PREFIX} [dbFallback] confirmed payments tanpa mirror ditemukan`);
+
+    for (const row of rows) {
+      const scPaymentNumber = `SCPAY-SC-${row.sc_payment_id}`;
+      try {
+        // Resolve local booking_id dari sc_booking_id
+        let localBookingId: number | null = null;
+        if (row.sc_booking_id != null) {
+          const localByScId = await db.execute(sql`
+            SELECT id FROM sport_bookings WHERE sc_booking_id = ${row.sc_booking_id} LIMIT 1
+          `).catch(() => ({ rows: [] }));
+          if (localByScId.rows.length > 0) {
+            localBookingId = Number((localByScId.rows[0] as any).id);
+          }
+        }
+
+        const paidAt   = row.confirmed_at ?? row.created_at ?? new Date().toISOString();
+        const method   = row.payment_method ?? "Transfer Bank";
+        const amount   = Number(row.amount ?? 0);
+
+        await db.execute(sql`
+          INSERT INTO sport_payments
+            (company_id, booking_id, payment_number, amount, method, status, paid_at,
+             payment_type, source, posting_status, created_at, updated_at)
+          VALUES
+            (1, ${localBookingId}, ${scPaymentNumber}, ${amount},
+             ${method}, 'paid', ${paidAt}::timestamptz,
+             'full_payment', 'SPORT_CENTER_SUPABASE', 'unposted',
+             ${row.created_at ?? new Date().toISOString()}::timestamptz, NOW())
+          ON CONFLICT (payment_number) DO NOTHING
+        `);
+
+        logger.info(
+          { scPaymentId: row.sc_payment_id, amount, method, localBookingId },
+          `${PREFIX} [dbFallback] mirror dibuat untuk confirmed payment`,
+        );
+        synced++;
+      } catch (err) {
+        logger.warn({ err, scPaymentNumber }, `${PREFIX} [dbFallback] gagal insert mirror`);
+      }
+    }
+  } catch (err) {
+    // DB function belum tersedia (runtime DB lama / migration belum jalan) — skip
+    logger.debug({ err: (err as Error)?.message }, `${PREFIX} [dbFallback] get_unmirrored_confirmed_payments tidak tersedia`);
+  }
+  return synced;
+}
+
 let isRunning = false;
 let lastBookingSyncAt: Date | null = null;
 let lastPaymentSyncAt: Date | null = null;
@@ -299,29 +371,48 @@ async function runIncrementalSync(): Promise<void> {
 
   try {
     const client = await getSupabaseClient();
-    if (!client) {
-      logger.debug(`${PREFIX} Supabase client tidak tersedia, skip`);
-      return;
+
+    let bookingSynced = 0;
+    let paymentSynced = 0;
+
+    if (client) {
+      const now = new Date();
+      const bookingSince = lastBookingSyncAt ?? new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      const paymentSince = lastPaymentSyncAt ?? new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+      [bookingSynced, paymentSynced] = await Promise.all([
+        syncNewBookings(client, bookingSince),
+        syncNewPayments(client, paymentSince),
+      ]);
+
+      lastBookingSyncAt = now;
+      lastPaymentSyncAt = now;
+    } else {
+      // Supabase client tidak tersedia → gunakan DB function sebagai fallback.
+      // Fungsi sport_center.get_unmirrored_confirmed_payments() adalah SECURITY DEFINER
+      // sehingga bisa query cross-schema tanpa service role key.
+      paymentSynced = await syncUnmirroredViaDbFunction();
     }
-
-    const now = new Date();
-    const bookingSince = lastBookingSyncAt ?? new Date(now.getTime() - 24 * 60 * 60 * 1000); // default: 24 jam lalu
-    const paymentSince = lastPaymentSyncAt ?? new Date(now.getTime() - 24 * 60 * 60 * 1000);
-
-    const [bookingSynced, paymentSynced] = await Promise.all([
-      syncNewBookings(client, bookingSince),
-      syncNewPayments(client, paymentSince),
-    ]);
-
-    lastBookingSyncAt = now;
-    lastPaymentSyncAt = now;
 
     let accountingSynced = 0;
     if (paymentSynced > 0) {
-      // Posting membaca mirror public.sport_payments dan memakai mirror.id
-      // sebagai accounting_payments.source_doc_id.
       const accounting = await syncPaymentsToAccounting(1);
       accountingSynced = accounting.synced;
+
+      // Setelah payment baru tersedia di public.sport_payments, regenerasi
+      // QRIS batch candidates agar cocokkan batch settlement (QRTRAVELI).
+      try {
+        const { generateQrisCandidates } = await import("../../lib/reconciliation/qrisCandidateService.js");
+        const qrisResult = await generateQrisCandidates({ companyId: 1, dryRun: false });
+        if (qrisResult.generated > 0) {
+          logger.info(
+            { generated: qrisResult.generated },
+            `${PREFIX} QRIS batch candidates diperbarui setelah payment sync`,
+          );
+        }
+      } catch (qrisErr) {
+        logger.debug({ err: (qrisErr as Error)?.message }, `${PREFIX} QRIS candidate regen skip`);
+      }
     }
 
     if (bookingSynced > 0 || paymentSynced > 0 || accountingSynced > 0) {
@@ -357,16 +448,29 @@ export function startIncrementalSyncWorker(): void {
 /** Manual trigger — dipanggil dari POST /api/sport-center/sync/incremental */
 export async function triggerIncrementalSync(): Promise<{ bookingSynced: number; paymentSynced: number }> {
   const client = await getSupabaseClient();
-  if (!client) return { bookingSynced: 0, paymentSynced: 0 };
 
-  // Force full 24-jam lookback saat trigger manual
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const [bookingSynced, paymentSynced] = await Promise.all([
-    syncNewBookings(client, since),
-    syncNewPayments(client, since),
-  ]);
+  let bookingSynced = 0;
+  let paymentSynced = 0;
+
+  if (client) {
+    // Force full 24-jam lookback saat trigger manual
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    [bookingSynced, paymentSynced] = await Promise.all([
+      syncNewBookings(client, since),
+      syncNewPayments(client, since),
+    ]);
+  } else {
+    // Fallback: cari confirmed payments tanpa mirror via DB function cross-schema
+    paymentSynced = await syncUnmirroredViaDbFunction();
+  }
+
   if (paymentSynced > 0) {
     await syncPaymentsToAccounting(1);
+    // Regenerasi QRIS batch candidates setelah payment baru tersedia
+    try {
+      const { generateQrisCandidates } = await import("../../lib/reconciliation/qrisCandidateService.js");
+      await generateQrisCandidates({ companyId: 1, dryRun: false });
+    } catch {/* non-fatal */}
   }
 
   lastBookingSyncAt = new Date();

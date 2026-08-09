@@ -204,8 +204,44 @@ export async function ensureSportPaymentMirrorTrigger(): Promise<void> {
     $migration$
   `);
 
+  // Fungsi cross-schema untuk worker: temukan confirmed payments yang belum punya mirror.
+  // SECURITY DEFINER agar bisa membaca sport_center.sport_payments tanpa service role key.
+  await db.execute(sql`
+    CREATE OR REPLACE FUNCTION sport_center.get_unmirrored_confirmed_payments()
+    RETURNS TABLE (
+      sc_payment_id  INTEGER,
+      sc_booking_id  INTEGER,
+      amount         NUMERIC,
+      payment_method TEXT,
+      confirmed_at   TIMESTAMPTZ,
+      created_at     TIMESTAMPTZ
+    )
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'sport_center', 'public'
+    AS $fn$
+    BEGIN
+      RETURN QUERY
+      SELECT
+        sp.id              AS sc_payment_id,
+        sp.booking_id      AS sc_booking_id,
+        sp.amount          AS amount,
+        sp.payment_method  AS payment_method,
+        sp.confirmed_at    AS confirmed_at,
+        sp.created_at      AS created_at
+      FROM sport_center.sport_payments sp
+      WHERE sp.status::text = 'confirmed'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM public.sport_payments pub
+          WHERE pub.payment_number = 'SCPAY-SC-' || sp.id::text
+        );
+    END;
+    $fn$
+  `);
+
   logger.info(
-    "Sport Center payment mirror trigger: function, unique idempotency index, dan trigger aktif",
+    "Sport Center payment mirror trigger: function, unique idempotency index, trigger, dan get_unmirrored_confirmed_payments aktif",
   );
 }
 
