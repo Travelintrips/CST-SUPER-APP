@@ -16,11 +16,11 @@ import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  Upload, RefreshCw, CheckCircle2, XCircle, AlertTriangle,
+  Upload, Play, RefreshCw, CheckCircle2, XCircle, AlertTriangle,
   Search, Trash2, ArrowLeft, CloudDownload,
   Wifi, WifiOff, Loader2, ShieldAlert, Plus, Settings2, Building2,
   ChevronDown, ChevronUp, ArrowUpRight, ArrowDownLeft, Zap, Eye,
-  BookOpen, TrendingUp, Clock, FileText, Users,
+  BookOpen, TrendingUp, Clock, FileText, CreditCard, Users,
   CircleCheck, CircleDot, ReceiptText, X, Undo2, RotateCcw,
   Paperclip, ImageIcon, ExternalLink,
 } from "lucide-react";
@@ -525,9 +525,17 @@ interface QrisCandidateAudit {
   observed_deduction: number | string;
   effective_deduction_rate: number | string | null;
   reconciliation_status: string;
+  status?: string;
   confidence: number | string;
   review_reason?: string | null;
-  payment_items?: Array<{ paymentId?: number; payment_id?: number }>;
+  payment_items?: Array<{
+    paymentId?: number;
+    payment_id?: number;
+    grossAmount?: number;
+    gross_amount?: number;
+    expectedSettlementDate?: string | null;
+    settlementRuleVersion?: string | null;
+  }>;
   description?: string | null;
 }
 
@@ -1772,6 +1780,7 @@ function MutationDetailPanel({
   onReverse,
   onReopen,
   mappingError,
+  onApproveQrisBatch,
 }: {
   mutation: BankMutation | null;
   open: boolean;
@@ -1782,6 +1791,7 @@ function MutationDetailPanel({
   onReverse: (m: BankMutation) => void;
   onReopen:  (m: BankMutation) => void;
   mappingError?: MappingRequiredError;
+  onApproveQrisBatch?: (candidateId: number, mutationId: number, candidate: QrisCandidateAudit) => void;
 }) {
   if (!mutation) return null;
   const m     = mutation;
@@ -1890,34 +1900,99 @@ function MutationDetailPanel({
             {qrisAudit && (
               <>
                 <Separator />
-                <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2 dark:border-amber-800 dark:bg-amber-950/20">
+                <div className="space-y-2">
+                  {/* Header */}
                   <div className="flex items-center justify-between gap-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-900 dark:text-slate-100">
-                      Pemeriksaan QRIS — perlu verifikasi
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      QRIS Batch Candidates
                     </p>
-                    <Badge variant="outline" className="border-amber-400 bg-amber-100 text-amber-900 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-200">
-                      {QRIS_AUDIT_STATUS_LABELS[qrisAudit.reconciliation_status] ?? qrisAudit.reconciliation_status}
-                    </Badge>
+                    {qrisAudit.status === "approved" ? (
+                      <Badge className="bg-green-600 text-white text-xs gap-1">
+                        <CheckCircle2 className="w-3 h-3" /> Disetujui
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="border-amber-400 bg-amber-100 text-amber-900 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-200 text-xs">
+                        {QRIS_AUDIT_STATUS_LABELS[qrisAudit.reconciliation_status] ?? qrisAudit.reconciliation_status}
+                      </Badge>
+                    )}
                   </div>
-                  <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-                    <span className="text-slate-700 dark:text-slate-300">Provider</span>
-                    <span className="font-medium text-right text-slate-950 dark:text-white">{qrisAudit.provider_code || "Belum dikenali"}</span>
-                    <span className="text-slate-700 dark:text-slate-300">Perkiraan settlement</span>
-                    <span className="font-medium text-right text-slate-950 dark:text-white">{fmtDate(qrisAudit.estimated_settlement_date)}</span>
-                    <span className="text-slate-700 dark:text-slate-300">Total pembayaran</span>
-                    <span className="font-medium text-right text-slate-950 dark:text-white">{idr(qrisAudit.gross_amount)}</span>
-                    <span className="text-slate-700 dark:text-slate-300">Dana masuk bank</span>
-                    <span className="font-medium text-right text-slate-950 dark:text-white">{idr(qrisAudit.net_amount)}</span>
-                    <span className="text-slate-700 dark:text-slate-300">Payment teridentifikasi</span>
-                    <span className="font-medium text-right text-slate-950 dark:text-white">{qrisAudit.payment_items?.length ?? 0}</span>
+
+                  {/* Summary */}
+                  <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3 space-y-2 dark:border-indigo-800 dark:bg-indigo-950/20">
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                      <span className="text-slate-600 dark:text-slate-400">Provider</span>
+                      <span className="font-medium text-right">{qrisAudit.provider_code || "Belum dikenali"}</span>
+                      <span className="text-slate-600 dark:text-slate-400">Perkiraan settlement</span>
+                      <span className="font-medium text-right">{fmtDate(qrisAudit.estimated_settlement_date)}</span>
+                      <span className="text-slate-600 dark:text-slate-400">Total bruto</span>
+                      <span className="font-medium text-right">{idr(qrisAudit.gross_amount)}</span>
+                      <span className="text-slate-600 dark:text-slate-400">Dana masuk (netto)</span>
+                      <span className="font-medium text-right text-green-700">{idr(qrisAudit.net_amount)}</span>
+                      <span className="text-slate-600 dark:text-slate-400">Potongan MDR</span>
+                      <span className="font-medium text-right text-red-600">{idr(qrisAudit.observed_deduction)}</span>
+                    </div>
+
+                    {/* Payment items list */}
+                    {(qrisAudit.payment_items?.length ?? 0) > 0 && (
+                      <div className="mt-1">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 mb-1">
+                          {qrisAudit.payment_items!.length} Sport Payment dalam Batch
+                        </p>
+                        <div className="rounded border divide-y text-xs max-h-40 overflow-y-auto bg-white dark:bg-slate-900">
+                          {qrisAudit.payment_items!.map((item, idx) => {
+                            const pid = item.paymentId ?? item.payment_id ?? 0;
+                            const gross = item.grossAmount ?? item.gross_amount ?? 0;
+                            return (
+                              <div key={idx} className="flex items-center justify-between px-2 py-1 gap-2">
+                                <span className="text-slate-500 font-mono text-[10px]">#{pid}</span>
+                                {gross > 0 && (
+                                  <span className="font-medium text-right">{idr(gross)}</span>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {qrisAudit.review_reason && (
+                      <p className="rounded border border-amber-200 bg-amber-50/80 px-2 py-1.5 text-[11px] text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                        {qrisAudit.review_reason}
+                      </p>
+                    )}
                   </div>
-                  <p className="rounded-md border border-amber-200 bg-amber-100/80 px-2 py-1.5 text-xs font-medium text-amber-950 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100">
-                    {qrisAudit.review_reason ?? "Kandidat ini hanya untuk review dan tidak menjadi kandidat approve/post."}
-                  </p>
-                  <p className="text-[11px] text-slate-700 dark:text-slate-300">
-                    Gunanya: memberi alasan mengapa sistem belum mencocokkan mutasi ini secara otomatis.
-                    Audit ini tidak membuat jurnal dan tidak mengubah status posting.
-                  </p>
+
+                  {/* Approve button — only for MATCHED, gated for REVIEW/UNMATCHED */}
+                  {qrisAudit.status !== "approved" && qrisAudit.id != null && onApproveQrisBatch && (() => {
+                    const isMatched = String(qrisAudit.reconciliation_status ?? "").toUpperCase() === "MATCHED";
+                    return isMatched ? (
+                      <Button
+                        size="sm"
+                        className="w-full gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white"
+                        onClick={() => onApproveQrisBatch(qrisAudit.id!, qrisAudit.mutation_id, qrisAudit)}
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Setujui Batch — Buat QRIS Settlement
+                      </Button>
+                    ) : (
+                      <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-200 space-y-1">
+                        <p className="font-semibold flex items-center gap-1">
+                          <AlertTriangle className="w-3 h-3 shrink-0" />
+                          Tidak dapat disetujui — verifikasi manual diperlukan
+                        </p>
+                        <p>
+                          Status <strong>{qrisAudit.reconciliation_status}</strong>: provider belum dikenali,
+                          partisi payment ambigu, atau potongan MDR di luar toleransi.
+                          Periksa dan perbaiki data sebelum membuat settlement.
+                        </p>
+                      </div>
+                    );
+                  })()}
+                  {qrisAudit.status === "approved" && (
+                    <p className="text-[11px] text-green-700 dark:text-green-400 text-center">
+                      Batch ini sudah disetujui. Settlement QRIS telah dibuat dan siap dicocokkan ke mutasi bank.
+                    </p>
+                  )}
                 </div>
               </>
             )}
@@ -2389,6 +2464,93 @@ export default function BankReconciliationPage() {
     refetchInterval: 30_000,
   });
 
+  const { data: qrisAuditData, isLoading: qrisAuditLoading } = useQuery({
+    queryKey: ["qris-candidate-audit"],
+    queryFn: async () => {
+      const r = await fetch("/api/bank-reconciliation/qris-candidates?limit=50", { credentials: "include" });
+      if (!r.ok) throw new Error(await r.text());
+      return r.json() as Promise<{
+        mode: string;
+        automaticFinalReconciliation: boolean;
+        candidates: QrisCandidateAudit[];
+      }>;
+    },
+    refetchInterval: 30_000,
+  });
+
+  const qrisDryRunMut = useMutation({
+    mutationFn: async () => {
+      const r = await fetch("/api/bank-reconciliation/qris-candidates/generate", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        // Persist only the candidate/review row. This is not final
+        // reconciliation and does not create a journal or consume evidence.
+        body: JSON.stringify({ dryRun: false }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      return r.json() as Promise<{ generated: number; candidates: QrisCandidateAudit[] }>;
+    },
+    onSuccess: (result) => {
+      toast({ title: `Dry-run QRIS selesai: ${result.generated} kandidat` });
+      qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] });
+    },
+    onError: (e: Error) => toast({ title: "Dry-run QRIS gagal", description: e.message, variant: "destructive" }),
+  });
+
+  const approveQrisBatchMut = useMutation({
+    mutationFn: async ({ candidateId }: { candidateId: number; mutationId: number }) => {
+      const r = await fetch(`/api/bank-reconciliation/qris-candidates/${candidateId}/approve`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const body = await r.json().catch(() => ({ error: "Unknown error" }));
+      if (!r.ok) throw new Error(body.error ?? "Gagal menyetujui batch QRIS");
+      return body as { ok: boolean; settlementId: number; settlementReference: string; itemCount: number };
+    },
+    onSuccess: (result) => {
+      toast({
+        title: "QRIS Batch disetujui",
+        description: `Settlement ${result.settlementReference} dibuat (${result.itemCount} payment)`,
+      });
+      qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] });
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
+      // Refresh detail panel so the button reflects approved state
+      setDetailMutation(null);
+    },
+    onError: (e: Error) => toast({ title: "Gagal menyetujui batch QRIS", description: e.message, variant: "destructive" }),
+  });
+
+  const [qrisBatchConfirm, setQrisBatchConfirm] = useState<{
+    candidateId: number;
+    mutationId: number;
+    providerCode: string;
+    netAmount: number | string;
+    paymentCount: number;
+  } | null>(null);
+
+  const handleApproveQrisBatch = (
+    candidateId: number,
+    mutationId: number,
+    candidate: QrisCandidateAudit,
+  ) => {
+    setQrisBatchConfirm({
+      candidateId,
+      mutationId,
+      providerCode: candidate.provider_code || "belum dikenali",
+      netAmount: candidate.net_amount,
+      paymentCount: candidate.payment_items?.length ?? 0,
+    });
+  };
+
+  const handleConfirmQrisBatch = () => {
+    if (!qrisBatchConfirm) return;
+    approveQrisBatchMut.mutate(qrisBatchConfirm);
+    setQrisBatchConfirm(null);
+  };
+
   const summaryMap: Record<string, { count: number; amount: number }> = {};
   for (const s of summary?.summary ?? []) {
     summaryMap[s.status] = { count: Number(s.count), amount: Number(s.total_amount) };
@@ -2696,6 +2858,132 @@ export default function BankReconciliationPage() {
         {/* ── Summary Cards ─────────────────────────────────── */}
         <SummaryCards summaryMap={summaryMap} activeFilter={filterStatus} onFilter={v => { setFilterStatus(v); setPage(0); }} />
 
+        {/* ── QRIS provider-aware audit: candidate/review only ── */}
+         <Card className="border-indigo-200/70 dark:border-indigo-900/70">
+          <CardHeader className="pb-3">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <CreditCard className="w-4 h-4 text-indigo-600" />
+                  QRIS Settlement Audit
+                </CardTitle>
+                 <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">
+                   Pemeriksaan awal untuk menjelaskan kemungkinan settlement QRIS. Tidak membuat jurnal dan tidak menandai settlement final.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                onClick={() => qrisDryRunMut.mutate()}
+                disabled={qrisDryRunMut.isPending}
+              >
+                {qrisDryRunMut.isPending
+                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  : <Play className="w-3.5 h-3.5" />}
+                {qrisDryRunMut.isPending ? "Menganalisis..." : "Buat Kandidat Review"}
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="pt-0">
+            {qrisAuditLoading ? (
+               <div className="text-xs text-slate-600 dark:text-slate-400 py-2">Memuat pemeriksaan QRIS...</div>
+            ) : (qrisAuditData?.candidates?.length ?? 0) === 0 ? (
+              <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-300">
+                Belum ada hasil pemeriksaan QRIS. Jalankan analisis setelah mutasi bank aktual diimpor.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="flex gap-2 flex-wrap text-xs">
+                  {(["MATCHED", "REVIEW", "UNMATCHED"] as const).map((status) => {
+                    const count = qrisAuditData?.candidates.filter(c => c.reconciliation_status === status).length ?? 0;
+                    return (
+                      <Badge key={status} variant="outline" className={
+                        status === "MATCHED"
+                           ? "border-green-300 bg-green-50 text-green-800 dark:border-green-800 dark:bg-green-950/30 dark:text-green-300"
+                          : status === "REVIEW"
+                             ? "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300"
+                             : "border-slate-300 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300"
+                      }>
+                         {QRIS_AUDIT_STATUS_LABELS[status]}: {count}
+                      </Badge>
+                    );
+                  })}
+                </div>
+                <div className="divide-y rounded-md border text-xs">
+                  {qrisAuditData?.candidates.slice(0, 10).map((candidate) => {
+                    const isApproved = candidate.status === "approved";
+                    const isApprovingThis = approveQrisBatchMut.isPending &&
+                      approveQrisBatchMut.variables?.candidateId === candidate.id;
+                    return (
+                      <div key={`${candidate.mutation_id}-${candidate.id ?? "candidate"}`} className="p-2.5 space-y-2">
+                        <div className="flex items-start justify-between gap-3 flex-wrap">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <Badge variant="outline" className="border-slate-300 bg-white text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
+                                {candidate.provider_code || "Provider belum dikenali"}
+                              </Badge>
+                              {isApproved ? (
+                                <Badge className="bg-green-600 text-white gap-1 text-[10px]">
+                                  <CheckCircle2 className="w-2.5 h-2.5" /> Disetujui
+                                </Badge>
+                              ) : (
+                                <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+                                  {QRIS_AUDIT_STATUS_LABELS[candidate.reconciliation_status] ?? candidate.reconciliation_status}
+                                </Badge>
+                              )}
+                              <span className="text-slate-600 dark:text-slate-400">Mutasi #{candidate.mutation_id}</span>
+                            </div>
+                            <p className="mt-1 truncate max-w-[400px] font-medium text-slate-900 dark:text-slate-100">
+                              {candidate.review_reason ?? candidate.description ?? "Belum ada alasan tambahan."}
+                            </p>
+                            <p className="text-slate-600 dark:text-slate-400 mt-0.5">
+                              Settlement {fmtDate(candidate.estimated_settlement_date)} · {candidate.payment_items?.length ?? 0} payment · Netto {idr(candidate.net_amount)}
+                            </p>
+                          </div>
+                          <div className="text-right shrink-0 space-y-1">
+                            <p className="font-semibold text-slate-950 dark:text-white">{idr(candidate.gross_amount)}</p>
+                            <p className="text-slate-500 dark:text-slate-400">
+                              MDR {idr(candidate.observed_deduction)}
+                              {candidate.effective_deduction_rate != null
+                                ? ` (${(Number(candidate.effective_deduction_rate) * 100).toFixed(2)}%)`
+                                : ""}
+                            </p>
+                            {!isApproved && candidate.id != null && (() => {
+                              const isMatched = String(candidate.reconciliation_status ?? "").toUpperCase() === "MATCHED";
+                              return isMatched ? (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 text-[11px] gap-1 border-indigo-400 text-indigo-700 hover:bg-indigo-50"
+                                  disabled={isApprovingThis || approveQrisBatchMut.isPending}
+                                  onClick={() => handleApproveQrisBatch(candidate.id!, candidate.mutation_id, candidate)}
+                                >
+                                  {isApprovingThis
+                                    ? <><Loader2 className="w-3 h-3 animate-spin" /> Menyetujui...</>
+                                    : <><CheckCircle2 className="w-3 h-3" /> Setujui Batch</>}
+                                </Button>
+                              ) : (
+                                <span
+                                  title={`Status ${candidate.reconciliation_status}: verifikasi manual diperlukan sebelum dapat disetujui`}
+                                  className="text-[10px] text-amber-700 dark:text-amber-400 flex items-center gap-0.5 cursor-help"
+                                >
+                                  <AlertTriangle className="w-3 h-3 shrink-0" />
+                                  Perlu verifikasi
+                                </span>
+                              );
+                            })()}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+        
         {/* ── Google Sheet (collapsed) ──────────────────────── */}
         <SheetConfigCollapsed />
 
@@ -2827,6 +3115,7 @@ export default function BankReconciliationPage() {
         onReverse={handleOpenReverse}
         onReopen={handleOpenReopen}
         mappingError={detailMutation ? mappingRequiredErrors.get(detailMutation.id) : undefined}
+        onApproveQrisBatch={handleApproveQrisBatch}
       />
 
       {/* ── Approve Dialog ────────────────────────────────────── */}
@@ -3364,6 +3653,43 @@ export default function BankReconciliationPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ── QRIS Batch Approval Confirmation ─────────────────── */}
+      <AlertDialog open={!!qrisBatchConfirm} onOpenChange={open => { if (!open) setQrisBatchConfirm(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <CheckCircle2 className="w-5 h-5 text-indigo-600" />
+              Setujui QRIS Batch Settlement?
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm">
+                <p>
+                  Anda akan membuat settlement QRIS untuk{" "}
+                  <strong>{qrisBatchConfirm?.paymentCount ?? 0} sport payment</strong>{" "}
+                  dengan total netto{" "}
+                  <strong>{qrisBatchConfirm ? idr(qrisBatchConfirm.netAmount) : "—"}</strong>{" "}
+                  dari provider <strong>{qrisBatchConfirm?.providerCode}</strong>.
+                </p>
+                <p className="text-orange-700 dark:text-orange-400 font-medium">
+                  Tindakan ini tidak dapat dibatalkan. Setelah disetujui, settlement akan
+                  terhubung ke mutasi bank dan muncul sebagai kandidat rekonsiliasi.
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setQrisBatchConfirm(null)}>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-indigo-600 hover:bg-indigo-700 text-white"
+              onClick={handleConfirmQrisBatch}
+              disabled={approveQrisBatchMut.isPending}
+            >
+              {approveQrisBatchMut.isPending ? "Menyetujui..." : "Ya, Setujui Batch"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* ── Delete All Confirmation ───────────────────────────── */}
       <AlertDialog open={showDeleteAll} onOpenChange={setShowDeleteAll}>

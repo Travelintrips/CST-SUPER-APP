@@ -74,6 +74,12 @@ import {
   generateQrisCandidates,
   listQrisCandidates,
 } from "../lib/reconciliation/qrisCandidateService.js";
+import { assertQrisBatchApprovalEligible } from "../lib/reconciliation/qrisBatchApprovalEligibility.js";
+import {
+  checkDuplicatePaymentIds,
+  checkStaleAmounts,
+  checkHeaderTotals,
+} from "../lib/reconciliation/qrisBatchAmountValidation.js";
 
 const router = Router();
 router.use(async (req, res, next) => {
@@ -1030,6 +1036,235 @@ router.post("/qris-candidates/generate", async (req, res) => {
   } catch (e: any) {
     logger.error({ err: e?.cause?.message ?? e?.message }, "[bankRecon] POST /qris-candidates/generate failed");
     return res.status(500).json({ error: e?.message ?? "Gagal membuat kandidat QRIS" });
+  }
+});
+
+// ─── POST /qris-candidates/:id/approve ──────────────────────────────────────
+// Mempromosikan qris_mutation_batch_candidates ke qris_settlements +
+// qris_settlement_items. Ini adalah aksi ireversibel yang mengkonsumsi
+// kandidat batch dan membuat settlement resmi yang bisa dicocokkan ke mutasi bank.
+router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
+  await runQrisSettlementMigration();
+  const candidateId = Number(req.params.candidateId);
+  if (!Number.isInteger(candidateId) || candidateId <= 0) {
+    return res.status(400).json({ error: "candidateId tidak valid" });
+  }
+  const companyId = resolveCompanyId(req);
+  if (!Number.isInteger(companyId) || companyId <= 0) {
+    return res.status(400).json({ error: "companyId tidak valid" });
+  }
+
+  const qEsc = (s: string) => String(s ?? "").replace(/'/g, "''");
+
+  try {
+    const result = await db.transaction(async (tx) => {
+      // Ambil kandidat batch — lock untuk update
+      const { rows: candidateRows } = await tx.execute(sql.raw(`
+        SELECT * FROM qris_mutation_batch_candidates
+        WHERE id = ${candidateId}
+        FOR UPDATE
+      `));
+      const candidate = candidateRows[0] as Record<string, unknown> | undefined;
+      if (!candidate) throw new Error("Kandidat QRIS tidak ditemukan");
+
+      // Validasi company
+      if (candidate.company_id != null && Number(candidate.company_id) !== companyId) {
+        throw new Error("Kandidat QRIS bukan milik company aktif");
+      }
+
+      // Eligibility: delegates to the shared pure-logic helper (also unit-tested).
+      // Only MATCHED candidates with non-negative net may be promoted to a settlement.
+      assertQrisBatchApprovalEligible({
+        id: Number(candidate.id),
+        reconciliation_status: String(candidate.reconciliation_status ?? ""),
+        status: candidate.status == null ? null : String(candidate.status),
+        net_amount: candidate.net_amount == null ? null : Number(candidate.net_amount),
+        observed_deduction: candidate.observed_deduction == null ? null : Number(candidate.observed_deduction),
+      });
+
+      // Parse payment_items
+      let paymentItems: Array<{ paymentId: number; grossAmount: number }> = [];
+      try {
+        const raw = typeof candidate.payment_items === "string"
+          ? JSON.parse(candidate.payment_items)
+          : candidate.payment_items;
+        if (Array.isArray(raw)) {
+          paymentItems = raw.map((item: Record<string, unknown>) => ({
+            paymentId: Number(item.paymentId ?? item.payment_id ?? 0),
+            grossAmount: Number(item.grossAmount ?? item.gross_amount ?? 0),
+          })).filter(item => item.paymentId > 0);
+        }
+      } catch {
+        throw new Error("Format payment_items tidak valid");
+      }
+      if (paymentItems.length === 0) {
+        throw new Error("Kandidat QRIS tidak memiliki payment item");
+      }
+
+      // 1. Require unique payment IDs — duplicates would double-count amounts.
+      const dupErr = checkDuplicatePaymentIds(paymentItems);
+      if (dupErr) throw new Error(dupErr.message);
+
+      // 2. Lock all referenced sport_payments and validate each one.
+      const paymentIdList = paymentItems.map(i => i.paymentId).join(",");
+      const { rows: payments } = await tx.execute(sql.raw(`
+        SELECT sp.id, sp.company_id, sp.amount, sp.method, sp.status, sp.payment_number,
+               sp.mdr_amount, sp.tax_withheld_amount, sp.other_fee_amount, sp.net_amount,
+               EXISTS (
+                 SELECT 1 FROM qris_settlement_items qsi WHERE qsi.sport_payment_id = sp.id
+               ) AS already_settled
+        FROM sport_payments sp
+        WHERE sp.id IN (${paymentIdList})
+        FOR UPDATE
+      `));
+      const byId = new Map((payments as Array<Record<string, unknown>>).map(r => [Number(r.id), r]));
+
+      // Status / method / already-settled checks for each payment
+      for (const item of paymentItems) {
+        const p = byId.get(item.paymentId);
+        if (!p) throw new Error(`sport_payment ${item.paymentId} tidak ditemukan`);
+        if (p.company_id != null && Number(p.company_id) !== companyId) {
+          throw new Error(`Payment ${item.paymentId} bukan milik company aktif`);
+        }
+        if (String(p.status ?? "").toLowerCase() !== "paid") {
+          throw new Error(`Payment ${item.paymentId} belum berstatus paid`);
+        }
+        if (!String(p.method ?? "").toLowerCase().includes("qris")) {
+          throw new Error(`Payment ${item.paymentId} bukan payment QRIS`);
+        }
+        if (Boolean(p.already_settled)) {
+          throw new Error(`Payment ${item.paymentId} sudah tergabung dalam settlement lain`);
+        }
+      }
+
+      // 3. Validate candidate item grossAmounts against LIVE locked payment amounts.
+      //    A stale candidate (payment edited after generation) must be rejected.
+      const livePayments = (payments as Array<Record<string, unknown>>).map(p => ({
+        id: Number(p.id),
+        amount: Number(p.amount ?? 0),
+      }));
+      const staleErr = checkStaleAmounts(paymentItems, livePayments);
+      if (staleErr) throw Object.assign(new Error(staleErr.message), { staleCandidate: true, ...staleErr });
+
+      // 4. Validate header totals: item-gross sum ≈ header.gross; net = gross − fees.
+      const candidateGross = Number(candidate.gross_amount ?? 0);
+      const candidateMdr = Number(candidate.mdr_amount ?? candidate.observed_deduction ?? 0);
+      const candidateOtherFee = Number(candidate.other_fee_amount ?? 0);
+      const candidateNet = Number(candidate.net_amount ?? 0);
+      const recomputedItemGross = paymentItems.reduce((s, i) => s + i.grossAmount, 0);
+
+      const headerErr = checkHeaderTotals(
+        { gross_amount: candidateGross, mdr_amount: candidateMdr, other_fee_amount: candidateOtherFee, net_amount: candidateNet },
+        paymentItems,
+      );
+      if (headerErr) throw new Error(headerErr.message);
+
+      // Nomor referensi unik untuk settlement ini
+      const settlementDate = String(candidate.estimated_settlement_date ?? candidate.source_date ?? "").slice(0, 10);
+      const settlementRef = `QRIS-BATCH-${candidate.mutation_id}-${settlementDate.replace(/-/g, "")}`;
+
+      // Cek referensi belum ada
+      const { rows: existingRef } = await tx.execute(sql.raw(`
+        SELECT id FROM qris_settlements
+        WHERE company_id = ${companyId} AND settlement_reference = '${qEsc(settlementRef)}'
+        LIMIT 1
+      `));
+      if (existingRef[0]) {
+        throw new Error(`Settlement dengan referensi ${settlementRef} sudah ada`);
+      }
+
+      const providerCode = qEsc(String(candidate.provider_code ?? "unknown"));
+      const mutationId = Number(candidate.mutation_id);
+
+      // Insert settlement — use already-validated totals (candidateGross/Net/etc.)
+      const { rows: inserted } = await tx.execute(sql.raw(`
+        INSERT INTO qris_settlements
+          (company_id, settlement_reference, provider_name, settlement_date,
+           gross_amount, mdr_amount, tax_withheld_amount, other_fee_amount,
+           net_amount, status, bank_mutation_id)
+        VALUES
+          (${companyId}, '${qEsc(settlementRef)}', '${providerCode}',
+           '${qEsc(settlementDate)}',
+           ${candidateGross}, ${candidateMdr}, 0, ${candidateOtherFee},
+           ${candidateNet}, 'settlement_confirmed', ${mutationId})
+        RETURNING *
+      `));
+      const settlement = inserted[0] as Record<string, unknown>;
+      const settlementId = Number(settlement.id);
+
+      // Distribusikan MDR + biaya proporsional ke tiap payment item
+      for (const item of paymentItems) {
+        const ratio = recomputedItemGross > 0 ? item.grossAmount / recomputedItemGross : 1 / paymentItems.length;
+        const itemMdr = Number((candidateMdr * ratio).toFixed(2));
+        const itemOther = Number((candidateOtherFee * ratio).toFixed(2));
+        const itemNet = Number((item.grossAmount - itemMdr - itemOther).toFixed(2));
+        await tx.execute(sql.raw(`
+          INSERT INTO qris_settlement_items
+            (settlement_id, sport_payment_id, gross_amount, mdr_amount,
+             tax_withheld_amount, other_fee_amount, net_amount)
+          VALUES
+            (${settlementId}, ${item.paymentId}, ${item.grossAmount},
+             ${itemMdr}, 0, ${itemOther}, ${itemNet})
+        `));
+        // Update sport_payment dengan info settlement
+        await tx.execute(sql.raw(`
+          UPDATE sport_payments
+          SET settlement_reference = '${qEsc(settlementRef)}',
+              settlement_date = '${qEsc(settlementDate)}',
+              settlement_status = 'settlement_confirmed',
+              mdr_amount = ${itemMdr},
+              other_fee_amount = ${itemOther},
+              net_amount = ${itemNet},
+              updated_at = NOW()
+          WHERE id = ${item.paymentId} AND company_id = ${companyId}
+        `));
+      }
+
+      // Tandai kandidat sebagai approved
+      await tx.execute(sql.raw(`
+        UPDATE qris_mutation_batch_candidates
+        SET status = 'approved',
+            reconciliation_status = 'MATCHED',
+            updated_at = NOW()
+        WHERE id = ${candidateId}
+      `));
+
+      return { settlementId, settlementRef, settlementDate, itemCount: paymentItems.length, settlement };
+    });
+
+    audit(req, {
+      action: "qris_batch_candidate_approved",
+      module: "accounting",
+      resourceId: `qris-settlement-${result.settlementId}`,
+      after: {
+        candidateId,
+        companyId,
+        settlementRef: result.settlementRef,
+        itemCount: result.itemCount,
+      },
+    });
+
+    return res.status(201).json({
+      ok: true,
+      settlementId: result.settlementId,
+      settlementReference: result.settlementRef,
+      itemCount: result.itemCount,
+      settlement: result.settlement,
+    });
+  } catch (e: any) {
+    logger.warn({ err: e?.message }, "[bankRecon] POST /qris-candidates/:id/approve rejected");
+    const message = e?.message ?? "Gagal menyetujui kandidat QRIS";
+    // 422 for eligibility violations (candidate not MATCHED / already approved)
+    if ((e as any)?.eligibilityError) {
+      return res.status(422).json({
+        error: message,
+        code: "CANDIDATE_NOT_ELIGIBLE",
+        reconciliation_status: (e as any).reconciliation_status,
+      });
+    }
+    return res.status(
+      /tidak ditemukan|tidak valid|bukan|sudah|belum|tidak memiliki/.test(message) ? 400 : 500,
+    ).json({ error: message });
   }
 });
 

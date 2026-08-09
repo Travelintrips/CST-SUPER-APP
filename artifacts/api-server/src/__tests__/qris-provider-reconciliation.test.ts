@@ -31,6 +31,7 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
       }],
       mutations: [{
         id: 25, companyId: 10, bankAccountId: 77, amount: 150_000,
+        transactionDate: "2026-08-07",
         direction: "IN", source: "bank_import",
         sourceClassification: "actual_bank_mutation",
         providerName: null,
@@ -49,6 +50,7 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
       }],
       mutations: [{
         id: 27, companyId: 10, bankAccountId: 77, amount: 150_000,
+        transactionDate: "2026-08-07",
         direction: "IN", source: "bank_import",
         sourceClassification: "actual_bank_mutation",
         providerName: null,
