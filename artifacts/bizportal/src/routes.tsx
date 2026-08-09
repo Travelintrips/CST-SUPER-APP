@@ -335,6 +335,7 @@ const SportCenterCustomers = React.lazy(() => import("@/pages/sport-center/custo
 const SportCenterMembers = React.lazy(() => import("@/pages/sport-center/members"));
 const SportCenterPricingRules = React.lazy(() => import("@/pages/sport-center/pricing-rules"));
 const SportCenterPayments = React.lazy(() => import("@/pages/sport-center/payments"));
+const SportCenterPendingConfirmation = React.lazy(() => import("@/pages/sport-center/pending-confirmation"));
 const SportCenterCompanyInvoices = React.lazy(() => import("@/pages/sport-center/company-invoices"));
 const SportCenterReports = React.lazy(() => import("@/pages/sport-center/reports"));
 const SportCenterSettings = React.lazy(() => import("@/pages/sport-center/settings"));
@@ -768,6 +769,7 @@ export function AppRoutes({ rootGuard }: { rootGuard?: React.ComponentType }) {
       <Route path="/sport-center/members" component={PR(SportCenterMembers)} />
       <Route path="/sport-center/pricing-rules" component={PR(SportCenterPricingRules)} />
       <Route path="/sport-center/payments" component={PR(SportCenterPayments)} />
+      <Route path="/sport-center/pending-confirmation" component={PR(SportCenterPendingConfirmation)} />
       <Route path="/sport-center/company-invoices" component={PR(SportCenterCompanyInvoices)} />
       <Route path="/sport-center/reports" component={PR(SportCenterReports)} />
       <Route path="/sport-center/profitability" component={PR(SportCenterProfitability)} />

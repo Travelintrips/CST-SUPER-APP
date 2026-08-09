@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from "react";
+import { useLocation } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,9 +12,11 @@ import { BackButton } from "@/components/ui/back-button";
 import {
   Upload, FileText, CheckCircle2, AlertTriangle, Loader2,
   TrendingUp, ChevronRight, Info, RefreshCw, X, FileSpreadsheet,
-  Shield, Zap, ArrowUpDown, ArrowLeft, Brain,
+  Shield, Zap, ArrowUpDown, ArrowLeft, Brain, Clock,
 } from "lucide-react";
 import { useRecommendations } from "@/hooks/useAiLearning";
+import { useQuery } from "@tanstack/react-query";
+import { useCompany } from "@/contexts/CompanyContext";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -184,6 +187,52 @@ function ResultTable({ rows, type }: { rows: MatchedRow[]; type: "reconciled" | 
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
+// ── Sport Center Pending Payments Banner ──────────────────────────────────────
+
+function SportCenterPendingBanner() {
+  const [, navigate] = useLocation();
+  const { activeCompanyId } = useCompany();
+
+  const { data, isLoading } = useQuery<{ total: number }>({
+    queryKey: ["sport-pending-count-banner", activeCompanyId],
+    queryFn: async () => {
+      const qs = new URLSearchParams();
+      if (activeCompanyId) qs.set("companyId", String(activeCompanyId));
+      qs.set("status", "pending");
+      qs.set("page", "1");
+      const r = await fetch(`/api/sport-center/payments?${qs}`, { credentials: "include" });
+      const d = await r.json();
+      return { total: d.total ?? 0 };
+    },
+    staleTime: 60_000,
+  });
+
+  if (isLoading || (data?.total ?? 0) === 0) return null;
+
+  return (
+    <div className="border border-yellow-500/40 bg-yellow-500/5 rounded-lg p-4 flex items-center gap-4">
+      <Clock className="h-5 w-5 text-yellow-400 shrink-0" />
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold text-yellow-200">
+          {data!.total} pembayaran sport center menunggu konfirmasi operator
+        </p>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          Pembayaran ini harus dikonfirmasi di aplikasi Sport Center agar rekonsiliasi bank dapat diselesaikan.
+        </p>
+      </div>
+      <Button
+        size="sm"
+        variant="outline"
+        className="shrink-0 gap-1.5 border-yellow-600 text-yellow-300 hover:bg-yellow-900/20 text-xs"
+        onClick={() => navigate("/sport-center/pending-confirmation")}
+      >
+        <Clock className="h-3.5 w-3.5" />
+        Cek Pembayaran Pending
+      </Button>
+    </div>
+  );
+}
+
 // ── AI Recommendation Banner (Phase 5) ───────────────────────────────────────
 
 function AiRecommendationBanner() {
@@ -346,6 +395,9 @@ export default function SmartBankReconPage() {
             </div>
           </CardContent>
         </Card>
+
+        {/* Sport Center Pending Payments Banner */}
+        <SportCenterPendingBanner />
 
         {!result && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">

@@ -1974,6 +1974,7 @@ router.get("/payments", async (req, res) => {
     const offset = (page - 1) * limit;
 
     const statusFilter = req.query.status ? String(req.query.status) : null;
+    const methodFilter = req.query.method ? String(req.query.method) : null;
     const dateFrom = req.query.date_from ? String(req.query.date_from) : null;
     const dateTo   = req.query.date_to   ? String(req.query.date_to)   : null;
     const search   = req.query.search    ? String(req.query.search).trim() : null;
@@ -2073,6 +2074,7 @@ router.get("/payments", async (req, res) => {
         )
         SELECT * FROM combined
         WHERE (${statusFilter}::text IS NULL OR status = ${statusFilter})
+          AND (${methodFilter}::text IS NULL OR method = ${methodFilter})
           AND (${dateFrom}::date IS NULL OR paid_at::date >= ${dateFrom}::date)
           AND (${dateTo}::date   IS NULL OR paid_at::date <= ${dateTo}::date)
           AND (${searchPattern}::text IS NULL
@@ -2086,6 +2088,7 @@ router.get("/payments", async (req, res) => {
         SELECT COUNT(*) AS cnt FROM (
           SELECT
             CASE WHEN lower(p.status::text) IN ('confirmed','paid','settlement','capture') THEN 'paid' ELSE 'pending' END::text AS status,
+            p.payment_method::text AS method,
             COALESCE(p.confirmed_at, p.created_at)::timestamptz AS paid_at,
             b.order_number::text AS booking_number,
             b.customer_name::text AS customer_name,
@@ -2096,6 +2099,7 @@ router.get("/payments", async (req, res) => {
           UNION ALL
           SELECT
             sp.status::text,
+            sp.method::text,
             COALESCE(sp.paid_at, sp.created_at)::timestamptz,
             sb.booking_number::text,
             sb.customer_name::text,
@@ -2106,6 +2110,7 @@ router.get("/payments", async (req, res) => {
           WHERE sp.payment_number NOT LIKE 'SCPAY-SC-%'
         ) u
         WHERE (${statusFilter}::text IS NULL OR status = ${statusFilter})
+          AND (${methodFilter}::text IS NULL OR method = ${methodFilter})
           AND (${dateFrom}::date IS NULL OR paid_at::date >= ${dateFrom}::date)
           AND (${dateTo}::date   IS NULL OR paid_at::date <= ${dateTo}::date)
           AND (${searchPattern}::text IS NULL
@@ -2117,6 +2122,7 @@ router.get("/payments", async (req, res) => {
         SELECT COALESCE(SUM(amount), 0) AS total_revenue FROM (
           SELECT
             CASE WHEN lower(p.status::text) IN ('confirmed','paid','settlement','capture') THEN 'paid' ELSE 'pending' END::text AS status,
+            p.payment_method::text AS method,
             p.amount::numeric AS amount,
             COALESCE(p.confirmed_at, p.created_at)::timestamptz AS paid_at,
             b.order_number::text AS booking_number,
@@ -2128,6 +2134,7 @@ router.get("/payments", async (req, res) => {
           UNION ALL
           SELECT
             sp.status::text,
+            sp.method::text,
             sp.amount::numeric,
             COALESCE(sp.paid_at, sp.created_at)::timestamptz,
             sb.booking_number::text,
@@ -2140,6 +2147,7 @@ router.get("/payments", async (req, res) => {
         ) u
         WHERE status = 'paid'
           AND (${statusFilter}::text IS NULL OR status = ${statusFilter})
+          AND (${methodFilter}::text IS NULL OR method = ${methodFilter})
           AND (${dateFrom}::date IS NULL OR paid_at::date >= ${dateFrom}::date)
           AND (${dateTo}::date   IS NULL OR paid_at::date <= ${dateTo}::date)
           AND (${searchPattern}::text IS NULL
