@@ -1,6 +1,7 @@
 import {
   calculateObservedDeduction,
   classifyBankMutationSource,
+  isQrisSettlementDescription,
   type BankMutationSourceClassification,
 } from "./qrisSettlement.js";
 import {
@@ -120,6 +121,25 @@ function providerEvidence(mutation: QrisMutationCandidateInput): {
   return { providerCode: "unknown", source: "unknown" };
 }
 
+/**
+ * The QRIS candidate flow is deliberately opt-in by bank evidence. A payment
+ * method in the Sport Center table is not enough to classify an arbitrary
+ * inbound bank mutation as QRIS; otherwise ordinary invoices would receive a
+ * misleading QRIS review panel.
+ */
+function hasQrisBankEvidence(mutation: QrisMutationCandidateInput): boolean {
+  if (normalizeQrisProvider(mutation.providerName) !== "unknown") return true;
+
+  return [
+    mutation.providerName,
+    mutation.providerOrderId,
+    mutation.settlementReference,
+    mutation.providerBatchReference,
+    mutation.providerTransactionReference,
+    mutation.description,
+  ].some((value) => isQrisSettlementDescription(value));
+}
+
 function partitionReference(
   value: QrisMutationCandidateInput | QrisPaymentCandidateInput,
 ): string | null {
@@ -186,6 +206,7 @@ export function generateQrisMutationBatchCandidates(input: {
 
   for (const mutation of [...openMutations].sort((a, b) => a.id - b.id)) {
     if (existingMutationIds.has(mutation.id)) continue;
+    if (!hasQrisBankEvidence(mutation)) continue;
 
     const sourceClassification = classifyBankMutationSource(
       mutation.source,

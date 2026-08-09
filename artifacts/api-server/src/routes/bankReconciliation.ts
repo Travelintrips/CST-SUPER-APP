@@ -1235,6 +1235,16 @@ router.get("/mutations", async (req, res) => {
          SELECT to_jsonb(qc)
          FROM qris_mutation_batch_candidates qc
          WHERE qc.mutation_id = bm.id
+            AND (
+              UPPER(COALESCE(bm.provider_name, '')) LIKE '%QRIS%'
+              OR UPPER(COALESCE(bm.provider_name, '')) LIKE '%QRTRAVELI%'
+              OR UPPER(COALESCE(bm.provider_name, '')) LIKE '%PAYLABS%'
+              OR UPPER(COALESCE(bm.provider_name, '')) LIKE '%MANDIRI%'
+              OR UPPER(COALESCE(bm.provider_order_id, '')) LIKE '%QRIS%'
+              OR UPPER(COALESCE(bm.provider_order_id, '')) LIKE '%QRTRAVELI%'
+              OR UPPER(COALESCE(bm.description, '')) LIKE '%QRIS%'
+              OR UPPER(COALESCE(bm.description, '')) LIKE '%QRTRAVELI%'
+            )
          ORDER BY qc.updated_at DESC, qc.id DESC
          LIMIT 1
        ) AS qris_candidate_audit

@@ -22,6 +22,43 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     expect(normalizeQrisProvider("QRIS")).toBe("unknown");
   });
 
+  it("does not create a QRIS audit candidate for an ordinary inbound invoice", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 24, companyId: 10, bankAccountId: 77, amount: 150_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-06",
+        expectedSettlementDate: "2026-08-07", providerName: "paylabs",
+      }],
+      mutations: [{
+        id: 25, companyId: 10, bankAccountId: 77, amount: 150_000,
+        direction: "IN", source: "bank_import",
+        sourceClassification: "actual_bank_mutation",
+        providerName: null,
+        description: "030/INVOICE-CST/VII MCM InhouseTrf CS-CS",
+      }],
+    });
+    expect(result).toEqual([]);
+  });
+
+  it("keeps QRTRAVELI bank evidence eligible for the QRIS audit path", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 26, companyId: 10, bankAccountId: 77, amount: 150_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-06",
+        expectedSettlementDate: "2026-08-07", providerName: "unknown",
+      }],
+      mutations: [{
+        id: 27, companyId: 10, bankAccountId: 77, amount: 150_000,
+        direction: "IN", source: "bank_import",
+        sourceClassification: "actual_bank_mutation",
+        providerName: null,
+        description: "7177632488799999999 QRTRAVELI",
+      }],
+    });
+    expect(result).toHaveLength(1);
+    expect(result[0]?.status).toBe("REVIEW");
+  });
+
   it("calculates gross 10m versus bank credit 9.93m as 70k deduction", () => {
     expect(calculateObservedDeduction(10_000_000, 9_930_000)).toEqual({
       gross: 10_000_000,

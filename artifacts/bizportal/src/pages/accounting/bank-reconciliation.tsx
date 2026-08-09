@@ -16,11 +16,11 @@ import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  Upload, Play, RefreshCw, CheckCircle2, XCircle, AlertTriangle,
+  Upload, RefreshCw, CheckCircle2, XCircle, AlertTriangle,
   Search, Trash2, ArrowLeft, CloudDownload,
   Wifi, WifiOff, Loader2, ShieldAlert, Plus, Settings2, Building2,
   ChevronDown, ChevronUp, ArrowUpRight, ArrowDownLeft, Zap, Eye,
-  BookOpen, TrendingUp, Clock, FileText, CreditCard, Users,
+  BookOpen, TrendingUp, Clock, FileText, Users,
   CircleCheck, CircleDot, ReceiptText, X, Undo2, RotateCcw,
   Paperclip, ImageIcon, ExternalLink,
 } from "lucide-react";
@@ -2389,40 +2389,6 @@ export default function BankReconciliationPage() {
     refetchInterval: 30_000,
   });
 
-  const { data: qrisAuditData, isLoading: qrisAuditLoading } = useQuery({
-    queryKey: ["qris-candidate-audit"],
-    queryFn: async () => {
-      const r = await fetch("/api/bank-reconciliation/qris-candidates?limit=50", { credentials: "include" });
-      if (!r.ok) throw new Error(await r.text());
-      return r.json() as Promise<{
-        mode: string;
-        automaticFinalReconciliation: boolean;
-        candidates: QrisCandidateAudit[];
-      }>;
-    },
-    refetchInterval: 30_000,
-  });
-
-  const qrisDryRunMut = useMutation({
-    mutationFn: async () => {
-      const r = await fetch("/api/bank-reconciliation/qris-candidates/generate", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        // Persist only the candidate/review row. This is not final
-        // reconciliation and does not create a journal or consume evidence.
-        body: JSON.stringify({ dryRun: false }),
-      });
-      if (!r.ok) throw new Error(await r.text());
-      return r.json() as Promise<{ generated: number; candidates: QrisCandidateAudit[] }>;
-    },
-    onSuccess: (result) => {
-      toast({ title: `Dry-run QRIS selesai: ${result.generated} kandidat` });
-      qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] });
-    },
-    onError: (e: Error) => toast({ title: "Dry-run QRIS gagal", description: e.message, variant: "destructive" }),
-  });
-
   const summaryMap: Record<string, { count: number; amount: number }> = {};
   for (const s of summary?.summary ?? []) {
     summaryMap[s.status] = { count: Number(s.count), amount: Number(s.total_amount) };
@@ -2729,95 +2695,6 @@ export default function BankReconciliationPage() {
 
         {/* ── Summary Cards ─────────────────────────────────── */}
         <SummaryCards summaryMap={summaryMap} activeFilter={filterStatus} onFilter={v => { setFilterStatus(v); setPage(0); }} />
-
-        {/* ── QRIS provider-aware audit: candidate/review only ── */}
-         <Card className="border-indigo-200/70 dark:border-indigo-900/70">
-          <CardHeader className="pb-3">
-            <div className="flex items-start justify-between gap-3 flex-wrap">
-              <div>
-                <CardTitle className="text-base flex items-center gap-2">
-                  <CreditCard className="w-4 h-4 text-indigo-600" />
-                  QRIS Settlement Audit
-                </CardTitle>
-                 <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">
-                   Pemeriksaan awal untuk menjelaskan kemungkinan settlement QRIS. Tidak membuat jurnal dan tidak menandai settlement final.
-                </p>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-1.5"
-                onClick={() => qrisDryRunMut.mutate()}
-                disabled={qrisDryRunMut.isPending}
-              >
-                {qrisDryRunMut.isPending
-                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  : <Play className="w-3.5 h-3.5" />}
-                {qrisDryRunMut.isPending ? "Menganalisis..." : "Buat Kandidat Review"}
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="pt-0">
-            {qrisAuditLoading ? (
-               <div className="text-xs text-slate-600 dark:text-slate-400 py-2">Memuat pemeriksaan QRIS...</div>
-            ) : (qrisAuditData?.candidates?.length ?? 0) === 0 ? (
-              <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-300">
-                Belum ada hasil pemeriksaan QRIS. Jalankan analisis setelah mutasi bank aktual diimpor.
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <div className="flex gap-2 flex-wrap text-xs">
-                  {(["MATCHED", "REVIEW", "UNMATCHED"] as const).map((status) => {
-                    const count = qrisAuditData?.candidates.filter(c => c.reconciliation_status === status).length ?? 0;
-                    return (
-                      <Badge key={status} variant="outline" className={
-                        status === "MATCHED"
-                           ? "border-green-300 bg-green-50 text-green-800 dark:border-green-800 dark:bg-green-950/30 dark:text-green-300"
-                          : status === "REVIEW"
-                             ? "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300"
-                             : "border-slate-300 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300"
-                      }>
-                         {QRIS_AUDIT_STATUS_LABELS[status]}: {count}
-                      </Badge>
-                    );
-                  })}
-                </div>
-                <div className="divide-y rounded-md border text-xs">
-                  {qrisAuditData?.candidates.slice(0, 5).map((candidate) => (
-                    <div key={`${candidate.mutation_id}-${candidate.id ?? "candidate"}`} className="p-2.5 flex items-center justify-between gap-3 flex-wrap">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                           <Badge variant="outline" className="border-slate-300 bg-white text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
-                             {candidate.provider_code || "Provider belum dikenali"}
-                           </Badge>
-                           <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
-                             {QRIS_AUDIT_STATUS_LABELS[candidate.reconciliation_status] ?? candidate.reconciliation_status}
-                           </Badge>
-                           <span className="text-slate-600 dark:text-slate-400">Mutasi #{candidate.mutation_id}</span>
-                        </div>
-                         <p className="mt-1 truncate max-w-[560px] font-medium text-slate-900 dark:text-slate-100">
-                           {candidate.review_reason ?? candidate.description ?? "Belum ada alasan tambahan."}
-                         </p>
-                         <p className="text-slate-600 dark:text-slate-400 mt-0.5">
-                           Settlement {fmtDate(candidate.estimated_settlement_date)} · {candidate.payment_items?.length ?? 0} payment teridentifikasi
-                        </p>
-                      </div>
-                      <div className="text-right shrink-0">
-                         <p className="font-semibold text-slate-950 dark:text-white">{idr(candidate.net_amount)}</p>
-                         <p className="text-slate-600 dark:text-slate-400">
-                          Deduction {idr(candidate.observed_deduction)}
-                          {candidate.effective_deduction_rate != null
-                            ? ` (${(Number(candidate.effective_deduction_rate) * 100).toFixed(2)}%)`
-                            : ""}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
 
         {/* ── Google Sheet (collapsed) ──────────────────────── */}
         <SheetConfigCollapsed />
