@@ -79,6 +79,11 @@ import {
   listQrisCandidates,
 } from "../lib/reconciliation/qrisCandidateService.js";
 import { canonicalSettlementDetailsSql } from "../lib/reconciliation/canonicalSettlementAdapter.js";
+import {
+  approveCanonicalSettlementLink,
+  CanonicalSettlementApprovalError,
+  CANONICAL_SETTLEMENT_SOURCE,
+} from "../lib/reconciliation/canonicalSettlementApproval.js";
 import { assertQrisBatchApprovalEligible } from "../lib/reconciliation/qrisBatchApprovalEligibility.js";
 import {
   checkDuplicatePaymentIds,
@@ -2172,6 +2177,62 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
       resolvedMutId = Number((promoted[0] as any).id);
     }
     logger.info({ originalBmiId: mutId, resolvedMutId }, "[bankRecon/approve] bank_mutation_imports promoted to bank_mutations");
+  }
+
+  // Canonical Sport Center settlements are already accounted by their posted
+  // settlement journal. Route them before the generic approval function so
+  // journal reuse/creation can never be reached for this source.
+  let canonicalApprovalRequested =
+    candidate_source === CANONICAL_SETTLEMENT_SOURCE;
+  if (!canonicalApprovalRequested && match_id) {
+    const { rows: routingMatch } = await db.execute(sql.raw(`
+      SELECT candidate_type, candidate_source
+      FROM bank_reconciliation_matches
+      WHERE id = ${Number(match_id)} AND mutation_id = ${resolvedMutId}
+      LIMIT 1
+    `));
+    canonicalApprovalRequested =
+      String((routingMatch[0] as any)?.candidate_type ?? "") === "qris_settlement" &&
+      String((routingMatch[0] as any)?.candidate_source ?? "") === CANONICAL_SETTLEMENT_SOURCE;
+  }
+
+  if (canonicalApprovalRequested) {
+    try {
+      const canonicalResult = await approveCanonicalSettlementLink(db as any, {
+        mutationId: resolvedMutId,
+        matchId: match_id ? Number(match_id) : null,
+        candidateType: candidate_type ?? null,
+        candidateId: candidate_id ? Number(candidate_id) : null,
+        candidateSource: candidate_source === CANONICAL_SETTLEMENT_SOURCE
+          ? CANONICAL_SETTLEMENT_SOURCE
+          : null,
+        actor,
+      });
+
+      audit(req, {
+        action: "approve-canonical-settlement-link",
+        module: "bank-reconciliation",
+        resourceId: `bank-mutation-${mutId}`,
+        after: canonicalResult,
+      });
+      triggerWritebackForMutation(mutId).catch(() => {});
+      trackMutationApproval({
+        mutationId: resolvedMutId,
+        actor,
+        companyId: (req as any).user?.companyId ?? null,
+      }).catch(() => {});
+      return res.json(canonicalResult);
+    } catch (e: any) {
+      const code = e instanceof CanonicalSettlementApprovalError
+        ? e.code
+        : "CANONICAL_APPROVAL_FAILED";
+      const status = code === "CANONICAL_BANK_MUTATION_NOT_FOUND" ? 404 : 409;
+      logger.warn(
+        { err: e?.cause?.message ?? e?.message, code, mutationId: resolvedMutId },
+        "[bankRecon/approve] canonical settlement link rejected",
+      );
+      return res.status(status).json({ error: e?.message ?? "Approval canonical gagal", code });
+    }
   }
 
   const result = await approveAndCreateJournal(

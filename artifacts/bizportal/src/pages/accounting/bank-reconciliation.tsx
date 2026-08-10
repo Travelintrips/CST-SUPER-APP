@@ -418,6 +418,7 @@ type MutationStatus =
   | "matched"
   | "duplicate_need_review"
   | "approved_pending_posting"
+  | "approved"
   | "posted"
   | "rejected"
   | "void";
