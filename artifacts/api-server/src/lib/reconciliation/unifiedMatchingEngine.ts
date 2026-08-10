@@ -26,6 +26,11 @@ import {
   JournalReuseErrorCode,
 } from "./journalReuseEngine.js";
 import { isQrisSettlementDescription } from "./qrisSettlement.js";
+import {
+  isSportPaymentInActiveCanonicalSettlement,
+  sportPaymentCanonicalSettlementExclusionSql,
+  SPORT_PAYMENT_ALREADY_IN_CANONICAL_SETTLEMENT,
+} from "./sportPaymentCanonicalSettlement.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -76,6 +81,8 @@ export interface UnifiedMatchResult {
   best?: UnifiedScoredMatch;
   all: UnifiedScoredMatch[];
 }
+
+export { SPORT_PAYMENT_ALREADY_IN_CANONICAL_SETTLEMENT };
 
 export interface MutationInput {
   id: number;
@@ -448,6 +455,8 @@ export async function fetchCandidates(
                AND qs_member.settlement_date BETWEEN ${dateFrom} AND ${dateTo}
                AND COALESCE(qs_member.status, 'unsettled') NOT IN ('cancelled', 'reversed')
            )` : "";
+  const canonicalSportPaymentExclusion =
+    `AND ${sportPaymentCanonicalSettlementExclusionSql("sp")}`;
 
   // R5 fix: isolasi per perusahaan — hanya ambil kandidat dari company yang sama
   const coFilter = company_id ? `AND ##TBL##.company_id = ${Number(company_id)}` : "";
@@ -549,6 +558,7 @@ export async function fetchCandidates(
           AND sp.status = 'paid'
            AND (${mutationLooksQris ? "COALESCE(sp.method, '') ILIKE '%qris%'" : "TRUE"})
            ${aggregateMatchFilter}
+           ${canonicalSportPaymentExclusion}
           AND (
             sp.bank_account_id IS NULL
             OR ${mutationBankAccountId != null ? `sp.bank_account_id = ${mutationBankAccountId}` : "TRUE"}
@@ -911,6 +921,24 @@ export async function approveAndCreateJournal(
          );
        }
 
+        // Phase 4C-4: candidate generation can race with canonical settlement
+        // posting. Revalidate the source payment while the approval transaction
+        // is still open, before any journal or bank mutation changes.
+        if (selectedType === "sport_payment" && selectedCandidateId != null) {
+          const alreadySettled = await isSportPaymentInActiveCanonicalSettlement(
+            tx as unknown as DbClient,
+            selectedCandidateId,
+          );
+          if (alreadySettled) {
+            throw Object.assign(
+              new Error(
+                "Sport Center payment already belongs to an active canonical settlement",
+              ),
+              { code: SPORT_PAYMENT_ALREADY_IN_CANONICAL_SETTLEMENT },
+            );
+          }
+        }
+
       // ── Step 3: Resolve bank COA + contra account + journal ───────────────
       // Bank COA: company_bank_accounts.coa_id WHERE id = bank_account_id
       let bankCoaId: number | null = null;
@@ -1252,6 +1280,15 @@ export async function approveAndCreateJournal(
         journalEntryId: null,
         error: e.message,
         manual_review_required: true as const,
+        code: e.code,
+      };
+    }
+
+    if (e?.code === SPORT_PAYMENT_ALREADY_IN_CANONICAL_SETTLEMENT) {
+      return {
+        ok: false,
+        journalEntryId: null,
+        error: e.message,
         code: e.code,
       };
     }

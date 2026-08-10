@@ -2198,6 +2198,12 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
         manual_review_required: true,
       });
     }
+    if (result.code === "SPORT_PAYMENT_ALREADY_IN_CANONICAL_SETTLEMENT") {
+      return res.status(409).json({
+        error: result.error,
+        code: result.code,
+      });
+    }
     return res.status(400).json({ error: result.error });
   }
 

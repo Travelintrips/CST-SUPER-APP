@@ -35,6 +35,7 @@ import {
 } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../logger.js";
+import { sportPaymentCanonicalSettlementExclusionSql } from "./sportPaymentCanonicalSettlement.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -457,6 +458,7 @@ async function fetchActiveCandidates(
           AND COALESCE(sp.status, 'pending') = 'paid'
            AND COALESCE(sp.method, '') ILIKE '%qris%'
            ${mutationIsQris ? aggregateMatchFilter : ""}
+           ${sportPaymentCanonicalSettlementExclusionSql("sp")}
       `,
     }] : []),
     ...(direction === "IN" && mutationIsQris && qrisSettlementTablesAvailable ? [{
