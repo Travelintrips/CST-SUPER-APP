@@ -49,3 +49,4 @@
 - [QRIS approval race guard](qris-approval-race-guard.md) — approval batch harus mengunci payment dan tetap mengandalkan unique index sebagai invariant double-settlement.
 - [Sport Center isolation proof boundary](sport-center-isolation-verification.md) — runtime proof wajib memakai Supabase development DB; heliumdb yang reachable belum tentu punya schema aplikasi.
 - [Canonical settlement contract gate](canonical-settlement-contract-gate.md) — reuse qris_settlement hanya aman dengan source discriminator; canonical runtime contract harus terverifikasi sebelum implementasi.
+- [Phase 4C-1 runtime bootstrap](phase4c1-runtime-bootstrap.md) — runtime DDL can fail non-fatally; prove additive reconciliation columns against development after applying the checked-in migration.
