@@ -66,7 +66,8 @@ export interface HistoricalRecord {
   companyId: number | null;
   candidateType: string;
   candidateId: number;
-  candidateSource: ReconciliationCandidateSource | null;
+  /** Optional for callers created before source-aware history; NULL remains historical. */
+  candidateSource?: ReconciliationCandidateSource | null;
   /** Score recorded when the admin approved the match. */
   originalMatchScore: number;
   /** Counterparty/vendor name extracted at import time (may be null). */

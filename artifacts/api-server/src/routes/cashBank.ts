@@ -1,5 +1,8 @@
 import { Router } from "express";
-import { db } from "@workspace/db";
+import {
+  db,
+  RECONCILIATION_CANDIDATE_SOURCES,
+} from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
 import { postToAccountingHub } from "../lib/accountingPostingService.js";
@@ -816,6 +819,21 @@ router.post("/reconciliation/match", async (req: any, res: any) => {
 
     if (!mutation_id || !candidate_type || !candidate_id) {
       return res.status(400).json({ error: "mutation_id, candidate_type, dan candidate_id wajib diisi" });
+    }
+
+    // Phase 4C-2: source-aware QRIS identity must never enter this legacy
+    // mutation-changing endpoint. Canonical adaptation is intentionally
+    // deferred to Phase 4C-3; historical NULL sources remain ambiguous.
+    if (candidate_type === "qris_settlement") {
+      const source = candidate_source ?? null;
+      const error = source === RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER
+        ? "CANONICAL_SETTLEMENT_ADAPTER_NOT_IMPLEMENTED"
+        : "AMBIGUOUS_QRIS_SETTLEMENT_SOURCE";
+      return res.status(422).json({
+        error,
+        code: error,
+        manual_review_required: true,
+      });
     }
 
     // Verifikasi mutation milik company ini

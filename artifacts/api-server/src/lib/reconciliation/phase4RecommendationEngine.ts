@@ -81,6 +81,7 @@ export interface Phase4Output {
     matched: boolean;
     sourceType: ErpSourceType | null;
     sourceId: number | null;
+    candidateSource: string | null;
     confidence: number;
     reasonCodes: string[];
     isMultipleCandidates?: boolean;
@@ -278,6 +279,7 @@ export async function buildCombinedRecommendation(
     matched: erpMatch.matched,
     sourceType: erpMatch.sourceType,
     sourceId: erpMatch.sourceId,
+    candidateSource: erpMatch.candidateSource ?? null,
     confidence: erpMatch.confidence,
     reasonCodes: erpMatch.reasonCodes,
     isMultipleCandidates: erpMatch.isMultipleCandidates,

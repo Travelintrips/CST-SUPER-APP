@@ -3373,6 +3373,7 @@ router.post("/smart-import", upload.single("file"), async (req, res) => {
           match_status: status,
           candidate_type: best?.candidate.type,
           candidate_id: best?.candidate.id,
+          candidate_source: best?.candidate.candidateSource ?? null,
           vendor_match: best?.vendor_match ?? false,
           amount_match: best?.amount_match ?? false,
           date_match: best?.date_match ?? false,

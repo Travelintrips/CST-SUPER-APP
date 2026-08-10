@@ -139,12 +139,15 @@ export interface ErpMatchResult {
   matched: boolean;
   sourceType: ErpSourceType | null;
   sourceId: number | null;
+  /** Optional for backward-compatible callers; runtime results normalize to null. */
+  candidateSource?: ReconciliationCandidateSource | null;
   confidence: number;
   reasonCodes: ErpReasonCode[];
   evidenceLevel: EvidenceLevel | null;
   allCandidates: Array<{
     sourceType: ErpSourceType;
     sourceId: number;
+    candidateSource?: ReconciliationCandidateSource | null;
     confidence: number;
     evidenceLevel: EvidenceLevel;
     reasonCodes: ErpReasonCode[];
@@ -653,6 +656,7 @@ export async function runErpDocumentMatching(
     matched:              false,
     sourceType:           null,
     sourceId:             null,
+    candidateSource:      null,
     confidence:           0,
     reasonCodes:          [],
     evidenceLevel:        null,
@@ -710,6 +714,7 @@ export async function runErpDocumentMatching(
     .map(s => ({
       sourceType:     s.candidate.sourceType,
       sourceId:       s.candidate.id,
+      candidateSource: s.candidate.candidateSource ?? null,
       confidence:     s.evidence.confidence,
       evidenceLevel:  s.evidence.level,
       reasonCodes:    s.evidence.reasonCodes,
@@ -737,6 +742,7 @@ export async function runErpDocumentMatching(
         matched:              false,
         sourceType:           null,
         sourceId:             null,
+        candidateSource:      null,
         confidence:           0,
         reasonCodes:          ["PAYMENT_METHOD_QRIS"],
         evidenceLevel:        null,
@@ -754,6 +760,7 @@ export async function runErpDocumentMatching(
     matched:              finalMatched,
     sourceType:           best.candidate.sourceType,
     sourceId:             best.candidate.id,
+    candidateSource:      best.candidate.candidateSource ?? null,
     confidence:           best.evidence.confidence,
     reasonCodes:          best.evidence.reasonCodes,
     evidenceLevel:        best.evidence.level,

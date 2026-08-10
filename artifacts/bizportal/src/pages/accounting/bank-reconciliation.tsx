@@ -3542,6 +3542,7 @@ export default function BankReconciliationPage() {
                                 matchId: chosen?.id,
                                 candidateType: chosen?.candidate_type,
                                 candidateId: chosen?.candidate_id,
+                                candidateSource: chosen?.candidate_source ?? null,
                                 manualCoaCode: latestSourceProposal.proposedCode,
                               });
                             }}

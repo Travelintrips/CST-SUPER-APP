@@ -27,6 +27,7 @@ import {
   type JournalResolutionResult,
   type ResolveJournalArgs,
 } from "../lib/reconciliation/journalReuseEngine.js";
+import { RECONCILIATION_CANDIDATE_SOURCES } from "@workspace/db";
 
 // ─── Mock DB client factory ───────────────────────────────────────────────────
 
@@ -72,6 +73,48 @@ const BASE_ARGS: ResolveJournalArgs = {
 // ─── Test suite ───────────────────────────────────────────────────────────────
 
 describe("resolveJournalForEconomicEvent — Universal Journal Reuse Engine", () => {
+
+  it("legacy QRIS source resolves through the existing public resolver", async () => {
+    const client = makeClient([posted()]);
+    const result = await resolveJournalForEconomicEvent(client as any, {
+      ...BASE_ARGS,
+      candidateType: "qris_settlement",
+      candidateId: 1,
+      candidateSource: RECONCILIATION_CANDIDATE_SOURCES.LEGACY_QRIS,
+    });
+
+    expect(result.decision).toBe("REUSE_EXISTING_JOURNAL");
+    expect(result.existingJournalId).toBe(101);
+    expect(client.execute).toHaveBeenCalled();
+  });
+
+  it("canonical QRIS source is blocked before the legacy resolver", async () => {
+    const client = makeClient([posted()]);
+    const result = await resolveJournalForEconomicEvent(client as any, {
+      ...BASE_ARGS,
+      candidateType: "qris_settlement",
+      candidateId: 1,
+      candidateSource: RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER,
+    });
+
+    expect(result.decision).toBe("MANUAL_REVIEW_REQUIRED");
+    expect(result.evidence.code).toBe("CANONICAL_SETTLEMENT_ADAPTER_NOT_IMPLEMENTED");
+    expect(client.execute).not.toHaveBeenCalled();
+  });
+
+  it("historical NULL QRIS source is rejected as ambiguous before lookup", async () => {
+    const client = makeClient([posted()]);
+    const result = await resolveJournalForEconomicEvent(client as any, {
+      ...BASE_ARGS,
+      candidateType: "qris_settlement",
+      candidateId: 1,
+      candidateSource: null,
+    });
+
+    expect(result.decision).toBe("MANUAL_REVIEW_REQUIRED");
+    expect(result.evidence.code).toBe("AMBIGUOUS_QRIS_SETTLEMENT_SOURCE");
+    expect(client.execute).not.toHaveBeenCalled();
+  });
 
   // ── Scenario 1: Posted journal found → REUSE ─────────────────────────────
 
