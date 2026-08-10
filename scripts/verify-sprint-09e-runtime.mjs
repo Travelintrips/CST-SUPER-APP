@@ -356,7 +356,8 @@ async function main() {
   await createFixture();
 
   const before = await boundarySnapshot();
-  const handoffPath = `/api/mkt/admin/payment-requests/${fixture.paymentId}/accounting-handoff`;
+  const companyQuery = `?companyId=${encodeURIComponent(fixture.companyId)}`;
+  const handoffPath = `/api/mkt/admin/payment-requests/${fixture.paymentId}/accounting-handoff${companyQuery}`;
   const handoffResponse = await api(handoffPath, {
     method: "POST",
     headers: { "Idempotency-Key": handoffKey },
@@ -368,7 +369,7 @@ async function main() {
   assert(String(handoff.correlationReference).startsWith(`MKT-ACC-${fixture.paymentId}-`),
     "accounting handoff correlation mismatch");
 
-  const path = `/api/mkt/admin/payment-requests/${fixture.paymentId}/reconciliation-link`;
+  const path = `/api/mkt/admin/payment-requests/${fixture.paymentId}/reconciliation-link${companyQuery}`;
   const created = await api(path, {
     method: "POST",
     headers: { "Idempotency-Key": linkKey },
