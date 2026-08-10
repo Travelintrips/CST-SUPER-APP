@@ -78,6 +78,7 @@ import {
   generateQrisCandidates,
   listQrisCandidates,
 } from "../lib/reconciliation/qrisCandidateService.js";
+import { canonicalSettlementDetailsSql } from "../lib/reconciliation/canonicalSettlementAdapter.js";
 import { assertQrisBatchApprovalEligible } from "../lib/reconciliation/qrisBatchApprovalEligibility.js";
 import {
   checkDuplicatePaymentIds,
@@ -1948,13 +1949,11 @@ router.get("/mutations", async (req, res) => {
         FROM qris_settlements qs
         WHERE qs.id = m.candidate_id
       )
+      WHEN m.candidate_type = 'qris_settlement'
+       AND m.candidate_source = '${RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER}' THEN
+        ${canonicalSettlementDetailsSql("m.candidate_id")}
       WHEN m.candidate_type = 'qris_settlement' THEN jsonb_build_object(
-        'resolutionError',
-        CASE
-          WHEN m.candidate_source = '${RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER}'
-            THEN 'CANONICAL_SETTLEMENT_ADAPTER_NOT_IMPLEMENTED'
-          ELSE 'AMBIGUOUS_QRIS_SETTLEMENT_SOURCE'
-        END,
+        'resolutionError', 'AMBIGUOUS_QRIS_SETTLEMENT_SOURCE',
         'candidateSource', m.candidate_source
       )
       WHEN m.candidate_type = 'invoice' THEN (
