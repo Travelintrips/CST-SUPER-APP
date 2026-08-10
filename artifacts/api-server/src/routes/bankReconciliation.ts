@@ -84,6 +84,10 @@ import {
   CanonicalSettlementApprovalError,
   CANONICAL_SETTLEMENT_SOURCE,
 } from "../lib/reconciliation/canonicalSettlementApproval.js";
+import {
+  assertGenericPostAllowed,
+  GenericPostGuardError,
+} from "../lib/reconciliation/genericPostGuard.js";
 import { assertQrisBatchApprovalEligible } from "../lib/reconciliation/qrisBatchApprovalEligibility.js";
 import {
   checkDuplicatePaymentIds,
@@ -2404,6 +2408,28 @@ router.post("/:mutationId/post", async (req, res) => {
         );
       }
 
+      // Resolve the approved source-qualified match before loading or changing
+      // any generic accounting journal. Canonical Sport Center settlements
+      // already own a posted settlement journal and must never enter /post.
+      const { rows: approvedMatchRows } = await tx.execute(sql.raw(`
+        SELECT candidate_type, candidate_id, candidate_source
+        FROM bank_reconciliation_matches
+        WHERE mutation_id = ${mutId}
+          AND status = 'approved'
+        ORDER BY id
+        LIMIT 2
+        FOR UPDATE
+      `));
+      if (approvedMatchRows.length > 1) {
+        throw new GenericPostGuardError(
+          "AMBIGUOUS_QRIS_SETTLEMENT_SOURCE",
+          "Mutasi memiliki lebih dari satu approved reconciliation match; generic posting ditolak.",
+        );
+      }
+      assertGenericPostAllowed(
+        (approvedMatchRows[0] as Record<string, unknown> | undefined) ?? null,
+      );
+
       const journalEntryId = mut.journal_entry_id ? Number(mut.journal_entry_id) : null;
       if (!journalEntryId) {
         throw new Error("Tidak ada journal_entry_id — jalankan approve terlebih dahulu");
@@ -2508,9 +2534,14 @@ router.post("/:mutationId/post", async (req, res) => {
     const code = (
       e.code === "NOT_FOUND"      ? 404 :
       e.code === "PERIOD_LOCKED"  ? 422 :
-      e.code === "CONFLICT" || e.code === "INVALID_STATUS" ? 409 : 500
+      e.code === "CONFLICT" || e.code === "INVALID_STATUS" ||
+      e.code === "CANONICAL_SETTLEMENT_ALREADY_ACCOUNTED" ||
+      e.code === "AMBIGUOUS_QRIS_SETTLEMENT_SOURCE" ? 409 : 500
     );
-    return res.status(code).json({ error: e.message });
+    return res.status(code).json({
+      error: e.message,
+      ...(e.code ? { code: e.code } : {}),
+    });
   }
 });
 
