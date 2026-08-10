@@ -48,3 +48,4 @@
 - [Sport payment_method NULL fix](sport-payment-method-backfill.md) — fn_block_posted_entry_update memblok metadata backfill; patch inline di accountingHubMigration + journal-code path (aj.code→method) adalah solusi.
 - [QRIS approval race guard](qris-approval-race-guard.md) — approval batch harus mengunci payment dan tetap mengandalkan unique index sebagai invariant double-settlement.
 - [Sport Center isolation proof boundary](sport-center-isolation-verification.md) — runtime proof wajib memakai Supabase development DB; heliumdb yang reachable belum tentu punya schema aplikasi.
+- [Development accounting purge guard](development-accounting-purge-guard.md) — posted accounting entries are trigger-protected; explicit dev-only purge needs worker quiescence, one transaction, and post-delete FK verification.
