@@ -45,14 +45,9 @@ const pool = new Pool({
 
 const DRY_RUN = !process.argv.includes("--execute");
 
-// ── Helper: run query ──────────────────────────────────────────────────────────
-async function q(client, queryText, params = []) {
-  return client.query(queryText, params);
-}
-
 // ── Find next available entry number for a journal ────────────────────────────
 async function nextEntryNumber(client, journalId) {
-  const res = await q(client, `
+  const res = await client.query(`
     SELECT COALESCE(MAX(CAST(REGEXP_REPLACE(entry_number, '[^0-9]', '', 'g') AS BIGINT)), 0) + 1 AS next
     FROM accounting_entries WHERE journal_id = $1
   `, [journalId]);
@@ -61,7 +56,7 @@ async function nextEntryNumber(client, journalId) {
 
 // ── Find or auto-create COA for a company ─────────────────────────────────────
 async function findCoa(client, companyId, codeLike, type) {
-  const res = await q(client, `
+  const res = await client.query(`
     SELECT id, code, name FROM chart_of_accounts
     WHERE company_id = $1 AND code LIKE $2 AND type = $3 AND is_active = true
     ORDER BY code LIMIT 1
@@ -71,7 +66,7 @@ async function findCoa(client, companyId, codeLike, type) {
 
 // ── Find general journal for a company ────────────────────────────────────────
 async function findJournal(client, companyId, type = "general") {
-  const res = await q(client, `
+  const res = await client.query(`
     SELECT id, code FROM accounting_journals
     WHERE company_id = $1 AND type = $2 AND is_active = true
     ORDER BY id LIMIT 1
@@ -82,7 +77,7 @@ async function findJournal(client, companyId, type = "general") {
 // ── Post a single correction entry ────────────────────────────────────────────
 async function postCorrectionEntry(client, { journalId, journalCode, companyId, ref, description, date, lines, sourceModule }) {
   const entryNum = await nextEntryNumber(client, journalId);
-  const entryRes = await q(client, `
+  const entryRes = await client.query(`
     INSERT INTO accounting_entries
       (journal_id, entry_number, date, ref, description, status, company_id, source, source_module, created_at, updated_at)
     VALUES ($1, $2, $3, $4, $5, 'posted', $6, 'kasbon', $7, NOW(), NOW())
@@ -92,7 +87,7 @@ async function postCorrectionEntry(client, { journalId, journalCode, companyId, 
   const entryId = entryRes.rows[0].id;
 
   for (const line of lines) {
-    await q(client, `
+    await client.query(`
       INSERT INTO accounting_entry_lines (entry_id, account_id, debit, credit, description, created_at)
       VALUES ($1, $2, $3, $4, $5, NOW())
     `, [entryId, line.accountId, line.debit, line.credit, line.description]);
@@ -108,7 +103,7 @@ async function main() {
   const client = await pool.connect();
   try {
     // 1. Find all old-style advances: have IC-{num} ref (no ADV), source_module = advance_intercompany
-    const oldEntries = await q(client, `
+    const oldEntries = await client.query(`
       SELECT DISTINCT
         ae.id         AS entry_id,
         ae.ref        AS old_ref,
@@ -179,7 +174,7 @@ async function main() {
       }
 
       // Check if already migrated (IC-ADV ref already exists for this advance)
-      const alreadyMigrated = await q(client, `
+      const alreadyMigrated = await client.query(`
         SELECT id FROM accounting_entries
         WHERE ref = $1 AND company_id = $2 AND status = 'posted'
         LIMIT 1
@@ -280,7 +275,7 @@ async function main() {
         });
 
         // Update cash_advances
-        await q(client, `
+        await client.query(`
           UPDATE cash_advances SET
             intercompany_reference = $1,
             funding_entry_id       = COALESCE($2, funding_entry_id),
@@ -290,7 +285,7 @@ async function main() {
         `, [newRef, fundingEntryId, respEntryId, row.advance_id]);
 
         // Update old IC entry source_module supaya tidak ter-query lagi sebagai "lama"
-        await q(client, `
+        await client.query(`
           UPDATE accounting_entries SET source_module = 'advance_intercompany_legacy'
           WHERE id = $1
         `, [row.entry_id]);

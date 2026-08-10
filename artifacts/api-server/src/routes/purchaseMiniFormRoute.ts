@@ -293,7 +293,7 @@ async function autoPostVendorInvoice(
   }
 
   const companyId = vi.companyId;
-  if (!Number.isInteger(companyId) || companyId <= 0) {
+  if (companyId == null || !Number.isInteger(companyId) || companyId <= 0) {
     logger.error(
       { viId: vi.id, companyId },
       "postVendorInvoiceAccounting: company context missing — refusing to post",
