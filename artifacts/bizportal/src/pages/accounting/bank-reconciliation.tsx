@@ -664,7 +664,7 @@ function isCanonicalSettlementMutation(m: BankMutation): boolean {
 
 function statusLabel(m: BankMutation): string {
   if (m.status === "approved" && isCanonicalSettlementMutation(m)) {
-    return "Disetujui / Tereconcile";
+    return "Approved / Reconciled";
   }
   return STATUS_LABELS[m.status] ?? m.status;
 }
