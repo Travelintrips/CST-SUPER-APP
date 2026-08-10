@@ -223,9 +223,15 @@ export async function findCanonicalSettlementCandidates(
   options: CanonicalSettlementLookupOptions = {},
 ): Promise<CanonicalSettlementCandidate[]> {
   const result = await db.execute(sql`
-    SELECT ${CANONICAL_SETTLEMENT_COLUMNS}
-    FROM sport_center.expected_bank_settlements
-    WHERE ${canonicalEligibilityFilters(options)}
+    SELECT ebs.*
+    FROM (
+      SELECT ${CANONICAL_SETTLEMENT_COLUMNS}
+      FROM sport_center.expected_bank_settlements
+      WHERE ${canonicalEligibilityFilters(options)}
+    ) ebs
+    JOIN sport_center.accounting_journals aj
+      ON aj.id = ebs.settlement_journal_id
+     AND aj.status = 'posted'
     ORDER BY settlement_date, settlement_id
   `);
 
@@ -261,8 +267,12 @@ export function canonicalSettlementDetailsSql(
         'candidateId', ebs.settlement_id,
         'candidateSource', '${CANONICAL_SETTLEMENT_SOURCE}',
         'amount', ebs.expected_bank_amount,
+         'expectedAmount', ebs.expected_bank_amount,
+         'actualBankAmount', bm.amount,
+         'amountDifference', ABS(ebs.expected_bank_amount::numeric - bm.amount::numeric),
         'settlementReference', ebs.settlement_reference,
         'settlementDate', ebs.settlement_date,
+         'mutationDate', bm.transaction_date,
         'providerCode', ebs.provider_code,
         'providerName', ebs.provider_name,
         'companyId', ebs.company_id,
@@ -284,8 +294,10 @@ export function canonicalSettlementDetailsSql(
           WHERE psi.settlement_id = ebs.settlement_id
         )
       )
-      FROM sport_center.expected_bank_settlements ebs
-      WHERE ebs.settlement_id = ${candidateIdExpression}
+       FROM sport_center.expected_bank_settlements ebs
+       JOIN bank_mutations bm
+         ON bm.id = m.mutation_id
+       WHERE ebs.settlement_id = ${candidateIdExpression}
         AND ebs.settlement_status = 'posted'
         AND ebs.bank_mutation_id IS NULL
         AND ebs.settlement_journal_id IS NOT NULL

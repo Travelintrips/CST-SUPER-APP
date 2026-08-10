@@ -3359,10 +3359,18 @@ router.post("/smart-import", upload.single("file"), async (req, res) => {
           provider_order_id: providerOrderId,
           uploaded_proof_url: null,
           normalized_description: normalizedDesc,
+          company_id: companyId,
+          bank_account_id: null,
+          provider_name: detectProvider(pr.description),
         }, c));
         scored.sort((a, b) => b.score - a.score);
         const best = scored[0];
-        const status = best ? classifyMatch(best) : "unmatched";
+        const status = best?.candidate.candidateSource ===
+          RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER
+          ? "manual_review"
+          : best
+            ? classifyMatch(best)
+            : "unmatched";
 
         const rowResult = {
           id: mutId,

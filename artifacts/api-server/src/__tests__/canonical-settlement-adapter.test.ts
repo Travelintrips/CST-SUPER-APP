@@ -80,6 +80,10 @@ describe("Phase 4C-3 canonical settlement adapter", () => {
     expect(detailsSql).toContain("ebs.provider_fee_amount");
     expect(detailsSql).toContain("ebs.fee_tax_amount");
     expect(detailsSql).toContain("ebs.adjustment_amount");
+    expect(detailsSql).toContain("expectedAmount");
+    expect(detailsSql).toContain("actualBankAmount");
+    expect(detailsSql).toContain("amountDifference");
+    expect(detailsSql).toContain("mutationDate");
     expect(detailsSql).toContain(CANONICAL_SETTLEMENT_SOURCE);
     expect(detailsSql).not.toContain("public.qris_settlements");
   });

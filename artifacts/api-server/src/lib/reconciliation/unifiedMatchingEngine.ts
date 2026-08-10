@@ -20,6 +20,7 @@ import { captureFailedJob } from "../financial/failedJobSystem.js";
 import { classifyMutationDescription, persistClassification } from "../expenseClassificationService.js";
 import { postEntryWithClient, type DbClient, type PostingLine } from "../accounting.js";
 import { normalizeDescription } from "../bankDescriptionNormalizer.js";
+import { normalizeQrisProvider } from "./providerSettlementRules.js";
 import { JournalMappingError } from "../journalMappingErrors.js";
 import {
   resolveJournalForEconomicEvent,
@@ -31,6 +32,10 @@ import {
   sportPaymentCanonicalSettlementExclusionSql,
   SPORT_PAYMENT_ALREADY_IN_CANONICAL_SETTLEMENT,
 } from "./sportPaymentCanonicalSettlement.js";
+import {
+  CANONICAL_SETTLEMENT_SOURCE,
+  findCanonicalSettlementCandidates,
+} from "./canonicalSettlementAdapter.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -62,6 +67,14 @@ export interface MatchCandidate {
   payment_method?: string | null;
   settlement_item_count?: number | null;
   settlement_partial?: boolean;
+  company_id?: number | null;
+  bank_account_id?: number | null;
+  provider_code?: string | null;
+  provider_name?: string | null;
+  provider_fee_amount?: number | null;
+  fee_tax_amount?: number | null;
+  adjustment_amount?: number | null;
+  expected_bank_amount?: number | null;
 }
 
 export interface UnifiedScoredMatch {
@@ -327,15 +340,41 @@ export async function resolveContraAccount(
 // ─── Scoring (max 100 pts) ────────────────────────────────────────────────────
 
 export function scoreUnified(
-  mutation: Pick<MutationInput, "amount" | "transaction_date" | "provider_order_id" | "uploaded_proof_url" | "normalized_description">,
+  mutation: Pick<MutationInput, "amount" | "transaction_date" | "provider_order_id" | "uploaded_proof_url" | "normalized_description">
+    & Partial<Pick<MutationInput, "company_id" | "bank_account_id" | "provider_name">>,
   cand: MatchCandidate,
 ): UnifiedScoredMatch {
   let score = 0;
   const reason: string[] = [];
 
+  // Canonical Sport Center settlements are company/account scoped. A
+  // structured mismatch must never be overridden by an exact amount.
+  const companyMismatch =
+    cand.company_id != null &&
+    mutation.company_id != null &&
+    Number(cand.company_id) !== Number(mutation.company_id);
+  const bankAccountMismatch =
+    cand.bank_account_id != null &&
+    mutation.bank_account_id != null &&
+    Number(cand.bank_account_id) !== Number(mutation.bank_account_id);
+  const providerMismatch =
+    cand.candidateSource === CANONICAL_SETTLEMENT_SOURCE &&
+    !!cand.provider_code &&
+    !!mutation.provider_name &&
+    !!cand.provider_name &&
+    normalizeQrisProvider(cand.provider_code) !== normalizeQrisProvider(mutation.provider_name) &&
+    normalizeQrisProvider(cand.provider_name) !== normalizeQrisProvider(mutation.provider_name);
+
   // 1. Amount — MANDATORY for auto-approve (+50)
-  const amountMatch = Math.abs(Number(cand.amount) - Number(mutation.amount)) < 0.01;
+  const amountMatch =
+    !companyMismatch &&
+    !bankAccountMismatch &&
+    !providerMismatch &&
+    Math.abs(Number(cand.amount) - Number(mutation.amount)) < 0.01;
   if (amountMatch) { score += 50; reason.push("nominal cocok (+50)"); }
+  if (companyMismatch) reason.push("company tidak cocok");
+  if (bankAccountMismatch) reason.push("rekening bank tidak cocok");
+  if (providerMismatch) reason.push("provider tidak cocok");
 
   // 2. Date ±1 day (+20)
   const mDate = new Date(mutation.transaction_date).getTime();
@@ -419,6 +458,12 @@ export async function fetchCandidates(
   const direction = String(mutation.direction ?? "IN").toUpperCase() === "OUT" ? "OUT" : "IN";
   const dateFrom = `'${transaction_date}'::date - 3`;
   const dateTo   = `'${transaction_date}'::date + 3`;
+  const dateOffset = (value: string, days: number): string => {
+    const parsed = new Date(`${value}T00:00:00Z`);
+    if (Number.isNaN(parsed.getTime())) return value;
+    parsed.setUTCDate(parsed.getUTCDate() + days);
+    return parsed.toISOString().slice(0, 10);
+  };
   const amtFilter = `ABS(##AMT##::numeric - ${Number(amount)}) < 0.01`;
   const mutationLooksQris =
     String(mutation.provider_name ?? "").toUpperCase() === "QRIS" ||
@@ -611,6 +656,51 @@ export async function fetchCandidates(
     },
   ];
 
+  // Phase 4C-5: canonical Sport Center settlements are read only through the
+  // verified adapter. The adapter uses expected_bank_settlements (net_amount)
+  // and enforces posted + unlinked + posted settlement journal eligibility.
+  if (direction === "IN") {
+    try {
+      const canonicalCandidates = await findCanonicalSettlementCandidates({
+        companyId: company_id ?? null,
+        amount: Number(amount),
+        from: transaction_date ? dateOffset(transaction_date, -3) : null,
+        to: transaction_date ? dateOffset(transaction_date, 3) : null,
+      });
+      for (const canonical of canonicalCandidates) {
+        const candidate: MatchCandidate = {
+          id: canonical.id,
+          type: "qris_settlement",
+          candidateSource: canonical.candidateSource,
+          amount: canonical.amount,
+          date: canonical.date,
+          ref: canonical.ref,
+          name: canonical.name,
+          gross_amount: canonical.gross_amount,
+          mdr_amount: canonical.mdr_amount,
+          provider_fee_amount: canonical.provider_fee_amount,
+          fee_tax_amount: canonical.fee_tax_amount,
+          tax_withheld_amount: canonical.tax_withheld_amount,
+          adjustment_amount: canonical.adjustment_amount,
+          expected_bank_amount: canonical.expected_bank_amount,
+          settlement_date: canonical.settlement_date,
+          settlement_reference: canonical.settlement_reference,
+          settlement_status: canonical.settlement_status,
+          company_id: canonical.company_id,
+          bank_account_id: canonical.bank_account_id,
+          provider_code: canonical.provider_code,
+          provider_name: canonical.provider_name,
+        };
+        candidates.push(candidate);
+      }
+    } catch (e: any) {
+      logger.warn(
+        { err: e.message },
+        "[unifiedMatchingEngine] canonical settlement source skipped",
+      );
+    }
+  }
+
   for (const src of sources) {
     try {
       const { rows } = await db.execute(sql.raw(src.q));
@@ -633,6 +723,10 @@ export async function fetchCandidates(
           payment_method: r.payment_method ? String(r.payment_method) : null,
           settlement_item_count: r.settlement_item_count != null ? Number(r.settlement_item_count) : null,
           settlement_partial: Boolean(r.settlement_partial),
+          company_id: r.company_id != null ? Number(r.company_id) : null,
+          bank_account_id: r.bank_account_id != null ? Number(r.bank_account_id) : null,
+          provider_code: r.provider_code ? String(r.provider_code) : null,
+          provider_name: r.provider_name ? String(r.provider_name) : null,
         });
       }
     } catch (e: any) {
@@ -723,7 +817,12 @@ export async function runUnifiedMatching(
   }
 
   const best = scored[0];
-  const classification = classifyMatch(best);
+  // Phase 4C-5 deliberately stops before approval. A canonical candidate may
+  // be scored and persisted, but it must remain a reviewable candidate until
+  // the dedicated canonical approval phase.
+  const isCanonicalBest =
+    best.candidate.candidateSource === CANONICAL_SETTLEMENT_SOURCE;
+  const classification = isCanonicalBest ? "manual_review" : classifyMatch(best);
 
   await writeReconAudit(mutation.id, "MATCH_CREATED", actor, {
     count: scored.length,
