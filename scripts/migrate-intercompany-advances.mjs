@@ -47,50 +47,65 @@ const DRY_RUN = !process.argv.includes("--execute");
 
 // ── Find next available entry number for a journal ────────────────────────────
 async function nextEntryNumber(client, journalId) {
-  const res = await client.query(`
-    SELECT COALESCE(MAX(CAST(REGEXP_REPLACE(entry_number, '[^0-9]', '', 'g') AS BIGINT)), 0) + 1 AS next
-    FROM accounting_entries WHERE journal_id = $1
-  `, [journalId]);
+  const res = await client.query({
+    text: `
+      SELECT COALESCE(MAX(CAST(REGEXP_REPLACE(entry_number, '[^0-9]', '', 'g') AS BIGINT)), 0) + 1 AS next
+      FROM accounting_entries WHERE journal_id = $1
+    `,
+    values: [journalId],
+  });
   return String(res.rows[0].next).padStart(6, "0");
 }
 
 // ── Find or auto-create COA for a company ─────────────────────────────────────
 async function findCoa(client, companyId, codeLike, type) {
-  const res = await client.query(`
-    SELECT id, code, name FROM chart_of_accounts
-    WHERE company_id = $1 AND code LIKE $2 AND type = $3 AND is_active = true
-    ORDER BY code LIMIT 1
-  `, [companyId, codeLike + "%", type]);
+  const res = await client.query({
+    text: `
+      SELECT id, code, name FROM chart_of_accounts
+      WHERE company_id = $1 AND code LIKE $2 AND type = $3 AND is_active = true
+      ORDER BY code LIMIT 1
+    `,
+    values: [companyId, codeLike + "%", type],
+  });
   return res.rows[0] ?? null;
 }
 
 // ── Find general journal for a company ────────────────────────────────────────
 async function findJournal(client, companyId, type = "general") {
-  const res = await client.query(`
-    SELECT id, code FROM accounting_journals
-    WHERE company_id = $1 AND type = $2 AND is_active = true
-    ORDER BY id LIMIT 1
-  `, [companyId, type]);
+  const res = await client.query({
+    text: `
+      SELECT id, code FROM accounting_journals
+      WHERE company_id = $1 AND type = $2 AND is_active = true
+      ORDER BY id LIMIT 1
+    `,
+    values: [companyId, type],
+  });
   return res.rows[0] ?? null;
 }
 
 // ── Post a single correction entry ────────────────────────────────────────────
 async function postCorrectionEntry(client, { journalId, journalCode, companyId, ref, description, date, lines, sourceModule }) {
   const entryNum = await nextEntryNumber(client, journalId);
-  const entryRes = await client.query(`
-    INSERT INTO accounting_entries
-      (journal_id, entry_number, date, ref, description, status, company_id, source, source_module, created_at, updated_at)
-    VALUES ($1, $2, $3, $4, $5, 'posted', $6, 'kasbon', $7, NOW(), NOW())
-    RETURNING id
-  `, [journalId, `${journalCode}-${entryNum}`, date, ref, description, companyId, sourceModule]);
+  const entryRes = await client.query({
+    text: `
+      INSERT INTO accounting_entries
+        (journal_id, entry_number, date, ref, description, status, company_id, source, source_module, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, 'posted', $6, 'kasbon', $7, NOW(), NOW())
+      RETURNING id
+    `,
+    values: [journalId, `${journalCode}-${entryNum}`, date, ref, description, companyId, sourceModule],
+  });
 
   const entryId = entryRes.rows[0].id;
 
   for (const line of lines) {
-    await client.query(`
-      INSERT INTO accounting_entry_lines (entry_id, account_id, debit, credit, description, created_at)
-      VALUES ($1, $2, $3, $4, $5, NOW())
-    `, [entryId, line.accountId, line.debit, line.credit, line.description]);
+    await client.query({
+      text: `
+        INSERT INTO accounting_entry_lines (entry_id, account_id, debit, credit, description, created_at)
+        VALUES ($1, $2, $3, $4, $5, NOW())
+      `,
+      values: [entryId, line.accountId, line.debit, line.credit, line.description],
+    });
   }
   return entryId;
 }
@@ -103,38 +118,41 @@ async function main() {
   const client = await pool.connect();
   try {
     // 1. Find all old-style advances: have IC-{num} ref (no ADV), source_module = advance_intercompany
-    const oldEntries = await client.query(`
-      SELECT DISTINCT
-        ae.id         AS entry_id,
-        ae.ref        AS old_ref,
-        ae.company_id AS responsible_company_id,
-        ae.date,
-        ca.id         AS advance_id,
-        ca.advance_number,
-        ca.category,
-        ca.funding_company_id,
-        ca.source_company_id,
-        ca.entry_id   AS original_entry_id,
-        ca.funding_entry_id,
-        ca.responsible_entry_id,
-        ca.intercompany_reference,
-        SUM(ael.debit) AS amount
-      FROM accounting_entries ae
-      JOIN accounting_entry_lines ael ON ael.entry_id = ae.id
-      LEFT JOIN cash_advances ca ON (
-        ae.ref = 'IC-' || ca.advance_number
-      )
-      WHERE ae.source_module = 'advance_intercompany'
-        AND ae.status = 'posted'
-        AND ae.ref LIKE 'IC-%'
-        AND ae.ref NOT LIKE 'IC-ADV-%'
-        AND ae.ref NOT LIKE 'IC-RPY-%'
-      GROUP BY ae.id, ae.ref, ae.company_id, ae.date,
-               ca.id, ca.advance_number, ca.category,
-               ca.funding_company_id, ca.source_company_id,
-               ca.entry_id, ca.funding_entry_id, ca.responsible_entry_id,
-               ca.intercompany_reference
-    `);
+    const oldEntries = await client.query({
+      text: `
+        SELECT DISTINCT
+          ae.id         AS entry_id,
+          ae.ref        AS old_ref,
+          ae.company_id AS responsible_company_id,
+          ae.date,
+          ca.id         AS advance_id,
+          ca.advance_number,
+          ca.category,
+          ca.funding_company_id,
+          ca.source_company_id,
+          ca.entry_id   AS original_entry_id,
+          ca.funding_entry_id,
+          ca.responsible_entry_id,
+          ca.intercompany_reference,
+          SUM(ael.debit) AS amount
+        FROM accounting_entries ae
+        JOIN accounting_entry_lines ael ON ael.entry_id = ae.id
+        LEFT JOIN cash_advances ca ON (
+          ae.ref = 'IC-' || ca.advance_number
+        )
+        WHERE ae.source_module = 'advance_intercompany'
+          AND ae.status = 'posted'
+          AND ae.ref LIKE 'IC-%'
+          AND ae.ref NOT LIKE 'IC-ADV-%'
+          AND ae.ref NOT LIKE 'IC-RPY-%'
+        GROUP BY ae.id, ae.ref, ae.company_id, ae.date,
+                 ca.id, ca.advance_number, ca.category,
+                 ca.funding_company_id, ca.source_company_id,
+                 ca.entry_id, ca.funding_entry_id, ca.responsible_entry_id,
+                 ca.intercompany_reference
+      `,
+      values: [],
+    });
 
     if (oldEntries.rows.length === 0) {
       console.log("✅ Tidak ada advance lama yang perlu dimigrasi.\n");
@@ -174,11 +192,14 @@ async function main() {
       }
 
       // Check if already migrated (IC-ADV ref already exists for this advance)
-      const alreadyMigrated = await client.query(`
-        SELECT id FROM accounting_entries
-        WHERE ref = $1 AND company_id = $2 AND status = 'posted'
-        LIMIT 1
-      `, [newRef, fundCoId]);
+      const alreadyMigrated = await client.query({
+        text: `
+          SELECT id FROM accounting_entries
+          WHERE ref = $1 AND company_id = $2 AND status = 'posted'
+          LIMIT 1
+        `,
+        values: [newRef, fundCoId],
+      });
       if (alreadyMigrated.rows.length > 0) {
         console.log(`  ⚠️  SKIP: sudah ada entry ${newRef} di buku funding company.`);
         skippedCount++;
@@ -275,20 +296,26 @@ async function main() {
         });
 
         // Update cash_advances
-        await client.query(`
-          UPDATE cash_advances SET
-            intercompany_reference = $1,
-            funding_entry_id       = COALESCE($2, funding_entry_id),
-            responsible_entry_id   = $3,
-            updated_at             = NOW()
-          WHERE id = $4
-        `, [newRef, fundingEntryId, respEntryId, row.advance_id]);
+        await client.query({
+          text: `
+            UPDATE cash_advances SET
+              intercompany_reference = $1,
+              funding_entry_id       = COALESCE($2, funding_entry_id),
+              responsible_entry_id   = $3,
+              updated_at             = NOW()
+            WHERE id = $4
+          `,
+          values: [newRef, fundingEntryId, respEntryId, row.advance_id],
+        });
 
         // Update old IC entry source_module supaya tidak ter-query lagi sebagai "lama"
-        await client.query(`
-          UPDATE accounting_entries SET source_module = 'advance_intercompany_legacy'
-          WHERE id = $1
-        `, [row.entry_id]);
+        await client.query({
+          text: `
+            UPDATE accounting_entries SET source_module = 'advance_intercompany_legacy'
+            WHERE id = $1
+          `,
+          values: [row.entry_id],
+        });
 
         await client.query("COMMIT");
 
