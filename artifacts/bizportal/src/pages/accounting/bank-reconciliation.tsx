@@ -427,6 +427,7 @@ interface Candidate {
   mutation_id: number;
   candidate_type: string;
   candidate_id: number;
+  candidate_source?: string | null;
   match_score: number;
   match_reason: string;
   amount_match: boolean;
@@ -2751,10 +2752,25 @@ export default function BankReconciliationPage() {
 
   // Approve → POST /:id/approve → status becomes approved_pending_posting
   const approveMut = useMutation({
-    mutationFn: async ({ mutId, matchId, candidateType, candidateId, manualCoaCode }: { mutId: number; matchId?: number; candidateType?: string; candidateId?: number; manualCoaCode?: string }) => {
+    mutationFn: async ({
+      mutId, matchId, candidateType, candidateId, candidateSource, manualCoaCode,
+    }: {
+      mutId: number;
+      matchId?: number;
+      candidateType?: string;
+      candidateId?: number;
+      candidateSource?: string | null;
+      manualCoaCode?: string;
+    }) => {
       const r = await fetch(`/api/bank-reconciliation/${mutId}/approve`, {
         method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ match_id: matchId, candidate_type: candidateType, candidate_id: candidateId, manual_coa_code: manualCoaCode }),
+        body: JSON.stringify({
+          match_id: matchId,
+          candidate_type: candidateType,
+          candidate_id: candidateId,
+          candidate_source: candidateSource ?? null,
+          manual_coa_code: manualCoaCode,
+        }),
       });
       const body = await r.json().catch(() => ({ error: "Unknown error" }));
       if (!r.ok) {
@@ -2907,6 +2923,7 @@ export default function BankReconciliationPage() {
       matchId: chosen?.id,
       candidateType: chosen?.candidate_type,
       candidateId: chosen?.candidate_id,
+      candidateSource: chosen?.candidate_source ?? null,
       // When a JOURNAL_MAPPING_REQUIRED error is active but an IMPLEMENTED COA proposal
       // is ready, pass the code so the backend bypasses resolveContraAccount.
       manualCoaCode: resolvedManualCoaCode ?? undefined,

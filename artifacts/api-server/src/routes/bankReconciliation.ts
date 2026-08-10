@@ -30,6 +30,10 @@ import {
   scoreUnified,
   classifyMatch,
 } from "../lib/reconciliation/unifiedMatchingEngine.js";
+import {
+  RECONCILIATION_CANDIDATE_SOURCES,
+  type ReconciliationCandidateSource,
+} from "@workspace/db";
 import { runErpDocumentMatching } from "../lib/reconciliation/erpDocumentMatcher.js";
 import { runHistoricalMatching } from "../lib/reconciliation/historicalMatchingEngine.js";
 import { buildCombinedRecommendation } from "../lib/reconciliation/phase4RecommendationEngine.js";
@@ -1863,8 +1867,8 @@ router.get("/mutations", async (req, res) => {
   // stable type/id and scoring evidence; these details are read live so the
   // panel does not show stale payment information.
   const candidateDetailsSql = `
-    CASE m.candidate_type
-      WHEN 'accounting_payment' THEN (
+    CASE
+      WHEN m.candidate_type = 'accounting_payment' THEN (
         SELECT jsonb_build_object(
           'amount', ap.amount,
           'date', ap.date,
@@ -1879,7 +1883,7 @@ router.get("/mutations", async (req, res) => {
         FROM accounting_payments ap
         WHERE ap.id = m.candidate_id
       )
-      WHEN 'sport_payment' THEN (
+      WHEN m.candidate_type = 'sport_payment' THEN (
         SELECT jsonb_build_object(
           'amount', GREATEST(0, sp.amount - COALESCE(sp.mdr_amount, 0) - COALESCE(sp.tax_withheld_amount, 0) - COALESCE(sp.other_fee_amount, 0)),
           'grossAmount', sp.amount,
@@ -1905,7 +1909,8 @@ router.get("/mutations", async (req, res) => {
         LEFT JOIN customers c ON c.id = sb.customer_id
         WHERE sp.id = m.candidate_id
       )
-      WHEN 'qris_settlement' THEN (
+      WHEN m.candidate_type = 'qris_settlement'
+       AND m.candidate_source = '${RECONCILIATION_CANDIDATE_SOURCES.LEGACY_QRIS}' THEN (
         SELECT jsonb_build_object(
           'amount', qs.net_amount,
           'grossAmount', qs.gross_amount,
@@ -1943,7 +1948,16 @@ router.get("/mutations", async (req, res) => {
         FROM qris_settlements qs
         WHERE qs.id = m.candidate_id
       )
-      WHEN 'invoice' THEN (
+      WHEN m.candidate_type = 'qris_settlement' THEN jsonb_build_object(
+        'resolutionError',
+        CASE
+          WHEN m.candidate_source = '${RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER}'
+            THEN 'CANONICAL_SETTLEMENT_ADAPTER_NOT_IMPLEMENTED'
+          ELSE 'AMBIGUOUS_QRIS_SETTLEMENT_SOURCE'
+        END,
+        'candidateSource', m.candidate_source
+      )
+      WHEN m.candidate_type = 'invoice' THEN (
         SELECT jsonb_build_object(
           'amount', sd.total_amount,
           'date', COALESCE(sd.invoice_date::text, sd.created_at::date::text),
@@ -1953,7 +1967,7 @@ router.get("/mutations", async (req, res) => {
         FROM sales_documents sd
         WHERE sd.id = m.candidate_id
       )
-      WHEN 'expense' THEN (
+      WHEN m.candidate_type = 'expense' THEN (
         SELECT jsonb_build_object(
           'amount', e.total,
           'date', e.date,
@@ -1963,7 +1977,7 @@ router.get("/mutations", async (req, res) => {
         FROM expenses e
         WHERE e.id = m.candidate_id
       )
-      WHEN 'logistic_order' THEN (
+      WHEN m.candidate_type = 'logistic_order' THEN (
         SELECT jsonb_build_object(
           'amount', lo.grand_total,
           'date', lo.created_at::date,
@@ -1974,7 +1988,7 @@ router.get("/mutations", async (req, res) => {
         FROM logistic_orders lo
         WHERE lo.id = m.candidate_id
       )
-      WHEN 'tenant_invoice' THEN (
+      WHEN m.candidate_type = 'tenant_invoice' THEN (
         SELECT jsonb_build_object(
           'amount', ti.total_amount,
           'date', ti.issued_date::text,
@@ -2095,7 +2109,9 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
   const mutId = parseInt(String(req.params.mutationId ?? ""), 10);
   if (isNaN(mutId)) return res.status(400).json({ error: "ID tidak valid" });
 
-  const { match_id, candidate_type, candidate_id, note, manual_coa_code } = req.body;
+  const {
+    match_id, candidate_type, candidate_id, candidate_source, note, manual_coa_code,
+  } = req.body;
   const actor = (req as any).user?.email ?? "admin";
 
   // ── Promote bank_mutation_imports row → bank_mutations if needed ─────────────
@@ -2167,6 +2183,10 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
     actor,
     note,
     manual_coa_code ? String(manual_coa_code) : null,
+    candidate_source === RECONCILIATION_CANDIDATE_SOURCES.LEGACY_QRIS ||
+      candidate_source === RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER
+      ? candidate_source as ReconciliationCandidateSource
+      : null,
   );
 
   if (!result.ok) {

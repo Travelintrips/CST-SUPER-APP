@@ -9,7 +9,11 @@
  *  - Jurnal hanya dibuat setelah approval (di approveAndCreateJournal)
  */
 
-import { db } from "@workspace/db";
+import {
+  db,
+  RECONCILIATION_CANDIDATE_SOURCES,
+  type ReconciliationCandidateSource,
+} from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../logger.js";
 import { captureFailedJob } from "../financial/failedJobSystem.js";
@@ -37,6 +41,8 @@ export type CandidateType =
 export interface MatchCandidate {
   id: number;
   type: CandidateType;
+  /** Source-qualified identity; historical rows may legitimately be null. */
+  candidateSource?: ReconciliationCandidateSource | null;
   amount: number;
   date: string;
   ref?: string | null;
@@ -446,7 +452,11 @@ export async function fetchCandidates(
   // R5 fix: isolasi per perusahaan — hanya ambil kandidat dari company yang sama
   const coFilter = company_id ? `AND ##TBL##.company_id = ${Number(company_id)}` : "";
 
-  const sources: Array<{ q: string; type: CandidateType }> = [
+  const sources: Array<{
+    q: string;
+    type: CandidateType;
+    candidateSource?: ReconciliationCandidateSource | null;
+  }> = [
     {
       type: "accounting_payment",
       q: `
@@ -547,6 +557,7 @@ export async function fetchCandidates(
     },
     ...(mutationLooksQris && qrisSettlementTablesAvailable ? [{
       type: "qris_settlement" as CandidateType,
+      candidateSource: RECONCILIATION_CANDIDATE_SOURCES.LEGACY_QRIS,
       q: `
         SELECT qs.id,
                qs.net_amount AS amount,
@@ -597,6 +608,7 @@ export async function fetchCandidates(
         candidates.push({
           id: Number(r.id),
           type: src.type,
+          candidateSource: src.candidateSource ?? null,
           amount: Number(r.amount),
           date: String(r.date ?? ""),
           name: r.name ?? null,
@@ -688,12 +700,14 @@ export async function runUnifiedMatching(
     await db.execute(sql.raw(`
       INSERT INTO bank_reconciliation_matches
         (mutation_id, candidate_type, candidate_id, match_score, match_reason,
-         amount_match, date_match, name_match, order_id_match, proof_match, status)
+         amount_match, date_match, name_match, order_id_match, proof_match, status,
+         candidate_source)
       VALUES
         (${mutation.id}, '${s.candidate.type}', ${s.candidate.id}, ${s.score},
          '${s.reason.join("; ").replace(/'/g, "''")}',
          ${s.amount_match}, ${s.date_match}, false, ${s.ref_match}, ${s.ocr_match},
-         'candidate')
+         'candidate',
+         ${s.candidate.candidateSource ? `'${s.candidate.candidateSource}'` : "NULL"})
       ON CONFLICT DO NOTHING
     `)).catch(() => {});
   }
@@ -718,6 +732,7 @@ export async function runUnifiedMatching(
       WHERE mutation_id = ${mutation.id}
         AND candidate_type = '${best.candidate.type}'
         AND candidate_id = ${best.candidate.id}
+        AND candidate_source IS NOT DISTINCT FROM ${best.candidate.candidateSource ? `'${best.candidate.candidateSource}'` : "NULL"}
     `)).catch(() => {});
     // Set mutation status to 'matched' — journal will be created by approval gate
     await db.execute(sql.raw(
@@ -810,6 +825,7 @@ export async function approveAndCreateJournal(
   /** COA code explicitly chosen by user after a JOURNAL_MAPPING_REQUIRED error.
    *  When provided, bypasses resolveContraAccount and uses this account directly. */
   manualCoaCode?: string | null,
+  candidateSource: ReconciliationCandidateSource | null = null,
 ): Promise<{ ok: boolean; journalEntryId: number | null; error?: string; manual_review_required?: true; code?: string }> {
 
   let journalEntryId: number | null = null;
@@ -843,9 +859,10 @@ export async function approveAndCreateJournal(
        // browser payload change the candidate selected by the reviewer.
        let selectedCandidateType = candidateType;
        let selectedCandidateId = candidateId;
+       let selectedCandidateSource = candidateSource;
        if (matchId) {
          const { rows: matchRows } = await tx.execute(sql.raw(`
-           SELECT id, candidate_type, candidate_id
+           SELECT id, candidate_type, candidate_id, candidate_source
            FROM bank_reconciliation_matches
            WHERE id = ${Number(matchId)} AND mutation_id = ${mutationId}
            FOR UPDATE
@@ -858,6 +875,7 @@ export async function approveAndCreateJournal(
          }
          selectedCandidateType = String((matchRows[0] as any).candidate_type ?? "");
          selectedCandidateId = Number((matchRows[0] as any).candidate_id);
+          selectedCandidateSource = (matchRows[0] as any).candidate_source ?? null;
        }
 
        const selectedType = canonicalCandidateType(selectedCandidateType);
@@ -937,6 +955,7 @@ export async function approveAndCreateJournal(
            companyId,
            candidateType: selectedCandidateType,
            candidateId: selectedCandidateId,
+            candidateSource: selectedCandidateSource,
            mutationId,
            mutationAmount: amount,
            mutationDate: txDate,
@@ -1015,10 +1034,12 @@ export async function approveAndCreateJournal(
            await tx.execute(sql.raw(`
              INSERT INTO bank_reconciliation_matches
                (mutation_id, candidate_type, candidate_id, match_score, match_reason,
-                amount_match, date_match, name_match, order_id_match, proof_match, status)
+                amount_match, date_match, name_match, order_id_match, proof_match, status,
+                candidate_source)
              VALUES
                (${mutationId}, '${escapeSql(selectedCandidateType)}', ${Number(selectedCandidateId)},
-                100, 'existing posted source journal reused', true, false, false, false, false, 'approved')
+                100, 'existing posted source journal reused', true, false, false, false, false, 'approved',
+                ${selectedCandidateSource ? `'${escapeSql(selectedCandidateSource)}'` : "NULL"})
              ON CONFLICT DO NOTHING
            `));
          }
@@ -1027,6 +1048,7 @@ export async function approveAndCreateJournal(
            match_id: matchId,
            candidate_type: selectedCandidateType,
            candidate_id: selectedCandidateId,
+           candidate_source: selectedCandidateSource,
            journal_entry_id: reusedEntry.id,
            reused_existing_entry: true,
            direction,
@@ -1170,10 +1192,12 @@ export async function approveAndCreateJournal(
         await tx.execute(sql.raw(`
           INSERT INTO bank_reconciliation_matches
             (mutation_id, candidate_type, candidate_id, match_score, match_reason,
-             amount_match, date_match, name_match, order_id_match, proof_match, status)
+             amount_match, date_match, name_match, order_id_match, proof_match, status,
+             candidate_source)
           VALUES
              (${mutationId}, '${escapeSql(selectedCandidateType)}', ${Number(selectedCandidateId)},
-             100, 'manual approve', true, false, false, false, false, 'approved')
+             100, 'manual approve', true, false, false, false, false, 'approved',
+             ${selectedCandidateSource ? `'${escapeSql(selectedCandidateSource)}'` : "NULL"})
           ON CONFLICT DO NOTHING
         `));
       }

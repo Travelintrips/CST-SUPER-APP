@@ -92,6 +92,7 @@ export interface Phase4Output {
     method?: string;
     candidateType?: string;
     candidateId?: number;
+    candidateSource?: string | null;
     confidenceBand?: string;
   };
   finalRecommendation: {
@@ -291,6 +292,7 @@ export async function buildCombinedRecommendation(
         method: classifyHistoricalMethod(bestHistorical as any),
         candidateType: bestHistorical.candidateType,
         candidateId: bestHistorical.candidateId,
+        candidateSource: bestHistorical.candidateSource,
         confidenceBand: bestHistorical.confidenceBand,
       }
     : { matched: false, confidence: 0 };

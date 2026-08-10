@@ -499,6 +499,7 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
     score: number | null;
     match_result: string;
     cand_type: string;
+    cand_source: string | null;
     is_approved: boolean;
     detail_name: string;
     detail_ref: string;
@@ -511,8 +512,10 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
         bm.mutation_key,
         bm.status,
         brm_best.match_score                                              AS best_score,
-        brm_cand.candidate_type || ':' || brm_cand.candidate_id          AS match_result,
+        brm_cand.candidate_type || ':' || brm_cand.candidate_id ||
+          COALESCE(':' || brm_cand.candidate_source, '')                  AS match_result,
         COALESCE(brm_cand.candidate_type, '')                            AS cand_type,
+        brm_cand.candidate_source                                        AS cand_source,
         COALESCE(brm_cand.is_approved, false)                            AS is_approved,
         COALESCE(
           CASE brm_cand.candidate_type
@@ -595,7 +598,7 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
       ) brm_best ON true
       LEFT JOIN LATERAL (
         -- Ambil kandidat terbaik: approved diprioritaskan, fallback ke candidate score tertinggi
-        SELECT candidate_type, candidate_id,
+        SELECT candidate_type, candidate_id, candidate_source,
                (status = 'approved') AS is_approved
         FROM bank_reconciliation_matches
         WHERE mutation_id = bm.id
@@ -610,6 +613,7 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
         score:        r.best_score != null ? Number(r.best_score) : null,
         match_result: String(r.match_result ?? ""),
         cand_type:    String(r.cand_type ?? ""),
+        cand_source:  r.cand_source != null ? String(r.cand_source) : null,
         is_approved:  Boolean(r.is_approved),
         detail_name:    String(r.detail_name ?? ""),
         detail_ref:     String(r.detail_ref ?? ""),

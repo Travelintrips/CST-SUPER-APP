@@ -29,6 +29,10 @@
  */
 
 import { db } from "@workspace/db";
+import {
+  RECONCILIATION_CANDIDATE_SOURCES,
+  type ReconciliationCandidateSource,
+} from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../logger.js";
 
@@ -109,6 +113,7 @@ export type ErpReasonCode =
 export interface ErpCandidateRaw {
   id: number;
   sourceType: ErpSourceType;
+  candidateSource?: ReconciliationCandidateSource | null;
   amount: number;
   documentDate: string;
   ref: string | null;
@@ -201,6 +206,7 @@ async function fetchAlreadyReconciled(companyId: number): Promise<Set<string>> {
   try {
     const { rows } = await db.execute(sql.raw(`
       SELECT brm.candidate_type, brm.candidate_id
+             ,brm.candidate_source
       FROM bank_reconciliation_matches brm
       JOIN bank_mutations bm ON bm.id = brm.mutation_id
       WHERE brm.status = 'approved'
@@ -209,11 +215,17 @@ async function fetchAlreadyReconciled(companyId: number): Promise<Set<string>> {
     const result = new Set<string>();
     for (const r of rows as any[]) {
       const legacyKey  = `${r.candidate_type}:${r.candidate_id}`;
-      result.add(legacyKey);
+      if (r.candidate_type !== "qris_settlement" ||
+          r.candidate_source === RECONCILIATION_CANDIDATE_SOURCES.LEGACY_QRIS) {
+        result.add(legacyKey);
+      }
       // Juga cek dengan format plural (Phase 4) agar tidak ada yang lolos
       for (const [plural, singular] of Object.entries(LEGACY_TYPE_MAP)) {
         if (singular === r.candidate_type) {
-          result.add(`${plural}:${r.candidate_id}`);
+          if (plural !== "qris_settlements" ||
+              r.candidate_source === RECONCILIATION_CANDIDATE_SOURCES.LEGACY_QRIS) {
+            result.add(`${plural}:${r.candidate_id}`);
+          }
         }
       }
     }
@@ -476,6 +488,9 @@ async function fetchActiveCandidates(
         results.push({
           id:               Number(r.id),
           sourceType:       src.type,
+          candidateSource:  src.type === "qris_settlements"
+            ? RECONCILIATION_CANDIDATE_SOURCES.LEGACY_QRIS
+            : null,
           amount:           Number(r.amount),
           documentDate:     String(r.doc_date ?? ""),
           ref:              r.ref ? String(r.ref) : null,

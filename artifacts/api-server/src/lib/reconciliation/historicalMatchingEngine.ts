@@ -18,6 +18,7 @@
  */
 
 import { db } from "@workspace/db";
+import type { ReconciliationCandidateSource } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../logger.js";
 
@@ -65,6 +66,7 @@ export interface HistoricalRecord {
   companyId: number | null;
   candidateType: string;
   candidateId: number;
+  candidateSource: ReconciliationCandidateSource | null;
   /** Score recorded when the admin approved the match. */
   originalMatchScore: number;
   /** Counterparty/vendor name extracted at import time (may be null). */
@@ -86,6 +88,7 @@ export interface HistoricalSignal {
 export interface HistoricalMatchSuggestion {
   candidateType: string;
   candidateId: number;
+  candidateSource?: ReconciliationCandidateSource | null;
   /** Final confidence score 0–100. */
   confidence: number;
   confidenceBand: "high" | "medium" | "low" | "none";
@@ -363,6 +366,7 @@ export function buildSuggestion(
   mutationDate: string,
   mutationAmount: number,
   groupRecords: HistoricalRecord[],
+  candidateSource: ReconciliationCandidateSource | null = null,
 ): HistoricalMatchSuggestion {
   if (!groupRecords.length) {
     throw new Error("buildSuggestion called with empty group");
@@ -423,6 +427,7 @@ export function buildSuggestion(
   return {
     candidateType,
     candidateId,
+    candidateSource,
     confidence,
     confidenceBand,
     signals,
@@ -463,6 +468,7 @@ export async function fetchApprovedHistory(
         bm.company_id,
         brm.candidate_type,
         brm.candidate_id::int                    AS candidate_id,
+        brm.candidate_source,
         brm.match_score::numeric                 AS original_match_score,
         bm.provider_name                         AS vendor_name
       FROM bank_reconciliation_matches brm
@@ -485,6 +491,7 @@ export async function fetchApprovedHistory(
       companyId:           r.company_id != null ? Number(r.company_id) : null,
       candidateType:       String(r.candidate_type ?? ""),
       candidateId:         Number(r.candidate_id),
+      candidateSource:     r.candidate_source != null ? String(r.candidate_source) as ReconciliationCandidateSource : null,
       originalMatchScore:  Number(r.original_match_score ?? 0),
       vendorName:          r.vendor_name != null ? String(r.vendor_name) : null,
     }));
@@ -543,7 +550,7 @@ export async function runHistoricalMatching(
   // ── 3. Group by (candidateType, candidateId) ──────────────────────────────
   const groups = new Map<string, HistoricalRecord[]>();
   for (const r of qualifying) {
-    const key = `${r.candidateType}:${r.candidateId}`;
+    const key = `${r.candidateType}:${r.candidateId}:${r.candidateSource ?? "<historical-null>"}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)!.push(r);
   }
@@ -552,7 +559,7 @@ export async function runHistoricalMatching(
   const suggestions: HistoricalMatchSuggestion[] = [];
 
   for (const [, groupRecords] of groups) {
-    const { candidateType, candidateId } = groupRecords[0];
+    const { candidateType, candidateId, candidateSource } = groupRecords[0];
     try {
       const suggestion = buildSuggestion(
         candidateType,
@@ -561,6 +568,7 @@ export async function runHistoricalMatching(
         transactionDate,
         amount,
         groupRecords,
+        candidateSource,
       );
       // Only surface suggestions with at least some confidence
       if (suggestion.confidence >= CONFIDENCE_BANDS.LOW) {

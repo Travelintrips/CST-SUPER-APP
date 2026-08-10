@@ -48,6 +48,10 @@ export type ReconciliationCandidateIdentity = {
   candidateSource: ReconciliationCandidateSource | null;
 };
 
+export function isQrisSettlementCandidate(candidateType: string | null | undefined): boolean {
+  return candidateType === "qris_settlement";
+}
+
 /**
  * Stable persistence identity representation. A NULL source is retained as a
  * distinct historical state rather than being silently treated as legacy.
