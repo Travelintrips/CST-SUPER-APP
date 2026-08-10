@@ -292,9 +292,18 @@ async function autoPostVendorInvoice(
     matchNotes = "No GR linked (via mini form)";
   }
 
+  const companyId = vi.companyId;
+  if (!Number.isInteger(companyId) || companyId <= 0) {
+    logger.error(
+      { viId: vi.id, companyId },
+      "postVendorInvoiceAccounting: company context missing — refusing to post",
+    );
+    return;
+  }
+
   // 5. Post journal: Dr GR/IR (atau Beban Pembelian) / Cr AP
   try {
-    const settings = await ensureAccountingSettings(vi.companyId);
+    const settings = await ensureAccountingSettings(companyId);
     const grandTotal = Number(vi.grandTotal ?? 0);
     const taxAmount = Number(vi.taxAmount ?? 0);
     const netAmount = grandTotal - taxAmount;
@@ -325,7 +334,7 @@ async function autoPostVendorInvoice(
           description: `Vendor Invoice ${vi.invoiceNumber} (mini form)`,
           source: "purchase_bill",
           sourceId: vi.id,
-          companyId: vi.companyId,
+          companyId,
           lines,
         },
         "PUR",

@@ -876,7 +876,7 @@ router.get("/unpaid", async (req, res) => {
 
 // GET /api/tax/compliance-summary?companyId=N&period=YYYY-MM
 router.get("/compliance-summary", async (req, res) => {
-  const companyId = resolveCompanyIdAudit(req);
+  const companyId = resolveCompanyId(req);
   const { period } = req.query as Record<string, string>;
   const periodFilter = period ? sql`AND period = ${period}` : sql``;
 

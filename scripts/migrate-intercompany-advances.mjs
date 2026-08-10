@@ -46,8 +46,8 @@ const pool = new Pool({
 const DRY_RUN = !process.argv.includes("--execute");
 
 // ── Helper: run query ──────────────────────────────────────────────────────────
-async function q(client, sql, params = []) {
-  return client.query(sql, params);
+async function q(client, queryText, params = []) {
+  return client.query(queryText, params);
 }
 
 // ── Find next available entry number for a journal ────────────────────────────
