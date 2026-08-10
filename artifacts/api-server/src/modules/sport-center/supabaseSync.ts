@@ -699,6 +699,7 @@ export async function syncAllBookings(): Promise<{ synced: number; errors: numbe
 export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced: number; skipped: number; errors: number }> {
   console.log(`${PREFIX} Sport Center accounting sync isolated — payment remains confirmed without accounting posting (company_id=${companyId})`);
   return { synced: 0, skipped: 0, errors: 0 };
+}
 
   /*
   // Baca dari local mirror (public.sport_payments + public.sport_bookings)

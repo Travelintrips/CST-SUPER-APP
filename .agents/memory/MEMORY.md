@@ -47,3 +47,4 @@
 - [Sport Center mirror duplicate booking](sport-center-mirror-duplicate-booking.md) — duplicate public booking dengan sc_booking_id sama dapat membuat trigger mirror memilih booking terbaru yang salah.
 - [Sport payment_method NULL fix](sport-payment-method-backfill.md) — fn_block_posted_entry_update memblok metadata backfill; patch inline di accountingHubMigration + journal-code path (aj.code→method) adalah solusi.
 - [QRIS approval race guard](qris-approval-race-guard.md) — approval batch harus mengunci payment dan tetap mengandalkan unique index sebagai invariant double-settlement.
+- [Sport Center isolation proof boundary](sport-center-isolation-verification.md) — runtime proof wajib memakai Supabase development DB; heliumdb yang reachable belum tentu punya schema aplikasi.
