@@ -1,7 +1,6 @@
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../../lib/logger.js";
-import { syncPaymentsToAccounting } from "./supabaseSync.js";
 import { validateSportPaymentMirror } from "./sportPaymentValidation.js";
 
 const PREFIX = "[SportIncrementalSync]";
@@ -524,26 +523,9 @@ async function runIncrementalSync(): Promise<void> {
       paymentSynced = await syncUnmirroredViaDbFunction();
     }
 
-    let accountingSynced = 0;
-    if (paymentSynced > 0) {
-      const accounting = await syncPaymentsToAccounting(1);
-      accountingSynced = accounting.synced;
-
-      // Setelah payment baru tersedia di public.sport_payments, regenerasi
-      // QRIS batch candidates agar cocokkan batch settlement (QRTRAVELI).
-      try {
-        const { generateQrisCandidates } = await import("../../lib/reconciliation/qrisCandidateService.js");
-        const qrisResult = await generateQrisCandidates({ companyId: 1, dryRun: false });
-        if (qrisResult.generated > 0) {
-          logger.info(
-            { generated: qrisResult.generated },
-            `${PREFIX} QRIS batch candidates diperbarui setelah payment sync`,
-          );
-        }
-      } catch (qrisErr) {
-        logger.debug({ err: (qrisErr as Error)?.message }, `${PREFIX} QRIS candidate regen skip`);
-      }
-    }
+    // Payment mirror synchronization remains active; Sport Center accounting
+    // posting is intentionally not part of this worker during isolation.
+    const accountingSynced = 0;
 
     if (bookingSynced > 0 || paymentSynced > 0 || accountingSynced > 0) {
       logger.info(
@@ -592,15 +574,6 @@ export async function triggerIncrementalSync(): Promise<{ bookingSynced: number;
   } else {
     // Fallback: cari confirmed payments tanpa mirror via DB function cross-schema
     paymentSynced = await syncUnmirroredViaDbFunction();
-  }
-
-  if (paymentSynced > 0) {
-    await syncPaymentsToAccounting(1);
-    // Regenerasi QRIS batch candidates setelah payment baru tersedia
-    try {
-      const { generateQrisCandidates } = await import("../../lib/reconciliation/qrisCandidateService.js");
-      await generateQrisCandidates({ companyId: 1, dryRun: false });
-    } catch {/* non-fatal */}
   }
 
   lastBookingSyncAt = new Date();

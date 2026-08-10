@@ -20,13 +20,11 @@ import {
 } from "@workspace/db";
 import { sql, eq, and, gte, lte, desc, asc, isNull, isNotNull, count } from "drizzle-orm";
 import { requireAdmin } from "../lib/requireAdmin.js";
-import { backfillSportCenterAccountingPayments } from "../lib/backfillSportCenterPayments.js";
 import {
   postToAccountingHub,
   voidAccountingEntry,
   voidAccountingPayment,
   postTenantPaymentToAccounting,
-  postSportBookingPaymentToAccounting,
   postExpenseToAccounting,
   postInvoicePaymentToAccounting,
 } from "../lib/accountingPostingService.js";
@@ -859,17 +857,10 @@ router.post("/post/tenant-payment/:id", async (req, res) => {
 
 // POST /api/accounting/post/sport-payment/:id
 router.post("/post/sport-payment/:id", async (req, res) => {
-  try {
-    const paymentId = Number(req.params.id);
-    const { company_id, amount, customer_name, date, facility_name } = req.body;
-    const result = await postSportBookingPaymentToAccounting(paymentId, Number(company_id), {
-      amount, customerName: customer_name, date, facilityName: facility_name,
-    });
-    if (!result) return res.status(422).json({ error: "Posting gagal — lihat accounting_posting_errors" });
-    res.json(result);
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message });
-  }
+  res.status(410).json({
+    error: "Sport Center direct accounting posting is temporarily disabled",
+    code: "SPORT_CENTER_ACCOUNTING_ISOLATED",
+  });
 });
 
 // POST /api/accounting/post/expense/:id
@@ -1085,20 +1076,10 @@ router.post("/hub/backfill-tenant", async (req, res) => {
 // an accounting_payments row (e.g. when cash_journal_id was null at time of payment).
 // Covers all payment_type values (booking + membership). Idempotent.
 router.post("/hub/backfill-sport-center", async (req, res) => {
-  try {
-    const result = await backfillSportCenterAccountingPayments();
-    res.json({
-      ok: true,
-      ...result,
-      message:
-        result.total === 0
-          ? "Tidak ada sport_payment yang perlu dibackfill — semua sudah tercatat."
-          : `Backfill selesai: ${result.posted} dibuat, ${result.skipped} dilewati, ${result.errors} gagal (dari ${result.total} yang diproses).`,
-    });
-  } catch (err: any) {
-    logger.error({ err }, "[backfill-sport-center] failed");
-    return res.status(500).json({ error: err?.message ?? "Gagal menjalankan backfill" });
-  }
+  res.status(410).json({
+    error: "Sport Center accounting backfill is temporarily disabled",
+    code: "SPORT_CENTER_ACCOUNTING_ISOLATED",
+  });
 });
 
 // ── POST /api/accounting/hub/post-manual ─────────────────────────────────────

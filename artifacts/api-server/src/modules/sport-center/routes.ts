@@ -1,14 +1,14 @@
 import { Router } from "express";
-import { db, pool, accountingPaymentsTable, getCircuitBreakerStatus } from "@workspace/db";
+import { db, pool, getCircuitBreakerStatus } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { requireAdmin } from "../../lib/requireAdmin.js";
 import { resolveCompanyId } from "../../lib/resolveCompany.js";
 import { assertCompanyAccess } from "../../lib/assertCompanyAccess.js";
 import { handleSportCenterSse, broadcastSportCenterEvent } from "./broadcast.js";
-import { normalizePaymentMethod, resolvePaymentDestination, postSportCenterBooking, postSportCenterBookingReversal, postSportCenterRefund, postSportCenterMembershipPayment, postSportCenterBookingRefundDirect, postSportCenterExpenseEntry, postEntry, resolveSportCenterBookingAccountId, resolveCostCenterId, postSportCenterPaymentAtomic, type DbClient as SportDbClient } from "../../lib/accounting.js";
+import { normalizePaymentMethod, resolvePaymentDestination, postSportCenterBookingReversal, postSportCenterRefund, postSportCenterMembershipPayment, postSportCenterBookingRefundDirect, postSportCenterExpenseEntry, postEntry, resolveSportCenterBookingAccountId, resolveCostCenterId, type DbClient as SportDbClient } from "../../lib/accounting.js";
 import { ensureAccountingSettings } from "../../lib/accountingSeed.js";
 import { getActiveTaxRate, seedDefaultTaxRules } from "../../lib/taxRulesMigration.js";
-import { syncFacilityUpsert, syncFacilityDelete, syncAllFacilities, syncBookingUpsert, syncAllBookings, getLastSyncLogs, pullLegacyBookingsFromSupabase, syncPaymentsToAccounting, pullPaymentsFromSupabase, pullFacilitiesFromSupabase, runDailyPaymentSync } from "./supabaseSync.js";
+import { syncFacilityUpsert, syncFacilityDelete, syncAllFacilities, syncBookingUpsert, syncAllBookings, getLastSyncLogs, pullLegacyBookingsFromSupabase, pullPaymentsFromSupabase, pullFacilitiesFromSupabase, runDailyPaymentSync } from "./supabaseSync.js";
 import { saveAndBroadcast } from "../../lib/notificationStore.js";
 
 // ─── [DB SOURCE CHECK] ────────────────────────────────────────────────────────
@@ -27,79 +27,6 @@ import { saveAndBroadcast } from "../../lib/notificationStore.js";
   );
 }
 // ─────────────────────────────────────────────────────────────────────────────
-
-async function insertAccountingPaymentForSportCenter(args: {
-  companyId: number;
-  paymentNumber: string;
-  amount: number;
-  method: string;
-  partnerName: string;
-  ref: string;
-  memo: string;
-  paymentMethod?: string | null;
-  sourceDocId: number;
-  date?: string;
-  createdById?: string | null;
-  /** Optional transaction client — pass to keep this insert atomic with caller's tx */
-  client?: SportDbClient;
-}): Promise<void> {
-  const q = args.client ?? db;
-  try {
-    // Idempotency: skip if accounting_payment already exists for this sourceDocId
-    const existing = await q.execute(sql`
-      SELECT id FROM accounting_payments
-      WHERE source_type = 'sport_center' AND source_doc_id = ${args.sourceDocId}
-      LIMIT 1
-    `);
-    if (existing.rows.length > 0) {
-      console.log(`[sport-center] insertAccountingPaymentForSportCenter: already exists for source_doc_id=${args.sourceDocId} — skip`);
-      return;
-    }
-
-    // Resolve journal — THROW (not silent return) so missing config surfaces as a real error.
-    const settings = await ensureAccountingSettings(args.companyId);
-    const destination = resolvePaymentDestination(args.paymentMethod ?? args.method, settings);
-    const { paymentMethod, journalId } = destination;
-    if (!journalId) {
-      throw new Error(
-        `JOURNAL_MISSING: Tidak ada jurnal Kas/Bank untuk company_id=${args.companyId} method=${args.method}. ` +
-        `cashJournalId=${settings.cashJournalId} bankJournalId=${settings.bankJournalId}. ` +
-        `Konfigurasi di Accounting → Settings → Cash Journal atau Bank Journal.`
-      );
-    }
-    const payDate = args.date ?? new Date().toISOString().split("T")[0]!;
-    const year = payDate.slice(0, 4);
-    const cntRes = await q.execute(sql`
-      SELECT CAST(COUNT(*) AS int) AS seq FROM accounting_payments
-      WHERE company_id = ${args.companyId}
-    `);
-    const seq = Number((cntRes.rows[0] as any)?.seq ?? 0);
-    const paySeq = (seq + 1).toString().padStart(4, "0");
-    const acctPayNumber = `PAY/${year}/${paySeq}`;
-    await q.insert(accountingPaymentsTable).values({
-      companyId: args.companyId,
-      paymentNumber: acctPayNumber,
-      paymentType: "inbound",
-      status: "posted",
-      amount: String(Math.round(args.amount * 100) / 100),
-      journalId,
-      partnerName: args.partnerName || null,
-      date: payDate,
-      ref: args.ref || null,
-      memo: args.memo || null,
-       paymentMethod,
-      entryId: null,
-      sourceType: "sport_center",
-      sourceDocId: args.sourceDocId,
-      createdById: args.createdById ?? null,
-    });
-    console.log(`[sport-center] accounting_payment created: ${acctPayNumber} amount=${args.amount} source_doc_id=${args.sourceDocId}`);
-  } catch (err) {
-    console.error("[sport-center] insertAccountingPaymentForSportCenter failed:", err);
-    // Re-throw so the caller (transaction or route handler) can roll back or surface 422/500.
-    throw err;
-  }
-}
 
 const router = Router();
 
@@ -126,14 +53,13 @@ async function nextPaymentNumber(companyId?: number): Promise<string> {
   return `PAY/${new Date().getFullYear()}/${pad(Number((res.rows[0] as any).cnt) + 1)}`;
 }
 
-// Pastikan booking yang sudah 'paid' punya record di sport_payments (+ jurnal akuntansi).
+// Pastikan booking yang sudah 'paid' punya record di sport_payments.
 // Dipakai oleh PATCH /bookings/:id dan legacy sync push-bookings agar booking lunas
 // selalu muncul di daftar Pembayaran.
 //
 // Idempotency (partial-state safe):
-//  - sport_payments row exists AND accounting_payments row exists → fully done, skip.
-//  - sport_payments row exists BUT accounting_payments is missing → backfill accounting only.
-//  - Neither exists → create both inside the provided tx client (atomic with caller).
+//  - sport_payments row exists → skip.
+//  - Neither exists → create sport_payments inside the provided tx client.
 //
 // @param client — pass the caller's transaction so all writes commit/rollback together.
 //                 Defaults to global db for legacy callers (push-bookings sync).
@@ -148,7 +74,6 @@ async function ensurePaymentForPaidBooking(
   const bCompanyId = row.company_id != null ? Number(row.company_id) : null;
   const bTotalAmount = Number(row.total_amount ?? 0);
   const bookingDateStr = String(row.booking_date ?? new Date().toISOString().slice(0, 10));
-  const bookingCodeStr = String(row.booking_number ?? `BK-${id}`);
 
   // ── Check existing sport_payments row ────────────────────────────────────
   const existingPayment = await client.execute(sql`
@@ -156,11 +81,7 @@ async function ensurePaymentForPaidBooking(
   `);
   const existingSportPayId = Number((existingPayment.rows[0] as Record<string, unknown> | undefined)?.id ?? 0);
 
-  let sportPaymentId: number;
   let paymentNumber: string;
-  // These hold the values to use for the accounting insert — either from the
-  // existing sport_payments row (backfill path) or the booking defaults (new path).
-  let acctAmount = bTotalAmount;
   const bookingPaymentMethod = normalizePaymentMethod(
     row.payment_method != null
       ? String(row.payment_method)
@@ -168,37 +89,11 @@ async function ensurePaymentForPaidBooking(
         ? String(row.method)
         : null,
   ) ?? "cash";
-  let acctMethod = bookingPaymentMethod;
-  let acctDate   = bookingDateStr;
 
   let createdPayRow: Record<string, unknown> | null = null;
 
   if (existingSportPayId) {
-    // sport_payments row already exists — check if accounting_payments is also present.
-    const existingAcct = await client.execute(sql`
-      SELECT id FROM accounting_payments
-      WHERE source_type = 'sport_center' AND source_doc_id = ${existingSportPayId}
-      LIMIT 1
-    `);
-    if (existingAcct.rows.length > 0) {
-      // Fully done (both records present) — idempotent skip.
-      console.log(`[sport-center] ensurePaymentForPaidBooking: already complete for booking_id=${id} — skip`);
-      return;
-    }
-    // Partial state: sport_payment exists but accounting_payment is missing.
-    // Backfill accounting only — use the existing sport_payments row as the source
-    // of truth (amount, method, payment_number, date) so the accounting record
-    // mirrors the actual payment that was already recorded.
-    sportPaymentId = existingSportPayId;
-    const spRow = await client.execute(sql`
-      SELECT payment_number, amount, method, paid_at FROM sport_payments WHERE id = ${existingSportPayId} LIMIT 1
-    `);
-    const spData = (spRow.rows[0] as Record<string, unknown> | undefined) ?? {};
-    paymentNumber = String(spData["payment_number"] ?? `PAY-${id}`);
-    acctAmount = spData["amount"] != null ? Number(spData["amount"]) : bTotalAmount;
-    acctMethod = normalizePaymentMethod(spData["method"] != null ? String(spData["method"]) : null) ?? "cash";
-    acctDate   = spData["paid_at"] != null ? String(spData["paid_at"]).slice(0, 10) : bookingDateStr;
-    console.log(`[sport-center] ensurePaymentForPaidBooking: backfilling missing accounting for sport_payment_id=${sportPaymentId} amount=${acctAmount} method=${acctMethod}`);
+    console.log(`[sport-center] ensurePaymentForPaidBooking: payment already exists for booking_id=${id} — skip`);
   } else {
     // Neither record exists — INSERT sport_payments inside the caller's transaction.
     paymentNumber = await nextPaymentNumber(bCompanyId ?? undefined);
@@ -211,32 +106,10 @@ async function ensurePaymentForPaidBooking(
          NOW(), 'Auto-created (paid booking)', 'SPORT_CENTER', 'booking')
       RETURNING *
     `);
-    sportPaymentId = Number((payR.rows[0] as Record<string, unknown>)?.id ?? 0);
     createdPayRow = payR.rows[0] as Record<string, unknown>;
-    // acctAmount/acctMethod/acctDate remain at booking-level defaults (already set above)
   }
 
-  // ── Insert accounting_payments (THROWS on missing journal — rolls back caller's tx) ──
-  // Side effects (audit, broadcast, journal entry, tax) are deferred to AFTER this
-  // succeeds so a JOURNAL_MISSING failure leaves no false artifacts.
-  if (sportPaymentId) {
-    await insertAccountingPaymentForSportCenter({
-      companyId: bCompanyId ?? 1,
-      paymentNumber,
-      amount: acctAmount,
-      method: acctMethod,
-      partnerName: String(row.customer_name ?? ""),
-      ref: bookingCodeStr,
-      memo: 'Auto-created (paid booking)',
-      paymentMethod: acctMethod,
-      sourceDocId: sportPaymentId,
-      date: acctDate,
-      createdById,
-      client,
-    });
-  }
-
-  // ── Side effects: only reached after all DB writes committed (or will commit) ──
+  // ── Non-accounting side effects: only reached after the payment write ──
   if (createdPayRow) {
     // Audit log — fire-and-forget, uses global db (non-critical, outside tx intentionally)
     db.execute(sql`
@@ -253,30 +126,6 @@ async function ensurePaymentForPaidBooking(
       bCompanyId as number | undefined,
     );
 
-    // Journal entry — fire-and-forget
-    postSportCenterBooking({
-      bookingId: id,
-      bookingCode: bookingCodeStr,
-      customerName: String(row.customer_name ?? ""),
-      facilityName: String(row.facility_name ?? ""),
-      date: bookingDateStr,
-       totalPrice: bTotalAmount,
-       paymentMethod: acctMethod,
-      createdById,
-      companyId: bCompanyId,
-    }).catch((err: unknown) => console.error('[sport-center] postSportCenterBooking (ensurePayment) failed:', err));
-
-    // Tax engine — fire-and-forget
-    import("../../lib/taxAutoService.js").then(({ recordTransactionTax }) => {
-      const dppForTax = Math.round(bTotalAmount * 100 / 111 * 100) / 100;
-      void recordTransactionTax({
-        companyId: bCompanyId ?? 1,
-        transactionType: "sport_center",
-        transactionId: id,
-        transactionRef: String(row.booking_number ?? id),
-        baseAmount: dppForTax,
-      });
-    }).catch(() => {/* ignore */});
   }
 }
 
@@ -1703,9 +1552,8 @@ router.post("/members/:id/payment", async (req, res) => {
     const paymentNumber = await nextPaymentNumber(companyId);
     const actorId = (req.user as { id: string } | undefined)?.id ?? null;
 
-    // Atomic transaction: INSERT sport_payments + accounting (THROWS on missing COA/journal).
+    // Atomic transaction: INSERT sport_payments only.
     let payment: Record<string, unknown>;
-    let membershipAcctResult: { entryId: number; paymentId: number; skipped: boolean };
     try {
       const txResult = await db.transaction(async (tx) => {
         const payRes = await tx.execute(sql`
@@ -1718,35 +1566,16 @@ router.post("/members/:id/payment", async (req, res) => {
           RETURNING *
         `);
         const row = payRes.rows[0] as Record<string, unknown>;
-
-        const acct = await postSportCenterPaymentAtomic(tx as unknown as SportDbClient, {
-          paymentId:    Number(row.id),
-          paymentNumber,
-          type:         "membership",
-          sourceId:     Number(row.id),   // membership idempotency = sport_payments.id
-          sourceRef:    String(member.member_number ?? paymentNumber),
-          customerName: String(member.name ?? ""),
-          memberNumber: String(member.member_number ?? `MBR-${memberId}`),
-          amount:       amt,
-           method:       normalizedPaymentMethod,
-          date:         new Date().toISOString().slice(0, 10),
-          companyId,
-          createdById:  actorId,
-        });
-
-        return { row, acct };
+        return row;
       });
 
-      payment            = txResult.row;
-      membershipAcctResult = txResult.acct;
+      payment = txResult;
     } catch (txErr: unknown) {
       const detail = txErr instanceof Error ? txErr.message : String(txErr);
       console.error("[sport-center] membership payment transaction failed:", detail);
-      const isConfigError = detail.startsWith("COA_MISSING:") || detail.startsWith("JOURNAL_MISSING:");
-      return res.status(isConfigError ? 422 : 500).json({
-        error: isConfigError ? "Konfigurasi akuntansi belum lengkap" : "Gagal memproses pembayaran membership",
+      return res.status(500).json({
+        error: "Gagal memproses pembayaran membership",
         detail,
-        posting_status: "failed",
       });
     }
 
@@ -1756,7 +1585,7 @@ router.post("/members/:id/payment", async (req, res) => {
       VALUES (
         ${companyId}, 'member', ${memberId},
         'MEMBERSHIP_PAYMENT_CREATED', ${actorId},
-        ${JSON.stringify({ member_id: memberId, amount: amt, payment_method: normalizedPaymentMethod, payment_number: paymentNumber, entry_id: membershipAcctResult.entryId })}::jsonb
+        ${JSON.stringify({ member_id: memberId, amount: amt, payment_method: normalizedPaymentMethod, payment_number: paymentNumber, accounting_isolated: true })}::jsonb
       )
     `).catch((err: unknown) => console.error("[sport-center] audit log (membership) failed:", err));
 
@@ -2228,10 +2057,9 @@ router.post("/payments", async (req, res) => {
     // 2. Generate payment number dengan company_id yang benar
     const paymentNumber = await nextPaymentNumber(bCompanyId);
 
-    // 3–5. Atomic transaction: INSERT sport_payments + UPDATE sport_bookings + accounting.
-    // All three commit/roll back together — no split-brain possible.
+    // 3–4. Atomic transaction: INSERT sport_payments + UPDATE sport_bookings.
+    // Sport Center accounting is intentionally isolated in this phase.
     let payRow: Record<string, unknown>;
-    let accountingResult: { entryId: number; paymentId: number; skipped: boolean };
     try {
       const txResult = await db.transaction(async (tx) => {
         // 3. Insert sport_payments
@@ -2254,35 +2082,16 @@ router.post("/payments", async (req, res) => {
           WHERE id = ${booking_id}
         `);
 
-        // 5. Post journal + accounting_payments atomically (THROWS on missing COA/journal)
-        const acct = await postSportCenterPaymentAtomic(tx as unknown as SportDbClient, {
-          paymentId:    Number(row.id),
-          paymentNumber,
-          type:         "booking",
-          sourceId:     Number(booking_id),
-          sourceRef:    bCode,
-          customerName: bCustomer,
-          facilityName: bFacility,
-          amount:       bTotalAmount,
-          method:       finalMethod,
-          date:         paymentAccountingDate,
-          companyId:    bCompanyId,
-          createdById,
-        });
-
-        return { row, acct };
+        return row;
       });
 
-      payRow = txResult.row;
-      accountingResult = txResult.acct;
+      payRow = txResult;
     } catch (txErr: unknown) {
       const detail = txErr instanceof Error ? txErr.message : String(txErr);
       console.error("[sport-center] POST /payments transaction failed:", detail);
-      const isConfigError = detail.startsWith("COA_MISSING:") || detail.startsWith("JOURNAL_MISSING:");
-      return res.status(isConfigError ? 422 : 500).json({
-        error: isConfigError ? "Konfigurasi akuntansi belum lengkap" : "Gagal mencatat pembayaran",
+      return res.status(500).json({
+        error: "Gagal mencatat pembayaran",
         detail,
-        posting_status: "failed",
       });
     }
 
@@ -2332,8 +2141,7 @@ router.post("/payments", async (req, res) => {
           payment_number: paymentNumber,
           source: 'SPORT_CENTER',
           payment_date: effectiveDate,
-          entry_id: accountingResult.entryId,
-          acct_payment_id: accountingResult.paymentId,
+          accounting_isolated: true,
         })}::jsonb
       )
     `).catch((err: unknown) => console.error('[sport-center] audit log failed:', err));
@@ -4990,12 +4798,14 @@ router.post("/sync/accounting", async (req, res) => {
     const bookings = await pullLegacyBookingsFromSupabase();
     // 2. Pull payments dari Supabase → sport_payments lokal
     const payments = await pullPaymentsFromSupabase(companyId);
-    // 3. Sync confirmed payments → accounting_payments
-    const accounting = await syncPaymentsToAccounting(companyId);
-
-    // syncPaymentsToAccounting sudah handle posting JNL via postSportCenterBooking (idempoten)
-    // Loop backfill terpisah dihapus untuk mencegah duplikasi JNL entry
-    res.json({ ok: true, bookings, payments, accounting });
+    res.status(410).json({
+      ok: false,
+      code: "SPORT_CENTER_ACCOUNTING_ISOLATED",
+      message: "Sport Center accounting sync is temporarily disabled; payment synchronization remains available.",
+      bookings,
+      payments,
+      accounting: { synced: 0, skipped: 0, errors: 0 },
+    });
   } catch (err) {
     console.error("[sport-center] sync/accounting error:", err);
     res.status(500).json({ error: "Gagal sync akuntansi" });
@@ -5386,19 +5196,9 @@ router.post("/sync/full-audit", async (req, res) => {
         retryable: true,
       });
     }
-    accountingResult = await syncPaymentsToAccounting(1);
-    if (accountingResult.errors > 0) {
-      auditErrors.push({
-        module: "accounting",
-        operation: "syncPaymentsToAccounting",
-        entityId: null,
-        entityName: "ALL",
-        errorCode: "ACCOUNTING_SYNC_ERROR",
-        errorMessage: `${accountingResult.errors} payment gagal diposting`,
-        category: "other",
-        retryable: true,
-      });
-    }
+    // Sport Center accounting is intentionally isolated; payment mirror
+    // verification remains active, but CST does not post accounting here.
+    accountingResult = { synced: 0, skipped: 0, errors: 0 };
   } catch (err: any) {
     auditErrors.push({ module: "accounting", operation: "syncPaymentsToAccounting", entityId: null, entityName: "ALL", errorCode: "SYNC_FATAL", errorMessage: err?.message ?? String(err), category: categorize(err?.message ?? ""), retryable: false });
   }

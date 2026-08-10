@@ -141,7 +141,6 @@ import { runTaxRulesMigration } from "./lib/taxRulesMigration.js";
 import { runTaxSptMigration } from "./lib/taxSptMigration.js";
 import { runTaxAuditMigration } from "./lib/taxAuditMigration.js";
 import { runTaxCoretaxMigration } from "./lib/taxCoretaxMigration.js";
-import { backfillSportCenterAccountingPayments } from "./lib/backfillSportCenterPayments.js";
 import { runFreightAccountingMigration } from "./lib/freightAccountingMigration.js";
 import { runBankReconciliationCoreMigration } from "./routes/bankReconciliation.js";
 import { runQrisSettlementMigration } from "./lib/reconciliation/qrisSettlementMigration.js";
@@ -1858,11 +1857,6 @@ async function startServer() {
     .then(() =>
       repairOrphanedEntryLines().catch((err) => {
         logger.warn({ err }, "Repair orphaned entry lines failed (non-fatal)");
-      })
-    )
-    .then(() =>
-      backfillSportCenterAccountingPayments().catch((err) => {
-        logger.warn({ err }, "Sport Center accounting payments backfill failed (non-fatal)");
       })
     )
     .then(() =>

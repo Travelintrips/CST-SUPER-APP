@@ -1,7 +1,7 @@
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { notifySyncError } from "./sportSyncNotifier.js";
-import { normalizePaymentMethod, resolvePaymentDestination, postSportCenterBooking } from "../../lib/accounting.js";
+import { normalizePaymentMethod, resolvePaymentDestination } from "../../lib/accounting.js";
 import {
   validateSportPaymentPosting,
   type SportPaymentPostingEvidence,
@@ -690,16 +690,17 @@ export async function syncAllBookings(): Promise<{ synced: number; errors: numbe
 }
 
 /**
- * syncPaymentsToAccounting
- * Sinkronisasi payment paid di public.sport_payments → accounting_payments + accounting_entries.
- * Mirror payment dibuat oleh trigger PostgreSQL. Scheduler hanya memastikan journal
- * booking tersedia lalu membuat accounting_payment yang selalu menunjuk ke journal itu.
+ * Legacy Sport Center accounting sink.
  *
- * Penting: jangan pernah membuat accounting_payment berstatus posted dengan entry_id
- * NULL. Baris seperti itu membuat payment terlihat selesai, tetapi ledger belum ada,
- * dan pada retry dapat memicu jurnal ganda.
+ * Payment confirmation is intentionally isolated in this phase. Keep this
+ * function as a compatibility boundary for existing sync callers, but do not
+ * read, create, update, or link any accounting row here.
  */
 export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced: number; skipped: number; errors: number }> {
+  console.log(`${PREFIX} Sport Center accounting sync isolated — payment remains confirmed without accounting posting (company_id=${companyId})`);
+  return { synced: 0, skipped: 0, errors: 0 };
+
+  /*
   // Baca dari local mirror (public.sport_payments + public.sport_bookings)
   // — mirror dibuat oleh trigger PostgreSQL di sport_center.sport_payments.
   // Service ini hanya mem-posting mirror yang sudah tersedia.
@@ -968,6 +969,8 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
 
   return { synced, skipped, errors };
 }
+
+*/
 
 /**
  * pullPaymentsFromSupabase
@@ -1492,15 +1495,10 @@ export async function runDailyPaymentSync(
     paymentsResult.errors++;
   }
 
-  // ── 3. Sync ke accounting_payments ─────────────────────────────────────────
-  let accountingResult = { synced: 0, skipped: 0, errors: 0 };
-  try {
-    accountingResult = await syncPaymentsToAccounting(companyId);
-    console.log(`${PREFIX} [dailySync] Accounting sync: synced=${accountingResult.synced} skipped=${accountingResult.skipped} errors=${accountingResult.errors}`);
-  } catch (err) {
-    console.error(`${PREFIX} [dailySync] syncPaymentsToAccounting gagal:`, err);
-    accountingResult.errors++;
-  }
+  // ── 3. Accounting intentionally isolated ───────────────────────────────────
+  // Payment pull/status reconciliation remains active, but CST does not post
+  // Sport Center accounting during this phase.
+  const accountingResult = { synced: 0, skipped: 0, errors: 0 };
 
   // ── 4. Update status booking paid yang belum terupdate ─────────────────────
   let statusUpdated = 0;
