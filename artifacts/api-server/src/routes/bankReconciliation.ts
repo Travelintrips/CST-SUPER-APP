@@ -145,6 +145,14 @@ export async function runBankReconciliationCoreMigration() {
     )
   `)).catch(() => {});
 
+  // Phase 4C-1: source-aware candidate persistence. Historical rows remain NULL.
+  // Canonical matching and source-aware callers are intentionally deferred to
+  // later Phase 4C slices.
+  await db.execute(sql.raw(`
+    ALTER TABLE public.bank_reconciliation_matches
+      ADD COLUMN IF NOT EXISTS candidate_source TEXT
+  `)).catch(() => {});
+
   await db.execute(sql.raw(`
     CREATE TABLE IF NOT EXISTS bank_reconciliation_audit (
       id SERIAL PRIMARY KEY,
