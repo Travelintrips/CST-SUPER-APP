@@ -62,3 +62,4 @@
 - [4C-7A.7H runtime proof](phase4c7a7h-runtime-proof.md) — final contract proof requires live definition/source parity plus transaction rollback and post-rollback state checks.
 - [AI matching performance](ai-matching-performance.md) — bounded workers, parallel candidate reads, and batched score persistence prevent matching from appearing stuck.
 - [Source-aware matching idempotency](source-aware-matching-idempotency.md) — active reconciliation candidates require the full source-qualified identity; reruns preserve superseded history without appending active duplicates.
+- [Canonical approval bridge](canonical-approval-bridge.md) — link-only approval must resolve the public mutation_key to exactly one Sport Center bank mutation; missing bridge is fail-closed.
