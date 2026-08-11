@@ -104,6 +104,7 @@ import {
 import { wasRecentlyNotified } from "../lib/notificationLog.js";
 import { getAdminWa } from "../lib/adminWa.js";
 
+export const logisticOrdersPublicRouter = Router();
 export const logisticOrdersRouter = Router();
 
 // Inline migration: payment_proof_url column
@@ -346,7 +347,7 @@ async function resolveTemplateForCategory(categoryKey: string | null | undefined
 // ─── PUBLIC ROUTES (no auth required) ────────────────────────────────────────
 
 // POST /api/logistic/orders — create order (public customer portal endpoint)
-logisticOrdersRouter.post("/", async (req: Request, res: Response) => {
+logisticOrdersPublicRouter.post("/", async (req: Request, res: Response) => {
   // [C4-FIX] IP-based rate limit: prevent bot flooding
   const clientIp = ((req.ip ?? req.socket?.remoteAddress) || "unknown").replace(/^::ffff:/, "");
   if (!_checkPublicOrderRate(clientIp)) {
@@ -686,7 +687,7 @@ function publicLookupRateLimit(req: Request, res: Response, next: () => void) {
 }
 
 // GET /api/logistic/orders/by-number/:orderNumber — minimal public lookup (no PII fields)
-logisticOrdersRouter.get(
+logisticOrdersPublicRouter.get(
   "/by-number/:orderNumber",
   publicLookupRateLimit,
   async (req: Request, res: Response) => {

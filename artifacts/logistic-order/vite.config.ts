@@ -67,7 +67,7 @@ export default defineConfig({
     },
     proxy: {
       "/api": {
-        target: "http://localhost:8080",
+        target: `http://localhost:${process.env.API_PORT ?? process.env.FORWARDER_PORT ?? 18444}`,
         changeOrigin: true,
       },
     },

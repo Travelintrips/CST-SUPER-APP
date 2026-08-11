@@ -5,19 +5,44 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import {
-  useGetLogisticOrderByNumber,
-  getGetLogisticOrderByNumberQueryKey,
-} from "@workspace/api-client-react";
-import { Search, Package, Ship } from "lucide-react";
+import { Search, Package, Ship, AlertCircle } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { STATUS_COLORS, OrderStatus } from "@/lib/services-data";
 import { useLanguage } from "@/contexts/LanguageContext";
+
+type TrackOrder = {
+  id: number;
+  orderNumber: string;
+  companyName: string;
+  customerName: string;
+  shipmentType: string;
+  commodity?: string | null;
+  origin?: string | null;
+  destination?: string | null;
+  status: string;
+  createdAt: string;
+  subtotal: number;
+  tax: number;
+  grandTotal: number;
+  items: Array<{
+    id: number;
+    category: string;
+    serviceName: string;
+    subtotal: number;
+    inputData?: unknown;
+  }>;
+};
 
 export default function TrackPage() {
   const [, setLocation] = useLocation();
   const [input, setInput] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
+  const [phoneInput, setPhoneInput] = useState("");
+  const [verifiedPhoneLast4, setVerifiedPhoneLast4] = useState("");
+  const [needsPhoneVerification, setNeedsPhoneVerification] = useState(false);
+  const [order, setOrder] = useState<TrackOrder | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isError, setIsError] = useState(false);
   const { t } = useLanguage();
 
   // Read ?order= from URL
@@ -30,21 +55,51 @@ export default function TrackPage() {
     }
   }, []);
 
-  const {
-    data: order,
-    isLoading,
-    isError,
-  } = useGetLogisticOrderByNumber(searchTerm, {
-    query: {
-      enabled: !!searchTerm,
-      queryKey: getGetLogisticOrderByNumberQueryKey(searchTerm),
-    },
-  });
+  useEffect(() => {
+    if (!searchTerm) return;
+    let cancelled = false;
+    setIsLoading(true);
+    setIsError(false);
+    setNeedsPhoneVerification(false);
+    setOrder(null);
+    const query = verifiedPhoneLast4 ? `?phone=${encodeURIComponent(verifiedPhoneLast4)}` : "";
+    fetch(`/api/logistic/orders/track/${encodeURIComponent(searchTerm)}${query}`)
+      .then(async (res) => {
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          if (res.status === 403 && body.requiresPhoneVerification) {
+            setNeedsPhoneVerification(true);
+          }
+          throw new Error(body.message ?? "Order tidak ditemukan");
+        }
+        return body as TrackOrder;
+      })
+      .then((data) => {
+        if (!cancelled) setOrder(data);
+      })
+      .catch(() => {
+        if (!cancelled) setIsError(true);
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [searchTerm, verifiedPhoneLast4]);
 
   function handleSearch() {
     const trimmed = input.trim().toUpperCase();
     if (!trimmed) return;
+    setPhoneInput("");
+    setVerifiedPhoneLast4("");
     setSearchTerm(trimmed);
+  }
+
+  function handlePhoneVerification() {
+    const trimmed = phoneInput.replace(/\D/g, "").slice(-4);
+    if (trimmed.length !== 4) return;
+    setVerifiedPhoneLast4(trimmed);
   }
 
   return (
@@ -68,6 +123,33 @@ export default function TrackPage() {
             {isLoading ? t("track.searching") : t("track.search")}
           </Button>
         </div>
+
+        {needsPhoneVerification && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-3">
+            <div className="flex items-start gap-2 text-amber-800">
+              <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+              <div>
+                <p className="font-medium">{t("track.phoneVerification", "Verifikasi diperlukan")}</p>
+                <p className="text-xs mt-1">
+                  {t("track.phoneVerificationDesc", "Masukkan 4 digit terakhir nomor HP yang digunakan saat booking.")}
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Input
+                inputMode="numeric"
+                maxLength={4}
+                placeholder="1234"
+                value={phoneInput}
+                onChange={(e) => setPhoneInput(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                onKeyDown={(e) => e.key === "Enter" && handlePhoneVerification()}
+              />
+              <Button onClick={handlePhoneVerification} disabled={phoneInput.replace(/\D/g, "").length !== 4}>
+                {t("track.verify", "Verifikasi")}
+              </Button>
+            </div>
+          </div>
+        )}
 
         {isError && (
           <div className="text-center py-10 text-muted-foreground">

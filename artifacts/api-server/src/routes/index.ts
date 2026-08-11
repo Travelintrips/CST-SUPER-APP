@@ -26,7 +26,11 @@ import { invoiceOcrRouter } from "./invoiceOcr";
 import expensesRouter from "./expenses";
 import portalRouter from "./portal";
 import { masterPriceRouter } from "./masterPrice.js";
-import { logisticOrdersRouter, logisticOrderTrackPublicRouter } from "./logisticOrders";
+import {
+  logisticOrdersPublicRouter,
+  logisticOrdersRouter,
+  logisticOrderTrackPublicRouter,
+} from "./logisticOrders";
 import { logisticRfqRouter } from "./logisticRfq";
 import { productFirstFlowRouter } from "./productFirstFlow";
 import { logisticRfqV2Router } from "./logisticRfqV2";
@@ -270,6 +274,7 @@ router.use("/trading/catalog-engine", vendorCatalogEngineAdminRouter);
 // TODO Step 2: pisahkan sub-path agar tidak ada ambiguitas (misal /logistic/rfq vs /logistic/orders).
 // Public tracking (anonymous customer-portal visitors) — must be mounted before
 // the RBAC-guarded routers below, or the guard would 401 every request.
+router.use("/logistic/orders", logisticOrdersPublicRouter);
 router.use("/logistic/orders", logisticOrderTrackPublicRouter);
 router.use("/logistic/orders", makeRbacGuard("rfq"), logisticRfqRouter);
 // Phase 2A: Product-First Flow endpoints (product-rfq, select-product-vendor, dll.)
