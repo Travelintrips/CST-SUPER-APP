@@ -33,7 +33,7 @@ const adminSession = await devLogin({ email: process.env.TEST_ADMIN_EMAIL });
 const sessionId = adminSession.cookie.slice("sid=".length);
 
 const req = async (method, path, body) =>
-  apiRequest(`/api${path}`, {
+  apiRequest(`/api${path}${path.includes("?") ? "&" : "?"}companyId=1`, {
     method,
     body,
     cookie: adminSession.cookie,

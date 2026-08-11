@@ -200,11 +200,12 @@ function getAdminCookie() {
 /** Like httpJson but adds Cookie header for admin auth. */
 function httpJsonAuth(method, path, cookie, body) {
   return new Promise((resolve, reject) => {
+    const pathWithCompany = path.includes("?") ? `${path}&companyId=1` : `${path}?companyId=1`;
     const payload = body ? JSON.stringify(body) : null;
     const opts = {
       hostname: BASE_HOST,
       port: BASE_PORT,
-      path,
+      path: pathWithCompany,
       method,
       headers: {
         "Content-Type": "application/json",
