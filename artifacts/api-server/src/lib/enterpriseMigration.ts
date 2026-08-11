@@ -15,6 +15,7 @@ export async function runEnterpriseMigration(): Promise<void> {
     // 2. Add rank columns to logistic_order_quotes — batched
     await db.execute(sql`
       ALTER TABLE logistic_order_quotes
+        ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT 'IDR',
         ADD COLUMN IF NOT EXISTS rank_score NUMERIC(6,2),
         ADD COLUMN IF NOT EXISTS rank_badges TEXT[] DEFAULT '{}';
     `);

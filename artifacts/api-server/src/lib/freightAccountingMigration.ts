@@ -5,6 +5,7 @@ import { logger } from "./logger.js";
 export async function runFreightAccountingMigration(): Promise<void> {
   await db.execute(sql`
     ALTER TABLE freight_shipments
+      ADD COLUMN IF NOT EXISTS freight_cost NUMERIC(14,2) DEFAULT '0',
       ADD COLUMN IF NOT EXISTS estimated_revenue NUMERIC(14,2),
       ADD COLUMN IF NOT EXISTS estimated_cost    NUMERIC(14,2),
       ADD COLUMN IF NOT EXISTS actual_revenue    NUMERIC(14,2),
