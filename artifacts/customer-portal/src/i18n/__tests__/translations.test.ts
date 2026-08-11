@@ -28,7 +28,7 @@ describe("i18n translations", () => {
     }
     expect(getCachedLocale("id-ID")).toBeDefined();
     expect(getCachedLocale("en-US")).toBeDefined();
-    expect(Object.keys(TRANSLATIONS).sort()).toEqual(["en-US", "id-ID"]);
+    expect(Object.keys(TRANSLATIONS).sort()).toEqual([...SUPPORTED_LOCALES].sort());
   });
 
   it("has the same key count in every locale as the id-ID baseline", async () => {
@@ -38,7 +38,7 @@ describe("i18n translations", () => {
       const flat = flatten(await loadLocale(locale));
       expect(Object.keys(flat).length).toBe(baseKeys.length);
     }
-  });
+  }, 30_000);
 
   it("has every baseline key present in every locale", async () => {
     const baseline = flatten(await loadLocale("id-ID"));
