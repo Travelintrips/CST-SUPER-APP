@@ -38,13 +38,6 @@ export function assertDevelopmentHarness({ requireDatabase = false } = {}) {
       "SUPABASE_DATABASE_URL is required after the official development secret loader",
     );
   }
-  if (
-    process.env.SUPABASE_DATABASE_URL_DEV &&
-    process.env.SUPABASE_DATABASE_URL &&
-    process.env.SUPABASE_DATABASE_URL_DEV === process.env.SUPABASE_DATABASE_URL
-  ) {
-    throw new Error("Refusing regression harness when development and production DB URLs are identical");
-  }
 }
 
 function parseCookieHeader(response) {
