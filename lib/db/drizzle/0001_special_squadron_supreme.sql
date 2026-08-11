@@ -1245,6 +1245,8 @@ ALTER TABLE "correspondences" ADD COLUMN "company_id" integer;
 --> statement-breakpoint
 ALTER TABLE "freight_shipments" ADD COLUMN "company_id" integer;
 --> statement-breakpoint
+ALTER TABLE "freight_shipments" ADD COLUMN IF NOT EXISTS "freight_cost" numeric(14, 2) DEFAULT '0';
+--> statement-breakpoint
 ALTER TABLE "expenses" ADD COLUMN "company_id" integer;
 --> statement-breakpoint
 ALTER TABLE "portal_customers" ADD COLUMN "oauth_provider" text;
@@ -1252,6 +1254,8 @@ ALTER TABLE "portal_customers" ADD COLUMN "oauth_provider" text;
 ALTER TABLE "portal_customers" ADD COLUMN "oauth_id" text;
 --> statement-breakpoint
 ALTER TABLE "logistic_order_quotes" ADD COLUMN "vendor_confirm_token" text;
+--> statement-breakpoint
+ALTER TABLE "logistic_order_quotes" ADD COLUMN IF NOT EXISTS "currency" text NOT NULL DEFAULT 'IDR';
 --> statement-breakpoint
 ALTER TABLE "logistic_orders" ADD COLUMN "company_id" integer;
 --> statement-breakpoint
