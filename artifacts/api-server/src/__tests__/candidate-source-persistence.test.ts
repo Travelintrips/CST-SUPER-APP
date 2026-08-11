@@ -77,4 +77,16 @@ describe("Phase 4C-1 candidate_source persistence", () => {
     expect(migration).toContain("status = 'superseded'");
     expect(migration).not.toMatch(/DELETE\s+FROM/i);
   });
+
+  it("defines active candidates as candidate or approved, excluding superseded history", () => {
+    const migration = readFileSync(
+      resolve(process.cwd(), "../../lib/db/drizzle/0034_reconciliation_candidate_identity.sql"),
+      "utf8",
+    );
+
+    expect(migration).toContain(
+      "status IN ('candidate', 'approved')",
+    );
+    expect(migration).toContain("SET status = 'superseded'");
+  });
 });

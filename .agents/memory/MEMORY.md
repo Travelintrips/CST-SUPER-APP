@@ -63,4 +63,4 @@
 - [AI matching performance](ai-matching-performance.md) — bounded workers, parallel candidate reads, and batched score persistence prevent matching from appearing stuck.
 - [Source-aware matching idempotency](source-aware-matching-idempotency.md) — active reconciliation candidates require the full source-qualified identity; reruns preserve superseded history without appending active duplicates.
 - [Canonical approval bridge](canonical-approval-bridge.md) — link-only approval must resolve the public mutation_key to exactly one Sport Center bank mutation; missing bridge is fail-closed.
-- [Phase 4C-7P runtime blocked](phase4c7p-runtime-blocked.md) — live engine score differed from persisted score; existing payment-22 settlement link invalidated clean no-link proof.
+- [Phase 4C-7P runtime evidence](phase4c7p-runtime-blocked.md) — active scores are correct; exclude superseded history or stale rows can falsely show a 30→20 persistence loss.

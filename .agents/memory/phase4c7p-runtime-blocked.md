@@ -1,10 +1,10 @@
 ---
-name: Phase 4C-7P runtime blocked
-description: Development runtime proof exposed a returned-versus-persisted score mismatch and pre-existing settlement linkage.
+name: Phase 4C-7P runtime evidence
+description: Active canonical candidate persistence is correct; proof queries must exclude superseded history.
 ---
 
-The Phase 4C-7P runtime proof must compare the exact `runUnifiedMatching()` result with the persisted `bank_reconciliation_matches` rows. In the observed development state, the engine returned canonical candidate 1 at 30 and candidate 2 at 20, while persisted rows showed both at 20. The same state already contained an active settlement item linking payment 22 to settlement 2, so the no-link assertion was not a clean proof condition.
+The Phase 4C-7P runtime proof must compare the exact `runUnifiedMatching()` result with only active `bank_reconciliation_matches` rows (`status IN ('candidate', 'approved')`). Mutation 144's development state contains active canonical candidates 1 and 2 at 30 and 20, plus superseded historical duplicate rows. A query that omits the active-status filter can select a stale 20-point row and falsely report that persistence lost the exact-date bonus. The same state contains an existing active settlement item linking payment 22 to settlement 2, so that negative assertion is a fixture-state fact, not an approval side effect.
 
-**Why:** A passing in-memory ranking does not prove the database-backed candidate/rank contract, and pre-existing canonical links can invalidate a negative proof without any approval action in the harness.
+**Why:** Superseded candidate history is intentionally retained, so reading by identity alone is nondeterministic when duplicate rows exist. Pre-existing canonical links can also invalidate a negative proof without any approval action in the harness.
 
-**How to apply:** Keep 4C-7P blocked until the persistence mismatch is investigated and the development fixture/state is reset or explicitly accounted for. Do not change scoring or approve mutation 144 as part of the proof.
+**How to apply:** Filter active rows before checking score, rank, count, or uniqueness. Do not change scoring or approve mutation 144 as part of the proof.
