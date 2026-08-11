@@ -461,23 +461,190 @@ The current canonical payment table exposes a text
 `settlement_status` with a default of `unsettled`. The builder must not guess
 the post-build value from the public QRIS implementation.
 
-Before implementation, prove from the live canonical schema/function/service
-contract the exact transition owned by the Sport Center system:
+### 11.1 Frozen audit result — status contract remains unresolved
 
 ```text
-unsettled -> <verified successfully-settled state>
+live canonical values observed:
+  sport_center.sport_payments.settlement_status = unsettled
+
+live canonical writers observed:
+  sport_center.mirror_confirmed_payment_to_public()
+    copies the canonical value to public.sport_payments;
+  sport_center.create_settlement_journal_draft(...)
+    creates the settlement journal draft;
+  sport_center.finalize_payment_settlement(...)
+    finalizes the settlement journal and changes the batch to posted.
+
+none of the verified settlement-owner functions changes
+sport_center.sport_payments.settlement_status after successful settlement posting.
 ```
 
-The implementation must then:
+The mirror trigger is not a settlement-status owner. The public QRIS and admin
+payment routes write public `sport_payments` lifecycle values, but belong to a
+different public/reconciliation lifecycle and cannot establish the canonical
+Sport Center transition.
 
-1. lock the payment;
-2. revalidate the old value is `unsettled`;
-3. apply only the verified transition;
-4. verify the resulting value before commit.
+Therefore the exact canonical transition is **NOT FROZEN**:
 
-If the owner contract does not define this transition, the builder must return
-`CANONICAL_PAYMENT_SETTLEMENT_STATE_UNRESOLVED` and roll back. It must not
-invent `settled`, `posted`, or another status.
+```text
+unsettled -> <state not defined by the verified canonical owner contract>
+```
+
+The builder must not select `settled`, `posted`, `settlement_confirmed`, or any
+other value by convention.
+
+### 11.2 Minimum owner contract required before implementation
+
+The canonical settlement owner must expose one transaction-scoped operation
+(database function or owner service) that:
+
+1. locks each canonical payment in ascending `payment_id` order;
+2. revalidates the old value is exactly `unsettled`;
+3. verifies the payment belongs to the same finalized settlement batch;
+4. applies one explicitly named success state;
+5. rejects an already transitioned payment unless it is an exact idempotent
+   retry for the same batch;
+6. returns or permits verification of the resulting state before commit.
+
+That owner contract must also state whether the transition is applied before or
+after batch finalization and must be the sole writer for this settlement
+lifecycle. Until it exists, a builder run must return
+`CANONICAL_PAYMENT_SETTLEMENT_STATE_UNRESOLVED` and roll back.
+
+This is a missing owner contract, not permission to add a direct update in the
+builder.
+
+## 11A. Settlement grouping identity and concurrency freeze
+
+### 11A.1 Deterministic group identity
+
+The canonical group identity is the complete normalized tuple:
+
+```text
+company_id
+provider identity
+external bank account
+expected_settlement_date
+settlement_rule_version
+```
+
+For the currently verified batch columns, the persisted components are:
+
+```text
+company_id
+provider_code       -- normalized provider identity
+bank_account_id     -- external bank-account identity
+settlement_date     -- expected settlement date
+settlement_rule_version
+```
+
+`provider_name`, row order, payment IDs, process time, and bank-mutation
+evidence are not substitutes for this identity. The builder must reject a group
+with any missing component.
+
+No existing field is sufficient as the group key by itself:
+
+- `settlement_reference` is required and has a unique
+  `(company_id, provider_code, settlement_reference)` index, but is currently
+  caller-supplied and is not constrained to encode the complete group;
+- `correlation_id` has a partial unique index, but is nullable and likewise is
+  not constrained to encode the complete group;
+- `provider_batch_id` is nullable and its existing unique index omits bank
+  account, settlement date, and rule version;
+- the existing `(company_id, bank_account_id, settlement_date)` index is
+  non-unique and omits provider and rule version.
+
+The minimum deterministic reference contract is therefore:
+
+```text
+canonical_serialization =
+  versioned, length-delimited UTF-8 serialization of:
+    company_id
+    normalized provider identity
+    external bank account
+    expected settlement date
+    settlement rule version
+
+group_digest =
+  lowercase hex SHA-256(canonical_serialization)
+
+settlement_reference =
+  SCB1-<group_digest>
+
+correlation_id =
+  scb:v1:<group_digest>
+```
+
+The exact serialization and normalization rules must be shared by every
+builder caller. The digest must not include payment row order, a timestamp,
+randomness, bank mutation data, or mutable display names. The reference and
+correlation are generated by the canonical builder/owner, not accepted as
+independent caller identity.
+
+### 11A.2 Required uniqueness backstop
+
+The live schema currently proves only:
+
+```text
+unique correlation_id WHERE correlation_id IS NOT NULL
+unique (company_id, provider_code, settlement_reference)
+```
+
+Those constraints are useful idempotency backstops only after the deterministic
+identity contract above is enforced. They do not prevent two callers from
+choosing two different references for the same group.
+
+The minimum schema-level grouping backstop required before implementation is a
+unique index over the complete persisted group identity:
+
+```sql
+(
+  company_id,
+  provider_code,
+  bank_account_id,
+  settlement_date,
+  settlement_rule_version
+)
+```
+
+with the canonical active-batch lifecycle defined explicitly. At minimum,
+active states must cover `draft`, `calculated`, and `posted`; if
+`reconciled` remains the same canonical batch identity, it must be covered as
+well. Reversed/voided replacement behavior must be specified before excluding
+those states from a partial index. A non-unique lookup index or an application
+pre-check is insufficient.
+
+This required index is **ABSENT** in the live development schema. The current
+`finalize_payment_settlement` advisory lock is keyed by an existing settlement
+ID, so it serializes finalization of one batch but cannot serialize creation of
+two batches for the same group. The existing correlation/reference indexes
+cannot repair that gap when callers use different values.
+
+### 11A.3 Exact concurrency and idempotency invariant
+
+For one complete grouping key and one locked eligible payment set:
+
+```text
+two concurrent builder runs
+  -> one active canonical batch
+  -> one active item per payment
+  -> one canonical settlement journal for that batch
+  -> one posted batch
+```
+
+The builder must acquire the group identity lock or rely on the required
+unique index before creating a batch. A unique violation must be re-read as an
+idempotency/concurrency outcome:
+
+- return the existing result only when the complete group, item set, journal,
+  amounts, and lifecycle state match exactly;
+- otherwise return `CANONICAL_SETTLEMENT_CONCURRENCY_CONFLICT` or
+  `CANONICAL_SETTLEMENT_IDEMPOTENCY_CONFLICT` and roll back.
+
+The current schema can enforce the item-level invariants, but cannot enforce
+the one-batch-per-complete-group invariant. Consequently the grouping and
+concurrency gate remains blocked pending the additive unique index (or an
+equivalent proven database advisory-lock contract).
 
 ## 12. Recovery and error codes
 
@@ -613,3 +780,16 @@ batch grouping uniqueness backstop
 
 No builder, function, migration, table, worker, or settlement row is created
 by this specification.
+
+## 17. Phase 4C-7A.7H final verdict
+
+```text
+4C-7A.7H BLOCKED — CANONICAL OWNERSHIP STILL UNRESOLVED
+```
+
+Reason:
+
+- no verified canonical owner performs the successful
+  `sport_center.sport_payments.settlement_status` transition; and
+- no unique constraint or equivalent proven advisory-lock contract enforces
+  one active batch for the complete grouping key.
