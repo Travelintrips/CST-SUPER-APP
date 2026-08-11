@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 /**
  * Regression Test Suite — Phase 4 Freeze & Cleanup
- * Jalankan: node scripts/regression-phase4.mjs
+ * Jalankan:
+ *   APP_ENV=development node artifacts/api-server/load-secrets.mjs \
+ *     node scripts/regression-phase4.mjs
  *
  * Menguji 11 alur kritis pasca-freeze:
  *   1.  Customer create order
@@ -21,7 +23,19 @@
  *   - Verify GET /api/logistics/shipments responds (dismounted = 401 from auth guard)
  */
 
-const BASE = process.env.API_BASE ?? "http://localhost:8080/api";
+import {
+  apiRequest,
+  assertDevelopmentHarness,
+  devLogin,
+  getApiBaseUrl,
+  getApiUrl,
+  waitForApiReady,
+} from "./regression-harness-helpers.mjs";
+
+assertDevelopmentHarness();
+await waitForApiReady();
+const adminSession = await devLogin({ email: process.env.TEST_ADMIN_EMAIL });
+const BASE = `${getApiBaseUrl()}/api`;
 // /healthz is mounted directly on app, not under /api
 const ROOT = BASE.replace(/\/api$/, "");
 
@@ -60,6 +74,10 @@ async function get(path, opts = {}) {
   return res;
 }
 
+async function adminGet(path, opts = {}) {
+  return apiRequest(`/api${path}`, { method: "GET", cookie: adminSession.cookie, headers: opts.headers });
+}
+
 async function post(path, body, opts = {}) {
   const res = await fetch(`${BASE}${path}`, {
     method: "POST",
@@ -94,7 +112,7 @@ await check("3. Vendor submit quote — endpoint reachable", async () => {
 
 // ─── TEST 4: Admin select vendor — list quotes for order ──────────────────────
 await check("4. Admin list quotes — endpoint reachable (auth required)", async () => {
-  const res = await get("/logistic/orders/1/quotes");
+  const res = await adminGet("/logistic/orders/1/quotes");
   const ok = res.status === 401 || res.status === 403 || res.status === 200 || res.status === 404;
   return { ok, detail: `HTTP ${res.status}` };
 });
@@ -122,14 +140,14 @@ await check("7. POD OCR endpoint reachable", async () => {
 
 // ─── TEST 8: Invoice issued — accounting list ─────────────────────────────────
 await check("8. Invoice list — accounting endpoint reachable", async () => {
-  const res = await get("/accounting/invoices");
+  const res = await adminGet("/accounting/invoices");
   const ok = res.status === 401 || res.status === 403 || res.status === 200;
   return { ok, detail: `HTTP ${res.status}` };
 });
 
 // ─── TEST 9: Payment manual — payments list ───────────────────────────────────
 await check("9. Payment list — payments endpoint reachable", async () => {
-  const res = await get("/payments");
+  const res = await adminGet("/payments");
   const ok = res.status === 401 || res.status === 403 || res.status === 200 || res.status === 404;
   return { ok, detail: `HTTP ${res.status}` };
 });
@@ -192,7 +210,7 @@ await check("BONUS-C. GET /logistics/shipments — dismounted (401 dari auth gua
 
 // ─── BONUS: RFQ V2 aktif ──────────────────────────────────────────────────────
 await check("BONUS-D. RFQ V2 list — endpoint aktif", async () => {
-  const res = await get("/logistic/rfq/list");
+  const res = await adminGet("/logistic/rfq/list");
   const ok = res.status === 401 || res.status === 403 || res.status === 200;
   return { ok, detail: `HTTP ${res.status}` };
 });
@@ -212,9 +230,13 @@ await check("BONUS-F. Estimate price — customer portal endpoint aktif", async 
 
 // ─── API Health Check — /healthz di root (bukan /api) ────────────────────────
 await check("HEALTH. API server health check — GET /healthz", async () => {
-  const res = await fetch(`${ROOT}/healthz`);
-  const ok = res.status === 200;
-  return { ok, detail: `HTTP ${res.status}` };
+  const res = await fetch(getApiUrl("/healthz"));
+  const livenessOk = res.status === 200;
+  if (!livenessOk) return { ok: false, detail: `liveness HTTP ${res.status}` };
+  const readiness = await fetch(getApiUrl("/api/health/ready"));
+  const body = await readiness.json().catch(() => null);
+  const ok = readiness.status === 200 && body?.ready === true;
+  return { ok, detail: `liveness HTTP 200 | readiness=${JSON.stringify(body)}` };
 });
 
 // ─── Print results ────────────────────────────────────────────────────────────
