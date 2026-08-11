@@ -471,13 +471,35 @@ export async function fetchCandidates(
   // The aggregate tables may not exist yet on older runtime databases. Keep
   // the source query fail-safe and only add the aggregate candidate when both
   // tables are present.
-  const qrisSettlementTablesAvailable = mutationLooksQris
-    ? await db.execute(sql.raw(`
+  // These two discovery reads are independent. Run them together so a QRIS
+  // mutation does not wait for the canonical source lookup before starting its
+  // candidate queries.
+  const qrisTablesPromise = mutationLooksQris
+    ? db.execute(sql.raw(`
         SELECT to_regclass('public.qris_settlements') AS settlements,
                to_regclass('public.qris_settlement_items') AS items
-      `)).then(({ rows }) => Boolean((rows[0] as any)?.settlements && (rows[0] as any)?.items))
-      .catch(() => false)
-    : false;
+      `))
+        .then(({ rows }) => Boolean((rows[0] as any)?.settlements && (rows[0] as any)?.items))
+        .catch(() => false)
+    : Promise.resolve(false);
+  const canonicalCandidatesPromise = direction === "IN"
+    ? findCanonicalSettlementCandidates({
+        companyId: company_id ?? null,
+        amount: Number(amount),
+        from: transaction_date ? dateOffset(transaction_date, -3) : null,
+        to: transaction_date ? dateOffset(transaction_date, 3) : null,
+      }).catch((e: any) => {
+        logger.warn(
+          { err: e.message },
+          "[unifiedMatchingEngine] canonical settlement source skipped",
+        );
+        return [] as Awaited<ReturnType<typeof findCanonicalSettlementCandidates>>;
+      })
+    : Promise.resolve([] as Awaited<ReturnType<typeof findCanonicalSettlementCandidates>>);
+  const [qrisSettlementTablesAvailable, canonicalCandidates] = await Promise.all([
+    qrisTablesPromise,
+    canonicalCandidatesPromise,
+  ]);
   const calculatedSportNet = "GREATEST(0, sp.amount - COALESCE(sp.mdr_amount, 0) - COALESCE(sp.tax_withheld_amount, 0) - COALESCE(sp.other_fee_amount, 0))";
   const verifiedSportNet = `(CASE
     WHEN COALESCE(sp.net_amount, 0) > 0
@@ -659,78 +681,72 @@ export async function fetchCandidates(
   // Phase 4C-5: canonical Sport Center settlements are read only through the
   // verified adapter. The adapter uses expected_bank_settlements (net_amount)
   // and enforces posted + unlinked + posted settlement journal eligibility.
-  if (direction === "IN") {
-    try {
-      const canonicalCandidates = await findCanonicalSettlementCandidates({
-        companyId: company_id ?? null,
-        amount: Number(amount),
-        from: transaction_date ? dateOffset(transaction_date, -3) : null,
-        to: transaction_date ? dateOffset(transaction_date, 3) : null,
-      });
-      for (const canonical of canonicalCandidates) {
-        const candidate: MatchCandidate = {
-          id: canonical.id,
-          type: "qris_settlement",
-          candidateSource: canonical.candidateSource,
-          amount: canonical.amount,
-          date: canonical.date,
-          ref: canonical.ref,
-          name: canonical.name,
-          gross_amount: canonical.gross_amount,
-          mdr_amount: canonical.mdr_amount,
-          provider_fee_amount: canonical.provider_fee_amount,
-          fee_tax_amount: canonical.fee_tax_amount,
-          tax_withheld_amount: canonical.tax_withheld_amount,
-          adjustment_amount: canonical.adjustment_amount,
-          expected_bank_amount: canonical.expected_bank_amount,
-          settlement_date: canonical.settlement_date,
-          settlement_reference: canonical.settlement_reference,
-          settlement_status: canonical.settlement_status,
-          company_id: canonical.company_id,
-          bank_account_id: canonical.bank_account_id,
-          provider_code: canonical.provider_code,
-          provider_name: canonical.provider_name,
-        };
-        candidates.push(candidate);
-      }
-    } catch (e: any) {
-      logger.warn(
-        { err: e.message },
-        "[unifiedMatchingEngine] canonical settlement source skipped",
-      );
-    }
+  for (const canonical of canonicalCandidates) {
+    const candidate: MatchCandidate = {
+      id: canonical.id,
+      type: "qris_settlement",
+      candidateSource: canonical.candidateSource,
+      amount: canonical.amount,
+      date: canonical.date,
+      ref: canonical.ref,
+      name: canonical.name,
+      gross_amount: canonical.gross_amount,
+      mdr_amount: canonical.mdr_amount,
+      provider_fee_amount: canonical.provider_fee_amount,
+      fee_tax_amount: canonical.fee_tax_amount,
+      tax_withheld_amount: canonical.tax_withheld_amount,
+      adjustment_amount: canonical.adjustment_amount,
+      expected_bank_amount: canonical.expected_bank_amount,
+      settlement_date: canonical.settlement_date,
+      settlement_reference: canonical.settlement_reference,
+      settlement_status: canonical.settlement_status,
+      company_id: canonical.company_id,
+      bank_account_id: canonical.bank_account_id,
+      provider_code: canonical.provider_code,
+      provider_name: canonical.provider_name,
+    };
+    candidates.push(candidate);
   }
 
-  for (const src of sources) {
-    try {
-      const { rows } = await db.execute(sql.raw(src.q));
-      for (const r of rows as any[]) {
-        candidates.push({
-          id: Number(r.id),
-          type: src.type,
-          candidateSource: src.candidateSource ?? null,
-          amount: Number(r.amount),
-          date: String(r.date ?? ""),
-          name: r.name ?? null,
-          ref: r.ref ?? null,
-          gross_amount: r.gross_amount != null ? Number(r.gross_amount) : null,
-          mdr_amount: r.mdr_amount != null ? Number(r.mdr_amount) : null,
-          tax_withheld_amount: r.tax_withheld_amount != null ? Number(r.tax_withheld_amount) : null,
-          other_fee_amount: r.other_fee_amount != null ? Number(r.other_fee_amount) : null,
-          settlement_date: r.settlement_date ? String(r.settlement_date) : null,
-          settlement_reference: r.settlement_reference ? String(r.settlement_reference) : null,
-          settlement_status: r.settlement_status ? String(r.settlement_status) : null,
-          payment_method: r.payment_method ? String(r.payment_method) : null,
-          settlement_item_count: r.settlement_item_count != null ? Number(r.settlement_item_count) : null,
-          settlement_partial: Boolean(r.settlement_partial),
-          company_id: r.company_id != null ? Number(r.company_id) : null,
-          bank_account_id: r.bank_account_id != null ? Number(r.bank_account_id) : null,
-          provider_code: r.provider_code ? String(r.provider_code) : null,
-          provider_name: r.provider_name ? String(r.provider_name) : null,
-        });
+  // Candidate sources are independent amount/date lookups. Running them in
+  // parallel removes one full database round-trip per source while preserving
+  // fail-soft behavior for optional/legacy tables.
+  const sourceRows = await Promise.all(
+    sources.map(async (src) => {
+      try {
+        const { rows } = await db.execute(sql.raw(src.q));
+        return { src, rows: rows as any[] };
+      } catch (e: any) {
+        logger.warn({ err: e.message, type: src.type }, "[unifiedMatchingEngine] fetchCandidates: source skipped");
+        return { src, rows: [] as any[] };
       }
-    } catch (e: any) {
-      logger.warn({ err: e.message, type: src.type }, "[unifiedMatchingEngine] fetchCandidates: source skipped");
+    }),
+  );
+  for (const { src, rows } of sourceRows) {
+    for (const r of rows) {
+      candidates.push({
+        id: Number(r.id),
+        type: src.type,
+        candidateSource: src.candidateSource ?? null,
+        amount: Number(r.amount),
+        date: String(r.date ?? ""),
+        name: r.name ?? null,
+        ref: r.ref ?? null,
+        gross_amount: r.gross_amount != null ? Number(r.gross_amount) : null,
+        mdr_amount: r.mdr_amount != null ? Number(r.mdr_amount) : null,
+        tax_withheld_amount: r.tax_withheld_amount != null ? Number(r.tax_withheld_amount) : null,
+        other_fee_amount: r.other_fee_amount != null ? Number(r.other_fee_amount) : null,
+        settlement_date: r.settlement_date ? String(r.settlement_date) : null,
+        settlement_reference: r.settlement_reference ? String(r.settlement_reference) : null,
+        settlement_status: r.settlement_status ? String(r.settlement_status) : null,
+        payment_method: r.payment_method ? String(r.payment_method) : null,
+        settlement_item_count: r.settlement_item_count != null ? Number(r.settlement_item_count) : null,
+        settlement_partial: Boolean(r.settlement_partial),
+        company_id: r.company_id != null ? Number(r.company_id) : null,
+        bank_account_id: r.bank_account_id != null ? Number(r.bank_account_id) : null,
+        provider_code: r.provider_code ? String(r.provider_code) : null,
+        provider_name: r.provider_name ? String(r.provider_name) : null,
+      });
     }
   }
 
@@ -799,22 +815,24 @@ export async function runUnifiedMatching(
     .map(c => scoreUnified(mutation, c))
     .sort((a, b) => b.score - a.score);
 
-  // Persist all candidate scores
-  for (const s of scored) {
-    await db.execute(sql.raw(`
-      INSERT INTO bank_reconciliation_matches
-        (mutation_id, candidate_type, candidate_id, match_score, match_reason,
-         amount_match, date_match, name_match, order_id_match, proof_match, status,
-         candidate_source)
-      VALUES
-        (${mutation.id}, '${s.candidate.type}', ${s.candidate.id}, ${s.score},
-         '${s.reason.join("; ").replace(/'/g, "''")}',
-         ${s.amount_match}, ${s.date_match}, false, ${s.ref_match}, ${s.ocr_match},
-         'candidate',
-         ${s.candidate.candidateSource ? `'${s.candidate.candidateSource}'` : "NULL"})
-      ON CONFLICT DO NOTHING
-    `)).catch(() => {});
-  }
+  // Persist all candidate scores in one statement instead of one round-trip
+  // per candidate. The values are derived from typed engine output; strings
+  // are escaped before being embedded in the existing raw SQL path.
+  const candidateValues = scored.map((s) => `(
+    ${mutation.id}, '${s.candidate.type}', ${s.candidate.id}, ${s.score},
+    '${s.reason.join("; ").replace(/'/g, "''")}',
+    ${s.amount_match}, ${s.date_match}, false, ${s.ref_match}, ${s.ocr_match},
+    'candidate',
+    ${s.candidate.candidateSource ? `'${s.candidate.candidateSource.replace(/'/g, "''")}'` : "NULL"}
+  )`).join(",\n");
+  await db.execute(sql.raw(`
+    INSERT INTO bank_reconciliation_matches
+      (mutation_id, candidate_type, candidate_id, match_score, match_reason,
+       amount_match, date_match, name_match, order_id_match, proof_match, status,
+       candidate_source)
+    VALUES ${candidateValues}
+    ON CONFLICT DO NOTHING
+  `)).catch(() => {});
 
   const best = scored[0];
   // Phase 4C-5 deliberately stops before approval. A canonical candidate may

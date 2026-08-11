@@ -2792,6 +2792,10 @@ router.post("/run-matching", async (req, res) => {
 
   const actor = (req as any).user?.email ?? "system";
   const { ids } = req.body as { ids?: number[] };
+  // Keep a small worker pool: matching performs several independent reads per
+  // mutation, so serial processing is unnecessarily slow, while unbounded
+  // Promise.all would exhaust the database pool during a large re-run.
+  const MATCHING_CONCURRENCY = 4;
 
   // Allow matching unmatched + matched + duplicate_need_review (spec §Phase3)
   let whereClause = "status IN ('unmatched','matched','duplicate_need_review')";
@@ -2808,7 +2812,7 @@ router.post("/run-matching", async (req, res) => {
   let rule_matched = 0;
   let ecf_matched = 0;
 
-  for (const m of mutations as any[]) {
+  const processMutation = async (m: any) => {
     try {
       // ── 1. Decision Stack pre-processing (Rule Engine + ECF) ─────────────────
       const decisionInput: MutationForDecisionStack = {
@@ -2832,7 +2836,7 @@ router.post("/run-matching", async (req, res) => {
       if (!decision.eligible) {
         // Status guard blocked — skip, do not count as processed
         logger.debug({ mutationId: m.id, reason: decision.blockedReason }, "[run-matching] blocked by status guard");
-        continue;
+        return;
       }
 
       // ── 2a. Rule Engine match → save as candidate + update audit trail ────────
@@ -2879,7 +2883,7 @@ router.post("/run-matching", async (req, res) => {
         `)).catch(() => {});
 
         manual_review++;
-        continue;
+        return;
       }
 
       // ── 2b. ECF match → record candidate + fall through to unified engine ─────
@@ -2933,7 +2937,25 @@ router.post("/run-matching", async (req, res) => {
     } catch (e: any) {
       logger.warn({ err: e.message, id: m.id }, "[bankRecon] matching error for mutation");
     }
-  }
+  };
+
+  // Process independent mutations concurrently with a bounded worker pool.
+  // This preserves the existing response contract while cutting the long
+  // serial wait for large matching runs.
+  let nextIndex = 0;
+  const worker = async () => {
+    while (true) {
+      const index = nextIndex++;
+      if (index >= mutations.length) return;
+      await processMutation(mutations[index]);
+    }
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(MATCHING_CONCURRENCY, mutations.length) },
+      () => worker(),
+    ),
+  );
 
   return res.json({
     ok: true,

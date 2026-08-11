@@ -60,3 +60,4 @@
 - [Phase 4C-7A.6 recovery boundary](phase4c7a6-recovery-boundary.md) — trigger replay can recover a historical mirror idempotently, while accounting/settlement remain stopped when their approved pipeline is isolated.
 - [Canonical builder contract](canonical-settlement-builder-contract.md) — builder remains fail-closed until payment-journal, fee config, journal owner, status transition, and batch uniqueness are proven.
 - [4C-7A.7H runtime proof](phase4c7a7h-runtime-proof.md) — final contract proof requires live definition/source parity plus transaction rollback and post-rollback state checks.
+- [AI matching performance](ai-matching-performance.md) — bounded workers, parallel candidate reads, and batched score persistence prevent matching from appearing stuck.
