@@ -52,3 +52,4 @@
 - [Phase 4C-1 runtime bootstrap](phase4c1-runtime-bootstrap.md) — runtime DDL can fail non-fatally; prove additive reconciliation columns against development after applying the checked-in migration.
 - [Phase 4C-4 exclusion boundary](phase4c4-exclusion-boundary.md) — bridge SCPAY mirror IDs to canonical payments; only posted/reconciled settlements exclude candidates.
 - [Phase 4C-5 matching boundary](phase4c5-matching-boundary.md) — canonical settlements use adapter net amounts and source-aware review candidates; generic approval remains blocked.
+- [Phase 4C-7A.5 mirror proof boundary](phase4c7a5-proof-boundary.md) — metadata columns alone do not prove the live trigger contract; verify PostgreSQL function/trigger definitions separately in development.

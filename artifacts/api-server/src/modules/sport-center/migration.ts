@@ -77,6 +77,26 @@ export async function ensureSportPaymentMirrorTrigger(): Promise<void> {
             'posting_status', 'updated_at'
           )
       ) AS public_payment_columns_complete
+      ,
+      (
+        SELECT COUNT(*) = 12
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'sport_payments'
+          AND column_name IN (
+            'company_id', 'provider_id', 'payment_provider', 'provider_code',
+            'bank_account_id', 'external_bank_account_id',
+            'expected_settlement_date', 'settlement_rule_version',
+            'settlement_status', 'source_payment_id', 'source_schema',
+            'source_table'
+          )
+      ) AS public_mirror_metadata_complete,
+      EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'sport_center'
+          AND table_name = 'payment_business_calendar'
+      ) AS payment_calendar_exists
   `);
 
   const objects = requiredObjects.rows[0] as Record<string, boolean> | undefined;
@@ -88,7 +108,9 @@ export async function ensureSportPaymentMirrorTrigger(): Promise<void> {
     objects.source_payment_columns_complete === true &&
     objects.source_booking_columns_complete === true &&
     objects.public_booking_columns_complete === true &&
-    objects.public_payment_columns_complete === true;
+    objects.public_payment_columns_complete === true &&
+    objects.public_mirror_metadata_complete === true &&
+    objects.payment_calendar_exists === true;
 
   if (!ready) {
     logger.warn(
@@ -114,7 +136,23 @@ export async function ensureSportPaymentMirrorTrigger(): Promise<void> {
     AS $function$
     DECLARE
       v_public_booking_id integer;
+      v_public_booking_count integer;
       v_booking_tax_rate numeric;
+      v_facility_id integer;
+      v_company_id integer;
+      v_company_count integer;
+      v_external_bank_account_id text;
+      v_internal_bank_account_id integer;
+      v_bank_account_count integer;
+      v_provider_id text;
+      v_provider_name text;
+      v_provider_code text;
+      v_provider_rule_version text;
+      v_settlement_delay integer;
+      v_payment_date date;
+      v_expected_settlement_date date;
+      v_business_day boolean;
+      v_remaining integer;
       v_payment_number text;
     BEGIN
       IF NEW.status::text <> 'confirmed' THEN
@@ -123,21 +161,136 @@ export async function ensureSportPaymentMirrorTrigger(): Promise<void> {
 
       v_payment_number := 'SCPAY-SC-' || NEW.id::text;
 
-      SELECT pb.id
-        INTO v_public_booking_id
+      SELECT COUNT(*)::integer, MIN(pb.id)
+        INTO v_public_booking_count, v_public_booking_id
         FROM public.sport_bookings pb
-       WHERE pb.sc_booking_id = NEW.booking_id
-       ORDER BY pb.id DESC
-       LIMIT 1;
+       WHERE pb.sc_booking_id = NEW.booking_id;
 
-      SELECT sb.ppn_rate
-        INTO v_booking_tax_rate
+      IF v_public_booking_count = 0 THEN
+        RAISE EXCEPTION 'MIRROR_BOOKING_BRIDGE_MISSING: canonical booking % has no public bridge', NEW.booking_id
+          USING ERRCODE = 'P0001';
+      ELSIF v_public_booking_count > 1 THEN
+        RAISE EXCEPTION 'MIRROR_BOOKING_BRIDGE_AMBIGUOUS: canonical booking % has % public bridges',
+          NEW.booking_id, v_public_booking_count
+          USING ERRCODE = 'P0001';
+      END IF;
+
+      SELECT sb.facility_id, sb.ppn_rate
+        INTO v_facility_id, v_booking_tax_rate
         FROM sport_center.sport_bookings sb
        WHERE sb.id = NEW.booking_id;
+
+      IF NOT FOUND OR v_facility_id IS NULL THEN
+        RAISE EXCEPTION 'MIRROR_COMPANY_UNRESOLVED: canonical booking % has no facility',
+          NEW.booking_id
+          USING ERRCODE = 'P0001';
+      END IF;
+
+      SELECT COUNT(*)::integer, MIN(fcm.company_id)
+        INTO v_company_count, v_company_id
+        FROM sport_center.facility_company_mappings fcm
+       WHERE fcm.facility_id = v_facility_id
+         AND fcm.is_active = TRUE;
+
+      IF v_company_count = 0 OR v_company_id IS NULL THEN
+        RAISE EXCEPTION 'MIRROR_COMPANY_UNRESOLVED: facility % has no active company mapping',
+          v_facility_id
+          USING ERRCODE = 'P0001';
+      ELSIF v_company_count > 1 THEN
+        RAISE EXCEPTION 'MIRROR_COMPANY_UNRESOLVED: facility % has % active company mappings',
+          v_facility_id, v_company_count
+          USING ERRCODE = 'P0001';
+      END IF;
+
+      v_external_bank_account_id := NULLIF(BTRIM(NEW.bank_account_id::text), '');
+      IF v_external_bank_account_id IS NULL THEN
+        RAISE EXCEPTION 'MIRROR_BANK_ACCOUNT_UNRESOLVED: canonical payment % has no external bank account',
+          NEW.id
+          USING ERRCODE = 'P0001';
+      END IF;
+
+      SELECT COUNT(*)::integer, MIN(cba.id)
+        INTO v_bank_account_count, v_internal_bank_account_id
+        FROM public.company_bank_accounts cba
+       WHERE cba.company_id = v_company_id
+         AND cba.account_number::text = v_external_bank_account_id
+         AND cba.is_active = TRUE;
+
+      IF v_bank_account_count = 0 OR v_internal_bank_account_id IS NULL THEN
+        RAISE EXCEPTION 'MIRROR_BANK_ACCOUNT_UNRESOLVED: company % has no active bank account %',
+          v_company_id, v_external_bank_account_id
+          USING ERRCODE = 'P0001';
+      ELSIF v_bank_account_count > 1 THEN
+        RAISE EXCEPTION 'MIRROR_BANK_ACCOUNT_UNRESOLVED: company % has % active matches for bank account %',
+          v_company_id, v_bank_account_count, v_external_bank_account_id
+          USING ERRCODE = 'P0001';
+      END IF;
+
+      v_provider_id := NULLIF(BTRIM(NEW.provider_id::text), '');
+      v_provider_name := NULLIF(BTRIM(NEW.provider_name::text), '');
+      v_provider_code := NULLIF(LOWER(BTRIM(NEW.payment_provider::text)), '');
+      IF v_provider_id IS NULL OR v_provider_name IS NULL OR v_provider_code IS NULL THEN
+        RAISE EXCEPTION 'MIRROR_PROVIDER_RULE_UNRESOLVED: canonical payment % has incomplete provider identity',
+          NEW.id
+          USING ERRCODE = 'P0001';
+      END IF;
+
+      v_payment_date := (COALESCE(NEW.paid_at, NEW.confirmed_at, NEW.created_at)
+        AT TIME ZONE 'Asia/Jakarta')::date;
+
+      SELECT COUNT(*)::integer, MIN(psc.rule_version), MIN(psc.settlement_delay_business_days)
+        INTO v_company_count, v_provider_rule_version, v_settlement_delay
+        FROM sport_center.payment_settlement_configs psc
+       WHERE psc.company_id = v_company_id
+         AND LOWER(BTRIM(psc.provider_code)) = v_provider_code
+         AND psc.bank_account_id = v_external_bank_account_id
+         AND psc.is_active = TRUE
+         AND psc.source = 'OWNER_APPROVED'
+         AND psc.rule_version = 'PROD-MANDIRI-SC-20260810-v1'
+         AND psc.effective_from <= v_payment_date
+         AND (psc.effective_until IS NULL OR v_payment_date < psc.effective_until);
+
+      IF v_company_count = 0 OR v_provider_rule_version IS NULL OR v_settlement_delay IS NULL THEN
+        RAISE EXCEPTION 'MIRROR_PROVIDER_RULE_UNRESOLVED: no owner-approved rule for company %, provider %, bank %',
+          v_company_id, v_provider_code, v_external_bank_account_id
+          USING ERRCODE = 'P0001';
+      ELSIF v_company_count > 1 THEN
+        RAISE EXCEPTION 'MIRROR_PROVIDER_RULE_UNRESOLVED: multiple owner-approved rules for company %, provider %, bank %',
+          v_company_id, v_provider_code, v_external_bank_account_id
+          USING ERRCODE = 'P0001';
+      END IF;
+
+      v_expected_settlement_date := v_payment_date;
+      v_remaining := GREATEST(v_settlement_delay, 0);
+      WHILE v_remaining > 0 LOOP
+        v_expected_settlement_date := v_expected_settlement_date + 1;
+        SELECT COALESCE(pbc.is_business_day, TRUE)
+          INTO v_business_day
+          FROM sport_center.payment_business_calendar pbc
+         WHERE pbc.calendar_date = v_expected_settlement_date;
+        IF EXTRACT(ISODOW FROM v_expected_settlement_date) < 6
+           AND COALESCE(v_business_day, TRUE) THEN
+          v_remaining := v_remaining - 1;
+        END IF;
+      END LOOP;
+
+      LOOP
+        SELECT COALESCE(pbc.is_business_day, TRUE)
+          INTO v_business_day
+          FROM sport_center.payment_business_calendar pbc
+         WHERE pbc.calendar_date = v_expected_settlement_date;
+        EXIT WHEN EXTRACT(ISODOW FROM v_expected_settlement_date) < 6
+          AND COALESCE(v_business_day, TRUE);
+        v_expected_settlement_date := v_expected_settlement_date + 1;
+      END LOOP;
 
       INSERT INTO public.sport_payments
         (booking_id, payment_number, amount, method, status, paid_at,
          payment_type, tax_rate, tax_amount, source, posting_status,
+         company_id, provider_id, payment_provider, provider_code,
+         bank_account_id, external_bank_account_id,
+         expected_settlement_date, settlement_rule_version, settlement_status,
+         source_schema, source_table, source_payment_id,
          created_at, updated_at)
       VALUES
         (v_public_booking_id,
@@ -151,10 +304,34 @@ export async function ensureSportPaymentMirrorTrigger(): Promise<void> {
          0,
          'SPORT_CENTER_SUPABASE',
          'unposted',
+         v_company_id,
+         v_provider_id,
+         v_provider_name,
+         v_provider_code,
+         v_internal_bank_account_id,
+         v_external_bank_account_id,
+         v_expected_settlement_date::text,
+         v_provider_rule_version,
+         COALESCE(NULLIF(BTRIM(NEW.settlement_status::text), ''), 'unsettled'),
+         'sport_center',
+         'sport_payments',
+         NEW.id,
          NEW.created_at,
          now())
       ON CONFLICT (payment_number) DO UPDATE
         SET booking_id = COALESCE(public.sport_payments.booking_id, EXCLUDED.booking_id),
+            company_id = EXCLUDED.company_id,
+            provider_id = EXCLUDED.provider_id,
+            payment_provider = EXCLUDED.payment_provider,
+            provider_code = EXCLUDED.provider_code,
+            bank_account_id = EXCLUDED.bank_account_id,
+            external_bank_account_id = EXCLUDED.external_bank_account_id,
+            expected_settlement_date = EXCLUDED.expected_settlement_date,
+            settlement_rule_version = EXCLUDED.settlement_rule_version,
+            settlement_status = EXCLUDED.settlement_status,
+            source_schema = EXCLUDED.source_schema,
+            source_table = EXCLUDED.source_table,
+            source_payment_id = EXCLUDED.source_payment_id,
             amount = CASE
               WHEN public.sport_payments.posting_status IN ('unposted', 'failed')
                 THEN EXCLUDED.amount
@@ -240,8 +417,29 @@ export async function ensureSportPaymentMirrorTrigger(): Promise<void> {
     $fn$
   `);
 
+  await db.execute(sql`
+    CREATE OR REPLACE FUNCTION sport_center.replay_confirmed_payment_mirror(p_payment_id integer)
+    RETURNS boolean
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'sport_center', 'public'
+    AS $fn$
+    DECLARE
+      v_found boolean;
+    BEGIN
+      UPDATE sport_center.sport_payments
+         SET status = status,
+             updated_at = updated_at
+       WHERE id = p_payment_id
+         AND status::text = 'confirmed'
+      RETURNING TRUE INTO v_found;
+      RETURN COALESCE(v_found, FALSE);
+    END;
+    $fn$
+  `);
+
   logger.info(
-    "Sport Center payment mirror trigger: function, unique idempotency index, trigger, dan get_unmirrored_confirmed_payments aktif",
+    "Sport Center payment mirror trigger: resolver, function, unique idempotency index, trigger, replay, dan get_unmirrored_confirmed_payments aktif",
   );
 }
 
