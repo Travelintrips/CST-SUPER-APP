@@ -61,3 +61,4 @@
 - [Canonical builder contract](canonical-settlement-builder-contract.md) — builder remains fail-closed until payment-journal, fee config, journal owner, status transition, and batch uniqueness are proven.
 - [4C-7A.7H runtime proof](phase4c7a7h-runtime-proof.md) — final contract proof requires live definition/source parity plus transaction rollback and post-rollback state checks.
 - [AI matching performance](ai-matching-performance.md) — bounded workers, parallel candidate reads, and batched score persistence prevent matching from appearing stuck.
+- [Source-aware matching idempotency](source-aware-matching-idempotency.md) — active reconciliation candidates require the full source-qualified identity; reruns preserve superseded history without appending active duplicates.
