@@ -65,6 +65,27 @@ describe("Phase 4C-5 canonical settlement matching", () => {
     expect(scored.candidate.gross_amount).toBe(100000);
   });
 
+  it("ranks an exact canonical settlement date above the ±1-day tolerance", () => {
+    const exactDate = scoreUnified(
+      mutation({ transaction_date: "2026-08-10" }),
+      canonicalCandidate({ settlement_date: "2026-08-10", date: "2026-08-10" }),
+    );
+    const oneDayTolerance = scoreUnified(
+      mutation({ transaction_date: "2026-08-10" }),
+      canonicalCandidate({ id: 2, settlement_date: "2026-08-11", date: "2026-08-11" }),
+    );
+
+    expect(exactDate.amount_match).toBe(true);
+    expect(oneDayTolerance.amount_match).toBe(true);
+    expect(exactDate.date_match).toBe(true);
+    expect(oneDayTolerance.date_match).toBe(true);
+    expect(exactDate.score).toBe(80);
+    expect(oneDayTolerance.score).toBe(70);
+    expect(exactDate.score).toBeGreaterThan(oneDayTolerance.score);
+    expect(exactDate.reason).toContain("tanggal settlement canonical tepat (+10)");
+    expect(oneDayTolerance.reason).not.toContain("tanggal settlement canonical tepat (+10)");
+  });
+
   it("does not treat gross equality as a canonical exact amount match", () => {
     const scored = scoreUnified(
       mutation({ amount: 100000 }),
@@ -96,10 +117,10 @@ describe("Phase 4C-5 canonical settlement matching", () => {
 
   it("keeps canonical approval out of the generic auto-match classifier", () => {
     const scored = scoreUnified(mutation(), canonicalCandidate());
-    expect(classifyMatch(scored)).toBe("manual_review");
-    // The orchestration boundary also forces manual_review when a canonical
-    // candidate has enough evidence for generic auto-matching. The candidate
-    // itself remains scoreable and source-qualified.
+    // Exact canonical-date evidence reaches the existing generic confidence
+    // threshold, but the orchestration boundary still forces canonical
+    // candidates to manual_review before any approval path.
+    expect(classifyMatch(scored)).toBe("auto_matched");
     expect(scored.candidate.candidateSource).toBe(CANONICAL_SETTLEMENT_SOURCE);
   });
 

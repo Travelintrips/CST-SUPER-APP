@@ -3,7 +3,8 @@
  *
  * Rules:
  *  - Amount match WAJIB untuk auto-approve (tidak ada exception)
- *  - Scoring: Amount +50, Date ±1d +20, Ref exact +20, OCR +10 (max 100)
+ *  - Scoring: Amount +50, Date ±1d +20, exact canonical settlement date +10,
+ *    Ref exact +20, OCR +10 (max 100)
  *  - Threshold: ≥90 + amount_match = AUTO; 70–89 = MANUAL; <70 = UNMATCHED
  *  - Satu mutation hanya boleh match ke 1 kandidat (unique lock di DB)
  *  - Jurnal hanya dibuat setelah approval (di approveAndCreateJournal)
@@ -405,6 +406,16 @@ export function scoreUnified(
   const dateMatch = diffDays <= 1;
   if (diffDays === 0)     { score += 20; reason.push("tanggal sama (+20)"); }
   else if (diffDays <= 1) { score += 20; reason.push("tanggal beda 1 hari (+20)"); }
+  if (
+    diffDays === 0 &&
+    cand.candidateSource === CANONICAL_SETTLEMENT_SOURCE
+  ) {
+    // Exact canonical settlement dates are stronger evidence than the
+    // otherwise eligible ±1-day tolerance. Keep the tolerance candidate in
+    // the review set, but make deterministic exact-date evidence win.
+    score += 10;
+    reason.push("tanggal settlement canonical tepat (+10)");
+  }
 
   // 3. Booking reference EXACT match (+20)
   let refMatch = false;
