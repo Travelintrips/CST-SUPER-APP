@@ -610,6 +610,535 @@ export async function ensureSportPaymentMirrorTrigger(): Promise<void> {
   );
 }
 
+/**
+ * Canonical settlement ownership and grouping backstops.
+ *
+ * The settlement tables/functions are owned by the Supabase `sport_center`
+ * schema.  Keep this additive and guarded so the normal local/public Sport
+ * Center migration does not attempt to provision a partial canonical schema.
+ */
+export async function ensureCanonicalSettlementContracts(): Promise<void> {
+  const exists = await db.execute(sql`
+    SELECT
+      EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'sport_center'
+          AND table_name = 'sport_payments'
+      ) AS sport_payments_exists,
+      EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'sport_center'
+          AND table_name = 'payment_settlement_batches'
+      ) AS settlement_batches_exists,
+      EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'sport_center'
+          AND table_name = 'payment_settlement_items'
+      ) AS settlement_items_exists,
+      EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'sport_center'
+          AND table_name = 'accounting_journals'
+      ) AS accounting_journals_exists
+  `);
+  const objects = exists.rows[0] as Record<string, boolean> | undefined;
+  if (
+    !objects?.sport_payments_exists ||
+    !objects.settlement_batches_exists ||
+    !objects.settlement_items_exists ||
+    !objects.accounting_journals_exists
+  ) {
+    logger.info("Canonical Sport Center settlement schema belum lengkap; contract migration dilewati");
+    return;
+  }
+
+  const duplicateGroups = await db.execute(sql`
+    SELECT
+      company_id,
+      lower(provider_code) AS provider_code,
+      bank_account_id,
+      settlement_date,
+      settlement_rule_version,
+      COUNT(*)::int AS duplicate_count
+    FROM sport_center.payment_settlement_batches
+    WHERE status IN ('draft', 'calculated', 'posted', 'reconciled')
+      AND settlement_rule_version IS NOT NULL
+    GROUP BY
+      company_id,
+      lower(provider_code),
+      bank_account_id,
+      settlement_date,
+      settlement_rule_version
+    HAVING COUNT(*) > 1
+  `);
+  if (duplicateGroups.rows.length > 0) {
+    throw new Error(
+      "CANONICAL_SETTLEMENT_GROUP_DUPLICATES_EXIST: resolve duplicate active grouping keys before installing the unique backstop",
+    );
+  }
+
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS payment_settlement_batches_active_group_unique
+      ON sport_center.payment_settlement_batches (
+        company_id,
+        lower(provider_code),
+        bank_account_id,
+        settlement_date,
+        settlement_rule_version
+      )
+      WHERE status IN ('draft', 'calculated', 'posted', 'reconciled')
+        AND settlement_rule_version IS NOT NULL
+  `);
+
+  await db.execute(sql.raw(`
+    CREATE OR REPLACE FUNCTION sport_center.canonical_settlement_group_identity(
+      p_company_id integer,
+      p_provider_code text,
+      p_bank_account_id text,
+      p_settlement_date date,
+      p_settlement_rule_version text
+    )
+    RETURNS TABLE (
+      settlement_reference text,
+      correlation_id text
+    )
+    LANGUAGE plpgsql
+    IMMUTABLE
+    SET search_path TO 'pg_catalog', 'sport_center'
+    AS $function$
+    DECLARE
+      v_provider text;
+      v_bank text;
+      v_rule text;
+      v_serialized text;
+      v_digest text;
+    BEGIN
+      IF p_company_id IS NULL
+         OR p_provider_code IS NULL
+         OR btrim(p_provider_code) = ''
+         OR p_bank_account_id IS NULL
+         OR btrim(p_bank_account_id) = ''
+         OR p_settlement_date IS NULL
+         OR p_settlement_rule_version IS NULL
+         OR btrim(p_settlement_rule_version) = ''
+      THEN
+        RAISE EXCEPTION 'CANONICAL_SETTLEMENT_GROUP_INVALID';
+      END IF;
+
+      v_provider := lower(btrim(p_provider_code));
+      v_bank := btrim(p_bank_account_id);
+      v_rule := btrim(p_settlement_rule_version);
+
+      v_serialized :=
+          'scb-v1|'
+          || p_company_id::text
+          || '|'
+          || octet_length(v_provider)::text || ':' || v_provider
+          || '|'
+          || octet_length(v_bank)::text || ':' || v_bank
+          || '|'
+          || to_char(p_settlement_date, 'YYYY-MM-DD')
+          || '|'
+          || octet_length(v_rule)::text || ':' || v_rule;
+
+      v_digest := encode(
+        public.digest(convert_to(v_serialized, 'UTF8'), 'sha256'),
+        'hex'
+      );
+
+      settlement_reference := 'SCB1-' || v_digest;
+      correlation_id := 'scb:v1:' || v_digest;
+      RETURN NEXT;
+    END;
+    $function$;
+  `));
+
+  await db.execute(sql.raw(`
+    CREATE OR REPLACE FUNCTION sport_center.mark_settlement_payments_settled(
+      p_settlement_id bigint,
+      p_actor text DEFAULT 'canonical-settlement-owner'
+    )
+    RETURNS integer
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'sport_center'
+    AS $function$
+    DECLARE
+      v_batch sport_center.payment_settlement_batches%ROWTYPE;
+      v_journal sport_center.accounting_journals%ROWTYPE;
+      v_payment record;
+      v_item_count integer;
+      v_processed integer := 0;
+      v_updated integer;
+    BEGIN
+      SELECT *
+        INTO v_batch
+        FROM sport_center.payment_settlement_batches
+       WHERE id = p_settlement_id
+       FOR UPDATE;
+
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'SETTLEMENT_NOT_FOUND: %', p_settlement_id;
+      END IF;
+
+      IF v_batch.status NOT IN ('posted', 'reconciled') THEN
+        RAISE EXCEPTION
+          'SETTLEMENT_NOT_POSTED_FOR_PAYMENT_STATE: settlement=% status=%',
+          p_settlement_id,
+          v_batch.status;
+      END IF;
+
+      IF v_batch.settlement_journal_id IS NULL THEN
+        RAISE EXCEPTION 'SETTLEMENT_JOURNAL_REQUIRED: %', p_settlement_id;
+      END IF;
+
+      SELECT *
+        INTO v_journal
+        FROM sport_center.accounting_journals
+       WHERE id = v_batch.settlement_journal_id
+       FOR UPDATE;
+
+      IF NOT FOUND OR v_journal.status <> 'posted' THEN
+        RAISE EXCEPTION
+          'SETTLEMENT_JOURNAL_NOT_POSTED: settlement=% journal=%',
+          p_settlement_id,
+          v_batch.settlement_journal_id;
+      END IF;
+
+      SELECT COUNT(*)::int
+        INTO v_item_count
+        FROM sport_center.payment_settlement_items
+       WHERE settlement_id = p_settlement_id
+         AND item_status = 'active';
+
+      IF v_item_count = 0 THEN
+        RAISE EXCEPTION 'SETTLEMENT_ACTIVE_ITEMS_REQUIRED: %', p_settlement_id;
+      END IF;
+
+      /*
+       * This ordered FOR UPDATE is the sole canonical payment-state owner.
+       * A retry is idempotent only when the payment is already settled through
+       * an active item belonging to this same batch.
+       */
+      FOR v_payment IN
+        SELECT
+          p.id,
+          p.status::text AS payment_status,
+          p.settlement_status
+        FROM sport_center.payment_settlement_items i
+        JOIN sport_center.sport_payments p
+          ON p.id = i.payment_id
+        WHERE i.settlement_id = p_settlement_id
+          AND i.item_status = 'active'
+        ORDER BY p.id
+        FOR UPDATE OF p
+      LOOP
+        IF v_payment.payment_status <> 'confirmed' THEN
+          RAISE EXCEPTION
+            'CANONICAL_PAYMENT_NOT_CONFIRMED: payment=% status=%',
+            v_payment.id,
+            v_payment.payment_status;
+        END IF;
+
+        IF v_payment.settlement_status = 'settled' THEN
+          v_processed := v_processed + 1;
+          CONTINUE;
+        END IF;
+
+        IF v_payment.settlement_status <> 'unsettled' THEN
+          RAISE EXCEPTION
+            'CANONICAL_PAYMENT_SETTLEMENT_STATE_CONFLICT: payment=% state=%',
+            v_payment.id,
+            v_payment.settlement_status;
+        END IF;
+
+        UPDATE sport_center.sport_payments
+           SET settlement_status = 'settled',
+               updated_at = now()
+         WHERE id = v_payment.id
+           AND settlement_status = 'unsettled';
+
+        GET DIAGNOSTICS v_updated = ROW_COUNT;
+        IF v_updated <> 1 THEN
+          RAISE EXCEPTION
+            'CANONICAL_PAYMENT_SETTLEMENT_STATE_RACE: payment=%',
+            v_payment.id;
+        END IF;
+
+        v_processed := v_processed + 1;
+      END LOOP;
+
+      RETURN v_processed;
+    END;
+    $function$;
+  `));
+
+  /*
+   * Any direct canonical batch transition to posted must use the same owner.
+   * The finalizer wrapper below also invokes it for already-posted idempotent
+   * retries, which repairs a valid historical batch whose payment state lagged.
+   */
+  await db.execute(sql.raw(`
+    CREATE OR REPLACE FUNCTION sport_center.enforce_settlement_payment_state_after_post()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'sport_center'
+    AS $function$
+    BEGIN
+      IF NEW.status = 'posted'
+         AND OLD.status IS DISTINCT FROM NEW.status
+      THEN
+        PERFORM sport_center.mark_settlement_payments_settled(
+          NEW.id,
+          COALESCE(NEW.posted_by, 'canonical-settlement-owner')
+        );
+      END IF;
+      RETURN NEW;
+    END;
+    $function$;
+  `));
+
+  await db.execute(sql.raw(`
+    DROP TRIGGER IF EXISTS trg_settlement_payment_state_after_post
+      ON sport_center.payment_settlement_batches;
+    CREATE TRIGGER trg_settlement_payment_state_after_post
+      AFTER UPDATE OF status ON sport_center.payment_settlement_batches
+      FOR EACH ROW
+      EXECUTE FUNCTION sport_center.enforce_settlement_payment_state_after_post();
+  `));
+
+  /*
+   * Preserve the existing accounting implementation as the legacy owner and
+   * expose a deterministic/idempotent boundary for new callers. The wrapper
+   * locks the complete group before delegating to the proven calculation and
+   * journal/item creation function.
+   */
+  await db.execute(sql.raw(`
+    DO $migration$
+    BEGIN
+      IF to_regprocedure(
+           'sport_center.create_payment_settlement_batch(text,integer,text,text,date,integer[],text)'
+         ) IS NOT NULL
+         AND to_regprocedure(
+           'sport_center.create_payment_settlement_batch_legacy(text,integer,text,text,date,integer[],text)'
+         ) IS NULL
+      THEN
+        ALTER FUNCTION sport_center.create_payment_settlement_batch(
+          text, integer, text, text, date, integer[], text
+        ) RENAME TO create_payment_settlement_batch_legacy;
+      END IF;
+    END;
+    $migration$;
+  `));
+
+  await db.execute(sql.raw(`
+    CREATE OR REPLACE FUNCTION sport_center.create_payment_settlement_batch(
+      p_settlement_reference text,
+      p_company_id integer,
+      p_provider_code text,
+      p_bank_account_id text,
+      p_settlement_date date,
+      p_payment_ids integer[],
+      p_actor text DEFAULT 'manual-supabase'
+    )
+    RETURNS bigint
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'sport_center'
+    AS $function$
+    DECLARE
+      v_input_count integer;
+      v_unique_count integer;
+      v_confirmed_count integer;
+      v_invalid_date_count integer;
+      v_rule_min text;
+      v_rule_max text;
+      v_existing_batch_id bigint;
+      v_reference text;
+      v_correlation text;
+      v_serialized text;
+      v_identity record;
+      v_result bigint;
+      v_item_count integer;
+    BEGIN
+      IF p_payment_ids IS NULL OR cardinality(p_payment_ids) = 0 THEN
+        RAISE EXCEPTION 'PAYMENT_IDS_REQUIRED';
+      END IF;
+
+      v_input_count := cardinality(p_payment_ids);
+      SELECT COUNT(DISTINCT x.payment_id)
+        INTO v_unique_count
+        FROM unnest(p_payment_ids) x(payment_id);
+      IF v_input_count <> v_unique_count THEN
+        RAISE EXCEPTION 'DUPLICATE_PAYMENT_ID_IN_REQUEST';
+      END IF;
+
+      SELECT
+        COUNT(*)::int,
+        COUNT(*) FILTER (
+          WHERE p.expected_settlement_date IS DISTINCT FROM p_settlement_date::text
+        )::int,
+        MIN(NULLIF(btrim(p.settlement_rule_version), '')),
+        MAX(NULLIF(btrim(p.settlement_rule_version), ''))
+        INTO
+          v_confirmed_count,
+          v_invalid_date_count,
+          v_rule_min,
+          v_rule_max
+        FROM unnest(p_payment_ids) x(payment_id)
+        JOIN sport_center.sport_payments p
+          ON p.id = x.payment_id
+       WHERE p.status::text = 'confirmed'
+         AND p.company_id = p_company_id
+         AND lower(p.payment_provider::text) = lower(btrim(p_provider_code))
+         AND p.bank_account_id = btrim(p_bank_account_id);
+
+      IF v_confirmed_count <> v_input_count
+         OR v_invalid_date_count <> 0
+         OR v_rule_min IS NULL
+         OR v_rule_min IS DISTINCT FROM v_rule_max
+      THEN
+        RAISE EXCEPTION
+          'CANONICAL_SETTLEMENT_GROUP_INVALID: expected_date/provider/bank/rule mismatch';
+      END IF;
+
+      SELECT settlement_reference, correlation_id
+        INTO v_identity
+        FROM sport_center.canonical_settlement_group_identity(
+          p_company_id,
+          p_provider_code,
+          p_bank_account_id,
+          p_settlement_date,
+          v_rule_min
+        );
+      v_reference := v_identity.settlement_reference;
+      v_correlation := v_identity.correlation_id;
+
+      v_serialized :=
+          p_company_id::text || '|'
+          || lower(btrim(p_provider_code)) || '|'
+          || btrim(p_bank_account_id) || '|'
+          || p_settlement_date::text || '|'
+          || v_rule_min;
+      PERFORM pg_advisory_xact_lock(hashtext(v_serialized));
+
+      SELECT id
+        INTO v_existing_batch_id
+        FROM sport_center.payment_settlement_batches
+       WHERE company_id = p_company_id
+         AND lower(provider_code) = lower(btrim(p_provider_code))
+         AND bank_account_id = btrim(p_bank_account_id)
+         AND settlement_date = p_settlement_date
+         AND settlement_rule_version = v_rule_min
+         AND status IN ('draft', 'calculated', 'posted', 'reconciled')
+       FOR UPDATE;
+
+      IF v_existing_batch_id IS NOT NULL THEN
+        SELECT COUNT(*)::int
+          INTO v_item_count
+          FROM sport_center.payment_settlement_items
+         WHERE settlement_id = v_existing_batch_id
+           AND item_status = 'active';
+
+        IF v_item_count <> v_input_count
+           OR EXISTS (
+             SELECT 1
+             FROM unnest(p_payment_ids) x(payment_id)
+             WHERE NOT EXISTS (
+               SELECT 1
+               FROM sport_center.payment_settlement_items i
+               WHERE i.settlement_id = v_existing_batch_id
+                 AND i.payment_id = x.payment_id
+                 AND i.item_status = 'active'
+             )
+           )
+        THEN
+          RAISE EXCEPTION
+            'CANONICAL_SETTLEMENT_IDEMPOTENCY_CONFLICT: batch=%',
+            v_existing_batch_id;
+        END IF;
+
+        RETURN v_existing_batch_id;
+      END IF;
+
+      SELECT sport_center.create_payment_settlement_batch_legacy(
+        v_reference,
+        p_company_id,
+        lower(btrim(p_provider_code)),
+        btrim(p_bank_account_id),
+        p_settlement_date,
+        p_payment_ids,
+        p_actor
+      )
+        INTO v_result;
+
+      UPDATE sport_center.payment_settlement_batches
+         SET settlement_reference = v_reference,
+             correlation_id = v_correlation,
+             settlement_rule_version = v_rule_min,
+             updated_at = now()
+       WHERE id = v_result
+         AND status = 'calculated';
+
+      RETURN v_result;
+    END;
+    $function$;
+  `));
+
+  await db.execute(sql.raw(`
+    DO $migration$
+    BEGIN
+      IF to_regprocedure(
+           'sport_center.finalize_payment_settlement(bigint,text)'
+         ) IS NOT NULL
+         AND to_regprocedure(
+           'sport_center.finalize_payment_settlement_legacy(bigint,text)'
+         ) IS NULL
+      THEN
+        ALTER FUNCTION sport_center.finalize_payment_settlement(
+          bigint, text
+        ) RENAME TO finalize_payment_settlement_legacy;
+      END IF;
+    END;
+    $migration$;
+  `));
+
+  await db.execute(sql.raw(`
+    CREATE OR REPLACE FUNCTION sport_center.finalize_payment_settlement(
+      p_settlement_id bigint,
+      p_actor text DEFAULT 'manual-supabase'
+    )
+    RETURNS bigint
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'sport_center'
+    AS $function$
+    DECLARE
+      v_result bigint;
+    BEGIN
+      v_result := sport_center.finalize_payment_settlement_legacy(
+        p_settlement_id,
+        p_actor
+      );
+      PERFORM sport_center.mark_settlement_payments_settled(
+        p_settlement_id,
+        p_actor
+      );
+      RETURN v_result;
+    END;
+    $function$;
+  `));
+
+  logger.info(
+    "Canonical Sport Center settlement contracts: status owner, deterministic grouping, unique active-group backstop, and idempotent wrappers aktif",
+  );
+}
+
 export async function runSportCenterMigration(): Promise<void> {
   try {
     await db.execute(sql`
@@ -1397,6 +1926,13 @@ export async function runSportCenterMigration(): Promise<void> {
       logger.info("Sport Center migration: dropped legacy non-company-scoped index idx_accounting_entries_source_source_id (R-1 fix)");
     } catch (idxErr) {
       logger.warn({ err: idxErr }, "Sport Center migration: drop legacy index failed (non-fatal)");
+    }
+
+    try {
+      await ensureCanonicalSettlementContracts();
+    } catch (canonicalErr) {
+      logger.error({ err: canonicalErr }, "Canonical Sport Center settlement contract migration gagal");
+      throw canonicalErr;
     }
 
     logger.info("Sport Center migration: selesai");

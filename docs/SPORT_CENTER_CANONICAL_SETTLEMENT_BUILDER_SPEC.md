@@ -614,7 +614,19 @@ well. Reversed/voided replacement behavior must be specified before excluding
 those states from a partial index. A non-unique lookup index or an application
 pre-check is insufficient.
 
-This required index is **ABSENT** in the live development schema. The current
+The frozen replacement policy is:
+
+- `draft`, `calculated`, `posted`, and `reconciled` are one active canonical
+  group identity; a new batch for the same group is a conflict, not a
+  replacement;
+- `reversed` and `voided` are terminal historical states; after all their
+  active items are transitioned out of `active`, a new batch for the same
+  group may be created;
+- a reversed/voided batch must never be reused as an idempotent result, and
+  its historical reference/correlation remains immutable.
+
+The required index is **ABSENT** in the original audit snapshot and is now
+installed by the additive canonical settlement migration. The current
 `finalize_payment_settlement` advisory lock is keyed by an existing settlement
 ID, so it serializes finalization of one batch but cannot serialize creation of
 two batches for the same group. The existing correlation/reference indexes
@@ -641,10 +653,12 @@ idempotency/concurrency outcome:
 - otherwise return `CANONICAL_SETTLEMENT_CONCURRENCY_CONFLICT` or
   `CANONICAL_SETTLEMENT_IDEMPOTENCY_CONFLICT` and roll back.
 
-The current schema can enforce the item-level invariants, but cannot enforce
-the one-batch-per-complete-group invariant. Consequently the grouping and
-concurrency gate remains blocked pending the additive unique index (or an
-equivalent proven database advisory-lock contract).
+The additive migration enforces the one-batch-per-complete-group invariant
+with the partial unique index
+`payment_settlement_batches_active_group_unique`, while the canonical batch
+owner also takes a deterministic advisory lock before the unique-index
+attempt. The grouping/concurrency gate is satisfied only after the migration
+and its development runtime proof succeed.
 
 ## 12. Recovery and error codes
 
@@ -767,29 +781,33 @@ spec-only phase.
 
 ## 16. Implementation readiness verdict
 
-The minimum builder behavior is now specified, but implementation remains
-blocked until the following live contracts are proven:
+The status/grouping gates for this phase are now frozen. The future settlement
+builder remains separately gated by the following implementation contracts:
 
 ```text
 canonical payment -> posted payment journal bridge
 canonical settlement journal creation/posting owner
-payment settlement_status success transition
 exact owner-approved fee/rate columns
-batch grouping uniqueness backstop
 ```
 
-No builder, function, migration, table, worker, or settlement row is created
-by this specification.
+The additive contract migration owns the status transition and grouping
+backstop, but does not create the future builder or settlement rows.
 
 ## 17. Phase 4C-7A.7H final verdict
 
 ```text
-4C-7A.7H BLOCKED — CANONICAL OWNERSHIP STILL UNRESOLVED
+4C-7A.7H COMPLETE — STATUS/GROUPING CONTRACT FROZEN
 ```
 
-Reason:
+Frozen owners/backstops:
 
-- no verified canonical owner performs the successful
-  `sport_center.sport_payments.settlement_status` transition; and
-- no unique constraint or equivalent proven advisory-lock contract enforces
-  one active batch for the complete grouping key.
+- `sport_center.mark_settlement_payments_settled(bigint,text)` owns the
+  transaction-scoped `unsettled -> settled` transition after a posted batch
+  and posted settlement journal are verified;
+- `sport_center.finalize_payment_settlement(bigint,text)` remains the
+  batch/journal finalization owner and invokes the payment-state owner;
+- `sport_center.payment_settlement_batches_active_group_unique` plus the
+  deterministic group advisory lock enforce one active batch per complete
+  grouping key;
+- `reversed`/`voided` batches are historical and replaceable only after their
+  active items are no longer active.
