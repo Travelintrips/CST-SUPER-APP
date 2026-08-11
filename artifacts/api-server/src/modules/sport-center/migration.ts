@@ -644,13 +644,35 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
         WHERE table_schema = 'sport_center'
           AND table_name = 'accounting_journals'
       ) AS accounting_journals_exists
+       ,
+       EXISTS (
+         SELECT 1
+         FROM information_schema.tables
+         WHERE table_schema = 'sport_center'
+           AND table_name = 'bank_mutations'
+       ) AS canonical_bank_mutations_exists,
+       EXISTS (
+         SELECT 1
+         FROM information_schema.tables
+         WHERE table_schema = 'public'
+           AND table_name = 'bank_mutations'
+       ) AS public_bank_mutations_exists,
+       EXISTS (
+         SELECT 1
+         FROM information_schema.tables
+         WHERE table_schema = 'sport_center'
+           AND table_name = 'payment_settlement_configs'
+       ) AS settlement_configs_exists
   `);
   const objects = exists.rows[0] as Record<string, boolean> | undefined;
   if (
     !objects?.sport_payments_exists ||
     !objects.settlement_batches_exists ||
     !objects.settlement_items_exists ||
-    !objects.accounting_journals_exists
+     !objects.accounting_journals_exists ||
+     !objects.canonical_bank_mutations_exists ||
+     !objects.public_bank_mutations_exists ||
+     !objects.settlement_configs_exists
   ) {
     logger.info("Canonical Sport Center settlement schema belum lengkap; contract migration dilewati");
     return;
@@ -1134,8 +1156,312 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
     $function$;
   `));
 
+  /*
+   * Phase 4C-7N: public bank-mutation -> canonical Sport Center bridge.
+   *
+   * This is deliberately owned by PostgreSQL.  The public row is the UI/API
+   * identity, while the canonical row gets its provider and bank-account
+   * metadata only from one unambiguous OWNER_APPROVED Sport Center config.
+   * No public provider/account fields are trusted, and no settlement,
+   * reconciliation, or accounting state is changed here.
+   */
+  await db.execute(sql.raw(`
+    CREATE UNIQUE INDEX IF NOT EXISTS sport_center_bank_mutations_mutation_key_unique
+      ON sport_center.bank_mutations (mutation_key)
+  `));
+
+  await db.execute(sql.raw(`
+    CREATE OR REPLACE FUNCTION sport_center.project_public_bank_mutation_to_canonical(
+      p_public_mutation_id integer
+    )
+    RETURNS integer
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'sport_center', 'public'
+    AS $function$
+    DECLARE
+      v_public public.bank_mutations%ROWTYPE;
+      v_candidate_count integer;
+      v_config_count integer;
+      v_public_key_count integer;
+      v_canonical_id integer;
+      v_settlement_id bigint;
+      v_config_id integer;
+      v_company_id integer;
+      v_provider_code text;
+      v_bank_account_id text;
+      v_existing_source_table text;
+      v_existing_source_id text;
+    BEGIN
+      SELECT *
+        INTO v_public
+        FROM public.bank_mutations
+       WHERE id = p_public_mutation_id
+       FOR UPDATE;
+
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'PUBLIC_BANK_MUTATION_NOT_FOUND: %', p_public_mutation_id;
+      END IF;
+
+      /*
+       * Scope gate: this bridge is not a general public-mutation mirror.
+       * Canonical reconciliation starts from an incoming matched mutation.
+       */
+      IF LOWER(COALESCE(v_public.status, '')) NOT IN ('matched', 'auto_matched')
+         OR LOWER(COALESCE(v_public.direction, '')) NOT IN ('in', 'credit', 'incoming', 'cr')
+      THEN
+        RETURN NULL;
+      END IF;
+
+      IF v_public.mutation_key IS NULL
+         OR btrim(v_public.mutation_key) = ''
+         OR v_public.company_id IS NULL
+         OR v_public.transaction_date IS NULL
+         OR btrim(v_public.transaction_date) = ''
+         OR v_public.amount IS NULL
+         OR v_public.amount <= 0
+      THEN
+        RAISE EXCEPTION
+          'CANONICAL_BANK_MUTATION_BRIDGE_UNRESOLVED: public mutation=% lacks company/date/amount/key',
+          p_public_mutation_id;
+      END IF;
+
+      SELECT COUNT(*)::integer
+        INTO v_public_key_count
+        FROM public.bank_mutations
+       WHERE mutation_key = v_public.mutation_key;
+
+      IF v_public_key_count <> 1 THEN
+        RAISE EXCEPTION
+          'CANONICAL_BANK_MUTATION_IDENTITY_CONFLICT: mutation_key=% public_rows=%',
+          v_public.mutation_key,
+          v_public_key_count;
+      END IF;
+
+      /*
+       * First establish that the public evidence belongs to exactly one
+       * posted, not-yet-linked canonical settlement with a posted settlement
+       * journal.  Amount/date/company/direction are the evidence boundary.
+       */
+      SELECT COUNT(*)::integer
+        INTO v_candidate_count
+        FROM sport_center.payment_settlement_batches b
+        JOIN sport_center.accounting_journals aj
+          ON aj.id = b.settlement_journal_id
+         AND aj.status = 'posted'
+         AND aj.journal_type = 'settlement'
+         AND aj.is_reversal = FALSE
+       WHERE b.status = 'posted'
+         AND b.bank_mutation_id IS NULL
+         AND b.company_id = v_public.company_id
+         AND b.settlement_date = v_public.transaction_date::date
+         AND b.net_amount = v_public.amount
+         AND LOWER(COALESCE(v_public.direction, '')) IN ('in', 'credit', 'incoming', 'cr');
+
+      IF v_candidate_count = 0 THEN
+        RETURN NULL;
+      ELSIF v_candidate_count > 1 THEN
+        RAISE EXCEPTION
+          'CANONICAL_BANK_MUTATION_BRIDGE_AMBIGUOUS_SETTLEMENT: public_mutation=% candidates=%',
+          p_public_mutation_id,
+          v_candidate_count;
+      END IF;
+
+      /*
+       * Resolve provider/account/company only through the owner-approved
+       * Sport Center configuration.  The batch must agree with that config;
+       * the public QRIS/provider/account fields are intentionally ignored.
+       */
+      SELECT
+        COUNT(*)::integer,
+        MIN(b.id),
+        MIN(psc.id),
+        MIN(psc.company_id),
+        MIN(LOWER(BTRIM(psc.provider_code))),
+        MIN(BTRIM(psc.bank_account_id))
+        INTO
+          v_config_count,
+          v_settlement_id,
+          v_config_id,
+          v_company_id,
+          v_provider_code,
+          v_bank_account_id
+        FROM sport_center.payment_settlement_batches b
+        JOIN sport_center.accounting_journals aj
+          ON aj.id = b.settlement_journal_id
+         AND aj.status = 'posted'
+         AND aj.journal_type = 'settlement'
+         AND aj.is_reversal = FALSE
+        JOIN sport_center.payment_settlement_configs psc
+          ON psc.company_id = b.company_id
+         AND LOWER(BTRIM(psc.provider_code)) = LOWER(BTRIM(b.provider_code))
+         AND BTRIM(psc.bank_account_id) = BTRIM(b.bank_account_id)
+         AND psc.is_active = TRUE
+         AND psc.source = 'OWNER_APPROVED'
+         AND psc.effective_from <= b.settlement_date
+         AND (psc.effective_until IS NULL OR b.settlement_date < psc.effective_until)
+       WHERE b.status = 'posted'
+         AND b.bank_mutation_id IS NULL
+         AND b.company_id = v_public.company_id
+         AND b.settlement_date = v_public.transaction_date::date
+         AND b.net_amount = v_public.amount
+         AND LOWER(COALESCE(v_public.direction, '')) IN ('in', 'credit', 'incoming', 'cr');
+
+      IF v_config_count = 0
+         OR v_company_id IS NULL
+         OR v_provider_code IS NULL
+         OR v_bank_account_id IS NULL
+      THEN
+        RAISE EXCEPTION
+          'CANONICAL_BANK_MUTATION_BRIDGE_CONFIG_UNRESOLVED: public_mutation=%',
+          p_public_mutation_id;
+      ELSIF v_config_count > 1 THEN
+        RAISE EXCEPTION
+          'CANONICAL_BANK_MUTATION_BRIDGE_CONFIG_AMBIGUOUS: public_mutation=% configs=%',
+          p_public_mutation_id,
+          v_config_count;
+      END IF;
+
+      SELECT id, source_table, source_id
+        INTO v_canonical_id, v_existing_source_table, v_existing_source_id
+        FROM sport_center.bank_mutations
+       WHERE mutation_key = v_public.mutation_key
+       FOR UPDATE;
+
+      IF v_canonical_id IS NOT NULL
+         AND (
+           v_existing_source_table IS DISTINCT FROM 'public.bank_mutations'
+           OR v_existing_source_id IS DISTINCT FROM v_public.id::text
+         )
+      THEN
+        RAISE EXCEPTION
+          'CANONICAL_BANK_MUTATION_IDENTITY_CONFLICT: mutation_key=% canonical_id=%',
+          v_public.mutation_key,
+          v_canonical_id;
+      END IF;
+
+      INSERT INTO sport_center.bank_mutations (
+        bank_account_id,
+        transaction_date,
+        description,
+        credit_amount,
+        debit_amount,
+        amount,
+        direction,
+        mutation_key,
+        normalized_description,
+        provider_name,
+        provider_order_id,
+        company_id,
+        source,
+        source_classification,
+        source_app,
+        source_module,
+        source_table,
+        source_id,
+        provenance
+      )
+      VALUES (
+        v_bank_account_id,
+        v_public.transaction_date,
+        v_public.description,
+        v_public.amount,
+        0,
+        v_public.amount,
+        'IN',
+        v_public.mutation_key,
+        v_public.normalized_description,
+        v_provider_code,
+        NULL,
+        v_company_id,
+        'PUBLIC_BANK_MUTATION_BRIDGE',
+        'actual_bank_mutation',
+        'cst-super-app',
+        'canonical_bank_mutation_bridge',
+        'public.bank_mutations',
+        v_public.id::text,
+        jsonb_build_object(
+          'bridge', 'public_to_sport_center',
+          'public_mutation_id', v_public.id,
+          'settlement_id', v_settlement_id,
+          'approved_config_id', v_config_id
+        )
+      )
+      ON CONFLICT (mutation_key) DO UPDATE
+      SET bank_account_id = EXCLUDED.bank_account_id,
+          transaction_date = EXCLUDED.transaction_date,
+          description = EXCLUDED.description,
+          credit_amount = EXCLUDED.credit_amount,
+          debit_amount = EXCLUDED.debit_amount,
+          amount = EXCLUDED.amount,
+          direction = EXCLUDED.direction,
+          normalized_description = EXCLUDED.normalized_description,
+          provider_name = EXCLUDED.provider_name,
+          provider_order_id = EXCLUDED.provider_order_id,
+          company_id = EXCLUDED.company_id,
+          source = EXCLUDED.source,
+          source_classification = EXCLUDED.source_classification,
+          source_app = EXCLUDED.source_app,
+          source_module = EXCLUDED.source_module,
+          source_table = EXCLUDED.source_table,
+          source_id = EXCLUDED.source_id,
+          provenance = EXCLUDED.provenance,
+          updated_at = now()
+      RETURNING id INTO v_canonical_id;
+
+      RETURN v_canonical_id;
+    END;
+    $function$;
+  `));
+
+  await db.execute(sql.raw(`
+    CREATE OR REPLACE FUNCTION sport_center.replay_public_bank_mutation_bridge(
+      p_public_mutation_id integer
+    )
+    RETURNS integer
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'sport_center', 'public'
+    AS $function$
+    BEGIN
+      RETURN sport_center.project_public_bank_mutation_to_canonical(
+        p_public_mutation_id
+      );
+    END;
+    $function$;
+  `));
+
+  await db.execute(sql.raw(`
+    CREATE OR REPLACE FUNCTION sport_center.project_public_bank_mutation_to_canonical_trigger()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'sport_center', 'public'
+    AS $function$
+    BEGIN
+      PERFORM sport_center.project_public_bank_mutation_to_canonical(NEW.id);
+      RETURN NEW;
+    END;
+    $function$;
+  `));
+
+  await db.execute(sql.raw(`
+    DO $migration$
+    BEGIN
+      EXECUTE 'DROP TRIGGER IF EXISTS trg_project_public_bank_mutation_to_canonical
+               ON public.bank_mutations';
+      EXECUTE 'CREATE TRIGGER trg_project_public_bank_mutation_to_canonical
+               AFTER INSERT OR UPDATE OF mutation_key, company_id, transaction_date,
+                 amount, direction, status
+               ON public.bank_mutations
+               FOR EACH ROW
+               EXECUTE FUNCTION sport_center.project_public_bank_mutation_to_canonical_trigger()';
+    END;
+    $migration$;
+  `));
+
   logger.info(
-    "Canonical Sport Center settlement contracts: status owner, deterministic grouping, unique active-group backstop, and idempotent wrappers aktif",
+    "Canonical Sport Center contracts: settlement owner, deterministic grouping, and 4C-7N public bank-mutation bridge aktif",
   );
 }
 
