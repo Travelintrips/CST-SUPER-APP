@@ -8,6 +8,8 @@ import { logger } from "./logger.js";
  * execution, accounting, treasury, settlement, refund, or reconciliation data.
  */
 export async function runMktPaymentHandoffMigration(): Promise<void> {
+  logger.info("[mktPaymentHandoffMigration] Sprint 09A start");
+  logger.info("[mktPaymentHandoffMigration] Sprint 09A step 1 begin: payment_requests columns");
   await db.execute(sql`
     ALTER TABLE IF EXISTS payment_requests
       ADD COLUMN IF NOT EXISTS source_type TEXT,
@@ -33,6 +35,7 @@ export async function runMktPaymentHandoffMigration(): Promise<void> {
       ADD COLUMN IF NOT EXISTS mkt_cancelled_by TEXT,
       ADD COLUMN IF NOT EXISTS mkt_cancellation_reason TEXT
   `);
+  logger.info("[mktPaymentHandoffMigration] Sprint 09A step 1 complete: payment_requests columns");
   await db.execute(sql`
     ALTER TABLE IF EXISTS mkt_ap_preparations
       ADD COLUMN IF NOT EXISTS payment_request_id INTEGER,
