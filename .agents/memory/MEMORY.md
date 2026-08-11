@@ -58,3 +58,4 @@
 - [Phase 4C-5 matching boundary](phase4c5-matching-boundary.md) — canonical settlements use adapter net amounts and source-aware review candidates; generic approval remains blocked.
 - [Phase 4C-7A.5 mirror proof boundary](phase4c7a5-proof-boundary.md) — metadata columns alone do not prove the live trigger contract; verify PostgreSQL function/trigger definitions separately in development.
 - [Phase 4C-7A.6 recovery boundary](phase4c7a6-recovery-boundary.md) — trigger replay can recover a historical mirror idempotently, while accounting/settlement remain stopped when their approved pipeline is isolated.
+- [Canonical builder contract](canonical-settlement-builder-contract.md) — builder remains fail-closed until payment-journal, fee config, journal owner, status transition, and batch uniqueness are proven.
