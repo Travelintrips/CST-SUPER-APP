@@ -1,7 +1,7 @@
 # Sprint 10 — Business Decisions
 
 **Tanggal:** 2026-08-10  
-**Status:** Business decision closure — **OPEN**  
+**Status:** Business decision closure — **APPROVED**
 **Implementation:** **NOT STARTED**  
 **Sumber of truth:**
 
@@ -60,8 +60,11 @@ Repository evidence cukup untuk menetapkan recommendation teknis berikut:
 - jangan memperlakukan company selection dari browser sebagai authorization;
 - evidence security/environment yang unknown bukan PASS.
 
-Namun, business policy belum lengkap untuk mengaktifkan seluruh scope. Masih
-terbuka:
+Product Owner telah menyetujui opsi final untuk keenam ADR pada 2026-08-10.
+Business approval ini menyelesaikan G-00, tetapi belum mengaktifkan implementasi
+atau operational/runtime gate. S10-A/G-01 dan G-02 sampai G-05 tetap wajib.
+
+Detail implementasi dan evidence yang masih diperlukan:
 
 - provider dan channel monitoring;
 - retensi evidence monitoring dan format export insiden;
@@ -72,11 +75,11 @@ terbuka:
 
 ### Decision closure verdict
 
-> ⏸️ **Sprint 10 Business Decisions Not Ready**
+> ✅ **Sprint 10 Business Decisions Approved**
 >
 > 9 keputusan arsitektur: **APPROVED**  
-> 2 keputusan operasional: **PENDING**  
-> 4 keputusan bisnis/security: **REQUIRES PRODUCT OWNER**  
+> 6 business decisions: **APPROVED by Product Owner**
+> G-00: **RESOLVED**
 > Sprint 10 implementation: **NOT IMPLEMENTED**
 
 ## 2. Decision Register
@@ -95,16 +98,16 @@ terbuka:
 | ADR-10B-008 | S10-F / S10-D | Browser company selection hanya hint, bukan authorization | APPROVED | Security Owner | Scope selalu di-resolve dan divalidasi server-side. |
 | ADR-10B-009 | S10-B / release | Unknown security/environment evidence bukan PASS | APPROVED | Release Lead | Production posture tetap fail-closed. |
 
-### 2.2 Keputusan yang masih terbuka
+### 2.2 Keputusan yang telah disetujui Product Owner
 
 | Decision ID | Feature | Topic | Status | Owner | Resolution gate |
 |---|---|---|---|---|---|
-| ADR-10B-010 | S10-C | Monitoring provider dan alert channel | PENDING | DevOps | Pilih provider/channel, hitung retensi dan cost, tunjuk owner/on-call, lalu setujui routing. |
-| ADR-10B-011 | S10-D | Governance metric definitions dan denominator policy | REQUIRES PRODUCT OWNER | Product Owner / Finance | Setujui definisi execution, completion/failure, approval rate, pending/expired, confidence, latency, token, cost, freshness, dan perlakuan unknown. |
-| ADR-10B-012 | S10-F / S10-D | Field-level AI data classification dan retention period | REQUIRES PRODUCT OWNER | Security / Product Owner | Setujui klasifikasi PII, prompt/output, context, credential, restricted data, redaction, retention, dan deletion/legal hold. |
-| ADR-10B-013 | S10-F / S10-D | Branch/division scope untuk consolidated governance views | REQUIRES PRODUCT OWNER | Product Owner / Org Owner | Tetapkan allowed-company set, branch semantics, consolidated visibility, dan exception audit. |
-| ADR-10B-014 | S10-C | External monitoring evidence retention dan incident export format | PENDING | DevOps / Operations | Setelah provider dipilih, setujui format timestamped evidence, incident export, retention, dan access control. |
-| ADR-10B-015 | S10-D | Persona-level visibility untuk model/token/cost metadata | REQUIRES PRODUCT OWNER | Product Owner / Finance | Tentukan metadata yang boleh terlihat oleh Finance, Ops, Security, Admin, dan role lain. |
+| ADR-10B-010 | S10-C | Monitoring provider dan alert channel | APPROVED | DevOps | Opsi C disetujui Product Owner; DevOps tetap memilih provider/channel konkret dan menyelesaikan G-03. |
+| ADR-10B-011 | S10-D | Governance metric definitions dan denominator policy | APPROVED | Product Owner / Finance | Opsi B disetujui; metric dictionary dan G-05 evidence tetap wajib. |
+| ADR-10B-012 | S10-F / S10-D | Field-level AI data classification dan retention period | APPROVED | Security / Product Owner | Opsi B disetujui dengan Opsi C sebagai kontrol sementara sampai implementasi Opsi B selesai. |
+| ADR-10B-013 | S10-F / S10-D | Branch/division scope untuk consolidated governance views | APPROVED | Product Owner / Org Owner | Opsi B disetujui dengan Opsi C sebagai fallback sementara sampai implementasi Opsi B selesai. |
+| ADR-10B-014 | S10-C | External monitoring evidence retention dan incident export format | APPROVED | DevOps / Operations | Opsi B disetujui Product Owner; DevOps/Operations tetap menerjemahkan policy dan menyelesaikan G-03. |
+| ADR-10B-015 | S10-D | Persona-level visibility untuk model/token/cost metadata | APPROVED | Product Owner / Finance | Opsi B disetujui dengan Opsi C sebagai fallback sementara sampai implementasi Opsi B selesai. |
 
 ### 2.3 Status interpretation
 
@@ -112,7 +115,8 @@ terbuka:
   implementasi atau production activation sudah disetujui.
 - **PENDING:** keputusan operasional belum dipilih atau belum lengkap.
 - **REQUIRES PRODUCT OWNER:** policy/business authority belum ditetapkan oleh
-  pihak yang berwenang.
+  pihak yang berwenang. Tidak ada ADR Sprint 10 yang masih berada pada status
+  ini setelah approval 2026-08-10.
 - **REJECTED:** tidak ada pada decision register Sprint 10 saat ini.
 
 ## 3. Decision Matrix
@@ -122,18 +126,18 @@ terbuka:
 | S10-B | ADR-10B-001 | Apakah Sprint 10 membangun platform security/AI baru? | APPROVED | Tidak; reuse bounded modules dan security boundary existing. | Technical Lead | No |
 | S10-B | ADR-10B-002 | Apakah release verification Sprint 09 menjadi feature Sprint 10? | APPROVED | Tidak; S10-A tetap release/QA epic terpisah. | Release Lead | No |
 | S10-B | ADR-10B-009 | Bagaimana memperlakukan evidence security/environment yang unknown? | APPROVED | Fail-closed; unknown bukan PASS. | Release Lead | No |
-| S10-C | ADR-10B-010 | Provider dan channel alert apa yang digunakan? | PENDING | Pilih satu provider adapter dan satu designated on-call channel setelah review cost, retention, dan ownership. | DevOps | **Yes** |
-| S10-C | ADR-10B-014 | Berapa lama evidence disimpan dan bagaimana incident diekspor? | PENDING | Gunakan timestamped incident evidence bundle dengan redaction dan export yang dapat direview; final format menunggu provider/runbook. | DevOps / Operations | **Yes** |
+| S10-C | ADR-10B-010 | Provider dan channel alert apa yang digunakan? | APPROVED | Opsi C disetujui; provider/channel konkret, owner, dan G-03 evidence tetap harus diselesaikan DevOps. | DevOps | **Yes — technical/operational gate** |
+| S10-C | ADR-10B-014 | Berapa lama evidence disimpan dan bagaimana incident diekspor? | APPROVED | Opsi B disetujui; structured redacted evidence bundle tetap menunggu provider/runbook mapping dan G-03. | DevOps / Operations | **Yes — technical/operational gate** |
 | S10-F | ADR-10B-003 | Apakah dibuat orchestrator kedua? | APPROVED | Tidak; `contextOrchestrator` tetap single builder. | Architecture Owner | No |
 | S10-F | ADR-10B-004 | Kapan permission projection diterapkan? | APPROVED | Setelah retrieval/cache dan sebelum AI/tool consumption. | Security Owner | No |
 | S10-F | ADR-10B-008 | Apakah browser company selection dapat memperluas scope? | APPROVED | Tidak; hanya hint dan selalu diverifikasi server-side. | Security Owner | No |
-| S10-F | ADR-10B-012 | Data AI apa yang boleh digunakan, dilihat, dicatat, dan berapa lama? | REQUIRES PRODUCT OWNER | Default deny/redact untuk raw prompt/output, credential, personal, restricted, dan unrestricted context sampai policy disetujui. | Security / Product Owner | **Yes** |
-| S10-F | ADR-10B-013 | Apa arti branch/division dalam consolidated view? | REQUIRES PRODUCT OWNER | Server-resolved allowed-company/branch set; consolidated tidak berarti unrestricted access. | Product Owner / Org Owner | **Yes** |
+| S10-F | ADR-10B-012 | Data AI apa yang boleh digunakan, dilihat, dicatat, dan berapa lama? | APPROVED | Opsi B disetujui dengan Opsi C sebagai kontrol sementara; G-04/G-05 tetap wajib. | Security / Product Owner | **Yes — technical gate** |
+| S10-F | ADR-10B-013 | Apa arti branch/division dalam consolidated view? | APPROVED | Opsi B disetujui dengan Opsi C sebagai fallback sementara; G-04 tetap wajib. | Product Owner / Org Owner | **Yes — technical gate** |
 | S10-D | ADR-10B-005 | Apakah dashboard dapat mengubah approval atau business state? | APPROVED | Tidak; read-only bounded slice. | Product Owner / Finance | No |
 | S10-D | ADR-10B-006 | Source of truth execution evidence apa? | APPROVED | `ai_agent_executions`. | AI Owner | No |
 | S10-D | ADR-10B-007 | Source of truth approval evidence apa? | APPROVED | `ai_approval_queue`. | Finance Owner | No |
-| S10-D | ADR-10B-011 | Metric governance apa yang ditampilkan dan bagaimana denominator dihitung? | REQUIRES PRODUCT OWNER | Metric dictionary wajib eksplisit; unknown/partial tidak boleh diperlakukan sebagai zero atau success. | Product Owner / Finance | **Yes** |
-| S10-D | ADR-10B-015 | Persona mana yang boleh melihat model/token/cost? | REQUIRES PRODUCT OWNER | Minimized, persona-scoped metadata; keputusan final menunggu Product Owner/Finance. | Product Owner / Finance | **Yes** |
+| S10-D | ADR-10B-011 | Metric governance apa yang ditampilkan dan bagaimana denominator dihitung? | APPROVED | Opsi B disetujui; metric dictionary, unknown/partial semantics, dan G-05 tetap wajib. | Product Owner / Finance | **Yes — technical gate** |
+| S10-D | ADR-10B-015 | Persona mana yang boleh melihat model/token/cost? | APPROVED | Opsi B disetujui dengan Opsi C sebagai fallback sementara; visibility matrix dan G-05 tetap wajib. | Product Owner / Finance | **Yes — technical gate** |
 
 ## 4. Feature Decisions
 
@@ -338,14 +342,14 @@ tersedia.
 |---|---|---|---|
 | S10-A release/QA prerequisite | Release Lead / DevOps | Open; production NO-GO | Feature implementation berisiko tidak boleh dimulai sebelum environment/evidence gate jelas. |
 | S10-B current security reproduction | Technical Lead / Security | Design ready; runtime evidence belum dihasilkan pada phase ini | S10-C/S10-F progression membutuhkan finding decision dan tenant proof. |
-| Monitoring provider/channel | DevOps | PENDING | Memblok activation S10-C. |
-| Monitoring retention/export | DevOps / Operations | PENDING | Memblok audit-ready incident evidence. |
+| Monitoring provider/channel | DevOps | APPROVED — business option | Opsi C disetujui Product Owner; concrete provider/channel dan G-03 tetap wajib. |
+| Monitoring retention/export | DevOps / Operations | APPROVED — business option | Opsi B disetujui Product Owner; mapping dan G-03 tetap wajib. |
 | Auth user-role/company contract | Security / Backend | Existing contract identified | Prasyarat S10-F; tidak boleh melemahkan role/company authorization. |
-| Classification and retention policy | Security / Product Owner | REQUIRES PRODUCT OWNER | Memblok sensitive context projection dan dashboard redaction contract. |
-| Branch/division semantics | Product Owner / Org Owner | REQUIRES PRODUCT OWNER | Memblok consolidated governance scope. |
+| Classification and retention policy | Security / Product Owner | APPROVED — business option | Opsi B disetujui dengan Opsi C interim sampai implementasi B selesai; G-04/G-05 tetap wajib. |
+| Branch/division semantics | Product Owner / Org Owner | APPROVED — business option | Opsi B disetujui dengan Opsi C interim sampai implementasi B selesai; G-04 tetap wajib. |
 | Tool/data allowlist | Security / Product Owner | Design requirement identified | Memblok AI context exposure. |
-| Governance metric dictionary | Product Owner / Finance | REQUIRES PRODUCT OWNER | Memblok trusted dashboard aggregate. |
-| Persona model/token/cost visibility | Product Owner / Finance | REQUIRES PRODUCT OWNER | Memblok final dashboard DTO per persona. |
+| Governance metric dictionary | Product Owner / Finance | APPROVED — business option | Opsi B disetujui; metric evidence dan G-05 tetap wajib. |
+| Persona model/token/cost visibility | Product Owner / Finance | APPROVED — business option | Opsi B disetujui dengan Opsi C interim sampai implementasi B selesai; G-05 tetap wajib. |
 | Canonical AI records | AI Owner / Finance Owner | Existing: `ai_agent_executions`, `ai_approval_queue` | Tidak boleh digantikan atau diduplikasi. |
 
 ### Sprint 09 overlap review
@@ -366,9 +370,9 @@ harus memiliki reproduction, boundary impact, owner, remediation decision,
 regression/DNB, dan rollback evidence sebelum dianggap sebagai perubahan yang
 diperlukan.
 
-## 9. Outstanding Decisions
+## 9. Approved Decisions — Implementation Conditions
 
-### PENDING — operational owners
+### APPROVED — operational decisions with execution conditions
 
 #### ADR-10B-010 — Monitoring provider and alert channel
 
@@ -399,7 +403,7 @@ alert, runbook, dan SLA lengkap.
 **Gate:** Incident evidence tidak dianggap audit-ready hanya karena alert
 berhasil dikirim.
 
-### REQUIRES PRODUCT OWNER — business and security policy
+### APPROVED — business and security policy
 
 #### ADR-10B-011 — Governance metrics and denominators
 
@@ -427,9 +431,9 @@ Metric harus membawa `as of`/freshness dan source completeness.
 - redaction rule per consumer;
 - retention, deletion, legal hold, dan external-monitoring export policy.
 
-**Recommendation:** Default deny/redact untuk credential, raw prompt/output,
-unrestricted context, personal data, dan restricted data sampai explicit
-approval tersedia.
+**Interim control:** Default deny/redact untuk credential, raw prompt/output,
+unrestricted context, personal data, dan restricted data sampai implementasi
+Opsi B selesai sepenuhnya.
 
 #### ADR-10B-013 — Branch/division semantics
 
@@ -461,8 +465,9 @@ raw provider credentials dan sensitive execution payload tetap dilarang.
 
 ## 10. Recommendation
 
-1. **Jangan mulai implementasi Sprint 10** sebelum enam outstanding decisions
-   di atas memiliki status final dan owner sign-off.
+1. **Jangan mulai implementasi Sprint 10** hanya berdasarkan business approval.
+   S10-A/G-01 dan technical gates G-02 sampai G-05 harus memiliki evidence dan
+   sign-off terlebih dahulu.
 2. Pertahankan S10-A sebagai release/QA epic terpisah dan selesaikan dedicated
    staging, secret rotation owner verification, HTTP E2E, backup/restore,
    rollback, monitoring evidence, dan sign-off sesuai release gate.
@@ -486,11 +491,12 @@ raw provider credentials dan sensitive execution payload tetap dilarang.
 
 ### Final verdict
 
-> ⏸️ **Sprint 10 Business Decisions Not Ready**
+> ✅ **Sprint 10 Business Decisions Approved**
 >
-> Keputusan yang sudah approved cukup untuk baseline desain, tetapi belum cukup
-> untuk implementation authorization karena provider, retention, metric,
-> classification, branch/division, dan persona metadata policy masih terbuka.
+> Keenam business decisions telah disetujui Product Owner pada 2026-08-10.
+> Persetujuan ini menyelesaikan G-00, tetapi belum cukup untuk implementation
+> authorization karena S10-A/G-01 dan technical gates G-02 sampai G-05 masih
+> memerlukan evidence.
 >
 > ✅ Sprint 09 boundaries preserved  
 > ✅ Sprint 10 scope preserved  

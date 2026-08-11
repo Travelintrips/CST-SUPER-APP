@@ -1213,12 +1213,12 @@ visibility, not autonomy.
 | ADR-10B-007 | `ai_approval_queue` remains canonical for approval evidence and mutation. | APPROVED | Dashboard cannot become approval engine. | Finance Owner |
 | ADR-10B-008 | Browser company selection is a hint, never authorization. | APPROVED | Prevents client-controlled tenant widening. | Security Owner |
 | ADR-10B-009 | Unknown security/environment evidence is not PASS. | APPROVED | Preserves fail-closed release posture. | Release Lead |
-| ADR-10B-010 | Monitoring provider and alert channel are not selected by this document. | PENDING | Provider, retention, cost, and owner decisions are still required. | DevOps |
-| ADR-10B-011 | Governance metric definitions and denominator policy. | REQUIRES PRODUCT OWNER | Business users must approve what counts as execution, approval rate, cost, and freshness. | Product Owner / Finance |
-| ADR-10B-012 | Field-level AI data classification and retention period. | REQUIRES PRODUCT OWNER | Security/legal/business owner must approve PII, prompt/output, and retention handling. | Security / Product Owner |
-| ADR-10B-013 | Branch/division-level scope semantics for consolidated governance views. | REQUIRES PRODUCT OWNER | Existing company context does not by itself settle all organizational visibility rules. | Product Owner / Org Owner |
-| ADR-10B-014 | External monitoring evidence retention and incident export format. | PENDING | Depends on selected provider and operational runbook. | DevOps / Operations |
-| ADR-10B-015 | Whether approved governance summaries may show model/token/cost metadata to each persona. | REQUIRES PRODUCT OWNER | Cost and model metadata may be sensitive or financially relevant. | Product Owner / Finance |
+| ADR-10B-010 | Monitoring provider and alert channel are not selected by this document. | APPROVED — business decision | Opsi C approved by Product Owner; concrete provider/channel and G-03 evidence remain required. | DevOps |
+| ADR-10B-011 | Governance metric definitions and denominator policy. | APPROVED — business decision | Opsi B approved by Product Owner; metric dictionary and G-05 evidence remain required. | Product Owner / Finance |
+| ADR-10B-012 | Field-level AI data classification and retention period. | APPROVED — business decision | Opsi B approved with Opsi C interim until implementation B is complete. | Security / Product Owner |
+| ADR-10B-013 | Branch/division-level scope semantics for consolidated governance views. | APPROVED — business decision | Opsi B approved with Opsi C interim until implementation B is complete. | Product Owner / Org Owner |
+| ADR-10B-014 | External monitoring evidence retention and incident export format. | APPROVED — business decision | Opsi B approved by Product Owner; provider mapping and G-03 evidence remain required. | DevOps / Operations |
+| ADR-10B-015 | Whether approved governance summaries may show model/token/cost metadata to each persona. | APPROVED — business decision | Opsi B approved with Opsi C interim until implementation B is complete. | Product Owner / Finance |
 
 No PENDING or REQUIRES PRODUCT OWNER decision authorizes implementation that
 would widen scope or bypass an existing protected boundary.
@@ -1239,7 +1239,8 @@ would widen scope or bypass an existing protected boundary.
   Accounting Core, Payment Engine, and Bank Reconciliation Engine.
 - [ ] Risk matrix covers Technical, Security, Performance, Operational, and
   Scalability categories.
-- [ ] Decision register uses APPROVED, PENDING, and REQUIRES PRODUCT OWNER.
+- [x] Decision register records the approved business decisions and their
+  remaining technical/operational resolution gates.
 - [ ] Dependency graph follows S10-B → S10-C → S10-F → S10-D.
 
 ### Design invariants
@@ -1272,8 +1273,8 @@ Architecture lock is complete when:
 
 1. This document is approved as the baseline for the four in-scope workstreams.
 2. All APPROVED decisions are preserved in implementation tickets/designs.
-3. PENDING and REQUIRES PRODUCT OWNER decisions have named owners and explicit
-   resolution gates.
+3. Product Owner business decisions have named owners, approval records, and
+   explicit technical/operational resolution gates.
 4. S10-A remains separately tracked as release/QA prerequisite.
 5. No source code, migration, endpoint, service, schema, test, workflow, API,
    or configuration has been created as part of this phase.

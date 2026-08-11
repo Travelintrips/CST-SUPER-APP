@@ -44,9 +44,9 @@ future backlog; S10-I dan L1 tetap documentation work terpisah.
 > ✅ Work Breakdown Structure, roadmap, dependency, test, release, risk, dan
 > execution plan telah disusun.
 >
-> ⏸️ Implementasi belum boleh dimulai karena Business Decisions masih memiliki
-> keputusan `PENDING` dan `REQUIRES PRODUCT OWNER`, serta S10-A release gate
-> masih terpisah dan belum ditutup.
+> ⏸️ Implementasi belum boleh dimulai. Business Decisions telah disetujui
+> Product Owner dan G-00 terselesaikan, tetapi S10-A release gate serta G-02
+> sampai G-05 technical/operational gates masih terpisah dan belum ditutup.
 >
 > ✅ Sprint 10 Master Plan Ready as a conditional baseline  
 > ❌ Sprint 10 implementation: **NOT IMPLEMENTED**
@@ -97,7 +97,7 @@ gate berikut terpenuhi:
 
 | Gate | Required decision/evidence |
 |---|---|
-| G-00 — Business decision | Semua keputusan S10-C/S10-F/S10-D yang `PENDING` atau `REQUIRES PRODUCT OWNER` memiliki resolution dan sign-off. |
+| G-00 — Business decision | ADR-10B-010 sampai ADR-10B-015 memiliki resolution dan Product Owner sign-off. |
 | G-01 — Release/QA | S10-A memiliki dedicated staging identity, HTTP E2E, backup/restore, rollback, monitoring evidence, cleanup, dan sign-off. |
 | G-02 — Security | S10-B finding register, current reproduction/decision, tenant proof, regression/DNB, dan rollback evidence tersedia. |
 | G-03 — Observability | Provider/channel, owner, threshold, test alert, runbook, SLA, retention, dan export format disetujui. |
@@ -682,18 +682,21 @@ unchanged.
 
 ### Business Decision
 
-- [ ] ADR-10B-010 provider and alert channel approved.
-- [ ] ADR-10B-011 metric definitions and denominators approved.
-- [ ] ADR-10B-012 AI classification and retention approved.
-- [ ] ADR-10B-013 branch/division and consolidated semantics approved.
-- [ ] ADR-10B-014 monitoring evidence retention/export approved.
-- [ ] ADR-10B-015 model/token/cost visibility per persona approved.
-- [ ] Owner sign-off retained for all required decisions.
+- [x] ADR-10B-010 business option C approved; concrete provider/channel tetap
+  menunggu DevOps dan G-03.
+- [x] ADR-10B-011 metric definitions dan denominators approved.
+- [x] ADR-10B-012 AI classification dan retention approved; Opsi C interim.
+- [x] ADR-10B-013 branch/division dan consolidated semantics approved; Opsi C
+  interim.
+- [x] ADR-10B-014 monitoring evidence retention/export approved.
+- [x] ADR-10B-015 model/token/cost visibility per persona approved; Opsi C
+  interim.
+- [x] Product Owner approval record retained for all six decisions.
 
 ### Implementation authorization
 
 - [ ] S10-A dedicated staging/release gate closed.
-- [ ] G-00 business decision gate passed.
+- [x] G-00 business decision gate passed via Product Owner approval.
 - [ ] G-01 release/QA gate passed.
 - [ ] WP-01 finding register frozen before WP-02.
 - [ ] WP-02 security evidence and rollback accepted.
@@ -804,8 +807,8 @@ Sprint 10 implementation may be considered complete for review only when:
 
 1. Accept this document as the **conditional implementation baseline**, not as
    authorization to start coding.
-2. Close the six outstanding business decisions in
-   `SPRINT-10_BUSINESS_DECISIONS.md` before implementing WP-03, WP-05, or WP-07.
+2. Treat the six Product Owner decisions as G-00 approval, not as permission
+   to skip technical or release evidence.
 3. Close S10-A separately before high-risk feature work and retain all release
    evidence in the release process.
 4. Begin authorized feature work with WP-01/S10-B security revalidation; do not
@@ -827,5 +830,6 @@ Sprint 10 implementation may be considered complete for review only when:
 >
 > ✅ WBS and implementation roadmap complete  
 > ✅ Dependency, risk, testing, release, and execution checklist complete  
-> 🚧 Business decision and S10-A release gates remain blocking  
+> ✅ Business decision gate G-00 resolved by Product Owner approval
+> 🚧 S10-A release gate and G-02 through G-05 technical gates remain blocking
 > ❌ Sprint 10 implementation: **NOT IMPLEMENTED**

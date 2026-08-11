@@ -1,7 +1,7 @@
 # Sprint 10 — Decision Resolution
 
 **Tanggal:** 2026-08-10  
-**Status:** Resolution planning complete — **DECISIONS STILL OPEN**  
+**Status:** Resolution complete — **BUSINESS DECISIONS APPROVED**
 **Sprint 10 implementation:** **NOT STARTED**  
 **Final verdict:** ❌ **Sprint 10 Still Blocked**
 
@@ -28,18 +28,30 @@ Marketplace AP preparation → waiting_payment
   → Bank Reconciliation reference link
 ```
 
-Sprint 10 memiliki master plan sebagai baseline, tetapi belum memiliki
-otorisasi implementasi. Enam business decisions masih terbuka dan S10-A tetap
-merupakan release/QA prerequisite terpisah.
+Sprint 10 memiliki master plan sebagai baseline. Product Owner telah menyetujui
+keenam business decisions pada 2026-08-10. Otorisasi implementasi tetap belum
+terbit karena S10-A/G-01 dan technical gates G-02 sampai G-05 masih terpisah.
 
 | Status | Count | Decision IDs |
 |---|---:|---|
-| PENDING | 2 | ADR-10B-010, ADR-10B-014 |
-| REQUIRES PRODUCT OWNER | 4 | ADR-10B-011, ADR-10B-012, ADR-10B-013, ADR-10B-015 |
+| APPROVED by Product Owner | 6 | ADR-10B-010 through ADR-10B-015 |
 | Separate blocking release gate | 1 | S10-A / G-01 |
 
-Recommendation bukan approval. Status hanya dapat menjadi `APPROVED` setelah
-decision owner memilih opsi, menetapkan policy, dan merekam sign-off.
+Approval yang dicatat adalah business decision. Status implementasi/activation
+tetap blocked sampai evidence dan sign-off gate terkait tersedia.
+
+### Product Owner approval record
+
+- **Approver:** Product Owner
+- **Tanggal:** 2026-08-10
+- **ADR-10B-010:** Opsi C
+- **ADR-10B-011:** Opsi B
+- **ADR-10B-012:** Opsi B, interim Opsi C
+- **ADR-10B-013:** Opsi B, interim Opsi C
+- **ADR-10B-014:** Opsi B
+- **ADR-10B-015:** Opsi B, interim Opsi C
+- **Scope:** business decision untuk Sprint 10; tidak menutup release atau
+  technical gates.
 
 ## 2. Resolution Rules
 
@@ -65,23 +77,23 @@ ambiguous scope. Tidak boleh ada perubahan authority Payment, Accounting,
 Reconciliation, atau Marketplace dari Sprint 09, second orchestrator, event bus,
 vector store, approval engine, atau payment/accounting boundary baru.
 
-## 3. Open Decision Register
+## 3. Approved Decision Register
 
 | Decision ID | Feature | Status | Owner | Blocking effect |
 |---|---|---|---|---|
-| ADR-10B-010 | S10-C | PENDING | DevOps | Memblok provider/channel selection dan S10-C activation. |
-| ADR-10B-011 | S10-D | REQUIRES PRODUCT OWNER | Product Owner / Finance | Memblok trusted governance metrics dan dashboard acceptance. |
-| ADR-10B-012 | S10-F / S10-D | REQUIRES PRODUCT OWNER | Security / Product Owner | Memblok AI context exposure, redaction, retention, dan dashboard DTO. |
-| ADR-10B-013 | S10-F / S10-D | REQUIRES PRODUCT OWNER | Product Owner / Org Owner | Memblok consolidated governance scope dan branch-aware projection. |
-| ADR-10B-014 | S10-C | PENDING | DevOps / Operations | Memblok audit-ready monitoring evidence dan incident export. |
-| ADR-10B-015 | S10-D | REQUIRES PRODUCT OWNER | Product Owner / Finance | Memblok persona-level model/token/cost visibility. |
+| ADR-10B-010 | S10-C | APPROVED | DevOps | Opsi C disetujui; concrete provider/channel dan G-03 tetap wajib. |
+| ADR-10B-011 | S10-D | APPROVED | Product Owner / Finance | Opsi B disetujui; metric evidence dan G-05 tetap wajib. |
+| ADR-10B-012 | S10-F / S10-D | APPROVED | Security / Product Owner | Opsi B disetujui; Opsi C interim sampai implementasi B selesai. |
+| ADR-10B-013 | S10-F / S10-D | APPROVED | Product Owner / Org Owner | Opsi B disetujui; Opsi C interim sampai implementasi B selesai. |
+| ADR-10B-014 | S10-C | APPROVED | DevOps / Operations | Opsi B disetujui; evidence mapping dan G-03 tetap wajib. |
+| ADR-10B-015 | S10-D | APPROVED | Product Owner / Finance | Opsi B disetujui; Opsi C interim sampai implementasi B selesai. |
 
 ## 4. Decision Resolutions
 
 ## 4.1 ADR-10B-010 — Monitoring Provider and Alert Channel
 
 **Feature:** S10-C — Centralized Monitoring & Incident Readiness  
-**Status:** `PENDING`  
+**Status:** `APPROVED` — Product Owner business approval recorded 2026-08-10
 **Decision owner:** DevOps  
 **Related approvers:** Operations Owner, Technical Lead, Security Owner  
 **Blocking:** Yes — S10-C cannot be active
@@ -124,7 +136,7 @@ setelah test alert, runbook, SLA, dan retention/export policy tersedia.
 ## 4.2 ADR-10B-011 — Governance Metric Definitions and Denominators
 
 **Feature:** S10-D — AI Execution Audit Trail & Governance Dashboard  
-**Status:** `REQUIRES PRODUCT OWNER`  
+**Status:** `APPROVED` — Product Owner business approval recorded 2026-08-10
 **Decision owner:** Product Owner / Finance  
 **Related approvers:** AI Owner, Data Owner, Security Owner  
 **Blocking:** Yes — dashboard aggregates cannot be trusted
@@ -167,7 +179,7 @@ metric pada G-05 dapat dibuka.
 ## 4.3 ADR-10B-012 — Field-Level AI Data Classification and Retention
 
 **Feature:** S10-F / S10-D  
-**Status:** `REQUIRES PRODUCT OWNER`  
+**Status:** `APPROVED` — Product Owner business approval recorded 2026-08-10
 **Decision owner:** Security / Product Owner  
 **Related approvers:** Legal/Privacy bila berlaku, AI Owner, Finance Owner  
 **Blocking:** Yes — sensitive AI context/read exposure is prohibited
@@ -210,7 +222,7 @@ dibuka setelah policy efektif.
 ## 4.4 ADR-10B-013 — Branch/Division Scope for Consolidated Views
 
 **Feature:** S10-F / S10-D  
-**Status:** `REQUIRES PRODUCT OWNER`  
+**Status:** `APPROVED` — Product Owner business approval recorded 2026-08-10
 **Decision owner:** Product Owner / Org Owner  
 **Related approvers:** Security Owner, Finance/Ops Owner  
 **Blocking:** Yes — consolidated governance scope is undefined
@@ -251,7 +263,7 @@ cases.
 ## 4.5 ADR-10B-014 — Monitoring Evidence Retention and Incident Export
 
 **Feature:** S10-C — Centralized Monitoring & Incident Readiness  
-**Status:** `PENDING`  
+**Status:** `APPROVED` — Product Owner business approval recorded 2026-08-10
 **Decision owner:** DevOps / Operations  
 **Related approvers:** Security Owner, Technical Lead, Legal/Privacy bila berlaku  
 **Blocking:** Yes — monitoring evidence is not audit-ready
@@ -293,7 +305,7 @@ G-03.
 ## 4.6 ADR-10B-015 — Persona-Level Model/Token/Cost Visibility
 
 **Feature:** S10-D — AI Execution Audit Trail & Governance Dashboard  
-**Status:** `REQUIRES PRODUCT OWNER`  
+**Status:** `APPROVED` — Product Owner business approval recorded 2026-08-10
 **Decision owner:** Product Owner / Finance  
 **Related approvers:** AI Owner, Security Owner, Data Owner  
 **Blocking:** Yes — final governance DTO visibility is undefined
@@ -414,25 +426,25 @@ S10-A / G-01 → G-02 → feature progression
 
 ### Governance
 
-- [ ] Owner and approver named for ADR-10B-010 through ADR-10B-015.
-- [ ] Option, rationale, scope, date, and review cadence recorded per decision.
-- [ ] No recommendation treated as approval without sign-off.
+- [x] Owner and approver named for ADR-10B-010 through ADR-10B-015.
+- [x] Option, rationale, scope, date, and approval record recorded per decision.
+- [x] Product Owner business approval recorded on 2026-08-10.
 
-### S10-C
+### S10-C — post-approval execution conditions
 
 - [ ] Provider/channel, owner roster, P0–P3 SLA approved.
 - [ ] Threshold, dedup, cooldown, recovery, escalation approved.
 - [ ] Retention, incident export, redaction, and access policy approved.
 - [ ] Test alert delivered and acknowledged.
 
-### S10-F
+### S10-F — post-approval execution conditions
 
 - [ ] AI classification, retention, deletion/legal hold approved.
 - [ ] Branch/division ownership and consolidated semantics approved.
 - [ ] Allowed-company/branch, missing-scope, allowlist, and redaction approved.
 - [ ] Negative isolation evidence retained.
 
-### S10-D
+### S10-D — post-approval execution conditions
 
 - [ ] Metric dictionary and denominators approved.
 - [ ] Unknown/partial/freshness semantics approved.
@@ -451,23 +463,19 @@ S10-A / G-01 → G-02 → feature progression
 
 ## 8. Final Recommendation
 
-1. Jangan mengubah enam ADR menjadi `APPROVED` hanya karena recommendation
-   tersedia.
-2. Jalankan resolution workshop dengan owner masing-masing.
-3. Selesaikan ADR-10B-010 sebelum ADR-10B-014.
-4. Selesaikan ADR-10B-012/013 sebelum membuka AI context atau consolidated
-   reads.
-5. Selesaikan ADR-10B-011/015 sebelum metric atau metadata visibility dianggap
-   authoritative.
-6. Tutup S10-A lalu kumpulkan G-02 sebelum progression S10-C/S10-F/S10-D.
-7. Pertahankan default-deny/redact untuk sensitive atau ambiguous data selama
-   resolution belum effective.
-8. Jangan melakukan coding, migration, endpoint, service, workflow, runtime,
-   test, atau implementasi Sprint 10 dalam phase ini.
+1. Business approval keenam ADR telah direkam; jangan menganggapnya sebagai
+   technical implementation authorization.
+2. Selesaikan provider/channel konkret dan ADR-10B-014 mapping sebelum G-03.
+3. Tutup S10-A lalu kumpulkan G-02 sebelum progression S10-C/S10-F/S10-D.
+4. Pertahankan default-deny/redact dan interim Opsi C sampai Opsi B
+   diimplementasikan serta diverifikasi.
+5. Jangan melakukan coding, migration, endpoint, service, workflow, runtime,
+   test, atau implementasi Sprint 10 dalam phase governance ini.
 
 ### Final verdict
 
-> ❌ **Sprint 10 Still Blocked**
+> ❌ **Sprint 10 Still Blocked for Authorization**
 >
-> Enam business decisions belum memiliki final owner sign-off dan S10-A/G-01
-> release gate belum ditutup. Sprint 10 tetap **NOT IMPLEMENTED**.
+> Keenam business decisions telah disetujui Product Owner, tetapi S10-A/G-01
+> release gate dan G-02 sampai G-05 technical gates belum ditutup. Sprint 10
+> tetap **NOT IMPLEMENTED**.
