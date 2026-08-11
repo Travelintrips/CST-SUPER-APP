@@ -6,6 +6,7 @@ import {
 } from "../lib/reconciliation/canonicalSettlementAdapter.js";
 import {
   classifyMatch,
+  dedupeCandidatesByIdentity,
   scoreUnified,
   type MatchCandidate,
 } from "../lib/reconciliation/unifiedMatchingEngine.js";
@@ -100,5 +101,29 @@ describe("Phase 4C-5 canonical settlement matching", () => {
     // candidate has enough evidence for generic auto-matching. The candidate
     // itself remains scoreable and source-qualified.
     expect(scored.candidate.candidateSource).toBe(CANONICAL_SETTLEMENT_SOURCE);
+  });
+
+  it("deduplicates by the full source-qualified identity", () => {
+    const canonical = canonicalCandidate({ id: 2 });
+    const legacy = canonicalCandidate({
+      id: 2,
+      candidateSource: "public.qris_settlements",
+    });
+    const historical = canonicalCandidate({ id: 2, candidateSource: null });
+
+    const deduped = dedupeCandidatesByIdentity([
+      canonical,
+      { ...canonical, scoreOnly: "duplicate" } as MatchCandidate,
+      legacy,
+      historical,
+      { ...historical, scoreOnly: "historical duplicate" } as MatchCandidate,
+    ]);
+
+    expect(deduped).toHaveLength(3);
+    expect(deduped.map((candidate) => candidate.candidateSource)).toEqual([
+      CANONICAL_SETTLEMENT_SOURCE,
+      "public.qris_settlements",
+      null,
+    ]);
   });
 });

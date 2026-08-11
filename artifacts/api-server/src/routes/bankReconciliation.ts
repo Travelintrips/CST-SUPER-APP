@@ -160,12 +160,49 @@ export async function runBankReconciliationCoreMigration() {
   `)).catch(() => {});
 
   // Phase 4C-1: source-aware candidate persistence. Historical rows remain NULL.
-  // Canonical matching and source-aware callers are intentionally deferred to
-  // later Phase 4C slices.
+  // Historical rows remain NULL; source-aware candidates use the exact identity
+  // below and are never collapsed by numeric candidate ID alone.
   await db.execute(sql.raw(`
     ALTER TABLE public.bank_reconciliation_matches
       ADD COLUMN IF NOT EXISTS candidate_source TEXT
   `)).catch(() => {});
+
+  // Preserve the duplicate candidate evidence while making only one row
+  // active per source-qualified identity. This is intentionally not a DELETE:
+  // only rows classified as non-approved candidates are superseded, and
+  // approved or historical evidence is never silently rewritten.
+  await db.execute(sql.raw(`
+    WITH duplicate_groups AS (
+      SELECT mutation_id, candidate_type, candidate_id, candidate_source,
+             MIN(id) AS keep_id
+      FROM public.bank_reconciliation_matches
+      WHERE candidate_source IS NOT NULL
+        AND status = 'candidate'
+      GROUP BY mutation_id, candidate_type, candidate_id, candidate_source
+      HAVING COUNT(*) > 1
+    )
+    UPDATE public.bank_reconciliation_matches m
+    SET status = 'superseded'
+    FROM duplicate_groups d
+    WHERE m.mutation_id = d.mutation_id
+      AND m.candidate_type = d.candidate_type
+      AND m.candidate_id = d.candidate_id
+      AND m.candidate_source = d.candidate_source
+      AND m.id <> d.keep_id
+      AND m.status = 'candidate'
+  `)).catch((e: any) => {
+    logger.warn({ err: e?.cause?.message ?? e?.message }, "[bankRecon] source-aware candidate cleanup skipped");
+  });
+
+  await db.execute(sql.raw(`
+    CREATE UNIQUE INDEX IF NOT EXISTS brm_source_identity_active_unique
+    ON public.bank_reconciliation_matches
+      (mutation_id, candidate_type, candidate_id, candidate_source)
+    WHERE candidate_source IS NOT NULL
+      AND status IN ('candidate', 'approved')
+  `)).catch((e: any) => {
+    logger.warn({ err: e?.cause?.message ?? e?.message }, "[bankRecon] source-aware candidate unique backstop unavailable");
+  });
 
   await db.execute(sql.raw(`
     CREATE TABLE IF NOT EXISTS bank_reconciliation_audit (
@@ -2027,6 +2064,7 @@ router.get("/mutations", async (req, res) => {
         )
        FROM bank_reconciliation_matches m
        WHERE m.mutation_id = bm.id
+          AND m.status IN ('candidate', 'approved')
        ) AS candidates,
        (
          SELECT to_jsonb(qc)

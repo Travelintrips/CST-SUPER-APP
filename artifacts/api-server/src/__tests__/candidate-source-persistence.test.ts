@@ -63,4 +63,18 @@ describe("Phase 4C-1 candidate_source persistence", () => {
       "qris_settlement:1:sport_center.payment_settlement_batches",
     );
   });
+
+  it("defines the source-aware active identity backstop", () => {
+    const migration = readFileSync(
+      resolve(process.cwd(), "../../lib/db/drizzle/0034_reconciliation_candidate_identity.sql"),
+      "utf8",
+    );
+
+    expect(migration).toContain(
+      "mutation_id, candidate_type, candidate_id, candidate_source",
+    );
+    expect(migration).toContain("status IN ('candidate', 'approved')");
+    expect(migration).toContain("status = 'superseded'");
+    expect(migration).not.toMatch(/DELETE\s+FROM/i);
+  });
 });

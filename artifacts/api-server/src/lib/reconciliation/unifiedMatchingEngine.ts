@@ -111,6 +111,28 @@ export interface MutationInput {
   direction?: string;
 }
 
+/**
+ * Keep one scored candidate per source-qualified identity.
+ *
+ * A NULL source is intentionally represented by a stable sentinel: historical
+ * rows must remain distinct from both legacy and canonical source identities.
+ */
+export function dedupeCandidatesByIdentity(
+  candidates: MatchCandidate[],
+): MatchCandidate[] {
+  const seen = new Set<string>();
+  return candidates.filter((candidate) => {
+    const key = [
+      candidate.type,
+      candidate.id,
+      candidate.candidateSource ?? "<historical-null>",
+    ].join(":");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 type ContraResolution = {
   accountId: number;
   label: string;
@@ -750,7 +772,7 @@ export async function fetchCandidates(
     }
   }
 
-  return candidates;
+  return dedupeCandidatesByIdentity(candidates);
 }
 
 // ─── Audit helper ─────────────────────────────────────────────────────────────
@@ -811,28 +833,90 @@ export async function runUnifiedMatching(
     return { status: "unmatched", all: [] };
   }
 
-  const scored = candidates
+  const scored = dedupeCandidatesByIdentity(candidates)
     .map(c => scoreUnified(mutation, c))
     .sort((a, b) => b.score - a.score);
 
   // Persist all candidate scores in one statement instead of one round-trip
   // per candidate. The values are derived from typed engine output; strings
   // are escaped before being embedded in the existing raw SQL path.
-  const candidateValues = scored.map((s) => `(
+  const sourceAwareValues = scored
+    .filter((s) => s.candidate.candidateSource != null)
+    .map((s) => `(
     ${mutation.id}, '${s.candidate.type}', ${s.candidate.id}, ${s.score},
     '${s.reason.join("; ").replace(/'/g, "''")}',
     ${s.amount_match}, ${s.date_match}, false, ${s.ref_match}, ${s.ocr_match},
     'candidate',
     ${s.candidate.candidateSource ? `'${s.candidate.candidateSource.replace(/'/g, "''")}'` : "NULL"}
-  )`).join(",\n");
+  )`);
+  const historicalValues = scored
+    .filter((s) => s.candidate.candidateSource == null)
+    .map((s) => `(
+    ${mutation.id}, '${s.candidate.type}', ${s.candidate.id}, ${s.score},
+    '${s.reason.join("; ").replace(/'/g, "''")}',
+    ${s.amount_match}, ${s.date_match}, false, ${s.ref_match}, ${s.ocr_match},
+    'candidate', NULL
+  )`);
+
+  // Source-aware candidates are an idempotent identity, not append-only
+  // evidence. Stale active source-aware rows are retained as superseded
+  // history, while the current candidate set becomes the only active set.
+  const sourceIdentityPredicate = (s: UnifiedScoredMatch) =>
+    `(candidate_type = '${s.candidate.type.replace(/'/g, "''")}'` +
+    ` AND candidate_id = ${s.candidate.id}` +
+    ` AND candidate_source = '${s.candidate.candidateSource!.replace(/'/g, "''")}' )`;
+  const currentSourceIdentities = scored
+    .filter((s) => s.candidate.candidateSource != null)
+    .map(sourceIdentityPredicate);
   await db.execute(sql.raw(`
-    INSERT INTO bank_reconciliation_matches
-      (mutation_id, candidate_type, candidate_id, match_score, match_reason,
-       amount_match, date_match, name_match, order_id_match, proof_match, status,
-       candidate_source)
-    VALUES ${candidateValues}
-    ON CONFLICT DO NOTHING
+    UPDATE bank_reconciliation_matches
+    SET status = 'superseded'
+    WHERE mutation_id = ${mutation.id}
+      AND candidate_source IS NOT NULL
+      AND status = 'candidate'
+      ${currentSourceIdentities.length
+        ? `AND NOT (${currentSourceIdentities.join(" OR ")})`
+        : ""}
   `)).catch(() => {});
+
+  if (sourceAwareValues.length) {
+    await db.execute(sql.raw(`
+      INSERT INTO bank_reconciliation_matches
+        (mutation_id, candidate_type, candidate_id, match_score, match_reason,
+         amount_match, date_match, name_match, order_id_match, proof_match, status,
+         candidate_source)
+      VALUES ${sourceAwareValues.join(",\n")}
+      ON CONFLICT
+        (mutation_id, candidate_type, candidate_id, candidate_source)
+        WHERE candidate_source IS NOT NULL
+          AND status IN ('candidate', 'approved')
+      DO UPDATE SET
+        match_score = EXCLUDED.match_score,
+        match_reason = EXCLUDED.match_reason,
+        amount_match = EXCLUDED.amount_match,
+        date_match = EXCLUDED.date_match,
+        name_match = EXCLUDED.name_match,
+        order_id_match = EXCLUDED.order_id_match,
+        proof_match = EXCLUDED.proof_match,
+        status = CASE
+          WHEN bank_reconciliation_matches.status = 'approved' THEN 'approved'
+          ELSE 'candidate'
+        END
+    `)).catch(() => {});
+  }
+
+  // Historical NULL-source persistence remains deliberately unchanged: NULL
+  // is not silently interpreted as the legacy QRIS source.
+  if (historicalValues.length) {
+    await db.execute(sql.raw(`
+      INSERT INTO bank_reconciliation_matches
+        (mutation_id, candidate_type, candidate_id, match_score, match_reason,
+         amount_match, date_match, name_match, order_id_match, proof_match, status,
+         candidate_source)
+      VALUES ${historicalValues.join(",\n")}
+      ON CONFLICT DO NOTHING
+    `)).catch(() => {});
+  }
 
   const best = scored[0];
   // Phase 4C-5 deliberately stops before approval. A canonical candidate may
