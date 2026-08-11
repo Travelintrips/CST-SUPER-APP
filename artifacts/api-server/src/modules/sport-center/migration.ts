@@ -127,6 +127,166 @@ export async function ensureSportPaymentMirrorTrigger(): Promise<void> {
       ON public.sport_payments(payment_number)
   `);
 
+  // Canonical metadata is resolved and persisted before the public mirror is
+  // projected.  The function is deliberately source-aware and fail-closed:
+  // it will not write partial metadata or use a non-owner-approved rule.
+  await db.execute(sql`
+    CREATE OR REPLACE FUNCTION sport_center.resolve_and_persist_payment_metadata(
+      p_payment_id integer
+    )
+    RETURNS TABLE (
+      resolved_company_id integer,
+      resolved_expected_settlement_date date,
+      resolved_rule_version text
+    )
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'sport_center', 'public'
+    AS $function$
+    DECLARE
+      v_payment sport_center.sport_payments%ROWTYPE;
+      v_facility_id integer;
+      v_company_id integer;
+      v_company_count integer;
+      v_external_bank_account_id text;
+      v_bank_account_id integer;
+      v_bank_account_count integer;
+      v_provider_id text;
+      v_provider_name text;
+      v_provider_code text;
+      v_rule_version text;
+      v_settlement_delay integer;
+      v_payment_date date;
+      v_expected_settlement_date date;
+      v_business_day boolean;
+      v_remaining integer;
+    BEGIN
+      PERFORM pg_advisory_xact_lock(731026, p_payment_id);
+
+      SELECT *
+        INTO v_payment
+        FROM sport_center.sport_payments
+       WHERE id = p_payment_id
+       FOR UPDATE;
+
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'CANONICAL_PAYMENT_NOT_FOUND: %', p_payment_id;
+      END IF;
+
+      IF v_payment.status::text <> 'confirmed' THEN
+        RAISE EXCEPTION 'CANONICAL_PAYMENT_NOT_CONFIRMED: payment=% status=%',
+          p_payment_id, v_payment.status;
+      END IF;
+
+      SELECT sb.facility_id
+        INTO v_facility_id
+        FROM sport_center.sport_bookings sb
+       WHERE sb.id = v_payment.booking_id;
+
+      IF NOT FOUND OR v_facility_id IS NULL THEN
+        RAISE EXCEPTION 'CANONICAL_COMPANY_UNRESOLVED: payment=% booking=%',
+          p_payment_id, v_payment.booking_id;
+      END IF;
+
+      SELECT COUNT(*)::integer, MIN(fcm.company_id)
+        INTO v_company_count, v_company_id
+        FROM sport_center.facility_company_mappings fcm
+       WHERE fcm.facility_id = v_facility_id
+         AND fcm.is_active = TRUE;
+
+      IF v_company_count <> 1 OR v_company_id IS NULL THEN
+        RAISE EXCEPTION 'CANONICAL_COMPANY_UNRESOLVED: facility=% active_mappings=%',
+          v_facility_id, v_company_count;
+      END IF;
+
+      v_external_bank_account_id := NULLIF(BTRIM(v_payment.bank_account_id::text), '');
+      IF v_external_bank_account_id IS NULL THEN
+        RAISE EXCEPTION 'CANONICAL_BANK_ACCOUNT_UNRESOLVED: payment=%', p_payment_id;
+      END IF;
+
+      SELECT COUNT(*)::integer, MIN(cba.id)
+        INTO v_bank_account_count, v_bank_account_id
+        FROM public.company_bank_accounts cba
+       WHERE cba.company_id = v_company_id
+         AND cba.account_number::text = v_external_bank_account_id
+         AND cba.is_active = TRUE;
+
+      IF v_bank_account_count <> 1 OR v_bank_account_id IS NULL THEN
+        RAISE EXCEPTION 'CANONICAL_BANK_ACCOUNT_UNRESOLVED: company=% account=% matches=%',
+          v_company_id, v_external_bank_account_id, v_bank_account_count;
+      END IF;
+
+      v_provider_id := NULLIF(BTRIM(v_payment.provider_id::text), '');
+      v_provider_name := NULLIF(BTRIM(v_payment.provider_name::text), '');
+      v_provider_code := NULLIF(LOWER(BTRIM(v_payment.payment_provider::text)), '');
+      IF v_provider_id IS NULL OR v_provider_name IS NULL OR v_provider_code IS NULL THEN
+        RAISE EXCEPTION 'CANONICAL_PROVIDER_UNRESOLVED: payment=%', p_payment_id;
+      END IF;
+
+      v_payment_date := (COALESCE(
+        v_payment.paid_at,
+        v_payment.confirmed_at,
+        v_payment.created_at
+      ) AT TIME ZONE 'Asia/Jakarta')::date;
+
+      SELECT COUNT(*)::integer, MIN(psc.rule_version), MIN(psc.settlement_delay_business_days)
+        INTO v_company_count, v_rule_version, v_settlement_delay
+        FROM sport_center.payment_settlement_configs psc
+       WHERE psc.company_id = v_company_id
+         AND LOWER(BTRIM(psc.provider_code)) = v_provider_code
+         AND psc.bank_account_id = v_external_bank_account_id
+         AND psc.is_active = TRUE
+         AND psc.source = 'OWNER_APPROVED'
+         AND psc.rule_version = 'PROD-MANDIRI-SC-20260810-v1'
+         AND psc.effective_from <= v_payment_date
+         AND (psc.effective_until IS NULL OR v_payment_date < psc.effective_until);
+
+      IF v_company_count <> 1
+         OR v_rule_version IS NULL
+         OR v_settlement_delay IS NULL THEN
+        RAISE EXCEPTION 'CANONICAL_PROVIDER_RULE_UNRESOLVED: company=% provider=% bank=% matches=%',
+          v_company_id, v_provider_code, v_external_bank_account_id, v_company_count;
+      END IF;
+
+      v_expected_settlement_date := v_payment_date;
+      v_remaining := GREATEST(v_settlement_delay, 0);
+      WHILE v_remaining > 0 LOOP
+        v_expected_settlement_date := v_expected_settlement_date + 1;
+        SELECT COALESCE(pbc.is_business_day, TRUE)
+          INTO v_business_day
+          FROM sport_center.payment_business_calendar pbc
+         WHERE pbc.calendar_date = v_expected_settlement_date;
+        IF EXTRACT(ISODOW FROM v_expected_settlement_date) < 6
+           AND COALESCE(v_business_day, TRUE) THEN
+          v_remaining := v_remaining - 1;
+        END IF;
+      END LOOP;
+
+      LOOP
+        SELECT COALESCE(pbc.is_business_day, TRUE)
+          INTO v_business_day
+          FROM sport_center.payment_business_calendar pbc
+         WHERE pbc.calendar_date = v_expected_settlement_date;
+        EXIT WHEN EXTRACT(ISODOW FROM v_expected_settlement_date) < 6
+          AND COALESCE(v_business_day, TRUE);
+        v_expected_settlement_date := v_expected_settlement_date + 1;
+      END LOOP;
+
+      UPDATE sport_center.sport_payments
+         SET company_id = v_company_id,
+             expected_settlement_date = v_expected_settlement_date,
+             settlement_rule_version = v_rule_version
+       WHERE id = p_payment_id
+         AND status::text = 'confirmed';
+
+      resolved_company_id := v_company_id;
+      resolved_expected_settlement_date := v_expected_settlement_date;
+      resolved_rule_version := v_rule_version;
+      RETURN NEXT;
+    END;
+    $function$
+  `);
+
   await db.execute(sql`
     CREATE OR REPLACE FUNCTION sport_center.mirror_confirmed_payment_to_public()
     RETURNS trigger
@@ -135,6 +295,7 @@ export async function ensureSportPaymentMirrorTrigger(): Promise<void> {
     SET search_path TO 'pg_catalog', 'sport_center', 'public'
     AS $function$
     DECLARE
+      v_canonical_metadata RECORD;
       v_public_booking_id integer;
       v_public_booking_count integer;
       v_booking_tax_rate numeric;
@@ -160,6 +321,12 @@ export async function ensureSportPaymentMirrorTrigger(): Promise<void> {
       END IF;
 
       v_payment_number := 'SCPAY-SC-' || NEW.id::text;
+
+      -- Persist canonical metadata first.  The following projection uses the
+      -- same owner-approved resolution contract and remains idempotent.
+      SELECT *
+        INTO v_canonical_metadata
+        FROM sport_center.resolve_and_persist_payment_metadata(NEW.id);
 
       SELECT COUNT(*)::integer, MIN(pb.id)
         INTO v_public_booking_count, v_public_booking_id
