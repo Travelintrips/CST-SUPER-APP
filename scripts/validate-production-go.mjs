@@ -66,6 +66,21 @@ function envPresent(name, minLength = 4) {
   return v && v.trim().length >= minLength;
 }
 
+function gateStatus(value) {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object" && typeof value.status === "string") {
+    return value.status;
+  }
+  return undefined;
+}
+
+function gateReason(value) {
+  if (value && typeof value === "object" && typeof value.reason === "string") {
+    return value.reason;
+  }
+  return undefined;
+}
+
 // ── Determine if dedicated staging is available ───────────────────────────────
 
 const hasDedicatedStaging =
@@ -80,15 +95,16 @@ const gates = [];
 // Gate 1 — Static (typecheck + tests + build)
 {
   const s = summary.customerStatic ?? summary.static;
+  const currentStatus = gateStatus(s);
   const status = !summaryLoaded ? "NOT_RUN"
-    : s?.status === "PASS" ? "PASS"
-    : s?.status === "FAIL" ? "FAIL"
+    : currentStatus === "PASS" ? "PASS"
+    : currentStatus === "FAIL" ? "FAIL"
     : "NOT_RUN";
   gates.push({
     gate: "1 — Static",
     description: "TypeScript + unit tests + build",
     status,
-    evidence: s?.status === "PASS"
+    evidence: currentStatus === "PASS"
       ? "pnpm run audit:customer-static → exit 0"
       : status === "NOT_RUN"
       ? "NOT_RUN — current static audit evidence not found. Run: pnpm run audit:customer-static"
@@ -99,15 +115,16 @@ const gates = [];
 // Gate 2 — Runtime Safe Dev
 {
   const s = summary.runtimeSafeDev ?? summary.runtime;
+  const currentStatus = gateStatus(s);
   const status = !summaryLoaded ? "NOT_RUN"
-    : s?.status === "PASS" ? "PASS"
-    : s?.status === "FAIL" ? "FAIL"
+    : currentStatus === "PASS" ? "PASS"
+    : currentStatus === "FAIL" ? "FAIL"
     : "NOT_RUN";
   gates.push({
     gate: "2 — Runtime Safe Dev",
     description: "DB connected, workers running, health checks green",
     status,
-    evidence: s?.status === "PASS"
+    evidence: currentStatus === "PASS"
       ? "pnpm run audit:customer-runtime → exit 0"
       : status === "NOT_RUN"
       ? "NOT_RUN — current runtime-safe-dev evidence not found. Run: pnpm run audit:customer-runtime"
@@ -118,15 +135,16 @@ const gates = [];
 // Gate 3 — Secret Availability
 {
   const s = summary.secretAvailability;
+  const currentStatus = gateStatus(s);
   const status = !summaryLoaded ? "NOT_RUN"
-    : s?.status === "PASS" ? "PASS"
-    : s?.status === "FAIL" ? "FAIL"
+    : currentStatus === "PASS" ? "PASS"
+    : currentStatus === "FAIL" ? "FAIL"
     : "NOT_RUN";
   gates.push({
     gate: "3 — Secret Availability",
     description: "All required secrets PRESENT and non-placeholder",
     status,
-    evidence: s?.status === "PASS"
+    evidence: currentStatus === "PASS"
       ? "pnpm run audit:secrets → MISSING: 0, INVALID: 0"
       : status === "NOT_RUN"
       ? "NOT_RUN — secret availability audit has not run in the current validation cycle. Run: pnpm run audit:secrets"
@@ -155,7 +173,7 @@ const gates = [];
   }
 
   // summary.json can override if the gate has been formally run and PASS
-  if (summary.secretRotation?.status === "PASS") {
+  if (gateStatus(summary.secretRotation) === "PASS") {
     rotStatus = "PASS";
   }
 
@@ -194,18 +212,19 @@ function stagingDependentGate(summaryKey, gateLabel, description, passSummary, b
     };
   }
   const s = summary[summaryKey];
+  const currentStatus = gateStatus(s);
   const status = !summaryLoaded ? "NOT_RUN"
-    : s?.status === "PASS"    ? "PASS"
-    : s?.status === "BLOCKED" ? "BLOCKED"
-    : s?.status === "FAIL"    ? "FAIL"
+    : currentStatus === "PASS"    ? "PASS"
+    : currentStatus === "BLOCKED" ? "BLOCKED"
+    : currentStatus === "FAIL"    ? "FAIL"
     : "NOT_RUN";
   return {
     gate: gateLabel,
     description,
     status,
-    evidence: s?.status === "PASS"
+    evidence: currentStatus === "PASS"
       ? passSummary
-      : s?.reason || blockedReason,
+      : gateReason(s) || blockedReason,
   };
 }
 
@@ -266,9 +285,10 @@ gates.push(stagingDependentGate(
 // Gate 12 — Production Verdict (from formal production gate run)
 {
   const s = summary.production;
+  const currentStatus = gateStatus(s);
   const status = !summaryLoaded ? "NOT_RUN"
-    : s?.status === "GO"    ? "PASS"
-    : s?.status === "NO-GO" ? "FAIL"
+    : currentStatus === "GO"    ? "PASS"
+    : currentStatus === "NO-GO" ? "FAIL"
     : "NOT_RUN";
   const reasons = Array.isArray(s?.reasons) && s.reasons.length > 0
     ? s.reasons.join("; ")
@@ -277,11 +297,11 @@ gates.push(stagingDependentGate(
     gate: "12 — Production Gate",
     description: "pnpm run audit:customer-production → GO",
     status,
-    evidence: s?.status === "GO"
+    evidence: currentStatus === "GO"
       ? "summary.json production: GO"
       : status === "NOT_RUN"
       ? "NOT_RUN — dependent gates are not complete. Run: pnpm run audit:customer-production"
-      : reasons || "Run: pnpm run audit:customer-production",
+      : reasons || gateReason(s) || "Run: pnpm run audit:customer-production",
   });
 }
 
