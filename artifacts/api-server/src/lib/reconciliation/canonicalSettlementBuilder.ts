@@ -128,7 +128,8 @@ function assertGroup(payment: PaymentIdentity): GroupIdentity {
   const companyId = numberOrNull(payment.company_id);
   const providerCode = normalizeProvider(payment.provider_code);
   const bankAccountId = textOrNull(payment.bank_account_id);
-  const settlementDate = textOrNull(payment.expected_settlement_date)?.slice(0, 10);
+  const settlementDate =
+    textOrNull(payment.expected_settlement_date)?.slice(0, 10) ?? null;
   const ruleVersion = textOrNull(payment.settlement_rule_version);
 
   if (
@@ -793,7 +794,7 @@ export async function buildCanonicalSportCenterSettlements(
 ): Promise<CanonicalSettlementBuildResult> {
   try {
     return await client.transaction((tx) =>
-      buildInTransaction(tx as QueryClient, options),
+      buildInTransaction(tx as unknown as QueryClient, options),
     );
   } catch (error) {
     if (error instanceof CanonicalSettlementBuilderError) throw error;
