@@ -1,5 +1,8 @@
 import { Router } from "express";
-import { db } from "@workspace/db";
+import {
+  db,
+  RECONCILIATION_CANDIDATE_SOURCES,
+} from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
 import { postToAccountingHub } from "../lib/accountingPostingService.js";
@@ -812,10 +815,25 @@ router.post("/reconciliation/match", async (req: any, res: any) => {
     const companyId = getCompanyId(req);
     if (!companyId) return res.status(400).json({ error: "companyId required" });
     const userId = req.user?.id ?? "system";
-    const { mutation_id, candidate_type, candidate_id, notes } = req.body as any;
+    const { mutation_id, candidate_type, candidate_id, candidate_source, notes } = req.body as any;
 
     if (!mutation_id || !candidate_type || !candidate_id) {
       return res.status(400).json({ error: "mutation_id, candidate_type, dan candidate_id wajib diisi" });
+    }
+
+    // Phase 4C-2: source-aware QRIS identity must never enter this legacy
+    // mutation-changing endpoint. Canonical adaptation is intentionally
+    // deferred to Phase 4C-3; historical NULL sources remain ambiguous.
+    if (candidate_type === "qris_settlement") {
+      const source = candidate_source ?? null;
+      const error = source === RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER
+        ? "CANONICAL_SETTLEMENT_ADAPTER_NOT_IMPLEMENTED"
+        : "AMBIGUOUS_QRIS_SETTLEMENT_SOURCE";
+      return res.status(422).json({
+        error,
+        code: error,
+        manual_review_required: true,
+      });
     }
 
     // Verifikasi mutation milik company ini
@@ -829,21 +847,22 @@ router.post("/reconciliation/match", async (req: any, res: any) => {
     // Upsert ke bank_reconciliation_matches
     await db.execute(sql`
       INSERT INTO bank_reconciliation_matches
-        (mutation_id, candidate_type, candidate_id, match_score, match_reason, status, created_at)
+        (mutation_id, candidate_type, candidate_id, candidate_source, match_score, match_reason, status, created_at)
       VALUES
-        (${mutation_id}, ${candidate_type}, ${candidate_id}, 100, ${notes ?? 'Manual match'}, 'approved', NOW())
+        (${mutation_id}, ${candidate_type}, ${candidate_id}, ${candidate_source ?? null}, 100, ${notes ?? 'Manual match'}, 'approved', NOW())
       ON CONFLICT (mutation_id) DO UPDATE
         SET candidate_type = EXCLUDED.candidate_type,
             candidate_id   = EXCLUDED.candidate_id,
+            candidate_source = EXCLUDED.candidate_source,
             match_score    = 100,
             match_reason   = EXCLUDED.match_reason,
             status         = 'approved'
     `).catch(async () => {
       await db.execute(sql`
         INSERT INTO bank_reconciliation_matches
-          (mutation_id, candidate_type, candidate_id, match_score, match_reason, status, created_at)
+          (mutation_id, candidate_type, candidate_id, candidate_source, match_score, match_reason, status, created_at)
         VALUES
-          (${mutation_id}, ${candidate_type}, ${candidate_id}, 100, ${notes ?? 'Manual match'}, 'approved', NOW())
+          (${mutation_id}, ${candidate_type}, ${candidate_id}, ${candidate_source ?? null}, 100, ${notes ?? 'Manual match'}, 'approved', NOW())
       `);
     });
 
@@ -859,7 +878,7 @@ router.post("/reconciliation/match", async (req: any, res: any) => {
     `);
 
     logger.info({ mutation_id, candidate_type, candidate_id, companyId, userId }, "[cashBank] Manual reconciliation match");
-    res.json({ success: true, mutation_id, candidate_type, candidate_id });
+    res.json({ success: true, mutation_id, candidate_type, candidate_id, candidate_source: candidate_source ?? null });
   } catch (err: any) {
     logger.error({ err }, "[cashBank] POST /reconciliation/match error");
     res.status(500).json({ error: err.message });

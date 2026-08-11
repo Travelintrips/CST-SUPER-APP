@@ -29,8 +29,13 @@
  */
 
 import { db } from "@workspace/db";
+import {
+  RECONCILIATION_CANDIDATE_SOURCES,
+  type ReconciliationCandidateSource,
+} from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../logger.js";
+import { sportPaymentCanonicalSettlementExclusionSql } from "./sportPaymentCanonicalSettlement.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -109,6 +114,7 @@ export type ErpReasonCode =
 export interface ErpCandidateRaw {
   id: number;
   sourceType: ErpSourceType;
+  candidateSource?: ReconciliationCandidateSource | null;
   amount: number;
   documentDate: string;
   ref: string | null;
@@ -134,12 +140,15 @@ export interface ErpMatchResult {
   matched: boolean;
   sourceType: ErpSourceType | null;
   sourceId: number | null;
+  /** Optional for backward-compatible callers; runtime results normalize to null. */
+  candidateSource?: ReconciliationCandidateSource | null;
   confidence: number;
   reasonCodes: ErpReasonCode[];
   evidenceLevel: EvidenceLevel | null;
   allCandidates: Array<{
     sourceType: ErpSourceType;
     sourceId: number;
+    candidateSource?: ReconciliationCandidateSource | null;
     confidence: number;
     evidenceLevel: EvidenceLevel;
     reasonCodes: ErpReasonCode[];
@@ -201,6 +210,7 @@ async function fetchAlreadyReconciled(companyId: number): Promise<Set<string>> {
   try {
     const { rows } = await db.execute(sql.raw(`
       SELECT brm.candidate_type, brm.candidate_id
+             ,brm.candidate_source
       FROM bank_reconciliation_matches brm
       JOIN bank_mutations bm ON bm.id = brm.mutation_id
       WHERE brm.status = 'approved'
@@ -209,11 +219,17 @@ async function fetchAlreadyReconciled(companyId: number): Promise<Set<string>> {
     const result = new Set<string>();
     for (const r of rows as any[]) {
       const legacyKey  = `${r.candidate_type}:${r.candidate_id}`;
-      result.add(legacyKey);
+      if (r.candidate_type !== "qris_settlement" ||
+          r.candidate_source === RECONCILIATION_CANDIDATE_SOURCES.LEGACY_QRIS) {
+        result.add(legacyKey);
+      }
       // Juga cek dengan format plural (Phase 4) agar tidak ada yang lolos
       for (const [plural, singular] of Object.entries(LEGACY_TYPE_MAP)) {
         if (singular === r.candidate_type) {
-          result.add(`${plural}:${r.candidate_id}`);
+          if (plural !== "qris_settlements" ||
+              r.candidate_source === RECONCILIATION_CANDIDATE_SOURCES.LEGACY_QRIS) {
+            result.add(`${plural}:${r.candidate_id}`);
+          }
         }
       }
     }
@@ -442,6 +458,7 @@ async function fetchActiveCandidates(
           AND COALESCE(sp.status, 'pending') = 'paid'
            AND COALESCE(sp.method, '') ILIKE '%qris%'
            ${mutationIsQris ? aggregateMatchFilter : ""}
+           ${sportPaymentCanonicalSettlementExclusionSql("sp")}
       `,
     }] : []),
     ...(direction === "IN" && mutationIsQris && qrisSettlementTablesAvailable ? [{
@@ -476,6 +493,9 @@ async function fetchActiveCandidates(
         results.push({
           id:               Number(r.id),
           sourceType:       src.type,
+          candidateSource:  src.type === "qris_settlements"
+            ? RECONCILIATION_CANDIDATE_SOURCES.LEGACY_QRIS
+            : null,
           amount:           Number(r.amount),
           documentDate:     String(r.doc_date ?? ""),
           ref:              r.ref ? String(r.ref) : null,
@@ -638,6 +658,7 @@ export async function runErpDocumentMatching(
     matched:              false,
     sourceType:           null,
     sourceId:             null,
+    candidateSource:      null,
     confidence:           0,
     reasonCodes:          [],
     evidenceLevel:        null,
@@ -695,6 +716,7 @@ export async function runErpDocumentMatching(
     .map(s => ({
       sourceType:     s.candidate.sourceType,
       sourceId:       s.candidate.id,
+      candidateSource: s.candidate.candidateSource ?? null,
       confidence:     s.evidence.confidence,
       evidenceLevel:  s.evidence.level,
       reasonCodes:    s.evidence.reasonCodes,
@@ -722,6 +744,7 @@ export async function runErpDocumentMatching(
         matched:              false,
         sourceType:           null,
         sourceId:             null,
+        candidateSource:      null,
         confidence:           0,
         reasonCodes:          ["PAYMENT_METHOD_QRIS"],
         evidenceLevel:        null,
@@ -739,6 +762,7 @@ export async function runErpDocumentMatching(
     matched:              finalMatched,
     sourceType:           best.candidate.sourceType,
     sourceId:             best.candidate.id,
+    candidateSource:      best.candidate.candidateSource ?? null,
     confidence:           best.evidence.confidence,
     reasonCodes:          best.evidence.reasonCodes,
     evidenceLevel:        best.evidence.level,

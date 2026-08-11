@@ -10,6 +10,10 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@workspace/db", () => ({
   db: {},
+  RECONCILIATION_CANDIDATE_SOURCES: {
+    LEGACY_QRIS: "public.qris_settlements",
+    CANONICAL_SPORT_CENTER: "sport_center.payment_settlement_batches",
+  },
 }));
 
 vi.mock("drizzle-orm", () => ({

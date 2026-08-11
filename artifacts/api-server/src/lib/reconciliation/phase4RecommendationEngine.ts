@@ -81,6 +81,7 @@ export interface Phase4Output {
     matched: boolean;
     sourceType: ErpSourceType | null;
     sourceId: number | null;
+    candidateSource: string | null;
     confidence: number;
     reasonCodes: string[];
     isMultipleCandidates?: boolean;
@@ -92,6 +93,7 @@ export interface Phase4Output {
     method?: string;
     candidateType?: string;
     candidateId?: number;
+    candidateSource?: string | null;
     confidenceBand?: string;
   };
   finalRecommendation: {
@@ -277,6 +279,7 @@ export async function buildCombinedRecommendation(
     matched: erpMatch.matched,
     sourceType: erpMatch.sourceType,
     sourceId: erpMatch.sourceId,
+    candidateSource: erpMatch.candidateSource ?? null,
     confidence: erpMatch.confidence,
     reasonCodes: erpMatch.reasonCodes,
     isMultipleCandidates: erpMatch.isMultipleCandidates,
@@ -291,6 +294,7 @@ export async function buildCombinedRecommendation(
         method: classifyHistoricalMethod(bestHistorical as any),
         candidateType: bestHistorical.candidateType,
         candidateId: bestHistorical.candidateId,
+        candidateSource: bestHistorical.candidateSource,
         confidenceBand: bestHistorical.confidenceBand,
       }
     : { matched: false, confidence: 0 };

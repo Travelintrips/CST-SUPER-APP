@@ -9,19 +9,33 @@
  *  - Jurnal hanya dibuat setelah approval (di approveAndCreateJournal)
  */
 
-import { db } from "@workspace/db";
+import {
+  db,
+  RECONCILIATION_CANDIDATE_SOURCES,
+  type ReconciliationCandidateSource,
+} from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../logger.js";
 import { captureFailedJob } from "../financial/failedJobSystem.js";
 import { classifyMutationDescription, persistClassification } from "../expenseClassificationService.js";
 import { postEntryWithClient, type DbClient, type PostingLine } from "../accounting.js";
 import { normalizeDescription } from "../bankDescriptionNormalizer.js";
+import { normalizeQrisProvider } from "./providerSettlementRules.js";
 import { JournalMappingError } from "../journalMappingErrors.js";
 import {
   resolveJournalForEconomicEvent,
   JournalReuseErrorCode,
 } from "./journalReuseEngine.js";
 import { isQrisSettlementDescription } from "./qrisSettlement.js";
+import {
+  isSportPaymentInActiveCanonicalSettlement,
+  sportPaymentCanonicalSettlementExclusionSql,
+  SPORT_PAYMENT_ALREADY_IN_CANONICAL_SETTLEMENT,
+} from "./sportPaymentCanonicalSettlement.js";
+import {
+  CANONICAL_SETTLEMENT_SOURCE,
+  findCanonicalSettlementCandidates,
+} from "./canonicalSettlementAdapter.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -37,6 +51,8 @@ export type CandidateType =
 export interface MatchCandidate {
   id: number;
   type: CandidateType;
+  /** Source-qualified identity; historical rows may legitimately be null. */
+  candidateSource?: ReconciliationCandidateSource | null;
   amount: number;
   date: string;
   ref?: string | null;
@@ -51,6 +67,14 @@ export interface MatchCandidate {
   payment_method?: string | null;
   settlement_item_count?: number | null;
   settlement_partial?: boolean;
+  company_id?: number | null;
+  bank_account_id?: number | null;
+  provider_code?: string | null;
+  provider_name?: string | null;
+  provider_fee_amount?: number | null;
+  fee_tax_amount?: number | null;
+  adjustment_amount?: number | null;
+  expected_bank_amount?: number | null;
 }
 
 export interface UnifiedScoredMatch {
@@ -70,6 +94,8 @@ export interface UnifiedMatchResult {
   best?: UnifiedScoredMatch;
   all: UnifiedScoredMatch[];
 }
+
+export { SPORT_PAYMENT_ALREADY_IN_CANONICAL_SETTLEMENT };
 
 export interface MutationInput {
   id: number;
@@ -314,15 +340,41 @@ export async function resolveContraAccount(
 // ─── Scoring (max 100 pts) ────────────────────────────────────────────────────
 
 export function scoreUnified(
-  mutation: Pick<MutationInput, "amount" | "transaction_date" | "provider_order_id" | "uploaded_proof_url" | "normalized_description">,
+  mutation: Pick<MutationInput, "amount" | "transaction_date" | "provider_order_id" | "uploaded_proof_url" | "normalized_description">
+    & Partial<Pick<MutationInput, "company_id" | "bank_account_id" | "provider_name">>,
   cand: MatchCandidate,
 ): UnifiedScoredMatch {
   let score = 0;
   const reason: string[] = [];
 
+  // Canonical Sport Center settlements are company/account scoped. A
+  // structured mismatch must never be overridden by an exact amount.
+  const companyMismatch =
+    cand.company_id != null &&
+    mutation.company_id != null &&
+    Number(cand.company_id) !== Number(mutation.company_id);
+  const bankAccountMismatch =
+    cand.bank_account_id != null &&
+    mutation.bank_account_id != null &&
+    Number(cand.bank_account_id) !== Number(mutation.bank_account_id);
+  const providerMismatch =
+    cand.candidateSource === CANONICAL_SETTLEMENT_SOURCE &&
+    !!cand.provider_code &&
+    !!mutation.provider_name &&
+    !!cand.provider_name &&
+    normalizeQrisProvider(cand.provider_code) !== normalizeQrisProvider(mutation.provider_name) &&
+    normalizeQrisProvider(cand.provider_name) !== normalizeQrisProvider(mutation.provider_name);
+
   // 1. Amount — MANDATORY for auto-approve (+50)
-  const amountMatch = Math.abs(Number(cand.amount) - Number(mutation.amount)) < 0.01;
+  const amountMatch =
+    !companyMismatch &&
+    !bankAccountMismatch &&
+    !providerMismatch &&
+    Math.abs(Number(cand.amount) - Number(mutation.amount)) < 0.01;
   if (amountMatch) { score += 50; reason.push("nominal cocok (+50)"); }
+  if (companyMismatch) reason.push("company tidak cocok");
+  if (bankAccountMismatch) reason.push("rekening bank tidak cocok");
+  if (providerMismatch) reason.push("provider tidak cocok");
 
   // 2. Date ±1 day (+20)
   const mDate = new Date(mutation.transaction_date).getTime();
@@ -406,6 +458,12 @@ export async function fetchCandidates(
   const direction = String(mutation.direction ?? "IN").toUpperCase() === "OUT" ? "OUT" : "IN";
   const dateFrom = `'${transaction_date}'::date - 3`;
   const dateTo   = `'${transaction_date}'::date + 3`;
+  const dateOffset = (value: string, days: number): string => {
+    const parsed = new Date(`${value}T00:00:00Z`);
+    if (Number.isNaN(parsed.getTime())) return value;
+    parsed.setUTCDate(parsed.getUTCDate() + days);
+    return parsed.toISOString().slice(0, 10);
+  };
   const amtFilter = `ABS(##AMT##::numeric - ${Number(amount)}) < 0.01`;
   const mutationLooksQris =
     String(mutation.provider_name ?? "").toUpperCase() === "QRIS" ||
@@ -442,11 +500,17 @@ export async function fetchCandidates(
                AND qs_member.settlement_date BETWEEN ${dateFrom} AND ${dateTo}
                AND COALESCE(qs_member.status, 'unsettled') NOT IN ('cancelled', 'reversed')
            )` : "";
+  const canonicalSportPaymentExclusion =
+    `AND ${sportPaymentCanonicalSettlementExclusionSql("sp")}`;
 
   // R5 fix: isolasi per perusahaan — hanya ambil kandidat dari company yang sama
   const coFilter = company_id ? `AND ##TBL##.company_id = ${Number(company_id)}` : "";
 
-  const sources: Array<{ q: string; type: CandidateType }> = [
+  const sources: Array<{
+    q: string;
+    type: CandidateType;
+    candidateSource?: ReconciliationCandidateSource | null;
+  }> = [
     {
       type: "accounting_payment",
       q: `
@@ -539,6 +603,7 @@ export async function fetchCandidates(
           AND sp.status = 'paid'
            AND (${mutationLooksQris ? "COALESCE(sp.method, '') ILIKE '%qris%'" : "TRUE"})
            ${aggregateMatchFilter}
+           ${canonicalSportPaymentExclusion}
           AND (
             sp.bank_account_id IS NULL
             OR ${mutationBankAccountId != null ? `sp.bank_account_id = ${mutationBankAccountId}` : "TRUE"}
@@ -547,6 +612,7 @@ export async function fetchCandidates(
     },
     ...(mutationLooksQris && qrisSettlementTablesAvailable ? [{
       type: "qris_settlement" as CandidateType,
+      candidateSource: RECONCILIATION_CANDIDATE_SOURCES.LEGACY_QRIS,
       q: `
         SELECT qs.id,
                qs.net_amount AS amount,
@@ -590,6 +656,51 @@ export async function fetchCandidates(
     },
   ];
 
+  // Phase 4C-5: canonical Sport Center settlements are read only through the
+  // verified adapter. The adapter uses expected_bank_settlements (net_amount)
+  // and enforces posted + unlinked + posted settlement journal eligibility.
+  if (direction === "IN") {
+    try {
+      const canonicalCandidates = await findCanonicalSettlementCandidates({
+        companyId: company_id ?? null,
+        amount: Number(amount),
+        from: transaction_date ? dateOffset(transaction_date, -3) : null,
+        to: transaction_date ? dateOffset(transaction_date, 3) : null,
+      });
+      for (const canonical of canonicalCandidates) {
+        const candidate: MatchCandidate = {
+          id: canonical.id,
+          type: "qris_settlement",
+          candidateSource: canonical.candidateSource,
+          amount: canonical.amount,
+          date: canonical.date,
+          ref: canonical.ref,
+          name: canonical.name,
+          gross_amount: canonical.gross_amount,
+          mdr_amount: canonical.mdr_amount,
+          provider_fee_amount: canonical.provider_fee_amount,
+          fee_tax_amount: canonical.fee_tax_amount,
+          tax_withheld_amount: canonical.tax_withheld_amount,
+          adjustment_amount: canonical.adjustment_amount,
+          expected_bank_amount: canonical.expected_bank_amount,
+          settlement_date: canonical.settlement_date,
+          settlement_reference: canonical.settlement_reference,
+          settlement_status: canonical.settlement_status,
+          company_id: canonical.company_id,
+          bank_account_id: canonical.bank_account_id,
+          provider_code: canonical.provider_code,
+          provider_name: canonical.provider_name,
+        };
+        candidates.push(candidate);
+      }
+    } catch (e: any) {
+      logger.warn(
+        { err: e.message },
+        "[unifiedMatchingEngine] canonical settlement source skipped",
+      );
+    }
+  }
+
   for (const src of sources) {
     try {
       const { rows } = await db.execute(sql.raw(src.q));
@@ -597,6 +708,7 @@ export async function fetchCandidates(
         candidates.push({
           id: Number(r.id),
           type: src.type,
+          candidateSource: src.candidateSource ?? null,
           amount: Number(r.amount),
           date: String(r.date ?? ""),
           name: r.name ?? null,
@@ -611,6 +723,10 @@ export async function fetchCandidates(
           payment_method: r.payment_method ? String(r.payment_method) : null,
           settlement_item_count: r.settlement_item_count != null ? Number(r.settlement_item_count) : null,
           settlement_partial: Boolean(r.settlement_partial),
+          company_id: r.company_id != null ? Number(r.company_id) : null,
+          bank_account_id: r.bank_account_id != null ? Number(r.bank_account_id) : null,
+          provider_code: r.provider_code ? String(r.provider_code) : null,
+          provider_name: r.provider_name ? String(r.provider_name) : null,
         });
       }
     } catch (e: any) {
@@ -688,18 +804,25 @@ export async function runUnifiedMatching(
     await db.execute(sql.raw(`
       INSERT INTO bank_reconciliation_matches
         (mutation_id, candidate_type, candidate_id, match_score, match_reason,
-         amount_match, date_match, name_match, order_id_match, proof_match, status)
+         amount_match, date_match, name_match, order_id_match, proof_match, status,
+         candidate_source)
       VALUES
         (${mutation.id}, '${s.candidate.type}', ${s.candidate.id}, ${s.score},
          '${s.reason.join("; ").replace(/'/g, "''")}',
          ${s.amount_match}, ${s.date_match}, false, ${s.ref_match}, ${s.ocr_match},
-         'candidate')
+         'candidate',
+         ${s.candidate.candidateSource ? `'${s.candidate.candidateSource}'` : "NULL"})
       ON CONFLICT DO NOTHING
     `)).catch(() => {});
   }
 
   const best = scored[0];
-  const classification = classifyMatch(best);
+  // Phase 4C-5 deliberately stops before approval. A canonical candidate may
+  // be scored and persisted, but it must remain a reviewable candidate until
+  // the dedicated canonical approval phase.
+  const isCanonicalBest =
+    best.candidate.candidateSource === CANONICAL_SETTLEMENT_SOURCE;
+  const classification = isCanonicalBest ? "manual_review" : classifyMatch(best);
 
   await writeReconAudit(mutation.id, "MATCH_CREATED", actor, {
     count: scored.length,
@@ -718,6 +841,7 @@ export async function runUnifiedMatching(
       WHERE mutation_id = ${mutation.id}
         AND candidate_type = '${best.candidate.type}'
         AND candidate_id = ${best.candidate.id}
+        AND candidate_source IS NOT DISTINCT FROM ${best.candidate.candidateSource ? `'${best.candidate.candidateSource}'` : "NULL"}
     `)).catch(() => {});
     // Set mutation status to 'matched' — journal will be created by approval gate
     await db.execute(sql.raw(
@@ -810,6 +934,7 @@ export async function approveAndCreateJournal(
   /** COA code explicitly chosen by user after a JOURNAL_MAPPING_REQUIRED error.
    *  When provided, bypasses resolveContraAccount and uses this account directly. */
   manualCoaCode?: string | null,
+  candidateSource: ReconciliationCandidateSource | null = null,
 ): Promise<{ ok: boolean; journalEntryId: number | null; error?: string; manual_review_required?: true; code?: string }> {
 
   let journalEntryId: number | null = null;
@@ -843,9 +968,10 @@ export async function approveAndCreateJournal(
        // browser payload change the candidate selected by the reviewer.
        let selectedCandidateType = candidateType;
        let selectedCandidateId = candidateId;
+       let selectedCandidateSource = candidateSource;
        if (matchId) {
          const { rows: matchRows } = await tx.execute(sql.raw(`
-           SELECT id, candidate_type, candidate_id
+           SELECT id, candidate_type, candidate_id, candidate_source
            FROM bank_reconciliation_matches
            WHERE id = ${Number(matchId)} AND mutation_id = ${mutationId}
            FOR UPDATE
@@ -858,6 +984,7 @@ export async function approveAndCreateJournal(
          }
          selectedCandidateType = String((matchRows[0] as any).candidate_type ?? "");
          selectedCandidateId = Number((matchRows[0] as any).candidate_id);
+          selectedCandidateSource = (matchRows[0] as any).candidate_source ?? null;
        }
 
        const selectedType = canonicalCandidateType(selectedCandidateType);
@@ -892,6 +1019,24 @@ export async function approveAndCreateJournal(
            { code: "CONFLICT" },
          );
        }
+
+        // Phase 4C-4: candidate generation can race with canonical settlement
+        // posting. Revalidate the source payment while the approval transaction
+        // is still open, before any journal or bank mutation changes.
+        if (selectedType === "sport_payment" && selectedCandidateId != null) {
+          const alreadySettled = await isSportPaymentInActiveCanonicalSettlement(
+            tx as unknown as DbClient,
+            selectedCandidateId,
+          );
+          if (alreadySettled) {
+            throw Object.assign(
+              new Error(
+                "Sport Center payment already belongs to an active canonical settlement",
+              ),
+              { code: SPORT_PAYMENT_ALREADY_IN_CANONICAL_SETTLEMENT },
+            );
+          }
+        }
 
       // ── Step 3: Resolve bank COA + contra account + journal ───────────────
       // Bank COA: company_bank_accounts.coa_id WHERE id = bank_account_id
@@ -937,6 +1082,7 @@ export async function approveAndCreateJournal(
            companyId,
            candidateType: selectedCandidateType,
            candidateId: selectedCandidateId,
+            candidateSource: selectedCandidateSource,
            mutationId,
            mutationAmount: amount,
            mutationDate: txDate,
@@ -1015,10 +1161,12 @@ export async function approveAndCreateJournal(
            await tx.execute(sql.raw(`
              INSERT INTO bank_reconciliation_matches
                (mutation_id, candidate_type, candidate_id, match_score, match_reason,
-                amount_match, date_match, name_match, order_id_match, proof_match, status)
+                amount_match, date_match, name_match, order_id_match, proof_match, status,
+                candidate_source)
              VALUES
                (${mutationId}, '${escapeSql(selectedCandidateType)}', ${Number(selectedCandidateId)},
-                100, 'existing posted source journal reused', true, false, false, false, false, 'approved')
+                100, 'existing posted source journal reused', true, false, false, false, false, 'approved',
+                ${selectedCandidateSource ? `'${escapeSql(selectedCandidateSource)}'` : "NULL"})
              ON CONFLICT DO NOTHING
            `));
          }
@@ -1027,6 +1175,7 @@ export async function approveAndCreateJournal(
            match_id: matchId,
            candidate_type: selectedCandidateType,
            candidate_id: selectedCandidateId,
+           candidate_source: selectedCandidateSource,
            journal_entry_id: reusedEntry.id,
            reused_existing_entry: true,
            direction,
@@ -1170,10 +1319,12 @@ export async function approveAndCreateJournal(
         await tx.execute(sql.raw(`
           INSERT INTO bank_reconciliation_matches
             (mutation_id, candidate_type, candidate_id, match_score, match_reason,
-             amount_match, date_match, name_match, order_id_match, proof_match, status)
+             amount_match, date_match, name_match, order_id_match, proof_match, status,
+             candidate_source)
           VALUES
              (${mutationId}, '${escapeSql(selectedCandidateType)}', ${Number(selectedCandidateId)},
-             100, 'manual approve', true, false, false, false, false, 'approved')
+             100, 'manual approve', true, false, false, false, false, 'approved',
+             ${selectedCandidateSource ? `'${escapeSql(selectedCandidateSource)}'` : "NULL"})
           ON CONFLICT DO NOTHING
         `));
       }
@@ -1228,6 +1379,15 @@ export async function approveAndCreateJournal(
         journalEntryId: null,
         error: e.message,
         manual_review_required: true as const,
+        code: e.code,
+      };
+    }
+
+    if (e?.code === SPORT_PAYMENT_ALREADY_IN_CANONICAL_SETTLEMENT) {
+      return {
+        ok: false,
+        journalEntryId: null,
+        error: e.message,
         code: e.code,
       };
     }

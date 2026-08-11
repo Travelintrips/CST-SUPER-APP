@@ -1,5 +1,5 @@
 import { createRoot } from "react-dom/client";
-import { Component, type ReactNode } from "react";
+import * as React from "react";
 import { HelmetProvider } from "@/lib/helmet-stub";
 import App from "./App";
 import "./index.css";
@@ -33,8 +33,8 @@ function showFatalError(message: string) {
 }
 
 // ── React Error Boundary (catches render-phase throws) ────────────────────────
-class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
-  state = { error: null };
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
   static getDerivedStateFromError(error: Error) { return { error }; }
   componentDidCatch(error: Error, info: { componentStack: string }) {
     showFatalError(`React render error: ${error.message}\n${error.stack}\nComponent stack:${info.componentStack}`);
@@ -46,9 +46,9 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 }
 
 createRoot(document.getElementById("root")!).render(
-  <ErrorBoundary>
-    <HelmetProvider>
-      <App />
-    </HelmetProvider>
-  </ErrorBoundary>
+  React.createElement(
+    ErrorBoundary,
+    null,
+    React.createElement(HelmetProvider, null, React.createElement(App)),
+  ),
 );

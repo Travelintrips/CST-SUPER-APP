@@ -27,6 +27,7 @@
  */
 
 import { sql } from "drizzle-orm";
+import type { ReconciliationCandidateSource } from "@workspace/db";
 import { logger } from "../logger.js";
 import type { DbClient } from "../accounting.js";
 
@@ -67,6 +68,8 @@ export const JournalReuseErrorCode = {
   JOURNAL_REUSE_ALREADY_RECONCILED:  "JOURNAL_REUSE_ALREADY_RECONCILED",
   JOURNAL_REUSE_DUPLICATE_MUTATION:  "JOURNAL_REUSE_DUPLICATE_MUTATION",
   MANUAL_REVIEW_REQUIRED:            "MANUAL_REVIEW_REQUIRED",
+  CANONICAL_SETTLEMENT_ADAPTER_NOT_IMPLEMENTED: "CANONICAL_SETTLEMENT_ADAPTER_NOT_IMPLEMENTED",
+  AMBIGUOUS_QRIS_SETTLEMENT_SOURCE: "AMBIGUOUS_QRIS_SETTLEMENT_SOURCE",
 } as const;
 
 export type JournalReuseErrorCode =
@@ -827,11 +830,18 @@ async function lookupExistingEntry(
   companyId: number | null,
   candidateType: string,
   candidateId: number,
+  candidateSource: ReconciliationCandidateSource | null,
 ): Promise<FoundEntry | null> {
   switch (candidateType) {
     case "sport_payment":
       return resolveSportPaymentEntry(client, companyId, candidateId);
     case "qris_settlement": {
+      // Phase 4C-2 deliberately does not adapt the canonical Sport Center
+      // settlement batch. Never allow it (or a historical NULL source) to
+      // fall through to the legacy public.qris_settlements journal lookup.
+      if (candidateSource !== "public.qris_settlements") {
+        return null;
+      }
       // A settlement aggregate is not itself a revenue event. Reuse is only
       // safe when a dedicated settlement journal was explicitly created.
       const companyFilter = companyId != null ? `AND ae.company_id = ${companyId}` : "";
@@ -911,6 +921,8 @@ export interface ResolveJournalArgs {
   candidateType: string | null;
   /** Candidate entity PK */
   candidateId: number | null;
+  /** Source-qualified QRIS identity; NULL is an ambiguous historical value. */
+  candidateSource?: ReconciliationCandidateSource | null;
   /** bank_mutations.id being reconciled */
   mutationId: number;
   /** bank_mutations.amount (absolute value) */
@@ -931,7 +943,10 @@ export async function resolveJournalForEconomicEvent(
   client: DbClient,
   args: ResolveJournalArgs,
 ): Promise<JournalResolutionResult> {
-  const { companyId, candidateType, candidateId, mutationId, mutationAmount, mutationDate } = args;
+  const {
+    companyId, candidateType, candidateId, candidateSource = null,
+    mutationId, mutationAmount, mutationDate,
+  } = args;
   const reasons: string[] = [];
   const evidence: Record<string, unknown> = {
     mutationId,
@@ -939,6 +954,7 @@ export async function resolveJournalForEconomicEvent(
     mutationDate,
     candidateType,
     candidateId,
+    candidateSource,
     companyId,
   };
 
@@ -962,11 +978,34 @@ export async function resolveJournalForEconomicEvent(
   }
 
   // ── Source adapter dispatch — FAIL CLOSED on error ────────────────────────
+  if (candidateType === "qris_settlement" && candidateSource !== "public.qris_settlements") {
+    const code = candidateSource === "sport_center.payment_settlement_batches"
+      ? JournalReuseErrorCode.CANONICAL_SETTLEMENT_ADAPTER_NOT_IMPLEMENTED
+      : JournalReuseErrorCode.AMBIGUOUS_QRIS_SETTLEMENT_SOURCE;
+    return {
+      decision: "MANUAL_REVIEW_REQUIRED",
+      companyId,
+      economicEventType: candidateType,
+      existingJournalId: null,
+      existingJournalNumber: null,
+      sourceDocumentId: candidateId,
+      matchedCandidateType: candidateType,
+      confidence: 0,
+      reasons: [code === JournalReuseErrorCode.CANONICAL_SETTLEMENT_ADAPTER_NOT_IMPLEMENTED
+        ? "Canonical Sport Center settlement adapter is not implemented in Phase 4C-2"
+        : "QRIS settlement source is ambiguous because candidate_source is NULL"],
+      evidence: { ...evidence, code },
+      duplicateRisk: "high",
+      requiresHumanReview: true,
+      safeToCreateJournal: false,
+    };
+  }
+
   let existingEntry: FoundEntry | null = null;
   let lookupError: string | null = null;
 
   try {
-    existingEntry = await lookupExistingEntry(client, companyId, candidateType, candidateId);
+    existingEntry = await lookupExistingEntry(client, companyId, candidateType, candidateId, candidateSource);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     lookupError = msg;

@@ -418,6 +418,7 @@ type MutationStatus =
   | "matched"
   | "duplicate_need_review"
   | "approved_pending_posting"
+  | "approved"
   | "posted"
   | "rejected"
   | "void";
@@ -427,6 +428,7 @@ interface Candidate {
   mutation_id: number;
   candidate_type: string;
   candidate_id: number;
+  candidate_source?: string | null;
   match_score: number;
   match_reason: string;
   amount_match: boolean;
@@ -514,6 +516,8 @@ interface BankMutation {
   posted_by?: string | null;
 }
 
+const CANONICAL_SETTLEMENT_SOURCE = "sport_center.payment_settlement_batches";
+
 interface QrisCandidateAudit {
   id?: number;
   mutation_id: number;
@@ -587,6 +591,7 @@ const STATUS_LABELS: Record<string, string> = {
   matched:                 "Kandidat Ditemukan",
   duplicate_need_review:   "Perlu Review",
   approved_pending_posting:"Menunggu Posting",
+  approved:                "Disetujui",
   posted:                  "Sudah Diposting",
   rejected:                "Ditolak",
   void:                    "Dibatalkan",
@@ -597,6 +602,7 @@ const STATUS_COLORS: Record<string, string> = {
   matched:                 "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/30 dark:text-blue-400",
   duplicate_need_review:   "bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-950/30 dark:text-orange-400",
   approved_pending_posting:"bg-yellow-50 text-yellow-700 border-yellow-200 dark:bg-yellow-950/30 dark:text-yellow-400",
+  approved:                "bg-green-50 text-green-700 border-green-200 dark:bg-green-950/30 dark:text-green-400",
   posted:                  "bg-green-50 text-green-700 border-green-200 dark:bg-green-950/30 dark:text-green-400",
   rejected:                "bg-red-50 text-red-600 border-red-200 dark:bg-red-950/30 dark:text-red-400",
   void:                    "bg-gray-100 text-gray-500 border-gray-200 dark:bg-gray-900/30 dark:text-gray-400",
@@ -613,6 +619,7 @@ const CARD_BORDER: Record<string, string> = {
   matched:                 "border-l-4 border-l-blue-400",
   duplicate_need_review:   "border-l-4 border-l-orange-400",
   approved_pending_posting:"border-l-4 border-l-yellow-400",
+  approved:                "border-l-4 border-l-green-400",
   posted:                  "border-l-4 border-l-green-400",
   rejected:                "border-l-4 border-l-red-400",
   void:                    "border-l-4 border-l-gray-300",
@@ -628,7 +635,8 @@ const canApprove = (m: BankMutation) =>
 
 /** Post ke Accounting → promotes draft journal to posted. */
 const canPost = (m: BankMutation) =>
-  m.status === "approved_pending_posting";
+  m.status === "approved_pending_posting" &&
+  !m.candidates?.some(c => c.candidate_source === CANONICAL_SETTLEMENT_SOURCE);
 
 /** Reject → hanya sebelum posted. */
 const canReject = (m: BankMutation) =>
@@ -646,6 +654,24 @@ const canReopen = (m: BankMutation) =>
 /** Delete → jangan hapus yang sudah posted. */
 const canDelete = (m: BankMutation) =>
   m.status !== "posted" && m.source !== "bank_import";
+
+function isCanonicalSettlementMutation(m: BankMutation): boolean {
+  return m.candidates?.some(
+    c => c.candidate_type === "qris_settlement" &&
+      c.candidate_source === CANONICAL_SETTLEMENT_SOURCE,
+  ) ?? false;
+}
+
+function statusLabel(m: BankMutation): string {
+  if (m.status === "approved" && isCanonicalSettlementMutation(m)) {
+    return "Approved / Reconciled";
+  }
+  return STATUS_LABELS[m.status] ?? m.status;
+}
+
+function statusColor(m: BankMutation): string {
+  return STATUS_COLORS[m.status] ?? "";
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ScoreBadge
@@ -1476,8 +1502,8 @@ function MutationCard({
                 <p className={`text-base font-bold tabular-nums ${isIN ? "text-green-600" : "text-red-600"}`}>
                   {isIN ? "+" : "-"}{idr(amount)}
                 </p>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded-full border font-medium ${STATUS_COLORS[m.status] ?? ""}`}>
-                  {STATUS_LABELS[m.status] ?? m.status}
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full border font-medium ${statusColor(m)}`}>
+                  {statusLabel(m)}
                 </span>
               </div>
             </div>
@@ -1902,8 +1928,8 @@ function MutationDetailPanel({
                 {fmtDate(m.transaction_date)} · {isIN ? "Uang Masuk" : "Uang Keluar"}
               </p>
             </div>
-            <span className={`shrink-0 text-xs px-2 py-1 rounded-full border font-medium ${STATUS_COLORS[m.status] ?? ""}`}>
-              {STATUS_LABELS[m.status] ?? m.status}
+            <span className={`shrink-0 text-xs px-2 py-1 rounded-full border font-medium ${statusColor(m)}`}>
+              {statusLabel(m)}
             </span>
           </div>
         </SheetHeader>
@@ -2749,12 +2775,28 @@ export default function BankReconciliationPage() {
     onError: (e: Error) => toast({ title: "Sync gagal", description: e.message, variant: "destructive" }),
   });
 
-  // Approve → POST /:id/approve → status becomes approved_pending_posting
+  // Approve → POST /:id/approve → legacy becomes approved_pending_posting;
+  // canonical settlement becomes terminal approved/reconciled.
   const approveMut = useMutation({
-    mutationFn: async ({ mutId, matchId, candidateType, candidateId, manualCoaCode }: { mutId: number; matchId?: number; candidateType?: string; candidateId?: number; manualCoaCode?: string }) => {
+    mutationFn: async ({
+      mutId, matchId, candidateType, candidateId, candidateSource, manualCoaCode,
+    }: {
+      mutId: number;
+      matchId?: number;
+      candidateType?: string;
+      candidateId?: number;
+      candidateSource?: string | null;
+      manualCoaCode?: string;
+    }) => {
       const r = await fetch(`/api/bank-reconciliation/${mutId}/approve`, {
         method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ match_id: matchId, candidate_type: candidateType, candidate_id: candidateId, manual_coa_code: manualCoaCode }),
+        body: JSON.stringify({
+          match_id: matchId,
+          candidate_type: candidateType,
+          candidate_id: candidateId,
+          candidate_source: candidateSource ?? null,
+          manual_coa_code: manualCoaCode,
+        }),
       });
       const body = await r.json().catch(() => ({ error: "Unknown error" }));
       if (!r.ok) {
@@ -2777,7 +2819,11 @@ export default function BankReconciliationPage() {
         return;
       }
       setManualReviewWarning(null);
-      toast({ title: "Approve berhasil — draft jurnal dibuat ✓" });
+      toast({
+        title: d?.candidate_source === CANONICAL_SETTLEMENT_SOURCE
+          ? "Settlement disetujui dan direconcile ✓"
+          : "Approve berhasil — draft jurnal dibuat ✓",
+      });
       setActionDialog(null);
       invalidate();
     },
@@ -2907,6 +2953,7 @@ export default function BankReconciliationPage() {
       matchId: chosen?.id,
       candidateType: chosen?.candidate_type,
       candidateId: chosen?.candidate_id,
+      candidateSource: chosen?.candidate_source ?? null,
       // When a JOURNAL_MAPPING_REQUIRED error is active but an IMPLEMENTED COA proposal
       // is ready, pass the code so the backend bypasses resolveContraAccount.
       manualCoaCode: resolvedManualCoaCode ?? undefined,
@@ -3525,6 +3572,7 @@ export default function BankReconciliationPage() {
                                 matchId: chosen?.id,
                                 candidateType: chosen?.candidate_type,
                                 candidateId: chosen?.candidate_id,
+                                candidateSource: chosen?.candidate_source ?? null,
                                 manualCoaCode: latestSourceProposal.proposedCode,
                               });
                             }}

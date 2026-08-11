@@ -14,6 +14,7 @@ import { validateBeforePost } from "../lib/prePostGate.js";
 import { checkRevenueFieldLock, reportImmutabilityViolation } from "../lib/ledgerImmutability.js";
 import { queueIntegrityError } from "../lib/errorContainment.js";
 import { safeAccountingPost } from "../lib/safeAccountingPost.js";
+import { sportPaymentCanonicalSettlementExclusionSql } from "../lib/reconciliation/sportPaymentCanonicalSettlement.js";
 
 const router = Router();
 
@@ -2710,6 +2711,7 @@ async function findMatchingTransaction(
       WHERE ABS(amount::numeric - ${amount}) < 1
         AND payment_date BETWEEN ${dateFilter}
         AND status = 'paid'
+        ${sportPaymentCanonicalSettlementExclusionSql("sport_payments")}
       LIMIT 1
     `));
     if (sp.length) return { type: 'sport_payment', id: (sp[0] as any).id };

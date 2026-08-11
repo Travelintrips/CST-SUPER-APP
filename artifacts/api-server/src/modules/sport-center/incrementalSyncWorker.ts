@@ -36,40 +36,24 @@ async function syncUnmirroredViaDbFunction(): Promise<number> {
     for (const row of rows) {
       const scPaymentNumber = `SCPAY-SC-${row.sc_payment_id}`;
       try {
-        // Resolve local booking_id dari sc_booking_id
-        let localBookingId: number | null = null;
-        if (row.sc_booking_id != null) {
-          const localByScId = await db.execute(sql`
-            SELECT id FROM sport_bookings WHERE sc_booking_id = ${row.sc_booking_id} LIMIT 1
-          `).catch(() => ({ rows: [] }));
-          if (localByScId.rows.length > 0) {
-            localBookingId = Number((localByScId.rows[0] as any).id);
-          }
+        const replay = await db.execute(sql`
+          SELECT sport_center.replay_confirmed_payment_mirror(${row.sc_payment_id}) AS replayed
+        `);
+        if (!(replay.rows[0] as { replayed?: boolean } | undefined)?.replayed) {
+          logger.warn(
+            { scPaymentId: row.sc_payment_id, paymentNumber: scPaymentNumber },
+            `${PREFIX} [dbFallback] trigger replay tidak dijalankan untuk payment yang tidak confirmed`,
+          );
+          continue;
         }
 
-        const paidAt   = row.confirmed_at ?? row.created_at ?? new Date().toISOString();
-        const method   = row.payment_method ?? "Transfer Bank";
-        const amount   = Number(row.amount ?? 0);
-
-        await db.execute(sql`
-          INSERT INTO sport_payments
-            (company_id, booking_id, payment_number, amount, method, status, paid_at,
-             payment_type, source, posting_status, created_at, updated_at)
-          VALUES
-            (1, ${localBookingId}, ${scPaymentNumber}, ${amount},
-             ${method}, 'paid', ${paidAt}::timestamptz,
-             'full_payment', 'SPORT_CENTER_SUPABASE', 'unposted',
-             ${row.created_at ?? new Date().toISOString()}::timestamptz, NOW())
-          ON CONFLICT (payment_number) DO NOTHING
-        `);
-
         logger.info(
-          { scPaymentId: row.sc_payment_id, amount, method, localBookingId },
-          `${PREFIX} [dbFallback] mirror dibuat untuk confirmed payment`,
+          { scPaymentId: row.sc_payment_id },
+          `${PREFIX} [dbFallback] trigger-owned mirror replay diminta`,
         );
         synced++;
       } catch (err) {
-        logger.warn({ err, scPaymentNumber }, `${PREFIX} [dbFallback] gagal insert mirror`);
+        logger.warn({ err, scPaymentNumber }, `${PREFIX} [dbFallback] trigger-owned mirror replay gagal`);
       }
     }
   } catch (err) {
@@ -285,59 +269,6 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
          continue;
        }
 
-      // ── Resolve local booking_id (shared by mirror-create and booking_id-backfill) ──
-       const resolveLocalBooking = async (): Promise<{
-         id: number | null;
-         duplicateCount: number;
-         bookingNumber: string | null;
-       }> => {
-         if (pay.booking_id == null) return { id: null, duplicateCount: 0, bookingNumber: null };
-          const bookingOrder = await client
-          .schema("sport_center")
-          .from("sport_bookings")
-          .select("order_number")
-          .eq("id", pay.booking_id)
-          .maybeSingle();
-          const orderNumber = bookingOrder.data?.order_number ?? null;
-
-          // Source identity is authoritative. Do this lookup first so a
-          // unique order_number cannot hide duplicate public mirrors that
-          // share the same sport_center booking id.
-          const bySourceId = await db.execute(sql`
-            SELECT id, booking_number
-            FROM sport_bookings
-            WHERE sc_booking_id = ${pay.booking_id}
-            ORDER BY id ASC
-          `).catch(() => ({ rows: [] }));
-          if (bySourceId.rows.length > 0) {
-            return {
-              id: Number((bySourceId.rows[0] as any).id),
-              duplicateCount: bySourceId.rows.length,
-              bookingNumber: String((bySourceId.rows[0] as any).booking_number ?? orderNumber ?? ""),
-            };
-          }
-
-          // Legacy rows may predate sc_booking_id; use the source order
-          // number only as a fallback.
-          if (orderNumber) {
-            const byOrderNumber = await db.execute(sql`
-              SELECT id, booking_number
-              FROM sport_bookings
-              WHERE booking_number = ${orderNumber}
-              ORDER BY id ASC
-            `).catch(() => ({ rows: [] }));
-            return {
-              id: byOrderNumber.rows.length > 0 ? Number((byOrderNumber.rows[0] as any).id) : null,
-              duplicateCount: byOrderNumber.rows.length,
-              bookingNumber: byOrderNumber.rows.length > 0
-                ? String((byOrderNumber.rows[0] as any).booking_number ?? orderNumber)
-                : null,
-            };
-          }
-
-          return { id: null, duplicateCount: 0, bookingNumber: null };
-        };
-
       if (!mirror) {
         if (pay.status !== "confirmed") {
           // Belum confirmed → trigger belum seharusnya fire; expected untuk pending payments.
@@ -348,73 +279,27 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
           continue;
         }
 
-        // Payment confirmed tapi mirror belum ada → trigger tidak aktif saat dikonfirmasi
-        // (misal QRIS yang dikonfirmasi sebelum trigger diinstall). Insert mirror manual.
+        // Payment confirmed tapi mirror belum ada → trigger-owned replay.
         logger.info(
           { sportCenterPaymentId: pay.id, paymentNumber: scPaymentNumber },
-          `${PREFIX} payment confirmed tanpa mirror → insert mirror manual`,
+          `${PREFIX} payment confirmed tanpa mirror → trigger-owned replay`,
         );
-         const localBooking = await resolveLocalBooking();
-         if (localBooking.duplicateCount > 1) {
-           logger.warn(
-             { sportCenterPaymentId: pay.id, duplicateBookingCount: localBooking.duplicateCount },
-             `${PREFIX} duplicate local booking mirrors — mirror tidak dibuat`,
-           );
-           continue;
-         }
-         const localBookingId = localBooking.id;
-        const paidAt   = pay.confirmed_at ?? pay.created_at ?? new Date().toISOString();
-        const method   = pay.payment_method ?? "Transfer Bank";
-
-        await db.execute(sql`
-          INSERT INTO sport_payments
-            (company_id, booking_id, payment_number, amount, method, status, paid_at,
-             payment_type, source, posting_status, created_at, updated_at)
-          VALUES
-            (1, ${localBookingId}, ${scPaymentNumber}, ${pay.amount},
-             ${method}, 'paid', ${paidAt}::timestamptz,
-             'full_payment', 'SPORT_CENTER_SUPABASE', 'unposted',
-             ${pay.created_at ?? new Date().toISOString()}::timestamptz, NOW())
-          ON CONFLICT (payment_number) DO NOTHING
-        `);
-         synced++;
+        try {
+          const replay = await db.execute(sql`
+            SELECT sport_center.replay_confirmed_payment_mirror(${pay.id}) AS replayed
+          `);
+          if ((replay.rows[0] as { replayed?: boolean } | undefined)?.replayed) synced++;
+        } catch (err) {
+          logger.warn({ err, sportCenterPaymentId: pay.id }, `${PREFIX} trigger-owned replay gagal`);
+        }
         continue;
       }
 
       if (mirror.booking_id == null && pay.booking_id != null) {
-         const localBooking = await resolveLocalBooking();
-
-         if (localBooking.duplicateCount > 1) {
-           const error = `duplicate local booking mirrors for Sport Center booking ${pay.booking_id} (${localBooking.duplicateCount})`;
-           await db.execute(sql`
-             UPDATE sport_payments
-             SET posting_status = 'manual_review',
-                 posting_error = ${error},
-                 updated_at = NOW()
-             WHERE id = ${Number(mirror.id)}
-           `).catch(() => {});
-           logger.warn(
-             { sportCenterPaymentId: pay.id, duplicateBookingCount: localBooking.duplicateCount },
-             `${PREFIX} duplicate local booking mirrors — posting diblokir`,
-           );
-           synced++;
-           continue;
-         }
-
-         if (localBooking.id) {
-          await db.execute(sql`
-             UPDATE sport_payments
-             SET booking_id = ${localBooking.id}
-            WHERE id = ${Number(mirror.id)}
-              AND booking_id IS NULL
-          `);
-        } else {
-          logger.warn(
-            { sportCenterPaymentId: pay.id, paymentNumber: scPaymentNumber },
-            `${PREFIX} booking lokal belum tersedia; mirror dipertahankan tanpa posting`,
-          );
-          continue;
-        }
+        logger.warn(
+          { sportCenterPaymentId: pay.id, paymentNumber: scPaymentNumber },
+          `${PREFIX} mirror booking bridge missing — trigger remains sole owner`,
+        );
       }
 
        const mirrorEvidenceRes = await db.execute(sql`
@@ -467,22 +352,6 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
           synced++;
           continue;
        }
-
-      // Patch method jika sport_center payment adalah QRIS tapi mirror belum reflect itu.
-      // Hanya update jika posting_status masih unposted/failed (belum diposting ke jurnal).
-      if (
-        pay.payment_method &&
-        String(pay.payment_method).toLowerCase().includes("qris")
-      ) {
-        await db.execute(sql`
-          UPDATE sport_payments
-          SET method     = ${pay.payment_method},
-              updated_at = NOW()
-          WHERE id       = ${Number(mirror.id)}
-            AND LOWER(COALESCE(method, '')) NOT LIKE '%qris%'
-            AND posting_status IN ('unposted', 'failed')
-        `).catch(() => {/* non-fatal */});
-      }
 
       synced++;
     } catch (err) {

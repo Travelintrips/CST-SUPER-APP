@@ -93,7 +93,7 @@ import { registerWorker, startAll } from "./lib/startupOrchestrator.js";
 import { startTokenCleanupWorker } from "./workers/tokenCleanupWorker.js";
 import { initAlertsBroadcast } from "./lib/alertsBroadcast.js";
 import { warmupMailer } from "./lib/mailer.js";
-import { runSportCenterMigration, runSportCenterAccountCorrection, runSportCenterCompanyInvoiceMigration, runSportExpensesMigration } from "./modules/sport-center/migration.js";
+import { ensureSportPaymentMirrorTrigger, runSportCenterMigration, runSportCenterAccountCorrection, runSportCenterCompanyInvoiceMigration, runSportExpensesMigration } from "./modules/sport-center/migration.js";
 import { runTenantMigration } from "./modules/tenant/migration.js";
 import { startRecurringExpenseWorker } from "./modules/sport-center/recurringExpenseWorker.js";
 import { startMemberReminderWorker } from "./modules/sport-center/memberReminderWorker.js";
@@ -231,6 +231,18 @@ async function runWithRetry<T>(
 // ── Pre-startup critical schema migrations (run BEFORE accepting requests) ────
 // These ensure Drizzle ORM columns exist before any query can be executed.
 async function runCriticalPreStartMigrations() {
+  // Install the canonical Sport Center payment resolver before the long
+  // startup migration chain. This is the same idempotent runtime installer
+  // used by runSportCenterMigration; it does not post accounting or create
+  // settlement records.
+  try {
+    await ensureSportPaymentMirrorTrigger();
+    logger.info("Sport Center canonical payment metadata resolver ready");
+  } catch (err) {
+    logger.error({ err }, "Sport Center canonical payment resolver installation failed");
+    throw err;
+  }
+
   // Sprint 8B AP handoff must be available before the API accepts lifecycle
   // writes. Run it first so unrelated legacy DDL cannot delay this scope.
   try {

@@ -30,6 +30,10 @@ import {
   scoreUnified,
   classifyMatch,
 } from "../lib/reconciliation/unifiedMatchingEngine.js";
+import {
+  RECONCILIATION_CANDIDATE_SOURCES,
+  type ReconciliationCandidateSource,
+} from "@workspace/db";
 import { runErpDocumentMatching } from "../lib/reconciliation/erpDocumentMatcher.js";
 import { runHistoricalMatching } from "../lib/reconciliation/historicalMatchingEngine.js";
 import { buildCombinedRecommendation } from "../lib/reconciliation/phase4RecommendationEngine.js";
@@ -74,6 +78,16 @@ import {
   generateQrisCandidates,
   listQrisCandidates,
 } from "../lib/reconciliation/qrisCandidateService.js";
+import { canonicalSettlementDetailsSql } from "../lib/reconciliation/canonicalSettlementAdapter.js";
+import {
+  approveCanonicalSettlementLink,
+  CanonicalSettlementApprovalError,
+  CANONICAL_SETTLEMENT_SOURCE,
+} from "../lib/reconciliation/canonicalSettlementApproval.js";
+import {
+  assertGenericPostAllowed,
+  GenericPostGuardError,
+} from "../lib/reconciliation/genericPostGuard.js";
 import { assertQrisBatchApprovalEligible } from "../lib/reconciliation/qrisBatchApprovalEligibility.js";
 import {
   checkDuplicatePaymentIds,
@@ -143,6 +157,14 @@ export async function runBankReconciliationCoreMigration() {
       status         TEXT NOT NULL DEFAULT 'candidate',
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
+  `)).catch(() => {});
+
+  // Phase 4C-1: source-aware candidate persistence. Historical rows remain NULL.
+  // Canonical matching and source-aware callers are intentionally deferred to
+  // later Phase 4C slices.
+  await db.execute(sql.raw(`
+    ALTER TABLE public.bank_reconciliation_matches
+      ADD COLUMN IF NOT EXISTS candidate_source TEXT
   `)).catch(() => {});
 
   await db.execute(sql.raw(`
@@ -1855,8 +1877,8 @@ router.get("/mutations", async (req, res) => {
   // stable type/id and scoring evidence; these details are read live so the
   // panel does not show stale payment information.
   const candidateDetailsSql = `
-    CASE m.candidate_type
-      WHEN 'accounting_payment' THEN (
+    CASE
+      WHEN m.candidate_type = 'accounting_payment' THEN (
         SELECT jsonb_build_object(
           'amount', ap.amount,
           'date', ap.date,
@@ -1871,7 +1893,7 @@ router.get("/mutations", async (req, res) => {
         FROM accounting_payments ap
         WHERE ap.id = m.candidate_id
       )
-      WHEN 'sport_payment' THEN (
+      WHEN m.candidate_type = 'sport_payment' THEN (
         SELECT jsonb_build_object(
           'amount', GREATEST(0, sp.amount - COALESCE(sp.mdr_amount, 0) - COALESCE(sp.tax_withheld_amount, 0) - COALESCE(sp.other_fee_amount, 0)),
           'grossAmount', sp.amount,
@@ -1897,7 +1919,8 @@ router.get("/mutations", async (req, res) => {
         LEFT JOIN customers c ON c.id = sb.customer_id
         WHERE sp.id = m.candidate_id
       )
-      WHEN 'qris_settlement' THEN (
+      WHEN m.candidate_type = 'qris_settlement'
+       AND m.candidate_source = '${RECONCILIATION_CANDIDATE_SOURCES.LEGACY_QRIS}' THEN (
         SELECT jsonb_build_object(
           'amount', qs.net_amount,
           'grossAmount', qs.gross_amount,
@@ -1935,7 +1958,14 @@ router.get("/mutations", async (req, res) => {
         FROM qris_settlements qs
         WHERE qs.id = m.candidate_id
       )
-      WHEN 'invoice' THEN (
+      WHEN m.candidate_type = 'qris_settlement'
+       AND m.candidate_source = '${RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER}' THEN
+        ${canonicalSettlementDetailsSql("m.candidate_id")}
+      WHEN m.candidate_type = 'qris_settlement' THEN jsonb_build_object(
+        'resolutionError', 'AMBIGUOUS_QRIS_SETTLEMENT_SOURCE',
+        'candidateSource', m.candidate_source
+      )
+      WHEN m.candidate_type = 'invoice' THEN (
         SELECT jsonb_build_object(
           'amount', sd.total_amount,
           'date', COALESCE(sd.invoice_date::text, sd.created_at::date::text),
@@ -1945,7 +1975,7 @@ router.get("/mutations", async (req, res) => {
         FROM sales_documents sd
         WHERE sd.id = m.candidate_id
       )
-      WHEN 'expense' THEN (
+      WHEN m.candidate_type = 'expense' THEN (
         SELECT jsonb_build_object(
           'amount', e.total,
           'date', e.date,
@@ -1955,7 +1985,7 @@ router.get("/mutations", async (req, res) => {
         FROM expenses e
         WHERE e.id = m.candidate_id
       )
-      WHEN 'logistic_order' THEN (
+      WHEN m.candidate_type = 'logistic_order' THEN (
         SELECT jsonb_build_object(
           'amount', lo.grand_total,
           'date', lo.created_at::date,
@@ -1966,7 +1996,7 @@ router.get("/mutations", async (req, res) => {
         FROM logistic_orders lo
         WHERE lo.id = m.candidate_id
       )
-      WHEN 'tenant_invoice' THEN (
+      WHEN m.candidate_type = 'tenant_invoice' THEN (
         SELECT jsonb_build_object(
           'amount', ti.total_amount,
           'date', ti.issued_date::text,
@@ -2087,7 +2117,9 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
   const mutId = parseInt(String(req.params.mutationId ?? ""), 10);
   if (isNaN(mutId)) return res.status(400).json({ error: "ID tidak valid" });
 
-  const { match_id, candidate_type, candidate_id, note, manual_coa_code } = req.body;
+  const {
+    match_id, candidate_type, candidate_id, candidate_source, note, manual_coa_code,
+  } = req.body;
   const actor = (req as any).user?.email ?? "admin";
 
   // ── Promote bank_mutation_imports row → bank_mutations if needed ─────────────
@@ -2151,6 +2183,62 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
     logger.info({ originalBmiId: mutId, resolvedMutId }, "[bankRecon/approve] bank_mutation_imports promoted to bank_mutations");
   }
 
+  // Canonical Sport Center settlements are already accounted by their posted
+  // settlement journal. Route them before the generic approval function so
+  // journal reuse/creation can never be reached for this source.
+  let canonicalApprovalRequested =
+    candidate_source === CANONICAL_SETTLEMENT_SOURCE;
+  if (!canonicalApprovalRequested && match_id) {
+    const { rows: routingMatch } = await db.execute(sql.raw(`
+      SELECT candidate_type, candidate_source
+      FROM bank_reconciliation_matches
+      WHERE id = ${Number(match_id)} AND mutation_id = ${resolvedMutId}
+      LIMIT 1
+    `));
+    canonicalApprovalRequested =
+      String((routingMatch[0] as any)?.candidate_type ?? "") === "qris_settlement" &&
+      String((routingMatch[0] as any)?.candidate_source ?? "") === CANONICAL_SETTLEMENT_SOURCE;
+  }
+
+  if (canonicalApprovalRequested) {
+    try {
+      const canonicalResult = await approveCanonicalSettlementLink(db as any, {
+        mutationId: resolvedMutId,
+        matchId: match_id ? Number(match_id) : null,
+        candidateType: candidate_type ?? null,
+        candidateId: candidate_id ? Number(candidate_id) : null,
+        candidateSource: candidate_source === CANONICAL_SETTLEMENT_SOURCE
+          ? CANONICAL_SETTLEMENT_SOURCE
+          : null,
+        actor,
+      });
+
+      audit(req, {
+        action: "approve-canonical-settlement-link",
+        module: "bank-reconciliation",
+        resourceId: `bank-mutation-${mutId}`,
+        after: canonicalResult,
+      });
+      triggerWritebackForMutation(mutId).catch(() => {});
+      trackMutationApproval({
+        mutationId: resolvedMutId,
+        actor,
+        companyId: (req as any).user?.companyId ?? null,
+      }).catch(() => {});
+      return res.json(canonicalResult);
+    } catch (e: any) {
+      const code = e instanceof CanonicalSettlementApprovalError
+        ? e.code
+        : "CANONICAL_APPROVAL_FAILED";
+      const status = code === "CANONICAL_BANK_MUTATION_NOT_FOUND" ? 404 : 409;
+      logger.warn(
+        { err: e?.cause?.message ?? e?.message, code, mutationId: resolvedMutId },
+        "[bankRecon/approve] canonical settlement link rejected",
+      );
+      return res.status(status).json({ error: e?.message ?? "Approval canonical gagal", code });
+    }
+  }
+
   const result = await approveAndCreateJournal(
     resolvedMutId,
     match_id ? Number(match_id) : null,
@@ -2159,6 +2247,10 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
     actor,
     note,
     manual_coa_code ? String(manual_coa_code) : null,
+    candidate_source === RECONCILIATION_CANDIDATE_SOURCES.LEGACY_QRIS ||
+      candidate_source === RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER
+      ? candidate_source as ReconciliationCandidateSource
+      : null,
   );
 
   if (!result.ok) {
@@ -2169,6 +2261,12 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
         error: result.error,
         code: result.code,
         manual_review_required: true,
+      });
+    }
+    if (result.code === "SPORT_PAYMENT_ALREADY_IN_CANONICAL_SETTLEMENT") {
+      return res.status(409).json({
+        error: result.error,
+        code: result.code,
       });
     }
     return res.status(400).json({ error: result.error });
@@ -2310,6 +2408,28 @@ router.post("/:mutationId/post", async (req, res) => {
         );
       }
 
+      // Resolve the approved source-qualified match before loading or changing
+      // any generic accounting journal. Canonical Sport Center settlements
+      // already own a posted settlement journal and must never enter /post.
+      const { rows: approvedMatchRows } = await tx.execute(sql.raw(`
+        SELECT candidate_type, candidate_id, candidate_source
+        FROM bank_reconciliation_matches
+        WHERE mutation_id = ${mutId}
+          AND status = 'approved'
+        ORDER BY id
+        LIMIT 2
+        FOR UPDATE
+      `));
+      if (approvedMatchRows.length > 1) {
+        throw new GenericPostGuardError(
+          "AMBIGUOUS_QRIS_SETTLEMENT_SOURCE",
+          "Mutasi memiliki lebih dari satu approved reconciliation match; generic posting ditolak.",
+        );
+      }
+      assertGenericPostAllowed(
+        (approvedMatchRows[0] as Record<string, unknown> | undefined) ?? null,
+      );
+
       const journalEntryId = mut.journal_entry_id ? Number(mut.journal_entry_id) : null;
       if (!journalEntryId) {
         throw new Error("Tidak ada journal_entry_id — jalankan approve terlebih dahulu");
@@ -2414,9 +2534,14 @@ router.post("/:mutationId/post", async (req, res) => {
     const code = (
       e.code === "NOT_FOUND"      ? 404 :
       e.code === "PERIOD_LOCKED"  ? 422 :
-      e.code === "CONFLICT" || e.code === "INVALID_STATUS" ? 409 : 500
+      e.code === "CONFLICT" || e.code === "INVALID_STATUS" ||
+      e.code === "CANONICAL_SETTLEMENT_ALREADY_ACCOUNTED" ||
+      e.code === "AMBIGUOUS_QRIS_SETTLEMENT_SOURCE" ? 409 : 500
     );
-    return res.status(code).json({ error: e.message });
+    return res.status(code).json({
+      error: e.message,
+      ...(e.code ? { code: e.code } : {}),
+    });
   }
 });
 
@@ -3326,10 +3451,18 @@ router.post("/smart-import", upload.single("file"), async (req, res) => {
           provider_order_id: providerOrderId,
           uploaded_proof_url: null,
           normalized_description: normalizedDesc,
+          company_id: companyId,
+          bank_account_id: null,
+          provider_name: detectProvider(pr.description),
         }, c));
         scored.sort((a, b) => b.score - a.score);
         const best = scored[0];
-        const status = best ? classifyMatch(best) : "unmatched";
+        const status = best?.candidate.candidateSource ===
+          RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER
+          ? "manual_review"
+          : best
+            ? classifyMatch(best)
+            : "unmatched";
 
         const rowResult = {
           id: mutId,
@@ -3345,6 +3478,7 @@ router.post("/smart-import", upload.single("file"), async (req, res) => {
           match_status: status,
           candidate_type: best?.candidate.type,
           candidate_id: best?.candidate.id,
+          candidate_source: best?.candidate.candidateSource ?? null,
           vendor_match: best?.vendor_match ?? false,
           amount_match: best?.amount_match ?? false,
           date_match: best?.date_match ?? false,
