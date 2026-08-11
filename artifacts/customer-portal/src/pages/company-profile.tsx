@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, Link } from "wouter";
 import { useLanguage } from "@/i18n/LanguageContext";
-import { getAuthToken, getAuthHeaders } from "@/lib/auth";
+import { isAuthenticated, getAuthHeaders } from "@/lib/auth";
 import { useGetPortalMe } from "@workspace/api-client-react";
 import {
   Building2, Mail, Phone, User, MapPin, Shield,
@@ -16,7 +16,7 @@ import { useToast } from "@/hooks/use-toast";
 export default function CompanyProfile() {
   const { t } = useLanguage();
   const [, setLocation] = useLocation();
-  const token = getAuthToken();
+  const authed = isAuthenticated();
   const headers = getAuthHeaders() as Record<string, string>;
   const { toast } = useToast();
   const [editing, setEditing] = useState(false);
@@ -26,11 +26,11 @@ export default function CompanyProfile() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (!token) setLocation("/login");
-  }, [token, setLocation]);
+    if (!authed) setLocation("/login");
+  }, [authed, setLocation]);
 
   const { data: profile, isLoading, refetch } = useGetPortalMe({
-    query: { queryKey: ["getPortalMe", token], enabled: !!token },
+    query: { queryKey: ["getPortalMe"], enabled: authed },
     request: { headers, credentials: "include" },
   });
 
@@ -109,7 +109,7 @@ export default function CompanyProfile() {
     }
   }
 
-  if (!token) return null;
+  if (!authed) return null;
 
   const initials = (profile?.name ?? "?")
     .split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
