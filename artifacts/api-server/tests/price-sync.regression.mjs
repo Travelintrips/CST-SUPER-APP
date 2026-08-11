@@ -7,14 +7,23 @@
  * Cara menjalankan:
  *   node artifacts/api-server/tests/price-sync.regression.mjs
  *
- * Pastikan API Server sudah berjalan di PORT 8080 sebelum menjalankan test ini.
+ * Pastikan API Server sudah berjalan dan jalankan melalui loader development:
+ *   APP_ENV=development node artifacts/api-server/load-secrets.mjs \
+ *     node artifacts/api-server/tests/price-sync.regression.mjs
  */
 
 import http from "http";
+import {
+  assertDevelopmentHarness,
+  getApiBaseUrl,
+  waitForApiReady,
+} from "../../../scripts/regression-harness-helpers.mjs";
 
-const BASE_HOST = "localhost";
-const BASE_PORT = 8080;
-const BASE = `http://${BASE_HOST}:${BASE_PORT}`;
+assertDevelopmentHarness();
+const BASE = getApiBaseUrl();
+const BASE_URL = new URL(BASE);
+const BASE_HOST = BASE_URL.hostname;
+const BASE_PORT = Number(BASE_URL.port || (BASE_URL.protocol === "https:" ? 443 : 80));
 const TIMEOUT_MS = 8000;
 
 let passed = 0;
@@ -134,7 +143,7 @@ async function expectPriceSync(label, triggerFn) {
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 async function getFirstProduct() {
-  const arr = await httpJson("GET", "/api/portal/products");
+   const arr = await httpJson("GET", "/api/portal/products");
   return Array.isArray(arr) ? arr[0] : null;
 }
 
@@ -374,6 +383,7 @@ async function testOrderPriceSnapshot() {
 // ─── Runner ──────────────────────────────────────────────────────────────────
 
 async function run() {
+  await waitForApiReady();
   console.log("=== Price Sync Regression Tests ===\n");
   console.log(`Target: ${BASE}`);
   console.log(`SSE:    ${BASE}/api/ecommerce/events\n`);
