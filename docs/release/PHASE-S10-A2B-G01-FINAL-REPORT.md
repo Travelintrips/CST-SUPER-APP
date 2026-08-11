@@ -43,9 +43,9 @@ Status semantics:
 | Requirement | Current Evidence | Status | Root Cause | Classification | Required Owner | Action Required |
 |---|---|---|---|---|---|---|
 | Repository working tree dan patch integrity bersih | Audit mencatat `git diff --check: PASS` dan working tree clean. | **PASS** | Tidak ada whitespace error atau perubahan tidak tercatat pada saat audit. | Application | Engineering | Tidak ada action untuk gate ini. Pertahankan working tree bersih. |
-| Application static quality: typecheck bersih | Audit terbaru mencatat `pnpm run typecheck: FAIL`; error ada pada `artifacts/customer-portal/src/pages/vendor-mini-form.tsx` dan inferred types terkait. | **FAIL** | Error TypeScript masih ada pada application repository. | Application | Engineering | Perbaiki dan verifikasi ulang pada phase engineering yang berwenang; bukan remediation S10-A2B. |
-| Application build bersih | Audit terbaru mencatat `pnpm run build: FAIL`; `artifacts/mockup-sandbox` tidak dapat resolve asset `nigiri-maguro.png`. | **FAIL** | Asset build-time yang dirujuk tidak tersedia/ter-resolve. | Application | Engineering | Pulihkan atau koreksi asset pada phase engineering terpisah, lalu ulangi build. Tidak dilakukan pada phase ini. |
-| API regression bersih | Audit mencatat 96 test files pass dan 1 file gagal; 6 test gagal pada `src/__tests__/sport-center-membership-accounting.test.ts`. | **FAIL** | Regression test pada existing application belum bersih. | Application | Engineering | Investigasi dan perbaiki pada owner module terkait; jangan menganggap release siap sebelum rerun bersih. |
+| Application static quality: typecheck bersih | Verifikasi HEAD: invokasi pertama `pnpm run typecheck` **FAIL** karena `artifacts/mockup-sandbox/src/.generated/mockup-components.ts` belum ada. Setelah `pnpm run build` membuat file generated tersebut, typecheck diulang dan **PASS**. | **FAIL pada cold checkout; PASS setelah build** | File generated di-ignore Git dan dihasilkan oleh `mockupPreviewPlugin` saat build; cold checkout tidak langsung typecheckable. Error `customer-portal/vendor-mini-form.tsx` dari laporan sebelumnya tidak tereproduksi pada HEAD saat ini. | Application | Engineering | Tidak ada perubahan source pada phase ini. Untuk release evidence, tetapkan urutan generate/build sebelum typecheck atau sediakan generated artifact melalui proses build yang disetujui. |
+| Application build bersih | Verifikasi HEAD: `pnpm run build` **PASS**, seluruh build workspace selesai; `mockup-sandbox`, logistic-order, customer-portal, dan bizportal berhasil dibuild. | **PASS** | Klaim build failure pada laporan sebelumnya sudah stale. Commit `5af60a4` menghapus binary template assets, lalu `a6e2925` dan `ee4dd80` mengganti referensi template dengan fallback data-only sehingga build HEAD sekarang lulus. | Application | Engineering | Tidak ada action build pada phase ini. Gunakan hasil HEAD terbaru, bukan failure historis. |
+| Seluruh regression suite bersih | Verifikasi workspace: API server `97` test files / `3.096` pass dan `1` fail dari `3.097`; BizPortal `208/208` pass; Customer Portal `11/11` pass; service-templates `28/28` pass. Failure API ada pada `phase11-db-integrity.test.ts` — ditemukan 2 posted entries tanpa lines, sementara assertion mengizinkan maksimal 1. | **FAIL** | Development DB saat verifikasi memiliki 2 posted entries tanpa lines; bukan 6 failure pada `sport-center-membership-accounting.test.ts` seperti laporan sebelumnya. | Environment | Infrastructure | Jangan melakukan cleanup/remediation pada phase ini. Owner environment/database perlu menyediakan baseline data yang valid atau Engineering perlu menilai kontrak test pada phase terpisah, lalu rerun suite. |
 | Runtime SAFE DEV tersedia | Evidence sebelumnya mencatat API sehat, database terhubung, worker terjadwal, dan health checks pass. Audit terbaru juga menyatakan environment hanya `MODE B — SAFE DEV`. | **PARTIAL** | SAFE DEV bukan dedicated staging dan tidak memenuhi release proof. | Environment | DevOps | Pertahankan SAFE DEV sebagai development evidence; jangan gunakan sebagai pengganti staging E2E. |
 | Semua secret tersedia | `release-readiness.md` mencatat secret availability PASS; audit secret lama mencatat PRESENT: 20, MISSING: 0, INVALID: 0. Screenshot `attached_assets/image_1786372947102.png` hanya membuktikan nama secret tampil di Replit, bukan validitas koneksi atau rotasi. | **PASS** untuk availability | Availability tidak sama dengan rotation, owner verification, atau functional connectivity. | Environment | DevOps | Tidak ada action availability; tetap lakukan verifikasi release terpisah untuk rotation dan runtime. |
 | Secret rotation diverifikasi owner | `secret-rotation-status.json` tercatat `verifiedByOwner: false`; 19 credential masih incomplete/pending manual rotation. | **FAIL** | Rotasi dan revocation belum diselesaikan serta belum diverifikasi Account Owner. | Governance | Product Owner | Account Owner menyelesaikan rotasi, revocation credential lama, dan owner verification; jalankan audit rotation setelahnya. |
@@ -69,6 +69,7 @@ Status semantics:
 | Sprint 10 belum diimplementasikan | `SPRINT-10_GATE_CLOSURE_AUDIT.md` menyatakan `Implementation status: Sprint 10 NOT IMPLEMENTED`. | Ini sesuai scope phase; tidak berarti release production sudah GO. |
 | Repository integrity check | `git diff --check: PASS`; working tree tercatat clean. | Tidak menghapus application typecheck/build/regression failures. |
 | Existing SAFE DEV runtime foundation | API/DB/worker/health evidence tercatat PASS pada release/security reports. | Hanya dev-safe evidence; bukan dedicated staging release evidence. |
+| Current HEAD verification | `pnpm run build`: PASS; typecheck setelah generated output tersedia: PASS; regression: 3.096/3.097 PASS dengan 1 failure. | Ini adalah evidence terbaru untuk repository HEAD, tetapi belum cukup untuk release GO. |
 | E2E safety guard | `/api/e2e-safety` tercatat live pada dev dan startup guard fail-closed untuk dangerous outbound channels. | Safety guard bukan bukti bahwa full HTTP E2E sudah lulus. |
 | Fail-closed production gate | Production audit gate tidak mengeluarkan GO bila required gate belum PASS. | Gate integrity baik, tetapi hasil saat ini tetap NO-GO. |
 | Existing monitoring baseline | Monitoring matrix dan severity/SLA routing terdokumentasi. | Stack, alert channel, activation, test alert, dan retention belum terbukti aktif. |
@@ -107,18 +108,21 @@ Status semantics:
 ### Apakah aplikasi sudah siap?
 
 **Belum siap untuk release production.** Ada foundation yang tercatat berjalan
-di SAFE DEV, safety guard tersedia, dan production gate fail-closed. Namun audit
-terbaru mencatat typecheck gagal, build gagal karena asset mockup yang tidak
-ter-resolve, dan regression API gagal pada enam test. Selain itu, critical
-release proof seperti staging HTTP E2E, tenant isolation, accounting, SSE, dan
-cleanup belum tersedia.
+di SAFE DEV, safety guard tersedia, dan production gate fail-closed. Verifikasi
+HEAD terbaru menunjukkan build PASS. Typecheck gagal pada cold checkout karena
+generated mockup module belum dibuat, lalu PASS setelah build membuat module
+tersebut. Regression masih FAIL dengan 1 failure dari 3.097 test. Selain itu,
+critical release proof seperti staging HTTP E2E, tenant isolation, accounting,
+SSE, dan cleanup belum tersedia.
 
 ### Apakah repository sudah sehat?
 
-**Sebagian sehat, tetapi belum release-clean.** Working tree dan `git diff
---check` PASS. Sebaliknya, static typecheck, build, dan regression result pada
-audit terbaru tidak bersih. Laporan release lama yang mencatat static PASS
-merupakan historical evidence dan tidak menggantikan hasil audit terbaru.
+**Belum sehat secara konsisten.** Working tree dan `git diff --check` PASS.
+Build PASS, tetapi cold-checkout typecheck tidak PASS tanpa generated output dan
+regression masih memiliki 1 failure. Artefak `BASELINE_TYPESCRIPT_CLEANUP.md`
+berlaku untuk scope API server dan bahkan mencatat 1 pre-existing test failure;
+artefak release/UAT yang menyatakan seluruh repository PASS adalah historical
+evidence, bukan hasil eksekusi HEAD saat ini.
 
 ### Apakah Release & QA masih tertahan?
 
@@ -134,9 +138,10 @@ Blocker utama berada pada:
 2. **Account/governance:** secret rotation 19 credential belum owner-verified,
    backup/restore dan rollback belum dibuktikan, serta sign-off release dan
    technical/security belum tersedia.
-3. **Application:** current audit menunjukkan typecheck, build, dan API
-   regression belum bersih. Ini merupakan blocker independen yang harus
-   ditutup sebelum release dapat disebut application-ready.
+3. **Current verification:** build sudah PASS, tetapi cold-checkout typecheck
+   bergantung pada generated output dan regression memiliki satu failure akibat
+   kondisi data development. Ini tetap menghalangi klaim repository fully
+   healthy.
 
 ### Siapa yang harus menutup blocker?
 
@@ -159,7 +164,59 @@ Blocker utama berada pada:
 | **G-04 — Permission-aware Context** | **PARTIAL** | Existing orchestration/access helper ada, tetapi projection policy dan retained cross-company/cross-branch isolation proof belum ada. | Sensitive/ambiguous context tetap tidak boleh diekspos. |
 | **G-05 — Governance Dashboard** | **PARTIAL** | Canonical source/design/query foundation ada, tetapi scoped read acceptance, metric denominators, persona/PII review, dan dashboard acceptance belum ada. | Dashboard data exposure belum diizinkan. |
 
-## 9. Final Verdict
+## 9. Baseline Consistency Analysis
+
+### Artefak mana yang sudah tidak berlaku?
+
+Bagian berikut dari laporan G-01 sebelumnya sudah tidak berlaku sebagai
+deskripsi kondisi HEAD:
+
+- typecheck failure pada `customer-portal/vendor-mini-form.tsx`;
+- build failure karena `nigiri-maguro.png`;
+- 6 regression failures pada `sport-center-membership-accounting.test.ts`.
+
+Status final G-01 tetap FAIL, tetapi detail evidence di atas harus digantikan
+dengan hasil verifikasi HEAD terbaru. Artefak
+`artifacts/api-server/changelog/BASELINE_TYPESCRIPT_CLEANUP.md` tidak boleh
+dibaca sebagai repository-wide health report: scope-nya API server dan
+dokumen itu sendiri mencatat 1 pre-existing regression failure. Laporan
+release/UAT yang menyatakan seluruh suite PASS adalah historical evidence
+dengan scope/commit berbeda, bukan bukti HEAD saat ini.
+
+### Penyebab inkonsistensi
+
+1. **Generated mockup output:** `src/.generated/mockup-components.ts` di-ignore
+   Git dan dibuat oleh `mockupPreviewPlugin` saat build. Karena itu cold
+   checkout gagal pada typecheck, sedangkan urutan build lalu typecheck lulus.
+2. **Build asset history:** `5af60a4` menghapus template binary assets;
+   `a6e2925` dan `ee4dd80` kemudian mengubah template asset references menjadi
+   fallback data-only. Build failure asset dari evidence lama tidak
+   merepresentasikan HEAD sekarang.
+3. **Regression data state:** test `phase11-db-integrity.test.ts` membaca
+   development DB dan menemukan 2 posted entries tanpa lines, melebihi baseline
+   assertion `<= 1`. Ini adalah kondisi data/runtime saat verifikasi, bukan
+   perubahan Sprint 10.
+4. **Evidence scope:** baseline API-only dan laporan release/UAT historical
+   tidak ekuivalen dengan full workspace verification pada HEAD.
+
+### Apakah repository berubah setelah Baseline Recovery?
+
+**Ya, repository memiliki perubahan setelah artefak baseline yang dirujuk.**
+Evidence commit yang relevan:
+
+- `b887d33` menambahkan mockup-sandbox, generated-module build mechanism, dan
+  Phase 11 DB integrity test.
+- `5af60a4` meng-untrack template binary assets.
+- `a6e2925` dan `ee4dd80` mengubah template asset references menjadi fallback.
+- `70f80c5` mengubah `sport-center-membership-accounting.test.ts`, tetapi bukan
+  sumber failure yang ditemukan pada verifikasi terbaru.
+- `6a289f9` hanya menambahkan laporan G-01; tidak mengubah source application.
+
+Tidak ada source-code remediation yang dilakukan dalam verifikasi S10-A2C.
+Generated file yang muncul setelah build tetap ignored dan bukan perubahan
+tracked source.
+
+## 10. Final Verdict
 
 ### Apakah G-01 gagal karena aplikasi atau infrastructure/environment?
 
@@ -168,12 +225,14 @@ governance release, bukan semata-mata karena aplikasi.**
 
 Tanpa dedicated staging, secret rotation owner verification, backup/restore,
 rollback, full HTTP E2E, dan sign-off, G-01 memang tidak dapat PASS. Aplikasi
-juga **belum sepenuhnya clean** karena audit terbaru mencatat typecheck, build,
-dan regression failures. Jadi kesimpulan yang akurat bukan “aplikasi sudah siap
-dan hanya infra yang bermasalah”; melainkan:
+juga **belum sepenuhnya clean** karena cold-checkout typecheck tidak langsung
+PASS dan regression masih gagal satu test. Build sendiri PASS pada HEAD. Jadi
+kesimpulan yang akurat bukan “aplikasi sudah siap dan hanya infra yang
+bermasalah”; melainkan:
 
 > **Release tertahan dominan oleh infrastructure/environment/governance, dengan
-> application-health blockers yang juga harus ditutup sebelum keputusan GO.**
+> current repository consistency blockers yang juga harus ditutup sebelum
+> keputusan GO.**
 
 **Final G-01 verdict: `FAIL — RELEASE/QA NO-GO`.**
 

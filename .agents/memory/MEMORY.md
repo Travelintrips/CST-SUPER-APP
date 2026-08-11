@@ -48,6 +48,7 @@
 - [Sport payment_method NULL fix](sport-payment-method-backfill.md) — fn_block_posted_entry_update memblok metadata backfill; patch inline di accountingHubMigration + journal-code path (aj.code→method) adalah solusi.
 - [QRIS approval race guard](qris-approval-race-guard.md) — approval batch harus mengunci payment dan tetap mengandalkan unique index sebagai invariant double-settlement.
 - [Sport Center isolation proof boundary](sport-center-isolation-verification.md) — runtime proof wajib memakai Supabase development DB; heliumdb yang reachable belum tentu punya schema aplikasi.
+- [Baseline consistency and generated output](baseline-consistency-generated-output.md) — cold-checkout dan post-build typecheck dapat berbeda saat package membutuhkan file generated yang di-ignore Git.
 - [Canonical settlement contract gate](canonical-settlement-contract-gate.md) — reuse qris_settlement hanya aman dengan source discriminator; canonical runtime contract harus terverifikasi sebelum implementasi.
 - [Phase 4C-1 runtime bootstrap](phase4c1-runtime-bootstrap.md) — runtime DDL can fail non-fatally; prove additive reconciliation columns against development after applying the checked-in migration.
 - [Phase 4C-4 exclusion boundary](phase4c4-exclusion-boundary.md) — bridge SCPAY mirror IDs to canonical payments; only posted/reconciled settlements exclude candidates.
