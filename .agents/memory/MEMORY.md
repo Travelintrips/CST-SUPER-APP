@@ -53,6 +53,7 @@
 - [Baseline consistency and generated output](baseline-consistency-generated-output.md) — cold-checkout dan post-build typecheck dapat berbeda saat package membutuhkan file generated yang di-ignore Git.
 - [Canonical settlement contract gate](canonical-settlement-contract-gate.md) — reuse qris_settlement hanya aman dengan source discriminator; canonical runtime contract harus terverifikasi sebelum implementasi.
 - [Phase 4C-1 runtime bootstrap](phase4c1-runtime-bootstrap.md) — runtime DDL can fail non-fatally; prove additive reconciliation columns against development after applying the checked-in migration.
+- [Freight runtime forward migration](freight-runtime-forward-migration.md) — changes to already-applied 0001 need a separate additive migration for existing environments.
 - [Phase 4C-4 exclusion boundary](phase4c4-exclusion-boundary.md) — bridge SCPAY mirror IDs to canonical payments; only posted/reconciled settlements exclude candidates.
 - [Phase 4C-5 matching boundary](phase4c5-matching-boundary.md) — canonical settlements use adapter net amounts and source-aware review candidates; generic approval remains blocked.
 - [Phase 4C-7A.5 mirror proof boundary](phase4c7a5-proof-boundary.md) — metadata columns alone do not prove the live trigger contract; verify PostgreSQL function/trigger definitions separately in development.
