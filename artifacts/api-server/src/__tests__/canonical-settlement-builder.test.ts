@@ -1,0 +1,57 @@
+import { describe, expect, it } from "vitest";
+import {
+  CANONICAL_SETTLEMENT_BANK_COA,
+  CANONICAL_SETTLEMENT_BUILDER_CODES,
+  CanonicalSettlementBuilderError,
+  canonicalSettlementGroupSerialization,
+} from "../lib/reconciliation/canonicalSettlementBuilder.js";
+
+describe("4C-7A.7G canonical settlement builder contract", () => {
+  it("uses the resolved canonical Sport Center bank COA contract, not a public ID", () => {
+    expect(CANONICAL_SETTLEMENT_BANK_COA).toEqual({
+      code: "1-1023-CST",
+      name: "Bank Mandiri - Sport Center",
+      accountType: "asset",
+    });
+    expect(
+      "publicCoaId" in CANONICAL_SETTLEMENT_BANK_COA,
+    ).toBe(false);
+  });
+
+  it("serializes the complete grouping key deterministically", () => {
+    const group = {
+      companyId: 1,
+      providerCode: "MANDIRI_DIRECT",
+      bankAccountId: "1640006707220",
+      settlementDate: "2026-08-11",
+      ruleVersion: "PROD-MANDIRI-SC-20260810-v1",
+    };
+    expect(canonicalSettlementGroupSerialization(group)).toBe(
+      "1|mandiri_direct|1640006707220|2026-08-11|PROD-MANDIRI-SC-20260810-v1",
+    );
+    expect(
+      canonicalSettlementGroupSerialization({
+        ...group,
+        settlementDate: "2026-08-12",
+      }),
+    ).not.toBe(canonicalSettlementGroupSerialization(group));
+  });
+
+  it("publishes a controlled error when no explicit source is supplied", () => {
+    const error = new CanonicalSettlementBuilderError(
+      CANONICAL_SETTLEMENT_BUILDER_CODES.SOURCE_PAYMENT_REQUIRED,
+      "An explicit source payment is required.",
+    );
+    expect(error.code).toBe("CANONICAL_SOURCE_PAYMENT_REQUIRED");
+    expect(error).toBeInstanceOf(Error);
+  });
+
+  it("keeps the forbidden reconciliation and generic-post paths out of the builder surface", async () => {
+    const module = await import("../lib/reconciliation/canonicalSettlementBuilder.js");
+    const source = String(module.buildCanonicalSportCenterSettlements);
+    expect(source).not.toContain("qris_settlements");
+    expect(source).not.toContain("/post");
+    expect(source).not.toContain("bank_mutation_id =");
+    expect(source).not.toContain("UPDATE sport_center.sport_payments");
+  });
+});
