@@ -1352,6 +1352,7 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
         normalized_description,
         provider_name,
         provider_order_id,
+         status,
         company_id,
         source,
         source_classification,
@@ -1373,6 +1374,7 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
         v_public.normalized_description,
         v_provider_code,
         NULL,
+         v_public.status::sport_center.bank_mutation_status,
         v_company_id,
         'PUBLIC_BANK_MUTATION_BRIDGE',
         'actual_bank_mutation',
@@ -1398,6 +1400,11 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
           normalized_description = EXCLUDED.normalized_description,
           provider_name = EXCLUDED.provider_name,
           provider_order_id = EXCLUDED.provider_order_id,
+           status = CASE
+             WHEN sport_center.bank_mutations.status IN ('approved', 'rejected')
+               THEN sport_center.bank_mutations.status
+             ELSE EXCLUDED.status
+           END,
           company_id = EXCLUDED.company_id,
           source = EXCLUDED.source,
           source_classification = EXCLUDED.source_classification,
