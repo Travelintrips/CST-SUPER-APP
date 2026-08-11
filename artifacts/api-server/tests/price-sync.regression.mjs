@@ -15,6 +15,7 @@
 import http from "http";
 import {
   assertDevelopmentHarness,
+  devLogin,
   getApiBaseUrl,
   waitForApiReady,
 } from "../../../scripts/regression-harness-helpers.mjs";
@@ -28,6 +29,7 @@ const TIMEOUT_MS = 8000;
 
 let passed = 0;
 let failed = 0;
+let adminCookie;
 
 function log(label, status, detail = "") {
   const icon = status === "PASS" ? "✅" : "❌";
@@ -231,8 +233,11 @@ async function testProductPriceUpdate() {
   }
   const origPrice = Number(product.price);
   await expectPriceSync("T1: PUT /api/ecommerce/products/:id (product price)", async () => {
-    await httpJson("PUT", `/api/ecommerce/products/${product.id}`, { price: origPrice + 1000 });
-    await httpJson("PUT", `/api/ecommerce/products/${product.id}`, { price: origPrice });
+    try {
+      await httpJsonAuth("PUT", `/api/ecommerce/products/${product.id}`, adminCookie, { price: origPrice + 1000 });
+    } finally {
+      await httpJsonAuth("PUT", `/api/ecommerce/products/${product.id}`, adminCookie, { price: origPrice });
+    }
   });
 }
 
@@ -245,8 +250,11 @@ async function testServicePriceUpdate() {
   }
   const origPrice = Number(service.price);
   await expectPriceSync("T2: PUT /api/ecommerce/products/:id (service price)", async () => {
-    await httpJson("PUT", `/api/ecommerce/products/${service.id}`, { price: origPrice + 500 });
-    await httpJson("PUT", `/api/ecommerce/products/${service.id}`, { price: origPrice });
+    try {
+      await httpJsonAuth("PUT", `/api/ecommerce/products/${service.id}`, adminCookie, { price: origPrice + 500 });
+    } finally {
+      await httpJsonAuth("PUT", `/api/ecommerce/products/${service.id}`, adminCookie, { price: origPrice });
+    }
   });
 }
 
@@ -261,7 +269,7 @@ async function testCalculatorRatesUpdate() {
   await expectPriceSync(
     "T3: calculator-rates broadcast (via POST /api/ecommerce/sync-prices proxy)",
     async () => {
-      await httpJson("POST", "/api/ecommerce/sync-prices", {});
+      await httpJsonAuth("POST", "/api/ecommerce/sync-prices", adminCookie, {});
     }
   );
 }
@@ -275,7 +283,7 @@ async function testBulkImport() {
     return;
   }
   await expectPriceSync("T4: POST /api/ecommerce/products/bulk-import", async () => {
-    await httpJson("POST", "/api/ecommerce/products/bulk-import", {
+    await httpJsonAuth("POST", "/api/ecommerce/products/bulk-import", adminCookie, {
       rows: [
         {
           nama: product.name,
@@ -339,24 +347,14 @@ async function testOrderPriceSnapshot() {
 
   // 2. Update harga produk ke nilai berbeda
   const newPrice = origPrice + 99999;
-  await httpJson("PUT", `/api/ecommerce/products/${product.id}`, { price: newPrice });
+  await httpJsonAuth("PUT", `/api/ecommerce/products/${product.id}`, adminCookie, { price: newPrice });
 
   // 3. Ambil order via admin endpoint (butuh session cookie)
-  let cookie;
-  try {
-    cookie = await getAdminCookie();
-  } catch (err) {
-    log(label, "FAIL", `getAdminCookie error: ${err.message}`);
-    failed++;
-    await httpJson("PUT", `/api/ecommerce/products/${product.id}`, { price: origPrice });
-    return;
-  }
-
-  const fetched = await httpJsonAuth("GET", `/api/portal-product/orders/${orderId}`, cookie);
+  const fetched = await httpJsonAuth("GET", `/api/portal-product/orders/${orderId}`, adminCookie);
   const fetchedPrice = fetched?.items?.[0]?.unitPrice;
 
   // 4. Restore harga produk
-  await httpJson("PUT", `/api/ecommerce/products/${product.id}`, { price: origPrice });
+  await httpJsonAuth("PUT", `/api/ecommerce/products/${product.id}`, adminCookie, { price: origPrice });
 
   // 5. Verifikasi snapshot tidak berubah
   if (fetchedPrice === undefined || fetchedPrice === null) {
@@ -384,6 +382,7 @@ async function testOrderPriceSnapshot() {
 
 async function run() {
   await waitForApiReady();
+  adminCookie = (await devLogin({ email: process.env.TEST_ADMIN_EMAIL })).cookie;
   console.log("=== Price Sync Regression Tests ===\n");
   console.log(`Target: ${BASE}`);
   console.log(`SSE:    ${BASE}/api/ecommerce/events\n`);
