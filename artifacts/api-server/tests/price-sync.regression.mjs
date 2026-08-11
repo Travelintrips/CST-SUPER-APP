@@ -13,6 +13,7 @@
  */
 
 import http from "http";
+import pg from "pg";
 import {
   assertDevelopmentHarness,
   devLogin,
@@ -30,6 +31,8 @@ const TIMEOUT_MS = 8000;
 let passed = 0;
 let failed = 0;
 let adminCookie;
+let sessionId;
+let pool;
 
 function log(label, status, detail = "") {
   const icon = status === "PASS" ? "✅" : "❌";
@@ -345,16 +348,19 @@ async function testOrderPriceSnapshot() {
   const orderId = created.id;
   const snapshotPrice = created.items?.[0]?.unitPrice;
 
-  // 2. Update harga produk ke nilai berbeda
+  // 2. Update harga produk ke nilai berbeda, lalu selalu restore dalam finally.
   const newPrice = origPrice + 99999;
-  await httpJsonAuth("PUT", `/api/ecommerce/products/${product.id}`, adminCookie, { price: newPrice });
+  let fetched;
+  try {
+    await httpJsonAuth("PUT", `/api/ecommerce/products/${product.id}`, adminCookie, { price: newPrice });
 
-  // 3. Ambil order via admin endpoint (butuh session cookie)
-  const fetched = await httpJsonAuth("GET", `/api/portal-product/orders/${orderId}`, adminCookie);
+    // 3. Ambil order via admin endpoint (butuh session cookie)
+    fetched = await httpJsonAuth("GET", `/api/portal-product/orders/${orderId}`, adminCookie);
+  } finally {
+    // Harga katalog tidak boleh tertinggal berubah walaupun assertion gagal.
+    await httpJsonAuth("PUT", `/api/ecommerce/products/${product.id}`, adminCookie, { price: origPrice });
+  }
   const fetchedPrice = fetched?.items?.[0]?.unitPrice;
-
-  // 4. Restore harga produk
-  await httpJsonAuth("PUT", `/api/ecommerce/products/${product.id}`, adminCookie, { price: origPrice });
 
   // 5. Verifikasi snapshot tidak berubah
   if (fetchedPrice === undefined || fetchedPrice === null) {
@@ -382,26 +388,43 @@ async function testOrderPriceSnapshot() {
 
 async function run() {
   await waitForApiReady();
-  adminCookie = (await devLogin({ email: process.env.TEST_ADMIN_EMAIL })).cookie;
+  const adminSession = await devLogin({ email: process.env.TEST_ADMIN_EMAIL });
+  adminCookie = adminSession.cookie;
+  sessionId = adminCookie.slice("sid=".length);
+  pool = new pg.Pool({
+    connectionString: process.env.SUPABASE_DATABASE_URL,
+    ssl: { rejectUnauthorized: false },
+  });
   console.log("=== Price Sync Regression Tests ===\n");
   console.log(`Target: ${BASE}`);
   console.log(`SSE:    ${BASE}/api/ecommerce/events\n`);
 
-  await testProductPriceUpdate();
-  await testServicePriceUpdate();
-  await testCalculatorRatesUpdate();
-  await testBulkImport();
-  await testOrderPriceSnapshot();
+  try {
+    await testProductPriceUpdate();
+    await testServicePriceUpdate();
+    await testCalculatorRatesUpdate();
+    await testBulkImport();
+    await testOrderPriceSnapshot();
 
-  console.log(`\n${"─".repeat(50)}`);
-  console.log(`Hasil: ${passed} PASS  |  ${failed} FAIL`);
+    console.log(`\n${"─".repeat(50)}`);
+    console.log(`Hasil: ${passed} PASS  |  ${failed} FAIL`);
 
-  if (failed > 0) {
-    console.log("\n⚠️  Ada test yang gagal. Periksa broadcastToPortal di endpoint terkait.");
-    process.exit(1);
-  } else {
-    console.log("\n✅ Semua test passed.");
-    process.exit(0);
+    if (failed > 0) {
+      console.log("\n⚠️  Ada test yang gagal. Periksa broadcastToPortal di endpoint terkait.");
+      process.exitCode = 1;
+    } else {
+      console.log("\n✅ Semua test passed.");
+    }
+  } finally {
+    if (pool && sessionId) {
+      await pool.query("DELETE FROM sessions WHERE sid = $1", [sessionId]);
+      const remaining = await pool.query("SELECT 1 FROM sessions WHERE sid = $1", [sessionId]);
+      if (remaining.rowCount !== 0) {
+        throw new Error("Official admin session cleanup verification failed");
+      }
+      console.log("✅ Cleanup: regression admin session removed");
+    }
+    await pool?.end();
   }
 }
 
