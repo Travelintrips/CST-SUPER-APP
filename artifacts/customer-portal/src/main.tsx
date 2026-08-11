@@ -34,7 +34,7 @@ function showFatalError(message: string) {
 
 // ── React Error Boundary (catches render-phase throws) ────────────────────────
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
-  state = { error: null };
+  state: { error: Error | null } = { error: null };
   static getDerivedStateFromError(error: Error) { return { error }; }
   componentDidCatch(error: Error, info: { componentStack: string }) {
     showFatalError(`React render error: ${error.message}\n${error.stack}\nComponent stack:${info.componentStack}`);
