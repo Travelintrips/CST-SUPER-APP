@@ -1,11 +1,7 @@
 const PV_CSS = "@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,400&display=swap');\n\n.theme-paper-vermilion {\n  --bg-paper: #F6F4F0;\n  --text-ink: #111111;\n  --accent-vermilion: #E3342F;\n  --line-faint: rgba(17, 17, 17, 0.12);\n  --line-strong: rgba(17, 17, 17, 0.8);\n  \n  --font-serif: 'Cormorant Garamond', serif;\n  --font-sans: 'DM Sans', sans-serif;\n  \n  background-color: var(--bg-paper);\n  color: var(--text-ink);\n  font-family: var(--font-sans);\n  \n  /* Add paper texture via noise */\n  position: relative;\n}\n\n.theme-paper-vermilion::before {\n  content: \"\";\n  position: fixed;\n  top: 0; left: 0; width: 100vw; height: 100vh;\n  background-image: url(\"data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.04'/%3E%3C/svg%3E\");\n  pointer-events: none;\n  z-index: 50;\n  opacity: 0.8;\n}\n\n.pv-serif {\n  font-family: var(--font-serif);\n}\n\n.pv-sans {\n  font-family: var(--font-sans);\n}\n\n.pv-bg {\n  background-color: var(--bg-paper);\n}\n\n.pv-ink {\n  color: var(--text-ink);\n}\n\n.pv-vermilion {\n  color: var(--accent-vermilion);\n}\n\n.pv-bg-vermilion {\n  background-color: var(--accent-vermilion);\n}\n\n.pv-border-faint {\n  border-color: var(--line-faint);\n}\n\n.pv-border-strong {\n  border-color: var(--line-strong);\n}\n\n.pv-stamp {\n  width: 4rem;\n  height: 4rem;\n  border-radius: 50%;\n  background-color: var(--accent-vermilion);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  color: #fff;\n  font-family: var(--font-serif);\n  font-weight: 700;\n  font-size: 1.5rem;\n  line-height: 1;\n  letter-spacing: -0.05em;\n  transform: rotate(-12deg);\n}\n\n.pv-hairline-t { border-top: 1px solid var(--line-faint); }\n.pv-hairline-b { border-bottom: 1px solid var(--line-faint); }\n.pv-hairline-l { border-left: 1px solid var(--line-faint); }\n.pv-hairline-r { border-right: 1px solid var(--line-faint); }\n\n/* Animation utilities */\n@keyframes pv-fade-up {\n  from { opacity: 0; transform: translateY(20px); }\n  to { opacity: 1; transform: translateY(0); }\n}\n\n@keyframes pv-reveal-line {\n  from { transform: scaleX(0); }\n  to { transform: scaleX(1); }\n}\n\n@keyframes pv-stamp-press {\n  0% { opacity: 0; transform: scale(1.5) rotate(0deg); }\n  50% { opacity: 1; transform: scale(0.9) rotate(-15deg); }\n  100% { opacity: 1; transform: scale(1) rotate(-12deg); }\n}\n\n.animate-pv-fade-up {\n  animation: pv-fade-up 1s cubic-bezier(0.16, 1, 0.3, 1) forwards;\n}\n\n.animate-pv-line {\n  transform-origin: left;\n  animation: pv-reveal-line 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;\n}\n\n.animate-pv-stamp {\n  animation: pv-stamp-press 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;\n}\n\n.delay-100 { animation-delay: 100ms; }\n.delay-200 { animation-delay: 200ms; }\n.delay-300 { animation-delay: 300ms; }\n.delay-400 { animation-delay: 400ms; }\n.delay-500 { animation-delay: 500ms; }\n.delay-600 { animation-delay: 600ms; }\n.delay-700 { animation-delay: 700ms; }\n.delay-1000 { animation-delay: 1000ms; }\n\n.pv-circle-text {\n  /* We will implement circular text using SVG in the component */\n}\n";
 import React, { useEffect, useRef, useState } from 'react';
 import { ArrowRight, ChevronDown } from 'lucide-react';
-import imgNigiriMaguro from './assets/nigiri-maguro.png';
-import imgNigiriSake from './assets/nigiri-sake.png';
 import imgNigiriEbi from './assets/nigiri-ebi.png';
-import imgNigiriUni from './assets/nigiri-uni.png';
-import imgNigiriTamago from './assets/nigiri-tamago.png';
 import imgSushiChef from './assets/sushi-chef.jpg';
 import imgCourseSakizuke from './assets/course-sakizuke.jpg';
 import imgCourseSashimi from './assets/course-sashimi.jpg';
@@ -18,6 +14,13 @@ import imgGallery3Hands from './assets/gallery3-hands.jpg';
 import imgGallery3Sake from './assets/gallery3-sake.jpg';
 import imgGallery3Wasabi from './assets/gallery3-wasabi.jpg';
 import imgGallery3Nigiri from './assets/gallery3-nigiri.jpg';
+
+// The original template-only nigiri variants are not part of the repository
+// asset set. Keep the preview buildable with the available nigiri asset.
+const imgNigiriMaguro = imgNigiriEbi;
+const imgNigiriSake = imgNigiriEbi;
+const imgNigiriUni = imgNigiriEbi;
+const imgNigiriTamago = imgNigiriEbi;
 
 
 // Circular Text Component using SVG

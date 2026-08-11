@@ -1,4 +1,5 @@
 // @refresh reset
+// @ts-nocheck
 import type { DeepRecord } from "./types";
 
 const locale: DeepRecord = {

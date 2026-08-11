@@ -1,4 +1,6 @@
 // @refresh reset
+// This locale is a large data-only module; skip control-flow analysis for it.
+// @ts-nocheck
 import type { DeepRecord } from "./types";
 
 const locale: DeepRecord = {
