@@ -1844,6 +1844,13 @@ async function startServer() {
           logger.error({ err: seedErr }, "Logistics/demo seed failed");
         })
     )
+    .then(() => {
+      migrationsComplete = true;
+      logger.info("All startup migrations complete — /api/health/ready → true");
+    })
+    // Post-start maintenance is intentionally detached from readiness. These
+    // repairs are non-critical and may perform long-running DB discovery; they
+    // must not keep a healthy API reporting ready=false indefinitely.
     .then(() =>
       backfillVendorPerformance().catch((err) => {
         logger.warn({ err }, "Vendor performance backfill failed (non-fatal)");
@@ -1855,8 +1862,6 @@ async function startServer() {
       })
     )
     .then(() =>
-      // Post-sync diagnostic: warn if any sequence is STILL desynced after the fix attempt.
-      // This catches edge cases (e.g. sequences that couldn't be synced due to table errors).
       checkSequenceDesync().catch((err) => {
         logger.warn({ err }, "Post-sync sequence desync check failed (non-fatal)");
       })
@@ -1891,10 +1896,6 @@ async function startServer() {
         logger.warn({ err }, "QA fixture migration failed (non-fatal)");
       })
     )
-    .then(() => {
-      migrationsComplete = true;
-      logger.info("All startup migrations complete — /api/health/ready → true");
-    })
     .then(() => {
       // Fleet intelligence migration runs AFTER the main chain + 5-minute delay
       // to avoid hammering pgBouncer during the critical startup window.
