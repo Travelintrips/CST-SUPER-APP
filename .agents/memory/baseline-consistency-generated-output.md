@@ -15,3 +15,15 @@ an earlier data state.
 label the repository healthy from a package-only or historical PASS; report
 cold-checkout and post-build results separately, and treat live development DB
 regressions as environment evidence.
+
+Runtime regression scripts are not interchangeable with the workspace Vitest
+suite: legacy scripts may assume a different API port or database schema than
+the configured artifact workflow.
+
+**Why:** The configured API workflow listens on its artifact port, while older
+regression scripts can default to another port and may seed legacy tables before
+testing. A clean unit suite therefore does not prove those scripts are runnable.
+
+**How to apply:** Run legacy HTTP regressions against the workflow's actual
+port and report port/schema incompatibilities as explicit regression blockers,
+without changing source code during baseline validation.
