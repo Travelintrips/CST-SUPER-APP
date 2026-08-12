@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { X, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, ImageOff, Images } from "lucide-react";
 import { useLanguage } from "@/i18n/LanguageContext";
+import { resolveImageUrl } from "@/lib/utils";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -144,7 +145,7 @@ function Lightbox({
           {current.fileUrl ? (
             <img
               key={current.id}
-              src={current.fileUrl}
+              src={resolveImageUrl(current.fileUrl) ?? current.fileUrl}
               alt={current.title ?? current.itemName ?? ""}
               className="max-h-[78vh] max-w-full object-contain shadow-2xl rounded-sm"
               draggable={false}
@@ -183,7 +184,7 @@ function Lightbox({
             >
               {img.thumbnailUrl ?? img.fileUrl ? (
                 <img
-                  src={(img.thumbnailUrl ?? img.fileUrl)!}
+                  src={resolveImageUrl(img.thumbnailUrl ?? img.fileUrl) ?? (img.thumbnailUrl ?? img.fileUrl)!}
                   alt=""
                   loading="lazy"
                   className="w-full h-full object-cover"
@@ -230,7 +231,7 @@ export function VendorGallery({ images }: VendorGalleryProps) {
             onClick={() => setLightboxIndex(idx)}
           >
             <img
-              src={(img.thumbnailUrl ?? img.fileUrl)!}
+              src={resolveImageUrl(img.thumbnailUrl ?? img.fileUrl) ?? (img.thumbnailUrl ?? img.fileUrl)!}
               alt={img.title ?? img.itemName ?? t("gallery.photoAlt", "Foto vendor")}
               loading="lazy"
               className="w-full h-auto object-cover group-hover:scale-105 transition-transform duration-300"

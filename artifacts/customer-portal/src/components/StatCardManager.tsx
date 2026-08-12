@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { resolveImageUrl } from "@/lib/utils";
 
 const ALL_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   Package, Truck, Ship, Plane, Box, Archive, BarChart2, Layers,
@@ -117,7 +118,7 @@ export function StatCardDisplay({ card, count, isActive, onClick }: StatCardDisp
         <p className={`text-2xl font-bold ${isGradient ? "text-white drop-shadow" : colors.num}`}>{count}</p>
         {card.logoUrl ? (
           <img
-            src={card.logoUrl}
+            src={resolveImageUrl(card.logoUrl) ?? card.logoUrl}
             alt=""
             className="h-7 w-7 object-contain rounded"
             onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
@@ -155,7 +156,7 @@ function CardEditor({ card, onChange, onDelete, dragHandleProps, isDragging }: C
       </div>
 
       {card.logoUrl ? (
-        <img src={card.logoUrl} alt="" className="h-5 w-5 object-contain rounded flex-shrink-0 mt-0.5" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
+        <img src={resolveImageUrl(card.logoUrl) ?? card.logoUrl} alt="" className="h-5 w-5 object-contain rounded flex-shrink-0 mt-0.5" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
       ) : (
         <IconComp className={`h-5 w-5 ${colors.text} flex-shrink-0 mt-0.5`} />
       )}
@@ -208,7 +209,7 @@ function CardEditor({ card, onChange, onDelete, dragHandleProps, isDragging }: C
           />
           {card.logoUrl && (
             <>
-              <img src={card.logoUrl} alt="" className="h-5 w-5 object-contain rounded border flex-shrink-0" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
+              <img src={resolveImageUrl(card.logoUrl) ?? card.logoUrl} alt="" className="h-5 w-5 object-contain rounded border flex-shrink-0" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
               <button onClick={() => onChange({ ...card, logoUrl: undefined })} className="text-muted-foreground hover:text-red-500 flex-shrink-0"><X className="h-3 w-3" /></button>
             </>
           )}

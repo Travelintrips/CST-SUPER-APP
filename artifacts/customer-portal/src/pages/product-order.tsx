@@ -10,7 +10,7 @@ import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, resolveImageUrl } from "@/lib/utils";
 import {
   Package, Search, Plus, Minus, Trash2, ShoppingCart,
   User, CheckCircle2, ChevronLeft, ChevronRight, Loader2, Tag,
@@ -478,7 +478,7 @@ export default function ProductOrderPage() {
                 return (
                   <div key={product.id} className="border rounded-xl bg-card overflow-hidden hover:shadow-md transition-shadow">
                     {product.imageUrl
-                      ? <img src={product.imageUrl} alt={product.name} className="w-full h-40 object-cover" />
+                      ? <img src={resolveImageUrl(product.imageUrl) ?? product.imageUrl} alt={product.name} className="w-full h-40 object-cover" />
                       : <div className="w-full h-40 bg-muted flex items-center justify-center"><Package className="w-12 h-12 text-muted-foreground/40" /></div>
                     }
                     <div className="p-4">

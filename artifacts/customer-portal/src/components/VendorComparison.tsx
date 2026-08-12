@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { MarketplaceItem } from "@/lib/catalogFilters";
 import { useLanguage } from "@/i18n/LanguageContext";
+import { resolveImageUrl } from "@/lib/utils";
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -203,8 +204,11 @@ function generateComparisonReport(
     const isBest = minPrice !== null && item.priceSell === minPrice;
     const catKey = item.categoryKey ?? item.serviceType ?? "";
     const cat = CATEGORY_PLACEHOLDER[catKey];
-    const thumb = item.primaryImageUrl
-      ? `<img src="${item.primaryImageUrl}" style="width:60px;height:60px;object-fit:cover;border-radius:8px;border:1px solid #e2e8f0" />`
+    const primaryImageUrl = item.primaryImageUrl
+      ? (resolveImageUrl(item.primaryImageUrl) ?? item.primaryImageUrl)
+      : null;
+    const thumb = primaryImageUrl
+      ? `<img src="${primaryImageUrl}" style="width:60px;height:60px;object-fit:cover;border-radius:8px;border:1px solid #e2e8f0" />`
       : `<div style="width:60px;height:60px;border-radius:8px;background:linear-gradient(135deg,${cat ? cat.from : "#64748b"},${cat ? cat.to : "#94a3b8"});display:flex;align-items:center;justify-content:center;font-size:24px">${cat ? cat.emoji : (item.templateKind === "service" ? "🚚" : "📦")}</div>`;
 
     return `
@@ -520,7 +524,7 @@ export function CompareModal({
                     <th key={item.id} className="border-b border-r border-slate-200 px-4 py-3 text-left min-w-[200px] bg-white">
                       <div className="flex items-start gap-3">
                         {item.primaryImageUrl ? (
-                          <img src={item.primaryImageUrl} alt={item.name} loading="lazy" className="w-12 h-12 rounded-xl object-cover shrink-0 border border-slate-200" />
+                          <img src={resolveImageUrl(item.primaryImageUrl) ?? item.primaryImageUrl} alt={item.name} loading="lazy" className="w-12 h-12 rounded-xl object-cover shrink-0 border border-slate-200" />
                         ) : (
                           <div
                             className="w-12 h-12 rounded-xl flex items-center justify-center text-xl shrink-0"

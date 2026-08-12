@@ -290,7 +290,10 @@ function ItemCard({
 }) {
   const { t } = useLanguage();
   const isProduct = item.templateKind === "product";
-  const hasImage = !!item.primaryImageUrl;
+  const imageSrc = item.primaryImageUrl
+    ? (resolveImageUrl(item.primaryImageUrl) ?? item.primaryImageUrl)
+    : null;
+  const hasImage = !!imageSrc;
   const daysUntilExpiry = useMemo(() => {
     if (!item.validityDate) return null;
     const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -315,7 +318,7 @@ function ItemCard({
       <div className="relative overflow-hidden bg-slate-100" style={{ aspectRatio: "4/3" }}>
         {hasImage ? (
           <img
-            src={item.primaryImageUrl!}
+            src={imageSrc!}
             alt={item.name}
             className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
             loading="lazy"

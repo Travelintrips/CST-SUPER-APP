@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useParams } from "wouter";
 import { resolveServiceCategory } from "@workspace/logistics-constants";
 import { useLanguage } from "@/i18n/LanguageContext";
+import { resolveImageUrl } from "@/lib/utils";
 
 type LightboxItem = { url: string; title: string; subtitle?: string };
 
@@ -87,7 +88,7 @@ function Lightbox({
 
         <img
           key={item.url}
-          src={item.url}
+          src={resolveImageUrl(item.url) ?? item.url}
           alt={item.title}
           className="max-h-[78vh] max-w-[85vw] rounded-xl shadow-2xl object-contain"
         />

@@ -12,6 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
 import { useCart } from "@/lib/logistic-cart";
 import { useLanguage } from "@/i18n/LanguageContext";
+import { resolveImageUrl } from "@/lib/utils";
 import {
   ArrowLeft, Building2, Truck, Plane, Ship, Package,
   FileText, MapPin, Clock, Tag, CheckCircle2, ShoppingCart,
@@ -852,7 +853,14 @@ export default function JasaVendorDetail() {
   }
 
   const allMedia = item.media ?? [];
-  const primaryImage = activeImage ?? (allMedia.find((m) => m.isPrimary && m.mediaType === "image")?.fileUrl ?? allMedia.find((m) => m.mediaType === "image")?.fileUrl ?? null);
+  const primaryImage = activeImage
+    ? (resolveImageUrl(activeImage) ?? activeImage)
+    : (() => {
+        const raw = allMedia.find((m) => m.isPrimary && m.mediaType === "image")?.fileUrl
+          ?? allMedia.find((m) => m.mediaType === "image")?.fileUrl
+          ?? null;
+        return raw ? (resolveImageUrl(raw) ?? raw) : null;
+      })();
   const thumbs = allMedia.filter((m) => m.mediaType === "image" && m.fileUrl);
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -923,9 +931,9 @@ export default function JasaVendorDetail() {
             {thumbs.length > 1 && (
               <div className="flex gap-2 overflow-x-auto pb-1">
                 {thumbs.map((m) => (
-                  <button key={m.id} onClick={() => setActiveImage(m.fileUrl)}
-                    className={`shrink-0 w-16 h-16 rounded-xl overflow-hidden border-2 transition-all ${activeImage === m.fileUrl || (!activeImage && m.isPrimary) ? "border-sky-500 shadow-md" : "border-transparent"}`}>
-                    <img src={m.fileUrl!} alt="" className="w-full h-full object-cover" />
+                   <button key={m.id} onClick={() => setActiveImage(m.fileUrl)}
+                     className={`shrink-0 w-16 h-16 rounded-xl overflow-hidden border-2 transition-all ${activeImage === m.fileUrl || (!activeImage && m.isPrimary) ? "border-sky-500 shadow-md" : "border-transparent"}`}>
+                     <img src={resolveImageUrl(m.fileUrl) ?? m.fileUrl!} alt="" className="w-full h-full object-cover" />
                   </button>
                 ))}
               </div>

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams } from "wouter";
 import { usePushNotification } from "@/hooks/usePushNotification";
 import { useLanguage } from "@/i18n/LanguageContext";
+import { resolveImageUrl } from "@/lib/utils";
 
 type ProgressEntry = {
   id: number;
@@ -171,7 +172,7 @@ function PhotoGrid({ photos, onOpen }: { photos: DriverPhoto[]; onOpen: (url: st
           title={`Foto ${p.photoType} — ${new Date(p.takenAt).toLocaleString("id-ID")}`}
         >
           <img
-            src={p.url}
+           src={resolveImageUrl(p.url) ?? p.url}
             alt={`Foto ${p.photoType}`}
             className="w-full h-full object-cover"
             loading="lazy"
@@ -195,7 +196,7 @@ function Lightbox({ url, onClose }: { url: string; onClose: () => void }) {
       onClick={onClose}
     >
       <img
-        src={url}
+         src={resolveImageUrl(url) ?? url}
         alt="Foto driver"
         className="max-w-full max-h-full rounded-xl shadow-2xl object-contain"
         onClick={(e) => e.stopPropagation()}

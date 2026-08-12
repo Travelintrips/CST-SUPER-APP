@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useLanguage } from "@/i18n/LanguageContext";
+import { resolveImageUrl } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -670,7 +671,7 @@ export default function VendorRegisterPage() {
                                 </div>
                               ) : (
                                 <img
-                                  src={m.url}
+                                  src={resolveImageUrl(m.url) ?? m.url}
                                   alt={m.fileName}
                                   className="w-full h-full object-cover"
                                   onError={(e) => {

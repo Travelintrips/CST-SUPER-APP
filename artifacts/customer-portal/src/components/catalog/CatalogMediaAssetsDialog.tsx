@@ -16,6 +16,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { resolveImageUrl } from "@/lib/utils";
 import {
   Upload, X, Star, StarOff, ChevronUp, ChevronDown,
   Eye, ExternalLink, FileText, Play, Loader2, ImagePlus,
@@ -445,7 +446,7 @@ export function CatalogMediaAssetsDialog({
                       onClick={() => setPreviewAsset(a)}
                     >
                       {isImg(a) ? (
-                        <img src={a.url} alt="" className="w-full h-full object-cover" />
+                        <img src={resolveImageUrl(a.url) ?? a.url} alt="" className="w-full h-full object-cover" />
                       ) : isVid(a) ? (
                         <div className="w-full h-full flex items-center justify-center bg-slate-800">
                           <Play className="w-5 h-5 text-white" />
@@ -593,7 +594,7 @@ export function CatalogMediaAssetsDialog({
           <DialogContent className="max-w-4xl p-2">
             <div className="flex justify-center items-center min-h-64 bg-black rounded-lg overflow-hidden">
               {isImg(previewAsset) ? (
-                <img src={previewAsset.url} alt="" className="max-w-full max-h-[70vh] object-contain" />
+                <img src={resolveImageUrl(previewAsset.url) ?? previewAsset.url} alt="" className="max-w-full max-h-[70vh] object-contain" />
               ) : isVid(previewAsset) ? (
                 <video src={previewAsset.url} controls autoPlay className="max-w-full max-h-[70vh]" />
               ) : (

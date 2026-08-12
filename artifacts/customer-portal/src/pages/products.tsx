@@ -68,9 +68,14 @@ function useUsdIdrRate(): number {
 }
 
 function getMedia(product: Product): MediaItem[] {
-  const items = product.mediaItems ?? [];
+  const items = (product.mediaItems ?? []).map((item) => ({
+    ...item,
+    url: item.type === "image" ? (resolveImageUrl(item.url) ?? item.url) : item.url,
+  }));
   if (items.length > 0) return items;
-  if (product.imageUrl) return [{ type: "image", url: product.imageUrl }];
+  if (product.imageUrl) {
+    return [{ type: "image", url: resolveImageUrl(product.imageUrl) ?? product.imageUrl }];
+  }
   return [];
 }
 

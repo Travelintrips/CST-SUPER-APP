@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { isAuthenticated, removeAuthToken, getAuthHeaders } from "@/lib/auth";
+import { resolveImageUrl } from "@/lib/utils";
 import { useLanguage } from "@/i18n/LanguageContext";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -283,7 +284,7 @@ function VendorEtalaseSection() {
                 <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
                   {imageAssets.map(asset => (
                     <div key={asset.url} className="relative group aspect-square rounded-xl overflow-hidden border border-border/50 bg-slate-100">
-                      <img src={asset.url} alt="" className="w-full h-full object-cover"
+                      <img src={resolveImageUrl(asset.url) ?? asset.url} alt="" className="w-full h-full object-cover"
                         onError={e => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
                       {asset.isPrimary && (
                         <div className="absolute top-1 left-1 bg-amber-400 rounded-full p-0.5">
@@ -721,7 +722,7 @@ function VendorCatalogManagementSection() {
                     <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
                       {imgAssets.map(asset => (
                         <div key={asset.url} className="relative group aspect-square rounded-xl overflow-hidden border bg-slate-100">
-                          <img src={asset.url} alt="" className="w-full h-full object-cover"
+                          <img src={resolveImageUrl(asset.url) ?? asset.url} alt="" className="w-full h-full object-cover"
                             onError={e => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
                           {asset.isPrimary && (
                             <div className="absolute top-1 left-1 bg-amber-400 rounded-full p-0.5">

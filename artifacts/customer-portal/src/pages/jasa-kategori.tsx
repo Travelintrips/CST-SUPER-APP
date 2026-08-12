@@ -143,7 +143,9 @@ function VendorItemCard({ item, accentColor }: { item: ServiceHubItem; accentCol
   const { t } = useLanguage();
   const catKey = item.categoryKey ?? item.serviceType ?? "";
   const cat = catKey ? CATEGORY_PLACEHOLDER[catKey] : undefined;
-  const src = item.primaryImageUrl ?? (item.imageUrl ? resolveImageUrl(item.imageUrl) : null);
+  const src = item.primaryImageUrl
+    ? (resolveImageUrl(item.primaryImageUrl) ?? item.primaryImageUrl)
+    : (item.imageUrl ? resolveImageUrl(item.imageUrl) : null);
   const fallback = getServiceFallbackImage(item.categories ?? (item.category ? [item.category] : []), item.title);
   const imgSrc = (src && !imgFailed) ? src : fallback;
 

@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { isAuthenticated } from "@/lib/auth";
+import { resolveImageUrl } from "@/lib/utils";
 import { VendorGallery, type GalleryImage } from "@/components/VendorGallery";
 import { ContactSupplierModal } from "@/components/ContactSupplierModal";
 import {
@@ -282,7 +283,7 @@ function ItemCard({ item, onClick }: { item: CatalogItem; onClick: () => void })
       <div className="relative h-36 bg-gradient-to-br from-slate-100 to-slate-200 overflow-hidden">
         {item.primaryImageUrl ? (
           <img
-            src={item.primaryImageUrl}
+            src={resolveImageUrl(item.primaryImageUrl) ?? item.primaryImageUrl}
             alt={item.name}
             loading="lazy"
             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
@@ -694,7 +695,7 @@ export default function VendorProfilPage() {
             {/* Logo */}
             <div className="w-16 h-16 md:w-20 md:h-20 rounded-2xl bg-gradient-to-br from-sky-100 to-sky-200 flex items-center justify-center text-3xl shrink-0 border-2 border-white shadow-md">
               {vendor.logoUrl
-                ? <img src={vendor.logoUrl} alt="" loading="lazy" className="w-full h-full rounded-2xl object-cover" />
+                ? <img src={resolveImageUrl(vendor.logoUrl) ?? vendor.logoUrl} alt="" loading="lazy" className="w-full h-full rounded-2xl object-cover" />
                 : vendor.logo && vendor.logo.length <= 4
                   ? <span>{vendor.logo}</span>
                   : <Building2 className="h-8 w-8 text-sky-400" />}

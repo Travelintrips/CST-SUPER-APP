@@ -22,6 +22,7 @@ import {
   Award, TrendingUp, ChevronRight, Users, Timer, Eye, Shield, Zap,
 } from "lucide-react";
 import type { ProductMediaItem, MarketplaceItem } from "@/lib/catalogFilters";
+import { resolveImageUrl } from "@/lib/utils";
 // C1: auth via cookie (credentials: "include")
 
 // ── Extended types for new sections ──────────────────────────────────────────
@@ -138,7 +139,7 @@ function MediaGallery({ media, isProduct }: { media: ProductMediaItem[]; isProdu
     if (m.mediaType === "image" && m.fileUrl) {
       return (
         <img
-          src={m.fileUrl}
+          src={resolveImageUrl(m.fileUrl) ?? m.fileUrl}
           alt={m.title ?? "foto produk"}
           className="w-full h-full object-contain bg-slate-50"
           onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
@@ -175,7 +176,7 @@ function MediaGallery({ media, isProduct }: { media: ProductMediaItem[]; isProdu
 
   function renderThumb(m: ProductMediaItem) {
     if (m.mediaType === "image" && m.fileUrl) {
-      return <img src={m.fileUrl} alt="" className="w-full h-full object-cover" loading="lazy" />;
+      return <img src={resolveImageUrl(m.fileUrl) ?? m.fileUrl} alt="" className="w-full h-full object-cover" loading="lazy" />;
     }
     if (m.mediaType === "video" && m.fileUrl) {
       return (
@@ -1181,7 +1182,7 @@ function ItemMiniCard({ item, onNavigate }: { item: CatalogItemSummary; onNaviga
       <div className="relative w-full h-[110px] overflow-hidden bg-slate-100">
         {item.primaryImageUrl ? (
           <img
-            src={item.primaryImageUrl}
+            src={resolveImageUrl(item.primaryImageUrl) ?? item.primaryImageUrl}
             alt={item.name}
             className="w-full h-full object-cover"
             loading="lazy"

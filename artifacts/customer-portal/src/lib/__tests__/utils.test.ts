@@ -1,0 +1,33 @@
+import { describe, expect, it } from "vitest";
+import { resolveImageUrl } from "@/lib/utils";
+
+const CANONICAL_ROOT =
+  "/api/storage/public-objects/portal-assets/static/customer-portal/images/";
+
+describe("resolveImageUrl", () => {
+  it.each([
+    ["/images/foo.webp", "foo.webp"],
+    ["/portal/images/foo.webp", "foo.webp"],
+    ["/api/storage/public-objects/portal/images/foo.webp", "foo.webp"],
+    ["/api/storage/public-objects/images/foo.webp", "foo.webp"],
+  ])("normalizes legacy path %s", (input, relative) => {
+    expect(resolveImageUrl(input)).toBe(`${CANONICAL_ROOT}${relative}`);
+  });
+
+  it("keeps canonical storage URLs unchanged", () => {
+    const canonical = `${CANONICAL_ROOT}foo.webp`;
+    expect(resolveImageUrl(canonical)).toBe(canonical);
+  });
+
+  it("keeps valid external URLs unchanged", () => {
+    const external = "https://external-valid.example/image.webp";
+    expect(resolveImageUrl(external)).toBe(external);
+  });
+
+  it.each(["/images/../secret.webp", "/images/foo\\bar.webp", "/images/"])(
+    "rejects unsafe or empty legacy path %s",
+    (input) => {
+      expect(resolveImageUrl(input)).toBeNull();
+    },
+  );
+});
