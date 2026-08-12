@@ -432,7 +432,14 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
         const [{ nullSettingsCnt }] = await db
           .select({ nullSettingsCnt: sql<number>`count(*)::int` })
           .from(accountingSettingsTable)
-          .where(sql`cash_journal_id IS NULL AND company_id IS NOT NULL`);
+          .where(sql`
+            company_id IS NOT NULL
+            AND (
+              cash_journal_id IS NULL
+              OR bank_journal_id IS NULL
+              OR (company_id = 1 AND (qris_account_id IS NULL OR qris_journal_id IS NULL))
+            )
+          `);
         const [{ totalSettingsCnt }] = await db
           .select({ totalSettingsCnt: sql<number>`count(*)::int` })
           .from(accountingSettingsTable)
@@ -821,6 +828,7 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
     const ap          = needFor("2-1010", companyId);
     const ppnOut      = needFor("2-1020", companyId);
     const salesIncome           = needFor("4-1010", companyId);
+    const sportCenterRevenue    = needFor("4-1017", companyId);
     const tenantRentIncome      = byCode.get(`4-1021-${COMPANY_ABBR[companyId]}`) ?? byCode.get("4-1021") ?? null;
     const cogs                  = needFor("5-1010", companyId);
     const freightExpense        = needFor("5-1011", companyId);
@@ -828,6 +836,7 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
     const cSalesJ = getJournal("SAL", companyId);
     const cPurJ   = getJournal("PUR", companyId);
     const cBankJ  = getJournal("BNK", companyId);
+    const cQrisJ  = getJournal("QRIS", companyId);
     const cCashJ  = getJournal("CSH", companyId);
     const abbr = COMPANY_ABBR[companyId]!;
 
@@ -840,7 +849,10 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
     const settingsBase = {
       arAccountId:             ar.id,
       apAccountId:             ap.id,
-      salesIncomeAccountId:    salesIncome.id,
+      // Company 1's canonical Sport Center handoff deliberately uses the
+      // dedicated booking revenue account, not the generic freight revenue
+      // fallback. Other companies retain the general accounting default.
+      salesIncomeAccountId:    companyId === 1 ? sportCenterRevenue.id : salesIncome.id,
       purchaseExpenseAccountId: freightExpense.id,
       defaultBankAccountId:    bankMandiri.id,
       defaultCashAccountId:    cash.id,
@@ -849,6 +861,8 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
       salesJournalId:          cSalesJ?.id ?? salesJ.id,
       purchaseJournalId:       cPurJ?.id   ?? purJ.id,
       bankJournalId:           cBankJ?.id  ?? bankJ.id,
+      qrisAccountId:           needFor("1-1023", companyId).id,
+      qrisJournalId:           cQrisJ?.id ?? null,
       cashJournalId:           cCashJ?.id  ?? cashJ.id,
       defaultSalesTaxId:       saleTax?.id ?? null,
       defaultPurchaseTaxId:    purchaseTax?.id ?? null,
