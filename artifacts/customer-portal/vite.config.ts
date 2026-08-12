@@ -128,6 +128,18 @@ export default defineConfig({
         target: `http://localhost:${process.env.API_PORT ?? process.env.FORWARDER_PORT ?? 18444}`,
         changeOrigin: true,
       },
+      // Legacy public image URLs must never reach Vite's SPA fallback. The
+      // API applies the same canonicalization and 404 semantics in dev.
+      "/images": {
+        target: `http://localhost:${process.env.API_PORT ?? process.env.FORWARDER_PORT ?? 18444}`,
+        changeOrigin: true,
+        rewrite: (path) => `/api/storage/public-objects${path}`,
+      },
+      "/portal/images": {
+        target: `http://localhost:${process.env.API_PORT ?? process.env.FORWARDER_PORT ?? 18444}`,
+        changeOrigin: true,
+        rewrite: (path) => `/api/storage/public-objects${path}`,
+      },
       // /sitemap.xml intentionally NOT proxied — served as a static file from public/
       "/q": {
         target: `http://localhost:${process.env.API_PORT ?? process.env.FORWARDER_PORT ?? 18444}`,

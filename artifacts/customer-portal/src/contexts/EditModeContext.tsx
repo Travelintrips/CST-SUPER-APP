@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from "react";
 import { isPortalAdmin } from "@/lib/auth";
 import { useLanguage } from "@/i18n/LanguageContext";
+import { resolveImageUrl } from "@/lib/utils";
 
 interface EditModeContextValue {
   editMode: boolean;
@@ -154,8 +155,10 @@ export function EditModeProvider({ children }: { children: ReactNode }) {
     const selectors = ['link[rel="icon"]', 'link[rel="shortcut icon"]', 'link[rel="apple-touch-icon"]'];
     selectors.forEach((sel) => {
       const el = document.querySelector<HTMLLinkElement>(sel);
-      if (el) {
-        el.href = faviconUrl.startsWith("http") ? faviconUrl : `${window.location.origin}/api/portal/storage/${faviconUrl}`;
+         if (el) {
+         el.href = faviconUrl.startsWith("http")
+           ? faviconUrl
+           : (resolveImageUrl(faviconUrl) ?? faviconUrl);
       }
     });
   }, [content]);

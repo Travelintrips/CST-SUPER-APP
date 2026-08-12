@@ -334,7 +334,6 @@ export default function Login() {
               alt="Logo"
               className="h-12 w-auto object-contain"
               style={{ maxWidth: "160px" }}
-              onError={(e) => { const el = e.currentTarget; const fb = el.src.replace("/api/storage/public-objects/portal/images/", "/api/storage/public-objects/portal-assets/static/customer-portal/images/"); if (el.src !== fb) el.src = fb; }}
             />
           </div>
           <h1 className="font-display mb-6" style={{ fontWeight: 800, fontSize: "clamp(36px, 4vw, 56px)", lineHeight: 1.08, letterSpacing: "-0.04em", color: "#ffffff", textShadow: "0 6px 24px rgba(15,23,42,0.55)" }}>

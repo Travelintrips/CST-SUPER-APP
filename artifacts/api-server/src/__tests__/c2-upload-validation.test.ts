@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { validateUploadFile, validateMagicBytes } from "../lib/uploadValidation.js";
+import { validateUploadFile, validateMagicBytes, validateSvgImageAsset } from "../lib/uploadValidation.js";
 
 // ── fixture factories ───────────────────────────────────────────────────────
 
@@ -199,5 +199,17 @@ describe("validateMagicBytes", () => {
     const short = Buffer.from([0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00]); // only 8 bytes
     const r = validateMagicBytes(short, "image/webp");
     expect(r.ok).toBe(false);
+  });
+});
+
+describe("validateSvgImageAsset", () => {
+  it("accepts a passive SVG logo", () => {
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><path d="M0 0h10v10H0z"/></svg>');
+    expect(validateSvgImageAsset(svg)).toEqual({ ok: true });
+  });
+
+  it("rejects active or externally loaded SVG markup", () => {
+    const svg = Buffer.from('<svg><script>alert(1)</script><image href="https://evil.example/x"/></svg>');
+    expect(validateSvgImageAsset(svg).ok).toBe(false);
   });
 });

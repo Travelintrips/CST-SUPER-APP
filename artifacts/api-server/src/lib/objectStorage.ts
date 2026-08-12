@@ -81,6 +81,41 @@ function extFromMime(mime: string): string {
   return map[mime.toLowerCase()] ?? "bin";
 }
 
+function sniffPublicContentType(buffer: Buffer): string | null {
+  if (buffer.length >= 8 &&
+      buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+    return "image/png";
+  }
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (buffer.length >= 6 && (buffer.subarray(0, 6).toString("ascii") === "GIF87a" ||
+      buffer.subarray(0, 6).toString("ascii") === "GIF89a")) {
+    return "image/gif";
+  }
+  if (buffer.length >= 12 && buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+      buffer.subarray(8, 12).toString("ascii") === "WEBP") {
+    return "image/webp";
+  }
+  if (buffer.length >= 2 && buffer[0] === 0x42 && buffer[1] === 0x4d) return "image/bmp";
+  if (buffer.length >= 4 &&
+      ((buffer[0] === 0x49 && buffer[1] === 0x49 && buffer[2] === 0x2a && buffer[3] === 0x00) ||
+       (buffer[0] === 0x4d && buffer[1] === 0x4d && buffer[2] === 0x00 && buffer[3] === 0x2a))) {
+    return "image/tiff";
+  }
+  if (buffer.subarray(0, 5).toString("ascii") === "%PDF-") return "application/pdf";
+
+  const text = buffer.subarray(0, 4096).toString("utf8").replace(/^\uFEFF/, "").trimStart();
+  if (/^(?:<\?xml[\s\S]*?)?<svg\b/i.test(text)) return "image/svg+xml";
+  return null;
+}
+
+const SAFE_PUBLIC_METADATA_TYPES = new Set([
+  "image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif",
+  "image/tiff", "image/bmp", "image/heic", "image/heif", "image/svg+xml",
+  "application/pdf",
+]);
+
 async function supabaseUpload(
   bucket: string,
   path: string,
@@ -161,7 +196,12 @@ export class ObjectStorageService {
       mp4: "video/mp4", mov: "video/quicktime", webm: "video/webm",
       avi: "video/x-msvideo", mpeg: "video/mpeg", ogv: "video/ogg",
     };
-    const contentType = file.metadata?.contentType ?? mimeMap[ext] ?? "application/octet-stream";
+    const metadataType = file.metadata?.contentType?.toLowerCase();
+    const contentType =
+      sniffPublicContentType(buffer) ??
+      (metadataType && SAFE_PUBLIC_METADATA_TYPES.has(metadataType) ? metadataType : null) ??
+      mimeMap[ext] ??
+      "application/octet-stream";
     const webStream = Readable.toWeb(Readable.from(buffer)) as ReadableStream;
     return new Response(webStream, {
       headers: {

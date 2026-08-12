@@ -31,6 +31,8 @@ const LOCALE_INDEPENDENT_KEYS = new Set([
 function isLocaleIndependentVisualKey(key: string): boolean {
   return LOCALE_INDEPENDENT_KEYS.has(key)
     || key.startsWith("logo")
+    || key.endsWith("_logo")
+    || key.endsWith(".logo")
     || /(?:^|[._-])(img|image|photo|favicon|banner|background|bg)(?:[._\d-]|$)/i.test(key);
 }
 

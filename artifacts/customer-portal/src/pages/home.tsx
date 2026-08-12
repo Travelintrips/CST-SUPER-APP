@@ -11,6 +11,7 @@ import { useLanguage } from "@/i18n/LanguageContext";
 import { CART_KEY } from "@/lib/logistic-cart";
 import PageSeo from "@/components/PageSeo";
 import { CUSTOMER_ASSETS, staticAsset } from "@/lib/staticAssets";
+import { resolveImageUrl } from "@/lib/utils";
 
 export default function Home() {
   const { data: company } = useGetPortalCompany({
@@ -765,7 +766,15 @@ export default function Home() {
                   &ldquo;<EditableText contentKey={textKey} defaultValue={t(textKey)} multiline />&rdquo;
                 </p>
                 <div className="flex items-center gap-3 pt-4 border-t border-white/10">
-                  <img src={content[photoKey] || defaultImg} alt={t(nameKey)} className="w-10 h-10 md:w-12 md:h-12 rounded-full object-cover ring-2 ring-sky-400/40 shrink-0" />
+                  <img
+                    src={resolveImageUrl(content[photoKey]) || defaultImg}
+                    alt={t(nameKey)}
+                    className="w-10 h-10 md:w-12 md:h-12 rounded-full object-cover ring-2 ring-sky-400/40 shrink-0"
+                    onError={(event) => {
+                      const image = event.currentTarget;
+                      if (image.src !== defaultImg) image.src = defaultImg;
+                    }}
+                  />
                   <div>
                     <p className="font-semibold text-white text-sm">
                       <EditableText contentKey={nameKey} defaultValue={t(nameKey)} />

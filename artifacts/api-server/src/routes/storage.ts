@@ -326,7 +326,30 @@ router.post("/storage/uploads/request-url", async (req: Request, res: Response) 
 router.get("/storage/public-objects/{*filePath}", async (req: Request, res: Response) => {
   try {
     const rawParam = req.params.filePath as unknown;
-    const filePath = Array.isArray(rawParam) ? rawParam.join("/") : String(rawParam);
+    const requestedPath = Array.isArray(rawParam) ? rawParam.join("/") : String(rawParam);
+    const filePath = requestedPath.replace(/^\/+/, "");
+    if (
+      filePath.split("/").some((segment) => !segment || segment === "." || segment === "..") ||
+      filePath.includes("\\") ||
+      filePath.includes("\0")
+    ) {
+      res.status(400).json({ error: "Invalid public object path" });
+      return;
+    }
+
+    // All historical portal image URLs resolve to the one canonical storage
+    // prefix. Redirect rather than maintaining duplicate storage trees.
+    const legacyImagePath = filePath.startsWith("portal/images/")
+      ? filePath.slice("portal/images/".length)
+      : filePath.startsWith("images/")
+        ? filePath.slice("images/".length)
+        : null;
+    if (legacyImagePath !== null) {
+      const canonical = `portal-assets/static/customer-portal/images/${legacyImagePath}`;
+      const encoded = canonical.split("/").map(encodeURIComponent).join("/");
+      return res.redirect(308, `${req.baseUrl}/storage/public-objects/${encoded}`);
+    }
+
     const file = await objectStorageService.searchPublicObject(filePath);
     if (!file) {
       // Fallback: try redirecting to PROD Supabase CDN so that content uploaded

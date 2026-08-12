@@ -10,7 +10,7 @@ import { invalidateTokenCache, SERVICE_SCHEMAS } from "./vendorMiniForm";
 import { eq, inArray, and, ne, isNull, sql, desc, gte, lte, ilike, or, asc } from "drizzle-orm";
 import { productMediaTable } from "@workspace/db";
 import { ObjectStorageService } from "../lib/objectStorage.js";
-import { validateUploadFile, validateMagicBytes } from "../lib/uploadValidation.js";
+import { validateUploadFile, validateMagicBytes, validateSvgImageAsset } from "../lib/uploadValidation.js";
 import { sendViaService as sendWhatsApp } from "../lib/waTransport.js";
 import { getAdminWa } from "../lib/adminWa.js";
 import { getAppConfig } from "../lib/appConfig.js";
@@ -1135,13 +1135,19 @@ const _multerUpload = multer({ storage: multer.memoryStorage(), limits: { fileSi
 router.post("/admin/upload", requirePortalAdmin, _multerUpload.single("file"), async (req, res) => {
   const file = req.file;
   if (!file) return res.status(400).json({ message: "File gambar wajib diisi" });
-  const _ADMIN_IMG_MIME = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp", "image/heic", "image/heif"]);
-  if (!_ADMIN_IMG_MIME.has(file.mimetype)) return res.status(415).json({ message: "Hanya file gambar (JPG, PNG, WebP, HEIC) yang diizinkan" });
-  // C2-REMEDIATION: magic-byte signature check
-  const magicCheck = validateMagicBytes(file.buffer, file.mimetype);
-  if (!magicCheck.ok) return res.status(400).json({ message: magicCheck.errorMessage });
+  const _ADMIN_IMG_MIME = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp", "image/svg+xml"]);
+  const mime = file.mimetype.toLowerCase();
+  if (!_ADMIN_IMG_MIME.has(mime)) return res.status(415).json({ message: "Hanya file gambar (JPG, PNG, WebP, SVG) yang diizinkan" });
+  const validation = mime === "image/svg+xml"
+    ? validateSvgImageAsset(file.buffer)
+    : validateMagicBytes(file.buffer, mime);
+  if (!validation.ok) return res.status(400).json({ message: validation.errorMessage });
   try {
-    const { buffer, contentType } = await compressImageBuffer(file.buffer, file.mimetype, "photo");
+    // CMS media is stored with the original bytes and MIME. This keeps SVG
+    // logos valid and prevents PNG/JPEG uploads from being silently rewritten
+    // to WebP while the DB still points at the upload URL.
+    const buffer = file.buffer;
+    const contentType = mime === "image/jpg" ? "image/jpeg" : mime;
     const objectId = randomUUID();
     const url = await _objectStorage.uploadPublicAsset(buffer, objectId, contentType);
     return res.json({ url });

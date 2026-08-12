@@ -180,3 +180,35 @@ export function validateMagicBytes(
     errorMessage: `Konten file tidak cocok dengan tipe yang dideklarasikan (${mime}). File mungkin telah diubah ekstensinya.`,
   };
 }
+
+/**
+ * SVG is intentionally not accepted by the generic document upload validator.
+ * The portal CMS has a separate, explicit opt-in for SVG logos, and must
+ * reject active/external markup before storing it in the public bucket.
+ */
+export function validateSvgImageAsset(buffer: Buffer): ValidateUploadResult {
+  if (!buffer.length) return { ok: false, errorMessage: "File SVG kosong." };
+  const source = buffer.toString("utf8").replace(/^\uFEFF/, "").trim();
+  if (!source.toLowerCase().startsWith("<svg") && !/^<\?xml[\s\S]*<svg\b/i.test(source)) {
+    return { ok: false, errorMessage: "Konten file bukan SVG yang valid." };
+  }
+  if (source.length > 5 * 1024 * 1024) {
+    return { ok: false, errorMessage: "File SVG terlalu besar." };
+  }
+
+  // Keep public SVGs image-only: no scripts, event handlers, embedded
+  // documents, javascript URLs, external resources, or entity declarations.
+  const dangerous = [
+    /<!DOCTYPE/i,
+    /<\s*script\b/i,
+    /<\s*(?:iframe|object|embed|foreignObject)\b/i,
+    /\bon[a-z]+\s*=/i,
+    /\b(?:javascript|vbscript):/i,
+    /data\s*:\s*text\/html/i,
+    /(?:href|xlink:href|src)\s*=\s*["']\s*(?:https?:|\/\/|data:)/i,
+  ];
+  if (dangerous.some((pattern) => pattern.test(source))) {
+    return { ok: false, errorMessage: "SVG hanya boleh berisi markup gambar yang aman." };
+  }
+  return { ok: true };
+}

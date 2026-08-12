@@ -27,14 +27,21 @@ export function assetUrl(path: string): string {
 export function resolveImageUrl(url: string | null | undefined): string | null {
   if (!url) return null;
   if (url.startsWith("/objects/")) return `/api/storage${url}`;
-  // Legacy portal CMS rows used /portal/images/* before Customer Portal
-  // assets were consolidated under portal-assets/static/customer-portal.
-  // Keep old database values displayable without duplicating storage objects.
-  if (url.startsWith("/api/storage/public-objects/portal/images/")) {
-    return url.replace(
-      "/api/storage/public-objects/portal/images/",
-      "/api/storage/public-objects/portal-assets/static/customer-portal/images/",
-    );
+  // Legacy CMS values and old hard-coded paths all resolve to the same
+  // canonical Customer Portal storage root. Keep path segments intact; do
+  // not normalize arbitrary URLs or allow a caller to escape the image root.
+  const legacyPrefixes = [
+    "/api/storage/public-objects/portal/images/",
+    "/api/storage/public-objects/images/",
+    "/portal/images/",
+    "/images/",
+  ];
+  for (const prefix of legacyPrefixes) {
+    if (url.startsWith(prefix)) {
+      const relative = url.slice(prefix.length);
+      if (!relative || relative.split("/").some((part) => part === "." || part === ".." || part.includes("\\"))) return null;
+      return `/api/storage/public-objects/portal-assets/static/customer-portal/images/${relative}`;
+    }
   }
   return url;
 }
