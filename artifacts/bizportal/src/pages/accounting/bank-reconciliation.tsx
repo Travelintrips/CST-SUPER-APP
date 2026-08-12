@@ -2132,7 +2132,7 @@ function MutationDetailPanel({
                     )}
 
                     {qrisAudit.review_reason && (
-                      <p className="rounded border border-amber-200 bg-amber-50/80 px-2 py-1.5 text-[11px] text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                      <p className="rounded border border-amber-300 bg-amber-50 px-2 py-1.5 text-[11px] font-medium leading-relaxed text-slate-950 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-50">
                         {qrisAudit.review_reason}
                       </p>
                     )}
