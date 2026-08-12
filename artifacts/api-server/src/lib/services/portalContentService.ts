@@ -11,6 +11,19 @@ import { SECRETS_CATALOG } from "../appSecrets.js";
 const DEFAULT_LOCALE = "id-ID";
 const LOCALE_SUFFIX_SEP = "__";
 
+// Media/config values are shared by the public site regardless of the
+// visitor's language. Text fields remain locale-specific, but an admin should
+// not have to upload the same hero image once per language.
+const LOCALE_INDEPENDENT_KEYS = new Set([
+  "hero_bg",
+  "about_img1",
+  "about_img2",
+  "testimonials.t1Photo",
+  "testimonials.t2Photo",
+  "testimonials.t3Photo",
+  "site_favicon",
+]);
+
 // ─── Cache ────────────────────────────────────────────────────────────────────
 
 // Row type includes locale so getContent() can filter correctly.
@@ -52,9 +65,10 @@ async function loadAllRows(): Promise<ContentRow[]> {
 // deliberately do NOT add a `locale` column or change its key-only unique
 // constraint (that would break other upserts/reads elsewhere in the app).
 //
-// Rows with locale === null are truly locale-independent (images, JSON
-// config, contact details, etc.) and always apply regardless of the
-// requested locale.
+// Rows with locale === null are truly locale-independent and always apply
+// regardless of the requested locale. The migration currently keeps locale
+// NOT NULL for compatibility with the shared table, so known media/config
+// keys are also resolved from the default locale below.
 //
 // Rows with an explicit locale (including DEFAULT_LOCALE) are CMS TEXT
 // overrides for that specific language only. They must NOT leak into other
@@ -83,6 +97,23 @@ export async function getContent(locale: string = DEFAULT_LOCALE): Promise<Recor
       content[r.key] = r.value;
     }
   }
+
+  // Media/config values are global. Older rows may have been saved while an
+  // admin was editing a non-default language, so prefer the requested
+  // locale's value when present and otherwise fall back to the canonical
+  // default-locale row.
+  if (locale !== DEFAULT_LOCALE) {
+    for (const r of rows) {
+      if (
+        r.locale === DEFAULT_LOCALE &&
+        LOCALE_INDEPENDENT_KEYS.has(r.key) &&
+        !(r.key in content)
+      ) {
+        content[r.key] = r.value;
+      }
+    }
+  }
+
   return content;
 }
 
@@ -98,9 +129,13 @@ export async function updateContent(
 ): Promise<void> {
   for (const [key, value] of Object.entries(updates)) {
     if (RESERVED_SECRET_KEYS.has(key)) continue; // CMS editor must never write app secrets
+    // Keep media/config values in the canonical default-locale row. This
+    // prevents an image uploaded from the en-US CMS tab from being invisible
+    // to id-ID visitors (and vice versa).
+    const storageLocale = LOCALE_INDEPENDENT_KEYS.has(key) ? DEFAULT_LOCALE : locale;
     await db
       .insert(portalContentTable)
-      .values({ key, value: String(value), updatedAt: new Date(), locale } as any)
+      .values({ key, value: String(value), updatedAt: new Date(), locale: storageLocale } as any)
       .onConflictDoUpdate({
         target: [portalContentTable.key, (portalContentTable as any).locale],
         set: { value: String(value), updatedAt: new Date() },
