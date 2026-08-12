@@ -598,20 +598,20 @@ const CANDIDATE_TYPE_LABELS: Record<string, string> = {
 // Backend status → Indonesian UI label mapping
 // SOURCE: bank_mutations.status values from bankReconciliation.ts routes
 const STATUS_LABELS: Record<string, string> = {
-  unmatched:               "Belum Dicocokkan",
-  matched:                 "Kandidat Ditemukan",
-  duplicate_need_review:   "Perlu Review",
+  unmatched:               "Transaksi Belum Lengkap",
+  matched:                 "Cocok",
+  duplicate_need_review:   "Perlu Diperiksa",
   approved_pending_posting:"Menunggu Posting",
-  approved:                "Disetujui",
+  approved:                "Sudah Dicocokkan",
   posted:                  "Sudah Diposting",
   rejected:                "Ditolak",
   void:                    "Dibatalkan",
 };
 
 const STATUS_COLORS: Record<string, string> = {
-  unmatched:               "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/30 dark:text-amber-400",
-  matched:                 "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/30 dark:text-blue-400",
-  duplicate_need_review:   "bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-950/30 dark:text-orange-400",
+  unmatched:               "bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/30 dark:text-amber-300",
+  matched:                 "bg-green-50 text-green-700 border-green-200 dark:bg-green-950/30 dark:text-green-400",
+  duplicate_need_review:   "bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/30 dark:text-amber-300",
   approved_pending_posting:"bg-yellow-50 text-yellow-700 border-yellow-200 dark:bg-yellow-950/30 dark:text-yellow-400",
   approved:                "bg-green-50 text-green-700 border-green-200 dark:bg-green-950/30 dark:text-green-400",
   posted:                  "bg-green-50 text-green-700 border-green-200 dark:bg-green-950/30 dark:text-green-400",
@@ -620,9 +620,9 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 const QRIS_AUDIT_STATUS_LABELS: Record<string, string> = {
-  MATCHED: "Ada kecocokan",
-  REVIEW: "Perlu verifikasi",
-  UNMATCHED: "Belum cocok",
+  MATCHED: "Cocok",
+  REVIEW: "Perlu Diperiksa",
+  UNMATCHED: "Transaksi Belum Lengkap",
 };
 
 const CARD_BORDER: Record<string, string> = {
@@ -674,14 +674,123 @@ function isCanonicalSettlementMutation(m: BankMutation): boolean {
 }
 
 function statusLabel(m: BankMutation): string {
-  if (m.status === "approved" && isCanonicalSettlementMutation(m)) {
-    return "Approved / Reconciled";
-  }
-  return STATUS_LABELS[m.status] ?? m.status;
+  if (m.status === "approved") return STATUS_LABELS.approved;
+  if (m.status === "posted") return STATUS_LABELS.posted;
+  if (m.status === "rejected") return STATUS_LABELS.rejected;
+  if (m.status === "void") return STATUS_LABELS.void;
+  if (m.status === "approved_pending_posting") return STATUS_LABELS.approved_pending_posting;
+  if (m.status === "duplicate_need_review" || hasUnresolvedVariance(m)) return "Perlu Diperiksa";
+  if (m.status === "unmatched" || !m.candidates?.length) return "Transaksi Belum Lengkap";
+  return isExactMatch(m) ? "Cocok" : "Perlu Diperiksa";
 }
 
 function statusColor(m: BankMutation): string {
-  return STATUS_COLORS[m.status] ?? "";
+  if (m.status === "rejected" || m.status === "void") return STATUS_COLORS[m.status] ?? "";
+  if (m.status === "approved_pending_posting") return STATUS_COLORS.approved_pending_posting;
+  if (m.status === "approved" || m.status === "posted") return STATUS_COLORS.approved;
+  if (m.status === "duplicate_need_review" || hasUnresolvedVariance(m)) return STATUS_COLORS.duplicate_need_review;
+  if (m.status === "unmatched" || !m.candidates?.length) return STATUS_COLORS.unmatched;
+  return isExactMatch(m) ? STATUS_COLORS.matched : STATUS_COLORS.duplicate_need_review;
+}
+
+interface ReconciliationEvidence {
+  bankAmount: number;
+  foundAmount: number;
+  deduction: number;
+  expectedAmount: number;
+  missingAmount: number;
+  transactions: Array<{
+    label: string;
+    amount: number;
+    date?: string | null;
+    customer?: string | null;
+    facility?: string | null;
+  }>;
+}
+
+const numericValue = (value: number | string | null | undefined): number | null => {
+  if (value == null || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+function hasUnresolvedVariance(m: BankMutation): boolean {
+  const candidate = m.candidates?.[0];
+  const d = candidate?.details;
+  const variance = numericValue(d?.varianceAmount ?? d?.amountDifference);
+  return Boolean(
+    d?.settlementPartial ||
+    (variance != null && Math.abs(variance) >= 0.01) ||
+    ["REVIEW", "UNMATCHED"].includes(String(m.qris_candidate_audit?.reconciliation_status ?? "").toUpperCase()),
+  );
+}
+
+function isExactMatch(m: BankMutation): boolean {
+  const candidate = m.candidates?.[0];
+  if (!candidate || m.status !== "matched" || hasUnresolvedVariance(m)) return false;
+  return Boolean(candidate.amount_match && candidate.date_match && candidate.match_score >= 90);
+}
+
+function isUiApprovalEligible(m: BankMutation): boolean {
+  // This is deliberately stricter than the backend action guard. The server
+  // remains the final authority; the UI only avoids offering an unsafe action.
+  return canApprove(m) && isExactMatch(m);
+}
+
+function mutationHeading(m: BankMutation): string {
+  return `${m.direction === "IN" ? "Uang Masuk" : "Uang Keluar"} ${idr(m.amount)}`;
+}
+
+function mutationSourceLabel(m: BankMutation): string {
+  if (m.qris_candidate_audit || m.candidates?.some(c => c.candidate_type === "qris_settlement" || c.candidate_type === "sport_payment")) {
+    return "QRIS Sport Center";
+  }
+  return m.provider_name || (m.direction === "IN" ? "Rekening Bank" : "Bank");
+}
+
+function reconciliationEvidence(m: BankMutation): ReconciliationEvidence {
+  const candidate = m.candidates?.[0];
+  const d = candidate?.details;
+  const audit = m.qris_candidate_audit;
+  const bankAmount = numericValue(d?.actualBankAmount) ?? numericValue(m.amount) ?? 0;
+  const expectedAmount =
+    numericValue(d?.expectedAmount) ??
+    numericValue(d?.netAmount) ??
+    numericValue(audit?.net_amount) ??
+    numericValue(candidate?.details?.amount) ??
+    0;
+  const foundAmount =
+    numericValue(d?.expectedAmount) ??
+    numericValue(d?.netAmount) ??
+    numericValue(audit?.net_amount) ??
+    numericValue(d?.amount) ??
+    0;
+  const deduction =
+    numericValue(d?.mdrAmount) ??
+    numericValue(audit?.observed_deduction) ??
+    (numericValue(d?.taxWithheldAmount) ?? 0) + (numericValue(d?.otherFeeAmount) ?? 0);
+  const authoritativeVariance = numericValue(d?.varianceAmount ?? d?.amountDifference);
+  const missingAmount = Math.abs(authoritativeVariance ?? Math.max(0, bankAmount - expectedAmount));
+
+  const settlementItems = d?.settlementItems ?? [];
+  const auditItems = audit?.payment_items ?? [];
+  const transactions = settlementItems.length > 0
+    ? settlementItems.map((item, index) => ({
+        label: item.paymentNumber ?? `Booking ${item.bookingId != null ? `SC-${String(item.bookingId).padStart(4, "0")}` : `#${index + 1}`}`,
+        amount: numericValue(item.netAmount ?? item.grossAmount) ?? 0,
+        date: null,
+        customer: null,
+        facility: "Sport Center",
+      }))
+    : auditItems.map((item, index) => ({
+        label: item.bookingNumber ?? item.booking_number ?? item.paymentNumber ?? item.payment_number ?? `Transaksi #${index + 1}`,
+        amount: numericValue(item.grossAmount ?? item.gross_amount) ?? 0,
+        date: item.paymentDate ?? item.paid_at,
+        customer: null,
+        facility: "Sport Center",
+      }));
+
+  return { bankAmount, foundAmount, deduction, expectedAmount, missingAmount, transactions };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1075,15 +1184,18 @@ function StepProgressBar({ summaryMap }: { summaryMap: Record<string, { count: n
   const hasReviewNeeded = (summaryMap.duplicate_need_review?.count ?? 0) > 0;
   const hasPendingPost  = (summaryMap.approved_pending_posting?.count ?? 0) > 0;
   const hasPosted       = (summaryMap.posted?.count ?? 0) > 0;
+  const hasApproved     = (summaryMap.approved?.count ?? 0) > 0;
   const allProcessed    = hasAny &&
     (summaryMap.unmatched?.count ?? 0) === 0 &&
     (summaryMap.matched?.count ?? 0) === 0 &&
+    (summaryMap.duplicate_need_review?.count ?? 0) === 0 &&
     (summaryMap.approved_pending_posting?.count ?? 0) === 0;
 
   const activeStep =
     !hasAny          ? 1 :
     !hasMatched      ? 2 :
     hasReviewNeeded  ? 3 :
+    allProcessed && (hasApproved || hasPosted) ? 6 :
     !hasPendingPost && !hasPosted ? 3 :
     hasPendingPost   ? 5 :
     allProcessed     ? 6 : 5;
@@ -1150,11 +1262,19 @@ function SummaryCards({
     },
     {
       key: "matched",
-      icon: CircleDot,
-      label: "Kandidat Ditemukan",
+      icon: CheckCircle2,
+      label: "Siap Disetujui",
       count: summaryMap.matched?.count ?? 0,
-      iconClass: "text-blue-500",
-      bg: "hover:bg-blue-50 dark:hover:bg-blue-950/20",
+      iconClass: "text-green-500",
+      bg: "hover:bg-green-50 dark:hover:bg-green-950/20",
+    },
+    {
+      key: "duplicate_need_review",
+      icon: AlertTriangle,
+      label: "Perlu Diperiksa",
+      count: summaryMap.duplicate_need_review?.count ?? 0,
+      iconClass: "text-amber-500",
+      bg: "hover:bg-amber-50 dark:hover:bg-amber-950/20",
     },
     {
       key: "approved_pending_posting",
@@ -1167,8 +1287,8 @@ function SummaryCards({
     {
       key: "posted",
       icon: CheckCircle2,
-      label: "Sudah Diposting",
-      count: summaryMap.posted?.count ?? 0,
+      label: "Selesai",
+      count: (summaryMap.posted?.count ?? 0) + (summaryMap.approved?.count ?? 0),
       iconClass: "text-green-500",
       bg: "hover:bg-green-50 dark:hover:bg-green-950/20",
     },
@@ -1180,8 +1300,10 @@ function SummaryCards({
       amount:
         (summaryMap.unmatched?.amount ?? 0) +
         (summaryMap.matched?.amount ?? 0) +
+        (summaryMap.duplicate_need_review?.amount ?? 0) +
         (summaryMap.approved_pending_posting?.amount ?? 0) +
-        (summaryMap.posted?.amount ?? 0),
+        (summaryMap.posted?.amount ?? 0) +
+        (summaryMap.approved?.amount ?? 0),
       iconClass: "text-purple-500",
       bg: "hover:bg-purple-50 dark:hover:bg-purple-950/20",
     },
@@ -1362,10 +1484,10 @@ type QuickFilter = {
 // Endpoint filter values must match bank_mutations.status values (backend contract)
 const QUICK_FILTERS: QuickFilter[] = [
   { label: "Belum Dicocokkan",   status: "unmatched" },
-  { label: "Siap Approve",       status: "matched" },
-  { label: "Perlu Review",       status: "duplicate_need_review" },
+  { label: "Siap Disetujui",     status: "matched" },
+  { label: "Perlu Diperiksa",    status: "duplicate_need_review" },
   { label: "Menunggu Posting",   status: "approved_pending_posting" },
-  { label: "Sudah Diposting",    status: "posted" },
+  { label: "Selesai",            status: "posted" },
   { label: "Dibatalkan",         status: "void" },
   { label: "Uang Masuk (IN)",    direction: "IN" },
   { label: "Uang Keluar (OUT)",  direction: "OUT" },
@@ -1533,41 +1655,47 @@ function MutationCard({
           <div className="flex-1 min-w-0">
             <div className="flex items-start justify-between gap-2 flex-wrap">
               <div className="min-w-0">
-                <p className="font-semibold text-sm truncate">{m.description}</p>
+                <p className="font-semibold text-base leading-tight truncate">{mutationHeading(m)}</p>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   {fmtDate(m.transaction_date)}
-                  {m.provider_name && <> · <Badge variant="secondary" className="text-[10px] px-1 py-0 h-4">{m.provider_name}</Badge></>}
-                  {m.provider_order_id && <> · <span className="font-mono">{m.provider_order_id}</span></>}
+                  {" · "}{mutationSourceLabel(m)}
                 </p>
+                <Collapsible className="mt-1" onClick={e => e.stopPropagation()}>
+                  <CollapsibleTrigger asChild>
+                    <button type="button" className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
+                      <ChevronDown className="w-3 h-3" /> Lihat keterangan bank
+                    </button>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="text-[11px] text-muted-foreground pt-1 break-words">
+                    {m.description}
+                    {m.provider_order_id && <span className="ml-1">· Ref: {m.provider_order_id}</span>}
+                  </CollapsibleContent>
+                </Collapsible>
               </div>
               <div className="text-right shrink-0">
-                <p className={`text-base font-bold tabular-nums ${isIN ? "text-green-600" : "text-red-600"}`}>
-                  {isIN ? "+" : "-"}{idr(amount)}
-                </p>
                 <span className={`text-[10px] px-1.5 py-0.5 rounded-full border font-medium ${statusColor(m)}`}>
                   {statusLabel(m)}
                 </span>
               </div>
             </div>
 
-            {/* Candidate info */}
-            {best && (
-              <div className="mt-2 flex items-center gap-2 flex-wrap">
-                <div className="flex items-center gap-1.5 text-xs bg-muted/60 rounded-md px-2 py-1">
-                  <ScoreBadge score={best.match_score} />
-                  <span className="font-medium">
-                    {CANDIDATE_TYPE_LABELS[best.candidate_type] ?? best.candidate_type} #{best.candidate_id}
-                  </span>
-                  {cands.length > 1 && (
-                    <span className="text-muted-foreground">+{cands.length - 1} kandidat lain</span>
-                  )}
+            {/* Friendly matching summary — scoring details live in the detail panel. */}
+            {best && isExactMatch(m) && (
+              <div className="mt-2 rounded-md border border-green-200 bg-green-50/70 px-3 py-2 text-xs dark:border-green-800 dark:bg-green-950/20">
+                <p className="font-semibold text-green-800 dark:text-green-300">
+                  Cocok dengan transaksi {best.candidate_type === "sport_payment" || best.candidate_type === "qris_settlement" ? "Sport Center" : "di sistem"}
+                </p>
+                <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-green-700 dark:text-green-400">
+                  <span>Uang masuk bank {idr(amount)}</span>
+                  <span>Seharusnya diterima {idr(reconciliationEvidence(m).expectedAmount || amount)}</span>
                 </div>
-                <div className="flex gap-1">
-                  {best.amount_match   && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950/30 px-1.5 py-0.5 rounded">✓ Nominal</span>}
-                  {best.date_match     && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950/30 px-1.5 py-0.5 rounded">✓ Tanggal</span>}
-                  {best.name_match     && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950/30 px-1.5 py-0.5 rounded">✓ Nama</span>}
-                  {best.order_id_match && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950/30 px-1.5 py-0.5 rounded">✓ Order ID</span>}
-                </div>
+              </div>
+            )}
+
+            {m.status === "matched" && !isExactMatch(m) && (
+              <div className="mt-2 rounded-md border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-200">
+                <p className="font-semibold">Perlu Diperiksa</p>
+                <p className="mt-0.5">Sistem menemukan transaksi, tetapi nominal atau bukti belum sepenuhnya cocok.</p>
               </div>
             )}
 
@@ -1666,17 +1794,26 @@ function MutationCard({
           onClick={e => e.stopPropagation()}
         >
           <div className="flex gap-1.5 flex-wrap">
-            {/* Approve — only before posting; disabled when mapping-required */}
-            {canApprove(m) && (
+            {/* One clear primary action per mutation. Backend remains the final guard. */}
+            {!mappingError && isUiApprovalEligible(m) && (
               <Button
                 size="sm"
                 className="h-7 text-xs gap-1 bg-green-600 hover:bg-green-700 disabled:opacity-50"
-                disabled={!!mappingError}
-                title={mappingError ? "COA spesifik belum tersedia — selesaikan pemetaan COA terlebih dahulu" : undefined}
                 onClick={() => onApprove(m)}
               >
                 <CheckCircle2 className="w-3.5 h-3.5" />
-                Approve
+                Setujui
+              </Button>
+            )}
+            {!isUiApprovalEligible(m) && (m.status === "unmatched" || m.status === "matched" || m.status === "duplicate_need_review") && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs gap-1 border-amber-300 text-amber-800 hover:bg-amber-50 dark:text-amber-300"
+                onClick={() => onDetail(m)}
+              >
+                <Eye className="w-3.5 h-3.5" />
+                Periksa Transaksi
               </Button>
             )}
             {/* Post ke Accounting — only for approved_pending_posting; disabled when mapping-required */}
@@ -1690,6 +1827,12 @@ function MutationCard({
               >
                 <ReceiptText className="w-3.5 h-3.5" />
                 Post ke Accounting
+              </Button>
+            )}
+            {(m.status === "approved" || m.status === "posted") && (
+              <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => onDetail(m)}>
+                <Eye className="w-3.5 h-3.5" />
+                Lihat Detail
               </Button>
             )}
             {/* Reject — only before posted */}
@@ -1965,9 +2108,9 @@ function MutationDetailPanel({
         <SheetHeader className="px-4 py-4 border-b shrink-0">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
-              <SheetTitle className="text-base leading-tight truncate">{m.description}</SheetTitle>
+              <SheetTitle className="text-base leading-tight truncate">{mutationHeading(m)}</SheetTitle>
               <p className="text-xs text-muted-foreground mt-1">
-                {fmtDate(m.transaction_date)} · {isIN ? "Uang Masuk" : "Uang Keluar"}
+                {fmtDate(m.transaction_date)} · {mutationSourceLabel(m)}
               </p>
             </div>
             <span className={`shrink-0 text-xs px-2 py-1 rounded-full border font-medium ${statusColor(m)}`}>
@@ -1978,6 +2121,64 @@ function MutationDetailPanel({
 
         <ScrollArea className="flex-1 overflow-auto">
           <div className="min-w-0 px-4 py-4 space-y-4">
+            {(() => {
+              const evidence = reconciliationEvidence(m);
+              const incomplete = !isExactMatch(m) && (m.status === "unmatched" || m.status === "matched" || m.status === "duplicate_need_review" || hasUnresolvedVariance(m));
+              return (
+                <>
+                  <section aria-labelledby="review-summary-title" className="space-y-3">
+                    <div className="rounded-xl border bg-muted/20 p-4">
+                      <p id="review-summary-title" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Ringkasan</p>
+                      <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+                        <div><p className="text-xs text-muted-foreground">Uang masuk bank</p><p className="font-semibold tabular-nums">{idr(evidence.bankAmount)}</p></div>
+                        <div><p className="text-xs text-muted-foreground">Transaksi ditemukan</p><p className="font-semibold tabular-nums">{idr(evidence.foundAmount)}</p></div>
+                        <div><p className="text-xs text-muted-foreground">MDR / potongan</p><p className="font-semibold tabular-nums">{idr(evidence.deduction)}</p></div>
+                        <div><p className="text-xs text-muted-foreground">Seharusnya diterima</p><p className="font-semibold tabular-nums">{idr(evidence.expectedAmount)}</p></div>
+                      </div>
+                    </div>
+                    {incomplete && evidence.missingAmount > 0 && (
+                      <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-3 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+                        <p className="font-semibold">Masih ada {idr(evidence.missingAmount)} yang belum ditemukan.</p>
+                        <p className="mt-1 text-xs leading-relaxed">Sistem belum menemukan transaksi Sport Center yang menjelaskan seluruh uang masuk bank ini.</p>
+                        <Button size="sm" variant="outline" className="mt-3 border-amber-400 text-amber-900 hover:bg-amber-100 dark:text-amber-100" onClick={() => onClose()}>
+                          Cari Transaksi yang Hilang
+                        </Button>
+                      </div>
+                    )}
+                  </section>
+
+                  <section aria-labelledby="found-transactions-title">
+                    <div className="flex items-center justify-between gap-2">
+                      <p id="found-transactions-title" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Transaksi yang Ditemukan</p>
+                      {evidence.transactions.length > 0 && <span className="text-xs text-muted-foreground">{evidence.transactions.length} transaksi</span>}
+                    </div>
+                    {evidence.transactions.length > 0 ? (
+                      <div className="mt-2 divide-y rounded-lg border">
+                        {evidence.transactions.map((transaction, index) => (
+                          <div key={`${transaction.label}-${index}`} className="flex items-center justify-between gap-3 px-3 py-2.5">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium">{transaction.label}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {[transaction.customer, transaction.facility, transaction.date ? fmtDate(String(transaction.date)) : null].filter(Boolean).join(" · ") || "Detail transaksi tersedia di sistem"}
+                              </p>
+                            </div>
+                            <p className="shrink-0 text-sm font-semibold tabular-nums">{idr(transaction.amount)}</p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-2 rounded-lg border border-dashed px-3 py-4 text-center text-sm text-muted-foreground">Belum ada transaksi yang dapat ditampilkan.</p>
+                    )}
+                  </section>
+
+                  <Collapsible>
+                    <CollapsibleTrigger asChild>
+                      <button type="button" className="flex w-full items-center justify-between rounded-lg border px-3 py-2.5 text-left text-sm font-medium hover:bg-muted/40">
+                        Detail Teknis
+                        <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                      </button>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="pt-3 space-y-4">
             {/* Nominal */}
             <div className="rounded-lg bg-muted/40 p-3 text-center">
               <p className={`text-2xl font-bold tabular-nums ${isIN ? "text-green-600" : "text-red-600"}`}>
@@ -2219,6 +2420,11 @@ function MutationDetailPanel({
                 </p>
               )}
             </div>
+                    </CollapsibleContent>
+                  </Collapsible>
+                </>
+              );
+            })()}
           </div>
         </ScrollArea>
 
@@ -2240,14 +2446,22 @@ function MutationDetailPanel({
 
         {/* Footer actions — explicit per-status */}
         <div className="px-4 py-3 border-t shrink-0 flex gap-2 flex-wrap">
-          {canApprove(m) && (
+          {!mappingError && isUiApprovalEligible(m) && (
             <Button
               className="flex-1 gap-1.5 bg-green-600 hover:bg-green-700 min-w-[120px] disabled:opacity-50"
-              disabled={!!mappingError}
-              title={mappingError ? "COA spesifik belum tersedia — selesaikan pemetaan COA terlebih dahulu" : undefined}
               onClick={() => { onClose(); onApprove(m); }}>
               <CheckCircle2 className="w-4 h-4" />
-              Approve
+              Setujui Pencocokan
+            </Button>
+          )}
+          {!isUiApprovalEligible(m) && (m.status === "unmatched" || m.status === "matched" || m.status === "duplicate_need_review") && (
+            <Button
+              variant="outline"
+              className="flex-1 gap-1.5 border-amber-300 text-amber-800 hover:bg-amber-50 dark:text-amber-300 min-w-[150px]"
+              onClick={onClose}
+            >
+              <Search className="w-4 h-4" />
+              Periksa Transaksi
             </Button>
           )}
           {canPost(m) && (
@@ -2287,7 +2501,7 @@ function MutationDetailPanel({
               Jurnal reversal sudah dibuat. Klik <strong>Buka Ulang</strong> untuk cocokkan mutasi ini kembali.
             </p>
           )}
-          {!canApprove(m) && !canPost(m) && !canReject(m) && !canReverse(m) && !canReopen(m) && (
+          {!isUiApprovalEligible(m) && !canPost(m) && !canReject(m) && !canReverse(m) && !canReopen(m) && (
             <p className="text-xs text-muted-foreground py-1 w-full text-center">Tidak ada aksi tersedia untuk status ini</p>
           )}
         </div>
@@ -2599,6 +2813,7 @@ export default function BankReconciliationPage() {
   );
   const [page,           setPage]           = useState(0);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [showQrisAuditList, setShowQrisAuditList] = useState(false);
   const PAGE_SIZE = 20;
 
   // ── UI state ──────────────────────────────────────────────────────────────
@@ -3192,23 +3407,28 @@ export default function BankReconciliationPage() {
               </div>
             ) : (
               <div className="space-y-2">
-                <div className="flex gap-2 flex-wrap text-xs">
+                 <div className="grid grid-cols-3 gap-2">
                   {(["MATCHED", "REVIEW", "UNMATCHED"] as const).map((status) => {
                     const count = qrisAuditData?.candidates.filter(c => c.reconciliation_status === status).length ?? 0;
                     return (
-                      <Badge key={status} variant="outline" className={
+                       <div key={status} className={`rounded-lg border px-2.5 py-2 ${
                         status === "MATCHED"
-                           ? "border-green-300 bg-green-50 text-green-800 dark:border-green-800 dark:bg-green-950/30 dark:text-green-300"
+                            ? "border-green-300 bg-green-50 text-green-800 dark:border-green-800 dark:bg-green-950/30 dark:text-green-300"
                           : status === "REVIEW"
                              ? "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300"
                              : "border-slate-300 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300"
-                      }>
-                         {QRIS_AUDIT_STATUS_LABELS[status]}: {count}
-                      </Badge>
+                       }`}>
+                         <p className="text-[11px] font-medium leading-tight">{QRIS_AUDIT_STATUS_LABELS[status]}</p>
+                         <p className="mt-1 text-xl font-bold tabular-nums">{count}</p>
+                       </div>
                     );
                   })}
                 </div>
-                <div className="divide-y rounded-md border text-xs">
+                 <Button variant="outline" size="sm" className="w-full gap-1.5 text-xs" onClick={() => setShowQrisAuditList(value => !value)}>
+                   <Eye className="h-3.5 w-3.5" />
+                   {showQrisAuditList ? "Sembunyikan Pemeriksaan" : "Lihat Semua Pemeriksaan"}
+                 </Button>
+                 {showQrisAuditList && <div className="divide-y rounded-md border text-xs">
                   {qrisAuditData?.candidates.slice(0, 10).map((candidate) => {
                     const isApproved = candidate.status === "approved";
                     const isApprovingThis = approveQrisBatchMut.isPending &&
@@ -3282,13 +3502,13 @@ export default function BankReconciliationPage() {
                                   Perlu verifikasi
                                 </span>
                               );
-                            })()}
-                          </div>
+                             })()}
+                           </div>
                         </div>
                       </div>
                     );
-                  })}
-                </div>
+                   })}
+                 </div>}
               </div>
             )}
           </CardContent>
