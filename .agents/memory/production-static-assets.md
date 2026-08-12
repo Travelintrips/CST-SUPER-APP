@@ -29,3 +29,15 @@ asset mapping.
 **How to apply:** Inspect the live route's loaded bundle and test every
 rendered asset URL after publishing the frontend bundle. Treat any legacy
 `.png`/`.jpg` request or `text/html` image response as a republish blocker.
+
+The current production branding objects `logo.png` and `logo-baru.png` are
+valid PNGs, while their WebP counterparts may not exist. Brand-logo references
+must therefore remain on the published PNG format until derived WebP objects
+are explicitly promoted.
+
+**Why:** A global PNG-to-WebP resolver changed visible branding requests to
+missing objects even though the original production logo was healthy.
+
+**How to apply:** When changing the raster resolver, test logo and logo-baru
+separately from vehicle/content assets; verify both the header and PWA
+manifest/service-worker icon URLs against production.
