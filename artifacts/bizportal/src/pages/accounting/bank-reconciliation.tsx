@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { AIReviewSourcePanel } from "@/components/ai-review";
+import { useCompany } from "@/contexts/CompanyContext";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -2581,6 +2582,11 @@ export default function BankReconciliationPage() {
   const { toast }  = useToast();
   const qc         = useQueryClient();
   const [, setLocation] = useLocation();
+  const { activeCompanyId } = useCompany();
+  const qrisCompanyId =
+    typeof activeCompanyId === "number" && Number.isInteger(activeCompanyId) && activeCompanyId > 0
+      ? activeCompanyId
+      : null;
 
   // ── Filters ──────────────────────────────────────────────────────────────
   const [filterStatus,   setFilterStatus]   = useState("all");
@@ -2640,9 +2646,10 @@ export default function BankReconciliationPage() {
   });
 
   const { data: qrisAuditData, isLoading: qrisAuditLoading } = useQuery({
-    queryKey: ["qris-candidate-audit"],
+    queryKey: ["qris-candidate-audit", qrisCompanyId],
     queryFn: async () => {
-      const r = await fetch("/api/bank-reconciliation/qris-candidates?limit=50", { credentials: "include" });
+      const params = new URLSearchParams({ limit: "50", companyId: String(qrisCompanyId) });
+      const r = await fetch(`/api/bank-reconciliation/qris-candidates?${params}`, { credentials: "include" });
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{
         mode: string;
@@ -2650,25 +2657,29 @@ export default function BankReconciliationPage() {
         candidates: QrisCandidateAudit[];
       }>;
     },
+    enabled: qrisCompanyId != null,
     refetchInterval: 30_000,
   });
 
   const qrisDryRunMut = useMutation({
     mutationFn: async () => {
+      if (qrisCompanyId == null) {
+        throw new Error("Pilih satu perusahaan aktif sebelum membuat kandidat review QRIS.");
+      }
       const r = await fetch("/api/bank-reconciliation/qris-candidates/generate", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         // Persist only the candidate/review row. This is not final
         // reconciliation and does not create a journal or consume evidence.
-        body: JSON.stringify({ dryRun: false }),
+        body: JSON.stringify({ dryRun: false, companyId: qrisCompanyId }),
       });
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{ generated: number; candidates: QrisCandidateAudit[] }>;
     },
     onSuccess: (result) => {
       toast({ title: `Dry-run QRIS selesai: ${result.generated} kandidat` });
-      qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] });
+      qc.invalidateQueries({ queryKey: ["qris-candidate-audit", qrisCompanyId] });
     },
     onError: (e: Error) => toast({ title: "Dry-run QRIS gagal", description: e.message, variant: "destructive" }),
   });
@@ -3110,7 +3121,8 @@ export default function BankReconciliationPage() {
                 size="sm"
                 className="gap-1.5"
                 onClick={() => qrisDryRunMut.mutate()}
-                disabled={qrisDryRunMut.isPending}
+                disabled={qrisDryRunMut.isPending || qrisCompanyId == null}
+                title={qrisCompanyId == null ? "Pilih satu perusahaan aktif terlebih dahulu" : undefined}
               >
                 {qrisDryRunMut.isPending
                   ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -3120,7 +3132,11 @@ export default function BankReconciliationPage() {
             </div>
           </CardHeader>
           <CardContent className="pt-0">
-            {qrisAuditLoading ? (
+            {qrisCompanyId == null ? (
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                Pilih satu perusahaan aktif terlebih dahulu. Analisis QRIS tidak dijalankan dalam mode semua perusahaan agar data tidak tercampur.
+              </div>
+            ) : qrisAuditLoading ? (
                <div className="text-xs text-slate-600 dark:text-slate-400 py-2">Memuat pemeriksaan QRIS...</div>
             ) : (qrisAuditData?.candidates?.length ?? 0) === 0 ? (
               <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700 dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-300">
