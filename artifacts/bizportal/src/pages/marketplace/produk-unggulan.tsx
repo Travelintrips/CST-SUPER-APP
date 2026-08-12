@@ -54,6 +54,7 @@ interface FeaturedPackage {
   placementType: string | null;
   priorityWeight: number | null;
   categoryId: number | null;
+  internalOnly: boolean;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -381,7 +382,11 @@ function TambahProdukInternalSection() {
     staleTime: 60_000,
   });
 
-  const { data: packages = [], isLoading: packagesLoading } = useQuery<FeaturedPackage[]>({
+  const {
+    data: packages = [],
+    isLoading: packagesLoading,
+    isError: packagesError,
+  } = useQuery<FeaturedPackage[]>({
     queryKey: ["admin-featured-packages"],
     queryFn: async () => {
       const r = await fetch("/api/portal/admin/featured-packages", { credentials: "include" });
@@ -403,6 +408,7 @@ function TambahProdukInternalSection() {
   });
 
   const selectedPackage = packages.find((pkg) => String(pkg.id) === packageId);
+  const activePackages = packages.filter((pkg) => pkg.isActive);
 
   function handleVendorChange(value: string) {
     setVendorId(value);
@@ -509,18 +515,30 @@ function TambahProdukInternalSection() {
 
           <div className="space-y-1.5">
             <Label>Paket promosi / durasi *</Label>
-            <Select value={packageId} onValueChange={handlePackageChange}>
+            <Select
+              value={packageId}
+              onValueChange={handlePackageChange}
+              disabled={packagesLoading || packagesError || activePackages.length === 0}
+            >
               <SelectTrigger>
                 <SelectValue placeholder={packagesLoading ? "Memuat paket..." : "Pilih paket"} />
               </SelectTrigger>
               <SelectContent>
-                {packages.filter((pkg) => pkg.isActive).map((pkg) => (
+                {activePackages.map((pkg) => (
                   <SelectItem key={pkg.id} value={String(pkg.id)}>
                     {pkg.name} · {pkg.durationDays} hari
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
+            {packagesError && (
+              <p className="text-xs text-destructive">Gagal memuat paket. Muat ulang halaman dan coba lagi.</p>
+            )}
+            {!packagesLoading && !packagesError && activePackages.length === 0 && (
+              <p className="text-xs text-muted-foreground">
+                Belum ada paket aktif. Aktifkan atau buat paket pada tab Paket Promosi.
+              </p>
+            )}
           </div>
 
           <div className="space-y-1.5">

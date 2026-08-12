@@ -41,14 +41,41 @@ export async function runFeaturedProductMigration(): Promise<void> {
         placement_type   TEXT NOT NULL DEFAULT 'homepage_top',
         priority_weight  INTEGER NOT NULL DEFAULT 0,
         category_id      INTEGER,
+        internal_only    BOOLEAN NOT NULL DEFAULT FALSE,
         is_active        BOOLEAN NOT NULL DEFAULT TRUE,
         created_at       TIMESTAMP NOT NULL DEFAULT NOW(),
         updated_at       TIMESTAMP NOT NULL DEFAULT NOW()
       )
     `);
     await db.execute(sql`
+      ALTER TABLE mkt_featured_packages
+        ADD COLUMN IF NOT EXISTS internal_only BOOLEAN NOT NULL DEFAULT FALSE
+    `);
+    await db.execute(sql`
       CREATE INDEX IF NOT EXISTS mkt_featured_packages_active_idx
         ON mkt_featured_packages(is_active)
+    `);
+    // Internal activation needs a selectable duration/priority package even
+    // when an admin has not configured paid vendor packages yet. Keep this
+    // package out of the vendor-paid flow via internal_only.
+    await db.execute(sql`
+      INSERT INTO mkt_featured_packages (
+        code, name, description, duration_days, price, currency,
+        placement_type, priority_weight, internal_only, is_active
+      )
+      VALUES (
+        'INTERNAL-30D',
+        'Internal · 30 Hari',
+        'Paket default untuk aktivasi Produk Unggulan vendor internal.',
+        30,
+        0,
+        'IDR',
+        'homepage_top',
+        100,
+        TRUE,
+        TRUE
+      )
+      ON CONFLICT (code) DO NOTHING
     `);
 
     // ── mkt_featured_product_requests ─────────────────────────────────────────

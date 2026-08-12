@@ -3191,7 +3191,7 @@ async function _requireVendorSupplierId(req: PortalAuthReq, res: Response): Prom
 // GET /api/portal/vendor/featured-packages — packages a vendor can pick from
 router.get("/vendor/featured-packages", requirePortalAuth, requireActiveVendor, async (_req, res) => {
   try {
-    res.json(await listFeaturedPackages(false));
+    res.json(await listFeaturedPackages(false, { internalOnly: false }));
   } catch (e: unknown) {
     res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
   }

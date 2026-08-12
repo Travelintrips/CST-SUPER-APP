@@ -45,6 +45,7 @@ export const mktFeaturedPackagesTable = pgTable("mkt_featured_packages", {
   placementType:  text("placement_type").notNull().default("homepage_top"),
   priorityWeight: integer("priority_weight").notNull().default(0),
   categoryId:     integer("category_id"),
+  internalOnly:   boolean("internal_only").notNull().default(false),
   isActive:       boolean("is_active").notNull().default(true),
   createdAt:      timestamp("created_at").notNull().defaultNow(),
   updatedAt:      timestamp("updated_at").notNull().defaultNow(),

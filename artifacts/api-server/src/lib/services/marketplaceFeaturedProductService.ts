@@ -52,8 +52,16 @@ const ACTIVE_LIKE_STATUSES = ["pending", "approved", "active"] as const;
 // Packages (admin)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function listFeaturedPackages(includeInactive = false): Promise<MktFeaturedPackage[]> {
+export async function listFeaturedPackages(
+  includeInactive = false,
+  options: { internalOnly?: boolean } = {},
+): Promise<MktFeaturedPackage[]> {
   const conditions = includeInactive ? [] : [eq(mktFeaturedPackagesTable.isActive, true)];
+  if (options.internalOnly === true) {
+    conditions.push(eq(mktFeaturedPackagesTable.internalOnly, true));
+  } else if (options.internalOnly === false) {
+    conditions.push(eq(mktFeaturedPackagesTable.internalOnly, false));
+  }
   return db
     .select()
     .from(mktFeaturedPackagesTable)
@@ -99,6 +107,7 @@ export async function createFeaturedPackage(
       placementType: input.placementType ?? "homepage_top",
       priorityWeight: input.priorityWeight ?? 0,
       categoryId: input.categoryId ?? null,
+      internalOnly: false,
       isActive: true,
     })
     .returning();
