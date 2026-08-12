@@ -2659,6 +2659,7 @@ function MutationDetailPanel({
                       Batch ini sudah disetujui. Settlement QRIS telah dibuat dan siap dicocokkan ke mutasi bank.
                     </p>
                   )}
+                </div>
               </>
             )}
 
