@@ -1628,8 +1628,11 @@ function QrisMutationCard({
   const items = audit.payment_items ?? [];
   const isIN = m.direction === "IN";
   const isMatched = String(audit.reconciliation_status ?? "").toUpperCase() === "MATCHED";
+  const isReview = String(audit.reconciliation_status ?? "").toUpperCase() === "REVIEW";
   const isApproved = audit.status === "approved";
-  const canSelect = audit.id != null && isMatched && !isApproved;
+  // REVIEW candidates are explicitly approvable through the existing override
+  // flow, so they must be selectable in the card as well as in the batch toolbar.
+  const canSelect = audit.id != null && (isMatched || isReview) && !isApproved;
   const bankAmount = numericValue(m.amount) ?? 0;
   const candidateGross = numericValue(audit.gross_amount) ?? items.reduce(
     (total, item) => total + (numericValue(item.grossAmount ?? item.gross_amount) ?? 0),
@@ -2643,27 +2646,11 @@ function MutationDetailPanel({
                     // UNMATCHED or unknown — fully blocked
                     return (
                       <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 space-y-1">
-                  {/* Approve button — only for MATCHED, gated for REVIEW/UNMATCHED */}
-                   {qrisAudit.status !== "approved" && qrisAudit.id != null && onApproveQrisBatch && (() => {
-                    const isMatched = String(qrisAudit.reconciliation_status ?? "").toUpperCase() === "MATCHED";
-                    return isMatched ? (
-                      <Button
-                        size="sm"
-                        className="w-full gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white"
-                         disabled={!qrisSelectionChecked}
-                         title={!qrisSelectionChecked ? "Pilih batch terlebih dahulu" : undefined}
-                        onClick={() => onApproveQrisBatch(qrisAudit.id!, qrisAudit.mutation_id, qrisAudit)}
-                      >
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        Setujui Batch — Buat QRIS Settlement
-                      </Button>
-                    ) : (
-                      <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-200 space-y-1">
                         <p className="font-semibold flex items-center gap-1">
                           <AlertTriangle className="w-3 h-3 shrink-0" />
                           Tidak dapat disetujui
                         </p>
-                        <p>Status <strong>{qrisAudit.reconciliation_status}</strong>: jalankan AI Matching terlebih dahulu.</p>
+                        <p>Status <strong>{qrisAudit.reconciliation_status || "UNMATCHED"}</strong>: jalankan AI Matching terlebih dahulu.</p>
                       </div>
                     );
                   })()}
