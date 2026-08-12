@@ -113,12 +113,8 @@ async function fetchBankAccountBalances(
     FROM company_bank_accounts cba
     LEFT JOIN bank_mutations bm
       ON (
-        (
-          bm.bank_account_id ~ '^[0-9]+$'
-          AND bm.bank_account_id::numeric BETWEEN -2147483648 AND 2147483647
-          AND cba.id = bm.bank_account_id::integer
-        )
-        OR cba.account_number::text = bm.bank_account_id::text
+        cba.id::text = NULLIF(BTRIM(bm.bank_account_id::text), '')
+        OR cba.account_number::text = NULLIF(BTRIM(bm.bank_account_id::text), '')
       )
      AND bm.transaction_date::date <= '${asOfDate}'
      AND bm.status NOT IN ('void', 'rejected')

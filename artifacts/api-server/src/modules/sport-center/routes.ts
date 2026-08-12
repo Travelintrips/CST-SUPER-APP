@@ -1941,12 +1941,14 @@ router.get("/payments", async (req, res) => {
             COALESCE(sp.paid_at, sp.created_at)::timestamptz AS paid_at,
             sp.created_at::timestamptz                     AS created_at,
             'bizportal_mirror'::text                       AS source,
-            sp.bank_account_id::integer                    AS bank_account_id,
+            cba.id::integer                                AS bank_account_id,
             cba.name::text                                 AS bank_account_name
           FROM public.sport_payments sp
           LEFT JOIN public.sport_bookings  sb ON sb.id = sp.booking_id
           LEFT JOIN public.sport_facilities sf ON sf.id = sb.facility_id
-          LEFT JOIN public.company_bank_accounts cba ON cba.id = sp.bank_account_id
+          LEFT JOIN public.company_bank_accounts cba
+            ON cba.id::text = NULLIF(BTRIM(sp.bank_account_id::text), '')
+            OR cba.account_number::text = NULLIF(BTRIM(sp.bank_account_id::text), '')
           WHERE sp.payment_number NOT LIKE 'SCPAY-SC-%'
         ),
         combined AS (

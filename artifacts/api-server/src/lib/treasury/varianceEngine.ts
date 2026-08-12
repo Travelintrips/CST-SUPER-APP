@@ -99,12 +99,8 @@ async function computeInflowVariance(
       SUM(bm.amount)                  AS actual
     FROM bank_mutations bm
     JOIN company_bank_accounts cba ON (
-      (
-        bm.bank_account_id ~ '^[0-9]+$'
-        AND bm.bank_account_id::numeric BETWEEN -2147483648 AND 2147483647
-        AND cba.id = bm.bank_account_id::integer
-      )
-      OR cba.account_number::text = bm.bank_account_id::text
+      cba.id::text = NULLIF(BTRIM(bm.bank_account_id::text), '')
+      OR cba.account_number::text = NULLIF(BTRIM(bm.bank_account_id::text), '')
     )
     WHERE cba.company_id = ${companyId}
       AND bm.direction = 'IN'
@@ -184,12 +180,8 @@ async function computeOutflowVariance(
       SUM(bm.amount)                  AS actual
     FROM bank_mutations bm
     JOIN company_bank_accounts cba ON (
-      (
-        bm.bank_account_id ~ '^[0-9]+$'
-        AND bm.bank_account_id::numeric BETWEEN -2147483648 AND 2147483647
-        AND cba.id = bm.bank_account_id::integer
-      )
-      OR cba.account_number::text = bm.bank_account_id::text
+      cba.id::text = NULLIF(BTRIM(bm.bank_account_id::text), '')
+      OR cba.account_number::text = NULLIF(BTRIM(bm.bank_account_id::text), '')
     )
     WHERE cba.company_id = ${companyId}
       AND bm.direction = 'OUT'
