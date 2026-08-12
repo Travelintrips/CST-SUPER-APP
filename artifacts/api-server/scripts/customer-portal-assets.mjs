@@ -13,6 +13,7 @@
  */
 
 import { createClient } from "@supabase/supabase-js";
+import WebSocket from "ws";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -163,7 +164,13 @@ export function resolveStorageCredentials(environment, env = process.env) {
 
 function storageClient(environment, env = process.env) {
   const { url, key } = resolveStorageCredentials(environment, env);
-  return { client: createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } }), url };
+  return {
+    client: createClient(url, key, {
+      auth: { autoRefreshToken: false, persistSession: false },
+      realtime: { transport: WebSocket },
+    }),
+    url,
+  };
 }
 
 function bodyLooksLikeHtmlOrJson(body) {
