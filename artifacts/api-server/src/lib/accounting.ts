@@ -131,10 +131,13 @@ export interface PostingInput {
     | "payroll"
     | "hrd_salary_payment"
     | "sport_center_ppn_correction"
-    | "sport_center_amount_correction";
+    | "sport_center_amount_correction"
+    | "sport_center_payment";
   /** Sub-module identifier stored to source_module column (e.g. "allocation_engine", "advance_disbursement"). */
   sourceModule?: string | null;
   sourceId?: number | null;
+  /** Stable upstream event identity used for canonical idempotency. */
+  sourceEventId?: string | null;
   createdById?: string | null;
   companyId?: number | null;
   costCenterId?: number | null;
@@ -307,10 +310,10 @@ function round2(n: number): number {
 }
 
 // ── Internal Drizzle client type ─────────────────────────────────────────────
-// db.transaction(async tx => ...) memberikan `tx` dengan interface identik db.
-// Keduanya structural-compatible dengan typeof db, sehingga bisa digunakan
-// sebagai parameter bertipe DbClient tanpa memerlukan import tambahan.
-export type DbClient = typeof db;
+// PgTransaction intentionally does not expose the pool `$client` property that
+// exists on the root database instance. Accounting only needs the shared query
+// builder surface, so omit that root-only property and keep db/tx compatible.
+export type DbClient = Omit<typeof db, "$client">;
 
 /**
  * Atomic sequence counter via UPSERT — aman terhadap race condition concurrency.
@@ -462,6 +465,7 @@ async function _postEntryCore(
     status: "draft" as "posted",
     source,
     sourceId,
+    sourceEventId: input.sourceEventId ?? null,
     sourceModule: input.sourceModule ?? null,
     totalDebit: String(totalDebit),
     totalCredit: String(totalCredit),

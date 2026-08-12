@@ -119,6 +119,7 @@ const COA_LEAF_TEMPLATES: SeedAccount[] = [
   { code: "1-1020", name: "Bank Mandiri",                     type: "asset",   parentCode: "1-1000" },
   { code: "1-1021", name: "Bank BCA",                         type: "asset",   parentCode: "1-1000" },
   { code: "1-1022", name: "Bank BNI",                         type: "asset",   parentCode: "1-1000" },
+  { code: "1-1023", name: "Bank Mandiri - Sport Center",      type: "asset",   parentCode: "1-1000" },
   { code: "1-1030", name: "Piutang Usaha",                    type: "asset",   parentCode: "1-1000" },
   { code: "1-1031", name: "Piutang Lainnya",                  type: "asset",   parentCode: "1-1000" },
   { code: "1-1032", name: "Piutang Karyawan (Kasbon)",        type: "asset",   parentCode: "1-1000" },
@@ -643,6 +644,7 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
     { suffix: "SAL", label: "Penjualan",              type: "sales",    debitBase: "1-1030", creditBase: "4-1010" },
     { suffix: "PUR", label: "Pembelian",              type: "purchase", debitBase: "5-1010", creditBase: "2-1010" },
     { suffix: "BNK", label: "Bank Mandiri",           type: "bank",     debitBase: "1-1020", creditBase: "1-1020" },
+    { suffix: "QRIS", label: "QRIS Sport Center",     type: "bank",     debitBase: "1-1023", creditBase: "1-1023" },
     { suffix: "CSH", label: "Kas Kecil",              type: "cash",     debitBase: "1-1010", creditBase: "1-1010" },
     { suffix: "GEN", label: "Memorial / Penyesuaian", type: "general",  debitBase: null,     creditBase: null     },
     { suffix: "EXP", label: "Beban & Reimburse",      type: "purchase", debitBase: "5-1010", creditBase: "2-1010" },
@@ -1249,7 +1251,16 @@ async function resolveSettingsFromCoa(companyId: number): Promise<Partial<typeof
     return row?.id ?? null;
   };
 
-  const [cashAccountId, bankAccountId, salesIncomeId, arAccountId, apAccountId, cashJournalId, bankJournalId, salesJournalId, purchaseJournalId] = await Promise.all([
+  const lookupJournalByCode = async (code: string): Promise<number | null> => {
+    const [row] = await db
+      .select({ id: accountingJournalsTable.id })
+      .from(accountingJournalsTable)
+      .where(sql`${accountingJournalsTable.code} = ${code} AND ${accountingJournalsTable.companyId} = ${cFilter} AND ${accountingJournalsTable.isActive} = TRUE`)
+      .limit(1);
+    return row?.id ?? null;
+  };
+
+  const [cashAccountId, bankAccountId, salesIncomeId, arAccountId, apAccountId, cashJournalId, bankJournalId, salesJournalId, purchaseJournalId, qrisAccountId, ppnOutputAccountId, qrisJournalId, sportCenterRevenueId] = await Promise.all([
     lookupCoa("1-1010"),
     lookupCoa("1-1020"),
     lookupCoa("4-1010"),
@@ -1259,6 +1270,10 @@ async function resolveSettingsFromCoa(companyId: number): Promise<Partial<typeof
     lookupJournal("bank"),
     lookupJournal("sales"),
     lookupJournal("purchase"),
+    companyId === 1 ? lookupCoa("1-1023") : Promise.resolve(null),
+    companyId === 1 ? lookupCoa("2-1020") : Promise.resolve(null),
+    companyId === 1 ? lookupJournalByCode("QRIS-CST") : Promise.resolve(null),
+    companyId === 1 ? lookupCoa("4-1017") : Promise.resolve(null),
   ]);
 
   return {
@@ -1271,30 +1286,40 @@ async function resolveSettingsFromCoa(companyId: number): Promise<Partial<typeof
     bankJournalId,
     salesJournalId,
     purchaseJournalId,
+    ...(companyId === 1
+      ? {
+          qrisAccountId,
+          qrisJournalId,
+          ppnOutputAccountId,
+          salesIncomeAccountId: sportCenterRevenueId ?? salesIncomeId,
+        }
+      : {}),
   };
 }
 
 export async function ensureAccountingSettings(companyId = 1): Promise<typeof accountingSettingsTable.$inferSelect> {
   const existing = await getAccountingSettings(companyId);
   if (existing) {
-    // Jika field kas/jurnal masih null (belum dikonfigurasi manual), coba auto-populate dari COA
-    const needsPopulate = !existing.defaultCashAccountId && !existing.defaultBankAccountId && !existing.cashJournalId && !existing.bankJournalId;
-    if (needsPopulate) {
-      try {
-        const patch = await resolveSettingsFromCoa(companyId);
-        const hasAny = Object.values(patch).some((v) => v != null);
-        if (hasAny) {
-          const [updated] = await db
-            .update(accountingSettingsTable)
-            .set(patch)
-            .where(eq(accountingSettingsTable.id, existing.id))
-            .returning();
-          logger.info({ companyId, patch }, "ensureAccountingSettings: auto-populated settings dari COA");
-          return updated ?? existing;
-        }
-      } catch (err) {
-        logger.warn({ companyId, err }, "ensureAccountingSettings: gagal auto-populate dari COA");
+    try {
+      const resolved = await resolveSettingsFromCoa(companyId);
+      // Never overwrite an explicit owner/manual mapping. Fill only missing
+      // destinations, including the canonical company-1 QRIS contract.
+      const patch = Object.fromEntries(
+        Object.entries(resolved).filter(([key, value]) =>
+          value != null && (existing as Record<string, unknown>)[key] == null,
+        ),
+      ) as Partial<typeof accountingSettingsTable.$inferInsert>;
+      if (Object.keys(patch).length > 0) {
+        const [updated] = await db
+          .update(accountingSettingsTable)
+          .set(patch)
+          .where(eq(accountingSettingsTable.id, existing.id))
+          .returning();
+        logger.info({ companyId, patch }, "ensureAccountingSettings: auto-populated settings dari COA");
+        return updated ?? existing;
       }
+    } catch (err) {
+      logger.warn({ companyId, err }, "ensureAccountingSettings: gagal auto-populate dari COA");
     }
     return existing;
   }

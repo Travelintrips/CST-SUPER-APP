@@ -2410,6 +2410,10 @@ export async function runSportCenterMigration(): Promise<void> {
     await db.execute(sql`
       ALTER TABLE accounting_entries ADD COLUMN IF NOT EXISTS facility_id INTEGER;
       ALTER TABLE accounting_entries ADD COLUMN IF NOT EXISTS expense_category TEXT;
+      ALTER TABLE accounting_entries ADD COLUMN IF NOT EXISTS source_event_id TEXT;
+      CREATE UNIQUE INDEX IF NOT EXISTS accounting_entries_canonical_event_uniq
+        ON accounting_entries(company_id, source, source_event_id)
+        WHERE source = 'sport_center_payment' AND source_event_id IS NOT NULL;
     `);
 
     // ── FASE 6C: recurring_expenses table ────────────────────────────────────

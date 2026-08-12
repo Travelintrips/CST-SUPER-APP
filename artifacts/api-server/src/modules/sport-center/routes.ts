@@ -9,6 +9,7 @@ import { normalizePaymentMethod, resolvePaymentDestination, postSportCenterBooki
 import { ensureAccountingSettings } from "../../lib/accountingSeed.js";
 import { getActiveTaxRate, seedDefaultTaxRules } from "../../lib/taxRulesMigration.js";
 import { syncFacilityUpsert, syncFacilityDelete, syncAllFacilities, syncBookingUpsert, syncAllBookings, getLastSyncLogs, pullLegacyBookingsFromSupabase, pullPaymentsFromSupabase, pullFacilitiesFromSupabase, syncPaymentsToAccounting, runDailyPaymentSync } from "./supabaseSync.js";
+import { buildCanonicalSportCenterSettlements } from "../../lib/reconciliation/canonicalSettlementBuilder.js";
 import { saveAndBroadcast } from "../../lib/notificationStore.js";
 
 // ─── [DB SOURCE CHECK] ────────────────────────────────────────────────────────
@@ -589,6 +590,46 @@ router.post("/sync/payments/accounting", async (req, res) => {
     res.json({ success: result.errors === 0, ...result, completed_at: new Date().toISOString() });
   } catch (err: any) {
     res.status(500).json({ error: "Canonical payment accounting sync gagal", detail: err?.message });
+  }
+});
+
+/**
+ * POST /api/sport-center/settlements/build
+ *
+ * Explicit source-scoped canonical settlement owner. A broad "build all"
+ * endpoint is intentionally not exposed: the source payment/event is required
+ * so retries cannot accidentally settle an unrelated QRIS cohort.
+ */
+router.post("/settlements/build", async (req, res) => {
+  if (!await requireAdmin(req, res)) return;
+  const sourcePaymentId = req.body?.sourcePaymentId ?? req.body?.source_payment_id;
+  const sourceEventId = req.body?.sourceEventId ?? req.body?.source_event_id;
+  const paymentId = sourcePaymentId == null ? undefined : Number(sourcePaymentId);
+  const eventId = sourceEventId == null ? undefined : String(sourceEventId).trim();
+  if (
+    (paymentId == null || !Number.isSafeInteger(paymentId) || paymentId <= 0) &&
+    !eventId
+  ) {
+    return res.status(400).json({
+      error: "sourcePaymentId atau sourceEventId wajib diisi",
+      code: "CANONICAL_SOURCE_PAYMENT_REQUIRED",
+    });
+  }
+
+  try {
+    const actor = String((req.user as { id?: string } | undefined)?.id ?? "sport-center-admin");
+    const result = await buildCanonicalSportCenterSettlements({
+      sourcePaymentId: paymentId,
+      sourceEventId: eventId,
+      actor,
+    });
+    return res.json(result);
+  } catch (err: any) {
+    const code = err?.code ?? "CANONICAL_SETTLEMENT_BUILD_FAILED";
+    return res.status(code === "CANONICAL_PAYMENT_NOT_FOUND" ? 404 : 409).json({
+      error: err?.message ?? "Canonical settlement gagal dibuat",
+      code,
+    });
   }
 });
 
@@ -5207,9 +5248,7 @@ router.post("/sync/full-audit", async (req, res) => {
         retryable: true,
       });
     }
-    // Sport Center accounting is intentionally isolated; payment mirror
-    // verification remains active, but CST does not post accounting here.
-    accountingResult = { synced: 0, skipped: 0, errors: 0 };
+    accountingResult = await syncPaymentsToAccounting(1);
   } catch (err: any) {
     auditErrors.push({ module: "accounting", operation: "syncPaymentsToAccounting", entityId: null, entityName: "ALL", errorCode: "SYNC_FATAL", errorMessage: err?.message ?? String(err), category: categorize(err?.message ?? ""), retryable: false });
   }

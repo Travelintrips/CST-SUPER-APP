@@ -832,8 +832,12 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
       }
 
       const result = await db.transaction(async (tx) => {
+        const canonicalEventId = String(
+          raw.source_event_id ?? raw.journal_source_event_id ?? "",
+        ).trim() || null;
         const existing = await tx.execute(sql`
-          SELECT ae.id AS entry_id, ap.id AS payment_id
+          SELECT ae.id AS entry_id, ae.source_id, ae.source_event_id,
+                 ap.id AS payment_id
           FROM accounting_entries ae
           LEFT JOIN accounting_payments ap
             ON ap.entry_id = ae.id
@@ -841,11 +845,22 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
            AND ap.source_doc_id = ${paymentId}
           WHERE ae.company_id = ${companyId}
             AND ae.source = 'sport_center_payment'
-            AND ae.source_id = ${paymentId}
+            AND (
+              ae.source_id = ${paymentId}
+              OR (
+                ${canonicalEventId}::text IS NOT NULL
+                AND ae.source_event_id = ${canonicalEventId}
+              )
+            )
           LIMIT 1
         `);
         if (existing.rows.length > 0) {
           const row = existing.rows[0] as Record<string, unknown>;
+          if (Number(row.source_id) !== paymentId) {
+            throw new Error(
+              `CANONICAL_PAYMENT_EVENT_CONFLICT: event=${canonicalEventId} already belongs to payment=${row.source_id}`,
+            );
+          }
           return {
             entryId: Number(row.entry_id),
             accountingPaymentId: Number(row.payment_id ?? 0) || null,
@@ -864,6 +879,7 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
             paymentMethod: normalizePaymentMethod(String(raw.payment_method ?? "")) ?? "qris",
             source: "sport_center_payment",
             sourceId: paymentId,
+            sourceEventId: canonicalEventId,
             sourceModule: "sport_center_canonical",
             companyId,
             costCenterId: null,

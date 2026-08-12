@@ -295,6 +295,8 @@ export const accountingEntriesTable = pgTable("accounting_entries", {
   status: accountingEntryStatusEnum("status").notNull().default("posted"),
   source: accountingEntrySourceEnum("source").notNull().default("manual"),
   sourceId: integer("source_id"),
+  /** Canonical upstream event identity for source-aware integrations. */
+  sourceEventId: text("source_event_id"),
   totalDebit: numeric("total_debit", { precision: 14, scale: 2 }).notNull().default("0"),
   totalCredit: numeric("total_credit", { precision: 14, scale: 2 }).notNull().default("0"),
   createdById: text("created_by_id"),
@@ -320,6 +322,9 @@ export const accountingEntriesTable = pgTable("accounting_entries", {
   uniqAutoSource: uniqueIndex("accounting_entries_source_uniq")
     .on(t.source, t.sourceId)
     .where(drizzleSql`${t.source} <> 'manual' AND ${t.sourceId} IS NOT NULL`),
+  uniqCanonicalSourceEvent: uniqueIndex("accounting_entries_canonical_event_uniq")
+    .on(t.companyId, t.source, t.sourceEventId)
+    .where(drizzleSql`${t.source} = 'sport_center_payment' AND ${t.sourceEventId} IS NOT NULL`),
   companyIdx: index("accounting_entries_company_idx").on(t.companyId),
   journalIdx: index("accounting_entries_journal_idx").on(t.journalId),
   dateIdx: index("accounting_entries_date_idx").on(t.date),
