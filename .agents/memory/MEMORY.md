@@ -69,3 +69,4 @@
 - [Phase 4C-7P runtime evidence](phase4c7p-runtime-blocked.md) — active scores are correct; exclude superseded history or stale rows can falsely show a 30→20 persistence loss.
 - [Portal CMS media locale](portal-cms-media-locale.md) — hero and branding assets are global; text overrides remain language-specific.
 - [Static artifact browser proof](static-artifact-browser-proof.md) — fetch-based proof gateways must strip compression headers after buffering upstream responses.
+- [Mobile detail sheet layout](qris-detail-mobile-layout.md) — SheetContent bawaan memakai w-3/4; panel mobile harus override ke 100vw dan menumpuk label/nilai agar tidak overflow.

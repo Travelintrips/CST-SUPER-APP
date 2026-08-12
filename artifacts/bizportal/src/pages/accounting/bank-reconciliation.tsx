@@ -807,11 +807,11 @@ function CandidateDetailsBlock({
           </div>
         </div>
       )}
-      <div className={`min-w-0 grid ${compact ? "grid-cols-1" : "grid-cols-[minmax(0,auto)_minmax(0,1fr)]"} gap-x-3 gap-y-1`}>
+      <div className={`min-w-0 grid ${compact ? "grid-cols-1" : "grid-cols-1 sm:grid-cols-[minmax(0,auto)_minmax(0,1fr)]"} gap-x-3 gap-y-1`}>
         {rows.map(row => (
           <React.Fragment key={row.label}>
             <span className="min-w-0 text-[10px] text-muted-foreground">{row.label}</span>
-            <span className={`min-w-0 text-xs font-medium ${compact ? "" : "text-right"} break-all`}>
+            <span className={`min-w-0 text-xs font-medium ${compact ? "" : "sm:text-right"} break-all`}>
               {String(row.value)}
             </span>
           </React.Fragment>
@@ -1961,7 +1961,7 @@ function MutationDetailPanel({
 
   return (
     <Sheet open={open} onOpenChange={onClose}>
-      <SheetContent side="right" className="w-full max-w-full overflow-hidden p-0 flex flex-col">
+      <SheetContent side="right" className="!w-screen !max-w-none sm:!w-[32rem] sm:!max-w-[32rem] overflow-hidden p-0 flex flex-col">
         <SheetHeader className="px-4 py-4 border-b shrink-0">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
@@ -2000,9 +2000,9 @@ function MutationDetailPanel({
                 ...(m.posted_at ? [{ label: "Diposting", value: fmtDateTime(m.posted_at) }] : []),
                 ...(m.posted_by ? [{ label: "Oleh", value: m.posted_by }] : []),
               ].map(({ label, value }) => (
-                <div key={label} className="flex min-w-0 items-start justify-between gap-2">
-                  <span className="text-muted-foreground shrink-0 w-36">{label}</span>
-                  <span className="min-w-0 flex-1 text-right font-medium break-all">{value}</span>
+                <div key={label} className="flex min-w-0 flex-col gap-0.5 sm:flex-row sm:items-start sm:justify-between sm:gap-2">
+                  <span className="text-muted-foreground sm:shrink-0 sm:w-36">{label}</span>
+                  <span className="min-w-0 flex-1 font-medium break-all sm:text-right">{value}</span>
                 </div>
               ))}
             </div>
@@ -2078,17 +2078,17 @@ function MutationDetailPanel({
 
                   {/* Summary */}
                   <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3 space-y-2 dark:border-indigo-800 dark:bg-indigo-950/20">
-                    <div className="min-w-0 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                    <div className="min-w-0 grid grid-cols-1 gap-y-1 text-xs sm:grid-cols-2 sm:gap-x-3">
                       <span className="min-w-0 text-slate-600 dark:text-slate-400">Provider</span>
-                      <span className="min-w-0 font-medium text-right break-all">{qrisAudit.provider_code || "Belum dikenali"}</span>
+                      <span className="min-w-0 font-medium break-all sm:text-right">{qrisAudit.provider_code || "Belum dikenali"}</span>
                       <span className="text-slate-600 dark:text-slate-400">Perkiraan settlement</span>
-                      <span className="min-w-0 font-medium text-right break-words">{fmtDate(qrisAudit.estimated_settlement_date)}</span>
+                      <span className="min-w-0 font-medium break-words sm:text-right">{fmtDate(qrisAudit.estimated_settlement_date)}</span>
                       <span className="text-slate-600 dark:text-slate-400">Total bruto</span>
-                      <span className="min-w-0 font-medium text-right break-words">{idr(qrisAudit.gross_amount)}</span>
+                      <span className="min-w-0 font-medium break-words sm:text-right">{idr(qrisAudit.gross_amount)}</span>
                       <span className="text-slate-600 dark:text-slate-400">Dana masuk (netto)</span>
-                      <span className="min-w-0 font-medium text-right break-words text-green-700">{idr(qrisAudit.net_amount)}</span>
+                      <span className="min-w-0 font-medium break-words text-green-700 sm:text-right">{idr(qrisAudit.net_amount)}</span>
                       <span className="text-slate-600 dark:text-slate-400">Potongan MDR</span>
-                      <span className="min-w-0 font-medium text-right break-words text-red-600">{idr(qrisAudit.observed_deduction)}</span>
+                      <span className="min-w-0 font-medium break-words text-red-600 sm:text-right">{idr(qrisAudit.observed_deduction)}</span>
                     </div>
 
                     {/* Payment items list */}
