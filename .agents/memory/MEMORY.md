@@ -1,4 +1,5 @@
 - [Asset storage rule](asset-storage-rule.md) — gambar/biner wajib ke Supabase Storage, bukan git; history sudah di-rewrite Jul 2026 (475 MB → 139 MB).
+- [Production static asset promotion](production-static-assets.md) — asset dev tidak otomatis ada di bucket production; cek secret runtime live dan verifikasi bucket production sebelum publish.
 - [Recon Batch 2 audit](recon-batch2.md) — 82/82 tests, build bersih, type fix deskripsi ECF, 7 endpoint governance; verdiksi LULUS semua fitur.
 - [Git repo cleanup](git-repo-cleanup.md) — strip dist/+attached_assets/+.agents/outputs/ via git-filter-repo; re-add origin after; resolve subrepl conflicts with --ours; gateway workflow = "Start application".
 - [Artifact workflow CWD](artifact-workflow-cwd.md) — artifact workflows start at workspace root; use workspace-relative script paths or explicitly `cd` into the artifact.
