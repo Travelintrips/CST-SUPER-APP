@@ -1868,9 +1868,14 @@ router.get("/mutations", async (req, res) => {
     status, from, to, direction, provider, search,
     limit = "100", offset = "0",
     company_id,
+    mutation_id,
   } = req.query as Record<string, string>;
   const lim = Math.min(parseInt(limit) || 100, 500);
   const off = parseInt(offset) || 0;
+  const requestedMutationId = mutation_id == null ? null : Number(mutation_id);
+  if (requestedMutationId != null && (!Number.isInteger(requestedMutationId) || requestedMutationId <= 0)) {
+    return res.status(400).json({ error: "mutation_id tidak valid" });
+  }
 
   // ── Filter helpers ────────────────────────────────────────────────────────
   const esc = (s: string) => s.replace(/'/g, "''");
@@ -1881,6 +1886,7 @@ router.get("/mutations", async (req, res) => {
   if (direction && direction !== "all")  bmFilters.push(`bm.direction = '${esc(direction)}'`);
   if (provider && provider !== "all" && provider !== "BANK_IMPORT")
     bmFilters.push(`bm.provider_name = '${esc(provider)}'`);
+  if (requestedMutationId != null) bmFilters.push(`bm.id = ${requestedMutationId}`);
   if (from)       bmFilters.push(`bm.transaction_date >= '${esc(from)}'`);
   if (to)         bmFilters.push(`bm.transaction_date <= '${esc(to)}'`);
   if (company_id) bmFilters.push(`bm.company_id = ${Number(company_id)}`);

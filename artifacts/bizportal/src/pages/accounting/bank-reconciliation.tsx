@@ -2604,6 +2604,7 @@ export default function BankReconciliationPage() {
   // ── UI state ──────────────────────────────────────────────────────────────
   const [detailMutation,      setDetailMutation]      = useState<BankMutation | null>(null);
   const [actionDialog,        setActionDialog]        = useState<{ mutation: BankMutation; mode: DialogMode } | null>(null);
+  const [qrisDetailLoadingId, setQrisDetailLoadingId] = useState<number | null>(null);
   const [selectedCandidateId, setSelectedCandidateId] = useState<number | null>(null);
   const [reverseReason,       setReverseReason]       = useState("");
   const [showDeleteAll,       setShowDeleteAll]       = useState(false);
@@ -3048,6 +3049,53 @@ export default function BankReconciliationPage() {
   const total       = data?.total ?? 0;
   const totalPages  = Math.ceil(total / PAGE_SIZE);
 
+  const handleOpenQrisMutation = async (candidate: QrisCandidateAudit) => {
+    const mutationId = Number(candidate.mutation_id);
+    if (!Number.isInteger(mutationId) || mutationId <= 0 || qrisCompanyId == null) {
+      toast({
+        title: "Mutasi QRIS tidak valid",
+        description: "Company atau ID mutasi tidak tersedia.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const currentMutation = mutations.find((mutation) => mutation.id === mutationId);
+    if (currentMutation) {
+      setDetailMutation(currentMutation);
+      return;
+    }
+
+    setQrisDetailLoadingId(mutationId);
+    try {
+      const params = new URLSearchParams({
+        company_id: String(qrisCompanyId),
+        mutation_id: String(mutationId),
+        limit: "1",
+      });
+      const response = await fetch(`/api/bank-reconciliation/mutations?${params}`, {
+        credentials: "include",
+      });
+      const result = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(result?.error ?? "Gagal mengambil detail mutasi");
+      }
+      const mutation = result?.mutations?.[0] as BankMutation | undefined;
+      if (!mutation) {
+        throw new Error(`Mutasi #${mutationId} tidak ditemukan pada perusahaan aktif`);
+      }
+      setDetailMutation(mutation);
+    } catch (error) {
+      toast({
+        title: "Gagal membuka verifikasi",
+        description: error instanceof Error ? error.message : "Detail mutasi tidak dapat dimuat.",
+        variant: "destructive",
+      });
+    } finally {
+      setQrisDetailLoadingId(null);
+    }
+  };
+
   const approveDialogCands    = actionDialog?.mutation.candidates ?? [];
   const approveSelectedCand   = approveDialogCands.find(c => c.id === selectedCandidateId);
 
@@ -3190,6 +3238,18 @@ export default function BankReconciliationPage() {
                             <p className="text-slate-600 dark:text-slate-400 mt-0.5">
                               Settlement {fmtDate(candidate.estimated_settlement_date)} · {candidate.payment_items?.length ?? 0} payment · Netto {idr(candidate.net_amount)}
                             </p>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="mt-2 h-7 gap-1 border-indigo-300 text-[11px] text-indigo-700 hover:bg-indigo-50 dark:border-indigo-700 dark:text-indigo-300 dark:hover:bg-indigo-950/40"
+                              disabled={qrisDetailLoadingId === candidate.mutation_id}
+                              onClick={() => void handleOpenQrisMutation(candidate)}
+                            >
+                              {qrisDetailLoadingId === candidate.mutation_id
+                                ? <Loader2 className="h-3 w-3 animate-spin" />
+                                : <Eye className="h-3 w-3" />}
+                              {qrisDetailLoadingId === candidate.mutation_id ? "Membuka..." : "Lihat & Verifikasi Mutasi"}
+                            </Button>
                           </div>
                           <div className="text-right shrink-0 space-y-1">
                             <p className="font-semibold text-slate-950 dark:text-white">{idr(candidate.gross_amount)}</p>
