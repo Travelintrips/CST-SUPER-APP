@@ -18,13 +18,13 @@
       "purpose": "any maskable"
     },
     {
-      "src": "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo-baru.webp",
+      "src": "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo-baru.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo-baru.webp",
+      "src": "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo-baru.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"

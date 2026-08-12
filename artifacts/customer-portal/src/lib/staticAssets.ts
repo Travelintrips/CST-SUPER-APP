@@ -1,11 +1,14 @@
 const STORAGE_ROOT = "/api/storage/public-objects/portal-assets/static/customer-portal";
+const PNG_ONLY_ASSETS = new Set(["images/logo.png", "images/logo-baru.png"]);
 
 export function staticAsset(path: string): string {
   const normalized = path.replace(/^\/+/, "");
-  // Static raster assets are published as WebP by the release pipeline. Keep
-  // source call sites readable (`staticAsset("images/logo.png")`) while
-  // ensuring the runtime requests the derived object that the manifest
-  // promotes and verifies.
+  // The existing production logo objects are PNGs. Keep these two brand
+  // assets on their published format; other raster assets use their derived
+  // WebP object from the release pipeline.
+  if (PNG_ONLY_ASSETS.has(normalized)) {
+    return `${STORAGE_ROOT}/${normalized}`;
+  }
   return `${STORAGE_ROOT}/${normalized.replace(/\.(png|jpe?g)$/i, ".webp")}`;
 }
 
