@@ -13,6 +13,7 @@
 - [Payment posting visibility](payment-posting-visibility.md) — payment sumber harus menyimpan status error dan pesan saat accounting entry gagal; jangan tandai posted hanya karena row payment berhasil dibuat.
 - [Tax COA collision fix](tax-coa-collision.md) — 2-1060 ditempati Hutang Intercompany; safe header = 2-1090 (children 2-1091–2-1102); 128 CRs PENDING_APPROVAL di dev; vitest runner (testTimeout=120s) adalah cara terbaik menjalankan migration function tanpa server.
 - [Deployment publish build prerequisites](deployment-publish-build.md) — root manifest yang tidak terpakai dapat memicu builder bahasa lain; validasi build publish dan preflight environment harus dipisahkan.
+- [Custom domain deployment ownership](custom-domain-deployment-ownership.md) — getDeploymentInfo() kosong tidak berarti domain publik mati; domain dapat tetap menunjuk ke deployment/project lain.
 - [Google credential separation](google-credential-separation.md) — Service Account Google Sheets dan bootstrap Secret Manager dapat berbeda dan membutuhkan izin berbeda.
 - [BizPortal preview API proxy](bizportal-preview-api-proxy.md) — preview BizPortal harus meneruskan `/api` ke API server port 8080 agar login tidak 502.
 - [Dev/Prod DB Isolation](dev-prod-isolation.md) — APP_ENV=development di start-dev.sh; load-secrets.mjs inject *_DEV keys as canonical + shared keys tanpa _DEV counterpart.
