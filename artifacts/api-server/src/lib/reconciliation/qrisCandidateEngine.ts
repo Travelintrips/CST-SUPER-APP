@@ -264,7 +264,7 @@ export function generateQrisMutationBatchCandidates(input: {
           input.holidays ?? [],
         ) <= Math.max(0, Math.trunc(rule.matchWindowBusinessDays)),
     );
-    const naturalPayments = dimensionPayments.filter((payment) =>
+    const providerDimensionPayments = dimensionPayments.filter((payment) =>
       evidence.providerCode !== "unknown"
         && sameNaturalBatch(
           payment,
@@ -274,6 +274,26 @@ export function generateQrisMutationBatchCandidates(input: {
           rule.matchWindowBusinessDays,
         ),
     );
+    const nearestExpectedSettlementDistance = providerDimensionPayments.length > 0
+      ? Math.min(
+        ...providerDimensionPayments.map((payment) =>
+          businessDayDistance(
+            payment.expectedSettlementDate!,
+            mutation.transactionDate,
+            input.holidays ?? [],
+          ),
+        ),
+      )
+      : null;
+    const naturalPayments = evidence.providerCode === "unknown"
+      ? dimensionPayments
+      : providerDimensionPayments.filter((payment) =>
+        businessDayDistance(
+          payment.expectedSettlementDate!,
+          mutation.transactionDate,
+          input.holidays ?? [],
+        ) === nearestExpectedSettlementDistance,
+      );
     const sameDimensionMutations = openMutations.filter((other) => {
       if (other.id === mutation.id || other.companyId !== mutation.companyId
         || other.bankAccountId !== mutation.bankAccountId
@@ -373,7 +393,7 @@ export function generateQrisMutationBatchCandidates(input: {
                 ? "AMBIGUOUS_PAYMENT_PARTITION: settlement provider/date/rekening ganda tanpa reference pembeda yang juga ada pada payment."
                   : splitSettlementReconcilesTotal
                     ? `SPLIT_SETTLEMENT_REVIEW: ${splitSettlementMutations.length + 1} mutasi dalam window settlement berjumlah Rp${splitSettlementNet}; alokasi payment ke setiap tanggal wajib dikonfirmasi sebelum approval.`
-                : observed.observedDeduction < 0
+                    : observed.observedDeduction < 0
                   ? "NEGATIVE_OBSERVED_DEDUCTION: gross natural batch lebih kecil dari bank credit."
                   : grossAmount > netAmount
                     ? "AMBIGUOUS_PAYMENT_PARTITION: natural batch gross tidak cocok; subset arbitrer tidak boleh dipilih hanya dari nominal/rate."

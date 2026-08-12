@@ -61,6 +61,37 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     expect(result[0]?.status).toBe("REVIEW");
   });
 
+  it("maps QRTRAVELI to the only configured account provider", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 260, companyId: 10, bankAccountId: 77, amount: 150_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-06",
+        expectedSettlementDate: "2026-08-07", providerName: "mandiri_direct",
+      }],
+      mutations: [{
+        id: 270, companyId: 10, bankAccountId: 77, amount: 149_000,
+        transactionDate: "2026-08-07",
+        direction: "IN", source: "google_sheet",
+        sourceClassification: "actual_bank_mutation",
+        providerName: "QRIS",
+        description: "7177632488799999999 QRTRAVELI",
+      }],
+      accountProviderRules: {
+        "77": {
+          mandiri_direct: {
+            providerCode: "mandiri_direct",
+            settlementDelayBusinessDays: 1,
+            matchWindowBusinessDays: 1,
+            maxEffectiveDeductionRate: 0.1,
+          },
+        },
+      },
+    });
+    expect(result[0]?.providerCode).toBe("mandiri_direct");
+    expect(result[0]?.providerDetectionSource).toBe("settlement_rule");
+    expect(result[0]?.status).toBe("MATCHED");
+  });
+
   it("calculates gross 10m versus bank credit 9.93m as 70k deduction", () => {
     expect(calculateObservedDeduction(10_000_000, 9_930_000)).toEqual({
       gross: 10_000_000,
@@ -200,6 +231,37 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     });
     expect(result.every((candidate) => candidate.status === "REVIEW")).toBe(true);
     expect(result.every((candidate) => candidate.reason.includes("AMBIGUOUS_PAYMENT_PARTITION"))).toBe(true);
+  });
+
+  it("keeps a cross-date partial settlement reviewable without calling it an ambiguous subset", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 81, companyId: 10, bankAccountId: 77, amount: 1_430_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-06",
+        expectedSettlementDate: "2026-08-07", providerName: "mandiri_direct",
+      }, {
+        id: 80, companyId: 10, bankAccountId: 77, amount: 100_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-05",
+        expectedSettlementDate: "2026-08-06", providerName: "mandiri_direct",
+      }],
+      mutations: [
+        {
+          id: 82, companyId: 10, bankAccountId: 77, amount: 933_420,
+          transactionDate: "2026-08-07", direction: "IN", source: "bank_import",
+          sourceClassification: "actual_bank_mutation",
+          providerName: "mandiri_direct", description: "MANDIRI DIRECT SETTLEMENT",
+        },
+        {
+          id: 83, companyId: 10, bankAccountId: 77, amount: 496_580,
+          transactionDate: "2026-08-08", direction: "IN", source: "bank_import",
+          sourceClassification: "actual_bank_mutation",
+          providerName: "mandiri_direct", description: "MANDIRI DIRECT SETTLEMENT",
+        },
+      ],
+    });
+    expect(result.map((candidate) => candidate.status)).toEqual(["REVIEW", "REVIEW"]);
+    expect(result.every((candidate) => candidate.reason.includes("SPLIT_SETTLEMENT_REVIEW"))).toBe(true);
+    expect(result.every((candidate) => candidate.paymentItems.map((item) => item.paymentId).join(",") === "81")).toBe(true);
   });
 
   it("allows a same-day partition only when the settlement reference is shared", () => {

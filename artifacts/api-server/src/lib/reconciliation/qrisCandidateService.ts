@@ -64,7 +64,14 @@ export async function generateQrisCandidates(options: {
       SELECT
         bm.id, bm.company_id,
         COALESCE(
-          bm.bank_account_id,
+          (
+            SELECT cba.id::text
+            FROM company_bank_accounts cba
+            WHERE cba.is_active = TRUE
+              AND (cba.company_id = bm.company_id OR cba.company_id IS NULL)
+              AND cba.id::text = NULLIF(BTRIM(bm.bank_account_id), '')
+            LIMIT 1
+          ),
           (
             SELECT cba.id
             FROM company_bank_accounts cba
@@ -81,7 +88,7 @@ export async function generateQrisCandidates(options: {
               )
             ORDER BY cba.company_id NULLS LAST, cba.id
             LIMIT 1
-          )
+          )::text
         ) AS bank_account_id,
         bm.transaction_date, bm.amount,
         bm.direction, bm.source, bm.source_classification, bm.provider_name,
