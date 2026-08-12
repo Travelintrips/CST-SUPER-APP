@@ -1654,7 +1654,7 @@ export default function MarketplacePage() {
                       <p className="text-[13px] font-bold text-slate-500 uppercase tracking-wider mb-4">{t("marketplace.comingSoonCategories")}</p>
                       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
                         {[
-                          { img: "/api/storage/public-objects/portal/images/categories/coffee.jpg",                                                                                           catKey: "coffee"     },
+                          { img: "/api/storage/public-objects/portal-assets/static/customer-portal/images/categories/coffee.jpg", catKey: "coffee" },
                           { img: "/api/storage/public-objects/portal/images/products/batubara-coal.png",                                                                         catKey: "coal"       },
                           { img: "/api/storage/public-objects/portal/images/categories/iron-steel.jpg",                                                                                      catKey: "iron_steel" },
                           { img: "/api/storage/public-objects/portal/images/products/sawit-palm-oil.png",                                                                          catKey: "palm_oil"   },
