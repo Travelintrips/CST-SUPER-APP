@@ -10,6 +10,9 @@ const mirrorMigration = readFileSync(
   resolve(process.cwd(), "src/modules/sport-center/migration.ts"),
   "utf8",
 );
+const mirrorTrigger = mirrorMigration.match(
+  /CREATE OR REPLACE FUNCTION sport_center\.mirror_confirmed_payment_to_public\(\)[\s\S]*?AS \$function\$[\s\S]*?\$function\$/,
+)?.[0] ?? "";
 const worker = readFileSync(
   resolve(process.cwd(), "src/modules/sport-center/incrementalSyncWorker.ts"),
   "utf8",
@@ -30,11 +33,11 @@ describe("Phase 4C-7A.5 additive mirror contract", () => {
   });
 
   it("uses a deterministic booking bridge and fails closed on missing or duplicate rows", () => {
-    expect(mirrorMigration).toContain("WHERE pb.sc_booking_id = NEW.booking_id");
-    expect(mirrorMigration).toContain("MIRROR_BOOKING_BRIDGE_MISSING");
-    expect(mirrorMigration).toContain("MIRROR_BOOKING_BRIDGE_AMBIGUOUS");
-    expect(mirrorMigration).not.toContain("ORDER BY pb.id DESC");
-    expect(mirrorMigration).not.toContain("LIMIT 1");
+    expect(mirrorTrigger).toContain("WHERE pb.sc_booking_id = NEW.booking_id");
+    expect(mirrorTrigger).toContain("MIRROR_BOOKING_BRIDGE_MISSING");
+    expect(mirrorTrigger).toContain("MIRROR_BOOKING_BRIDGE_AMBIGUOUS");
+    expect(mirrorTrigger).not.toContain("ORDER BY pb.id DESC");
+    expect(mirrorTrigger).not.toContain("LIMIT 1");
   });
 
   it("resolves company, bank, and provider configuration without hardcoded ownership", () => {
