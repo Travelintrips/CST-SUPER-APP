@@ -30,6 +30,7 @@ import { buildCatalogFilters, matchVendorCatalog } from "@/lib/catalogFilters";
 import { CompareTray, CompareModal } from "@/components/VendorComparison";
 import PageSeo from "@/components/PageSeo";
 import { CUSTOMER_ASSETS } from "@/lib/staticAssets";
+import { resolveImageUrl } from "@/lib/utils";
 
 // ── Hero category tile type (from DB) ─────────────────────────────────────────
 interface HeroCategoryTile {
@@ -1673,7 +1674,8 @@ export default function MarketplacePage() {
                         ].map(({ img, catKey }) => {
                           const sub = t(`marketplace.catSub_${catKey}`, catKey);
                           const label = t(`marketplace.cat_${catKey}`);
-                          const effectiveImg = customCategoryImgs[catKey] ?? img;
+                           const rawImg = customCategoryImgs[catKey] ?? img;
+                           const effectiveImg = resolveImageUrl(rawImg) ?? rawImg;
                           const isUploading = uploadingCat === label;
                           return (
                             <div
@@ -1686,8 +1688,6 @@ export default function MarketplacePage() {
                                 className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
                                 onError={(e) => {
                                   const el = e.currentTarget;
-                                  const fb = el.src.replace("/api/storage/public-objects/portal/images/", "/api/storage/public-objects/portal-assets/static/customer-portal/images/");
-                                  if (el.src !== fb) { el.src = fb; return; }
                                   el.style.display = "none";
                                   if (el.parentElement) el.parentElement.style.background = "linear-gradient(145deg,#1a2a3a,#2a4060)";
                                 }}

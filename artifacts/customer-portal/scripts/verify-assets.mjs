@@ -20,6 +20,11 @@ const legacy = [
   "/images/logo.png",
   "/portal/images/logo.png",
 ];
+const missing = [
+  "/api/storage/public-objects/portal-assets/static/customer-portal/images/does-not-exist.png",
+  "/images/does-not-exist.png",
+  "/portal/images/does-not-exist.png",
+];
 
 async function verify(path, expectRedirect = false) {
   const response = await fetch(`${base}${path}`, { redirect: "manual" });
@@ -29,8 +34,17 @@ async function verify(path, expectRedirect = false) {
   const followsLegacy = isRedirect && (response.headers.get("location") ?? "").includes("/portal-assets/static/customer-portal/images/");
   const badBody = type === "text/html" || type === "application/json" ||
     /^\s*(?:<!doctype html|<html\b|\{)/i.test(body.subarray(0, 256).toString("utf8"));
+  let destinationOk = false;
+  if (expectRedirect && followsLegacy) {
+    const destination = new URL(response.headers.get("location"), base).toString();
+    const finalResponse = await fetch(destination);
+    const finalType = (finalResponse.headers.get("content-type") ?? "").split(";")[0].toLowerCase();
+    const finalBody = Buffer.from(await finalResponse.arrayBuffer());
+    destinationOk = finalResponse.ok && finalType.startsWith("image/") && finalBody.length > 0 &&
+      finalType !== "text/html" && finalType !== "application/json";
+  }
   const ok = expectRedirect
-    ? (followsLegacy || (response.ok && type.startsWith("image/") && body.length > 0))
+    ? destinationOk
     : response.ok && type.startsWith("image/") && body.length > 0 && !badBody;
   console.log(`${ok ? "PASS" : "FAIL"} ${response.status} ${type || "(missing MIME)"} ${body.length}B ${path}`);
   if (!ok) throw new Error(`asset verification failed: ${path}`);
@@ -38,4 +52,12 @@ async function verify(path, expectRedirect = false) {
 
 for (const path of assets) await verify(path);
 for (const path of legacy) await verify(path, true);
-console.log(`Verified ${assets.length} canonical and ${legacy.length} legacy asset URLs.`);
+for (const path of missing) {
+  const response = await fetch(`${base}${path}`, { redirect: "manual" });
+  const type = (response.headers.get("content-type") ?? "").split(";")[0].toLowerCase();
+  const body = Buffer.from(await response.arrayBuffer());
+  const ok = response.status === 404 && type !== "text/html" && body.length > 0;
+  console.log(`${ok ? "PASS" : "FAIL"} ${response.status} ${type || "(missing MIME)"} ${body.length}B ${path}`);
+  if (!ok) throw new Error(`missing asset verification failed: ${path}`);
+}
+console.log(`Verified ${assets.length} canonical, ${legacy.length} legacy, and ${missing.length} missing asset URLs.`);

@@ -8,12 +8,13 @@
  *   <div style={{ backgroundImage: bg }} />
  */
 import { useEffect, useState } from "react";
+import { resolveImageUrl } from "@/lib/utils";
 
 export function useStorageBg(storageUrl: string): string {
-  const [url, setUrl] = useState(storageUrl);
+  const [url, setUrl] = useState(resolveImageUrl(storageUrl) ?? storageUrl);
 
   useEffect(() => {
-    setUrl(storageUrl);
+    setUrl(resolveImageUrl(storageUrl) ?? storageUrl);
   }, [storageUrl]);
 
   return `url('${url}')`;
