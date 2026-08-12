@@ -61,6 +61,7 @@
 - [Canonical builder contract](canonical-settlement-builder-contract.md) — builder remains fail-closed until payment-journal, fee config, journal owner, status transition, and batch uniqueness are proven.
 - [4C-7A.7H runtime proof](phase4c7a7h-runtime-proof.md) — final contract proof requires live definition/source parity plus transaction rollback and post-rollback state checks.
 - [AI matching performance](ai-matching-performance.md) — bounded workers, parallel candidate reads, and batched score persistence prevent matching from appearing stuck.
+- [Payment accounting outbox gap](payment-accounting-outbox-gap.md) — failed payment_confirmed outbox events can leave canonical payments/journals without public mirrors or settlement cohort membership.
 - [Source-aware matching idempotency](source-aware-matching-idempotency.md) — active reconciliation candidates require the full source-qualified identity; reruns preserve superseded history without appending active duplicates.
 - [Canonical approval bridge](canonical-approval-bridge.md) — link-only approval must resolve the public mutation_key to exactly one Sport Center bank mutation; missing bridge is fail-closed.
 - [Phase 4C-7P runtime evidence](phase4c7p-runtime-blocked.md) — active scores are correct; exclude superseded history or stale rows can falsely show a 30→20 persistence loss.
