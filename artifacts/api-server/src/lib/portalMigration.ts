@@ -8,6 +8,19 @@ import { logger } from "./logger";
  */
 export async function runPortalMigration(): Promise<void> {
   try {
+    // Keep the account-state columns in a small, independent statement. The
+    // legacy portal migration also creates several large tables and can be
+    // interrupted by startup connection contention; account administration
+    // must not depend on that unrelated work completing first.
+    await db.execute(sql`
+      ALTER TABLE portal_customers
+        ADD COLUMN IF NOT EXISTS account_status TEXT NOT NULL DEFAULT 'active',
+        ADD COLUMN IF NOT EXISTS sanction_reason TEXT,
+        ADD COLUMN IF NOT EXISTS sanction_until TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS status_changed_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS status_changed_by TEXT
+    `);
+
     // Tambah kolom role ke portal_customers jika belum ada (tabel mungkin belum exist)
     await db.execute(sql`
       DO $$ BEGIN

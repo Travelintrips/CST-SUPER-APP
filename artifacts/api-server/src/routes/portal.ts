@@ -1844,6 +1844,18 @@ router.post("/admin/wa-logs/:id/retry", requirePortalAdmin, async (req, res): Pr
   }
 });
 
+// GET /api/portal/admin/customers/stats — quick stats
+// Must be registered before /:id so "stats" is not parsed as an ID.
+router.get("/admin/customers/stats", requirePortalAdmin, async (_req, res): Promise<void> => {
+  try {
+    const stats = await getCustomerStats();
+    res.json(stats);
+  } catch (err) {
+    console.error("[portal] customerStats error", err);
+    res.status(500).json({ error: "Gagal memuat statistik customers" });
+  }
+});
+
 // GET /api/portal/admin/customers/:id — detail satu customer (admin only)
 router.get("/admin/customers/:id", requirePortalAdmin, async (req, res): Promise<void> => {
   const id = Number(req.params["id"]);
@@ -2019,17 +2031,6 @@ router.get("/admin/customers", requirePortalAdmin, async (req, res): Promise<voi
   } catch (err) {
     console.error("[portal] listCustomers error", err);
     res.status(500).json({ error: "Gagal memuat customers" });
-  }
-});
-
-// GET /api/portal/admin/customers/stats — quick stats
-router.get("/admin/customers/stats", requirePortalAdmin, async (_req, res): Promise<void> => {
-  try {
-    const stats = await getCustomerStats();
-    res.json(stats);
-  } catch (err) {
-    console.error("[portal] customerStats error", err);
-    res.status(500).json({ error: "Gagal memuat statistik customers" });
   }
 });
 
