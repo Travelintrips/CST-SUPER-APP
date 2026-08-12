@@ -37,6 +37,13 @@ const OLD_TO_NEW_ABBR: Record<string, string> = {
 
 const ALL_COMPANY_IDS: number[] = [1, 2, 3, 4];
 
+// Canonical Sport Center QRIS receipts must not share the physical bank COA.
+// 1-1023 remains the bank/net-settlement account; 1-1024 is the gross payment
+// clearing account used by the canonical payment adapter.
+const SPORT_CENTER_QRIS_CLEARING_BASE_CODE = "1-1024";
+const SPORT_CENTER_QRIS_CLEARING_CODE = "1-1024-CST";
+const SPORT_CENTER_LEGACY_BANK_CODE = "1-1023-CST";
+
 /**
  * Populate ALL_COMPANY_IDS dan COMPANY_ABBR secara dinamis dari tabel companies.
  * Perusahaan baru (ID > 4 atau yang belum terdaftar) akan ditambahkan ke daftar
@@ -120,6 +127,7 @@ const COA_LEAF_TEMPLATES: SeedAccount[] = [
   { code: "1-1021", name: "Bank BCA",                         type: "asset",   parentCode: "1-1000" },
   { code: "1-1022", name: "Bank BNI",                         type: "asset",   parentCode: "1-1000" },
   { code: "1-1023", name: "Bank Mandiri - Sport Center",      type: "asset",   parentCode: "1-1000" },
+  { code: "1-1024", name: "Payment Clearing Sport Center / QRIS", type: "asset", parentCode: "1-1000" },
   { code: "1-1030", name: "Piutang Usaha",                    type: "asset",   parentCode: "1-1000" },
   { code: "1-1031", name: "Piutang Lainnya",                  type: "asset",   parentCode: "1-1000" },
   { code: "1-1032", name: "Piutang Karyawan (Kasbon)",        type: "asset",   parentCode: "1-1000" },
@@ -383,7 +391,7 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
   // Expected: COA_LEAF_TEMPLATES.length × ALL_COMPANY_IDS.length leaf accounts,
   //           6 journal types × companies, settings rows with cash_journal_id populated.
   try {
-    const expectedJournals = 6 * ALL_COMPANY_IDS.length; // 6 journal types × N companies
+    const expectedJournals = 7 * ALL_COMPANY_IDS.length; // 7 journal types × N companies
 
     // ── GUARD: if journals are completely missing, skip fast-path immediately ──────
     const [{ jCount }] = await db
@@ -459,6 +467,7 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
               WHERE s.grir_account_id IS NULL
             `);
           } catch (e) { /* non-fatal */ }
+          await repairSportCenterQrisSettings();
           return;
         } // end else (journals+settings already seeded)
       } // end if (leafCount >= expectedLeaves)
@@ -644,7 +653,7 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
     { suffix: "SAL", label: "Penjualan",              type: "sales",    debitBase: "1-1030", creditBase: "4-1010" },
     { suffix: "PUR", label: "Pembelian",              type: "purchase", debitBase: "5-1010", creditBase: "2-1010" },
     { suffix: "BNK", label: "Bank Mandiri",           type: "bank",     debitBase: "1-1020", creditBase: "1-1020" },
-    { suffix: "QRIS", label: "QRIS Sport Center",     type: "bank",     debitBase: "1-1023", creditBase: "1-1023" },
+    { suffix: "QRIS", label: "QRIS Sport Center",     type: "bank",     debitBase: "1-1024", creditBase: "1-1024" },
     { suffix: "CSH", label: "Kas Kecil",              type: "cash",     debitBase: "1-1010", creditBase: "1-1010" },
     { suffix: "GEN", label: "Memorial / Penyesuaian", type: "general",  debitBase: null,     creditBase: null     },
     { suffix: "EXP", label: "Beban & Reimburse",      type: "purchase", debitBase: "5-1010", creditBase: "2-1010" },
@@ -823,6 +832,10 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
     const abbr = COMPANY_ABBR[companyId]!;
 
     const grir = byCode.get(`2-1045-${abbr}`);
+    const qrisClearing = companyId === 1
+      ? needFor(SPORT_CENTER_QRIS_CLEARING_BASE_CODE, companyId)
+      : null;
+    const qrisJ = companyId === 1 ? getJournal("QRIS", companyId) : null;
 
     const settingsBase = {
       arAccountId:             ar.id,
@@ -842,6 +855,8 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
       inventoryAccountId:      inventory.id,
       cogsAccountId:              cogs.id,
       grirAccountId:              grir?.id ?? null,
+      qrisAccountId:              qrisClearing?.id ?? null,
+      qrisJournalId:              qrisJ?.id ?? null,
       tenantRentIncomeAccountId:  tenantRentIncome?.id ?? null,
     };
 
@@ -856,6 +871,8 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
       logger.info(`Accounting seed: updated settings for company ${companyId} (${COMPANY_ABBR[companyId]}).`);
     }
   }
+
+  await repairSportCenterQrisSettings();
 
   // ── Expense categories: seed using CST accounts ───────────────────────────
   const c1ExpByCode = new Map(
@@ -1270,7 +1287,7 @@ async function resolveSettingsFromCoa(companyId: number): Promise<Partial<typeof
     lookupJournal("bank"),
     lookupJournal("sales"),
     lookupJournal("purchase"),
-    companyId === 1 ? lookupCoa("1-1023") : Promise.resolve(null),
+    companyId === 1 ? lookupCoa(SPORT_CENTER_QRIS_CLEARING_BASE_CODE) : Promise.resolve(null),
     companyId === 1 ? lookupCoa("2-1020") : Promise.resolve(null),
     companyId === 1 ? lookupJournalByCode("QRIS-CST") : Promise.resolve(null),
     companyId === 1 ? lookupCoa("4-1017") : Promise.resolve(null),
@@ -1295,6 +1312,43 @@ async function resolveSettingsFromCoa(companyId: number): Promise<Partial<typeof
         }
       : {}),
   };
+}
+
+/**
+ * Repair only the legacy/default QRIS mapping. An explicitly configured
+ * non-legacy owner mapping is left untouched and will be rejected by the
+ * canonical adapter until it is reviewed, rather than silently overwritten.
+ */
+async function repairSportCenterQrisSettings(): Promise<void> {
+  try {
+    await db.execute(sql`
+      UPDATE accounting_settings AS s
+      SET
+        qris_account_id = target_coa.id,
+        qris_journal_id = target_journal.id,
+        updated_at = NOW()
+      FROM chart_of_accounts AS target_coa
+      JOIN accounting_journals AS target_journal
+        ON target_journal.company_id = 1
+       AND target_journal.code = 'QRIS-CST'
+       AND target_journal.is_active = TRUE
+      LEFT JOIN chart_of_accounts AS current_coa
+        ON current_coa.id = s.qris_account_id
+      WHERE s.company_id = 1
+        AND target_coa.company_id = 1
+        AND target_coa.code = ${SPORT_CENTER_QRIS_CLEARING_CODE}
+        AND target_coa.type = 'asset'
+        AND target_coa.is_active = TRUE
+        AND target_coa.is_postable = TRUE
+        AND (
+          s.qris_account_id IS NULL
+          OR current_coa.code = ${SPORT_CENTER_LEGACY_BANK_CODE}
+          OR current_coa.name = 'Bank Mandiri - Sport Center CST'
+        )
+    `);
+  } catch (err) {
+    logger.warn({ err }, "Accounting seed: QRIS clearing mapping repair gagal (non-fatal)");
+  }
 }
 
 export async function ensureAccountingSettings(companyId = 1): Promise<typeof accountingSettingsTable.$inferSelect> {

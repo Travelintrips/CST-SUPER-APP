@@ -16,6 +16,12 @@ export const CANONICAL_SETTLEMENT_BANK_COA = {
   accountType: "asset",
 } as const;
 
+export const CANONICAL_PAYMENT_CLEARING_COA = {
+  code: "1-1024-CST",
+  name: "Payment Clearing Sport Center / QRIS",
+  accountType: "asset",
+} as const;
+
 export const CANONICAL_SETTLEMENT_BUILDER_CODES = {
   SOURCE_PAYMENT_REQUIRED: "CANONICAL_SOURCE_PAYMENT_REQUIRED",
   PAYMENT_NOT_FOUND: "CANONICAL_PAYMENT_NOT_FOUND",

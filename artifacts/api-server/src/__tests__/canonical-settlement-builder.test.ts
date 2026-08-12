@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CANONICAL_SETTLEMENT_BANK_COA,
+  CANONICAL_PAYMENT_CLEARING_COA,
   CANONICAL_SETTLEMENT_BUILDER_CODES,
   CanonicalSettlementBuilderError,
   canonicalSettlementGroupSerialization,
@@ -16,6 +17,17 @@ describe("4C-7A.7G canonical settlement builder contract", () => {
     expect(
       "publicCoaId" in CANONICAL_SETTLEMENT_BANK_COA,
     ).toBe(false);
+  });
+
+  it("keeps QRIS payment clearing separate from the physical bank COA", () => {
+    expect(CANONICAL_PAYMENT_CLEARING_COA).toEqual({
+      code: "1-1024-CST",
+      name: "Payment Clearing Sport Center / QRIS",
+      accountType: "asset",
+    });
+    expect(CANONICAL_PAYMENT_CLEARING_COA.code).not.toBe(
+      CANONICAL_SETTLEMENT_BANK_COA.code,
+    );
   });
 
   it("serializes the complete grouping key deterministically", () => {

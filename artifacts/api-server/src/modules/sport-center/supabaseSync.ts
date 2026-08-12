@@ -743,11 +743,11 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
   const taxAccountId = Number(settings?.ppn_output_account_id ?? 0);
 
   const configErrors: string[] = [];
-  if (!qrisAccountId || settings?.qris_code !== "1-1023-CST" ||
-      settings?.qris_name !== "Bank Mandiri - Sport Center" ||
+   if (!qrisAccountId || settings?.qris_code !== "1-1024-CST" ||
+       settings?.qris_name !== "Payment Clearing Sport Center / QRIS CST" ||
       settings?.qris_type !== "asset" || settings?.qris_active !== true ||
       settings?.qris_postable !== true) {
-    configErrors.push("QRIS clearing COA is not the active 1-1023-CST asset");
+     configErrors.push("QRIS clearing COA is not the active 1-1024-CST asset");
   }
   if (!qrisJournalId || settings?.qris_journal_code !== "QRIS-CST" ||
       settings?.qris_journal_active !== true) {
