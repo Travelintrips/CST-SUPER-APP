@@ -42,7 +42,6 @@ const ALL_COMPANY_IDS: number[] = [1, 2, 3, 4];
 // clearing account used by the canonical payment adapter.
 const SPORT_CENTER_QRIS_CLEARING_BASE_CODE = "1-1024";
 const SPORT_CENTER_QRIS_CLEARING_CODE = "1-1024-CST";
-const SPORT_CENTER_LEGACY_BANK_CODE = "1-1023-CST";
 
 /**
  * Populate ALL_COMPANY_IDS dan COMPANY_ABBR secara dinamis dari tabel companies.
@@ -474,7 +473,7 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
               WHERE s.grir_account_id IS NULL
             `);
           } catch (e) { /* non-fatal */ }
-          await repairSportCenterQrisSettings();
+          await repairSportCenterCanonicalSettings();
           return;
         } // end else (journals+settings already seeded)
       } // end if (leafCount >= expectedLeaves)
@@ -836,7 +835,6 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
     const cSalesJ = getJournal("SAL", companyId);
     const cPurJ   = getJournal("PUR", companyId);
     const cBankJ  = getJournal("BNK", companyId);
-    const cQrisJ  = getJournal("QRIS", companyId);
     const cCashJ  = getJournal("CSH", companyId);
     const abbr = COMPANY_ABBR[companyId]!;
 
@@ -861,8 +859,6 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
       salesJournalId:          cSalesJ?.id ?? salesJ.id,
       purchaseJournalId:       cPurJ?.id   ?? purJ.id,
       bankJournalId:           cBankJ?.id  ?? bankJ.id,
-      qrisAccountId:           needFor("1-1023", companyId).id,
-      qrisJournalId:           cQrisJ?.id ?? null,
       cashJournalId:           cCashJ?.id  ?? cashJ.id,
       defaultSalesTaxId:       saleTax?.id ?? null,
       defaultPurchaseTaxId:    purchaseTax?.id ?? null,
@@ -886,7 +882,7 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
     }
   }
 
-  await repairSportCenterQrisSettings();
+  await repairSportCenterCanonicalSettings();
 
   // ── Expense categories: seed using CST accounts ───────────────────────────
   const c1ExpByCode = new Map(
@@ -1329,39 +1325,49 @@ async function resolveSettingsFromCoa(companyId: number): Promise<Partial<typeof
 }
 
 /**
- * Repair only the legacy/default QRIS mapping. An explicitly configured
- * non-legacy owner mapping is left untouched and will be rejected by the
- * canonical adapter until it is reviewed, rather than silently overwritten.
+ * Repair the approved canonical Sport Center accounting destinations.
+ *
+ * Company 1's Sport Center payment handoff has one governed destination
+ * contract: QRIS clearing, QRIS journal, Sport Center revenue, and PPN
+ * output. This is intentionally idempotent and only changes the settings
+ * row; transaction and journal history remains untouched.
  */
-async function repairSportCenterQrisSettings(): Promise<void> {
+async function repairSportCenterCanonicalSettings(): Promise<void> {
   try {
     await db.execute(sql`
       UPDATE accounting_settings AS s
       SET
-        qris_account_id = target_coa.id,
+        qris_account_id = target_qris.id,
+        sales_income_account_id = target_revenue.id,
+        ppn_output_account_id = target_tax.id,
         qris_journal_id = target_journal.id,
         updated_at = NOW()
-      FROM chart_of_accounts AS target_coa
+      FROM chart_of_accounts AS target_qris
       JOIN accounting_journals AS target_journal
         ON target_journal.company_id = 1
        AND target_journal.code = 'QRIS-CST'
        AND target_journal.is_active = TRUE
-      LEFT JOIN chart_of_accounts AS current_coa
-        ON current_coa.id = s.qris_account_id
+      JOIN chart_of_accounts AS target_revenue
+        ON target_revenue.company_id = 1
+       AND target_revenue.code = '4-1017-CST'
+       AND target_revenue.type = 'revenue'
+       AND target_revenue.is_active = TRUE
+       AND target_revenue.is_postable = TRUE
+      JOIN chart_of_accounts AS target_tax
+        ON target_tax.company_id = 1
+       AND target_tax.code = '2-1020-CST'
+       AND target_tax.type = 'liability'
+       AND target_tax.is_active = TRUE
+       AND target_tax.is_postable = TRUE
       WHERE s.company_id = 1
-        AND target_coa.company_id = 1
-        AND target_coa.code = ${SPORT_CENTER_QRIS_CLEARING_CODE}
-        AND target_coa.type = 'asset'
-        AND target_coa.is_active = TRUE
-        AND target_coa.is_postable = TRUE
-        AND (
-          s.qris_account_id IS NULL
-          OR current_coa.code = ${SPORT_CENTER_LEGACY_BANK_CODE}
-          OR current_coa.name = 'Bank Mandiri - Sport Center CST'
-        )
+        AND target_qris.company_id = 1
+        AND target_qris.code = ${SPORT_CENTER_QRIS_CLEARING_CODE}
+        AND target_qris.type = 'asset'
+        AND target_qris.is_active = TRUE
+        AND target_qris.is_postable = TRUE
     `);
   } catch (err) {
-    logger.warn({ err }, "Accounting seed: QRIS clearing mapping repair gagal (non-fatal)");
+    logger.warn({ err }, "Accounting seed: canonical Sport Center mapping repair gagal (non-fatal)");
   }
 }
 
