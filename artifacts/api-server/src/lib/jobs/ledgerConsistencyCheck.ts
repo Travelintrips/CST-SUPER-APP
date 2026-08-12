@@ -14,6 +14,10 @@
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../logger.js";
+import {
+  classifyPaymentAccountingOutbox,
+  type PaymentAccountingOutboxClassification,
+} from "./paymentAccountingOutboxClassification.js";
 
 // ─── DB migration ─────────────────────────────────────────────────────────────
 
@@ -199,6 +203,182 @@ async function checkOrphanMutations(): Promise<number> {
   return found;
 }
 
+// ─── Check 5: stale payment-accounting outbox failures ────────────────────────
+
+type JsonObject = Record<string, unknown>;
+
+function asJsonObject(value: unknown): JsonObject {
+  if (value && typeof value === "object") return value as JsonObject;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return parsed && typeof parsed === "object" ? parsed as JsonObject : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+function firstJsonValue(row: JsonObject, keys: string[]): unknown {
+  for (const key of keys) {
+    if (row[key] != null && row[key] !== "") return row[key];
+  }
+  return null;
+}
+
+function outboxPaymentId(row: JsonObject): number | null {
+  const direct = firstJsonValue(row, [
+    "payment_id",
+    "sport_payment_id",
+    "canonical_payment_id",
+    "source_payment_id",
+  ]);
+  const directId = Number(direct);
+  if (Number.isSafeInteger(directId) && directId > 0) return directId;
+
+  for (const key of ["payload", "event", "data", "details"]) {
+    const nested = asJsonObject(row[key]);
+    const nestedId = Number(firstJsonValue(nested, [
+      "payment_id",
+      "sport_payment_id",
+      "canonical_payment_id",
+      "source_payment_id",
+    ]));
+    if (Number.isSafeInteger(nestedId) && nestedId > 0) return nestedId;
+  }
+  return null;
+}
+
+function outboxRowId(row: JsonObject, fallback: number): string {
+  const value = firstJsonValue(row, ["id", "outbox_id", "event_id"]);
+  return value == null || value === "" ? String(fallback) : String(value);
+}
+
+async function paymentHasPostedJournal(paymentId: number): Promise<boolean> {
+  try {
+    const result = await db.execute(sql`
+      SELECT EXISTS (
+        SELECT 1
+        FROM sport_center.accounting_journals
+        WHERE payment_id = ${paymentId}
+          AND journal_type = 'payment_confirmed'
+          AND status = 'posted'
+          AND is_reversal = FALSE
+      ) AS recovered
+    `);
+    return (result.rows[0] as JsonObject | undefined)?.["recovered"] === true;
+  } catch {
+    // A missing/old runtime schema is not recovery evidence.
+    return false;
+  }
+}
+
+async function writeOutboxClassificationAlert(
+  classification: Exclude<PaymentAccountingOutboxClassification, "IGNORE">,
+  outboxId: string,
+  paymentId: number | null,
+): Promise<void> {
+  const isRecovered = classification === "RECOVERED";
+  const alertType = isRecovered
+    ? "PAYMENT_ACCOUNTING_RECOVERED"
+    : "PAYMENT_ACCOUNTING_INCOMPLETE";
+  const severity = isRecovered ? "LOW" : "HIGH";
+  const description = isRecovered
+    ? `Outbox failure ${outboxId} is stale: canonical payment${paymentId == null ? "" : ` #${paymentId}`} now has a posted payment_confirmed journal.`
+    : `Outbox failure ${outboxId} remains active: canonical payment${paymentId == null ? "" : ` #${paymentId}`} has no posted payment_confirmed journal.`;
+
+  await db.execute(sql`
+    INSERT INTO ledger_consistency_alerts
+      (alert_type, severity, description, entity_type, entity_id, resolved, resolved_at, resolved_by)
+    SELECT
+      ${alertType},
+      ${severity},
+      ${description},
+      'payment_accounting_outbox',
+      ${outboxId},
+      ${isRecovered},
+      CASE WHEN ${isRecovered} THEN NOW() ELSE NULL END,
+      CASE WHEN ${isRecovered} THEN 'ledger-consistency-check' ELSE NULL END
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM ledger_consistency_alerts
+      WHERE alert_type = ${alertType}
+        AND entity_type = 'payment_accounting_outbox'
+        AND entity_id = ${outboxId}
+        AND created_at > NOW() - INTERVAL '1 day'
+    )
+  `).catch((e: unknown) => {
+    logger.warn({ e, outboxId, classification }, "[LedgerConsistency] outbox alert write failed (non-fatal)");
+  });
+
+  if (isRecovered) {
+    await db.execute(sql`
+      UPDATE ledger_consistency_alerts
+      SET resolved = TRUE,
+          resolved_at = COALESCE(resolved_at, NOW()),
+          resolved_by = COALESCE(resolved_by, 'ledger-consistency-check')
+      WHERE alert_type = 'PAYMENT_ACCOUNTING_INCOMPLETE'
+        AND entity_type = 'payment_accounting_outbox'
+        AND entity_id = ${outboxId}
+        AND resolved = FALSE
+    `).catch((e: unknown) => {
+      logger.warn({ e, outboxId }, "[LedgerConsistency] stale outbox alert resolution failed (non-fatal)");
+    });
+  }
+}
+
+async function readPaymentAccountingOutboxRows(): Promise<JsonObject[]> {
+  // This table is owned by the Sport Center accounting handoff. The checker
+  // remains compatible with runtimes where that additive contract is absent.
+  for (const relation of ["sport_center.payment_accounting_outbox", "public.payment_accounting_outbox"]) {
+    try {
+      const result = await db.execute(sql.raw(`
+        SELECT to_jsonb(outbox) AS row_json
+        FROM ${relation} AS outbox
+        LIMIT 100
+      `));
+      return (result.rows as Array<JsonObject>)
+        .map((row) => asJsonObject(row["row_json"]));
+    } catch {
+      // Try the other approved namespace before declaring the check absent.
+    }
+  }
+  return [];
+}
+
+async function checkPaymentAccountingOutbox(): Promise<{
+  recovered: number;
+  active: number;
+}> {
+  const outboxRows = await readPaymentAccountingOutboxRows();
+  let recovered = 0;
+  let active = 0;
+
+  for (const [index, row] of outboxRows.entries()) {
+    const paymentId = outboxPaymentId(row);
+    const postedJournal = paymentId == null
+      ? false
+      : await paymentHasPostedJournal(paymentId);
+    const classification = classifyPaymentAccountingOutbox({
+      status: firstJsonValue(row, ["status", "state"]),
+      rowText: JSON.stringify(row),
+      hasPostedPaymentJournal: postedJournal,
+      explicitlyResolved:
+        firstJsonValue(row, ["resolved", "recovered"]) === true,
+    });
+
+    if (classification === "IGNORE") continue;
+
+    const outboxId = outboxRowId(row, index + 1);
+    await writeOutboxClassificationAlert(classification, outboxId, paymentId);
+    if (classification === "RECOVERED") recovered++;
+    if (classification === "ACTIVE_FAILURE") active++;
+  }
+
+  return { recovered, active };
+}
+
 // ─── Rule 4: Event-driven spot check ─────────────────────────────────────────
 
 /**
@@ -257,28 +437,49 @@ export async function runLedgerConsistencyCheck(): Promise<{
   orphanEntries:  number;
   duplicates:     number;
   orphanMutations: number;
+  recoveredOutboxFailures: number;
+  activeOutboxFailures: number;
 }> {
   await ensureAlertsTable();
 
-  const [orphanPayments, orphanEntries, duplicates, orphanMutations] = await Promise.all([
+  const [orphanPayments, orphanEntries, duplicates, orphanMutations, outbox] = await Promise.all([
     checkOrphanPayments().catch(() => 0),
     checkOrphanEntries().catch(() => 0),
     checkDuplicateJournals().catch(() => 0),
     checkOrphanMutations().catch(() => 0),
+    checkPaymentAccountingOutbox().catch(() => ({ recovered: 0, active: 0 })),
   ]);
 
-  const total = orphanPayments + orphanEntries + duplicates + orphanMutations;
+  const total = orphanPayments + orphanEntries + duplicates + orphanMutations + outbox.active;
 
   if (total > 0) {
     logger.warn(
-      { orphanPayments, orphanEntries, duplicates, orphanMutations, total },
+      {
+        orphanPayments,
+        orphanEntries,
+        duplicates,
+        orphanMutations,
+        recoveredOutboxFailures: outbox.recovered,
+        activeOutboxFailures: outbox.active,
+        total,
+      },
       "[LedgerConsistencyCheck] ⚠ Inkonsistensi terdeteksi — lihat ledger_consistency_alerts",
     );
   } else {
-    logger.info("[LedgerConsistencyCheck] ✓ Semua pemeriksaan lulus — tidak ada inkonsistensi");
+    logger.info(
+      { recoveredOutboxFailures: outbox.recovered },
+      "[LedgerConsistencyCheck] ✓ Semua pemeriksaan lulus — tidak ada inkonsistensi aktif",
+    );
   }
 
-  return { orphanPayments, orphanEntries, duplicates, orphanMutations };
+  return {
+    orphanPayments,
+    orphanEntries,
+    duplicates,
+    orphanMutations,
+    recoveredOutboxFailures: outbox.recovered,
+    activeOutboxFailures: outbox.active,
+  };
 }
 
 // ─── Worker entry point ───────────────────────────────────────────────────────
