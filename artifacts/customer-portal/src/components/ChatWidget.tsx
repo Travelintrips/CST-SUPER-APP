@@ -27,6 +27,7 @@ import {
 import { Link } from "wouter";
 import { LocationCombobox } from "@/components/LocationCombobox";
 import { COMPANY_CONFIG } from "@/config/company";
+import { CUSTOMER_ASSETS } from "@/lib/staticAssets";
 
 interface ChatMessage {
   id: string;
@@ -1548,7 +1549,7 @@ export function ChatWidget() {
           >
             {/* Avatar */}
             <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center shrink-0 ring-2 ring-white/30">
-              <img src="/api/storage/public-objects/portal/images/logo-baru.png" className="h-6 w-6 object-contain" alt="logo" onError={(e) => { const el = e.currentTarget; const fb = el.src.replace("/api/storage/public-objects/portal/images/", "/api/storage/public-objects/portal-assets/static/customer-portal/images/"); if (el.src !== fb) el.src = fb; }} />
+              <img src={CUSTOMER_ASSETS.logoBrand} className="h-6 w-6 object-contain" alt="logo" />
             </div>
 
             {/* Title + status — left-aligned, truncates before reaching buttons */}
@@ -1662,7 +1663,7 @@ export function ChatWidget() {
                       {msg.role === "admin" ? (
                         <User className="h-4 w-4 text-sky-700" />
                       ) : (
-                        <img src="/api/storage/public-objects/portal/images/logo-baru.png" className="h-5 w-5 object-contain" alt="logo" onError={(e) => { const el = e.currentTarget; const fb = el.src.replace("/api/storage/public-objects/portal/images/", "/api/storage/public-objects/portal-assets/static/customer-portal/images/"); if (el.src !== fb) el.src = fb; }} />
+                        <img src={CUSTOMER_ASSETS.logoBrand} className="h-5 w-5 object-contain" alt="logo" />
                       )}
                     </div>
                   )}
@@ -1729,7 +1730,7 @@ export function ChatWidget() {
             {isStreaming && (
               <div className="flex gap-2 flex-row">
                 <div className="w-8 h-8 rounded-full bg-sky-100 flex items-center justify-center shrink-0 mt-0.5">
-                  <img src="/api/storage/public-objects/portal/images/logo-baru.png" className="h-5 w-5 object-contain" alt="logo" onError={(e) => { const el = e.currentTarget; const fb = el.src.replace("/api/storage/public-objects/portal/images/", "/api/storage/public-objects/portal-assets/static/customer-portal/images/"); if (el.src !== fb) el.src = fb; }} />
+                  <img src={CUSTOMER_ASSETS.logoBrand} className="h-5 w-5 object-contain" alt="logo" />
                 </div>
                 <div
                   className="max-w-[85%] bg-white border border-gray-100 text-gray-800 rounded-2xl rounded-tl-sm px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap"

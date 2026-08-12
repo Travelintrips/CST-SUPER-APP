@@ -27,5 +27,14 @@ export function assetUrl(path: string): string {
 export function resolveImageUrl(url: string | null | undefined): string | null {
   if (!url) return null;
   if (url.startsWith("/objects/")) return `/api/storage${url}`;
+  // Legacy portal CMS rows used /portal/images/* before Customer Portal
+  // assets were consolidated under portal-assets/static/customer-portal.
+  // Keep old database values displayable without duplicating storage objects.
+  if (url.startsWith("/api/storage/public-objects/portal/images/")) {
+    return url.replace(
+      "/api/storage/public-objects/portal/images/",
+      "/api/storage/public-objects/portal-assets/static/customer-portal/images/",
+    );
+  }
   return url;
 }

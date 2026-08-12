@@ -10,7 +10,7 @@ import { EditableImage } from "@/components/EditableImage";
 import { useLanguage } from "@/i18n/LanguageContext";
 import { CART_KEY } from "@/lib/logistic-cart";
 import PageSeo from "@/components/PageSeo";
-import { CUSTOMER_ASSETS } from "@/lib/staticAssets";
+import { CUSTOMER_ASSETS, staticAsset } from "@/lib/staticAssets";
 
 export default function Home() {
   const { data: company } = useGetPortalCompany({
@@ -146,9 +146,9 @@ export default function Home() {
   ];
 
   const testimonials = [
-    { nameKey: "testimonials.t1Name", roleKey: "testimonials.t1Role", textKey: "testimonials.t1Text", photoKey: "testimonials.t1Photo", defaultImg: "/api/storage/public-objects/portal/images/testimonials/t1.jpg" },
-    { nameKey: "testimonials.t2Name", roleKey: "testimonials.t2Role", textKey: "testimonials.t2Text", photoKey: "testimonials.t2Photo", defaultImg: "/api/storage/public-objects/portal/images/testimonials/t2.jpg" },
-    { nameKey: "testimonials.t3Name", roleKey: "testimonials.t3Role", textKey: "testimonials.t3Text", photoKey: "testimonials.t3Photo", defaultImg: "/api/storage/public-objects/portal/images/testimonials/t3.jpg" },
+    { nameKey: "testimonials.t1Name", roleKey: "testimonials.t1Role", textKey: "testimonials.t1Text", photoKey: "testimonials.t1Photo", defaultImg: CUSTOMER_ASSETS.portOperations },
+    { nameKey: "testimonials.t2Name", roleKey: "testimonials.t2Role", textKey: "testimonials.t2Text", photoKey: "testimonials.t2Photo", defaultImg: CUSTOMER_ASSETS.customs },
+    { nameKey: "testimonials.t3Name", roleKey: "testimonials.t3Role", textKey: "testimonials.t3Text", photoKey: "testimonials.t3Photo", defaultImg: CUSTOMER_ASSETS.warehouse },
   ];
 
   return (
@@ -269,7 +269,7 @@ export default function Home() {
             <div className="flex -space-x-2.5">
               {["sp1","sp2","sp3","sp4"].map((id, i) => (
                 <img key={i}
-                  src={`/api/storage/public-objects/portal/images/testimonials/${id}.jpg`}
+                  src={staticAsset(`images/testimonials/${id}.jpg`)}
                   className="w-8 h-8 rounded-full ring-2 object-cover"
                   style={{ outline: "2px solid rgba(15,23,42,0.8)", outlineOffset: "-2px" }}
                   onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}

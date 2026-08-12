@@ -15,6 +15,10 @@ const LOCALE_SUFFIX_SEP = "__";
 // visitor's language. Text fields remain locale-specific, but an admin should
 // not have to upload the same hero image once per language.
 const LOCALE_INDEPENDENT_KEYS = new Set([
+  "logo",
+  "header_logo",
+  "footer_logo",
+  "partner_logo",
   "hero_bg",
   "about_img1",
   "about_img2",
@@ -23,6 +27,12 @@ const LOCALE_INDEPENDENT_KEYS = new Set([
   "testimonials.t3Photo",
   "site_favicon",
 ]);
+
+function isLocaleIndependentVisualKey(key: string): boolean {
+  return LOCALE_INDEPENDENT_KEYS.has(key)
+    || key.startsWith("logo")
+    || /(?:^|[._-])(img|image|photo|favicon|banner|background|bg)(?:[._\d-]|$)/i.test(key);
+}
 
 // ─── Cache ────────────────────────────────────────────────────────────────────
 
@@ -106,7 +116,7 @@ export async function getContent(locale: string = DEFAULT_LOCALE): Promise<Recor
     for (const r of rows) {
       if (
         r.locale === DEFAULT_LOCALE &&
-        LOCALE_INDEPENDENT_KEYS.has(r.key) &&
+        isLocaleIndependentVisualKey(r.key) &&
         !(r.key in content)
       ) {
         content[r.key] = r.value;
@@ -132,7 +142,7 @@ export async function updateContent(
     // Keep media/config values in the canonical default-locale row. This
     // prevents an image uploaded from the en-US CMS tab from being invisible
     // to id-ID visitors (and vice versa).
-    const storageLocale = LOCALE_INDEPENDENT_KEYS.has(key) ? DEFAULT_LOCALE : locale;
+    const storageLocale = isLocaleIndependentVisualKey(key) ? DEFAULT_LOCALE : locale;
     await db
       .insert(portalContentTable)
       .values({ key, value: String(value), updatedAt: new Date(), locale: storageLocale } as any)

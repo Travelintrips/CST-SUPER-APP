@@ -133,9 +133,19 @@ export class ObjectStorageService {
   // ── Public object search/download ────────────────────────────────────────────
   async searchPublicObject(filePath: string): Promise<SupabaseFileHandle | null> {
     const cleaned = filePath.replace(/^\/+/, "");
-    const exists = await supabaseExists(PUBLIC_BUCKET, cleaned);
-    if (!exists) return null;
-    return { bucket: PUBLIC_BUCKET, path: cleaned };
+    const dir = cleaned.includes("/") ? cleaned.substring(0, cleaned.lastIndexOf("/")) : "";
+    const filename = cleaned.includes("/") ? cleaned.substring(cleaned.lastIndexOf("/") + 1) : cleaned;
+    const { data } = await getSupabase().storage.from(PUBLIC_BUCKET).list(dir, { search: filename });
+    const match = data?.find((file) => file.name === filename);
+    if (!match) return null;
+
+    const metadata = (match.metadata ?? {}) as Record<string, unknown>;
+    const contentType = metadata["mimetype"] ?? metadata["contentType"] ?? metadata["content-type"];
+    return {
+      bucket: PUBLIC_BUCKET,
+      path: cleaned,
+      metadata: typeof contentType === "string" ? { contentType } : undefined,
+    };
   }
 
   async downloadObject(file: SupabaseFileHandle, _cacheTtlSec: number = 3600): Promise<{ arrayBuffer(): Promise<ArrayBuffer> }> {
@@ -151,7 +161,7 @@ export class ObjectStorageService {
       mp4: "video/mp4", mov: "video/quicktime", webm: "video/webm",
       avi: "video/x-msvideo", mpeg: "video/mpeg", ogv: "video/ogg",
     };
-    const contentType = mimeMap[ext] ?? "application/octet-stream";
+    const contentType = file.metadata?.contentType ?? mimeMap[ext] ?? "application/octet-stream";
     const webStream = Readable.toWeb(Readable.from(buffer)) as ReadableStream;
     return new Response(webStream, {
       headers: {
