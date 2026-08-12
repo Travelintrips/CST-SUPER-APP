@@ -601,7 +601,7 @@ const STATUS_LABELS: Record<string, string> = {
   unmatched:               "Transaksi Belum Lengkap",
   matched:                 "Cocok",
   duplicate_need_review:   "Perlu Diperiksa",
-  approved_pending_posting:"Menunggu Posting",
+  approved_pending_posting:"Sudah Dicocokkan",
   approved:                "Sudah Dicocokkan",
   posted:                  "Sudah Diposting",
   rejected:                "Ditolak",
@@ -2080,6 +2080,8 @@ function MutationDetailPanel({
   onReverse,
   onReopen,
   onApproveQris,
+  onFindMissing,
+  matchingPending,
   mappingError,
   onApproveQrisBatch,
 }: {
@@ -2092,6 +2094,8 @@ function MutationDetailPanel({
   onReverse: (m: BankMutation) => void;
   onReopen:  (m: BankMutation) => void;
   onApproveQris: (m: BankMutation) => void;
+  onFindMissing: () => void;
+  matchingPending: boolean;
   mappingError?: MappingRequiredError;
   onApproveQrisBatch?: (candidateId: number, mutationId: number, candidate: QrisCandidateAudit) => void;
 }) {
@@ -2140,8 +2144,15 @@ function MutationDetailPanel({
                       <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-3 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
                         <p className="font-semibold">Masih ada {idr(evidence.missingAmount)} yang belum ditemukan.</p>
                         <p className="mt-1 text-xs leading-relaxed">Sistem belum menemukan transaksi Sport Center yang menjelaskan seluruh uang masuk bank ini.</p>
-                        <Button size="sm" variant="outline" className="mt-3 border-amber-400 text-amber-900 hover:bg-amber-100 dark:text-amber-100" onClick={() => onClose()}>
-                          Cari Transaksi yang Hilang
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="mt-3 gap-1.5 border-amber-400 text-amber-900 hover:bg-amber-100 dark:text-amber-100"
+                          onClick={() => { onClose(); onFindMissing(); }}
+                          disabled={matchingPending}
+                        >
+                          {matchingPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                          {matchingPending ? "Mencari transaksi..." : "Cari Transaksi yang Hilang"}
                         </Button>
                       </div>
                     )}
@@ -3646,6 +3657,8 @@ export default function BankReconciliationPage() {
         onReverse={handleOpenReverse}
         onReopen={handleOpenReopen}
         onApproveQris={handleApproveQris}
+        onFindMissing={() => matchMut.mutate()}
+        matchingPending={matchMut.isPending}
         mappingError={detailMutation ? mappingRequiredErrors.get(detailMutation.id) : undefined}
         onApproveQrisBatch={handleApproveQrisBatch}
       />
