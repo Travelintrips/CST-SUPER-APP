@@ -166,7 +166,14 @@ async function fetchMutationInflow(
   const { rows } = await db.execute<{ total: string }>(sql.raw(`
     SELECT COALESCE(SUM(bm.amount), 0) AS total
     FROM bank_mutations bm
-    JOIN company_bank_accounts cba ON cba.id = bm.bank_account_id::integer
+    JOIN company_bank_accounts cba ON (
+      (
+        bm.bank_account_id ~ '^[0-9]+$'
+        AND bm.bank_account_id::numeric BETWEEN -2147483648 AND 2147483647
+        AND cba.id = bm.bank_account_id::integer
+      )
+      OR cba.account_number::text = bm.bank_account_id::text
+    )
     WHERE cba.company_id = ${companyId}
       AND bm.direction = 'IN'
       AND bm.status IN ('unmatched', 'pending', 'scheduled')
@@ -187,7 +194,14 @@ async function fetchMutationOutflow(
   const { rows } = await db.execute<{ total: string }>(sql.raw(`
     SELECT COALESCE(SUM(bm.amount), 0) AS total
     FROM bank_mutations bm
-    JOIN company_bank_accounts cba ON cba.id = bm.bank_account_id::integer
+    JOIN company_bank_accounts cba ON (
+      (
+        bm.bank_account_id ~ '^[0-9]+$'
+        AND bm.bank_account_id::numeric BETWEEN -2147483648 AND 2147483647
+        AND cba.id = bm.bank_account_id::integer
+      )
+      OR cba.account_number::text = bm.bank_account_id::text
+    )
     WHERE cba.company_id = ${companyId}
       AND bm.direction = 'OUT'
       AND bm.status IN ('unmatched', 'pending', 'scheduled')

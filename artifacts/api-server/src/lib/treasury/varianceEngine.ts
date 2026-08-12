@@ -98,7 +98,14 @@ async function computeInflowVariance(
       bm.transaction_date::date::text AS mut_date,
       SUM(bm.amount)                  AS actual
     FROM bank_mutations bm
-    JOIN company_bank_accounts cba ON cba.id = bm.bank_account_id::integer
+    JOIN company_bank_accounts cba ON (
+      (
+        bm.bank_account_id ~ '^[0-9]+$'
+        AND bm.bank_account_id::numeric BETWEEN -2147483648 AND 2147483647
+        AND cba.id = bm.bank_account_id::integer
+      )
+      OR cba.account_number::text = bm.bank_account_id::text
+    )
     WHERE cba.company_id = ${companyId}
       AND bm.direction = 'IN'
       AND bm.status NOT IN ('void', 'rejected')
@@ -176,7 +183,14 @@ async function computeOutflowVariance(
       bm.transaction_date::date::text AS mut_date,
       SUM(bm.amount)                  AS actual
     FROM bank_mutations bm
-    JOIN company_bank_accounts cba ON cba.id = bm.bank_account_id::integer
+    JOIN company_bank_accounts cba ON (
+      (
+        bm.bank_account_id ~ '^[0-9]+$'
+        AND bm.bank_account_id::numeric BETWEEN -2147483648 AND 2147483647
+        AND cba.id = bm.bank_account_id::integer
+      )
+      OR cba.account_number::text = bm.bank_account_id::text
+    )
     WHERE cba.company_id = ${companyId}
       AND bm.direction = 'OUT'
       AND bm.status NOT IN ('void', 'rejected')

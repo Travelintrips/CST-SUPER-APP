@@ -133,7 +133,14 @@ async function fetchTotalCash(companyId: number): Promise<number> {
       FROM bank_mutations
       WHERE status NOT IN ('void','rejected')
       GROUP BY bank_account_id
-    ) mut ON mut.bank_account_id::integer = cba.id
+    ) mut ON (
+      (
+        mut.bank_account_id ~ '^[0-9]+$'
+        AND mut.bank_account_id::numeric BETWEEN -2147483648 AND 2147483647
+        AND cba.id = mut.bank_account_id::integer
+      )
+      OR cba.account_number::text = mut.bank_account_id::text
+    )
     WHERE cba.company_id = ${companyId} AND cba.is_active = true
   `));
   return Number(rows[0]?.total ?? 0);
@@ -186,7 +193,14 @@ async function fetchCollected30d(companyId: number, asOf: string): Promise<numbe
   const { rows } = await db.execute<{ total: string }>(sql.raw(`
     SELECT COALESCE(SUM(bm.amount), 0) AS total
     FROM bank_mutations bm
-    JOIN company_bank_accounts cba ON cba.id = bm.bank_account_id::integer
+    JOIN company_bank_accounts cba ON (
+      (
+        bm.bank_account_id ~ '^[0-9]+$'
+        AND bm.bank_account_id::numeric BETWEEN -2147483648 AND 2147483647
+        AND cba.id = bm.bank_account_id::integer
+      )
+      OR cba.account_number::text = bm.bank_account_id::text
+    )
     WHERE cba.company_id = ${companyId}
       AND bm.direction = 'IN'
       AND bm.status NOT IN ('void','rejected')
