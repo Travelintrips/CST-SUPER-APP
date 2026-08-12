@@ -273,6 +273,154 @@ function sha256(buffer) {
   return createHash("sha256").update(buffer).digest("hex");
 }
 
+export function selectManifestAssets(manifest, storagePaths) {
+  const requested = [...new Set(storagePaths.map((value) => String(value).trim()).filter(Boolean))];
+  const byPath = new Map(manifest.assets.map((asset) => [asset.storagePath, asset]));
+  const unknown = requested.filter((storagePath) => !byPath.has(storagePath));
+  if (unknown.length) {
+    throw new Error(`Scoped promotion path is not in the Customer Portal manifest: ${unknown.join(", ")}`);
+  }
+  return requested.map((storagePath) => byPath.get(storagePath));
+}
+
+async function readScopedPaths(pathsFile) {
+  const raw = JSON.parse(await fs.readFile(pathsFile, "utf8"));
+  if (!Array.isArray(raw)) throw new Error(`Scoped paths file must contain a JSON array: ${pathsFile}`);
+  return raw;
+}
+
+export async function stageStaticAssets({
+  manifest,
+  environment = "development",
+  paths,
+  stageDir,
+  env = process.env,
+} = {}) {
+  if (environment !== "development") {
+    throw new Error("Static asset staging must read from the development environment.");
+  }
+  if (env.APP_ENV !== environment) {
+    throw new Error(
+      `Staging environment mismatch: APP_ENV=${env.APP_ENV ?? "(missing)"} but --env=${environment}.`,
+    );
+  }
+  if (!stageDir) throw new Error("A --stage-dir is required for scoped asset staging.");
+  const scopedAssets = selectManifestAssets(manifest, paths ?? []);
+  const sourceStorage = storageClient(environment, env);
+  const staged = [];
+
+  await fs.mkdir(stageDir, { recursive: true });
+  for (const asset of scopedAssets) {
+    const body = await downloadObject(sourceStorage.client, asset.storagePath);
+    if (!body || body.length === 0) {
+      throw new Error(`Missing development source asset: ${asset.storagePath}`);
+    }
+    const sourceMime = sniffMime(body);
+    if (sourceMime !== asset.contentType) {
+      throw new Error(
+        `Invalid development source MIME ${sourceMime ?? "(unknown)"} expected ${asset.contentType}: ${asset.storagePath}`,
+      );
+    }
+    const localPath = path.join(stageDir, asset.storagePath);
+    await fs.mkdir(path.dirname(localPath), { recursive: true });
+    await fs.writeFile(localPath, body);
+    staged.push({
+      storagePath: asset.storagePath,
+      contentType: asset.contentType,
+      bytes: body.length,
+      sha256: sha256(body),
+    });
+    console.log(`staged ${asset.storagePath}`);
+  }
+
+  await fs.writeFile(
+    path.join(stageDir, "manifest.json"),
+    `${JSON.stringify({ schemaVersion: 1, source: environment, assets: staged }, null, 2)}\n`,
+  );
+  console.log(JSON.stringify({ mode: "stage", source: environment, staged: staged.length }, null, 2));
+  return staged;
+}
+
+export async function promoteStagedAssets({
+  manifest,
+  stageDir,
+  destination = "production",
+  write = false,
+  env = process.env,
+} = {}) {
+  if (destination !== "production") throw new Error("Promotion destination must be production.");
+  if (env.APP_ENV !== "production") {
+    throw new Error(
+      "Production promotion must run with APP_ENV=production. " +
+      "This prevents a development secret bundle from being mistaken for production.",
+    );
+  }
+  if (!stageDir) throw new Error("A --staged-dir is required for staged promotion.");
+  if (write && !process.env.CUSTOMER_PORTAL_ASSET_WRITE_ACK && !env.CUSTOMER_PORTAL_ASSET_WRITE_ACK) {
+    throw new Error(
+      "Production write blocked. Set CUSTOMER_PORTAL_ASSET_WRITE_ACK=I_UNDERSTAND and pass --write explicitly.",
+    );
+  }
+
+  const stageManifest = JSON.parse(await fs.readFile(path.join(stageDir, "manifest.json"), "utf8"));
+  if (stageManifest.schemaVersion !== 1 || !Array.isArray(stageManifest.assets)) {
+    throw new Error(`Invalid staged Customer Portal asset manifest: ${stageDir}`);
+  }
+  const manifestAssets = new Map(manifest.assets.map((asset) => [asset.storagePath, asset]));
+  const destinationStorage = storageClient(destination, env);
+  const summary = { "would-copy": 0, "already-present": 0, copied: 0, failed: 0 };
+
+  for (const staged of stageManifest.assets) {
+    const asset = manifestAssets.get(staged.storagePath);
+    if (!asset) throw new Error(`Staged asset is not in the Customer Portal manifest: ${staged.storagePath}`);
+    const localPath = path.join(stageDir, staged.storagePath);
+    const sourceBody = await fs.readFile(localPath);
+    if (
+      sourceBody.length !== staged.bytes ||
+      sha256(sourceBody) !== staged.sha256 ||
+      staged.contentType !== asset.contentType ||
+      sniffMime(sourceBody) !== asset.contentType
+    ) {
+      throw new Error(`Staged asset integrity check failed: ${staged.storagePath}`);
+    }
+
+    const destinationBody = await downloadObject(destinationStorage.client, asset.storagePath);
+    if (destinationBody && sha256(destinationBody) === sha256(sourceBody)) {
+      summary["already-present"]++;
+      console.log(`already-present ${asset.storagePath}`);
+      continue;
+    }
+
+    summary["would-copy"]++;
+    if (!write) {
+      console.log(`would-copy ${asset.storagePath}`);
+      continue;
+    }
+    const { error } = await destinationStorage.client.storage.from(BUCKET).upload(
+      asset.storagePath,
+      sourceBody,
+      { contentType: asset.contentType, cacheControl: "31536000", upsert: true },
+    );
+    if (error) {
+      summary.failed++;
+      console.log(`failed ${asset.storagePath}: ${error.message}`);
+      continue;
+    }
+    const verified = await downloadObject(destinationStorage.client, asset.storagePath);
+    if (!verified || sha256(verified) !== sha256(sourceBody)) {
+      summary.failed++;
+      console.log(`failed-post-copy-verification ${asset.storagePath}`);
+      continue;
+    }
+    summary.copied++;
+    console.log(`copied ${asset.storagePath}`);
+  }
+
+  console.log(JSON.stringify({ mode: write ? "write" : "dry-run", destination, ...summary }, null, 2));
+  if (summary.failed) throw new Error("Staged Customer Portal static asset promotion failed.");
+  return summary;
+}
+
 export async function promoteStaticAssets({
   manifest,
   source = "development",
@@ -390,9 +538,36 @@ async function main() {
     return;
   }
 
+  if (command === "stage") {
+    const environment = arg("--env", process.env.APP_ENV);
+    if (environment !== "development" || process.env.APP_ENV !== environment) {
+      throw new Error(
+        `Staging environment mismatch: APP_ENV=${process.env.APP_ENV ?? "(missing)"} but --env=${environment ?? "(missing)"}.`,
+      );
+    }
+    const pathsFile = arg("--paths-file");
+    if (!pathsFile) throw new Error("Scoped staging requires --paths-file.");
+    await stageStaticAssets({
+      manifest,
+      environment,
+      paths: await readScopedPaths(pathsFile),
+      stageDir: arg("--stage-dir"),
+    });
+    return;
+  }
+
   if (command === "promote") {
     const write = has("--write");
     if (!write && !has("--dry-run")) console.log("No --write supplied; defaulting to --dry-run.");
+    const stagedDir = arg("--staged-dir");
+    if (stagedDir) {
+      await promoteStagedAssets({
+        manifest,
+        stageDir: stagedDir,
+        write,
+      });
+      return;
+    }
     await promoteStaticAssets({
       manifest,
       source: arg("--source", "development"),

@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   discoverManifest,
   normalizeStoragePath,
+  selectManifestAssets,
   resolveStorageCredentials,
   verifyHttpAsset,
   verifyCmsReferences,
@@ -53,9 +54,34 @@ test("manifest is derived from source usage and contains derived assets", async 
   const manifest = await discoverManifest();
   const paths = new Set(manifest.assets.map((asset) => asset.storagePath));
   assert.ok(paths.has("portal-assets/static/customer-portal/images/air-freight.webp"));
+  assert.ok(paths.has("portal-assets/static/customer-portal/images/customs.webp"));
+  assert.ok(paths.has("portal-assets/static/customer-portal/images/customs-document.webp"));
   assert.ok(paths.has("portal-assets/static/customer-portal/images/vehicles/mobil-ai.webp"));
   assert.ok(paths.has("portal-assets/static/customer-portal/images/categories/coffee.webp"));
   assert.ok(![...paths].some((asset) => asset.endsWith(".png") || asset.endsWith(".jpg")));
+});
+
+test("scoped promotion only accepts manifest assets", () => {
+  const manifest = {
+    assets: [
+      { storagePath: "portal-assets/static/customer-portal/images/customs.webp" },
+      { storagePath: "portal-assets/static/customer-portal/images/customs-document.webp" },
+    ],
+  };
+  assert.deepEqual(
+    selectManifestAssets(manifest, [
+      "portal-assets/static/customer-portal/images/customs-document.webp",
+      "portal-assets/static/customer-portal/images/customs.webp",
+    ]).map((asset) => asset.storagePath),
+    [
+      "portal-assets/static/customer-portal/images/customs-document.webp",
+      "portal-assets/static/customer-portal/images/customs.webp",
+    ],
+  );
+  assert.throws(
+    () => selectManifestAssets(manifest, ["portal-assets/static/customer-portal/images/not-approved.webp"]),
+    /not in the Customer Portal manifest/,
+  );
 });
 
 test("missing asset, wrong MIME, and empty body fail the HTTP verifier", async () => {

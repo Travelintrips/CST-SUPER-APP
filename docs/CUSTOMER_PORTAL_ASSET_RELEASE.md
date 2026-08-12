@@ -81,6 +81,31 @@ Dry-run output includes `would-copy`, `already-present`, `missing-source`, and
 `invalid-mime`. The production write additionally requires the explicit
 acknowledgement environment variable and `--write`.
 
+When the environment-specific secret bundles intentionally isolate DEV and PROD
+credentials, use the staged scoped flow for a small approved asset set. The
+development loader downloads only the approved manifest paths to a temporary
+staging directory; the production loader then performs the dry-run/write from
+that staging directory. No credential is copied between environments:
+
+```bash
+cat >/tmp/customer-portal-ppjk-paths.json <<'JSON'
+[
+  "portal-assets/static/customer-portal/images/customs.webp",
+  "portal-assets/static/customer-portal/images/customs-document.webp"
+]
+JSON
+
+APP_ENV=development node artifacts/api-server/load-secrets.mjs \
+  node artifacts/api-server/scripts/customer-portal-assets.mjs stage \
+  --env development \
+  --paths-file /tmp/customer-portal-ppjk-paths.json \
+  --stage-dir /tmp/customer-portal-ppjk-stage
+
+APP_ENV=production node artifacts/api-server/load-secrets.mjs \
+  node artifacts/api-server/scripts/customer-portal-assets.mjs promote \
+  --staged-dir /tmp/customer-portal-ppjk-stage --dry-run
+```
+
 ## Release gate
 
 ```text
