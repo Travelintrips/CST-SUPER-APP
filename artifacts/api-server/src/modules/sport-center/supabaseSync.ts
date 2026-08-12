@@ -779,7 +779,7 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
       p.provider_id,
       p.provider_order_id,
       p.bank_account_id,
-      p.source_event_id,
+      j.source_event_id AS source_event_id,
       j.id AS canonical_journal_id,
       j.status::text AS journal_status,
       j.is_reversal,
