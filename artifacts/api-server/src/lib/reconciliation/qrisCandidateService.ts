@@ -62,7 +62,28 @@ export async function generateQrisCandidates(options: {
     `)),
     db.execute(sql.raw(`
       SELECT
-        bm.id, bm.company_id, bm.bank_account_id, bm.transaction_date, bm.amount,
+        bm.id, bm.company_id,
+        COALESCE(
+          bm.bank_account_id,
+          (
+            SELECT cba.id
+            FROM company_bank_accounts cba
+            WHERE cba.is_active = TRUE
+              AND (cba.company_id = bm.company_id OR cba.company_id IS NULL)
+              AND (
+                (bm.source_account IS NOT NULL
+                  AND regexp_replace(bm.source_account, '[^0-9]', '', 'g')
+                    = regexp_replace(cba.account_number, '[^0-9]', '', 'g'))
+                OR POSITION(
+                  regexp_replace(cba.account_number, '[^0-9]', '', 'g')
+                  IN regexp_replace(COALESCE(bm.description, ''), '[^0-9]', '', 'g')
+                ) > 0
+              )
+            ORDER BY cba.company_id NULLS LAST, cba.id
+            LIMIT 1
+          )
+        ) AS bank_account_id,
+        bm.transaction_date, bm.amount,
         bm.direction, bm.source, bm.source_classification, bm.provider_name,
         bm.provider_order_id, bm.description, bm.status
       FROM bank_mutations bm

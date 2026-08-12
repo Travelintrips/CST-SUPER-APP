@@ -83,6 +83,7 @@ interface ParsedRow {
   normalized_description: string;
   provider_name: string | null;
   bank: string | null;
+  bank_account_id?: number | null;
 }
 
 const ID_MONTHS: Record<string, number> = {
@@ -426,6 +427,31 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
   const esc = (s: string) => (s ?? "").replace(/'/g, "''");
 
   for (const p of parsed) {
+    // Google Sheet rows often carry the destination account only inside the
+    // statement description. Resolve it before building the canonical key so
+    // QRIS matching is scoped to the same company/account dimension as the
+    // Sport Center payment.
+    let bankAccountId: number | null = null;
+    try {
+      const accountProbe = `${p.bank ?? ""} ${p.description}`.replace(/'/g, "''");
+      const { rows: accountRows } = await db.execute(sql.raw(`
+        SELECT id
+        FROM company_bank_accounts
+        WHERE is_active = TRUE
+          AND (company_id = ${company_id ?? "NULL"} OR company_id IS NULL)
+          AND regexp_replace(account_number, '[^0-9]', '', 'g') <> ''
+          AND POSITION(
+            regexp_replace(account_number, '[^0-9]', '', 'g')
+            IN regexp_replace('${accountProbe}', '[^0-9]', '', 'g')
+          ) > 0
+        ORDER BY company_id NULLS LAST, id
+        LIMIT 1
+      `));
+      bankAccountId = accountRows[0]?.id == null ? null : Number(accountRows[0].id);
+    } catch (err: any) {
+      logger.warn({ err: err?.message, companyId: company_id }, "[sheetSync] Resolusi rekening mutasi gagal");
+    }
+
     // Compute canonical_key with the actual company_id from sheet config
     const cKey = canonicalMutationKey({
       transaction_date: p.transaction_date,
@@ -433,7 +459,7 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
       credit:           p.kredit,
       description:      p.description,
       company_id:       company_id ?? null,
-      bank_account_id:  null,
+      bank_account_id:  bankAccountId,
     });
 
     // Dedup: skip if mutation_key (old format) OR canonical_key already exists
@@ -444,6 +470,7 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
         INSERT INTO bank_mutations
           (mutation_key, canonical_key, transaction_date, description, amount, direction,
            credit_amount, debit_amount, normalized_description, provider_name,
+           bank_account_id, source_classification,
            status, source, source_account, company_id, sheet_config_id)
         VALUES (
           '${esc(p.mutation_key)}',
@@ -456,6 +483,8 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
           ${p.debit},
           '${esc(p.normalized_description)}',
           ${p.provider_name ? `'${esc(p.provider_name)}'` : "NULL"},
+           ${bankAccountId ?? "NULL"},
+           'actual_bank_mutation',
           'unmatched',
           'google_sheet',
           ${p.bank ? `'${esc(p.bank)}'` : "NULL"},
@@ -470,7 +499,7 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
       if (rowId) {
         existingKeys.add(p.mutation_key);
         existingKeys.add(cKey);
-        newMutations.push({ id: Number(rowId), parsed: p });
+        newMutations.push({ id: Number(rowId), parsed: { ...p, bank_account_id: bankAccountId } });
       }
     } catch (err: any) {
       logger.warn({ err: err.message, key: p.mutation_key, label }, "[sheetSync] Gagal insert mutasi");
@@ -485,6 +514,7 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
         mutation_key: p.mutation_key, normalized_description: p.normalized_description,
         direction: p.direction,
         company_id,
+         bank_account_id: p.bank_account_id ?? null,
         provider_name: p.provider_name,
       }, "sheet-sync");
     } catch (err: any) {

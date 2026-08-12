@@ -10,6 +10,7 @@ import {
   type QrisProviderCode,
   type QrisProviderRule,
 } from "./providerSettlementRules.js";
+import { businessDayDistance } from "./businessCalendar.js";
 
 export type QrisReconciliationStatus = "MATCHED" | "REVIEW" | "UNMATCHED";
 export type QrisProviderDetectionSource =
@@ -103,7 +104,10 @@ function isEligiblePayment(payment: QrisPaymentCandidateInput): boolean {
     && payment.bankAccountId != null;
 }
 
-function providerEvidence(mutation: QrisMutationCandidateInput): {
+function providerEvidence(
+  mutation: QrisMutationCandidateInput,
+  accountProviderRules?: Record<string, Partial<Record<QrisProviderCode, QrisProviderRule>>>,
+): {
   providerCode: QrisProviderCode;
   source: QrisProviderDetectionSource;
 } {
@@ -126,6 +130,23 @@ function providerEvidence(mutation: QrisMutationCandidateInput): {
   if (fromDescription !== "unknown") {
     return { providerCode: fromDescription, source: "mutation_description" };
   }
+
+  // A generic bank label such as "QRIS" is not enough to identify a
+  // provider. When the mutation is tied to a bank account with exactly one
+  // configured QRIS provider, however, the active account rule is an
+  // auditable provider dimension and may be used for review matching.
+  const configuredProviders = Object.entries(
+    accountProviderRules?.[String(mutation.bankAccountId)] ?? {},
+  ).filter(([provider, rule]) =>
+    provider !== "unknown" && rule?.providerCode === provider,
+  );
+  if (isQrisSettlementDescription(mutation.description) && configuredProviders.length === 1) {
+    return {
+      providerCode: configuredProviders[0]![0] as QrisProviderCode,
+      source: "settlement_rule",
+    };
+  }
+
   return { providerCode: "unknown", source: "unknown" };
 }
 
@@ -165,10 +186,17 @@ function sameNaturalBatch(
   payment: QrisPaymentCandidateInput,
   mutation: QrisMutationCandidateInput,
   providerCode: QrisProviderCode,
+  holidays: Iterable<string>,
+  matchWindowBusinessDays: number,
 ): boolean {
   return payment.companyId === mutation.companyId
     && payment.bankAccountId === mutation.bankAccountId
-    && payment.expectedSettlementDate === mutation.transactionDate
+    && payment.expectedSettlementDate != null
+    && businessDayDistance(
+      payment.expectedSettlementDate,
+      mutation.transactionDate,
+      holidays,
+    ) <= Math.max(0, Math.trunc(matchWindowBusinessDays))
     && normalizeQrisProvider(payment.providerName) === providerCode;
 }
 
@@ -220,7 +248,7 @@ export function generateQrisMutationBatchCandidates(input: {
       mutation.source,
       mutation.sourceClassification,
     );
-    const evidence = providerEvidence(mutation);
+    const evidence = providerEvidence(mutation, input.accountProviderRules);
     const accountRules = input.accountProviderRules?.[String(mutation.bankAccountId)];
     const rule = accountRules?.[evidence.providerCode]
       ?? rules[evidence.providerCode]
@@ -229,20 +257,44 @@ export function generateQrisMutationBatchCandidates(input: {
     const dimensionPayments = eligiblePayments.filter((payment) =>
       payment.companyId === mutation.companyId
         && payment.bankAccountId === mutation.bankAccountId
-        && payment.expectedSettlementDate === mutation.transactionDate,
+        && payment.expectedSettlementDate != null
+        && businessDayDistance(
+          payment.expectedSettlementDate,
+          mutation.transactionDate,
+          input.holidays ?? [],
+        ) <= Math.max(0, Math.trunc(rule.matchWindowBusinessDays)),
     );
     const naturalPayments = dimensionPayments.filter((payment) =>
       evidence.providerCode !== "unknown"
-        && sameNaturalBatch(payment, mutation, evidence.providerCode),
+        && sameNaturalBatch(
+          payment,
+          mutation,
+          evidence.providerCode,
+          input.holidays ?? [],
+          rule.matchWindowBusinessDays,
+        ),
     );
     const sameDimensionMutations = openMutations.filter((other) => {
       if (other.id === mutation.id || other.companyId !== mutation.companyId
         || other.bankAccountId !== mutation.bankAccountId
         || other.transactionDate !== mutation.transactionDate) return false;
-      const otherEvidence = providerEvidence(other);
+      const otherEvidence = providerEvidence(other, input.accountProviderRules);
       return otherEvidence.providerCode === evidence.providerCode
         && evidence.providerCode !== "unknown";
     });
+    const splitSettlementMutations = openMutations.filter((other) =>
+      other.id !== mutation.id
+        && other.companyId === mutation.companyId
+        && other.bankAccountId === mutation.bankAccountId
+        && businessDayDistance(
+          other.transactionDate,
+          mutation.transactionDate,
+          input.holidays ?? [],
+        ) <= Math.max(0, Math.trunc(rule.matchWindowBusinessDays))
+        && providerEvidence(other, input.accountProviderRules).providerCode
+          === evidence.providerCode
+        && evidence.providerCode !== "unknown",
+    );
 
     const mutationReference = partitionReference(mutation);
     const hasMultipleSettlements = sameDimensionMutations.length > 0;
@@ -286,6 +338,13 @@ export function generateQrisMutationBatchCandidates(input: {
     const hasNaturalBatch = evidence.providerCode === "unknown"
       ? dimensionPayments.length > 0
       : naturalPayments.length > 0;
+    const splitSettlementNet = roundMoney(
+      [mutation, ...splitSettlementMutations]
+        .reduce((sum, item) => sum + (Number(item.amount) || 0), 0),
+    );
+    const splitSettlementReconcilesTotal = splitSettlementMutations.length > 0
+      && splitSettlementNet === grossAmount
+      && grossAmount > 0;
     const validDeduction = grossAmount > 0
       && isValidObservedDeduction(grossAmount, netAmount, rule.maxEffectiveDeductionRate);
     const actualEvidence = sourceClassification === "actual_bank_mutation";
@@ -298,6 +357,7 @@ export function generateQrisMutationBatchCandidates(input: {
       && hasNaturalBatch
       && expectedDatesPresent
       && !partitionBlocked
+      && !splitSettlementReconcilesTotal
       && validDeduction;
     const reviewReason = !completeBankDimension
       ? "Dimensi company dan bank account wajib tersedia; rekening null bukan wildcard."
@@ -311,6 +371,8 @@ export function generateQrisMutationBatchCandidates(input: {
               ? "Expected settlement date belum tersnapshot; hanya review."
               : partitionBlocked
                 ? "AMBIGUOUS_PAYMENT_PARTITION: settlement provider/date/rekening ganda tanpa reference pembeda yang juga ada pada payment."
+                  : splitSettlementReconcilesTotal
+                    ? `SPLIT_SETTLEMENT_REVIEW: ${splitSettlementMutations.length + 1} mutasi dalam window settlement berjumlah Rp${splitSettlementNet}; alokasi payment ke setiap tanggal wajib dikonfirmasi sebelum approval.`
                 : observed.observedDeduction < 0
                   ? "NEGATIVE_OBSERVED_DEDUCTION: gross natural batch lebih kecil dari bank credit."
                   : grossAmount > netAmount
