@@ -1164,10 +1164,9 @@ function JournalPreview({
 const STEPS = [
   { id: 1, label: "Sync Mutasi",        icon: CloudDownload },
   { id: 2, label: "AI Matching",         icon: Zap },
-  { id: 3, label: "Review",             icon: Eye },
-  { id: 4, label: "Approve",            icon: CheckCircle2 },
-  { id: 5, label: "Posting Accounting", icon: ReceiptText },
-  { id: 6, label: "Selesai",            icon: CircleCheck },
+  { id: 3, label: "Approve",            icon: CheckCircle2 },
+  { id: 4, label: "Posting Accounting", icon: ReceiptText },
+  { id: 5, label: "Selesai",            icon: CircleCheck },
 ];
 
 function StepProgressBar({ summaryMap }: { summaryMap: Record<string, { count: number; amount: number }> }) {
@@ -1182,7 +1181,6 @@ function StepProgressBar({ summaryMap }: { summaryMap: Record<string, { count: n
 
   const hasAny     = totalMutations > 0;
   const hasMatched = (summaryMap.matched?.count ?? 0) + (summaryMap.approved_pending_posting?.count ?? 0) + (summaryMap.posted?.count ?? 0) > 0;
-  const hasReviewNeeded = (summaryMap.duplicate_need_review?.count ?? 0) > 0;
   const hasPendingPost  = (summaryMap.approved_pending_posting?.count ?? 0) > 0;
   const hasPosted       = (summaryMap.posted?.count ?? 0) > 0;
   const hasApproved     = (summaryMap.approved?.count ?? 0) > 0;
@@ -1195,11 +1193,10 @@ function StepProgressBar({ summaryMap }: { summaryMap: Record<string, { count: n
   const activeStep =
     !hasAny          ? 1 :
     !hasMatched      ? 2 :
-    hasReviewNeeded  ? 3 :
-    allProcessed && (hasApproved || hasPosted) ? 6 :
+    allProcessed && (hasApproved || hasPosted) ? 5 :
     !hasPendingPost && !hasPosted ? 3 :
-    hasPendingPost   ? 5 :
-    allProcessed     ? 6 : 5;
+    hasPendingPost   ? 4 :
+    allProcessed     ? 5 : 3;
 
   return (
     <Card className="overflow-hidden">
@@ -1605,6 +1602,252 @@ function ProofUploadButton({ mutationId, proofUrl }: { mutationId: number; proof
 // Mutation Card
 // ─────────────────────────────────────────────────────────────────────────────
 
+function QrisMutationCard({
+  m,
+  audit,
+  onReject,
+  onDetail,
+  onDelete,
+  onApproveQrisBatch,
+  qrisSelectionChecked,
+  onToggleQrisSelection,
+  onRunMatching,
+  mappingError,
+}: {
+  m: BankMutation;
+  audit: QrisCandidateAudit;
+  onReject: (m: BankMutation) => void;
+  onDetail: (m: BankMutation) => void;
+  onDelete: (id: number) => void;
+  onApproveQrisBatch?: (candidateId: number, mutationId: number, candidate: QrisCandidateAudit) => void;
+  qrisSelectionChecked: boolean;
+  onToggleQrisSelection?: (candidateId: number, checked: boolean) => void;
+  onRunMatching: () => void;
+  mappingError?: MappingRequiredError;
+}) {
+  const items = audit.payment_items ?? [];
+  const isIN = m.direction === "IN";
+  const isMatched = String(audit.reconciliation_status ?? "").toUpperCase() === "MATCHED";
+  const isApproved = audit.status === "approved";
+  const canSelect = audit.id != null && isMatched && !isApproved;
+  const bankAmount = numericValue(m.amount) ?? 0;
+  const candidateGross = numericValue(audit.gross_amount) ?? items.reduce(
+    (total, item) => total + (numericValue(item.grossAmount ?? item.gross_amount) ?? 0),
+    0,
+  );
+  const mdr = numericValue(audit.observed_deduction) ?? 0;
+  const expectedNet = numericValue(audit.net_amount) ?? Math.max(0, bankAmount - mdr);
+  const difference = bankAmount - expectedNet;
+  const statusText = isApproved
+    ? "Sudah Disetujui"
+    : isMatched
+      ? "Cocok"
+      : "Perlu Diperiksa";
+
+  return (
+    <Card
+      className={`transition-all hover:shadow-md ${CARD_BORDER[m.status] ?? ""} cursor-pointer group`}
+      onClick={() => onDetail(m)}
+      tabIndex={0}
+      onKeyDown={e => e.key === "Enter" && onDetail(m)}
+      role="article"
+      aria-label={`Mutasi QRIS: ${m.description}`}
+    >
+      <CardContent className="p-3 sm:p-4">
+        <div className="flex items-start gap-3">
+          <div className={`mt-0.5 shrink-0 w-9 h-9 rounded-full flex items-center justify-center ${
+            isIN ? "bg-green-100 text-green-600 dark:bg-green-950/40" : "bg-red-100 text-red-600 dark:bg-red-950/40"
+          }`}>
+            {isIN ? <ArrowDownLeft className="w-4 h-4" /> : <ArrowUpRight className="w-4 h-4" />}
+          </div>
+
+          <div className="min-w-0 flex-1">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="font-semibold text-base leading-tight truncate">{mutationHeading(m)}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {fmtDate(m.transaction_date)} · QRIS Sport Center
+                </p>
+                <p className="mt-1 text-[11px] text-muted-foreground break-words">
+                  Mutasi: {m.description}
+                  {m.provider_order_id && <span> · Ref: {m.provider_order_id}</span>}
+                </p>
+              </div>
+              <Badge
+                variant="outline"
+                className={`shrink-0 text-[10px] ${isMatched ? "border-green-300 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-950/30 dark:text-green-300" : "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300"}`}
+              >
+                {statusText}
+              </Badge>
+            </div>
+
+            <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
+              {[
+                { label: "Uang Masuk (Bank)", value: idr(bankAmount), tone: "text-foreground" },
+                { label: "Total Kandidat", value: `${idr(candidateGross)} · ${items.length} transaksi`, tone: "text-foreground" },
+                { label: "MDR (Estimasi)", value: idr(mdr), tone: "text-foreground" },
+                { label: "Seharusnya Diterima", value: idr(expectedNet), tone: "text-foreground" },
+                { label: "Selisih", value: idr(Math.abs(difference)), tone: difference === 0 ? "text-green-600" : "text-red-600" },
+              ].map(metric => (
+                <div key={metric.label} className="min-w-0 rounded-md border bg-muted/20 px-2.5 py-2">
+                  <p className="text-[10px] leading-tight text-muted-foreground">{metric.label}</p>
+                  <p className={`mt-1 truncate text-sm font-semibold tabular-nums ${metric.tone}`}>{metric.value}</p>
+                </div>
+              ))}
+            </div>
+
+            {items.length > 0 ? (
+              <div className="mt-3 overflow-hidden rounded-md border" onClick={e => e.stopPropagation()}>
+                <div className="flex items-center justify-between gap-2 border-b bg-muted/30 px-2.5 py-2">
+                  <div>
+                    <p className="text-xs font-semibold">Kandidat Transaksi Sport Center</p>
+                    <p className="text-[10px] text-muted-foreground">Pilih transaksi yang akan diproses sebagai satu batch QRIS.</p>
+                  </div>
+                  {canSelect && audit.id != null && onToggleQrisSelection && (
+                    <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-[10px] font-medium">
+                      <Checkbox
+                        checked={qrisSelectionChecked}
+                        onCheckedChange={checked => onToggleQrisSelection(audit.id!, checked === true)}
+                        aria-label={`Pilih semua kandidat QRIS pada mutasi ${m.id}`}
+                      />
+                      Pilih Semua ({items.length})
+                    </label>
+                  )}
+                </div>
+                <div className="overflow-x-auto">
+                  <div className="min-w-[650px]">
+                    <div className="grid grid-cols-[1.1fr_1.4fr_1fr_1fr_1fr_44px] gap-2 border-b bg-muted/15 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      <span>Booking</span>
+                      <span>Pelanggan / Payment</span>
+                      <span>Tanggal Booking</span>
+                      <span>Metode Bayar</span>
+                      <span className="text-right">Nominal (Gross)</span>
+                      <span className="text-center">Pilih</span>
+                    </div>
+                    {items.map((item, index) => {
+                      const paymentId = item.paymentId ?? item.payment_id;
+                      const booking = item.bookingNumber ?? item.booking_number ?? (item.booking_id != null ? `SC-${String(item.booking_id).padStart(4, "0")}` : "—");
+                      const payment = item.paymentNumber ?? item.payment_number ?? (paymentId != null ? `#${paymentId}` : "—");
+                      const paidAt = item.paymentDate ?? item.paid_at;
+                      const gross = numericValue(item.grossAmount ?? item.gross_amount) ?? 0;
+                      return (
+                        <div key={`${paymentId ?? index}-${booking}`} className="grid grid-cols-[1.1fr_1.4fr_1fr_1fr_1fr_44px] items-center gap-2 border-b px-2.5 py-2 last:border-b-0">
+                          <span className="truncate text-xs font-medium">{booking}</span>
+                          <span className="min-w-0 truncate text-xs text-muted-foreground">{payment}</span>
+                          <span className="truncate text-xs text-muted-foreground">{paidAt ? fmtDate(String(paidAt)) : "—"}</span>
+                          <span className="truncate text-xs text-muted-foreground">QRIS</span>
+                          <span className="text-right text-xs font-medium tabular-nums">{idr(gross)}</span>
+                          <span className="flex justify-center">
+                            {canSelect && audit.id != null && onToggleQrisSelection ? (
+                              <Checkbox
+                                checked={qrisSelectionChecked}
+                                onCheckedChange={checked => onToggleQrisSelection(audit.id!, checked === true)}
+                                aria-label={`Pilih ${booking} ${payment}`}
+                              />
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
+                            )}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+                <p className="border-t bg-muted/15 px-2.5 py-1.5 text-[10px] text-muted-foreground">
+                  Legenda: MDR (Estimasi) = Total potongan QRIS · Approval selalu memproses seluruh batch.
+                </p>
+              </div>
+            ) : (
+              <div className="mt-3 rounded-md border border-dashed px-3 py-4 text-center">
+                <p className="text-sm font-medium">Belum ada kandidat match</p>
+                <p className="mt-1 text-xs text-muted-foreground">Jalankan AI Matching untuk mencari transaksi Sport Center.</p>
+              </div>
+            )}
+
+            {audit.review_reason && !isMatched && (
+              <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                {audit.review_reason}
+              </p>
+            )}
+
+            {mappingError && (
+              <Alert className="mt-3 border-orange-300 bg-orange-50 text-orange-900 dark:border-orange-700 dark:bg-orange-950/30 dark:text-orange-200" onClick={e => e.stopPropagation()}>
+                <AlertTriangle className="h-4 w-4 text-orange-500 shrink-0" />
+                <AlertDescription className="text-xs space-y-1">
+                  <p className="font-semibold">COA spesifik belum tersedia. Jurnal belum dibuat.</p>
+                  <p>{mappingError.message}</p>
+                </AlertDescription>
+              </Alert>
+            )}
+
+            <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t pt-3" onClick={e => e.stopPropagation()}>
+              {(!items.length || !isMatched) && !isApproved && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1.5 text-xs border-blue-300 text-blue-700 hover:bg-blue-50 dark:border-blue-800 dark:text-blue-300"
+                  onClick={onRunMatching}
+                >
+                  <Zap className="h-3.5 w-3.5" />
+                  Jalankan AI Matching
+                </Button>
+              )}
+              {canReject(m) && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1.5 text-xs text-red-600 hover:bg-red-50 hover:text-red-700 border-red-200"
+                  onClick={() => onReject(m)}
+                >
+                  <XCircle className="h-3.5 w-3.5" />
+                  Reject
+                </Button>
+              )}
+              {!isApproved && audit.id != null && onApproveQrisBatch && (
+                <Button
+                  size="sm"
+                  className="ml-auto h-8 gap-1.5 bg-green-600 text-xs text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={!canSelect || !qrisSelectionChecked || !!mappingError}
+                  title={!qrisSelectionChecked ? "Pilih minimal satu kandidat terlebih dahulu" : undefined}
+                  onClick={() => onApproveQrisBatch(audit.id!, audit.mutation_id, audit)}
+                >
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  Approve Batch QRIS ({items.length})
+                </Button>
+              )}
+              {isApproved && (
+                <Badge className="ml-auto bg-green-600 text-white">
+                  <CheckCircle2 className="mr-1 h-3 w-3" /> Batch QRIS Disetujui
+                </Badge>
+              )}
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-8 w-8 p-0 text-muted-foreground"
+                title="Lihat detail"
+                onClick={() => onDetail(m)}
+              >
+                <Eye className="h-3.5 w-3.5" />
+              </Button>
+              {canDelete(m) && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
+                  title="Hapus mutasi"
+                  onClick={() => { if (confirm("Hapus mutasi ini?")) onDelete(m.id); }}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function MutationCard({
   m,
   onApprove,
@@ -1615,6 +1858,10 @@ function MutationCard({
   onDelete,
   onDetail,
   onApproveQris,
+  onApproveQrisBatch,
+  qrisSelectionChecked,
+  onToggleQrisSelection,
+  onRunMatching,
   mappingError,
 }: {
   m: BankMutation;
@@ -1626,6 +1873,10 @@ function MutationCard({
   onDelete:  (id: number) => void;
   onDetail:  (m: BankMutation) => void;
   onApproveQris: (m: BankMutation) => void;
+  onApproveQrisBatch?: (candidateId: number, mutationId: number, candidate: QrisCandidateAudit) => void;
+  qrisSelectionChecked?: boolean;
+  onToggleQrisSelection?: (candidateId: number, checked: boolean) => void;
+  onRunMatching: () => void;
   mappingError?: MappingRequiredError;
 }) {
   const cands  = m.candidates ?? [];
@@ -1633,6 +1884,23 @@ function MutationCard({
   const best   = cands[0];
   const amount = Number(m.amount) || 0;
   const isIN   = m.direction === "IN";
+
+  if (qrisAudit) {
+    return (
+      <QrisMutationCard
+        m={m}
+        audit={qrisAudit}
+        onReject={onReject}
+        onDetail={onDetail}
+        onDelete={onDelete}
+        onApproveQrisBatch={onApproveQrisBatch}
+        qrisSelectionChecked={qrisSelectionChecked ?? false}
+        onToggleQrisSelection={onToggleQrisSelection}
+        onRunMatching={onRunMatching}
+        mappingError={mappingError}
+      />
+    );
+  }
 
   return (
     <Card
@@ -1697,44 +1965,6 @@ function MutationCard({
               <div className="mt-2 rounded-md border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-200">
                 <p className="font-semibold">Perlu Diperiksa</p>
                 <p className="mt-0.5">Sistem menemukan transaksi, tetapi nominal atau bukti belum sepenuhnya cocok.</p>
-              </div>
-            )}
-
-            {qrisAudit && (
-              <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-2 text-xs dark:border-amber-800 dark:bg-amber-950/20">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-semibold text-slate-900 dark:text-slate-100">
-                    Pemeriksaan QRIS
-                  </span>
-                  <Badge variant="outline" className="border-amber-400 bg-amber-100 text-amber-900 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-200">
-                    {QRIS_AUDIT_STATUS_LABELS[qrisAudit.reconciliation_status] ?? qrisAudit.reconciliation_status}
-                  </Badge>
-                  <span className="text-slate-700 dark:text-slate-300">
-                    Provider: {qrisAudit.provider_code || "belum dikenali"}
-                  </span>
-                </div>
-                <p className="mt-1 font-medium text-amber-950 dark:text-amber-100">
-                  {qrisAudit.review_reason ?? "Kandidat QRIS tersedia untuk review."}
-                </p>
-                <p className="mt-1 text-slate-700 dark:text-slate-300">
-                  Gross {idr(qrisAudit.gross_amount)} · Dana masuk {idr(qrisAudit.net_amount)} ·{" "}
-                  {qrisAudit.payment_items?.length ?? 0} payment teridentifikasi
-                </p>
-                <QrisPaymentItemsSummary items={qrisAudit.payment_items} compact />
-                <p className="mt-1 text-[11px] text-slate-600 dark:text-slate-400">
-                  Audit ini hanya membantu verifikasi. Tidak melakukan approve, posting, atau membuat jurnal.
-                </p>
-                {qrisAudit.id && qrisAudit.status !== "approved" && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="mt-2 h-7 text-xs border-amber-400 text-amber-900 hover:bg-amber-100 dark:text-amber-200"
-                    onClick={() => onApproveQris(m)}
-                  >
-                    <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
-                    Approve batch QRIS
-                  </Button>
-                )}
               </div>
             )}
 
@@ -2413,6 +2643,22 @@ function MutationDetailPanel({
                     // UNMATCHED or unknown — fully blocked
                     return (
                       <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 space-y-1">
+                  {/* Approve button — only for MATCHED, gated for REVIEW/UNMATCHED */}
+                   {qrisAudit.status !== "approved" && qrisAudit.id != null && onApproveQrisBatch && (() => {
+                    const isMatched = String(qrisAudit.reconciliation_status ?? "").toUpperCase() === "MATCHED";
+                    return isMatched ? (
+                      <Button
+                        size="sm"
+                        className="w-full gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white"
+                         disabled={!qrisSelectionChecked}
+                         title={!qrisSelectionChecked ? "Pilih batch terlebih dahulu" : undefined}
+                        onClick={() => onApproveQrisBatch(qrisAudit.id!, qrisAudit.mutation_id, qrisAudit)}
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Setujui Batch — Buat QRIS Settlement
+                      </Button>
+                    ) : (
+                      <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-200 space-y-1">
                         <p className="font-semibold flex items-center gap-1">
                           <AlertTriangle className="w-3 h-3 shrink-0" />
                           Tidak dapat disetujui
@@ -2806,9 +3052,8 @@ function OnboardingModal() {
           {[
             { n: 1, icon: CloudDownload, label: "Sync Google Sheet",     desc: "Tarik data mutasi bank dari Google Sheet Anda." },
             { n: 2, icon: Zap,           label: "Jalankan AI Matching",  desc: "AI akan mencocokkan mutasi ke invoice, expense, dan transaksi lain." },
-            { n: 3, icon: Eye,           label: "Review Hasil",          desc: "Periksa hasil matching dan tangani duplikat." },
-            { n: 4, icon: CheckCircle2,  label: "Approve",               desc: "Konfirmasi mutasi yang sudah benar — draft jurnal dibuat otomatis." },
-            { n: 5, icon: ReceiptText,   label: "Post ke Accounting",    desc: "Promosikan draft jurnal ke status posted." },
+            { n: 3, icon: CheckCircle2,  label: "Pilih & Approve",        desc: "Pilih kandidat yang benar lalu setujui batch yang dipilih." },
+            { n: 4, icon: ReceiptText,   label: "Post ke Accounting",    desc: "Promosikan draft jurnal ke status posted." },
           ].map(({ n, icon: Icon, label, desc }) => (
             <div key={n} className="flex items-start gap-3">
               <div className="flex items-center justify-center w-7 h-7 rounded-full bg-primary/10 text-primary text-sm font-bold shrink-0">{n}</div>
@@ -3504,7 +3749,10 @@ export default function BankReconciliationPage() {
         {/* ── Summary Cards ─────────────────────────────────── */}
         <SummaryCards summaryMap={summaryMap} activeFilter={filterStatus} onFilter={v => { setFilterStatus(v); setPage(0); }} />
 
-        {/* ── QRIS provider-aware audit: candidate/review only ── */}
+        {/* QRIS candidates are shown directly inside each bank mutation card.
+            Keep the legacy audit block unreachable while the endpoint contract
+            remains available for the batch selection toolbar below. */}
+        {false && (
          <Card className="border-indigo-200/70 dark:border-indigo-900/70">
           <CardHeader className="pb-3">
             <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -3720,6 +3968,7 @@ export default function BankReconciliationPage() {
             )}
           </CardContent>
         </Card>
+        )}
         
         {/* ── Google Sheet (collapsed) ──────────────────────── */}
         <SheetConfigCollapsed />
@@ -3785,6 +4034,22 @@ export default function BankReconciliationPage() {
               {isLoading ? "Memuat..." : `${total} mutasi`}
             </p>
           </div>
+          {selectedQrisCandidates.length > 0 && (
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-indigo-200 bg-indigo-50/70 px-3 py-2.5 text-xs dark:border-indigo-800 dark:bg-indigo-950/20">
+              <p className="font-medium text-indigo-950 dark:text-indigo-100">
+                {selectedQrisCandidates.length} batch QRIS dipilih
+              </p>
+              <Button
+                size="sm"
+                className="h-8 gap-1.5 bg-indigo-600 text-xs text-white hover:bg-indigo-700"
+                disabled={approveQrisBatchMut.isPending}
+                onClick={handleApproveSelectedQris}
+              >
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                Setujui Batch Terpilih ({selectedQrisCandidates.length})
+              </Button>
+            </div>
+          )}
 
           {isLoading ? (
             <div className="space-y-3">
@@ -3823,6 +4088,13 @@ export default function BankReconciliationPage() {
                   onDelete={id => deleteMut.mutate(id)}
                   onDetail={setDetailMutation}
                   onApproveQris={handleApproveQris}
+                   onApproveQrisBatch={handleApproveQrisBatch}
+                   qrisSelectionChecked={
+                     m.qris_candidate_audit?.id != null
+                     && selectedQrisCandidateIds.includes(m.qris_candidate_audit.id)
+                   }
+                   onToggleQrisSelection={(candidateId, checked) => toggleQrisCandidate(candidateId, checked)}
+                   onRunMatching={() => matchMut.mutate()}
                   mappingError={mappingRequiredErrors.get(m.id)}
                 />
               ))}
