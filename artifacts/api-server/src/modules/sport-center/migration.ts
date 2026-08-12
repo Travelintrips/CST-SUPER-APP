@@ -678,6 +678,103 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
     return;
   }
 
+  // The canonical payment owner stores the provider's bank identifier as
+  // TEXT metadata on sport_center.sport_payments.  The accounting journal
+  // uses the internal company_bank_accounts.id INTEGER.  Older runtime
+  // definitions passed v_payment.bank_account_id straight into that integer
+  // column, which overflows for valid external account numbers such as
+  // 1640006707220.  Keep the external value untouched and resolve it only at
+  // the owner boundary.
+  await db.execute(sql.raw(`
+    CREATE OR REPLACE FUNCTION sport_center.resolve_internal_bank_account_id(
+      p_company_id integer,
+      p_external_bank_account_id text
+    )
+    RETURNS integer
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'sport_center', 'public'
+    AS $function$
+    DECLARE
+      v_external_bank_account_id text;
+      v_bank_account_count integer;
+      v_internal_bank_account_id integer;
+    BEGIN
+      v_external_bank_account_id :=
+        NULLIF(BTRIM(p_external_bank_account_id::text), '');
+
+      IF v_external_bank_account_id IS NULL THEN
+        RAISE EXCEPTION
+          'CANONICAL_BANK_ACCOUNT_UNRESOLVED: company=% has no external bank account',
+          p_company_id
+          USING ERRCODE = 'P0001';
+      END IF;
+
+      SELECT COUNT(*)::integer, MIN(cba.id)
+        INTO v_bank_account_count, v_internal_bank_account_id
+        FROM public.company_bank_accounts cba
+       WHERE cba.company_id = p_company_id
+         AND cba.account_number::text = v_external_bank_account_id
+         AND cba.is_active = TRUE;
+
+      IF v_bank_account_count <> 1 OR v_internal_bank_account_id IS NULL THEN
+        RAISE EXCEPTION
+          'CANONICAL_BANK_ACCOUNT_UNRESOLVED: company=% account=% matches=%',
+          p_company_id, v_external_bank_account_id, v_bank_account_count
+          USING ERRCODE = 'P0001';
+      END IF;
+
+      RETURN v_internal_bank_account_id;
+    END;
+    $function$;
+  `));
+
+  await db.execute(sql.raw(`
+    DO $migration$
+    DECLARE
+      v_definition text;
+      v_patched_definition text;
+    BEGIN
+      IF to_regprocedure(
+           'sport_center.create_payment_accounting_draft(integer)'
+         ) IS NULL THEN
+        RAISE EXCEPTION
+          'CANONICAL_PAYMENT_ACCOUNTING_OWNER_MISSING: sport_center.create_payment_accounting_draft(integer)';
+      END IF;
+
+      SELECT pg_get_functiondef(
+        'sport_center.create_payment_accounting_draft(integer)'::regprocedure
+      )
+        INTO v_definition;
+
+      v_patched_definition := replace(
+        v_definition,
+        'SET search_path TO ''pg_catalog'', ''sport_center''',
+        'SET search_path TO ''pg_catalog'', ''sport_center'', ''public'''
+      );
+      v_patched_definition := replace(
+        v_patched_definition,
+        'v_payment.bank_account_id,',
+        'sport_center.resolve_internal_bank_account_id(v_company_id, v_payment.bank_account_id::text),'
+      );
+
+      IF v_patched_definition = v_definition
+         OR position(
+              'sport_center.resolve_internal_bank_account_id(v_company_id, v_payment.bank_account_id::text)'
+              IN v_patched_definition
+            ) = 0
+      THEN
+        RAISE EXCEPTION
+          'CANONICAL_PAYMENT_ACCOUNTING_OWNER_PATCH_FAILED: bank identity assignment not found';
+      END IF;
+
+      IF v_patched_definition <> v_definition THEN
+        EXECUTE v_patched_definition;
+      END IF;
+    END;
+    $migration$;
+  `));
+
   const duplicateGroups = await db.execute(sql`
     SELECT
       company_id,
