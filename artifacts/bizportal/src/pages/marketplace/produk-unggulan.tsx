@@ -35,6 +35,7 @@ import {
   PowerOff,
   Wrench,
   ShieldAlert,
+  Building2,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -124,6 +125,18 @@ function PayBadge({ status }: { status: PaymentStatus | null | undefined }) {
   if (!status) return <span className="text-muted-foreground/40 text-xs">—</span>;
   const m = PAY_META[status] ?? { label: status, cls: "bg-slate-100 text-slate-600" };
   return <Badge className={`text-xs ${m.cls}`}>{m.label}</Badge>;
+}
+
+function dateInputValue(date: Date) {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 10);
+}
+
+function dateWithDays(start: string, days: number) {
+  const parsed = new Date(`${start}T00:00:00`);
+  if (!start || Number.isNaN(parsed.getTime()) || !Number.isFinite(days)) return "";
+  parsed.setDate(parsed.getDate() + days);
+  return dateInputValue(parsed);
 }
 
 // ── Section: Paket Promosi ────────────────────────────────────────────────────
@@ -326,6 +339,223 @@ function PaketPromosiSection() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+// ── Section: Tambah Produk Internal ────────────────────────────────────────────
+
+interface InternalVendor {
+  id: number;
+  name: string;
+  companyId: number | null;
+}
+
+interface InternalCatalogItem {
+  id: number;
+  vendorId: number;
+  name: string;
+  description: string | null;
+  currency: string;
+  priceSell: string | number | null;
+  isFeatured: boolean;
+}
+
+function TambahProdukInternalSection() {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const today = dateInputValue(new Date());
+  const [vendorId, setVendorId] = useState("");
+  const [catalogItemId, setCatalogItemId] = useState("");
+  const [packageId, setPackageId] = useState("");
+  const [startAt, setStartAt] = useState(today);
+  const [endAt, setEndAt] = useState("");
+
+  const { data: vendors = [], isLoading: vendorsLoading } = useQuery<InternalVendor[]>({
+    queryKey: ["admin-internal-featured-vendors"],
+    queryFn: async () => {
+      const r = await fetch("/api/portal/admin/internal-featured/vendors", { credentials: "include" });
+      if (!r.ok) throw new Error("Gagal memuat vendor internal");
+      return r.json();
+    },
+    staleTime: 60_000,
+  });
+
+  const { data: packages = [], isLoading: packagesLoading } = useQuery<FeaturedPackage[]>({
+    queryKey: ["admin-featured-packages"],
+    queryFn: async () => {
+      const r = await fetch("/api/portal/admin/featured-packages", { credentials: "include" });
+      if (!r.ok) throw new Error("Gagal memuat paket");
+      return r.json();
+    },
+    staleTime: 30_000,
+  });
+
+  const { data: catalog = [], isLoading: catalogLoading } = useQuery<InternalCatalogItem[]>({
+    queryKey: ["admin-internal-featured-catalog", vendorId],
+    queryFn: async () => {
+      const r = await fetch(`/api/portal/admin/internal-featured/vendors/${vendorId}/catalog`, { credentials: "include" });
+      if (!r.ok) throw new Error("Gagal memuat katalog internal");
+      return r.json();
+    },
+    enabled: Boolean(vendorId),
+    staleTime: 15_000,
+  });
+
+  const selectedPackage = packages.find((pkg) => String(pkg.id) === packageId);
+
+  function handleVendorChange(value: string) {
+    setVendorId(value);
+    setCatalogItemId("");
+  }
+
+  function handlePackageChange(value: string) {
+    setPackageId(value);
+    const pkg = packages.find((candidate) => String(candidate.id) === value);
+    if (pkg) setEndAt(dateWithDays(startAt, pkg.durationDays));
+  }
+
+  function handleStartChange(value: string) {
+    setStartAt(value);
+    if (selectedPackage) setEndAt(dateWithDays(value, selectedPackage.durationDays));
+  }
+
+  const activateMut = useMutation({
+    mutationFn: async () => {
+      const r = await fetch("/api/portal/admin/internal-featured/activate", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          vendorId: Number(vendorId),
+          catalogItemId: Number(catalogItemId),
+          packageId: Number(packageId),
+          startAt: `${startAt}T00:00:00`,
+          endAt: `${endAt}T00:00:00`,
+        }),
+      });
+      if (!r.ok) {
+        const e = await r.json().catch(() => ({}));
+        throw new Error(e.error ?? "Gagal mengaktifkan Produk Unggulan");
+      }
+      return r.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin-featured-requests"] });
+      qc.invalidateQueries({ queryKey: ["admin-featured-requests-approved"] });
+      qc.invalidateQueries({ queryKey: ["admin-featured-requests-history"] });
+      qc.invalidateQueries({ queryKey: ["admin-internal-featured-catalog", vendorId] });
+      setCatalogItemId("");
+      toast({
+        title: "Produk internal diaktifkan",
+        description: "Produk langsung menjadi Produk Unggulan dan bebas pembayaran.",
+      });
+    },
+    onError: (e: Error) => toast({ title: "Gagal", description: e.message, variant: "destructive" }),
+  });
+
+  const canSubmit = Boolean(vendorId && catalogItemId && packageId && startAt && endAt);
+  const selectedItem = catalog.find((item) => String(item.id) === catalogItemId);
+
+  return (
+    <div className="space-y-4">
+      <Card className="border-indigo-200 bg-indigo-50/40">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Building2 className="h-4 w-4 text-indigo-600" />
+            Tambah Produk Internal
+            <Badge className="bg-indigo-100 text-indigo-700 border-indigo-200 text-[10px]">Internal / Bebas Pembayaran</Badge>
+          </CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Pilih vendor internal dan produk katalog yang sudah aktif serta published. Tidak perlu login vendor atau upload bukti pembayaran.
+          </p>
+        </CardHeader>
+        <CardContent className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label>Vendor internal *</Label>
+            <Select value={vendorId} onValueChange={handleVendorChange}>
+              <SelectTrigger>
+                <SelectValue placeholder={vendorsLoading ? "Memuat vendor..." : "Pilih vendor internal"} />
+              </SelectTrigger>
+              <SelectContent>
+                {vendors.map((vendor) => (
+                  <SelectItem key={vendor.id} value={String(vendor.id)}>{vendor.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {vendors.length === 0 && !vendorsLoading && (
+              <p className="text-xs text-muted-foreground">Belum ada vendor internal aktif.</p>
+            )}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Produk katalog *</Label>
+            <Select value={catalogItemId} onValueChange={setCatalogItemId} disabled={!vendorId || catalogLoading}>
+              <SelectTrigger>
+                <SelectValue placeholder={!vendorId ? "Pilih vendor terlebih dahulu" : catalogLoading ? "Memuat katalog..." : "Pilih produk aktif"} />
+              </SelectTrigger>
+              <SelectContent>
+                {catalog.map((item) => (
+                  <SelectItem key={item.id} value={String(item.id)}>
+                    <span>{item.name}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {vendorId && catalog.length === 0 && !catalogLoading && (
+              <p className="text-xs text-muted-foreground">Tidak ada produk aktif/published yang tersedia.</p>
+            )}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Paket promosi / durasi *</Label>
+            <Select value={packageId} onValueChange={handlePackageChange}>
+              <SelectTrigger>
+                <SelectValue placeholder={packagesLoading ? "Memuat paket..." : "Pilih paket"} />
+              </SelectTrigger>
+              <SelectContent>
+                {packages.filter((pkg) => pkg.isActive).map((pkg) => (
+                  <SelectItem key={pkg.id} value={String(pkg.id)}>
+                    {pkg.name} · {pkg.durationDays} hari
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Tanggal mulai *</Label>
+            <Input type="date" value={startAt} onChange={(e) => handleStartChange(e.target.value)} />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Tanggal selesai *</Label>
+            <Input type="date" value={endAt} onChange={(e) => setEndAt(e.target.value)} />
+            {selectedPackage && (
+              <p className="text-xs text-muted-foreground">
+                Otomatis mengikuti durasi paket: {selectedPackage.durationDays} hari.
+              </p>
+            )}
+          </div>
+
+          <div className="flex items-end justify-between gap-3 rounded-md border bg-white p-3">
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-muted-foreground">Ringkasan</p>
+              <p className="truncate text-sm font-medium">{selectedItem?.name ?? "Belum memilih produk"}</p>
+              <p className="text-xs text-muted-foreground">
+                {selectedPackage ? `${selectedPackage.name} · prioritas ${selectedPackage.priorityWeight ?? 0}` : "Belum memilih paket"}
+              </p>
+            </div>
+            <Button
+              onClick={() => activateMut.mutate()}
+              disabled={!canSubmit || activateMut.isPending}
+              className="shrink-0"
+            >
+              {activateMut.isPending ? "Mengaktifkan..." : "Aktifkan Produk Unggulan"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -1007,6 +1237,9 @@ export default function ProdukUnggulanPage() {
             <TabsTrigger value="pengajuan" className="flex items-center gap-1.5">
               <Clock className="h-3.5 w-3.5" />Daftar Pengajuan
             </TabsTrigger>
+            <TabsTrigger value="internal" className="flex items-center gap-1.5">
+              <Building2 className="h-3.5 w-3.5" />Tambah Internal
+            </TabsTrigger>
             <TabsTrigger value="aktif" className="flex items-center gap-1.5">
               <Package className="h-3.5 w-3.5" />Produk Aktif
             </TabsTrigger>
@@ -1026,6 +1259,9 @@ export default function ProdukUnggulanPage() {
 
           <TabsContent value="pengajuan">
             <DaftarPengajuanSection />
+          </TabsContent>
+          <TabsContent value="internal">
+            <TambahProdukInternalSection />
           </TabsContent>
           <TabsContent value="aktif">
             <ProdukAktifSection />

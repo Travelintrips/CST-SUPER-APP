@@ -245,6 +245,160 @@ export async function createFeaturedRequest(
   }
 }
 
+export interface ActivateInternalFeaturedProductInput {
+  vendorId: number;
+  catalogItemId: number;
+  packageId: number;
+  startAt: Date;
+  endAt: Date;
+}
+
+/**
+ * Admin shortcut for internal vendors.
+ *
+ * It deliberately goes through the same request table and catalog fields as
+ * the paid vendor flow, but creates the request as active with verified
+ * payment. This keeps expiry, priority ordering, history, and audit behavior
+ * identical without requiring a vendor login or payment proof.
+ */
+export async function activateInternalFeaturedProduct(
+  input: ActivateInternalFeaturedProductInput,
+  adminId: string | null,
+): Promise<MktFeaturedProductRequest> {
+  if (!Number.isInteger(input.vendorId) || !Number.isInteger(input.catalogItemId) || !Number.isInteger(input.packageId)) {
+    throw new FeaturedProductError("Vendor, produk, dan paket wajib dipilih");
+  }
+  if (!(input.startAt instanceof Date) || Number.isNaN(input.startAt.getTime())
+    || !(input.endAt instanceof Date) || Number.isNaN(input.endAt.getTime())
+    || input.endAt <= input.startAt) {
+    throw new FeaturedProductError("Tanggal mulai dan selesai tidak valid");
+  }
+
+  try {
+    const row = await db.transaction(async (tx) => {
+      const [supplier] = await tx
+        .select()
+        .from(suppliersTable)
+        .where(eq(suppliersTable.id, input.vendorId))
+        .for("update")
+        .limit(1);
+      if (!supplier) throw new FeaturedProductError("Vendor tidak ditemukan", 404);
+      if (!supplier.isInternalVendor) {
+        throw new FeaturedProductError("Aksi ini hanya untuk vendor internal");
+      }
+      if (!supplier.isActive) {
+        throw new FeaturedProductError("Vendor internal tidak aktif");
+      }
+
+      const [item] = await tx
+        .select()
+        .from(vendorCatalogItemsTable)
+        .where(eq(vendorCatalogItemsTable.id, input.catalogItemId))
+        .for("update")
+        .limit(1);
+      if (!item || item.vendorId !== input.vendorId) {
+        throw new FeaturedProductError("Produk tidak dimiliki vendor internal ini", 404);
+      }
+      if (!item.isActive || item.status !== "published" || !item.isPublished) {
+        throw new FeaturedProductError("Produk harus aktif dan sudah dipublikasikan");
+      }
+      if (item.isFeatured) {
+        throw new FeaturedProductError("Produk ini sedang menjadi Produk Unggulan aktif");
+      }
+
+      const [pkg] = await tx
+        .select()
+        .from(mktFeaturedPackagesTable)
+        .where(eq(mktFeaturedPackagesTable.id, input.packageId))
+        .limit(1);
+      if (!pkg || !pkg.isActive) {
+        throw new FeaturedProductError("Paket promosi tidak tersedia", 404);
+      }
+
+      const expectedEndAt = new Date(input.startAt.getTime() + pkg.durationDays * 24 * 60 * 60 * 1000);
+      if (expectedEndAt.getTime() !== input.endAt.getTime()) {
+        throw new FeaturedProductError(`Tanggal selesai harus ${pkg.durationDays} hari setelah tanggal mulai`);
+      }
+
+      const existing = await tx
+        .select({ id: mktFeaturedProductRequestsTable.id })
+        .from(mktFeaturedProductRequestsTable)
+        .where(and(
+          eq(mktFeaturedProductRequestsTable.catalogItemId, input.catalogItemId),
+          sql`${mktFeaturedProductRequestsTable.status} IN ('pending', 'approved', 'active')`,
+        ))
+        .limit(1);
+      if (existing.length > 0) {
+        throw new FeaturedProductError("Sudah ada pengajuan aktif untuk produk ini", 409);
+      }
+
+      const now = new Date();
+      const [created] = await tx
+        .insert(mktFeaturedProductRequestsTable)
+        .values({
+          companyId: supplier.companyId ?? null,
+          vendorId: supplier.id,
+          catalogItemId: item.id,
+          packageId: pkg.id,
+          status: "active",
+          requestedStartAt: input.startAt,
+          requestedEndAt: input.endAt,
+          approvedStartAt: input.startAt,
+          approvedEndAt: input.endAt,
+          price: pkg.price,
+          currency: pkg.currency,
+          paymentStatus: "verified",
+          paymentReference: "INTERNAL_VENDOR_FREE",
+          adminNotes: "Internal vendor • Bebas Pembayaran",
+          approvedBy: adminId,
+          approvedAt: now,
+          activatedAt: now,
+          updatedAt: now,
+        })
+        .returning();
+      if (!created) throw new FeaturedProductError("Gagal membuat Produk Unggulan");
+
+      await tx
+        .update(vendorCatalogItemsTable)
+        .set({
+          isFeatured: true,
+          featuredPriority: pkg.priorityWeight,
+          featuredStartAt: input.startAt,
+          featuredUntil: input.endAt,
+          updatedAt: now,
+        })
+        .where(eq(vendorCatalogItemsTable.id, item.id));
+
+      return created;
+    });
+
+    writeAuditLog({
+      userId: adminId,
+      action: "featured_internal_product_activated",
+      module: "marketplace_featured",
+      referenceId: String(row.id),
+      newData: {
+        requestId: row.id,
+        vendorId: row.vendorId,
+        catalogItemId: row.catalogItemId,
+        packageId: row.packageId,
+        startAt: row.approvedStartAt,
+        endAt: row.approvedEndAt,
+        paymentStatus: row.paymentStatus,
+        paymentReference: row.paymentReference,
+      },
+    });
+
+    return row;
+  } catch (err: unknown) {
+    if (err instanceof FeaturedProductError) throw err;
+    if (err instanceof Error && /duplicate key|unique constraint/i.test(err.message)) {
+      throw new FeaturedProductError("Sudah ada pengajuan aktif untuk produk ini", 409);
+    }
+    throw err;
+  }
+}
+
 export async function listFeaturedRequestsForVendor(vendorId: number): Promise<MktFeaturedProductRequest[]> {
   return db
     .select()

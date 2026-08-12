@@ -93,6 +93,7 @@ import {
   updateFeaturedPackage,
   deactivateFeaturedPackage,
   createFeaturedRequest,
+  activateInternalFeaturedProduct,
   listFeaturedRequestsForVendor,
   getFeaturedRequestDetailForVendor,
   submitPaymentProofForVendor,
@@ -3307,6 +3308,79 @@ router.get("/admin/featured-packages", requirePortalAdmin, async (req, res) => {
     res.json(await listFeaturedPackages(req.query.includeInactive === "true"));
   } catch (e: unknown) {
     res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
+  }
+});
+
+// ── Admin shortcut: Internal Vendor → Featured Product ───────────────────────
+// This is intentionally separate from the vendor request flow: no vendor login,
+// payment proof, or payment verification is needed. The shared service still
+// creates the normal featured request and catalog state for expiry/history.
+router.get("/admin/internal-featured/vendors", requirePortalAdmin, async (_req, res) => {
+  try {
+    const rows = await db
+      .select({
+        id: suppliersTable.id,
+        name: suppliersTable.name,
+        companyId: suppliersTable.companyId,
+      })
+      .from(suppliersTable)
+      .where(and(eq(suppliersTable.isInternalVendor, true), eq(suppliersTable.isActive, true)))
+      .orderBy(asc(suppliersTable.name));
+    return res.json(rows);
+  } catch (e: unknown) {
+    return res.status(500).json({ error: (e as Error)?.message ?? "Gagal memuat vendor internal" });
+  }
+});
+
+router.get("/admin/internal-featured/vendors/:vendorId/catalog", requirePortalAdmin, async (req, res) => {
+  const vendorId = Number(req.params.vendorId);
+  if (!Number.isInteger(vendorId) || vendorId <= 0) return res.status(400).json({ error: "vendorId tidak valid" });
+  try {
+    const rows = await db
+      .select({
+        id: vendorCatalogItemsTable.id,
+        vendorId: vendorCatalogItemsTable.vendorId,
+        name: vendorCatalogItemsTable.name,
+        description: vendorCatalogItemsTable.description,
+        currency: vendorCatalogItemsTable.currency,
+        priceSell: vendorCatalogItemsTable.priceSell,
+        isFeatured: vendorCatalogItemsTable.isFeatured,
+      })
+      .from(vendorCatalogItemsTable)
+      .innerJoin(suppliersTable, eq(vendorCatalogItemsTable.vendorId, suppliersTable.id))
+      .where(and(
+        eq(vendorCatalogItemsTable.vendorId, vendorId),
+        eq(suppliersTable.isInternalVendor, true),
+        eq(vendorCatalogItemsTable.isActive, true),
+        eq(vendorCatalogItemsTable.isPublished, true),
+        eq(vendorCatalogItemsTable.status, "published"),
+        eq(vendorCatalogItemsTable.isFeatured, false),
+      ))
+      .orderBy(asc(vendorCatalogItemsTable.name));
+    return res.json(rows);
+  } catch (e: unknown) {
+    return res.status(500).json({ error: (e as Error)?.message ?? "Gagal memuat katalog internal" });
+  }
+});
+
+router.post("/admin/internal-featured/activate", requirePortalAdmin, async (req: PortalAuthReq, res) => {
+  try {
+    const vendorId = Number(req.body?.vendorId);
+    const catalogItemId = Number(req.body?.catalogItemId);
+    const packageId = Number(req.body?.packageId);
+    const startAt = new Date(String(req.body?.startAt ?? ""));
+    const endAt = new Date(String(req.body?.endAt ?? ""));
+    if (![vendorId, catalogItemId, packageId].every((n) => Number.isInteger(n) && n > 0)) {
+      return res.status(400).json({ error: "Vendor, produk, dan paket wajib dipilih" });
+    }
+    const row = await activateInternalFeaturedProduct(
+      { vendorId, catalogItemId, packageId, startAt, endAt },
+      _adminIdOf(req),
+    );
+    return res.status(201).json(row);
+  } catch (e: unknown) {
+    if (e instanceof FeaturedProductError) return res.status(e.statusCode).json({ error: e.message });
+    return res.status(500).json({ error: (e as Error)?.message ?? "Gagal mengaktifkan Produk Unggulan" });
   }
 });
 
