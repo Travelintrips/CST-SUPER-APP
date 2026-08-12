@@ -18,8 +18,17 @@ export async function runPortalMigration(): Promise<void> {
           ) THEN
             ALTER TABLE portal_customers ADD COLUMN role TEXT NOT NULL DEFAULT 'customer';
           END IF;
+          ALTER TABLE portal_customers ADD COLUMN IF NOT EXISTS account_status TEXT NOT NULL DEFAULT 'active';
+          ALTER TABLE portal_customers ADD COLUMN IF NOT EXISTS sanction_reason TEXT;
+          ALTER TABLE portal_customers ADD COLUMN IF NOT EXISTS sanction_until TIMESTAMPTZ;
+          ALTER TABLE portal_customers ADD COLUMN IF NOT EXISTS status_changed_at TIMESTAMPTZ;
+          ALTER TABLE portal_customers ADD COLUMN IF NOT EXISTS status_changed_by TEXT;
         END IF;
       END $$
+    `);
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS portal_customers_account_status_idx
+        ON portal_customers (account_status)
     `);
 
     // Buat tabel portal_content jika belum ada
@@ -150,7 +159,7 @@ export async function runPortalMigration(): Promise<void> {
       ALTER TABLE portal_customers ADD COLUMN IF NOT EXISTS avatar_url TEXT
     `);
 
-    logger.info("Portal migration: selesai (role column + portal_content table + admin email promotion + quote_requests + media_assets + wa_otp_codes + trusted_devices + avatar_url)");
+    logger.info("Portal migration: selesai (role + account status + portal_content + admin email promotion + quote_requests + media_assets + wa_otp_codes + trusted_devices + avatar_url)");
   } catch (err) {
     logger.error({ err }, "Portal migration gagal");
   }

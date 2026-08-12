@@ -16,6 +16,7 @@ import { eq, and, desc, sql } from "drizzle-orm";
 
 export interface CustomerListOptions {
   role?: string;
+  accountStatus?: string;
   q?: string;
 }
 
@@ -26,6 +27,9 @@ export interface CustomerListItem {
   phone: string | null;
   company: string | null;
   role: string | null;
+  accountStatus: string;
+  sanctionReason: string | null;
+  sanctionUntil: Date | null;
   avatarUrl: string | null;
   source: "wa" | "oauth" | "email";
   createdAt: Date | null;
@@ -43,6 +47,64 @@ export interface CustomerStats {
   profileIncomplete: number;
   profilePending: number;
   profileActive: number;
+  accountActive: number;
+  accountInactive: number;
+  accountSanctioned: number;
+}
+
+export type PortalAccountStatus = "active" | "inactive" | "sanctioned";
+
+export interface UpdatePortalCustomerInput {
+  name?: string;
+  email?: string;
+  phone?: string | null;
+  company?: string | null;
+  role?: string;
+  accountStatus?: PortalAccountStatus;
+  sanctionReason?: string | null;
+  sanctionUntil?: Date | null;
+  statusChangedBy?: string | null;
+}
+
+export async function updatePortalCustomer(
+  customerId: number,
+  input: UpdatePortalCustomerInput,
+) {
+  const [current] = await db
+    .select()
+    .from(portalCustomersTable)
+    .where(eq(portalCustomersTable.id, customerId))
+    .limit(1);
+  if (!current) return null;
+
+  const patch: Record<string, unknown> = {};
+  if (input.name !== undefined) patch.name = input.name.trim();
+  if (input.email !== undefined) patch.email = input.email.trim().toLowerCase();
+  if (input.phone !== undefined) patch.phone = input.phone?.trim() || null;
+  if (input.company !== undefined) patch.company = input.company?.trim() || null;
+  if (input.role !== undefined) patch.role = input.role;
+  if (input.accountStatus !== undefined) {
+    patch.accountStatus = input.accountStatus;
+    patch.statusChangedAt = new Date();
+    patch.statusChangedBy = input.statusChangedBy ?? null;
+    if (input.accountStatus === "active") {
+      patch.sanctionReason = null;
+      patch.sanctionUntil = null;
+    } else {
+      patch.sanctionReason = input.sanctionReason?.trim() || null;
+      patch.sanctionUntil = input.sanctionUntil ?? null;
+    }
+  } else if (input.sanctionReason !== undefined || input.sanctionUntil !== undefined) {
+    patch.sanctionReason = input.sanctionReason?.trim() || null;
+    patch.sanctionUntil = input.sanctionUntil ?? null;
+  }
+
+  const [updated] = await db
+    .update(portalCustomersTable)
+    .set(patch as any)
+    .where(eq(portalCustomersTable.id, customerId))
+    .returning();
+  return updated ?? null;
 }
 
 // ─── listCustomers ────────────────────────────────────────────────────────────
@@ -50,6 +112,7 @@ export interface CustomerStats {
 export async function listCustomers(opts: CustomerListOptions): Promise<{ items: CustomerListItem[]; total: number }> {
   const conds = [];
   if (opts.role) conds.push(eq(portalCustomersTable.role, opts.role));
+  if (opts.accountStatus) conds.push(eq(portalCustomersTable.accountStatus, opts.accountStatus));
 
   const rows = await db
     .select({
@@ -59,6 +122,9 @@ export async function listCustomers(opts: CustomerListOptions): Promise<{ items:
       phone:              portalCustomersTable.phone,
       company:            portalCustomersTable.company,
       role:               portalCustomersTable.role,
+      accountStatus:      portalCustomersTable.accountStatus,
+      sanctionReason:     portalCustomersTable.sanctionReason,
+      sanctionUntil:      portalCustomersTable.sanctionUntil,
       avatarUrl:          sql<string | null>`${portalCustomersTable}.avatar_url`,
       oauthProvider:      portalCustomersTable.oauthProvider,
       createdAt:          portalCustomersTable.createdAt,
@@ -92,6 +158,9 @@ export async function listCustomers(opts: CustomerListOptions): Promise<{ items:
       phone:              r.phone,
       company:            r.company,
       role:               r.role,
+      accountStatus:      r.accountStatus ?? "active",
+      sanctionReason:     r.sanctionReason ?? null,
+      sanctionUntil:      r.sanctionUntil ?? null,
       avatarUrl:          r.avatarUrl ?? null,
       source,
       createdAt:          r.createdAt,
@@ -112,6 +181,7 @@ export async function getCustomerStats(): Promise<CustomerStats> {
     .select({
       id:            portalCustomersTable.id,
       role:          portalCustomersTable.role,
+      accountStatus: portalCustomersTable.accountStatus,
       email:         portalCustomersTable.email,
       profileStatus: userProfilesTable.status,
     })
@@ -126,5 +196,8 @@ export async function getCustomerStats(): Promise<CustomerStats> {
     profileIncomplete:  rows.filter((r) => !r.profileStatus || r.profileStatus === "incomplete" || r.profileStatus === "not_started").length,
     profilePending:     rows.filter((r) => r.profileStatus === "pending").length,
     profileActive:      rows.filter((r) => r.profileStatus === "active").length,
+    accountActive:     rows.filter((r) => r.accountStatus === "active").length,
+    accountInactive:   rows.filter((r) => r.accountStatus === "inactive").length,
+    accountSanctioned: rows.filter((r) => r.accountStatus === "sanctioned").length,
   };
 }

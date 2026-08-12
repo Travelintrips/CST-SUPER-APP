@@ -52,7 +52,7 @@ import {
   getApprovalStats,
   getApprovalIdentityDocs,
 } from "../lib/services/portalApprovalService.js";
-import { listCustomers, getCustomerStats } from "../lib/services/portalCustomerService.js";
+import { listCustomers, getCustomerStats, updatePortalCustomer, type PortalAccountStatus } from "../lib/services/portalCustomerService.js";
 import { getErpStats } from "../lib/services/portalStatsService.js";
 import { getContent, updateContent } from "../lib/services/portalContentService.js";
 import {
@@ -1857,6 +1857,11 @@ router.get("/admin/customers/:id", requirePortalAdmin, async (req, res): Promise
         phone:       portalCustomersTable.phone,
         company:     portalCustomersTable.company,
         role:        portalCustomersTable.role,
+        accountStatus: portalCustomersTable.accountStatus,
+        sanctionReason: portalCustomersTable.sanctionReason,
+        sanctionUntil: portalCustomersTable.sanctionUntil,
+        statusChangedAt: portalCustomersTable.statusChangedAt,
+        statusChangedBy: portalCustomersTable.statusChangedBy,
         avatarUrl:   sql<string | null>`${portalCustomersTable}.avatar_url`,
         oauthProvider: portalCustomersTable.oauthProvider,
         createdAt:   portalCustomersTable.createdAt,
@@ -1879,11 +1884,135 @@ router.get("/admin/customers/:id", requirePortalAdmin, async (req, res): Promise
   }
 });
 
+// PATCH /api/portal/admin/customers/:id — edit profile/role/status akun (admin only)
+router.patch("/admin/customers/:id", requirePortalAdmin, async (req, res): Promise<void> => {
+  const id = Number(req.params["id"]);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "ID tidak valid" });
+    return;
+  }
+
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const allowedRoles = ["customer", "vendor", "driver", "employee", "admin"];
+  const allowedStatuses: PortalAccountStatus[] = ["active", "inactive", "sanctioned"];
+  const role = body.role === undefined ? undefined : String(body.role);
+  const accountStatus = body.accountStatus === undefined ? undefined : String(body.accountStatus) as PortalAccountStatus;
+  const email = body.email === undefined ? undefined : String(body.email).trim().toLowerCase();
+  const name = body.name === undefined ? undefined : String(body.name).trim();
+  const sanctionReason = body.sanctionReason === undefined || body.sanctionReason === null
+    ? null
+    : String(body.sanctionReason).trim();
+  const sanctionUntilRaw = body.sanctionUntil === undefined || body.sanctionUntil === null || body.sanctionUntil === ""
+    ? null
+    : new Date(String(body.sanctionUntil));
+
+  if (role !== undefined && !allowedRoles.includes(role)) {
+    res.status(400).json({ error: "Role akun tidak valid" });
+    return;
+  }
+  if (accountStatus !== undefined && !allowedStatuses.includes(accountStatus)) {
+    res.status(400).json({ error: "Status akun tidak valid" });
+    return;
+  }
+  if (email !== undefined && (!email.includes("@") || email.length > 254)) {
+    res.status(400).json({ error: "Email tidak valid" });
+    return;
+  }
+  if (name !== undefined && !name) {
+    res.status(400).json({ error: "Nama wajib diisi" });
+    return;
+  }
+  if (accountStatus === "sanctioned" && !sanctionReason) {
+    res.status(400).json({ error: "Alasan sanksi wajib diisi" });
+    return;
+  }
+  if (sanctionUntilRaw && Number.isNaN(sanctionUntilRaw.getTime())) {
+    res.status(400).json({ error: "Tanggal berakhir sanksi tidak valid" });
+    return;
+  }
+
+  const actorId = (req as PortalAuthReq).portalCustomerId;
+  const [current] = await db
+    .select()
+    .from(portalCustomersTable)
+    .where(eq(portalCustomersTable.id, id))
+    .limit(1);
+  if (!current) {
+    res.status(404).json({ error: "Customer tidak ditemukan" });
+    return;
+  }
+  // Jangan izinkan admin mencabut akses dirinya sendiri atau menurunkan role admin
+  // dari akun yang sedang dipakai untuk menjalankan operasi.
+  if (actorId === id && ((accountStatus && accountStatus !== "active") || (role && role !== "admin"))) {
+    res.status(400).json({ error: "Admin tidak dapat menonaktifkan atau menurunkan role akunnya sendiri" });
+    return;
+  }
+
+  try {
+    const updated = await updatePortalCustomer(id, {
+      name,
+      email,
+      phone: body.phone === undefined ? undefined : String(body.phone),
+      company: body.company === undefined ? undefined : String(body.company),
+      role,
+      accountStatus,
+      sanctionReason,
+      sanctionUntil: sanctionUntilRaw,
+      statusChangedBy: actorId ? String(actorId) : null,
+    });
+    if (!updated) {
+      res.status(404).json({ error: "Customer tidak ditemukan" });
+      return;
+    }
+
+    writeAuditLog({
+      userId: actorId ? String(actorId) : null,
+      userEmail: (req.user as { email?: string } | undefined)?.email ?? null,
+      action: "UPDATE",
+      module: "portal_account",
+      referenceId: String(id),
+      entityType: "portal_customer",
+      entityId: String(id),
+      oldData: {
+        name: current.name,
+        email: current.email,
+        phone: current.phone,
+        company: current.company,
+        role: current.role,
+        accountStatus: current.accountStatus,
+        sanctionReason: current.sanctionReason,
+        sanctionUntil: current.sanctionUntil,
+      },
+      newData: {
+        name: updated.name,
+        email: updated.email,
+        phone: updated.phone,
+        company: updated.company,
+        role: updated.role,
+        accountStatus: updated.accountStatus,
+        sanctionReason: updated.sanctionReason,
+        sanctionUntil: updated.sanctionUntil,
+      },
+      ipAddress: req.ip ?? null,
+      userAgent: req.get("user-agent") ?? null,
+    });
+    res.json(updated);
+  } catch (err: any) {
+    if (err?.code === "23505") {
+      res.status(409).json({ error: "Email sudah digunakan oleh akun lain" });
+      return;
+    }
+    req.log?.error({ err }, "portal admin customer update error");
+    res.status(500).json({ error: "Gagal menyimpan perubahan akun" });
+  }
+});
+
 // GET /api/portal/admin/customers — list all portal customers (with onboarding status)
 router.get("/admin/customers", requirePortalAdmin, async (req, res): Promise<void> => {
   try {
     const data = await listCustomers({
       role: req.query.role as string | undefined,
+      accountStatus: req.query.accountStatus as string | undefined,
       q:    req.query.q    as string | undefined,
     });
     res.json(data);

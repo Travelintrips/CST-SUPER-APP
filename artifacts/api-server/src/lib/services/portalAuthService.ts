@@ -22,6 +22,21 @@ import { sendViaService as sendWhatsApp } from "../waTransport.js";
 import { sendMail, isSmtpConfigured } from "../mailer.js";
 import { normalizePhone } from "../phoneUtils.js";
 
+function assertAccountUsable(customer: {
+  accountStatus?: string | null;
+  sanctionUntil?: Date | string | null;
+}): void {
+  const status = customer.accountStatus ?? "active";
+  if (status === "active") return;
+  throw new AuthServiceError(
+    403,
+    status === "sanctioned"
+      ? "Akun terkena sanksi dan tidak dapat digunakan."
+      : "Akun tidak aktif dan tidak dapat digunakan.",
+    { payload: { accountStatus: status, sanctionUntil: customer.sanctionUntil ?? null } },
+  );
+}
+
 // ─── Typed Error ───────────────────────────────────────────────────────────────
 
 export class AuthServiceError extends Error {
@@ -75,6 +90,7 @@ export async function emailPasswordLogin(email: string, password: string) {
   if (!customer || !customer.passwordHash) {
     throw new AuthServiceError(401, "Email atau password salah.");
   }
+  assertAccountUsable(customer);
   const valid = await bcrypt.compare(String(password), customer.passwordHash);
   if (!valid) {
     throw new AuthServiceError(401, "Email atau password salah.");
@@ -349,6 +365,7 @@ export async function waLogin(
     throw new AuthServiceError(409, "Akun ambigu untuk nomor ini. Hubungi admin.");
   }
   const user = matches[0];
+  assertAccountUsable(user);
 
   // Invalidate verifyToken — clear both plaintext AND hash, force expiry for true single-use semantics
   await db.update(waOtpCodesTable)
@@ -421,6 +438,7 @@ export async function waTrustedLogin(rawPhone: string, deviceToken: string) {
 
   if (matches.length !== 1) throw new AuthServiceError(401, "Akun tidak ditemukan.");
   const user = matches[0];
+  assertAccountUsable(user);
 
   // Sliding expiry: perpanjang masa berlaku 30 hari dari sekarang
   const newExpiresAt = new Date(Date.now() + 30 * 86400_000);

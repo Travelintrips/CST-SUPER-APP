@@ -34,6 +34,23 @@ function verifyDevToken(token: string): { id: number; email: string; role: strin
 
 export type PortalAuthReq = Request & { portalCustomerId: number; portalRole: string };
 
+function rejectUnavailablePortalAccount(
+  customer: { accountStatus?: string | null; sanctionUntil?: Date | string | null },
+  res: Response,
+): boolean {
+  const status = customer.accountStatus ?? "active";
+  if (status === "active") return false;
+  const message = status === "sanctioned"
+    ? "Akun terkena sanksi dan tidak dapat digunakan."
+    : "Akun tidak aktif dan tidak dapat digunakan.";
+  res.status(403).json({
+    message,
+    accountStatus: status,
+    sanctionUntil: customer.sanctionUntil ?? null,
+  });
+  return true;
+}
+
 /**
  * Safely extract the email from a devportal.* token.
  * Returns null when:
@@ -122,6 +139,7 @@ export async function requirePortalAuth(req: Request, res: Response, next: NextF
       .from(portalCustomersTable)
       .where(eq(portalCustomersTable.id, devPayload.id));
     if (!customer) { res.status(401).json({ message: "Dev user not found" }); return; }
+    if (rejectUnavailablePortalAccount(customer, res)) return;
     (req as PortalAuthReq).portalCustomerId = customer.id;
     (req as PortalAuthReq).portalRole = customer.role;
     next();
@@ -136,6 +154,7 @@ export async function requirePortalAuth(req: Request, res: Response, next: NextF
       .from(portalCustomersTable)
       .where(eq(portalCustomersTable.id, portalPayload.customerId));
     if (!customer) { res.status(401).json({ message: "Customer not found" }); return; }
+    if (rejectUnavailablePortalAccount(customer, res)) return;
     (req as PortalAuthReq).portalCustomerId = customer.id;
     (req as PortalAuthReq).portalRole = customer.role;
     next();
@@ -178,6 +197,7 @@ export async function requirePortalAuth(req: Request, res: Response, next: NextF
     }
   }
 
+  if (rejectUnavailablePortalAccount(customer, res)) return;
   (req as PortalAuthReq).portalCustomerId = customer.id;
   (req as PortalAuthReq).portalRole = customer.role;
   next();
@@ -219,6 +239,7 @@ export async function requirePortalAdmin(req: Request, res: Response, next: Next
       res.status(403).json({ message: "Akses admin diperlukan" });
       return;
     }
+    if (rejectUnavailablePortalAccount(customer, res)) return;
     (req as PortalAuthReq).portalCustomerId = customer.id;
     (req as PortalAuthReq).portalRole = customer.role;
     next();
@@ -236,6 +257,7 @@ export async function requirePortalAdmin(req: Request, res: Response, next: Next
       res.status(403).json({ message: "Akses admin diperlukan" });
       return;
     }
+    if (rejectUnavailablePortalAccount(customer, res)) return;
     (req as PortalAuthReq).portalCustomerId = customer.id;
     (req as PortalAuthReq).portalRole = customer.role;
     next();
@@ -266,6 +288,7 @@ export async function requirePortalAdmin(req: Request, res: Response, next: Next
     res.status(403).json({ message: "Akses admin diperlukan" });
     return;
   }
+  if (rejectUnavailablePortalAccount(customer, res)) return;
 
   (req as PortalAuthReq).portalCustomerId = customer.id;
   (req as PortalAuthReq).portalRole = customer.role;

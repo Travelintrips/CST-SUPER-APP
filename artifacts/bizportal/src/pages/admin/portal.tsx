@@ -9,11 +9,14 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Users, Building2, Truck, CheckCircle2, Clock, XCircle,
   RefreshCw, Search, AlertCircle,
   MessageCircle, Mail, ArrowRight, Loader2,
-  ShieldCheck, UserCheck, BarChart3,
+  ShieldCheck, UserCheck, BarChart3, Pencil, Eye, Ban,
 } from "lucide-react";
 import { Link } from "wouter";
 import { toast } from "@/hooks/use-toast";
@@ -44,6 +47,9 @@ interface CustomerItem {
   phone: string | null;
   company: string | null;
   role: string;
+  accountStatus: "active" | "inactive" | "sanctioned";
+  sanctionReason: string | null;
+  sanctionUntil: string | null;
   source: "wa" | "oauth" | "email";
   createdAt: string;
   profileStatus: string;
@@ -84,6 +90,16 @@ function roleBadge(role: string) {
     admin: "bg-red-100 text-red-800 border-red-200",
   };
   return <Badge className={`text-xs ${map[role] ?? "bg-gray-100 text-gray-700"}`}>{role}</Badge>;
+}
+
+function accountStatusBadge(status: string) {
+  if (status === "sanctioned") {
+    return <Badge className="gap-1 bg-red-100 text-red-800 border-red-200 text-xs"><Ban className="h-3 w-3" />Sanksi</Badge>;
+  }
+  if (status === "inactive") {
+    return <Badge variant="outline" className="text-xs text-slate-600 border-slate-300">Nonaktif</Badge>;
+  }
+  return <Badge className="bg-green-100 text-green-800 border-green-200 text-xs">Aktif</Badge>;
 }
 
 // ── Stats Cards ───────────────────────────────────────────────────────────────
@@ -204,8 +220,16 @@ function CustomerStatsCard() {
 function CustomersTab() {
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [selected, setSelected] = useState<CustomerItem | null>(null);
+  const [form, setForm] = useState({
+    name: "", email: "", phone: "", company: "", role: "customer",
+    accountStatus: "active" as CustomerItem["accountStatus"],
+    sanctionReason: "", sanctionUntil: "",
+  });
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const queryClient = useQueryClient();
 
   // Clean up debounce timer on unmount
   useEffect(() => () => { if (searchTimeout.current) clearTimeout(searchTimeout.current); }, []);
@@ -218,6 +242,7 @@ function CustomersTab() {
 
   const params = new URLSearchParams();
   if (roleFilter !== "all") params.set("role", roleFilter);
+  if (statusFilter !== "all") params.set("accountStatus", statusFilter);
   if (debouncedSearch) params.set("q", debouncedSearch);
   const qs = params.toString();
 
@@ -230,6 +255,56 @@ function CustomersTab() {
     },
     staleTime: 30_000,
   });
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      if (!selected) throw new Error("Akun belum dipilih");
+      if (form.accountStatus === "sanctioned" && !form.sanctionReason.trim()) {
+        throw new Error("Alasan sanksi wajib diisi");
+      }
+      const r = await fetch(`/api/portal/admin/customers/${selected.id}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: form.name,
+          email: form.email,
+          phone: form.phone || null,
+          company: form.company || null,
+          role: form.role,
+          accountStatus: form.accountStatus,
+          sanctionReason: form.sanctionReason || null,
+          sanctionUntil: form.sanctionUntil || null,
+        }),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.error || body.message || "Gagal menyimpan akun");
+      }
+      return r.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-customers"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-customer-stats"] });
+      toast({ title: "Perubahan akun tersimpan" });
+      setSelected(null);
+    },
+    onError: (err: Error) => toast({ title: "Gagal menyimpan", description: err.message, variant: "destructive" }),
+  });
+
+  const openCustomer = (customer: CustomerItem) => {
+    setSelected(customer);
+    setForm({
+      name: customer.name ?? customer.profileFullName ?? "",
+      email: customer.email ?? "",
+      phone: customer.phone ?? "",
+      company: customer.company ?? "",
+      role: customer.role ?? "customer",
+      accountStatus: customer.accountStatus ?? "active",
+      sanctionReason: customer.sanctionReason ?? "",
+      sanctionUntil: customer.sanctionUntil ? customer.sanctionUntil.slice(0, 10) : "",
+    });
+  };
 
   return (
     <div className="space-y-4">
@@ -255,6 +330,17 @@ function CustomersTab() {
             <SelectItem value="driver">Driver</SelectItem>
             <SelectItem value="employee">Karyawan</SelectItem>
             <SelectItem value="admin">Admin</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={statusFilter} onValueChange={setStatusFilter}>
+          <SelectTrigger className="h-9 w-[145px] text-sm">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Semua Status</SelectItem>
+            <SelectItem value="active">Aktif</SelectItem>
+            <SelectItem value="inactive">Nonaktif</SelectItem>
+            <SelectItem value="sanctioned">Sanksi</SelectItem>
           </SelectContent>
         </Select>
         <Button variant="ghost" size="icon" className="h-9 w-9" onClick={() => refetch()}>
@@ -287,19 +373,21 @@ function CustomersTab() {
                   <TableHead className="text-xs">Sumber</TableHead>
                   <TableHead className="text-xs">Status Profil</TableHead>
                   <TableHead className="text-xs">Tipe Akun</TableHead>
+                  <TableHead className="text-xs">Status Akun</TableHead>
                   <TableHead className="text-xs">Daftar</TableHead>
+                  <TableHead className="text-xs text-right">Aksi</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {isLoading ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center py-8">
+                    <TableCell colSpan={10} className="text-center py-8">
                       <Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" />
                     </TableCell>
                   </TableRow>
                 ) : data?.items.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center py-8 text-muted-foreground text-sm">
+                    <TableCell colSpan={10} className="text-center py-8 text-muted-foreground text-sm">
                       Tidak ada data yang ditemukan
                     </TableCell>
                   </TableRow>
@@ -315,7 +403,13 @@ function CustomersTab() {
                     <TableCell>{sourceBadge(c.source)}</TableCell>
                     <TableCell>{profileStatusBadge(c.profileStatus)}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{c.profileAccountType || "—"}</TableCell>
+                   <TableCell>{accountStatusBadge(c.accountStatus)}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{fmt(c.createdAt)}</TableCell>
+                   <TableCell className="text-right">
+                     <Button size="sm" variant="ghost" className="gap-1.5" onClick={() => openCustomer(c)}>
+                       <Eye className="h-3.5 w-3.5" /> Lihat / Ubah
+                     </Button>
+                   </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -323,6 +417,111 @@ function CustomersTab() {
           </div>
         </CardContent>
       </Card>
+
+      <Dialog open={!!selected} onOpenChange={(open) => !open && setSelected(null)}>
+        <DialogContent className="max-w-2xl max-h-[92vh] overflow-y-auto">
+          {selected && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <Pencil className="h-4 w-4 text-primary" /> Kelola Akun Portal
+                </DialogTitle>
+                <DialogDescription>
+                  Perubahan berlaku pada login Customer Portal. Data transaksi akun tidak dihapus.
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="grid gap-4 py-2">
+                <div className="rounded-lg border bg-muted/30 p-3 grid grid-cols-2 gap-3 text-sm">
+                  <div><div className="text-xs text-muted-foreground">Sumber akun</div>{sourceBadge(selected.source)}</div>
+                  <div><div className="text-xs text-muted-foreground">Terdaftar</div><div>{fmt(selected.createdAt)}</div></div>
+                  <div><div className="text-xs text-muted-foreground">Status profil</div>{profileStatusBadge(selected.profileStatus)}</div>
+                  <div><div className="text-xs text-muted-foreground">Tipe akun</div><div>{selected.profileAccountType || "—"}</div></div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="portal-account-name">Nama</Label>
+                    <Input id="portal-account-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="portal-account-email">Email</Label>
+                    <Input id="portal-account-email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="portal-account-phone">Telepon / WhatsApp</Label>
+                    <Input id="portal-account-phone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="portal-account-company">Perusahaan</Label>
+                    <Input id="portal-account-company" value={form.company} onChange={(e) => setForm({ ...form, company: e.target.value })} />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label>Role Portal</Label>
+                    <Select value={form.role} onValueChange={(role) => setForm({ ...form, role })}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="customer">Customer</SelectItem>
+                        <SelectItem value="vendor">Vendor</SelectItem>
+                        <SelectItem value="driver">Driver</SelectItem>
+                        <SelectItem value="employee">Karyawan</SelectItem>
+                        <SelectItem value="admin">Admin</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label>Status Akun</Label>
+                    <Select value={form.accountStatus} onValueChange={(accountStatus: CustomerItem["accountStatus"]) => setForm({ ...form, accountStatus })}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="active">Aktif — dapat login</SelectItem>
+                        <SelectItem value="inactive">Nonaktif — login ditolak</SelectItem>
+                        <SelectItem value="sanctioned">Sanksi — login ditolak</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="grid gap-1.5">
+                  <Label htmlFor="portal-account-reason">
+                    {form.accountStatus === "sanctioned" ? "Alasan sanksi *" : "Catatan status (opsional)"}
+                  </Label>
+                  <Textarea
+                    id="portal-account-reason"
+                    value={form.sanctionReason}
+                    onChange={(e) => setForm({ ...form, sanctionReason: e.target.value })}
+                    placeholder="Contoh: dokumen tidak valid, pelanggaran kebijakan, atau permintaan penonaktifan."
+                  />
+                </div>
+                {form.accountStatus === "sanctioned" && (
+                  <div className="grid gap-1.5 max-w-xs">
+                    <Label htmlFor="portal-sanction-until">Sanksi berakhir (opsional)</Label>
+                    <Input id="portal-sanction-until" type="date" value={form.sanctionUntil} onChange={(e) => setForm({ ...form, sanctionUntil: e.target.value })} />
+                  </div>
+                )}
+
+                <div className="rounded-lg border p-3 text-sm">
+                  <div className="font-medium mb-2">Ringkasan profil</div>
+                  <div className="grid sm:grid-cols-2 gap-x-5 gap-y-1 text-muted-foreground">
+                    <div>Nama profil: <span className="text-foreground">{selected.profileFullName || "—"}</span></div>
+                    <div>Alamat: <span className="text-foreground">{selected.profileAddress || "—"}</span></div>
+                  </div>
+                  {selected.sanctionReason && (
+                    <div className="mt-2 text-xs text-red-700">Sanksi sebelumnya: {selected.sanctionReason}</div>
+                  )}
+                </div>
+              </div>
+
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setSelected(null)}>Batal</Button>
+                <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>
+                  {saveMutation.isPending ? "Menyimpan…" : "Simpan Perubahan"}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
