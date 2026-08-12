@@ -14,6 +14,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -2084,6 +2085,8 @@ function MutationDetailPanel({
   matchingPending,
   mappingError,
   onApproveQrisBatch,
+  qrisSelectionChecked,
+  onToggleQrisSelection,
 }: {
   mutation: BankMutation | null;
   open: boolean;
@@ -2098,6 +2101,8 @@ function MutationDetailPanel({
   matchingPending: boolean;
   mappingError?: MappingRequiredError;
   onApproveQrisBatch?: (candidateId: number, mutationId: number, candidate: QrisCandidateAudit) => void;
+  qrisSelectionChecked?: boolean;
+  onToggleQrisSelection?: (candidateId: number, checked: boolean) => void;
 }) {
   if (!mutation) return null;
   const m     = mutation;
@@ -2277,15 +2282,30 @@ function MutationDetailPanel({
                     <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                       QRIS Batch Candidates
                     </p>
-                    {qrisAudit.status === "approved" ? (
-                      <Badge className="bg-green-600 text-white text-xs gap-1">
-                        <CheckCircle2 className="w-3 h-3" /> Disetujui
-                      </Badge>
-                    ) : (
-                      <Badge variant="outline" className="border-amber-400 bg-amber-100 text-amber-900 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-200 text-xs">
-                        {QRIS_AUDIT_STATUS_LABELS[qrisAudit.reconciliation_status] ?? qrisAudit.reconciliation_status}
-                      </Badge>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {qrisAudit.status !== "approved"
+                        && qrisAudit.id != null
+                        && String(qrisAudit.reconciliation_status ?? "").toUpperCase() === "MATCHED"
+                        && onToggleQrisSelection && (
+                        <label className="flex cursor-pointer items-center gap-1.5 text-[10px] font-medium normal-case tracking-normal text-indigo-700 dark:text-indigo-300">
+                          <Checkbox
+                            checked={qrisSelectionChecked}
+                            onCheckedChange={(checked) => onToggleQrisSelection(qrisAudit.id!, checked === true)}
+                            aria-label="Pilih batch QRIS ini"
+                          />
+                          Pilih batch
+                        </label>
+                      )}
+                      {qrisAudit.status === "approved" ? (
+                        <Badge className="bg-green-600 text-white text-xs gap-1">
+                          <CheckCircle2 className="w-3 h-3" /> Disetujui
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="border-amber-400 bg-amber-100 text-amber-900 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-200 text-xs">
+                          {QRIS_AUDIT_STATUS_LABELS[qrisAudit.reconciliation_status] ?? qrisAudit.reconciliation_status}
+                        </Badge>
+                      )}
+                    </div>
                   </div>
 
                   {/* Summary */}
@@ -2831,6 +2851,7 @@ export default function BankReconciliationPage() {
   const [detailMutation,      setDetailMutation]      = useState<BankMutation | null>(null);
   const [actionDialog,        setActionDialog]        = useState<{ mutation: BankMutation; mode: DialogMode } | null>(null);
   const [qrisDetailLoadingId, setQrisDetailLoadingId] = useState<number | null>(null);
+  const [selectedQrisCandidateIds, setSelectedQrisCandidateIds] = useState<number[]>([]);
   const [selectedCandidateId, setSelectedCandidateId] = useState<number | null>(null);
   const [reverseReason,       setReverseReason]       = useState("");
   const [showDeleteAll,       setShowDeleteAll]       = useState(false);
@@ -2912,42 +2933,115 @@ export default function BankReconciliationPage() {
   });
 
   const [qrisBatchConfirm, setQrisBatchConfirm] = useState<{
-    candidateId: number;
-    mutationId: number;
-    companyId: number;
-    providerCode: string;
-    netAmount: number | string;
-    paymentCount: number;
+    candidates: QrisCandidateAudit[];
   } | null>(null);
 
+  const qrisCandidates = qrisAuditData?.candidates ?? [];
+  const qrisApprovableCandidates = qrisCandidates.filter((candidate) =>
+    candidate.id != null
+    && String(candidate.reconciliation_status ?? "").toUpperCase() === "MATCHED"
+    && candidate.status !== "approved",
+  );
+  const selectedQrisCandidates = qrisApprovableCandidates.filter((candidate) =>
+    selectedQrisCandidateIds.includes(candidate.id!),
+  );
+  const allQrisCandidatesSelected =
+    qrisApprovableCandidates.length > 0
+    && qrisApprovableCandidates.every((candidate) => selectedQrisCandidateIds.includes(candidate.id!));
+
+  const toggleQrisCandidate = (candidateId: number, checked: boolean) => {
+    setSelectedQrisCandidateIds((current) =>
+      checked
+        ? Array.from(new Set([...current, candidateId]))
+        : current.filter((id) => id !== candidateId),
+    );
+  };
+
+  const toggleAllQrisCandidates = (checked: boolean) => {
+    setSelectedQrisCandidateIds(checked ? qrisApprovableCandidates.map((candidate) => candidate.id!) : []);
+  };
+
   const handleApproveQrisBatch = (
-    candidateId: number,
-    mutationId: number,
+    _candidateId: number,
+    _mutationId: number,
     candidate: QrisCandidateAudit,
   ) => {
-    const companyId = Number(candidate.company_id ?? null);
-    if (!Number.isInteger(companyId) || companyId <= 0) {
+    openQrisBatchApprovalConfirmation([candidate]);
+  };
+
+  const openQrisBatchApprovalConfirmation = (candidates: QrisCandidateAudit[]) => {
+    const eligibleCandidates = candidates.filter((candidate) =>
+      candidate.id != null
+      && String(candidate.reconciliation_status ?? "").toUpperCase() === "MATCHED"
+      && candidate.status !== "approved",
+    );
+    if (eligibleCandidates.length === 0) {
       toast({
-        title: "Company context tidak tersedia",
-        description: "Kandidat QRIS tidak memiliki company yang valid.",
+        title: "Tidak ada kandidat QRIS yang dapat disetujui",
+        description: "Hanya kandidat berstatus MATCHED yang dapat dipilih.",
         variant: "destructive",
       });
       return;
     }
-    setQrisBatchConfirm({
-      candidateId,
-      mutationId,
-      companyId,
-      providerCode: candidate.provider_code || "belum dikenali",
-      netAmount: candidate.net_amount,
-      paymentCount: candidate.payment_items?.length ?? 0,
+
+    const invalidCompany = eligibleCandidates.find((candidate) => {
+      const companyId = Number(candidate.company_id ?? null);
+      return !Number.isInteger(companyId) || companyId <= 0;
     });
+    if (invalidCompany) {
+      toast({
+        title: "Company context tidak tersedia",
+        description: "Salah satu kandidat QRIS tidak memiliki company yang valid.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setQrisBatchConfirm({ candidates: eligibleCandidates });
   };
 
-  const handleConfirmQrisBatch = () => {
+  const handleApproveSelectedQris = () => {
+    openQrisBatchApprovalConfirmation(selectedQrisCandidates);
+  };
+
+  const handleConfirmQrisBatch = async () => {
     if (!qrisBatchConfirm) return;
-    approveQrisBatchMut.mutate(qrisBatchConfirm);
+    const candidates = qrisBatchConfirm.candidates;
     setQrisBatchConfirm(null);
+
+    let approvedCount = 0;
+    let failedCount = 0;
+    let firstError = "";
+
+    for (const candidate of candidates) {
+      try {
+        await approveQrisBatchMut.mutateAsync({
+          candidateId: candidate.id!,
+          mutationId: candidate.mutation_id,
+          companyId: Number(candidate.company_id),
+          silent: true,
+        });
+        approvedCount += 1;
+      } catch (error) {
+        failedCount += 1;
+        if (!firstError) {
+          firstError = error instanceof Error ? error.message : "Kesalahan tidak diketahui";
+        }
+      }
+    }
+
+    setSelectedQrisCandidateIds([]);
+    qc.invalidateQueries({ queryKey: ["qris-candidate-audit", qrisCompanyId] });
+
+    if (failedCount > 0) {
+      toast({
+        title: `${approvedCount} batch disetujui, ${failedCount} gagal`,
+        description: firstError,
+        variant: "destructive",
+      });
+    } else {
+      toast({ title: `${approvedCount} batch QRIS berhasil disetujui ✓` });
+    }
   };
 
   const summaryMap: Record<string, { count: number; amount: number }> = {};
@@ -3036,7 +3130,7 @@ export default function BankReconciliationPage() {
       candidateId,
       mutationId,
       companyId,
-    }: { candidateId: number; mutationId: number; companyId: number }) => {
+    }: { candidateId: number; mutationId: number; companyId: number; silent?: boolean }) => {
       const r = await fetch(`/api/bank-reconciliation/qris-candidates/${candidateId}/approve`, {
         method: "POST",
         credentials: "include",
@@ -3047,16 +3141,24 @@ export default function BankReconciliationPage() {
       if (!r.ok) throw new Error(body.error ?? r.statusText);
       return body as { mutationId: number; matching?: { status?: string } | null };
     },
-    onSuccess: async (result) => {
-      toast({
-        title: result.matching?.status === "auto_matched" || result.matching?.status === "manual_review"
-          ? "Batch QRIS disetujui — mutasi sudah di-matching ✓"
-          : "Batch QRIS disetujui ✓",
-      });
-      await refreshMutationDetail(result.mutationId);
+    onSuccess: async (result, variables) => {
+      if (!variables.silent) {
+        toast({
+          title: result.matching?.status === "auto_matched" || result.matching?.status === "manual_review"
+            ? "Batch QRIS disetujui — mutasi sudah di-matching ✓"
+            : "Batch QRIS disetujui ✓",
+        });
+      }
+      if (detailMutation?.id === result.mutationId) {
+        await refreshMutationDetail(result.mutationId);
+      }
       qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] });
     },
-    onError: (e: Error) => toast({ title: "Gagal approve batch QRIS", description: e.message, variant: "destructive" }),
+    onError: (e: Error, variables) => {
+      if (!variables?.silent) {
+        toast({ title: "Gagal approve batch QRIS", description: e.message, variant: "destructive" });
+      }
+    },
   });
 
   const sheetSyncMut = useMutation({
@@ -3435,13 +3537,41 @@ export default function BankReconciliationPage() {
                     );
                   })}
                 </div>
-                 <Button variant="outline" size="sm" className="w-full gap-1.5 text-xs" onClick={() => setShowQrisAuditList(value => !value)}>
+                  <Button variant="outline" size="sm" className="w-full gap-1.5 text-xs" onClick={() => setShowQrisAuditList(value => !value)}>
                    <Eye className="h-3.5 w-3.5" />
                    {showQrisAuditList ? "Sembunyikan Pemeriksaan" : "Lihat Semua Pemeriksaan"}
                  </Button>
+                  {showQrisAuditList && qrisApprovableCandidates.length > 0 && (
+                    <div className="flex flex-col gap-2 rounded-md border border-indigo-200 bg-indigo-50/60 px-3 py-2.5 text-xs dark:border-indigo-800 dark:bg-indigo-950/20 sm:flex-row sm:items-center sm:justify-between">
+                      <label className="flex min-w-0 cursor-pointer items-center gap-2">
+                        <Checkbox
+                          checked={allQrisCandidatesSelected}
+                          onCheckedChange={(checked) => toggleAllQrisCandidates(checked === true)}
+                          aria-label="Pilih semua kandidat QRIS yang cocok"
+                        />
+                        <span className="font-medium text-indigo-950 dark:text-indigo-100">
+                          Pilih semua batch yang cocok ({qrisApprovableCandidates.length})
+                        </span>
+                      </label>
+                      <Button
+                        size="sm"
+                        className="h-8 gap-1.5 bg-indigo-600 text-xs text-white hover:bg-indigo-700"
+                        disabled={selectedQrisCandidates.length === 0 || approveQrisBatchMut.isPending}
+                        onClick={handleApproveSelectedQris}
+                      >
+                        {approveQrisBatchMut.isPending
+                          ? <Loader2 className="h-3 w-3 animate-spin" />
+                          : <CheckCircle2 className="h-3 w-3" />}
+                        Setujui yang dipilih ({selectedQrisCandidates.length})
+                      </Button>
+                    </div>
+                  )}
                  {showQrisAuditList && <div className="divide-y rounded-md border text-xs">
-                  {qrisAuditData?.candidates.slice(0, 10).map((candidate) => {
+                   {qrisCandidates.map((candidate) => {
                     const isApproved = candidate.status === "approved";
+                     const isMatched = String(candidate.reconciliation_status ?? "").toUpperCase() === "MATCHED";
+                     const isSelectable = candidate.id != null && isMatched && !isApproved;
+                     const isSelected = candidate.id != null && selectedQrisCandidateIds.includes(candidate.id);
                     const isApprovingThis = approveQrisBatchMut.isPending &&
                       approveQrisBatchMut.variables?.candidateId === candidate.id;
                     return (
@@ -3469,6 +3599,31 @@ export default function BankReconciliationPage() {
                             <p className="text-slate-600 dark:text-slate-400 mt-0.5">
                               Settlement {fmtDate(candidate.estimated_settlement_date)} · {candidate.payment_items?.length ?? 0} payment · Netto {idr(candidate.net_amount)}
                             </p>
+                             {(candidate.payment_items?.length ?? 0) > 0 && (
+                               <div className="mt-2 rounded border bg-slate-50/80 px-2 py-1.5 text-[10px] dark:bg-slate-900/60">
+                                 <p className="mb-1 font-semibold uppercase tracking-wide text-slate-500">
+                                   Detail booking/payment
+                                 </p>
+                                 <div className="grid gap-1 sm:grid-cols-2">
+                                   {candidate.payment_items!.map((item, index) => {
+                                     const paymentNumber = item.payment_number ?? item.paymentNumber;
+                                     const bookingNumber = item.booking_number ?? item.bookingNumber;
+                                     const paymentId = item.payment_id ?? item.paymentId;
+                                     const grossAmount = item.gross_amount ?? item.grossAmount;
+                                     return (
+                                       <div key={`${candidate.id}-${paymentId ?? index}`} className="flex min-w-0 items-center justify-between gap-2">
+                                         <span className="min-w-0 truncate text-slate-600 dark:text-slate-400">
+                                           {bookingNumber || "Booking —"} · {paymentNumber || `Payment #${paymentId ?? "—"}`}
+                                         </span>
+                                         <span className="shrink-0 font-medium text-slate-800 dark:text-slate-200">
+                                           {idr(grossAmount ?? 0)}
+                                         </span>
+                                       </div>
+                                     );
+                                   })}
+                                 </div>
+                               </div>
+                             )}
                             <Button
                               size="sm"
                               variant="outline"
@@ -3482,16 +3637,25 @@ export default function BankReconciliationPage() {
                               {qrisDetailLoadingId === candidate.mutation_id ? "Membuka..." : "Lihat & Verifikasi Mutasi"}
                             </Button>
                           </div>
-                          <div className="text-right shrink-0 space-y-1">
-                            <p className="font-semibold text-slate-950 dark:text-white">{idr(candidate.gross_amount)}</p>
-                            <p className="text-slate-500 dark:text-slate-400">
-                              MDR {idr(candidate.observed_deduction)}
-                              {candidate.effective_deduction_rate != null
-                                ? ` (${(Number(candidate.effective_deduction_rate) * 100).toFixed(2)}%)`
-                                : ""}
-                            </p>
+                           <div className="flex shrink-0 items-start gap-3 text-right">
+                             <div className="space-y-1">
+                               <p className="font-semibold text-slate-950 dark:text-white">{idr(candidate.gross_amount)}</p>
+                               <p className="text-slate-500 dark:text-slate-400">
+                                 MDR {idr(candidate.observed_deduction)}
+                                 {candidate.effective_deduction_rate != null
+                                   ? ` (${(Number(candidate.effective_deduction_rate) * 100).toFixed(2)}%)`
+                                   : ""}
+                               </p>
+                             </div>
+                             {isSelectable && (
+                               <Checkbox
+                                 checked={isSelected}
+                                 onCheckedChange={(checked) => toggleQrisCandidate(candidate.id!, checked === true)}
+                                 aria-label={`Pilih batch QRIS mutasi ${candidate.mutation_id}`}
+                                 className="mt-0.5"
+                               />
+                             )}
                             {!isApproved && candidate.id != null && (() => {
-                              const isMatched = String(candidate.reconciliation_status ?? "").toUpperCase() === "MATCHED";
                               return isMatched ? (
                                 <Button
                                   size="sm"
@@ -3661,6 +3825,11 @@ export default function BankReconciliationPage() {
         matchingPending={matchMut.isPending}
         mappingError={detailMutation ? mappingRequiredErrors.get(detailMutation.id) : undefined}
         onApproveQrisBatch={handleApproveQrisBatch}
+         qrisSelectionChecked={
+           detailMutation?.qris_candidate_audit?.id != null
+           && selectedQrisCandidateIds.includes(detailMutation.qris_candidate_audit.id)
+         }
+         onToggleQrisSelection={(candidateId, checked) => toggleQrisCandidate(candidateId, checked)}
       />
 
       {/* ── Approve Dialog ────────────────────────────────────── */}
@@ -4210,16 +4379,27 @@ export default function BankReconciliationPage() {
             </AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-2 text-sm">
-                <p>
-                  Anda akan membuat settlement QRIS untuk{" "}
-                  <strong>{qrisBatchConfirm?.paymentCount ?? 0} sport payment</strong>{" "}
-                  dengan total netto{" "}
-                  <strong>{qrisBatchConfirm ? idr(qrisBatchConfirm.netAmount) : "—"}</strong>{" "}
-                  dari provider <strong>{qrisBatchConfirm?.providerCode}</strong>.
-                </p>
+                {(() => {
+                  const candidates = qrisBatchConfirm?.candidates ?? [];
+                  const paymentCount = candidates.reduce(
+                    (total, candidate) => total + (candidate.payment_items?.length ?? 0),
+                    0,
+                  );
+                  const netAmount = candidates.reduce((total, candidate) => total + Number(candidate.net_amount ?? 0), 0);
+                  const providers = Array.from(new Set(candidates.map((candidate) => candidate.provider_code).filter(Boolean)));
+                  return (
+                    <p>
+                      Anda akan membuat settlement QRIS untuk{" "}
+                      <strong>{candidates.length} batch</strong> dengan{" "}
+                      <strong>{paymentCount} sport payment</strong>, total netto{" "}
+                      <strong>{idr(netAmount)}</strong>, dari provider{" "}
+                      <strong>{providers.join(", ") || "belum dikenali"}</strong>.
+                    </p>
+                  );
+                })()}
                 <p className="text-orange-700 dark:text-orange-400 font-medium">
-                  Tindakan ini tidak dapat dibatalkan. Setelah disetujui, settlement akan
-                  terhubung ke mutasi bank dan muncul sebagai kandidat rekonsiliasi.
+                  Tindakan ini tidak dapat dibatalkan. Setiap batch yang dipilih akan
+                  diproses penuh sesuai detail payment yang ditampilkan.
                 </p>
               </div>
             </AlertDialogDescription>
@@ -4231,7 +4411,9 @@ export default function BankReconciliationPage() {
               onClick={handleConfirmQrisBatch}
               disabled={approveQrisBatchMut.isPending}
             >
-              {approveQrisBatchMut.isPending ? "Menyetujui..." : "Ya, Setujui Batch"}
+              {approveQrisBatchMut.isPending
+                ? "Menyetujui..."
+                : `Ya, Setujui ${qrisBatchConfirm?.candidates.length ?? 0} Batch`}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
