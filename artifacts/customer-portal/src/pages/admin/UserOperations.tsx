@@ -12,7 +12,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Loader2, RefreshCw, Search, Users, MessageCircle, Phone, Mail, Globe, Clock,
-  UserCheck, UserX, Eye, CheckCircle2, AlertCircle,
+  UserCheck, UserX, Eye, CheckCircle2, AlertCircle, Pencil, Ban,
 } from "lucide-react";
 
 // ── ApprovalsTab ──────────────────────────────────────────────────────────────
@@ -294,44 +294,167 @@ type CustomerItem = {
   role: string;
   source: "wa" | "oauth" | "email";
   createdAt: string;
+  accountStatus: "active" | "inactive" | "sanctioned";
+  sanctionReason: string | null;
+  sanctionUntil: string | null;
+  avatarUrl: string | null;
   profileStatus: string;
   profileAccountType: string | null;
   profileFullName: string | null;
 };
-type CustomerStats = { total: number; wa: number; customer: number; vendor: number; profileIncomplete: number; profilePending: number; profileActive: number };
+type CustomerStats = {
+  total: number;
+  wa: number;
+  customer: number;
+  vendor: number;
+  profileIncomplete: number;
+  profilePending: number;
+  profileActive: number;
+  accountActive: number;
+  accountInactive: number;
+  accountSanctioned: number;
+};
+type CustomerDetail = CustomerItem & {
+  oauthProvider: string | null;
+  statusChangedAt: string | null;
+  statusChangedBy: string | null;
+  profile: Record<string, unknown> | null;
+};
+type CustomerForm = {
+  name: string;
+  email: string;
+  phone: string;
+  company: string;
+  role: string;
+  accountStatus: CustomerItem["accountStatus"];
+  sanctionReason: string;
+  sanctionUntil: string;
+};
 
 export function CustomersTab() {
   const h = getAuthHeaders();
+  const { toast } = useToast();
   const [items, setItems] = useState<CustomerItem[]>([]);
   const [stats, setStats] = useState<CustomerStats | null>(null);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState<string>("all");
   const [searchInput, setSearchInput] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [selected, setSelected] = useState<CustomerItem | null>(null);
+  const [detail, setDetail] = useState<CustomerDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState<CustomerForm>({
+    name: "", email: "", phone: "", company: "", role: "customer",
+    accountStatus: "active", sanctionReason: "", sanctionUntil: "",
+  });
 
-  async function load(q = search, role = roleFilter) {
+  async function load(q = search, role = roleFilter, accountStatus = statusFilter) {
     setLoading(true);
     try {
       const params = new URLSearchParams();
       if (q) params.set("q", q);
       if (role !== "all") params.set("role", role);
+      if (accountStatus !== "all") params.set("accountStatus", accountStatus);
       const [r1, r2] = await Promise.all([
         fetch(`/api/portal/admin/customers?${params}`, { headers: h, credentials: "include" }),
         fetch("/api/portal/admin/customers/stats", { headers: h, credentials: "include" }),
       ]);
-      if (r1.ok) { const d = await r1.json() as { items: CustomerItem[] }; setItems(d.items); }
+      if (r1.ok) { const d = await r1.json() as { items: CustomerItem[] }; setItems(d.items ?? []); }
       if (r2.ok) setStats(await r2.json() as CustomerStats);
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => { void load(); }, [roleFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void load(search, search ? roleFilter : roleFilter, statusFilter); }, [roleFilter, statusFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleSearch(e: React.FormEvent) {
     e.preventDefault();
     setSearch(searchInput);
-    void load(searchInput, roleFilter);
+    void load(searchInput, roleFilter, statusFilter);
+  }
+
+  async function openDetail(customer: CustomerItem) {
+    setSelected(customer);
+    setDetail(null);
+    setEditing(false);
+    setDetailLoading(true);
+    try {
+      const response = await fetch(`/api/portal/admin/customers/${customer.id}`, { headers: h, credentials: "include" });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error ?? "Gagal memuat detail akun");
+      const loaded = body as CustomerDetail;
+      setDetail(loaded);
+      setForm({
+        name: loaded.name ?? "",
+        email: loaded.email ?? "",
+        phone: loaded.phone ?? "",
+        company: loaded.company ?? "",
+        role: loaded.role ?? "customer",
+        accountStatus: loaded.accountStatus ?? "active",
+        sanctionReason: loaded.sanctionReason ?? "",
+        sanctionUntil: loaded.sanctionUntil ? loaded.sanctionUntil.slice(0, 10) : "",
+      });
+    } catch (error) {
+      setSelected(null);
+      toast({ title: "Gagal memuat akun", description: String(error), variant: "destructive" });
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  function closeDetail() {
+    setSelected(null);
+    setDetail(null);
+    setEditing(false);
+  }
+
+  async function saveCustomer() {
+    if (!selected) return;
+    if (!form.name.trim()) {
+      toast({ title: "Nama wajib diisi", variant: "destructive" });
+      return;
+    }
+    if (!form.email.includes("@")) {
+      toast({ title: "Email tidak valid", variant: "destructive" });
+      return;
+    }
+    if (form.accountStatus === "sanctioned" && !form.sanctionReason.trim()) {
+      toast({ title: "Alasan sanksi wajib diisi", variant: "destructive" });
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const response = await fetch(`/api/portal/admin/customers/${selected.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...h },
+        credentials: "include",
+        body: JSON.stringify({
+          name: form.name.trim(),
+          email: form.email.trim(),
+          phone: form.phone.trim() || null,
+          company: form.company.trim() || null,
+          role: form.role,
+          accountStatus: form.accountStatus,
+          sanctionReason: form.sanctionReason.trim() || null,
+          sanctionUntil: form.sanctionUntil || null,
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error ?? body.message ?? "Gagal menyimpan perubahan");
+      toast({ title: "Perubahan disimpan", description: "Data dan status akun berhasil diperbarui." });
+      setEditing(false);
+      await load(search, roleFilter, statusFilter);
+      await openDetail({ ...selected, ...body } as CustomerItem);
+    } catch (error) {
+      toast({ title: "Gagal menyimpan", description: String(error), variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
   }
 
   const roleBadge = (r: string) => {
@@ -353,10 +476,19 @@ export function CustomersTab() {
     return <Mail className="h-3 w-3 text-slate-400" />;
   };
 
+  const accountBadge = (s: CustomerItem["accountStatus"]) => {
+    if (s === "sanctioned") return <Badge variant="outline" className="text-[10px] border-red-300 text-red-700 bg-red-50"><Ban className="h-3 w-3 mr-1" />Sanksi</Badge>;
+    if (s === "inactive") return <Badge variant="outline" className="text-[10px] border-slate-300 text-slate-600 bg-slate-50">Nonaktif</Badge>;
+    return <Badge variant="outline" className="text-[10px] border-green-300 text-green-700 bg-green-50">Aktif</Badge>;
+  };
+
+  const formatDate = (value: string | null | undefined) =>
+    value ? new Date(value).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" }) : "—";
+
   return (
     <div className="space-y-4">
       {stats && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-10 gap-2">
           {[
             { label: "Total", value: stats.total, color: "text-slate-700" },
             { label: "Customer", value: stats.customer, color: "text-slate-600" },
@@ -365,6 +497,9 @@ export function CustomersTab() {
             { label: "Aktif", value: stats.profileActive, color: "text-green-700" },
             { label: "Pending", value: stats.profilePending, color: "text-amber-700" },
             { label: "Belum Lengkap", value: stats.profileIncomplete, color: "text-slate-500" },
+            { label: "Akun Aktif", value: stats.accountActive, color: "text-emerald-700" },
+            { label: "Nonaktif", value: stats.accountInactive, color: "text-slate-600" },
+            { label: "Sanksi", value: stats.accountSanctioned, color: "text-red-700" },
           ].map(({ label, value, color }) => (
             <div key={label} className="rounded-lg border bg-white p-3 text-center">
               <p className={`text-xl font-bold ${color}`}>{value}</p>
@@ -393,7 +528,16 @@ export function CustomersTab() {
             <SelectItem value="admin">Admin</SelectItem>
           </SelectContent>
         </Select>
-        <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5" onClick={() => void load(searchInput, roleFilter)} disabled={loading}>
+        <Select value={statusFilter} onValueChange={setStatusFilter}>
+          <SelectTrigger className="w-36 h-8 text-xs"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Semua Status</SelectItem>
+            <SelectItem value="active">Aktif</SelectItem>
+            <SelectItem value="inactive">Nonaktif</SelectItem>
+            <SelectItem value="sanctioned">Sanksi</SelectItem>
+          </SelectContent>
+        </Select>
+        <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5" onClick={() => void load(searchInput, roleFilter, statusFilter)} disabled={loading}>
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
         </Button>
       </div>
@@ -418,8 +562,10 @@ export function CustomersTab() {
                   <th className="text-left p-3 font-medium hidden sm:table-cell">Kontak</th>
                   <th className="text-left p-3 font-medium">Role</th>
                   <th className="text-left p-3 font-medium hidden md:table-cell">Status</th>
+                  <th className="text-left p-3 font-medium hidden lg:table-cell">Akun</th>
                   <th className="text-left p-3 font-medium hidden lg:table-cell">Daftar</th>
                   <th className="text-left p-3 font-medium">Sumber</th>
+                  <th className="text-right p-3 font-medium">Aksi</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -435,10 +581,16 @@ export function CustomersTab() {
                     </td>
                     <td className="p-3">{roleBadge(c.role)}</td>
                     <td className="p-3 hidden md:table-cell">{profileBadge(c.profileStatus)}</td>
+                    <td className="p-3 hidden lg:table-cell">{accountBadge(c.accountStatus)}</td>
                     <td className="p-3 hidden lg:table-cell text-muted-foreground">
                       {new Date(c.createdAt).toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" })}
                     </td>
                     <td className="p-3">{sourceIcon(c.source)}</td>
+                    <td className="p-3 text-right">
+                      <Button variant="outline" size="sm" className="h-7 text-[11px] gap-1" onClick={() => void openDetail(c)}>
+                        <Eye className="h-3 w-3" /> Detail
+                      </Button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -446,6 +598,137 @@ export function CustomersTab() {
           </div>
         </>
       )}
+
+      <Dialog open={!!selected} onOpenChange={(open) => { if (!open && !saving) closeDetail(); }}>
+        <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {editing ? <Pencil className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              {editing ? "Ubah Akun Portal" : "Detail Akun Portal"}
+            </DialogTitle>
+          </DialogHeader>
+          {detailLoading || !detail ? (
+            <div className="flex items-center justify-center py-12 text-muted-foreground gap-2">
+              <Loader2 className="h-4 w-4 animate-spin" /> Memuat detail akun...
+            </div>
+          ) : (
+            <div className="space-y-5">
+              <div className="rounded-xl bg-slate-50 border p-4">
+                <div className="flex items-start gap-3">
+                  {detail.avatarUrl ? (
+                    <img src={detail.avatarUrl} alt={detail.name} className="h-12 w-12 rounded-full object-cover" />
+                  ) : (
+                    <div className="h-12 w-12 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-semibold">
+                      {(detail.profileFullName ?? detail.name).slice(0, 2).toUpperCase()}
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="font-semibold text-base">{detail.profileFullName ?? detail.name}</p>
+                    <p className="text-xs text-muted-foreground">{detail.email}</p>
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {roleBadge(detail.role)}
+                      {profileBadge(detail.profileStatus)}
+                      {accountBadge(detail.accountStatus)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {editing ? (
+                <div className="rounded-xl border p-4 space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="customer-admin-name">Nama</Label>
+                      <Input id="customer-admin-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="customer-admin-email">Email</Label>
+                      <Input id="customer-admin-email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="customer-admin-phone">WhatsApp / Telepon</Label>
+                      <Input id="customer-admin-phone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="customer-admin-company">Perusahaan</Label>
+                      <Input id="customer-admin-company" value={form.company} onChange={(e) => setForm({ ...form, company: e.target.value })} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Role</Label>
+                      <Select value={form.role} onValueChange={(role) => setForm({ ...form, role })}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="customer">Customer</SelectItem>
+                          <SelectItem value="vendor">Vendor</SelectItem>
+                          <SelectItem value="driver">Driver</SelectItem>
+                          <SelectItem value="employee">Employee</SelectItem>
+                          <SelectItem value="admin">Admin</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Status Akun</Label>
+                      <Select value={form.accountStatus} onValueChange={(accountStatus: CustomerItem["accountStatus"]) => setForm({ ...form, accountStatus })}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="active">Aktif — dapat login</SelectItem>
+                          <SelectItem value="inactive">Nonaktif — login ditolak</SelectItem>
+                          <SelectItem value="sanctioned">Sanksi — login ditolak</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="customer-admin-sanction-reason">
+                      {form.accountStatus === "sanctioned" ? "Alasan sanksi *" : "Catatan status (opsional)"}
+                    </Label>
+                    <Textarea id="customer-admin-sanction-reason" value={form.sanctionReason} onChange={(e) => setForm({ ...form, sanctionReason: e.target.value })} rows={3} />
+                  </div>
+                  {form.accountStatus === "sanctioned" && (
+                    <div className="space-y-1.5 max-w-xs">
+                      <Label htmlFor="customer-admin-sanction-until">Sanksi berakhir (opsional)</Label>
+                      <Input id="customer-admin-sanction-until" type="date" value={form.sanctionUntil} onChange={(e) => setForm({ ...form, sanctionUntil: e.target.value })} />
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+                  <div><p className="text-xs text-muted-foreground">Nama</p><p className="font-medium">{detail.name}</p></div>
+                  <div><p className="text-xs text-muted-foreground">Email</p><p className="font-medium break-words">{detail.email?.endsWith("@wa.local") ? "—" : detail.email}</p></div>
+                  <div><p className="text-xs text-muted-foreground">WhatsApp / Telepon</p><p className="font-medium">{detail.phone ?? "—"}</p></div>
+                  <div><p className="text-xs text-muted-foreground">Perusahaan</p><p className="font-medium">{detail.company ?? "—"}</p></div>
+                  <div><p className="text-xs text-muted-foreground">Terdaftar</p><p className="font-medium">{formatDate(detail.createdAt)}</p></div>
+                  <div><p className="text-xs text-muted-foreground">Sumber</p><p className="font-medium flex items-center gap-1">{sourceIcon(detail.source)} {detail.source === "wa" ? "WhatsApp" : detail.source === "oauth" ? "OAuth" : "Email"}</p></div>
+                  {detail.accountStatus !== "active" && (
+                    <div className="sm:col-span-2 rounded-lg border border-red-200 bg-red-50 p-3">
+                      <p className="text-xs font-semibold text-red-700">Penanganan status akun</p>
+                      <p className="text-sm text-red-800 mt-1">{detail.accountStatus === "sanctioned" ? detail.sanctionReason || "Akun terkena sanksi." : "Akun dinonaktifkan oleh admin."}</p>
+                      {detail.sanctionUntil && <p className="text-xs text-red-700 mt-1">Berakhir: {formatDate(detail.sanctionUntil)}</p>}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          {!detailLoading && detail && (
+            <DialogFooter className="gap-2">
+              {editing ? (
+                <>
+                  <Button variant="outline" onClick={() => setEditing(false)} disabled={saving}>Batal</Button>
+                  <Button onClick={() => void saveCustomer()} disabled={saving}>
+                    {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : null}
+                    Simpan Perubahan
+                  </Button>
+                </>
+              ) : (
+                <Button className="gap-1.5" onClick={() => setEditing(true)}>
+                  <Pencil className="h-3.5 w-3.5" /> Ubah Akun
+                </Button>
+              )}
+            </DialogFooter>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
