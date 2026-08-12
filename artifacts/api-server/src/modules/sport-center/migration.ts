@@ -768,7 +768,7 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
           || octet_length(v_rule)::text || ':' || v_rule;
 
       v_digest := encode(
-        public.digest(convert_to(v_serialized, 'UTF8'), 'sha256'),
+        extensions.digest(convert_to(v_serialized, 'UTF8'), 'sha256'),
         'hex'
       );
 
