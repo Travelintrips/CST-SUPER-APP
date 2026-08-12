@@ -56,12 +56,18 @@ export type CanonicalSettlementCandidate = {
   bank_account_id: number | null;
   settlement_journal_id: number | null;
   bank_mutation_id: number | null;
+  settlement_rule_version: string | null;
 };
 
 export type CanonicalSettlementLookupOptions = {
   companyId?: number | null;
   settlementId?: number | null;
   amount?: number | null;
+  bankAmount?: number | null;
+  absoluteVarianceTolerance?: number | null;
+  percentageVarianceTolerance?: number | null;
+  bankAccountId?: number | null;
+  providerCode?: string | null;
   from?: string | null;
   to?: string | null;
 };
@@ -158,6 +164,9 @@ export function mapCanonicalSettlementRow(
     bank_account_id: numberOrNull(row.bank_account_id),
     settlement_journal_id: numberOrNull(row.settlement_journal_id),
     bank_mutation_id: numberOrNull(row.bank_mutation_id),
+    settlement_rule_version: row.settlement_rule_version == null
+      ? null
+      : String(row.settlement_rule_version),
   };
 }
 
@@ -204,6 +213,41 @@ function canonicalEligibilityFilters(
   }
   if (options.amount != null) {
     filters.push(sql`ABS(expected_bank_amount::numeric - ${options.amount}) < 0.01`);
+  }
+  if (options.bankAmount != null) {
+    const absoluteTolerance = Math.max(0, Number(options.absoluteVarianceTolerance ?? 0));
+    const percentageTolerance = Math.max(0, Number(options.percentageVarianceTolerance ?? 0));
+    filters.push(sql`(
+      ABS(expected_bank_amount::numeric - ${options.bankAmount}) < 0.01
+      OR (
+        ${absoluteTolerance} > 0
+        AND ABS(expected_bank_amount::numeric - ${options.bankAmount}) <= ${absoluteTolerance}
+      )
+      OR (
+        ${percentageTolerance} > 0
+        AND NULLIF(ABS(expected_bank_amount::numeric), 0) IS NOT NULL
+        AND ABS(expected_bank_amount::numeric - ${options.bankAmount})
+          / NULLIF(ABS(expected_bank_amount::numeric), 0) * 100 <= ${percentageTolerance}
+      )
+    )`);
+  }
+  if (options.bankAccountId != null) {
+    filters.push(sql`(
+      bank_account_id = ${options.bankAccountId}
+      OR (
+        bank_account_id IS NULL
+        AND ABS(expected_bank_amount::numeric - ${options.bankAmount ?? options.amount ?? 0}) < 0.01
+      )
+    )`);
+  }
+  if (options.providerCode) {
+    filters.push(sql`(
+      provider_code = ${options.providerCode}
+      OR (
+        provider_code IS NULL
+        AND ABS(expected_bank_amount::numeric - ${options.bankAmount ?? options.amount ?? 0}) < 0.01
+      )
+    )`);
   }
   if (options.from) {
     filters.push(sql`settlement_date >= ${options.from}`);
@@ -270,6 +314,22 @@ export function canonicalSettlementDetailsSql(
          'expectedAmount', ebs.expected_bank_amount,
          'actualBankAmount', bm.amount,
          'amountDifference', ABS(ebs.expected_bank_amount::numeric - bm.amount::numeric),
+         'varianceAmount', bm.amount::numeric - ebs.expected_bank_amount::numeric,
+         'variancePercent', CASE
+           WHEN NULLIF(ABS(ebs.expected_bank_amount::numeric), 0) IS NULL THEN NULL
+           ELSE ABS(bm.amount::numeric - ebs.expected_bank_amount::numeric)
+             / NULLIF(ABS(ebs.expected_bank_amount::numeric), 0) * 100
+         END,
+         'varianceStatus', CASE
+           WHEN ABS(ebs.expected_bank_amount::numeric - bm.amount::numeric) < 0.01
+             THEN 'exact_match'
+           ELSE 'need_review'
+         END,
+         'varianceReason', CASE
+           WHEN ABS(ebs.expected_bank_amount::numeric - bm.amount::numeric) < 0.01
+             THEN 'exact amount match'
+           ELSE 'amount_variance'
+         END,
         'settlementReference', ebs.settlement_reference,
         'settlementDate', ebs.settlement_date,
          'mutationDate', bm.transaction_date,

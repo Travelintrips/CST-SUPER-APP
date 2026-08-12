@@ -9,6 +9,8 @@ export interface QrisProviderRule {
   settlementDelayBusinessDays: number;
   matchWindowBusinessDays: number;
   maxEffectiveDeductionRate: number;
+  absoluteVarianceTolerance?: number;
+  percentageVarianceTolerance?: number;
 }
 
 export const DEFAULT_QRIS_PROVIDER_RULES: Record<QrisProviderCode, QrisProviderRule> = {
@@ -18,6 +20,8 @@ export const DEFAULT_QRIS_PROVIDER_RULES: Record<QrisProviderCode, QrisProviderR
     settlementDelayBusinessDays: 1,
     matchWindowBusinessDays: 1,
     maxEffectiveDeductionRate: 0.1,
+    absoluteVarianceTolerance: 5000,
+    percentageVarianceTolerance: 1,
   },
   paylabs: {
     providerCode: "paylabs",
@@ -25,6 +29,8 @@ export const DEFAULT_QRIS_PROVIDER_RULES: Record<QrisProviderCode, QrisProviderR
     settlementDelayBusinessDays: 1,
     matchWindowBusinessDays: 1,
     maxEffectiveDeductionRate: 0.1,
+    absoluteVarianceTolerance: 5000,
+    percentageVarianceTolerance: 1,
   },
   unknown: {
     providerCode: "unknown",
@@ -32,6 +38,8 @@ export const DEFAULT_QRIS_PROVIDER_RULES: Record<QrisProviderCode, QrisProviderR
     settlementDelayBusinessDays: 1,
     matchWindowBusinessDays: 1,
     maxEffectiveDeductionRate: 0.1,
+    absoluteVarianceTolerance: 5000,
+    percentageVarianceTolerance: 1,
   },
 };
 
@@ -84,6 +92,8 @@ export function providerRulesFromRows(
     settlement_delay_business_days?: number;
     match_window_business_days?: number;
     max_effective_deduction_rate?: number;
+    absolute_variance_tolerance?: number;
+    percentage_variance_tolerance?: number;
   }>,
 ): Record<QrisProviderCode, QrisProviderRule> {
   const result = { ...DEFAULT_QRIS_PROVIDER_RULES };
@@ -106,6 +116,14 @@ export function providerRulesFromRows(
       maxEffectiveDeductionRate: Number(row.maxEffectiveDeductionRate
         ?? row.max_effective_deduction_rate
         ?? result[provider].maxEffectiveDeductionRate),
+      absoluteVarianceTolerance: Number(row.absoluteVarianceTolerance
+        ?? row.absolute_variance_tolerance
+        ?? result[provider].absoluteVarianceTolerance
+        ?? 0),
+      percentageVarianceTolerance: Number(row.percentageVarianceTolerance
+        ?? row.percentage_variance_tolerance
+        ?? result[provider].percentageVarianceTolerance
+        ?? 0),
     };
   }
   return result;
@@ -119,6 +137,8 @@ export function providerRulesByBankAccountFromRows(
     settlement_delay_business_days?: number;
     match_window_business_days?: number;
     max_effective_deduction_rate?: number;
+    absolute_variance_tolerance?: number;
+    percentage_variance_tolerance?: number;
   }>,
 ): Record<string, Record<QrisProviderCode, QrisProviderRule>> {
   const result: Record<string, Record<QrisProviderCode, QrisProviderRule>> = {};
@@ -142,6 +162,14 @@ export function providerRulesByBankAccountFromRows(
       maxEffectiveDeductionRate: Number(row.maxEffectiveDeductionRate
         ?? row.max_effective_deduction_rate
         ?? accountRules[provider].maxEffectiveDeductionRate),
+      absoluteVarianceTolerance: Number(row.absoluteVarianceTolerance
+        ?? row.absolute_variance_tolerance
+        ?? accountRules[provider].absoluteVarianceTolerance
+        ?? 0),
+      percentageVarianceTolerance: Number(row.percentageVarianceTolerance
+        ?? row.percentage_variance_tolerance
+        ?? accountRules[provider].percentageVarianceTolerance
+        ?? 0),
     };
     result[String(accountId)] = accountRules;
   }

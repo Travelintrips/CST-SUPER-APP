@@ -464,6 +464,14 @@ interface CandidateDetails {
   settlementStatus?: string | null;
   settlementPartial?: boolean;
   settlementItemCount?: number | null;
+  expectedAmount?: number | string | null;
+  actualBankAmount?: number | string | null;
+  amountDifference?: number | string | null;
+  varianceAmount?: number | string | null;
+  variancePercent?: number | string | null;
+  varianceStatus?: string | null;
+  varianceReason?: string | null;
+  settlementRuleVersion?: string | null;
   settlementItems?: Array<{
     id?: number;
     sportPaymentId?: number;
@@ -699,6 +707,14 @@ function CandidateDetailsBlock({
 }) {
   const d = candidate.details;
   if (!d) return null;
+  const isCanonicalSettlement =
+    candidate.candidate_type === "qris_settlement" &&
+    candidate.candidate_source === CANONICAL_SETTLEMENT_SOURCE;
+  const hasVarianceEvidence =
+    isCanonicalSettlement &&
+    d.expectedAmount != null &&
+    d.actualBankAmount != null &&
+    Math.abs(Number(d.varianceAmount ?? 0)) >= 0.01;
 
   const rows = [
     { label: "Nominal", value: d.amount != null ? idr(d.amount) : null },
@@ -732,6 +748,29 @@ function CandidateDetailsBlock({
         <p className="text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
           Settlement QRIS PARTIAL — hanya sebagian dana/provider batch yang sudah tersettle; perlu review sebelum dianggap lunas.
         </p>
+      )}
+      {hasVarianceEvidence && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-2 text-[11px] text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+          <div className="flex items-center justify-between gap-2">
+            <p className="font-semibold">Variance settlement QRIS</p>
+            <Badge variant="outline" className="border-amber-400 bg-amber-100 text-amber-900 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-200">
+              Perlu Review
+            </Badge>
+          </div>
+          <div className="mt-1 grid grid-cols-1 gap-0.5 sm:grid-cols-2">
+            <span>Expected Settlement: <b>{idr(d.expectedAmount ?? 0)}</b></span>
+            <span>Mutasi Bank: <b>{idr(d.actualBankAmount ?? 0)}</b></span>
+            <span>Selisih: <b>{Number(d.varianceAmount) >= 0 ? "+" : ""}{idr(d.varianceAmount ?? 0)}</b></span>
+            <span>Variance: <b>{Number(d.variancePercent ?? 0).toFixed(2)}%</b></span>
+          </div>
+          <p className="mt-1 text-[10px]">
+            Status: <b>need_review</b> · reason: <b>amount_variance</b>
+            {d.settlementRuleVersion ? <> · rule {d.settlementRuleVersion}</> : null}
+          </p>
+          <p className="mt-1 text-[10px] text-amber-800 dark:text-amber-200">
+            Kandidat ini tidak auto-match dan tidak auto-approve.
+          </p>
+        </div>
       )}
       {d.settlementItems && d.settlementItems.length > 0 && (
         <div className="border-t pt-1.5 mt-1.5 space-y-1.5">

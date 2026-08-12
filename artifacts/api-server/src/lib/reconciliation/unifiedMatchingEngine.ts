@@ -76,6 +76,8 @@ export interface MatchCandidate {
   fee_tax_amount?: number | null;
   adjustment_amount?: number | null;
   expected_bank_amount?: number | null;
+  settlement_rule_version?: string | null;
+  variance_eligible?: boolean;
 }
 
 export interface UnifiedScoredMatch {
@@ -88,6 +90,9 @@ export interface UnifiedScoredMatch {
   ocr_match: boolean;
   vendor_match: boolean;
   confidence: number; // 0-100 display value
+  variance_amount: number | null;
+  variance_percent: number | null;
+  amount_variance_match: boolean;
 }
 
 export interface UnifiedMatchResult {
@@ -447,7 +452,42 @@ export function scoreUnified(
     }
   }
 
-  const confidence = Math.min(100, score);
+  const expectedAmount = Number(
+    cand.expected_bank_amount ?? cand.amount,
+  );
+  const bankAmount = Number(mutation.amount);
+  const varianceAmount = Number.isFinite(expectedAmount) && Number.isFinite(bankAmount)
+    ? bankAmount - expectedAmount
+    : null;
+  const variancePercent = varianceAmount != null && Math.abs(expectedAmount) > 0.000001
+    ? Math.abs(varianceAmount) / Math.abs(expectedAmount) * 100
+    : null;
+  const canonicalVarianceEvidence =
+    cand.candidateSource === CANONICAL_SETTLEMENT_SOURCE &&
+    cand.variance_eligible === true &&
+    !amountMatch &&
+    varianceAmount != null &&
+    variancePercent != null &&
+    !companyMismatch &&
+    !bankAccountMismatch &&
+    !providerMismatch;
+
+  // Exact amount scoring is intentionally unchanged. A canonical variance
+  // candidate receives a smaller, distance-aware evidence score only after
+  // identity/date/provider/account checks pass. This keeps exact candidates
+  // above variance candidates without making tolerance an approval signal.
+  if (canonicalVarianceEvidence) {
+    const varianceEvidenceScore = Math.max(
+      1,
+      Math.round(35 - Math.min(34, variancePercent)),
+    );
+    score += varianceEvidenceScore;
+    reason.push(
+      `amount variance ${varianceAmount >= 0 ? "+" : ""}${varianceAmount.toFixed(2)} ` +
+      `(${variancePercent.toFixed(2)}%; evidence +${varianceEvidenceScore})`,
+    );
+    reason.push("canonical variance — perlu review");
+  }
 
   return {
     candidate: cand,
@@ -458,7 +498,10 @@ export function scoreUnified(
     ref_match: refMatch,
     ocr_match: ocrMatch,
     vendor_match: vendorMatch,
-    confidence,
+    confidence: Math.min(100, score),
+    variance_amount: varianceAmount,
+    variance_percent: variancePercent,
+    amount_variance_match: canonicalVarianceEvidence,
   };
 }
 
@@ -497,6 +540,48 @@ export async function fetchCandidates(
     parsed.setUTCDate(parsed.getUTCDate() + days);
     return parsed.toISOString().slice(0, 10);
   };
+  const canonicalTolerance = async (): Promise<{
+    absolute: number;
+    percentage: number;
+    providerCode: string | null;
+  }> => {
+    const providerCode = normalizeQrisProvider(mutation.provider_name);
+    if (providerCode === "unknown" || company_id == null || mutationBankAccountId == null) {
+      // Unknown provider or incomplete bank identity is fail-closed for variance.
+      return { absolute: 0, percentage: 0, providerCode: null };
+    }
+
+    try {
+      const { rows } = await db.execute(sql`
+        SELECT company_id, bank_account_id, provider_code,
+               absolute_variance_tolerance, percentage_variance_tolerance
+        FROM qris_provider_settlement_rules
+        WHERE is_active = TRUE
+          AND (company_id IS NULL OR company_id = ${Number(company_id)})
+          AND (bank_account_id IS NULL OR bank_account_id = ${mutationBankAccountId})
+      `);
+      const matchingRows = (rows as Array<Record<string, unknown>>)
+        .filter((row) => normalizeQrisProvider(String(row.provider_code ?? "")) === providerCode)
+        .sort((a, b) => {
+          const specificity = (row: Record<string, unknown>) =>
+            (row.company_id != null && Number(row.company_id) === Number(company_id) ? 2 : 0) +
+            (row.bank_account_id != null && Number(row.bank_account_id) === mutationBankAccountId ? 1 : 0);
+          return specificity(b) - specificity(a);
+        });
+      const row = matchingRows[0];
+      return {
+        absolute: Math.max(0, Number(row?.absolute_variance_tolerance ?? 0)),
+        percentage: Math.max(0, Number(row?.percentage_variance_tolerance ?? 0)),
+        providerCode,
+      };
+    } catch (error: any) {
+      logger.warn(
+        { err: error?.message ?? String(error) },
+        "[unifiedMatchingEngine] canonical variance rule unavailable; exact-only",
+      );
+      return { absolute: 0, percentage: 0, providerCode };
+    }
+  };
   const amtFilter = `ABS(##AMT##::numeric - ${Number(amount)}) < 0.01`;
   const mutationLooksQris =
     String(mutation.provider_name ?? "").toUpperCase() === "QRIS" ||
@@ -516,18 +601,24 @@ export async function fetchCandidates(
         .catch(() => false)
     : Promise.resolve(false);
   const canonicalCandidatesPromise = direction === "IN"
-    ? findCanonicalSettlementCandidates({
+    ? canonicalTolerance().then((tolerance) =>
+      findCanonicalSettlementCandidates({
         companyId: company_id ?? null,
-        amount: Number(amount),
+        bankAmount: Number(amount),
+        absoluteVarianceTolerance: tolerance.absolute,
+        percentageVarianceTolerance: tolerance.percentage,
+        bankAccountId: mutationBankAccountId,
+        providerCode: tolerance.providerCode,
         from: transaction_date ? dateOffset(transaction_date, -3) : null,
         to: transaction_date ? dateOffset(transaction_date, 3) : null,
-      }).catch((e: any) => {
-        logger.warn(
-          { err: e.message },
-          "[unifiedMatchingEngine] canonical settlement source skipped",
-        );
-        return [] as Awaited<ReturnType<typeof findCanonicalSettlementCandidates>>;
-      })
+      }),
+    ).catch((e: any) => {
+      logger.warn(
+        { err: e.message },
+        "[unifiedMatchingEngine] canonical settlement source skipped",
+      );
+      return [] as Awaited<ReturnType<typeof findCanonicalSettlementCandidates>>;
+    })
     : Promise.resolve([] as Awaited<ReturnType<typeof findCanonicalSettlementCandidates>>);
   const [qrisSettlementTablesAvailable, canonicalCandidates] = await Promise.all([
     qrisTablesPromise,
@@ -737,6 +828,8 @@ export async function fetchCandidates(
       bank_account_id: canonical.bank_account_id,
       provider_code: canonical.provider_code,
       provider_name: canonical.provider_name,
+      settlement_rule_version: canonical.settlement_rule_version,
+      variance_eligible: true,
     };
     candidates.push(candidate);
   }

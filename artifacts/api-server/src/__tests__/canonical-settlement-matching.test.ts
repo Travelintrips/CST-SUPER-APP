@@ -96,6 +96,25 @@ describe("Phase 4C-5 canonical settlement matching", () => {
     expect(scored.score).toBeLessThan(50);
   });
 
+  it("keeps a canonical amount variance reviewable and exposes signed variance", () => {
+    const scored = scoreUnified(
+      mutation({ amount: 933420 }),
+      canonicalCandidate({
+        expected_bank_amount: 935000,
+        amount: 935000,
+        settlement_date: "2026-08-10",
+        date: "2026-08-10",
+        variance_eligible: true,
+      }),
+    );
+
+    expect(scored.amount_match).toBe(false);
+    expect(scored.amount_variance_match).toBe(true);
+    expect(scored.variance_amount).toBe(-1580);
+    expect(scored.variance_percent).toBeCloseTo(0.16898, 4);
+    expect(scored.reason).toContain("canonical variance — perlu review");
+  });
+
   it.each([
     ["reconciled", { settlement_status: "reconciled" }],
     ["linked", { bank_mutation_id: 99 }],

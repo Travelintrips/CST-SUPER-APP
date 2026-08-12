@@ -58,6 +58,8 @@ export async function runQrisSettlementMigration(): Promise<void> {
       settlement_delay_business_days INTEGER NOT NULL DEFAULT 1,
       match_window_business_days INTEGER NOT NULL DEFAULT 1,
       max_effective_deduction_rate NUMERIC(7,6) NOT NULL DEFAULT 0.100000,
+       absolute_variance_tolerance NUMERIC(16,2) NOT NULL DEFAULT 5000.00,
+       percentage_variance_tolerance NUMERIC(7,4) NOT NULL DEFAULT 1.0000,
       is_active BOOLEAN NOT NULL DEFAULT TRUE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -67,7 +69,9 @@ export async function runQrisSettlementMigration(): Promise<void> {
   await db.execute(sql`
     ALTER TABLE qris_provider_settlement_rules
       ADD COLUMN IF NOT EXISTS bank_account_id INTEGER,
-      ADD COLUMN IF NOT EXISTS rule_version TEXT NOT NULL DEFAULT 'default-v1'
+       ADD COLUMN IF NOT EXISTS rule_version TEXT NOT NULL DEFAULT 'default-v1',
+       ADD COLUMN IF NOT EXISTS absolute_variance_tolerance NUMERIC(16,2) NOT NULL DEFAULT 5000.00,
+       ADD COLUMN IF NOT EXISTS percentage_variance_tolerance NUMERIC(7,4) NOT NULL DEFAULT 1.0000
   `).catch(() => {});
   // Settlement routing is company + account + provider. The legacy unique
   // constraint is too broad for companies with multiple settlement accounts.
