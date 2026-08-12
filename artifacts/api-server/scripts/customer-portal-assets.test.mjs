@@ -56,7 +56,22 @@ test("manifest is derived from source usage and contains derived assets", async 
   assert.ok(paths.has("portal-assets/static/customer-portal/images/air-freight.webp"));
   assert.ok(paths.has("portal-assets/static/customer-portal/images/customs.webp"));
   assert.ok(paths.has("portal-assets/static/customer-portal/images/customs-document.webp"));
-  assert.ok(paths.has("portal-assets/static/customer-portal/images/vehicles/mobil-ai.webp"));
+  for (const vehicle of [
+    "mobil-ai",
+    "mobil-xl-ai",
+    "van-ai",
+    "pickup-kecil-ai",
+    "box-kecil-ai",
+    "engkel-ai",
+    "double-engkel-ai",
+    "cdd-long-ai",
+    "fuso-ai",
+    "tronton-ai",
+    "truk-trailer-ai",
+    "truk-reefer-ai",
+  ]) {
+    assert.ok(paths.has(`portal-assets/static/customer-portal/images/vehicles/${vehicle}.webp`), vehicle);
+  }
   assert.ok(paths.has("portal-assets/static/customer-portal/images/categories/coffee.webp"));
   assert.ok(![...paths].some((asset) => asset.endsWith(".png") || asset.endsWith(".jpg")));
 });

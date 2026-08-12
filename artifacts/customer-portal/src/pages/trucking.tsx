@@ -104,20 +104,19 @@ function TruckSVG({ size = "sm", variant = "default" }: { size?: "sm" | "lg"; va
 }
 
 // ─── Static vehicle photos ────────────────────────────────────────────────────
-const _SBV = staticAsset("images/vehicles");
 const VEHICLE_PHOTOS: Record<string, string> = {
-  "mobil":          `${_SBV}/mobil-ai.png`,
-  "mobil-xl":       `${_SBV}/mobil-xl-ai.png`,
-  "van":            `${_SBV}/van-ai.png`,
-  "pickup-kecil":   `${_SBV}/pickup-kecil-ai.png`,
-  "box-kecil":      `${_SBV}/box-kecil-ai.png`,
-  "engkel":         `${_SBV}/engkel-ai.png`,
-  "double-engkel":  `${_SBV}/double-engkel-ai.png`,
-  "cdd-long":       `${_SBV}/cdd-long-ai.png`,
-  "fuso":           `${_SBV}/fuso-ai.png`,
-  "tronton":        `${_SBV}/tronton-ai.png`,
-  "truk-trailer":   `${_SBV}/truk-trailer-ai.png`,
-  "truk-reefer":    `${_SBV}/truk-reefer-ai.png`,
+  "mobil":          staticAsset("images/vehicles/mobil-ai.png"),
+  "mobil-xl":       staticAsset("images/vehicles/mobil-xl-ai.png"),
+  "van":            staticAsset("images/vehicles/van-ai.png"),
+  "pickup-kecil":   staticAsset("images/vehicles/pickup-kecil-ai.png"),
+  "box-kecil":      staticAsset("images/vehicles/box-kecil-ai.png"),
+  "engkel":         staticAsset("images/vehicles/engkel-ai.png"),
+  "double-engkel":  staticAsset("images/vehicles/double-engkel-ai.png"),
+  "cdd-long":       staticAsset("images/vehicles/cdd-long-ai.png"),
+  "fuso":           staticAsset("images/vehicles/fuso-ai.png"),
+  "tronton":        staticAsset("images/vehicles/tronton-ai.png"),
+  "truk-trailer":   staticAsset("images/vehicles/truk-trailer-ai.png"),
+  "truk-reefer":    staticAsset("images/vehicles/truk-reefer-ai.png"),
 };
 
 /**
