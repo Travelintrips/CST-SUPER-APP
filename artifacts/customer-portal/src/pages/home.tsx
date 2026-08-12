@@ -146,6 +146,14 @@ export default function Home() {
     { titleKey: "homePromo.promo.item3Title", descKey: "homePromo.promo.item3Desc", badgeKey: "homePromo.promo.item3Badge", validKey: "homePromo.promo.item3Valid", gradient: "from-violet-500 to-purple-600", icon: Sparkles, href: "/register" },
   ];
 
+  // Reuse canonical public assets instead of requesting removed avatar files.
+  const socialProofImages = [
+    CUSTOMER_ASSETS.portOperations,
+    CUSTOMER_ASSETS.customs,
+    CUSTOMER_ASSETS.warehouse,
+    CUSTOMER_ASSETS.hero,
+  ];
+
   const testimonials = [
     { nameKey: "testimonials.t1Name", roleKey: "testimonials.t1Role", textKey: "testimonials.t1Text", photoKey: "testimonials.t1Photo", defaultImg: CUSTOMER_ASSETS.portOperations },
     { nameKey: "testimonials.t2Name", roleKey: "testimonials.t2Role", textKey: "testimonials.t2Text", photoKey: "testimonials.t2Photo", defaultImg: CUSTOMER_ASSETS.customs },
@@ -268,12 +276,11 @@ export default function Home() {
           {/* Social proof row */}
           <div className="flex items-center justify-center gap-4 flex-wrap">
             <div className="flex -space-x-2.5">
-              {["sp1","sp2","sp3","sp4"].map((id, i) => (
+              {socialProofImages.map((src, i) => (
                 <img key={i}
-                  src={staticAsset(`images/testimonials/${id}.jpg`)}
+                  src={src}
                   className="w-8 h-8 rounded-full ring-2 object-cover"
                   style={{ outline: "2px solid rgba(15,23,42,0.8)", outlineOffset: "-2px" }}
-                  onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
                   alt=""
                 />
               ))}
