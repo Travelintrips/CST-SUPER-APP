@@ -8,7 +8,7 @@ import { handleSportCenterSse, broadcastSportCenterEvent } from "./broadcast.js"
 import { normalizePaymentMethod, resolvePaymentDestination, postSportCenterBookingReversal, postSportCenterRefund, postSportCenterMembershipPayment, postSportCenterBookingRefundDirect, postSportCenterExpenseEntry, postEntry, resolveSportCenterBookingAccountId, resolveCostCenterId, type DbClient as SportDbClient } from "../../lib/accounting.js";
 import { ensureAccountingSettings } from "../../lib/accountingSeed.js";
 import { getActiveTaxRate, seedDefaultTaxRules } from "../../lib/taxRulesMigration.js";
-import { syncFacilityUpsert, syncFacilityDelete, syncAllFacilities, syncBookingUpsert, syncAllBookings, getLastSyncLogs, pullLegacyBookingsFromSupabase, pullPaymentsFromSupabase, pullFacilitiesFromSupabase, runDailyPaymentSync } from "./supabaseSync.js";
+import { syncFacilityUpsert, syncFacilityDelete, syncAllFacilities, syncBookingUpsert, syncAllBookings, getLastSyncLogs, pullLegacyBookingsFromSupabase, pullPaymentsFromSupabase, pullFacilitiesFromSupabase, syncPaymentsToAccounting, runDailyPaymentSync } from "./supabaseSync.js";
 import { saveAndBroadcast } from "../../lib/notificationStore.js";
 
 // ─── [DB SOURCE CHECK] ────────────────────────────────────────────────────────
@@ -578,6 +578,17 @@ router.post("/sync/incremental", async (req, res) => {
     res.json({ success: true, ...result, completed_at: new Date().toISOString() });
   } catch (err: any) {
     res.status(500).json({ error: "Incremental sync gagal", detail: err?.message });
+  }
+});
+
+router.post("/sync/payments/accounting", async (req, res) => {
+  if (!await requireAdmin(req, res)) return;
+  try {
+    const companyId = resolveCompanyId(req) ?? 1;
+    const result = await syncPaymentsToAccounting(companyId);
+    res.json({ success: result.errors === 0, ...result, completed_at: new Date().toISOString() });
+  } catch (err: any) {
+    res.status(500).json({ error: "Canonical payment accounting sync gagal", detail: err?.message });
   }
 });
 

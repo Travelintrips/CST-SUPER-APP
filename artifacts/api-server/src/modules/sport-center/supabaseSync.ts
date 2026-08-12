@@ -1,7 +1,7 @@
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { notifySyncError } from "./sportSyncNotifier.js";
-import { normalizePaymentMethod, resolvePaymentDestination } from "../../lib/accounting.js";
+import { normalizePaymentMethod, resolvePaymentDestination, postEntryWithClient } from "../../lib/accounting.js";
 import {
   validateSportPaymentPosting,
   type SportPaymentPostingEvidence,
@@ -697,8 +697,255 @@ export async function syncAllBookings(): Promise<{ synced: number; errors: numbe
  * read, create, update, or link any accounting row here.
  */
 export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced: number; skipped: number; errors: number }> {
-  console.log(`${PREFIX} Sport Center accounting sync isolated — payment remains confirmed without accounting posting (company_id=${companyId})`);
-  return { synced: 0, skipped: 0, errors: 0 };
+  /*
+   * Canonical owner boundary:
+   *   sport_center.sport_payments + sport_center.accounting_journals
+   *       -> public.accounting_entries + public.accounting_payments
+   *
+   * This deliberately does not call postSportCenterPaymentAtomic() and does
+   * not use public.sport_bookings as the accounting source.  The canonical
+   * payment id and source_event_id are the idempotency identity; the public
+   * sport_payments row is only the mirror that receives posting status.
+   */
+  const settingsResult = await db.execute(sql`
+    SELECT
+      s.qris_account_id,
+      s.qris_journal_id,
+      s.sales_income_account_id,
+      s.ppn_output_account_id,
+      qa.code AS qris_code,
+      qa.name AS qris_name,
+      qa.type AS qris_type,
+      qa.is_active AS qris_active,
+      qa.is_postable AS qris_postable,
+      qj.code AS qris_journal_code,
+      qj.is_active AS qris_journal_active,
+      ra.code AS revenue_code,
+      ra.name AS revenue_name,
+      ra.type AS revenue_type,
+      ra.is_active AS revenue_active,
+      ta.code AS tax_code,
+      ta.name AS tax_name,
+      ta.type AS tax_type,
+      ta.is_active AS tax_active
+    FROM accounting_settings s
+    LEFT JOIN chart_of_accounts qa ON qa.id = s.qris_account_id
+    LEFT JOIN accounting_journals qj ON qj.id = s.qris_journal_id
+    LEFT JOIN chart_of_accounts ra ON ra.id = s.sales_income_account_id
+    LEFT JOIN chart_of_accounts ta ON ta.id = s.ppn_output_account_id
+    WHERE s.company_id = ${companyId}
+    LIMIT 1
+  `);
+  const settings = settingsResult.rows[0] as Record<string, unknown> | undefined;
+  const qrisAccountId = Number(settings?.qris_account_id ?? 0);
+  const qrisJournalId = Number(settings?.qris_journal_id ?? 0);
+  const revenueAccountId = Number(settings?.sales_income_account_id ?? 0);
+  const taxAccountId = Number(settings?.ppn_output_account_id ?? 0);
+
+  const configErrors: string[] = [];
+  if (!qrisAccountId || settings?.qris_code !== "1-1023-CST" ||
+      settings?.qris_name !== "Bank Mandiri - Sport Center" ||
+      settings?.qris_type !== "asset" || settings?.qris_active !== true ||
+      settings?.qris_postable !== true) {
+    configErrors.push("QRIS clearing COA is not the active 1-1023-CST asset");
+  }
+  if (!qrisJournalId || settings?.qris_journal_code !== "QRIS-CST" ||
+      settings?.qris_journal_active !== true) {
+    configErrors.push("QRIS-CST journal is not configured and active");
+  }
+  if (!revenueAccountId || settings?.revenue_code !== "4-1017-CST" ||
+      settings?.revenue_type !== "revenue" || settings?.revenue_active !== true) {
+    configErrors.push("Sport Center revenue COA is not the active 4-1017-CST account");
+  }
+  if (!taxAccountId || settings?.tax_code !== "2-1020-CST" ||
+      settings?.tax_type !== "liability" || settings?.tax_active !== true) {
+    configErrors.push("PPN output COA is not the active 2-1020-CST account");
+  }
+  if (configErrors.length > 0) {
+    const error = `CANONICAL_PAYMENT_CONFIG_INVALID: ${configErrors.join("; ")}`;
+    console.error(`${PREFIX} ${error}`);
+    return { synced: 0, skipped: 0, errors: 1 };
+  }
+
+  const sourceResult = await db.execute(sql`
+    SELECT
+      p.id,
+      p.amount,
+      p.payment_method,
+      p.status::text AS payment_status,
+      p.paid_at,
+      p.company_id,
+      p.payment_provider,
+      p.provider_id,
+      p.provider_order_id,
+      p.bank_account_id,
+      p.source_event_id,
+      j.id AS canonical_journal_id,
+      j.status::text AS journal_status,
+      j.is_reversal,
+      j.journal_date,
+      j.debit_amount,
+      j.credit_revenue_amount,
+      j.credit_ppn_amount,
+      j.source_event_id AS journal_source_event_id,
+      j.correlation_id,
+      b.order_number,
+      b.customer_name,
+      b.facility_id,
+      m.id AS mirror_payment_id
+    FROM sport_center.sport_payments p
+    JOIN sport_center.accounting_journals j
+      ON j.payment_id = p.id
+     AND j.journal_type = 'payment_confirmed'
+     AND j.is_reversal = FALSE
+    LEFT JOIN sport_center.sport_bookings b ON b.id = p.booking_id
+    LEFT JOIN public.sport_payments m
+      ON m.payment_number = 'SCPAY-SC-' || p.id::text
+    WHERE p.company_id = ${companyId}
+      AND p.status::text = 'confirmed'
+    ORDER BY p.id
+  `);
+
+  let synced = 0;
+  let skipped = 0;
+  let errors = 0;
+
+  for (const raw of sourceResult.rows as Array<Record<string, unknown>>) {
+    const paymentId = Number(raw.id);
+    const mirrorPaymentId = Number(raw.mirror_payment_id ?? 0);
+    try {
+      if (!mirrorPaymentId) {
+        throw new Error(`CANONICAL_PAYMENT_MIRROR_MISSING: payment=${paymentId}`);
+      }
+      if (raw.journal_status !== "posted" || raw.is_reversal === true) {
+        throw new Error(`CANONICAL_PAYMENT_JOURNAL_NOT_POSTED: payment=${paymentId}`);
+      }
+
+      const gross = Number(raw.amount);
+      const debit = Number(raw.debit_amount);
+      const revenue = Number(raw.credit_revenue_amount);
+      const tax = Number(raw.credit_ppn_amount ?? 0);
+      if (![gross, debit, revenue, tax].every(Number.isFinite) ||
+          gross <= 0 || Math.abs(debit - gross) > 0.01 ||
+          Math.abs(revenue + tax - gross) > 0.01) {
+        throw new Error(`CANONICAL_PAYMENT_JOURNAL_UNBALANCED: payment=${paymentId}`);
+      }
+
+      const result = await db.transaction(async (tx) => {
+        const existing = await tx.execute(sql`
+          SELECT ae.id AS entry_id, ap.id AS payment_id
+          FROM accounting_entries ae
+          LEFT JOIN accounting_payments ap
+            ON ap.entry_id = ae.id
+           AND ap.source_type = 'sport_center'
+           AND ap.source_doc_id = ${paymentId}
+          WHERE ae.company_id = ${companyId}
+            AND ae.source = 'sport_center_payment'
+            AND ae.source_id = ${paymentId}
+          LIMIT 1
+        `);
+        if (existing.rows.length > 0) {
+          const row = existing.rows[0] as Record<string, unknown>;
+          return {
+            entryId: Number(row.entry_id),
+            accountingPaymentId: Number(row.payment_id ?? 0) || null,
+            created: false,
+          };
+        }
+
+        const dateValue = String(raw.journal_date ?? raw.paid_at ?? new Date().toISOString()).slice(0, 10);
+        const entry = await postEntryWithClient(
+          tx,
+          {
+            journalId: qrisJournalId,
+            date: new Date(`${dateValue}T00:00:00.000Z`),
+            ref: `SCPAY-SC-${paymentId}`,
+            description: `Canonical Sport Center payment ${raw.order_number ?? paymentId}`,
+            paymentMethod: normalizePaymentMethod(String(raw.payment_method ?? "")) ?? "qris",
+            source: "sport_center_payment",
+            sourceId: paymentId,
+            sourceModule: "sport_center_canonical",
+            companyId,
+            costCenterId: null,
+            lines: [
+              {
+                accountId: qrisAccountId,
+                debit: gross,
+                credit: 0,
+                description: `QRIS clearing ${raw.order_number ?? paymentId}`,
+              },
+              {
+                accountId: revenueAccountId,
+                debit: 0,
+                credit: revenue,
+                description: `Pendapatan Booking Sport Center ${raw.order_number ?? paymentId}`,
+              },
+              ...(tax > 0 ? [{
+                accountId: taxAccountId,
+                debit: 0,
+                credit: tax,
+                description: `PPN Keluaran Sport Center ${raw.order_number ?? paymentId}`,
+              }] : []),
+            ],
+          },
+          "QRIS",
+          "posted",
+        );
+
+        const paymentNumber = `PAY/SC/${dateValue.replaceAll("-", "")}/${String(paymentId).padStart(6, "0")}`;
+        const paymentInsert = await tx.execute(sql`
+          INSERT INTO accounting_payments
+            (company_id, payment_number, payment_type, status, amount, journal_id,
+             partner_name, date, ref, memo, payment_method, entry_id,
+             source_type, source_doc_id, created_by_id, created_at, updated_at)
+          VALUES
+            (${companyId}, ${paymentNumber}, 'inbound', 'posted', ${gross},
+             ${qrisJournalId}, ${raw.customer_name ?? null}, ${dateValue}::date,
+             ${`SCPAY-SC-${paymentId}`},
+             ${`Canonical Sport Center payment event ${raw.source_event_id ?? raw.journal_source_event_id ?? paymentId}`},
+             ${normalizePaymentMethod(String(raw.payment_method ?? "")) ?? "qris"},
+             ${entry.id}, 'sport_center', ${paymentId}, 'canonical-sport-center-owner', NOW(), NOW())
+          RETURNING id
+        `);
+        return {
+          entryId: entry.id,
+          accountingPaymentId: Number((paymentInsert.rows[0] as Record<string, unknown>)?.id ?? 0),
+          created: true,
+        };
+      });
+
+      await db.execute(sql`
+        UPDATE public.sport_payments
+        SET accounting_payment_id = ${result.accountingPaymentId},
+            posting_status = 'posted',
+            posting_error = NULL,
+            updated_at = NOW()
+        WHERE id = ${mirrorPaymentId}
+      `);
+      if (result.created) {
+        synced++;
+        console.log(`${PREFIX} canonical payment posted payment=${paymentId} entry=${result.entryId}`);
+      } else {
+        skipped++;
+      }
+    } catch (err) {
+      errors++;
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`${PREFIX} canonical payment failed payment=${paymentId}: ${message}`);
+      if (mirrorPaymentId) {
+        await db.execute(sql`
+          UPDATE public.sport_payments
+          SET posting_status = 'failed',
+              posting_error = ${message.slice(0, 1000)},
+              updated_at = NOW()
+          WHERE id = ${mirrorPaymentId}
+        `).catch(() => {});
+      }
+    }
+  }
+
+  console.log(`${PREFIX} canonical sync selesai: synced=${synced} skipped=${skipped} errors=${errors}`);
+  return { synced, skipped, errors };
 }
 
   /*
@@ -1496,10 +1743,17 @@ export async function runDailyPaymentSync(
     paymentsResult.errors++;
   }
 
-  // ── 3. Accounting intentionally isolated ───────────────────────────────────
-  // Payment pull/status reconciliation remains active, but CST does not post
-  // Sport Center accounting during this phase.
-  const accountingResult = { synced: 0, skipped: 0, errors: 0 };
+  // ── 3. Project canonical payment events into public accounting ─────────────
+  // The adapter is explicitly source-aware and never revives the legacy
+  // sport_center_booking posting path.
+  let accountingResult = { synced: 0, skipped: 0, errors: 0 };
+  try {
+    accountingResult = await syncPaymentsToAccounting(companyId);
+    console.log(`${PREFIX} [dailySync] Canonical accounting: synced=${accountingResult.synced} skipped=${accountingResult.skipped} errors=${accountingResult.errors}`);
+  } catch (err) {
+    console.error(`${PREFIX} [dailySync] canonical accounting sync gagal:`, err);
+    accountingResult.errors++;
+  }
 
   // ── 4. Update status booking paid yang belum terupdate ─────────────────────
   let statusUpdated = 0;

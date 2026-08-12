@@ -130,6 +130,7 @@ export const accountingEntrySourceEnum = pgEnum("accounting_entry_source", [
   "sport_center_ppn_correction",    // Koreksi PPN double-count sport center
   "sport_center_amount_correction", // Koreksi jumlah jurnal ≠ harga fasilitas
   "sport_center_qris_mdr",           // Jurnal biaya MDR QRIS
+  "sport_center_payment",            // Canonical Sport Center payment event
 ]);
 
 export const accountingPaymentTypeEnum = pgEnum("accounting_payment_type", [

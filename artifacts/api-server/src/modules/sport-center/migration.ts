@@ -2248,6 +2248,9 @@ export async function runSportCenterMigration(): Promise<void> {
     await db.execute(sql`
       ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'sport_center_amount_correction'
     `).catch(() => {/* already exists */});
+    await db.execute(sql`
+      ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'sport_center_payment'
+    `).catch(() => {/* already exists */});
 
     // ── Auto-sync: sport_center_services → sport_facilities ──────────────────
     // Setiap kali startup, data dari schema lama (sport_center_services) di-sync
