@@ -457,32 +457,43 @@ router.post("/auth/dev-login", async (req: Request, res: Response) => {
   };
 
   let dbUser: { id: string; email: string | null; firstName: string | null; lastName: string | null; profileImageUrl: string | null; role?: string | null; companyId?: number | null; name?: string | null };
+
+  // Race DB lookup against a 4-second timeout so slow DB connections fall back
+  // to a synthetic user instead of making the browser abort the request.
+  const dbTimeout = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error("dev-login db timeout")), 4000)
+  );
   try {
-    let [found] = await db.select().from(usersTable).where(eq(usersTable.email, normalizedEmail));
-    if (!found) {
-      try {
-        const [created] = await db.insert(usersTable).values({
-          id: syntheticUser.id,
-          email: normalizedEmail,
-          name: syntheticUser.name,
-          firstName,
-          lastName,
-          role: syntheticUser.role as "admin" | "ecommerce" | "trading" | "logistics",
-        }).returning();
-        found = created;
-      } catch {
-        const [retry] = await db.select().from(usersTable).where(eq(usersTable.email, normalizedEmail));
-        found = retry;
-      }
-    }
-    // Jika email ada di ADMIN_EMAIL tapi role di DB bukan admin, update sekarang
-    if (found && isAdmin && found.role !== "admin") {
-      const [updated] = await db.update(usersTable).set({ role: "admin" }).where(eq(usersTable.id, found.id)).returning();
-      if (updated) found = updated;
-    }
-    dbUser = found ?? syntheticUser;
+    dbUser = await Promise.race([
+      (async () => {
+        let [found] = await db.select().from(usersTable).where(eq(usersTable.email, normalizedEmail));
+        if (!found) {
+          try {
+            const [created] = await db.insert(usersTable).values({
+              id: syntheticUser.id,
+              email: normalizedEmail,
+              name: syntheticUser.name,
+              firstName,
+              lastName,
+              role: syntheticUser.role as "admin" | "ecommerce" | "trading" | "logistics",
+            }).returning();
+            found = created;
+          } catch {
+            const [retry] = await db.select().from(usersTable).where(eq(usersTable.email, normalizedEmail));
+            found = retry;
+          }
+        }
+        // Jika email ada di ADMIN_EMAIL tapi role di DB bukan admin, update sekarang
+        if (found && isAdmin && found.role !== "admin") {
+          const [updated] = await db.update(usersTable).set({ role: "admin" }).where(eq(usersTable.id, found.id)).returning();
+          if (updated) found = updated;
+        }
+        return found ?? syntheticUser;
+      })(),
+      dbTimeout,
+    ]);
   } catch {
-    // DB unavailable — use synthetic user (session stored in memory)
+    // DB unavailable or timed out — use synthetic user (session stored in memory)
     dbUser = syntheticUser;
   }
 
