@@ -17,7 +17,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Switch } from "@/components/ui/switch";
 import {
   Loader2, RefreshCw, Plus, Package, Wrench, ShieldAlert, AlertCircle,
-  CheckCircle, CheckCircle2, XCircle, Eye, Play,
+  CheckCircle, CheckCircle2, XCircle, Eye, Play, Building2,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -135,6 +135,18 @@ const FEATURED_REASON_LABEL: Record<string, string> = {
   no_matching_request: "Tidak ada pengajuan terkait",
   request_not_active: "Pengajuan tidak berstatus aktif",
 };
+
+function dateInputValue(date: Date) {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 10);
+}
+
+function dateWithDays(start: string, days: number) {
+  const parsed = new Date(`${start}T00:00:00`);
+  if (!start || Number.isNaN(parsed.getTime()) || !Number.isFinite(days)) return "";
+  parsed.setDate(parsed.getDate() + days);
+  return dateInputValue(parsed);
+}
 
 // ── FixJasaNamesTool ──────────────────────────────────────────────────────────
 
@@ -784,6 +796,230 @@ export function FeaturedMaintenanceSection({ getAuthHeaders: _getAuthHeaders }: 
   );
 }
 
+// ── Tambah Produk Internal ─────────────────────────────────────────────────────
+
+type InternalVendor = {
+  id: number;
+  name: string;
+  companyId: number | null;
+};
+
+type InternalCatalogItem = {
+  id: number;
+  vendorId: number;
+  name: string;
+  description: string | null;
+  currency: string;
+  priceSell: string | number | null;
+  isFeatured: boolean;
+};
+
+/**
+ * The Customer Portal admin uses the same server endpoints and business rules
+ * as BizPortal. This panel intentionally creates the normal featured request
+ * through the internal-vendor shortcut, rather than recreating request logic.
+ */
+function TambahProdukInternalSection({ getAuthHeaders: _getAuthHeaders }: { getAuthHeaders: () => Record<string, string> }) {
+  const { toast } = useToast();
+  const h = _getAuthHeaders();
+  const today = dateInputValue(new Date());
+  const [vendors, setVendors] = useState<InternalVendor[]>([]);
+  const [packages, setPackages] = useState<FeaturedPackage[]>([]);
+  const [catalog, setCatalog] = useState<InternalCatalogItem[]>([]);
+  const [vendorId, setVendorId] = useState("");
+  const [catalogItemId, setCatalogItemId] = useState("");
+  const [packageId, setPackageId] = useState("");
+  const [startAt, setStartAt] = useState(today);
+  const [endAt, setEndAt] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const [vendorResponse, packageResponse] = await Promise.all([
+          fetch("/api/portal/admin/internal-featured/vendors", { credentials: "include", headers: h }),
+          fetch("/api/portal/admin/featured-packages", { credentials: "include", headers: h }),
+        ]);
+        if (cancelled) return;
+        if (vendorResponse.ok) setVendors(await vendorResponse.json() as InternalVendor[]);
+        if (packageResponse.ok) setPackages(await packageResponse.json() as FeaturedPackage[]);
+      } catch (error) {
+        if (!cancelled) toast({ title: "Gagal memuat data", description: String(error), variant: "destructive" });
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!vendorId) {
+      setCatalog([]);
+      setCatalogItemId("");
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setCatalogLoading(true);
+      setCatalogItemId("");
+      try {
+        const r = await fetch(`/api/portal/admin/internal-featured/vendors/${vendorId}/catalog`, {
+          credentials: "include",
+          headers: h,
+        });
+        if (r.ok && !cancelled) setCatalog(await r.json() as InternalCatalogItem[]);
+      } catch (error) {
+        if (!cancelled) toast({ title: "Gagal memuat katalog", description: String(error), variant: "destructive" });
+      } finally {
+        if (!cancelled) setCatalogLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [vendorId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const selectedPackage = packages.find((pkg) => String(pkg.id) === packageId);
+  const selectedItem = catalog.find((item) => String(item.id) === catalogItemId);
+
+  const handlePackageChange = (value: string) => {
+    setPackageId(value);
+    const pkg = packages.find((candidate) => String(candidate.id) === value);
+    if (pkg) setEndAt(dateWithDays(startAt, pkg.durationDays));
+  };
+
+  const handleStartChange = (value: string) => {
+    setStartAt(value);
+    if (selectedPackage) setEndAt(dateWithDays(value, selectedPackage.durationDays));
+  };
+
+  const handleActivate = async () => {
+    if (!vendorId || !catalogItemId || !packageId || !startAt || !endAt) return;
+    setSubmitting(true);
+    try {
+      const r = await fetch("/api/portal/admin/internal-featured/activate", {
+        method: "POST",
+        credentials: "include",
+        headers: { ...h, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          vendorId: Number(vendorId),
+          catalogItemId: Number(catalogItemId),
+          packageId: Number(packageId),
+          startAt: `${startAt}T00:00:00`,
+          endAt: `${endAt}T00:00:00`,
+        }),
+      });
+      if (!r.ok) {
+        const error = await r.json().catch(() => ({}));
+        throw new Error(error.error ?? "Gagal mengaktifkan Produk Unggulan");
+      }
+      setCatalog((items) => items.filter((item) => String(item.id) !== catalogItemId));
+      setCatalogItemId("");
+      toast({
+        title: "Produk internal diaktifkan",
+        description: "Produk menjadi Produk Unggulan dan bebas pembayaran.",
+      });
+    } catch (error) {
+      toast({ title: "Gagal", description: String(error instanceof Error ? error.message : error), variant: "destructive" });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const canSubmit = Boolean(vendorId && catalogItemId && packageId && startAt && endAt);
+
+  return (
+    <div className="space-y-4">
+      <Card className="border-indigo-200 bg-indigo-50/40">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Building2 className="h-4 w-4 text-indigo-600" />
+            Tambah Produk Internal
+            <Badge className="bg-indigo-100 text-indigo-700 border-indigo-200 text-[10px]">Internal / Bebas Pembayaran</Badge>
+          </CardTitle>
+          <CardDescription>
+            Pilih vendor internal dan produk katalog yang aktif serta published. Tidak perlu login vendor atau upload bukti pembayaran.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label>Vendor internal *</Label>
+            <select
+              className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+              value={vendorId}
+              onChange={(e) => { setVendorId(e.target.value); setCatalogItemId(""); }}
+              disabled={loading}
+            >
+              <option value="">{loading ? "Memuat vendor..." : "Pilih vendor internal"}</option>
+              {vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}
+            </select>
+            {!loading && vendors.length === 0 && <p className="text-xs text-muted-foreground">Belum ada vendor internal aktif.</p>}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Produk katalog *</Label>
+            <select
+              className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+              value={catalogItemId}
+              onChange={(e) => setCatalogItemId(e.target.value)}
+              disabled={!vendorId || catalogLoading}
+            >
+              <option value="">
+                {!vendorId ? "Pilih vendor terlebih dahulu" : catalogLoading ? "Memuat katalog..." : "Pilih produk aktif"}
+              </option>
+              {catalog.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+            {vendorId && !catalogLoading && catalog.length === 0 && (
+              <p className="text-xs text-muted-foreground">Tidak ada produk aktif/published yang tersedia.</p>
+            )}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Paket promosi / durasi *</Label>
+            <select
+              className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+              value={packageId}
+              onChange={(e) => handlePackageChange(e.target.value)}
+              disabled={loading}
+            >
+              <option value="">{loading ? "Memuat paket..." : "Pilih paket"}</option>
+              {packages.filter((pkg) => pkg.isActive).map((pkg) => (
+                <option key={pkg.id} value={pkg.id}>{pkg.name} · {pkg.durationDays} hari</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Tanggal mulai *</Label>
+            <Input type="date" value={startAt} onChange={(e) => handleStartChange(e.target.value)} />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Tanggal selesai *</Label>
+            <Input type="date" value={endAt} onChange={(e) => setEndAt(e.target.value)} />
+            {selectedPackage && <p className="text-xs text-muted-foreground">Otomatis mengikuti durasi paket: {selectedPackage.durationDays} hari.</p>}
+          </div>
+
+          <div className="flex items-end justify-between gap-3 rounded-md border bg-white p-3">
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-muted-foreground">Ringkasan</p>
+              <p className="truncate text-sm font-medium">{selectedItem?.name ?? "Belum memilih produk"}</p>
+              <p className="text-xs text-muted-foreground">
+                {selectedPackage ? `${selectedPackage.name} · prioritas ${selectedPackage.priorityWeight}` : "Belum memilih paket"}
+              </p>
+            </div>
+            <Button onClick={() => void handleActivate()} disabled={!canSubmit || submitting} className="shrink-0">
+              {submitting ? "Mengaktifkan..." : "Aktifkan Produk Unggulan"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 // ── ProdukUnggulanTab ─────────────────────────────────────────────────────────
 
 export function ProdukUnggulanTab({ getAuthHeaders: _getAuthHeaders }: { getAuthHeaders: () => Record<string, string> }) {
@@ -852,6 +1088,7 @@ export function ProdukUnggulanTab({ getAuthHeaders: _getAuthHeaders }: { getAuth
 
   const SUB_TABS = [
     { value: "pengajuan", label: "Pengajuan" },
+    { value: "internal", label: "Tambah Internal" },
     { value: "aktif", label: "Produk Aktif" },
     { value: "paket", label: "Paket Promosi" },
     { value: "riwayat", label: "Riwayat" },
@@ -887,6 +1124,8 @@ export function ProdukUnggulanTab({ getAuthHeaders: _getAuthHeaders }: { getAuth
           <FeaturedRequestsTable rows={pengajuanRows} loading={pengajuanLoading} onRefresh={loadPengajuan} showActions={true} />
         </div>
       )}
+
+      {subTab === "internal" && <TambahProdukInternalSection getAuthHeaders={_getAuthHeaders} />}
 
       {subTab === "aktif" && (
         <div className="space-y-3">
