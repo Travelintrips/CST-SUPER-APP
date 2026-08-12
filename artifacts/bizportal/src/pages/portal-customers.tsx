@@ -1,17 +1,20 @@
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle,
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import {
   Users, MessageCircle, Mail, KeyRound, Phone, Building2, RefreshCw,
-  MapPin, User, Calendar, ShieldCheck, FileText,
+  MapPin, User, Calendar, ShieldCheck, FileText, Pencil, Ban,
 } from "lucide-react";
 import { BackButton } from "@/components/ui/back-button";
 
@@ -22,6 +25,9 @@ type PortalCustomer = {
   phone: string | null;
   company: string | null;
   role: string;
+  accountStatus: "active" | "inactive" | "sanctioned";
+  sanctionReason: string | null;
+  sanctionUntil: string | null;
   avatarUrl: string | null;
   source: "wa" | "oauth" | "email";
   createdAt: string;
@@ -54,6 +60,7 @@ type CustomerDetail = PortalCustomer & {
 type Stats = {
   total: number; wa: number; customer: number; vendor: number;
   profileIncomplete: number; profilePending: number; profileActive: number;
+  accountActive: number; accountInactive: number; accountSanctioned: number;
 };
 
 async function fetchJSON<T>(url: string): Promise<T> {
@@ -78,10 +85,20 @@ export default function PortalCustomersPage() {
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState<string>("all");
   const [sourceFilter, setSourceFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [form, setForm] = useState({
+    name: "", email: "", phone: "", company: "", role: "customer",
+    accountStatus: "active" as PortalCustomer["accountStatus"],
+    sanctionReason: "", sanctionUntil: "",
+  });
+  const queryClient = useQueryClient();
 
   const params = new URLSearchParams();
   if (roleFilter !== "all") params.set("role", roleFilter);
+  if (statusFilter !== "all") params.set("accountStatus", statusFilter);
   if (search.trim()) params.set("q", search.trim());
 
   const { data, isLoading, refetch, isFetching } = useQuery({
@@ -98,6 +115,57 @@ export default function PortalCustomersPage() {
     queryKey: ["portal-customer-detail", selectedId],
     queryFn: () => fetchJSON<CustomerDetail>(`/api/portal/admin/customers/${selectedId}`),
     enabled: selectedId !== null,
+  });
+
+  useEffect(() => {
+    if (!detail) return;
+    setForm({
+      name: detail.name ?? "",
+      email: detail.email ?? "",
+      phone: detail.phone ?? "",
+      company: detail.company ?? "",
+      role: detail.role ?? "customer",
+      accountStatus: detail.accountStatus ?? "active",
+      sanctionReason: detail.sanctionReason ?? "",
+      sanctionUntil: detail.sanctionUntil ? detail.sanctionUntil.slice(0, 10) : "",
+    });
+  }, [detail]);
+
+  const updateMutation = useMutation({
+    mutationFn: async () => {
+      if (selectedId === null) throw new Error("Akun belum dipilih");
+      if (!form.name.trim()) throw new Error("Nama wajib diisi");
+      if (!form.email.includes("@")) throw new Error("Email tidak valid");
+      if (form.accountStatus === "sanctioned" && !form.sanctionReason.trim()) {
+        throw new Error("Alasan sanksi wajib diisi");
+      }
+      const response = await fetch(`/api/portal/admin/customers/${selectedId}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: form.name.trim(),
+          email: form.email.trim(),
+          phone: form.phone.trim() || null,
+          company: form.company.trim() || null,
+          role: form.role,
+          accountStatus: form.accountStatus,
+          sanctionReason: form.sanctionReason.trim() || null,
+          sanctionUntil: form.sanctionUntil || null,
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || body.message || "Gagal menyimpan perubahan");
+      return body;
+    },
+    onSuccess: () => {
+      setSaveMessage("Perubahan akun berhasil disimpan.");
+      setEditing(false);
+      queryClient.invalidateQueries({ queryKey: ["portal-customers"] });
+      queryClient.invalidateQueries({ queryKey: ["portal-customers-stats"] });
+      queryClient.invalidateQueries({ queryKey: ["portal-customer-detail", selectedId] });
+    },
+    onError: (error: Error) => setSaveMessage(error.message),
   });
 
   const items = (data?.items ?? []).filter((it) => sourceFilter === "all" || it.source === sourceFilter);
@@ -118,6 +186,16 @@ export default function PortalCustomersPage() {
     };
     const m = map[status] ?? map.not_started;
     return <Badge className={`${m.cls} hover:${m.cls}`}>{m.label}</Badge>;
+  };
+
+  const accountBadge = (status: PortalCustomer["accountStatus"]) => {
+    if (status === "sanctioned") {
+      return <Badge className="gap-1 bg-red-100 text-red-700 hover:bg-red-100"><Ban className="w-3 h-3" />Sanksi</Badge>;
+    }
+    if (status === "inactive") {
+      return <Badge variant="outline" className="text-slate-600 border-slate-300">Nonaktif</Badge>;
+    }
+    return <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100">Aktif</Badge>;
   };
 
   const fmtDate = (s: string | null | undefined) =>
@@ -147,6 +225,8 @@ export default function PortalCustomersPage() {
               { label: "Belum Onboarding", value: stats.profileIncomplete, cls: "text-gray-600" },
               { label: "Pending Approval", value: stats.profilePending, cls: "text-amber-600" },
               { label: "Aktif", value: stats.profileActive, cls: "text-emerald-600" },
+              { label: "Akun Nonaktif", value: stats.accountInactive, cls: "text-slate-600" },
+              { label: "Akun Sanksi", value: stats.accountSanctioned, cls: "text-rose-600" },
             ].map((s) => (
               <Card key={s.label}>
                 <CardContent className="p-4">
@@ -185,6 +265,15 @@ export default function PortalCustomersPage() {
                   <SelectItem value="oauth">OAuth (Google)</SelectItem>
                 </SelectContent>
               </Select>
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="w-44"><SelectValue placeholder="Status akun" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Semua Status Akun</SelectItem>
+                  <SelectItem value="active">Aktif</SelectItem>
+                  <SelectItem value="inactive">Nonaktif</SelectItem>
+                  <SelectItem value="sanctioned">Sanksi</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
             <div className="border rounded-md overflow-x-auto">
@@ -196,16 +285,17 @@ export default function PortalCustomersPage() {
                     <TableHead>Perusahaan</TableHead>
                     <TableHead>Role</TableHead>
                     <TableHead>Sumber</TableHead>
-                    <TableHead>Status</TableHead>
+                    <TableHead>Status Profil</TableHead>
+                    <TableHead>Status Akun</TableHead>
                     <TableHead>Terdaftar</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {isLoading && (
-                    <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-8">Memuat…</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-8">Memuat…</TableCell></TableRow>
                   )}
                   {!isLoading && items.length === 0 && (
-                    <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-8">Belum ada data.</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-8">Belum ada data.</TableCell></TableRow>
                   )}
                   {items.map((c) => (
                     <TableRow
@@ -240,6 +330,7 @@ export default function PortalCustomersPage() {
                       <TableCell><Badge variant="outline" className="capitalize">{c.role}</Badge></TableCell>
                       <TableCell>{sourceBadge(c.source)}</TableCell>
                       <TableCell>{profileBadge(c.profileStatus)}</TableCell>
+                      <TableCell>{accountBadge(c.accountStatus)}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">
                         {new Date(c.createdAt).toLocaleString("id-ID", { dateStyle: "short", timeStyle: "short" })}
                       </TableCell>
@@ -253,10 +344,22 @@ export default function PortalCustomersPage() {
       </div>
 
       {/* Customer Detail Dialog */}
-      <Dialog open={selectedId !== null} onOpenChange={(open) => { if (!open) setSelectedId(null); }}>
+      <Dialog open={selectedId !== null} onOpenChange={(open) => {
+        if (!open) {
+          setSelectedId(null);
+          setEditing(false);
+          setSaveMessage(null);
+        }
+      }}>
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Detail Pelanggan</DialogTitle>
+            <DialogTitle className="flex items-center gap-2">
+              {editing ? <Pencil className="w-4 h-4" /> : <Users className="w-4 h-4" />}
+              {editing ? "Ubah Akun Pelanggan" : "Detail Pelanggan"}
+            </DialogTitle>
+            <DialogDescription>
+              Kelola akses login dan data akun tanpa menghapus histori transaksi.
+            </DialogDescription>
           </DialogHeader>
 
           {detailLoading || !detail ? (
@@ -273,9 +376,72 @@ export default function PortalCustomersPage() {
                     <Badge variant="outline" className="capitalize">{detail.role}</Badge>
                     {sourceBadge(detail.source)}
                     {profileBadge(detail.profileStatus)}
+                    {accountBadge(detail.accountStatus)}
                   </div>
                 </div>
               </div>
+
+              {editing && (
+                <div className="rounded-lg border p-4 space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="portal-customer-name">Nama</Label>
+                      <Input id="portal-customer-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+                    </div>
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="portal-customer-email">Email</Label>
+                      <Input id="portal-customer-email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+                    </div>
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="portal-customer-phone">WhatsApp / Telepon</Label>
+                      <Input id="portal-customer-phone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+                    </div>
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="portal-customer-company">Perusahaan</Label>
+                      <Input id="portal-customer-company" value={form.company} onChange={(e) => setForm({ ...form, company: e.target.value })} />
+                    </div>
+                    <div className="grid gap-1.5">
+                      <Label>Role</Label>
+                      <Select value={form.role} onValueChange={(role) => setForm({ ...form, role })}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="customer">Customer</SelectItem>
+                          <SelectItem value="vendor">Vendor</SelectItem>
+                          <SelectItem value="driver">Driver</SelectItem>
+                          <SelectItem value="employee">Karyawan</SelectItem>
+                          <SelectItem value="admin">Admin</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="grid gap-1.5">
+                      <Label>Status Akun</Label>
+                      <Select value={form.accountStatus} onValueChange={(accountStatus: PortalCustomer["accountStatus"]) => setForm({ ...form, accountStatus })}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="active">Aktif — dapat login</SelectItem>
+                          <SelectItem value="inactive">Nonaktif — login ditolak</SelectItem>
+                          <SelectItem value="sanctioned">Sanksi — login ditolak</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="portal-customer-sanction-reason">
+                      {form.accountStatus === "sanctioned" ? "Alasan sanksi *" : "Catatan status (opsional)"}
+                    </Label>
+                    <Textarea id="portal-customer-sanction-reason" value={form.sanctionReason} onChange={(e) => setForm({ ...form, sanctionReason: e.target.value })} />
+                  </div>
+                  {form.accountStatus === "sanctioned" && (
+                    <div className="grid gap-1.5 max-w-xs">
+                      <Label htmlFor="portal-customer-sanction-until">Sanksi berakhir (opsional)</Label>
+                      <Input id="portal-customer-sanction-until" type="date" value={form.sanctionUntil} onChange={(e) => setForm({ ...form, sanctionUntil: e.target.value })} />
+                    </div>
+                  )}
+                  {saveMessage && (
+                    <p className={`text-sm ${saveMessage.includes("berhasil") ? "text-emerald-600" : "text-red-600"}`}>{saveMessage}</p>
+                  )}
+                </div>
+              )}
 
               {/* Contact */}
               <div>
@@ -337,6 +503,23 @@ export default function PortalCustomersPage() {
                 <p className="text-sm text-muted-foreground text-center py-4 border rounded-lg">Belum ada data onboarding untuk pelanggan ini.</p>
               )}
             </div>
+          )}
+
+          {!detailLoading && detail && (
+            <DialogFooter>
+              {editing ? (
+                <>
+                  <Button variant="outline" onClick={() => { setEditing(false); setSaveMessage(null); }}>Batal</Button>
+                  <Button onClick={() => updateMutation.mutate()} disabled={updateMutation.isPending}>
+                    {updateMutation.isPending ? "Menyimpan…" : "Simpan Perubahan"}
+                  </Button>
+                </>
+              ) : (
+                <Button className="gap-2" onClick={() => { setEditing(true); setSaveMessage(null); }}>
+                  <Pencil className="w-4 h-4" /> Ubah Akun
+                </Button>
+              )}
+            </DialogFooter>
           )}
         </DialogContent>
       </Dialog>
