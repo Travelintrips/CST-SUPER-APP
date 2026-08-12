@@ -1952,8 +1952,8 @@ router.patch("/admin/customers/:id", requirePortalAdmin, async (req, res): Promi
     const updated = await updatePortalCustomer(id, {
       name,
       email,
-      phone: body.phone === undefined ? undefined : String(body.phone),
-      company: body.company === undefined ? undefined : String(body.company),
+      phone: body.phone === undefined ? undefined : body.phone === null ? null : String(body.phone),
+      company: body.company === undefined ? undefined : body.company === null ? null : String(body.company),
       role,
       accountStatus,
       sanctionReason,
