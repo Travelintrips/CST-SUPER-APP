@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { isPortalAdmin } from "@/lib/auth";
+import { resolveImageUrl } from "@/lib/utils";
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -225,7 +226,7 @@ export function PayLabsSettingTab() {
               <Input value={selectedMethod.iconUrl} onChange={(e) => updateMethod(selectedMethod.code, "iconUrl", e.target.value)} placeholder="https://example.com/icon.png" />
               <p className="text-xs text-muted-foreground">{t("adminPayments.iconUrlHint", "URL harus berekstensi .png")}</p>
               {selectedMethod.iconUrl && (
-                <img src={selectedMethod.iconUrl} alt="preview" className="h-8 w-8 object-contain rounded border mt-1" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                <img src={resolveImageUrl(selectedMethod.iconUrl) ?? selectedMethod.iconUrl} alt="preview" className="h-8 w-8 object-contain rounded border mt-1" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
               )}
             </div>
           )}
@@ -340,7 +341,7 @@ export function PayLabsSettingTab() {
                 <div key={method.code} className="flex items-center gap-3 px-4 py-3 hover:bg-muted/30 transition-colors">
                   <div className="flex-shrink-0 w-10 h-10 rounded border bg-white flex items-center justify-center overflow-hidden">
                     {method.iconEnabled && method.iconUrl ? (
-                      <img src={method.iconUrl} alt={method.label} className="w-8 h-8 object-contain" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                      <img src={resolveImageUrl(method.iconUrl) ?? method.iconUrl} alt={method.label} className="w-8 h-8 object-contain" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
                     ) : (
                       <CreditCard className="h-5 w-5 text-muted-foreground" />
                     )}

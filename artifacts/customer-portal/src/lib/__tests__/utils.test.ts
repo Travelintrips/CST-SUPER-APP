@@ -24,7 +24,7 @@ describe("resolveImageUrl", () => {
     expect(resolveImageUrl(external)).toBe(external);
   });
 
-  it.each(["/images/../secret.webp", "/images/foo\\bar.webp", "/images/"])(
+  it.each(["/images/../secret.webp", "/images/foo\\bar.webp", "/images/", "../foo.webp"])(
     "rejects unsafe or empty legacy path %s",
     (input) => {
       expect(resolveImageUrl(input)).toBeNull();

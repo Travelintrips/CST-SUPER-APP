@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { COMPANY_CONFIG } from "@/config/company";
+import { resolveImageUrl } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -252,7 +253,7 @@ export function ContentTab() {
                   <div className="relative">
                     <div className="w-full aspect-square rounded-full overflow-hidden border-2 border-border bg-muted">
                       {field(`testimonials.${n}Photo`) ? (
-                        <img src={field(`testimonials.${n}Photo`)} alt={field(`testimonials.${n}Name`) || label} className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                        <img src={resolveImageUrl(field(`testimonials.${n}Photo`)) ?? field(`testimonials.${n}Photo`)} alt={field(`testimonials.${n}Name`) || label} className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center text-muted-foreground">
                           <Users className="h-8 w-8" />

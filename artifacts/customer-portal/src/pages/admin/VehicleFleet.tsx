@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useToast } from "@/hooks/use-toast";
+import { resolveImageUrl } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -65,7 +66,7 @@ function VehicleImageCard({
       >
         {imageUrl ? (
           <>
-            <img src={imageUrl} alt={vehicle.name} className="h-full w-full object-contain p-2" />
+            <img src={resolveImageUrl(imageUrl) ?? imageUrl} alt={vehicle.name} className="h-full w-full object-contain p-2" />
             <button
               onClick={() => onRemove(vehicle.id)}
               className="absolute top-2 right-2 bg-white rounded-full p-1 shadow text-slate-500 hover:text-red-500 transition-colors"
@@ -137,7 +138,7 @@ function SortableVehicleItem({ vehicle, index, imageUrl }: { vehicle: VehicleDef
       </button>
       <div className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0 overflow-hidden" style={{ background: `${vehicle.color}22` }}>
         {imageUrl
-          ? <img src={imageUrl} alt={vehicle.name} className="w-full h-full object-contain p-1" />
+          ? <img src={resolveImageUrl(imageUrl) ?? imageUrl} alt={vehicle.name} className="w-full h-full object-contain p-1" />
           : <div className="w-3 h-3 rounded-full" style={{ background: vehicle.color }} />
         }
       </div>

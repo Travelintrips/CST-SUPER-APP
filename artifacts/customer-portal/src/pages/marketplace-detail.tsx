@@ -1068,6 +1068,9 @@ function VendorProfileCard({ vendorId, itemLocation }: { vendorId: number; itemL
 
   const { vendor, performance: perf, productCount, serviceCount } = data;
   const memberYear = vendor.createdAt ? new Date(vendor.createdAt).getFullYear() : null;
+  const vendorLogoUrl = vendor.logo && /^(?:https?:|\/)/i.test(vendor.logo)
+    ? (resolveImageUrl(vendor.logo) ?? vendor.logo)
+    : null;
 
   const responseText = (() => {
     if (!perf) return null;
@@ -1086,8 +1089,8 @@ function VendorProfileCard({ vendorId, itemLocation }: { vendorId: number; itemL
         <div className="flex items-start gap-2">
           {/* Logo */}
           <div className="w-9 h-9 rounded-xl bg-white border border-slate-200 flex items-center justify-center shrink-0 text-lg overflow-hidden">
-            {vendor.logo && vendor.logo.startsWith("http") ? (
-              <img src={vendor.logo} alt="" className="w-full h-full object-contain" />
+            {vendorLogoUrl ? (
+              <img src={vendorLogoUrl} alt="" className="w-full h-full object-contain" />
             ) : (
               <span>{vendor.logo ?? "📦"}</span>
             )}

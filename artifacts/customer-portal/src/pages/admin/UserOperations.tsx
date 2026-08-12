@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { getAuthHeaders } from "@/lib/auth";
+import { resolveImageUrl } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -616,7 +617,7 @@ export function CustomersTab() {
               <div className="rounded-xl bg-slate-50 border p-4">
                 <div className="flex items-start gap-3">
                   {detail.avatarUrl ? (
-                    <img src={detail.avatarUrl} alt={detail.name} className="h-12 w-12 rounded-full object-cover" />
+                    <img src={resolveImageUrl(detail.avatarUrl) ?? detail.avatarUrl} alt={detail.name} className="h-12 w-12 rounded-full object-cover" />
                   ) : (
                     <div className="h-12 w-12 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-semibold">
                       {(detail.profileFullName ?? detail.name).slice(0, 2).toUpperCase()}

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "wouter";
 import { COMPANY_CONFIG } from "@/config/company";
+import { resolveImageUrl } from "@/lib/utils";
 
 type StepMeta = {
   photoUrl?: string;
@@ -288,9 +289,9 @@ export default function DriverProgressPage() {
                     </div>
 
                     {thumb && (
-                      <a href={thumb} target="_blank" rel="noopener noreferrer">
+                      <a href={resolveImageUrl(thumb) ?? thumb} target="_blank" rel="noopener noreferrer">
                         <img
-                          src={thumb}
+                          src={resolveImageUrl(thumb) ?? thumb}
                           alt={`Foto ${data.stepLabel[s] ?? s}`}
                           className="mt-2 w-full rounded-lg object-cover border border-gray-200"
                           style={{ maxHeight: 140 }}

@@ -26,6 +26,13 @@ export function assetUrl(path: string): string {
  */
 export function resolveImageUrl(url: string | null | undefined): string | null {
   if (!url) return null;
+  const isAbsoluteUrl = /^[a-z][a-z\d+.-]*:/i.test(url) || url.startsWith("//");
+  if (
+    !isAbsoluteUrl &&
+    (url.includes("\\") || url.split("/").some((part) => part === "." || part === ".."))
+  ) {
+    return null;
+  }
   if (url.startsWith("/objects/")) return `/api/storage${url}`;
   // Legacy CMS values and old hard-coded paths all resolve to the same
   // canonical Customer Portal storage root. Keep path segments intact; do

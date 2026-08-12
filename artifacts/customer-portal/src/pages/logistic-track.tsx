@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { usePushNotification } from "@/hooks/usePushNotification";
 import { usePortalSSEOrderTracker } from "@/hooks/usePortalSSE";
-import { formatDate } from "@/lib/utils";
+import { formatDate, resolveImageUrl } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 import PageSeo from "@/components/PageSeo";
 import { useLanguage } from "@/i18n/LanguageContext";
@@ -1122,7 +1122,7 @@ function DriverGpsTimeline({ events }: { events: ProgressEvent[] }) {
                   )}
                   {ev.photoUrl && (
                     <a
-                      href={ev.photoUrl}
+                      href={resolveImageUrl(ev.photoUrl) ?? ev.photoUrl}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:underline bg-emerald-50 px-2 py-1 rounded-md"
@@ -1247,11 +1247,11 @@ function DeliveryProofGallery({ events, driverPhotos, jobNumber, orderStatusRank
                   <div
                     key={ev.id}
                     className="rounded-lg border border-violet-100 bg-violet-50/30 overflow-hidden cursor-pointer group"
-                    onClick={() => setPreviewUrl(ev.photoUrl ?? null)}
+                    onClick={() => setPreviewUrl(ev.photoUrl ? (resolveImageUrl(ev.photoUrl) ?? ev.photoUrl) : null)}
                   >
                     <div className="relative aspect-square bg-muted overflow-hidden">
                       <img
-                        src={ev.photoUrl!}
+                        src={resolveImageUrl(ev.photoUrl) ?? ev.photoUrl!}
                         alt={ev.stepLabel}
                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
                         onError={() =>
@@ -1294,7 +1294,7 @@ function DeliveryProofGallery({ events, driverPhotos, jobNumber, orderStatusRank
               <X className="w-5 h-5" />
             </button>
             <img
-              src={previewUrl}
+              src={resolveImageUrl(previewUrl) ?? previewUrl}
               alt="Preview"
               className="max-h-[78vh] w-full object-contain rounded-lg shadow-2xl"
               onError={(e) => {
@@ -1304,7 +1304,7 @@ function DeliveryProofGallery({ events, driverPhotos, jobNumber, orderStatusRank
             />
             <div className="flex justify-center mt-4 gap-3">
               <a
-                href={previewUrl}
+                href={resolveImageUrl(previewUrl) ?? previewUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 text-sm text-white/80 hover:text-white bg-white/10 hover:bg-white/20 px-4 py-2 rounded-lg transition-colors"
@@ -1735,9 +1735,9 @@ export default function TrackPage() {
                       </p>
                     )}
                     {pod.photoUrl && (
-                      <a href={pod.photoUrl} target="_blank" rel="noopener noreferrer" className="block">
+                      <a href={resolveImageUrl(pod.photoUrl) ?? pod.photoUrl} target="_blank" rel="noopener noreferrer" className="block">
                         <img
-                          src={pod.photoUrl}
+                          src={resolveImageUrl(pod.photoUrl) ?? pod.photoUrl}
                           alt={t("logisticTrackStatus.podTitle")}
                           className="w-full max-h-64 object-contain rounded-lg border border-teal-100 hover:opacity-90 transition-opacity cursor-zoom-in"
                         />

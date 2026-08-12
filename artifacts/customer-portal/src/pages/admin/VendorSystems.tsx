@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useRef, Fragment } from "react";
 import { getAuthHeaders } from "@/lib/auth";
+import { resolveImageUrl } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { useLanguage } from "@/i18n/LanguageContext";
 import { Button } from "@/components/ui/button";
@@ -1243,7 +1244,7 @@ export function VendorCatalogTab() {
                                     <div className="flex flex-wrap gap-2">
                                       {item.media.map(img => (
                                         <div key={img.id} className="relative group w-20 h-20 rounded-lg overflow-hidden border border-border/50 bg-slate-100 shrink-0">
-                                          <img src={img.file_url} alt="" className="w-full h-full object-cover" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
+                                          <img src={resolveImageUrl(img.file_url) ?? img.file_url} alt="" className="w-full h-full object-cover" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
                                           {img.is_primary && (
                                             <div className="absolute top-1 left-1 bg-amber-400 rounded-full p-0.5">
                                               <Star className="h-2.5 w-2.5 text-white fill-white" />

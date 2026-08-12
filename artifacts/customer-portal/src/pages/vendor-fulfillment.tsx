@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams } from "wouter";
 import { useLanguage } from "@/i18n/LanguageContext";
+import { resolveImageUrl } from "@/lib/utils";
 
 /* ─── Types ───────────────────────────────────────────────────────────────── */
 
@@ -574,7 +575,7 @@ function SubmittedReview({
                   <div className="mt-3">
                     <p className="text-xs text-slate-400 mb-1.5">{t("vendorFulfillment.stockPhoto", "Foto Barang / Stok")}</p>
                     {val("stockPhotoUrl")!.match(/\.(jpg|jpeg|png|webp|heic|heif)$/i) ? (
-                      <img src={val("stockPhotoUrl")!} alt={t("vendorFulfillment.stockPhotoAlt", "Foto stok")} className="max-h-40 rounded-lg border border-slate-200" />
+                      <img src={resolveImageUrl(val("stockPhotoUrl")) ?? val("stockPhotoUrl")!} alt={t("vendorFulfillment.stockPhotoAlt", "Foto stok")} className="max-h-40 rounded-lg border border-slate-200" />
                     ) : (
                       <a href={val("stockPhotoUrl")!} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 underline">{t("vendorFulfillment.viewStockPhoto", "Lihat file foto stok")}</a>
                     )}
@@ -726,7 +727,7 @@ function UploadField({
         </button>
         {url && (
           <a
-            href={url}
+            href={isImage ? (resolveImageUrl(url) ?? url) : url}
             target="_blank"
             rel="noopener noreferrer"
             className="text-xs text-blue-600 underline truncate max-w-[160px]"
@@ -737,7 +738,7 @@ function UploadField({
       </div>
       {url && isImage && (
         <img
-          src={url}
+          src={resolveImageUrl(url) ?? url}
           alt={label}
           className="mt-1 max-h-32 rounded-lg border border-slate-200 object-cover"
         />

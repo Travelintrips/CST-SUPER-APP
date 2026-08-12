@@ -857,7 +857,7 @@ export default function VendorProfilPage() {
         {/* ── Company Banner ───────────────────────────────────────────────── */}
         {vendor.companyBanner && (
           <div className="mb-4 rounded-2xl overflow-hidden shadow-sm border border-slate-100">
-            <img src={vendor.companyBanner} alt={`${vendor.name} banner`}
+            <img src={resolveImageUrl(vendor.companyBanner) ?? vendor.companyBanner} alt={`${vendor.name} banner`}
               className="w-full h-40 md:h-56 object-cover" />
           </div>
         )}

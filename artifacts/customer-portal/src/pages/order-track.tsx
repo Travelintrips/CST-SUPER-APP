@@ -550,9 +550,9 @@ export default function OrderTrackPage() {
             {data.podFiles!.some(f => f.type === "photo") && (
               <div className="grid grid-cols-2 gap-2 mb-3">
                 {data.podFiles!.filter(f => f.type === "photo").map((f, i) => (
-                  <a key={i} href={f.url} target="_blank" rel="noopener noreferrer" className="block rounded-xl overflow-hidden border border-slate-200 hover:opacity-90 transition-opacity">
+                  <a key={i} href={resolveImageUrl(f.url) ?? f.url} target="_blank" rel="noopener noreferrer" className="block rounded-xl overflow-hidden border border-slate-200 hover:opacity-90 transition-opacity">
                     <img
-                      src={f.url}
+                      src={resolveImageUrl(f.url) ?? f.url}
                       alt={f.name}
                       className="w-full h-32 object-cover bg-slate-100"
                       onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
@@ -655,9 +655,9 @@ export default function OrderTrackPage() {
                     {p.notes && <p className="text-slate-600 text-xs mt-0.5">{p.notes}</p>}
                     <p className="text-xs text-slate-400 mt-0.5">{formatDate(p.created_at)}</p>
                     {p.photo_url && (
-                      <a href={p.photo_url} target="_blank" rel="noopener noreferrer" className="mt-1.5 block">
+                      <a href={resolveImageUrl(p.photo_url) ?? p.photo_url} target="_blank" rel="noopener noreferrer" className="mt-1.5 block">
                         <img
-                          src={p.photo_url}
+                          src={resolveImageUrl(p.photo_url) ?? p.photo_url}
                           alt={t("orderTrack.photo", "Foto")}
                           className="h-24 w-auto max-w-[180px] rounded-lg object-cover border border-slate-200 hover:opacity-90 transition-opacity"
                           onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}

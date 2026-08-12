@@ -625,7 +625,7 @@ export default function VendorJobPage() {
                     {data.podFiles.filter(f => f.publicUrl).map((f, i) => (
                       <button key={i} type="button" onClick={() => { const idx = lightboxIdxByUrl.get(f.publicUrl!); if (idx !== undefined) setLightboxIdx(idx); }} className="focus:outline-none">
                         <img
-                          src={f.publicUrl}
+                          src={resolveImageUrl(f.publicUrl) ?? f.publicUrl}
                           alt={f.name}
                           className="w-20 h-20 object-cover rounded-lg border border-slate-200 shadow-sm hover:opacity-80 transition-opacity cursor-zoom-in"
                         />
@@ -680,7 +680,7 @@ export default function VendorJobPage() {
                     {p.photo_url && (
                       <button type="button" onClick={() => { const idx = lightboxIdxByUrl.get(p.photo_url!); if (idx !== undefined) setLightboxIdx(idx); }} className="inline-block mt-1 focus:outline-none">
                         <img
-                          src={p.photo_url}
+                          src={resolveImageUrl(p.photo_url) ?? p.photo_url}
                           alt={t("vendorJob.progressPhoto", "Foto progress")}
                           className="w-28 h-28 object-cover rounded-lg border border-slate-200 shadow-sm hover:opacity-80 transition-opacity cursor-zoom-in"
                         />
