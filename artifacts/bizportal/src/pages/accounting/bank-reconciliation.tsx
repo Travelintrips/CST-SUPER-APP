@@ -497,6 +497,7 @@ interface JournalLine {
 
 interface BankMutation {
   id: number;
+  company_id: number | null;
   transaction_date: string;
   description: string;
   credit_amount: string;
@@ -529,6 +530,7 @@ const CANONICAL_SETTLEMENT_SOURCE = "sport_center.payment_settlement_batches";
 interface QrisCandidateAudit {
   id?: number;
   mutation_id: number;
+  company_id?: number | null;
   provider_code: string;
   mutation_source_classification: string;
   source_date: string;
@@ -2674,6 +2676,7 @@ export default function BankReconciliationPage() {
   const [qrisBatchConfirm, setQrisBatchConfirm] = useState<{
     candidateId: number;
     mutationId: number;
+    companyId: number;
     providerCode: string;
     netAmount: number | string;
     paymentCount: number;
@@ -2684,9 +2687,19 @@ export default function BankReconciliationPage() {
     mutationId: number,
     candidate: QrisCandidateAudit,
   ) => {
+    const companyId = Number(candidate.company_id ?? null);
+    if (!Number.isInteger(companyId) || companyId <= 0) {
+      toast({
+        title: "Company context tidak tersedia",
+        description: "Kandidat QRIS tidak memiliki company yang valid.",
+        variant: "destructive",
+      });
+      return;
+    }
     setQrisBatchConfirm({
       candidateId,
       mutationId,
+      companyId,
       providerCode: candidate.provider_code || "belum dikenali",
       netAmount: candidate.net_amount,
       paymentCount: candidate.payment_items?.length ?? 0,
@@ -2781,12 +2794,16 @@ export default function BankReconciliationPage() {
   });
 
   const approveQrisBatchMut = useMutation({
-    mutationFn: async ({ candidateId, mutationId }: { candidateId: number; mutationId: number }) => {
+    mutationFn: async ({
+      candidateId,
+      mutationId,
+      companyId,
+    }: { candidateId: number; mutationId: number; companyId: number }) => {
       const r = await fetch(`/api/bank-reconciliation/qris-candidates/${candidateId}/approve`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mutationId }),
+        body: JSON.stringify({ mutationId, companyId }),
       });
       const body = await r.json().catch(() => ({ error: "Unknown error" }));
       if (!r.ok) throw new Error(body.error ?? r.statusText);
@@ -2980,7 +2997,16 @@ export default function BankReconciliationPage() {
       toast({ title: "Kandidat QRIS tidak tersedia", variant: "destructive" });
       return;
     }
-    approveQrisBatchMut.mutate({ candidateId, mutationId: m.id });
+    const companyId = Number(m.qris_candidate_audit?.company_id ?? m.company_id ?? null);
+    if (!Number.isInteger(companyId) || companyId <= 0) {
+      toast({
+        title: "Company context tidak tersedia",
+        description: "Mutasi bank tidak memiliki company yang valid.",
+        variant: "destructive",
+      });
+      return;
+    }
+    approveQrisBatchMut.mutate({ candidateId, mutationId: m.id, companyId });
   };
 
   const handleConfirmApprove = () => {

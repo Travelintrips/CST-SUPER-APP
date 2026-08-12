@@ -14,3 +14,16 @@ Before editing this flow, verify that `bankReconciliation.ts` contains exactly o
 **Why:** A duplicated route fragment and an unclosed SQL template can make the whole API fail to build, masking the actual settlement implementation.
 
 **How to apply:** Run the API build and search for duplicate `/qris-candidates/*/approve` declarations before restarting the application workflow.
+
+Admin users without a default company must have the UI send the candidate's
+validated `company_id` in the approval request; the backend should continue
+resolving and checking that explicit context rather than guessing a tenant.
+
+**Why:** The approval endpoint intentionally fails closed for unassigned admins.
+Omitting the candidate company from the UI turns a valid tenant-scoped approval
+into `Company context is required`, while deriving it server-side without an
+explicit request would weaken the isolation boundary.
+
+**How to apply:** Carry `company_id` from the QRIS candidate/mutation into both
+approval button paths, validate it as a positive integer in the UI, and keep
+the backend company filter and payment-company checks authoritative.
