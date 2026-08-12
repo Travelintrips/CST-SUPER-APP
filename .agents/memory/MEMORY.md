@@ -68,3 +68,4 @@
 - [Canonical approval bridge](canonical-approval-bridge.md) — link-only approval must resolve the public mutation_key to exactly one Sport Center bank mutation; missing bridge is fail-closed.
 - [Phase 4C-7P runtime evidence](phase4c7p-runtime-blocked.md) — active scores are correct; exclude superseded history or stale rows can falsely show a 30→20 persistence loss.
 - [Portal CMS media locale](portal-cms-media-locale.md) — hero and branding assets are global; text overrides remain language-specific.
+- [Static artifact browser proof](static-artifact-browser-proof.md) — fetch-based proof gateways must strip compression headers after buffering upstream responses.
