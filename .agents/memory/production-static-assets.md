@@ -16,3 +16,16 @@ the production bucket has not received the assets.
 against both development and production bundles, then republish after any
 production secret/configuration change. Validate the public asset URLs from the
 live domain after publish.
+
+Also verify the browser-requested path and response MIME, not only whether the
+canonical production objects exist. A stale frontend bundle can request a
+legacy raster path that returns `200 text/html` from the SPA fallback while the
+correct WebP objects return `200 image/webp`.
+
+**Why:** Object promotion and frontend bundle publication are independent; a
+successful storage check cannot prove that the live UI is using the corrected
+asset mapping.
+
+**How to apply:** Inspect the live route's loaded bundle and test every
+rendered asset URL after publishing the frontend bundle. Treat any legacy
+`.png`/`.jpg` request or `text/html` image response as a republish blocker.
