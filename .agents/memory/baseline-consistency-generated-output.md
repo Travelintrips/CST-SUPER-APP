@@ -27,3 +27,14 @@ testing. A clean unit suite therefore does not prove those scripts are runnable.
 **How to apply:** Run legacy HTTP regressions against the workflow's actual
 port and report port/schema incompatibilities as explicit regression blockers,
 without changing source code during baseline validation.
+
+For API package typecheck, build the referenced workspace declarations first
+(`pnpm run typecheck:libs`), then run the package typecheck; otherwise TypeScript
+can report missing `TS6305` outputs even when the source is clean.
+
+**Why:** The API project references generated declaration outputs from shared
+workspace packages, and those outputs may be absent or stale after a fresh
+checkout or an isolated package check.
+
+**How to apply:** Treat the declaration build as part of the validation
+preflight, and report its command order when documenting typecheck evidence.
