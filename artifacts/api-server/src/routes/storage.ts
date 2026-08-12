@@ -345,13 +345,20 @@ router.get("/storage/public-objects/{*filePath}", async (req: Request, res: Resp
         ? filePath.slice("images/".length)
         : null;
     if (legacyImagePath !== null) {
-      const canonical = `portal-assets/static/customer-portal/images/${legacyImagePath}`;
+      const canonical = `portal-assets/static/customer-portal/images/${legacyImagePath.replace(/\.(png|jpe?g)$/i, ".webp")}`;
       const encoded = canonical.split("/").map(encodeURIComponent).join("/");
       return res.redirect(308, `${req.baseUrl}/storage/public-objects/${encoded}`);
     }
 
     const file = await objectStorageService.searchPublicObject(filePath);
     if (!file) {
+      if (filePath.startsWith("portal-assets/static/customer-portal/")) {
+        console.warn("[storage] Customer Portal static asset not found", {
+          environment: process.env.APP_ENV ?? "unknown",
+          bucket: "public-assets",
+          objectKey: filePath,
+        });
+      }
       // Fallback: try redirecting to PROD Supabase CDN so that content uploaded
       // before this environment was set up (pointing to the prod bucket) still works.
       try {

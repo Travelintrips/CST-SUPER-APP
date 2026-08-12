@@ -281,6 +281,12 @@ export async function promoteStaticAssets({
   env = process.env,
 } = {}) {
   if (destination !== "production") throw new Error("Promotion destination must be production.");
+  if (env.APP_ENV !== "production") {
+    throw new Error(
+      "Production promotion must run with APP_ENV=production. " +
+      "This prevents a development secret bundle from being mistaken for production.",
+    );
+  }
   if (write && !process.env.CUSTOMER_PORTAL_ASSET_WRITE_ACK && !env.CUSTOMER_PORTAL_ASSET_WRITE_ACK) {
     throw new Error(
       "Production write blocked. Set CUSTOMER_PORTAL_ASSET_WRITE_ACK=I_UNDERSTAND and pass --write explicitly.",
@@ -367,6 +373,11 @@ async function main() {
   if (command === "verify") {
     const environment = arg("--env", process.env.APP_ENV);
     if (!environment) throw new Error("Verification requires --env development|production; no environment fallback.");
+    if (environment !== "both" && process.env.APP_ENV !== environment) {
+      throw new Error(
+        `Verification environment mismatch: APP_ENV=${process.env.APP_ENV ?? "(missing)"} but --env=${environment}.`,
+      );
+    }
     if (environment === "both") {
       await verifyStorageEnvironment("development", manifest);
       await verifyStorageEnvironment("production", manifest);

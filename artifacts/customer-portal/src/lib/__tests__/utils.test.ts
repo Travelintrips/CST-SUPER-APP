@@ -7,6 +7,8 @@ const CANONICAL_ROOT =
 describe("resolveImageUrl", () => {
   it.each([
     ["/images/foo.webp", "foo.webp"],
+    ["/images/foo.png", "foo.webp"],
+    ["/portal/images/nested/foo.jpg", "nested/foo.webp"],
     ["/portal/images/foo.webp", "foo.webp"],
     ["/api/storage/public-objects/portal/images/foo.webp", "foo.webp"],
     ["/api/storage/public-objects/images/foo.webp", "foo.webp"],

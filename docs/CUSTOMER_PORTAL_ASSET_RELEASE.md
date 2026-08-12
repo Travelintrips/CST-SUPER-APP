@@ -67,11 +67,12 @@ copies only missing/outdated expected objects, verifies each copy, and is
 idempotent:
 
 ```bash
-# Safe default: no write
-pnpm assets:customer:promote
+# Safe default: no write. Run with the production secret bundle so the
+# canonical destination credentials cannot be confused with development.
+APP_ENV=production pnpm assets:customer:promote
 
 # Explicit production write, only after reviewing the dry-run
-CUSTOMER_PORTAL_ASSET_WRITE_ACK=I_UNDERSTAND \
+APP_ENV=production CUSTOMER_PORTAL_ASSET_WRITE_ACK=I_UNDERSTAND \
   node artifacts/api-server/scripts/customer-portal-assets.mjs promote \
   --source development --destination production --write
 ```

@@ -47,7 +47,7 @@ export function resolveImageUrl(url: string | null | undefined): string | null {
     if (url.startsWith(prefix)) {
       const relative = url.slice(prefix.length);
       if (!relative || relative.split("/").some((part) => part === "." || part === ".." || part.includes("\\"))) return null;
-      return `/api/storage/public-objects/portal-assets/static/customer-portal/images/${relative}`;
+      return `/api/storage/public-objects/portal-assets/static/customer-portal/images/${relative.replace(/\.(png|jpe?g)$/i, ".webp")}`;
     }
   }
   return url;
