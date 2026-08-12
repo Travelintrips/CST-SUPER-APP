@@ -2285,7 +2285,6 @@ function MutationDetailPanel({
                     <div className="flex items-center gap-2">
                       {qrisAudit.status !== "approved"
                         && qrisAudit.id != null
-                        && String(qrisAudit.reconciliation_status ?? "").toUpperCase() === "MATCHED"
                         && onToggleQrisSelection && (
                         <label className="flex cursor-pointer items-center gap-1.5 text-[10px] font-medium normal-case tracking-normal text-indigo-700 dark:text-indigo-300">
                           <Checkbox
@@ -2370,29 +2369,55 @@ function MutationDetailPanel({
                     )}
                   </div>
 
-                  {/* Approve button — only for MATCHED, gated for REVIEW/UNMATCHED */}
+                  {/* Approve button — MATCHED = normal, REVIEW = force-approve with warning */}
                   {qrisAudit.status !== "approved" && qrisAudit.id != null && onApproveQrisBatch && (() => {
-                    const isMatched = String(qrisAudit.reconciliation_status ?? "").toUpperCase() === "MATCHED";
-                    return isMatched ? (
-                      <Button
-                        size="sm"
-                        className="w-full gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white"
-                        onClick={() => onApproveQrisBatch(qrisAudit.id!, qrisAudit.mutation_id, qrisAudit)}
-                      >
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        Setujui Batch — Buat QRIS Settlement
-                      </Button>
-                    ) : (
-                      <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-200 space-y-1">
+                    const recoStatus = String(qrisAudit.reconciliation_status ?? "").toUpperCase();
+                    const isMatched = recoStatus === "MATCHED";
+                    const isReview  = recoStatus === "REVIEW";
+                    if (isMatched) {
+                      return (
+                        <Button
+                          size="sm"
+                          className="w-full gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white"
+                          onClick={() => onApproveQrisBatch(qrisAudit.id!, qrisAudit.mutation_id, qrisAudit)}
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          Setujui Batch — Buat QRIS Settlement
+                        </Button>
+                      );
+                    }
+                    if (isReview) {
+                      return (
+                        <div className="space-y-2">
+                          <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-200 space-y-1">
+                            <p className="font-semibold flex items-center gap-1">
+                              <AlertTriangle className="w-3 h-3 shrink-0" />
+                              Perlu verifikasi — provider atau MDR belum cocok
+                            </p>
+                            <p>
+                              Approve tetap bisa dilakukan, namun pastikan data payment sudah benar.
+                            </p>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="w-full gap-1.5 border-amber-400 text-amber-900 hover:bg-amber-50 dark:border-amber-600 dark:text-amber-300 dark:hover:bg-amber-950/40"
+                            onClick={() => onApproveQrisBatch(qrisAudit.id!, qrisAudit.mutation_id, qrisAudit)}
+                          >
+                            <AlertTriangle className="w-3.5 h-3.5" />
+                            Setujui Batch (Override REVIEW)
+                          </Button>
+                        </div>
+                      );
+                    }
+                    // UNMATCHED or unknown — fully blocked
+                    return (
+                      <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 space-y-1">
                         <p className="font-semibold flex items-center gap-1">
                           <AlertTriangle className="w-3 h-3 shrink-0" />
-                          Tidak dapat disetujui — verifikasi manual diperlukan
+                          Tidak dapat disetujui
                         </p>
-                        <p>
-                          Status <strong>{qrisAudit.reconciliation_status}</strong>: provider belum dikenali,
-                          partisi payment ambigu, atau potongan MDR di luar toleransi.
-                          Periksa dan perbaiki data sebelum membuat settlement.
-                        </p>
+                        <p>Status <strong>{qrisAudit.reconciliation_status}</strong>: jalankan AI Matching terlebih dahulu.</p>
                       </div>
                     );
                   })()}
@@ -2939,7 +2964,7 @@ export default function BankReconciliationPage() {
   const qrisCandidates = qrisAuditData?.candidates ?? [];
   const qrisApprovableCandidates = qrisCandidates.filter((candidate) =>
     candidate.id != null
-    && String(candidate.reconciliation_status ?? "").toUpperCase() === "MATCHED"
+    && ["MATCHED", "REVIEW"].includes(String(candidate.reconciliation_status ?? "").toUpperCase())
     && candidate.status !== "approved",
   );
   const selectedQrisCandidates = qrisApprovableCandidates.filter((candidate) =>
@@ -2972,13 +2997,13 @@ export default function BankReconciliationPage() {
   const openQrisBatchApprovalConfirmation = (candidates: QrisCandidateAudit[]) => {
     const eligibleCandidates = candidates.filter((candidate) =>
       candidate.id != null
-      && String(candidate.reconciliation_status ?? "").toUpperCase() === "MATCHED"
+      && ["MATCHED", "REVIEW"].includes(String(candidate.reconciliation_status ?? "").toUpperCase())
       && candidate.status !== "approved",
     );
     if (eligibleCandidates.length === 0) {
       toast({
         title: "Tidak ada kandidat QRIS yang dapat disetujui",
-        description: "Hanya kandidat berstatus MATCHED yang dapat dipilih.",
+        description: "Hanya kandidat berstatus MATCHED atau REVIEW yang dapat dipilih.",
         variant: "destructive",
       });
       return;
@@ -3570,7 +3595,7 @@ export default function BankReconciliationPage() {
                    {qrisCandidates.map((candidate) => {
                     const isApproved = candidate.status === "approved";
                      const isMatched = String(candidate.reconciliation_status ?? "").toUpperCase() === "MATCHED";
-                     const isSelectable = candidate.id != null && isMatched && !isApproved;
+                     const isSelectable = candidate.id != null && (isMatched || String(candidate.reconciliation_status ?? "").toUpperCase() === "REVIEW") && !isApproved;
                      const isSelected = candidate.id != null && selectedQrisCandidateIds.includes(candidate.id);
                     const isApprovingThis = approveQrisBatchMut.isPending &&
                       approveQrisBatchMut.variables?.candidateId === candidate.id;
@@ -3656,26 +3681,33 @@ export default function BankReconciliationPage() {
                                />
                              )}
                             {!isApproved && candidate.id != null && (() => {
-                              return isMatched ? (
+                              const isReviewStatus = String(candidate.reconciliation_status ?? "").toUpperCase() === "REVIEW";
+                              const canApprove = isMatched || isReviewStatus;
+                              if (!canApprove) return (
+                                <span
+                                  title={`Status ${candidate.reconciliation_status}: jalankan AI Matching terlebih dahulu`}
+                                  className="text-[10px] text-slate-500 dark:text-slate-400 flex items-center gap-0.5 cursor-help"
+                                >
+                                  <AlertTriangle className="w-3 h-3 shrink-0" />
+                                  Belum bisa
+                                </span>
+                              );
+                              return (
                                 <Button
                                   size="sm"
                                   variant="outline"
-                                  className="h-7 text-[11px] gap-1 border-indigo-400 text-indigo-700 hover:bg-indigo-50"
+                                  className={isMatched
+                                    ? "h-7 text-[11px] gap-1 border-indigo-400 text-indigo-700 hover:bg-indigo-50 dark:border-indigo-700 dark:text-indigo-300"
+                                    : "h-7 text-[11px] gap-1 border-amber-400 text-amber-800 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300"}
                                   disabled={isApprovingThis || approveQrisBatchMut.isPending}
                                   onClick={() => handleApproveQrisBatch(candidate.id!, candidate.mutation_id, candidate)}
                                 >
                                   {isApprovingThis
                                     ? <><Loader2 className="w-3 h-3 animate-spin" /> Menyetujui...</>
-                                    : <><CheckCircle2 className="w-3 h-3" /> Setujui Batch</>}
+                                    : isMatched
+                                      ? <><CheckCircle2 className="w-3 h-3" /> Setujui Batch</>
+                                      : <><AlertTriangle className="w-3 h-3" /> Setujui (REVIEW)</>}
                                 </Button>
-                              ) : (
-                                <span
-                                  title={`Status ${candidate.reconciliation_status}: verifikasi manual diperlukan sebelum dapat disetujui`}
-                                  className="text-[10px] text-amber-700 dark:text-amber-400 flex items-center gap-0.5 cursor-help"
-                                >
-                                  <AlertTriangle className="w-3 h-3 shrink-0" />
-                                  Perlu verifikasi
-                                </span>
                               );
                              })()}
                            </div>
@@ -4381,6 +4413,9 @@ export default function BankReconciliationPage() {
               <div className="space-y-2 text-sm">
                 {(() => {
                   const candidates = qrisBatchConfirm?.candidates ?? [];
+                  const reviewCandidates = candidates.filter(
+                    (c) => String(c.reconciliation_status ?? "").toUpperCase() === "REVIEW",
+                  );
                   const paymentCount = candidates.reduce(
                     (total, candidate) => total + (candidate.payment_items?.length ?? 0),
                     0,
@@ -4388,13 +4423,27 @@ export default function BankReconciliationPage() {
                   const netAmount = candidates.reduce((total, candidate) => total + Number(candidate.net_amount ?? 0), 0);
                   const providers = Array.from(new Set(candidates.map((candidate) => candidate.provider_code).filter(Boolean)));
                   return (
-                    <p>
-                      Anda akan membuat settlement QRIS untuk{" "}
-                      <strong>{candidates.length} batch</strong> dengan{" "}
-                      <strong>{paymentCount} sport payment</strong>, total netto{" "}
-                      <strong>{idr(netAmount)}</strong>, dari provider{" "}
-                      <strong>{providers.join(", ") || "belum dikenali"}</strong>.
-                    </p>
+                    <>
+                      <p>
+                        Anda akan membuat settlement QRIS untuk{" "}
+                        <strong>{candidates.length} batch</strong> dengan{" "}
+                        <strong>{paymentCount} sport payment</strong>, total netto{" "}
+                        <strong>{idr(netAmount)}</strong>, dari provider{" "}
+                        <strong>{providers.join(", ") || "belum dikenali"}</strong>.
+                      </p>
+                      {reviewCandidates.length > 0 && (
+                        <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200 space-y-1">
+                          <p className="font-semibold flex items-center gap-1">
+                            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                            Peringatan: {reviewCandidates.length} batch berstatus REVIEW
+                          </p>
+                          <p>
+                            Kandidat REVIEW belum sepenuhnya diverifikasi — provider atau potongan MDR mungkin belum cocok.
+                            Approve tetap bisa dilakukan, namun pastikan data payment sudah benar sebelum melanjutkan.
+                          </p>
+                        </div>
+                      )}
+                    </>
                   );
                 })()}
                 <p className="text-orange-700 dark:text-orange-400 font-medium">

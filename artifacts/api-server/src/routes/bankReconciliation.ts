@@ -1192,7 +1192,10 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
           code: "ALREADY_APPROVED",
         });
       }
-      if (reconciliationStatus !== "MATCHED") {
+      // Allow MATCHED (normal) and REVIEW (force-approve with user confirmation on frontend).
+      // UNMATCHED and other statuses are still blocked.
+      const approvableStatuses = ["MATCHED", "REVIEW"];
+      if (!approvableStatuses.includes(reconciliationStatus)) {
         throw Object.assign(
           new Error(`Kandidat QRIS berstatus ${reconciliationStatus || "UNKNOWN"} dan belum dapat di-approve`),
           { code: "INVALID_STATUS" },
