@@ -392,6 +392,7 @@ async function assertBatchResult(
   group: GroupIdentity,
   paymentIds: number[],
   expectedStatus: "posted" | "reconciled",
+  expectedRuleVersion = group.ruleVersion,
 ): Promise<{ itemIds: number[]; journalId: number; idempotent: boolean }> {
   const batch = rowOrThrow(
     await client.execute(sql`
@@ -413,7 +414,15 @@ async function assertBatchResult(
     normalizeProvider(batch.provider_code) !== group.providerCode ||
     textOrNull(batch.bank_account_id) !== group.bankAccountId ||
     textOrNull(batch.settlement_date)?.slice(0, 10) !== group.settlementDate ||
-    textOrNull(batch.settlement_rule_version) !== group.ruleVersion ||
+    (
+      textOrNull(batch.settlement_rule_version) !== expectedRuleVersion &&
+      !(
+        expectedRuleVersion === group.ruleVersion &&
+        textOrNull(batch.settlement_rule_version)?.startsWith(
+          `${group.ruleVersion}:SUPPLEMENTAL-`,
+        )
+      )
+    ) ||
     textOrNull(batch.source) !== "SPORT_CENTER" ||
     batch.bank_mutation_id != null ||
     ![expectedStatus].includes(textOrNull(batch.status) as "posted" | "reconciled")
@@ -613,107 +622,179 @@ async function buildInTransaction(
 
   await resolveOwnerApprovedConfig(client, group);
   const bankCoaCode = await resolveCanonicalBankCoa(client, group);
-  const paymentIds = payments.map((payment) => payment.id);
-  const journals = await lockPaymentJournals(client, paymentIds);
 
   /*
-   * Existing posted/reconciled batches are checked before the unsettled
-   * requirement so exact retries are idempotent.  A partial active item set
-   * is never treated as success.
+   * Completed batches are immutable. A late-arriving payment is excluded from
+   * the old completed item set and is built into a deterministic supplemental
+   * batch by the canonical owner.
    */
   const groupLock = canonicalSettlementGroupSerialization(group);
   await client.execute(sql`
     SELECT pg_advisory_xact_lock(hashtext(${groupLock}))
   `);
   const existingResult = await client.execute(sql`
-    SELECT id, status
-    FROM sport_center.payment_settlement_batches
-    WHERE company_id = ${group.companyId}
-      AND lower(provider_code) = ${group.providerCode}
-      AND bank_account_id = ${group.bankAccountId}
-      AND settlement_date = ${group.settlementDate}::date
-      AND settlement_rule_version = ${group.ruleVersion}
-      AND status IN ('draft', 'calculated', 'posted', 'reconciled')
-    FOR UPDATE
+    SELECT b.id, b.status, b.settlement_rule_version, b.correlation_id
+    FROM sport_center.payment_settlement_batches b
+    CROSS JOIN LATERAL (
+      SELECT correlation_id
+      FROM sport_center.canonical_settlement_group_identity(
+        ${group.companyId},
+        ${group.providerCode},
+        ${group.bankAccountId},
+        ${group.settlementDate}::date,
+        ${group.ruleVersion}
+      )
+    ) identity
+    WHERE b.company_id = ${group.companyId}
+      AND lower(b.provider_code) = ${group.providerCode}
+      AND b.bank_account_id = ${group.bankAccountId}
+      AND b.settlement_date = ${group.settlementDate}::date
+      AND b.status IN ('draft', 'calculated', 'posted', 'reconciled')
+      AND (
+        b.settlement_rule_version = ${group.ruleVersion}
+        OR b.correlation_id LIKE identity.correlation_id || ':supp:%'
+      )
+    ORDER BY
+      CASE WHEN b.correlation_id = identity.correlation_id THEN 0 ELSE 1 END,
+      b.id
+    FOR UPDATE OF b
   `);
   const existing = rows(existingResult);
-  if (existing.length > 1) {
-    throw new CanonicalSettlementBuilderError(
-      CANONICAL_SETTLEMENT_BUILDER_CODES.CONCURRENCY_CONFLICT,
-      "More than one active canonical batch exists for the complete group.",
-    );
+  const existingIds = existing.map((batch) => Number(batch.id));
+  const itemRows = existingIds.length
+    ? rows(await client.execute(sql`
+        SELECT settlement_id, payment_id
+        FROM sport_center.payment_settlement_items
+        WHERE settlement_id IN (${sql.join(existingIds.map((id) => sql`${id}`), sql`, `)})
+          AND item_status = 'active'
+        ORDER BY settlement_id, payment_id
+        FOR UPDATE
+      `))
+    : [];
+  const itemsByBatch = new Map<number, number[]>();
+  for (const item of itemRows) {
+    const batchId = Number(item.settlement_id);
+    const ids = itemsByBatch.get(batchId) ?? [];
+    ids.push(Number(item.payment_id));
+    itemsByBatch.set(batchId, ids);
   }
 
-  if (existing.length === 1) {
-    const batchId = Number(existing[0].id);
-    const status = textOrNull(existing[0].status);
-    const itemResult = await client.execute(sql`
-      SELECT id, payment_id
-      FROM sport_center.payment_settlement_items
-      WHERE settlement_id = ${batchId}
-        AND item_status = 'active'
-      ORDER BY payment_id
-      FOR UPDATE
-    `);
-    const itemRows = rows(itemResult);
-    const actualIds = itemRows.map((row) => Number(row.payment_id));
-    if (
-      actualIds.length !== paymentIds.length ||
-      actualIds.some((id, index) => id !== paymentIds[index])
-    ) {
+  const sourceCompletedBatch = existing.find((batch) => {
+    const status = textOrNull(batch.status);
+    return (
+      (status === "posted" || status === "reconciled") &&
+      (itemsByBatch.get(Number(batch.id)) ?? []).includes(source.id)
+    );
+  });
+  if (sourceCompletedBatch) {
+    const batchId = Number(sourceCompletedBatch.id);
+    const status = textOrNull(sourceCompletedBatch.status) as "posted" | "reconciled";
+    const verified = await assertBatchResult(
+      client,
+      batchId,
+      group,
+      itemsByBatch.get(batchId) ?? [],
+      status,
+    );
+    return {
+      ok: true,
+      idempotent: true,
+      batchIds: [batchId],
+      itemIds: verified.itemIds,
+      journalIds: [verified.journalId],
+    };
+  }
+
+  const completedPaymentIds = new Set<number>();
+  for (const batch of existing) {
+    const status = textOrNull(batch.status);
+    if (status === "posted" || status === "reconciled") {
+      for (const paymentId of itemsByBatch.get(Number(batch.id)) ?? []) {
+        completedPaymentIds.add(paymentId);
+      }
+    }
+  }
+  const eligiblePayments = payments.filter(
+    (payment) => !completedPaymentIds.has(payment.id),
+  );
+  if (!eligiblePayments.some((payment) => payment.id === source.id)) {
+    throw new CanonicalSettlementBuilderError(
+      CANONICAL_SETTLEMENT_BUILDER_CODES.PAYMENT_NOT_ELIGIBLE,
+      `Source payment ${source.id} is already settled by a different canonical batch.`,
+    );
+  }
+  const paymentIds = eligiblePayments.map((payment) => payment.id);
+  const paymentSetMatches = (ids: number[] | undefined): boolean => {
+    const actual = [...(ids ?? [])].sort((a, b) => a - b);
+    const expected = [...paymentIds].sort((a, b) => a - b);
+    return actual.length === expected.length &&
+      actual.every((id, index) => id === expected[index]);
+  };
+
+  let resumableBatch: { id: number; status: "draft" | "calculated" } | null = null;
+  for (const batch of existing) {
+    const status = textOrNull(batch.status);
+    if (status !== "draft" && status !== "calculated") continue;
+    if (!paymentSetMatches(itemsByBatch.get(Number(batch.id)))) {
       throw new CanonicalSettlementBuilderError(
         CANONICAL_SETTLEMENT_BUILDER_CODES.IDEMPOTENCY_CONFLICT,
-        `Existing canonical batch ${batchId} has a different active payment set.`,
+        `Existing canonical batch ${batch.id} is not safely extendable; late-arriving payments require a supplemental batch.`,
       );
     }
-
-    if (status === "posted" || status === "reconciled") {
-      const verified = await assertBatchResult(
-        client,
-        batchId,
-        group,
-        paymentIds,
-        status,
-      );
-      return {
-        ok: true,
-        idempotent: true,
-        batchIds: [batchId],
-        itemIds: verified.itemIds,
-        journalIds: [verified.journalId],
-      };
-    }
-    if (status !== "calculated") {
+    if (resumableBatch) {
       throw new CanonicalSettlementBuilderError(
-        CANONICAL_SETTLEMENT_BUILDER_CODES.BATCH_CONFLICT,
-        `Existing canonical batch ${batchId} is not safely resumable from calculated state.`,
+        CANONICAL_SETTLEMENT_BUILDER_CODES.CONCURRENCY_CONFLICT,
+        "More than one resumable canonical batch matches the eligible payment set.",
       );
     }
-  } else {
+    resumableBatch = {
+      id: Number(batch.id),
+      status,
+    };
+  }
+
+  if (!resumableBatch) {
     if (
-      payments.some(
+      eligiblePayments.some(
         (payment) => payment.settlement_status !== "unsettled",
       )
     ) {
       throw new CanonicalSettlementBuilderError(
         CANONICAL_SETTLEMENT_BUILDER_CODES.PAYMENT_NOT_ELIGIBLE,
-        "A new canonical settlement requires every payment to be unsettled.",
+        "A new canonical settlement requires every eligible payment to be unsettled.",
       );
     }
     await assertActiveItemsAbsent(client, paymentIds);
   }
+  await lockPaymentJournals(client, paymentIds);
 
-  const batchResult = await client.execute(sql`
-    SELECT sport_center.create_payment_settlement_batch(
-      ${`SCB1-${groupLock}`},
-      ${group.companyId},
-      ${group.providerCode},
-      ${group.bankAccountId},
-      ${group.settlementDate}::date,
-      ARRAY[${sql.join(paymentIds.map((id) => sql`${id}`), sql`, `)}]::integer[],
-      ${options.actor}
-    ) AS id
-  `);
+  const hasCompletedBatch = existing.some((batch) => {
+    const status = textOrNull(batch.status);
+    return status === "posted" || status === "reconciled";
+  });
+  const batchResult = hasCompletedBatch && !resumableBatch
+    ? await client.execute(sql`
+        SELECT sport_center.create_payment_settlement_supplemental_batch(
+          ${group.companyId},
+          ${group.providerCode},
+          ${group.bankAccountId},
+          ${group.settlementDate}::date,
+          ${group.ruleVersion},
+          ARRAY[${sql.join(paymentIds.map((id) => sql`${id}`), sql`, `)}]::integer[],
+          ${options.actor}
+        ) AS id
+      `)
+    : await client.execute(sql`
+        SELECT sport_center.create_payment_settlement_batch(
+          ${`SCB1-${groupLock}`},
+          ${group.companyId},
+          ${group.providerCode},
+          ${group.bankAccountId},
+          ${group.settlementDate}::date,
+          ARRAY[${sql.join(paymentIds.map((id) => sql`${id}`), sql`, `)}]::integer[],
+          ${options.actor}
+        ) AS id
+      `);
   const batchId = Number(
     rowOrThrow(
       batchResult,
@@ -736,7 +817,12 @@ async function buildInTransaction(
   if (
     textOrNull(batchAfterCreate.status) !== "calculated" ||
     batchAfterCreate.bank_mutation_id != null ||
-    textOrNull(batchAfterCreate.settlement_rule_version) !== group.ruleVersion
+    (
+      textOrNull(batchAfterCreate.settlement_rule_version) !== group.ruleVersion &&
+      !textOrNull(batchAfterCreate.settlement_rule_version)?.startsWith(
+        `${group.ruleVersion}:SUPPLEMENTAL-`,
+      )
+    )
   ) {
     throw new CanonicalSettlementBuilderError(
       CANONICAL_SETTLEMENT_BUILDER_CODES.BATCH_CONFLICT,
