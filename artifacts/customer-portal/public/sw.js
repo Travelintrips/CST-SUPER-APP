@@ -11,8 +11,8 @@ self.addEventListener("push", (event) => {
   const title = payload.title ?? "B2B Marketplace and Logistic";
   const options = {
     body: payload.body ?? "",
-    icon: "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo-baru.png",
-    badge: "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo-baru.png",
+    icon: "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo-baru.webp",
+    badge: "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo-baru.webp",
     tag: payload.tag ?? "cst-order-update",
     renotify: true,
     data: { url: payload.url ?? "/" },

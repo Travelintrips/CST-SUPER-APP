@@ -1,7 +1,12 @@
 const STORAGE_ROOT = "/api/storage/public-objects/portal-assets/static/customer-portal";
 
 export function staticAsset(path: string): string {
-  return `${STORAGE_ROOT}/${path.replace(/^\/+/, "")}`;
+  const normalized = path.replace(/^\/+/, "");
+  // Static raster assets are published as WebP by the release pipeline. Keep
+  // source call sites readable (`staticAsset("images/logo.png")`) while
+  // ensuring the runtime requests the derived object that the manifest
+  // promotes and verifies.
+  return `${STORAGE_ROOT}/${normalized.replace(/\.(png|jpe?g)$/i, ".webp")}`;
 }
 
 export const CUSTOMER_ASSETS = {

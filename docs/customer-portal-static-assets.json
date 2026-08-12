@@ -1,0 +1,562 @@
+{
+  "schemaVersion": 1,
+  "generatedFrom": [
+    "artifacts/customer-portal/src",
+    "artifacts/customer-portal/public",
+    "artifacts/customer-portal/scripts"
+  ],
+  "bucket": "public-assets",
+  "storageRoot": "portal-assets/static/customer-portal",
+  "generatedBy": "artifacts/api-server/scripts/customer-portal-assets.mjs",
+  "assets": [
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/air-freight.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/air-freight.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/jasa-shared.ts",
+        "src/lib/staticAssets.ts",
+        "src/pages/freight-forwarding.tsx",
+        "src/pages/jasa.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/banner-trucking-container.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/banner-trucking-container.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/jasa-shared.ts",
+        "src/pages/jasa.tsx",
+        "src/pages/services.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/categories/bird-nest.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/categories/bird-nest.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/marketplace.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/categories/chemical.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/categories/chemical.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/marketplace.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/categories/coffee.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/categories/coffee.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/marketplace.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/categories/copper.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/categories/copper.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/marketplace.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/categories/frozen-food.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/categories/frozen-food.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/marketplace.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/categories/furniture.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/categories/furniture.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/marketplace.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/categories/iron-steel.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/categories/iron-steel.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/marketplace.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/categories/live-fish.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/categories/live-fish.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/marketplace.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/categories/rubber.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/categories/rubber.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/marketplace.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/categories/seafood.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/categories/seafood.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/marketplace.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/categories/sugar.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/categories/sugar.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/marketplace.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/categories/textile.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/categories/textile.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/marketplace.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/customs-document.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/customs-document.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/jasa-shared.ts",
+        "src/lib/staticAssets.ts"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/customs.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/customs.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/jasa-shared.ts",
+        "src/lib/staticAssets.ts"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/gambar-baru.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/gambar-baru.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/marketplace.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/hero-bg.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/hero-bg.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "index.html",
+        "src/lib/staticAssets.ts"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/logistics-routes.svg",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/logistics-routes.svg",
+      "contentType": "image/svg+xml",
+      "sourceFiles": [
+        "src/lib/staticAssets.ts"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/logo-baru.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo-baru.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "index.html",
+        "public/sw.js",
+        "src/lib/staticAssets.ts",
+        "src/pages/jasa-detail.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/logo.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "index.html",
+        "src/components/layout/Footer.tsx",
+        "src/components/layout/Navbar.tsx",
+        "src/lib/staticAssets.ts",
+        "src/pages/jasa-detail.tsx",
+        "src/pages/logistic-admin.tsx",
+        "src/pages/orders.tsx",
+        "src/pages/products.tsx",
+        "src/pages/services.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/og-cover.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/og-cover.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "index.html",
+        "scripts/prerender.mjs",
+        "src/config/seo.ts",
+        "src/lib/staticAssets.ts"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/port-operations.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/port-operations.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/jasa-shared.ts",
+        "src/lib/staticAssets.ts",
+        "src/pages/jasa-kategori.tsx",
+        "src/pages/marketplace.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/product-hero-brand.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/product-hero-brand.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/products.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/products/batubara-coal.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/batubara-coal.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/marketplace.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/products/beras-rice.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/beras-rice.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/categoryImages.ts",
+        "src/pages/marketplace.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/products/green-bean-arabica.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/green-bean-arabica.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/categoryImages.ts"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/products/kursi-kantor-ergonomis.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/kursi-kantor-ergonomis.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/categoryImages.ts"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/products/meja-kerja-standing-desk.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/meja-kerja-standing-desk.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/categoryImages.ts"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/products/nikel.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/nikel.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/marketplace.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/products/printer-hp-laserjet.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/printer-hp-laserjet.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/categoryImages.ts"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/products/samsung-galaxy-a54.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/samsung-galaxy-a54.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/categoryImages.ts"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/products/sawit-palm-oil.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/sawit-palm-oil.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/marketplace.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/sea-freight.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/sea-freight.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/jasa-shared.ts",
+        "src/lib/staticAssets.ts",
+        "src/pages/freight-forwarding.tsx",
+        "src/pages/jasa.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/services/air-freight.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/air-freight.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/categoryImages.ts"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/services/asuransi-kargo.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/asuransi-kargo.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/categoryImages.ts",
+        "src/pages/jasa-detail.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/services/biaya-storage.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/biaya-storage.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/categoryImages.ts",
+        "src/pages/jasa-detail.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/services/customs-clearance.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/customs-clearance.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/categoryImages.ts",
+        "src/pages/jasa-detail.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/services/default-service.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/default-service.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/categoryImages.ts"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/services/emkl.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/emkl.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/categoryImages.ts"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/services/freight-laut-fcl.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/freight-laut-fcl.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/categoryImages.ts"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/services/freight-laut-lcl.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/freight-laut-lcl.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/categoryImages.ts"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/services/freight-udara.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/freight-udara.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/categoryImages.ts",
+        "src/pages/jasa-detail.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/services/handling-cargo-laut.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/handling-cargo-laut.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/categoryImages.ts",
+        "src/pages/jasa-detail.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/services/handling-cargo-udara.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/handling-cargo-udara.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/categoryImages.ts"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/services/ocean-freight.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/ocean-freight.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/categoryImages.ts"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/services/pengurusan-dokumen-ppjk.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/pengurusan-dokumen-ppjk.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/categoryImages.ts",
+        "src/pages/jasa-detail.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/services/port-charges.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/port-charges.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/categoryImages.ts"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/services/storage-demurrage.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/storage-demurrage.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/categoryImages.ts"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/services/trucking-container.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/trucking-container.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/categoryImages.ts",
+        "src/pages/jasa-detail.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/services/urus-dokumen-pabean.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/urus-dokumen-pabean.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/lib/categoryImages.ts"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/box-kecil-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/box-kecil-ai.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/trucking.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/cdd-long-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/cdd-long-ai.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/trucking.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/double-engkel-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/double-engkel-ai.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/trucking.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/engkel-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/engkel-ai.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/trucking.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/fuso-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/fuso-ai.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/trucking.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/mobil-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/mobil-ai.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/trucking.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/mobil-xl-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/mobil-xl-ai.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/trucking.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/pickup-kecil-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/pickup-kecil-ai.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/trucking.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/tronton-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/tronton-ai.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/trucking.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/truk-reefer-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/truk-reefer-ai.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/trucking.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/truk-trailer-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/truk-trailer-ai.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/trucking.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/vehicles/van-ai.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/vehicles/van-ai.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/pages/trucking.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/warehouse.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/warehouse.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "src/hooks/useStorageBg.ts",
+        "src/lib/staticAssets.ts"
+      ]
+    }
+  ]
+}

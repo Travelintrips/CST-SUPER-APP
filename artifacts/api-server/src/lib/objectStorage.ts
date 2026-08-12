@@ -17,28 +17,42 @@ function normalizeSupabaseUrl(raw: string): string {
   return `https://${raw}.supabase.co`;
 }
 
-// Use production key if valid (>100 chars), else fallback to DEV key/URL
-const _rawKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
-const _devKey = process.env.SUPABASE_SERVICE_ROLE_KEY_DEV ?? "";
-const _devUrl = process.env.SUPABASE_URL_DEV ?? "";
-
-const SUPABASE_KEY = _rawKey.length > 100 ? _rawKey : _devKey;
-const SUPABASE_URL = normalizeSupabaseUrl(
-  _rawKey.length > 100
-    ? (process.env.VITE_SUPABASE_URL ?? process.env.SUPABASE_URL ?? "")
-    : _devUrl.replace(/\/rest\/v1\/?$/, "") // strip /rest/v1 suffix from DEV URL
-);
-
 const PUBLIC_BUCKET = "public-assets";
 const PRIVATE_BUCKET = "private-uploads";
 
 let _supabase: ReturnType<typeof createClient> | null = null;
+function resolveStorageConfig(): { url: string; key: string } {
+  const appEnv = process.env.APP_ENV;
+  if (appEnv !== "development" && appEnv !== "production") {
+    throw new Error(
+      `Storage environment is ambiguous (APP_ENV="${appEnv ?? ""}"). ` +
+      "Set APP_ENV=development or APP_ENV=production before using Supabase Storage.",
+    );
+  }
+
+  // Development explicitly prefers the *_DEV pair. The secret loader also
+  // exposes the development pair under canonical names for application code,
+  // but never let a production process fall back to a DEV credential.
+  const url = appEnv === "development"
+    ? (process.env.SUPABASE_URL_DEV ?? process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? "")
+    : (process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? "");
+  const key = appEnv === "development"
+    ? (process.env.SUPABASE_SERVICE_ROLE_KEY_DEV ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? "")
+    : (process.env.SUPABASE_SERVICE_ROLE_KEY ?? "");
+
+  if (!url || !key) {
+    throw new Error(
+      `Supabase Storage is not configured for APP_ENV=${appEnv}. ` +
+      "Required environment-specific URL and service-role key are missing.",
+    );
+  }
+  return { url: normalizeSupabaseUrl(url), key };
+}
+
 function getSupabase() {
   if (!_supabase) {
-    if (!SUPABASE_URL || !SUPABASE_KEY) {
-      throw new Error("Supabase not configured: VITE_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY required");
-    }
-    _supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+    const { url, key } = resolveStorageConfig();
+    _supabase = createClient(url, key, {
       auth: { autoRefreshToken: false, persistSession: false },
       realtime: { transport: WebSocket as unknown as typeof globalThis.WebSocket },
     });
@@ -304,7 +318,8 @@ export class ObjectStorageService {
    */
   toSupabasePublicUrl(subPath: string): string {
     const cleaned = subPath.replace(/^\/+/, "");
-    return `${SUPABASE_URL}/storage/v1/object/public/${PUBLIC_BUCKET}/${cleaned}`;
+    const { url } = resolveStorageConfig();
+    return `${url}/storage/v1/object/public/${PUBLIC_BUCKET}/${cleaned}`;
   }
 
   // ── Generic public upload ────────────────────────────────────────────────────
