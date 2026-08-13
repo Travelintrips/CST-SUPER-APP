@@ -606,6 +606,9 @@ type QrisSelectionConflictError = Error & {
 const idr = (n: number | string) =>
   "Rp " + new Intl.NumberFormat("id-ID").format(Number(n) || 0);
 
+const idrWhole = (n: number | string) =>
+  idr(Math.round(Number(n) || 0));
+
 const fmtDate = (d: string) => {
   if (!d) return "-";
   try { return new Date(d).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" }); } catch { return d; }
@@ -1789,8 +1792,8 @@ function QrisMutationCard({
               {[
                 { label: "Uang Masuk (Bank)", value: idr(bankAmount), tone: "text-foreground" },
                 { label: `Total Kandidat${metricScopeLabel}`, value: `${idr(candidateGross)} · ${items.length} transaksi`, tone: "text-foreground" },
-                { label: `MDR (Estimasi${metricScopeLabel})`, value: idr(mdr), tone: "text-foreground" },
-                { label: `Seharusnya Diterima${metricScopeLabel}`, value: idr(expectedNet), tone: "text-foreground" },
+                { label: `MDR (Estimasi${metricScopeLabel})`, value: idrWhole(mdr), tone: "text-foreground" },
+                { label: `Seharusnya Diterima${metricScopeLabel}`, value: idrWhole(expectedNet), tone: "text-foreground" },
                 { label: differenceLabel, value: idr(Math.abs(difference)), tone: difference === 0 ? "text-green-600" : "text-red-600" },
               ].map(metric => (
                 <div key={metric.label} className="min-w-0 rounded-md border bg-muted/20 px-2.5 py-2">

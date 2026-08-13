@@ -20,3 +20,9 @@ After partial settlement, the approval card must also use live payment amounts f
 **Why:** The persisted candidate snapshot can contain the original batch while the bank mutation remains the full deposit; mixing those values made a correct Rp0 batch variance look like a variance for the remaining payments.
 
 **How to apply:** Include live amounts and the remaining expected net in the mutation audit response. Keep the original bank-vs-batch comparison explicit whenever only part of the candidate remains.
+
+Display-only QRIS summary amounts should be rounded to whole rupiah; keep fractional precision in the settlement calculations.
+
+**Why:** Derived MDR/net values can contain fractional rupiah from proportional allocation, which is distracting in an operational approval card but still useful internally for accurate allocation.
+
+**How to apply:** Use a presentation formatter for summary cards rather than changing API values or stored settlement amounts.
