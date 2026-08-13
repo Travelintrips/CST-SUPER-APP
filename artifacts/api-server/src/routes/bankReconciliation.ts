@@ -2108,7 +2108,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
         WHERE psi.item_status = 'active'
           AND psb.status IN ('posted', 'reconciled')
           AND psi.payment_id IN (${candidatePaymentIds.join(",")})
-        FOR SHARE OF psb
+          FOR SHARE OF psi, psb
       `));
       const activePostedPaymentIds = activePostedRows.map((item) =>
         Number((item as Record<string, unknown>).payment_id),
@@ -2334,6 +2334,14 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
     });
   } catch (error: any) {
     const code = error?.code ?? "QRIS_CANONICAL_APPROVAL_FAILED";
+    if (error instanceof QrisApprovalPaymentGuardError) {
+      return res.status(409).json({
+        error: "1 transaksi yang dipilih sudah masuk settlement sebelumnya. Muat ulang kandidat dan pilih transaksi yang masih tersedia.",
+        code: error.code,
+        already_settled_payment_ids: error.alreadySettledPaymentIds,
+        eligible_payment_ids: error.eligiblePaymentIds,
+      });
+    }
     const clientErrorCodes = new Set([
       "NOT_FOUND",
       "INVALID_CANDIDATE",
@@ -2343,6 +2351,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       "CANONICAL_SETTLEMENT_NOT_ELIGIBLE",
       "CANONICAL_SETTLEMENT_GROUP_INVALID",
       "CANONICAL_SETTLEMENT_BATCH_CONFLICT",
+      "CANONICAL_SETTLEMENT_SELECTION_CONFLICT",
       "CANONICAL_PAYMENT_SETTLEMENT_STATE_CONFLICT",
       "CANONICAL_BANK_MUTATION_NOT_ELIGIBLE",
     ]);

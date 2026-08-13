@@ -303,15 +303,30 @@ export async function listQrisCandidates(options: {
            bm.bank_account_id,
            bm.source, bm.provider_name AS bank_provider_name,
            'sport_center.sport_payments'::text AS candidate_source,
-           COALESCE((
-             SELECT jsonb_agg(qsi.sport_payment_id ORDER BY qsi.sport_payment_id)
-             FROM qris_settlement_items qsi
-             WHERE qsi.sport_payment_id IN (
-               SELECT (item->>'paymentId')::int
-               FROM jsonb_array_elements(c.payment_items) item
-               WHERE item->>'paymentId' IS NOT NULL
-             )
-           ), '[]'::jsonb) AS settled_payment_ids
+            COALESCE((
+              SELECT jsonb_agg(settled.payment_id ORDER BY settled.payment_id)
+              FROM (
+                SELECT qsi.sport_payment_id AS payment_id
+                FROM qris_settlement_items qsi
+                WHERE qsi.sport_payment_id IN (
+                  SELECT (item->>'paymentId')::int
+                  FROM jsonb_array_elements(c.payment_items) item
+                  WHERE item->>'paymentId' IS NOT NULL
+                )
+                UNION
+                SELECT psi.payment_id
+                FROM sport_center.payment_settlement_items psi
+                JOIN sport_center.payment_settlement_batches psb
+                  ON psb.id = psi.settlement_id
+                WHERE psi.item_status = 'active'
+                  AND psb.status IN ('posted', 'reconciled')
+                  AND psi.payment_id IN (
+                    SELECT (item->>'paymentId')::int
+                    FROM jsonb_array_elements(c.payment_items) item
+                    WHERE item->>'paymentId' IS NOT NULL
+                  )
+              ) settled
+            ), '[]'::jsonb) AS settled_payment_ids
     FROM qris_mutation_batch_candidates c
     LEFT JOIN bank_mutations bm ON bm.id = c.mutation_id
      WHERE TRUE ${companyFilter} ${statusFilter} ${completedFilter}

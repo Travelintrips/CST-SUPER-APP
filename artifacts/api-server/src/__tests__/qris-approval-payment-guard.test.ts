@@ -33,7 +33,11 @@ describe("QRIS supplemental approval payment guard", () => {
       });
     } catch (error) {
       expect((error as QrisApprovalPaymentGuardError).code)
-        .toBe("CANONICAL_SETTLEMENT_BATCH_CONFLICT");
+        .toBe("CANONICAL_SETTLEMENT_SELECTION_CONFLICT");
+      expect((error as QrisApprovalPaymentGuardError).alreadySettledPaymentIds)
+        .toEqual([25]);
+      expect((error as QrisApprovalPaymentGuardError).eligiblePaymentIds)
+        .toEqual([26]);
     }
   });
 

@@ -1,14 +1,22 @@
-export const QRIS_APPROVAL_BATCH_CONFLICT =
-  "CANONICAL_SETTLEMENT_BATCH_CONFLICT";
+export const QRIS_APPROVAL_SELECTION_CONFLICT =
+  "CANONICAL_SETTLEMENT_SELECTION_CONFLICT";
 
 export class QrisApprovalPaymentGuardError extends Error {
-  readonly code = QRIS_APPROVAL_BATCH_CONFLICT;
+  readonly code = QRIS_APPROVAL_SELECTION_CONFLICT;
   readonly paymentIds: number[];
+  readonly alreadySettledPaymentIds: number[];
+  readonly eligiblePaymentIds: number[];
 
-  constructor(message: string, paymentIds: number[] = []) {
+  constructor(
+    message: string,
+    paymentIds: number[] = [],
+    eligiblePaymentIds: number[] = [],
+  ) {
     super(message);
     this.name = "QrisApprovalPaymentGuardError";
     this.paymentIds = paymentIds;
+    this.alreadySettledPaymentIds = paymentIds;
+    this.eligiblePaymentIds = eligiblePaymentIds;
   }
 }
 
@@ -62,17 +70,20 @@ export function selectQrisApprovalPaymentIds(
 
   const selected = requested ?? candidateIds.filter((id) => !activeIds.has(id));
   const completedSelected = selected.filter((id) => activeIds.has(id));
+  const eligibleIds = candidateIds.filter((id) => !activeIds.has(id));
   if (completedSelected.length > 0) {
     throw new QrisApprovalPaymentGuardError(
       `Payment canonical ${completedSelected.join(", ")} sudah berada pada batch posted/reconciled; ` +
       "approval supplemental dibatalkan.",
       completedSelected,
+      eligibleIds,
     );
   }
   if (selected.length === 0) {
     throw new QrisApprovalPaymentGuardError(
       "Semua payment pada kandidat sudah berada pada batch posted/reconciled.",
       candidateIds,
+      eligibleIds,
     );
   }
 
