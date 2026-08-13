@@ -26,3 +26,9 @@ Display-only QRIS summary amounts should be rounded to whole rupiah; keep fracti
 **Why:** Derived MDR/net values can contain fractional rupiah from proportional allocation, which is distracting in an operational approval card but still useful internally for accurate allocation.
 
 **How to apply:** Use a presentation formatter for summary cards rather than changing API values or stored settlement amounts.
+
+The QRIS mutation summary cards should separate bank total, approved payment count/amount, unapproved payment count, remaining MDR, remaining payment amount, and variance.
+
+**Why:** A single “candidate total” card hid the distinction between historical batch value and the live remaining approval workload.
+
+**How to apply:** Derive approved/unapproved counts from live settlement membership; use the original batch only for an explicitly labeled batch variance.

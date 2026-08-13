@@ -1745,6 +1745,20 @@ function QrisMutationCard({
     const liveAmount = paymentId == null ? undefined : currentPaymentAmounts[String(paymentId)];
     return numericValue(liveAmount) ?? numericValue(item.grossAmount ?? item.gross_amount) ?? 0;
   };
+  const isApprovedItem = (item: QrisPaymentItem) => {
+    const paymentId = item.paymentId ?? item.payment_id;
+    if (paymentId == null) return false;
+    return currentPaymentIds
+      ? !currentPaymentIds.has(Number(paymentId))
+      : settledPaymentIds.has(Number(paymentId));
+  };
+  const approvedItems = allItems.filter(isApprovedItem);
+  const approvedGross = approvedItems.reduce(
+    (total, item) => total + (numericValue(item.grossAmount ?? item.gross_amount) ?? 0),
+    0,
+  );
+  const approvedPaymentCount = approvedItems.length;
+  const remainingPaymentCount = items.length;
   const statusText = isApproved
     ? "Sudah Disetujui"
     : isMatched
@@ -1788,13 +1802,14 @@ function QrisMutationCard({
               </Badge>
             </div>
 
-            <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
+            <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
               {[
-                { label: "Uang Masuk (Bank)", value: idr(bankAmount), tone: "text-foreground" },
-                { label: `Total Kandidat${metricScopeLabel}`, value: `${idr(candidateGross)} · ${items.length} transaksi`, tone: "text-foreground" },
+                { label: "Total Uang Masuk", value: idr(bankAmount), tone: "text-foreground" },
+                { label: "Payment Disetujui", value: `${approvedPaymentCount} payment${approvedGross > 0 ? ` · ${idr(approvedGross)}` : ""}`, tone: "text-green-600" },
+                { label: "Payment Belum Disetujui", value: `${remainingPaymentCount} payment`, tone: remainingPaymentCount > 0 ? "text-amber-600" : "text-green-600" },
                 { label: `MDR (Estimasi${metricScopeLabel})`, value: idrWhole(mdr), tone: "text-foreground" },
-                { label: `Seharusnya Diterima${metricScopeLabel}`, value: idrWhole(expectedNet), tone: "text-foreground" },
-                { label: differenceLabel, value: idr(Math.abs(difference)), tone: difference === 0 ? "text-green-600" : "text-red-600" },
+                { label: "Sisa Payment", value: `${idr(candidateGross)} · ${remainingPaymentCount} payment`, tone: "text-foreground" },
+                { label: differenceLabel, value: idrWhole(Math.abs(difference)), tone: difference === 0 ? "text-green-600" : "text-red-600" },
               ].map(metric => (
                 <div key={metric.label} className="min-w-0 rounded-md border bg-muted/20 px-2.5 py-2">
                   <p className="text-[10px] leading-tight text-muted-foreground">{metric.label}</p>
@@ -1804,7 +1819,7 @@ function QrisMutationCard({
             </div>
             {isPartialSettlement && (
               <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-[10px] leading-relaxed text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
-                Metrik kandidat, MDR, dan netto menunjukkan payment yang masih tersisa setelah partial settlement.
+                Stat menunjukkan total bank, status payment, MDR sisa, nominal sisa payment, dan selisih batch.
                 Selisih Batch Awal membandingkan mutasi bank dengan netto batch sebelum sebagian payment disetujui.
               </p>
             )}
