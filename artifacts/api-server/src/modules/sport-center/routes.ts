@@ -155,13 +155,14 @@ router.get("/dashboard", async (req, res) => {
     const cId = companyId ?? null;
 
     const [
-      totals, todayRes, pendingPayRes, membersRes, byStatus, topFacilities, recentBookings,
+      totals, todayRes, pendingPayRes, pendingPayAmountRes, membersRes, byStatus, topFacilities, recentBookings,
       monthRev, totalRev, promoUsedRes, promoDiscountRes, cancelledRes, totalRefundsRes,
       totalRefundAmountRes, expiredMembersRes, membershipRevRes, membershipPayCountRes,
     ] = await Promise.all([
       db.execute(sql`SELECT COUNT(*) AS cnt FROM sport_bookings WHERE (${cId}::int IS NULL OR company_id = ${cId})`),
       db.execute(sql`SELECT COUNT(*) AS cnt FROM sport_bookings WHERE (${cId}::int IS NULL OR company_id = ${cId}) AND booking_date = CURRENT_DATE`),
       db.execute(sql`SELECT COUNT(*) AS cnt FROM sport_bookings WHERE (${cId}::int IS NULL OR company_id = ${cId}) AND payment_status = 'unpaid' AND status NOT IN ('cancelled','completed')`),
+      db.execute(sql`SELECT COALESCE(SUM(total_amount), 0) AS amount FROM sport_bookings WHERE (${cId}::int IS NULL OR company_id = ${cId}) AND payment_status = 'unpaid' AND status NOT IN ('cancelled','completed')`),
       db.execute(sql`SELECT COUNT(*) AS cnt FROM sport_members WHERE (${cId}::int IS NULL OR company_id = ${cId}) AND status = 'active'`),
       db.execute(sql`SELECT status, COUNT(*) AS count FROM sport_bookings WHERE (${cId}::int IS NULL OR company_id = ${cId}) GROUP BY status ORDER BY count DESC`),
       db.execute(sql`SELECT facility_name, COUNT(*) AS bookings, COALESCE(SUM(total_amount),0) AS revenue FROM sport_bookings WHERE (${cId}::int IS NULL OR company_id = ${cId}) AND status != 'cancelled' GROUP BY facility_name ORDER BY bookings DESC LIMIT 5`),
@@ -187,6 +188,7 @@ router.get("/dashboard", async (req, res) => {
       totalBookings: Number((totals.rows[0] as any).cnt),
       todayBookings: Number((todayRes.rows[0] as any).cnt),
       pendingPayment: Number((pendingPayRes.rows[0] as any).cnt),
+      pendingPaymentAmount: Number((pendingPayAmountRes.rows[0] as any).amount ?? 0),
       activeMembers: Number((membersRes.rows[0] as any).cnt),
       totalMembers: Number((membersRes.rows[0] as any).cnt),
       expiredMembers: Number((expiredMembersRes.rows[0] as any).cnt),

@@ -59,6 +59,7 @@ const STATUS_COLOR: Record<string, string> = {
 
 interface LocalDashboardData {
   totalBookings: number; todayBookings: number; pendingPayment: number;
+  pendingPaymentAmount: number;
   totalRevenue: number; monthRevenue: number; totalMembers: number;
   byStatus: { status: string; count: string }[];
   topFacilities: { facility_name: string; bookings: string; revenue: string }[];
@@ -402,6 +403,7 @@ export default function SportCenterDashboard() {
   // Metrics utama
   const totalBookings   = supaData?.totalBookings   ?? localData?.totalBookings   ?? 0;
   const pendingPayment  = supaData?.pendingPayment  ?? localData?.pendingPayment  ?? 0;
+  const pendingPaymentAmount = supaData?.pendingPaymentAmount ?? localData?.pendingPaymentAmount ?? 0;
   const uniqueCustomers = supaData?.uniqueCustomers ?? 0;
   const activeServices  = supaData?.activeServices  ?? 0;
   const totalRevenue    = supaData?.totalRevenue    ?? localData?.totalRevenue    ?? 0;
@@ -626,11 +628,11 @@ export default function SportCenterDashboard() {
     },
     {
       title: "Belum Bayar",
-      value: pendingPayment,
+      value: idr(pendingPaymentAmount),
       icon: AlertCircle,
       color: "text-yellow-400",
       bg: "bg-yellow-900/20",
-      sub: "klik untuk filter tabel",
+      sub: "Total nominal belum dibayar",
       filter: "pending",
     },
   ];

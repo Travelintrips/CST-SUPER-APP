@@ -212,7 +212,9 @@ export default function SportCenterPayments() {
             <DollarSign className="h-6 w-6 text-green-400" />
             <div>
               <h1 className="text-2xl font-bold text-foreground">Pembayaran Sport Center</h1>
-              <p className="text-sm text-muted-foreground">Total: {data?.total ?? 0} transaksi</p>
+              <p className="text-sm text-muted-foreground">
+                Total nominal: {idr(totalRevenue)}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -231,7 +233,7 @@ export default function SportCenterPayments() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <Card className="border-border/60 bg-emerald-900/10">
             <CardContent className="p-4">
-              <p className="text-xs text-muted-foreground">Total Revenue</p>
+              <p className="text-xs text-muted-foreground">Total Nominal Pembayaran</p>
               <p className="text-xl font-bold text-emerald-400 mt-1">{idr(totalRevenue)}</p>
             </CardContent>
           </Card>

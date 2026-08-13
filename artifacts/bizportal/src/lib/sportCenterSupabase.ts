@@ -43,6 +43,7 @@ export interface SupabaseFacility {
 export interface SportCenterSupabaseData {
   totalBookings: number;
   pendingPayment: number;
+  pendingPaymentAmount: number;
   uniqueCustomers: number;
   activeServices: number;
   totalRevenue: number;
@@ -138,6 +139,9 @@ export async function fetchSportCenterData(): Promise<SportCenterSupabaseData> {
   const pendingPayment = bookings.filter((b) =>
     ["pending", "pending_payment", "menunggu_pembayaran"].includes(b.status?.toLowerCase() ?? ""),
   ).length;
+  const pendingPaymentAmount = bookings
+    .filter((b) => ["pending", "pending_payment", "menunggu_pembayaran"].includes(b.status?.toLowerCase() ?? ""))
+    .reduce((sum, b) => sum + Number(b.total_price ?? 0), 0);
 
   const uniqueCustomers = new Set(
     bookings.map((b) => b.customer_phone?.trim() ?? b.customer_name?.trim() ?? "").filter(Boolean),
@@ -191,6 +195,7 @@ export async function fetchSportCenterData(): Promise<SportCenterSupabaseData> {
     totalRevenue,
     monthRevenue,
     pendingPayment,
+    pendingPaymentAmount,
     uniqueCustomers,
     activeServices,
   });
@@ -198,6 +203,7 @@ export async function fetchSportCenterData(): Promise<SportCenterSupabaseData> {
   return {
     totalBookings,
     pendingPayment,
+    pendingPaymentAmount,
     uniqueCustomers,
     activeServices,
     totalRevenue,
@@ -210,7 +216,7 @@ export async function fetchSportCenterData(): Promise<SportCenterSupabaseData> {
 
 export function emptySupabaseData(): SportCenterSupabaseData {
   return {
-    totalBookings: 0, pendingPayment: 0, uniqueCustomers: 0, activeServices: 0,
+    totalBookings: 0, pendingPayment: 0, pendingPaymentAmount: 0, uniqueCustomers: 0, activeServices: 0,
     totalRevenue: 0, monthRevenue: 0, byStatus: [], topFacilities: [], recentBookings: [],
   };
 }
