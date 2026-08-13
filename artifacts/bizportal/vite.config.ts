@@ -200,6 +200,11 @@ if (h.indexOf('access_token') !== -1 || h.indexOf('error=') !== -1 ||
       strict: false,
     },
     proxy: {
+      [BRAND_LOGO_ASSET_PATH]: {
+        target: BRAND_LOGO_ASSET_DEV_FALLBACK_ORIGIN,
+        changeOrigin: true,
+        secure: true,
+      },
       "/api": {
         // The API server runs on 8080 in the unified Gateway and in the
         // standalone artifact workflow. Keep explicit overrides for legacy
