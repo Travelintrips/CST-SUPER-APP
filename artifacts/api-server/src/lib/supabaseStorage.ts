@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { ObjectStorageService } from "./objectStorage.js";
+import { compressImageBuffer, isCompressibleImage } from "./imageCompress.js";
 
 const objectStorage = new ObjectStorageService();
 
@@ -30,14 +31,27 @@ export async function uploadToSupabase(
   buffer: Buffer,
   contentType: string,
   folder = "uploads",
-): Promise<{ publicUrl: string; storagePath: string }> {
-  const ext = extFromContentType(contentType);
+): Promise<{ publicUrl: string; storagePath: string; contentType: string; sizeBytes: number }> {
+  const prepared = isCompressibleImage(contentType)
+    ? await compressImageBuffer(buffer, contentType, "photo")
+    : { buffer, contentType };
+  const ext = extFromContentType(prepared.contentType);
   const objectId = randomUUID();
   const fileName = `${objectId}.${ext}`;
   const objectKey = `${folder}/${fileName}`;
 
-  const publicUrl = await objectStorage.uploadPublicAsset(buffer, objectKey, contentType);
-  return { publicUrl, storagePath: objectKey };
+  const publicUrl = await objectStorage.uploadPublicAsset(
+    prepared.buffer,
+    objectKey,
+    prepared.contentType,
+    { skipImageCompression: true },
+  );
+  return {
+    publicUrl,
+    storagePath: objectKey,
+    contentType: prepared.contentType,
+    sizeBytes: prepared.buffer.byteLength,
+  };
 }
 
 /**

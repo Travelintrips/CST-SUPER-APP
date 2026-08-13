@@ -228,7 +228,7 @@ async function uploadPhotoToStorage(buffer: Buffer, mimetype: string, jobId: num
     const { buffer: compressed, contentType } = await compressImageBuffer(buffer, mimetype, "photo");
     const filename = `${randomUUID()}.jpg`;
     const storagePath = `public/cargo-photos/${jobId}/${filename}`;
-    await objectStorageService.uploadFile(compressed, storagePath, contentType);
+    await objectStorageService.uploadFile(compressed, storagePath, contentType, { skipImageCompression: true });
     return `/api/storage/public-objects/cargo-photos/${jobId}/${filename}`;
   } catch {
     throw new Error("Photo upload failed");

@@ -6,6 +6,7 @@
  */
 
 import { createClient } from "@supabase/supabase-js";
+import sharp from "sharp";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -42,6 +43,25 @@ function mimeType(filePath) {
   return map[ext] ?? "application/octet-stream";
 }
 
+async function prepareImage(buffer, contentType) {
+  if (!contentType.startsWith("image/") || contentType === "image/svg+xml" || contentType === "image/gif") {
+    return { buffer, contentType };
+  }
+
+  try {
+    const image = sharp(buffer, { failOn: "none" }).rotate();
+    if (contentType === "image/jpeg" || contentType === "image/jpg") {
+      return { buffer: await image.jpeg({ quality: 80, mozjpeg: true }).toBuffer(), contentType: "image/jpeg" };
+    }
+    if (contentType === "image/png") {
+      return { buffer: await image.png({ compressionLevel: 9, adaptiveFiltering: true, palette: true }).toBuffer(), contentType };
+    }
+    return { buffer: await image.webp({ quality: 80, effort: 4, smartSubsample: true }).toBuffer(), contentType: "image/webp" };
+  } catch {
+    return { buffer, contentType };
+  }
+}
+
 // ── Walk directory recursively ────────────────────────────────────────────────
 function walkDir(dir, base = dir) {
   const results = [];
@@ -60,12 +80,11 @@ function walkDir(dir, base = dir) {
 async function uploadFile(localRelPath) {
   const localFull = path.join(IMAGES_DIR, localRelPath);
   const storagePath = `portal/images/${localRelPath.replace(/\\/g, "/")}`;
-  const buffer = fs.readFileSync(localFull);
-  const contentType = mimeType(localFull);
+  const prepared = await prepareImage(fs.readFileSync(localFull), mimeType(localFull));
 
   const { error } = await supabase.storage
     .from(PUBLIC_BUCKET)
-    .upload(storagePath, buffer, { contentType, upsert: true });
+    .upload(storagePath, prepared.buffer, { contentType: prepared.contentType, upsert: true });
 
   if (error) {
     console.error(`  ✗ ${storagePath}: ${error.message}`);

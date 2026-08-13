@@ -30,7 +30,6 @@ import {
   SERVICE_CATEGORY_LABELS,
 } from "../catalogNormalization.js";
 import { uploadToSupabase } from "../supabaseStorage.js";
-import { compressImageBuffer, isCompressibleImage } from "../imageCompress.js";
 
 // ─── Re-export so portal.ts can keep using via single import ─────────────────
 export { normalizeServiceCategory, SERVICE_CATEGORY_LABELS };
@@ -1018,18 +1017,9 @@ export async function uploadVendorCatalogMedia(params: {
     .where(and(eq(vendorCatalogItemsTable.id, itemId), eq(vendorCatalogItemsTable.vendorId, supplierId)));
   if (!item) throw Object.assign(new Error("Item tidak ditemukan atau bukan milik vendor ini"), { statusCode: 404 });
 
-  // Compress if possible
-  let buffer = rawBuffer;
-  let mime   = rawMime;
-  if (isCompressibleImage(mime)) {
-    const c = await compressImageBuffer(buffer, mime, "photo");
-    buffer = c.buffer;
-    mime   = c.contentType;
-  }
-
   // Upload to storage
   const folder = `product-media/vendor-${supplierId}/item-${itemId}`;
-  const { publicUrl, storagePath } = await uploadToSupabase(buffer, mime, folder);
+  const { publicUrl, storagePath } = await uploadToSupabase(rawBuffer, rawMime, folder);
 
   // Determine primary flag
   const [existingPrimary] = await db

@@ -14,7 +14,7 @@
  *   thumbnail  300×300  WebP  cover (exact square, center-crop)  quality 78
  *   medium     800×800  WebP  inside (maintain ratio, no crop)   quality 80
  *   large     1600×1600 WebP  inside (maintain ratio, no crop)   quality 82
- *   original   as-is    (original MIME, stored for audit)
+ *   original   compressed WebP source (stored for audit)
  */
 
 import sharp from "sharp";
@@ -159,7 +159,7 @@ async function getDimensions(buffer: Buffer): Promise<{ width?: number; height?:
 /**
  * Jalankan full marketplace image pipeline:
  *   1. Generate thumbnail, medium, large variant via sharp
- *   2. Upload semua variant + original ke storage secara paralel
+ *   2. Upload semua variant + compressed source ke storage secara paralel
  *   3. Return semua URL + metadata per variant
  *
  * @param buffer      - raw file buffer dari multer (memory storage)
@@ -226,8 +226,8 @@ export async function optimizeAndUploadMarketplaceImage(
       url: origUpload.publicUrl,
       objectPath: origUpload.storagePath,
       ...origDim,
-      sizeBytes: buffer.byteLength,
-      mimeType,
+      sizeBytes: origUpload.sizeBytes,
+      mimeType: origUpload.contentType,
     },
   ];
 

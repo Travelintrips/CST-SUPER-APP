@@ -11,6 +11,7 @@
  */
 
 import { createClient } from "@supabase/supabase-js";
+import sharp from "sharp";
 import { readFileSync, readdirSync, statSync, existsSync, writeFileSync } from "node:fs";
 import { join, relative, extname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -65,6 +66,25 @@ function mimeFor(filename) {
   return MIME[extname(filename).toLowerCase()] ?? "application/octet-stream";
 }
 
+async function prepareImage(buffer, contentType) {
+  if (!contentType.startsWith("image/") || contentType === "image/svg+xml" || contentType === "image/gif") {
+    return { buffer, contentType };
+  }
+
+  try {
+    const image = sharp(buffer, { failOn: "none" }).rotate();
+    if (contentType === "image/jpeg" || contentType === "image/jpg") {
+      return { buffer: await image.jpeg({ quality: 80, mozjpeg: true }).toBuffer(), contentType: "image/jpeg" };
+    }
+    if (contentType === "image/png") {
+      return { buffer: await image.png({ compressionLevel: 9, adaptiveFiltering: true, palette: true }).toBuffer(), contentType };
+    }
+    return { buffer: await image.webp({ quality: 80, effort: 4, smartSubsample: true }).toBuffer(), contentType: "image/webp" };
+  } catch {
+    return { buffer, contentType };
+  }
+}
+
 // ── Upload folders mapping ────────────────────────────────────────────────────
 // Each entry: { localDir, storagePrefix }
 // storagePrefix is the path under public-assets bucket
@@ -110,9 +130,9 @@ function listFiles(dir) {
 
 // ── Upload single file ────────────────────────────────────────────────────────
 async function uploadFile(localPath, storagePath, contentType) {
-  const buffer = readFileSync(localPath);
-  const { error } = await supabase.storage.from(BUCKET).upload(storagePath, buffer, {
-    contentType,
+  const prepared = await prepareImage(readFileSync(localPath), contentType);
+  const { error } = await supabase.storage.from(BUCKET).upload(storagePath, prepared.buffer, {
+    contentType: prepared.contentType,
     upsert: true,
   });
   if (error) throw new Error(`Upload failed [${storagePath}]: ${error.message}`);

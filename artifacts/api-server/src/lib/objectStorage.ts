@@ -9,6 +9,7 @@ import {
   SupabaseFileHandle,
   canAccessObject,
 } from "./objectAcl.js";
+import { compressImageBuffer, isCompressibleImage } from "./imageCompress.js";
 
 // ── Supabase Storage client ───────────────────────────────────────────────────
 function normalizeSupabaseUrl(raw: string): string {
@@ -170,6 +171,17 @@ async function supabaseDelete(bucket: string, path: string): Promise<void> {
 
 // ── ObjectStorageService ──────────────────────────────────────────────────────
 export class ObjectStorageService {
+  private async prepareUpload(
+    buffer: Buffer,
+    contentType: string,
+    skipImageCompression = false,
+  ): Promise<{ buffer: Buffer; contentType: string }> {
+    if (skipImageCompression || !isCompressibleImage(contentType)) {
+      return { buffer, contentType };
+    }
+    return compressImageBuffer(buffer, contentType, "photo");
+  }
+
   // ── Public path helpers (kept for backward compat) ──────────────────────────
   getPublicObjectSearchPaths(): Array<string> {
     return [`/${PUBLIC_BUCKET}`];
@@ -255,11 +267,16 @@ export class ObjectStorageService {
   }
 
   // ── Private entity upload ────────────────────────────────────────────────────
-  async uploadPrivateEntity(buffer: Buffer, contentType: string): Promise<string> {
+  async uploadPrivateEntity(
+    buffer: Buffer,
+    contentType: string,
+    options: { skipImageCompression?: boolean } = {},
+  ): Promise<string> {
+    const prepared = await this.prepareUpload(buffer, contentType, options.skipImageCompression);
     const objectId = randomUUID();
-    const ext = extFromMime(contentType);
+    const ext = extFromMime(prepared.contentType);
     const path = `uploads/${objectId}.${ext}`;
-    await supabaseUpload(PRIVATE_BUCKET, path, buffer, contentType);
+    await supabaseUpload(PRIVATE_BUCKET, path, prepared.buffer, prepared.contentType);
     return `/objects/uploads/${objectId}.${ext}`;
   }
 
@@ -299,15 +316,27 @@ export class ObjectStorageService {
   }
 
   // ── Public asset upload ──────────────────────────────────────────────────────
-  async uploadPublicAsset(buffer: Buffer, objectKey: string, contentType: string): Promise<string> {
+  async uploadPublicAsset(
+    buffer: Buffer,
+    objectKey: string,
+    contentType: string,
+    options: { skipImageCompression?: boolean } = {},
+  ): Promise<string> {
+    const prepared = await this.prepareUpload(buffer, contentType, options.skipImageCompression);
     const path = `portal-assets/${objectKey}`;
-    await supabaseUpload(PUBLIC_BUCKET, path, buffer, contentType);
+    await supabaseUpload(PUBLIC_BUCKET, path, prepared.buffer, prepared.contentType);
     return `/api/storage/public-objects/portal-assets/${objectKey}`;
   }
 
   // ── uploadPublicRaw: public bucket, arbitrary subPath ────────────────────────
-  async uploadPublicRaw(subPath: string, buffer: Buffer, contentType: string): Promise<string> {
-    await supabaseUpload(PUBLIC_BUCKET, subPath, buffer, contentType);
+  async uploadPublicRaw(
+    subPath: string,
+    buffer: Buffer,
+    contentType: string,
+    options: { skipImageCompression?: boolean } = {},
+  ): Promise<string> {
+    const prepared = await this.prepareUpload(buffer, contentType, options.skipImageCompression);
+    await supabaseUpload(PUBLIC_BUCKET, subPath, prepared.buffer, prepared.contentType);
     return `/api/storage/public-objects/${subPath}`;
   }
 
@@ -323,9 +352,15 @@ export class ObjectStorageService {
   }
 
   // ── Generic public upload ────────────────────────────────────────────────────
-  async uploadFile(buffer: Buffer, storagePath: string, contentType: string): Promise<void> {
+  async uploadFile(
+    buffer: Buffer,
+    storagePath: string,
+    contentType: string,
+    options: { skipImageCompression?: boolean } = {},
+  ): Promise<void> {
     const cleaned = storagePath.replace(/^\/+/, "");
-    await supabaseUpload(PUBLIC_BUCKET, cleaned, buffer, contentType);
+    const prepared = await this.prepareUpload(buffer, contentType, options.skipImageCompression);
+    await supabaseUpload(PUBLIC_BUCKET, cleaned, prepared.buffer, prepared.contentType);
   }
 
   getPublicUrl(storagePath: string): string {

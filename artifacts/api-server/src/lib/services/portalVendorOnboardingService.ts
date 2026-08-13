@@ -12,7 +12,6 @@ import {
 import { eq, and } from "drizzle-orm";
 import { deleteFromSupabase } from "../supabaseStorage.js";
 import { ObjectStorageService } from "../objectStorage.js";
-import { compressImageBuffer } from "../imageCompress.js";
 import { sendViaService as sendWhatsApp } from "../waTransport.js";
 import { getAdminWa } from "../adminWa.js";
 import { getWaTemplateConfig, renderTemplate } from "../orderNotification.js";
@@ -37,10 +36,6 @@ const _ONBOARDING_DOC_ALLOWED_MIME = new Set([
   "image/jpeg", "image/jpg", "image/png", "image/webp", "image/heic", "image/heif",
   "application/msword",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-]);
-
-const _COMPRESS_IMAGE_MIME = new Set([
-  "image/jpeg", "image/jpg", "image/png", "image/webp", "image/heic", "image/heif",
 ]);
 
 // ── Error class ───────────────────────────────────────────────────────────────
@@ -151,13 +146,9 @@ export async function uploadOnboardingDoc(
   }
 
   const storage = new ObjectStorageService();
-  let buf = buffer;
-  if (_COMPRESS_IMAGE_MIME.has(mimetype)) {
-    try { const c = await compressImageBuffer(buf, mimetype); buf = c.buffer; } catch { /* gunakan original */ }
-  }
 
   // Upload ke private bucket — dokumen identitas tidak boleh public
-  const objectPath = await storage.uploadPrivateEntity(buf, mimetype);
+  const objectPath = await storage.uploadPrivateEntity(buffer, mimetype);
   const url = `/api/storage${objectPath}`;
 
   // Hapus doc lama (docType sama) dari storage + DB sebelum insert baru

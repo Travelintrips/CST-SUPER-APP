@@ -124,7 +124,6 @@ import {
 } from "../lib/services/portalLogisticAdminService.js";
 import multer from "multer";
 import { randomUUID } from "crypto";
-import { compressImageBuffer } from "../lib/imageCompress.js";
 import { verifyPortalJwt } from "../lib/portalJwt.js";
 import { verifySupabaseToken } from "../lib/supabaseAdmin.js";
 import {
@@ -1143,9 +1142,7 @@ router.post("/admin/upload", requirePortalAdmin, _multerUpload.single("file"), a
     : validateMagicBytes(file.buffer, mime);
   if (!validation.ok) return res.status(400).json({ message: validation.errorMessage });
   try {
-    // CMS media is stored with the original bytes and MIME. This keeps SVG
-    // logos valid and prevents PNG/JPEG uploads from being silently rewritten
-    // to WebP while the DB still points at the upload URL.
+    // Raster images are compressed by the storage layer; SVG remains unchanged.
     const buffer = file.buffer;
     const contentType = mime === "image/jpg" ? "image/jpeg" : mime;
     const objectId = randomUUID();

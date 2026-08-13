@@ -866,7 +866,7 @@ fulfillmentAdminRouter.post(
           const { buffer: compressed, contentType } = await compressImageBuffer(req.file.buffer, req.file.mimetype, "photo");
           const filename = `${randomUUID()}.jpg`;
           const storagePath = `public/pod-photos/${orderId}/${filename}`;
-          await objectStorageService.uploadFile(compressed, storagePath, contentType);
+          await objectStorageService.uploadFile(compressed, storagePath, contentType, { skipImageCompression: true });
           photoUrl = `/api/storage/public-objects/pod-photos/${orderId}/${filename}`;
         } catch (uploadErr) {
           logger.warn({ uploadErr }, "POD photo upload failed, continuing without photo");

@@ -4,7 +4,6 @@ import { db, productMediaTable, vendorCatalogItemsTable, suppliersTable } from "
 import { eq, and, asc, desc, inArray, isNull, ne, sql } from "drizzle-orm";
 import { requireClerkUser } from "../lib/requireAdmin.js";
 import { uploadToSupabase, deleteFromSupabase } from "../lib/supabaseStorage.js";
-import { compressImageBuffer, isCompressibleImage } from "../lib/imageCompress.js";
 import {
   generateSingleImage,
   generateImagesForItem,
@@ -202,14 +201,8 @@ router.post("/upload", upload.single("file"), async (req, res): Promise<void> =>
   if (!vendorCatalogItemId) { res.status(400).json({ error: "vendorCatalogItemId wajib" }); return; }
 
   try {
-    let buffer = req.file.buffer;
-    let mime = mimetype;
-    if (isImage && isCompressibleImage(mimetype)) {
-      const c = await compressImageBuffer(buffer, mimetype, "photo");
-      buffer = c.buffer; mime = c.contentType;
-    }
     const folder = isImage ? "product-media/images" : "product-media/videos";
-    const { publicUrl, storagePath } = await uploadToSupabase(buffer, mime, folder);
+    const { publicUrl, storagePath } = await uploadToSupabase(req.file.buffer, mimetype, folder);
 
     if (isPrimary) {
       await db.update(productMediaTable).set({ isPrimary: false, updatedAt: new Date() })

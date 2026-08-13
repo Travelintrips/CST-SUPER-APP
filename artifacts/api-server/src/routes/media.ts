@@ -7,7 +7,6 @@ import { requireClerkUser, requireAdmin } from "../lib/requireAdmin";
 import { uploadToSupabase, downloadFromSupabase, isSupabaseUrl, deleteFromSupabase } from "../lib/supabaseStorage";
 import { logStorageEvent, getRequestIp, getActor } from "../lib/storageAuditLog";
 import { writeAuditLog, extractRequestMeta } from "../lib/auditLog.js";
-import { compressImageBuffer, isCompressibleImage } from "../lib/imageCompress";
 import {
   optimizeAndUploadMarketplaceImage,
   validateMarketplaceImage,
@@ -87,26 +86,17 @@ router.post("/upload", upload.single("file"), async (req, res): Promise<void> =>
     }
 
     const folder = (req.body.folder as string)?.trim() || "Umum";
-    let buffer = req.file.buffer;
-    let finalContentType = mimetype;
-
-    if (isCompressibleImage(mimetype)) {
-      const compressed = await compressImageBuffer(buffer, mimetype, "photo");
-      buffer = compressed.buffer;
-      finalContentType = compressed.contentType;
-    }
-
-    const { publicUrl, storagePath } = await uploadToSupabase(buffer, finalContentType, "uploads");
+    const uploaded = await uploadToSupabase(req.file.buffer, mimetype, "uploads");
 
     const [inserted] = await db.insert(mediaAssetsTable).values({
       originalName: originalname,
-      contentType: finalContentType,
-      sizeBytes: buffer.byteLength,
-      url: publicUrl,
-      objectPath: `supabase:media/${storagePath}`,
+      contentType: uploaded.contentType,
+      sizeBytes: uploaded.sizeBytes,
+      url: uploaded.publicUrl,
+      objectPath: `supabase:media/${uploaded.storagePath}`,
       uploadedBy: (req as any).user?.email ?? null,
       folder,
-      publicUrl,
+      publicUrl: uploaded.publicUrl,
     }).returning();
 
     res.json({ ok: true, item: inserted });
