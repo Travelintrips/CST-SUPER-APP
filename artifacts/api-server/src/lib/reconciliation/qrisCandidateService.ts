@@ -46,18 +46,25 @@ export async function generateQrisCandidates(options: {
   const [paymentRows, mutationRows, holidayRows, ruleRows, existingRows] = await Promise.all([
     db.execute(sql.raw(`
       SELECT
-        sp.id, sp.company_id, sp.amount, sp.method, sp.status, sp.paid_at,
-        sp.payment_number, sp.booking_id, sb.booking_number,
-        sp.provider_code, sp.settlement_date, sp.settlement_rule_version,
-        sp.settlement_reference, sp.bank_account_id,
+        sp.id, sp.company_id, sp.amount, sp.payment_method AS method,
+        CASE WHEN LOWER(COALESCE(sp.status::text, '')) = 'confirmed'
+          THEN 'paid' ELSE sp.status::text END AS status,
+        COALESCE(sp.confirmed_at, sp.created_at) AS paid_at,
+        'SCPAY-SC-' || sp.id::text AS payment_number,
+        sp.booking_id, sb.order_number AS booking_number,
+        LOWER(BTRIM(sp.payment_provider::text)) AS provider_code,
+        sp.expected_settlement_date AS settlement_date,
+        sp.settlement_rule_version,
+        NULL::text AS settlement_reference,
+        sp.bank_account_id,
         EXISTS (
-          SELECT 1 FROM qris_settlement_items qsi
-          WHERE qsi.sport_payment_id = sp.id
+          SELECT 1 FROM sport_center.payment_settlement_items psi
+          WHERE psi.payment_id = sp.id AND psi.item_status = 'active'
         ) AS already_reconciled
-      FROM sport_payments sp
-      LEFT JOIN sport_bookings sb ON sb.id = sp.booking_id
-      WHERE LOWER(COALESCE(sp.method, '')) LIKE '%qris%'
-        AND LOWER(COALESCE(sp.status, '')) = 'paid'
+      FROM sport_center.sport_payments sp
+      LEFT JOIN sport_center.sport_bookings sb ON sb.id = sp.booking_id
+      WHERE LOWER(COALESCE(sp.payment_method::text, '')) LIKE '%qris%'
+        AND LOWER(COALESCE(sp.status::text, '')) = 'confirmed'
         ${companyFilter}
     `)),
     db.execute(sql.raw(`

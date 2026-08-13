@@ -84,6 +84,7 @@ import {
   CanonicalSettlementApprovalError,
   CANONICAL_SETTLEMENT_SOURCE,
 } from "../lib/reconciliation/canonicalSettlementApproval.js";
+import { buildCanonicalSportCenterSettlements } from "../lib/reconciliation/canonicalSettlementBuilder.js";
 import {
   assertGenericPostAllowed,
   GenericPostGuardError,
@@ -1155,7 +1156,7 @@ router.post("/qris-candidates/:id/approve", async (req, res) => {
 // Mempromosikan qris_mutation_batch_candidates ke qris_settlements +
 // qris_settlement_items. Ini adalah aksi ireversibel yang mengkonsumsi
 // kandidat batch dan membuat settlement resmi yang bisa dicocokkan ke mutasi bank.
-router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
+router.post("/qris-candidates/:candidateId/approve-legacy", async (req, res) => {
   await runQrisSettlementMigration();
   const candidateId = Number(req.params.candidateId);
   if (!Number.isInteger(candidateId) || candidateId <= 0) {
