@@ -8,3 +8,9 @@ The QRIS approval UI selects whole candidate batches. A checked batch is approve
 **Why:** The current backend contract validates and settles the complete candidate item set; selecting individual payment rows without a partial-settlement API would misrepresent what approval does.
 
 **How to apply:** Keep `Pilih semua` and per-row checkboxes scoped to MATCHED candidate batches. Only introduce payment-level selection after the backend explicitly supports partial settlement, amount allocation, mutation status, and rollback semantics.
+
+Every read path that renders a QRIS candidate must use live settlement membership (`current_payment_ids`) rather than the persisted `payment_items` snapshot alone.
+
+**Why:** Partial approval leaves the candidate row as historical evidence while only some payments are consumed; rendering the snapshot makes already-approved payments appear selectable or still pending.
+
+**How to apply:** Enrich mutation-detail responses with the same live settled/current IDs used by the candidate-audit endpoint, and filter both summary counts and payment rows from those IDs.

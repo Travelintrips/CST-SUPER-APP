@@ -1674,12 +1674,19 @@ function QrisMutationCard({
   onRunMatching: () => void;
   mappingError?: MappingRequiredError;
 }) {
-  const items = audit.payment_items ?? [];
+  const allItems = audit.payment_items ?? [];
   const settledPaymentIds = new Set((audit.settled_payment_ids ?? []).map(Number));
-  const availableItems = items.filter((item) => {
+  const currentPaymentIds = Array.isArray(audit.current_payment_ids)
+    ? new Set(audit.current_payment_ids.map(Number))
+    : null;
+  const availableItems = allItems.filter((item) => {
     const paymentId = item.paymentId ?? item.payment_id;
-    return paymentId != null && !settledPaymentIds.has(Number(paymentId));
+    return paymentId != null
+      && (currentPaymentIds
+        ? currentPaymentIds.has(Number(paymentId))
+        : !settledPaymentIds.has(Number(paymentId)));
   });
+  const items = availableItems;
   const availablePaymentIds = availableItems
     .map((item) => Number(item.paymentId ?? item.payment_id))
     .filter((id) => Number.isInteger(id) && id > 0);
@@ -1694,7 +1701,9 @@ function QrisMutationCard({
   // flow, so they must be selectable in the card as well as in the batch toolbar.
   const canSelect = audit.id != null && (isMatched || isReview) && !isApproved && availablePaymentIds.length > 0;
   const bankAmount = numericValue(m.amount) ?? 0;
-  const candidateGross = numericValue(audit.gross_amount) ?? items.reduce(
+  const candidateGross = numericValue(audit.current_gross_amount)
+    ?? numericValue(audit.gross_amount)
+    ?? items.reduce(
     (total, item) => total + (numericValue(item.grossAmount ?? item.gross_amount) ?? 0),
     0,
   );
@@ -1805,7 +1814,9 @@ function QrisMutationCard({
                             {canSelect && audit.id != null && paymentId != null && onToggleQrisPayment ? (
                               <Checkbox
                                 checked={selectedPaymentIds.includes(Number(paymentId))}
-                                disabled={settledPaymentIds.has(Number(paymentId))}
+                                disabled={currentPaymentIds
+                                  ? !currentPaymentIds.has(Number(paymentId))
+                                  : settledPaymentIds.has(Number(paymentId))}
                                 onCheckedChange={checked => onToggleQrisPayment(audit.id!, Number(paymentId), checked === true)}
                                 onClick={e => e.stopPropagation()}
                                 aria-label={`Pilih ${booking} ${payment}`}
@@ -2434,9 +2445,20 @@ function MutationDetailPanel({
   const cands = m.candidates ?? [];
   const qrisAudit = m.qris_candidate_audit;
   const settledQrisPaymentIds = new Set((qrisAudit?.settled_payment_ids ?? []).map(Number));
-  const availableQrisPaymentIds = (qrisAudit?.payment_items ?? [])
-    .map((item) => Number(item.paymentId ?? item.payment_id))
-    .filter((id) => Number.isInteger(id) && id > 0 && !settledQrisPaymentIds.has(id));
+  const currentQrisPaymentIds = Array.isArray(qrisAudit?.current_payment_ids)
+    ? new Set(qrisAudit.current_payment_ids.map(Number))
+    : null;
+  const availableQrisItems = (qrisAudit?.payment_items ?? []).filter((item) => {
+    const id = Number(item.paymentId ?? item.payment_id);
+    return Number.isInteger(id)
+      && id > 0
+      && (currentQrisPaymentIds
+        ? currentQrisPaymentIds.has(id)
+        : !settledQrisPaymentIds.has(id));
+  });
+  const availableQrisPaymentIds = availableQrisItems.map((item) =>
+    Number(item.paymentId ?? item.payment_id),
+  );
   const selectedQrisPayments = selectedQrisPaymentIds.filter((id) => availableQrisPaymentIds.includes(id));
   const allQrisPaymentsSelected = availableQrisPaymentIds.length > 0
     && availableQrisPaymentIds.every((id) => selectedQrisPayments.includes(id));
@@ -2660,11 +2682,11 @@ function MutationDetailPanel({
                     {/* Payment items list */}
                     {(qrisAudit.payment_items?.length ?? 0) > 0 && (
                       <div className="mt-1">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 mb-1">
-                          {qrisAudit.payment_items!.length} Sport Payment dalam Batch
+                         <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 mb-1">
+                           {availableQrisItems.length} Sport Payment tersisa dalam Batch
                         </p>
                         <div className="rounded border divide-y text-xs max-h-48 overflow-y-auto bg-white dark:bg-slate-900">
-                          {qrisAudit.payment_items!.map((item, idx) => {
+                           {availableQrisItems.map((item, idx) => {
                             const pid = item.paymentId ?? item.payment_id ?? 0;
                             const gross = item.grossAmount ?? item.gross_amount ?? 0;
                             const paymentNo = item.payment_number;
@@ -2675,7 +2697,10 @@ function MutationDetailPanel({
                                 {qrisAudit.id != null && onToggleQrisPayment && (
                                   <Checkbox
                                     checked={selectedQrisPayments.includes(Number(pid))}
-                                    disabled={String(qrisAudit.status ?? "").toLowerCase() === "approved" || settledQrisPaymentIds.has(Number(pid))}
+                                    disabled={String(qrisAudit.status ?? "").toLowerCase() === "approved"
+                                      || (currentQrisPaymentIds
+                                        ? !currentQrisPaymentIds.has(Number(pid))
+                                        : settledQrisPaymentIds.has(Number(pid)))}
                                     onCheckedChange={(checked) => onToggleQrisPayment(qrisAudit.id!, Number(pid), checked === true)}
                                     onClick={e => e.stopPropagation()}
                                     aria-label={`Pilih payment ${paymentNo || `#${pid}`}`}

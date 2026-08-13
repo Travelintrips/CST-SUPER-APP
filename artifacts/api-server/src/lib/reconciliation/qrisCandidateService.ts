@@ -375,6 +375,11 @@ export async function listQrisCandidates(options: {
                 WHERE item->>'paymentId' IS NOT NULL
                   AND NOT EXISTS (
                     SELECT 1
+                    FROM qris_settlement_items qsi
+                    WHERE qsi.sport_payment_id = (item->>'paymentId')::int
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1
                     FROM sport_center.payment_settlement_items psi
                     JOIN sport_center.payment_settlement_batches psb
                       ON psb.id = psi.settlement_id
@@ -391,6 +396,11 @@ export async function listQrisCandidates(options: {
                 SELECT (item->>'paymentId')::int
                 FROM jsonb_array_elements(c.payment_items) item
                 WHERE item->>'paymentId' IS NOT NULL
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM qris_settlement_items qsi
+                    WHERE qsi.sport_payment_id = sp.id
+                  )
                   AND NOT EXISTS (
                     SELECT 1
                     FROM sport_center.payment_settlement_items psi

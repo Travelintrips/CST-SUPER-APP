@@ -2622,23 +2622,93 @@ router.get("/mutations", async (req, res) => {
        WHERE m.mutation_id = bm.id
           AND m.status IN ('candidate', 'approved')
        ) AS candidates,
-       (
-         SELECT to_jsonb(qc)
-         FROM qris_mutation_batch_candidates qc
-         WHERE qc.mutation_id = bm.id
-            AND (
-              UPPER(COALESCE(bm.provider_name, '')) LIKE '%QRIS%'
-              OR UPPER(COALESCE(bm.provider_name, '')) LIKE '%QRTRAVELI%'
-              OR UPPER(COALESCE(bm.provider_name, '')) LIKE '%PAYLABS%'
-              OR UPPER(COALESCE(bm.provider_name, '')) LIKE '%MANDIRI%'
-              OR UPPER(COALESCE(bm.provider_order_id, '')) LIKE '%QRIS%'
-              OR UPPER(COALESCE(bm.provider_order_id, '')) LIKE '%QRTRAVELI%'
-              OR UPPER(COALESCE(bm.description, '')) LIKE '%QRIS%'
-              OR UPPER(COALESCE(bm.description, '')) LIKE '%QRTRAVELI%'
-            )
-         ORDER BY qc.updated_at DESC, qc.id DESC
-         LIMIT 1
-       ) AS qris_candidate_audit
+        (
+          SELECT to_jsonb(qc) || jsonb_build_object(
+            'settled_payment_ids', COALESCE((
+              SELECT jsonb_agg(settled.payment_id ORDER BY settled.payment_id)
+              FROM (
+                SELECT qsi.sport_payment_id AS payment_id
+                FROM qris_settlement_items qsi
+                WHERE qsi.sport_payment_id IN (
+                  SELECT (item->>'paymentId')::int
+                  FROM jsonb_array_elements(qc.payment_items) item
+                  WHERE item->>'paymentId' IS NOT NULL
+                )
+                UNION
+                SELECT psi.payment_id
+                FROM sport_center.payment_settlement_items psi
+                JOIN sport_center.payment_settlement_batches psb
+                  ON psb.id = psi.settlement_id
+                WHERE psi.item_status = 'active'
+                  AND psb.status IN ('posted', 'reconciled')
+                  AND psi.payment_id IN (
+                    SELECT (item->>'paymentId')::int
+                    FROM jsonb_array_elements(qc.payment_items) item
+                    WHERE item->>'paymentId' IS NOT NULL
+                  )
+              ) settled
+            ), '[]'::jsonb),
+            'current_payment_ids', COALESCE((
+              SELECT jsonb_agg(current_payment.payment_id ORDER BY current_payment.payment_id)
+              FROM (
+                SELECT (item->>'paymentId')::int AS payment_id
+                FROM jsonb_array_elements(qc.payment_items) item
+                WHERE item->>'paymentId' IS NOT NULL
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM qris_settlement_items qsi
+                    WHERE qsi.sport_payment_id = (item->>'paymentId')::int
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM sport_center.payment_settlement_items psi
+                    JOIN sport_center.payment_settlement_batches psb
+                      ON psb.id = psi.settlement_id
+                    WHERE psi.payment_id = (item->>'paymentId')::int
+                      AND psi.item_status = 'active'
+                      AND psb.status IN ('posted', 'reconciled')
+                  )
+              ) current_payment
+            ), '[]'::jsonb),
+            'current_gross_amount', COALESCE((
+              SELECT SUM(sp.amount)
+              FROM sport_center.sport_payments sp
+              WHERE sp.id IN (
+                SELECT (item->>'paymentId')::int
+                FROM jsonb_array_elements(qc.payment_items) item
+                WHERE item->>'paymentId' IS NOT NULL
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM qris_settlement_items qsi
+                    WHERE qsi.sport_payment_id = (item->>'paymentId')::int
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM sport_center.payment_settlement_items psi
+                    JOIN sport_center.payment_settlement_batches psb
+                      ON psb.id = psi.settlement_id
+                    WHERE psi.payment_id = (item->>'paymentId')::int
+                      AND psi.item_status = 'active'
+                      AND psb.status IN ('posted', 'reconciled')
+                  )
+              )
+            ), 0)
+          )
+          FROM qris_mutation_batch_candidates qc
+          WHERE qc.mutation_id = bm.id
+             AND (
+               UPPER(COALESCE(bm.provider_name, '')) LIKE '%QRIS%'
+               OR UPPER(COALESCE(bm.provider_name, '')) LIKE '%QRTRAVELI%'
+               OR UPPER(COALESCE(bm.provider_name, '')) LIKE '%PAYLABS%'
+               OR UPPER(COALESCE(bm.provider_name, '')) LIKE '%MANDIRI%'
+               OR UPPER(COALESCE(bm.provider_order_id, '')) LIKE '%QRIS%'
+               OR UPPER(COALESCE(bm.provider_order_id, '')) LIKE '%QRTRAVELI%'
+               OR UPPER(COALESCE(bm.description, '')) LIKE '%QRIS%'
+               OR UPPER(COALESCE(bm.description, '')) LIKE '%QRTRAVELI%'
+             )
+          ORDER BY qc.updated_at DESC, qc.id DESC
+          LIMIT 1
+        ) AS qris_candidate_audit
     FROM bank_mutations bm
     ${bmWhere}
   `;
