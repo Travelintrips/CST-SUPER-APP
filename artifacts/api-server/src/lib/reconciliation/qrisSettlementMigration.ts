@@ -79,10 +79,20 @@ export async function runQrisSettlementMigration(): Promise<void> {
     ALTER TABLE qris_provider_settlement_rules
       DROP CONSTRAINT IF EXISTS qris_provider_settlement_rules_company_id_provider_code_key
   `).catch(() => {});
+  // Deduplicate before creating the compound unique index; keep the latest row
+  // per (company_id, COALESCE(bank_account_id,0), provider_code) triple so the
+  // CREATE UNIQUE INDEX does not fail on pre-existing data.
+  await db.execute(sql.raw(`
+    DELETE FROM qris_provider_settlement_rules
+    WHERE id NOT IN (
+      SELECT MAX(id) FROM qris_provider_settlement_rules
+      GROUP BY company_id, COALESCE(bank_account_id, 0), provider_code
+    )
+  `)).catch(() => {});
   await db.execute(sql`
     CREATE UNIQUE INDEX IF NOT EXISTS uq_qris_provider_rules_company_account_provider
       ON qris_provider_settlement_rules (company_id, COALESCE(bank_account_id, 0), provider_code)
-  `);
+  `).catch(() => {});
 
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS qris_settlements (

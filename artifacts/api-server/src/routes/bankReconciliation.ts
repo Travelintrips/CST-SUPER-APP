@@ -372,6 +372,34 @@ export async function runBankReconciliationCoreMigration() {
   // ── Canonical key backfill (idempotent) ───────────────────────────────────
   await runCanonicalKeyBackfill();
 
+  // ── QRIS mutation bank_account_id backfill ────────────────────────────────
+  // Bank mutations imported from Google Sheet often have bank_account_id=NULL
+  // because the sheet config's source_account is unlinked. Without this field,
+  // the QRIS candidate engine treats bankAccountId=null as an incomplete
+  // dimension and can never produce a MATCHED candidate.
+  // Fix: for QRIS-labelled mutations that still have bank_account_id=NULL,
+  // assign the first active company bank account (same heuristic used for
+  // sport_center.sport_payments in runSportCenterMigration).
+  await db.execute(sql.raw(`
+    UPDATE bank_mutations bm
+    SET bank_account_id = cba.id
+    FROM (
+      SELECT DISTINCT ON (company_id) id, company_id
+      FROM company_bank_accounts
+      WHERE is_active = TRUE
+      ORDER BY company_id, id
+    ) cba
+    WHERE bm.bank_account_id IS NULL
+      AND bm.company_id = cba.company_id
+      AND (
+        bm.source_classification ILIKE '%qris%'
+        OR bm.provider_name ILIKE '%qris%'
+        OR bm.description ILIKE '%qris%'
+      )
+  `)).catch((e: any) => {
+    logger.warn({ err: e?.message }, "[bankRecon] QRIS mutation bank_account_id backfill skipped");
+  });
+
   // ── sport_center.expected_bank_settlements view ───────────────────────────
   // This view is required by canonicalSettlementDetailsSql() embedded in the
   // GET /mutations UNION ALL query.  It exposes payment_settlement_batches

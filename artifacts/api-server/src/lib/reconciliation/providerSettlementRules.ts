@@ -1,6 +1,6 @@
 import { addBusinessDays, jakartaDateFromTimestamp } from "./businessCalendar.js";
 
-export type QrisProviderCode = "mandiri_direct" | "paylabs" | "unknown";
+export type QrisProviderCode = "mandiri_direct" | "paylabs" | "gpn_qris" | "unknown";
 
 export interface QrisProviderRule {
   providerCode: QrisProviderCode;
@@ -32,6 +32,19 @@ export const DEFAULT_QRIS_PROVIDER_RULES: Record<QrisProviderCode, QrisProviderR
     absoluteVarianceTolerance: 5000,
     percentageVarianceTolerance: 1,
   },
+  // GPN (Gerbang Pembayaran Nasional) is Indonesia's national QRIS switching
+  // network.  BCA and other banks label their QRIS settlements with labels such
+  // as "QRTRAVELI", "QRPAY", "QRGPN", etc.  These are routed through GPN and
+  // settle T+1 like direct settlements.
+  gpn_qris: {
+    providerCode: "gpn_qris",
+    ruleVersion: "default-v1",
+    settlementDelayBusinessDays: 1,
+    matchWindowBusinessDays: 1,
+    maxEffectiveDeductionRate: 0.1,
+    absoluteVarianceTolerance: 5000,
+    percentageVarianceTolerance: 1,
+  },
   unknown: {
     providerCode: "unknown",
     ruleVersion: "default-v1",
@@ -46,6 +59,16 @@ export const DEFAULT_QRIS_PROVIDER_RULES: Record<QrisProviderCode, QrisProviderR
 const PROVIDER_ALIASES: Array<[QrisProviderCode, string[]]> = [
   ["mandiri_direct", ["mandiri_direct", "mandiri direct", "mandiri qris", "bank mandiri", "mandiri"]],
   ["paylabs", ["paylabs", "paylabs qris", "paylabs settlement"]],
+  // BCA and other banks print GPN/national-switch QRIS settlements using codes
+  // like "QRTRAVELI", "QRPAY", "QRGPN".  The regex /qr[a-z0-9]{4,}/ in
+  // isQrisSettlementDescription() already flags these rows as QRIS; here we
+  // assign them the gpn_qris provider code so the engine can match them.
+  ["gpn_qris", [
+    "qrtraveli", "qr traveli", "qrpay", "qr pay",
+    "qrgpn", "qr gpn", "gpn qris", "gpn",
+    "qrnusantara", "qr nusantara",
+    "qris gpn", "qris national",
+  ]],
 ];
 
 /**

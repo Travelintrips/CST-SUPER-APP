@@ -237,7 +237,12 @@ export async function generateQrisCandidates(options: {
     db.execute(sql.raw(`
       SELECT
         sp.id, sp.company_id, sp.amount, sp.payment_method AS method,
-        CASE WHEN LOWER(COALESCE(sp.status::text, '')) = 'confirmed'
+        -- Map local ENUM status to engine-understood 'paid':
+        -- 'confirmed' = explicitly confirmed in Supabase.
+        -- 'pending'   = Supabase status 'paid' that the sync CASE maps to
+        --               the local ENUM default 'pending' (ELSE branch).
+        -- Both are treated as "paid" by the matching engine.
+        CASE WHEN LOWER(COALESCE(sp.status::text, '')) IN ('confirmed', 'pending')
           THEN 'paid' ELSE sp.status::text END AS status,
         COALESCE(sp.confirmed_at, sp.created_at) AS paid_at,
         'SCPAY-SC-' || sp.id::text AS payment_number,
@@ -258,7 +263,7 @@ export async function generateQrisCandidates(options: {
       LEFT JOIN sport_center.sport_bookings sb ON sb.id = sp.booking_id
       LEFT JOIN sport_center.sport_facilities sf ON sf.id = sb.facility_id
       WHERE LOWER(COALESCE(sp.payment_method::text, '')) LIKE '%qris%'
-        AND LOWER(COALESCE(sp.status::text, '')) = 'confirmed'
+        AND LOWER(COALESCE(sp.status::text, '')) IN ('confirmed', 'pending')
         ${companyFilter}
     `)),
     db.execute(sql.raw(`
@@ -335,7 +340,10 @@ export async function generateQrisCandidates(options: {
     .filter((value): value is string => Boolean(value));
   const rules = providerRulesFromRows(
     ruleRows.rows as Array<Record<string, unknown>>,
-    { includeDefaults: false },
+    // Include DEFAULT_QRIS_PROVIDER_RULES as a base; DB rows override them.
+    // This allows gpn_qris (and other defaults) to match even when no explicit
+    // DB rule exists for this environment.
+    { includeDefaults: true },
   );
   const accountRules = providerRulesByBankAccountFromRows(
     ruleRows.rows as Array<Record<string, unknown>>,

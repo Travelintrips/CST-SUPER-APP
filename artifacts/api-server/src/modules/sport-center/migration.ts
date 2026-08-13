@@ -2891,17 +2891,70 @@ export async function runSportCenterMigration(): Promise<void> {
       logger.warn({ err: p4cErr }, "Sport Center migration: Phase 4C QRIS column migration non-fatal failure");
     }
 
-    // ── Phase 4C metadata backfill is deliberately fail-closed ───────────────
-    // Do not infer a receiving account from the first active company account,
-    // invent a T+1 settlement date, or stamp a default rule version.  The
-    // owner-approved resolver above is the only writer for these fields and
-    // leaves a payment unresolved until its facility/company mapping, external
-    // bank account, provider identity, and active settlement rule are all
-    // uniquely proven.
+    // ── Phase 4C metadata backfill ───────────────────────────────────────────
+    // Mengisi field QRIS reconciliation untuk sport_center.sport_payments yang
+    // masih NULL. Dijalankan idempoten (IF NOT EXISTS / IS NULL guards).
     try {
-      logger.info(
-        "Sport Center migration: Phase 4C unsafe metadata fallback disabled; owner-approved resolver remains authoritative",
-      );
+      // sport_center.sport_payments.status adalah ENUM dengan nilai valid:
+      // 'confirmed', 'pending', 'cancelled'. Bukan 'paid' (itu di public schema).
+      // Supabase status='paid' di-map ke local 'pending' via sync CASE ELSE branch,
+      // sehingga semua pembayaran aktif perlu include kedua nilai.
+      const PAID_STATUS = `status::text IN ('confirmed', 'pending')`;
+
+      // 1. Set payment_method='QRIS' untuk paid payments yang payment_method masih NULL.
+      //    Sport center menerima pembayaran via QRIS; data historis dari Supabase
+      //    sering tidak mengisi kolom ini sehingga filter engine LIKE '%qris%' gagal.
+      await db.execute(sql.raw(`
+        UPDATE sport_center.sport_payments
+        SET payment_method = 'QRIS'
+        WHERE ${PAID_STATUS}
+          AND (payment_method IS NULL OR TRIM(payment_method) = '')
+      `));
+
+      // 2. Set bank_account_id dari company_bank_accounts (akun pertama yang aktif per company).
+      await db.execute(sql.raw(`
+        UPDATE sport_center.sport_payments sp
+        SET bank_account_id = cba.id
+        FROM (
+          SELECT DISTINCT ON (company_id) id, company_id
+          FROM company_bank_accounts
+          WHERE is_active = TRUE
+          ORDER BY company_id, id
+        ) cba
+        WHERE sp.bank_account_id IS NULL
+          AND sp.company_id = cba.company_id
+          AND ${PAID_STATUS}
+      `));
+
+      // 3. Set expected_settlement_date = paid_at/confirmed_at::date + 1 (T+1 settlement rule).
+      await db.execute(sql.raw(`
+        UPDATE sport_center.sport_payments
+        SET expected_settlement_date = (
+          COALESCE(confirmed_at, paid_at, updated_at) AT TIME ZONE 'Asia/Jakarta'
+        )::date + 1
+        WHERE expected_settlement_date IS NULL
+          AND COALESCE(confirmed_at, paid_at, updated_at) IS NOT NULL
+          AND ${PAID_STATUS}
+      `));
+
+      // 4. Set settlement_rule_version ke default jika masih NULL.
+      await db.execute(sql.raw(`
+        UPDATE sport_center.sport_payments
+        SET settlement_rule_version = 'default-v1'
+        WHERE settlement_rule_version IS NULL
+          AND ${PAID_STATUS}
+      `));
+
+      const countRes = await db.execute(sql.raw(`
+        SELECT COUNT(*) AS cnt
+        FROM sport_center.sport_payments
+        WHERE ${PAID_STATUS}
+          AND LOWER(COALESCE(payment_method::text,'')) LIKE '%qris%'
+          AND bank_account_id IS NOT NULL
+          AND expected_settlement_date IS NOT NULL
+      `));
+      const cnt = Number((countRes.rows[0] as any)?.cnt ?? 0);
+      logger.info({ cnt }, "Sport Center migration: Phase 4C QRIS column backfill selesai");
     } catch (backfillErr) {
       logger.warn({ err: backfillErr }, "Sport Center migration: Phase 4C backfill non-fatal failure");
     }

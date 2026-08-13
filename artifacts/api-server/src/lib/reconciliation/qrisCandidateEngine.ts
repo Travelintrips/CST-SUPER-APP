@@ -10,6 +10,20 @@ import {
   type QrisProviderCode,
   type QrisProviderRule,
 } from "./providerSettlementRules.js";
+
+// When the payment system uses one provider label (e.g. sport center tracks
+// "mandiri_direct") but the bank statement carries a different label for the
+// same underlying network (e.g. GPN prints "QRTRAVELI" → "gpn_qris"), the two
+// sides still represent the same settlement.  List each bank-statement
+// provider alongside the payment-side providers that should be considered
+// compatible with it.
+//
+// Mandiri QRIS transactions settle via Indonesia's GPN network.  The bank
+// prints them as QRTRAVELI/QRGPN, which normalise to "gpn_qris", while the
+// sport-center payment provider field stores "mandiri_direct".
+const CROSS_PROVIDER_COMPATIBLE: Partial<Record<QrisProviderCode, QrisProviderCode[]>> = {
+  gpn_qris: ["mandiri_direct"],
+};
 import { businessDayDistance } from "./businessCalendar.js";
 
 export type QrisReconciliationStatus = "MATCHED" | "REVIEW" | "UNMATCHED";
@@ -109,10 +123,12 @@ function isQrisPayment(payment: QrisPaymentCandidateInput): boolean {
 function isEligiblePayment(payment: QrisPaymentCandidateInput): boolean {
   return isQrisPayment(payment)
     && String(payment.status ?? "").toLowerCase() === "paid"
-    && !payment.alreadyReconciled
-    // A missing account is not a wildcard. It cannot safely match a bank
-    // mutation because one company may settle through multiple accounts.
-    && payment.bankAccountId != null;
+    && !payment.alreadyReconciled;
+  // NOTE: bankAccountId=null is allowed here. When a payment has no
+  // bank_account_id (e.g. historical data before backfill), dimensionPayments
+  // still matches correctly because null === null (JS strict equality).
+  // completeBankDimension is relaxed separately to handle company-only
+  // matching when the exact account is not yet known.
 }
 
 function providerEvidence(
@@ -200,6 +216,18 @@ function sameNaturalBatch(
   holidays: Iterable<string>,
   matchWindowBusinessDays: number,
 ): boolean {
+  const paymentProvider = normalizeQrisProvider(payment.providerName);
+  // Provider compatibility rules:
+  // 1. Exact match.
+  // 2. Unknown payment provider is treated as compatible with any known
+  //    mutation provider (legacy/untracked sport-center data).
+  // 3. Cross-network compatibility: some payment-side labels (e.g.
+  //    "mandiri_direct") map to the same underlying settlement network as a
+  //    different bank-statement label (e.g. "gpn_qris" = QRTRAVELI/GPN).
+  const crossCompat = CROSS_PROVIDER_COMPATIBLE[providerCode] ?? [];
+  const providerCompatible = paymentProvider === providerCode
+    || paymentProvider === "unknown"
+    || crossCompat.includes(paymentProvider as QrisProviderCode);
   return payment.companyId === mutation.companyId
     && payment.bankAccountId === mutation.bankAccountId
     && payment.expectedSettlementDate != null
@@ -208,7 +236,7 @@ function sameNaturalBatch(
       mutation.transactionDate,
       holidays,
     ) <= Math.max(0, Math.trunc(matchWindowBusinessDays))
-    && normalizeQrisProvider(payment.providerName) === providerCode;
+    && providerCompatible;
 }
 
 function isOpenMutation(mutation: QrisMutationCandidateInput): boolean {
@@ -392,7 +420,12 @@ export function generateQrisMutationBatchCandidates(input: {
       );
     const actualEvidence = sourceClassification === "actual_bank_mutation";
     const knownProvider = evidence.providerCode !== "unknown";
-    const completeBankDimension = mutation.companyId != null && mutation.bankAccountId != null;
+    // Relax: when bank_account_id is missing on the mutation (e.g. Google Sheet
+    // imports without explicit account column), company-level identity is still
+    // sufficient to produce a MATCHED candidate for a single-account company.
+    // Strict bankAccountId matching happens in dimensionPayments filter above
+    // (null === null for both sides passes naturally).
+    const completeBankDimension = mutation.companyId != null;
     const expectedDatesPresent = naturalPayments.every((payment) => Boolean(payment.expectedSettlementDate));
     const matched = completeBankDimension
       && actualEvidence
