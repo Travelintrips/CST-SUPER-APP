@@ -191,8 +191,9 @@ export async function ensureSportPaymentMirrorTrigger(): Promise<void> {
       SELECT COUNT(*)::integer, MIN(fcm.company_id)
         INTO v_company_count, v_company_id
         FROM sport_center.facility_company_mappings fcm
-       WHERE fcm.facility_id = v_facility_id
-         AND fcm.is_active = TRUE;
+        WHERE fcm.facility_id = v_facility_id
+          AND fcm.is_active = TRUE
+          AND fcm.approval_status = 'OWNER_APPROVED';
 
       IF v_company_count <> 1 OR v_company_id IS NULL THEN
         RAISE EXCEPTION 'CANONICAL_COMPANY_UNRESOLVED: facility=% active_mappings=%',
@@ -356,8 +357,9 @@ export async function ensureSportPaymentMirrorTrigger(): Promise<void> {
       SELECT COUNT(*)::integer, MIN(fcm.company_id)
         INTO v_company_count, v_company_id
         FROM sport_center.facility_company_mappings fcm
-       WHERE fcm.facility_id = v_facility_id
-         AND fcm.is_active = TRUE;
+        WHERE fcm.facility_id = v_facility_id
+          AND fcm.is_active = TRUE
+          AND fcm.approval_status = 'OWNER_APPROVED';
 
       IF v_company_count = 0 OR v_company_id IS NULL THEN
         RAISE EXCEPTION 'MIRROR_COMPANY_UNRESOLVED: facility % has no active company mapping',
@@ -608,6 +610,133 @@ export async function ensureSportPaymentMirrorTrigger(): Promise<void> {
   logger.info(
     "Sport Center payment mirror trigger: resolver, function, unique idempotency index, trigger, replay, dan get_unmirrored_confirmed_payments aktif",
   );
+}
+
+/**
+ * Restore only the QRIS metadata that can be proven from explicit masters.
+ *
+ * The public facility master is the owner-approved source for the
+ * facility→company mapping in the development contract.  Bank accounts and
+ * settlement rules are intentionally not invented here: the canonical
+ * resolver is called per payment and fails closed when either dimension is
+ * missing, ambiguous, or not OWNER_APPROVED.
+ */
+export async function backfillCanonicalQrisPaymentMetadata(): Promise<void> {
+  try {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS sport_center.facility_company_mappings (
+        id               SERIAL PRIMARY KEY,
+        facility_id      INTEGER NOT NULL,
+        company_id       INTEGER NOT NULL,
+        approval_status  TEXT NOT NULL DEFAULT 'PENDING',
+        source           TEXT,
+        is_active        BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await db.execute(sql`
+      ALTER TABLE sport_center.facility_company_mappings
+        ADD COLUMN IF NOT EXISTS approval_status TEXT,
+        ADD COLUMN IF NOT EXISTS source TEXT,
+        ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE,
+        ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    `);
+    await db.execute(sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_facility_company_mapping_pair
+        ON sport_center.facility_company_mappings(facility_id, company_id)
+    `);
+
+    // Do not overwrite an existing mapping.  An existing conflicting mapping
+    // remains visible to the resolver as ambiguous and therefore blocks
+    // metadata recovery until an owner corrects it.
+    await db.execute(sql`
+      INSERT INTO sport_center.facility_company_mappings
+        (facility_id, company_id, approval_status, source, is_active)
+      SELECT
+        source_facility.id,
+        public_facility.company_id,
+        'OWNER_APPROVED',
+        'public.sport_facilities.company_id',
+        TRUE
+      FROM sport_center.sport_facilities source_facility
+      JOIN public.sport_facilities public_facility
+        ON public_facility.id = source_facility.id
+      WHERE source_facility.is_active = TRUE
+        AND public_facility.is_active = TRUE
+        AND public_facility.company_id IS NOT NULL
+      ON CONFLICT (facility_id, company_id) DO NOTHING
+    `);
+
+    const before = await db.execute(sql`
+      SELECT COUNT(*)::integer AS unresolved
+      FROM sport_center.sport_payments
+      WHERE status::text = 'confirmed'
+        AND LOWER(COALESCE(payment_method::text, '')) LIKE '%qris%'
+        AND (
+          company_id IS NULL
+          OR expected_settlement_date IS NULL
+          OR settlement_rule_version IS NULL
+        )
+    `);
+
+    // Each payment gets its own exception boundary.  One missing external
+    // account or provider rule must not roll back metadata recovered for a
+    // different payment.
+    await db.execute(sql`
+      DO $migration$
+      DECLARE
+        v_payment_id INTEGER;
+      BEGIN
+        FOR v_payment_id IN
+          SELECT id
+          FROM sport_center.sport_payments
+          WHERE status::text = 'confirmed'
+            AND LOWER(COALESCE(payment_method::text, '')) LIKE '%qris%'
+            AND (
+              company_id IS NULL
+              OR expected_settlement_date IS NULL
+              OR settlement_rule_version IS NULL
+            )
+          ORDER BY id
+        LOOP
+          BEGIN
+            PERFORM sport_center.resolve_and_persist_payment_metadata(v_payment_id);
+          EXCEPTION WHEN OTHERS THEN
+            -- Fail closed for this row; the next migration run can retry after
+            -- the owner adds the missing bank account/provider configuration.
+            NULL;
+          END;
+        END LOOP;
+      END;
+      $migration$
+    `);
+
+    const after = await db.execute(sql`
+      SELECT COUNT(*)::integer AS unresolved
+      FROM sport_center.sport_payments
+      WHERE status::text = 'confirmed'
+        AND LOWER(COALESCE(payment_method::text, '')) LIKE '%qris%'
+        AND (
+          company_id IS NULL
+          OR expected_settlement_date IS NULL
+          OR settlement_rule_version IS NULL
+        )
+    `);
+    logger.info(
+      {
+        recovered: Number((before.rows[0] as Record<string, unknown> | undefined)?.unresolved ?? 0)
+          - Number((after.rows[0] as Record<string, unknown> | undefined)?.unresolved ?? 0),
+        unresolved: Number((after.rows[0] as Record<string, unknown> | undefined)?.unresolved ?? 0),
+      },
+      "QRIS canonical metadata backfill selesai; unresolved rows tetap fail-closed",
+    );
+  } catch (err) {
+    logger.warn(
+      { err },
+      "QRIS canonical metadata backfill dilewati karena runtime schema belum lengkap",
+    );
+  }
 }
 
 /**
@@ -2502,6 +2631,7 @@ export async function runSportCenterMigration(): Promise<void> {
     // PostgreSQL owns mirrors from sport_center.sport_payments.  This must run
     // after both local payment/booking schemas are ready.
     await ensureSportPaymentMirrorTrigger();
+    await backfillCanonicalQrisPaymentMetadata();
 
     // ── FASE 6C: facility_id + expense_category di accounting_entries ──────────
     await db.execute(sql`
