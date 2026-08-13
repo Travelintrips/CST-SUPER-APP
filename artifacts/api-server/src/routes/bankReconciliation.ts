@@ -1154,10 +1154,13 @@ router.post("/qris-candidates/:id/approve", async (req, res) => {
   }
 */
 
-// ─── POST /qris-candidates/:id/approve ──────────────────────────────────────
-// Mempromosikan qris_mutation_batch_candidates ke qris_settlements +
-// qris_settlement_items. Ini adalah aksi ireversibel yang mengkonsumsi
-// kandidat batch dan membuat settlement resmi yang bisa dicocokkan ke mutasi bank.
+/*
+ * LEGACY DISABLED.
+ *
+ * QRIS approval has one active owner below: canonical Sport Center
+ * settlement builder → source-aware reconciliation approval.  Keep this
+ * historical implementation out of the router so it cannot create a public
+ * qris_settlements settlement or compete with the canonical path.
 router.post("/qris-candidates/:candidateId/approve-legacy", async (req, res) => {
   await runQrisSettlementMigration();
   const candidateId = Number(req.params.candidateId);
@@ -1470,6 +1473,7 @@ router.post("/qris-candidates/:candidateId/approve-legacy", async (req, res) => 
     ).json({ error: message });
   }
 });
+*/
 
 /*
   const qEsc = (s: string) => String(s ?? "").replace(/'/g, "''");

@@ -52,6 +52,11 @@ export async function generateQrisCandidates(options: {
         COALESCE(sp.confirmed_at, sp.created_at) AS paid_at,
         'SCPAY-SC-' || sp.id::text AS payment_number,
         sp.booking_id, sb.order_number AS booking_number,
+        sb.customer_name,
+        COALESCE(sf.name, sb.facility_name, '') AS facility_name,
+        sb.booking_date,
+        sb.start_time::text AS start_time,
+        sb.end_time::text AS end_time,
         LOWER(BTRIM(sp.payment_provider::text)) AS provider_code,
         sp.expected_settlement_date AS settlement_date,
         sp.settlement_rule_version,
@@ -63,6 +68,7 @@ export async function generateQrisCandidates(options: {
         ) AS already_reconciled
       FROM sport_center.sport_payments sp
       LEFT JOIN sport_center.sport_bookings sb ON sb.id = sp.booking_id
+      LEFT JOIN sport_center.sport_facilities sf ON sf.id = sb.facility_id
       WHERE LOWER(COALESCE(sp.payment_method::text, '')) LIKE '%qris%'
         AND LOWER(COALESCE(sp.status::text, '')) = 'confirmed'
         ${companyFilter}
@@ -160,6 +166,11 @@ export async function generateQrisCandidates(options: {
       paymentNumber: row.payment_number == null ? null : String(row.payment_number),
       bookingId: row.booking_id == null ? null : Number(row.booking_id),
       bookingNumber: row.booking_number == null ? null : String(row.booking_number),
+      customerName: row.customer_name == null ? null : String(row.customer_name),
+      facilityName: row.facility_name == null ? null : String(row.facility_name),
+      bookingDate: row.booking_date == null ? null : String(row.booking_date).slice(0, 10),
+      startTime: row.start_time == null ? null : String(row.start_time),
+      endTime: row.end_time == null ? null : String(row.end_time),
       paymentDate: row.paid_at == null
         ? null
         : String(row.paid_at),
@@ -243,8 +254,16 @@ export async function generateQrisCandidates(options: {
              other_fee_amount = EXCLUDED.other_fee_amount,
              net_amount = EXCLUDED.net_amount,
              payment_items = EXCLUDED.payment_items,
-             status = EXCLUDED.status,
-             reconciliation_status = EXCLUDED.reconciliation_status,
+             status = CASE
+               WHEN qris_mutation_batch_candidates.status IN ('approved', 'completed')
+                 THEN qris_mutation_batch_candidates.status
+               ELSE EXCLUDED.status
+             END,
+             reconciliation_status = CASE
+               WHEN qris_mutation_batch_candidates.status IN ('approved', 'completed')
+                 THEN qris_mutation_batch_candidates.reconciliation_status
+               ELSE EXCLUDED.reconciliation_status
+             END,
              confidence = EXCLUDED.confidence,
              observed_deduction = EXCLUDED.observed_deduction,
              effective_deduction_rate = EXCLUDED.effective_deduction_rate,
@@ -278,6 +297,7 @@ export async function listQrisCandidates(options: {
     SELECT c.*, bm.description, bm.transaction_date, bm.amount AS bank_amount,
            bm.bank_account_id,
            bm.source, bm.provider_name AS bank_provider_name,
+           'sport_center.sport_payments'::text AS candidate_source,
            COALESCE((
              SELECT jsonb_agg(qsi.sport_payment_id ORDER BY qsi.sport_payment_id)
              FROM qris_settlement_items qsi

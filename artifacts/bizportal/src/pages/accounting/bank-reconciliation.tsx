@@ -546,6 +546,7 @@ interface QrisCandidateAudit {
   review_reason?: string | null;
   payment_items?: QrisPaymentItem[];
   settled_payment_ids?: Array<number | string> | null;
+  candidate_source?: string | null;
   description?: string | null;
   status?: string | null;
 }
@@ -563,6 +564,16 @@ interface QrisPaymentItem {
   payment_number?: string | null;
   booking_id?: number | null;
   booking_number?: string | null;
+  customerName?: string | null;
+  customer_name?: string | null;
+  facilityName?: string | null;
+  facility_name?: string | null;
+  bookingDate?: string | null;
+  booking_date?: string | null;
+  startTime?: string | null;
+  start_time?: string | null;
+  endTime?: string | null;
+  end_time?: string | null;
   paid_at?: string | null;
 }
 
@@ -3959,7 +3970,13 @@ export default function BankReconciliationPage() {
                     <div className="flex flex-col gap-2 rounded-md border border-indigo-200 bg-indigo-50/60 px-3 py-2.5 text-xs dark:border-indigo-800 dark:bg-indigo-950/20 sm:flex-row sm:items-center sm:justify-between">
                       <label className="flex min-w-0 cursor-pointer items-center gap-2">
                         <Checkbox
-                          checked={allQrisCandidatesSelected}
+                          checked={
+                            allQrisCandidatesSelected
+                              ? true
+                              : selectedQrisCandidates.length > 0
+                                ? "indeterminate"
+                                : false
+                          }
                           onCheckedChange={(checked) => toggleAllQrisCandidates(checked === true)}
                           aria-label="Pilih semua kandidat QRIS yang cocok"
                         />
@@ -4015,23 +4032,44 @@ export default function BankReconciliationPage() {
                             </p>
                              {(candidate.payment_items?.length ?? 0) > 0 && (
                                <div className="mt-2 rounded border bg-slate-50/80 px-2 py-1.5 text-[10px] dark:bg-slate-900/60">
-                                 <p className="mb-1 font-semibold uppercase tracking-wide text-slate-500">
-                                   Detail booking/payment
-                                 </p>
-                                 <div className="grid gap-1 sm:grid-cols-2">
+                                <p className="mb-1 font-semibold uppercase tracking-wide text-slate-500">
+                                  Detail booking/payment
+                                  {(candidate.payment_items?.length ?? 0) > 1
+                                    ? ` · Satu settlement group (${candidate.payment_items!.length} booking/payment)`
+                                    : ""}
+                                </p>
+                                <div className="grid gap-1.5">
                                    {candidate.payment_items!.map((item, index) => {
                                      const paymentNumber = item.payment_number ?? item.paymentNumber;
                                      const bookingNumber = item.booking_number ?? item.bookingNumber;
                                      const paymentId = item.payment_id ?? item.paymentId;
                                      const grossAmount = item.gross_amount ?? item.grossAmount;
+                                    const customer = item.customer_name ?? item.customerName;
+                                    const facility = item.facility_name ?? item.facilityName;
+                                    const bookingDate = item.booking_date ?? item.bookingDate;
+                                    const startTime = item.start_time ?? item.startTime;
+                                    const endTime = item.end_time ?? item.endTime;
+                                    const bookingDateTime = bookingDate
+                                      ? `${fmtDate(String(bookingDate))}${startTime ? ` · ${startTime.slice(0, 5)}${endTime ? `–${endTime.slice(0, 5)}` : ""}` : ""}`
+                                      : "Jadwal —";
+                                    const paymentDate = item.paid_at ?? item.paymentDate;
                                      return (
-                                       <div key={`${candidate.id}-${paymentId ?? index}`} className="flex min-w-0 items-center justify-between gap-2">
-                                         <span className="min-w-0 truncate text-slate-600 dark:text-slate-400">
-                                           {bookingNumber || "Booking —"} · {paymentNumber || `Payment #${paymentId ?? "—"}`}
-                                         </span>
-                                         <span className="shrink-0 font-medium text-slate-800 dark:text-slate-200">
-                                           {idr(grossAmount ?? 0)}
-                                         </span>
+                                      <div key={`${candidate.id}-${paymentId ?? index}`} className="rounded border border-slate-200/80 bg-white/70 px-2 py-1.5 dark:border-slate-700 dark:bg-slate-950/30">
+                                        <div className="flex min-w-0 items-center justify-between gap-2">
+                                          <span className="min-w-0 truncate font-semibold text-slate-700 dark:text-slate-300">
+                                            {bookingNumber || `Booking SC-${String(item.booking_id ?? "—").padStart(4, "0")}`}
+                                          </span>
+                                          <span className="shrink-0 font-medium text-slate-800 dark:text-slate-200">
+                                            {idr(grossAmount ?? 0)}
+                                          </span>
+                                        </div>
+                                        <div className="mt-0.5 grid gap-x-3 gap-y-0.5 text-[10px] text-slate-500 dark:text-slate-400 sm:grid-cols-2">
+                                          <span>Customer: {customer || "—"}</span>
+                                          <span>Fasilitas: {facility || "—"}</span>
+                                          <span>Booking: {bookingDateTime}</span>
+                                          <span>Bayar: {paymentDate ? fmtDate(String(paymentDate)) : "—"}</span>
+                                          <span className="sm:col-span-2">Payment: {paymentNumber || `SCPAY-SC-${paymentId ?? "—"}`}</span>
+                                        </div>
                                        </div>
                                      );
                                    })}

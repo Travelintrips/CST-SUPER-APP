@@ -35,6 +35,11 @@ export interface QrisPaymentCandidateInput {
   paymentNumber?: string | null;
   bookingId?: number | null;
   bookingNumber?: string | null;
+  customerName?: string | null;
+  facilityName?: string | null;
+  bookingDate?: string | null;
+  startTime?: string | null;
+  endTime?: string | null;
   paymentDate?: string | null;
   taxAmount?: number | null;
   alreadyReconciled?: boolean;
@@ -80,6 +85,11 @@ export interface QrisMutationBatchCandidate {
     paymentNumber?: string | null;
     bookingId?: number | null;
     bookingNumber?: string | null;
+    customerName?: string | null;
+    facilityName?: string | null;
+    bookingDate?: string | null;
+    startTime?: string | null;
+    endTime?: string | null;
     paymentDate?: string | null;
   }>;
   status: QrisReconciliationStatus;
@@ -423,6 +433,11 @@ export function generateQrisMutationBatchCandidates(input: {
         paymentNumber: payment.paymentNumber ?? null,
         bookingId: payment.bookingId ?? null,
         bookingNumber: payment.bookingNumber ?? null,
+        customerName: payment.customerName ?? null,
+        facilityName: payment.facilityName ?? null,
+        bookingDate: payment.bookingDate ?? null,
+        startTime: payment.startTime ?? null,
+        endTime: payment.endTime ?? null,
         paymentDate: payment.paymentDate ?? (
           payment.paidAt == null ? null : String(payment.paidAt)
         ),
