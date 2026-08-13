@@ -8,6 +8,8 @@ const rawPort = process.env.PORT;
 const port = rawPort ? Number(rawPort) : 3000;
 
 const basePath = process.env.BASE_PATH ?? "/bizportal/";
+const BRAND_LOGO_ASSET_PATH = "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo.png";
+const BRAND_LOGO_ASSET_DEV_FALLBACK_ORIGIN = process.env.CUSTOMER_PORTAL_BRAND_ASSET_ORIGIN ?? "https://cstlogistic.co.id";
 
 // In dev (non-deployment), prefer *_DEV variants so they match the API server's
 // sport_center Supabase connection (SUPABASE_URL_DEV / SUPABASE_ANON_KEY_DEV).

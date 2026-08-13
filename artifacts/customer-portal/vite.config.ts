@@ -8,7 +8,9 @@ const port = Number(process.env.PORT ?? "3000");
 
 const basePath = process.env.BASE_PATH ?? "/";
 const HERO_ASSET_PATH = "/api/storage/public-objects/portal-assets/static/customer-portal/images/hero-bg.webp";
+const BRAND_LOGO_ASSET_PATH = "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo.png";
 const HERO_ASSET_DEV_FALLBACK_ORIGIN = process.env.CUSTOMER_PORTAL_HERO_ASSET_ORIGIN ?? "https://cstlogistic.co.id";
+const BRAND_LOGO_ASSET_DEV_FALLBACK_ORIGIN = process.env.CUSTOMER_PORTAL_BRAND_ASSET_ORIGIN ?? "https://cstlogistic.co.id";
 
 export default defineConfig({
   base: basePath,
@@ -133,6 +135,11 @@ export default defineConfig({
         ? {
             [HERO_ASSET_PATH]: {
               target: HERO_ASSET_DEV_FALLBACK_ORIGIN,
+              changeOrigin: true,
+              secure: true,
+            },
+            [BRAND_LOGO_ASSET_PATH]: {
+              target: BRAND_LOGO_ASSET_DEV_FALLBACK_ORIGIN,
               changeOrigin: true,
               secure: true,
             },
