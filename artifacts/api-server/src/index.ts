@@ -1612,8 +1612,6 @@ async function startServer() {
   // Integration health check — every 6h, alerts on pass→fail flips via Fonnte WA
   registerWorker("integration-health-check", startIntegrationHealthWorker, 190_000);
 
-  startAll();
-
   // Run all migrations + seeds in the background with an initial delay
   // to let the DB pool stabilize before hammering pgBouncer with DDL.
   sleep(8_000)
@@ -1846,6 +1844,9 @@ async function startServer() {
     )
     .then(() => {
       migrationsComplete = true;
+      // Do not let background workers compete with the startup migration chain
+      // for the small development session-pooler connection budget.
+      startAll();
       logger.info("All startup migrations complete — /api/health/ready → true");
     })
     // Post-start maintenance is intentionally detached from readiness. These
