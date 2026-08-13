@@ -9,6 +9,7 @@ import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { requireAdmin } from "../lib/requireAdmin.js";
 import { resolveCompanyId } from "../lib/resolveCompany.js";
+import { deferStartupTask } from "../lib/deferredStartupTasks.js";
 
 const router = Router();
 router.use(async (req, res, next) => {
@@ -37,7 +38,7 @@ async function ensureTables() {
     CREATE INDEX IF NOT EXISTS expense_audit_log_company_idx ON expense_audit_log(company_id);
   `));
 }
-ensureTables().catch(console.error);
+deferStartupTask("expense-dashboard", ensureTables);
 
 // ─── GET /api/expense-dashboard ───────────────────────────────────────────────
 router.get("/", async (req: Request, res) => {

@@ -29,6 +29,7 @@ import { requireAdmin } from "../lib/requireAdmin.js";
 import { postEntry } from "../lib/accounting.js";
 import { ensureAccountingSettings } from "../lib/accountingSeed.js";
 import { resolveCompanyId } from "../lib/resolveCompany.js";
+import { deferStartupTask } from "../lib/deferredStartupTasks.js";
 import { auditFromReq, auditFromReqSync } from "../lib/auditLog.js";
 import { assertCompanyAccess } from "../lib/assertCompanyAccess.js";
 import { getOpenAI } from "../lib/openaiClient.js";
@@ -127,7 +128,7 @@ async function ensureTables() {
     await db.execute(sql.raw(stmt)).catch(() => {});
   }
 }
-ensureTables().catch(console.error);
+deferStartupTask("cash-advances", ensureTables);
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

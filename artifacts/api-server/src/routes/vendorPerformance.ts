@@ -8,13 +8,12 @@ import {
   recalculateVendorPerformance,
   recalculateAllVendorPerformance,
 } from "../lib/vendorPerformanceService.js";
+import { deferStartupTask } from "../lib/deferredStartupTasks.js";
 
 const router = Router();
 
 // Run migration on module load (idempotent)
-runVendorPerformanceMigration().catch((err) =>
-  logger.warn({ err }, "[vendorPerformance] migration warning")
-);
+deferStartupTask("vendor-performance", runVendorPerformanceMigration);
 
 // ── Legacy exports (index.ts calls these) ────────────────────────────────────
 export async function backfillVendorPerformance() {

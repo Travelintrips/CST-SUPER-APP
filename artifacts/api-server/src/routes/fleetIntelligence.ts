@@ -24,6 +24,7 @@ import { z } from "zod";
 import { requireAdmin } from "../lib/requireAdmin.js";
 import { postFleetCashPaymentJournal, voidFleetCashPaymentJournal } from "../lib/fleetAccounting.js";
 import { logger } from "../lib/logger.js";
+import { deferStartupTask } from "../lib/deferredStartupTasks.js";
 import { writeAuditLog, extractRequestMeta } from "../lib/auditLog.js";
 import { sendViaService as sendWhatsApp } from "../lib/waTransport.js";
 
@@ -4530,8 +4531,7 @@ async function runFleetExpensesMigration() {
     logger.error({ err }, "[fleetExpenses] Migration error");
   }
 }
-// Run immediately when this module loads (idempotent).
-runFleetExpensesMigration().catch(() => {});
+deferStartupTask("fleet-expenses", runFleetExpensesMigration);
 
 const EXPENSE_TYPES = ["Ban", "Perbaikan", "Service Rutin", "Asuransi", "Bahan Bakar", "Parkir", "Tilang", "Oli", "Spare Part", "Lainnya"] as const;
 const EXPENSE_HIGHLIGHT_THRESHOLD = 5_000_000; // Rp 5.000.000

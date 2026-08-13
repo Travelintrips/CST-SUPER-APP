@@ -170,6 +170,7 @@ import { runExpenseClassificationMigration } from "./lib/expenseClassificationMi
 import { runTokenSecurityMigration } from "./lib/tokenSecurityMigration.js";
 import { runMasterPriceMigration } from "./lib/masterPriceMigration.js";
 import { runQaFixtureMigration } from "./lib/qaFixtureMigration.js";
+import { runDeferredStartupTasks } from "./lib/deferredStartupTasks.js";
 
 // Port resolution order (deterministic, no ambiguity):
 // 1. REPLIT_API_PORT — set by Replit deployment infra
@@ -1848,6 +1849,7 @@ async function startServer() {
       // for the small development session-pooler connection budget.
       startAll();
       logger.info("All startup migrations complete — /api/health/ready → true");
+      void runDeferredStartupTasks();
     })
     // Post-start maintenance is intentionally detached from readiness. These
     // repairs are non-critical and may perform long-running DB discovery; they

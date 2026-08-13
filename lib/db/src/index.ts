@@ -21,10 +21,12 @@ function resolveConnectionString(): string {
   const isProd = process.env.NODE_ENV === "production" || !!process.env.REPLIT_DEPLOYMENT;
   // PROD: hanya pakai SUPABASE_DATABASE_URL / DATABASE_URL / SUPABASE_PG_URL
   //       JANGAN fallback ke SUPABASE_DATABASE_URL_DEV di prod
-  // DEV : gunakan koneksi direct development bila tersedia. Runtime marketplace
-  // perlu koneksi yang stabil untuk beberapa request paralel; URL pooler
-  // transaction-mode dapat gagal checkout saat pooler sedang penuh.
-  // Fallback tetap mempertahankan konfigurasi lama bila URL direct tidak ada.
+  // DEV : gunakan URL database development/pooler yang di-inject sebagai
+  // SUPABASE_DATABASE_URL_DEV atau canonical SUPABASE_DATABASE_URL.
+  // Jangan memakai SUPABASE_MIGRATION_URL di sini: pada arsitektur secret
+  // bersama, URL tersebut adalah direct connection production untuk tooling
+  // migrasi dan dapat mengarahkan preview ke database yang salah/kehabisan
+  // kapasitas. Runtime development harus tetap berada di database dev.
   const candidates = isProd
     ? [
         process.env.SUPABASE_DATABASE_URL,
@@ -32,7 +34,6 @@ function resolveConnectionString(): string {
         process.env.SUPABASE_PG_URL,
       ]
     : [
-        process.env.SUPABASE_MIGRATION_URL,
         process.env.SUPABASE_DATABASE_URL_DEV,
         process.env.SUPABASE_DATABASE_URL,
         process.env.DATABASE_URL,

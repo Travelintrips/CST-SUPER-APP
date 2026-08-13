@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { requireClerkUser } from "../lib/requireAdmin.js";
 import { resolveCompanyId } from "../lib/resolveCompany.js";
+import { deferStartupTask } from "../lib/deferredStartupTasks.js";
 
 const router = Router();
 router.use(async (req: Request, res: Response, next) => {
@@ -35,7 +36,7 @@ async function runApprovalMigration() {
   await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_approval_requests_company ON approval_requests(company_id)`);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_approval_requests_module ON approval_requests(module, doc_type)`);
 }
-runApprovalMigration().catch((e) => console.error("[approval migration]", e));
+deferStartupTask("approval-requests", runApprovalMigration);
 
 // GET /api/approvals — list approval requests
 router.get("/", async (req: Request, res: Response) => {

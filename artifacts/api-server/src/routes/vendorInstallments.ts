@@ -8,6 +8,7 @@ import { requireAdmin } from "../lib/requireAdmin.js";
 import { postEntry } from "../lib/accounting.js";
 import { ensureAccountingSettings } from "../lib/accountingSeed.js";
 import { resolveCompanyId } from "../lib/resolveCompany.js";
+import { deferStartupTask } from "../lib/deferredStartupTasks.js";
 
 const router = Router();
 router.use(async (req, res, next) => {
@@ -54,7 +55,7 @@ async function ensureTables() {
     CREATE INDEX IF NOT EXISTS vendor_installment_payments_inst_idx ON vendor_installment_payments(installment_id);
   `));
 }
-ensureTables().catch(console.error);
+deferStartupTask("vendor-installments", ensureTables);
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

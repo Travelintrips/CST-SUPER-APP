@@ -13,6 +13,7 @@ import {
   previewDailyReport,
   ensureReportSettingsTable,
 } from "../lib/dailyReportWorker.js";
+import { deferStartupTask } from "../lib/deferredStartupTasks.js";
 
 const router = Router();
 
@@ -21,7 +22,7 @@ router.use(async (req, res, next) => {
   next();
 });
 
-void ensureReportSettingsTable().catch(() => {});
+deferStartupTask("wa-report-settings", ensureReportSettingsTable);
 
 router.get("/settings", async (_req, res) => {
   try {
