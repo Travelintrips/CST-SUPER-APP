@@ -19,7 +19,8 @@ import {
   Store, Search, SlidersHorizontal, X, Building2, Package, Truck,
   Tag, MapPin, Clock, ChevronRight, Filter, RefreshCw, GitCompareArrows,
   BarChart2, ChevronDown, ChevronUp, TrendingUp, Camera, Loader2,
-  MessageSquare, Share2,
+  MessageSquare, Share2, Award, ArrowUpRight, BadgeCheck, Globe2,
+  ShieldCheck, Sparkles, Star, Zap,
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -939,6 +940,230 @@ function useMarketplaceCatalogRealtime() {
   }, [handleCatalogChange]);
 }
 
+// ── Featured Supplier Spotlight — presentation-only, reuses existing queries ──
+function FeaturedSupplierSpotlight({
+  heroTiles,
+  items,
+  customImages,
+  failedLabels,
+  uploadingLabel,
+  isAdmin,
+  onRequestQuote,
+  onProfile,
+  onProductClick,
+  onUpload,
+  onImageError,
+}: {
+  heroTiles: HeroCategoryTile[];
+  items: MarketplaceItem[];
+  customImages: Record<string, string>;
+  failedLabels: Set<string>;
+  uploadingLabel: string | null;
+  isAdmin: boolean;
+  onRequestQuote: () => void;
+  onProfile: (vendorId: number) => void;
+  onProductClick: (productId: number) => void;
+  onUpload: (label: string) => void;
+  onImageError: (label: string) => void;
+}) {
+  const { t } = useLanguage();
+  const vendorId = heroTiles.find((tile) => tile.vendorId)?.vendorId ?? items[0]?.vendorId ?? null;
+  const vendorItems = vendorId == null ? [] : items.filter((item) => item.vendorId === vendorId);
+  const vendorName = vendorItems.find((item) => item.vendorName)?.vendorName
+    ?? t("marketplace.featuredSupplierFallback", "Verified Marketplace Partner");
+  const vendorCategory = vendorItems.find((item) => item.kategori || item.categoryKey);
+  const vendorOrigin = vendorItems.find((item) => item.origin || item.location);
+  const categoryLabel = vendorCategory
+    ? CATEGORY_PLACEHOLDER[vendorCategory.categoryKey ?? ""]?.label
+      ?? vendorCategory.kategori
+      ?? vendorCategory.categoryKey
+      ?? "Commodity"
+    : "Commodity";
+  const originLabel = vendorOrigin?.origin ?? vendorOrigin?.location ?? "—";
+  const initials = vendorName
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase() || "VP";
+
+  const fallbackProducts = items
+    .filter((item) => vendorId == null || item.vendorId === vendorId)
+    .slice(0, 4)
+    .map((item) => ({
+      id: item.id,
+      label: item.name,
+      imageUrl: item.primaryImageUrl,
+    }));
+  const spotlightProducts = (heroTiles.length > 0
+    ? heroTiles
+      .filter(({ label }) => !failedLabels.has(label))
+      .slice(0, 4)
+      .map((tile) => ({
+        id: tile.productId,
+        label: tile.label,
+        imageUrl: tile.imageUrl,
+      }))
+    : fallbackProducts);
+  const productCount = vendorItems.length || spotlightProducts.length;
+  const categoryCount = new Set(
+    vendorItems.map((item) => item.categoryKey ?? item.kategori).filter(Boolean),
+  ).size;
+
+  const metrics = [
+    { label: t("marketplace.featuredProducts", "Products"), value: productCount ? `${productCount}+` : "—", icon: Package },
+    { label: t("marketplace.featuredTransactions", "Transactions"), value: "—", icon: TrendingUp },
+    { label: t("marketplace.featuredRating", "Rating"), value: "—", icon: Star },
+    { label: t("marketplace.featuredResponseRate", "Response rate"), value: "—", icon: Zap },
+    { label: t("marketplace.featuredOnTime", "On-time delivery"), value: "—", icon: ShieldCheck },
+    { label: t("marketplace.featuredCategories", "Categories"), value: categoryCount ? `${categoryCount}` : "—", icon: Tag },
+  ];
+
+  return (
+    <aside
+      className="relative w-full md:w-[430px] shrink-0 overflow-hidden rounded-[28px] border border-white/20 bg-slate-950/55 p-4 shadow-[0_24px_70px_rgba(2,8,23,0.45)] backdrop-blur-xl transition-transform duration-300 hover:-translate-y-1 hover:border-amber-300/45"
+      aria-label={t("marketplace.featuredSupplierAria", "Featured Supplier Spotlight")}
+    >
+      <div className="pointer-events-none absolute -right-20 -top-24 h-56 w-56 rounded-full bg-amber-300/15 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-24 -left-16 h-48 w-48 rounded-full bg-sky-400/15 blur-3xl" />
+
+      <div className="relative">
+        <div className="flex items-center justify-between gap-3">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200/40 bg-amber-300/15 px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-[0.16em] text-amber-100 shadow-[0_0_22px_rgba(251,191,36,0.18)]">
+            <Sparkles className="h-3.5 w-3.5" />
+            {t("marketplace.featuredSupplier", "Featured Supplier")}
+          </span>
+          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-white/45">
+            {t("marketplace.spotlight", "Supplier Spotlight")}
+          </span>
+        </div>
+
+        <div className="mt-4 flex items-start gap-3">
+          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-white/25 bg-gradient-to-br from-sky-300 via-sky-500 to-indigo-700 text-lg font-black text-white shadow-lg shadow-sky-950/40">
+            {initials}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <h2 className="truncate text-[17px] font-black tracking-tight text-white">{vendorName}</h2>
+              <BadgeCheck className="h-4 w-4 shrink-0 text-sky-300" aria-label={t("marketplace.verified", "Verified")} />
+            </div>
+            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-white/60">
+              <span className="inline-flex items-center gap-1">
+                <Award className="h-3.5 w-3.5 text-amber-300" />
+                {t("marketplace.topSupplier", "Top Supplier")}
+              </span>
+              <span className="text-white/25">•</span>
+              <span>{categoryLabel}</span>
+              <span className="text-white/25">•</span>
+              <span className="inline-flex items-center gap-1">
+                <Globe2 className="h-3.5 w-3.5 text-sky-300" />
+                {originLabel}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-3 gap-2">
+          {metrics.map(({ label, value, icon: MetricIcon }) => (
+            <div key={label} className="rounded-2xl border border-white/10 bg-white/[0.07] px-2.5 py-2.5 transition-colors hover:bg-white/[0.12]">
+              <MetricIcon className="mb-1 h-3.5 w-3.5 text-sky-300/85" />
+              <p className="text-[14px] font-black leading-none text-white">{value}</p>
+              <p className="mt-1 truncate text-[9px] font-medium uppercase tracking-[0.05em] text-white/45">{label}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {[
+            { icon: BadgeCheck, label: t("marketplace.verifiedSupplier", "Verified supplier") },
+            { icon: ShieldCheck, label: t("marketplace.directQuotation", "Direct quotation") },
+            { icon: Award, label: t("marketplace.enterprisePartner", "Enterprise partner") },
+          ].map(({ icon: TrustIcon, label }) => (
+            <span key={label} className="inline-flex items-center gap-1 rounded-full border border-emerald-300/20 bg-emerald-300/10 px-2 py-1 text-[10px] font-semibold text-emerald-100">
+              <TrustIcon className="h-3 w-3" />
+              {label}
+            </span>
+          ))}
+        </div>
+
+        <div className="mt-4 flex items-center justify-between gap-2">
+          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/45">
+            {t("marketplace.featuredProductsLabel", "Featured product portfolio")}
+          </p>
+          <span className="text-[10px] text-white/40">{spotlightProducts.length} {t("marketplace.featuredItems", "items")}</span>
+        </div>
+
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          {spotlightProducts.map(({ id, label, imageUrl }) => {
+            const effectiveImage = resolveImageUrl(customImages[label] ?? imageUrl) ?? customImages[label] ?? imageUrl;
+            const isUploading = uploadingLabel === label;
+            return (
+              <div
+                key={`${id}-${label}`}
+                role="button"
+                tabIndex={0}
+                onClick={() => id && onProductClick(id)}
+                onKeyDown={(event) => {
+                  if ((event.key === "Enter" || event.key === " ") && id) {
+                    event.preventDefault();
+                    onProductClick(id);
+                  }
+                }}
+                className="group relative h-[82px] cursor-pointer overflow-hidden rounded-2xl border border-white/15 bg-slate-800/70 outline-none transition-all duration-300 hover:border-amber-200/60 hover:shadow-lg hover:shadow-slate-950/40 focus-visible:ring-2 focus-visible:ring-amber-200"
+              >
+                {effectiveImage ? (
+                  <img
+                    src={effectiveImage}
+                    alt={label}
+                    className="absolute inset-0 h-full w-full object-cover transition-transform duration-500 group-hover:scale-110"
+                    onError={() => onImageError(label)}
+                  />
+                ) : (
+                  <div className="absolute inset-0 bg-gradient-to-br from-slate-700 to-slate-900" />
+                )}
+                <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-slate-950/25 to-transparent" />
+                <span className="absolute bottom-2 left-2 right-2 truncate text-[10px] font-bold text-white drop-shadow">{label}</span>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={(event) => { event.stopPropagation(); onUpload(label); }}
+                    disabled={isUploading}
+                    className="absolute right-1.5 top-1.5 rounded-lg bg-black/65 p-1.5 text-white opacity-0 transition-opacity duration-200 group-hover:opacity-100 focus-visible:opacity-100 disabled:cursor-wait"
+                    title={`Ganti foto ${label}`}
+                  >
+                    {isUploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Camera className="h-3.5 w-3.5" />}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+          <button
+            type="button"
+            onClick={onRequestQuote}
+            className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-xl bg-sky-500 px-3 py-2.5 text-[11px] font-extrabold text-white shadow-lg shadow-sky-950/35 transition-all hover:bg-sky-400 hover:shadow-sky-950/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+          >
+            <MessageSquare className="h-3.5 w-3.5" />
+            {t("marketplace.requestQuoteBtn", "Request Quotation")}
+          </button>
+          <button
+            type="button"
+            onClick={() => vendorId != null && onProfile(vendorId)}
+            disabled={vendorId == null}
+            className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-xl border border-white/20 bg-white/10 px-3 py-2.5 text-[11px] font-extrabold text-white transition-all hover:border-white/40 hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+          >
+            {t("marketplace.viewSupplierProfile", "Lihat Profil Vendor")}
+            <ArrowUpRight className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
 // ── Main Page ──────────────────────────────────────────────────────────────────
 export default function MarketplacePage() {
   const { t } = useLanguage();
@@ -1259,8 +1484,8 @@ export default function MarketplacePage() {
           }}
         />
 
-        <div className="relative z-10 max-w-7xl mx-auto px-4 py-12 md:py-16">
-          <div className="flex flex-col md:flex-row items-start md:items-end gap-8">
+          <div className="relative z-10 max-w-7xl mx-auto px-4 py-10 md:py-12">
+          <div className="flex flex-col md:flex-row items-start gap-8">
 
             {/* Left — headline */}
             <div className="flex-1 min-w-0">
@@ -1351,46 +1576,24 @@ export default function MarketplacePage() {
               </div>
             </div>
 
-            {/* Right — quick-access commodity tiles, images sourced from DB */}
-            <div className="hidden md:grid grid-cols-3 gap-3 shrink-0 w-[312px]">
-              {heroTiles
-                .filter(({ label }) => !failedTileLabels.has(label))
-                .map(({ imageUrl, label, categoryKey: catKey }) => {
-                  const effectiveImg = customCategoryImgs[label] ?? imageUrl;
-                  const isUploading = uploadingCat === label;
-                  return (
-                    <div
-                      key={label}
-                      className="relative overflow-hidden rounded-xl border border-white/15 hover:border-white/30 transition-all cursor-pointer group h-[90px]"
-                      onClick={() => handleCategoryChange(catKey)}
-                    >
-                      <img
-                        src={effectiveImg}
-                        alt={label}
-                        className="absolute inset-0 w-full h-full object-cover object-center transition-transform duration-300 group-hover:scale-110"
-                        onError={() => setFailedTileLabels(prev => new Set([...prev, label]))}
-                      />
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
-                      <div className="absolute bottom-0 left-0 right-0 px-2 py-1.5">
-                        <span className="text-white text-[10px] font-bold leading-tight drop-shadow block truncate">{t(`marketplace.cat_${catKey}`) || label}</span>
-                      </div>
-                      {isAdmin && (
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); pendingCatLabelRef.current = label; catImgInputRef.current?.click(); }}
-                          disabled={isUploading}
-                          className="absolute top-1 right-1 z-10 rounded-md bg-black/60 hover:bg-black/90 text-white p-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 disabled:cursor-wait"
-                          title={`Ganti foto ${label}`}
-                        >
-                          {isUploading
-                            ? <Loader2 className="h-3 w-3 animate-spin" />
-                            : <Camera className="h-3 w-3" />}
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-            </div>
+            <FeaturedSupplierSpotlight
+              heroTiles={heroTiles}
+              items={items}
+              customImages={customCategoryImgs}
+              failedLabels={failedTileLabels}
+              uploadingLabel={uploadingCat}
+              isAdmin={isAdmin}
+              onRequestQuote={() => {
+                document.getElementById("marketplace-grid")?.scrollIntoView({ behavior: "smooth", block: "start" });
+              }}
+              onProfile={(vendorId) => setLocation(`/vendor/${vendorId}`)}
+              onProductClick={(productId) => setLocation(`/marketplace/${productId}`)}
+              onUpload={(label) => {
+                pendingCatLabelRef.current = label;
+                catImgInputRef.current?.click();
+              }}
+              onImageError={(label) => setFailedTileLabels((prev) => new Set([...prev, label]))}
+            />
 
           </div>
         </div>
