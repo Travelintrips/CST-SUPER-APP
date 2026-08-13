@@ -48,9 +48,12 @@ interface FeaturedProductCardData {
   imageUrl: string | null;
   moq: string;
   origin: string;
+  packaging: string;
+  availability: string | null;
   vendorName: string | null;
   uploadLabel: string;
   verified: boolean;
+  isFeatured: boolean;
 }
 
 // ── Category accent colors + labels — used only by product cards (not hero tiles) ──
@@ -952,7 +955,7 @@ function useMarketplaceCatalogRealtime() {
 }
 
 // ── Featured Products Showcase — presentation-only, reuses existing queries ──
-function FeaturedProductsShowcase({
+function FeaturedProductsShowcaseLegacy({
   heroTiles,
   items,
   customImages,
@@ -980,6 +983,9 @@ function FeaturedProductsShowcase({
     ? heroTiles.slice(0, 6).map((tile) => {
         const item = items.find((candidate) => candidate.id === tile.productId);
         const categoryKey = item?.categoryKey ?? item?.kategori ?? tile.categoryKey;
+        const specs = item?.specValues && typeof item.specValues === "object"
+          ? item.specValues as Record<string, unknown>
+          : {};
         return {
           id: tile.productId,
           label: item?.name ?? tile.label,
@@ -989,9 +995,15 @@ function FeaturedProductsShowcase({
             ? `${item.moq.toLocaleString("id-ID")} ${item.unit ?? ""}`.trim()
             : t("marketplace.featuredMoqOnRequest", "MOQ on request"),
           origin: item?.origin ?? item?.location ?? t("marketplace.featuredOriginOnRequest", "Origin on request"),
+          packaging: String(
+            specs["packaging"] ?? specs["packagingType"] ?? specs["kemasan"] ?? item?.unit
+              ?? t("marketplace.featuredPackagingOnRequest", "Packaging on request"),
+          ),
+          availability: item?.stockStatus ?? null,
           vendorName: item?.vendorName ?? null,
           uploadLabel: tile.label,
           verified: Boolean(item?.vendorId ?? tile.vendorId),
+          isFeatured: Boolean(item?.isFeatured ?? true),
         };
       })
     : items.slice(0, 6).map((item) => ({
@@ -1003,14 +1015,68 @@ function FeaturedProductsShowcase({
           ? `${item.moq.toLocaleString("id-ID")} ${item.unit ?? ""}`.trim()
           : t("marketplace.featuredMoqOnRequest", "MOQ on request"),
         origin: item.origin ?? item.location ?? t("marketplace.featuredOriginOnRequest", "Origin on request"),
+        packaging: (() => {
+          const specs = item.specValues && typeof item.specValues === "object"
+            ? item.specValues as Record<string, unknown>
+            : {};
+          return String(
+            specs["packaging"] ?? specs["packagingType"] ?? specs["kemasan"] ?? item.unit
+              ?? t("marketplace.featuredPackagingOnRequest", "Packaging on request"),
+          );
+        })(),
+        availability: item.stockStatus,
         vendorName: item.vendorName ?? null,
         uploadLabel: item.name,
         verified: Boolean(item.vendorId),
+        isFeatured: Boolean(item.isFeatured ?? true),
       })));
+
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [imageVisible, setImageVisible] = useState(true);
+
+  useEffect(() => {
+    setActiveIndex((current) => Math.min(current, Math.max(featuredProducts.length - 1, 0)));
+  }, [featuredProducts.length]);
+
+  const activeProduct = featuredProducts[activeIndex] ?? featuredProducts[0] ?? null;
+  const activeImageUrl = activeProduct
+    ? resolveImageUrl(customImages[activeProduct.uploadLabel] ?? activeProduct.imageUrl)
+      ?? customImages[activeProduct.uploadLabel]
+      ?? activeProduct.imageUrl
+    : null;
+  const activeHasImage = Boolean(activeImageUrl && !failedLabels.has(activeProduct?.uploadLabel ?? ""));
+
+  useEffect(() => {
+    if (!activeProduct) return;
+    setImageVisible(false);
+    const frame = window.requestAnimationFrame(() => setImageVisible(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeProduct?.id]);
+
+  if (!activeProduct) {
+    return (
+      <aside
+        className="relative w-full md:w-[430px] shrink-0 overflow-hidden rounded-[28px] border border-white/15 bg-slate-950/65 p-4 shadow-[0_24px_70px_rgba(2,8,23,0.45)] backdrop-blur-xl"
+        aria-label={t("marketplace.featuredProductsAria", "Featured Products")}
+      >
+        <div className="flex min-h-[320px] flex-col items-center justify-center rounded-[22px] border border-dashed border-white/15 bg-slate-900/60 px-6 text-center">
+          <Package className="h-9 w-9 text-white/30" />
+          <p className="mt-3 text-sm font-bold text-white/75">
+            {t("marketplace.featuredEmptyTitle", "Featured products are on their way")}
+          </p>
+          <p className="mt-1 max-w-[240px] text-[11px] leading-relaxed text-white/45">
+            {t("marketplace.featuredEmptySubtitle", "Check the marketplace below to browse available products.")}
+          </p>
+        </div>
+      </aside>
+    );
+  }
+
+  const activeUploading = uploadingLabel === activeProduct.uploadLabel;
 
   return (
     <aside
-      className="relative w-full md:w-[430px] shrink-0 overflow-hidden rounded-[28px] border border-white/20 bg-slate-950/60 p-4 shadow-[0_24px_70px_rgba(2,8,23,0.45)] backdrop-blur-xl transition-transform duration-300 hover:-translate-y-1 hover:border-amber-300/45"
+      className="group/showcase relative w-full md:w-[430px] shrink-0 overflow-hidden rounded-[30px] border border-white/20 bg-[#081426]/95 p-3.5 shadow-[0_26px_80px_rgba(2,8,23,0.48)] backdrop-blur-xl transition-all duration-300 hover:-translate-y-1 hover:border-amber-200/45 sm:p-4"
       aria-label={t("marketplace.featuredProductsAria", "Featured Products")}
     >
       <div className="pointer-events-none absolute -right-20 -top-24 h-56 w-56 rounded-full bg-amber-300/15 blur-3xl" />
@@ -1127,6 +1193,178 @@ function FeaturedProductsShowcase({
             <MessageSquare className="h-3.5 w-3.5" />
             {t("marketplace.requestQuoteBtn", "Request Quotation")}
           </button>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+// ── Featured Product Showcase V2 ──────────────────────────────────────────────
+function FeaturedProductsShowcase({
+  heroTiles,
+  items,
+  customImages,
+  failedLabels,
+  uploadingLabel,
+  isAdmin,
+  onRequestQuote,
+  onProductClick,
+  onUpload,
+  onImageError,
+}: {
+  heroTiles: HeroCategoryTile[];
+  items: MarketplaceItem[];
+  customImages: Record<string, string>;
+  failedLabels: Set<string>;
+  uploadingLabel: string | null;
+  isAdmin: boolean;
+  onRequestQuote: () => void;
+  onProductClick: (productId: number) => void;
+  onUpload: (label: string) => void;
+  onImageError: (label: string) => void;
+}) {
+  const { t } = useLanguage();
+  const featuredProducts: FeaturedProductCardData[] = (heroTiles.length > 0
+    ? heroTiles.slice(0, 6).map((tile) => {
+        const item = items.find((candidate) => candidate.id === tile.productId);
+        const categoryKey = item?.categoryKey ?? item?.kategori ?? tile.categoryKey;
+        const specs = item?.specValues && typeof item.specValues === "object"
+          ? item.specValues as Record<string, unknown>
+          : {};
+        return {
+          id: tile.productId,
+          label: item?.name ?? tile.label,
+          category: CATEGORY_PLACEHOLDER[categoryKey]?.label ?? item?.kategori ?? tile.label,
+          imageUrl: item?.primaryImageUrl ?? tile.imageUrl ?? null,
+          moq: item?.moq != null ? `${item.moq.toLocaleString("id-ID")} ${item.unit ?? ""}`.trim() : t("marketplace.featuredMoqOnRequest", "MOQ on request"),
+          origin: item?.origin ?? item?.location ?? t("marketplace.featuredOriginOnRequest", "Origin on request"),
+          packaging: String(specs["packaging"] ?? specs["packagingType"] ?? specs["kemasan"] ?? item?.unit ?? t("marketplace.featuredPackagingOnRequest", "Packaging on request")),
+          availability: item?.stockStatus ?? null,
+          vendorName: item?.vendorName ?? null,
+          uploadLabel: tile.label,
+          verified: Boolean(item?.vendorId ?? tile.vendorId),
+          isFeatured: Boolean(item?.isFeatured ?? true),
+        };
+      })
+    : items.slice(0, 6).map((item) => {
+        const specs = item.specValues && typeof item.specValues === "object"
+          ? item.specValues as Record<string, unknown>
+          : {};
+        return {
+          id: item.id,
+          label: item.name,
+          category: CATEGORY_PLACEHOLDER[item.categoryKey ?? ""]?.label ?? item.kategori ?? "Commodity",
+          imageUrl: item.primaryImageUrl ?? null,
+          moq: item.moq != null ? `${item.moq.toLocaleString("id-ID")} ${item.unit ?? ""}`.trim() : t("marketplace.featuredMoqOnRequest", "MOQ on request"),
+          origin: item.origin ?? item.location ?? t("marketplace.featuredOriginOnRequest", "Origin on request"),
+          packaging: String(specs["packaging"] ?? specs["packagingType"] ?? specs["kemasan"] ?? item.unit ?? t("marketplace.featuredPackagingOnRequest", "Packaging on request")),
+          availability: item.stockStatus,
+          vendorName: item.vendorName ?? null,
+          uploadLabel: item.name,
+          verified: Boolean(item.vendorId),
+          isFeatured: Boolean(item.isFeatured ?? true),
+        };
+      }));
+
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [imageVisible, setImageVisible] = useState(true);
+  useEffect(() => {
+    setActiveIndex((current) => Math.min(current, Math.max(featuredProducts.length - 1, 0)));
+  }, [featuredProducts.length]);
+
+  const activeProduct = featuredProducts[activeIndex] ?? featuredProducts[0] ?? null;
+  const activeImageUrl = activeProduct
+    ? resolveImageUrl(customImages[activeProduct.uploadLabel] ?? activeProduct.imageUrl)
+      ?? customImages[activeProduct.uploadLabel]
+      ?? activeProduct.imageUrl
+    : null;
+  const activeHasImage = Boolean(activeImageUrl && !failedLabels.has(activeProduct?.uploadLabel ?? ""));
+  useEffect(() => {
+    if (!activeProduct) return;
+    setImageVisible(false);
+    const frame = window.requestAnimationFrame(() => setImageVisible(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeProduct?.id]);
+
+  if (!activeProduct) {
+    return (
+      <aside className="relative w-full md:w-[430px] shrink-0 rounded-[28px] border border-white/15 bg-slate-950/65 p-4 shadow-[0_24px_70px_rgba(2,8,23,0.45)]" aria-label={t("marketplace.featuredProductsAria", "Featured Products")}>
+        <div className="flex min-h-[320px] flex-col items-center justify-center rounded-[22px] border border-dashed border-white/15 bg-slate-900/60 px-6 text-center">
+          <Package className="h-9 w-9 text-white/30" />
+          <p className="mt-3 text-sm font-bold text-white/75">{t("marketplace.featuredEmptyTitle", "Featured products are on their way")}</p>
+          <p className="mt-1 max-w-[240px] text-[11px] leading-relaxed text-white/45">{t("marketplace.featuredEmptySubtitle", "Check the marketplace below to browse available products.")}</p>
+        </div>
+      </aside>
+    );
+  }
+
+  const activeUploading = uploadingLabel === activeProduct.uploadLabel;
+  return (
+    <aside className="group/showcase relative w-full md:w-[430px] shrink-0 overflow-hidden rounded-[30px] border border-white/20 bg-[#081426]/95 p-3.5 shadow-[0_26px_80px_rgba(2,8,23,0.48)] backdrop-blur-xl transition-all duration-300 hover:-translate-y-1 hover:border-amber-200/45 sm:p-4" aria-label={t("marketplace.featuredProductsAria", "Featured Products")}>
+      <div className="pointer-events-none absolute -right-24 -top-28 h-64 w-64 rounded-full bg-amber-300/15 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-24 -left-20 h-56 w-56 rounded-full bg-sky-400/15 blur-3xl" />
+      <div className="relative">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200/40 bg-amber-300/15 px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-[0.16em] text-amber-100">
+              <Sparkles className="h-3.5 w-3.5" /> {t("marketplace.featuredProductsBadge", "Featured Products")}
+            </span>
+            <h2 className="mt-3 text-[21px] font-black tracking-tight text-white">{t("marketplace.featuredProductsTitle", "Produk Unggulan")}</h2>
+            <p className="mt-1 text-[11px] leading-relaxed text-white/55">{t("marketplace.featuredProductsSubtitle", "Premium products from verified marketplace vendors")}</p>
+          </div>
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-amber-200/25 bg-amber-200/15 text-amber-100"><Package className="h-5 w-5" /></div>
+        </div>
+
+        <div className="mt-4 overflow-hidden rounded-[24px] border border-white/15 bg-slate-900/80">
+          <div className="relative aspect-[1.12] min-h-[250px] overflow-hidden sm:aspect-[1.18]">
+            {activeHasImage ? (
+              <img key={activeProduct.id} src={activeImageUrl!} alt={activeProduct.label} loading="eager" className={`absolute inset-0 h-full w-full object-cover transition-all duration-500 ease-out ${imageVisible ? "scale-100 opacity-100" : "scale-[1.045] opacity-0"}`} onError={() => onImageError(activeProduct.uploadLabel)} />
+            ) : (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[radial-gradient(circle_at_30%_20%,rgba(251,191,36,0.22),transparent_38%),linear-gradient(135deg,#20344b,#091322)]"><Package className="h-12 w-12 text-amber-200/50" /><span className="text-[11px] font-semibold text-white/45">{t("mktCard.noPhotoYet", "No photo yet")}</span></div>
+            )}
+            <div className="absolute inset-0 bg-gradient-to-t from-[#06101d]/85 via-[#06101d]/10 to-transparent" />
+            <div className="absolute left-3 top-3 flex items-center gap-2">
+              {activeProduct.isFeatured && <span className="inline-flex items-center gap-1 rounded-full border border-amber-200/45 bg-[#131e2e]/75 px-2.5 py-1 text-[9px] font-extrabold uppercase tracking-[0.08em] text-amber-100"><Sparkles className="h-3 w-3" /> {t("marketplace.featuredProductBadge", "Featured")}</span>}
+              {activeProduct.verified && <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200/35 bg-emerald-950/65 px-2.5 py-1 text-[9px] font-bold text-emerald-100"><BadgeCheck className="h-3 w-3" /> {t("marketplace.verified", "Verified")}</span>}
+            </div>
+            {isAdmin && <button type="button" onClick={() => onUpload(activeProduct.uploadLabel)} disabled={activeUploading} aria-label={`Ganti foto ${activeProduct.label}`} title={`Ganti foto ${activeProduct.label}`} className="absolute right-3 top-3 rounded-xl border border-white/25 bg-slate-950/65 p-2 text-white opacity-0 shadow-lg transition-opacity duration-200 group-hover/showcase:opacity-100 focus-visible:opacity-100 disabled:cursor-wait disabled:opacity-70">{activeUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />}</button>}
+            <div className="absolute bottom-3 left-3 right-3">
+              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-amber-100/75">{activeProduct.category}</p>
+              <p className="mt-1 line-clamp-2 text-[22px] font-black leading-[1.05] tracking-tight text-white drop-shadow sm:text-[24px]">{activeProduct.label}</p>
+            </div>
+          </div>
+
+          <div className="space-y-3.5 p-4">
+            <div className="flex items-center gap-2 text-[11px] text-white/55">
+              <Building2 className="h-3.5 w-3.5 shrink-0 text-sky-300" /><span className="truncate">{activeProduct.vendorName ?? t("marketplace.vendor", "Vendor")}</span>
+              {activeProduct.verified && <><span className="h-1 w-1 shrink-0 rounded-full bg-white/25" /><BadgeCheck className="h-3.5 w-3.5 shrink-0 text-emerald-300" /><span className="shrink-0 font-semibold text-emerald-200/80">{t("marketplace.verified", "Verified")}</span></>}
+            </div>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-2.5 border-y border-white/10 py-3">
+              <div className="flex min-w-0 items-start gap-2"><MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-200/80" /><div className="min-w-0"><p className="text-[9px] font-bold uppercase tracking-[0.12em] text-white/35">{t("mktCard.originLabel", "Origin")}</p><p className="truncate text-[11px] font-semibold text-white/80">{activeProduct.origin}</p></div></div>
+              <div className="flex min-w-0 items-start gap-2"><Tag className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-200/80" /><div className="min-w-0"><p className="text-[9px] font-bold uppercase tracking-[0.12em] text-white/35">MOQ</p><p className="truncate text-[11px] font-semibold text-white/80">{activeProduct.moq}</p></div></div>
+              <div className="flex min-w-0 items-start gap-2"><Package className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-200/80" /><div className="min-w-0"><p className="text-[9px] font-bold uppercase tracking-[0.12em] text-white/35">{t("marketplace.packaging", "Packaging")}</p><p className="truncate text-[11px] font-semibold text-white/80">{activeProduct.packaging}</p></div></div>
+              <div className="flex min-w-0 items-start gap-2"><BadgeCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-200/80" /><div className="min-w-0"><p className="text-[9px] font-bold uppercase tracking-[0.12em] text-white/35">{t("marketplace.availability", "Availability")}</p><div className="mt-0.5"><StockBadge status={activeProduct.availability} /></div></div></div>
+            </div>
+            <div className="grid grid-cols-[1.15fr_1fr] gap-2">
+              <button type="button" onClick={onRequestQuote} aria-label={`${t("marketplace.requestQuoteBtn", "Request Quotation")} — ${activeProduct.label}`} className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-xl bg-sky-500 px-3 py-2.5 text-[11px] font-extrabold text-white shadow-lg shadow-sky-950/35 transition-all hover:-translate-y-0.5 hover:bg-sky-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"><MessageSquare className="h-3.5 w-3.5" /> {t("marketplace.requestQuoteBtn", "Request Quotation")}</button>
+              <button type="button" onClick={() => onProductClick(activeProduct.id)} aria-label={`${t("marketplace.viewProductDetail", "Lihat Detail Produk")} — ${activeProduct.label}`} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl border border-white/20 bg-white/[0.06] px-2.5 py-2.5 text-[11px] font-bold text-white/85 transition-all hover:-translate-y-0.5 hover:border-sky-200/60 hover:bg-sky-400/15 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-200">{t("marketplace.viewProductDetail", "Lihat Detail Produk")} <ArrowUpRight className="h-3.5 w-3.5 shrink-0" /></button>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-3.5">
+          <div className="mb-2 flex items-center justify-between gap-2"><p className="text-[9px] font-bold uppercase tracking-[0.16em] text-white/40">{t("marketplace.featuredBrowseLabel", "Browse featured products")}</p><span className="text-[9px] font-semibold text-white/35">{activeIndex + 1} / {featuredProducts.length}</span></div>
+          <div className="flex snap-x snap-mandatory gap-2 overflow-x-auto pb-1 scrollbar-none" aria-label={t("marketplace.featuredProductsSelector", "Select a featured product")}>
+            {featuredProducts.map((product, index) => {
+              const thumbnailUrl = resolveImageUrl(customImages[product.uploadLabel] ?? product.imageUrl) ?? customImages[product.uploadLabel] ?? product.imageUrl;
+              const hasThumbnail = Boolean(thumbnailUrl && !failedLabels.has(product.uploadLabel));
+              const isActive = index === activeIndex;
+              return <button key={`${product.id}-${product.label}`} type="button" onClick={() => setActiveIndex(index)} aria-label={`${t("marketplace.selectFeaturedProduct", "Select")} ${product.label}`} aria-pressed={isActive} className={`group/thumb relative h-[62px] w-[72px] shrink-0 snap-start overflow-hidden rounded-xl border transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200 focus-visible:ring-offset-2 focus-visible:ring-offset-[#081426] ${isActive ? "border-amber-200 shadow-lg shadow-amber-950/35 ring-1 ring-amber-200/70" : "border-white/15 bg-slate-800/80 opacity-70 hover:-translate-y-0.5 hover:border-white/45 hover:opacity-100 hover:shadow-lg hover:shadow-slate-950/40"}`}>
+                {hasThumbnail ? <img src={thumbnailUrl!} alt="" loading="lazy" className="h-full w-full object-cover transition-transform duration-500 group-hover/thumb:scale-110" onError={() => onImageError(product.uploadLabel)} /> : <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-slate-700 to-slate-900"><Package className="h-5 w-5 text-white/35" /></div>}
+                <span className="absolute inset-x-0 bottom-0 truncate bg-slate-950/75 px-1.5 py-1 text-left text-[8px] font-bold text-white/85">{product.label}</span>
+              </button>;
+            })}
+          </div>
         </div>
       </div>
     </aside>
