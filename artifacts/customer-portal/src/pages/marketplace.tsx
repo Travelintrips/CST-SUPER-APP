@@ -983,24 +983,7 @@ function FeaturedProductsShowcase({
         </span>
       </div>
 
-      <div className="mt-3 flex snap-x snap-mandatory gap-2 overflow-x-auto pb-1 scrollbar-none md:grid md:grid-cols-3 md:gap-2.5 md:overflow-visible">
-          <div className="relative aspect-[1.12] min-h-[250px] overflow-hidden sm:aspect-[1.18]">
-            {activeHasImage ? (
-              <img key={activeProduct.id} src={activeImageUrl!} alt={activeProduct.label} loading="eager" className={`absolute inset-0 h-full w-full object-cover transition-all duration-500 ease-out ${imageVisible ? "scale-100 opacity-100" : "scale-[1.045] opacity-0"}`} onError={() => onImageError(activeProduct.uploadLabel)} />
-            ) : (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[radial-gradient(circle_at_30%_20%,rgba(251,191,36,0.22),transparent_38%),linear-gradient(135deg,#20344b,#091322)]"><Package className="h-12 w-12 text-amber-200/50" /><span className="text-[11px] font-semibold text-white/45">{t("mktCard.noPhotoYet", "No photo yet")}</span></div>
-            )}
-            <div className="absolute inset-0 bg-gradient-to-t from-[#06101d]/85 via-[#06101d]/10 to-transparent" />
-            <div className="absolute left-3 top-3 flex items-center gap-2">
-              {activeProduct.isFeatured && <span className="inline-flex items-center gap-1 rounded-full border border-amber-200/45 bg-[#131e2e]/75 px-2.5 py-1 text-[9px] font-extrabold uppercase tracking-[0.08em] text-amber-100"><Sparkles className="h-3 w-3" /> {t("marketplace.featuredProductBadge", "Featured")}</span>}
-              {activeProduct.verified && <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200/35 bg-emerald-950/65 px-2.5 py-1 text-[9px] font-bold text-emerald-100"><BadgeCheck className="h-3 w-3" /> {t("marketplace.verified", "Verified")}</span>}
-            </div>
-            {isAdmin && <button type="button" onClick={() => onUpload(activeProduct.uploadLabel)} disabled={activeUploading} aria-label={`Ganti foto ${activeProduct.label}`} title={`Ganti foto ${activeProduct.label}`} className="absolute right-3 top-3 rounded-xl border border-white/25 bg-slate-950/65 p-2 text-white opacity-0 shadow-lg transition-opacity duration-200 group-hover/showcase:opacity-100 focus-visible:opacity-100 disabled:cursor-wait disabled:opacity-70">{activeUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />}</button>}
-            <div className="absolute bottom-3 left-3 right-3">
-              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-amber-100/75">{activeProduct.category}</p>
-              <p className="mt-1 line-clamp-2 text-[22px] font-black leading-[1.05] tracking-tight text-white drop-shadow sm:text-[24px]">{activeProduct.label}</p>
-            </div>
-          </div>
+      <div className="mt-3 grid grid-cols-3 gap-2">
 
           <div className="space-y-3.5 p-4">
             <div className="flex items-center gap-2 text-[11px] text-white/55">
@@ -1034,7 +1017,50 @@ function FeaturedProductsShowcase({
             })}
           </div>
         </div>
+      </div> */}
+      <div
+        className="mt-3 grid grid-cols-3 gap-2"
+        aria-label={t("marketplace.featuredProductsSelector", "Select a featured product")}
+      >
+        {tiles.map((tile) => (
+          <button
+            key={tile.id}
+            type="button"
+            onClick={() => onProductClick(tile.id)}
+            aria-label={`${t("marketplace.viewProductDetail", "Lihat Detail Produk")} — ${tile.label}`}
+            className="group relative aspect-[1.08] min-w-0 overflow-hidden rounded-2xl border border-white/15 bg-slate-900/70 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-amber-200/70 hover:shadow-lg hover:shadow-slate-950/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950"
+          >
+            <div className="absolute inset-0 flex items-center justify-center bg-[radial-gradient(circle_at_35%_25%,rgba(125,211,252,0.2),transparent_45%),linear-gradient(135deg,#1e293b,#0f172a)]">
+              <Package className="h-8 w-8 text-white/20" />
+            </div>
+            {tile.imageUrl && (
+              <img
+                src={tile.imageUrl}
+                alt=""
+                loading="lazy"
+                className="absolute inset-0 h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+                onError={(event) => {
+                  event.currentTarget.style.display = "none";
+                }}
+              />
+            )}
+            <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-slate-950/10 to-transparent" />
+            <div className="absolute inset-x-2 bottom-2 min-w-0">
+              <p className="truncate text-[11px] font-extrabold leading-tight text-white">{tile.label}</p>
+              {tile.vendorName && (
+                <p className="mt-0.5 flex items-center gap-1 truncate text-[9px] font-medium text-white/55">
+                  <Building2 className="h-2.5 w-2.5 shrink-0" />
+                  {tile.vendorName}
+                  {tile.verified && <BadgeCheck className="h-2.5 w-2.5 shrink-0 text-emerald-300" />}
+                </p>
+              )}
+            </div>
+          </button>
+        ))}
       </div>
+      <p className="mt-2 px-1 text-[9px] font-semibold text-white/40">
+        {t("marketplace.featuredProductsHint", "Pilihan produk dari vendor terverifikasi")}
+      </p>
     </aside>
   );
 }
