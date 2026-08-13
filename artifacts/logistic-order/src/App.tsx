@@ -26,9 +26,10 @@ export default function App() {
   const { t } = useLanguage();
 
   useEffect(() => {
+    const base = import.meta.env.BASE_URL.replace(/\/$/, "");
     const target = getRedirectTarget();
     const search = window.location.search;
-    window.location.replace(target + search);
+    window.location.replace(`${base}${target}${search}`);
   }, []);
 
   return (
