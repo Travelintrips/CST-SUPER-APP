@@ -755,6 +755,20 @@ function mutationSourceLabel(m: BankMutation): string {
   return m.provider_name || (m.direction === "IN" ? "Rekening Bank" : "Bank");
 }
 
+function isQrisMutation(m: BankMutation): boolean {
+  if (m.qris_candidate_audit || m.candidates?.some(c =>
+    c.candidate_type === "qris_settlement" || c.candidate_type === "sport_payment"
+  )) {
+    return true;
+  }
+  return [
+    m.provider_name,
+    m.provider_order_id,
+    m.description,
+    m.normalized_description,
+  ].some(value => /QRIS|QRTRAVELI|PAYLABS/i.test(String(value ?? "")));
+}
+
 function reconciliationEvidence(m: BankMutation): ReconciliationEvidence {
   const candidate = m.candidates?.[0];
   const d = candidate?.details;
@@ -1890,6 +1904,8 @@ function MutationCard({
   onToggleQrisPayment,
   onToggleAllQrisPayments,
   onRunMatching,
+  onGenerateQrisCandidates,
+  qrisGenerationPending,
   mappingError,
 }: {
   m: BankMutation;
@@ -1906,6 +1922,8 @@ function MutationCard({
   onToggleQrisPayment?: (candidateId: number, paymentId: number, checked: boolean) => void;
   onToggleAllQrisPayments?: (candidate: QrisCandidateAudit, checked: boolean) => void;
   onRunMatching: () => void;
+  onGenerateQrisCandidates?: () => void;
+  qrisGenerationPending?: boolean;
   mappingError?: MappingRequiredError;
 }) {
   const cands  = m.candidates ?? [];
@@ -1913,6 +1931,7 @@ function MutationCard({
   const best   = cands[0];
   const amount = Number(m.amount) || 0;
   const isIN   = m.direction === "IN";
+  const isQris = isQrisMutation(m);
 
   if (qrisAudit) {
     return (
@@ -1999,9 +2018,26 @@ function MutationCard({
             )}
 
             {!best && m.status === "unmatched" && (
-              <div className="mt-2 text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
-                <AlertTriangle className="w-3 h-3" />
-                Belum ada kandidat match — jalankan AI Matching
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-amber-600 dark:text-amber-400">
+                <span className="flex items-center gap-1">
+                  <AlertTriangle className="w-3 h-3" />
+                  {isQris ? "Belum ada kandidat QRIS" : "Belum ada kandidat match"}
+                </span>
+                {isQris && onGenerateQrisCandidates && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 gap-1 border-indigo-300 text-[11px] text-indigo-700 hover:bg-indigo-50 dark:border-indigo-700 dark:text-indigo-300 dark:hover:bg-indigo-950/40"
+                    disabled={qrisGenerationPending}
+                    onClick={() => onGenerateQrisCandidates()}
+                  >
+                    {qrisGenerationPending
+                      ? <Loader2 className="h-3 w-3 animate-spin" />
+                      : <CreditCard className="h-3 w-3" />}
+                    {qrisGenerationPending ? "Membuat kandidat..." : "Cari Kandidat QRIS"}
+                  </Button>
+                )}
+                {!isQris && <span>— jalankan AI Matching</span>}
               </div>
             )}
 
@@ -3237,10 +3273,11 @@ export default function BankReconciliationPage() {
       return r.json() as Promise<{ generated: number; candidates: QrisCandidateAudit[] }>;
     },
     onSuccess: (result) => {
-      toast({ title: `Dry-run QRIS selesai: ${result.generated} kandidat` });
+      toast({ title: `Kandidat QRIS dibuat: ${result.generated} kandidat` });
       qc.invalidateQueries({ queryKey: ["qris-candidate-audit", qrisCompanyId] });
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
     },
-    onError: (e: Error) => toast({ title: "Dry-run QRIS gagal", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: "Gagal membuat kandidat QRIS", description: e.message, variant: "destructive" }),
   });
 
   const [qrisBatchConfirm, setQrisBatchConfirm] = useState<{
@@ -3477,7 +3514,14 @@ export default function BankReconciliationPage() {
       if (!r.ok) throw new Error(await r.text());
       return r.json();
     },
-    onSuccess: (d) => { toast({ title: `AI Matching selesai: ${d.processed} mutasi diproses` }); invalidate(); },
+    onSuccess: (d) => {
+      toast({ title: `AI Matching selesai: ${d.processed} mutasi diproses` });
+      invalidate();
+      // AI Matching creates generic reconciliation matches. QRIS batch
+      // candidates are a separate persisted review contract, so refresh them
+      // in the same user action instead of requiring a hidden second step.
+      if (qrisCompanyId != null) qrisDryRunMut.mutate();
+    },
     onError: (e: Error) => toast({ title: "Gagal matching", description: e.message, variant: "destructive" }),
   });
 
@@ -4194,6 +4238,8 @@ export default function BankReconciliationPage() {
                   onToggleQrisPayment={toggleQrisPayment}
                   onToggleAllQrisPayments={toggleAllQrisPayments}
                    onRunMatching={() => matchMut.mutate()}
+                   onGenerateQrisCandidates={qrisCompanyId != null ? () => qrisDryRunMut.mutate() : undefined}
+                   qrisGenerationPending={qrisDryRunMut.isPending}
                   mappingError={mappingRequiredErrors.get(m.id)}
                 />
               ))}
