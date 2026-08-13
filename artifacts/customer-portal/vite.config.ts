@@ -7,6 +7,8 @@ import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 const port = Number(process.env.PORT ?? "3000");
 
 const basePath = process.env.BASE_PATH ?? "/";
+const HERO_ASSET_PATH = "/api/storage/public-objects/portal-assets/static/customer-portal/images/hero-bg.webp";
+const HERO_ASSET_DEV_FALLBACK_ORIGIN = process.env.CUSTOMER_PORTAL_HERO_ASSET_ORIGIN ?? "https://cstlogistic.co.id";
 
 export default defineConfig({
   base: basePath,
@@ -124,6 +126,18 @@ export default defineConfig({
     },
     hmr: false,
     proxy: {
+      // Development storage can lag the promoted production static-asset
+      // bucket. Keep the canonical application URL while allowing the
+      // above-the-fold hero to render in preview until that bucket is synced.
+      ...(process.env.NODE_ENV !== "production"
+        ? {
+            [HERO_ASSET_PATH]: {
+              target: HERO_ASSET_DEV_FALLBACK_ORIGIN,
+              changeOrigin: true,
+              secure: true,
+            },
+          }
+        : {}),
       "/api": {
         target: `http://localhost:${process.env.API_PORT ?? process.env.FORWARDER_PORT ?? 18444}`,
         changeOrigin: true,

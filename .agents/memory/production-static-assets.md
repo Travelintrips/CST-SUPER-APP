@@ -41,3 +41,15 @@ missing objects even though the original production logo was healthy.
 **How to apply:** When changing the raster resolver, test logo and logo-baru
 separately from vehicle/content assets; verify both the header and PWA
 manifest/service-worker icon URLs against production.
+
+Development static-asset promotion can be blocked independently by Supabase
+Storage connection limits (`429 too_many_connections`), even when the source
+production object is healthy. A dev-only proxy fallback may keep the hero
+previewable, but it does not replace a later bucket synchronization check.
+
+**Why:** Preview readiness and storage promotion are separate concerns; retries
+against a saturated Storage service do not prove an asset or application bug.
+
+**How to apply:** Verify the canonical production object first, keep preview
+fallbacks scoped to the affected static asset, and retry promotion only after
+the Storage connection limit clears.
