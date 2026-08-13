@@ -582,6 +582,15 @@ type QrisApprovalSelection = {
   paymentIds: number[];
 };
 
+const QRIS_SELECTION_CONFLICT_MESSAGE =
+  "Sebagian transaksi yang dipilih sudah masuk settlement sebelumnya. Daftar kandidat sudah diperbarui.";
+
+type QrisSelectionConflictError = Error & {
+  code?: string;
+  alreadySettledPaymentIds?: number[];
+  eligiblePaymentIds?: number[];
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3251,7 +3260,11 @@ export default function BankReconciliationPage() {
     refetchInterval: 30_000,
   });
 
-  const { data: qrisAuditData, isLoading: qrisAuditLoading } = useQuery({
+  const {
+    data: qrisAuditData,
+    isLoading: qrisAuditLoading,
+    refetch: refetchQrisAudit,
+  } = useQuery({
     queryKey: ["qris-candidate-audit", qrisCompanyId],
     queryFn: async () => {
       const params = new URLSearchParams({ limit: "50", companyId: String(qrisCompanyId) });
@@ -3296,10 +3309,17 @@ export default function BankReconciliationPage() {
   } | null>(null);
 
   const qrisCandidates = qrisAuditData?.candidates ?? [];
+  const getAvailableQrisPaymentIds = (candidate: QrisCandidateAudit): number[] => {
+    const settled = new Set((candidate.settled_payment_ids ?? []).map(Number));
+    return (candidate.payment_items ?? [])
+      .map((item) => Number(item.paymentId ?? item.payment_id))
+      .filter((id) => Number.isInteger(id) && id > 0 && !settled.has(id));
+  };
   const qrisApprovableCandidates = qrisCandidates.filter((candidate) =>
     candidate.id != null
     && ["MATCHED", "REVIEW"].includes(String(candidate.reconciliation_status ?? "").toUpperCase())
-    && candidate.status !== "approved",
+    && candidate.status !== "approved"
+    && getAvailableQrisPaymentIds(candidate).length > 0,
   );
   const selectedQrisCandidates = qrisApprovableCandidates.filter((candidate) =>
     selectedQrisCandidateIds.includes(candidate.id!),
@@ -3318,13 +3338,6 @@ export default function BankReconciliationPage() {
 
   const toggleAllQrisCandidates = (checked: boolean) => {
     setSelectedQrisCandidateIds(checked ? qrisApprovableCandidates.map((candidate) => candidate.id!) : []);
-  };
-
-  const getAvailableQrisPaymentIds = (candidate: QrisCandidateAudit): number[] => {
-    const settled = new Set((candidate.settled_payment_ids ?? []).map(Number));
-    return (candidate.payment_items ?? [])
-      .map((item) => Number(item.paymentId ?? item.payment_id))
-      .filter((id) => Number.isInteger(id) && id > 0 && !settled.has(id));
   };
 
   const selectedPaymentIdsForCandidate = (candidate: QrisCandidateAudit): number[] => {
@@ -3367,7 +3380,8 @@ export default function BankReconciliationPage() {
     const eligibleCandidates = candidates.filter((candidate) =>
       candidate.id != null
       && ["MATCHED", "REVIEW"].includes(String(candidate.reconciliation_status ?? "").toUpperCase())
-      && candidate.status !== "approved",
+      && candidate.status !== "approved"
+      && getAvailableQrisPaymentIds(candidate).length > 0
     );
     if (eligibleCandidates.length === 0) {
       toast({
@@ -3413,7 +3427,10 @@ export default function BankReconciliationPage() {
 
     let approvedCount = 0;
     let failedCount = 0;
+    let conflictCount = 0;
     let firstError = "";
+    const conflictedCandidateIds: number[] = [];
+    const approvedCandidateIds: number[] = [];
 
     for (const { candidate, paymentIds } of selections) {
       try {
@@ -3425,25 +3442,61 @@ export default function BankReconciliationPage() {
           silent: true,
         });
         approvedCount += 1;
+        approvedCandidateIds.push(candidate.id!);
       } catch (error) {
+        const conflict = error as QrisSelectionConflictError;
+        if (conflict.code === "CANONICAL_SETTLEMENT_SELECTION_CONFLICT") {
+          conflictCount += 1;
+          conflictedCandidateIds.push(candidate.id!);
+          const refreshed = await refetchQrisAudit();
+          const refreshedCandidate = refreshed.data?.candidates.find(
+            (item) => item.id === candidate.id,
+          );
+          const settled = new Set(
+            (refreshedCandidate?.settled_payment_ids ?? []).map(Number),
+          );
+          setSelectedQrisPaymentIds((current) => ({
+            ...current,
+            [candidate.id!]: (current[candidate.id!] ?? []).filter(
+              (paymentId) => !settled.has(paymentId),
+            ),
+          }));
+          continue;
+        }
         failedCount += 1;
         if (!firstError) {
-          firstError = error instanceof Error ? error.message : "Kesalahan tidak diketahui";
+          firstError = "Approval QRIS tidak dapat diselesaikan. Muat ulang daftar kandidat dan coba lagi.";
         }
       }
     }
 
-    setSelectedQrisCandidateIds([]);
-    setSelectedQrisPaymentIds({});
+    if (conflictCount === 0) {
+      setSelectedQrisCandidateIds([]);
+      setSelectedQrisPaymentIds({});
+    } else {
+      setSelectedQrisCandidateIds(conflictedCandidateIds);
+      setSelectedQrisPaymentIds((current) => {
+        const next = { ...current };
+        for (const candidateId of approvedCandidateIds) delete next[candidateId];
+        return next;
+      });
+    }
     qc.invalidateQueries({ queryKey: ["qris-candidate-audit", qrisCompanyId] });
 
+    if (conflictCount > 0) {
+      toast({
+        title: "Daftar kandidat QRIS diperbarui",
+        description: QRIS_SELECTION_CONFLICT_MESSAGE,
+        variant: "destructive",
+      });
+    }
     if (failedCount > 0) {
       toast({
         title: `${approvedCount} approval QRIS berhasil, ${failedCount} gagal`,
-        description: firstError,
+        description: firstError || "Approval QRIS tidak dapat diselesaikan.",
         variant: "destructive",
       });
-    } else {
+    } else if (conflictCount === 0) {
       toast({ title: `${approvedCount} approval QRIS berhasil disetujui ✓` });
     }
   };
@@ -3550,7 +3603,22 @@ export default function BankReconciliationPage() {
         body: JSON.stringify({ mutationId, companyId, paymentIds }),
       });
       const body = await r.json().catch(() => ({ error: "Unknown error" }));
-      if (!r.ok) throw new Error(body.error ?? r.statusText);
+      if (!r.ok) {
+        if (body.code === "CANONICAL_SETTLEMENT_SELECTION_CONFLICT") {
+          throw Object.assign(
+            new Error(QRIS_SELECTION_CONFLICT_MESSAGE),
+            {
+              code: body.code,
+              alreadySettledPaymentIds: body.already_settled_payment_ids,
+              eligiblePaymentIds: body.eligible_payment_ids,
+            },
+          ) as QrisSelectionConflictError;
+        }
+        throw Object.assign(
+          new Error("Approval QRIS tidak dapat diselesaikan. Coba lagi setelah memuat ulang kandidat."),
+          { code: body.code },
+        );
+      }
       return body as {
         mutationId: number;
         itemCount?: number;
@@ -3577,8 +3645,12 @@ export default function BankReconciliationPage() {
       qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] });
     },
     onError: (e: Error, variables) => {
-      if (!variables?.silent) {
-        toast({ title: "Gagal approve batch QRIS", description: e.message, variant: "destructive" });
+      if (!variables?.silent && (e as QrisSelectionConflictError).code !== "CANONICAL_SETTLEMENT_SELECTION_CONFLICT") {
+        toast({
+          title: "Gagal approve batch QRIS",
+          description: "Approval QRIS tidak dapat diselesaikan. Coba lagi setelah memuat ulang kandidat.",
+          variant: "destructive",
+        });
       }
     },
   });

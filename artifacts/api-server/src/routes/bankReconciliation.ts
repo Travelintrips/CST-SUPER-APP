@@ -2108,6 +2108,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
         WHERE psi.item_status = 'active'
           AND psb.status IN ('posted', 'reconciled')
           AND psi.payment_id IN (${candidatePaymentIds.join(",")})
+          ORDER BY psi.payment_id
           FOR SHARE OF psi, psb
       `));
       const activePostedPaymentIds = activePostedRows.map((item) =>
@@ -2336,7 +2337,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
     const code = error?.code ?? "QRIS_CANONICAL_APPROVAL_FAILED";
     if (error instanceof QrisApprovalPaymentGuardError) {
       return res.status(409).json({
-        error: "1 transaksi yang dipilih sudah masuk settlement sebelumnya. Muat ulang kandidat dan pilih transaksi yang masih tersedia.",
+        error: "Sebagian transaksi yang dipilih sudah masuk settlement sebelumnya. Daftar kandidat sudah diperbarui.",
         code: error.code,
         already_settled_payment_ids: error.alreadySettledPaymentIds,
         eligible_payment_ids: error.eligiblePaymentIds,
