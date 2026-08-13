@@ -1648,7 +1648,7 @@ function QrisMutationCard({
   const isIN = m.direction === "IN";
   const isMatched = String(audit.reconciliation_status ?? "").toUpperCase() === "MATCHED";
   const isReview = String(audit.reconciliation_status ?? "").toUpperCase() === "REVIEW";
-  const isApproved = audit.status === "approved";
+  const isApproved = String(audit.status ?? "").toLowerCase() === "approved";
   // REVIEW candidates are explicitly approvable through the existing override
   // flow, so they must be selectable in the card as well as in the batch toolbar.
   const canSelect = audit.id != null && (isMatched || isReview) && !isApproved && availablePaymentIds.length > 0;
@@ -1730,6 +1730,7 @@ function QrisMutationCard({
                       <Checkbox
                         checked={allPaymentsSelected}
                         onCheckedChange={checked => onToggleAllQrisPayments(audit, checked === true)}
+                        onClick={e => e.stopPropagation()}
                         aria-label={`Pilih semua kandidat QRIS pada mutasi ${m.id}`}
                       />
                       Pilih Semua ({availablePaymentIds.length})
@@ -1765,6 +1766,7 @@ function QrisMutationCard({
                                 checked={selectedPaymentIds.includes(Number(paymentId))}
                                 disabled={settledPaymentIds.has(Number(paymentId))}
                                 onCheckedChange={checked => onToggleQrisPayment(audit.id!, Number(paymentId), checked === true)}
+                                onClick={e => e.stopPropagation()}
                                 aria-label={`Pilih ${booking} ${payment}`}
                               />
                             ) : settledPaymentIds.has(Number(paymentId)) ? (
@@ -1779,7 +1781,7 @@ function QrisMutationCard({
                   </div>
                 </div>
                 <p className="border-t bg-muted/15 px-2.5 py-1.5 text-[10px] text-muted-foreground">
-                  Legenda: MDR (Estimasi) = Total potongan QRIS · Approval selalu memproses seluruh batch.
+                   Legenda: MDR (Estimasi) = Total potongan QRIS · Approval hanya memproses payment yang dipilih.
                 </p>
               </div>
             ) : (
@@ -2556,9 +2558,10 @@ function MutationDetailPanel({
                         && onToggleAllQrisPayments
                         && availableQrisPaymentIds.length > 0 && (
                         <label className="flex cursor-pointer items-center gap-1.5 text-[10px] font-medium normal-case tracking-normal text-indigo-700 dark:text-indigo-300">
-                          <Checkbox
+                           <Checkbox
                             checked={allQrisPaymentsSelected}
                             onCheckedChange={(checked) => onToggleAllQrisPayments(qrisAudit, checked === true)}
+                            onClick={e => e.stopPropagation()}
                             aria-label="Pilih semua payment QRIS yang belum tersettle"
                           />
                           Pilih semua payment ({availableQrisPaymentIds.length})
@@ -2609,8 +2612,9 @@ function MutationDetailPanel({
                                 {qrisAudit.id != null && onToggleQrisPayment && (
                                   <Checkbox
                                     checked={selectedQrisPayments.includes(Number(pid))}
-                                    disabled={qrisAudit.status === "approved" || settledQrisPaymentIds.has(Number(pid))}
+                                    disabled={String(qrisAudit.status ?? "").toLowerCase() === "approved" || settledQrisPaymentIds.has(Number(pid))}
                                     onCheckedChange={(checked) => onToggleQrisPayment(qrisAudit.id!, Number(pid), checked === true)}
+                                    onClick={e => e.stopPropagation()}
                                     aria-label={`Pilih payment ${paymentNo || `#${pid}`}`}
                                     className="mt-0.5"
                                   />
@@ -2650,7 +2654,7 @@ function MutationDetailPanel({
                   </div>
 
                   {/* Approve button — MATCHED = normal, REVIEW = force-approve with warning */}
-                  {qrisAudit.status !== "approved" && qrisAudit.id != null && onApproveQrisBatch && (() => {
+                  {String(qrisAudit.status ?? "").toLowerCase() !== "approved" && qrisAudit.id != null && onApproveQrisBatch && (() => {
                     const recoStatus = String(qrisAudit.reconciliation_status ?? "").toUpperCase();
                     const isMatched = recoStatus === "MATCHED";
                     const isReview  = recoStatus === "REVIEW";
@@ -2663,7 +2667,7 @@ function MutationDetailPanel({
                           onClick={() => onApproveQrisBatch(qrisAudit.id!, qrisAudit.mutation_id, qrisAudit, qrisPaymentIdsForApproval)}
                         >
                           <CheckCircle2 className="w-3.5 h-3.5" />
-                          Setujui Batch — Buat QRIS Settlement
+                          Setujui Payment Terpilih — Buat QRIS Settlement
                         </Button>
                       );
                     }
@@ -2687,7 +2691,7 @@ function MutationDetailPanel({
                             onClick={() => onApproveQrisBatch(qrisAudit.id!, qrisAudit.mutation_id, qrisAudit, qrisPaymentIdsForApproval)}
                           >
                             <AlertTriangle className="w-3.5 h-3.5" />
-                            Setujui Batch (Override REVIEW)
+                            Setujui Payment Terpilih (Override REVIEW)
                           </Button>
                         </div>
                       );
@@ -2703,9 +2707,9 @@ function MutationDetailPanel({
                       </div>
                     );
                   })()}
-                  {qrisAudit.status === "approved" && (
+                  {String(qrisAudit.status ?? "").toLowerCase() === "approved" && (
                     <p className="text-[11px] text-green-700 dark:text-green-400 text-center">
-                      Batch ini sudah disetujui. Settlement QRIS telah dibuat dan siap dicocokkan ke mutasi bank.
+                      Payment terpilih sudah disetujui. Settlement QRIS telah dibuat dan siap dicocokkan ke mutasi bank.
                     </p>
                   )}
                 </div>
