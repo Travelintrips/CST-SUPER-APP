@@ -983,41 +983,6 @@ function FeaturedProductsShowcase({
         </span>
       </div>
 
-      <div className="mt-3 grid grid-cols-3 gap-2">
-
-          <div className="space-y-3.5 p-4">
-            <div className="flex items-center gap-2 text-[11px] text-white/55">
-              <Building2 className="h-3.5 w-3.5 shrink-0 text-sky-300" /><span className="truncate">{activeProduct.vendorName ?? t("marketplace.vendor", "Vendor")}</span>
-              {activeProduct.verified && <><span className="h-1 w-1 shrink-0 rounded-full bg-white/25" /><BadgeCheck className="h-3.5 w-3.5 shrink-0 text-emerald-300" /><span className="shrink-0 font-semibold text-emerald-200/80">{t("marketplace.verified", "Verified")}</span></>}
-            </div>
-            <div className="grid grid-cols-2 gap-x-3 gap-y-2.5 border-y border-white/10 py-3">
-              <div className="flex min-w-0 items-start gap-2"><MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-200/80" /><div className="min-w-0"><p className="text-[9px] font-bold uppercase tracking-[0.12em] text-white/35">{t("mktCard.originLabel", "Origin")}</p><p className="truncate text-[11px] font-semibold text-white/80">{activeProduct.origin}</p></div></div>
-              <div className="flex min-w-0 items-start gap-2"><Tag className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-200/80" /><div className="min-w-0"><p className="text-[9px] font-bold uppercase tracking-[0.12em] text-white/35">MOQ</p><p className="truncate text-[11px] font-semibold text-white/80">{activeProduct.moq}</p></div></div>
-              <div className="flex min-w-0 items-start gap-2"><Package className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-200/80" /><div className="min-w-0"><p className="text-[9px] font-bold uppercase tracking-[0.12em] text-white/35">{t("marketplace.packaging", "Packaging")}</p><p className="truncate text-[11px] font-semibold text-white/80">{activeProduct.packaging}</p></div></div>
-              <div className="flex min-w-0 items-start gap-2"><BadgeCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-200/80" /><div className="min-w-0"><p className="text-[9px] font-bold uppercase tracking-[0.12em] text-white/35">{t("marketplace.availability", "Availability")}</p><div className="mt-0.5"><StockBadge status={activeProduct.availability} /></div></div></div>
-            </div>
-            <div className="grid grid-cols-[1.15fr_1fr] gap-2">
-              <button type="button" onClick={onRequestQuote} aria-label={`${t("marketplace.requestQuoteBtn", "Request Quotation")} — ${activeProduct.label}`} className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-xl bg-sky-500 px-3 py-2.5 text-[11px] font-extrabold text-white shadow-lg shadow-sky-950/35 transition-all hover:-translate-y-0.5 hover:bg-sky-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"><MessageSquare className="h-3.5 w-3.5" /> {t("marketplace.requestQuoteBtn", "Request Quotation")}</button>
-              <button type="button" onClick={() => onProductClick(activeProduct.id)} aria-label={`${t("marketplace.viewProductDetail", "Lihat Detail Produk")} — ${activeProduct.label}`} className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl border border-white/20 bg-white/[0.06] px-2.5 py-2.5 text-[11px] font-bold text-white/85 transition-all hover:-translate-y-0.5 hover:border-sky-200/60 hover:bg-sky-400/15 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-200">{t("marketplace.viewProductDetail", "Lihat Detail Produk")} <ArrowUpRight className="h-3.5 w-3.5 shrink-0" /></button>
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-3.5">
-          <div className="mb-2 flex items-center justify-between gap-2"><p className="text-[9px] font-bold uppercase tracking-[0.16em] text-white/40">{t("marketplace.featuredBrowseLabel", "Browse featured products")}</p><span className="text-[9px] font-semibold text-white/35">{activeIndex + 1} / {featuredProducts.length}</span></div>
-          <div className="flex snap-x snap-mandatory gap-2 overflow-x-auto pb-1 scrollbar-none" aria-label={t("marketplace.featuredProductsSelector", "Select a featured product")}>
-            {featuredProducts.map((product, index) => {
-              const thumbnailUrl = resolveImageUrl(customImages[product.uploadLabel] ?? product.imageUrl) ?? customImages[product.uploadLabel] ?? product.imageUrl;
-              const hasThumbnail = Boolean(thumbnailUrl && !failedLabels.has(product.uploadLabel));
-              const isActive = index === activeIndex;
-              return <button key={`${product.id}-${product.label}`} type="button" onClick={() => setActiveIndex(index)} aria-label={`${t("marketplace.selectFeaturedProduct", "Select")} ${product.label}`} aria-pressed={isActive} className={`group/thumb relative h-[62px] w-[72px] shrink-0 snap-start overflow-hidden rounded-xl border transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200 focus-visible:ring-offset-2 focus-visible:ring-offset-[#081426] ${isActive ? "border-amber-200 shadow-lg shadow-amber-950/35 ring-1 ring-amber-200/70" : "border-white/15 bg-slate-800/80 opacity-70 hover:-translate-y-0.5 hover:border-white/45 hover:opacity-100 hover:shadow-lg hover:shadow-slate-950/40"}`}>
-                {hasThumbnail ? <img src={thumbnailUrl!} alt="" loading="lazy" className="h-full w-full object-cover transition-transform duration-500 group-hover/thumb:scale-110" onError={() => onImageError(product.uploadLabel)} /> : <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-slate-700 to-slate-900"><Package className="h-5 w-5 text-white/35" /></div>}
-                <span className="absolute inset-x-0 bottom-0 truncate bg-slate-950/75 px-1.5 py-1 text-left text-[8px] font-bold text-white/85">{product.label}</span>
-              </button>;
-            })}
-          </div>
-        </div>
-      </div> */}
       <div
         className="mt-3 grid grid-cols-3 gap-2"
         aria-label={t("marketplace.featuredProductsSelector", "Select a featured product")}
