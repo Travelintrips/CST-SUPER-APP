@@ -1224,6 +1224,33 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
         });
       }
 
+      const requestedPaymentIdsRaw = req.body?.paymentIds ?? req.body?.payment_ids;
+      let requestedPaymentIds: number[] | null = null;
+      if (requestedPaymentIdsRaw !== undefined) {
+        if (!Array.isArray(requestedPaymentIdsRaw) || requestedPaymentIdsRaw.length === 0) {
+          throw Object.assign(new Error("Minimal satu payment QRIS harus dipilih"), {
+            code: "INVALID_SELECTION",
+          });
+        }
+        requestedPaymentIds = requestedPaymentIdsRaw.map((value: unknown) => Number(value));
+        if (
+          requestedPaymentIds.some((id) => !Number.isInteger(id) || id <= 0)
+          || new Set(requestedPaymentIds).size !== requestedPaymentIds.length
+        ) {
+          throw Object.assign(new Error("Daftar payment QRIS yang dipilih tidak valid"), {
+            code: "INVALID_SELECTION",
+          });
+        }
+        const candidatePaymentIds = new Set(items.map((item) => item.paymentId));
+        const outsideCandidate = requestedPaymentIds.filter((id) => !candidatePaymentIds.has(id));
+        if (outsideCandidate.length > 0) {
+          throw Object.assign(
+            new Error(`Payment ${outsideCandidate.join(", ")} bukan bagian dari kandidat QRIS ini`),
+            { code: "INVALID_SELECTION" },
+          );
+        }
+      }
+
       // Always lock payment IDs in ascending order. Different overlapping
       // batches then serialize on the same row instead of racing the EXISTS.
       const paymentIds = items.map((item) => item.paymentId).sort((a, b) => a - b);
@@ -1245,19 +1272,32 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       }
 
       const { rows: settledRows } = await tx.execute(sql.raw(`
-        SELECT qsi.sport_payment_id, qs.settlement_reference
+        SELECT qsi.sport_payment_id, qsi.gross_amount, qsi.net_amount, qs.settlement_reference
         FROM qris_settlement_items qsi
         JOIN qris_settlements qs ON qs.id = qsi.settlement_id
         WHERE qsi.sport_payment_id IN (${paymentIdList})
         ORDER BY qsi.sport_payment_id
       `));
-      if (settledRows.length > 0) {
+      const settledPaymentIds = new Set(
+        settledRows.map((row) => Number((row as Record<string, unknown>).sport_payment_id)),
+      );
+      const remainingItems = items.filter((item) => !settledPaymentIds.has(item.paymentId));
+      const selectedItems = requestedPaymentIds
+        ? items.filter((item) => requestedPaymentIds!.includes(item.paymentId))
+        : remainingItems;
+      const selectedAlreadySettled = selectedItems.filter((item) => settledPaymentIds.has(item.paymentId));
+      if (selectedAlreadySettled.length > 0) {
         throw new QrisPaymentAlreadySettledError(
-          settledRows.map((row) => Number((row as Record<string, unknown>).sport_payment_id)),
+          selectedAlreadySettled.map((item) => item.paymentId),
           settledRows
             .map((row) => String((row as Record<string, unknown>).settlement_reference ?? ""))
             .filter(Boolean),
         );
+      }
+      if (selectedItems.length === 0) {
+        throw Object.assign(new Error("Semua payment dalam kandidat QRIS sudah tersettle"), {
+          code: "ALREADY_SETTLED",
+        });
       }
 
       const grossAmount = Number(candidate.gross_amount ?? 0);
@@ -1274,18 +1314,45 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
           code: "INVALID_CANDIDATE",
         });
       }
+      const settledGrossTotal = settledRows.reduce(
+        (sum, row) => sum + Number((row as Record<string, unknown>).gross_amount ?? 0),
+        0,
+      );
+      const settledNetTotal = settledRows.reduce(
+        (sum, row) => sum + Number((row as Record<string, unknown>).net_amount ?? 0),
+        0,
+      );
+      const selectedGrossTotal = selectedItems.reduce((sum, item) => sum + item.grossAmount, 0);
+      const remainingGrossTotal = Math.max(0, itemGrossTotal - settledGrossTotal);
+      const remainingNetTotal = Math.max(0, netAmount - settledNetTotal);
+      if (selectedGrossTotal > remainingGrossTotal + 0.01) {
+        throw Object.assign(new Error("Nominal payment yang dipilih melebihi sisa kandidat QRIS"), {
+          code: "INVALID_SELECTION",
+        });
+      }
+      const selectedIsFinal = selectedItems.length === remainingItems.length;
+      const selectedTargetNet = selectedIsFinal
+        ? remainingNetTotal
+        : Number((
+          (netAmount * (settledGrossTotal + selectedGrossTotal) / itemGrossTotal) - settledNetTotal
+        ).toFixed(2));
+      const selectedNetAmount = Math.max(0, Math.min(remainingNetTotal, selectedTargetNet));
 
       const mutationId = Number(candidate.mutation_id);
-      const settlementReference = String(
+      const baseSettlementReference = String(
         candidate.provider_order_id
           ?? candidate.mutation_key
           ?? `QRIS-BANK-${mutationId}`,
       ).trim().slice(0, 180);
-      if (!settlementReference) {
+      if (!baseSettlementReference) {
         throw Object.assign(new Error("Referensi settlement QRIS tidak tersedia"), {
           code: "INVALID_CANDIDATE",
         });
       }
+      const selectionSuffix = selectedIsFinal
+        ? ""
+        : `-P-${selectedItems.map((item) => item.paymentId).sort((a, b) => a - b).join("-")}`;
+      const settlementReference = `${baseSettlementReference}${selectionSuffix}`.slice(0, 180);
       const settlementDate = String(
         candidate.estimated_settlement_date
           ?? candidate.transaction_date
@@ -1304,18 +1371,18 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
           net_amount, status, bank_mutation_id
         ) VALUES (
           ${companyId}, ${settlementReference}, ${providerName}, ${settlementDate},
-          ${grossAmount}, ${Math.max(0, grossAmount - netAmount)}, 0, 0,
-          ${netAmount}, 'settled', ${mutationId}
+          ${selectedGrossTotal}, ${Math.max(0, selectedGrossTotal - selectedNetAmount)}, 0, 0,
+          ${selectedNetAmount}, 'settled', ${mutationId}
         )
         RETURNING id
       `);
       const settlementId = Number((settlementRows[0] as Record<string, unknown>)?.id);
 
       let allocatedNet = 0;
-      for (const [index, item] of items.entries()) {
-        const itemNet = index === items.length - 1
-          ? Number((netAmount - allocatedNet).toFixed(2))
-          : Number((item.grossAmount * netAmount / itemGrossTotal).toFixed(2));
+      for (const [index, item] of selectedItems.entries()) {
+        const itemNet = index === selectedItems.length - 1
+          ? Number((selectedNetAmount - allocatedNet).toFixed(2))
+          : Number((item.grossAmount * selectedNetAmount / selectedGrossTotal).toFixed(2));
         allocatedNet += itemNet;
         const itemMdr = Number((item.grossAmount - itemNet).toFixed(2));
         await tx.execute(sql`
@@ -1339,22 +1406,41 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
         `);
       }
 
-      await tx.execute(sql`
-        UPDATE qris_mutation_batch_candidates
-        SET reconciliation_status = 'APPROVED',
-            status = 'approved',
-            updated_at = NOW()
-        WHERE id = ${candidateId}
-      `);
-      await tx.execute(sql`
-        UPDATE bank_mutations
-        SET status = 'approved',
-            reconciliation_status = 'reconciled',
-            updated_at = NOW()
-        WHERE id = ${mutationId} AND company_id = ${companyId}
-      `);
+      if (selectedIsFinal) {
+        await tx.execute(sql`
+          UPDATE qris_mutation_batch_candidates
+          SET reconciliation_status = 'APPROVED',
+              status = 'approved',
+              review_reason = 'Seluruh payment QRIS dalam kandidat sudah disetujui.',
+              updated_at = NOW()
+          WHERE id = ${candidateId}
+        `);
+        await tx.execute(sql`
+          UPDATE bank_mutations
+          SET status = 'approved',
+              reconciliation_status = 'reconciled',
+              updated_at = NOW()
+          WHERE id = ${mutationId} AND company_id = ${companyId}
+        `);
+      } else {
+        await tx.execute(sql`
+          UPDATE qris_mutation_batch_candidates
+          SET reconciliation_status = 'REVIEW',
+              status = 'partial',
+              review_reason = ${`Partial settlement: ${selectedItems.length} payment disetujui, ${remainingItems.length - selectedItems.length} payment tersisa.`},
+              updated_at = NOW()
+          WHERE id = ${candidateId}
+        `);
+      }
 
-      return { settlementId, mutationId, itemCount: items.length };
+      return {
+        settlementId,
+        mutationId,
+        itemCount: selectedItems.length,
+        partial: !selectedIsFinal,
+        remainingItemCount: Math.max(0, remainingItems.length - selectedItems.length),
+        selectedPaymentIds: selectedItems.map((item) => item.paymentId),
+      };
     });
 
     return res.status(201).json({
@@ -1362,12 +1448,22 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       settlementId: result.settlementId,
       mutationId: result.mutationId,
       itemCount: result.itemCount,
+      partial: result.partial,
+      remainingItemCount: result.remainingItemCount,
+      selectedPaymentIds: result.selectedPaymentIds,
     });
   } catch (e: any) {
     const message = e?.message ?? "Gagal menyetujui kandidat QRIS";
     logger.warn({ err: e?.cause?.message ?? message }, "[bankRecon] QRIS candidate approval rejected");
+    const postgresError = findPostgresError(e);
+    if (postgresError?.code === "23505") {
+      return res.status(409).json({
+        error: "Payment QRIS sudah diproses oleh admin lain. Approval dibatalkan.",
+        code: "QRIS_PAYMENT_ALREADY_SETTLED",
+      });
+    }
     return res.status(
-      /tidak ditemukan|tidak valid|bukan|sudah|belum|tidak memiliki/.test(message) ? 400 : 500,
+      /tidak ditemukan|tidak valid|bukan|sudah|belum|tidak memiliki|harus dipilih|melebihi sisa|bagian dari kandidat/.test(message) ? 400 : 500,
     ).json({ error: message });
   }
 });

@@ -117,6 +117,12 @@ export async function runQrisSettlementMigration(): Promise<void> {
       UNIQUE (settlement_id, sport_payment_id)
     )
   `);
+  // A payment may belong to only one provider settlement, including when
+  // approvals are split into multiple partial selections.
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_qris_settlement_items_payment
+      ON qris_settlement_items (sport_payment_id)
+  `);
 
   // Provisional candidates are derived only from imported bank mutations.
   // They are deliberately separate from provider-confirmed settlements so

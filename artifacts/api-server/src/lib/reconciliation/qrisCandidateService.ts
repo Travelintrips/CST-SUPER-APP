@@ -266,7 +266,16 @@ export async function listQrisCandidates(options: {
   const { rows } = await db.execute(sql.raw(`
     SELECT c.*, bm.description, bm.transaction_date, bm.amount AS bank_amount,
            bm.bank_account_id,
-           bm.source, bm.provider_name AS bank_provider_name
+           bm.source, bm.provider_name AS bank_provider_name,
+           COALESCE((
+             SELECT jsonb_agg(qsi.sport_payment_id ORDER BY qsi.sport_payment_id)
+             FROM qris_settlement_items qsi
+             WHERE qsi.sport_payment_id IN (
+               SELECT (item->>'paymentId')::int
+               FROM jsonb_array_elements(c.payment_items) item
+               WHERE item->>'paymentId' IS NOT NULL
+             )
+           ), '[]'::jsonb) AS settled_payment_ids
     FROM qris_mutation_batch_candidates c
     LEFT JOIN bank_mutations bm ON bm.id = c.mutation_id
     WHERE TRUE ${companyFilter} ${statusFilter}
