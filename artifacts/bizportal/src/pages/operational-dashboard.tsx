@@ -196,7 +196,7 @@ export default function OperationalDashboardPage() {
     const label = count === 1 ? (orderNums[0] ?? "") : `${count} order baru`;
     new Notification("📦 Order Baru Masuk", {
       body: label,
-      icon: "/bizportal/favicon.svg",
+      icon: "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo.png",
       tag: "new-logistic-order",
       renotify: true,
     } as any);
