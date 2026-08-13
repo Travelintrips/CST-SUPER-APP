@@ -367,6 +367,53 @@ export async function runBankReconciliationCoreMigration() {
 
   // ── Canonical key backfill (idempotent) ───────────────────────────────────
   await runCanonicalKeyBackfill();
+
+  // ── sport_center.expected_bank_settlements view ───────────────────────────
+  // This view is required by canonicalSettlementDetailsSql() embedded in the
+  // GET /mutations UNION ALL query.  It exposes payment_settlement_batches
+  // columns under the names expected by canonicalSettlementAdapter.ts.
+  // DROP + recreate is safe because this is a SELECT-only view with no
+  // dependents outside the adapter.
+  await db.execute(sql.raw(`
+    CREATE OR REPLACE VIEW sport_center.expected_bank_settlements AS
+    SELECT
+      b.id                                      AS settlement_id,
+      b.settlement_reference,
+      b.company_id,
+      b.provider_code,
+      COALESCE(b.provider_code, 'unknown')      AS provider_name,
+      b.bank_account_id,
+      b.settlement_date,
+      COALESCE(b.gross_amount,        0)        AS gross_amount,
+      COALESCE(b.mdr_amount,          0)        AS mdr_amount,
+      COALESCE(b.provider_fee_amount, 0)        AS provider_fee_amount,
+      COALESCE(b.fee_tax_amount,      0)        AS fee_tax_amount,
+      COALESCE(b.tax_withheld_amount, 0)        AS tax_withheld_amount,
+      COALESCE(b.adjustment_amount,   0)        AS adjustment_amount,
+      COALESCE(b.net_amount,          0)        AS expected_bank_amount,
+      b.status                                  AS settlement_status,
+      b.settlement_journal_id,
+      b.bank_mutation_id,
+      b.settlement_rule_version,
+      b.posted_at,
+      b.posted_by,
+      b.reconciled_at,
+      b.reconciled_by,
+      CASE
+        WHEN b.bank_mutation_id IS NOT NULL THEN 'linked'
+        WHEN b.status = 'reconciled'        THEN 'reconciled'
+        ELSE 'unlinked'
+      END                                       AS bank_link_status
+    FROM sport_center.payment_settlement_batches b
+  `)).catch(() => {
+    // Silently ignore ALL errors here.  This view depends on
+    // sport_center.payment_settlement_batches which may not yet exist when
+    // runBankReconciliationCoreMigration() first runs (before
+    // runSportCenterMigration completes).  The /mutations query already has a
+    // runtime to_regclass() guard that falls back to NULL when the view is
+    // absent, so missing the view is safe — it just means canonical settlement
+    // details are omitted until sport_center migration catches up.
+  });
 }
 
 /**
@@ -2414,6 +2461,64 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
 // dengan satu SQL UNION ALL query — lebih efisien, filtering konsisten.
 router.get("/mutations", async (req, res) => {
   await runBankReconciliationCoreMigration();
+
+  // ── Canonical settlement schema availability check ────────────────────────
+  // sport_center.payment_settlement_batches / _items and
+  // sport_center.expected_bank_settlements are created by runSportCenterMigration
+  // which runs asynchronously after health/ready.  On a fresh DB or before that
+  // migration completes the tables may not yet exist.  We guard every reference
+  // at runtime so the list query degrades gracefully instead of returning 500.
+  let hasCanonicalSettlementView = false;
+  let hasCanonicalSettlementSchema = false;
+  try {
+    const { rows: vcRows } = await db.execute(sql.raw(
+      `SELECT
+         to_regclass('sport_center.expected_bank_settlements')  AS v,
+         to_regclass('sport_center.payment_settlement_items')   AS s`,
+    ));
+    const vcRow = vcRows[0] as Record<string, unknown> | undefined;
+    hasCanonicalSettlementView   = vcRow?.v != null;
+    hasCanonicalSettlementSchema = vcRow?.s != null;
+  } catch {
+    // leave both false
+  }
+  const resolvedCanonicalDetailsSql = hasCanonicalSettlementView
+    ? canonicalSettlementDetailsSql("m.candidate_id")
+    : "NULL::jsonb";
+
+  // SQL fragments conditionally included when canonical settlement tables exist.
+  // Each fragment is either the real SQL or an empty string so it can be
+  // dropped into template literals without changing surrounding SQL structure.
+
+  // UNION part inside settled_payment_ids
+  const canonicalSettledUnionSql = hasCanonicalSettlementSchema
+    ? `UNION
+                SELECT psi.payment_id
+                FROM sport_center.payment_settlement_items psi
+                JOIN sport_center.payment_settlement_batches psb
+                  ON psb.id = psi.settlement_id
+                WHERE psi.item_status = 'active'
+                  AND psb.status IN ('posted', 'reconciled')
+                  AND psi.payment_id IN (
+                    SELECT (item->>'paymentId')::int
+                    FROM jsonb_array_elements(qc.payment_items) item
+                    WHERE item->>'paymentId' IS NOT NULL
+                  )`
+    : "";
+
+  // NOT EXISTS check to exclude canonical-settled payments from current_* lists
+  const canonicalSettledExcludeSql = hasCanonicalSettlementSchema
+    ? `AND NOT EXISTS (
+                      SELECT 1
+                      FROM sport_center.payment_settlement_items psi
+                      JOIN sport_center.payment_settlement_batches psb
+                        ON psb.id = psi.settlement_id
+                      WHERE psi.payment_id = (item->>'paymentId')::int
+                        AND psi.item_status = 'active'
+                        AND psb.status IN ('posted', 'reconciled')
+                    )`
+    : "";
+
   const {
     status, from, to, direction, provider, search,
     limit = "100", offset = "0",
@@ -2553,7 +2658,7 @@ router.get("/mutations", async (req, res) => {
       )
       WHEN m.candidate_type = 'qris_settlement'
        AND m.candidate_source = '${RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER}' THEN
-        ${canonicalSettlementDetailsSql("m.candidate_id")}
+        ${resolvedCanonicalDetailsSql}
       WHEN m.candidate_type = 'qris_settlement' THEN jsonb_build_object(
         'resolutionError', 'AMBIGUOUS_QRIS_SETTLEMENT_SOURCE',
         'candidateSource', m.candidate_source
@@ -2634,18 +2739,7 @@ router.get("/mutations", async (req, res) => {
                   FROM jsonb_array_elements(qc.payment_items) item
                   WHERE item->>'paymentId' IS NOT NULL
                 )
-                UNION
-                SELECT psi.payment_id
-                FROM sport_center.payment_settlement_items psi
-                JOIN sport_center.payment_settlement_batches psb
-                  ON psb.id = psi.settlement_id
-                WHERE psi.item_status = 'active'
-                  AND psb.status IN ('posted', 'reconciled')
-                  AND psi.payment_id IN (
-                    SELECT (item->>'paymentId')::int
-                    FROM jsonb_array_elements(qc.payment_items) item
-                    WHERE item->>'paymentId' IS NOT NULL
-                  )
+                ${canonicalSettledUnionSql}
               ) settled
             ), '[]'::jsonb),
             'current_payment_ids', COALESCE((
@@ -2659,15 +2753,7 @@ router.get("/mutations", async (req, res) => {
                     FROM qris_settlement_items qsi
                     WHERE qsi.sport_payment_id = (item->>'paymentId')::int
                   )
-                  AND NOT EXISTS (
-                    SELECT 1
-                    FROM sport_center.payment_settlement_items psi
-                    JOIN sport_center.payment_settlement_batches psb
-                      ON psb.id = psi.settlement_id
-                    WHERE psi.payment_id = (item->>'paymentId')::int
-                      AND psi.item_status = 'active'
-                      AND psb.status IN ('posted', 'reconciled')
-                  )
+                  ${canonicalSettledExcludeSql}
               ) current_payment
              ), '[]'::jsonb),
              'current_payment_amounts', COALESCE((
@@ -2684,15 +2770,7 @@ router.get("/mutations", async (req, res) => {
                        FROM qris_settlement_items qsi
                        WHERE qsi.sport_payment_id = (item->>'paymentId')::int
                      )
-                     AND NOT EXISTS (
-                       SELECT 1
-                       FROM sport_center.payment_settlement_items psi
-                       JOIN sport_center.payment_settlement_batches psb
-                         ON psb.id = psi.settlement_id
-                       WHERE psi.payment_id = (item->>'paymentId')::int
-                         AND psi.item_status = 'active'
-                         AND psb.status IN ('posted', 'reconciled')
-                     )
+                     ${canonicalSettledExcludeSql}
                  )
                ) current_payment
              ), '{}'::jsonb),
@@ -2708,15 +2786,7 @@ router.get("/mutations", async (req, res) => {
                     FROM qris_settlement_items qsi
                     WHERE qsi.sport_payment_id = (item->>'paymentId')::int
                   )
-                  AND NOT EXISTS (
-                    SELECT 1
-                    FROM sport_center.payment_settlement_items psi
-                    JOIN sport_center.payment_settlement_batches psb
-                      ON psb.id = psi.settlement_id
-                    WHERE psi.payment_id = (item->>'paymentId')::int
-                      AND psi.item_status = 'active'
-                      AND psb.status IN ('posted', 'reconciled')
-                  )
+                  ${canonicalSettledExcludeSql}
               )
             ), 0)
              ,
@@ -2735,15 +2805,7 @@ router.get("/mutations", async (req, res) => {
                      FROM qris_settlement_items qsi
                      WHERE qsi.sport_payment_id = (item->>'paymentId')::int
                    )
-                   AND NOT EXISTS (
-                     SELECT 1
-                     FROM sport_center.payment_settlement_items psi
-                     JOIN sport_center.payment_settlement_batches psb
-                       ON psb.id = psi.settlement_id
-                     WHERE psi.payment_id = (item->>'paymentId')::int
-                       AND psi.item_status = 'active'
-                       AND psb.status IN ('posted', 'reconciled')
-                   )
+                   ${canonicalSettledExcludeSql}
                )
              ), 0)
           )

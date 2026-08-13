@@ -17,6 +17,182 @@ function esc(value: unknown): string {
   return String(value ?? "").replace(/'/g, "''");
 }
 
+// ── Canonical settlement schema availability ──────────────────────────────────
+// sport_center.payment_settlement_batches / _items may not exist on all DBs
+// (they are created by runSportCenterMigration which runs asynchronously).
+// We cache the result to avoid repeated to_regclass() calls.
+let _canonicalSchemaKnown = false;
+let _canonicalSchemaAvailable = false;
+
+async function hasCanonicalSettlementSchema(): Promise<boolean> {
+  if (_canonicalSchemaKnown) return _canonicalSchemaAvailable;
+  try {
+    const { rows } = await db.execute(sql.raw(
+      `SELECT to_regclass('sport_center.payment_settlement_items') AS s`,
+    ));
+    _canonicalSchemaAvailable = (rows[0] as Record<string, unknown>)?.s != null;
+  } catch {
+    _canonicalSchemaAvailable = false;
+  }
+  _canonicalSchemaKnown = true;
+  return _canonicalSchemaAvailable;
+}
+
+// ── Phase 4C column availability for sport_center.sport_payments ──────────────
+// Columns added in Phase 4C (settlement_rule_version, payment_provider,
+// expected_settlement_date, bank_account_id) may be absent on older DB snapshots.
+// Check once and cache; fallback to NULL literals when absent.
+let _phase4ColsKnown = false;
+let _phase4ColsAvailable = false;
+
+async function hasQrisPaymentPhase4Columns(): Promise<boolean> {
+  if (_phase4ColsKnown) return _phase4ColsAvailable;
+  try {
+    const { rows } = await db.execute(sql.raw(`
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'sport_center'
+        AND table_name   = 'sport_payments'
+        AND column_name  = 'settlement_rule_version'
+      LIMIT 1
+    `));
+    _phase4ColsAvailable = (rows as unknown[]).length > 0;
+  } catch {
+    _phase4ColsAvailable = false;
+  }
+  _phase4ColsKnown = true;
+  return _phase4ColsAvailable;
+}
+
+// SQL fragments for Phase 4C columns — degrade to NULLs when columns are absent.
+function makePhase4PaymentFragments(available: boolean) {
+  return {
+    providerCodeSql:        available ? `LOWER(BTRIM(sp.payment_provider::text))` : `NULL::text`,
+    settlementDateSql:      available ? `sp.expected_settlement_date`              : `NULL::date`,
+    settlementRuleVerSql:   available ? `sp.settlement_rule_version`               : `NULL::text`,
+    paymentBankAccountSql:  available ? `sp.bank_account_id`                       : `NULL::text`,
+  };
+}
+
+// SQL fragments used when canonical settlement tables exist.
+// If the tables are absent these fragments evaluate to empty strings,
+// leaving the surrounding SQL structurally valid but without canonical data.
+function makeCanonicalFragments(available: boolean) {
+  const canonicalSettlementIdSql = available
+    ? `(
+           SELECT psi.settlement_id
+           FROM sport_center.payment_settlement_items psi
+           JOIN sport_center.payment_settlement_batches psb
+             ON psb.id = psi.settlement_id
+           WHERE psi.payment_id = sp.id
+             AND psi.item_status = 'active'
+           ORDER BY CASE WHEN psb.status IN ('posted', 'reconciled') THEN 0 ELSE 1 END,
+                    psi.settlement_id DESC
+           LIMIT 1
+         )`
+    : "NULL::int";
+
+  const alreadyReconciledSql = available
+    ? `EXISTS (
+           SELECT 1
+           FROM sport_center.payment_settlement_items psi
+           JOIN sport_center.payment_settlement_batches psb
+             ON psb.id = psi.settlement_id
+           WHERE psi.payment_id = sp.id
+             AND psi.item_status = 'active'
+             AND psb.status IN ('posted', 'reconciled')
+         )`
+    : "FALSE";
+
+  // SUM of net amounts of current canonical settlement batches for these payments
+  const currentExpectedAmountSql = available
+    ? `COALESCE((
+              SELECT SUM(current_settlements.net_amount)
+              FROM (
+                SELECT DISTINCT psb.id, psb.net_amount
+                FROM sport_center.payment_settlement_items psi
+                JOIN sport_center.payment_settlement_batches psb
+                  ON psb.id = psi.settlement_id
+                WHERE psi.item_status = 'active'
+                  AND psi.payment_id IN (
+                    SELECT (item->>'paymentId')::int
+                    FROM jsonb_array_elements(c.payment_items) item
+                    WHERE item->>'paymentId' IS NOT NULL
+                  )
+              ) current_settlements
+            ), bm.amount)`
+    : "bm.amount";
+
+  // NOT EXISTS for canonical settlement (used in current_payment_ids / current_gross_amount)
+  const canonicalSettledExcludeSql = available
+    ? `AND NOT EXISTS (
+                    SELECT 1
+                    FROM sport_center.payment_settlement_items psi
+                    JOIN sport_center.payment_settlement_batches psb
+                      ON psb.id = psi.settlement_id
+                    WHERE psi.payment_id = (item->>'paymentId')::int
+                      AND psi.item_status = 'active'
+                      AND psb.status IN ('posted', 'reconciled')
+                  )`
+    : "";
+
+  const canonicalSettledExcludeByIdSql = available
+    ? `AND NOT EXISTS (
+                    SELECT 1
+                    FROM sport_center.payment_settlement_items psi
+                    JOIN sport_center.payment_settlement_batches psb
+                      ON psb.id = psi.settlement_id
+                    WHERE psi.payment_id = sp.id
+                      AND psi.item_status = 'active'
+                      AND psb.status IN ('posted', 'reconciled')
+                  )`
+    : "";
+
+  // Current evidence valid: does the canonical settlement total match bm.amount?
+  const currentEvidenceValidSql = available
+    ? `ABS(COALESCE((
+              SELECT SUM(current_settlements.net_amount)
+              FROM (
+                SELECT DISTINCT psb.id, psb.net_amount
+                FROM sport_center.payment_settlement_items psi
+                JOIN sport_center.payment_settlement_batches psb
+                  ON psb.id = psi.settlement_id
+                WHERE psi.item_status = 'active'
+                  AND psi.payment_id IN (
+                    SELECT (item->>'paymentId')::int
+                    FROM jsonb_array_elements(c.payment_items) item
+                    WHERE item->>'paymentId' IS NOT NULL
+                  )
+              ) current_settlements
+            ), bm.amount) - bm.amount) <= 0.01`
+    : "TRUE";
+
+  // UNION with canonical settlement items in settled_payment_ids
+  const canonicalSettledUnionSql = available
+    ? `UNION
+                SELECT psi.payment_id
+                FROM sport_center.payment_settlement_items psi
+                JOIN sport_center.payment_settlement_batches psb
+                  ON psb.id = psi.settlement_id
+                WHERE psi.item_status = 'active'
+                  AND psb.status IN ('posted', 'reconciled')
+                  AND psi.payment_id IN (
+                    SELECT (item->>'paymentId')::int
+                    FROM jsonb_array_elements(c.payment_items) item
+                    WHERE item->>'paymentId' IS NOT NULL
+                  )`
+    : "";
+
+  return {
+    canonicalSettlementIdSql,
+    alreadyReconciledSql,
+    currentExpectedAmountSql,
+    canonicalSettledExcludeSql,
+    canonicalSettledExcludeByIdSql,
+    currentEvidenceValidSql,
+    canonicalSettledUnionSql,
+  };
+}
+
 function asDate(value: unknown): string | null {
   const result = String(value ?? "").slice(0, 10);
   return /^\d{4}-\d{2}-\d{2}$/.test(result) ? result : null;
@@ -43,6 +219,21 @@ export async function generateQrisCandidates(options: {
   const dateFilter = options.from ? `AND bm.transaction_date >= '${esc(options.from)}'` : "";
   const toFilter = options.to ? `AND bm.transaction_date <= '${esc(options.to)}'` : "";
 
+  const [canonicalAvailable, phase4Available] = await Promise.all([
+    hasCanonicalSettlementSchema(),
+    hasQrisPaymentPhase4Columns(),
+  ]);
+  const {
+    canonicalSettlementIdSql,
+    alreadyReconciledSql,
+  } = makeCanonicalFragments(canonicalAvailable);
+  const {
+    providerCodeSql,
+    settlementDateSql,
+    settlementRuleVerSql,
+    paymentBankAccountSql,
+  } = makePhase4PaymentFragments(phase4Available);
+
   const [paymentRows, mutationRows, holidayRows, ruleRows, existingRows] = await Promise.all([
     db.execute(sql.raw(`
       SELECT
@@ -57,31 +248,13 @@ export async function generateQrisCandidates(options: {
         sb.booking_date,
         sb.start_time::text AS start_time,
         sb.end_time::text AS end_time,
-        LOWER(BTRIM(sp.payment_provider::text)) AS provider_code,
-        sp.expected_settlement_date AS settlement_date,
-        sp.settlement_rule_version,
+        ${providerCodeSql} AS provider_code,
+        ${settlementDateSql} AS settlement_date,
+        ${settlementRuleVerSql} AS settlement_rule_version,
         NULL::text AS settlement_reference,
-        sp.bank_account_id,
-         (
-           SELECT psi.settlement_id
-           FROM sport_center.payment_settlement_items psi
-           JOIN sport_center.payment_settlement_batches psb
-             ON psb.id = psi.settlement_id
-           WHERE psi.payment_id = sp.id
-             AND psi.item_status = 'active'
-           ORDER BY CASE WHEN psb.status IN ('posted', 'reconciled') THEN 0 ELSE 1 END,
-                    psi.settlement_id DESC
-           LIMIT 1
-         ) AS canonical_settlement_id,
-        EXISTS (
-          SELECT 1
-          FROM sport_center.payment_settlement_items psi
-          JOIN sport_center.payment_settlement_batches psb
-            ON psb.id = psi.settlement_id
-          WHERE psi.payment_id = sp.id
-            AND psi.item_status = 'active'
-            AND psb.status IN ('posted', 'reconciled')
-        ) AS already_reconciled
+        ${paymentBankAccountSql} AS bank_account_id,
+        ${canonicalSettlementIdSql} AS canonical_settlement_id,
+        ${alreadyReconciledSql} AS already_reconciled
       FROM sport_center.sport_payments sp
       LEFT JOIN sport_center.sport_bookings sb ON sb.id = sp.booking_id
       LEFT JOIN sport_center.sport_facilities sf ON sf.id = sb.facility_id
@@ -346,27 +519,23 @@ export async function listQrisCandidates(options: {
     ? ""
     : "AND c.status NOT IN ('approved', 'completed', 'superseded', 'stale', 'ineligible')";
   const limit = Math.min(Math.max(Number(options.limit ?? 100), 1), 500);
+
+  const canonicalAvailable = await hasCanonicalSettlementSchema();
+  const {
+    currentExpectedAmountSql,
+    canonicalSettledExcludeSql,
+    canonicalSettledExcludeByIdSql,
+    currentEvidenceValidSql,
+    canonicalSettledUnionSql,
+  } = makeCanonicalFragments(canonicalAvailable);
+
   const { rows } = await db.execute(sql.raw(`
      SELECT c.*, bm.description, bm.transaction_date, bm.amount AS bank_amount,
             bm.mutation_key,
            bm.bank_account_id,
            bm.source, bm.provider_name AS bank_provider_name,
             COALESCE(c.candidate_source, 'sport_center.sport_payments') AS candidate_source,
-            COALESCE((
-              SELECT SUM(current_settlements.net_amount)
-              FROM (
-                SELECT DISTINCT psb.id, psb.net_amount
-                FROM sport_center.payment_settlement_items psi
-                JOIN sport_center.payment_settlement_batches psb
-                  ON psb.id = psi.settlement_id
-                WHERE psi.item_status = 'active'
-                  AND psi.payment_id IN (
-                    SELECT (item->>'paymentId')::int
-                    FROM jsonb_array_elements(c.payment_items) item
-                    WHERE item->>'paymentId' IS NOT NULL
-                  )
-              ) current_settlements
-            ), bm.amount) AS current_expected_amount,
+            ${currentExpectedAmountSql} AS current_expected_amount,
             COALESCE((
               SELECT jsonb_agg(current_payment.payment_id ORDER BY current_payment.payment_id)
               FROM (
@@ -378,15 +547,7 @@ export async function listQrisCandidates(options: {
                     FROM qris_settlement_items qsi
                     WHERE qsi.sport_payment_id = (item->>'paymentId')::int
                   )
-                  AND NOT EXISTS (
-                    SELECT 1
-                    FROM sport_center.payment_settlement_items psi
-                    JOIN sport_center.payment_settlement_batches psb
-                      ON psb.id = psi.settlement_id
-                    WHERE psi.payment_id = (item->>'paymentId')::int
-                      AND psi.item_status = 'active'
-                      AND psb.status IN ('posted', 'reconciled')
-                  )
+                  ${canonicalSettledExcludeSql}
               ) current_payment
             ), '[]'::jsonb) AS current_payment_ids,
             COALESCE((
@@ -401,32 +562,10 @@ export async function listQrisCandidates(options: {
                     FROM qris_settlement_items qsi
                     WHERE qsi.sport_payment_id = sp.id
                   )
-                  AND NOT EXISTS (
-                    SELECT 1
-                    FROM sport_center.payment_settlement_items psi
-                    JOIN sport_center.payment_settlement_batches psb
-                      ON psb.id = psi.settlement_id
-                    WHERE psi.payment_id = sp.id
-                      AND psi.item_status = 'active'
-                      AND psb.status IN ('posted', 'reconciled')
-                  )
+                  ${canonicalSettledExcludeByIdSql}
               )
             ), 0) AS current_gross_amount,
-            ABS(COALESCE((
-              SELECT SUM(current_settlements.net_amount)
-              FROM (
-                SELECT DISTINCT psb.id, psb.net_amount
-                FROM sport_center.payment_settlement_items psi
-                JOIN sport_center.payment_settlement_batches psb
-                  ON psb.id = psi.settlement_id
-                WHERE psi.item_status = 'active'
-                  AND psi.payment_id IN (
-                    SELECT (item->>'paymentId')::int
-                    FROM jsonb_array_elements(c.payment_items) item
-                    WHERE item->>'paymentId' IS NOT NULL
-                  )
-              ) current_settlements
-            ), bm.amount) - bm.amount) <= 0.01 AS current_evidence_valid,
+            ${currentEvidenceValidSql} AS current_evidence_valid,
             COALESCE((
               SELECT jsonb_agg(settled.payment_id ORDER BY settled.payment_id)
               FROM (
@@ -437,18 +576,7 @@ export async function listQrisCandidates(options: {
                   FROM jsonb_array_elements(c.payment_items) item
                   WHERE item->>'paymentId' IS NOT NULL
                 )
-                UNION
-                SELECT psi.payment_id
-                FROM sport_center.payment_settlement_items psi
-                JOIN sport_center.payment_settlement_batches psb
-                  ON psb.id = psi.settlement_id
-                WHERE psi.item_status = 'active'
-                  AND psb.status IN ('posted', 'reconciled')
-                  AND psi.payment_id IN (
-                    SELECT (item->>'paymentId')::int
-                    FROM jsonb_array_elements(c.payment_items) item
-                    WHERE item->>'paymentId' IS NOT NULL
-                  )
+                ${canonicalSettledUnionSql}
               ) settled
             ), '[]'::jsonb) AS settled_payment_ids
     FROM qris_mutation_batch_candidates c

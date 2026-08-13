@@ -2744,11 +2744,106 @@ export async function runSportCenterMigration(): Promise<void> {
       logger.warn({ err: idxErr }, "Sport Center migration: drop legacy index failed (non-fatal)");
     }
 
+    // ── Phase 4C: tambahkan kolom QRIS reconciliation ke sport_center.sport_payments ──
+    // Kolom ini mungkin ada di public.sport_payments (via ALTER TABLE di atas)
+    // tapi belum tentu ada di sport_center.sport_payments pada DB lama.
+    // Semua ADD COLUMN IF NOT EXISTS — aman dijalankan berulang kali.
+    try {
+      await db.execute(sql`
+        ALTER TABLE sport_center.sport_payments
+          ADD COLUMN IF NOT EXISTS payment_provider           TEXT,
+          ADD COLUMN IF NOT EXISTS expected_settlement_date   DATE,
+          ADD COLUMN IF NOT EXISTS settlement_rule_version    TEXT,
+          ADD COLUMN IF NOT EXISTS bank_account_id            INTEGER
+      `);
+      logger.info("Sport Center migration: Phase 4C QRIS columns ensured on sport_center.sport_payments");
+    } catch (p4cErr) {
+      logger.warn({ err: p4cErr }, "Sport Center migration: Phase 4C QRIS column migration non-fatal failure");
+    }
+
+    // ── Phase 4C backfill: isi bank_account_id + expected_settlement_date ──────
+    // Untuk payment yang baru punya kolom (NULL), backfill nilai reasonable:
+    //   • bank_account_id — ambil bank account aktif milik company (first match)
+    //   • expected_settlement_date — confirmed_at::date + 1 (simplified T+1)
+    //   • settlement_rule_version — 'default-v1' sebagai fallback
+    // Data yang sudah diisi trigger (non-NULL) tidak akan diubah.
+    try {
+      await db.execute(sql`
+        UPDATE sport_center.sport_payments sp
+        SET
+          bank_account_id = COALESCE(sp.bank_account_id, (
+            SELECT cba.id
+            FROM company_bank_accounts cba
+            WHERE cba.company_id = sp.company_id
+              AND cba.is_active = TRUE
+            ORDER BY cba.id
+            LIMIT 1
+          )),
+          expected_settlement_date = COALESCE(
+            sp.expected_settlement_date,
+            (COALESCE(sp.confirmed_at, sp.created_at)::date + 1)
+          ),
+          settlement_rule_version = COALESCE(
+            sp.settlement_rule_version,
+            'default-v1'
+          )
+        WHERE sp.bank_account_id IS NULL
+           OR sp.expected_settlement_date IS NULL
+           OR sp.settlement_rule_version IS NULL
+      `);
+      logger.info("Sport Center migration: Phase 4C QRIS column backfill selesai");
+    } catch (backfillErr) {
+      logger.warn({ err: backfillErr }, "Sport Center migration: Phase 4C backfill non-fatal failure");
+    }
+
     try {
       await ensureCanonicalSettlementContracts();
     } catch (canonicalErr) {
       logger.error({ err: canonicalErr }, "Canonical Sport Center settlement contract migration gagal");
       throw canonicalErr;
+    }
+
+    // ── expected_bank_settlements view ─────────────────────────────────────
+    // Required by canonicalSettlementDetailsSql() embedded in the bank-recon
+    // GET /mutations UNION ALL query.  Maps payment_settlement_batches columns
+    // to the names expected by canonicalSettlementAdapter.ts.
+    // Must run AFTER payment_settlement_batches is created above.
+    try {
+      await db.execute(sql`
+        CREATE OR REPLACE VIEW sport_center.expected_bank_settlements AS
+        SELECT
+          b.id                                      AS settlement_id,
+          b.settlement_reference,
+          b.company_id,
+          b.provider_code,
+          COALESCE(b.provider_code, 'unknown')      AS provider_name,
+          b.bank_account_id,
+          b.settlement_date,
+          COALESCE(b.gross_amount,        0)        AS gross_amount,
+          COALESCE(b.mdr_amount,          0)        AS mdr_amount,
+          COALESCE(b.provider_fee_amount, 0)        AS provider_fee_amount,
+          COALESCE(b.fee_tax_amount,      0)        AS fee_tax_amount,
+          COALESCE(b.tax_withheld_amount, 0)        AS tax_withheld_amount,
+          COALESCE(b.adjustment_amount,   0)        AS adjustment_amount,
+          COALESCE(b.net_amount,          0)        AS expected_bank_amount,
+          b.status                                  AS settlement_status,
+          b.settlement_journal_id,
+          b.bank_mutation_id,
+          b.settlement_rule_version,
+          b.posted_at,
+          b.posted_by,
+          b.reconciled_at,
+          b.reconciled_by,
+          CASE
+            WHEN b.bank_mutation_id IS NOT NULL THEN 'linked'
+            WHEN b.status = 'reconciled'        THEN 'reconciled'
+            ELSE 'unlinked'
+          END                                       AS bank_link_status
+        FROM sport_center.payment_settlement_batches b
+      `);
+      logger.info("Sport Center migration: expected_bank_settlements view created/updated");
+    } catch (viewErr) {
+      logger.warn({ err: viewErr }, "Sport Center migration: expected_bank_settlements view creation failed (non-fatal)");
     }
 
     logger.info("Sport Center migration: selesai");
