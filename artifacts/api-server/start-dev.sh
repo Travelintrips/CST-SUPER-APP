@@ -40,6 +40,11 @@ export APP_ENV
 # there is no second forwarder listener and no hidden 18445 process.
 API_PORT=${API_PORT:-18444}
 export API_PORT
+# The development Supabase session pooler has a small per-session limit.
+# Keep the preview API conservative while its migration/worker chain starts;
+# production uses its own runtime configuration.
+PG_POOL_MAX=${PG_POOL_MAX:-2}
+export PG_POOL_MAX
 
 # Only one API workflow instance may own the forwarder and internal server.
 # A second artifact/workflow invocation stays alive without binding anything,
