@@ -8,13 +8,15 @@
  *             the only status that can be promoted to a qris_settlement.
  *
  *  REVIEW   — provider unknown, payment partition ambiguous, deduction rate
- *             out-of-tolerance, or partial bank dimension. A human must verify
- *             before the candidate can be accepted.
+ *             out-of-tolerance, or partial bank dimension. A human has reviewed
+ *             and may explicitly approve, but the UI MUST show an amber warning
+ *             at every confirmation point.
  *
  *  UNMATCHED — no eligible payments found for this bank mutation on this date.
  *
- * Approving a REVIEW or UNMATCHED candidate would silently create a settlement
+ * Approving an UNMATCHED candidate would silently create a settlement
  * for data the engine could not validate — defeating the reconciliation model.
+ * REVIEW candidates CAN be approved after explicit human confirmation.
  */
 
 export interface QrisBatchCandidateForEligibility {
@@ -30,6 +32,12 @@ export interface QrisBatchCandidateForEligibility {
 export interface QrisBatchEligibilityError {
   message: string;
   code: "ALREADY_APPROVED" | "NOT_MATCHED" | "NEGATIVE_NET" | "NO_PROVIDER_EVIDENCE";
+}
+
+/** Non-blocking warning returned when a REVIEW candidate is approved manually. */
+export interface QrisBatchReviewWarning {
+  code: "REVIEW_OVERRIDE";
+  message: string;
 }
 
 /**
@@ -51,20 +59,11 @@ export function checkQrisBatchApprovalEligibility(
 
   const reconStatus = String(candidate.reconciliation_status ?? "").toUpperCase();
 
-  if (reconStatus === "REVIEW") {
+  if (reconStatus !== "MATCHED" && reconStatus !== "REVIEW") {
+    // Covers UNMATCHED, empty string, unknown values — hard block
     return {
       code: "NOT_MATCHED",
-      message:
-        "Kandidat ini membutuhkan verifikasi manual sebelum dapat disetujui. " +
-        "Periksa provider, partisi payment, dan potongan MDR terlebih dahulu.",
-    };
-  }
-
-  if (reconStatus !== "MATCHED") {
-    // Covers UNMATCHED, empty string, unknown values
-    return {
-      code: "NOT_MATCHED",
-      message: "Hanya kandidat dengan status MATCHED yang dapat disetujui.",
+      message: "Hanya kandidat dengan status MATCHED atau REVIEW yang dapat disetujui.",
     };
   }
 
@@ -81,6 +80,25 @@ export function checkQrisBatchApprovalEligibility(
   }
 
   return null; // eligible
+}
+
+/**
+ * Returns a review warning if the candidate is REVIEW status (eligible but
+ * requires human confirmation). Returns null for MATCHED (no warning needed).
+ */
+export function checkQrisBatchReviewWarning(
+  candidate: QrisBatchCandidateForEligibility,
+): QrisBatchReviewWarning | null {
+  const reconStatus = String(candidate.reconciliation_status ?? "").toUpperCase();
+  if (reconStatus === "REVIEW") {
+    return {
+      code: "REVIEW_OVERRIDE",
+      message:
+        "Kandidat ini disetujui dengan override manual. " +
+        "Provider, partisi payment, atau potongan MDR memerlukan verifikasi lebih lanjut.",
+    };
+  }
+  return null;
 }
 
 /**

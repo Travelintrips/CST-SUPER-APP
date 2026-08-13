@@ -89,7 +89,7 @@ import {
   assertGenericPostAllowed,
   GenericPostGuardError,
 } from "../lib/reconciliation/genericPostGuard.js";
-import { assertQrisBatchApprovalEligible } from "../lib/reconciliation/qrisBatchApprovalEligibility.js";
+import { assertQrisBatchApprovalEligible, checkQrisBatchReviewWarning } from "../lib/reconciliation/qrisBatchApprovalEligibility.js";
 import {
   checkDuplicatePaymentIds,
   checkStaleAmounts,
@@ -2256,6 +2256,12 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       companyId,
     }).catch(() => {});
 
+    const reviewWarning = checkQrisBatchReviewWarning({
+      id: candidateId,
+      reconciliation_status: String((candidate as any).reconciliation_status ?? ""),
+      status: String((candidate as any).status ?? ""),
+    });
+
     return res.json({
       ok: true,
       idempotent: built.idempotent || approval.idempotent,
@@ -2269,6 +2275,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       },
       approval,
       completion,
+      ...(reviewWarning ? { reviewWarning } : {}),
     });
   } catch (error: any) {
     const code = error?.code ?? "QRIS_CANONICAL_APPROVAL_FAILED";
