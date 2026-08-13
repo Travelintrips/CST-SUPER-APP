@@ -2366,6 +2366,14 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
     });
   } catch (error: any) {
     const code = error?.code ?? "QRIS_CANONICAL_APPROVAL_FAILED";
+    if (error?.eligibilityError) {
+      return res.status(422).json({
+        error: error?.message ?? "Kandidat QRIS belum memenuhi syarat approval",
+        code: "CANDIDATE_NOT_ELIGIBLE",
+        reason_code: code,
+        reconciliation_status: error?.reconciliation_status,
+      });
+    }
     if (error instanceof QrisApprovalPaymentGuardError) {
       return res.status(409).json({
         error: "Sebagian transaksi yang dipilih sudah masuk settlement sebelumnya. Daftar kandidat sudah diperbarui.",

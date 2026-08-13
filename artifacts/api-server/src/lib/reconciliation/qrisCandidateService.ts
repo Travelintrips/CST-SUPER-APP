@@ -53,7 +53,7 @@ export async function generateQrisCandidates(options: {
         'SCPAY-SC-' || sp.id::text AS payment_number,
         sp.booking_id, sb.order_number AS booking_number,
         sb.customer_name,
-        COALESCE(sf.name, sb.facility_name, '') AS facility_name,
+        COALESCE(sf.name, '') AS facility_name,
         sb.booking_date,
         sb.start_time::text AS start_time,
         sb.end_time::text AS end_time,
