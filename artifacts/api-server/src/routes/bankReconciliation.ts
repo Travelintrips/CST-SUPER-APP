@@ -2190,7 +2190,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       };
     });
 
-    if (candidate.stale) {
+    if ("stale" in candidate && candidate.stale) {
       const staleDetails = candidate.staleDetails;
       return res.status(409).json({
         error: staleDetails.message,
@@ -2201,7 +2201,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       });
     }
 
-    if (candidate.alreadyApproved) {
+    if ("alreadyApproved" in candidate && candidate.alreadyApproved) {
       return res.json({
         ok: true,
         idempotent: true,
@@ -2212,6 +2212,9 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       });
     }
 
+    if (!("selectedPaymentIds" in candidate)) {
+      throw new Error("Kandidat QRIS tidak memiliki payment yang dapat disetujui");
+    }
     const selectedPaymentIds = candidate.selectedPaymentIds as number[];
     const sourcePaymentId = selectedPaymentIds[0];
     const built = await buildCanonicalSportCenterSettlements({

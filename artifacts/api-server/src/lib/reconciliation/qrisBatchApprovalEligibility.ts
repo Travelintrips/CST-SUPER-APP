@@ -62,7 +62,9 @@ export function checkQrisBatchApprovalEligibility(
     // Covers UNMATCHED, empty string, unknown values — hard block
     return {
       code: "NOT_MATCHED",
-      message: "Hanya kandidat dengan status MATCHED yang dapat disetujui.",
+      message:
+        "Hanya kandidat dengan status MATCHED yang dapat disetujui; " +
+        "verifikasi manual diperlukan untuk status lain.",
     };
   }
 

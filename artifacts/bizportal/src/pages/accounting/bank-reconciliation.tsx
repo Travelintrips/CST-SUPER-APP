@@ -3303,9 +3303,9 @@ export default function BankReconciliationPage() {
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{ generated: number; candidates: QrisCandidateAudit[] }>;
     },
-    onSuccess: (result) => {
+      onSuccess: async (result) => {
       toast({ title: `Kandidat QRIS dibuat: ${result.generated} kandidat` });
-      qc.invalidateQueries({ queryKey: ["qris-candidate-audit", qrisCompanyId] });
+        await refetchQrisAudit();
       qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
     },
     onError: (e: Error) => toast({ title: "Gagal membuat kandidat QRIS", description: e.message, variant: "destructive" }),
@@ -3315,7 +3315,11 @@ export default function BankReconciliationPage() {
     selections: QrisApprovalSelection[];
   } | null>(null);
 
-  const qrisCandidates = qrisAuditData?.candidates ?? [];
+  const qrisCandidates = (qrisAuditData?.candidates ?? []).filter((candidate) =>
+    !["approved", "completed", "superseded", "stale", "ineligible"].includes(
+      String(candidate.status ?? "").toLowerCase(),
+    ),
+  );
   const getAvailableQrisPaymentIds = (candidate: QrisCandidateAudit): number[] => {
     if (Array.isArray(candidate.current_payment_ids)) {
       return candidate.current_payment_ids.map(Number).filter((id) => Number.isInteger(id) && id > 0);
@@ -3325,13 +3329,13 @@ export default function BankReconciliationPage() {
       .map((item) => Number(item.paymentId ?? item.payment_id))
       .filter((id) => Number.isInteger(id) && id > 0 && !settled.has(id));
   };
-  const qrisApprovableCandidates = qrisCandidates.filter((candidate) =>
+  const isQrisCandidateEligible = (candidate: QrisCandidateAudit): boolean =>
     candidate.id != null
     && String(candidate.reconciliation_status ?? "").toUpperCase() === "MATCHED"
-    && candidate.status !== "approved"
+    && String(candidate.status ?? "").toLowerCase() !== "approved"
     && candidate.current_evidence_valid !== false
-    && getAvailableQrisPaymentIds(candidate).length > 0,
-  );
+    && getAvailableQrisPaymentIds(candidate).length > 0;
+  const qrisApprovableCandidates = qrisCandidates.filter(isQrisCandidateEligible);
   const selectedQrisCandidates = qrisApprovableCandidates.filter((candidate) =>
     selectedQrisCandidateIds.includes(candidate.id!),
   );
@@ -3436,6 +3440,8 @@ export default function BankReconciliationPage() {
     if (!qrisBatchConfirm) return;
     const selections = qrisBatchConfirm.selections;
     setQrisBatchConfirm(null);
+    const selectedCandidateIdsAtStart = [...selectedQrisCandidateIds];
+    const selectedPaymentIdsAtStart = { ...selectedQrisPaymentIds };
 
     let approvedCount = 0;
     let failedCount = 0;
@@ -3444,6 +3450,7 @@ export default function BankReconciliationPage() {
     let firstError = "";
     const conflictedCandidateIds: number[] = [];
     const approvedCandidateIds: number[] = [];
+    let latestQrisCandidates: QrisCandidateAudit[] | null = null;
 
     for (const { candidate, paymentIds } of selections) {
       try {
@@ -3462,6 +3469,7 @@ export default function BankReconciliationPage() {
           conflictCount += 1;
           conflictedCandidateIds.push(candidate.id!);
           const refreshed = await refetchQrisAudit();
+          latestQrisCandidates = refreshed.data?.candidates ?? [];
           const refreshedCandidate = refreshed.data?.candidates.find(
             (item) => item.id === candidate.id,
           );
@@ -3478,7 +3486,8 @@ export default function BankReconciliationPage() {
         }
         if (conflict.code === "CANONICAL_CANDIDATE_STALE") {
           staleCount += 1;
-          await refetchQrisAudit();
+          const refreshed = await refetchQrisAudit();
+          latestQrisCandidates = refreshed.data?.candidates ?? [];
           continue;
         }
         failedCount += 1;
@@ -3488,18 +3497,42 @@ export default function BankReconciliationPage() {
       }
     }
 
-    if (conflictCount === 0) {
+    const needsSelectionReconcile = conflictCount > 0 || staleCount > 0 || failedCount > 0;
+    if (!needsSelectionReconcile) {
       setSelectedQrisCandidateIds([]);
       setSelectedQrisPaymentIds({});
     } else {
-      setSelectedQrisCandidateIds(conflictedCandidateIds);
-      setSelectedQrisPaymentIds((current) => {
-        const next = { ...current };
-        for (const candidateId of approvedCandidateIds) delete next[candidateId];
+      const refreshed = latestQrisCandidates == null
+        ? await refetchQrisAudit()
+        : { data: { candidates: latestQrisCandidates } };
+      const refreshedCandidates = refreshed.data?.candidates ?? [];
+      const refreshedById = new Map(
+        refreshedCandidates
+          .filter((candidate) => candidate.id != null)
+          .map((candidate) => [candidate.id!, candidate]),
+      );
+      const preservedCandidateIds = selectedCandidateIdsAtStart.filter((candidateId) => {
+        const candidate = refreshedById.get(candidateId);
+        return candidate != null && isQrisCandidateEligible(candidate);
+      });
+      setSelectedQrisCandidateIds(preservedCandidateIds);
+      setSelectedQrisPaymentIds(() => {
+        const next: Record<number, number[]> = {};
+        for (const candidateId of preservedCandidateIds) {
+          const candidate = refreshedById.get(candidateId);
+          if (!candidate) continue;
+          const available = new Set(getAvailableQrisPaymentIds(candidate));
+          const configured = selectedPaymentIdsAtStart[candidateId];
+          const selection = selections.find((item) => item.candidate.id === candidateId);
+          const requested = configured?.length
+            ? configured
+            : selection?.paymentIds ?? getAvailableQrisPaymentIds(candidate);
+          next[candidateId] = requested.filter((paymentId) => available.has(paymentId));
+        }
         return next;
       });
     }
-    qc.invalidateQueries({ queryKey: ["qris-candidate-audit", qrisCompanyId] });
+    await refetchQrisAudit();
 
     if (conflictCount > 0 || staleCount > 0) {
       toast({
@@ -3516,7 +3549,7 @@ export default function BankReconciliationPage() {
         description: firstError || "Approval QRIS tidak dapat diselesaikan.",
         variant: "destructive",
       });
-    } else if (conflictCount === 0) {
+    } else if (!needsSelectionReconcile) {
       toast({ title: `${approvedCount} approval QRIS berhasil disetujui ✓` });
     }
   };
@@ -3670,6 +3703,7 @@ export default function BankReconciliationPage() {
               : "Batch QRIS disetujui ✓",
         });
       }
+      await refetchQrisAudit();
       if (detailMutation?.id === result.mutationId) {
         await refreshMutationDetail(result.mutationId);
       }
@@ -4104,7 +4138,7 @@ export default function BankReconciliationPage() {
                    {qrisCandidates.map((candidate) => {
                     const isApproved = candidate.status === "approved";
                      const isMatched = String(candidate.reconciliation_status ?? "").toUpperCase() === "MATCHED";
-                     const isSelectable = candidate.id != null && (isMatched || String(candidate.reconciliation_status ?? "").toUpperCase() === "REVIEW") && !isApproved;
+                      const isSelectable = isQrisCandidateEligible(candidate);
                      const isSelected = candidate.id != null && selectedQrisCandidateIds.includes(candidate.id);
                     const isApprovingThis = approveQrisBatchMut.isPending &&
                       approveQrisBatchMut.variables?.candidateId === candidate.id;
@@ -4212,7 +4246,7 @@ export default function BankReconciliationPage() {
                              )}
                             {!isApproved && candidate.id != null && (() => {
                                const isReviewStatus = String(candidate.reconciliation_status ?? "").toUpperCase() === "REVIEW";
-                               const canApprove = isMatched;
+                               const canApprove = isQrisCandidateEligible(candidate);
                               if (!canApprove) return (
                                 <span
                                   title={`Status ${candidate.reconciliation_status}: jalankan AI Matching terlebih dahulu`}
