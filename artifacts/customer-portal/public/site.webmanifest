@@ -12,9 +12,9 @@
   "categories": ["business", "productivity", "shopping"],
   "icons": [
     {
-      "src": "/favicon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
+      "src": "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo.png?v=20260813",
+      "sizes": "500x500",
+      "type": "image/png",
       "purpose": "any maskable"
     },
     {
