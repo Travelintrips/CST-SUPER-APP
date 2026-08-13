@@ -32,28 +32,13 @@ import PageSeo from "@/components/PageSeo";
 import { CUSTOMER_ASSETS } from "@/lib/staticAssets";
 import { resolveImageUrl } from "@/lib/utils";
 
-// ── Hero category tile type (from DB) ─────────────────────────────────────────
-interface HeroCategoryTile {
-  label:       string;
-  categoryKey: string;
-  imageUrl:    string;
-  productId:   number;
-  vendorId:    number;
-}
-
-interface FeaturedProductCardData {
+// ── Featured product display data (from the existing public featured endpoint)
+interface FeaturedMarketplaceProduct {
   id: number;
-  label: string;
-  category: string;
-  imageUrl: string | null;
-  moq: string;
-  origin: string;
-  packaging: string;
-  availability: string | null;
+  vendorId: number;
   vendorName: string | null;
-  uploadLabel: string;
-  verified: boolean;
-  isFeatured: boolean;
+  name: string;
+  isFeatured: true;
 }
 
 // ── Category accent colors + labels — used only by product cards (not hero tiles) ──
@@ -954,251 +939,6 @@ function useMarketplaceCatalogRealtime() {
   }, [handleCatalogChange]);
 }
 
-// ── Featured Products Showcase — presentation-only, reuses existing queries ──
-function FeaturedProductsShowcaseLegacy({
-  heroTiles,
-  items,
-  customImages,
-  failedLabels,
-  uploadingLabel,
-  isAdmin,
-  onRequestQuote,
-  onProductClick,
-  onUpload,
-  onImageError,
-}: {
-  heroTiles: HeroCategoryTile[];
-  items: MarketplaceItem[];
-  customImages: Record<string, string>;
-  failedLabels: Set<string>;
-  uploadingLabel: string | null;
-  isAdmin: boolean;
-  onRequestQuote: () => void;
-  onProductClick: (productId: number) => void;
-  onUpload: (label: string) => void;
-  onImageError: (label: string) => void;
-}) {
-  const { t } = useLanguage();
-  const featuredProducts: FeaturedProductCardData[] = (heroTiles.length > 0
-    ? heroTiles.slice(0, 6).map((tile) => {
-        const item = items.find((candidate) => candidate.id === tile.productId);
-        const categoryKey = item?.categoryKey ?? item?.kategori ?? tile.categoryKey;
-        const specs = item?.specValues && typeof item.specValues === "object"
-          ? item.specValues as Record<string, unknown>
-          : {};
-        return {
-          id: tile.productId,
-          label: item?.name ?? tile.label,
-          category: CATEGORY_PLACEHOLDER[categoryKey]?.label ?? item?.kategori ?? tile.label,
-          imageUrl: item?.primaryImageUrl ?? tile.imageUrl ?? null,
-          moq: item?.moq != null
-            ? `${item.moq.toLocaleString("id-ID")} ${item.unit ?? ""}`.trim()
-            : t("marketplace.featuredMoqOnRequest", "MOQ on request"),
-          origin: item?.origin ?? item?.location ?? t("marketplace.featuredOriginOnRequest", "Origin on request"),
-          packaging: String(
-            specs["packaging"] ?? specs["packagingType"] ?? specs["kemasan"] ?? item?.unit
-              ?? t("marketplace.featuredPackagingOnRequest", "Packaging on request"),
-          ),
-          availability: item?.stockStatus ?? null,
-          vendorName: item?.vendorName ?? null,
-          uploadLabel: tile.label,
-          verified: Boolean(item?.vendorId ?? tile.vendorId),
-          isFeatured: Boolean(item?.isFeatured ?? true),
-        };
-      })
-    : items.slice(0, 6).map((item) => ({
-        id: item.id,
-        label: item.name,
-        category: CATEGORY_PLACEHOLDER[item.categoryKey ?? ""]?.label ?? item.kategori ?? "Commodity",
-        imageUrl: item.primaryImageUrl ?? null,
-        moq: item.moq != null
-          ? `${item.moq.toLocaleString("id-ID")} ${item.unit ?? ""}`.trim()
-          : t("marketplace.featuredMoqOnRequest", "MOQ on request"),
-        origin: item.origin ?? item.location ?? t("marketplace.featuredOriginOnRequest", "Origin on request"),
-        packaging: (() => {
-          const specs = item.specValues && typeof item.specValues === "object"
-            ? item.specValues as Record<string, unknown>
-            : {};
-          return String(
-            specs["packaging"] ?? specs["packagingType"] ?? specs["kemasan"] ?? item.unit
-              ?? t("marketplace.featuredPackagingOnRequest", "Packaging on request"),
-          );
-        })(),
-        availability: item.stockStatus,
-        vendorName: item.vendorName ?? null,
-        uploadLabel: item.name,
-        verified: Boolean(item.vendorId),
-        isFeatured: Boolean(item.isFeatured ?? true),
-      })));
-
-  const [activeIndex, setActiveIndex] = useState(0);
-  const [imageVisible, setImageVisible] = useState(true);
-
-  useEffect(() => {
-    setActiveIndex((current) => Math.min(current, Math.max(featuredProducts.length - 1, 0)));
-  }, [featuredProducts.length]);
-
-  const activeProduct = featuredProducts[activeIndex] ?? featuredProducts[0] ?? null;
-  const activeImageUrl = activeProduct
-    ? resolveImageUrl(customImages[activeProduct.uploadLabel] ?? activeProduct.imageUrl)
-      ?? customImages[activeProduct.uploadLabel]
-      ?? activeProduct.imageUrl
-    : null;
-  const activeHasImage = Boolean(activeImageUrl && !failedLabels.has(activeProduct?.uploadLabel ?? ""));
-
-  useEffect(() => {
-    if (!activeProduct) return;
-    setImageVisible(false);
-    const frame = window.requestAnimationFrame(() => setImageVisible(true));
-    return () => window.cancelAnimationFrame(frame);
-  }, [activeProduct?.id]);
-
-  if (!activeProduct) {
-    return (
-      <aside
-        className="relative w-full md:w-[430px] shrink-0 overflow-hidden rounded-[28px] border border-white/15 bg-slate-950/65 p-4 shadow-[0_24px_70px_rgba(2,8,23,0.45)] backdrop-blur-xl"
-        aria-label={t("marketplace.featuredProductsAria", "Featured Products")}
-      >
-        <div className="flex min-h-[320px] flex-col items-center justify-center rounded-[22px] border border-dashed border-white/15 bg-slate-900/60 px-6 text-center">
-          <Package className="h-9 w-9 text-white/30" />
-          <p className="mt-3 text-sm font-bold text-white/75">
-            {t("marketplace.featuredEmptyTitle", "Featured products are on their way")}
-          </p>
-          <p className="mt-1 max-w-[240px] text-[11px] leading-relaxed text-white/45">
-            {t("marketplace.featuredEmptySubtitle", "Check the marketplace below to browse available products.")}
-          </p>
-        </div>
-      </aside>
-    );
-  }
-
-  const activeUploading = uploadingLabel === activeProduct.uploadLabel;
-
-  return (
-    <aside
-      className="group/showcase relative w-full md:w-[430px] shrink-0 overflow-hidden rounded-[30px] border border-white/20 bg-[#081426]/95 p-3.5 shadow-[0_26px_80px_rgba(2,8,23,0.48)] backdrop-blur-xl transition-all duration-300 hover:-translate-y-1 hover:border-amber-200/45 sm:p-4"
-      aria-label={t("marketplace.featuredProductsAria", "Featured Products")}
-    >
-      <div className="pointer-events-none absolute -right-20 -top-24 h-56 w-56 rounded-full bg-amber-300/15 blur-3xl" />
-      <div className="pointer-events-none absolute -bottom-24 -left-16 h-48 w-48 rounded-full bg-sky-400/15 blur-3xl" />
-
-      <div className="relative">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200/40 bg-amber-300/15 px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-[0.16em] text-amber-100 shadow-[0_0_22px_rgba(251,191,36,0.18)]">
-              <Sparkles className="h-3.5 w-3.5" />
-              {t("marketplace.featuredProductsBadge", "Featured Products")}
-            </span>
-            <h2 className="mt-3 text-[21px] font-black tracking-tight text-white">
-              {t("marketplace.featuredProductsTitle", "Produk Unggulan")}
-            </h2>
-            <p className="mt-1 text-[11px] leading-relaxed text-white/55">
-              {t("marketplace.featuredProductsSubtitle", "Premium products from verified marketplace vendors")}
-            </p>
-          </div>
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-amber-200/25 bg-gradient-to-br from-amber-200/25 to-sky-400/20 text-amber-100 shadow-lg shadow-slate-950/30">
-            <Package className="h-5 w-5" />
-          </div>
-        </div>
-
-        <div className="mt-4 grid grid-cols-2 gap-2.5 sm:gap-3">
-          {featuredProducts.filter(({ uploadLabel }) => !failedLabels.has(uploadLabel)).map((product) => {
-            const effectiveImage = resolveImageUrl(customImages[product.uploadLabel] ?? product.imageUrl)
-              ?? customImages[product.uploadLabel]
-              ?? product.imageUrl;
-            const isUploading = uploadingLabel === product.uploadLabel;
-            return (
-              <div
-                key={`${product.id}-${product.label}`}
-                className="group relative min-h-[164px] cursor-pointer overflow-hidden rounded-2xl border border-white/15 bg-slate-800/70 outline-none transition-all duration-300 hover:-translate-y-0.5 hover:border-amber-200/60 hover:shadow-lg hover:shadow-slate-950/40 focus-visible:ring-2 focus-visible:ring-amber-200"
-              >
-                {effectiveImage ? (
-                  <img
-                    src={effectiveImage}
-                    alt={product.label}
-                    loading="lazy"
-                    className="absolute inset-0 h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-                    onError={() => onImageError(product.uploadLabel)}
-                  />
-                ) : (
-                  <div className="absolute inset-0 bg-gradient-to-br from-slate-700 to-slate-900" />
-                )}
-                <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-slate-950/25 to-transparent" />
-                <span className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full border border-amber-200/35 bg-slate-950/55 px-2 py-1 text-[9px] font-extrabold uppercase tracking-[0.08em] text-amber-100 backdrop-blur-sm">
-                  <Sparkles className="h-3 w-3" />
-                  {t("marketplace.featuredProductBadge", "Featured")}
-                </span>
-                {product.verified && (
-                  <span className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-full border border-emerald-200/35 bg-emerald-950/55 px-2 py-1 text-[9px] font-bold text-emerald-100 backdrop-blur-sm">
-                    <BadgeCheck className="h-3 w-3" />
-                    {t("marketplace.verified", "Verified")}
-                  </span>
-                )}
-                <div className="absolute bottom-2 left-2 right-2">
-                  <p className="truncate text-[12px] font-black text-white drop-shadow">{product.label}</p>
-                  <p className="mt-1 truncate text-[9px] font-semibold text-white/70">
-                    {product.category} · {product.origin}
-                  </p>
-                  <p className="mt-1 truncate text-[9px] text-white/55">
-                    MOQ: {product.moq}
-                  </p>
-                  <div className="mt-1.5 flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => product.id && onProductClick(product.id)}
-                      className="inline-flex min-w-0 flex-1 items-center justify-center gap-0.5 rounded-md border border-white/20 bg-slate-950/45 px-1.5 py-1 text-[8px] font-bold text-sky-100 transition-colors hover:border-sky-200/60 hover:bg-sky-400/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sky-200"
-                    >
-                      {t("marketplace.viewProduct", "Lihat Produk")}
-                      <ArrowUpRight className="h-3 w-3 shrink-0" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(event) => { event.stopPropagation(); onRequestQuote(); }}
-                      className="inline-flex min-w-0 flex-1 items-center justify-center gap-0.5 rounded-md bg-sky-500/90 px-1.5 py-1 text-[8px] font-bold text-white transition-colors hover:bg-sky-400 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white"
-                    >
-                      {t("marketplace.requestShort", "Request")}
-                    </button>
-                  </div>
-                </div>
-                {isAdmin && (
-                  <button
-                    type="button"
-                    onClick={(event) => { event.stopPropagation(); onUpload(product.uploadLabel); }}
-                    disabled={isUploading}
-                    className="absolute right-1.5 top-1.5 rounded-lg bg-black/65 p-1.5 text-white opacity-0 transition-opacity duration-200 group-hover:opacity-100 focus-visible:opacity-100 disabled:cursor-wait"
-                    title={`Ganti foto ${product.label}`}
-                  >
-                    {isUploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Camera className="h-3.5 w-3.5" />}
-                  </button>
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="mt-3 flex items-center justify-between gap-2">
-          <div className="min-w-0">
-            <p className="truncate text-[10px] font-bold uppercase tracking-[0.14em] text-white/45">
-              {featuredProducts.length} {t("marketplace.featuredItems", "featured products")}
-            </p>
-            <p className="mt-1 truncate text-[9px] text-white/45">
-              {t("marketplace.featuredMoqHint", "MOQ shown per product")}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onRequestQuote}
-            className="inline-flex min-h-10 shrink-0 items-center justify-center gap-1.5 rounded-xl bg-sky-500 px-3.5 py-2.5 text-[11px] font-extrabold text-white shadow-lg shadow-sky-950/35 transition-all hover:bg-sky-400 hover:shadow-sky-950/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
-          >
-            <MessageSquare className="h-3.5 w-3.5" />
-            {t("marketplace.requestQuoteBtn", "Request Quotation")}
-          </button>
-        </div>
-      </div>
-    </aside>
-  );
-}
-
 // ── Featured Product Showcase V2 ──────────────────────────────────────────────
 function FeaturedProductsShowcase({
   heroTiles,
@@ -1466,12 +1206,12 @@ export default function MarketplacePage() {
   const [showCompareModal, setShowCompareModal] = useState(false);
   const MAX_COMPARE = 4;
 
-  // ── Hero category tiles — DB-driven, no hardcoded URLs ───────────────────
-  const { data: heroTiles = [] } = useQuery<HeroCategoryTile[]>({
-    queryKey: ["marketplace-hero-tiles"],
+  // ── Featured products — reuse the existing canonical Admin Portal selection
+  const { data: featuredProducts = [] } = useQuery<FeaturedMarketplaceProduct[]>({
+    queryKey: ["marketplace-featured-products"],
     queryFn: () =>
-      fetch("/api/portal/marketplace/hero-tiles").then((r) => {
-        if (!r.ok) throw new Error("hero-tiles error");
+      fetch("/api/portal/marketplace/featured?limit=6").then((r) => {
+        if (!r.ok) throw new Error("featured-products error");
         return r.json();
       }),
     staleTime: 2 * 60_000,
@@ -1784,21 +1524,9 @@ export default function MarketplacePage() {
             </div>
 
             <FeaturedProductsShowcase
-              heroTiles={heroTiles}
+              featuredProducts={featuredProducts}
               items={items}
-              customImages={customCategoryImgs}
-              failedLabels={failedTileLabels}
-              uploadingLabel={uploadingCat}
-              isAdmin={isAdmin}
-              onRequestQuote={() => {
-                document.getElementById("marketplace-grid")?.scrollIntoView({ behavior: "smooth", block: "start" });
-              }}
               onProductClick={(productId) => setLocation(`/marketplace/${productId}`)}
-              onUpload={(label) => {
-                pendingCatLabelRef.current = label;
-                catImgInputRef.current?.click();
-              }}
-              onImageError={(label) => setFailedTileLabels((prev) => new Set([...prev, label]))}
             />
 
           </div>
