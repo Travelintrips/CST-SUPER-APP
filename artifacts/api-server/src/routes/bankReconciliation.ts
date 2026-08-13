@@ -2669,8 +2669,34 @@ router.get("/mutations", async (req, res) => {
                       AND psb.status IN ('posted', 'reconciled')
                   )
               ) current_payment
-            ), '[]'::jsonb),
-            'current_gross_amount', COALESCE((
+             ), '[]'::jsonb),
+             'current_payment_amounts', COALESCE((
+               SELECT jsonb_object_agg(current_payment.payment_id::text, current_payment.amount)
+               FROM (
+                 SELECT sp.id AS payment_id, sp.amount
+                 FROM sport_center.sport_payments sp
+                 WHERE sp.id IN (
+                   SELECT (item->>'paymentId')::int
+                   FROM jsonb_array_elements(qc.payment_items) item
+                   WHERE item->>'paymentId' IS NOT NULL
+                     AND NOT EXISTS (
+                       SELECT 1
+                       FROM qris_settlement_items qsi
+                       WHERE qsi.sport_payment_id = (item->>'paymentId')::int
+                     )
+                     AND NOT EXISTS (
+                       SELECT 1
+                       FROM sport_center.payment_settlement_items psi
+                       JOIN sport_center.payment_settlement_batches psb
+                         ON psb.id = psi.settlement_id
+                       WHERE psi.payment_id = (item->>'paymentId')::int
+                         AND psi.item_status = 'active'
+                         AND psb.status IN ('posted', 'reconciled')
+                     )
+                 )
+               ) current_payment
+             ), '{}'::jsonb),
+             'current_gross_amount', COALESCE((
               SELECT SUM(sp.amount)
               FROM sport_center.sport_payments sp
               WHERE sp.id IN (

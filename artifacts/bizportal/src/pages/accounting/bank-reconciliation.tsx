@@ -547,6 +547,7 @@ interface QrisCandidateAudit {
   payment_items?: QrisPaymentItem[];
   settled_payment_ids?: Array<number | string> | null;
   current_payment_ids?: Array<number | string> | null;
+  current_payment_amounts?: Record<string, number | string> | null;
   current_gross_amount?: number | string | null;
   current_expected_amount?: number | string | null;
   current_evidence_valid?: boolean | null;
@@ -747,6 +748,19 @@ const numericValue = (value: number | string | null | undefined): number | null 
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 };
+
+function qrisPaymentGross(
+  item: QrisPaymentItem,
+  liveAmounts?: Record<string, number | string> | null,
+): number {
+  const paymentId = item.paymentId ?? item.payment_id;
+  const liveAmount = paymentId == null
+    ? null
+    : numericValue(liveAmounts?.[String(paymentId)]);
+  return liveAmount
+    ?? numericValue(item.grossAmount ?? item.gross_amount)
+    ?? 0;
+}
 
 function hasUnresolvedVariance(m: BankMutation): boolean {
   const candidate = m.candidates?.[0];
