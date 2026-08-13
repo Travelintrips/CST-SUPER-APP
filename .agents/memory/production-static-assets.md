@@ -53,3 +53,16 @@ against a saturated Storage service do not prove an asset or application bug.
 **How to apply:** Verify the canonical production object first, keep preview
 fallbacks scoped to the affected static asset, and retry promotion only after
 the Storage connection limit clears.
+
+Development favicon uploads can also fail with gateway/database timeouts while
+the production branding object remains healthy. A narrowly scoped dev proxy to
+the verified production branding object keeps the favicon exact until the
+development bucket is synchronized.
+
+**Why:** The browser needs the same small brand asset in both environments,
+but a temporary dev storage outage should not force a different visual identity
+or a binary file into the repository.
+
+**How to apply:** Keep the canonical PNG link unchanged, scope the
+development-only proxy to that asset path, and retry bucket promotion
+separately.
