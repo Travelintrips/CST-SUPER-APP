@@ -126,10 +126,37 @@ else
   echo "[production] HTTP E2E: FAIL"
 fi
 
+# ── 5. Canonical Sport Center settlement schema/contract preflight ─────────────
+#
+# Metadata-only. This must pass before a production release can claim that
+# canonical settlement approval is available. It never runs DDL or writes data.
+echo ""
+echo "[production] Checking canonical Sport Center settlement contract..."
+set +e
+pnpm run db:preflight:canonical:prod
+canonical_exit=$?
+set -e
+
+echo "[production] canonical settlement preflight exit code: ${canonical_exit}"
+if [[ "$canonical_exit" -eq 0 ]]; then
+  node scripts/release-summary.mjs canonicalSettlement PASS
+  echo "[production] canonical settlement preflight: PASS"
+elif [[ "$canonical_exit" -eq 2 ]]; then
+  node scripts/release-summary.mjs canonicalSettlement BLOCKED "Canonical settlement schema/contract preflight is blocked"
+  reasons+=("Canonical settlement preflight BLOCKED — resolve runtime schema and frozen reconciliation ownership contract")
+  all_pass=false
+  echo "[production] canonical settlement preflight: BLOCKED"
+else
+  node scripts/release-summary.mjs canonicalSettlement FAIL "Canonical settlement schema preflight failed"
+  reasons+=("Canonical settlement preflight FAIL — required runtime objects are missing or invalid")
+  all_pass=false
+  echo "[production] canonical settlement preflight: FAIL"
+fi
+
 # ── Final verdict ─────────────────────────────────────────────────────────────
 
 echo ""
-echo "[production] static_exit=${static_exit} runtime_exit=${runtime_exit} availability_exit=${secret_availability_exit} rotation_exit=${secret_rotation_exit} e2e_exit=${e2e_exit}"
+echo "[production] static_exit=${static_exit} runtime_exit=${runtime_exit} availability_exit=${secret_availability_exit} rotation_exit=${secret_rotation_exit} e2e_exit=${e2e_exit} canonical_exit=${canonical_exit}"
 
 # SAFE DEV alone never enough for GO, even if all other gates pass
 if "$runtime_was_safe_dev" && [[ "$e2e_exit" -ne 0 ]]; then

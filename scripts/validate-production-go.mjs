@@ -305,6 +305,29 @@ gates.push(stagingDependentGate(
   });
 }
 
+// Gate 13 — Canonical Sport Center settlement contract
+{
+  const s = summary.canonicalSettlement;
+  const currentStatus = gateStatus(s);
+  const status = !summaryLoaded ? "NOT_RUN"
+    : currentStatus === "PASS"    ? "PASS"
+    : currentStatus === "BLOCKED" ? "BLOCKED"
+    : currentStatus === "FAIL"    ? "FAIL"
+    : "NOT_RUN";
+  gates.push({
+    gate: "13 — Canonical Settlement",
+    description: "Required settlement schema and frozen reconciliation contract",
+    status,
+    evidence: currentStatus === "PASS"
+      ? "pnpm run db:preflight:canonical:prod → PASS"
+      : currentStatus === "BLOCKED"
+      ? "Canonical settlement preflight is blocked by missing schema or unresolved ownership contract"
+      : status === "NOT_RUN"
+      ? "NOT_RUN — run: pnpm run db:preflight:canonical:prod"
+      : "Run: pnpm run db:preflight:canonical:prod",
+  });
+}
+
 // ── Report ────────────────────────────────────────────────────────────────────
 
 console.log("");
