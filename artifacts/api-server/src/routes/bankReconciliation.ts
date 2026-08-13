@@ -93,7 +93,11 @@ import {
   assertGenericPostAllowed,
   GenericPostGuardError,
 } from "../lib/reconciliation/genericPostGuard.js";
-import { assertQrisBatchApprovalEligible, checkQrisBatchReviewWarning } from "../lib/reconciliation/qrisBatchApprovalEligibility.js";
+import {
+  assertQrisBatchApprovalEligible,
+  checkQrisBatchReviewWarning,
+  hasQrisBatchPaymentItems,
+} from "../lib/reconciliation/qrisBatchApprovalEligibility.js";
 import {
   checkDuplicatePaymentIds,
   checkStaleAmounts,
@@ -1266,7 +1270,7 @@ router.post("/qris-candidates/:candidateId/approve-legacy", async (req, res) => 
       const rawItems = typeof candidate.payment_items === "string"
         ? JSON.parse(candidate.payment_items)
         : candidate.payment_items;
-      if (!Array.isArray(rawItems) || rawItems.length === 0) {
+      if (!hasQrisBatchPaymentItems(rawItems)) {
         throw Object.assign(new Error("Kandidat QRIS tidak memiliki payment item"), {
           code: "INVALID_CANDIDATE",
         });

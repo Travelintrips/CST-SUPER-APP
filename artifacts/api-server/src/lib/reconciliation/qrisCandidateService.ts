@@ -7,7 +7,6 @@ import {
   type QrisPaymentCandidateInput,
 } from "./qrisCandidateEngine.js";
 import {
-  expectedQrisSettlementDate,
   normalizeQrisProvider,
   providerRulesByBankAccountFromRows,
   providerRulesFromRows,
@@ -266,32 +265,36 @@ export async function generateQrisCandidates(options: {
       SELECT
         bm.id, bm.company_id,
          bm.mutation_key,
-        COALESCE(
-          (
-            SELECT cba.id::text
-            FROM company_bank_accounts cba
-            WHERE cba.is_active = TRUE
-              AND (cba.company_id = bm.company_id OR cba.company_id IS NULL)
-              AND cba.id::text = NULLIF(BTRIM(bm.bank_account_id), '')
-            LIMIT 1
-          ),
-          (
+        (
+          SELECT CASE WHEN COUNT(*) = 1 THEN MIN(matches.id)::text END
+          FROM (
             SELECT cba.id
             FROM company_bank_accounts cba
             WHERE cba.is_active = TRUE
               AND (cba.company_id = bm.company_id OR cba.company_id IS NULL)
               AND (
-                (bm.source_account IS NOT NULL
+                (
+                  NULLIF(BTRIM(bm.bank_account_id::text), '') IS NOT NULL
+                  AND cba.id::text = NULLIF(BTRIM(bm.bank_account_id::text), '')
+                )
+                OR (
+                  NULLIF(BTRIM(bm.bank_account_id::text), '') IS NULL
+                  AND bm.source_account IS NOT NULL
                   AND regexp_replace(bm.source_account, '[^0-9]', '', 'g')
-                    = regexp_replace(cba.account_number, '[^0-9]', '', 'g'))
-                OR POSITION(
-                  regexp_replace(cba.account_number, '[^0-9]', '', 'g')
-                  IN regexp_replace(COALESCE(bm.description, ''), '[^0-9]', '', 'g')
-                ) > 0
+                    <> ''
+                  AND regexp_replace(bm.source_account, '[^0-9]', '', 'g')
+                    = regexp_replace(cba.account_number, '[^0-9]', '', 'g')
+                )
+                OR (
+                  NULLIF(BTRIM(bm.bank_account_id::text), '') IS NULL
+                  AND regexp_replace(cba.account_number, '[^0-9]', '', 'g') <> ''
+                  AND POSITION(
+                    regexp_replace(cba.account_number, '[^0-9]', '', 'g')
+                    IN regexp_replace(COALESCE(bm.description, ''), '[^0-9]', '', 'g')
+                  ) > 0
+                )
               )
-            ORDER BY cba.company_id NULLS LAST, cba.id
-            LIMIT 1
-          )::text
+          ) matches
         ) AS bank_account_id,
         bm.transaction_date, bm.amount,
         bm.direction, bm.source, bm.source_classification, bm.provider_name,
@@ -330,15 +333,16 @@ export async function generateQrisCandidates(options: {
   const holidays = (holidayRows.rows as Array<Record<string, unknown>>)
     .map((row) => asDate(row.holiday_date))
     .filter((value): value is string => Boolean(value));
-  const rules = providerRulesFromRows(ruleRows.rows as Array<Record<string, unknown>>);
+  const rules = providerRulesFromRows(
+    ruleRows.rows as Array<Record<string, unknown>>,
+    { includeDefaults: false },
+  );
   const accountRules = providerRulesByBankAccountFromRows(
     ruleRows.rows as Array<Record<string, unknown>>,
   );
 
   const payments: QrisPaymentCandidateInput[] = (paymentRows.rows as Array<Record<string, unknown>>).map((row) => {
     const providerCode = normalizeQrisProvider(String(row.provider_code ?? "unknown"));
-    const providerRule = accountRules[String(row.bank_account_id)]?.[providerCode]
-      ?? rules[providerCode];
     return {
       id: Number(row.id),
       companyId: row.company_id == null ? null : Number(row.company_id),
@@ -347,11 +351,10 @@ export async function generateQrisCandidates(options: {
       method: String(row.method ?? ""),
       status: String(row.status ?? ""),
       paidAt: row.paid_at as string | null,
-      expectedSettlementDate: asDate(row.settlement_date)
-        ?? expectedQrisSettlementDate(row.paid_at as string, providerCode, holidays, providerRule),
+      expectedSettlementDate: asDate(row.settlement_date),
       settlementRuleVersion: row.settlement_rule_version == null
-        ? providerRule?.ruleVersion ?? "legacy-v1"
-        : String(row.settlement_rule_version),
+        ? null
+        : String(row.settlement_rule_version).trim() || null,
       providerName: providerCode,
       providerReference: row.settlement_reference == null ? null : String(row.settlement_reference),
       paymentNumber: row.payment_number == null ? null : String(row.payment_number),
@@ -397,10 +400,31 @@ export async function generateQrisCandidates(options: {
     holidays,
     providerRules: rules,
     accountProviderRules: accountRules,
+    requireExplicitSettlementMetadata: true,
   });
+  const persistableCandidates = candidates.filter((candidate) =>
+    candidate.paymentItems.length > 0
+      && Boolean(candidate.estimatedSettlementDate)
+      && Boolean(candidate.settlementRuleVersion),
+  );
+  const persistableMutationIds = new Set(
+    persistableCandidates.map((candidate) => candidate.mutationId),
+  );
 
   if (!options.dryRun) {
     for (const candidate of candidates) {
+      // qris_mutation_batch_candidates has a non-null estimated date for
+      // historical schema compatibility. Do not satisfy that constraint with
+      // the bank mutation date when canonical payment metadata is absent.
+      // Such an empty candidate is visible in dry-run output but is never
+      // persisted or made approvable.
+      if (
+        candidate.paymentItems.length === 0
+        || !candidate.estimatedSettlementDate
+        || !candidate.settlementRuleVersion
+      ) {
+        continue;
+      }
       const itemJson = JSON.stringify(candidate.paymentItems);
       const existing = (existingRows.rows as Array<Record<string, unknown>>).find((row) =>
         Number(row.mutation_id) === candidate.mutationId
@@ -496,6 +520,32 @@ export async function generateQrisCandidates(options: {
           NOW(),
           NOW()
         )
+      `));
+    }
+
+    // A previously generated candidate may contain metadata that was
+    // synthesized by the old fallback path. Once the strict regeneration
+    // cannot reproduce it, retire that provisional snapshot so it cannot
+    // remain approvable merely because the source payment is now unresolved.
+    const currentMutationIds = new Set(mutations.map((mutation) => mutation.id));
+    for (const existing of existingRows.rows as Array<Record<string, unknown>>) {
+      const mutationId = Number(existing.mutation_id);
+      const existingStatus = String(existing.status ?? "").toLowerCase();
+      if (
+        !currentMutationIds.has(mutationId)
+        || persistableMutationIds.has(mutationId)
+        || ["approved", "completed", "superseded", "stale", "ineligible"].includes(existingStatus)
+      ) {
+        continue;
+      }
+      await db.execute(sql.raw(`
+        UPDATE qris_mutation_batch_candidates
+        SET status = 'stale',
+            reconciliation_status = 'UNMATCHED',
+            review_reason = 'Kandidat ditutup: metadata QRIS canonical tidak lagi lengkap atau tidak unik; tidak ada fallback sintetis.',
+            updated_at = NOW()
+        WHERE id = ${Number(existing.id)}
+          AND status NOT IN ('approved', 'completed', 'superseded', 'stale', 'ineligible')
       `));
     }
   }

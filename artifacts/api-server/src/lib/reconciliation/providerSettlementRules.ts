@@ -95,34 +95,37 @@ export function providerRulesFromRows(
     absolute_variance_tolerance?: number;
     percentage_variance_tolerance?: number;
   }>,
-): Record<QrisProviderCode, QrisProviderRule> {
-  const result = { ...DEFAULT_QRIS_PROVIDER_RULES };
+  options: { includeDefaults?: boolean } = {},
+): Partial<Record<QrisProviderCode, QrisProviderRule>> {
+  const result: Partial<Record<QrisProviderCode, QrisProviderRule>> =
+    options.includeDefaults === false ? {} : { ...DEFAULT_QRIS_PROVIDER_RULES };
   for (const row of rows) {
     if (row.bankAccountId != null || (row as { bank_account_id?: number | null }).bank_account_id != null) {
       continue;
     }
     const provider = normalizeQrisProvider(row.providerCode ?? row.provider_code);
     if (provider === "unknown") continue;
+    const baseRule = result[provider] ?? DEFAULT_QRIS_PROVIDER_RULES[provider];
     result[provider] = {
-      ...result[provider],
+      ...baseRule,
       providerCode: provider,
-      ruleVersion: row.ruleVersion ?? row.rule_version ?? result[provider].ruleVersion ?? "legacy-v1",
+      ruleVersion: row.ruleVersion ?? row.rule_version ?? baseRule.ruleVersion ?? "legacy-v1",
       settlementDelayBusinessDays: Number(row.settlementDelayBusinessDays
         ?? row.settlement_delay_business_days
-        ?? result[provider].settlementDelayBusinessDays),
+        ?? baseRule.settlementDelayBusinessDays),
       matchWindowBusinessDays: Number(row.matchWindowBusinessDays
         ?? row.match_window_business_days
-        ?? result[provider].matchWindowBusinessDays),
+        ?? baseRule.matchWindowBusinessDays),
       maxEffectiveDeductionRate: Number(row.maxEffectiveDeductionRate
         ?? row.max_effective_deduction_rate
-        ?? result[provider].maxEffectiveDeductionRate),
+        ?? baseRule.maxEffectiveDeductionRate),
       absoluteVarianceTolerance: Number(row.absoluteVarianceTolerance
         ?? row.absolute_variance_tolerance
-        ?? result[provider].absoluteVarianceTolerance
+        ?? baseRule.absoluteVarianceTolerance
         ?? 0),
       percentageVarianceTolerance: Number(row.percentageVarianceTolerance
         ?? row.percentage_variance_tolerance
-        ?? result[provider].percentageVarianceTolerance
+        ?? baseRule.percentageVarianceTolerance
         ?? 0),
     };
   }

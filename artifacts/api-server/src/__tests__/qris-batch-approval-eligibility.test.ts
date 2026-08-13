@@ -14,6 +14,7 @@ import { describe, it, expect } from "vitest";
 import {
   checkQrisBatchApprovalEligibility,
   assertQrisBatchApprovalEligible,
+  hasQrisBatchPaymentItems,
   type QrisBatchCandidateForEligibility,
 } from "../lib/reconciliation/qrisBatchApprovalEligibility.js";
 
@@ -100,6 +101,18 @@ describe("checkQrisBatchApprovalEligibility", () => {
     expect(
       checkQrisBatchApprovalEligibility(candidate({ reconciliation_status: "matched" })),
     ).toBeNull();
+  });
+});
+
+describe("hasQrisBatchPaymentItems", () => {
+  it("rejects an empty candidate payload", () => {
+    expect(hasQrisBatchPaymentItems([])).toBe(false);
+    expect(hasQrisBatchPaymentItems(null)).toBe(false);
+    expect(hasQrisBatchPaymentItems({})).toBe(false);
+  });
+
+  it("accepts a candidate with at least one payment item", () => {
+    expect(hasQrisBatchPaymentItems([{ paymentId: 101 }])).toBe(true);
   });
 });
 

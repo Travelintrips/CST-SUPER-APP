@@ -262,6 +262,64 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     expect(result.every((candidate) => candidate.reason.includes("AMBIGUOUS_PAYMENT_PARTITION"))).toBe(true);
   });
 
+  it("does not synthesize settlement metadata in the strict runtime contract", () => {
+    const result = generateQrisMutationBatchCandidates({
+      requireExplicitSettlementMetadata: true,
+      payments: [{
+        id: 91, companyId: 10, bankAccountId: 77, amount: 100_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-06",
+        expectedSettlementDate: null, settlementRuleVersion: null,
+        providerName: "paylabs",
+      }],
+      mutations: [{
+        id: 92, companyId: 10, bankAccountId: 77, transactionDate: "2026-08-07",
+        amount: 99_300, direction: "IN", source: "bank_import",
+        sourceClassification: "actual_bank_mutation",
+        providerName: "paylabs", description: "PAYLABS SETTLEMENT",
+      }],
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      status: "UNMATCHED",
+      estimatedSettlementDate: "",
+      settlementRuleVersion: "",
+      paymentItems: [],
+    });
+    expect(result[0]?.status).not.toBe("MATCHED");
+  });
+
+  it("matches strict runtime metadata only with an explicit provider rule", () => {
+    const result = generateQrisMutationBatchCandidates({
+      requireExplicitSettlementMetadata: true,
+      providerRules: {
+        paylabs: {
+          providerCode: "paylabs",
+          ruleVersion: "OWNER-PAYLABS-V1",
+          settlementDelayBusinessDays: 1,
+          matchWindowBusinessDays: 1,
+          maxEffectiveDeductionRate: 0.1,
+        },
+      },
+      payments: [{
+        id: 93, companyId: 10, bankAccountId: 77, amount: 100_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-06",
+        expectedSettlementDate: "2026-08-07",
+        settlementRuleVersion: "OWNER-PAYLABS-V1",
+        providerName: "paylabs",
+      }],
+      mutations: [{
+        id: 94, companyId: 10, bankAccountId: 77, transactionDate: "2026-08-07",
+        amount: 99_300, direction: "IN", source: "bank_import",
+        sourceClassification: "actual_bank_mutation",
+        providerName: "paylabs", description: "PAYLABS SETTLEMENT",
+      }],
+    });
+
+    expect(result[0]?.status).toBe("MATCHED");
+    expect(result[0]?.settlementRuleVersion).toBe("OWNER-PAYLABS-V1");
+  });
+
   it("keeps a cross-date partial settlement reviewable without calling it an ambiguous subset", () => {
     const result = generateQrisMutationBatchCandidates({
       payments: [{

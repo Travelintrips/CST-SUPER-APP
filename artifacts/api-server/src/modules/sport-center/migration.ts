@@ -2891,37 +2891,17 @@ export async function runSportCenterMigration(): Promise<void> {
       logger.warn({ err: p4cErr }, "Sport Center migration: Phase 4C QRIS column migration non-fatal failure");
     }
 
-    // ── Phase 4C backfill: isi bank_account_id + expected_settlement_date ──────
-    // Untuk payment yang baru punya kolom (NULL), backfill nilai reasonable:
-    //   • bank_account_id — ambil bank account aktif milik company (first match)
-    //   • expected_settlement_date — confirmed_at::date + 1 (simplified T+1)
-    //   • settlement_rule_version — 'default-v1' sebagai fallback
-    // Data yang sudah diisi trigger (non-NULL) tidak akan diubah.
+    // ── Phase 4C metadata backfill is deliberately fail-closed ───────────────
+    // Do not infer a receiving account from the first active company account,
+    // invent a T+1 settlement date, or stamp a default rule version.  The
+    // owner-approved resolver above is the only writer for these fields and
+    // leaves a payment unresolved until its facility/company mapping, external
+    // bank account, provider identity, and active settlement rule are all
+    // uniquely proven.
     try {
-      await db.execute(sql`
-        UPDATE sport_center.sport_payments sp
-        SET
-          bank_account_id = COALESCE(sp.bank_account_id, (
-            SELECT cba.id
-            FROM company_bank_accounts cba
-            WHERE cba.company_id = sp.company_id
-              AND cba.is_active = TRUE
-            ORDER BY cba.id
-            LIMIT 1
-          )),
-          expected_settlement_date = COALESCE(
-            sp.expected_settlement_date,
-            (COALESCE(sp.confirmed_at, sp.created_at)::date + 1)
-          ),
-          settlement_rule_version = COALESCE(
-            sp.settlement_rule_version,
-            'default-v1'
-          )
-        WHERE sp.bank_account_id IS NULL
-           OR sp.expected_settlement_date IS NULL
-           OR sp.settlement_rule_version IS NULL
-      `);
-      logger.info("Sport Center migration: Phase 4C QRIS column backfill selesai");
+      logger.info(
+        "Sport Center migration: Phase 4C unsafe metadata fallback disabled; owner-approved resolver remains authoritative",
+      );
     } catch (backfillErr) {
       logger.warn({ err: backfillErr }, "Sport Center migration: Phase 4C backfill non-fatal failure");
     }

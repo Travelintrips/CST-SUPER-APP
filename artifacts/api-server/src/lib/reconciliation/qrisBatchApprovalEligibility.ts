@@ -40,6 +40,14 @@ export interface QrisBatchReviewWarning {
 }
 
 /**
+ * An empty candidate has no source payments to settle. It must never reach
+ * the approval transaction, regardless of its stored reconciliation status.
+ */
+export function hasQrisBatchPaymentItems(value: unknown): value is unknown[] {
+  return Array.isArray(value) && value.length > 0;
+}
+
+/**
  * Returns null when the candidate is eligible for approval, or an error object
  * that describes why it cannot be approved.
  *

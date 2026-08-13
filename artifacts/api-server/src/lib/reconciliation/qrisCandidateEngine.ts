@@ -244,8 +244,12 @@ export function generateQrisMutationBatchCandidates(input: {
   providerRules?: Partial<Record<QrisProviderCode, QrisProviderRule>>;
   accountProviderRules?: Record<string, Partial<Record<QrisProviderCode, QrisProviderRule>>>;
   existingMutationIds?: Iterable<number>;
+  requireExplicitSettlementMetadata?: boolean;
 }): QrisMutationBatchCandidate[] {
-  const rules = { ...DEFAULT_QRIS_PROVIDER_RULES, ...(input.providerRules ?? {}) };
+  const requireExplicitSettlementMetadata = input.requireExplicitSettlementMetadata === true;
+  const rules = requireExplicitSettlementMetadata
+    ? { ...(input.providerRules ?? {}) }
+    : { ...DEFAULT_QRIS_PROVIDER_RULES, ...(input.providerRules ?? {}) };
   const existingMutationIds = new Set(input.existingMutationIds ?? []);
   const eligiblePayments = input.payments.filter(isEligiblePayment);
   const openMutations = input.mutations.filter(isOpenMutation);
@@ -263,18 +267,22 @@ export function generateQrisMutationBatchCandidates(input: {
     const accountRules = input.accountProviderRules?.[String(mutation.bankAccountId)];
     const rule = accountRules?.[evidence.providerCode]
       ?? rules[evidence.providerCode]
-      ?? rules.unknown;
-    const ruleVersion = rule.ruleVersion ?? "legacy-v1";
-    const dimensionPayments = eligiblePayments.filter((payment) =>
-      payment.companyId === mutation.companyId
-        && payment.bankAccountId === mutation.bankAccountId
-        && payment.expectedSettlementDate != null
-        && businessDayDistance(
-          payment.expectedSettlementDate,
-          mutation.transactionDate,
-          input.holidays ?? [],
-        ) <= Math.max(0, Math.trunc(rule.matchWindowBusinessDays)),
-    );
+      ?? (requireExplicitSettlementMetadata ? undefined : rules.unknown);
+    const ruleVersion = rule?.ruleVersion ?? (requireExplicitSettlementMetadata ? "" : "legacy-v1");
+    const dimensionPayments = rule == null && requireExplicitSettlementMetadata
+      ? []
+      : eligiblePayments.filter((payment) =>
+        payment.companyId === mutation.companyId
+          && payment.bankAccountId === mutation.bankAccountId
+          && payment.expectedSettlementDate != null
+          && (!requireExplicitSettlementMetadata
+            || Boolean(String(payment.settlementRuleVersion ?? "").trim()))
+          && businessDayDistance(
+            payment.expectedSettlementDate,
+            mutation.transactionDate,
+            input.holidays ?? [],
+          ) <= Math.max(0, Math.trunc(rule?.matchWindowBusinessDays ?? 0)),
+      );
     const providerDimensionPayments = dimensionPayments.filter((payment) =>
       evidence.providerCode !== "unknown"
         && sameNaturalBatch(
@@ -282,7 +290,7 @@ export function generateQrisMutationBatchCandidates(input: {
           mutation,
           evidence.providerCode,
           input.holidays ?? [],
-          rule.matchWindowBusinessDays,
+          rule?.matchWindowBusinessDays ?? 0,
         ),
     );
     const nearestExpectedSettlementDistance = providerDimensionPayments.length > 0
@@ -321,7 +329,7 @@ export function generateQrisMutationBatchCandidates(input: {
           other.transactionDate,
           mutation.transactionDate,
           input.holidays ?? [],
-        ) <= Math.max(0, Math.trunc(rule.matchWindowBusinessDays))
+        ) <= Math.max(0, Math.trunc(rule?.matchWindowBusinessDays ?? 0))
         && providerEvidence(other, input.accountProviderRules).providerCode
           === evidence.providerCode
         && evidence.providerCode !== "unknown",
@@ -377,7 +385,11 @@ export function generateQrisMutationBatchCandidates(input: {
       && splitSettlementNet === grossAmount
       && grossAmount > 0;
     const validDeduction = grossAmount > 0
-      && isValidObservedDeduction(grossAmount, netAmount, rule.maxEffectiveDeductionRate);
+      && isValidObservedDeduction(
+        grossAmount,
+        netAmount,
+        rule?.maxEffectiveDeductionRate ?? 0,
+      );
     const actualEvidence = sourceClassification === "actual_bank_mutation";
     const knownProvider = evidence.providerCode !== "unknown";
     const completeBankDimension = mutation.companyId != null && mutation.bankAccountId != null;
@@ -385,6 +397,7 @@ export function generateQrisMutationBatchCandidates(input: {
     const matched = completeBankDimension
       && actualEvidence
       && knownProvider
+      && (!requireExplicitSettlementMetadata || rule != null)
       && hasNaturalBatch
       && expectedDatesPresent
       && !partitionBlocked
@@ -420,7 +433,7 @@ export function generateQrisMutationBatchCandidates(input: {
       providerDetectionSource: evidence.source,
       mutationSourceClassification: sourceClassification,
       sourceDate: mutation.transactionDate,
-      estimatedSettlementDate: selectedPayments[0]?.expectedSettlementDate ?? mutation.transactionDate,
+      estimatedSettlementDate: selectedPayments[0]?.expectedSettlementDate ?? "",
       settlementRuleVersion: selectedPayments[0]?.settlementRuleVersion ?? ruleVersion,
       grossAmount,
       netAmount,
