@@ -1089,10 +1089,12 @@ router.get("/qris-candidates", async (req, res) => {
   try {
     const companyId = resolveCompanyId(req);
     const status = req.query.status ? String(req.query.status).toUpperCase() : null;
+    const includeCompleted = String(req.query.includeCompleted ?? "").toLowerCase() === "true";
     const candidates = await listQrisCandidates({
       companyId,
       status,
       limit: Number(req.query.limit ?? 100),
+      includeCompleted,
     });
     return res.json({
       mode: "candidate_review",
@@ -1958,6 +1960,339 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
   }
 });
 */
+
+// ─── POST /qris-candidates/:id/approve ────────────────────────────────────────
+// One active QRIS approval path:
+//   candidate revalidation → canonical Sport Center settlement builder
+//   → source-aware matching → canonical reconciliation approval.
+// This route never writes qris_settlements, qris_settlement_items, or the
+// public sport_payments mirror. Those tables are historical/provisional only.
+router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
+  await runQrisSettlementMigration();
+  const candidateId = Number(req.params.candidateId);
+  const companyId = resolveCompanyId(req);
+  const actor = (req as any).user?.email ?? "system";
+
+  if (!Number.isSafeInteger(candidateId) || candidateId <= 0) {
+    return res.status(400).json({ error: "candidateId tidak valid" });
+  }
+  if (!Number.isSafeInteger(companyId) || companyId <= 0) {
+    return res.status(400).json({ error: "companyId tidak valid" });
+  }
+
+  try {
+    const requestedPaymentIds = req.body?.paymentIds ?? req.body?.payment_ids;
+    if (requestedPaymentIds !== undefined && !Array.isArray(requestedPaymentIds)) {
+      return res.status(400).json({ error: "paymentIds harus berupa array" });
+    }
+    const requestedIds: number[] | null = requestedPaymentIds === undefined
+      ? null
+      : [...new Set((requestedPaymentIds as unknown[]).map((value: unknown) => Number(value)))];
+
+    const candidate = await db.transaction(async (tx) => {
+      const { rows } = await tx.execute(sql.raw(`
+        SELECT c.*,
+               bm.description AS bank_description,
+               bm.normalized_description AS bank_normalized_description,
+               bm.transaction_date AS bank_transaction_date,
+               bm.amount AS bank_amount,
+               bm.direction AS bank_direction,
+               bm.company_id AS bank_company_id,
+               bm.bank_account_id AS bank_mutation_account_id,
+               bm.provider_name AS bank_provider_name,
+               bm.provider_order_id AS bank_provider_order_id,
+               bm.mutation_key AS bank_mutation_key,
+               bm.uploaded_proof_url AS bank_uploaded_proof_url
+        FROM qris_mutation_batch_candidates c
+        JOIN bank_mutations bm ON bm.id = c.mutation_id
+        WHERE c.id = ${candidateId}
+          AND c.company_id = ${companyId}
+        FOR UPDATE OF c, bm
+      `));
+      const row = rows[0] as Record<string, unknown> | undefined;
+      if (!row) throw Object.assign(new Error("Kandidat QRIS tidak ditemukan"), { code: "NOT_FOUND" });
+
+      const candidateStatus = String(row.status ?? "").toLowerCase();
+      if (["approved", "completed"].includes(candidateStatus)) {
+        const { rows: approvedRows } = await tx.execute(sql.raw(`
+          SELECT id, candidate_id, candidate_source, status
+          FROM bank_reconciliation_matches
+          WHERE mutation_id = ${Number(row.mutation_id)}
+            AND candidate_type = 'qris_settlement'
+            AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
+            AND status = 'approved'
+          ORDER BY id
+          LIMIT 1
+        `));
+        if (!approvedRows[0]) {
+          throw Object.assign(
+            new Error("Kandidat QRIS sudah berstatus selesai tetapi link canonical belum lengkap."),
+            { code: "INCONSISTENT_STATE" },
+          );
+        }
+        return {
+          ...row,
+          mutationId: Number(row.mutation_id),
+          alreadyApproved: true as const,
+          approvedMatch: approvedRows[0],
+          selectedPaymentIds: [] as number[],
+        };
+      }
+
+      assertQrisBatchApprovalEligible({
+        id: Number(row.id),
+        reconciliation_status: String(row.reconciliation_status ?? ""),
+        status: row.status == null ? null : String(row.status),
+        net_amount: row.net_amount == null ? null : Number(row.net_amount),
+        observed_deduction: row.observed_deduction == null
+          ? null
+          : Number(row.observed_deduction),
+      });
+      if (String(row.bank_direction ?? "").toUpperCase() !== "IN") {
+        throw Object.assign(new Error("Settlement QRIS hanya dapat ditautkan ke mutasi IN"), {
+          code: "INVALID_CANDIDATE",
+        });
+      }
+      if (
+        row.bank_company_id != null
+        && Number(row.bank_company_id) !== companyId
+      ) {
+        throw Object.assign(new Error("Mutasi bank bukan milik company aktif"), {
+          code: "INVALID_CANDIDATE",
+        });
+      }
+
+      let rawItems: unknown;
+      try {
+        rawItems = typeof row.payment_items === "string"
+          ? JSON.parse(row.payment_items)
+          : row.payment_items;
+      } catch {
+        throw Object.assign(new Error("Data payment_items kandidat QRIS tidak valid"), {
+          code: "INVALID_CANDIDATE",
+        });
+      }
+      if (!Array.isArray(rawItems) || rawItems.length === 0) {
+        throw Object.assign(new Error("Kandidat QRIS tidak memiliki payment"), {
+          code: "INVALID_CANDIDATE",
+        });
+      }
+
+      const paymentItems = rawItems.map((item: any) => ({
+        paymentId: Number(item?.paymentId ?? item?.payment_id),
+        grossAmount: Number(item?.grossAmount ?? item?.gross_amount ?? 0),
+      }));
+      const candidatePaymentIds = paymentItems.map((item) => item.paymentId);
+      if (
+        candidatePaymentIds.some((id) => !Number.isSafeInteger(id) || id <= 0)
+        || new Set(candidatePaymentIds).size !== candidatePaymentIds.length
+      ) {
+        throw Object.assign(new Error("Identitas payment canonical pada kandidat tidak valid"), {
+          code: "INVALID_CANDIDATE",
+        });
+      }
+      const selectedIds = requestedIds ?? candidatePaymentIds;
+      if (
+        selectedIds.length === 0
+        || selectedIds.some((id) => !Number.isSafeInteger(id) || id <= 0)
+        || selectedIds.some((id) => !candidatePaymentIds.includes(id))
+      ) {
+        throw Object.assign(
+          new Error("Payment yang dipilih harus berasal dari kandidat canonical yang terlihat."),
+          { code: "INVALID_CANDIDATE" },
+        );
+      }
+
+      return {
+        ...row,
+        mutationId: Number(row.mutation_id),
+        alreadyApproved: false as const,
+        candidatePaymentIds,
+        selectedPaymentIds: selectedIds,
+        paymentItems,
+      };
+    });
+
+    if (candidate.alreadyApproved) {
+      return res.json({
+        ok: true,
+        idempotent: true,
+        candidateId,
+        mutationId: candidate.mutationId,
+        settlementId: Number((candidate.approvedMatch as any).candidate_id),
+        matching: candidate.approvedMatch,
+      });
+    }
+
+    const selectedPaymentIds = candidate.selectedPaymentIds as number[];
+    const sourcePaymentId = selectedPaymentIds[0];
+    const built = await buildCanonicalSportCenterSettlements({
+      sourcePaymentId,
+      selectedPaymentIds,
+      actor,
+    });
+    const settlementId = built.batchIds[0];
+    if (!Number.isSafeInteger(settlementId) || settlementId <= 0) {
+      throw new Error("Canonical settlement builder tidak mengembalikan batch ID");
+    }
+
+    const mutationId = candidate.mutationId;
+    const { rows: mutationRows } = await db.execute(sql.raw(`
+      SELECT id, amount, transaction_date, mutation_key, provider_order_id,
+             provider_name, normalized_description, uploaded_proof_url,
+             company_id, bank_account_id, direction
+      FROM bank_mutations
+      WHERE id = ${mutationId}
+        AND company_id = ${companyId}
+      FOR UPDATE
+    `));
+    const mutation = mutationRows[0] as Record<string, unknown> | undefined;
+    if (!mutation) throw Object.assign(new Error("Mutasi bank QRIS tidak ditemukan"), { code: "NOT_FOUND" });
+
+    const matching = await runUnifiedMatching({
+      id: Number(mutation.id),
+      amount: Number(mutation.amount),
+      transaction_date: String(mutation.transaction_date).slice(0, 10),
+      mutation_key: String(mutation.mutation_key ?? ""),
+      provider_order_id: mutation.provider_order_id == null
+        ? null
+        : String(mutation.provider_order_id),
+      provider_name: mutation.provider_name == null ? null : String(mutation.provider_name),
+      normalized_description: mutation.normalized_description == null
+        ? null
+        : String(mutation.normalized_description),
+      uploaded_proof_url: mutation.uploaded_proof_url == null
+        ? null
+        : String(mutation.uploaded_proof_url),
+      company_id: mutation.company_id == null ? companyId : Number(mutation.company_id),
+      bank_account_id: mutation.bank_account_id == null
+        ? null
+        : Number(mutation.bank_account_id),
+      direction: String(mutation.direction ?? "IN"),
+    }, actor);
+
+    const { rows: canonicalMatches } = await db.execute(sql.raw(`
+      SELECT id, mutation_id, candidate_type, candidate_id, candidate_source, status
+      FROM bank_reconciliation_matches
+      WHERE mutation_id = ${mutationId}
+        AND candidate_type = 'qris_settlement'
+        AND candidate_id = ${settlementId}
+        AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
+        AND status IN ('candidate', 'approved')
+      ORDER BY id
+      LIMIT 2
+    `));
+    if (canonicalMatches.length !== 1) {
+      throw Object.assign(
+        new Error(
+          "Settlement canonical sudah dibuat, tetapi matching source-aware tidak menghasilkan tepat satu match yang dapat disetujui.",
+        ),
+        { code: "MATCHING_EVIDENCE_INVALID" },
+      );
+    }
+
+    const approval = await approveCanonicalSettlementLink(db as any, {
+      mutationId,
+      matchId: Number((canonicalMatches[0] as any).id),
+      candidateType: "qris_settlement",
+      candidateId: settlementId,
+      candidateSource: CANONICAL_SETTLEMENT_SOURCE,
+      actor,
+    });
+
+    const { rows: completionRows } = await db.execute(sql.raw(`
+      SELECT b.id AS settlement_id,
+             b.status AS settlement_status,
+             b.bank_mutation_id,
+             j.status AS journal_status,
+             pm.status AS public_mutation_status
+      FROM sport_center.payment_settlement_batches b
+      JOIN sport_center.accounting_journals j ON j.id = b.settlement_journal_id
+      JOIN bank_mutations pm ON pm.id = ${mutationId}
+      WHERE b.id = ${settlementId}
+    `));
+    const completion = completionRows[0] as Record<string, unknown> | undefined;
+    if (
+      !completion
+      || String(completion.settlement_status).toLowerCase() !== "reconciled"
+      || Number(completion.bank_mutation_id) !== mutationId
+      || String(completion.journal_status).toLowerCase() !== "posted"
+      || String(completion.public_mutation_status).toLowerCase() !== "approved"
+    ) {
+      throw Object.assign(
+        new Error("Canonical settlement selesai sebagian; queue tetap ditahan untuk tindakan."),
+        { code: "INCONSISTENT_STATE" },
+      );
+    }
+
+    await db.execute(sql.raw(`
+      UPDATE qris_mutation_batch_candidates
+      SET status = 'approved',
+          review_reason = 'Canonical Sport Center settlement, reconciliation, accounting, dan ledger selesai.',
+          updated_at = NOW()
+      WHERE id = ${candidateId}
+    `));
+
+    audit(req, {
+      action: "qris_canonical_one_click_approved",
+      module: "accounting",
+      resourceId: `qris-candidate-${candidateId}`,
+      after: {
+        candidateId,
+        mutationId,
+        settlementId,
+        selectedPaymentIds,
+        idempotent: built.idempotent || approval.idempotent,
+      },
+    });
+    triggerWritebackForMutation(mutationId).catch(() => {});
+    trackMutationApproval({
+      mutationId,
+      actor,
+      companyId,
+    }).catch(() => {});
+
+    return res.json({
+      ok: true,
+      idempotent: built.idempotent || approval.idempotent,
+      candidateId,
+      mutationId,
+      settlementId,
+      selectedPaymentIds,
+      matching: {
+        status: matching.status,
+        candidateSource: CANONICAL_SETTLEMENT_SOURCE,
+      },
+      approval,
+      completion,
+    });
+  } catch (error: any) {
+    const code = error?.code ?? "QRIS_CANONICAL_APPROVAL_FAILED";
+    const clientErrorCodes = new Set([
+      "NOT_FOUND",
+      "INVALID_CANDIDATE",
+      "INVALID_STATUS",
+      "MATCHING_EVIDENCE_INVALID",
+      "INCONSISTENT_STATE",
+      "CANONICAL_SETTLEMENT_NOT_ELIGIBLE",
+      "CANONICAL_SETTLEMENT_GROUP_INVALID",
+      "CANONICAL_SETTLEMENT_BATCH_CONFLICT",
+      "CANONICAL_PAYMENT_SETTLEMENT_STATE_CONFLICT",
+      "CANONICAL_BANK_MUTATION_NOT_ELIGIBLE",
+    ]);
+    const status = code === "NOT_FOUND"
+      ? 404
+      : clientErrorCodes.has(code) ? 409 : 500;
+    logger.warn(
+      { err: error?.cause?.message ?? error?.message, candidateId, code },
+      "[bankRecon] canonical QRIS one-click approval rejected",
+    );
+    return res.status(status).json({
+      error: error?.message ?? "Approval canonical QRIS gagal",
+      code,
+    });
+  }
+});
 
 // ─── GET /api/bank-reconciliation/mutations ───────────────────────────────────
 // D4 fix: replace JS-level merge (N+1 key fetch + in-memory dedup + JS sort)

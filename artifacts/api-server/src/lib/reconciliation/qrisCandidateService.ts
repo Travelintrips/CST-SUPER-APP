@@ -262,6 +262,7 @@ export async function listQrisCandidates(options: {
   companyId?: number | null;
   status?: string | null;
   limit?: number;
+  includeCompleted?: boolean;
 } = {}) {
   const companyFilter = options.companyId && Number.isInteger(options.companyId)
     ? `AND c.company_id = ${Number(options.companyId)}`
@@ -269,6 +270,9 @@ export async function listQrisCandidates(options: {
   const statusFilter = options.status && ["MATCHED", "REVIEW", "UNMATCHED"].includes(options.status)
     ? `AND c.reconciliation_status = '${esc(options.status)}'`
     : "";
+  const completedFilter = options.includeCompleted
+    ? ""
+    : "AND c.status NOT IN ('approved', 'completed')";
   const limit = Math.min(Math.max(Number(options.limit ?? 100), 1), 500);
   const { rows } = await db.execute(sql.raw(`
     SELECT c.*, bm.description, bm.transaction_date, bm.amount AS bank_amount,
@@ -285,7 +289,7 @@ export async function listQrisCandidates(options: {
            ), '[]'::jsonb) AS settled_payment_ids
     FROM qris_mutation_batch_candidates c
     LEFT JOIN bank_mutations bm ON bm.id = c.mutation_id
-    WHERE TRUE ${companyFilter} ${statusFilter}
+     WHERE TRUE ${companyFilter} ${statusFilter} ${completedFilter}
     ORDER BY c.source_date DESC, c.id DESC
     LIMIT ${limit}
   `));

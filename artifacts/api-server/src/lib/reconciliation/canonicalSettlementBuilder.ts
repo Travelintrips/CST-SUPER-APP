@@ -61,6 +61,12 @@ export interface CanonicalSettlementBuildOptions {
    */
   sourcePaymentId?: number;
   sourceEventId?: string;
+  /**
+   * Optional explicit selection from the canonical group. When present, the
+   * owner builds exactly this payment set; arbitrary cross-group selections
+   * fail closed instead of silently expanding to another natural batch.
+   */
+  selectedPaymentIds?: number[];
   actor: string;
 }
 
@@ -580,6 +586,22 @@ async function buildInTransaction(
     payment_status: textOrNull(sourceRow.payment_status),
   };
   const group = assertGroup(source);
+  const requestedPaymentIds = options.selectedPaymentIds == null
+    ? null
+    : [...new Set(options.selectedPaymentIds)];
+  if (
+    requestedPaymentIds !== null
+    && (
+      requestedPaymentIds.length === 0
+      || requestedPaymentIds.some((id) => !Number.isSafeInteger(id) || id <= 0)
+      || !requestedPaymentIds.includes(source.id)
+    )
+  ) {
+    throw new CanonicalSettlementBuilderError(
+      CANONICAL_SETTLEMENT_BUILDER_CODES.SETTLEMENT_GROUP_INVALID,
+      "Selected canonical payments must be non-empty, valid, and include the source payment.",
+    );
+  }
 
   const groupResult = await client.execute(sql`
     SELECT
@@ -619,6 +641,16 @@ async function buildInTransaction(
     );
   }
   for (const payment of payments) assertSameGroup(group, payment);
+  if (requestedPaymentIds !== null) {
+    const groupPaymentIds = new Set(payments.map((payment) => payment.id));
+    const outsideGroup = requestedPaymentIds.filter((id) => !groupPaymentIds.has(id));
+    if (outsideGroup.length) {
+      throw new CanonicalSettlementBuilderError(
+        CANONICAL_SETTLEMENT_BUILDER_CODES.SETTLEMENT_GROUP_INVALID,
+        `Selected payment(s) ${outsideGroup.join(", ")} do not belong to the source payment's canonical group.`,
+      );
+    }
+  }
   if (payments.some((payment) => payment.payment_status !== "confirmed")) {
     throw new CanonicalSettlementBuilderError(
       CANONICAL_SETTLEMENT_BUILDER_CODES.PAYMENT_NOT_ELIGIBLE,
@@ -694,12 +726,22 @@ async function buildInTransaction(
   });
   if (sourceCompletedBatch) {
     const batchId = Number(sourceCompletedBatch.id);
+    const completedBatchPaymentIds = itemsByBatch.get(batchId) ?? [];
+    if (
+      requestedPaymentIds !== null
+      && requestedPaymentIds.some((id) => !completedBatchPaymentIds.includes(id))
+    ) {
+      throw new CanonicalSettlementBuilderError(
+        CANONICAL_SETTLEMENT_BUILDER_CODES.BATCH_CONFLICT,
+        `Source payment ${source.id} is already settled, but the selected payment set is not the same completed batch.`,
+      );
+    }
     const status = textOrNull(sourceCompletedBatch.status) as "posted" | "reconciled";
     const verified = await assertBatchResult(
       client,
       batchId,
       group,
-      itemsByBatch.get(batchId) ?? [],
+      completedBatchPaymentIds,
       status,
     );
     return {
@@ -720,8 +762,19 @@ async function buildInTransaction(
       }
     }
   }
+  if (
+    requestedPaymentIds !== null
+    && requestedPaymentIds.some((id) => completedPaymentIds.has(id))
+  ) {
+    throw new CanonicalSettlementBuilderError(
+      CANONICAL_SETTLEMENT_BUILDER_CODES.BATCH_CONFLICT,
+      "One or more selected canonical payments already belong to a completed settlement.",
+    );
+  }
   const eligiblePayments = payments.filter(
-    (payment) => !completedPaymentIds.has(payment.id),
+    (payment) =>
+      !completedPaymentIds.has(payment.id)
+      && (requestedPaymentIds === null || requestedPaymentIds.includes(payment.id)),
   );
   if (!eligiblePayments.some((payment) => payment.id === source.id)) {
     throw new CanonicalSettlementBuilderError(
