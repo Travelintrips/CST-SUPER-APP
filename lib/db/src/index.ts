@@ -21,8 +21,10 @@ function resolveConnectionString(): string {
   const isProd = process.env.NODE_ENV === "production" || !!process.env.REPLIT_DEPLOYMENT;
   // PROD: hanya pakai SUPABASE_DATABASE_URL / DATABASE_URL / SUPABASE_PG_URL
   //       JANGAN fallback ke SUPABASE_DATABASE_URL_DEV di prod
-  // DEV : prefer SUPABASE_DATABASE_URL_DEV dulu; fallback ke SUPABASE_DATABASE_URL
-  //       hanya jika DEV URL belum di-set (shared-DB mode, akan di-warn oleh envGuard)
+  // DEV : gunakan koneksi direct development bila tersedia. Runtime marketplace
+  // perlu koneksi yang stabil untuk beberapa request paralel; URL pooler
+  // transaction-mode dapat gagal checkout saat pooler sedang penuh.
+  // Fallback tetap mempertahankan konfigurasi lama bila URL direct tidak ada.
   const candidates = isProd
     ? [
         process.env.SUPABASE_DATABASE_URL,
@@ -30,6 +32,7 @@ function resolveConnectionString(): string {
         process.env.SUPABASE_PG_URL,
       ]
     : [
+        process.env.SUPABASE_MIGRATION_URL,
         process.env.SUPABASE_DATABASE_URL_DEV,
         process.env.SUPABASE_DATABASE_URL,
         process.env.DATABASE_URL,
@@ -47,7 +50,7 @@ function resolveConnectionString(): string {
   throw new Error(
     isProd
       ? "No valid PostgreSQL connection string found. Set SUPABASE_DATABASE_URL."
-      : "No valid PostgreSQL connection string found. Set SUPABASE_DATABASE_URL_DEV (or SUPABASE_DATABASE_URL for shared-DB mode).",
+      : "No valid PostgreSQL connection string found. Set SUPABASE_MIGRATION_URL or SUPABASE_DATABASE_URL_DEV (or SUPABASE_DATABASE_URL for shared-DB mode).",
   );
 }
 

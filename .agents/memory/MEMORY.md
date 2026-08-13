@@ -71,3 +71,4 @@
 - [Static artifact browser proof](static-artifact-browser-proof.md) — fetch-based proof gateways must strip compression headers after buffering upstream responses.
 - [Mobile detail sheet layout](qris-detail-mobile-layout.md) — SheetContent bawaan memakai w-3/4; panel mobile harus override ke 100vw dan menumpuk label/nilai agar tidak overflow.
 - [QRIS batch approval UI](qris-batch-approval-ui.md) — pilih dan approve kandidat QRIS sebagai batch utuh; payment-level approval memerlukan kontrak partial-settlement backend.
+- [Marketplace DB connection routing](marketplace-db-connection-routing.md) — pooler dev dapat timeout checkout walau SQL cepat; bandingkan migration/direct URL sebelum optimasi query.
