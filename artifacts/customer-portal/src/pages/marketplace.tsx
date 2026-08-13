@@ -19,8 +19,7 @@ import {
   Store, Search, SlidersHorizontal, X, Building2, Package, Truck,
   Tag, MapPin, Clock, ChevronRight, Filter, RefreshCw, GitCompareArrows,
   BarChart2, ChevronDown, ChevronUp, TrendingUp, Camera, Loader2,
-  MessageSquare, Share2, Award, ArrowUpRight, BadgeCheck, Globe2,
-  ShieldCheck, Sparkles, Star, Zap,
+  MessageSquare, Share2, ArrowUpRight, BadgeCheck, Sparkles,
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -40,6 +39,18 @@ interface HeroCategoryTile {
   imageUrl:    string;
   productId:   number;
   vendorId:    number;
+}
+
+interface FeaturedProductCardData {
+  id: number;
+  label: string;
+  category: string;
+  imageUrl: string | null;
+  moq: string;
+  origin: string;
+  vendorName: string | null;
+  uploadLabel: string;
+  verified: boolean;
 }
 
 // ── Category accent colors + labels — used only by product cards (not hero tiles) ──
@@ -940,8 +951,8 @@ function useMarketplaceCatalogRealtime() {
   }, [handleCatalogChange]);
 }
 
-// ── Featured Supplier Spotlight — presentation-only, reuses existing queries ──
-function FeaturedSupplierSpotlight({
+// ── Featured Products Showcase — presentation-only, reuses existing queries ──
+function FeaturedProductsShowcase({
   heroTiles,
   items,
   customImages,
@@ -949,7 +960,6 @@ function FeaturedSupplierSpotlight({
   uploadingLabel,
   isAdmin,
   onRequestQuote,
-  onProfile,
   onProductClick,
   onUpload,
   onImageError,
@@ -961,176 +971,136 @@ function FeaturedSupplierSpotlight({
   uploadingLabel: string | null;
   isAdmin: boolean;
   onRequestQuote: () => void;
-  onProfile: (vendorId: number) => void;
   onProductClick: (productId: number) => void;
   onUpload: (label: string) => void;
   onImageError: (label: string) => void;
 }) {
   const { t } = useLanguage();
-  const vendorId = heroTiles.find((tile) => tile.vendorId)?.vendorId ?? items[0]?.vendorId ?? null;
-  const vendorItems = vendorId == null ? [] : items.filter((item) => item.vendorId === vendorId);
-  const vendorName = vendorItems.find((item) => item.vendorName)?.vendorName
-    ?? t("marketplace.featuredSupplierFallback", "Verified Marketplace Partner");
-  const vendorCategory = vendorItems.find((item) => item.kategori || item.categoryKey);
-  const vendorOrigin = vendorItems.find((item) => item.origin || item.location);
-  const categoryLabel = vendorCategory
-    ? CATEGORY_PLACEHOLDER[vendorCategory.categoryKey ?? ""]?.label
-      ?? vendorCategory.kategori
-      ?? vendorCategory.categoryKey
-      ?? "Commodity"
-    : "Commodity";
-  const originLabel = vendorOrigin?.origin ?? vendorOrigin?.location ?? "—";
-  const initials = vendorName
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0])
-    .join("")
-    .toUpperCase() || "VP";
-
-  const fallbackProducts = items
-    .filter((item) => vendorId == null || item.vendorId === vendorId)
-    .slice(0, 4)
-    .map((item) => ({
-      id: item.id,
-      label: item.name,
-      imageUrl: item.primaryImageUrl,
-    }));
-  const spotlightProducts = (heroTiles.length > 0
-    ? heroTiles
-      .filter(({ label }) => !failedLabels.has(label))
-      .slice(0, 4)
-      .map((tile) => ({
-        id: tile.productId,
-        label: tile.label,
-        imageUrl: tile.imageUrl,
-      }))
-    : fallbackProducts);
-  const productCount = vendorItems.length || spotlightProducts.length;
-  const categoryCount = new Set(
-    vendorItems.map((item) => item.categoryKey ?? item.kategori).filter(Boolean),
-  ).size;
-
-  const metrics = [
-    { label: t("marketplace.featuredProducts", "Products"), value: productCount ? `${productCount}+` : "—", icon: Package },
-    { label: t("marketplace.featuredTransactions", "Transactions"), value: "—", icon: TrendingUp },
-    { label: t("marketplace.featuredRating", "Rating"), value: "—", icon: Star },
-    { label: t("marketplace.featuredResponseRate", "Response rate"), value: "—", icon: Zap },
-    { label: t("marketplace.featuredOnTime", "On-time delivery"), value: "—", icon: ShieldCheck },
-    { label: t("marketplace.featuredCategories", "Categories"), value: categoryCount ? `${categoryCount}` : "—", icon: Tag },
-  ];
+  const featuredProducts: FeaturedProductCardData[] = (heroTiles.length > 0
+    ? heroTiles.slice(0, 6).map((tile) => {
+        const item = items.find((candidate) => candidate.id === tile.productId);
+        const categoryKey = item?.categoryKey ?? item?.kategori ?? tile.categoryKey;
+        return {
+          id: tile.productId,
+          label: item?.name ?? tile.label,
+          category: CATEGORY_PLACEHOLDER[categoryKey]?.label ?? item?.kategori ?? tile.label,
+          imageUrl: item?.primaryImageUrl ?? tile.imageUrl ?? null,
+          moq: item?.moq != null
+            ? `${item.moq.toLocaleString("id-ID")} ${item.unit ?? ""}`.trim()
+            : t("marketplace.featuredMoqOnRequest", "MOQ on request"),
+          origin: item?.origin ?? item?.location ?? t("marketplace.featuredOriginOnRequest", "Origin on request"),
+          vendorName: item?.vendorName ?? null,
+          uploadLabel: tile.label,
+          verified: Boolean(item?.vendorId ?? tile.vendorId),
+        };
+      })
+    : items.slice(0, 6).map((item) => ({
+        id: item.id,
+        label: item.name,
+        category: CATEGORY_PLACEHOLDER[item.categoryKey ?? ""]?.label ?? item.kategori ?? "Commodity",
+        imageUrl: item.primaryImageUrl ?? null,
+        moq: item.moq != null
+          ? `${item.moq.toLocaleString("id-ID")} ${item.unit ?? ""}`.trim()
+          : t("marketplace.featuredMoqOnRequest", "MOQ on request"),
+        origin: item.origin ?? item.location ?? t("marketplace.featuredOriginOnRequest", "Origin on request"),
+        vendorName: item.vendorName ?? null,
+        uploadLabel: item.name,
+        verified: Boolean(item.vendorId),
+      })));
 
   return (
     <aside
-      className="relative w-full md:w-[430px] shrink-0 overflow-hidden rounded-[28px] border border-white/20 bg-slate-950/55 p-4 shadow-[0_24px_70px_rgba(2,8,23,0.45)] backdrop-blur-xl transition-transform duration-300 hover:-translate-y-1 hover:border-amber-300/45"
-      aria-label={t("marketplace.featuredSupplierAria", "Featured Supplier Spotlight")}
+      className="relative w-full md:w-[430px] shrink-0 overflow-hidden rounded-[28px] border border-white/20 bg-slate-950/60 p-4 shadow-[0_24px_70px_rgba(2,8,23,0.45)] backdrop-blur-xl transition-transform duration-300 hover:-translate-y-1 hover:border-amber-300/45"
+      aria-label={t("marketplace.featuredProductsAria", "Featured Products")}
     >
       <div className="pointer-events-none absolute -right-20 -top-24 h-56 w-56 rounded-full bg-amber-300/15 blur-3xl" />
       <div className="pointer-events-none absolute -bottom-24 -left-16 h-48 w-48 rounded-full bg-sky-400/15 blur-3xl" />
 
       <div className="relative">
-        <div className="flex items-center justify-between gap-3">
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200/40 bg-amber-300/15 px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-[0.16em] text-amber-100 shadow-[0_0_22px_rgba(251,191,36,0.18)]">
-            <Sparkles className="h-3.5 w-3.5" />
-            {t("marketplace.featuredSupplier", "Featured Supplier")}
-          </span>
-          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-white/45">
-            {t("marketplace.spotlight", "Supplier Spotlight")}
-          </span>
-        </div>
-
-        <div className="mt-4 flex items-start gap-3">
-          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-white/25 bg-gradient-to-br from-sky-300 via-sky-500 to-indigo-700 text-lg font-black text-white shadow-lg shadow-sky-950/40">
-            {initials}
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-1.5">
-              <h2 className="truncate text-[17px] font-black tracking-tight text-white">{vendorName}</h2>
-              <BadgeCheck className="h-4 w-4 shrink-0 text-sky-300" aria-label={t("marketplace.verified", "Verified")} />
-            </div>
-            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-white/60">
-              <span className="inline-flex items-center gap-1">
-                <Award className="h-3.5 w-3.5 text-amber-300" />
-                {t("marketplace.topSupplier", "Top Supplier")}
-              </span>
-              <span className="text-white/25">•</span>
-              <span>{categoryLabel}</span>
-              <span className="text-white/25">•</span>
-              <span className="inline-flex items-center gap-1">
-                <Globe2 className="h-3.5 w-3.5 text-sky-300" />
-                {originLabel}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-4 grid grid-cols-3 gap-2">
-          {metrics.map(({ label, value, icon: MetricIcon }) => (
-            <div key={label} className="rounded-2xl border border-white/10 bg-white/[0.07] px-2.5 py-2.5 transition-colors hover:bg-white/[0.12]">
-              <MetricIcon className="mb-1 h-3.5 w-3.5 text-sky-300/85" />
-              <p className="text-[14px] font-black leading-none text-white">{value}</p>
-              <p className="mt-1 truncate text-[9px] font-medium uppercase tracking-[0.05em] text-white/45">{label}</p>
-            </div>
-          ))}
-        </div>
-
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          {[
-            { icon: BadgeCheck, label: t("marketplace.verifiedSupplier", "Verified supplier") },
-            { icon: ShieldCheck, label: t("marketplace.directQuotation", "Direct quotation") },
-            { icon: Award, label: t("marketplace.enterprisePartner", "Enterprise partner") },
-          ].map(({ icon: TrustIcon, label }) => (
-            <span key={label} className="inline-flex items-center gap-1 rounded-full border border-emerald-300/20 bg-emerald-300/10 px-2 py-1 text-[10px] font-semibold text-emerald-100">
-              <TrustIcon className="h-3 w-3" />
-              {label}
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200/40 bg-amber-300/15 px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-[0.16em] text-amber-100 shadow-[0_0_22px_rgba(251,191,36,0.18)]">
+              <Sparkles className="h-3.5 w-3.5" />
+              {t("marketplace.featuredProductsBadge", "Featured Products")}
             </span>
-          ))}
+            <h2 className="mt-3 text-[21px] font-black tracking-tight text-white">
+              {t("marketplace.featuredProductsTitle", "Produk Unggulan")}
+            </h2>
+            <p className="mt-1 text-[11px] leading-relaxed text-white/55">
+              {t("marketplace.featuredProductsSubtitle", "Premium products from verified marketplace vendors")}
+            </p>
+          </div>
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-amber-200/25 bg-gradient-to-br from-amber-200/25 to-sky-400/20 text-amber-100 shadow-lg shadow-slate-950/30">
+            <Package className="h-5 w-5" />
+          </div>
         </div>
 
-        <div className="mt-4 flex items-center justify-between gap-2">
-          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-white/45">
-            {t("marketplace.featuredProductsLabel", "Featured product portfolio")}
-          </p>
-          <span className="text-[10px] text-white/40">{spotlightProducts.length} {t("marketplace.featuredItems", "items")}</span>
-        </div>
-
-        <div className="mt-2 grid grid-cols-2 gap-2">
-          {spotlightProducts.map(({ id, label, imageUrl }) => {
-            const effectiveImage = resolveImageUrl(customImages[label] ?? imageUrl) ?? customImages[label] ?? imageUrl;
-            const isUploading = uploadingLabel === label;
+        <div className="mt-4 grid grid-cols-2 gap-2.5 sm:gap-3">
+          {featuredProducts.filter(({ uploadLabel }) => !failedLabels.has(uploadLabel)).map((product) => {
+            const effectiveImage = resolveImageUrl(customImages[product.uploadLabel] ?? product.imageUrl)
+              ?? customImages[product.uploadLabel]
+              ?? product.imageUrl;
+            const isUploading = uploadingLabel === product.uploadLabel;
             return (
               <div
-                key={`${id}-${label}`}
-                role="button"
-                tabIndex={0}
-                onClick={() => id && onProductClick(id)}
-                onKeyDown={(event) => {
-                  if ((event.key === "Enter" || event.key === " ") && id) {
-                    event.preventDefault();
-                    onProductClick(id);
-                  }
-                }}
-                className="group relative h-[82px] cursor-pointer overflow-hidden rounded-2xl border border-white/15 bg-slate-800/70 outline-none transition-all duration-300 hover:border-amber-200/60 hover:shadow-lg hover:shadow-slate-950/40 focus-visible:ring-2 focus-visible:ring-amber-200"
+                key={`${product.id}-${product.label}`}
+                className="group relative min-h-[164px] cursor-pointer overflow-hidden rounded-2xl border border-white/15 bg-slate-800/70 outline-none transition-all duration-300 hover:-translate-y-0.5 hover:border-amber-200/60 hover:shadow-lg hover:shadow-slate-950/40 focus-visible:ring-2 focus-visible:ring-amber-200"
               >
                 {effectiveImage ? (
                   <img
                     src={effectiveImage}
-                    alt={label}
-                    className="absolute inset-0 h-full w-full object-cover transition-transform duration-500 group-hover:scale-110"
-                    onError={() => onImageError(label)}
+                    alt={product.label}
+                    loading="lazy"
+                    className="absolute inset-0 h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+                    onError={() => onImageError(product.uploadLabel)}
                   />
                 ) : (
                   <div className="absolute inset-0 bg-gradient-to-br from-slate-700 to-slate-900" />
                 )}
                 <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-slate-950/25 to-transparent" />
-                <span className="absolute bottom-2 left-2 right-2 truncate text-[10px] font-bold text-white drop-shadow">{label}</span>
+                <span className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full border border-amber-200/35 bg-slate-950/55 px-2 py-1 text-[9px] font-extrabold uppercase tracking-[0.08em] text-amber-100 backdrop-blur-sm">
+                  <Sparkles className="h-3 w-3" />
+                  {t("marketplace.featuredProductBadge", "Featured")}
+                </span>
+                {product.verified && (
+                  <span className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-full border border-emerald-200/35 bg-emerald-950/55 px-2 py-1 text-[9px] font-bold text-emerald-100 backdrop-blur-sm">
+                    <BadgeCheck className="h-3 w-3" />
+                    {t("marketplace.verified", "Verified")}
+                  </span>
+                )}
+                <div className="absolute bottom-2 left-2 right-2">
+                  <p className="truncate text-[12px] font-black text-white drop-shadow">{product.label}</p>
+                  <p className="mt-1 truncate text-[9px] font-semibold text-white/70">
+                    {product.category} · {product.origin}
+                  </p>
+                  <p className="mt-1 truncate text-[9px] text-white/55">
+                    MOQ: {product.moq}
+                  </p>
+                  <div className="mt-1.5 flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => product.id && onProductClick(product.id)}
+                      className="inline-flex min-w-0 flex-1 items-center justify-center gap-0.5 rounded-md border border-white/20 bg-slate-950/45 px-1.5 py-1 text-[8px] font-bold text-sky-100 transition-colors hover:border-sky-200/60 hover:bg-sky-400/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sky-200"
+                    >
+                      {t("marketplace.viewProduct", "Lihat Produk")}
+                      <ArrowUpRight className="h-3 w-3 shrink-0" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(event) => { event.stopPropagation(); onRequestQuote(); }}
+                      className="inline-flex min-w-0 flex-1 items-center justify-center gap-0.5 rounded-md bg-sky-500/90 px-1.5 py-1 text-[8px] font-bold text-white transition-colors hover:bg-sky-400 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white"
+                    >
+                      {t("marketplace.requestShort", "Request")}
+                    </button>
+                  </div>
+                </div>
                 {isAdmin && (
                   <button
                     type="button"
-                    onClick={(event) => { event.stopPropagation(); onUpload(label); }}
+                    onClick={(event) => { event.stopPropagation(); onUpload(product.uploadLabel); }}
                     disabled={isUploading}
                     className="absolute right-1.5 top-1.5 rounded-lg bg-black/65 p-1.5 text-white opacity-0 transition-opacity duration-200 group-hover:opacity-100 focus-visible:opacity-100 disabled:cursor-wait"
-                    title={`Ganti foto ${label}`}
+                    title={`Ganti foto ${product.label}`}
                   >
                     {isUploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Camera className="h-3.5 w-3.5" />}
                   </button>
@@ -1140,23 +1110,22 @@ function FeaturedSupplierSpotlight({
           })}
         </div>
 
-        <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+        <div className="mt-3 flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <p className="truncate text-[10px] font-bold uppercase tracking-[0.14em] text-white/45">
+              {featuredProducts.length} {t("marketplace.featuredItems", "featured products")}
+            </p>
+            <p className="mt-1 truncate text-[9px] text-white/45">
+              {t("marketplace.featuredMoqHint", "MOQ shown per product")}
+            </p>
+          </div>
           <button
             type="button"
             onClick={onRequestQuote}
-            className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-xl bg-sky-500 px-3 py-2.5 text-[11px] font-extrabold text-white shadow-lg shadow-sky-950/35 transition-all hover:bg-sky-400 hover:shadow-sky-950/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+            className="inline-flex min-h-10 shrink-0 items-center justify-center gap-1.5 rounded-xl bg-sky-500 px-3.5 py-2.5 text-[11px] font-extrabold text-white shadow-lg shadow-sky-950/35 transition-all hover:bg-sky-400 hover:shadow-sky-950/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
           >
             <MessageSquare className="h-3.5 w-3.5" />
             {t("marketplace.requestQuoteBtn", "Request Quotation")}
-          </button>
-          <button
-            type="button"
-            onClick={() => vendorId != null && onProfile(vendorId)}
-            disabled={vendorId == null}
-            className="inline-flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-xl border border-white/20 bg-white/10 px-3 py-2.5 text-[11px] font-extrabold text-white transition-all hover:border-white/40 hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
-          >
-            {t("marketplace.viewSupplierProfile", "Lihat Profil Vendor")}
-            <ArrowUpRight className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>
@@ -1576,7 +1545,7 @@ export default function MarketplacePage() {
               </div>
             </div>
 
-            <FeaturedSupplierSpotlight
+            <FeaturedProductsShowcase
               heroTiles={heroTiles}
               items={items}
               customImages={customCategoryImgs}
@@ -1586,7 +1555,6 @@ export default function MarketplacePage() {
               onRequestQuote={() => {
                 document.getElementById("marketplace-grid")?.scrollIntoView({ behavior: "smooth", block: "start" });
               }}
-              onProfile={(vendorId) => setLocation(`/vendor/${vendorId}`)}
               onProductClick={(productId) => setLocation(`/marketplace/${productId}`)}
               onUpload={(label) => {
                 pendingCatLabelRef.current = label;
