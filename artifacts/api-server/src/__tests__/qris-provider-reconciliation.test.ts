@@ -164,6 +164,35 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     expect(generateQrisMutationBatchCandidates({ ...base, existingMutationIds: [8] })).toEqual([]);
   });
 
+  it("keeps a posted canonical payment out of a supplemental late-arriving batch", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [
+        {
+          id: 25, companyId: 1, amount: 100_000, bankAccountId: 17,
+          method: "QRIS", status: "paid", paidAt: "2026-08-12",
+          expectedSettlementDate: "2026-08-13", providerName: "mandiri_direct",
+          settlementRuleVersion: "PROD-MANDIRI-SC-20260810-v1",
+          alreadyReconciled: true,
+        },
+        {
+          id: 26, companyId: 1, amount: 200_000, bankAccountId: 17,
+          method: "QRIS", status: "paid", paidAt: "2026-08-12",
+          expectedSettlementDate: "2026-08-13", providerName: "mandiri_direct",
+          settlementRuleVersion: "PROD-MANDIRI-SC-20260810-v1",
+        },
+      ],
+      mutations: [{
+        id: 227, companyId: 1, bankAccountId: 17, transactionDate: "2026-08-13",
+        amount: 200_000, direction: "IN", source: "bank_import",
+        sourceClassification: "actual_bank_mutation",
+        providerName: "mandiri_direct",
+      }],
+    });
+    expect(result).toHaveLength(1);
+    expect(result[0]?.paymentItems.map((item) => item.paymentId)).toEqual([26]);
+    expect(result[0]?.paymentItems.map((item) => item.paymentId)).not.toContain(25);
+  });
+
   it("does not mix same company/provider/date payments across bank accounts", () => {
     const result = generateQrisMutationBatchCandidates({
       payments: [

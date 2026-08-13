@@ -78,6 +78,10 @@ import {
   generateQrisCandidates,
   listQrisCandidates,
 } from "../lib/reconciliation/qrisCandidateService.js";
+import {
+  QrisApprovalPaymentGuardError,
+  selectQrisApprovalPaymentIds,
+} from "../lib/reconciliation/qrisApprovalPaymentGuard.js";
 import { canonicalSettlementDetailsSql } from "../lib/reconciliation/canonicalSettlementAdapter.js";
 import {
   approveCanonicalSettlementLink,
@@ -2095,16 +2099,67 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
           code: "INVALID_CANDIDATE",
         });
       }
-      const selectedIds = requestedIds ?? candidatePaymentIds;
-      if (
-        selectedIds.length === 0
-        || selectedIds.some((id) => !Number.isSafeInteger(id) || id <= 0)
-        || selectedIds.some((id) => !candidatePaymentIds.includes(id))
-      ) {
-        throw Object.assign(
-          new Error("Payment yang dipilih harus berasal dari kandidat canonical yang terlihat."),
-          { code: "INVALID_CANDIDATE" },
+
+      const { rows: activePostedRows } = await tx.execute(sql.raw(`
+        SELECT psi.payment_id
+        FROM sport_center.payment_settlement_items psi
+        JOIN sport_center.payment_settlement_batches psb
+          ON psb.id = psi.settlement_id
+        WHERE psi.item_status = 'active'
+          AND psb.status IN ('posted', 'reconciled')
+          AND psi.payment_id IN (${candidatePaymentIds.join(",")})
+        FOR SHARE OF psb
+      `));
+      const activePostedPaymentIds = activePostedRows.map((item) =>
+        Number((item as Record<string, unknown>).payment_id),
+      );
+      let selectedIds: number[];
+      try {
+        selectedIds = selectQrisApprovalPaymentIds({
+          candidatePaymentIds,
+          requestedPaymentIds: requestedIds,
+          activePostedPaymentIds,
+        });
+      } catch (error) {
+        if (error instanceof QrisApprovalPaymentGuardError) {
+          throw Object.assign(error, { code: error.code });
+        }
+        throw error;
+      }
+      const selectedPaymentItems = paymentItems.filter((item) =>
+        selectedIds.includes(item.paymentId),
+      );
+
+      // Repair a stale provisional candidate in-place only when the caller did
+      // not provide an explicit selection. This keeps the visible candidate
+      // and its next approval payload aligned with the canonical active item
+      // set, while explicit mixed payloads remain fail-closed above.
+      if (requestedIds === null && activePostedPaymentIds.length > 0) {
+        const refreshedGross = selectedPaymentItems.reduce(
+          (sum, item) => sum + item.grossAmount,
+          0,
         );
+        const refreshedNet = Number(row.net_amount ?? 0);
+        const refreshedDeduction = refreshedGross - refreshedNet;
+        await tx.execute(sql`
+          UPDATE qris_mutation_batch_candidates
+          SET gross_amount = ${refreshedGross},
+              observed_deduction = ${refreshedDeduction},
+              effective_deduction_rate = CASE
+                WHEN ${refreshedGross} > 0
+                THEN ${refreshedDeduction} / ${refreshedGross}
+                ELSE NULL
+              END,
+              payment_items = ${JSON.stringify(selectedPaymentItems)}::jsonb,
+              status = 'candidate_review',
+              reconciliation_status = 'REVIEW',
+              confidence = 0,
+              review_reason = ${`Kandidat diperbarui: payment posted/reconciled ${activePostedPaymentIds.join(", ")} dikeluarkan; supplemental hanya membawa payment ${selectedIds.join(", ")}.`},
+              updated_at = NOW()
+          WHERE id = ${candidateId}
+        `);
+        row.reconciliation_status = "REVIEW";
+        row.status = "candidate_review";
       }
 
       return {
@@ -2113,7 +2168,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
         alreadyApproved: false as const,
         candidatePaymentIds,
         selectedPaymentIds: selectedIds,
-        paymentItems,
+        paymentItems: selectedPaymentItems,
       };
     });
 

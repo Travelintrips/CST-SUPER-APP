@@ -63,8 +63,13 @@ export async function generateQrisCandidates(options: {
         NULL::text AS settlement_reference,
         sp.bank_account_id,
         EXISTS (
-          SELECT 1 FROM sport_center.payment_settlement_items psi
-          WHERE psi.payment_id = sp.id AND psi.item_status = 'active'
+          SELECT 1
+          FROM sport_center.payment_settlement_items psi
+          JOIN sport_center.payment_settlement_batches psb
+            ON psb.id = psi.settlement_id
+          WHERE psi.payment_id = sp.id
+            AND psi.item_status = 'active'
+            AND psb.status IN ('posted', 'reconciled')
         ) AS already_reconciled
       FROM sport_center.sport_payments sp
       LEFT JOIN sport_center.sport_bookings sb ON sb.id = sp.booking_id
