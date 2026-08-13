@@ -201,6 +201,11 @@ function SheetConfigManager() {
         toast({ title: data.error ?? "Sync gagal", variant: "destructive" });
       }
       qc.invalidateQueries({ queryKey: ["sheet-configs"] });
+      // Sync inserts into bank_mutations, so refresh both the mutation list
+      // and its status summary. Without this, the page keeps showing the
+      // cached "0 mutasi" result until a full browser reload.
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] });
     } catch (e: any) {
       toast({ title: e.message ?? "Sync gagal", variant: "destructive" });
     } finally {
