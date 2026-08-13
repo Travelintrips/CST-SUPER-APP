@@ -62,6 +62,17 @@ export async function generateQrisCandidates(options: {
         sp.settlement_rule_version,
         NULL::text AS settlement_reference,
         sp.bank_account_id,
+         (
+           SELECT psi.settlement_id
+           FROM sport_center.payment_settlement_items psi
+           JOIN sport_center.payment_settlement_batches psb
+             ON psb.id = psi.settlement_id
+           WHERE psi.payment_id = sp.id
+             AND psi.item_status = 'active'
+           ORDER BY CASE WHEN psb.status IN ('posted', 'reconciled') THEN 0 ELSE 1 END,
+                    psi.settlement_id DESC
+           LIMIT 1
+         ) AS canonical_settlement_id,
         EXISTS (
           SELECT 1
           FROM sport_center.payment_settlement_items psi
@@ -81,6 +92,7 @@ export async function generateQrisCandidates(options: {
     db.execute(sql.raw(`
       SELECT
         bm.id, bm.company_id,
+         bm.mutation_key,
         COALESCE(
           (
             SELECT cba.id::text
@@ -136,8 +148,9 @@ export async function generateQrisCandidates(options: {
         AND (company_id IS NULL OR company_id = ${options.companyId ? Number(options.companyId) : "0"})
     `)).catch(() => ({ rows: [] as unknown[] })),
     db.execute(sql.raw(`
-      SELECT mutation_id
+       SELECT id, mutation_id, status, gross_amount, net_amount, payment_items
       FROM qris_mutation_batch_candidates
+       ORDER BY id DESC
     `)).catch(() => ({ rows: [] as unknown[] })),
   ]);
 
@@ -180,6 +193,9 @@ export async function generateQrisCandidates(options: {
         ? null
         : String(row.paid_at),
       alreadyReconciled: Boolean(row.already_reconciled),
+       canonicalSettlementId: row.canonical_settlement_id == null
+         ? null
+         : Number(row.canonical_settlement_id),
     };
   });
   const mutations: QrisMutationCandidateInput[] = (mutationRows.rows as Array<Record<string, unknown>>).map((row) => ({
@@ -213,9 +229,69 @@ export async function generateQrisCandidates(options: {
   if (!options.dryRun) {
     for (const candidate of candidates) {
       const itemJson = JSON.stringify(candidate.paymentItems);
+      const existing = (existingRows.rows as Array<Record<string, unknown>>).find((row) =>
+        Number(row.mutation_id) === candidate.mutationId
+        && !["approved", "completed", "superseded", "stale", "ineligible"]
+          .includes(String(row.status ?? "").toLowerCase()),
+      );
+      const existingItems = existing?.payment_items == null
+        ? []
+        : typeof existing.payment_items === "string"
+          ? JSON.parse(existing.payment_items)
+          : existing.payment_items;
+      const normalizeItems = (items: unknown) => JSON.stringify(
+        Array.isArray(items)
+          ? items.map((item: Record<string, unknown>) => ({
+            paymentId: Number(item.paymentId ?? item.payment_id),
+            grossAmount: Number(item.grossAmount ?? item.gross_amount ?? 0),
+            canonicalSettlementId: item.canonicalSettlementId == null
+              ? item.canonical_settlement_id == null
+                ? null
+                : Number(item.canonical_settlement_id)
+              : Number(item.canonicalSettlementId),
+          })).sort((a, b) => a.paymentId - b.paymentId)
+          : [],
+      );
+      const evidenceChanged = existing != null && (
+        Math.abs(Number(existing.gross_amount ?? 0) - candidate.grossAmount) > 0.01
+        || Math.abs(Number(existing.net_amount ?? 0) - candidate.netAmount) > 0.01
+        || normalizeItems(existingItems) !== normalizeItems(candidate.paymentItems)
+      );
+      if (evidenceChanged) {
+        await db.execute(sql.raw(`
+          UPDATE qris_mutation_batch_candidates
+          SET status = 'superseded',
+              reconciliation_status = 'UNMATCHED',
+              review_reason = 'Kandidat superseded: canonical payment membership/amount/settlement evidence berubah.',
+              updated_at = NOW()
+          WHERE id = ${Number(existing!.id)}
+            AND status NOT IN ('approved', 'completed', 'superseded', 'stale', 'ineligible')
+        `));
+      }
+      if (existing && !evidenceChanged) {
+        await db.execute(sql.raw(`
+          UPDATE qris_mutation_batch_candidates
+          SET candidate_source = 'sport_center.sport_payments',
+              mutation_key = (SELECT mutation_key FROM bank_mutations WHERE id = ${candidate.mutationId}),
+              payment_items = '${esc(itemJson)}'::jsonb,
+              status = 'candidate_review',
+              reconciliation_status = '${esc(candidate.status)}',
+              gross_amount = ${candidate.grossAmount},
+              mdr_amount = ${candidate.observedDeduction},
+              net_amount = ${candidate.netAmount},
+              observed_deduction = ${candidate.observedDeduction},
+              effective_deduction_rate = ${candidate.effectiveDeductionRate == null ? "NULL" : candidate.effectiveDeductionRate},
+              review_reason = '${esc(candidate.reason)}',
+              generated_at = NOW(),
+              updated_at = NOW()
+          WHERE id = ${Number(existing.id)}
+        `));
+        continue;
+      }
       await db.execute(sql.raw(`
         INSERT INTO qris_mutation_batch_candidates (
-          mutation_id, company_id, source_date, estimated_settlement_date,
+          mutation_id, company_id, candidate_source, mutation_key,
+          source_date, estimated_settlement_date,
           bank_account_id, provider_code, provider_detection_source,
           settlement_rule_version, mutation_source_classification, gross_amount,
           mdr_amount, other_fee_amount, net_amount, payment_items, status,
@@ -224,6 +300,8 @@ export async function generateQrisCandidates(options: {
         ) VALUES (
           ${candidate.mutationId},
           ${candidate.companyId == null ? "NULL" : candidate.companyId},
+          'sport_center.sport_payments',
+          (SELECT mutation_key FROM bank_mutations WHERE id = ${candidate.mutationId}),
           '${esc(candidate.sourceDate)}',
           '${esc(candidate.estimatedSettlementDate)}',
           ${candidate.bankAccountId == null ? "NULL" : candidate.bankAccountId},
@@ -245,36 +323,6 @@ export async function generateQrisCandidates(options: {
           NOW(),
           NOW()
         )
-           ON CONFLICT (mutation_id) DO UPDATE SET
-             company_id = EXCLUDED.company_id,
-             source_date = EXCLUDED.source_date,
-             estimated_settlement_date = EXCLUDED.estimated_settlement_date,
-             bank_account_id = EXCLUDED.bank_account_id,
-             provider_code = EXCLUDED.provider_code,
-             provider_detection_source = EXCLUDED.provider_detection_source,
-             settlement_rule_version = EXCLUDED.settlement_rule_version,
-             mutation_source_classification = EXCLUDED.mutation_source_classification,
-             gross_amount = EXCLUDED.gross_amount,
-             mdr_amount = EXCLUDED.mdr_amount,
-             other_fee_amount = EXCLUDED.other_fee_amount,
-             net_amount = EXCLUDED.net_amount,
-             payment_items = EXCLUDED.payment_items,
-             status = CASE
-               WHEN qris_mutation_batch_candidates.status IN ('approved', 'completed')
-                 THEN qris_mutation_batch_candidates.status
-               ELSE EXCLUDED.status
-             END,
-             reconciliation_status = CASE
-               WHEN qris_mutation_batch_candidates.status IN ('approved', 'completed')
-                 THEN qris_mutation_batch_candidates.reconciliation_status
-               ELSE EXCLUDED.reconciliation_status
-             END,
-             confidence = EXCLUDED.confidence,
-             observed_deduction = EXCLUDED.observed_deduction,
-             effective_deduction_rate = EXCLUDED.effective_deduction_rate,
-             review_reason = EXCLUDED.review_reason,
-             generated_at = EXCLUDED.generated_at,
-             updated_at = NOW()
       `));
     }
   }
@@ -296,13 +344,79 @@ export async function listQrisCandidates(options: {
     : "";
   const completedFilter = options.includeCompleted
     ? ""
-    : "AND c.status NOT IN ('approved', 'completed')";
+    : "AND c.status NOT IN ('approved', 'completed', 'superseded', 'stale', 'ineligible')";
   const limit = Math.min(Math.max(Number(options.limit ?? 100), 1), 500);
   const { rows } = await db.execute(sql.raw(`
-    SELECT c.*, bm.description, bm.transaction_date, bm.amount AS bank_amount,
+     SELECT c.*, bm.description, bm.transaction_date, bm.amount AS bank_amount,
+            bm.mutation_key,
            bm.bank_account_id,
            bm.source, bm.provider_name AS bank_provider_name,
-           'sport_center.sport_payments'::text AS candidate_source,
+            COALESCE(c.candidate_source, 'sport_center.sport_payments') AS candidate_source,
+            COALESCE((
+              SELECT SUM(current_settlements.net_amount)
+              FROM (
+                SELECT DISTINCT psb.id, psb.net_amount
+                FROM sport_center.payment_settlement_items psi
+                JOIN sport_center.payment_settlement_batches psb
+                  ON psb.id = psi.settlement_id
+                WHERE psi.item_status = 'active'
+                  AND psi.payment_id IN (
+                    SELECT (item->>'paymentId')::int
+                    FROM jsonb_array_elements(c.payment_items) item
+                    WHERE item->>'paymentId' IS NOT NULL
+                  )
+              ) current_settlements
+            ), bm.amount) AS current_expected_amount,
+            COALESCE((
+              SELECT jsonb_agg(current_payment.payment_id ORDER BY current_payment.payment_id)
+              FROM (
+                SELECT (item->>'paymentId')::int AS payment_id
+                FROM jsonb_array_elements(c.payment_items) item
+                WHERE item->>'paymentId' IS NOT NULL
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM sport_center.payment_settlement_items psi
+                    JOIN sport_center.payment_settlement_batches psb
+                      ON psb.id = psi.settlement_id
+                    WHERE psi.payment_id = (item->>'paymentId')::int
+                      AND psi.item_status = 'active'
+                      AND psb.status IN ('posted', 'reconciled')
+                  )
+              ) current_payment
+            ), '[]'::jsonb) AS current_payment_ids,
+            COALESCE((
+              SELECT SUM(sp.amount)
+              FROM sport_center.sport_payments sp
+              WHERE sp.id IN (
+                SELECT (item->>'paymentId')::int
+                FROM jsonb_array_elements(c.payment_items) item
+                WHERE item->>'paymentId' IS NOT NULL
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM sport_center.payment_settlement_items psi
+                    JOIN sport_center.payment_settlement_batches psb
+                      ON psb.id = psi.settlement_id
+                    WHERE psi.payment_id = sp.id
+                      AND psi.item_status = 'active'
+                      AND psb.status IN ('posted', 'reconciled')
+                  )
+              )
+            ), 0) AS current_gross_amount,
+            ABS(COALESCE((
+              SELECT SUM(current_settlements.net_amount)
+              FROM (
+                SELECT DISTINCT psb.id, psb.net_amount
+                FROM sport_center.payment_settlement_items psi
+                JOIN sport_center.payment_settlement_batches psb
+                  ON psb.id = psi.settlement_id
+                WHERE psi.item_status = 'active'
+                  AND psi.payment_id IN (
+                    SELECT (item->>'paymentId')::int
+                    FROM jsonb_array_elements(c.payment_items) item
+                    WHERE item->>'paymentId' IS NOT NULL
+                  )
+              ) current_settlements
+            ), bm.amount) - bm.amount) <= 0.01 AS current_evidence_valid,
             COALESCE((
               SELECT jsonb_agg(settled.payment_id ORDER BY settled.payment_id)
               FROM (

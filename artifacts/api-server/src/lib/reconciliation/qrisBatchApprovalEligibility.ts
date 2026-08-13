@@ -8,15 +8,14 @@
  *             the only status that can be promoted to a qris_settlement.
  *
  *  REVIEW   — provider unknown, payment partition ambiguous, deduction rate
- *             out-of-tolerance, or partial bank dimension. A human has reviewed
- *             and may explicitly approve, but the UI MUST show an amber warning
- *             at every confirmation point.
+ *             out-of-tolerance, or partial bank dimension. Review candidates
+ *             remain visible but cannot enter the one-click approval path.
  *
  *  UNMATCHED — no eligible payments found for this bank mutation on this date.
  *
  * Approving an UNMATCHED candidate would silently create a settlement
  * for data the engine could not validate — defeating the reconciliation model.
- * REVIEW candidates CAN be approved after explicit human confirmation.
+ * REVIEW candidates remain unapproved until matching evidence is valid.
  */
 
 export interface QrisBatchCandidateForEligibility {
@@ -59,11 +58,11 @@ export function checkQrisBatchApprovalEligibility(
 
   const reconStatus = String(candidate.reconciliation_status ?? "").toUpperCase();
 
-  if (reconStatus !== "MATCHED" && reconStatus !== "REVIEW") {
+  if (reconStatus !== "MATCHED") {
     // Covers UNMATCHED, empty string, unknown values — hard block
     return {
       code: "NOT_MATCHED",
-      message: "Hanya kandidat dengan status MATCHED atau REVIEW yang dapat disetujui.",
+      message: "Hanya kandidat dengan status MATCHED yang dapat disetujui.",
     };
   }
 

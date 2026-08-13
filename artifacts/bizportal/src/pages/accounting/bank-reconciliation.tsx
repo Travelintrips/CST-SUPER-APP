@@ -546,6 +546,10 @@ interface QrisCandidateAudit {
   review_reason?: string | null;
   payment_items?: QrisPaymentItem[];
   settled_payment_ids?: Array<number | string> | null;
+  current_payment_ids?: Array<number | string> | null;
+  current_gross_amount?: number | string | null;
+  current_expected_amount?: number | string | null;
+  current_evidence_valid?: boolean | null;
   candidate_source?: string | null;
   description?: string | null;
   status?: string | null;
@@ -589,6 +593,9 @@ type QrisSelectionConflictError = Error & {
   code?: string;
   alreadySettledPaymentIds?: number[];
   eligiblePaymentIds?: number[];
+  staleCandidateId?: number;
+  currentPaymentIds?: number[];
+  currentExpectedAmount?: number;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3310,6 +3317,9 @@ export default function BankReconciliationPage() {
 
   const qrisCandidates = qrisAuditData?.candidates ?? [];
   const getAvailableQrisPaymentIds = (candidate: QrisCandidateAudit): number[] => {
+    if (Array.isArray(candidate.current_payment_ids)) {
+      return candidate.current_payment_ids.map(Number).filter((id) => Number.isInteger(id) && id > 0);
+    }
     const settled = new Set((candidate.settled_payment_ids ?? []).map(Number));
     return (candidate.payment_items ?? [])
       .map((item) => Number(item.paymentId ?? item.payment_id))
@@ -3317,8 +3327,9 @@ export default function BankReconciliationPage() {
   };
   const qrisApprovableCandidates = qrisCandidates.filter((candidate) =>
     candidate.id != null
-    && ["MATCHED", "REVIEW"].includes(String(candidate.reconciliation_status ?? "").toUpperCase())
+    && String(candidate.reconciliation_status ?? "").toUpperCase() === "MATCHED"
     && candidate.status !== "approved"
+    && candidate.current_evidence_valid !== false
     && getAvailableQrisPaymentIds(candidate).length > 0,
   );
   const selectedQrisCandidates = qrisApprovableCandidates.filter((candidate) =>
@@ -3379,8 +3390,9 @@ export default function BankReconciliationPage() {
   ) => {
     const eligibleCandidates = candidates.filter((candidate) =>
       candidate.id != null
-      && ["MATCHED", "REVIEW"].includes(String(candidate.reconciliation_status ?? "").toUpperCase())
+      && String(candidate.reconciliation_status ?? "").toUpperCase() === "MATCHED"
       && candidate.status !== "approved"
+      && candidate.current_evidence_valid !== false
       && getAvailableQrisPaymentIds(candidate).length > 0
     );
     if (eligibleCandidates.length === 0) {
@@ -3428,6 +3440,7 @@ export default function BankReconciliationPage() {
     let approvedCount = 0;
     let failedCount = 0;
     let conflictCount = 0;
+    let staleCount = 0;
     let firstError = "";
     const conflictedCandidateIds: number[] = [];
     const approvedCandidateIds: number[] = [];
@@ -3463,6 +3476,11 @@ export default function BankReconciliationPage() {
           }));
           continue;
         }
+        if (conflict.code === "CANONICAL_CANDIDATE_STALE") {
+          staleCount += 1;
+          await refetchQrisAudit();
+          continue;
+        }
         failedCount += 1;
         if (!firstError) {
           firstError = "Approval QRIS tidak dapat diselesaikan. Muat ulang daftar kandidat dan coba lagi.";
@@ -3483,10 +3501,12 @@ export default function BankReconciliationPage() {
     }
     qc.invalidateQueries({ queryKey: ["qris-candidate-audit", qrisCompanyId] });
 
-    if (conflictCount > 0) {
+    if (conflictCount > 0 || staleCount > 0) {
       toast({
         title: "Daftar kandidat QRIS diperbarui",
-        description: QRIS_SELECTION_CONFLICT_MESSAGE,
+        description: staleCount > 0
+          ? "Data kandidat sudah berubah. Kandidat lama disembunyikan dan daftar terbaru dimuat."
+          : QRIS_SELECTION_CONFLICT_MESSAGE,
         variant: "destructive",
       });
     }
@@ -3611,6 +3631,17 @@ export default function BankReconciliationPage() {
               code: body.code,
               alreadySettledPaymentIds: body.already_settled_payment_ids,
               eligiblePaymentIds: body.eligible_payment_ids,
+            },
+          ) as QrisSelectionConflictError;
+        }
+        if (body.code === "CANONICAL_CANDIDATE_STALE") {
+          throw Object.assign(
+            new Error("Data kandidat sudah berubah. Daftar kandidat telah diperbarui."),
+            {
+              code: body.code,
+              staleCandidateId: body.stale_candidate_id,
+              currentPaymentIds: body.current_payment_ids,
+              currentExpectedAmount: body.current_expected_amount,
             },
           ) as QrisSelectionConflictError;
         }
@@ -4100,7 +4131,7 @@ export default function BankReconciliationPage() {
                               {candidate.review_reason ?? candidate.description ?? "Belum ada alasan tambahan."}
                             </p>
                             <p className="text-slate-600 dark:text-slate-400 mt-0.5">
-                              Settlement {fmtDate(candidate.estimated_settlement_date)} · {candidate.payment_items?.length ?? 0} payment · Netto {idr(candidate.net_amount)}
+                               Settlement {fmtDate(candidate.estimated_settlement_date)} · {getAvailableQrisPaymentIds(candidate).length} payment · Netto {idr(candidate.current_expected_amount ?? candidate.net_amount)}
                             </p>
                              {(candidate.payment_items?.length ?? 0) > 0 && (
                                <div className="mt-2 rounded border bg-slate-50/80 px-2 py-1.5 text-[10px] dark:bg-slate-900/60">
@@ -4162,10 +4193,10 @@ export default function BankReconciliationPage() {
                             </Button>
                           </div>
                            <div className="flex shrink-0 items-start gap-3 text-right">
-                             <div className="space-y-1">
-                               <p className="font-semibold text-slate-950 dark:text-white">{idr(candidate.gross_amount)}</p>
+                              <div className="space-y-1">
+                                <p className="font-semibold text-slate-950 dark:text-white">{idr(candidate.current_gross_amount ?? candidate.gross_amount)}</p>
                                <p className="text-slate-500 dark:text-slate-400">
-                                 MDR {idr(candidate.observed_deduction)}
+                                  MDR {idr(Number(candidate.current_gross_amount ?? candidate.gross_amount) - Number(candidate.current_expected_amount ?? candidate.net_amount))}
                                  {candidate.effective_deduction_rate != null
                                    ? ` (${(Number(candidate.effective_deduction_rate) * 100).toFixed(2)}%)`
                                    : ""}
@@ -4180,8 +4211,8 @@ export default function BankReconciliationPage() {
                                />
                              )}
                             {!isApproved && candidate.id != null && (() => {
-                              const isReviewStatus = String(candidate.reconciliation_status ?? "").toUpperCase() === "REVIEW";
-                              const canApprove = isMatched || isReviewStatus;
+                               const isReviewStatus = String(candidate.reconciliation_status ?? "").toUpperCase() === "REVIEW";
+                               const canApprove = isMatched;
                               if (!canApprove) return (
                                 <span
                                   title={`Status ${candidate.reconciliation_status}: jalankan AI Matching terlebih dahulu`}
@@ -4205,7 +4236,7 @@ export default function BankReconciliationPage() {
                                     ? <><Loader2 className="w-3 h-3 animate-spin" /> Menyetujui...</>
                                     : isMatched
                                       ? <><CheckCircle2 className="w-3 h-3" /> Setujui Batch</>
-                                      : <><AlertTriangle className="w-3 h-3" /> Setujui (REVIEW)</>}
+                                     : <><AlertTriangle className="w-3 h-3" /> Tidak dapat disetujui</>}
                                 </Button>
                               );
                              })()}

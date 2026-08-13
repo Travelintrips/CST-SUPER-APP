@@ -43,6 +43,7 @@ export interface QrisPaymentCandidateInput {
   paymentDate?: string | null;
   taxAmount?: number | null;
   alreadyReconciled?: boolean;
+  canonicalSettlementId?: number | null;
 }
 
 export interface QrisMutationCandidateInput {
@@ -428,6 +429,7 @@ export function generateQrisMutationBatchCandidates(input: {
       paymentItems: selectedPayments.map((payment) => ({
         paymentId: payment.id,
         grossAmount: roundMoney(Number(payment.amount) || 0),
+        canonicalSettlementId: payment.canonicalSettlementId ?? null,
         expectedSettlementDate: payment.expectedSettlementDate,
         settlementRuleVersion: payment.settlementRuleVersion ?? ruleVersion,
         paymentNumber: payment.paymentNumber ?? null,

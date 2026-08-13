@@ -99,6 +99,10 @@ import {
   checkStaleAmounts,
   checkHeaderTotals,
 } from "../lib/reconciliation/qrisBatchAmountValidation.js";
+import {
+  CANONICAL_CANDIDATE_STALE,
+  checkQrisCandidateFreshness,
+} from "../lib/reconciliation/qrisCandidateContract.js";
 
 const router = Router();
 router.use(async (req, res, next) => {
@@ -2089,6 +2093,11 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       const paymentItems = rawItems.map((item: any) => ({
         paymentId: Number(item?.paymentId ?? item?.payment_id),
         grossAmount: Number(item?.grossAmount ?? item?.gross_amount ?? 0),
+        canonicalSettlementId: item?.canonicalSettlementId == null
+          ? item?.canonical_settlement_id == null
+            ? null
+            : Number(item.canonical_settlement_id)
+          : Number(item.canonicalSettlementId),
       }));
       const candidatePaymentIds = paymentItems.map((item) => item.paymentId);
       if (
@@ -2100,18 +2109,25 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
         });
       }
 
-      const { rows: activePostedRows } = await tx.execute(sql.raw(`
-        SELECT psi.payment_id
+      const { rows: livePaymentRows } = await tx.execute(sql.raw(`
+        SELECT id, amount
+        FROM sport_center.sport_payments
+        WHERE id IN (${candidatePaymentIds.join(",")})
+        FOR SHARE
+      `));
+      const { rows: liveSettlementRows } = await tx.execute(sql.raw(`
+        SELECT psi.payment_id, psi.settlement_id, psb.net_amount, psb.status
         FROM sport_center.payment_settlement_items psi
         JOIN sport_center.payment_settlement_batches psb
           ON psb.id = psi.settlement_id
         WHERE psi.item_status = 'active'
-          AND psb.status IN ('posted', 'reconciled')
           AND psi.payment_id IN (${candidatePaymentIds.join(",")})
           ORDER BY psi.payment_id
           FOR SHARE OF psi, psb
       `));
-      const activePostedPaymentIds = activePostedRows.map((item) =>
+      const activePostedPaymentIds = (liveSettlementRows as Array<Record<string, unknown>>)
+        .filter((item) => ["posted", "reconciled"].includes(String(item.status).toLowerCase()))
+        .map((item) =>
         Number((item as Record<string, unknown>).payment_id),
       );
       let selectedIds: number[];
@@ -2131,36 +2147,37 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
         selectedIds.includes(item.paymentId),
       );
 
-      // Repair a stale provisional candidate in-place only when the caller did
-      // not provide an explicit selection. This keeps the visible candidate
-      // and its next approval payload aligned with the canonical active item
-      // set, while explicit mixed payloads remain fail-closed above.
-      if (requestedIds === null && activePostedPaymentIds.length > 0) {
-        const refreshedGross = selectedPaymentItems.reduce(
-          (sum, item) => sum + item.grossAmount,
-          0,
-        );
-        const refreshedNet = Number(row.net_amount ?? 0);
-        const refreshedDeduction = refreshedGross - refreshedNet;
+      const freshness = checkQrisCandidateFreshness({
+        candidateId,
+        candidateItems: paymentItems,
+        candidateNetAmount: Number(row.net_amount ?? 0),
+        candidateMutationAmount: Number(row.bank_amount ?? 0),
+        livePayments: (livePaymentRows as Array<Record<string, unknown>>).map((item) => ({
+          id: Number(item.id),
+          amount: Number(item.amount),
+        })),
+        liveSettlements: (liveSettlementRows as Array<Record<string, unknown>>).map((item) => ({
+          paymentId: Number(item.payment_id),
+          settlementId: Number(item.settlement_id),
+          netAmount: Number(item.net_amount),
+          isPosted: ["posted", "reconciled"].includes(String(item.status).toLowerCase()),
+        })),
+      });
+      if (freshness) {
         await tx.execute(sql`
           UPDATE qris_mutation_batch_candidates
-          SET gross_amount = ${refreshedGross},
-              observed_deduction = ${refreshedDeduction},
-              effective_deduction_rate = CASE
-                WHEN ${refreshedGross} > 0
-                THEN ${refreshedDeduction} / ${refreshedGross}
-                ELSE NULL
-              END,
-              payment_items = ${JSON.stringify(selectedPaymentItems)}::jsonb,
-              status = 'candidate_review',
-              reconciliation_status = 'REVIEW',
-              confidence = 0,
-              review_reason = ${`Kandidat diperbarui: payment posted/reconciled ${activePostedPaymentIds.join(", ")} dikeluarkan; supplemental hanya membawa payment ${selectedIds.join(", ")}.`},
+          SET status = 'superseded',
+              reconciliation_status = 'UNMATCHED',
+              review_reason = ${`Kandidat superseded: ${freshness.reasons.join("; ")}.`},
               updated_at = NOW()
           WHERE id = ${candidateId}
         `);
-        row.reconciliation_status = "REVIEW";
-        row.status = "candidate_review";
+        return {
+          ...row,
+          mutationId: Number(row.mutation_id),
+          stale: true as const,
+          staleDetails: freshness,
+        };
       }
 
       return {
@@ -2172,6 +2189,17 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
         paymentItems: selectedPaymentItems,
       };
     });
+
+    if (candidate.stale) {
+      const staleDetails = candidate.staleDetails;
+      return res.status(409).json({
+        error: staleDetails.message,
+        code: CANONICAL_CANDIDATE_STALE,
+        stale_candidate_id: staleDetails.staleCandidateId,
+        current_payment_ids: staleDetails.currentPaymentIds,
+        current_expected_amount: staleDetails.currentExpectedAmount,
+      });
+    }
 
     if (candidate.alreadyApproved) {
       return res.json({

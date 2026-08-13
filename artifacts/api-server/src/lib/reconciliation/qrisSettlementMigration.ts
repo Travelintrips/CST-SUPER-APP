@@ -160,6 +160,8 @@ export async function runQrisSettlementMigration(): Promise<void> {
   await db.execute(sql`
     ALTER TABLE qris_mutation_batch_candidates
       ADD COLUMN IF NOT EXISTS bank_account_id INTEGER,
+      ADD COLUMN IF NOT EXISTS candidate_source TEXT NOT NULL DEFAULT 'sport_center.sport_payments',
+      ADD COLUMN IF NOT EXISTS mutation_key TEXT,
       ADD COLUMN IF NOT EXISTS provider_code TEXT NOT NULL DEFAULT 'unknown',
       ADD COLUMN IF NOT EXISTS provider_detection_source TEXT NOT NULL DEFAULT 'unknown',
       ADD COLUMN IF NOT EXISTS settlement_rule_version TEXT NOT NULL DEFAULT 'legacy-v1',
@@ -170,6 +172,18 @@ export async function runQrisSettlementMigration(): Promise<void> {
       ADD COLUMN IF NOT EXISTS effective_deduction_rate NUMERIC(9,8),
       ADD COLUMN IF NOT EXISTS review_reason TEXT,
       ADD COLUMN IF NOT EXISTS generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  `).catch(() => {});
+
+  // A mutation may legitimately have multiple historical candidate snapshots.
+  // Keep superseded rows for audit instead of forcing the new snapshot to
+  // overwrite the old evidence through mutation_id's legacy UNIQUE constraint.
+  await db.execute(sql`
+    ALTER TABLE qris_mutation_batch_candidates
+      DROP CONSTRAINT IF EXISTS qris_mutation_batch_candidates_mutation_id_key
+  `).catch(() => {});
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS idx_qris_candidates_mutation
+      ON qris_mutation_batch_candidates(mutation_id, id DESC)
   `).catch(() => {});
 
   await db.execute(sql`
