@@ -1693,6 +1693,7 @@ function QrisMutationCard({
   const currentPaymentIds = Array.isArray(audit.current_payment_ids)
     ? new Set(audit.current_payment_ids.map(Number))
     : null;
+  const currentPaymentAmounts = audit.current_payment_amounts ?? {};
   const availableItems = allItems.filter((item) => {
     const paymentId = item.paymentId ?? item.payment_id;
     return paymentId != null
@@ -1715,15 +1716,32 @@ function QrisMutationCard({
   // flow, so they must be selectable in the card as well as in the batch toolbar.
   const canSelect = audit.id != null && (isMatched || isReview) && !isApproved && availablePaymentIds.length > 0;
   const bankAmount = numericValue(m.amount) ?? 0;
-  const candidateGross = numericValue(audit.current_gross_amount)
-    ?? numericValue(audit.gross_amount)
-    ?? items.reduce(
-    (total, item) => total + (numericValue(item.grossAmount ?? item.gross_amount) ?? 0),
-    0,
-  );
-  const mdr = numericValue(audit.observed_deduction) ?? 0;
-  const expectedNet = numericValue(audit.net_amount) ?? Math.max(0, bankAmount - mdr);
-  const difference = bankAmount - expectedNet;
+  const snapshotGross = numericValue(audit.gross_amount)
+    ?? allItems.reduce(
+      (total, item) => total + (numericValue(item.grossAmount ?? item.gross_amount) ?? 0),
+      0,
+    );
+  const hasLiveScope = currentPaymentIds !== null;
+  const isPartialSettlement = hasLiveScope && availablePaymentIds.length < allItems.length;
+  const candidateGross = hasLiveScope
+    ? (numericValue(audit.current_gross_amount) ?? 0)
+    : snapshotGross;
+  const originalExpectedNet = numericValue(audit.net_amount) ?? Math.max(0, bankAmount - (numericValue(audit.observed_deduction) ?? 0));
+  const expectedNet = hasLiveScope
+    ? (numericValue(audit.current_expected_amount)
+      ?? (snapshotGross > 0 ? candidateGross * originalExpectedNet / snapshotGross : 0))
+    : originalExpectedNet;
+  const mdr = hasLiveScope
+    ? Math.max(0, candidateGross - expectedNet)
+    : numericValue(audit.observed_deduction) ?? 0;
+  const difference = bankAmount - originalExpectedNet;
+  const metricScopeLabel = isPartialSettlement ? " tersisa" : "";
+  const differenceLabel = isPartialSettlement ? "Selisih Batch Awal" : "Selisih";
+  const liveGrossForItem = (item: QrisPaymentItem) => {
+    const paymentId = item.paymentId ?? item.payment_id;
+    const liveAmount = paymentId == null ? undefined : currentPaymentAmounts[String(paymentId)];
+    return numericValue(liveAmount) ?? numericValue(item.grossAmount ?? item.gross_amount) ?? 0;
+  };
   const statusText = isApproved
     ? "Sudah Disetujui"
     : isMatched
@@ -1770,10 +1788,10 @@ function QrisMutationCard({
             <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
               {[
                 { label: "Uang Masuk (Bank)", value: idr(bankAmount), tone: "text-foreground" },
-                { label: "Total Kandidat", value: `${idr(candidateGross)} · ${items.length} transaksi`, tone: "text-foreground" },
-                { label: "MDR (Estimasi)", value: idr(mdr), tone: "text-foreground" },
-                { label: "Seharusnya Diterima", value: idr(expectedNet), tone: "text-foreground" },
-                { label: "Selisih", value: idr(Math.abs(difference)), tone: difference === 0 ? "text-green-600" : "text-red-600" },
+                { label: `Total Kandidat${metricScopeLabel}`, value: `${idr(candidateGross)} · ${items.length} transaksi`, tone: "text-foreground" },
+                { label: `MDR (Estimasi${metricScopeLabel})`, value: idr(mdr), tone: "text-foreground" },
+                { label: `Seharusnya Diterima${metricScopeLabel}`, value: idr(expectedNet), tone: "text-foreground" },
+                { label: differenceLabel, value: idr(Math.abs(difference)), tone: difference === 0 ? "text-green-600" : "text-red-600" },
               ].map(metric => (
                 <div key={metric.label} className="min-w-0 rounded-md border bg-muted/20 px-2.5 py-2">
                   <p className="text-[10px] leading-tight text-muted-foreground">{metric.label}</p>
@@ -1781,6 +1799,12 @@ function QrisMutationCard({
                 </div>
               ))}
             </div>
+            {isPartialSettlement && (
+              <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-[10px] leading-relaxed text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                Metrik kandidat, MDR, dan netto menunjukkan payment yang masih tersisa setelah partial settlement.
+                Selisih Batch Awal membandingkan mutasi bank dengan netto batch sebelum sebagian payment disetujui.
+              </p>
+            )}
 
             {items.length > 0 ? (
               <div className="mt-3 overflow-hidden rounded-md border" onClick={e => e.stopPropagation()}>
@@ -1816,7 +1840,7 @@ function QrisMutationCard({
                       const booking = item.bookingNumber ?? item.booking_number ?? (item.booking_id != null ? `SC-${String(item.booking_id).padStart(4, "0")}` : "—");
                       const payment = item.paymentNumber ?? item.payment_number ?? (paymentId != null ? `#${paymentId}` : "—");
                       const paidAt = item.paymentDate ?? item.paid_at;
-                      const gross = numericValue(item.grossAmount ?? item.gross_amount) ?? 0;
+                       const gross = liveGrossForItem(item);
                       return (
                         <div key={`${paymentId ?? index}-${booking}`} className="grid grid-cols-[1.1fr_1.4fr_1fr_1fr_1fr_44px] items-center gap-2 border-b px-2.5 py-2 last:border-b-0">
                           <span className="truncate text-xs font-medium">{booking}</span>
@@ -2462,6 +2486,7 @@ function MutationDetailPanel({
   const currentQrisPaymentIds = Array.isArray(qrisAudit?.current_payment_ids)
     ? new Set(qrisAudit.current_payment_ids.map(Number))
     : null;
+  const currentQrisPaymentAmounts = qrisAudit?.current_payment_amounts ?? {};
   const availableQrisItems = (qrisAudit?.payment_items ?? []).filter((item) => {
     const id = Number(item.paymentId ?? item.payment_id);
     return Number.isInteger(id)
@@ -2702,7 +2727,8 @@ function MutationDetailPanel({
                         <div className="rounded border divide-y text-xs max-h-48 overflow-y-auto bg-white dark:bg-slate-900">
                            {availableQrisItems.map((item, idx) => {
                             const pid = item.paymentId ?? item.payment_id ?? 0;
-                            const gross = item.grossAmount ?? item.gross_amount ?? 0;
+                             const paymentAmount = currentQrisPaymentAmounts[String(pid)];
+                             const gross = paymentAmount ?? item.grossAmount ?? item.gross_amount ?? 0;
                             const paymentNo = item.payment_number;
                             const bookingNo = item.booking_number;
                             const paidAt = item.paid_at;

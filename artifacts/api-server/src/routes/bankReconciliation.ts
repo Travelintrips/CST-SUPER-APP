@@ -2719,6 +2719,33 @@ router.get("/mutations", async (req, res) => {
                   )
               )
             ), 0)
+             ,
+             'current_expected_amount', COALESCE((
+               SELECT CASE
+                 WHEN NULLIF(qc.gross_amount, 0) IS NULL THEN 0
+                 ELSE SUM(sp.amount) * qc.net_amount / NULLIF(qc.gross_amount, 0)
+               END
+               FROM sport_center.sport_payments sp
+               WHERE sp.id IN (
+                 SELECT (item->>'paymentId')::int
+                 FROM jsonb_array_elements(qc.payment_items) item
+                 WHERE item->>'paymentId' IS NOT NULL
+                   AND NOT EXISTS (
+                     SELECT 1
+                     FROM qris_settlement_items qsi
+                     WHERE qsi.sport_payment_id = (item->>'paymentId')::int
+                   )
+                   AND NOT EXISTS (
+                     SELECT 1
+                     FROM sport_center.payment_settlement_items psi
+                     JOIN sport_center.payment_settlement_batches psb
+                       ON psb.id = psi.settlement_id
+                     WHERE psi.payment_id = (item->>'paymentId')::int
+                       AND psi.item_status = 'active'
+                       AND psb.status IN ('posted', 'reconciled')
+                   )
+               )
+             ), 0)
           )
           FROM qris_mutation_batch_candidates qc
           WHERE qc.mutation_id = bm.id
