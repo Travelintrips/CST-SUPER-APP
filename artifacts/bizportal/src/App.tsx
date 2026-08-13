@@ -11,6 +11,7 @@ import { AppRoutes } from "@/routes";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { OrderNotificationsProvider } from "@/contexts/OrderNotificationsContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
+import { BIZ_ASSETS } from "@/lib/staticAssets";
 
 
 
@@ -382,9 +383,11 @@ function LoginScreen() {
   return (
     <div className="flex h-screen flex-col items-center justify-center gap-6 bg-slate-950 text-white">
       <div className="flex flex-col items-center gap-2">
-        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-600 text-2xl font-bold shadow-lg">
-          B
-        </div>
+        <img
+          src={BIZ_ASSETS.logo}
+          alt="CST"
+          className="h-14 w-14 object-contain"
+        />
         <h1 className="text-2xl font-semibold tracking-tight">BizPortal</h1>
         <p className="text-sm text-slate-400">
           Sistem ERP Internal B2B Marketplace and Logistic
