@@ -1,31 +1,28 @@
 <svg width="180" height="180" viewBox="0 0 180 180" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- Dark background circle -->
-  <circle cx="90" cy="90" r="90" fill="#040c1e"/>
-  <!-- Outer silver metallic ring -->
-  <circle cx="90" cy="90" r="87" fill="none" stroke="url(#rim)" stroke-width="10"/>
-  <!-- Inner dark field -->
-  <circle cx="90" cy="90" r="78" fill="#081228"/>
-
-  <!-- CST lightning bolt mark — upper diagonal bar (C stroke) -->
-  <path d="M115 38 L55 82 L70 82 L52 142 L112 98 L97 98 Z" fill="url(#bolt)"/>
-  <!-- Highlight edge on bolt -->
-  <path d="M115 38 L92 38 L55 82 L70 82 Z" fill="#93c5fd" opacity="0.55"/>
-  <path d="M52 142 L75 142 L112 98 L97 98 Z" fill="#bfdbfe" opacity="0.35"/>
-
-  <!-- Silver inner circle rim highlight -->
-  <circle cx="90" cy="90" r="77" fill="none" stroke="#8ba4c0" stroke-width="2" opacity="0.5"/>
-
   <defs>
-    <linearGradient id="rim" x1="0" y1="0" x2="180" y2="180" gradientUnits="userSpaceOnUse">
-      <stop offset="0%"   stop-color="#d8e4f0"/>
-      <stop offset="35%"  stop-color="#7090b0"/>
-      <stop offset="65%"  stop-color="#b0c8dc"/>
-      <stop offset="100%" stop-color="#e0eaf4"/>
+    <linearGradient id="rim" x1="18" y1="12" x2="160" y2="168" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset=".34" stop-color="#AAB8CB"/>
+      <stop offset=".68" stop-color="#F8FAFD"/>
+      <stop offset="1" stop-color="#6BC6F2"/>
     </linearGradient>
-    <linearGradient id="bolt" x1="52" y1="38" x2="115" y2="142" gradientUnits="userSpaceOnUse">
-      <stop offset="0%"   stop-color="#60a5fa"/>
-      <stop offset="50%"  stop-color="#2563eb"/>
-      <stop offset="100%" stop-color="#1d4ed8"/>
+    <linearGradient id="surface" x1="48" y1="28" x2="132" y2="154" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset=".52" stop-color="#E7ECF4"/>
+      <stop offset="1" stop-color="#B8C5D7"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="63" y1="35" x2="124" y2="139" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7BC6FF"/>
+      <stop offset=".42" stop-color="#1464E8"/>
+      <stop offset="1" stop-color="#002A91"/>
     </linearGradient>
   </defs>
+  <circle cx="90" cy="90" r="86" fill="url(#surface)" stroke="url(#rim)" stroke-width="8"/>
+  <circle cx="90" cy="90" r="76" stroke="#8D9EB5" stroke-width="2" opacity=".58"/>
+  <path d="M105 28 66 59c-4 3-6 8-6 13v12h16V72l35-28-6-16Z" fill="url(#blue)" stroke="#08348D" stroke-width="2"/>
+  <path d="m111 45 2 28 36 22-13 10-39-23-11-13 16-12 9-12Z" fill="url(#blue)" stroke="#08348D" stroke-width="2"/>
+  <path d="m60 93 17 12 36-25 13 10-40 31-18 2-15-12 7-18Z" fill="url(#blue)" stroke="#08348D" stroke-width="2"/>
+  <path d="m116 90 14 10-35 42-18 2 29-52 10-2Z" fill="url(#blue)" stroke="#08348D" stroke-width="2"/>
+  <path d="m77 105 36-25 13 10-40 31-18 2 9-18Z" fill="#F7FAFF" opacity=".82"/>
+  <image href="/api/storage/public-objects/portal-assets/static/customer-portal/images/logo.png?v=20260813" x="0" y="0" width="180" height="180" preserveAspectRatio="xMidYMid meet"/>
 </svg>
