@@ -130,10 +130,10 @@ async function isPortalSessionRevoked(token: string): Promise<boolean> {
       LIMIT 1
     `);
     return (result.rows as unknown[]).length > 0;
-  } catch {
-    // The idempotent portal migration runs before auth proof. Keep legacy
-    // startup behavior when an older database is still migrating.
-    return false;
+  } catch (error) {
+    // Revocation is a security-critical control. If the lookup cannot be
+    // completed, fail closed instead of allowing a logged-out session through.
+    throw new Error("Portal session revocation check unavailable", { cause: error });
   }
 }
 
@@ -165,7 +165,15 @@ export async function requirePortalAuth(req: Request, res: Response, next: NextF
     res.status(401).json({ message: "Unauthorized" });
     return;
   }
-  if (await isPortalSessionRevoked(token)) {
+  let revoked: boolean;
+  try {
+    revoked = await isPortalSessionRevoked(token);
+  } catch (error) {
+    req.log?.error({ err: error }, "portal session revocation check failed");
+    res.status(503).json({ message: "Sesi tidak dapat diverifikasi. Coba lagi." });
+    return;
+  }
+  if (revoked) {
     res.status(401).json({ message: "Session sudah tidak berlaku" });
     return;
   }
@@ -286,7 +294,15 @@ export async function requirePortalAdmin(req: Request, res: Response, next: Next
     res.status(401).json({ message: "Unauthorized" });
     return;
   }
-  if (await isPortalSessionRevoked(token)) {
+  let revoked: boolean;
+  try {
+    revoked = await isPortalSessionRevoked(token);
+  } catch (error) {
+    req.log?.error({ err: error }, "portal admin session revocation check failed");
+    res.status(503).json({ message: "Sesi tidak dapat diverifikasi. Coba lagi." });
+    return;
+  }
+  if (revoked) {
     res.status(401).json({ message: "Session sudah tidak berlaku" });
     return;
   }
