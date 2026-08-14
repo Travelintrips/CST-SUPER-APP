@@ -904,6 +904,7 @@ export async function verifyEmailOtp(email: string, code: string) {
  */
 export async function forgotPasswordCustom(email: string, origin: string) {
   const emailLower = String(email).toLowerCase().trim();
+  const isDev = !process.env.REPLIT_DEPLOYMENT;
 
   // Always respond with same message to prevent email enumeration
   const genericOk = { sent: true, message: "Jika email terdaftar, link reset password telah dikirim ke email Anda." };
@@ -930,6 +931,12 @@ export async function forgotPasswordCustom(email: string, origin: string) {
   captureSafeDevResetArtifact(emailLower, rawToken);
 
   const smtpOk = isSmtpConfigured();
+  // Production must never report success when the reset email cannot be
+  // delivered. Development keeps the existing safe/test-mode behavior.
+  if (!smtpOk && !isDev) {
+    throw new AuthServiceError(503, "Layanan email belum dikonfigurasi. Hubungi admin.");
+  }
+
   if (smtpOk) {
     try {
       await sendMail({
@@ -952,8 +959,17 @@ export async function forgotPasswordCustom(email: string, origin: string) {
         text: `🔑 Reset Password\n\nKami menerima permintaan reset password untuk akun ${emailLower}.\n\nKlik link berikut untuk membuat password baru (berlaku 1 jam):\n\n${resetUrl}\n\nApabila Anda tidak meminta reset password, abaikan email ini.\n\n—\nPT Cahaya Sejati Teknologi`,
         context: "forgot-password",
       });
-    } catch {
-      // Silent fail — don't leak SMTP errors; token still valid in DB
+    } catch (smtpErr) {
+      // Do not expose provider details, but do not claim the message was sent.
+      // sendMail already records the provider error in notification_logs when
+      // the SMTP transport reaches the provider.
+      if (!isDev) {
+        throw new AuthServiceError(
+          502,
+          "Gagal mengirim email reset password. Coba lagi atau hubungi admin.",
+          { cause: smtpErr },
+        );
+      }
     }
   }
 
