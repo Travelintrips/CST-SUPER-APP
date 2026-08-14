@@ -168,6 +168,7 @@ import {
   verifyEmailOtp,
   getMe,
   normalizePhoneID,
+  hasUsablePortalPassword,
   forgotPasswordCustom,
   resetPasswordWithToken,
 } from "../lib/services/portalAuthService.js";
@@ -4219,7 +4220,7 @@ router.post("/admin/vendor-invitations/:id/approve", requirePortalAdmin, async (
         if (customer) {
           portalCustomerId = Number(customer.id);
           credentialEmail = String(customer.email);
-          credentialNeedsSetup = !String(customer.password_hash ?? "").trim();
+          credentialNeedsSetup = !hasUsablePortalPassword(customer.password_hash);
           await tx.execute(sql`
             UPDATE portal_customers
             SET role = 'vendor',

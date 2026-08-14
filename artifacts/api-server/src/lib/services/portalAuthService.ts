@@ -57,6 +57,16 @@ export class AuthServiceError extends Error {
 
 // ─── Internal Helpers ─────────────────────────────────────────────────────────
 
+/**
+ * A portal account created by onboarding may temporarily contain an empty
+ * password hash while the existing reset/setup flow is being completed.
+ * Never let an empty or whitespace-only value pass the email/password login
+ * gate.
+ */
+export function hasUsablePortalPassword(passwordHash: string | null | undefined): boolean {
+  return typeof passwordHash === "string" && passwordHash.trim().length > 0;
+}
+
 // Canonical phone normalizer — single source of truth for all OTP / login flows.
 // Delegates to lib/phoneUtils.normalizePhone which handles: 0XXXXXXX, 62XXXXXXX,
 // +62XXXXXXX, and the malformed 620XXXXXXX (extra leading-0 after country code).
@@ -87,7 +97,7 @@ export async function emailPasswordLogin(email: string, password: string) {
     .from(portalCustomersTable)
     .where(eq(portalCustomersTable.email, String(email).toLowerCase().trim()));
 
-  if (!customer || !customer.passwordHash) {
+  if (!customer || !hasUsablePortalPassword(customer.passwordHash)) {
     throw new AuthServiceError(401, "Email atau password salah.");
   }
   assertAccountUsable(customer);

@@ -24,7 +24,7 @@ import { NotificationService } from "./notificationService.js";
 import { runVendorApprovedInTx } from "./vendorLifecycleService.js";
 import { getWaTemplateConfig, renderTemplate } from "../orderNotification.js";
 import { sendViaService as sendWhatsApp } from "../waTransport.js";
-import { forgotPasswordCustom } from "./portalAuthService.js";
+import { forgotPasswordCustom, hasUsablePortalPassword } from "./portalAuthService.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -369,7 +369,7 @@ async function _sendVendorCredentialSetup(
       .where(eq(portalCustomersTable.id, customerId))
       .limit(1);
 
-    if (!customer?.email || customer.passwordHash?.trim()) return false;
+    if (!customer?.email || hasUsablePortalPassword(customer.passwordHash)) return false;
 
     const origin = portalOrigin?.startsWith("http")
       ? portalOrigin
