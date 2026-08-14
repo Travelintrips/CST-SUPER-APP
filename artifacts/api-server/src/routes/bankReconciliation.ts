@@ -2851,6 +2851,22 @@ router.get("/mutations", async (req, res) => {
           )
           FROM qris_mutation_batch_candidates qc
           WHERE qc.mutation_id = bm.id
+              AND (
+                UPPER(COALESCE(qc.status, '')) NOT IN (
+                  'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
+                )
+                OR EXISTS (
+                  SELECT 1
+                  FROM jsonb_array_elements(COALESCE(qc.payment_items, '[]'::jsonb)) item
+                  WHERE item->>'paymentId' IS NOT NULL
+                    AND NOT EXISTS (
+                      SELECT 1
+                      FROM qris_settlement_items qsi
+                      WHERE qsi.sport_payment_id = (item->>'paymentId')::int
+                    )
+                    ${canonicalSettledExcludeSql}
+                )
+              )
              AND (
                UPPER(COALESCE(bm.provider_name, '')) LIKE '%QRIS%'
                OR UPPER(COALESCE(bm.provider_name, '')) LIKE '%QRTRAVELI%'
