@@ -38,6 +38,42 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     }, accounts)).toBe(17);
   });
 
+  it("matches an external payment account number to an internal mutation account ID", () => {
+    const accounts = [
+      { id: 17, companyId: 1, accountNumber: "1640006707220" },
+    ];
+    const paymentAccountId = resolveActiveBankAccountId({
+      companyId: 1,
+      bankAccountId: "1640006707220",
+    }, accounts);
+    const mutationAccountId = resolveActiveBankAccountId({
+      companyId: 1,
+      bankAccountId: "17",
+    }, accounts);
+
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 101, companyId: 1, bankAccountId: paymentAccountId, amount: 100_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-12",
+        expectedSettlementDate: "2026-08-13", providerName: "paylabs",
+      }],
+      mutations: [{
+        id: 102, companyId: 1, bankAccountId: mutationAccountId, amount: 99_300,
+        transactionDate: "2026-08-13", direction: "IN",
+        source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "paylabs", description: "PAYLABS SETTLEMENT",
+      }],
+    });
+
+    expect(paymentAccountId).toBe(17);
+    expect(mutationAccountId).toBe(17);
+    expect(result[0]).toMatchObject({
+      status: "MATCHED",
+      bankAccountId: 17,
+      paymentItems: [{ paymentId: 101 }],
+    });
+  });
+
   it("fails closed when a bank account reference is missing or ambiguous", () => {
     const accounts = [
       { id: 17, companyId: 1, accountNumber: "1640006707220" },
@@ -110,7 +146,7 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
       }],
     });
     expect(result).toHaveLength(1);
-    expect(result[0]?.status).toBe("REVIEW");
+    expect(result[0]?.status).toBe("MATCHED");
   });
 
   it("maps QRTRAVELI to the only configured account provider", () => {
@@ -139,8 +175,8 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
         },
       },
     });
-    expect(result[0]?.providerCode).toBe("mandiri_direct");
-    expect(result[0]?.providerDetectionSource).toBe("settlement_rule");
+    expect(result[0]?.providerCode).toBe("gpn_qris");
+    expect(result[0]?.providerDetectionSource).toBe("mutation_description");
     expect(result[0]?.status).toBe("MATCHED");
   });
 
