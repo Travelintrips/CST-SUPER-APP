@@ -203,6 +203,26 @@ export async function requirePortalAuth(req: Request, res: Response, next: NextF
   next();
 }
 
+/**
+ * Customer-private portal routes must not be reachable by vendor/admin sessions.
+ *
+ * Keep requirePortalAuth separate because shared endpoints such as /auth/me and
+ * /me/dashboard-stats intentionally support multiple portal roles.
+ */
+export async function requireCustomerPortalAuth(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  await requirePortalAuth(req, res, () => {
+    if ((req as PortalAuthReq).portalRole !== "customer") {
+      res.status(403).json({ message: "Akses customer diperlukan" });
+      return;
+    }
+    next();
+  });
+}
+
 // ── requirePortalAdmin ────────────────────────────────────────────────────────
 // C1-REMEDIATION: accepts HttpOnly cookie first, then Bearer fallback.
 export async function requirePortalAdmin(req: Request, res: Response, next: NextFunction) {

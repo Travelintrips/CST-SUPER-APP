@@ -381,13 +381,6 @@ export default function Login() {
                 {t("login.tabEmailOtp")}
               </button>
               <button type="button" onClick={() => { setMode("wa"); setErrorMsg(""); setOtpStep("email"); setOtpCode(""); }} className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${mode === "wa" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
-                {t("login.tabPhone")}
-              </button>
-              <button type="button" onClick={() => { setMode("password"); setErrorMsg(""); setOtpStep("email"); setOtpCode(""); setWaStep("phone"); setWaCode(""); }} className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${mode === "password" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
-                {t("login.password")}
-                {t("login.tabEmail", "Email OTP")}
-              </button>
-              <button type="button" onClick={() => { setMode("wa"); setErrorMsg(""); setOtpStep("email"); setOtpCode(""); }} className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${mode === "wa" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
                 {t("login.tabWa", "No HP / WA")}
               </button>
               <button type="button" onClick={() => { setMode("password"); setErrorMsg(""); setOtpStep("email"); setOtpCode(""); setWaStep("phone"); setWaCode(""); }} className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${mode === "password" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}>

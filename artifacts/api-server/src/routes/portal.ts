@@ -16,7 +16,7 @@ import { getAdminWa } from "../lib/adminWa.js";
 import { getAppConfig } from "../lib/appConfig.js";
 import { updateMarketplaceStatus, verifySupplier } from "../lib/services/supplierStatusService.js";
 import { validateMediaAssetsPayload } from "../lib/mediaAssetsValidation.js";
-import { requirePortalAuth, requirePortalAdmin, requireActiveVendor, verifyDevPortalEmail, type PortalAuthReq, setPortalSessionCookie, clearPortalSessionCookie, PORTAL_SESSION_COOKIE } from "../lib/supabaseAuth";
+import { requirePortalAuth, requireCustomerPortalAuth, requirePortalAdmin, requireActiveVendor, verifyDevPortalEmail, type PortalAuthReq, setPortalSessionCookie, clearPortalSessionCookie, PORTAL_SESSION_COOKIE } from "../lib/supabaseAuth";
 import { writeAuditLog } from "../lib/auditLog.js";
 import { requireClerkUser } from "../lib/requireAdmin";
 import { isCatalogItemPublic, catalogPublicConditions } from "../lib/catalogVisibility.js";
@@ -1169,7 +1169,7 @@ const _portalUpload = multer({
 // the 20 MB size limit before any byte reaches object storage.  This replaces
 // the old presigned-URL flow (/order-upload-url) which issued unconstrained GCS
 // PUT URLs that bypassed all server-side size limits.
-router.post("/order-upload", requirePortalAuth, (req, res, next) => {
+router.post("/order-upload", requireCustomerPortalAuth, (req, res, next) => {
   _portalUpload.single("file")(req, res, (err) => {
     if (err) {
       if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
@@ -1197,7 +1197,7 @@ router.post("/order-upload", requirePortalAuth, (req, res, next) => {
 // Auth enforced before multer so unauthenticated requests are rejected before
 // any file bytes are processed or written to object storage.
 const _proofUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
-router.post("/payment-proof-upload", requirePortalAuth, (req, res, next) => {
+router.post("/payment-proof-upload", requireCustomerPortalAuth, (req, res, next) => {
   _proofUpload.single("file")(req, res, (err) => {
     if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
       res.status(413).json({ message: "Ukuran file melebihi batas 10 MB." }); return;
@@ -1221,12 +1221,12 @@ router.post("/payment-proof-upload", requirePortalAuth, (req, res, next) => {
 
 // POST /api/portal/order-upload-url  — DEPRECATED, kept for backward compat.
 // Returns 410 Gone so old clients fail visibly rather than silently.
-router.post("/order-upload-url", requirePortalAuth, (_req, res) => {
+router.post("/order-upload-url", requireCustomerPortalAuth, (_req, res) => {
   return res.status(410).json({ message: "Endpoint ini sudah tidak aktif. Gunakan /api/portal/order-upload (multipart/form-data)." });
 });
 
 // GET /api/portal/orders — returns sales orders for the authenticated portal customer
-router.get("/orders", requirePortalAuth, async (req, res) => {
+router.get("/orders", requireCustomerPortalAuth, async (req, res) => {
   const portalCustId = (req as PortalAuthReq).portalCustomerId;
   try {
     return res.json(await listSalesOrders(portalCustId));
@@ -1237,7 +1237,7 @@ router.get("/orders", requirePortalAuth, async (req, res) => {
 });
 
 // GET /api/portal/logistic-orders — returns logistic orders for the authenticated portal customer
-router.get("/logistic-orders", requirePortalAuth, async (req, res) => {
+router.get("/logistic-orders", requireCustomerPortalAuth, async (req, res) => {
   const portalCustId = (req as PortalAuthReq).portalCustomerId;
   try {
     return res.json(await listLogisticOrders(portalCustId));
@@ -1248,7 +1248,7 @@ router.get("/logistic-orders", requirePortalAuth, async (req, res) => {
 });
 
 // GET /api/portal/product-orders — returns portal product orders for the customer
-router.get("/product-orders", requirePortalAuth, async (req, res) => {
+router.get("/product-orders", requireCustomerPortalAuth, async (req, res) => {
   const portalCustId = (req as PortalAuthReq).portalCustomerId;
   try {
     return res.json(await listProductOrders(portalCustId));
@@ -1259,7 +1259,7 @@ router.get("/product-orders", requirePortalAuth, async (req, res) => {
 });
 
 // POST /api/portal/orders — place a new order from the portal
-router.post("/orders", requirePortalAuth, async (req, res) => {
+router.post("/orders", requireCustomerPortalAuth, async (req, res) => {
   const portalCustId = (req as PortalAuthReq).portalCustomerId;
   const { items, notes, expectedDate, paymentType } = req.body ?? {};
   try {
@@ -1272,7 +1272,7 @@ router.post("/orders", requirePortalAuth, async (req, res) => {
 });
 
 // PATCH /api/portal/orders/:id/cancel — cancel a portal sales order (owning customer only)
-router.patch("/orders/:id/cancel", requirePortalAuth, async (req, res) => {
+router.patch("/orders/:id/cancel", requireCustomerPortalAuth, async (req, res) => {
   const portalCustId = (req as PortalAuthReq).portalCustomerId;
   const id = Number(String(req.params.id));
   try {
@@ -1284,7 +1284,7 @@ router.patch("/orders/:id/cancel", requirePortalAuth, async (req, res) => {
 });
 
 // PATCH /api/portal/logistic-orders/:id/cancel — cancel a portal logistic order (owning customer only)
-router.patch("/logistic-orders/:id/cancel", requirePortalAuth, async (req, res) => {
+router.patch("/logistic-orders/:id/cancel", requireCustomerPortalAuth, async (req, res) => {
   const portalCustId = (req as PortalAuthReq).portalCustomerId;
   const id = Number(String(req.params.id));
   try {
@@ -2160,7 +2160,7 @@ router.get("/me/dashboard-stats", requirePortalAuth, async (req, res) => {
 });
 
 // GET /api/portal/me/invoices — Customer invoice list (from sales_documents)
-router.get("/me/invoices", requirePortalAuth, async (req, res) => {
+router.get("/me/invoices", requireCustomerPortalAuth, async (req, res) => {
   const customerId = (req as PortalAuthReq).portalCustomerId;
   try {
     const result = await db.execute<{
