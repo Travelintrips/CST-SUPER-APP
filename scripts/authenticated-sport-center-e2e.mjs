@@ -491,6 +491,42 @@ async function main() {
     },
   });
 
+  const ledgerEventsBody = assertOk(
+    await apiRequest(
+      `/api/accounting/ledger/events?company_id=${companyId}&event_type=POST&limit=200`,
+      { cookie: login.cookie },
+    ),
+    "ledger event audit listing",
+  );
+  const ledgerEvents = asRows(ledgerEventsBody);
+  const postingEvent = ledgerEvents.find(
+    (event) =>
+      Number(event?.company_id) === companyId &&
+      event?.event_type === "POST" &&
+      Number(event?.entry_id) === Number(post1.accountingEntryId),
+  );
+  if (!postingEvent) {
+    fail("Sport Center posting did not persist its ledger audit event", {
+      companyId,
+      entryId: Number(post1.accountingEntryId),
+      matchingEvents: ledgerEvents.filter(
+        (event) => Number(event?.entry_id) === Number(post1.accountingEntryId),
+      ),
+      eventCount: ledgerEvents.length,
+    });
+  }
+  checks.push({
+    name: "Sport Center posting ledger audit event persisted",
+    passed: true,
+    detail: {
+      eventId: postingEvent.id ?? null,
+      eventType: postingEvent.event_type,
+      companyId: Number(postingEvent.company_id),
+      entryId: Number(postingEvent.entry_id),
+      period: postingEvent.period ?? null,
+    },
+  });
+
   const post2 = assertOk(
     await apiRequest("/api/accounting/posting-monitor/post", {
       method: "POST",

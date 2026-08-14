@@ -93,7 +93,7 @@ import { registerWorker, startAll } from "./lib/startupOrchestrator.js";
 import { startTokenCleanupWorker } from "./workers/tokenCleanupWorker.js";
 import { initAlertsBroadcast } from "./lib/alertsBroadcast.js";
 import { warmupMailer } from "./lib/mailer.js";
-import { ensureSportPaymentMirrorTrigger, runSportCenterMigration, runSportCenterAccountCorrection, runSportCenterCompanyInvoiceMigration, runSportExpensesMigration } from "./modules/sport-center/migration.js";
+import { ensureSportPaymentMirrorTrigger, runLedgerEventsEntryIdMigration, runSportCenterMigration, runSportCenterAccountCorrection, runSportCenterCompanyInvoiceMigration, runSportExpensesMigration } from "./modules/sport-center/migration.js";
 import { runTenantMigration } from "./modules/tenant/migration.js";
 import { startRecurringExpenseWorker } from "./modules/sport-center/recurringExpenseWorker.js";
 import { startMemberReminderWorker } from "./modules/sport-center/memberReminderWorker.js";
@@ -232,6 +232,10 @@ async function runWithRetry<T>(
 // ── Pre-startup critical schema migrations (run BEFORE accepting requests) ────
 // These ensure Drizzle ORM columns exist before any query can be executed.
 async function runCriticalPreStartMigrations() {
+  // Accounting posting emits a non-fatal audit event. Upgrade legacy
+  // ledger_events before any authenticated posting can be accepted.
+  await runLedgerEventsEntryIdMigration();
+
   // Install the canonical Sport Center payment resolver before the long
   // startup migration chain. This is the same idempotent runtime installer
   // used by runSportCenterMigration; it does not post accounting or create
@@ -1730,6 +1734,7 @@ async function startServer() {
     .then(() => runWithRetry("Freight doc verify migration", runFreightDocVerifyMigration))
     .then(() => runWithRetry("Financial period migration", runFinancialPeriodMigration))
     .then(() => runWithRetry("Financial closing migration", runFinancialClosingMigration))
+    .then(() => runWithRetry("Ledger events entry_id migration", runLedgerEventsEntryIdMigration))
     .then(() => runWithRetry("SAP hardening migration", runSapHardeningMigration))
     .then(() => runWithRetry("Finance governance migration", runFinanceGovernanceMigration))
     .then(() => runWithRetry("Bank disbursement migration", runBankDisbursementMigration))

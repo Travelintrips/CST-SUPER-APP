@@ -4,6 +4,28 @@ import { logger } from "../../lib/logger.js";
 import { pullLegacyBookingsFromSupabase, pullFacilitiesFromSupabase, pullPaymentsFromSupabase } from "./supabaseSync.js";
 
 /**
+ * Upgrade the shared ledger audit table used by accounting posting.
+ *
+ * Older runtime databases may have `ledger_events` from the fleet schema,
+ * which predates the accounting audit contract and has no `entry_id`. Keep
+ * this additive and safe to run before/after the table is provisioned.
+ */
+export async function runLedgerEventsEntryIdMigration(): Promise<void> {
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF to_regclass('public.ledger_events') IS NOT NULL THEN
+        ALTER TABLE public.ledger_events
+          ADD COLUMN IF NOT EXISTS entry_id INTEGER;
+        CREATE INDEX IF NOT EXISTS ledger_events_entry_id_idx
+          ON public.ledger_events (entry_id);
+      END IF;
+    END $$;
+  `);
+  logger.info("Ledger events migration: entry_id siap");
+}
+
+/**
  * The canonical Sport Center payment table lives in the Supabase
  * `sport_center` schema.  The local/public payment row is deliberately owned
  * by PostgreSQL so that a retried confirmation cannot create two accounting
