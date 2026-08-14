@@ -189,9 +189,13 @@ async function cleanupStaleFixtures() {
 async function waitForReadiness(timeoutMs = 180_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const response = await fetch("http://127.0.0.1:18444/api/health/ready");
-    const body = await response.json();
-    if (response.status === 200 && body.ready === true) return true;
+    try {
+      const response = await fetch("http://127.0.0.1:18444/api/health/ready");
+      const body = await response.json();
+      if (response.status === 200 && body.ready === true) return true;
+    } catch {
+      // The workflow may still be between process replacement and listen().
+    }
     await new Promise((resolve) => setTimeout(resolve, 5_000));
   }
   return false;
