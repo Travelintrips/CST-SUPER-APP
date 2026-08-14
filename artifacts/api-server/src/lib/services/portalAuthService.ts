@@ -101,7 +101,7 @@ export async function emailPasswordLogin(email: string, password: string) {
     throw new AuthServiceError(401, "Email atau password salah.");
   }
   assertAccountUsable(customer);
-  const valid = await bcrypt.compare(String(password), customer.passwordHash);
+  const valid = await bcrypt.compare(String(password), customer.passwordHash as string);
   if (!valid) {
     throw new AuthServiceError(401, "Email atau password salah.");
   }
