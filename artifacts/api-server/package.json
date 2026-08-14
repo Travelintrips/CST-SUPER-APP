@@ -12,6 +12,8 @@
     "start:secure": "PORT=18444 node load-secrets.mjs node --enable-source-maps ./dist/index.mjs",
     "typecheck": "node --max-old-space-size=4096 ../../node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
     "test:price-sync": "node tests/price-sync.regression.mjs",
+    "storage:compress-images": "APP_ENV=production node load-secrets.mjs node scripts/compress-supabase-images.mjs",
+    "storage:compress-images:apply": "APP_ENV=production node load-secrets.mjs node scripts/compress-supabase-images.mjs --apply",
     "test": "vitest run",
     "test:watch": "vitest"
   },

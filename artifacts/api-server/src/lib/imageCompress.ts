@@ -1,6 +1,7 @@
 import sharp from "sharp";
 
 export type ImageCompressMode = "photo" | "ocr-doc";
+export type ImageOutputFormat = "webp" | "preserve";
 
 const MODES = {
   photo: { maxWidth: 1600, quality: 80 },
@@ -33,11 +34,14 @@ export function isCompressibleImage(contentType: string): boolean {
  *  - EXIF rotation is applied automatically
  *  - Upscaling is disabled (withoutEnlargement)
  *  - Falls back to original if compression fails
+ *  - `outputFormat: "preserve"` keeps JPG/PNG/WebP paths compatible with
+ *    existing storage references while still reducing their size
  */
 export async function compressImageBuffer(
   buffer: Buffer,
   contentType: string,
   mode: ImageCompressMode = "photo",
+  outputFormat: ImageOutputFormat = "webp",
 ): Promise<{ buffer: Buffer; contentType: string }> {
   if (!isCompressibleImage(contentType)) {
     return { buffer, contentType };
@@ -55,6 +59,46 @@ export async function compressImageBuffer(
 
     if (width > maxWidth) {
       pipeline = pipeline.resize({ width: maxWidth, withoutEnlargement: true });
+    }
+
+    const normalizedType = contentType.toLowerCase();
+
+    if (outputFormat === "preserve") {
+      // Animated GIFs must not be sent through a single-frame sharp pipeline.
+      // Unsupported formats are left untouched rather than changing a stored
+      // object's extension/content contract.
+      if (normalizedType === "image/gif" || normalizedType === "image/bmp" ||
+          normalizedType === "image/heic" || normalizedType === "image/heif") {
+        return { buffer, contentType };
+      }
+
+      if (normalizedType === "image/png") {
+        const compressed = await pipeline
+          .png({ compressionLevel: 9, adaptiveFiltering: true })
+          .toBuffer();
+        return { buffer: compressed, contentType: "image/png" };
+      }
+
+      if (normalizedType === "image/jpeg" || normalizedType === "image/jpg") {
+        const compressed = await pipeline
+          .jpeg({ quality, mozjpeg: true })
+          .toBuffer();
+        return { buffer: compressed, contentType: "image/jpeg" };
+      }
+
+      if (normalizedType === "image/webp") {
+        const compressed = await pipeline
+          .webp({ quality, effort: 4, smartSubsample: true })
+          .toBuffer();
+        return { buffer: compressed, contentType: "image/webp" };
+      }
+
+      if (normalizedType === "image/tiff") {
+        const compressed = await pipeline
+          .tiff({ compression: "jpeg", quality })
+          .toBuffer();
+        return { buffer: compressed, contentType: "image/tiff" };
+      }
     }
 
     if (mode === "photo") {

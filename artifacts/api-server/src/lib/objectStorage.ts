@@ -175,11 +175,19 @@ export class ObjectStorageService {
     buffer: Buffer,
     contentType: string,
     skipImageCompression = false,
+    preserveImageFormat = false,
   ): Promise<{ buffer: Buffer; contentType: string }> {
     if (skipImageCompression || !isCompressibleImage(contentType)) {
       return { buffer, contentType };
     }
-    return compressImageBuffer(buffer, contentType, "photo");
+    const prepared = await compressImageBuffer(
+      buffer,
+      contentType,
+      "photo",
+      preserveImageFormat ? "preserve" : "webp",
+    );
+    // Do not replace an already-small image with a larger encoded variant.
+    return prepared.buffer.length < buffer.length ? prepared : { buffer, contentType };
   }
 
   // ── Public path helpers (kept for backward compat) ──────────────────────────
@@ -335,7 +343,9 @@ export class ObjectStorageService {
     contentType: string,
     options: { skipImageCompression?: boolean } = {},
   ): Promise<string> {
-    const prepared = await this.prepareUpload(buffer, contentType, options.skipImageCompression);
+    // This method accepts caller-owned paths. Preserve the extension/content
+    // contract so existing URL/database references remain valid.
+    const prepared = await this.prepareUpload(buffer, contentType, options.skipImageCompression, true);
     await supabaseUpload(PUBLIC_BUCKET, subPath, prepared.buffer, prepared.contentType);
     return `/api/storage/public-objects/${subPath}`;
   }
@@ -359,7 +369,8 @@ export class ObjectStorageService {
     options: { skipImageCompression?: boolean } = {},
   ): Promise<void> {
     const cleaned = storagePath.replace(/^\/+/, "");
-    const prepared = await this.prepareUpload(buffer, contentType, options.skipImageCompression);
+    // Generic callers often persist `storagePath`; preserve its image format.
+    const prepared = await this.prepareUpload(buffer, contentType, options.skipImageCompression, true);
     await supabaseUpload(PUBLIC_BUCKET, cleaned, prepared.buffer, prepared.contentType);
   }
 
