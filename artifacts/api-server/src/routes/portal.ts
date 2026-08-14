@@ -16,7 +16,7 @@ import { getAdminWa } from "../lib/adminWa.js";
 import { getAppConfig } from "../lib/appConfig.js";
 import { updateMarketplaceStatus, verifySupplier } from "../lib/services/supplierStatusService.js";
 import { validateMediaAssetsPayload } from "../lib/mediaAssetsValidation.js";
-import { requirePortalAuth, requireCustomerPortalAuth, requirePortalAdmin, requireActiveVendor, verifyDevPortalEmail, type PortalAuthReq, setPortalSessionCookie, clearPortalSessionCookie, PORTAL_SESSION_COOKIE } from "../lib/supabaseAuth";
+import { requirePortalAuth, requireCustomerPortalAuth, requirePortalAdmin, requireActiveVendor, verifyDevPortalEmail, type PortalAuthReq, setPortalSessionCookie, clearPortalSessionCookie, revokePortalSession, PORTAL_SESSION_COOKIE } from "../lib/supabaseAuth";
 import { consumeSafeDevResetArtifact, isSafeDevResetCaptureEnabled } from "../lib/safeDevResetCapture.js";
 import { writeAuditLog } from "../lib/auditLog.js";
 import { requireClerkUser } from "../lib/requireAdmin";
@@ -608,7 +608,18 @@ router.post("/auth/login", loginLimiter, async (req, res) => {
 });
 
 // POST /api/portal/auth/logout — clears the session cookie
-router.post("/auth/logout", (req, res) => {
+router.post("/auth/logout", async (req, res) => {
+  const bearerHeader = req.headers.authorization;
+  const cookieToken = (req.cookies as Record<string, string> | undefined)?.[PORTAL_SESSION_COOKIE];
+  const token = (bearerHeader?.startsWith("Bearer ") ? bearerHeader.slice(7) : null) ?? cookieToken;
+  if (token) {
+    try {
+      await revokePortalSession(token);
+    } catch (err) {
+      req.log?.error({ err }, "portal logout session revocation failed");
+      return res.status(503).json({ message: "Sesi belum dapat dicabut. Coba lagi." });
+    }
+  }
   clearPortalSessionCookie(res);
   res.json({ message: "Logged out." });
 });
@@ -5068,7 +5079,18 @@ router.post("/auth/set-cookie", requirePortalAuth, (req, res) => {
  * Menghapus HttpOnly session cookie dan invalidasi sesi.
  * Frontend harus tetap menghapus localStorage entries sendiri.
  */
-router.post("/auth/logout", (req, res) => {
+router.post("/auth/logout", async (req, res) => {
+  const bearerHeader = req.headers.authorization;
+  const cookieToken = (req.cookies as Record<string, string> | undefined)?.[PORTAL_SESSION_COOKIE];
+  const token = (bearerHeader?.startsWith("Bearer ") ? bearerHeader.slice(7) : null) ?? cookieToken;
+  if (token) {
+    try {
+      await revokePortalSession(token);
+    } catch (err) {
+      req.log?.error({ err }, "portal logout session revocation failed");
+      return res.status(503).json({ message: "Sesi belum dapat dicabut. Coba lagi." });
+    }
+  }
   clearPortalSessionCookie(res);
   return res.json({ ok: true, message: "Logged out" });
 });

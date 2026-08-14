@@ -44,6 +44,18 @@ export async function runPortalMigration(): Promise<void> {
         ON portal_customers (account_status)
     `);
 
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS portal_session_revocations (
+        token_hash  TEXT PRIMARY KEY,
+        expires_at  TIMESTAMPTZ NOT NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS portal_session_revocations_expiry_idx
+        ON portal_session_revocations (expires_at)
+    `);
+
     // Buat tabel portal_content jika belum ada
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS portal_content (

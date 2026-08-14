@@ -3,7 +3,8 @@ import { db, portalCustomersTable, userProfilesTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { verifySupabaseToken } from "./supabaseAdmin";
 import { verifyPortalJwt } from "./portalJwt";
-import { createHmac } from "crypto";
+import { createHash, createHmac } from "crypto";
+import { sql } from "drizzle-orm";
 
 const IS_PROD =
   process.env.REPLIT_DEPLOYMENT === "1" || process.env.NODE_ENV === "production";
@@ -115,6 +116,40 @@ export function clearPortalSessionCookie(res: Response): void {
   res.clearCookie(PORTAL_SESSION_HINT_COOKIE, { path: "/", secure, sameSite });
 }
 
+function hashPortalSessionToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+async function isPortalSessionRevoked(token: string): Promise<boolean> {
+  try {
+    const result = await db.execute(sql`
+      SELECT 1
+      FROM portal_session_revocations
+      WHERE token_hash = ${hashPortalSessionToken(token)}
+        AND expires_at > NOW()
+      LIMIT 1
+    `);
+    return (result.rows as unknown[]).length > 0;
+  } catch {
+    // The idempotent portal migration runs before auth proof. Keep legacy
+    // startup behavior when an older database is still migrating.
+    return false;
+  }
+}
+
+export async function revokePortalSession(token: string): Promise<void> {
+  if (!token) return;
+  await db.execute(sql`
+    INSERT INTO portal_session_revocations (token_hash, expires_at)
+    VALUES (${hashPortalSessionToken(token)}, NOW() + INTERVAL '8 days')
+    ON CONFLICT (token_hash) DO UPDATE SET expires_at = EXCLUDED.expires_at
+  `);
+  await db.execute(sql`
+    DELETE FROM portal_session_revocations
+    WHERE expires_at <= NOW()
+  `);
+}
+
 // ── requirePortalAuth ─────────────────────────────────────────────────────────
 // C1-REMEDIATION: accepts HttpOnly cookie (portal_session) FIRST, then falls back
 // to Bearer header for backward compatibility with legacy sessions.
@@ -128,6 +163,10 @@ export async function requirePortalAuth(req: Request, res: Response, next: NextF
 
   if (!token) {
     res.status(401).json({ message: "Unauthorized" });
+    return;
+  }
+  if (await isPortalSessionRevoked(token)) {
+    res.status(401).json({ message: "Session sudah tidak berlaku" });
     return;
   }
 
@@ -245,6 +284,10 @@ export async function requirePortalAdmin(req: Request, res: Response, next: Next
 
   if (!token) {
     res.status(401).json({ message: "Unauthorized" });
+    return;
+  }
+  if (await isPortalSessionRevoked(token)) {
+    res.status(401).json({ message: "Session sudah tidak berlaku" });
     return;
   }
 

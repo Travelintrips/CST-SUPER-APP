@@ -332,7 +332,7 @@ async function run() {
     await assertStatus("logout", await request("/auth/logout", { method: "POST", jar: passwordLoginJar }), 200);
     const oldSession = await request("/auth/me", { jar: oldSessionJar });
     await assertStatus("old session rejected", oldSession, [401, 403]);
-    record("logout cookie cleared", !passwordLoginJar.has("portal_session"), "client jar no longer has session cookie");
+    record("logout cookie cleared", !passwordLoginJar.get("portal_session"), "client jar no longer has session cookie");
   } catch (error) {
     record("harness execution", false, error instanceof Error ? error.message : String(error));
   } finally {
