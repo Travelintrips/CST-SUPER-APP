@@ -631,6 +631,7 @@ export async function backfillCanonicalQrisPaymentMetadata(): Promise<void> {
         approval_status  TEXT NOT NULL DEFAULT 'PENDING',
         source           TEXT,
         is_active        BOOLEAN NOT NULL DEFAULT TRUE,
+        effective_from   DATE NOT NULL DEFAULT DATE '1970-01-01',
         created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
@@ -640,6 +641,7 @@ export async function backfillCanonicalQrisPaymentMetadata(): Promise<void> {
         ADD COLUMN IF NOT EXISTS approval_status TEXT,
         ADD COLUMN IF NOT EXISTS source TEXT,
         ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE,
+        ADD COLUMN IF NOT EXISTS effective_from DATE NOT NULL DEFAULT DATE '1970-01-01',
         ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     `);
     await db.execute(sql`
@@ -652,13 +654,14 @@ export async function backfillCanonicalQrisPaymentMetadata(): Promise<void> {
     // metadata recovery until an owner corrects it.
     await db.execute(sql`
       INSERT INTO sport_center.facility_company_mappings
-        (facility_id, company_id, approval_status, source, is_active)
+        (facility_id, company_id, approval_status, source, is_active, effective_from)
       SELECT
         source_facility.id,
         public_facility.company_id,
         'OWNER_APPROVED',
         'public.sport_facilities.company_id',
-        TRUE
+        TRUE,
+        DATE '1970-01-01'
       FROM sport_center.sport_facilities source_facility
       JOIN public.sport_facilities public_facility
         ON public_facility.id = source_facility.id
