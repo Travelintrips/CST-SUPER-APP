@@ -84,6 +84,7 @@ type VendorCatalogItem = {
   description: string | null;
   kategori: string | null;
   type: string;
+  template_kind: string | null;
   status: string;
   is_published: boolean;
   is_active: boolean;
@@ -101,7 +102,7 @@ type VendorCatalogItem = {
   documents: { key: string; label: string; required?: boolean; url?: string; reference?: string; fileUrl?: string }[];
 };
 
-type EditCatalogForm = { name: string; description: string; price_base: string; markup_pct: string; kategori: string };
+type EditCatalogForm = { name: string; description: string; price_base: string; markup_pct: string; kategori: string; template_kind: "product" | "service" };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -881,7 +882,7 @@ export function VendorCatalogTab() {
   const [deletingMedia, setDeletingMedia] = useState<Record<number, boolean>>({});
   const fileInputRefs = useRef<Record<number, HTMLInputElement | null>>({});
   const [editTarget, setEditTarget] = useState<VendorCatalogItem | null>(null);
-  const [editForm, setEditForm] = useState<EditCatalogForm>({ name: "", description: "", price_base: "", markup_pct: "0", kategori: "" });
+  const [editForm, setEditForm] = useState<EditCatalogForm>({ name: "", description: "", price_base: "", markup_pct: "0", kategori: "", template_kind: "product" });
   const [saving, setSaving] = useState(false);
   const [searchQ, setSearchQ] = useState("");
   const [mediaAssetsTarget, setMediaAssetsTarget] = useState<VendorCatalogItem | null>(null);
@@ -916,6 +917,7 @@ export function VendorCatalogTab() {
       price_base: item.price_base != null ? String(parseFloat(String(item.price_base)) || 0) : "",
       markup_pct: item.markup_pct != null ? String(parseFloat(String(item.markup_pct)) || 0) : "0",
       kategori: item.kategori ?? "",
+      template_kind: item.template_kind === "service" || item.type === "service" ? "service" : "product",
     });
   };
 
@@ -930,14 +932,31 @@ export function VendorCatalogTab() {
       const r = await fetch(`/api/portal/admin/vendor-catalog-items/${editTarget.id}`, {
         method: "PUT", credentials: "include",
         headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
-        body: JSON.stringify({ name: editForm.name.trim(), description: editForm.description.trim() || null, price_base: base || null, markup_pct: markup, kategori: editForm.kategori.trim() || null }),
+        body: JSON.stringify({
+          name: editForm.name.trim(),
+          description: editForm.description.trim() || null,
+          price_base: base || null,
+          markup_pct: markup,
+          kategori: editForm.kategori.trim() || null,
+          template_kind: editForm.template_kind,
+        }),
       });
       if (!r.ok) throw new Error(await r.text());
       const serverResp = await r.json() as { ok: boolean; price_sell: number | null; effective_markup?: number };
       const effectiveMarkup = serverResp.effective_markup ?? markup;
       const sell = serverResp.price_sell;
       setItems(prev => prev.map(i => i.id === editTarget.id
-        ? { ...i, name: editForm.name.trim(), description: editForm.description.trim() || null, price_base: base ? String(base) : null, markup_pct: String(effectiveMarkup), price_sell: sell != null ? String(sell) : null, kategori: editForm.kategori.trim() || null }
+        ? {
+            ...i,
+            name: editForm.name.trim(),
+            description: editForm.description.trim() || null,
+            price_base: base ? String(base) : null,
+            markup_pct: String(effectiveMarkup),
+            price_sell: sell != null ? String(sell) : null,
+            kategori: editForm.kategori.trim() || null,
+            type: editForm.template_kind,
+            template_kind: editForm.template_kind,
+          }
         : i
       ));
       toast({ title: t("vendorSystems.productUpdated", "Produk berhasil diperbarui") });
@@ -1093,6 +1112,18 @@ export function VendorCatalogTab() {
             <div>
               <Label className="text-xs font-medium">{t("vendorSystems.category", "Kategori")}</Label>
               <input className="mt-1 flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm" value={editForm.kategori} onChange={e => setEditForm(p => ({ ...p, kategori: e.target.value }))} placeholder={t("vendorSystems.categoryPlaceholder", "Misal: commodity")} />
+            </div>
+            <div>
+              <Label className="text-xs font-medium">Tipe Marketplace</Label>
+              <Select value={editForm.template_kind} onValueChange={(value) => setEditForm(p => ({ ...p, template_kind: value as "product" | "service" }))}>
+                <SelectTrigger className="mt-1 h-9">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="product">Product</SelectItem>
+                  <SelectItem value="service">Service</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
           <DialogFooter>

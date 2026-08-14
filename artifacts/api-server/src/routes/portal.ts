@@ -4539,7 +4539,7 @@ router.get("/admin/vendor-catalog-items", requirePortalAdmin, async (_req, res) 
   try {
     const rows = await db.execute(sql`
       SELECT vci.id, vci.vendor_id, vci.vendor_name, vci.name, vci.description,
-             vci.kategori, vci.type, vci.status, vci.is_published, vci.is_active,
+             vci.kategori, vci.type, vci.template_kind, vci.status, vci.is_published, vci.is_active,
              vci.price_base, vci.markup_pct, vci.price_sell, vci.currency, vci.created_at,
              COALESCE(vci.media_assets, '[]'::jsonb) AS media_assets,
              COALESCE(vci.documents, '[]'::jsonb) AS documents,
@@ -4556,7 +4556,7 @@ router.get("/admin/vendor-catalog-items", requirePortalAdmin, async (_req, res) 
       LEFT JOIN suppliers s ON s.id = vci.vendor_id
       LEFT JOIN product_media pm ON pm.vendor_catalog_item_id = vci.id
       GROUP BY vci.id, vci.vendor_id, vci.vendor_name, vci.name, vci.description,
-               vci.kategori, vci.type, vci.status, vci.is_published, vci.is_active,
+                vci.kategori, vci.type, vci.template_kind, vci.status, vci.is_published, vci.is_active,
                vci.price_base, vci.markup_pct, vci.price_sell, vci.currency, vci.created_at,
                vci.media_assets, vci.documents,
                s.service_type, s.contact_email, s.phone, s.is_internal_vendor
@@ -4637,6 +4637,7 @@ router.post("/admin/vendor-catalog-items", requirePortalAdmin, async (req: Porta
         vendorName:   resolvedVendorName,
         masterItemId: master_item_id ? (parseInt(String(master_item_id), 10) || null) : null,
         type:         String(type ?? "product"),
+        templateKind: String(type ?? "product") === "service" ? "service" : "product",
         name:         String(name).trim().slice(0, 200),
         description:  description ? String(description).trim() : null,
         kategori:     kategori     ? String(kategori).trim()    : null,
@@ -4886,7 +4887,7 @@ router.put("/admin/vendor-catalog-items/:id", requirePortalAdmin, async (req: Po
 
   // Destructure — price_sell from client is intentionally NOT read (always computed server-side).
   // is_published IS supported in PUT as a full update; use PATCH for quick toggle-only calls.
-  const { name, description, price_base, markup_pct, kategori, is_published } = req.body ?? {};
+  const { name, description, price_base, markup_pct, kategori, template_kind, is_published } = req.body ?? {};
 
   if (!name?.trim()) return res.status(400).json({ message: "Nama produk harus diisi" });
 
@@ -4930,6 +4931,13 @@ router.put("/admin/vendor-catalog-items/:id", requirePortalAdmin, async (req: Po
     WHERE vci.id = ${id}
   `);
   const isInternalVendor = (vendorFlagRows.rows?.[0] as any)?.is_internal_vendor === true;
+
+  const normalizedTemplateKind = template_kind == null || template_kind === ""
+    ? null
+    : String(template_kind).trim().toLowerCase();
+  if (normalizedTemplateKind !== null && !["product", "service"].includes(normalizedTemplateKind)) {
+    return res.status(400).json({ message: "template_kind harus berupa product atau service" });
+  }
 
   // ── Apply internal vendor override (zero markup for internal vendors) ────────
   const requestedMarkup = markup;
@@ -4988,6 +4996,12 @@ router.put("/admin/vendor-catalog-items/:id", requirePortalAdmin, async (req: Po
         markupPct:   String(effectiveMarkup),
         priceSell:   sell != null ? String(sell) : null,
         kategori:    kategori?.trim() || null,
+        ...(normalizedTemplateKind !== null
+          ? {
+              templateKind: normalizedTemplateKind,
+              type: normalizedTemplateKind,
+            }
+          : {}),
         updatedAt:   new Date(),
         ...publishFields,
       })

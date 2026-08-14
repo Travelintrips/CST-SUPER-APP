@@ -19,9 +19,14 @@ const DEFAULT_MARKUP: Record<string, number> = {
   service: 0.20,  // 20%
 };
 
-function resolveTemplateKind(serviceType: string | null | undefined): "product" | "service" {
-  if (!serviceType) return "service";
-  return serviceType === "product" ? "product" : "service";
+export function resolveTemplateKind(serviceType: string | null | undefined): "product" | "service" {
+  // A marketplace invitation is a product-catalog invitation. Older links
+  // may omit service_type entirely, while newer links use "marketplace".
+  const normalized = String(serviceType ?? "").trim().toLowerCase();
+  if (normalized === "" || normalized === "product" || normalized === "marketplace") {
+    return "product";
+  }
+  return "service";
 }
 
 function computePriceSell(priceBase: number, templateKind: "product" | "service"): number {
@@ -175,6 +180,7 @@ export async function upsertCatalogDraftFromSubmission(
       vendorId,
       vendorName,
       templateKind,
+      type: templateKind, // legacy compatibility; keep both classifiers aligned
       categoryKey,
       serviceType,
       templateId,
