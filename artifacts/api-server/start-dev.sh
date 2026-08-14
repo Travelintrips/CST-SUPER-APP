@@ -39,12 +39,13 @@ export APP_ENV
 # the safe defaults here so the managed artifact workflow cannot accidentally
 # start an unsafe dev API; production uses start.sh/start:secure instead.
 SAFE_DEV_TEST_MODE=${SAFE_DEV_TEST_MODE:-true}
+CUSTOMER_AUTH_HARNESS_CAPTURE=${CUSTOMER_AUTH_HARNESS_CAPTURE:-1}
 MOCK_WHATSAPP=${MOCK_WHATSAPP:-true}
 MOCK_EMAIL=${MOCK_EMAIL:-true}
 MOCK_PAYMENT=${MOCK_PAYMENT:-true}
 MOCK_STORAGE=${MOCK_STORAGE:-true}
 USE_TEST_STORAGE=${USE_TEST_STORAGE:-true}
-export SAFE_DEV_TEST_MODE MOCK_WHATSAPP MOCK_EMAIL MOCK_PAYMENT MOCK_STORAGE USE_TEST_STORAGE
+export SAFE_DEV_TEST_MODE CUSTOMER_AUTH_HARNESS_CAPTURE MOCK_WHATSAPP MOCK_EMAIL MOCK_PAYMENT MOCK_STORAGE USE_TEST_STORAGE
 
 # ── Deterministic single-listener configuration ─────────────────────────────
 # The artifact workflow exposes 18444. Express binds directly to that port;
