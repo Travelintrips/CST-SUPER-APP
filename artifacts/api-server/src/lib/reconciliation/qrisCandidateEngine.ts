@@ -124,11 +124,6 @@ function isEligiblePayment(payment: QrisPaymentCandidateInput): boolean {
   return isQrisPayment(payment)
     && String(payment.status ?? "").toLowerCase() === "paid"
     && !payment.alreadyReconciled;
-  // NOTE: bankAccountId=null is allowed here. When a payment has no
-  // bank_account_id (e.g. historical data before backfill), dimensionPayments
-  // still matches correctly because null === null (JS strict equality).
-  // completeBankDimension is relaxed separately to handle company-only
-  // matching when the exact account is not yet known.
 }
 
 function providerEvidence(
@@ -229,6 +224,8 @@ function sameNaturalBatch(
     || paymentProvider === "unknown"
     || crossCompat.includes(paymentProvider as QrisProviderCode);
   return payment.companyId === mutation.companyId
+    && payment.bankAccountId != null
+    && mutation.bankAccountId != null
     && payment.bankAccountId === mutation.bankAccountId
     && payment.expectedSettlementDate != null
     && businessDayDistance(
@@ -343,6 +340,7 @@ export function generateQrisMutationBatchCandidates(input: {
       );
     const sameDimensionMutations = openMutations.filter((other) => {
       if (other.id === mutation.id || other.companyId !== mutation.companyId
+        || other.bankAccountId == null || mutation.bankAccountId == null
         || other.bankAccountId !== mutation.bankAccountId
         || other.transactionDate !== mutation.transactionDate) return false;
       const otherEvidence = providerEvidence(other, input.accountProviderRules);
@@ -352,6 +350,8 @@ export function generateQrisMutationBatchCandidates(input: {
     const splitSettlementMutations = openMutations.filter((other) =>
       other.id !== mutation.id
         && other.companyId === mutation.companyId
+        && other.bankAccountId != null
+        && mutation.bankAccountId != null
         && other.bankAccountId === mutation.bankAccountId
         && businessDayDistance(
           other.transactionDate,
@@ -425,7 +425,8 @@ export function generateQrisMutationBatchCandidates(input: {
     // sufficient to produce a MATCHED candidate for a single-account company.
     // Strict bankAccountId matching happens in dimensionPayments filter above
     // (null === null for both sides passes naturally).
-    const completeBankDimension = mutation.companyId != null;
+    const completeBankDimension =
+      mutation.companyId != null && mutation.bankAccountId != null;
     const expectedDatesPresent = naturalPayments.every((payment) => Boolean(payment.expectedSettlementDate));
     const matched = completeBankDimension
       && actualEvidence

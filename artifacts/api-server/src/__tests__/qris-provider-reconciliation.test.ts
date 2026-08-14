@@ -3,6 +3,7 @@ import { addBusinessDays, jakartaDateFromTimestamp } from "../lib/reconciliation
 import { normalizeQrisProvider } from "../lib/reconciliation/providerSettlementRules.js";
 import { calculateObservedDeduction, classifyBankMutationSource } from "../lib/reconciliation/qrisSettlement.js";
 import { generateQrisMutationBatchCandidates } from "../lib/reconciliation/qrisCandidateEngine.js";
+import { resolveActiveBankAccountId } from "../lib/reconciliation/bankAccountIdentity.js";
 
 describe("provider-aware QRIS dry-run reconciliation", () => {
   it("resolves Friday, Saturday, and Sunday to Monday in Asia/Jakarta", () => {
@@ -20,6 +21,57 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     expect(normalizeQrisProvider("Mandiri Direct")).toBe("mandiri_direct");
     expect(normalizeQrisProvider("Paylabs")).toBe("paylabs");
     expect(normalizeQrisProvider("QRIS")).toBe("unknown");
+  });
+
+  it("resolves an external account number to the internal account ID", () => {
+    const accounts = [
+      { id: 17, companyId: 1, accountNumber: "1640006707220" },
+    ];
+
+    expect(resolveActiveBankAccountId({
+      companyId: 1,
+      bankAccountId: "1640006707220",
+    }, accounts)).toBe(17);
+    expect(resolveActiveBankAccountId({
+      companyId: 1,
+      bankAccountId: "17",
+    }, accounts)).toBe(17);
+  });
+
+  it("fails closed when a bank account reference is missing or ambiguous", () => {
+    const accounts = [
+      { id: 17, companyId: 1, accountNumber: "1640006707220" },
+      { id: 18, companyId: 1, accountNumber: "1640006707220" },
+    ];
+
+    expect(resolveActiveBankAccountId({
+      companyId: 1,
+      bankAccountId: "1640006707220",
+    }, accounts)).toBeNull();
+    expect(resolveActiveBankAccountId({
+      companyId: 1,
+      bankAccountId: null,
+    }, accounts)).toBeNull();
+  });
+
+  it("does not treat missing bank-account mapping as a wildcard", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 1, companyId: 1, bankAccountId: null, amount: 100_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-12",
+        expectedSettlementDate: "2026-08-13", providerName: "mandiri_direct",
+      }],
+      mutations: [{
+        id: 2, companyId: 1, bankAccountId: null, amount: 100_000,
+        transactionDate: "2026-08-13", direction: "IN",
+        source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "mandiri_direct",
+      }],
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.status).toBe("UNMATCHED");
+    expect(result[0]?.reason).toContain("Dimensi company dan bank account wajib tersedia");
   });
 
   it("does not create a QRIS audit candidate for an ordinary inbound invoice", () => {

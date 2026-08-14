@@ -11,6 +11,10 @@ import {
   providerRulesByBankAccountFromRows,
   providerRulesFromRows,
 } from "./providerSettlementRules.js";
+import {
+  resolveActiveBankAccountId,
+  type ActiveBankAccount,
+} from "./bankAccountIdentity.js";
 
 function esc(value: unknown): string {
   return String(value ?? "").replace(/'/g, "''");
@@ -233,7 +237,7 @@ export async function generateQrisCandidates(options: {
     paymentBankAccountSql,
   } = makePhase4PaymentFragments(phase4Available);
 
-  const [paymentRows, mutationRows, holidayRows, ruleRows, existingRows] = await Promise.all([
+  const [paymentRows, mutationRows, holidayRows, ruleRows, existingRows, accountRows] = await Promise.all([
     db.execute(sql.raw(`
       SELECT
         sp.id, sp.company_id, sp.amount, sp.payment_method AS method,
@@ -270,38 +274,8 @@ export async function generateQrisCandidates(options: {
       SELECT
         bm.id, bm.company_id,
          bm.mutation_key,
-        (
-          SELECT CASE WHEN COUNT(*) = 1 THEN MIN(matches.id)::text END
-          FROM (
-            SELECT cba.id
-            FROM company_bank_accounts cba
-            WHERE cba.is_active = TRUE
-              AND (cba.company_id = bm.company_id OR cba.company_id IS NULL)
-              AND (
-                (
-                  NULLIF(BTRIM(bm.bank_account_id::text), '') IS NOT NULL
-                  AND cba.id::text = NULLIF(BTRIM(bm.bank_account_id::text), '')
-                )
-                OR (
-                  NULLIF(BTRIM(bm.bank_account_id::text), '') IS NULL
-                  AND bm.source_account IS NOT NULL
-                  AND regexp_replace(bm.source_account, '[^0-9]', '', 'g')
-                    <> ''
-                  AND regexp_replace(bm.source_account, '[^0-9]', '', 'g')
-                    = regexp_replace(cba.account_number, '[^0-9]', '', 'g')
-                )
-                OR (
-                  NULLIF(BTRIM(bm.bank_account_id::text), '') IS NULL
-                  AND regexp_replace(cba.account_number, '[^0-9]', '', 'g') <> ''
-                  AND POSITION(
-                    regexp_replace(cba.account_number, '[^0-9]', '', 'g')
-                    IN regexp_replace(COALESCE(bm.description, ''), '[^0-9]', '', 'g')
-                  ) > 0
-                )
-              )
-          ) matches
-        ) AS bank_account_id,
-        bm.transaction_date, bm.amount,
+        bm.bank_account_id AS raw_bank_account_id,
+        bm.transaction_date, bm.amount, bm.source_account,
         bm.direction, bm.source, bm.source_classification, bm.provider_name,
         bm.provider_order_id, bm.description, bm.status
       FROM bank_mutations bm
@@ -333,6 +307,11 @@ export async function generateQrisCandidates(options: {
       FROM qris_mutation_batch_candidates
        ORDER BY id DESC
     `)).catch(() => ({ rows: [] as unknown[] })),
+    db.execute(sql.raw(`
+      SELECT id, company_id, account_number
+      FROM company_bank_accounts
+      WHERE is_active = TRUE
+    `)).catch(() => ({ rows: [] as unknown[] })),
   ]);
 
   const holidays = (holidayRows.rows as Array<Record<string, unknown>>)
@@ -349,12 +328,25 @@ export async function generateQrisCandidates(options: {
     ruleRows.rows as Array<Record<string, unknown>>,
   );
 
+  const activeBankAccounts: ActiveBankAccount[] =
+    (accountRows.rows as Array<Record<string, unknown>>)
+      .map((row) => ({
+        id: Number(row.id),
+        companyId: row.company_id == null ? null : Number(row.company_id),
+        accountNumber: row.account_number == null ? null : String(row.account_number),
+      }))
+      .filter((account) => Number.isInteger(account.id) && account.id > 0);
+
   const payments: QrisPaymentCandidateInput[] = (paymentRows.rows as Array<Record<string, unknown>>).map((row) => {
     const providerCode = normalizeQrisProvider(String(row.provider_code ?? "unknown"));
+    const companyId = row.company_id == null ? null : Number(row.company_id);
     return {
       id: Number(row.id),
-      companyId: row.company_id == null ? null : Number(row.company_id),
-      bankAccountId: row.bank_account_id == null ? null : Number(row.bank_account_id),
+      companyId,
+      bankAccountId: resolveActiveBankAccountId({
+        companyId,
+        bankAccountId: row.bank_account_id,
+      }, activeBankAccounts),
       amount: Number(row.amount ?? 0),
       method: String(row.method ?? ""),
       status: String(row.status ?? ""),
@@ -382,20 +374,28 @@ export async function generateQrisCandidates(options: {
          : Number(row.canonical_settlement_id),
     };
   });
-  const mutations: QrisMutationCandidateInput[] = (mutationRows.rows as Array<Record<string, unknown>>).map((row) => ({
-    id: Number(row.id),
-    companyId: row.company_id == null ? null : Number(row.company_id),
-    bankAccountId: row.bank_account_id == null ? null : Number(row.bank_account_id),
-    transactionDate: asDate(row.transaction_date) ?? "",
-    amount: Number(row.amount ?? 0),
-    direction: String(row.direction ?? ""),
-    source: row.source == null ? null : String(row.source),
-    sourceClassification: row.source_classification == null ? null : String(row.source_classification),
-    providerName: row.provider_name == null ? null : String(row.provider_name),
-    providerOrderId: row.provider_order_id == null ? null : String(row.provider_order_id),
-    description: row.description == null ? null : String(row.description),
-    status: row.status == null ? null : String(row.status),
-  })).filter((row) => row.transactionDate);
+  const mutations: QrisMutationCandidateInput[] = (mutationRows.rows as Array<Record<string, unknown>>).map((row) => {
+    const companyId = row.company_id == null ? null : Number(row.company_id);
+    return {
+      id: Number(row.id),
+      companyId,
+      bankAccountId: resolveActiveBankAccountId({
+        companyId,
+        bankAccountId: row.raw_bank_account_id,
+        sourceAccount: row.source_account,
+        description: row.description,
+      }, activeBankAccounts),
+      transactionDate: asDate(row.transaction_date) ?? "",
+      amount: Number(row.amount ?? 0),
+      direction: String(row.direction ?? ""),
+      source: row.source == null ? null : String(row.source),
+      sourceClassification: row.source_classification == null ? null : String(row.source_classification),
+      providerName: row.provider_name == null ? null : String(row.provider_name),
+      providerOrderId: row.provider_order_id == null ? null : String(row.provider_order_id),
+      description: row.description == null ? null : String(row.description),
+      status: row.status == null ? null : String(row.status),
+    };
+  }).filter((row) => row.transactionDate);
 
   // Recompute existing provisional rows as well. A bank mutation can be
   // imported before the Sport Center payment sync finishes; skipping an
