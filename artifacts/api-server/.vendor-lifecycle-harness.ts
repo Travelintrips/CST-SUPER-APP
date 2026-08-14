@@ -140,11 +140,11 @@ async function cleanup() {
 
   const leftovers = await query<{ table_name: string; count: string }>(
     `SELECT 'invitation' AS table_name, count(*)::text AS count FROM portal_vendor_invitations WHERE vendor_name = $1
-     UNION ALL SELECT 'supplier', count(*)::text FROM suppliers WHERE name = $1
-     UNION ALL SELECT 'catalog', count(*)::text FROM vendor_catalog_items WHERE name = $1
-     UNION ALL SELECT 'customer', count(*)::text FROM portal_customers WHERE email = $1
-     UNION ALL SELECT 'notifications', count(*)::text FROM notification_logs WHERE recipient = $1 AND created_at >= $2`,
-    [marker, email, productName, email, startedAt],
+     UNION ALL SELECT 'supplier', count(*)::text FROM suppliers WHERE name = $2
+     UNION ALL SELECT 'catalog', count(*)::text FROM vendor_catalog_items WHERE name = $3
+     UNION ALL SELECT 'customer', count(*)::text FROM portal_customers WHERE email = $4
+     UNION ALL SELECT 'notifications', count(*)::text FROM notification_logs WHERE recipient = $4 AND created_at >= $5`,
+    [marker, marker, productName, email, startedAt],
   ).catch((error) => {
     cleanupErrors.push(error instanceof Error ? error.message : String(error));
     return [];
@@ -163,12 +163,12 @@ async function run() {
     body: await res.json(),
   }));
   record("development safe mode", safety.status === 200 && safety.body.e2eMode === true &&
-    safety.body.outbound?.whatsapp === "mocked" &&
-    safety.body.outbound?.email === "mocked" &&
-    safety.body.outbound?.payment === "mocked" &&
-    safety.body.outbound?.webhook === "disabled" &&
-    safety.body.outbound?.worker === "disabled" &&
-    safety.body.outbound?.storage === "test-only", bodyMessage(safety.body));
+    safety.body.whatsapp === "mocked" &&
+    safety.body.email === "mocked" &&
+    safety.body.payment === "mocked" &&
+    safety.body.webhooks === "disabled" &&
+    safety.body.workers === "disabled" &&
+    safety.body.storage === "test-only", bodyMessage(safety.body));
 
   const readiness = await fetch("http://127.0.0.1:18444/api/health/ready").then(async (res) => ({
     status: res.status,
@@ -189,7 +189,7 @@ async function run() {
       vendor_name: marker,
       phone,
       email,
-      service_type: "logistics",
+      service_type: "marketplace",
       notes: "controlled development lifecycle fixture",
       send_wa: false,
     },
@@ -223,20 +223,18 @@ async function run() {
       products: [{
         name: productName,
         description: "Development-only catalog fixture",
-        category: "Logistics",
+         category: "Bahan Baku & Industri",
         mediaUrls: [],
       }],
     },
   });
   record("vendor registration", accept.status === 200 || accept.status === 201, bodyMessage(accept.body));
 
-  const afterAccept = await dbOne<{ status: string; supplier_id: number | null; portal_customer_id: number | null }>(
-    "SELECT status, supplier_id, portal_customer_id FROM portal_vendor_invitations WHERE id = $1",
+  const afterAccept = await dbOne<{ status: string; supplier_id: number | null }>(
+    "SELECT status, supplier_id FROM portal_vendor_invitations WHERE id = $1",
     [invitationId],
   );
   supplierId = Number(afterAccept?.supplier_id || 0) || null;
-  portalCustomerId = Number(afterAccept?.portal_customer_id || 0) || null;
-  record("supplier mapping", Boolean(supplierId && portalCustomerId), "registration mapped supplier and portal customer");
 
   const approve = await request(`/admin/vendor-invitations/${invitationId}/approve`, {
     method: "POST",
@@ -244,6 +242,7 @@ async function run() {
     body: { note: "controlled development approval" },
   });
   record("vendor approval", approve.status === 200 && approve.body?.ok === true, bodyMessage(approve.body));
+  portalCustomerId = Number(approve.body?.portal_customer_id || 0) || null;
 
   const state = await dbOne<any>(
     `SELECT i.status AS invitation_status, s.status AS supplier_status, s.is_verified,
@@ -255,13 +254,19 @@ async function run() {
        FROM portal_vendor_invitations i
        JOIN suppliers s ON s.id = i.supplier_id
        JOIN vendor_profiles vp ON vp.supplier_id = s.id
-       JOIN user_profiles up ON up.customer_id = i.portal_customer_id
+       JOIN user_profiles up ON up.customer_id = vp.customer_id
        LEFT JOIN vendor_catalog_items ci ON ci.vendor_id = s.id AND ci.name = $2
       WHERE i.id = $1`,
     [invitationId, productName],
   );
   catalogItemId = Number(state?.catalog_item_id || 0) || null;
-  record("approved vendor state", state?.invitation_status === "approved" || state?.invitation_status === "accepted" &&
+  supplierId = Number(state?.supplier_id || supplierId || 0) || null;
+  portalCustomerId = Number(state?.vendor_profile_customer_id || portalCustomerId || 0) || null;
+  record("supplier mapping", Boolean(supplierId && portalCustomerId && Number(state?.supplier_id) === supplierId &&
+    Number(state?.vendor_profile_customer_id) === portalCustomerId), "approval linked vendor profile to supplier");
+  record("vendor user created", Boolean(portalCustomerId && state?.user_profile_status === "active"), "active vendor user exists");
+  record("vendor profile", Boolean(portalCustomerId && Number(state?.vendor_profile_customer_id) === portalCustomerId), "vendor profile is linked to supplier");
+  record("approved vendor state", (state?.invitation_status === "approved" || state?.invitation_status === "accepted") &&
     ["active", "approved"].includes(String(state?.supplier_status)) &&
     state?.is_verified === true &&
     ["published"].includes(String(state?.marketplace_status)) &&

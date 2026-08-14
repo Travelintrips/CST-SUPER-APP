@@ -4143,8 +4143,8 @@ router.post("/admin/vendor-invitations/:id/approve", requirePortalAdmin, async (
         const existingSupplierRows = await tx.execute(sql`
           SELECT id, name
           FROM suppliers
-          WHERE (${vendorEmail} IS NOT NULL AND contact_email = ${vendorEmail})
-             OR (${vendorPhone} IS NOT NULL AND phone = ${vendorPhone})
+          WHERE (${vendorEmail}::text IS NOT NULL AND contact_email = ${vendorEmail}::text)
+             OR (${vendorPhone}::text IS NOT NULL AND phone = ${vendorPhone}::text)
           ORDER BY id
           LIMIT 1
           FOR UPDATE
