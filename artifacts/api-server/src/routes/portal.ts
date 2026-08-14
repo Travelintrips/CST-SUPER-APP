@@ -173,6 +173,9 @@ import {
   resetPasswordWithToken,
 } from "../lib/services/portalAuthService.js";
 import {
+  evaluateVendorInvitationEmail,
+} from "../lib/vendorInvitationIdentityGuard.js";
+import {
   LogisticOrderServiceError,
   submitVendorQuote,
   listSalesOrders,
@@ -3677,11 +3680,29 @@ router.post("/admin/vendor-invitations", requirePortalAdmin, async (req, res) =>
   const validUntil = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
 
   try {
+    const normalizedEmail = typeof email === "string" && email.trim()
+      ? email.trim().toLowerCase()
+      : null;
+    const matchingIdentities = normalizedEmail
+      ? await db
+          .select({ role: portalCustomersTable.role })
+          .from(portalCustomersTable)
+          .where(eq(portalCustomersTable.email, normalizedEmail))
+          .limit(2)
+      : [];
+    const emailDecision = evaluateVendorInvitationEmail(email, matchingIdentities);
+    if (!emailDecision.ok) {
+      return res.status(409).json({
+        code: emailDecision.code,
+        message: emailDecision.message,
+      });
+    }
+
     await db.execute(sql`
       INSERT INTO portal_vendor_invitations
         (vendor_name, phone, email, service_type, notes, token, valid_until, sent_via_wa)
       VALUES
-        (${vendor_name.trim()}, ${phone ?? null}, ${email ?? null},
+        (${vendor_name.trim()}, ${phone ?? null}, ${emailDecision.email},
          ${service_type ?? null}, ${notes ?? null}, ${token}, ${validUntil}, ${false})
     `);
 
