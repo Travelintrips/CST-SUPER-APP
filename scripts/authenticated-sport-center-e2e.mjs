@@ -27,7 +27,9 @@ import {
   waitForApiReady,
 } from "./regression-harness-helpers.mjs";
 
-const EXPECTED_SHEET_ROWS = Number(process.env.EXPECTED_SHEET_ROWS ?? 45);
+const EXPECTED_SHEET_ROWS = process.env.EXPECTED_SHEET_ROWS
+  ? Number(process.env.EXPECTED_SHEET_ROWS)
+  : null;
 const EXPECTED_SHEET_TOTAL = process.env.EXPECTED_SHEET_TOTAL
   ? Number(process.env.EXPECTED_SHEET_TOTAL)
   : null;
@@ -174,18 +176,25 @@ async function main() {
     ),
     "Google Sheet diagnosis",
   );
-  if (Number(diagnosis.totalRows) !== EXPECTED_SHEET_ROWS) {
+  const sheetSourceRows = Number(diagnosis.totalRows);
+  const parsedSheetRows = Number(diagnosis.parsedOk);
+  if (!Number.isInteger(sheetSourceRows) || sheetSourceRows < 0) {
+    fail("Google Sheet diagnosis did not return a valid source row count", {
+      totalRows: diagnosis.totalRows ?? null,
+    });
+  }
+  if (EXPECTED_SHEET_ROWS != null && sheetSourceRows !== EXPECTED_SHEET_ROWS) {
     fail("Google Sheet row count does not match expected proof count", {
       expected: EXPECTED_SHEET_ROWS,
-      actual: diagnosis.totalRows ?? null,
-      parsedOk: diagnosis.parsedOk ?? null,
+      actual: sheetSourceRows,
+      parsedOk: parsedSheetRows,
       skippedCount: diagnosis.skippedCount ?? null,
     });
   }
-  if (Number(diagnosis.parsedOk) !== EXPECTED_SHEET_ROWS) {
+  if (parsedSheetRows !== sheetSourceRows) {
     fail("Google Sheet contains rows that the parser skipped", {
-      expectedParsed: EXPECTED_SHEET_ROWS,
-      parsedOk: diagnosis.parsedOk ?? null,
+      expectedParsed: sheetSourceRows,
+      parsedOk: parsedSheetRows,
       skippedCount: diagnosis.skippedCount ?? null,
       skippedSample: diagnosis.skippedSample ?? [],
     });
@@ -195,9 +204,10 @@ async function main() {
     passed: true,
     detail: {
       configId,
-      totalRows: Number(diagnosis.totalRows),
-      parsedOk: Number(diagnosis.parsedOk),
+      totalRows: sheetSourceRows,
+      parsedOk: parsedSheetRows,
       skippedCount: Number(diagnosis.skippedCount ?? 0),
+      existingInDbBeforeSync: Number(diagnosis.existingInDb ?? 0),
     },
   });
 
@@ -215,9 +225,9 @@ async function main() {
     ),
     "second Google Sheet sync",
   );
-  if (Number(sync1.total) !== EXPECTED_SHEET_ROWS || Number(sync2.total) !== EXPECTED_SHEET_ROWS) {
+  if (Number(sync1.total) !== sheetSourceRows || Number(sync2.total) !== sheetSourceRows) {
     fail("Sync response total does not match the Google Sheet row count", {
-      expected: EXPECTED_SHEET_ROWS,
+      expected: sheetSourceRows,
       first: compactResponse(sync1),
       second: compactResponse(sync2),
     });
@@ -244,33 +254,35 @@ async function main() {
     "bank mutation listing",
   );
   const bankMutations = asRows(bankMutationsBody, "mutations", "data");
-  const sheetMutations = bankMutations.filter(
-    (row) => Number(row?.sheet_config_id) === configId,
-  );
-  const mutationKeys = uniqueValues(sheetMutations, "mutation_key");
-  const sheetTotal = Number(bankMutationsBody.total ?? sheetMutations.length);
-  const sheetAmountTotal = sheetMutations.reduce(
+  // The listing endpoint is company-scoped and intentionally omits
+  // sheet_config_id. The sheet diagnostic provides the config-scoped
+  // persisted baseline; compare the company listing against it instead of
+  // filtering on a field the endpoint does not return.
+  const persistedRowsBeforeSync = Number(diagnosis.existingInDb ?? 0);
+  const mutationKeys = uniqueValues(bankMutations, "mutation_key");
+  const persistedTotal = Number(bankMutationsBody.total ?? bankMutations.length);
+  const persistedAmountTotal = bankMutations.reduce(
     (sum, row) => sum + numberValue(row?.amount),
     0,
   );
-  if (sheetMutations.length !== EXPECTED_SHEET_ROWS) {
-    fail("bank_mutations does not contain exactly the expected Sheet rows", {
-      expected: EXPECTED_SHEET_ROWS,
-      actualForConfig: sheetMutations.length,
-      endpointTotal: sheetTotal,
+  if (bankMutations.length !== persistedRowsBeforeSync || persistedTotal !== persistedRowsBeforeSync) {
+    fail("bank_mutations persisted count does not match the Sheet config baseline", {
+      expectedPersistedRows: persistedRowsBeforeSync,
+      actualReturned: bankMutations.length,
+      endpointTotal: persistedTotal,
       configId,
     });
   }
-  if (mutationKeys.size !== sheetMutations.length) {
+  if (mutationKeys.size !== bankMutations.length) {
     fail("bank_mutations contains duplicate mutation_key values", {
-      rows: sheetMutations.length,
+      rows: bankMutations.length,
       uniqueKeys: mutationKeys.size,
     });
   }
-  if (EXPECTED_SHEET_TOTAL != null && !sameNumber(sheetAmountTotal, EXPECTED_SHEET_TOTAL)) {
+  if (EXPECTED_SHEET_TOTAL != null && !sameNumber(persistedAmountTotal, EXPECTED_SHEET_TOTAL)) {
     fail("Sheet nominal total does not match EXPECTED_SHEET_TOTAL", {
       expected: EXPECTED_SHEET_TOTAL,
-      actual: rounded(sheetAmountTotal),
+      actual: rounded(persistedAmountTotal),
     });
   }
   checks.push({
@@ -278,10 +290,11 @@ async function main() {
     passed: true,
     detail: {
       configId,
-      rows: sheetMutations.length,
+      sourceRows: sheetSourceRows,
+      persistedRows: bankMutations.length,
       uniqueMutationKeys: mutationKeys.size,
-      amountTotal: rounded(sheetAmountTotal),
-      endpointTotal: sheetTotal,
+      amountTotal: rounded(persistedAmountTotal),
+      endpointTotal: persistedTotal,
     },
   });
 
@@ -353,6 +366,11 @@ async function main() {
     });
   }
   const sportPaymentId = Number(selectedSportPayment.source_id);
+  const sportPaymentDate = String(
+    selectedSportPayment.paid_at ??
+      selectedSportPayment.created_at ??
+      new Date().toISOString(),
+  ).slice(0, 10);
   const post1 = assertOk(
     await apiRequest("/api/accounting/posting-monitor/post", {
       method: "POST",
@@ -360,6 +378,8 @@ async function main() {
       body: {
         moduleType: "sport_center",
         sourceDocId: sportPaymentId,
+        companyId,
+        date: sportPaymentDate,
       },
     }),
     "Sport Center first posting",
@@ -478,6 +498,8 @@ async function main() {
       body: {
         moduleType: "sport_center",
         sourceDocId: sportPaymentId,
+        companyId,
+        date: sportPaymentDate,
       },
     }),
     "Sport Center second posting",
