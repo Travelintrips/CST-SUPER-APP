@@ -41,6 +41,8 @@ interface SheetConfig {
   label: string;
   sheet_id: string;
   tab_name: string;
+  bank_account_number: string | null;
+  bank_name: string | null;
   is_active: boolean;
   last_synced_at: string | null;
   last_sync_status: string | null;
@@ -95,6 +97,8 @@ function SheetConfigManager() {
     company_id: "",
     label: "",
     sheet_id: "",
+    bank_account_number: "",
+    bank_name: "",
     tab_name: "Mutasi_Bank",
   });
 
@@ -113,7 +117,7 @@ function SheetConfigManager() {
 
   const openCreate = () => {
     setEditTarget(null);
-    setForm({ company_id: "", label: "", sheet_id: "", tab_name: "Mutasi_Bank" });
+    setForm({ company_id: "", label: "", sheet_id: "", bank_account_number: "", bank_name: "", tab_name: "Mutasi_Bank" });
     setShowForm(true);
   };
 
@@ -123,6 +127,8 @@ function SheetConfigManager() {
       company_id: cfg.company_id ? String(cfg.company_id) : "",
       label: cfg.label,
       sheet_id: cfg.sheet_id,
+      bank_account_number: cfg.bank_account_number ?? "",
+      bank_name: cfg.bank_name ?? "",
       tab_name: cfg.tab_name,
     });
     setShowForm(true);
@@ -137,6 +143,8 @@ function SheetConfigManager() {
       company_id: form.company_id ? Number(form.company_id) : null,
       label: form.label,
       sheet_id: form.sheet_id,
+      bank_account_number: form.bank_account_number.trim() || null,
+      bank_name: form.bank_name.trim() || null,
       tab_name: form.tab_name || "Mutasi_Bank",
     };
     const url  = editTarget
@@ -285,6 +293,8 @@ function SheetConfigManager() {
                   {/* Sheet info */}
                   <div className="text-xs text-muted-foreground flex flex-wrap gap-x-4 gap-y-0.5">
                     <span>Sheet: <code className="bg-muted px-1 rounded">{cfg.sheet_id.slice(0, 24)}…</code></span>
+                    {cfg.bank_name && <span>Bank: <code className="bg-muted px-1 rounded">{cfg.bank_name}</code></span>}
+                    {cfg.bank_account_number && <span>No. Rek: <code className="bg-muted px-1 rounded">{cfg.bank_account_number}</code></span>}
                     <span>Tab: <code className="bg-muted px-1 rounded">{cfg.tab_name}</code></span>
                     {cfg.last_synced_at && <span>Sync terakhir: {fmtDate(cfg.last_synced_at)}</span>}
                   </div>
@@ -395,6 +405,25 @@ function SheetConfigManager() {
               <p className="text-xs text-muted-foreground">
                 Dari URL: docs.google.com/spreadsheets/d/<strong>[ID INI]</strong>/edit
               </p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Nama Bank</label>
+                <Input
+                  placeholder="Contoh: BCA"
+                  value={form.bank_name}
+                  onChange={e => setForm(f => ({ ...f, bank_name: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Nomor Rekening</label>
+                <Input
+                  inputMode="numeric"
+                  placeholder="Contoh: 1234567890"
+                  value={form.bank_account_number}
+                  onChange={e => setForm(f => ({ ...f, bank_account_number: e.target.value }))}
+                />
+              </div>
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Nama Tab</label>
@@ -3016,7 +3045,7 @@ function SheetConfigCollapsed() {
   const [testResults, setTestResults] = useState<Record<number, TestResult>>({});
   const [testing, setTesting] = useState<Record<number, boolean>>({});
   const [syncing, setSyncing] = useState<Record<number, boolean>>({});
-  const [form, setForm] = useState({ company_id: "", label: "", sheet_id: "", tab_name: "Mutasi_Bank" });
+  const [form, setForm] = useState({ company_id: "", label: "", sheet_id: "", bank_account_number: "", bank_name: "", tab_name: "Mutasi_Bank" });
 
   const { data: configsData, isLoading } = useQuery({
     queryKey: ["sheet-configs"],
@@ -3062,17 +3091,31 @@ function SheetConfigCollapsed() {
 
   const openCreate = () => {
     setEditTarget(null);
-    setForm({ company_id: "", label: "", sheet_id: "", tab_name: "Mutasi_Bank" });
+    setForm({ company_id: "", label: "", sheet_id: "", bank_account_number: "", bank_name: "", tab_name: "Mutasi_Bank" });
     setShowForm(true);
   };
   const openEdit = (cfg: SheetConfig) => {
     setEditTarget(cfg);
-    setForm({ company_id: cfg.company_id ? String(cfg.company_id) : "", label: cfg.label, sheet_id: cfg.sheet_id, tab_name: cfg.tab_name });
+    setForm({
+      company_id: cfg.company_id ? String(cfg.company_id) : "",
+      label: cfg.label,
+      sheet_id: cfg.sheet_id,
+      bank_account_number: cfg.bank_account_number ?? "",
+      bank_name: cfg.bank_name ?? "",
+      tab_name: cfg.tab_name,
+    });
     setShowForm(true);
   };
   const saveConfig = async () => {
     if (!form.label || !form.sheet_id) { toast({ title: "Label dan Sheet ID wajib diisi", variant: "destructive" }); return; }
-    const body = { company_id: form.company_id ? Number(form.company_id) : null, label: form.label, sheet_id: form.sheet_id, tab_name: form.tab_name || "Mutasi_Bank" };
+    const body = {
+      company_id: form.company_id ? Number(form.company_id) : null,
+      label: form.label,
+      sheet_id: form.sheet_id,
+      bank_account_number: form.bank_account_number.trim() || null,
+      bank_name: form.bank_name.trim() || null,
+      tab_name: form.tab_name || "Mutasi_Bank",
+    };
     const url  = editTarget ? `/api/bank-reconciliation/sheet-configs/${editTarget.id}` : "/api/bank-reconciliation/sheet-configs";
     const r    = await fetch(url, { method: editTarget ? "PUT" : "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const d    = await r.json();
@@ -3143,6 +3186,8 @@ function SheetConfigCollapsed() {
                       </div>
                     </div>
                     <div className="text-xs text-muted-foreground">
+                      {cfg.bank_name && <>Bank: <code className="bg-muted px-1 rounded">{cfg.bank_name}</code> · </>}
+                      {cfg.bank_account_number && <>No. Rek: <code className="bg-muted px-1 rounded">{cfg.bank_account_number}</code> · </>}
                       Tab: <code className="bg-muted px-1 rounded">{cfg.tab_name}</code>
                       {cfg.last_synced_at && <> · {fmtDateTime(cfg.last_synced_at)}</>}
                     </div>
@@ -3197,6 +3242,16 @@ function SheetConfigCollapsed() {
               <label className="text-sm font-medium">Google Sheet ID <span className="text-red-500">*</span></label>
               <Input placeholder="1VcbUujz6WHRgj5Fa1QkWja..." value={form.sheet_id} onChange={e => setForm(f => ({ ...f, sheet_id: e.target.value }))} />
               <p className="text-xs text-muted-foreground">Dari URL: docs.google.com/spreadsheets/d/<strong>[ID INI]</strong>/edit</p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Nama Bank</label>
+                <Input placeholder="Contoh: BCA" value={form.bank_name} onChange={e => setForm(f => ({ ...f, bank_name: e.target.value }))} />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Nomor Rekening</label>
+                <Input inputMode="numeric" placeholder="Contoh: 1234567890" value={form.bank_account_number} onChange={e => setForm(f => ({ ...f, bank_account_number: e.target.value }))} />
+              </div>
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Nama Tab</label>

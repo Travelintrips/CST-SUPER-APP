@@ -334,6 +334,8 @@ export async function runBankReconciliationCoreMigration() {
       label           TEXT NOT NULL,
       sheet_id        TEXT NOT NULL,
       tab_name        TEXT NOT NULL DEFAULT 'Mutasi_Bank',
+      bank_account_number TEXT,
+      bank_name       TEXT,
       is_active       BOOLEAN NOT NULL DEFAULT TRUE,
       last_synced_at  TIMESTAMPTZ,
       last_sync_status TEXT,
@@ -342,6 +344,8 @@ export async function runBankReconciliationCoreMigration() {
       updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `)).catch(() => {});
+  await db.execute(sql.raw(`ALTER TABLE bank_sheet_configs ADD COLUMN IF NOT EXISTS bank_account_number TEXT`)).catch(() => {});
+  await db.execute(sql.raw(`ALTER TABLE bank_sheet_configs ADD COLUMN IF NOT EXISTS bank_name TEXT`)).catch(() => {});
   await db.execute(sql.raw(`
     CREATE INDEX IF NOT EXISTS bsc_company_idx ON bank_sheet_configs(company_id)
   `)).catch(() => {});
@@ -3897,12 +3901,14 @@ router.get("/sheet-configs", async (_req, res) => {
 // POST /api/bank-reconciliation/sheet-configs — create
 router.post("/sheet-configs", async (req, res) => {
   await runBankReconciliationCoreMigration();
-  const { company_id, label, sheet_id, tab_name } = req.body ?? {};
+  const { company_id, label, sheet_id, tab_name, bank_account_number, bank_name } = req.body ?? {};
   if (!label || !sheet_id) return res.status(400).json({ error: "label dan sheet_id wajib diisi" });
   const esc = (s: string) => String(s ?? "").replace(/'/g, "''");
+  const nullableText = (value: unknown) => value ? `'${esc(String(value))}'` : "NULL";
   const { rows } = await db.execute(sql.raw(`
-    INSERT INTO bank_sheet_configs (company_id, label, sheet_id, tab_name)
-    VALUES (${company_id ? Number(company_id) : "NULL"}, '${esc(label)}', '${esc(sheet_id)}', '${esc(tab_name ?? "Mutasi_Bank")}')
+    INSERT INTO bank_sheet_configs (company_id, label, sheet_id, tab_name, bank_account_number, bank_name)
+    VALUES (${company_id ? Number(company_id) : "NULL"}, '${esc(label)}', '${esc(sheet_id)}', '${esc(tab_name ?? "Mutasi_Bank")}',
+            ${nullableText(bank_account_number)}, ${nullableText(bank_name)})
     RETURNING *
   `));
   return res.json({ config: (rows as any[])[0] });
@@ -3912,12 +3918,15 @@ router.post("/sheet-configs", async (req, res) => {
 router.put("/sheet-configs/:id", async (req, res) => {
   const id = parseInt(req.params.id);
   if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
-  const { company_id, label, sheet_id, tab_name, is_active } = req.body ?? {};
+  const { company_id, label, sheet_id, tab_name, bank_account_number, bank_name, is_active } = req.body ?? {};
   const esc = (s: string) => String(s ?? "").replace(/'/g, "''");
+  const nullableText = (value: unknown) => value ? `'${esc(String(value))}'` : "NULL";
   const sets: string[] = [`updated_at = NOW()`];
   if (label     !== undefined) sets.push(`label = '${esc(label)}'`);
   if (sheet_id  !== undefined) sets.push(`sheet_id = '${esc(sheet_id)}'`);
   if (tab_name  !== undefined) sets.push(`tab_name = '${esc(tab_name)}'`);
+  if (bank_account_number !== undefined) sets.push(`bank_account_number = ${nullableText(bank_account_number)}`);
+  if (bank_name !== undefined) sets.push(`bank_name = ${nullableText(bank_name)}`);
   if (is_active !== undefined) sets.push(`is_active = ${is_active ? "TRUE" : "FALSE"}`);
   if (company_id !== undefined) sets.push(`company_id = ${company_id ? Number(company_id) : "NULL"}`);
   const { rows } = await db.execute(sql.raw(`UPDATE bank_sheet_configs SET ${sets.join(", ")} WHERE id = ${id} RETURNING *`));
