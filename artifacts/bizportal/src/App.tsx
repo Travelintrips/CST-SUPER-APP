@@ -85,15 +85,20 @@ function DevLoginSection() {
   const [error, setError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
-    fetch("/api/dev-users", { credentials: "include" })
-      .then((r) => r.ok ? r.json() : { users: [] })
-      .then((d: { users: DevUser[] }) => {
-        setUsers(d.users ?? []);
-        if (d.users?.length > 0) {
-          setDevEmail(d.users[0].email ?? "");
-        }
-      })
-      .catch(() => setMode("manual"));
+    // Keep this development-only convenience request off the critical path
+    // so the login form appears while the API is still warming up.
+    const timer = window.setTimeout(() => {
+      fetch("/api/dev-users", { credentials: "include" })
+        .then((r) => r.ok ? r.json() : { users: [] })
+        .then((d: { users: DevUser[] }) => {
+          setUsers(d.users ?? []);
+          if (d.users?.length > 0) {
+            setDevEmail(d.users[0].email ?? "");
+          }
+        })
+        .catch(() => setMode("manual"));
+    }, 800);
+    return () => window.clearTimeout(timer);
   }, []);
 
   const grouped = React.useMemo(() => {
@@ -460,7 +465,10 @@ function AuthRouteGuard() {
     writeRoleCache(null);
     return <LoginScreen />;
   }
-  if (dbLoading) return <LoadingSpinner />;
+  // A cached role is enough to choose the first route. The user query still
+  // runs in the background and will correct the route if the role changed,
+  // but the app no longer shows a full-screen spinner while it waits.
+  if (dbLoading && !cachedRole) return <LoadingSpinner />;
   return <Redirect to={roleToPath(dbUser?.role ?? cachedRole)} />;
 }
 

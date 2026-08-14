@@ -84,10 +84,11 @@ function writeCache(locale: string, flat: Record<string, string>) {
 
 // ── API fetch ─────────────────────────────────────────────────────────────────
 
-async function fetchRemote(locale: string): Promise<Record<string, string> | null> {
+async function fetchRemote(locale: string, signal?: AbortSignal): Promise<Record<string, string> | null> {
   try {
     const res = await fetch(`/api/translations/bizportal/${encodeURIComponent(locale)}`, {
       credentials: "same-origin",
+      signal,
     });
     if (!res.ok) return null;
     const data = await res.json() as Record<string, string>;
@@ -141,11 +142,28 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
       setRemoteFlat(cached);
       return;
     }
-    fetchRemote(locale).then((flat) => {
-      if (!flat) return;
-      writeCache(locale, flat);
-      setRemoteFlat(flat);
-    });
+
+    // The bundled translations are complete enough to render the shell. Do not
+    // put the first paint behind a database-backed request: on a cold API
+    // connection this endpoint can take several seconds. Sync the optional
+    // overrides once the browser has had time to paint the page.
+    const controller = new AbortController();
+    const requestTimeout = window.setTimeout(() => controller.abort(), 4000);
+    const timer = window.setTimeout(() => {
+      void fetchRemote(locale, controller.signal).then((flat) => {
+        if (!flat || controller.signal.aborted) return;
+        writeCache(locale, flat);
+        setRemoteFlat(flat);
+      }).finally(() => {
+        window.clearTimeout(requestTimeout);
+      });
+    }, 1200);
+
+    return () => {
+      window.clearTimeout(timer);
+      window.clearTimeout(requestTimeout);
+      controller.abort();
+    };
   }, [locale]);
 
   const t = useMemo(() => buildTranslations(locale, remoteFlat), [locale, remoteFlat]);

@@ -47,8 +47,13 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
   const [isLoading, setIsLoading] = useState(!cached);
 
   const fetchUser = useCallback(async () => {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 2500);
     try {
-      const res = await fetch("/api/auth/user", { credentials: "include" });
+      const res = await fetch("/api/auth/user", {
+        credentials: "include",
+        signal: controller.signal,
+      });
       if (res.status >= 500) return;
       if (!res.ok) { setUser(null); writeCache(null); return; }
       const data = await res.json() as { user: AuthUser | null };
@@ -58,6 +63,7 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
     } catch {
       // keep existing cache
     } finally {
+      window.clearTimeout(timeout);
       setIsLoading(false);
     }
   }, []);
