@@ -32,3 +32,9 @@ The QRIS mutation summary cards should separate bank total, approved payment cou
 **Why:** A single “candidate total” card hid the distinction between historical batch value and the live remaining approval workload.
 
 **How to apply:** Derive approved/unapproved counts from live settlement membership; use the original batch only for an explicitly labeled batch variance.
+
+Partial-settlement `review_reason` is historical text and must not be used as the live remaining-payment count; later settlement activity can make it stale.
+
+**Why:** A batch can be settled again through the canonical path or another approved flow, while the original partial-settlement message remains unchanged. The live `current_payment_ids` scope is authoritative.
+
+**How to apply:** Render the remaining count and candidate rows from the same live settlement membership. Treat `review_reason` as an audit note, or regenerate it whenever settlement state changes.
