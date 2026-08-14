@@ -3915,10 +3915,16 @@ export default function BankReconciliationPage() {
       if (!variables?.silent && (e as QrisSelectionConflictError).code !== "CANONICAL_SETTLEMENT_SELECTION_CONFLICT") {
         toast({
           title: "Gagal approve batch QRIS",
-          description: "Approval QRIS tidak dapat diselesaikan. Coba lagi setelah memuat ulang kandidat.",
+          description: e.message || "Approval QRIS tidak dapat diselesaikan. Periksa konfigurasi lalu coba lagi.",
           variant: "destructive",
         });
       }
+      // Keep the screen aligned with the server even when approval is rejected
+      // by a governance/configuration guard (for example, a missing bank COA).
+      // The mutation must remain visible in that case, but its latest status
+      // and eligibility should not depend on a hard browser reload.
+      void Promise.all([refetchQrisAudit(), refetch()]);
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] });
     },
   });
 
