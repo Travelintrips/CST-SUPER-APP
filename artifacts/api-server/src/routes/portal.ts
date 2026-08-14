@@ -14,6 +14,7 @@ import { validateUploadFile, validateMagicBytes, validateSvgImageAsset } from ".
 import { sendViaService as sendWhatsApp } from "../lib/waTransport.js";
 import { getAdminWa } from "../lib/adminWa.js";
 import { getAppConfig } from "../lib/appConfig.js";
+import { updateMarketplaceStatus, verifySupplier } from "../lib/services/supplierStatusService.js";
 import { validateMediaAssetsPayload } from "../lib/mediaAssetsValidation.js";
 import { requirePortalAuth, requirePortalAdmin, requireActiveVendor, verifyDevPortalEmail, type PortalAuthReq, setPortalSessionCookie, clearPortalSessionCookie, PORTAL_SESSION_COOKIE } from "../lib/supabaseAuth";
 import { writeAuditLog } from "../lib/auditLog.js";
@@ -4073,170 +4074,303 @@ router.post("/vendor-invite/:token/reject", async (req, res) => {
 });
 
 // POST /api/portal/admin/vendor-invitations/:id/approve — admin approves an
-// accepted invitation and auto-activates the vendor as a live ERP supplier
-// (and, for marketplace category, publishes their submitted products).
+// accepted invitation and atomically activates the vendor, publishes the
+// supplier, creates the vendor account mapping, and publishes submitted items.
 router.post("/admin/vendor-invitations/:id/approve", requirePortalAdmin, async (req, res) => {
   const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
 
+  const adminIdentity = (req as PortalAuthReq).portalCustomerId != null
+    ? String((req as PortalAuthReq).portalCustomerId)
+    : "admin";
+  const portalOrigin = process.env.PORTAL_ORIGIN ?? `${req.protocol}://${req.get("host")}`;
+
   try {
-    const rows = await db.execute(sql`
-      SELECT id, vendor_name, company_name, contact_name, phone, email,
-             service_type, category_label, vendor_message, products, supplier_id, status
-      FROM portal_vendor_invitations
-      WHERE id = ${id}
-      LIMIT 1
-    `);
-    const inv = (rows as any).rows?.[0];
-    if (!inv) return res.status(404).json({ message: "Undangan tidak ditemukan" });
-    if (inv.status !== "accepted") {
-      return res.status(409).json({ message: "Hanya undangan yang sudah diterima vendor yang bisa disetujui" });
-    }
-    // Idempotent: already activated → return existing IDs without re-running writes
-    if (inv.supplier_id) {
-      const existingPc = await db.execute(sql`
-        SELECT id FROM portal_customers WHERE email = ${typeof inv.email === "string" ? inv.email.toLowerCase().trim() : ""} LIMIT 1
-      `);
-      return res.json({
-        ok: true,
-        supplier_id: inv.supplier_id,
-        portal_customer_id: (existingPc as any).rows?.[0]?.id ?? null,
-        already_activated: true,
-      });
-    }
-
-    const supplierName   = String(inv.company_name || inv.vendor_name);
-    const adminIdentity  = (req as PortalAuthReq).portalCustomerId != null
-      ? String((req as PortalAuthReq).portalCustomerId)
-      : "admin";
-    const vendorEmail    = typeof inv.email === "string" ? inv.email.toLowerCase().trim() : null;
-    const vendorPhone    = inv.phone ? normalizePhoneID(String(inv.phone)) : null;
-    const vendorName     = String(inv.contact_name || inv.company_name || inv.vendor_name);
-
-    // ── Core approval: single atomic transaction ────────────────────────────
-    // Rolls back entirely if any step fails.
-    // Covered: supplier, invitation update, portal_customer, vendor_profile,
-    //          user_profiles (required by requireActiveVendor middleware).
-    const { supplierId, portalCustomerId } = await db.transaction(async (tx) => {
-      // 1. Create supplier
-      const supplierResult = await tx.execute(sql`
-        INSERT INTO suppliers (name, contact_email, contact_person, phone, tax_id, service_type, note, is_active)
-        VALUES (${supplierName}, ${vendorEmail ?? null}, ${inv.contact_name ?? null}, ${vendorPhone ?? null},
-                NULL, ${inv.service_type ?? null}, ${inv.vendor_message ?? null}, TRUE)
-        RETURNING id
-      `);
-      const supplierId = (supplierResult as any).rows?.[0]?.id as number | undefined;
-      if (!supplierId) throw new Error("Gagal membuat data supplier");
-
-      // 2. Mark invitation as approved
-      await tx.execute(sql`
-        UPDATE portal_vendor_invitations
-        SET supplier_id = ${supplierId}, approved_at = NOW(), approved_by = ${adminIdentity}
+    const result = await db.transaction(async (tx) => {
+      // Lock the invitation so two admin clicks cannot create two suppliers.
+      const rows = await tx.execute(sql`
+        SELECT id, vendor_name, company_name, contact_name, phone, email,
+               service_type, vendor_message, products, supplier_id, status
+        FROM portal_vendor_invitations
         WHERE id = ${id}
+        LIMIT 1
+        FOR UPDATE
       `);
-
-      // 3. Create or upgrade portal_customers account
-      let portalCustomerId: number | null = null;
-      if (vendorEmail) {
-        const existingRows = await tx.execute(sql`
-          SELECT id, role FROM portal_customers WHERE email = ${vendorEmail} LIMIT 1
-        `);
-        const existing = (existingRows as any).rows?.[0];
-        if (existing) {
-          portalCustomerId = existing.id as number;
-          await tx.execute(sql`
-            UPDATE portal_customers
-            SET role  = 'vendor',
-                name  = COALESCE(NULLIF(name, ''), ${vendorName}),
-                phone = COALESCE(phone, ${vendorPhone})
-            WHERE id = ${existing.id}
-          `);
-        } else {
-          const inserted = await tx.execute(sql`
-            INSERT INTO portal_customers (name, email, phone, role, password_hash)
-            VALUES (${vendorName}, ${vendorEmail}, ${vendorPhone}, 'vendor', '')
-            RETURNING id
-          `);
-          portalCustomerId = (inserted as any).rows?.[0]?.id as number ?? null;
-        }
+      const inv = (rows as any).rows?.[0];
+      if (!inv) {
+        throw Object.assign(new Error("Undangan tidak ditemukan"), { statusCode: 404 });
+      }
+      if (inv.status !== "accepted") {
+        throw Object.assign(
+          new Error("Hanya undangan yang sudah diterima vendor yang bisa disetujui"),
+          { statusCode: 409 },
+        );
       }
 
-      // 4. Upsert vendor_profiles
-      if (portalCustomerId) {
+      const supplierName = String(inv.company_name || inv.vendor_name);
+      const vendorName = String(inv.contact_name || inv.company_name || inv.vendor_name);
+      const vendorEmail = typeof inv.email === "string" && inv.email.trim()
+        ? inv.email.toLowerCase().trim()
+        : null;
+      const vendorPhone = inv.phone ? normalizePhoneID(String(inv.phone)) : null;
+      const accountEmail = vendorEmail ?? (vendorPhone ? `${vendorPhone}@wa.local` : null);
+      if (!accountEmail && !inv.supplier_id) {
+        throw Object.assign(
+          new Error("Email atau nomor WhatsApp vendor diperlukan untuk membuat akun login"),
+          { statusCode: 422 },
+        );
+      }
+
+      // Reuse the canonical supplier when this is a retry or when the same
+      // vendor already exists. A retry never creates a duplicate supplier.
+      let supplierId = Number(inv.supplier_id ?? 0) || null;
+      let persistedSupplierName = supplierName;
+      if (supplierId) {
+        const existingSupplier = await tx.execute(sql`
+          SELECT id, name
+          FROM suppliers
+          WHERE id = ${supplierId}
+          LIMIT 1
+          FOR UPDATE
+        `);
+        const supplier = (existingSupplier as any).rows?.[0];
+        if (!supplier) {
+          throw new Error("Supplier yang terhubung ke undangan tidak ditemukan");
+        }
+        persistedSupplierName = String(supplier.name);
+      } else {
+        const existingSupplierRows = await tx.execute(sql`
+          SELECT id, name
+          FROM suppliers
+          WHERE (${vendorEmail} IS NOT NULL AND contact_email = ${vendorEmail})
+             OR (${vendorPhone} IS NOT NULL AND phone = ${vendorPhone})
+          ORDER BY id
+          LIMIT 1
+          FOR UPDATE
+        `);
+        const existingSupplier = (existingSupplierRows as any).rows?.[0];
+        if (existingSupplier) {
+          supplierId = Number(existingSupplier.id);
+          persistedSupplierName = String(existingSupplier.name);
+        } else {
+          const insertedSupplier = await tx.execute(sql`
+            INSERT INTO suppliers
+              (name, contact_email, contact_person, phone, tax_id, service_type,
+               note, is_active, status, is_verified)
+            VALUES
+              (${supplierName}, ${vendorEmail}, ${inv.contact_name ?? null},
+               ${vendorPhone}, NULL, ${inv.service_type ?? null},
+               ${inv.vendor_message ?? null}, FALSE, 'pending', FALSE)
+            RETURNING id, name
+          `);
+          const supplier = (insertedSupplier as any).rows?.[0];
+          supplierId = supplier ? Number(supplier.id) : null;
+          persistedSupplierName = supplier ? String(supplier.name) : supplierName;
+        }
+      }
+      if (!supplierId) throw new Error("Gagal membuat data supplier");
+
+      // These are state-critical approval invariants. Any failure aborts the
+      // whole transaction; no approved-but-unpublished supplier is allowed.
+      await verifySupplier({
+        supplierId,
+        actorUserId: adminIdentity,
+        dbOrTx: tx as any,
+      });
+      const marketplaceResult = await updateMarketplaceStatus({
+        supplierId,
+        newMarketplaceStatus: "published",
+        actorUserId: adminIdentity,
+        dbOrTx: tx as any,
+      });
+      if (!marketplaceResult.ok) {
+        throw new Error(`Vendor approval gagal dipublish ke Marketplace: ${marketplaceResult.error ?? "unknown error"}`);
+      }
+
+      // Account creation/upgrade is idempotent and never overwrites an
+      // existing password hash. Empty hash means password setup is required.
+      let portalCustomerId: number | null = null;
+      let credentialEmail: string | null = null;
+      let credentialNeedsSetup = false;
+      if (accountEmail) {
+        const byEmail = await tx.execute(sql`
+          SELECT id, email, role, password_hash
+          FROM portal_customers
+          WHERE email = ${accountEmail}
+          LIMIT 1
+          FOR UPDATE
+        `);
+        let customer = (byEmail as any).rows?.[0];
+        if (!customer && vendorPhone) {
+          const byPhone = await tx.execute(sql`
+            SELECT id, email, role, password_hash
+            FROM portal_customers
+            WHERE phone = ${vendorPhone}
+            LIMIT 1
+            FOR UPDATE
+          `);
+          customer = (byPhone as any).rows?.[0];
+        }
+
+        if (customer?.role === "admin") {
+          throw new Error("Akun admin tidak boleh dipromosikan menjadi akun vendor");
+        }
+
+        if (customer) {
+          portalCustomerId = Number(customer.id);
+          credentialEmail = String(customer.email);
+          credentialNeedsSetup = !String(customer.password_hash ?? "").trim();
+          await tx.execute(sql`
+            UPDATE portal_customers
+            SET role = 'vendor',
+                name = COALESCE(NULLIF(name, ''), ${vendorName}),
+                phone = COALESCE(phone, ${vendorPhone})
+            WHERE id = ${portalCustomerId}
+          `);
+        } else {
+          const insertedCustomer = await tx.execute(sql`
+            INSERT INTO portal_customers (name, email, phone, role, password_hash)
+            VALUES (${vendorName}, ${accountEmail}, ${vendorPhone}, 'vendor', '')
+            RETURNING id, email
+          `);
+          const created = (insertedCustomer as any).rows?.[0];
+          portalCustomerId = created ? Number(created.id) : null;
+          credentialEmail = created ? String(created.email) : null;
+          credentialNeedsSetup = true;
+        }
+        if (!portalCustomerId) throw new Error("Gagal membuat akun portal vendor");
+
         const vpRows = await tx.execute(sql`
-          SELECT id FROM vendor_profiles WHERE customer_id = ${portalCustomerId} LIMIT 1
+          SELECT id FROM vendor_profiles WHERE customer_id = ${portalCustomerId} LIMIT 1 FOR UPDATE
         `);
         if ((vpRows as any).rows?.length > 0) {
           await tx.execute(sql`
             UPDATE vendor_profiles
-            SET company_name        = ${supplierName},
-                service_type        = ${inv.service_type ?? null},
-                supplier_id         = ${supplierId},
-                verification_status = 'verified'
+            SET company_name = COALESCE(NULLIF(company_name, ''), ${supplierName}),
+                service_type = ${inv.service_type ?? null},
+                pic_name = COALESCE(NULLIF(pic_name, ''), ${vendorName}),
+                phone = COALESCE(phone, ${vendorPhone}),
+                email = COALESCE(email, ${vendorEmail}),
+                supplier_id = ${supplierId},
+                verification_status = 'verified',
+                approved_at = NOW(),
+                updated_at = NOW()
             WHERE customer_id = ${portalCustomerId}
           `);
         } else {
           await tx.execute(sql`
-            INSERT INTO vendor_profiles (customer_id, company_name, service_type, supplier_id, verification_status)
-            VALUES (${portalCustomerId}, ${supplierName}, ${inv.service_type ?? null}, ${supplierId}, 'verified')
+            INSERT INTO vendor_profiles
+              (customer_id, company_name, service_type, pic_name, phone, email,
+               supplier_id, verification_status, approved_at)
+            VALUES
+              (${portalCustomerId}, ${supplierName}, ${inv.service_type ?? null},
+               ${vendorName}, ${vendorPhone}, ${vendorEmail},
+               ${supplierId}, 'verified', NOW())
           `);
         }
 
-        // 5. Upsert user_profiles with status='active'
-        // requireActiveVendor checks user_profiles.status = 'active' before
-        // granting access to /vendor/profile and all vendor-only routes.
         const upRows = await tx.execute(sql`
-          SELECT id FROM user_profiles WHERE customer_id = ${portalCustomerId} LIMIT 1
+          SELECT id FROM user_profiles WHERE customer_id = ${portalCustomerId} LIMIT 1 FOR UPDATE
         `);
         if ((upRows as any).rows?.length > 0) {
           await tx.execute(sql`
             UPDATE user_profiles
-            SET status       = 'active',
+            SET status = 'active',
                 account_type = 'vendor',
-                updated_at   = NOW()
+                full_name = COALESCE(NULLIF(full_name, ''), ${vendorName}),
+                phone = COALESCE(phone, ${vendorPhone}),
+                completed_at = COALESCE(completed_at, NOW()),
+                updated_at = NOW()
             WHERE customer_id = ${portalCustomerId}
           `);
         } else {
           await tx.execute(sql`
-            INSERT INTO user_profiles (customer_id, full_name, phone, account_type, status, completed_at)
-            VALUES (${portalCustomerId}, ${vendorName}, ${vendorPhone ?? null}, 'vendor', 'active', NOW())
+            INSERT INTO user_profiles
+              (customer_id, full_name, phone, account_type, status, completed_at)
+            VALUES
+              (${portalCustomerId}, ${vendorName}, ${vendorPhone}, 'vendor', 'active', NOW())
           `);
         }
       }
 
-      return { supplierId, portalCustomerId };
+      // Persist the approval before publishing products. Re-running the
+      // transaction keeps the same supplier and uses the NOT EXISTS guard.
+      await tx.execute(sql`
+        UPDATE portal_vendor_invitations
+        SET supplier_id = ${supplierId},
+            approved_at = COALESCE(approved_at, NOW()),
+            approved_by = COALESCE(approved_by, ${adminIdentity})
+        WHERE id = ${id}
+      `);
+
+      const isMarketplace = !inv.service_type || inv.service_type === "marketplace";
+      const products: any[] = Array.isArray(inv.products) ? inv.products : [];
+      if (isMarketplace) {
+        for (const p of products) {
+          if (!p?.name?.trim()) continue;
+          const productName = String(p.name).trim().slice(0, 200);
+          const pCat = typeof p.category === "string" ? p.category.trim() : null;
+          const pCatKey = pCat && hasInCodeTemplate(pCat) ? pCat : null;
+          const pTpl = pCatKey ? resolveTemplate(pCatKey) : null;
+          await tx.execute(sql`
+            INSERT INTO vendor_catalog_items
+              (vendor_id, vendor_name, type, name, description, kategori,
+               category_key, template_id, template_version, template_snapshot,
+               status, is_published, is_active, published_at, media_assets)
+            SELECT
+              ${supplierId}, ${persistedSupplierName}, 'product', ${productName},
+              ${p.description ?? null}, ${pCat}, ${pCatKey},
+              ${pTpl?.category ?? null}, ${pTpl?.version ?? null},
+              ${pTpl ? JSON.stringify(pTpl) : null}::jsonb,
+              'published', TRUE, TRUE, NOW(),
+              ${JSON.stringify((p.mediaUrls ?? []).map((u: string) => ({ url: u })))}::jsonb
+            WHERE NOT EXISTS (
+              SELECT 1 FROM vendor_catalog_items
+              WHERE vendor_id = ${supplierId}
+                AND type = 'product'
+                AND name = ${productName}
+            )
+          `);
+        }
+      }
+
+      return {
+        supplierId,
+        portalCustomerId,
+        credentialEmail,
+        credentialNeedsSetup,
+        loginIdentifier: vendorEmail ? "email/password" : "WhatsApp OTP",
+      };
     });
 
-    // ── Catalog items: best-effort, outside transaction ─────────────────────
-    // Marketplace product publishing failure must NOT roll back the approval.
-    const isMarketplace = !inv.service_type || inv.service_type === "marketplace";
-    const products: any[] = Array.isArray(inv.products) ? inv.products : [];
-    if (isMarketplace && products.length > 0) {
-      for (const p of products) {
-        if (!p?.name?.trim()) continue;
-        const pCat    = typeof p.category === "string" ? p.category.trim() : null;
-        const pCatKey = pCat && hasInCodeTemplate(pCat) ? pCat : null;
-        const pTpl    = pCatKey ? resolveTemplate(pCatKey) : null;
-        await db.execute(sql`
-          INSERT INTO vendor_catalog_items
-            (vendor_id, vendor_name, type, name, description, kategori,
-             category_key, template_id, template_version, template_snapshot,
-             status, is_published, is_active, media_assets)
-          VALUES
-            (${supplierId}, ${supplierName}, 'product', ${String(p.name).slice(0, 200)},
-             ${p.description ?? null}, ${pCat},
-             ${pCatKey}, ${pTpl?.category ?? null}, ${pTpl?.version ?? null},
-             ${pTpl ? JSON.stringify(pTpl) : null}::jsonb,
-             'published', TRUE, TRUE,
-             ${JSON.stringify((p.mediaUrls ?? []).map((u: string) => ({ url: u })))}::jsonb)
-        `).catch((e: unknown) => console.error("[portal] approve: gagal insert vendor_catalog_items", e));
+    let credentialSetup = result.loginIdentifier === "WhatsApp OTP"
+      ? "whatsapp_otp"
+      : "existing_password";
+    if (result.credentialNeedsSetup && result.credentialEmail) {
+      try {
+        await forgotPasswordCustom(result.credentialEmail, portalOrigin);
+        credentialSetup = "password_reset_link_requested";
+      } catch (credentialError) {
+        console.error("[portal] vendor credential setup request failed", credentialError);
+        credentialSetup = "manual_password_reset_required";
       }
     }
 
-    return res.json({ ok: true, supplier_id: supplierId, portal_customer_id: portalCustomerId });
-  } catch (e) {
+    return res.json({
+      ok: true,
+      supplier_id: result.supplierId,
+      portal_customer_id: result.portalCustomerId,
+      credential_setup: credentialSetup,
+      login_url: `${portalOrigin}/login`,
+      login_identifier: result.loginIdentifier,
+      dashboard_url: `${portalOrigin}/vendor-dashboard`,
+    });
+  } catch (e: any) {
     console.error("[portal] POST vendor-invitations approve error", e);
-    return res.status(500).json({ error: "Gagal menyetujui & mengaktifkan vendor" });
+    const statusCode = Number.isInteger(e?.statusCode) ? e.statusCode : 500;
+    return res.status(statusCode).json({
+      message: statusCode === 500 ? "Gagal menyetujui & mengaktifkan vendor" : e?.message,
+    });
   }
 });
 

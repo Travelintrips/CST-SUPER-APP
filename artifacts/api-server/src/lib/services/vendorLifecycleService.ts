@@ -169,6 +169,36 @@ async function generateFreshSubmissionLink(
   createdBy: string,
   dbOrTx: DbLike = db,
 ): Promise<{ id: number; token: string; url: string }> {
+  // Approval retries must be deterministic. Reuse an existing active link
+  // instead of creating a new link every time an already-approved vendor is
+  // approved again. Expired links are replaced below.
+  const [existingLink] = await dbOrTx
+    .select({
+      id: vendorCatalogSubmissionLinksTable.id,
+      token: vendorCatalogSubmissionLinksTable.token,
+      expiresAt: vendorCatalogSubmissionLinksTable.expiresAt,
+    })
+    .from(vendorCatalogSubmissionLinksTable)
+    .where(
+      and(
+        eq(vendorCatalogSubmissionLinksTable.supplierId, supplierId),
+        eq(vendorCatalogSubmissionLinksTable.isActive, true),
+      )
+    )
+    .limit(1);
+
+  if (existingLink && (!existingLink.expiresAt || existingLink.expiresAt > new Date())) {
+    const devDomain = process.env.REPLIT_DEV_DOMAIN;
+    const baseUrl = devDomain
+      ? `https://${devDomain}`
+      : (process.env.APP_BASE_URL ?? "");
+    return {
+      id: existingLink.id,
+      token: existingLink.token,
+      url: `${baseUrl}/api/vendor-catalog-engine/form/${existingLink.token}`,
+    };
+  }
+
   // Nonaktifkan semua link lama untuk supplier ini
   await dbOrTx
     .update(vendorCatalogSubmissionLinksTable)

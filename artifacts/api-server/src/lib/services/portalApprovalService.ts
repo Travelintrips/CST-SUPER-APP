@@ -25,7 +25,6 @@ import { runVendorApprovedInTx } from "./vendorLifecycleService.js";
 import { getWaTemplateConfig, renderTemplate } from "../orderNotification.js";
 import { sendViaService as sendWhatsApp } from "../waTransport.js";
 import { forgotPasswordCustom } from "./portalAuthService.js";
-import { isSmtpConfigured } from "../mailer.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -348,9 +347,45 @@ export async function getApprovalStats(): Promise<Record<string, number>> {
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
 
+/**
+ * Prepare the existing password-reset lifecycle for a newly approved vendor.
+ *
+ * Empty password hashes are intentionally not treated as usable credentials.
+ * The reset service generates a single-use, hashed token and never returns the
+ * password or token to the caller. If delivery is unavailable, the vendor can
+ * still use the existing forgot-password endpoint to request the same flow.
+ */
+async function _sendVendorCredentialSetup(
+  customerId: number,
+  portalOrigin?: string,
+): Promise<boolean> {
+  try {
+    const [customer] = await db
+      .select({
+        email: portalCustomersTable.email,
+        passwordHash: portalCustomersTable.passwordHash,
+      })
+      .from(portalCustomersTable)
+      .where(eq(portalCustomersTable.id, customerId))
+      .limit(1);
+
+    if (!customer?.email || customer.passwordHash?.trim()) return false;
+
+    const origin = portalOrigin?.startsWith("http")
+      ? portalOrigin
+      : (process.env.PORTAL_ORIGIN ?? "https://cstlogistic.co.id");
+    await forgotPasswordCustom(customer.email, origin);
+    return true;
+  } catch (err) {
+    console.error("[portalApprovalService] vendor credential setup error:", err);
+    return false;
+  }
+}
+
 async function _sendVendorApprovedWa(
   lc: NonNullable<TxLifecycleResult>,
   customerId: number,
+  passwordSetupPrepared = false,
 ) {
   try {
     const [customer] = await db.select().from(portalCustomersTable).where(eq(portalCustomersTable.id, customerId));
@@ -366,10 +401,17 @@ async function _sendVendorApprovedWa(
       `📦 Upload katalog produk/layanan Anda melalui link berikut:`,
       `{{submissionLinkUrl}}`, ``,
       `Link ini sudah siap digunakan. Setelah upload, tim kami akan mereview katalog Anda.`, ``,
+      `{{credentialInstruction}}`, ``,
       `Terima kasih telah bergabung!`,
     ];
     const tplBody = await getWaTemplateConfig("vendor", "vendor_onboarding_approved", defaultTpl);
-    const msg = renderTemplate(tplBody, { vendorName: lc.supplierName, submissionLinkUrl: lc.submissionLinkUrl });
+    const msg = renderTemplate(tplBody, {
+      vendorName: lc.supplierName,
+      submissionLinkUrl: lc.submissionLinkUrl,
+      credentialInstruction: passwordSetupPrepared
+        ? "🔑 Link pembuatan password dikirim ke email terdaftar."
+        : "🔐 Gunakan login WhatsApp atau minta reset password dari halaman login.",
+    });
     await sendWhatsApp(phone, msg);
     await db.insert(notificationLogsTable).values({
       channel: "wa", recipient: phone, subject: "Vendor Approved", message: msg,
