@@ -2909,8 +2909,34 @@ export async function runSportCenterMigration(): Promise<void> {
           ADD COLUMN IF NOT EXISTS payment_provider           TEXT,
           ADD COLUMN IF NOT EXISTS expected_settlement_date   DATE,
           ADD COLUMN IF NOT EXISTS settlement_rule_version    TEXT,
-          ADD COLUMN IF NOT EXISTS bank_account_id            INTEGER
+          ADD COLUMN IF NOT EXISTS bank_account_id            TEXT
       `);
+      // The canonical Sport Center source may contain a provider account
+      // number (including values larger than a PostgreSQL INTEGER).  Older
+      // runtime snapshots created this column as INTEGER, which either
+      // rejected a valid account number or made the value look like an
+      // internal account ID.  Keep the source identity losslessly as TEXT;
+      // internal IDs are resolved at accounting/reconciliation boundaries.
+      await db.execute(sql.raw(`
+        DO $repair$
+        DECLARE
+          v_data_type text;
+        BEGIN
+          SELECT data_type
+            INTO v_data_type
+            FROM information_schema.columns
+           WHERE table_schema = 'sport_center'
+             AND table_name = 'sport_payments'
+             AND column_name = 'bank_account_id';
+
+          IF v_data_type IS NOT NULL AND v_data_type <> 'text' THEN
+            ALTER TABLE sport_center.sport_payments
+              ALTER COLUMN bank_account_id TYPE TEXT
+              USING bank_account_id::text;
+          END IF;
+        END
+        $repair$;
+      `));
       logger.info("Sport Center migration: Phase 4C QRIS columns ensured on sport_center.sport_payments");
     } catch (p4cErr) {
       logger.warn({ err: p4cErr }, "Sport Center migration: Phase 4C QRIS column migration non-fatal failure");
@@ -2936,22 +2962,64 @@ export async function runSportCenterMigration(): Promise<void> {
           AND (payment_method IS NULL OR TRIM(payment_method) = '')
       `));
 
-      // 2. Set bank_account_id dari company_bank_accounts (akun pertama yang aktif per company).
+      // 2. Recover the canonical external account identity from an existing
+      // public mirror when available.  Never choose the first active account:
+      // that silently assigns the wrong bank dimension in a multi-account
+      // company.  The canonical source keeps the external value; the
+      // reconciliation boundary resolves it to company_bank_accounts.id.
       await db.execute(sql.raw(`
         UPDATE sport_center.sport_payments sp
-        SET bank_account_id = cba.id
-        FROM (
-          SELECT DISTINCT ON (company_id) id, company_id
-          FROM company_bank_accounts
-          WHERE is_active = TRUE
-          ORDER BY company_id, id
-        ) cba
+        SET bank_account_id = NULLIF(BTRIM(m.external_bank_account_id::text), '')
+        FROM public.sport_payments m
         WHERE sp.bank_account_id IS NULL
-          AND sp.company_id = cba.company_id
+          AND m.source_schema = 'sport_center'
+          AND m.source_table = 'sport_payments'
+          AND m.source_payment_id = sp.id
+          AND NULLIF(BTRIM(m.external_bank_account_id::text), '') IS NOT NULL
           AND ${PAID_STATUS}
       `));
 
-      // 3. Set expected_settlement_date = paid_at/confirmed_at::date + 1 (T+1 settlement rule).
+      // 3. Repair the public mirror's internal account ID from the canonical
+      // external identity.  The update is deliberately unique-match-only:
+      // zero or ambiguous account matches remain unresolved and visible for
+      // owner configuration instead of being guessed.
+      await db.execute(sql.raw(`
+        UPDATE public.sport_payments m
+        SET bank_account_id = resolved.bank_account_id
+        FROM (
+          SELECT
+            sp.id AS source_payment_id,
+            cba.id AS bank_account_id
+          FROM sport_center.sport_payments sp
+          JOIN public.company_bank_accounts cba
+            ON cba.company_id = sp.company_id
+           AND cba.is_active = TRUE
+           AND (
+             cba.account_number::text = NULLIF(BTRIM(sp.bank_account_id::text), '')
+             OR cba.id::text = NULLIF(BTRIM(sp.bank_account_id::text), '')
+           )
+          WHERE ${PAID_STATUS}
+            AND NULLIF(BTRIM(sp.bank_account_id::text), '') IS NOT NULL
+          GROUP BY sp.id, cba.id
+          HAVING COUNT(*) = 1
+             AND (
+               SELECT COUNT(*)
+               FROM public.company_bank_accounts cba2
+               WHERE cba2.company_id = sp.company_id
+                 AND cba2.is_active = TRUE
+                 AND (
+                   cba2.account_number::text = NULLIF(BTRIM(sp.bank_account_id::text), '')
+                   OR cba2.id::text = NULLIF(BTRIM(sp.bank_account_id::text), '')
+                 )
+             ) = 1
+        ) resolved
+        WHERE m.source_schema = 'sport_center'
+          AND m.source_table = 'sport_payments'
+          AND m.source_payment_id = resolved.source_payment_id
+          AND m.posting_status IN ('unposted', 'failed')
+      `));
+
+      // 4. Set expected_settlement_date = paid_at/confirmed_at::date + 1 (T+1 settlement rule).
       await db.execute(sql.raw(`
         UPDATE sport_center.sport_payments
         SET expected_settlement_date = (
@@ -2962,7 +3030,7 @@ export async function runSportCenterMigration(): Promise<void> {
           AND ${PAID_STATUS}
       `));
 
-      // 4. Set settlement_rule_version ke default jika masih NULL.
+      // 5. Set settlement_rule_version ke default jika masih NULL.
       await db.execute(sql.raw(`
         UPDATE sport_center.sport_payments
         SET settlement_rule_version = 'default-v1'
