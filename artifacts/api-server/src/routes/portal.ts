@@ -17,6 +17,7 @@ import { getAppConfig } from "../lib/appConfig.js";
 import { updateMarketplaceStatus, verifySupplier } from "../lib/services/supplierStatusService.js";
 import { validateMediaAssetsPayload } from "../lib/mediaAssetsValidation.js";
 import { requirePortalAuth, requireCustomerPortalAuth, requirePortalAdmin, requireActiveVendor, verifyDevPortalEmail, type PortalAuthReq, setPortalSessionCookie, clearPortalSessionCookie, PORTAL_SESSION_COOKIE } from "../lib/supabaseAuth";
+import { consumeSafeDevResetArtifact, isSafeDevResetCaptureEnabled } from "../lib/safeDevResetCapture.js";
 import { writeAuditLog } from "../lib/auditLog.js";
 import { requireClerkUser } from "../lib/requireAdmin";
 import { isCatalogItemPublic, catalogPublicConditions } from "../lib/catalogVisibility.js";
@@ -830,6 +831,32 @@ router.post("/auth/reset-password-with-token", async (req, res) => {
     console.error("[portal] reset-password-with-token error", e);
     return res.status(500).json({ message: "Terjadi kesalahan. Coba lagi." });
   }
+});
+
+// Development harness-only reset artifact capture.
+// This endpoint is unavailable unless the process is explicitly in development
+// safe mode with the one-shot harness flag enabled. The token is never logged
+// and is removed from the in-memory capture map after one read.
+router.get("/auth/dev-reset-capture", (req, res) => {
+  const remote = req.socket.remoteAddress ?? "";
+  const ip = req.ip ?? "";
+  const loopback = remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1"
+    || ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
+  if (!isSafeDevResetCaptureEnabled() || !loopback) {
+    res.status(404).json({ message: "Not found" });
+    return;
+  }
+  const email = typeof req.query.email === "string" ? req.query.email : "";
+  if (!email) {
+    res.status(400).json({ message: "Email diperlukan." });
+    return;
+  }
+  const token = consumeSafeDevResetArtifact(email);
+  if (!token) {
+    res.status(404).json({ message: "Reset artifact tidak tersedia." });
+    return;
+  }
+  res.json({ ok: true, token });
 });
 
 // GET /api/portal/auth/me
@@ -2179,7 +2206,7 @@ router.get("/me/invoices", requireCustomerPortalAuth, async (req, res) => {
         invoice_status  AS status,
         due_date        AS "dueDate",
         created_at      AS "createdAt",
-        order_number    AS "orderNumber"
+        doc_number      AS "orderNumber"
       FROM sales_documents
       WHERE status NOT IN ('cancelled', 'draft')
         AND LOWER(customer_name) = LOWER(

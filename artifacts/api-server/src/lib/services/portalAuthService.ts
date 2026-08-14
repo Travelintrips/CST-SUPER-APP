@@ -21,6 +21,7 @@ import { signPortalJwt } from "../portalJwt.js";
 import { sendViaService as sendWhatsApp } from "../waTransport.js";
 import { sendMail, isSmtpConfigured } from "../mailer.js";
 import { normalizePhone } from "../phoneUtils.js";
+import { captureSafeDevResetArtifact } from "../safeDevResetCapture.js";
 
 function assertAccountUsable(customer: {
   accountStatus?: string | null;
@@ -926,6 +927,7 @@ export async function forgotPasswordCustom(email: string, origin: string) {
     .where(eq(portalCustomersTable.id, customer.id));
 
   const resetUrl = `${origin}/reset-password?token=${encodeURIComponent(rawToken)}&email=${encodeURIComponent(emailLower)}`;
+  captureSafeDevResetArtifact(emailLower, rawToken);
 
   const smtpOk = isSmtpConfigured();
   if (smtpOk) {
