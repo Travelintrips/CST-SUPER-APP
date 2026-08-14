@@ -29,7 +29,7 @@ import {
   supplierDocumentsTable,
   identityDocumentsTable,
 } from "@workspace/db";
-import { updateSupplierStatus, verifySupplier } from "./supplierStatusService.js";
+import { updateMarketplaceStatus, verifySupplier } from "./supplierStatusService.js";
 import { sendViaService as sendWhatsApp } from "../waTransport.js";
 import { getWaTemplateConfig, renderTemplate } from "../orderNotification.js";
 import { NotificationService } from "./notificationService.js";
@@ -534,14 +534,25 @@ export async function runVendorApprovedInTx(
   // Step 3: Update vendor_profiles bridge inside tx
   await updateVendorProfileBridge(customerId, supplierId, link.id, tx);
 
-  // Step 4: Verifikasi supplier → status active + isVerified=true
+  // Step 4: Verifikasi supplier → status active + isVerified=true.
+  // These are state-critical approval invariants. Do not swallow an error:
+  // the surrounding transaction must roll back instead of committing a
+  // vendor that is approved in the portal but invisible in Marketplace.
   await verifySupplier({
     supplierId,
     actorUserId: reviewedBy,
     dbOrTx: tx as Parameters<typeof verifySupplier>[0]["dbOrTx"],
-  }).catch((e: unknown) => {
-    logger.warn({ err: e, supplierId }, "runVendorApprovedInTx: verifySupplier gagal (non-fatal, approval tetap lanjut)");
   });
+
+  const marketplaceResult = await updateMarketplaceStatus({
+    supplierId,
+    newMarketplaceStatus: "published",
+    actorUserId: reviewedBy,
+    dbOrTx: tx as Parameters<typeof updateMarketplaceStatus>[0]["dbOrTx"],
+  });
+  if (!marketplaceResult.ok) {
+    throw new Error(`Vendor approval gagal dipublish ke Marketplace: ${marketplaceResult.error ?? "unknown error"}`);
+  }
 
   // Step 5: Migrate dokumen onboarding → supplier_documents (idempotent)
   await migrateOnboardingDocuments(customerId, supplierId, tx).catch((e: unknown) => {

@@ -1626,6 +1626,7 @@ router.patch("/admin/approvals/:id", requirePortalAdmin, async (req, res): Promi
       adminNote,
       reviewedBy,
       adminPortalCustomerId: (req as import("../lib/supabaseAuth.js").PortalAuthReq).portalCustomerId,
+      portalOrigin: `${req.protocol}://${req.get("host")}`,
       ip: ((req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim())
           ?? req.socket?.remoteAddress
           ?? "unknown",

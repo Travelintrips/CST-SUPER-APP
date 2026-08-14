@@ -2,7 +2,11 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { vendorCatalogItemsTable, suppliersTable } from "@workspace/db";
 import { eq, and, ilike, or, sql, asc, ne, isNull, gte } from "drizzle-orm";
-import { isCatalogItemPublic, catalogPublicConditions } from "../lib/catalogVisibility.js";
+import {
+  isCatalogItemPublic,
+  catalogPublicConditions,
+  catalogSupplierConditions,
+} from "../lib/catalogVisibility.js";
 
 export { isCatalogItemPublic };
 
@@ -15,6 +19,7 @@ marketplaceRouter.get("/products", async (req, res) => {
 
   const conditions = [
     ...catalogPublicConditions(),
+    ...catalogSupplierConditions(),
     or(isNull(vendorCatalogItemsTable.validityDate), gte(vendorCatalogItemsTable.validityDate, sql`CURRENT_DATE`))!,
   ];
 
@@ -65,7 +70,10 @@ marketplaceRouter.get("/products", async (req, res) => {
       mediaAssets:    vendorCatalogItemsTable.mediaAssets,
     })
     .from(vendorCatalogItemsTable)
-    .leftJoin(suppliersTable, eq(vendorCatalogItemsTable.vendorId, suppliersTable.id))
+    .innerJoin(
+      suppliersTable,
+      and(eq(vendorCatalogItemsTable.vendorId, suppliersTable.id), ...catalogSupplierConditions()),
+    )
     .where(and(...conditions))
     .orderBy(asc(vendorCatalogItemsTable.sortOrder), asc(vendorCatalogItemsTable.id));
 
@@ -93,7 +101,11 @@ marketplaceRouter.get("/vendors", async (_req, res) => {
       s.id,
       COALESCE(vci.vendor_name, s.name) AS name
     FROM vendor_catalog_items vci
-    LEFT JOIN suppliers s ON vci.vendor_id = s.id
+    INNER JOIN suppliers s
+      ON vci.vendor_id = s.id
+      AND s.is_active = true
+      AND s.is_verified = true
+      AND s.marketplace_status = 'published'
     WHERE vci.is_published = true
       AND vci.is_active != false
     ORDER BY 2
@@ -104,12 +116,17 @@ marketplaceRouter.get("/vendors", async (_req, res) => {
 // GET /api/marketplace/categories — unique categories for filter chips (published+active only)
 marketplaceRouter.get("/categories", async (_req, res) => {
   const rows = await db.execute(sql`
-    SELECT DISTINCT COALESCE(category_key, kategori) AS key
-    FROM vendor_catalog_items
-    WHERE is_published = true
-      AND is_active != false
-      AND COALESCE(category_key, kategori) IS NOT NULL
-      AND COALESCE(category_key, kategori) != ''
+    SELECT DISTINCT COALESCE(vci.category_key, vci.kategori) AS key
+    FROM vendor_catalog_items vci
+    INNER JOIN suppliers s
+      ON vci.vendor_id = s.id
+      AND s.is_active = true
+      AND s.is_verified = true
+      AND s.marketplace_status = 'published'
+    WHERE vci.is_published = true
+      AND vci.is_active != false
+      AND COALESCE(vci.category_key, vci.kategori) IS NOT NULL
+      AND COALESCE(vci.category_key, vci.kategori) != ''
     ORDER BY 1
   `);
   return res.json(
@@ -132,7 +149,11 @@ marketplaceRouter.get("/products/:id/related", async (req, res) => {
       categoryKey: vendorCatalogItemsTable.categoryKey,
     })
     .from(vendorCatalogItemsTable)
-    .where(eq(vendorCatalogItemsTable.id, id))
+    .innerJoin(
+      suppliersTable,
+      and(eq(vendorCatalogItemsTable.vendorId, suppliersTable.id), ...catalogSupplierConditions()),
+    )
+    .where(and(eq(vendorCatalogItemsTable.id, id), ...catalogPublicConditions()))
     .limit(1);
 
   if (!current) return res.json([]);
@@ -159,8 +180,12 @@ marketplaceRouter.get("/products/:id/related", async (req, res) => {
     const sameVendor = await db
       .select(cols)
       .from(vendorCatalogItemsTable)
+      .innerJoin(
+        suppliersTable,
+        and(eq(vendorCatalogItemsTable.vendorId, suppliersTable.id), ...catalogSupplierConditions()),
+      )
       .where(and(
-        eq(vendorCatalogItemsTable.isPublished, true),
+        ...catalogPublicConditions(),
         eq(vendorCatalogItemsTable.vendorId, current.vendorId),
         ne(vendorCatalogItemsTable.id, id),
       ))
@@ -180,8 +205,12 @@ marketplaceRouter.get("/products/:id/related", async (req, res) => {
       const sameCat = await db
         .select(cols)
         .from(vendorCatalogItemsTable)
+        .innerJoin(
+          suppliersTable,
+          and(eq(vendorCatalogItemsTable.vendorId, suppliersTable.id), ...catalogSupplierConditions()),
+        )
         .where(and(
-          eq(vendorCatalogItemsTable.isPublished, true),
+          ...catalogPublicConditions(),
           or(
             eq(vendorCatalogItemsTable.categoryKey, cat),
             eq(vendorCatalogItemsTable.kategori, cat),

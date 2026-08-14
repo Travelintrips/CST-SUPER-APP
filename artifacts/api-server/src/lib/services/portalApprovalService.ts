@@ -24,6 +24,8 @@ import { NotificationService } from "./notificationService.js";
 import { runVendorApprovedInTx } from "./vendorLifecycleService.js";
 import { getWaTemplateConfig, renderTemplate } from "../orderNotification.js";
 import { sendViaService as sendWhatsApp } from "../waTransport.js";
+import { forgotPasswordCustom } from "./portalAuthService.js";
+import { isSmtpConfigured } from "../mailer.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -41,6 +43,8 @@ export interface ProcessApprovalOptions {
   reviewedBy?: string;
   /** portalCustomerId of the admin performing the action */
   adminPortalCustomerId?: number;
+  /** Public portal origin used by the existing password-reset flow. */
+  portalOrigin?: string;
   ip: string;
   userAgent: string;
 }
@@ -137,7 +141,7 @@ export async function listApprovals(opts: ApprovalListOptions) {
 // ─── processApproval ─────────────────────────────────────────────────────────
 
 export async function processApproval(opts: ProcessApprovalOptions): Promise<ProcessApprovalResult> {
-  const { id, status, adminNote, reviewedBy, adminPortalCustomerId, ip, userAgent } = opts;
+  const { id, status, adminNote, reviewedBy, adminPortalCustomerId, portalOrigin, ip, userAgent } = opts;
 
   const [approval] = await db
     .select()
@@ -224,7 +228,8 @@ export async function processApproval(opts: ProcessApprovalOptions): Promise<Pro
   // ── WA notification (non-blocking, after commit) ──────────────────────────
   if (isVendorApproval && txLifecycle) {
     const lc = txLifecycle as NonNullable<TxLifecycleResult>;
-    void _sendVendorApprovedWa(lc, approval.customerId);
+    const passwordSetupSent = await _sendVendorCredentialSetup(approval.customerId, portalOrigin);
+    void _sendVendorApprovedWa(lc, approval.customerId, passwordSetupSent);
     void NotificationService.notifyVendorApproved({
       supplierId:        lc.supplierId,
       supplierName:      lc.supplierName,
