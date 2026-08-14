@@ -33,6 +33,10 @@ export const CUSTOMER_PORTAL_ROOT = path.resolve(
 
 const IMAGE_EXTENSIONS = /\.(?:png|jpe?g|webp|gif|svg)$/i;
 const RASTER_EXTENSIONS = /\.(?:png|jpe?g)$/i;
+// The approved production brand objects are PNGs. Do not derive a WebP path
+// for these two files: the frontend, favicon, manifest, and service worker all
+// intentionally share the published PNG brand assets.
+const BRAND_PNG_PATHS = new Set(["images/logo.png", "images/logo-baru.png"]);
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".mjs", ".json", ".html"]);
 const MEDIA_KEY_PATTERN = /(?:^|[._-])(img|image|photo|favicon|banner|background|bg|logo)(?:[._\d-]|$)/i;
 
@@ -49,12 +53,15 @@ export function normalizeStoragePath(rawPath) {
   value = value.replace(/^portal\/images\//, "images/");
   value = value.replace(/^images\//, "images/");
   if (!IMAGE_EXTENSIONS.test(value)) return null;
+  if (BRAND_PNG_PATHS.has(value)) return `${STORAGE_ROOT}/${value}`;
   return `${STORAGE_ROOT}/${value.replace(RASTER_EXTENSIONS, ".webp")}`;
 }
 
 function expectedMime(storagePath) {
   if (storagePath.endsWith(".svg")) return "image/svg+xml";
   if (storagePath.endsWith(".gif")) return "image/gif";
+  if (storagePath.endsWith(".png")) return "image/png";
+  if (storagePath.endsWith(".jpg") || storagePath.endsWith(".jpeg")) return "image/jpeg";
   return "image/webp";
 }
 

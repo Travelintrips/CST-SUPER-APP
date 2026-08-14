@@ -13,10 +13,14 @@ function response({ status = 200, type = "image/webp", body = Buffer.from("image
   return new Response(body, { status, headers: { "content-type": type } });
 }
 
-test("normalizes raster source names to the derived WebP object", () => {
+test("normalizes raster source names while preserving approved PNG brand objects", () => {
   assert.equal(
     normalizeStoragePath("/api/storage/public-objects/portal/images/logo.png"),
-    "portal-assets/static/customer-portal/images/logo.webp",
+    "portal-assets/static/customer-portal/images/logo.png",
+  );
+  assert.equal(
+    normalizeStoragePath("/api/storage/public-objects/portal/images/logo-baru.png"),
+    "portal-assets/static/customer-portal/images/logo-baru.png",
   );
   assert.equal(
     normalizeStoragePath("images/sea-freight.jpg"),
@@ -73,7 +77,9 @@ test("manifest is derived from source usage and contains derived assets", async 
     assert.ok(paths.has(`portal-assets/static/customer-portal/images/vehicles/${vehicle}.webp`), vehicle);
   }
   assert.ok(paths.has("portal-assets/static/customer-portal/images/categories/coffee.webp"));
-  assert.ok(![...paths].some((asset) => asset.endsWith(".png") || asset.endsWith(".jpg")));
+  assert.ok(paths.has("portal-assets/static/customer-portal/images/logo.png"));
+  assert.ok(paths.has("portal-assets/static/customer-portal/images/logo-baru.png"));
+  assert.ok(![...paths].some((asset) => asset.endsWith(".jpg")));
 });
 
 test("scoped promotion only accepts manifest assets", () => {

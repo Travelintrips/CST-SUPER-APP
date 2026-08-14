@@ -158,7 +158,8 @@
       "contentType": "image/webp",
       "sourceFiles": [
         "index.html",
-        "src/lib/staticAssets.ts"
+        "src/lib/staticAssets.ts",
+        "vite.config.ts"
       ]
     },
     {
@@ -170,9 +171,9 @@
       ]
     },
     {
-      "storagePath": "portal-assets/static/customer-portal/images/logo-baru.webp",
-      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo-baru.webp",
-      "contentType": "image/webp",
+      "storagePath": "portal-assets/static/customer-portal/images/logo-baru.png",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo-baru.png",
+      "contentType": "image/png",
       "sourceFiles": [
         "index.html",
         "public/sw.js",
@@ -181,9 +182,9 @@
       ]
     },
     {
-      "storagePath": "portal-assets/static/customer-portal/images/logo.webp",
-      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo.webp",
-      "contentType": "image/webp",
+      "storagePath": "portal-assets/static/customer-portal/images/logo.png",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo.png",
+      "contentType": "image/png",
       "sourceFiles": [
         "index.html",
         "src/components/layout/Footer.tsx",
@@ -193,7 +194,8 @@
         "src/pages/logistic-admin.tsx",
         "src/pages/orders.tsx",
         "src/pages/products.tsx",
-        "src/pages/services.tsx"
+        "src/pages/services.tsx",
+        "vite.config.ts"
       ]
     },
     {
