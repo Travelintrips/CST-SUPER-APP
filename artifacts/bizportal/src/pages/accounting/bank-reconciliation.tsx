@@ -3412,6 +3412,11 @@ export default function BankReconciliationPage() {
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{ mutations: BankMutation[]; total: number }>;
     },
+    // Keep the primary mutation list in sync with approvals performed by
+    // another tab/admin. The QRIS audit query polls separately, but this list
+    // used to stay stale until a hard reload.
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
   });
 
   const { data: summary } = useQuery({
@@ -3692,7 +3697,10 @@ export default function BankReconciliationPage() {
         return next;
       });
     }
-    await refetchQrisAudit();
+    // Refresh once after the whole batch. The mutation hook intentionally
+    // skips its per-item refresh when `silent` is set above.
+    await Promise.all([refetchQrisAudit(), refetch()]);
+    qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] });
 
     if (conflictCount > 0 || staleCount > 0) {
       toast({
@@ -3879,6 +3887,11 @@ export default function BankReconciliationPage() {
       };
     },
     onSuccess: async (result, variables) => {
+      // A batch approval owns the refresh lifecycle. Refetching here for
+      // every candidate makes a multi-candidate approval perform redundant
+      // network round-trips while the next approval is waiting.
+      if (variables.silent) return;
+
       if (!variables.silent) {
         toast({
           title: result.matching?.status === "auto_matched" || result.matching?.status === "manual_review"
@@ -3890,7 +3903,9 @@ export default function BankReconciliationPage() {
               : "Batch QRIS disetujui ✓",
         });
       }
-      await refetchQrisAudit();
+      // Refresh both datasets: the QRIS candidate status and the primary
+      // bank-mutation card are maintained by different queries.
+      await Promise.all([refetchQrisAudit(), refetch()]);
       if (detailMutation?.id === result.mutationId) {
         await refreshMutationDetail(result.mutationId);
       }
