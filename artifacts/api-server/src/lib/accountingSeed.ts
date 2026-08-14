@@ -38,10 +38,12 @@ const OLD_TO_NEW_ABBR: Record<string, string> = {
 const ALL_COMPANY_IDS: number[] = [1, 2, 3, 4];
 
 // Canonical Sport Center QRIS receipts must not share the physical bank COA.
-// 1-1023 remains the bank/net-settlement account; 1-1024 is the gross payment
-// clearing account used by the canonical payment adapter.
+// 1-1023 is the CST Bank Mandiri Ciputat net-settlement account; 1-1024 is
+// the gross payment clearing account used by the canonical payment adapter.
 const SPORT_CENTER_QRIS_CLEARING_BASE_CODE = "1-1024";
 const SPORT_CENTER_QRIS_CLEARING_CODE = "1-1024-CST";
+const CST_BANK_PARENT_CODE = "1-1020-CST";
+const CST_BANK_CHILD_CODE = "1-1023-CST";
 
 /**
  * Populate ALL_COMPANY_IDS dan COMPANY_ABBR secara dinamis dari tabel companies.
@@ -376,6 +378,123 @@ export async function ensureDefaultCompany(): Promise<number> {
   return row!.id;
 }
 
+/**
+ * Make the CST Mandiri account a real header and keep the postable Ciputat
+ * child as the destination for all new bank activity.
+ *
+ * This is deliberately idempotent and runs before the seed fast-path, because
+ * existing installations can already have a complete COA and therefore skip
+ * the full seed loop. Historical journal lines are not rewritten.
+ */
+export async function repairMandiriCiputatHierarchy(): Promise<void> {
+  try {
+    const parentRows = await db.execute(sql`
+      SELECT id
+      FROM chart_of_accounts
+      WHERE company_id = 1 AND code = ${CST_BANK_PARENT_CODE}
+      LIMIT 1
+    `);
+    const childRows = await db.execute(sql`
+      SELECT id
+      FROM chart_of_accounts
+      WHERE company_id = 1 AND code = ${CST_BANK_CHILD_CODE}
+      LIMIT 1
+    `);
+    const parentId = Number((parentRows.rows[0] as { id?: number } | undefined)?.id);
+    const childId = Number((childRows.rows[0] as { id?: number } | undefined)?.id);
+    if (!parentId || !childId) return;
+
+    await db.execute(sql`
+      UPDATE chart_of_accounts
+      SET name = 'Bank Mandiri CST',
+          is_header = TRUE,
+          is_postable = FALSE,
+          updated_at = NOW()
+      WHERE id = ${parentId}
+    `);
+    await db.execute(sql`
+      UPDATE chart_of_accounts
+      SET name = 'Bank Mandiri Ciputat',
+          parent_id = ${parentId},
+          is_header = FALSE,
+          is_postable = TRUE,
+          updated_at = NOW()
+      WHERE id = ${childId}
+    `);
+
+    // BNK-CST and CST accounting settings must never point to the header.
+    await db.execute(sql`
+      UPDATE accounting_journals
+      SET default_debit_account_id = ${childId},
+          default_credit_account_id = ${childId}
+      WHERE company_id = 1 AND code = 'BNK-CST'
+    `);
+    await db.execute(sql`
+      UPDATE accounting_settings
+      SET default_bank_account_id = ${childId}
+      WHERE company_id = 1
+    `);
+    await db.execute(sql`
+      UPDATE company_bank_accounts
+      SET name = CASE
+            WHEN name ILIKE '%Bank Mandiri%Sport Center%' THEN 'Bank Mandiri Ciputat'
+            ELSE name
+          END,
+          coa_id = ${childId},
+          updated_at = NOW()
+      WHERE company_id = 1
+        AND (
+          coa_id IN (${parentId}, ${childId})
+          OR name ILIKE '%Bank Mandiri%Sport Center%'
+          OR name ILIKE '%Bank Mandiri CST%'
+        )
+    `);
+
+    // The bank mutation master is the source of truth for imported bank rows.
+    // Reuse an existing Ciputat row when present; otherwise promote the legacy
+    // CST row instead of creating a duplicate configuration.
+    await db.execute(sql`
+      UPDATE master_bank_accounts
+      SET is_active = FALSE,
+          updated_at = NOW()
+      WHERE company_id = 1
+        AND coa_code = '1-1020-CST'
+        AND EXISTS (
+          SELECT 1
+          FROM master_bank_accounts
+          WHERE company_id = 1 AND coa_code = '1-1023-CST'
+        )
+    `);
+    await db.execute(sql`
+      UPDATE master_bank_accounts
+      SET account_name = 'Mandiri Ciputat',
+          coa_code = '1-1023-CST',
+          updated_at = NOW()
+      WHERE company_id = 1
+        AND is_active = TRUE
+        AND coa_code = '1-1020-CST'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM master_bank_accounts
+          WHERE company_id = 1 AND coa_code = '1-1023-CST'
+        )
+    `);
+    await db.execute(sql`
+      UPDATE master_bank_accounts
+      SET account_name = 'Mandiri Ciputat',
+          coa_code = '1-1023-CST',
+          updated_at = NOW()
+      WHERE company_id = 1
+        AND is_active = TRUE
+        AND coa_code = '1-1023-CST'
+    `);
+  } catch (err) {
+    // Startup migrations can run before optional bank-master tables exist.
+    // The full seed/migration runner will retry this function later.
+    logger.warn({ err }, "Accounting seed: Mandiri Ciputat hierarchy repair deferred");
+  }
+}
+
 export async function seedAccountingDefaults(companyId?: number): Promise<void> {
   const cid = companyId ?? (await ensureDefaultCompany());
 
@@ -383,6 +502,11 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
   // Harus dijalankan sebelum fast-path check agar perusahaan baru (ID > 4)
   // turut disertakan dalam seed COA, jurnal, dan settings.
   await populateDynamicCompanies();
+
+  // Keep the CST bank hierarchy and all bank-facing defaults aligned even
+  // when the general seed takes its fast path.  The parent is a header only;
+  // all new CST bank postings must use the Ciputat child account.
+  await repairMandiriCiputatHierarchy();
 
   // ── Fast-path: skip heavy seed if COA, journals, AND settings already fully populated ──
   // Check journals FIRST: if empty → always run full seed regardless of COA state.
@@ -589,9 +713,15 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
         // governed. Do not create, rename, or repair them from startup seed.
         continue;
       }
-      const parentId = leaf.parentCode ? (byCode.get(leaf.parentCode)?.id ?? null) : null;
+      const parentId =
+        companyId === 1 && leaf.code === "1-1023"
+          ? (byCode.get(CST_BANK_PARENT_CODE)?.id ?? null)
+          : (leaf.parentCode ? (byCode.get(leaf.parentCode)?.id ?? null) : null);
       const companyCode = `${leaf.code}-${abbr}`;
-      const companyName = `${leaf.name} ${abbr}`;
+      const companyName =
+        companyId === 1 && leaf.code === "1-1023"
+          ? "Bank Mandiri Ciputat"
+          : `${leaf.name} ${abbr}`;
       await db
         .insert(chartOfAccountsTable)
         .values({
@@ -607,6 +737,10 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
         });
     }
   }
+
+  // Pass 3 creates the child on a fresh database; run the repair again so the
+  // hierarchy and related defaults are also applied on the full-seed path.
+  await repairMandiriCiputatHierarchy();
 
   // Tax headers and subaccounts are intentionally absent from this seed.
   // Run coaTaxMigration and approve its change requests instead.
@@ -670,8 +804,12 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
     for (const tpl of JOURNAL_TEMPLATES) {
       const code = `${tpl.suffix}-${abbr}`;
       const name = tpl.label + (tpl.suffix === "BNK" ? ` ${abbr}` : "");
-      const debitId  = tpl.debitBase  ? (byCode.get(`${tpl.debitBase}-${abbr}`)?.id  ?? null) : null;
-      const creditId = tpl.creditBase ? (byCode.get(`${tpl.creditBase}-${abbr}`)?.id ?? null) : null;
+      const debitBase =
+        companyId === 1 && tpl.suffix === "BNK" ? "1-1023" : tpl.debitBase;
+      const creditBase =
+        companyId === 1 && tpl.suffix === "BNK" ? "1-1023" : tpl.creditBase;
+      const debitId  = debitBase  ? (byCode.get(`${debitBase}-${abbr}`)?.id  ?? null) : null;
+      const creditId = creditBase ? (byCode.get(`${creditBase}-${abbr}`)?.id ?? null) : null;
       await db
         .insert(accountingJournalsTable)
         .values({
@@ -820,7 +958,7 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
 
   for (const companyId of ALL_COMPANY_IDS) {
     const cash        = needFor("1-1010", companyId);
-    const bankMandiri = needFor("1-1020", companyId);
+    const bankMandiri = needFor(companyId === 1 ? "1-1023" : "1-1020", companyId);
     const ar          = needFor("1-1030", companyId);
     const inventory   = needFor("1-1040", companyId);
     const ppnIn       = byCode.get(`1-1050-${COMPANY_ABBR[companyId]}`);
@@ -1289,7 +1427,7 @@ async function resolveSettingsFromCoa(companyId: number): Promise<Partial<typeof
 
   const [cashAccountId, bankAccountId, salesIncomeId, arAccountId, apAccountId, cashJournalId, bankJournalId, salesJournalId, purchaseJournalId, qrisAccountId, ppnOutputAccountId, qrisJournalId, sportCenterRevenueId] = await Promise.all([
     lookupCoa("1-1010"),
-    lookupCoa("1-1020"),
+     lookupCoa(companyId === 1 ? "1-1023" : "1-1020"),
     lookupCoa("4-1010"),
     lookupCoa("1-1030"),
     lookupCoa("2-1010"),

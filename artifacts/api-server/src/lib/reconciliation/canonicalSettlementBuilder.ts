@@ -12,7 +12,7 @@ import { sql } from "drizzle-orm";
 
 export const CANONICAL_SETTLEMENT_BANK_COA = {
   code: "1-1023-CST",
-  name: "Bank Mandiri - Sport Center",
+  name: "Bank Mandiri Ciputat",
   accountType: "asset",
 } as const;
 

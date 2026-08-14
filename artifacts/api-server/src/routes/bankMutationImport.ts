@@ -221,13 +221,15 @@ export async function runBankMutationImportMigration() {
   // CST (company_id=1) — Mandiri Ciputat
   await db.execute(sql.raw(`
     INSERT INTO master_bank_accounts (account_name, bank_name, coa_code, company_id, is_active)
-    SELECT 'Mandiri Ciputat', 'Bank Mandiri', '1-1020-CST', 1, true
-    WHERE NOT EXISTS (SELECT 1 FROM master_bank_accounts WHERE company_id=1 AND coa_code='1-1020-CST');
+    SELECT 'Mandiri Ciputat', 'Bank Mandiri', '1-1023-CST', 1, true
+    WHERE NOT EXISTS (SELECT 1 FROM master_bank_accounts WHERE company_id=1 AND coa_code='1-1023-CST');
   `)).catch(() => {});
   await db.execute(sql.raw(`
     UPDATE master_bank_accounts
-    SET coa_code = '1-1020-CST', company_id = 1
-    WHERE account_name ILIKE 'Mandiri Ciputat' AND is_active = TRUE AND company_id IS DISTINCT FROM 1;
+    SET account_name = 'Mandiri Ciputat', coa_code = '1-1023-CST', company_id = 1
+    WHERE is_active = TRUE
+      AND company_id = 1
+      AND (account_name ILIKE 'Mandiri Ciputat' OR coa_code IN ('1-1020-CST', '1-1023-CST'));
   `)).catch(() => {});
   // Hapus duplicate: hanya simpan satu entry per (company_id, coa_code)
   await db.execute(sql.raw(`

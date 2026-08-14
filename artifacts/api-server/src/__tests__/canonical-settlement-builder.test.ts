@@ -11,7 +11,7 @@ describe("4C-7A.7G canonical settlement builder contract", () => {
   it("uses the resolved canonical Sport Center bank COA contract, not a public ID", () => {
     expect(CANONICAL_SETTLEMENT_BANK_COA).toEqual({
       code: "1-1023-CST",
-      name: "Bank Mandiri - Sport Center",
+      name: "Bank Mandiri Ciputat",
       accountType: "asset",
     });
     expect(
