@@ -46,6 +46,10 @@ MOCK_STORAGE=${MOCK_STORAGE:-true}
 USE_TEST_STORAGE=${USE_TEST_STORAGE:-true}
 export SAFE_DEV_TEST_MODE MOCK_WHATSAPP MOCK_EMAIL MOCK_PAYMENT MOCK_STORAGE USE_TEST_STORAGE
 
+# Temporary development-only capture for the customer lifecycle harness.
+# Remove after the scoped credential proof; production never uses this script.
+export CUSTOMER_AUTH_HARNESS_CAPTURE=1
+
 # ── Deterministic single-listener configuration ─────────────────────────────
 # The artifact workflow exposes 18444. Express binds directly to that port;
 # there is no second forwarder listener and no hidden 18445 process.
