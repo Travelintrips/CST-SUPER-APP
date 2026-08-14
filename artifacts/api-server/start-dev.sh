@@ -35,6 +35,17 @@ fi
 APP_ENV=development
 export APP_ENV
 
+# Development lifecycle harnesses must never send real outbound traffic. Keep
+# the safe defaults here so the managed artifact workflow cannot accidentally
+# start an unsafe dev API; production uses start.sh/start:secure instead.
+SAFE_DEV_TEST_MODE=${SAFE_DEV_TEST_MODE:-true}
+MOCK_WHATSAPP=${MOCK_WHATSAPP:-true}
+MOCK_EMAIL=${MOCK_EMAIL:-true}
+MOCK_PAYMENT=${MOCK_PAYMENT:-true}
+MOCK_STORAGE=${MOCK_STORAGE:-true}
+USE_TEST_STORAGE=${USE_TEST_STORAGE:-true}
+export SAFE_DEV_TEST_MODE MOCK_WHATSAPP MOCK_EMAIL MOCK_PAYMENT MOCK_STORAGE USE_TEST_STORAGE
+
 # ── Deterministic single-listener configuration ─────────────────────────────
 # The artifact workflow exposes 18444. Express binds directly to that port;
 # there is no second forwarder listener and no hidden 18445 process.
