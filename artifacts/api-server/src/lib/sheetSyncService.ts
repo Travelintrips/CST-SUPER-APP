@@ -19,12 +19,31 @@ import { runUnifiedMatching } from "./reconciliation/unifiedMatchingEngine.js";
 import { logger } from "./logger.js";
 import { canonicalMutationKey, canonicalNormalizeDesc } from "./reconciliation/canonicalMutationKey.js";
 import { isQrisSettlementDescription } from "./reconciliation/qrisSettlement.js";
+import {
+  isDevelopmentEnvironment,
+  isReconciliationWorkerEnabled,
+  positiveIntEnv,
+} from "./reconciliation/workerGuard.js";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
 const LEGACY_SHEET_ID = () => process.env.GOOGLE_SHEET_ID_BANK_MUTATIONS ?? "";
 const LEGACY_TAB      = () => process.env.GOOGLE_SHEET_MUTATIONS_TAB ?? "Mutasi_Bank";
-const SYNC_MS         = 60_000;
+const SYNC_MS = positiveIntEnv(
+  "RECONCILIATION_WORKER_INTERVAL_MS",
+  isDevelopmentEnvironment() ? 15 * 60_000 : 60_000,
+);
+const MATCH_CONCURRENCY = positiveIntEnv(
+  "RECONCILIATION_MATCH_CONCURRENCY",
+  isDevelopmentEnvironment() ? 1 : 4,
+  8,
+);
+const MATCH_YIELD_MS = positiveIntEnv(
+  "RECONCILIATION_MATCH_YIELD_MS",
+  isDevelopmentEnvironment() ? 100 : 0,
+  10_000,
+);
+let _workerRunning = false;
 
 const COL_MUTATION_KEY = "mutation_key";
 const COL_STATUS_REKON = "status_rekon";
@@ -422,8 +441,38 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
     }
   }
 
-  // Insert new mutations
+  // Resolve all possible destination accounts once. The previous per-row
+  // probe held the single development pool in a 46-row serial loop.
+  const accountNumbers: Array<{ id: number; digits: string }> = [];
+  try {
+    const { rows: accountRows } = await db.execute(sql.raw(`
+      SELECT id, account_number
+      FROM company_bank_accounts
+      WHERE is_active = TRUE
+        AND (company_id = ${company_id ?? "NULL"} OR company_id IS NULL)
+        AND account_number IS NOT NULL
+    `));
+    for (const row of accountRows as Array<{ id?: number; account_number?: string }>) {
+      const digits = String(row.account_number ?? "").replace(/\D/g, "");
+      if (row.id != null && digits) accountNumbers.push({ id: Number(row.id), digits });
+    }
+  } catch (err: any) {
+    logger.warn({ err: err?.message, companyId: company_id }, "[sheetSync] Gagal memuat daftar rekening");
+  }
+
+  const resolveBankAccountId = (p: ParsedRow): number | null => {
+    const statementDigits = `${p.bank ?? ""} ${p.description}`.replace(/\D/g, "");
+    return (
+      accountNumbers
+        .sort((a, b) => b.digits.length - a.digits.length)
+        .find((account) => statementDigits.includes(account.digits))
+        ?.id ?? null
+    );
+  };
+
+  // Build new rows in memory, then insert them in one statement.
   const newMutations: Array<{ id: number; parsed: ParsedRow }> = [];
+  const pendingMutations: Array<{ parsed: ParsedRow; canonicalKey: string; bankAccountId: number | null }> = [];
   const esc = (s: string) => (s ?? "").replace(/'/g, "''");
 
   for (const p of parsed) {
@@ -431,26 +480,7 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
     // statement description. Resolve it before building the canonical key so
     // QRIS matching is scoped to the same company/account dimension as the
     // Sport Center payment.
-    let bankAccountId: number | null = null;
-    try {
-      const accountProbe = `${p.bank ?? ""} ${p.description}`.replace(/'/g, "''");
-      const { rows: accountRows } = await db.execute(sql.raw(`
-        SELECT id
-        FROM company_bank_accounts
-        WHERE is_active = TRUE
-          AND (company_id = ${company_id ?? "NULL"} OR company_id IS NULL)
-          AND regexp_replace(account_number, '[^0-9]', '', 'g') <> ''
-          AND POSITION(
-            regexp_replace(account_number, '[^0-9]', '', 'g')
-            IN regexp_replace('${accountProbe}', '[^0-9]', '', 'g')
-          ) > 0
-        ORDER BY company_id NULLS LAST, id
-        LIMIT 1
-      `));
-      bankAccountId = accountRows[0]?.id == null ? null : Number(accountRows[0].id);
-    } catch (err: any) {
-      logger.warn({ err: err?.message, companyId: company_id }, "[sheetSync] Resolusi rekening mutasi gagal");
-    }
+    const bankAccountId = resolveBankAccountId(p);
 
     // Compute canonical_key with the actual company_id from sheet config
     const cKey = canonicalMutationKey({
@@ -465,62 +495,78 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
     // Dedup: skip if mutation_key (old format) OR canonical_key already exists
     if (existingKeys.has(p.mutation_key) || existingKeys.has(cKey)) continue;
 
+    pendingMutations.push({ parsed: p, canonicalKey: cKey, bankAccountId });
+  }
+
+  if (pendingMutations.length > 0) {
     try {
-      const { rows: ins } = await db.execute(sql.raw(`
+      const values = pendingMutations.map(({ parsed: p, canonicalKey: cKey, bankAccountId }) => `(
+        '${esc(p.mutation_key)}', '${esc(cKey)}', '${p.transaction_date}',
+        '${esc(p.description)}', ${p.amount}, '${p.direction}',
+        ${p.kredit}, ${p.debit}, '${esc(p.normalized_description)}',
+        ${p.provider_name ? `'${esc(p.provider_name)}'` : "NULL"},
+        ${bankAccountId ?? "NULL"}, 'actual_bank_mutation', 'unmatched',
+        'google_sheet', ${p.bank ? `'${esc(p.bank)}'` : "NULL"},
+        ${company_id ?? "NULL"}, ${configId}
+      )`).join(",\n");
+      const { rows: inserted } = await db.execute(sql.raw(`
         INSERT INTO bank_mutations
           (mutation_key, canonical_key, transaction_date, description, amount, direction,
            credit_amount, debit_amount, normalized_description, provider_name,
-           bank_account_id, source_classification,
-           status, source, source_account, company_id, sheet_config_id)
-        VALUES (
-          '${esc(p.mutation_key)}',
-          '${esc(cKey)}',
-          '${p.transaction_date}',
-          '${esc(p.description)}',
-          ${p.amount},
-          '${p.direction}',
-          ${p.kredit},
-          ${p.debit},
-          '${esc(p.normalized_description)}',
-          ${p.provider_name ? `'${esc(p.provider_name)}'` : "NULL"},
-           ${bankAccountId ?? "NULL"},
-           'actual_bank_mutation',
-          'unmatched',
-          'google_sheet',
-          ${p.bank ? `'${esc(p.bank)}'` : "NULL"},
-          ${company_id ?? "NULL"},
-          ${configId}
-        )
+           bank_account_id, source_classification, status, source, source_account,
+           company_id, sheet_config_id)
+        VALUES ${values}
         ON CONFLICT DO NOTHING
-        RETURNING id
+        RETURNING id, mutation_key
       `));
-
-      const rowId = (ins as any[])[0]?.id;
-      if (rowId) {
-        existingKeys.add(p.mutation_key);
-        existingKeys.add(cKey);
-        newMutations.push({ id: Number(rowId), parsed: { ...p, bank_account_id: bankAccountId } });
+      for (const row of inserted as Array<{ id?: number; mutation_key?: string }>) {
+        const pending = pendingMutations.find((item) => item.parsed.mutation_key === row.mutation_key);
+        if (!pending || row.id == null) continue;
+        existingKeys.add(pending.parsed.mutation_key);
+        existingKeys.add(pending.canonicalKey);
+        newMutations.push({
+          id: Number(row.id),
+          parsed: { ...pending.parsed, bank_account_id: pending.bankAccountId },
+        });
       }
     } catch (err: any) {
-      logger.warn({ err: err.message, key: p.mutation_key, label }, "[sheetSync] Gagal insert mutasi");
+      logger.warn(
+        { err: err.message, count: pendingMutations.length, label },
+        "[sheetSync] Batch insert mutasi gagal",
+      );
     }
   }
 
-  // Run matching for new mutations
-  for (const { id, parsed: p } of newMutations) {
-    try {
-      await runUnifiedMatching({
-        id, amount: p.amount, transaction_date: p.transaction_date,
-        mutation_key: p.mutation_key, normalized_description: p.normalized_description,
-        direction: p.direction,
-        company_id,
-         bank_account_id: p.bank_account_id ?? null,
-        provider_name: p.provider_name,
-      }, "sheet-sync");
-    } catch (err: any) {
-      logger.warn({ err: err.message, id }, "[sheetSync] Matching gagal (non-fatal)");
+  // Run matching with bounded concurrency. A development pool of one must not
+  // receive an unbounded Promise.all burst, and each iteration yields so HTTP
+  // requests can take the connection between worker queries.
+  let nextMatchIndex = 0;
+  const matchWorker = async () => {
+    while (true) {
+      const index = nextMatchIndex++;
+      const item = newMutations[index];
+      if (!item) return;
+      const { id, parsed: p } = item;
+      try {
+        await runUnifiedMatching({
+          id, amount: p.amount, transaction_date: p.transaction_date,
+          mutation_key: p.mutation_key, normalized_description: p.normalized_description,
+          direction: p.direction,
+          company_id,
+          bank_account_id: p.bank_account_id ?? null,
+          provider_name: p.provider_name,
+        }, "sheet-sync");
+      } catch (err: any) {
+        logger.warn({ err: err.message, id }, "[sheetSync] Matching gagal (non-fatal)");
+      }
+      if (MATCH_YIELD_MS > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, MATCH_YIELD_MS));
+      }
     }
-  }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(MATCH_CONCURRENCY, newMutations.length) }, () => matchWorker()),
+  );
 
   // Write-back status → sheet
   const keyList = parsed.map((p) => `'${p.mutation_key.replace(/'/g, "''")}'`).join(",");
@@ -992,6 +1038,12 @@ export async function syncSheetToReplit(): Promise<void> {
 // ── Worker starter ─────────────────────────────────────────────────────────────
 
 export function startSheetSyncWorker(): void {
+  if (!isReconciliationWorkerEnabled()) {
+    logger.info(
+      "[sheetSync] Worker development dinonaktifkan; set RECONCILIATION_WORKER_ENABLED=true untuk opt-in",
+    );
+    return;
+  }
   if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
     logger.info("[sheetSync] Sheet sync tidak aktif — set GOOGLE_SERVICE_ACCOUNT_JSON untuk mengaktifkan");
     return;
@@ -1000,6 +1052,12 @@ export function startSheetSyncWorker(): void {
   logger.info({ intervalMs: SYNC_MS }, "[sheetSync] Multi-sheet auto-sync dimulai");
 
   const runAll = async () => {
+    if (_workerRunning) {
+      logger.debug("[sheetSync] Siklus sebelumnya masih berjalan — skip");
+      return;
+    }
+    _workerRunning = true;
+    try {
     // Mode 1: DB configs (multi-company)
     await syncAllSheetConfigs();
     // Mode 2: Legacy env var fallback (hanya kalau tidak ada DB config)
@@ -1010,12 +1068,18 @@ export function startSheetSyncWorker(): void {
     if (!hasDbConfigs && LEGACY_SHEET_ID()) {
       await syncSheetToReplit();
     }
+    } finally {
+      _workerRunning = false;
+    }
   };
 
-  // Sync awal
-  runAll().catch((err) => logger.warn({ err: err?.message }, "[sheetSync] Initial sync gagal (non-fatal)"));
+  // Development is opt-in and deliberately delayed even when enabled.
+  const initialDelayMs = isDevelopmentEnvironment() ? 120_000 : 0;
+  setTimeout(() => {
+    runAll().catch((err) => logger.warn({ err: err?.message }, "[sheetSync] Initial sync gagal (non-fatal)"));
+  }, initialDelayMs).unref();
 
-  // Auto sync tiap 1 menit
+  // Auto sync is single-flight; a slow Google/API run cannot overlap itself.
   setInterval(() => {
     runAll().catch((err) => logger.warn({ err: err?.message }, "[sheetSync] Periodic sync gagal (non-fatal)"));
   }, SYNC_MS).unref();

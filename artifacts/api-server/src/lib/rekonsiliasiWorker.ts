@@ -7,6 +7,7 @@ import { db, accountingSettingsTable, accountingEntriesTable, accountingEntryLin
 import { eq, and, gte, lte } from "drizzle-orm";
 import { readSheet, batchUpdateSheet } from "./googleSheets.js";
 import { logger } from "./logger.js";
+import { isReconciliationWorkerEnabled } from "./reconciliation/workerGuard.js";
 
 const INTERVAL_MIN = 60; // cek tiap jam, tapi hanya jalankan pada jam yang dikonfigurasi
 const INITIAL_DELAY_MIN = 3;
@@ -285,11 +286,19 @@ async function checkAndRun() {
 // ─── Export ───────────────────────────────────────────────────────────────────
 
 export function startRekonsiliasiWorker() {
+  if (!isReconciliationWorkerEnabled()) {
+    logger.info(
+      "rekonsiliasiWorker disabled in development; set RECONCILIATION_WORKER_ENABLED=true to opt in",
+    );
+    return;
+  }
   const initialDelayMs = INITIAL_DELAY_MIN * 60 * 1000;
   const intervalMs = INTERVAL_MIN * 60 * 1000;
   setTimeout(() => {
-    checkAndRun();
-    setInterval(checkAndRun, intervalMs);
+    checkAndRun().catch((err) => logger.warn({ err }, "rekonsiliasiWorker initial check failed"));
+    setInterval(() => {
+      checkAndRun().catch((err) => logger.warn({ err }, "rekonsiliasiWorker periodic check failed"));
+    }, intervalMs).unref();
   }, initialDelayMs);
   logger.info(
     { intervalMin: INTERVAL_MIN, initialDelayMin: INITIAL_DELAY_MIN },

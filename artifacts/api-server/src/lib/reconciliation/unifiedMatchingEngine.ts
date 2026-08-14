@@ -38,6 +38,91 @@ import {
   findCanonicalSettlementCandidates,
 } from "./canonicalSettlementAdapter.js";
 
+type OptionalCandidateSource = "logistic_order" | "invoice" | "tenant_invoice";
+
+const OPTIONAL_SOURCE_REQUIREMENTS: Record<OptionalCandidateSource, Record<string, string[]>> = {
+  logistic_order: {
+    logistic_orders: ["id", "grand_total", "created_at", "sender_name", "order_number", "company_id"],
+  },
+  invoice: {
+    sales_documents: ["id", "total_amount", "invoice_date", "invoice_number", "customer_id", "company_id"],
+    customers: ["id", "name"],
+  },
+  tenant_invoice: {
+    tenant_invoices: ["id", "total_amount", "created_at", "tenant_id", "tenant_name", "invoice_number", "company_id"],
+    tenants: ["id", "name"],
+  },
+};
+
+let optionalSourceAvailability:
+  | { expiresAt: number; available: Set<OptionalCandidateSource> }
+  | null = null;
+
+/**
+ * Runtime databases can lag the checked-in Drizzle schema. Check optional
+ * sources once per short TTL so a missing table/column is skipped before its
+ * candidate SQL is sent to PostgreSQL.
+ */
+async function getOptionalSourceAvailability(): Promise<Set<OptionalCandidateSource>> {
+  const now = Date.now();
+  if (optionalSourceAvailability && optionalSourceAvailability.expiresAt > now) {
+    return optionalSourceAvailability.available;
+  }
+
+  const requiredTables = Object.values(OPTIONAL_SOURCE_REQUIREMENTS)
+    .flatMap((requirements) => Object.keys(requirements));
+  const tableList = [...new Set(requiredTables)]
+    .map((table) => `'${table.replace(/'/g, "''")}'`)
+    .join(", ");
+
+  try {
+    const { rows } = await db.execute(sql.raw(`
+      SELECT table_name, column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name IN (${tableList})
+    `));
+    const columns = new Map<string, Set<string>>();
+    for (const row of rows as Array<{ table_name?: string; column_name?: string }>) {
+      if (!row.table_name || !row.column_name) continue;
+      if (!columns.has(row.table_name)) columns.set(row.table_name, new Set());
+      columns.get(row.table_name)!.add(row.column_name);
+    }
+
+    const available = new Set<OptionalCandidateSource>();
+    for (const [source, requirements] of Object.entries(OPTIONAL_SOURCE_REQUIREMENTS) as Array<
+      [OptionalCandidateSource, Record<string, string[]>]
+    >) {
+      const missing = Object.entries(requirements).flatMap(([table, requiredColumns]) =>
+        requiredColumns
+          .filter((column) => !columns.get(table)?.has(column))
+          .map((column) => `${table}.${column}`),
+      );
+      if (missing.length === 0) {
+        available.add(source);
+      } else {
+        logger.warn(
+          { source, missing },
+          "[unifiedMatchingEngine] optional candidate source skipped by schema preflight",
+        );
+      }
+    }
+
+    optionalSourceAvailability = { available, expiresAt: now + 5 * 60_000 };
+    return available;
+  } catch (error: any) {
+    // Keep core matching available. Optional sources remain disabled until the
+    // next TTL refresh rather than repeatedly retrying a broken discovery query.
+    logger.warn(
+      { err: error?.message ?? String(error) },
+      "[unifiedMatchingEngine] candidate source schema preflight failed; optional sources skipped",
+    );
+    const available = new Set<OptionalCandidateSource>();
+    optionalSourceAvailability = { available, expiresAt: now + 60_000 };
+    return available;
+  }
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type CandidateType =
@@ -679,7 +764,7 @@ export async function fetchCandidates(
     {
       type: "logistic_order",
       q: `
-        SELECT lo.id, lo.total_price AS amount,
+        SELECT lo.id, lo.grand_total AS amount,
                lo.created_at::date::text AS date,
                COALESCE(lo.sender_name, '') AS name,
                lo.order_number AS ref
@@ -694,15 +779,15 @@ export async function fetchCandidates(
       type: "invoice",
       q: `
         SELECT sd.id, sd.total_amount AS amount,
-               sd.issue_date::text AS date,
+               COALESCE(sd.invoice_date, sd.created_at::date)::text AS date,
                COALESCE(c.name, '') AS name,
                sd.doc_number AS ref
         FROM sales_documents sd
         LEFT JOIN customers c ON c.id = sd.customer_id
-        WHERE sd.doc_type = 'invoice'
+        WHERE sd.invoice_number IS NOT NULL
           AND '${direction}' = 'IN'
           AND ${amtFilter.replace("##AMT##", "sd.total_amount")}
-          AND sd.issue_date BETWEEN ${dateFrom} AND ${dateTo}
+          AND COALESCE(sd.invoice_date, sd.created_at::date) BETWEEN ${dateFrom} AND ${dateTo}
           ${coFilter.replace("##TBL##", "sd")}
       `,
     },
@@ -837,8 +922,14 @@ export async function fetchCandidates(
   // Candidate sources are independent amount/date lookups. Running them in
   // parallel removes one full database round-trip per source while preserving
   // fail-soft behavior for optional/legacy tables.
+  const availableOptionalSources = await getOptionalSourceAvailability();
   const sourceRows = await Promise.all(
-    sources.map(async (src) => {
+    sources
+      .filter((src) =>
+        !OPTIONAL_SOURCE_REQUIREMENTS[src.type as OptionalCandidateSource] ||
+        availableOptionalSources.has(src.type as OptionalCandidateSource),
+      )
+      .map(async (src) => {
       try {
         const { rows } = await db.execute(sql.raw(src.q));
         return { src, rows: rows as any[] };
@@ -846,7 +937,7 @@ export async function fetchCandidates(
         logger.warn({ err: e.message, type: src.type }, "[unifiedMatchingEngine] fetchCandidates: source skipped");
         return { src, rows: [] as any[] };
       }
-    }),
+      }),
   );
   for (const { src, rows } of sourceRows) {
     for (const r of rows) {

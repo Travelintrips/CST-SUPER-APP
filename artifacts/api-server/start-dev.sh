@@ -49,6 +49,12 @@ export PG_POOL_MAX
 PG_CONNECTION_TIMEOUT_MS=${PG_CONNECTION_TIMEOUT_MS:-30000}
 export PG_CONNECTION_TIMEOUT_MS
 
+# Automatic reconciliation competes with interactive BizPortal requests for
+# the single development pool connection. Keep it off by default; enable it
+# explicitly when testing the worker with RECONCILIATION_WORKER_ENABLED=true.
+RECONCILIATION_WORKER_ENABLED=${RECONCILIATION_WORKER_ENABLED:-false}
+export RECONCILIATION_WORKER_ENABLED
+
 # Only one API workflow instance may own the forwarder and internal server.
 # A second artifact/workflow invocation stays alive without binding anything,
 # preventing an EADDRINUSE crash loop while the first instance is healthy.
