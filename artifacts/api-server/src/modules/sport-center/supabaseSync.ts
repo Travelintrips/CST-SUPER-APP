@@ -36,6 +36,47 @@ function paymentEvidenceFromRow(row: PaymentEvidenceRow): SportPaymentPostingEvi
   };
 }
 
+/**
+ * A confirmed canonical payment may already have a complete draft journal
+ * created by the Sport Center owner pipeline. Promote only that exact journal;
+ * never create a second journal in the BizPortal database.
+ */
+async function promoteCompleteCanonicalPaymentJournal(
+  paymentId: number,
+  journalId: number,
+  grossAmount: number,
+  revenueAmount: number,
+  taxAmount: number,
+): Promise<boolean> {
+  if (![grossAmount, revenueAmount, taxAmount].every(Number.isFinite)) return false;
+  if (
+    grossAmount <= 0 ||
+    Math.abs(grossAmount - (revenueAmount + taxAmount)) > 0.01
+  ) return false;
+
+  const promoted = await db.execute(sql`
+    UPDATE sport_center.accounting_journals j
+    SET status = 'posted',
+        posted_by = COALESCE(j.posted_by, 'canonical-payment-sync'),
+        posted_at = COALESCE(j.posted_at, NOW()),
+        updated_at = NOW()
+    WHERE j.id = ${journalId}
+      AND j.payment_id = ${paymentId}
+      AND j.journal_type = 'payment_confirmed'
+      AND j.is_reversal = FALSE
+      AND j.status = 'draft'
+      AND j.debit_amount = ${grossAmount}
+      AND ABS(j.credit_revenue_amount + j.credit_ppn_amount - ${grossAmount}) <= 0.01
+      AND (
+        SELECT COUNT(*)
+        FROM sport_center.accounting_journal_lines l
+        WHERE l.journal_id = j.id
+      ) >= 2
+    RETURNING j.id
+  `);
+  return promoted.rows.length > 0;
+}
+
 async function loadPaymentPostingEvidence(
   mirrorPaymentId: number,
 ): Promise<SportPaymentPostingEvidence | null> {
@@ -817,10 +858,6 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
       if (!mirrorPaymentId) {
         throw new Error(`CANONICAL_PAYMENT_MIRROR_MISSING: payment=${paymentId}`);
       }
-      if (raw.journal_status !== "posted" || raw.is_reversal === true) {
-        throw new Error(`CANONICAL_PAYMENT_JOURNAL_NOT_POSTED: payment=${paymentId}`);
-      }
-
       const gross = Number(raw.amount);
       const debit = Number(raw.debit_amount);
       const revenue = Number(raw.credit_revenue_amount);
@@ -829,6 +866,20 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
           gross <= 0 || Math.abs(debit - gross) > 0.01 ||
           Math.abs(revenue + tax - gross) > 0.01) {
         throw new Error(`CANONICAL_PAYMENT_JOURNAL_UNBALANCED: payment=${paymentId}`);
+      }
+
+      if (raw.journal_status === "draft" && raw.canonical_journal_id != null) {
+        const promoted = await promoteCompleteCanonicalPaymentJournal(
+          paymentId,
+          Number(raw.canonical_journal_id),
+          gross,
+          revenue,
+          tax,
+        );
+        if (promoted) raw.journal_status = "posted";
+      }
+      if (raw.journal_status !== "posted" || raw.is_reversal === true) {
+        throw new Error(`CANONICAL_PAYMENT_JOURNAL_NOT_POSTED: payment=${paymentId}`);
       }
 
       const result = await db.transaction(async (tx) => {

@@ -152,39 +152,132 @@ router.get("/summary", async (req: any, res: any) => {
 router.get("/mutations", async (req: any, res: any) => {
   try {
     const companyId = req.user?.companyId ?? req.query.companyId;
-    const { accountId, startDate, endDate, limit = "50", offset = "0" } = req.query;
+    // The BizPortal page historically sent snake_case names while this route
+    // expected camelCase. Accept both so the page cannot silently render an
+    // empty table after a successful bank-sheet sync.
+    const accountId = req.query.accountId ?? req.query.account_id;
+    const startDate = req.query.startDate ?? req.query.from;
+    const endDate = req.query.endDate ?? req.query.to;
+    const { limit = "50", offset = "0" } = req.query;
 
-    if (!companyId || !accountId) {
-      return res.status(400).json({ error: "companyId dan accountId required" });
+    if (!companyId) {
+      return res.status(400).json({ error: "companyId required" });
     }
 
-    const rows = await db.execute(sql`
+    const parsedAccountId =
+      accountId != null && accountId !== "" && accountId !== "all"
+        ? Number(accountId)
+        : null;
+    if (parsedAccountId != null && (!Number.isInteger(parsedAccountId) || parsedAccountId <= 0)) {
+      return res.status(400).json({ error: "accountId tidak valid" });
+    }
+
+    const parsedLimit = Math.min(Math.max(Number(limit) || 50, 1), 500);
+    const parsedOffset = Math.max(Number(offset) || 0, 0);
+    const ledgerAccountFilter = parsedAccountId != null
+      ? sql`AND cba.id = ${parsedAccountId}`
+      : sql``;
+    const sheetAccountFilter = parsedAccountId != null
+      ? sql`AND bm.bank_account_id = ${parsedAccountId}`
+      : sql``;
+    const fromFilter = startDate ? sql`AND entry_date >= ${String(startDate)}::date` : sql``;
+    const toFilter = endDate ? sql`AND entry_date <= ${String(endDate)}::date` : sql``;
+
+    // Bank-sheet rows are source evidence and must remain visible before
+    // matching/posting. Once a row has a journal, suppress that one accounting
+    // line from this combined view to avoid displaying the same movement twice.
+    const result = await db.execute(sql`
+      WITH combined AS (
+        SELECT
+          ae.id::text || ':' || ael.id::text AS line_id,
+          ae.date::text AS entry_date,
+          ae.entry_number,
+          ae.ref,
+          ae.description AS entry_desc,
+          ael.description AS line_desc,
+          ae.source,
+          ae.source_module,
+          ael.debit,
+          ael.credit,
+          cba.name AS bank_account_name,
+          ae.date AS sort_date,
+          ae.id AS sort_id,
+          0 AS sort_source
+        FROM accounting_entry_lines ael
+        JOIN accounting_entries ae ON ae.id = ael.entry_id
+        JOIN company_bank_accounts cba ON cba.coa_id = ael.account_id
+        WHERE cba.company_id = ${Number(companyId)}
+          ${ledgerAccountFilter}
+          AND ae.status = 'posted'
+          AND NOT EXISTS (
+            SELECT 1
+            FROM bank_mutations bm
+            WHERE bm.journal_entry_id = ae.id
+              AND bm.bank_account_id = cba.id
+              AND bm.company_id = ${Number(companyId)}
+          )
+
+        UNION ALL
+
+        SELECT
+          'bank_mutation:' || bm.id::text AS line_id,
+          bm.transaction_date::text AS entry_date,
+          'BANK-' || bm.id::text AS entry_number,
+          bm.mutation_key AS ref,
+          bm.description AS entry_desc,
+          bm.description AS line_desc,
+          'bank_mutation' AS source,
+          'bank_reconciliation' AS source_module,
+          COALESCE(bm.debit_amount, 0) AS debit,
+          COALESCE(bm.credit_amount, 0) AS credit,
+          COALESCE(cba.name, bm.provider_name, 'Rekening belum dipetakan') AS bank_account_name,
+          bm.transaction_date AS sort_date,
+          bm.id AS sort_id,
+          1 AS sort_source
+        FROM bank_mutations bm
+        LEFT JOIN company_bank_accounts cba ON cba.id = bm.bank_account_id
+        WHERE bm.company_id = ${Number(companyId)}
+          ${sheetAccountFilter}
+      ),
+      dated AS (
+        SELECT *
+        FROM combined
+        WHERE 1 = 1
+          ${fromFilter}
+          ${toFilter}
+      ),
+      with_balance AS (
+        SELECT
+          dated.*,
+          SUM(COALESCE(dated.debit, 0) - COALESCE(dated.credit, 0)) OVER (
+            ORDER BY dated.sort_date, dated.sort_source, dated.sort_id
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+          ) AS running_balance,
+          COUNT(*) OVER () AS total_count
+        FROM dated
+      )
       SELECT
-        ae.date,
-        ae.entry_number,
-        ae.ref,
-        ae.description,
-        ae.source,
-        ae.source_module,
-        ael.debit,
-        ael.credit,
-        ael.description AS line_description,
-        SUM(ael.debit - ael.credit) OVER (
-          ORDER BY ae.date, ae.id
-          ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-        ) AS saldo_berjalan
-      FROM accounting_entry_lines ael
-      JOIN accounting_entries ae ON ae.id = ael.entry_id
-      JOIN company_bank_accounts cba ON cba.coa_id = ael.account_id
-      WHERE cba.id = ${Number(accountId)}
-        AND ae.status = 'posted'
-        AND (${startDate ? sql`ae.date >= ${startDate}::date` : sql`TRUE`})
-        AND (${endDate ? sql`ae.date <= ${endDate}::date` : sql`TRUE`})
-      ORDER BY ae.date DESC, ae.id DESC
-      LIMIT ${Number(limit)} OFFSET ${Number(offset)}
+        line_id,
+        entry_date,
+        entry_number,
+        ref,
+        entry_desc,
+        line_desc,
+        source,
+        source_module,
+        debit,
+        credit,
+        bank_account_name,
+        running_balance,
+        total_count
+      FROM with_balance
+      ORDER BY sort_date DESC, sort_source DESC, sort_id DESC
+      LIMIT ${parsedLimit} OFFSET ${parsedOffset}
     `);
 
-    res.json({ data: rows.rows });
+    const rows = result.rows as Array<Record<string, unknown>>;
+    const total = rows.length > 0 ? Number(rows[0].total_count ?? 0) : 0;
+    res.json({ data: rows.map(({ total_count: _totalCount, ...row }) => row), total });
   } catch (err: any) {
     logger.error({ err }, "[kasBank] GET mutations error");
     res.status(500).json({ error: err.message });

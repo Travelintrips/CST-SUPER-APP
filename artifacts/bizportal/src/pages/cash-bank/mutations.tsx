@@ -24,16 +24,18 @@ export default function CashBankMutations() {
     if (!activeCompanyId) return;
     setLoading(true);
     const params = new URLSearchParams({ companyId: String(activeCompanyId), limit: "100" });
-    if (accountId !== "all") params.append("account_id", accountId);
-    if (from) params.append("from", from);
-    if (to) params.append("to", to);
+    if (accountId !== "all") params.append("accountId", accountId);
+    if (from) params.append("startDate", from);
+    if (to) params.append("endDate", to);
 
     const [mutR, accR] = await Promise.all([
-      fetch(`${API}/cash-bank/mutations?${params}`, { credentials: "include" }).then(r => r.json()),
+      fetch(`${API}/cash-bank/mutations?${params}`, { credentials: "include" }),
       fetch(`${API}/cash-bank/accounts?companyId=${activeCompanyId}`, { credentials: "include" }).then(r => r.json()),
     ]);
-    setMutations(mutR.data ?? []);
-    setTotal(mutR.total ?? 0);
+    const mutationBody = await mutR.json();
+    if (!mutR.ok) throw new Error(mutationBody.error ?? "Gagal memuat mutasi");
+    setMutations(mutationBody.data ?? []);
+    setTotal(mutationBody.total ?? 0);
     setAccounts(accR.data ?? []);
     setLoading(false);
   }, [activeCompanyId, accountId, from, to]);

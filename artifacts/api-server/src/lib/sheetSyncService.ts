@@ -388,6 +388,8 @@ interface SheetConfig {
 export async function syncOneConfig(cfg: SheetConfig): Promise<{
   imported: number;
   total: number;
+  parsed: number;
+  existing: number;
 }> {
   const { id: configId, company_id, sheet_id: sheetId, tab_name: tabName, label } = cfg;
   const syncStartMs = Date.now();
@@ -414,7 +416,7 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
       SET last_sync_status = 'ok', last_sync_error = NULL, last_synced_at = NOW(), updated_at = NOW()
       WHERE id = ${configId}
     `)).catch(() => {});
-    return { imported: 0, total: 0 };
+    return { imported: 0, total: rows.length > 0 ? rows.length - 1 : 0, parsed: 0, existing: 0 };
   }
 
   const { mutationKeyIdx, statusIdx, scoreIdx, resultIdx, lastSyncIdx, namaIdx, referensiIdx, kategoriIdx, perusahaanIdx, fasilitasIdx } =
@@ -440,7 +442,6 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
       if (r.canonical_key) existingKeys.add(r.canonical_key);
     }
   }
-
   // Resolve all possible destination accounts once. The previous per-row
   // probe held the single development pool in a 46-row serial loop.
   const accountNumbers: Array<{ id: number; digits: string }> = [];
@@ -791,7 +792,12 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
   // Update revenue summary tab (non-fatal)
   await updateRevenueSummaryTab(sheetId, company_id ?? null);
 
-  return { imported: newMutations.length, total: parsed.length };
+  return {
+    imported: newMutations.length,
+    total: rows.length - 1,
+    parsed: parsed.length,
+    existing: Math.max(0, parsed.length - newMutations.length),
+  };
 }
 
 // ── Revenue Summary Tab ────────────────────────────────────────────────────────
