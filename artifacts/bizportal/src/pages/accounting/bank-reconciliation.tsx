@@ -3775,7 +3775,14 @@ export default function BankReconciliationPage() {
       return r.json();
     },
     onSuccess: (d) => {
-      toast({ title: `AI Matching selesai: ${d.processed} mutasi diproses` });
+      toast({
+        title: d.queued
+          ? "AI Matching sedang berjalan di background"
+          : `AI Matching selesai: ${d.processed} mutasi diproses`,
+        description: d.queued
+          ? "Kandidat QRIS akan dicari otomatis setelah permintaan ini diterima."
+          : undefined,
+      });
       invalidate();
       // AI Matching creates generic reconciliation matches. QRIS batch
       // candidates are a separate persisted review contract, so refresh them
