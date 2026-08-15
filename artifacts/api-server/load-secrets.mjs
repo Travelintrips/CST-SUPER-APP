@@ -244,10 +244,19 @@ export function injectSecrets(payload, appEnv, legacyMode, target) {
       );
     }
     if (!payloadEnv) {
-      // Bundle lacks APP_ENV field — warn but continue (supports bundles created before this requirement)
+      if (process.env.SCHEMA_SYNC_REQUIRE_BUNDLE_ENV === "1") {
+        throw new Error(
+          `Bundle is missing required APP_ENV metadata for schema sync runtime "${appEnv}".\n` +
+            "  Add APP_ENV=development or APP_ENV=production to the environment-specific bundle.\n" +
+            "  Schema sync aborted to prevent cross-environment contamination."
+        );
+      }
+      // Keep backward compatibility for existing application bundles created
+      // before APP_ENV metadata was added. Schema sync enables the strict mode
+      // above through its isolated child-process environment.
       console.warn(
         "[load-secrets] WARN: Bundle does not contain APP_ENV field.\n" +
-        "  Add APP_ENV to the bundle payload to enable cross-verification."
+          "  Add APP_ENV to the bundle payload to enable cross-verification."
       );
     }
 

@@ -257,6 +257,17 @@ describe("Test 9: Bundle APP_ENV mismatch → fail", () => {
       injectSecrets({ APP_ENV: "development", SESSION_SECRET: "x" }, "production", false, {})
     ).toThrow(/Bundle environment mismatch/);
   });
+
+  it("warns but continues when an application bundle omits APP_ENV", () => {
+    expect(() =>
+      injectSecrets(
+        { SESSION_SECRET: "x", SUPABASE_DATABASE_URL: "postgres://host/db" },
+        "production",
+        false,
+        {}
+      )
+    ).not.toThrow();
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -34,8 +34,8 @@ echo "[2/4] Applying DB migrations..."
 node scripts/apply-migrations.mjs
 
 # Report schema drift only. Production changes must be explicitly reviewed and
-# applied through scripts/sync-schema-additive.mjs --apply with both runtime
-# Supabase targets resolved by the official secret loader.
+# applied through scripts/run-sync-schema-additive.mjs --apply, which loads
+# development and production bundles separately through the official loader.
 echo "[3/4] Reporting schema drift dev→prod (read-only)..."
 node scripts/sync-schema-dev-to-prod.mjs || echo "[post-merge] schema report skipped/warning — lihat output di atas."
 

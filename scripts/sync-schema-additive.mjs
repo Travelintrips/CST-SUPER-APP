@@ -16,24 +16,62 @@
  */
 
 import pg from "pg";
+import fs from "node:fs/promises";
 
 const { Client } = pg;
-const applyMode = process.argv.includes("--apply");
+const args = process.argv.slice(2);
+const applyMode = args.includes("--apply");
 
-const DEV_URL = process.env.SUPABASE_DATABASE_URL_DEV;
-const PROD_URL = process.env.SUPABASE_DATABASE_URL;
+function flagValue(flag) {
+  const index = args.indexOf(flag);
+  return index >= 0 ? args[index + 1] : undefined;
+}
 
-if (!DEV_URL || !PROD_URL) {
+const snapshotWritePath = flagValue("--write-dev-snapshot");
+const snapshotReadPath = flagValue("--from-dev-snapshot");
+const directMode = !snapshotWritePath && !snapshotReadPath;
+const DEV_URL = directMode ? process.env.SUPABASE_DATABASE_URL_DEV : null;
+const PROD_URL = directMode
+  ? process.env.SUPABASE_DATABASE_URL
+  : process.env.SUPABASE_DATABASE_URL;
+
+if (snapshotWritePath && snapshotReadPath) {
+  throw new Error("Snapshot write and snapshot read modes cannot be combined.");
+}
+if (directMode && (!DEV_URL || !PROD_URL)) {
   throw new Error(
-    "Both SUPABASE_DATABASE_URL_DEV and SUPABASE_DATABASE_URL are required.",
+    "Direct mode requires both SUPABASE_DATABASE_URL_DEV and SUPABASE_DATABASE_URL. " +
+      "Use scripts/run-sync-schema-additive.mjs with the official loader for separate environment bundles.",
   );
 }
-if (DEV_URL === PROD_URL) {
+if (snapshotWritePath && (!PROD_URL || process.env.APP_ENV !== "development")) {
+  throw new Error(
+    "--write-dev-snapshot requires APP_ENV=development and the canonical development database URL.",
+  );
+}
+if (snapshotReadPath && (!PROD_URL || process.env.APP_ENV !== "production")) {
+  throw new Error(
+    "--from-dev-snapshot requires APP_ENV=production and the canonical production database URL.",
+  );
+}
+if (applyMode && process.env.APP_ENV !== "production") {
+  throw new Error("Schema apply is only allowed with APP_ENV=production.");
+}
+if (directMode && DEV_URL === PROD_URL) {
   throw new Error("Development and production URLs are identical; aborting.");
 }
 
 const IDENTIFIER = /^[a-zA-Z_][a-zA-Z0-9_$]*$/;
 const PROMOTED_SCHEMAS = new Set(["public", "sport_center"]);
+const EXCLUDED_TABLE_NAME = /(^|_)(ai|menu|uat)(_|$)/i;
+const ALLOWED_ACTIONS = new Set([
+  "columns",
+  "functions",
+  "triggers",
+  "views",
+  "enums",
+  "policies",
+]);
 
 function quoteIdent(value) {
   if (!IDENTIFIER.test(value)) {
@@ -64,11 +102,17 @@ const QUERY = {
       c.is_generated,
       c.is_identity,
       c.identity_generation,
-      format_type(a.atttypid, a.atttypmod) AS formatted_type
+      format_type(a.atttypid, a.atttypmod) AS formatted_type,
+      COALESCE(element_type.typname, column_type.typname) AS udt_name,
+      COALESCE(element_schema.nspname, type_schema.nspname) AS udt_schema
     FROM information_schema.columns c
     JOIN pg_namespace n ON n.nspname = c.table_schema
     JOIN pg_class t ON t.relnamespace = n.oid AND t.relname = c.table_name
     JOIN pg_attribute a ON a.attrelid = t.oid AND a.attname = c.column_name
+    JOIN pg_type column_type ON column_type.oid = a.atttypid
+    JOIN pg_namespace type_schema ON type_schema.oid = column_type.typnamespace
+    LEFT JOIN pg_type element_type ON element_type.oid = column_type.typelem
+    LEFT JOIN pg_namespace element_schema ON element_schema.oid = element_type.typnamespace
     WHERE c.table_schema NOT IN ('pg_catalog', 'information_schema')
     ORDER BY 1, 2, a.attnum
   `,
@@ -235,8 +279,142 @@ function policySql(row) {
   return `${parts.join(" ")};`;
 }
 
+function isPromotedTable(schema, table) {
+  return PROMOTED_SCHEMAS.has(schema) && !EXCLUDED_TABLE_NAME.test(table);
+}
+
+function isExcludedObjectName(name) {
+  return EXCLUDED_TABLE_NAME.test(name);
+}
+
+function definitionReferencesExcludedTable(definition, schemaRows) {
+  const text = String(definition ?? "").toLowerCase();
+  return schemaRows.some((row) => {
+    if (!EXCLUDED_TABLE_NAME.test(row.table_name)) return false;
+    const escaped = row.table_name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(^|[^a-z0-9_$])${escaped}([^a-z0-9_$]|$)`, "i").test(
+      text,
+    );
+  });
+}
+
+function schemaDiff(snapshot, production) {
+  const columns = diffRows(snapshot.columns, production.columns, columnKey);
+  const functions = diffRows(
+    snapshot.functions,
+    production.functions,
+    functionKey,
+  );
+  const triggers = diffRows(
+    snapshot.triggers,
+    production.triggers,
+    triggerKey,
+  );
+  const views = diffRows(snapshot.views, production.views, viewKey);
+  const policies = diffRows(
+    snapshot.policies,
+    production.policies,
+    policyKey,
+  );
+
+  const devRls = new Map(
+    snapshot.rls.map((row) => [`${row.schema_name}.${row.table_name}`, row]),
+  );
+  const prodRls = new Map(
+    production.rls.map((row) => [`${row.schema_name}.${row.table_name}`, row]),
+  );
+  const devEnums = new Map();
+  for (const row of snapshot.enums) {
+    const key = enumKey(row);
+    if (!devEnums.has(key)) devEnums.set(key, []);
+    devEnums.get(key).push(row.enumlabel);
+  }
+  const prodEnums = new Map();
+  for (const row of production.enums) {
+    const key = enumKey(row);
+    if (!prodEnums.has(key)) prodEnums.set(key, []);
+    prodEnums.get(key).push(row.enumlabel);
+  }
+  const enumChanges = [];
+  for (const [key, values] of devEnums) {
+    const current = new Set(prodEnums.get(key) ?? []);
+    const [schema, name] = key.split(".");
+    const missingValues = values.filter((value) => !current.has(value));
+    if (missingValues.length || !prodEnums.has(key)) {
+      enumChanges.push({ key, schema, name, values, missingValues });
+    }
+  }
+
+  const promotedColumns = columns.missing.filter((key) => {
+    const row = columns.devMap.get(key);
+    return isPromotedTable(row.schema_name, row.table_name);
+  });
+  const promotedFunctions = functions.missing.filter((key) => {
+    const row = functions.devMap.get(key);
+    return (
+      PROMOTED_SCHEMAS.has(row.schema_name) &&
+      !isExcludedObjectName(row.name) &&
+      !definitionReferencesExcludedTable(row.definition, snapshot.columns)
+    );
+  });
+  const promotedTriggers = triggers.missing.filter((key) => {
+    const row = triggers.devMap.get(key);
+    return isPromotedTable(row.schema_name, row.table_name);
+  });
+  const promotedViews = views.missing.filter((key) => {
+    const row = views.devMap.get(key);
+    return (
+      PROMOTED_SCHEMAS.has(row.schema_name) &&
+      !isExcludedObjectName(row.name) &&
+      !definitionReferencesExcludedTable(row.definition, snapshot.columns)
+    );
+  });
+  const promotedPolicies = policies.missing.filter((key) => {
+    const row = policies.devMap.get(key);
+    return isPromotedTable(row.schema_name, row.table_name);
+  });
+  const promotedEnumChanges = enumChanges.filter((change) => {
+    if (!PROMOTED_SCHEMAS.has(change.schema) || isExcludedObjectName(change.name)) {
+      return false;
+    }
+    return snapshot.columns.some(
+      (row) =>
+        row.schema_name === change.schema &&
+        row.udt_schema === change.schema &&
+        row.udt_name === change.name &&
+        isPromotedTable(row.schema_name, row.table_name),
+    );
+  });
+
+  const rlsCandidates = [];
+  for (const [key, row] of devRls) {
+    if (!isPromotedTable(row.schema_name, row.table_name)) continue;
+    const target = prodRls.get(key);
+    if (row.rls_enabled && !target?.rls_enabled) rlsCandidates.push(key);
+  }
+
+  return {
+    columns,
+    functions,
+    triggers,
+    views,
+    policies,
+    devRls,
+    prodRls,
+    enumChanges,
+    promotedColumns,
+    promotedFunctions,
+    promotedTriggers,
+    promotedViews,
+    promotedPolicies,
+    promotedEnumChanges,
+    rlsCandidates,
+  };
+}
+
+let savepointCounter = 0;
 async function tryAdditive(client, label, operation) {
-  const savepoint = `sp_${Math.random().toString(36).slice(2, 10)}`;
+  const savepoint = `schema_sync_sp_${++savepointCounter}`;
   await client.query(`SAVEPOINT ${savepoint}`);
   try {
     await operation();
@@ -244,99 +422,128 @@ async function tryAdditive(client, label, operation) {
     console.log(`  + ${label}`);
     return true;
   } catch (error) {
-    await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
-    await client.query(`RELEASE SAVEPOINT ${savepoint}`);
-    console.log(`  ! skipped ${label}: ${error.message.slice(0, 180)}`);
-    return false;
+    try {
+      await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+      await client.query(`RELEASE SAVEPOINT ${savepoint}`);
+    } catch (rollbackError) {
+      throw new Error(
+        `${label} failed and savepoint rollback also failed: ${error.message}; ` +
+          `rollback: ${rollbackError.message}`,
+      );
+    }
+    throw new Error(`${label} failed: ${error.message}`);
   }
+}
+
+async function writeDevelopmentSnapshot(path) {
+  const client = await connect(PROD_URL);
+  try {
+    const schema = await collect(client);
+    const identity = await connectionIdentity(client);
+    await fs.writeFile(
+      path,
+      JSON.stringify({ formatVersion: 1, identity, schema }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+    console.log(`Development schema snapshot written: ${path}`);
+  } finally {
+    await client.end();
+  }
+}
+
+async function readDevelopmentSnapshot(path) {
+  const raw = await fs.readFile(path, "utf8");
+  const snapshot = JSON.parse(raw);
+  if (
+    snapshot?.formatVersion !== 1 ||
+    !snapshot.identity ||
+    !snapshot.schema?.columns ||
+    !snapshot.schema?.functions ||
+    !snapshot.schema?.triggers ||
+    !snapshot.schema?.views ||
+    !snapshot.schema?.enums ||
+    !snapshot.schema?.policies ||
+    !snapshot.schema?.rls
+  ) {
+    throw new Error("Invalid or incomplete development schema snapshot.");
+  }
+  return snapshot;
+}
+
+async function connectionIdentity(client) {
+  const { rows } = await client.query(
+    "SELECT current_database() AS database_name, current_user AS user_name, " +
+      "inet_server_addr()::text AS server_address, inet_server_port() AS server_port",
+  );
+  const row = rows[0];
+  return [
+    row.database_name,
+    row.user_name,
+    row.server_address,
+    row.server_port,
+  ].join("|");
 }
 
 async function run() {
   console.log("=== additive schema reconciliation ===");
-  console.log(`  DEV : ${maskUrl(DEV_URL)}`);
+  if (snapshotWritePath) {
+    await writeDevelopmentSnapshot(snapshotWritePath);
+    return;
+  }
+
+  console.log(`  DEV : ${snapshotReadPath ? "temporary schema snapshot" : maskUrl(DEV_URL)}`);
   console.log(`  PROD: ${maskUrl(PROD_URL)}`);
   console.log(`  Mode: ${applyMode ? "APPLY" : "REPORT"}\n`);
 
-  const [dev, prod] = await Promise.all([connect(DEV_URL), connect(PROD_URL)]);
+  let dev = null;
+  let prod = null;
   try {
-    const [devSchema, prodSchema] = await Promise.all([
-      collect(dev),
-      collect(prod),
-    ]);
-
-    const columns = diffRows(
-      devSchema.columns,
-      prodSchema.columns,
-      columnKey,
-    );
-    const functions = diffRows(
-      devSchema.functions,
-      prodSchema.functions,
-      functionKey,
-    );
-    const triggers = diffRows(
-      devSchema.triggers,
-      prodSchema.triggers,
-      triggerKey,
-    );
-    const views = diffRows(devSchema.views, prodSchema.views, viewKey);
-    const policies = diffRows(
-      devSchema.policies,
-      prodSchema.policies,
-      policyKey,
-    );
-    const devRls = new Map(
-      devSchema.rls.map((row) => [
-        `${row.schema_name}.${row.table_name}`,
-        row,
-      ]),
-    );
-    const prodRls = new Map(
-      prodSchema.rls.map((row) => [
-        `${row.schema_name}.${row.table_name}`,
-        row,
-      ]),
-    );
-    const devEnums = new Map();
-    for (const row of devSchema.enums) {
-      const key = enumKey(row);
-      if (!devEnums.has(key)) devEnums.set(key, []);
-      devEnums.get(key).push(row.enumlabel);
-    }
-    const prodEnums = new Map();
-    for (const row of prodSchema.enums) {
-      const key = enumKey(row);
-      if (!prodEnums.has(key)) prodEnums.set(key, []);
-      prodEnums.get(key).push(row.enumlabel);
-    }
-    const enumChanges = [];
-    for (const [key, values] of devEnums) {
-      const current = new Set(prodEnums.get(key) ?? []);
-      const [schema, name] = key.split(".");
-      const missingValues = values.filter((value) => !current.has(value));
-      if (missingValues.length || !prodEnums.has(key)) {
-        enumChanges.push({ key, schema, name, values, missingValues });
+    let devSchema;
+    let prodSchema;
+    if (snapshotReadPath) {
+      const snapshot = await readDevelopmentSnapshot(snapshotReadPath);
+      devSchema = snapshot.schema;
+      prod = await connect(PROD_URL);
+      const prodIdentity = await connectionIdentity(prod);
+      if (prodIdentity === snapshot.identity) {
+        throw new Error(
+          "Development snapshot and production target have the same database identity; aborting.",
+        );
       }
+      prodSchema = await collect(prod);
+    } else {
+      [dev, prod] = await Promise.all([connect(DEV_URL), connect(PROD_URL)]);
+      const [devIdentity, prodIdentity] = await Promise.all([
+        connectionIdentity(dev),
+        connectionIdentity(prod),
+      ]);
+      if (devIdentity === prodIdentity) {
+        throw new Error(
+          "Development and production connections resolve to the same database identity; aborting.",
+        );
+      }
+      [devSchema, prodSchema] = await Promise.all([
+        collect(dev),
+        collect(prod),
+      ]);
     }
 
-    const promotedColumns = columns.missing.filter((key) =>
-      PROMOTED_SCHEMAS.has(columns.devMap.get(key).schema_name),
-    );
-    const promotedFunctions = functions.missing.filter((key) =>
-      PROMOTED_SCHEMAS.has(functions.devMap.get(key).schema_name),
-    );
-    const promotedTriggers = triggers.missing.filter((key) =>
-      PROMOTED_SCHEMAS.has(triggers.devMap.get(key).schema_name),
-    );
-    const promotedViews = views.missing.filter((key) =>
-      PROMOTED_SCHEMAS.has(views.devMap.get(key).schema_name),
-    );
-    const promotedPolicies = policies.missing.filter((key) =>
-      PROMOTED_SCHEMAS.has(policies.devMap.get(key).schema_name),
-    );
-    const promotedEnumChanges = enumChanges.filter((change) =>
-      PROMOTED_SCHEMAS.has(change.schema),
-    );
+    const diff = schemaDiff(devSchema, prodSchema);
+    const {
+      columns,
+      functions,
+      triggers,
+      views,
+      policies,
+      devRls,
+      promotedColumns,
+      promotedFunctions,
+      promotedTriggers,
+      promotedViews,
+      promotedPolicies,
+      promotedEnumChanges,
+      rlsCandidates,
+    } = diff;
 
     const report = {
       columns: promotedColumns.length,
@@ -345,26 +552,14 @@ async function run() {
       views: promotedViews.length,
       enumTypesOrValues: promotedEnumChanges.length,
       policies: promotedPolicies.length,
-      rlsTablesWithPolicyPlan: 0,
-      skippedRlsTables: [],
+      rlsCandidates: rlsCandidates.length,
+      excludedColumns: columns.missing.length - promotedColumns.length,
+      excludedFunctions: functions.missing.length - promotedFunctions.length,
+      excludedTriggers: triggers.missing.length - promotedTriggers.length,
+      excludedViews: views.missing.length - promotedViews.length,
+      excludedPolicies: policies.missing.length - promotedPolicies.length,
+      excludedEnumChanges: diff.enumChanges.length - promotedEnumChanges.length,
     };
-
-    // Only enable RLS where the target will have at least one policy. Enabling
-    // RLS without policies is fail-closed and can lock the API out entirely.
-    const policyTables = new Set([
-      ...prodSchema.policies.map(
-        (row) => `${row.schema_name}.${row.table_name}`,
-      ),
-      ...promotedPolicies.map((key) => key.split(".").slice(0, 2).join(".")),
-    ]);
-    for (const [key, row] of devRls) {
-      if (!PROMOTED_SCHEMAS.has(row.schema_name)) continue;
-      const target = prodRls.get(key);
-      if (row.rls_enabled && !target?.rls_enabled) {
-        if (policyTables.has(key)) report.rlsTablesWithPolicyPlan++;
-        else report.skippedRlsTables.push(key);
-      }
-    }
 
     console.log(`Promoted columns     : ${report.columns}`);
     console.log(`Promoted functions   : ${report.functions}`);
@@ -372,8 +567,16 @@ async function run() {
     console.log(`Promoted views       : ${report.views}`);
     console.log(`Promoted enum changes: ${report.enumTypesOrValues}`);
     console.log(`Promoted policies    : ${report.policies}`);
-    console.log(`RLS enable candidates: ${report.rlsTablesWithPolicyPlan}`);
-    console.log(`RLS skipped (no policy): ${report.skippedRlsTables.length}`);
+    console.log(`RLS candidates (not allowed): ${report.rlsCandidates}`);
+    console.log(
+      `Scope-excluded objects: ${report.excludedColumns} columns, ` +
+        `${report.excludedFunctions} functions, ${report.excludedTriggers} triggers, ` +
+        `${report.excludedViews} views, ${report.excludedEnumChanges} enums, ` +
+        `${report.excludedPolicies} policies`,
+    );
+    console.log(
+      `Allowed actions: ${[...ALLOWED_ACTIONS].join(", ")}; RLS/other DDL: blocked`,
+    );
 
     if (!applyMode) {
       console.log("\nREPORT ONLY — rerun with --apply to execute additive changes.");
@@ -474,20 +677,6 @@ async function run() {
         );
       }
 
-      for (const [key, row] of devRls) {
-        if (!PROMOTED_SCHEMAS.has(row.schema_name)) continue;
-        const target = prodRls.get(key);
-        if (!row.rls_enabled || target?.rls_enabled || !policyTables.has(key)) {
-          continue;
-        }
-        const [schema, table] = key.split(".");
-        await tryAdditive(prod, `enable RLS ${key}`, () =>
-          prod.query(
-            `ALTER TABLE ${qualified(schema, table)} ENABLE ROW LEVEL SECURITY`,
-          ),
-        );
-      }
-
       await prod.query("COMMIT");
       console.log("\n✅ Additive schema reconciliation committed.");
       console.log(
@@ -498,7 +687,10 @@ async function run() {
       throw error;
     }
   } finally {
-    await Promise.allSettled([dev.end(), prod.end()]);
+    await Promise.allSettled([
+      dev?.end(),
+      prod?.end(),
+    ]);
   }
 }
 
