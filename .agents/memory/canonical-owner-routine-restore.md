@@ -18,3 +18,15 @@ unit tests pass.
 credentials. If the shell cannot see the bootstrap credential, do not work
 around the loader or copy DEV objects to PROD; report the live proof as blocked
 until the managed credential is available.
+
+The environment-specific bundles can supply the DEV and PROD database targets
+without exposing direct URLs in the shell. The canonical preflight reports the
+six routines as structural PASS in both environments, but exits with status 2
+while its separately documented reconciliation contract gates remain BLOCKED.
+
+**Why:** A routine catalog proof and implementation readiness are distinct
+claims; treating the preflight's overall exit code as routine absence would
+misclassify a successful live catalog check.
+
+**How to apply:** Run the preflight through `load-secrets.mjs`, record the
+individual routine results, and report the contract-gate blockers separately.
