@@ -73,7 +73,10 @@ import { buildAllocationPlan, getCompanyAllocationStrategy, applyAllocationPlan 
 import { resolveCompanyId } from "../lib/resolveCompany.js";
 import { runQrisSettlementMigration } from "../lib/reconciliation/qrisSettlementMigration.js";
 import { isQrisSettlementDescription } from "../lib/reconciliation/qrisSettlement.js";
-import { normalizeQrisProvider } from "../lib/reconciliation/providerSettlementRules.js";
+import {
+  areQrisProvidersCompatible,
+  normalizeQrisProvider,
+} from "../lib/reconciliation/providerSettlementRules.js";
 import {
   generateQrisCandidates,
   listQrisCandidates,
@@ -2149,12 +2152,32 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
         });
       }
       if (
-        row.bank_company_id != null
-        && Number(row.bank_company_id) !== companyId
+        row.bank_company_id == null
+        || Number(row.bank_company_id) !== companyId
       ) {
         throw Object.assign(new Error("Mutasi bank bukan milik company aktif"), {
           code: "INVALID_CANDIDATE",
         });
+      }
+      const candidateProvider = normalizeQrisProvider(row.provider_code == null
+        ? null
+        : String(row.provider_code));
+      const mutationProvider = normalizeQrisProvider(
+        row.bank_provider_name == null
+          ? String(row.bank_description ?? "")
+          : String(row.bank_provider_name),
+      );
+      if (candidateProvider === "unknown" || mutationProvider === "unknown") {
+        throw Object.assign(
+          new Error("Provider payment dan mutasi wajib tersedia untuk approval QRIS"),
+          { code: "INVALID_CANDIDATE" },
+        );
+      }
+      if (!areQrisProvidersCompatible(candidateProvider, mutationProvider)) {
+        throw Object.assign(
+          new Error("Provider payment tidak cocok dengan provider mutasi bank"),
+          { code: "INVALID_CANDIDATE" },
+        );
       }
 
       let rawItems: unknown;
@@ -2193,7 +2216,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       }
 
       const { rows: livePaymentRows } = await tx.execute(sql.raw(`
-        SELECT id, amount
+        SELECT id, amount, company_id, payment_provider, payment_method
         FROM sport_center.sport_payments
         WHERE id IN (${candidatePaymentIds.join(",")})
         FOR SHARE
@@ -2229,6 +2252,39 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       const selectedPaymentItems = paymentItems.filter((item) =>
         selectedIds.includes(item.paymentId),
       );
+      const selectedLivePayments = (livePaymentRows as Array<Record<string, unknown>>)
+        .filter((item) => selectedIds.includes(Number(item.id)));
+      if (selectedLivePayments.length !== selectedIds.length) {
+        throw Object.assign(
+          new Error("Payment canonical pada kandidat tidak ditemukan"),
+          { code: "INVALID_CANDIDATE" },
+        );
+      }
+      for (const payment of selectedLivePayments) {
+        if (payment.company_id == null || Number(payment.company_id) !== companyId) {
+          throw Object.assign(
+            new Error("Company payment tidak cocok dengan company mutasi bank"),
+            { code: "INVALID_CANDIDATE" },
+          );
+        }
+        const paymentProvider = normalizeQrisProvider(
+          payment.payment_provider == null
+            ? null
+            : String(payment.payment_provider),
+        );
+        if (paymentProvider === "unknown") {
+          throw Object.assign(
+            new Error("Provider payment wajib tersedia untuk approval QRIS"),
+            { code: "INVALID_CANDIDATE" },
+          );
+        }
+        if (!areQrisProvidersCompatible(paymentProvider, mutationProvider)) {
+          throw Object.assign(
+            new Error("Provider payment tidak cocok dengan provider mutasi bank"),
+            { code: "INVALID_CANDIDATE" },
+          );
+        }
+      }
 
       const freshness = checkQrisCandidateFreshness({
         candidateId,

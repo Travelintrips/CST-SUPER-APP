@@ -7,23 +7,10 @@ import {
 import {
   DEFAULT_QRIS_PROVIDER_RULES,
   normalizeQrisProvider,
+  areQrisProvidersCompatible,
   type QrisProviderCode,
   type QrisProviderRule,
 } from "./providerSettlementRules.js";
-
-// When the payment system uses one provider label (e.g. sport center tracks
-// "mandiri_direct") but the bank statement carries a different label for the
-// same underlying network (e.g. GPN prints "QRTRAVELI" → "gpn_qris"), the two
-// sides still represent the same settlement.  List each bank-statement
-// provider alongside the payment-side providers that should be considered
-// compatible with it.
-//
-// Mandiri QRIS transactions settle via Indonesia's GPN network.  The bank
-// prints them as QRTRAVELI/QRGPN, which normalise to "gpn_qris", while the
-// sport-center payment provider field stores "mandiri_direct".
-const CROSS_PROVIDER_COMPATIBLE: Partial<Record<QrisProviderCode, QrisProviderCode[]>> = {
-  gpn_qris: ["mandiri_direct"],
-};
 import { businessDayDistance } from "./businessCalendar.js";
 
 export type QrisReconciliationStatus = "MATCHED" | "REVIEW" | "UNMATCHED";
@@ -211,18 +198,10 @@ function sameNaturalBatch(
   holidays: Iterable<string>,
   matchWindowBusinessDays: number,
 ): boolean {
-  const paymentProvider = normalizeQrisProvider(payment.providerName);
-  // Provider compatibility rules:
-  // 1. Exact match.
-  // 2. Unknown payment provider is treated as compatible with any known
-  //    mutation provider (legacy/untracked sport-center data).
-  // 3. Cross-network compatibility: some payment-side labels (e.g.
-  //    "mandiri_direct") map to the same underlying settlement network as a
-  //    different bank-statement label (e.g. "gpn_qris" = QRTRAVELI/GPN).
-  const crossCompat = CROSS_PROVIDER_COMPATIBLE[providerCode] ?? [];
-  const providerCompatible = paymentProvider === providerCode
-    || paymentProvider === "unknown"
-    || crossCompat.includes(paymentProvider as QrisProviderCode);
+  const providerCompatible = areQrisProvidersCompatible(
+    payment.providerName,
+    providerCode,
+  );
   return payment.companyId === mutation.companyId
     && payment.bankAccountId != null
     && mutation.bankAccountId != null

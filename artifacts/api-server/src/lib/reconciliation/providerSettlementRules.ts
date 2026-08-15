@@ -84,6 +84,22 @@ export function normalizeQrisProvider(value: string | null | undefined): QrisPro
   return "unknown";
 }
 
+/**
+ * Provider identity is required for an automatic reconciliation. The only
+ * intentional cross-label mapping is Mandiri's payment-side provider label
+ * settling through the GPN label used by some bank statements.
+ */
+export function areQrisProvidersCompatible(
+  paymentProvider: string | null | undefined,
+  mutationProvider: string | null | undefined,
+): boolean {
+  const payment = normalizeQrisProvider(paymentProvider);
+  const mutation = normalizeQrisProvider(mutationProvider);
+  if (payment === "unknown" || mutation === "unknown") return false;
+  return payment === mutation
+    || (payment === "mandiri_direct" && mutation === "gpn_qris");
+}
+
 export function classifyProviderFromBankEvidence(
   providerName: string | null | undefined,
   description: string | null | undefined,

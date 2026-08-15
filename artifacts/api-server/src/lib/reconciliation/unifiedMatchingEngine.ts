@@ -21,7 +21,10 @@ import { captureFailedJob } from "../financial/failedJobSystem.js";
 import { classifyMutationDescription, persistClassification } from "../expenseClassificationService.js";
 import { postEntryWithClient, type DbClient, type PostingLine } from "../accounting.js";
 import { normalizeDescription } from "../bankDescriptionNormalizer.js";
-import { normalizeQrisProvider } from "./providerSettlementRules.js";
+import {
+  areQrisProvidersCompatible,
+  normalizeQrisProvider,
+} from "./providerSettlementRules.js";
 import { JournalMappingError } from "../journalMappingErrors.js";
 import {
   resolveJournalForEconomicEvent,
@@ -460,23 +463,36 @@ export function scoreUnified(
   let score = 0;
   const reason: string[] = [];
 
-  // Canonical Sport Center settlements are company/account scoped. A
-  // structured mismatch must never be overridden by an exact amount.
+  // QRIS candidates are company/provider scoped. A mismatch or missing
+  // identity must never be overridden by an exact amount.
+  const requiresQrisIdentity =
+    cand.type === "qris_settlement" || cand.type === "sport_payment";
   const companyMismatch =
-    cand.company_id != null &&
-    mutation.company_id != null &&
-    Number(cand.company_id) !== Number(mutation.company_id);
+    requiresQrisIdentity &&
+    (
+      cand.company_id == null ||
+      mutation.company_id == null ||
+      Number(cand.company_id) !== Number(mutation.company_id)
+    );
   const bankAccountMismatch =
     cand.bank_account_id != null &&
     mutation.bank_account_id != null &&
     Number(cand.bank_account_id) !== Number(mutation.bank_account_id);
+  const candidateProviderCode = normalizeQrisProvider(cand.provider_code);
+  const candidateProviderName = normalizeQrisProvider(cand.provider_name);
+  const mutationProvider =
+    normalizeQrisProvider(mutation.provider_name) !== "unknown"
+      ? normalizeQrisProvider(mutation.provider_name)
+      : normalizeQrisProvider(mutation.normalized_description);
+  const candidateProvider =
+    candidateProviderCode !== "unknown" ? candidateProviderCode : candidateProviderName;
   const providerMismatch =
-    cand.candidateSource === CANONICAL_SETTLEMENT_SOURCE &&
-    !!cand.provider_code &&
-    !!mutation.provider_name &&
-    !!cand.provider_name &&
-    normalizeQrisProvider(cand.provider_code) !== normalizeQrisProvider(mutation.provider_name) &&
-    normalizeQrisProvider(cand.provider_name) !== normalizeQrisProvider(mutation.provider_name);
+    requiresQrisIdentity &&
+    (
+      candidateProvider === "unknown" ||
+      mutationProvider === "unknown" ||
+      !areQrisProvidersCompatible(candidateProvider, mutationProvider)
+    );
 
   // 1. Amount — MANDATORY for auto-approve (+50)
   const amountMatch =
@@ -487,7 +503,7 @@ export function scoreUnified(
   if (amountMatch) { score += 50; reason.push("nominal cocok (+50)"); }
   if (companyMismatch) reason.push("company tidak cocok");
   if (bankAccountMismatch) reason.push("rekening bank tidak cocok");
-  if (providerMismatch) reason.push("provider tidak cocok");
+  if (providerMismatch) reason.push("provider tidak cocok atau tidak tersedia");
 
   // 2. Date ±1 day (+20)
   const mDate = new Date(mutation.transaction_date).getTime();
@@ -814,6 +830,10 @@ export async function fetchCandidates(
                ${settlementDateExpr}::text AS date,
                COALESCE(c.name, sb.customer_name, '') AS name,
                CONCAT('SPORT-', sp.booking_id::text) AS ref,
+               sp.company_id,
+               sp.bank_account_id,
+               LOWER(BTRIM(sp.payment_provider::text)) AS provider_code,
+               sp.payment_provider::text AS provider_name,
                sp.amount AS gross_amount,
                COALESCE(sp.mdr_amount, 0) AS mdr_amount,
                COALESCE(sp.tax_withheld_amount, 0) AS tax_withheld_amount,

@@ -74,6 +74,44 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     });
   });
 
+  it("does not match a payment from another company even when amount/provider/date fit", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 103, companyId: 2, bankAccountId: 17, amount: 100_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-12",
+        expectedSettlementDate: "2026-08-13", providerName: "paylabs",
+      }],
+      mutations: [{
+        id: 104, companyId: 1, bankAccountId: 17, amount: 99_300,
+        transactionDate: "2026-08-13", direction: "IN",
+        source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "paylabs", description: "PAYLABS SETTLEMENT",
+      }],
+    });
+
+    expect(result[0]?.status).toBe("UNMATCHED");
+    expect(result[0]?.paymentItems).toEqual([]);
+  });
+
+  it("does not match a payment from another provider even when amount/company/date fit", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 105, companyId: 1, bankAccountId: 17, amount: 100_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-12",
+        expectedSettlementDate: "2026-08-13", providerName: "paylabs",
+      }],
+      mutations: [{
+        id: 106, companyId: 1, bankAccountId: 17, amount: 99_300,
+        transactionDate: "2026-08-13", direction: "IN",
+        source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "mandiri_direct", description: "MANDIRI DIRECT SETTLEMENT",
+      }],
+    });
+
+    expect(result[0]?.status).toBe("REVIEW");
+    expect(result[0]?.paymentItems).toEqual([]);
+  });
+
   it("fails closed when a bank account reference is missing or ambiguous", () => {
     const accounts = [
       { id: 17, companyId: 1, accountNumber: "1640006707220" },
@@ -146,7 +184,9 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
       }],
     });
     expect(result).toHaveLength(1);
-    expect(result[0]?.status).toBe("MATCHED");
+    expect(result[0]?.status).toBe("REVIEW");
+    expect(result[0]?.paymentItems).toEqual([]);
+    expect(result[0]?.reason).toContain("Tidak ditemukan natural batch");
   });
 
   it("maps QRTRAVELI to the only configured account provider", () => {

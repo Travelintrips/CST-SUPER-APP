@@ -134,6 +134,27 @@ describe("Phase 4C-5 canonical settlement matching", () => {
     ).amount_match).toBe(false);
   });
 
+  it("blocks provider mismatch before exact amount scoring", () => {
+    const scored = scoreUnified(
+      mutation({ provider_name: "paylabs" }),
+      canonicalCandidate(),
+    );
+
+    expect(scored.amount_match).toBe(false);
+    expect(scored.reason.join(" ")).toContain("provider tidak cocok");
+  });
+
+  it("fails closed when a QRIS identity is missing", () => {
+    expect(scoreUnified(
+      mutation({ company_id: null, provider_name: null }),
+      canonicalCandidate(),
+    ).amount_match).toBe(false);
+    expect(scoreUnified(
+      mutation({ provider_name: null, normalized_description: "QRIS SETTLEMENT" }),
+      canonicalCandidate(),
+    ).amount_match).toBe(false);
+  });
+
   it("keeps canonical approval out of the generic auto-match classifier", () => {
     const scored = scoreUnified(mutation(), canonicalCandidate());
     // Exact canonical-date evidence reaches the existing generic confidence
