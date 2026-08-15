@@ -120,3 +120,31 @@ export async function sendMail(opts: SendMailOptions): Promise<void> {
     refId: opts.refId,
   });
 }
+
+/**
+ * Verify the same SMTP transport used by application email delivery.
+ * This intentionally does not send a message; it only validates the
+ * configured credentials and connection.
+ */
+export async function checkSmtpConnection(): Promise<{
+  status: "ok" | "error" | "unconfigured";
+  latencyMs: number | null;
+  detail?: string;
+}> {
+  if (externalIntegrationsDisabled()) {
+    return { status: "unconfigured", latencyMs: null };
+  }
+
+  const startedAt = Date.now();
+  try {
+    const { transporter } = await createTransport();
+    await transporter.verify();
+    return { status: "ok", latencyMs: Date.now() - startedAt };
+  } catch (err) {
+    return {
+      status: "error",
+      latencyMs: Date.now() - startedAt,
+      detail: err instanceof Error ? err.message : String(err),
+    };
+  }
+}

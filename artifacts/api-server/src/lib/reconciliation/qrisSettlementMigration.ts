@@ -7,7 +7,9 @@ import { sql } from "drizzle-orm";
  * A settlement is the bank-facing aggregate. The items preserve the
  * one-to-many relationship back to the canonical Sport Center payments.
  */
-export async function runQrisSettlementMigration(): Promise<void> {
+let qrisSettlementMigrationPromise: Promise<void> | null = null;
+
+async function runQrisSettlementMigrationOnce(): Promise<void> {
   // Provider and bank-evidence classification are additive. Historical rows
   // remain valid and are deliberately left as unknown when no explicit value
   // exists; payment_method=QRIS is never used to guess a provider.
@@ -226,4 +228,20 @@ export async function runQrisSettlementMigration(): Promise<void> {
     CREATE UNIQUE INDEX IF NOT EXISTS uq_qris_settlement_items_payment
       ON qris_settlement_items(sport_payment_id)
   `);
+}
+
+/**
+ * Runtime migration is used by several QRIS endpoints. Share the in-flight
+ * promise so concurrent requests do not each run the full DDL/backfill chain.
+ * A failed run is cleared so the next request can retry after the underlying
+ * database problem has been resolved.
+ */
+export function runQrisSettlementMigration(): Promise<void> {
+  if (!qrisSettlementMigrationPromise) {
+    qrisSettlementMigrationPromise = runQrisSettlementMigrationOnce().catch((error) => {
+      qrisSettlementMigrationPromise = null;
+      throw error;
+    });
+  }
+  return qrisSettlementMigrationPromise;
 }

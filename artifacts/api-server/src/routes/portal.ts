@@ -14,7 +14,12 @@ import { validateUploadFile, validateMagicBytes, validateSvgImageAsset } from ".
 import { sendViaService as sendWhatsApp } from "../lib/waTransport.js";
 import { getAdminWa } from "../lib/adminWa.js";
 import { getAppConfig } from "../lib/appConfig.js";
-import { updateMarketplaceStatus, verifySupplier } from "../lib/services/supplierStatusService.js";
+import {
+  canSupplierAppearInMarketplace,
+  setSupplierVerification,
+  updateMarketplaceStatus,
+  verifySupplier,
+} from "../lib/services/supplierStatusService.js";
 import { validateMediaAssetsPayload } from "../lib/mediaAssetsValidation.js";
 import { requirePortalAuth, requireCustomerPortalAuth, requirePortalAdmin, requireActiveVendor, verifyDevPortalEmail, type PortalAuthReq, setPortalSessionCookie, clearPortalSessionCookie, revokePortalSession, PORTAL_SESSION_COOKIE } from "../lib/supabaseAuth";
 import { consumeSafeDevResetArtifact, isSafeDevResetCaptureEnabled } from "../lib/safeDevResetCapture.js";
@@ -2794,6 +2799,12 @@ router.post("/vendor/catalog", requirePortalAuth, async (req, res) => {
 
   const { name, templateKind, description, kategori, categoryKey, priceSell, unit, moq, origin, hsCode } = req.body ?? {};
   if (!String(name ?? "").trim()) return res.status(400).json({ message: "Nama produk wajib diisi" });
+  const normalizedTemplateKind = templateKind == null || templateKind === ""
+    ? "product"
+    : String(templateKind).trim().toLowerCase();
+  if (!["product", "service"].includes(normalizedTemplateKind)) {
+    return res.status(400).json({ message: "templateKind harus berupa product atau service" });
+  }
 
   try {
     const [row] = await db
@@ -2801,8 +2812,9 @@ router.post("/vendor/catalog", requirePortalAuth, async (req, res) => {
       .values({
         vendorId:     supplier.id,
         vendorName:   supplier.name ?? null,
+        type:         normalizedTemplateKind,
         name:         String(name).trim().slice(0, 200),
-        templateKind: templateKind ?? "product",
+        templateKind: normalizedTemplateKind,
         description:  description ?? null,
         kategori:     kategori ?? null,
         categoryKey:  categoryKey ?? null,
@@ -2835,12 +2847,19 @@ router.put("/vendor/catalog/:id", requirePortalAuth, async (req, res) => {
 
   const { name, templateKind, description, kategori, categoryKey, priceSell, unit, moq, origin, hsCode, specValues } = req.body ?? {};
   if (!String(name ?? "").trim()) return res.status(400).json({ message: "Nama produk wajib diisi" });
+  const normalizedTemplateKind = templateKind == null || templateKind === ""
+    ? "product"
+    : String(templateKind).trim().toLowerCase();
+  if (!["product", "service"].includes(normalizedTemplateKind)) {
+    return res.status(400).json({ message: "templateKind harus berupa product atau service" });
+  }
 
   try {
     const result = await db.execute(sql`
       UPDATE vendor_catalog_items
       SET name          = ${String(name).trim().slice(0, 200)},
-          template_kind = ${templateKind ?? null},
+           type          = ${normalizedTemplateKind},
+           template_kind = ${normalizedTemplateKind},
           description   = ${description ?? null},
           kategori      = ${kategori ?? null},
           category_key  = ${categoryKey ?? null},
@@ -4496,23 +4515,67 @@ router.patch("/admin/suppliers/:id/marketplace", requirePortalAdmin, async (req:
   }
 
   try {
-    const existing = await db.select({ id: suppliersTable.id })
-      .from(suppliersTable)
-      .where(eq(suppliersTable.id, id))
-      .limit(1);
-    if (!existing.length) return res.status(404).json({ message: "Supplier tidak ditemukan" });
+    if (isVerified === undefined && marketplaceStatus === undefined) {
+      return res.status(400).json({ message: "Tidak ada perubahan" });
+    }
 
-    const updates: Record<string, unknown> = {};
-    if (isVerified !== undefined)        updates.is_verified        = isVerified;
-    if (marketplaceStatus !== undefined) updates.marketplace_status = marketplaceStatus;
-    if (!Object.keys(updates).length) return res.status(400).json({ message: "Tidak ada perubahan" });
+    const result = await db.transaction(async (tx) => {
+      const [current] = await tx
+        .select({
+          id: suppliersTable.id,
+          status: suppliersTable.status,
+          isActive: suppliersTable.isActive,
+          isVerified: suppliersTable.isVerified,
+          marketplaceStatus: suppliersTable.marketplaceStatus,
+        })
+        .from(suppliersTable)
+        .where(eq(suppliersTable.id, id))
+        .limit(1);
+      if (!current) {
+        throw Object.assign(new Error("Supplier tidak ditemukan"), { statusCode: 404 });
+      }
 
-    await db.execute(sql`
-      UPDATE suppliers SET
-        is_verified        = COALESCE(${isVerified        ?? null}, is_verified),
-        marketplace_status = COALESCE(${marketplaceStatus ?? null}, marketplace_status)
-      WHERE id = ${id}
-    `);
+      const actorUserId = req.portalCustomerId ? String(req.portalCustomerId) : "admin";
+      if (isVerified !== undefined) {
+        if (isVerified) {
+          await verifySupplier({ supplierId: id, actorUserId, dbOrTx: tx as any });
+        } else {
+          await setSupplierVerification({ supplierId: id, isVerified: false, actorUserId, dbOrTx: tx as any });
+        }
+      }
+
+      if (marketplaceStatus !== undefined) {
+        const published = await updateMarketplaceStatus({
+          supplierId: id,
+          newMarketplaceStatus: marketplaceStatus,
+          actorUserId,
+          dbOrTx: tx as any,
+        });
+        if (!published.ok) {
+          throw Object.assign(new Error(published.error ?? "Supplier belum memenuhi syarat Marketplace"), {
+            statusCode: 409,
+          });
+        }
+      }
+
+      const [updated] = await tx
+        .select({
+          id: suppliersTable.id,
+          status: suppliersTable.status,
+          isActive: suppliersTable.isActive,
+          isVerified: suppliersTable.isVerified,
+          marketplaceStatus: suppliersTable.marketplaceStatus,
+        })
+        .from(suppliersTable)
+        .where(eq(suppliersTable.id, id))
+        .limit(1);
+      return updated;
+    });
+
+    const updates: Record<string, unknown> = {
+      is_verified: result.isVerified,
+      marketplace_status: result.marketplaceStatus,
+    };
 
     const adminId = req.portalCustomerId ? String(req.portalCustomerId) : "admin";
     try {
@@ -4529,6 +4592,8 @@ router.patch("/admin/suppliers/:id/marketplace", requirePortalAdmin, async (req:
     return res.json({ ok: true, id, ...updates });
   } catch (e) {
     console.error("[portal] PATCH admin/suppliers/:id/marketplace error", e);
+    if (Number((e as any)?.statusCode) === 404) return res.status(404).json({ message: (e as Error).message });
+    if (Number((e as any)?.statusCode) === 409) return res.status(409).json({ message: (e as Error).message });
     return res.status(500).json({ error: "Gagal mengupdate status marketplace" });
   }
 });
@@ -4686,6 +4751,33 @@ router.post("/admin/vendor-catalog-items/bulk", requirePortalAdmin, async (req, 
 
   try {
     if (action === "publish") {
+      const rows = await db
+        .select({
+          id: vendorCatalogItemsTable.id,
+          supplierStatus: suppliersTable.status,
+          supplierIsActive: suppliersTable.isActive,
+          supplierIsVerified: suppliersTable.isVerified,
+          supplierMarketplaceStatus: suppliersTable.marketplaceStatus,
+        })
+        .from(vendorCatalogItemsTable)
+        .innerJoin(suppliersTable, eq(vendorCatalogItemsTable.vendorId, suppliersTable.id))
+        .where(inArray(vendorCatalogItemsTable.id, intIds));
+      const missingIds = intIds.filter((itemId) => !rows.some((row) => row.id === itemId));
+      if (missingIds.length > 0) {
+        return res.status(404).json({ message: "Sebagian produk tidak ditemukan", missingIds });
+      }
+      const blocked = rows.filter((row) => !canSupplierAppearInMarketplace({
+        status: row.supplierStatus,
+        isActive: row.supplierIsActive,
+        isVerified: row.supplierIsVerified,
+        marketplaceStatus: row.supplierMarketplaceStatus,
+      }));
+      if (blocked.length > 0) {
+        return res.status(409).json({
+          message: "Produk tidak dapat dipublish sebelum supplier aktif, terverifikasi, dan dipublish ke Marketplace.",
+          blockedIds: blocked.map((row) => row.id),
+        });
+      }
       await db.update(vendorCatalogItemsTable)
         .set({ isPublished: true, status: "published", updatedAt: new Date() })
         .where(inArray(vendorCatalogItemsTable.id, intIds));
@@ -4860,19 +4952,55 @@ router.patch("/admin/vendor-catalog-items/:id", requirePortalAdmin, async (req, 
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
   const { is_published, is_active } = req.body ?? {};
   try {
-    if (typeof is_published === "boolean") {
-      await db.execute(sql`
-        UPDATE vendor_catalog_items
-        SET is_published = ${is_published}, status = ${is_published ? "published" : "draft"}
-        WHERE id = ${id}
-      `);
-    }
-    if (typeof is_active === "boolean") {
-      await db.execute(sql`UPDATE vendor_catalog_items SET is_active = ${is_active} WHERE id = ${id}`);
-    }
+    await db.transaction(async (tx) => {
+      const [state] = await tx.execute(sql`
+        SELECT vci.id, vci.is_active, s.status AS supplier_status,
+               s.is_active AS supplier_is_active,
+               s.is_verified AS supplier_is_verified,
+               s.marketplace_status AS supplier_marketplace_status
+        FROM vendor_catalog_items vci
+        INNER JOIN suppliers s ON s.id = vci.vendor_id
+        WHERE vci.id = ${id}
+        LIMIT 1
+        FOR UPDATE
+      `).then((result) => (result.rows as any[]));
+      if (!state) throw Object.assign(new Error("Item tidak ditemukan"), { statusCode: 404 });
+
+      const finalIsActive = typeof is_active === "boolean" ? is_active : state.is_active;
+      if (is_published === true && (!finalIsActive || !canSupplierAppearInMarketplace({
+        status: state.supplier_status,
+        isActive: state.supplier_is_active,
+        isVerified: state.supplier_is_verified,
+        marketplaceStatus: state.supplier_marketplace_status,
+      }))) {
+        throw Object.assign(
+          new Error("Produk tidak dapat dipublish sebelum produk aktif dan supplier Marketplace eligible."),
+          { statusCode: 409 },
+        );
+      }
+
+      if (typeof is_published === "boolean") {
+        await tx.execute(sql`
+          UPDATE vendor_catalog_items
+          SET is_published = ${is_published},
+              status = ${is_published ? "published" : "draft"},
+              updated_at = NOW()
+          WHERE id = ${id}
+        `);
+      }
+      if (typeof is_active === "boolean") {
+        await tx.execute(sql`
+          UPDATE vendor_catalog_items
+          SET is_active = ${is_active}, updated_at = NOW()
+          WHERE id = ${id}
+        `);
+      }
+    });
     return res.json({ ok: true });
   } catch (e) {
     console.error("[portal] PATCH vendor-catalog-items error", e);
+    if (Number((e as any)?.statusCode) === 404) return res.status(404).json({ message: (e as Error).message });
+    if (Number((e as any)?.statusCode) === 409) return res.status(409).json({ message: (e as Error).message });
     return res.status(500).json({ error: "Gagal memperbarui item katalog" });
   }
 });
@@ -4890,6 +5018,32 @@ router.put("/admin/vendor-catalog-items/:id", requirePortalAdmin, async (req: Po
   const { name, description, price_base, markup_pct, kategori, template_kind, is_published } = req.body ?? {};
 
   if (!name?.trim()) return res.status(400).json({ message: "Nama produk harus diisi" });
+
+  if (is_published === true) {
+    const [visibility] = await db
+      .select({
+        isActive: vendorCatalogItemsTable.isActive,
+        supplierStatus: suppliersTable.status,
+        supplierIsActive: suppliersTable.isActive,
+        supplierIsVerified: suppliersTable.isVerified,
+        supplierMarketplaceStatus: suppliersTable.marketplaceStatus,
+      })
+      .from(vendorCatalogItemsTable)
+      .innerJoin(suppliersTable, eq(vendorCatalogItemsTable.vendorId, suppliersTable.id))
+      .where(eq(vendorCatalogItemsTable.id, id))
+      .limit(1);
+    if (!visibility) return res.status(404).json({ message: "Item tidak ditemukan" });
+    if (!visibility.isActive || !canSupplierAppearInMarketplace({
+      status: visibility.supplierStatus,
+      isActive: visibility.supplierIsActive,
+      isVerified: visibility.supplierIsVerified,
+      marketplaceStatus: visibility.supplierMarketplaceStatus,
+    })) {
+      return res.status(409).json({
+        message: "Produk tidak dapat dipublish sebelum produk aktif dan supplier Marketplace eligible.",
+      });
+    }
+  }
 
   // ── Validate price_base ────────────────────────────────────────────────────
   let base: number | null = null;

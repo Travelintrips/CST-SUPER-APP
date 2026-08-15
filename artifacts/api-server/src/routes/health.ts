@@ -4,6 +4,7 @@ import { getRuntimeCheckState } from "../lib/startupValidator.js";
 import { getWorkerHeartbeats, getWorkerAggregateStatus } from "../lib/workerHeartbeat.js";
 import { getE2ESafetyStatus, isProductionMode } from "../lib/e2eSafetyGuard.js";
 import { checkSequenceDesync } from "../lib/accountingMigration.js";
+import { checkSmtpConnection } from "../lib/mailer.js";
 
 const router: IRouter = Router();
 const startedAt = Date.now();
@@ -63,24 +64,8 @@ async function checkFonnte(): Promise<ExternalCheckResult> {
   }
 }
 
-async function checkResend(): Promise<ExternalCheckResult> {
-  const apiKey = process.env.SMTP_PASS?.trim();
-  if (!apiKey) return { status: "unconfigured", latencyMs: null };
-  try {
-    const t0 = Date.now();
-    type FetchRes = { ok: boolean; status: number };
-    const res = await fetch("https://api.resend.com/domains", {
-      method: "GET",
-      headers: { Authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(5_000),
-    }) as unknown as FetchRes;
-    const latencyMs = Date.now() - t0;
-    if (res.status === 401) return { status: "error", latencyMs, detail: "Invalid API key" };
-    if (!res.ok) return { status: "error", latencyMs, detail: `HTTP ${res.status}` };
-    return { status: "ok", latencyMs };
-  } catch (err) {
-    return { status: "error", latencyMs: null, detail: String(err) };
-  }
+async function checkSmtp(): Promise<ExternalCheckResult> {
+  return checkSmtpConnection();
 }
 
 router.get("/ping", (_req, res) => {
@@ -117,7 +102,7 @@ router.get("/healthz", async (_req, res) => {
   const [db, whatsapp, smtp] = await Promise.all([
     checkDb(),
     cachedCheck("fonnte", checkFonnte),
-    cachedCheck("resend", checkResend),
+    cachedCheck("smtp", checkSmtp),
   ]);
 
   const runtimeState = getRuntimeCheckState();

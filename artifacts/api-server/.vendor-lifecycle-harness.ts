@@ -309,15 +309,13 @@ async function run() {
   });
   record("empty credential rejected", [400, 401, 403].includes(emptyPasswordLogin.status), `status=${emptyPasswordLogin.status}`);
 
-  const resetNotification = await dbOne<{ message: string }>(
-    `SELECT message FROM notification_logs
-      WHERE channel = 'email' AND recipient = $1 AND context = 'forgot-password' AND created_at >= $2
-      ORDER BY id DESC LIMIT 1`,
-    [email, startedAt],
+  const capturedReset = await request(`/auth/dev-reset-capture?email=${encodeURIComponent(email)}`);
+  const resetToken = typeof capturedReset.body?.token === "string" ? capturedReset.body.token : "";
+  record(
+    "canonical credential setup artifact",
+    capturedReset.status === 200 && resetToken.length > 0,
+    "safe-mode reset artifact captured without outbound delivery",
   );
-  const tokenMatch = resetNotification?.message.match(/reset-password\?token=([^&\s]+)&email=/);
-  record("canonical credential setup artifact", Boolean(tokenMatch), "safe-mode reset message captured without outbound delivery");
-  const resetToken = tokenMatch ? decodeURIComponent(tokenMatch[1]) : "";
   const reset = await request("/auth/reset-password-with-token", {
     method: "POST",
     body: { email, token: resetToken, password },
@@ -331,6 +329,7 @@ async function run() {
     jar: vendorJar,
   });
   record("vendor login", vendorLogin.status === 200 && vendorJar.size > 0, "email/password login established session");
+  const oldVendorSession = new Map(vendorJar);
 
   const profile = await request("/vendor/profile", { jar: vendorJar });
   record("vendor profile access", profile.status === 200 && Number(profile.body?.supplier?.id || profile.body?.supplier_id || profile.body?.supplierId) === supplierId,
@@ -358,8 +357,17 @@ async function run() {
 
   const logout = await request("/auth/logout", { method: "POST", jar: vendorJar });
   record("vendor logout", logout.status === 200 || logout.status === 204, `status=${logout.status}`);
+  const replayedOldSession = await request("/vendor/profile", { jar: oldVendorSession });
+  record("old session replay denied", replayedOldSession.status === 401, `status=${replayedOldSession.status}`);
   const afterLogout = await request("/vendor/profile", { jar: vendorJar });
   record("logout invalidates session", afterLogout.status === 401, `status=${afterLogout.status}`);
+  const freshVendorJar = new Map();
+  const freshVendorLogin = await request("/auth/login", {
+    method: "POST",
+    body: { email, password },
+    jar: freshVendorJar,
+  });
+  record("fresh vendor login", freshVendorLogin.status === 200 && freshVendorJar.size > 0, "new session established after logout");
 }
 
 let runError: unknown = null;

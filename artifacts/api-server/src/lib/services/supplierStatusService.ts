@@ -144,6 +144,54 @@ export async function verifySupplier(opts: {
 }
 
 /**
+ * Set verification state without leaving a published supplier in a
+ * contradictory state. Unverifying a published supplier automatically moves
+ * it back to draft; publishing must then be explicitly re-approved.
+ */
+export async function setSupplierVerification(opts: {
+  supplierId: number;
+  isVerified: boolean;
+  actorUserId?: string;
+  dbOrTx?: Pick<typeof db, "select" | "update" | "insert" | "execute">;
+}): Promise<void> {
+  const { supplierId, isVerified, actorUserId } = opts;
+  const conn = opts.dbOrTx ?? db;
+  const now = new Date();
+  const [current] = await conn
+    .select({
+      status: suppliersTable.status,
+      isActive: suppliersTable.isActive,
+      marketplaceStatus: suppliersTable.marketplaceStatus,
+    })
+    .from(suppliersTable)
+    .where(eq(suppliersTable.id, supplierId))
+    .limit(1);
+
+  if (!current) throw new Error(`Supplier ${supplierId} tidak ditemukan`);
+
+  const remainsEligible =
+    isVerified &&
+    current.status === "active" &&
+    current.isActive === true;
+
+  await conn
+    .update(suppliersTable)
+    .set({
+      isVerified,
+      verifiedAt: isVerified ? now : null,
+      verifiedBy: isVerified ? (actorUserId ?? null) : null,
+      ...(current.marketplaceStatus === "published" && !remainsEligible
+        ? {
+            marketplaceStatus: "draft" as const,
+            marketplacePublishedAt: null,
+            marketplacePublishedBy: null,
+          }
+        : {}),
+    })
+    .where(eq(suppliersTable.id, supplierId));
+}
+
+/**
  * Update marketplace_status + timestamp publikasi.
  * Hanya vendor active + verified yang boleh dipublish.
  */

@@ -112,6 +112,10 @@ import {
 } from "../lib/reconciliation/qrisCandidateContract.js";
 
 const router = Router();
+// The full-bank matching run can legitimately outlive the browser request
+// timeout. Keep one background run per API process so repeated clicks do not
+// fan out duplicate work against the same mutation set.
+let unifiedMatchingJobActive = false;
 router.use(async (req, res, next) => {
   if (!(await requireAdmin(req, res))) return;
   next();
@@ -2903,6 +2907,22 @@ router.get("/mutations", async (req, res) => {
           )
           FROM qris_mutation_batch_candidates qc
           WHERE qc.mutation_id = bm.id
+              AND (
+                UPPER(COALESCE(qc.status, '')) NOT IN (
+                  'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
+                )
+                OR EXISTS (
+                  SELECT 1
+                  FROM jsonb_array_elements(COALESCE(qc.payment_items, '[]'::jsonb)) item
+                  WHERE item->>'paymentId' IS NOT NULL
+                    AND NOT EXISTS (
+                      SELECT 1
+                      FROM qris_settlement_items qsi
+                      WHERE qsi.sport_payment_id = (item->>'paymentId')::int
+                    )
+                    ${canonicalSettledExcludeSql}
+                )
+              )
              AND (
                UPPER(COALESCE(bm.provider_name, '')) LIKE '%QRIS%'
                OR UPPER(COALESCE(bm.provider_name, '')) LIKE '%QRTRAVELI%'
@@ -3811,8 +3831,10 @@ router.post("/run-matching", async (req, res) => {
   };
 
   // Process independent mutations concurrently with a bounded worker pool.
-  // This preserves the existing response contract while cutting the long
-  // serial wait for large matching runs.
+  // A full-bank run can contain hundreds of rows and exceed the browser's
+  // request timeout. Explicit `ids` requests retain the synchronous response
+  // contract; the normal all-mutations action is queued so the UI can continue
+  // immediately and trigger the separate QRIS candidate review flow.
   let nextIndex = 0;
   const worker = async () => {
     while (true) {
@@ -3821,13 +3843,52 @@ router.post("/run-matching", async (req, res) => {
       await processMutation(mutations[index]);
     }
   };
-  await Promise.all(
-    Array.from(
-      { length: Math.min(MATCHING_CONCURRENCY, mutations.length) },
-      () => worker(),
-    ),
-  );
+  const runWorkers = async () => {
+    await Promise.all(
+      Array.from(
+        { length: Math.min(MATCHING_CONCURRENCY, mutations.length) },
+        () => worker(),
+      ),
+    );
+    logger.info(
+      { processed, auto_matched, manual_review, unmatched: unmatched_count, rule_matched, ecf_matched },
+      "[bankRecon] background matching completed",
+    );
+  };
 
+  if (!ids?.length) {
+    if (unifiedMatchingJobActive) {
+      return res.status(202).json({
+        ok: true,
+        queued: true,
+        alreadyRunning: true,
+        message: "AI Matching sedang berjalan di background.",
+      });
+    }
+
+    unifiedMatchingJobActive = true;
+    setImmediate(() => {
+      runWorkers()
+        .catch((e: any) => logger.error({ err: e }, "[bankRecon] background matching failed"))
+        .finally(() => {
+          unifiedMatchingJobActive = false;
+        });
+    });
+
+    return res.status(202).json({
+      ok: true,
+      queued: true,
+      processed: 0,
+      auto_matched: 0,
+      manual_review: 0,
+      unmatched: 0,
+      rule_matched: 0,
+      ecf_matched: 0,
+      message: `${mutations.length} mutasi sedang diproses di background.`,
+    });
+  }
+
+  await runWorkers();
   return res.json({
     ok: true,
     processed,

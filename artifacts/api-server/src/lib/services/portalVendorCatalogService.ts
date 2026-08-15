@@ -22,7 +22,12 @@ import {
   companiesTable,
 } from "@workspace/db";
 import { eq, and, ne, isNull, sql, desc, gte, ilike, or, asc, inArray } from "drizzle-orm";
-import { catalogPublicConditions, catalogSupplierConditions, resolveMediaAssetsImage } from "../catalogVisibility.js";
+import {
+  catalogPublicConditions,
+  catalogSupplierConditions,
+  resolveCatalogItemKind,
+  resolveMediaAssetsImage,
+} from "../catalogVisibility.js";
 import {
   normalizeServiceCategory,
   normalizeMarketplaceStockStatus,
@@ -40,6 +45,7 @@ const CATALOG_PUBLIC_COLS = {
   id:               vendorCatalogItemsTable.id,
   vendorId:         vendorCatalogItemsTable.vendorId,
   vendorName:       vendorCatalogItemsTable.vendorName,
+  type:             vendorCatalogItemsTable.type,
   templateKind:     vendorCatalogItemsTable.templateKind,
   categoryKey:      vendorCatalogItemsTable.categoryKey,
   serviceType:      vendorCatalogItemsTable.serviceType,
@@ -78,6 +84,7 @@ export async function getCatalogItemPublic(id: number) {
       id:               vendorCatalogItemsTable.id,
       vendorId:         vendorCatalogItemsTable.vendorId,
       vendorName:       vendorCatalogItemsTable.vendorName,
+      type:             vendorCatalogItemsTable.type,
       templateKind:     vendorCatalogItemsTable.templateKind,
       categoryKey:      vendorCatalogItemsTable.categoryKey,
       serviceType:      vendorCatalogItemsTable.serviceType,
@@ -108,7 +115,11 @@ export async function getCatalogItemPublic(id: number) {
     .innerJoin(suppliersTable, and(eq(suppliersTable.id, vendorCatalogItemsTable.vendorId), ...catalogSupplierConditions()))
     .where(and(eq(vendorCatalogItemsTable.id, id), ...catalogPublicConditions()));
   if (!row) return null;
-  return { ...row, priceSell: row.priceSell !== null ? Number(row.priceSell) : null };
+  return {
+    ...row,
+    templateKind: resolveCatalogItemKind(row),
+    priceSell: row.priceSell !== null ? Number(row.priceSell) : null,
+  };
 }
 
 // ─── listPublicMarketplaceItems ───────────────────────────────────────────────
@@ -133,12 +144,18 @@ export async function listPublicMarketplaceItems(filters: MarketplaceListFilters
   ];
 
   if (kind === "service") {
-    conditions.push(eq(vendorCatalogItemsTable.templateKind, "service"));
+    conditions.push(and(
+      eq(vendorCatalogItemsTable.templateKind, "service"),
+      ne(vendorCatalogItemsTable.type, "product"),
+    ) as ReturnType<typeof eq>);
   } else if (kind === "product") {
-    // Items with templateKind=null are legacy products — include them in the product tab
+    // Product rows can be legacy-classified by `type`; include those while
+    // existing data is normalized. Items with templateKind=null are also
+    // legacy products and remain included in the product tab.
     conditions.push(
       or(
         eq(vendorCatalogItemsTable.templateKind, "product"),
+        eq(vendorCatalogItemsTable.type, "product"),
         isNull(vendorCatalogItemsTable.templateKind),
       ) as ReturnType<typeof eq>,
     );
@@ -242,6 +259,7 @@ export async function listPublicMarketplaceItems(filters: MarketplaceListFilters
     const resolvedCategory = normalizeServiceCategory(rawCat);
     return {
       ...r,
+      templateKind: resolveCatalogItemKind(r),
       vendorName:    r.vendorName || r.supplierName || null,
       priceSell:     r.priceSell !== null ? Number(r.priceSell) : null,
       stockStatus:   normalizeMarketplaceStockStatus(r.stockStatus),

@@ -74,6 +74,22 @@ describe("Phase 4C-7A.5 additive mirror contract", () => {
     expect(mirrorMigration).toContain("payment_business_calendar");
   });
 
+  it("does not guess a canonical bank account during QRIS backfill", () => {
+    expect(mirrorMigration).toContain(
+      "ADD COLUMN IF NOT EXISTS bank_account_id            TEXT",
+    );
+    expect(mirrorMigration).toContain(
+      "SET bank_account_id = NULLIF(BTRIM(m.external_bank_account_id::text), '')",
+    );
+    expect(mirrorMigration).toContain(
+      "SET bank_account_id = resolved.bank_account_id",
+    );
+    expect(mirrorMigration).toContain("HAVING COUNT(*) = 1");
+    expect(mirrorMigration).not.toContain(
+      "SELECT DISTINCT ON (company_id) id, company_id",
+    );
+  });
+
   it("keeps PostgreSQL trigger/function as the single mirror owner", () => {
     expect(worker).not.toMatch(/INSERT\s+INTO\s+sport_payments/i);
     expect(worker).toContain("replay_confirmed_payment_mirror");

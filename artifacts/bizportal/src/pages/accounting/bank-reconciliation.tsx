@@ -1707,6 +1707,7 @@ function QrisMutationCard({
   onDetail,
   onDelete,
   onApproveQrisBatch,
+  approveQrisPending,
   selectedQrisPaymentIds,
   onToggleQrisPayment,
   onToggleAllQrisPayments,
@@ -1719,6 +1720,7 @@ function QrisMutationCard({
   onDetail: (m: BankMutation) => void;
   onDelete: (id: number) => void;
   onApproveQrisBatch?: (candidateId: number, mutationId: number, candidate: QrisCandidateAudit, paymentIds?: number[]) => void;
+  approveQrisPending?: boolean;
   selectedQrisPaymentIds: number[];
   onToggleQrisPayment?: (candidateId: number, paymentId: number, checked: boolean) => void;
   onToggleAllQrisPayments?: (candidate: QrisCandidateAudit, checked: boolean) => void;
@@ -1976,12 +1978,14 @@ function QrisMutationCard({
                 <Button
                   size="sm"
                   className="ml-auto h-8 gap-1.5 bg-green-600 text-xs text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={!canSelect || selectedPaymentIds.length === 0 || !!mappingError}
+                  disabled={!canSelect || selectedPaymentIds.length === 0 || !!mappingError || approveQrisPending}
                   title={selectedPaymentIds.length === 0 ? "Pilih minimal satu payment terlebih dahulu" : undefined}
                   onClick={() => onApproveQrisBatch(audit.id!, audit.mutation_id, audit, selectedPaymentIds)}
                 >
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                  Approve QRIS Terpilih ({selectedPaymentIds.length})
+                  {approveQrisPending
+                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    : <CheckCircle2 className="h-3.5 w-3.5" />}
+                  {approveQrisPending ? "Memproses approval QRIS..." : `Approve QRIS Terpilih (${selectedPaymentIds.length})`}
                 </Button>
               )}
               {isApproved && (
@@ -2028,6 +2032,7 @@ function MutationCard({
   onDetail,
   onApproveQris,
   onApproveQrisBatch,
+  approveQrisPending,
   selectedQrisPaymentIds,
   onToggleQrisPayment,
   onToggleAllQrisPayments,
@@ -2046,6 +2051,7 @@ function MutationCard({
   onDetail:  (m: BankMutation) => void;
   onApproveQris: (m: BankMutation) => void;
   onApproveQrisBatch?: (candidateId: number, mutationId: number, candidate: QrisCandidateAudit, paymentIds?: number[]) => void;
+  approveQrisPending?: boolean;
   selectedQrisPaymentIds: number[];
   onToggleQrisPayment?: (candidateId: number, paymentId: number, checked: boolean) => void;
   onToggleAllQrisPayments?: (candidate: QrisCandidateAudit, checked: boolean) => void;
@@ -2070,6 +2076,7 @@ function MutationCard({
         onDetail={onDetail}
         onDelete={onDelete}
         onApproveQrisBatch={onApproveQrisBatch}
+        approveQrisPending={approveQrisPending}
         selectedQrisPaymentIds={selectedQrisPaymentIds}
         onToggleQrisPayment={onToggleQrisPayment}
         onToggleAllQrisPayments={onToggleAllQrisPayments}
@@ -2509,6 +2516,7 @@ function MutationDetailPanel({
   matchingPending,
   mappingError,
   onApproveQrisBatch,
+  approveQrisPending,
   selectedQrisPaymentIds,
   onToggleQrisPayment,
   onToggleAllQrisPayments,
@@ -2526,6 +2534,7 @@ function MutationDetailPanel({
   matchingPending: boolean;
   mappingError?: MappingRequiredError;
   onApproveQrisBatch?: (candidateId: number, mutationId: number, candidate: QrisCandidateAudit, paymentIds?: number[]) => void;
+  approveQrisPending?: boolean;
   selectedQrisPaymentIds: number[];
   onToggleQrisPayment?: (candidateId: number, paymentId: number, checked: boolean) => void;
   onToggleAllQrisPayments?: (candidate: QrisCandidateAudit, checked: boolean) => void;
@@ -2843,11 +2852,13 @@ function MutationDetailPanel({
                         <Button
                           size="sm"
                           className="w-full gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white"
-                          disabled={qrisPaymentIdsForApproval.length === 0}
+                          disabled={qrisPaymentIdsForApproval.length === 0 || approveQrisPending}
                           onClick={() => onApproveQrisBatch(qrisAudit.id!, qrisAudit.mutation_id, qrisAudit, qrisPaymentIdsForApproval)}
                         >
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                          Setujui Payment Terpilih — Buat QRIS Settlement
+                          {approveQrisPending
+                            ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            : <CheckCircle2 className="w-3.5 h-3.5" />}
+                          {approveQrisPending ? "Memproses approval QRIS..." : "Setujui Payment Terpilih — Buat QRIS Settlement"}
                         </Button>
                       );
                     }
@@ -2867,11 +2878,13 @@ function MutationDetailPanel({
                             size="sm"
                             variant="outline"
                             className="w-full gap-1.5 border-amber-400 text-amber-900 hover:bg-amber-50 dark:border-amber-600 dark:text-amber-300 dark:hover:bg-amber-950/40"
-                            disabled={qrisPaymentIdsForApproval.length === 0}
+                            disabled={qrisPaymentIdsForApproval.length === 0 || approveQrisPending}
                             onClick={() => onApproveQrisBatch(qrisAudit.id!, qrisAudit.mutation_id, qrisAudit, qrisPaymentIdsForApproval)}
                           >
-                            <AlertTriangle className="w-3.5 h-3.5" />
-                            Setujui Payment Terpilih (Override REVIEW)
+                            {approveQrisPending
+                              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              : <AlertTriangle className="w-3.5 h-3.5" />}
+                            {approveQrisPending ? "Memproses approval QRIS..." : "Setujui Payment Terpilih (Override REVIEW)"}
                           </Button>
                         </div>
                       );
@@ -3399,6 +3412,11 @@ export default function BankReconciliationPage() {
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{ mutations: BankMutation[]; total: number }>;
     },
+    // Keep the primary mutation list in sync with approvals performed by
+    // another tab/admin. The QRIS audit query polls separately, but this list
+    // used to stay stale until a hard reload.
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
   });
 
   const { data: summary } = useQuery({
@@ -3583,6 +3601,10 @@ export default function BankReconciliationPage() {
     if (!qrisBatchConfirm) return;
     const selections = qrisBatchConfirm.selections;
     setQrisBatchConfirm(null);
+    toast({
+      title: "Approval QRIS sedang diproses...",
+      description: "Pembuatan settlement dan pencocokan mutasi sedang berjalan.",
+    });
     const selectedCandidateIdsAtStart = [...selectedQrisCandidateIds];
     const selectedPaymentIdsAtStart = { ...selectedQrisPaymentIds };
 
@@ -3635,7 +3657,7 @@ export default function BankReconciliationPage() {
         }
         failedCount += 1;
         if (!firstError) {
-          firstError = "Approval QRIS tidak dapat diselesaikan. Muat ulang daftar kandidat dan coba lagi.";
+          firstError = conflict.message || "Approval QRIS tidak dapat diselesaikan. Muat ulang daftar kandidat dan coba lagi.";
         }
       }
     }
@@ -3675,7 +3697,10 @@ export default function BankReconciliationPage() {
         return next;
       });
     }
-    await refetchQrisAudit();
+    // Refresh once after the whole batch. The mutation hook intentionally
+    // skips its per-item refresh when `silent` is set above.
+    await Promise.all([refetchQrisAudit(), refetch()]);
+    qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] });
 
     if (conflictCount > 0 || staleCount > 0) {
       toast({
@@ -3775,7 +3800,14 @@ export default function BankReconciliationPage() {
       return r.json();
     },
     onSuccess: (d) => {
-      toast({ title: `AI Matching selesai: ${d.processed} mutasi diproses` });
+      toast({
+        title: d.queued
+          ? "AI Matching sedang berjalan di background"
+          : `AI Matching selesai: ${d.processed} mutasi diproses`,
+        description: d.queued
+          ? "Kandidat QRIS akan dicari otomatis setelah permintaan ini diterima."
+          : undefined,
+      });
       invalidate();
       // AI Matching creates generic reconciliation matches. QRIS batch
       // candidates are a separate persisted review contract, so refresh them
@@ -3792,12 +3824,28 @@ export default function BankReconciliationPage() {
       companyId,
       paymentIds,
     }: { candidateId: number; mutationId: number; companyId: number; paymentIds?: number[]; silent?: boolean }) => {
-      const r = await fetch(`/api/bank-reconciliation/qris-candidates/${candidateId}/approve`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mutationId, companyId, paymentIds }),
-      });
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 120_000);
+      let r: Response;
+      try {
+        r = await fetch(`/api/bank-reconciliation/qris-candidates/${candidateId}/approve`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mutationId, companyId, paymentIds }),
+          signal: controller.signal,
+        });
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          throw Object.assign(
+            new Error("Approval QRIS terlalu lama diproses. Periksa status kandidat setelah memuat ulang."),
+            { code: "QRIS_APPROVAL_TIMEOUT" },
+          ) as QrisSelectionConflictError;
+        }
+        throw error;
+      } finally {
+        window.clearTimeout(timeoutId);
+      }
       const body = await r.json().catch(() => ({ error: "Unknown error" }));
       if (!r.ok) {
         if (body.code === "CANONICAL_SETTLEMENT_SELECTION_CONFLICT") {
@@ -3822,9 +3870,13 @@ export default function BankReconciliationPage() {
           ) as QrisSelectionConflictError;
         }
         throw Object.assign(
-          new Error("Approval QRIS tidak dapat diselesaikan. Coba lagi setelah memuat ulang kandidat."),
+          new Error(
+            typeof body.error === "string" && body.error.trim()
+              ? body.error
+              : "Approval QRIS tidak dapat diselesaikan. Coba lagi setelah memuat ulang kandidat.",
+          ),
           { code: body.code },
-        );
+        ) as QrisSelectionConflictError;
       }
       return body as {
         mutationId: number;
@@ -3835,6 +3887,11 @@ export default function BankReconciliationPage() {
       };
     },
     onSuccess: async (result, variables) => {
+      // A batch approval owns the refresh lifecycle. Refetching here for
+      // every candidate makes a multi-candidate approval perform redundant
+      // network round-trips while the next approval is waiting.
+      if (variables.silent) return;
+
       if (!variables.silent) {
         toast({
           title: result.matching?.status === "auto_matched" || result.matching?.status === "manual_review"
@@ -3846,7 +3903,9 @@ export default function BankReconciliationPage() {
               : "Batch QRIS disetujui ✓",
         });
       }
-      await refetchQrisAudit();
+      // Refresh both datasets: the QRIS candidate status and the primary
+      // bank-mutation card are maintained by different queries.
+      await Promise.all([refetchQrisAudit(), refetch()]);
       if (detailMutation?.id === result.mutationId) {
         await refreshMutationDetail(result.mutationId);
       }
@@ -3856,10 +3915,16 @@ export default function BankReconciliationPage() {
       if (!variables?.silent && (e as QrisSelectionConflictError).code !== "CANONICAL_SETTLEMENT_SELECTION_CONFLICT") {
         toast({
           title: "Gagal approve batch QRIS",
-          description: "Approval QRIS tidak dapat diselesaikan. Coba lagi setelah memuat ulang kandidat.",
+          description: e.message || "Approval QRIS tidak dapat diselesaikan. Periksa konfigurasi lalu coba lagi.",
           variant: "destructive",
         });
       }
+      // Keep the screen aligned with the server even when approval is rejected
+      // by a governance/configuration guard (for example, a missing bank COA).
+      // The mutation must remain visible in that case, but its latest status
+      // and eligibility should not depend on a hard browser reload.
+      void Promise.all([refetchQrisAudit(), refetch()]);
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] });
     },
   });
 
@@ -4548,6 +4613,7 @@ export default function BankReconciliationPage() {
                   onDetail={setDetailMutation}
                   onApproveQris={handleApproveQris}
                   onApproveQrisBatch={handleApproveQrisBatch}
+                  approveQrisPending={approveQrisBatchMut.isPending}
                   selectedQrisPaymentIds={
                     m.qris_candidate_audit?.id != null
                       ? selectedPaymentIdsForCandidate(m.qris_candidate_audit)
@@ -4592,6 +4658,7 @@ export default function BankReconciliationPage() {
         matchingPending={matchMut.isPending}
         mappingError={detailMutation ? mappingRequiredErrors.get(detailMutation.id) : undefined}
         onApproveQrisBatch={handleApproveQrisBatch}
+        approveQrisPending={approveQrisBatchMut.isPending}
         selectedQrisPaymentIds={
           detailMutation?.qris_candidate_audit?.id != null
             ? selectedPaymentIdsForCandidate(detailMutation.qris_candidate_audit)
