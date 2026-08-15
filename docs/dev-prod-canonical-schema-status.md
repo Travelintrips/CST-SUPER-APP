@@ -424,3 +424,84 @@ production remediation, or republish was performed.
 **FINAL VERDICT:**
 ❌ **CANONICAL PRODUCTION FUNCTION DEFECT REMAINS**
 **MASTER REPUBLISH BLOCKED**
+
+## Sport Center function contract recovery
+
+**Phase:** evidence-only recovery
+**Database writes:** `0`
+**Business data modified:** `NO`
+**RLS changed:** `NO`
+**Republish:** `BLOCKED`
+
+### Function 1
+
+- **Function:** `sport_center.create_payment_accounting_draft(integer)`
+- **Repository complete definition found:** `NO`
+- **Historical commit:** `c1e25dcd359a633007ebfed0d1dac69e89ea1237`
+  introduced only the owner-definition patch.
+- **Historical file:** `artifacts/api-server/src/modules/sport-center/migration.ts`
+  lines 936–980; the parent revision contains no complete Function 1 body.
+- **DEV definition:** complete runtime body, `RETURNS integer`,
+  `LANGUAGE plpgsql`, `SECURITY DEFINER`; current read-only definition MD5
+  `dd75dce283fccdd1c47cb6e4ffda7239`. It serializes by payment, locks and
+  validates a confirmed payment, reuses an existing confirmed-payment journal,
+  calculates tax, selects Payment Clearing/CASH/BANK_RECEIPT mapping, inserts
+  the journal and lines, validates the journal, and returns the journal ID.
+- **PROD definition:** same complete runtime body after semantic normalization;
+  current read-only definition MD5
+  `7c9399907817f45c311693a83cf2314f`. The remaining runtime difference is
+  duplicate `public` entries in `search_path`; normalized body SHA-256 is the
+  same in DEV and PROD:
+  `dc487bc7d49e30867553cb1e193dbf26606a9ea8404c24770c0e59aff496c6ae`.
+- **Caller contract:** no repository API caller, repository trigger, or
+  repository-owned wrapper for this exact function was found. The runtime body
+  itself establishes the side effects and return value described above.
+- **Test contract:** no focused repository test proving this exact function's
+  owner contract, duplicate policy, journal line mapping, tax behavior, or
+  exception contract was found.
+- **Canonical classification:** **D — CANONICAL BODY STILL AMBIGUOUS**
+- **Canonical source:** unresolved. The repository proves the bank-account
+  resolver patch, but not the complete owner function contract.
+- **Exact owner decision required:** approve the complete journal contract,
+  including payment-method-to-debit mapping, tax-inclusive calculation,
+  external-to-internal bank-account resolution, reuse/idempotency rule,
+  draft validation behavior, exception behavior, and canonical `search_path`.
+- **Remediation:** do not replace or normalize this function until that contract
+  is source-controlled as a complete body.
+
+### Function 2
+
+- **Function:** `sport_center.mirror_confirmed_payment_to_public()`
+- **Repository complete definition found:** `YES`
+- **Canonical classification:** **A — CANONICAL BODY RECOVERED FROM
+  REPOSITORY HISTORY**
+- **Canonical source:** `artifacts/api-server/src/modules/sport-center/migration.ts`,
+  lines 314–556, with trigger installer at lines 558–573.
+- **Historical versions:** complete function introduced in commit
+  `6295ad1f` (`Implement sport center migration and update provenance
+  documentation`); subsequent semantic updates include `b0000b22` and the
+  metadata changes attributed to `55d562b1`.
+- **Repository test contract:** `artifacts/api-server/src/__tests__/phase4c7a5-mirror-contract.test.ts`
+  verifies deterministic booking bridging, fail-closed company/bank/provider
+  resolution, canonical provider/settlement/source identity, trigger ownership,
+  and stable `SCPAY-SC-<id>` idempotency.
+- **DEV definition:** current report hash
+  `828cf0c5a381165960e31d27c326a914`; fail-closed booking checks present and
+  no exception swallowing.
+- **PROD definition:** current report hash
+  `3e50d577cc1112830cc65df385a97a9c`; exception-swallowing behavior remains
+  present and is outdated relative to the repository contract.
+- **Remediation:** the repository body is sufficient for a future controlled
+  `CREATE OR REPLACE FUNCTION` after Function 1 is resolved. Do not remediate
+  this function alone in the current phase.
+
+### Recovery decision
+
+`create_payment_accounting_draft(integer)` remains the explicit blocker.
+Function 2 is recoverable and unambiguous, but both functions must remain
+unmodified until the owner contract for Function 1 is complete and
+source-controlled.
+
+**FINAL VERDICT:**
+⚠️ **OWNER DECISION REQUIRED — FUNCTION CONTRACT**
+**DO NOT REPUBLISH**
