@@ -144,10 +144,7 @@ if (!isLocalConn) {
     // while the primary instance is running the same startup migration chain.
     // Keep this fail-safe even though start-dev.sh now yields redundant API
     // workflows before they can connect to the database.
-    client
-      .query("SET search_path = public; SET lock_timeout = '20s'")
-      .catch(() => {});
-    // Set search_path — PgBouncer transaction mode does not preserve it
+    // Set search_path — PgBouncer transaction mode does not preserve it.
     // Set lock_timeout — prevents startup DDL migrations from hanging forever
     // when a previously killed instance left an open lock on the same table.
     client.query("SET search_path = public; SET lock_timeout = '20s'").catch(() => {});
