@@ -3,8 +3,8 @@
  * Additive Dev -> Prod schema reconciliation for the Supabase runtime DB.
  *
  * This intentionally never drops, replaces, disables, or alters an existing
- * production object. It only creates objects/columns/enums/policies that are
- * present in development and absent from production.
+ * production object. It creates missing tables, columns, enums, constraints,
+ * indexes, functions, triggers, views, policies, and additive RLS settings.
  *
  * Usage:
  *   node scripts/sync-schema-additive.mjs              # report only
@@ -65,12 +65,16 @@ const IDENTIFIER = /^[a-zA-Z_][a-zA-Z0-9_$]*$/;
 const PROMOTED_SCHEMAS = new Set(["public", "sport_center"]);
 const EXCLUDED_TABLE_NAME = /(^|_)(ai|menu|uat)(_|$)/i;
 const ALLOWED_ACTIONS = new Set([
+  "tables",
   "columns",
+  "enums",
+  "constraints",
+  "indexes",
   "functions",
   "triggers",
   "views",
-  "enums",
   "policies",
+  "rls",
 ]);
 
 function quoteIdent(value) {
@@ -93,6 +97,29 @@ function maskUrl(url = "") {
 }
 
 const QUERY = {
+  relations: `
+    SELECT
+      n.nspname AS schema_name,
+      c.relname AS name,
+      c.relkind
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname NOT LIKE 'pg_%'
+      AND n.nspname <> 'information_schema'
+    ORDER BY 1, 2
+  `,
+  tables: `
+    SELECT
+      n.nspname AS schema_name,
+      c.relname AS table_name,
+      c.relkind
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE c.relkind IN ('r', 'p')
+      AND n.nspname NOT LIKE 'pg_%'
+      AND n.nspname <> 'information_schema'
+    ORDER BY 1, 2
+  `,
   columns: `
     SELECT
       c.table_schema AS schema_name,
@@ -115,6 +142,39 @@ const QUERY = {
     LEFT JOIN pg_namespace element_schema ON element_schema.oid = element_type.typnamespace
     WHERE c.table_schema NOT IN ('pg_catalog', 'information_schema')
     ORDER BY 1, 2, a.attnum
+  `,
+  constraints: `
+    SELECT
+      n.nspname AS schema_name,
+      c.relname AS table_name,
+      con.conname AS name,
+      con.contype,
+      con.convalidated,
+      pg_get_constraintdef(con.oid, true) AS definition
+    FROM pg_constraint con
+    JOIN pg_class c ON c.oid = con.conrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE c.relkind IN ('r', 'p')
+      AND n.nspname NOT LIKE 'pg_%'
+      AND n.nspname <> 'information_schema'
+    ORDER BY 1, 2, 3
+  `,
+  indexes: `
+    SELECT
+      n.nspname AS schema_name,
+      t.relname AS table_name,
+      i.relname AS name,
+      ix.indisunique AS is_unique,
+      ix.indisprimary AS is_primary,
+      ix.indisvalid AS is_valid,
+      pg_get_indexdef(ix.indexrelid) AS definition
+    FROM pg_class t
+    JOIN pg_namespace n ON n.oid = t.relnamespace
+    JOIN pg_index ix ON ix.indrelid = t.oid
+    JOIN pg_class i ON i.oid = ix.indexrelid
+    WHERE n.nspname NOT LIKE 'pg_%'
+      AND n.nspname <> 'information_schema'
+    ORDER BY 1, 2, 3
   `,
   functions: `
     SELECT
@@ -219,6 +279,10 @@ function columnKey(row) {
   return `${row.schema_name}.${row.table_name}.${row.column_name}`;
 }
 
+function tableKey(row) {
+  return `${row.schema_name}.${row.table_name}`;
+}
+
 function functionKey(row) {
   return `${row.schema_name}.${row.name}(${row.args})`;
 }
@@ -236,6 +300,14 @@ function enumKey(row) {
 }
 
 function policyKey(row) {
+  return `${row.schema_name}.${row.table_name}.${row.name}`;
+}
+
+function constraintKey(row) {
+  return `${row.schema_name}.${row.table_name}.${row.name}`;
+}
+
+function indexKey(row) {
   return `${row.schema_name}.${row.table_name}.${row.name}`;
 }
 
@@ -279,6 +351,153 @@ function policySql(row) {
   return `${parts.join(" ")};`;
 }
 
+function constraintSql(row, existingIndex, productionRelationKeys) {
+  const notValid =
+    row.convalidated === false && ["c", "f"].includes(row.contype)
+      ? " NOT VALID"
+      : "";
+  if (
+    existingIndex?.is_unique &&
+    ["p", "u"].includes(row.contype) &&
+    ["PRIMARY KEY", "UNIQUE"].some((kind) =>
+      row.definition.startsWith(kind),
+    )
+  ) {
+    const kind = row.contype === "p" ? "PRIMARY KEY" : "UNIQUE";
+    return (
+      `ALTER TABLE ${qualified(row.schema_name, row.table_name)} ` +
+      `ADD CONSTRAINT ${quoteIdent(row.name)} ${kind} USING INDEX ` +
+      `${quoteIdent(existingIndex.name)};`
+    );
+  }
+  if (
+    ["p", "u"].includes(row.contype) &&
+    row.definition.match(/^(PRIMARY KEY|UNIQUE)\s+(.+)$/i)
+  ) {
+    const [, kind, indexBody] = row.definition.match(
+      /^(PRIMARY KEY|UNIQUE)\s+(.+)$/i,
+    );
+    const auxiliaryIndex = `schema_sync_${stableHash(
+      `${row.schema_name}.${row.table_name}.${row.name}`,
+    )}`;
+    const relationCollision =
+      productionRelationKeys.has(`${row.schema_name}.${row.name}`) &&
+      !existingIndex;
+    const constraintName = relationCollision
+      ? `schema_sync_constraint_${stableHash(
+          `${row.schema_name}.${row.table_name}.${row.name}`,
+        )}`
+      : row.name;
+    return (
+      `CREATE UNIQUE INDEX IF NOT EXISTS ${quoteIdent(auxiliaryIndex)} ` +
+      `ON ${qualified(row.schema_name, row.table_name)} ${indexBody}; ` +
+      `ALTER TABLE ${qualified(row.schema_name, row.table_name)} ` +
+      `ADD CONSTRAINT ${quoteIdent(constraintName)} ${kind.toUpperCase()} USING INDEX ` +
+      `${quoteIdent(auxiliaryIndex)};`
+    );
+  }
+  return (
+    `ALTER TABLE ${qualified(row.schema_name, row.table_name)} ` +
+    `ADD CONSTRAINT ${quoteIdent(row.name)} ${row.definition}${notValid};`
+  );
+}
+
+function stableHash(value) {
+  let hash = 2166136261;
+  for (const char of String(value)) {
+    hash ^= char.codePointAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function normalizeSql(value) {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function equivalentConstraint(row, productionConstraints) {
+  return productionConstraints.find((candidate) => {
+    if (
+      candidate.schema_name !== row.schema_name ||
+      candidate.table_name !== row.table_name ||
+      candidate.contype !== row.contype
+    ) {
+      return false;
+    }
+    // A table can only have one primary key. For additive reconciliation,
+    // an existing primary key is already the required invariant even if its
+    // generated/name differs between environments.
+    if (row.contype === "p") return true;
+    return normalizeSql(candidate.definition) === normalizeSql(row.definition);
+  });
+}
+
+function normalizeIndexDefinition(value) {
+  return normalizeSql(value).replace(
+    /^create (unique )?index [^ ]+ on /,
+    "create $1index on ",
+  );
+}
+
+function equivalentIndex(row, productionIndexes) {
+  return productionIndexes.find(
+    (candidate) =>
+      candidate.schema_name === row.schema_name &&
+      candidate.table_name === row.table_name &&
+      normalizeIndexDefinition(candidate.definition) ===
+        normalizeIndexDefinition(row.definition),
+  );
+}
+
+function indexSql(row, alternateName) {
+  const match = String(row.definition).match(
+    /^(CREATE (?:UNIQUE )?INDEX )(.+?)( ON .+)$/i,
+  );
+  if (!match) return `${row.definition};`;
+  const indexName = alternateName ? quoteIdent(alternateName) : match[2];
+  return `${match[1]}IF NOT EXISTS ${indexName}${match[3]};`;
+}
+
+function isSafeDefault(columnDefault) {
+  const value = String(columnDefault ?? "").trim();
+  return (
+    /^(now\(\)|CURRENT_TIMESTAMP|CURRENT_DATE|gen_random_uuid\(\)|uuid_generate_v4\(\)|[-+]?\d+(?:\.\d+)?|'.*')(?:::[a-zA-Z0-9_." ]+)?$/i.test(
+      value,
+    ) || Boolean(sequenceNameFromDefault(value))
+  );
+}
+
+function columnDefinition(row, { preserveNotNull = true } = {}) {
+  const identity =
+    row.is_identity === "YES"
+      ? ` GENERATED ${row.identity_generation === "ALWAYS" ? "ALWAYS" : "BY DEFAULT"} AS IDENTITY`
+      : "";
+  const nullable =
+    preserveNotNull && row.is_nullable === "NO" && !identity ? " NOT NULL" : "";
+  const defaultSql =
+    !identity && isSafeDefault(row.column_default)
+      ? ` DEFAULT ${row.column_default}`
+      : "";
+  return `${quoteIdent(row.column_name)} ${row.formatted_type}${identity}${defaultSql}${nullable}`;
+}
+
+function tableSql(row, columns) {
+  const defs = columns
+    .filter(
+      (column) =>
+        column.schema_name === row.schema_name &&
+        column.table_name === row.table_name,
+    )
+    .map((column) => `  ${columnDefinition(column)}`);
+  return (
+    `CREATE TABLE IF NOT EXISTS ${qualified(row.schema_name, row.table_name)} (\n` +
+    `${defs.join(",\n")}\n);`
+  );
+}
+
 function isPromotedTable(schema, table) {
   return PROMOTED_SCHEMAS.has(schema) && !EXCLUDED_TABLE_NAME.test(table);
 }
@@ -299,7 +518,14 @@ function definitionReferencesExcludedTable(definition, schemaRows) {
 }
 
 function schemaDiff(snapshot, production) {
+  const tables = diffRows(snapshot.tables, production.tables, tableKey);
   const columns = diffRows(snapshot.columns, production.columns, columnKey);
+  const constraints = diffRows(
+    snapshot.constraints,
+    production.constraints,
+    constraintKey,
+  );
+  const indexes = diffRows(snapshot.indexes, production.indexes, indexKey);
   const functions = diffRows(
     snapshot.functions,
     production.functions,
@@ -345,9 +571,29 @@ function schemaDiff(snapshot, production) {
     }
   }
 
+  const promotedTables = tables.missing.filter((key) => {
+    const row = tables.devMap.get(key);
+    return isPromotedTable(row.schema_name, row.table_name);
+  });
   const promotedColumns = columns.missing.filter((key) => {
     const row = columns.devMap.get(key);
     return isPromotedTable(row.schema_name, row.table_name);
+  });
+  const promotedConstraints = constraints.missing.filter((key) => {
+    const row = constraints.devMap.get(key);
+    return (
+      isPromotedTable(row.schema_name, row.table_name) &&
+      !equivalentConstraint(row, [...constraints.prodMap.values()]) &&
+      !definitionReferencesExcludedTable(row.definition, snapshot.columns)
+    );
+  });
+  const promotedIndexes = indexes.missing.filter((key) => {
+    const row = indexes.devMap.get(key);
+    return (
+      isPromotedTable(row.schema_name, row.table_name) &&
+      !row.is_primary &&
+      !equivalentIndex(row, [...indexes.prodMap.values()])
+    );
   });
   const promotedFunctions = functions.missing.filter((key) => {
     const row = functions.devMap.get(key);
@@ -387,14 +633,19 @@ function schemaDiff(snapshot, production) {
   });
 
   const rlsCandidates = [];
+  const rlsForceCandidates = [];
   for (const [key, row] of devRls) {
     if (!isPromotedTable(row.schema_name, row.table_name)) continue;
     const target = prodRls.get(key);
     if (row.rls_enabled && !target?.rls_enabled) rlsCandidates.push(key);
+    if (row.rls_forced && !target?.rls_forced) rlsForceCandidates.push(key);
   }
 
   return {
+    tables,
     columns,
+    constraints,
+    indexes,
     functions,
     triggers,
     views,
@@ -402,13 +653,18 @@ function schemaDiff(snapshot, production) {
     devRls,
     prodRls,
     enumChanges,
+    promotedTables,
     promotedColumns,
+    promotedConstraints,
+    promotedIndexes,
     promotedFunctions,
     promotedTriggers,
     promotedViews,
     promotedPolicies,
     promotedEnumChanges,
     rlsCandidates,
+    rlsForceCandidates,
+    productionEnumKeys: [...prodEnums.keys()],
   };
 }
 
@@ -457,7 +713,11 @@ async function readDevelopmentSnapshot(path) {
   if (
     snapshot?.formatVersion !== 1 ||
     !snapshot.identity ||
+    !snapshot.schema?.relations ||
+    !snapshot.schema?.tables ||
     !snapshot.schema?.columns ||
+    !snapshot.schema?.constraints ||
+    !snapshot.schema?.indexes ||
     !snapshot.schema?.functions ||
     !snapshot.schema?.triggers ||
     !snapshot.schema?.views ||
@@ -530,30 +790,46 @@ async function run() {
 
     const diff = schemaDiff(devSchema, prodSchema);
     const {
+      tables,
       columns,
+      constraints,
+      indexes,
       functions,
       triggers,
       views,
       policies,
       devRls,
+      promotedTables,
       promotedColumns,
+      promotedConstraints,
+      promotedIndexes,
       promotedFunctions,
       promotedTriggers,
       promotedViews,
       promotedPolicies,
       promotedEnumChanges,
       rlsCandidates,
+      rlsForceCandidates,
+      productionEnumKeys,
     } = diff;
 
     const report = {
+      tables: promotedTables.length,
       columns: promotedColumns.length,
+      constraints: promotedConstraints.length,
+      indexes: promotedIndexes.length,
       functions: promotedFunctions.length,
       triggers: promotedTriggers.length,
       views: promotedViews.length,
       enumTypesOrValues: promotedEnumChanges.length,
       policies: promotedPolicies.length,
       rlsCandidates: rlsCandidates.length,
+      rlsForceCandidates: rlsForceCandidates.length,
+      excludedTables: tables.missing.length - promotedTables.length,
       excludedColumns: columns.missing.length - promotedColumns.length,
+      excludedConstraints:
+        constraints.missing.length - promotedConstraints.length,
+      excludedIndexes: indexes.missing.length - promotedIndexes.length,
       excludedFunctions: functions.missing.length - promotedFunctions.length,
       excludedTriggers: triggers.missing.length - promotedTriggers.length,
       excludedViews: views.missing.length - promotedViews.length,
@@ -561,21 +837,28 @@ async function run() {
       excludedEnumChanges: diff.enumChanges.length - promotedEnumChanges.length,
     };
 
+    console.log(`Promoted tables      : ${report.tables}`);
     console.log(`Promoted columns     : ${report.columns}`);
+    console.log(`Promoted constraints : ${report.constraints}`);
+    console.log(`Promoted indexes     : ${report.indexes}`);
     console.log(`Promoted functions   : ${report.functions}`);
     console.log(`Promoted triggers    : ${report.triggers}`);
     console.log(`Promoted views       : ${report.views}`);
     console.log(`Promoted enum changes: ${report.enumTypesOrValues}`);
     console.log(`Promoted policies    : ${report.policies}`);
-    console.log(`RLS candidates (not allowed): ${report.rlsCandidates}`);
+    console.log(`RLS enable candidates: ${report.rlsCandidates}`);
+    console.log(`RLS force candidates : ${report.rlsForceCandidates}`);
     console.log(
-      `Scope-excluded objects: ${report.excludedColumns} columns, ` +
+      `Scope-excluded objects: ${report.excludedTables} tables, ` +
+        `${report.excludedColumns} columns, ${report.excludedConstraints} constraints, ` +
+        `${report.excludedIndexes} indexes, ` +
         `${report.excludedFunctions} functions, ${report.excludedTriggers} triggers, ` +
         `${report.excludedViews} views, ${report.excludedEnumChanges} enums, ` +
         `${report.excludedPolicies} policies`,
     );
     console.log(
-      `Allowed actions: ${[...ALLOWED_ACTIONS].join(", ")}; RLS/other DDL: blocked`,
+      `Allowed additive actions: ${[...ALLOWED_ACTIONS].join(", ")}; ` +
+        "DROP/REPLACE/disable operations are blocked",
     );
 
     if (!applyMode) {
@@ -586,14 +869,16 @@ async function run() {
     await prod.query("BEGIN");
     try {
       // Create missing enum types and append missing labels only.
+      const prodEnumKeys = new Set(productionEnumKeys);
       for (const change of promotedEnumChanges) {
         const typeName = qualified(change.schema, change.name);
-        const typeExists = prodEnums.has(change.key);
+        const typeExists = prodEnumKeys.has(change.key);
         if (!typeExists) {
           const labels = change.values.map(quoteLiteral).join(", ");
           await tryAdditive(prod, `enum ${change.key}`, () =>
             prod.query(`CREATE TYPE ${typeName} AS ENUM (${labels})`),
           );
+          prodEnumKeys.add(change.key);
         } else {
           for (const value of change.missingValues) {
             await tryAdditive(prod, `enum value ${change.key}.${value}`, () =>
@@ -605,17 +890,40 @@ async function run() {
         }
       }
 
+      const prodTableKeys = new Set(
+        prodSchema.tables.map((row) => tableKey(row)),
+      );
+      for (const key of promotedTables) {
+        const row = tables.devMap.get(key);
+        await tryAdditive(prod, `table ${key}`, async () => {
+          for (const column of devSchema.columns.filter(
+            (candidate) => tableKey(candidate) === key,
+          )) {
+            const sequenceName = sequenceNameFromDefault(
+              column.column_default,
+            );
+            if (sequenceName) {
+              const [sequenceSchema, sequence] = parseQualifiedName(sequenceName);
+              await prod.query(
+                `CREATE SEQUENCE IF NOT EXISTS ${qualified(sequenceSchema, sequence)}`,
+              );
+            }
+          }
+          await prod.query(tableSql(row, devSchema.columns));
+        });
+        prodTableKeys.add(key);
+      }
+      const productionRelationKeys = new Set(
+        prodSchema.relations.map((row) => `${row.schema_name}.${row.name}`),
+      );
+
       // Add columns as nullable on purpose. This preserves existing production
       // rows; NOT NULL/backfill is a separate reviewed data migration.
-      const prodTables = new Set(
-        prodSchema.columns.map(
-          (row) => `${row.schema_name}.${row.table_name}`,
-        ),
-      );
       for (const key of promotedColumns) {
         const row = columns.devMap.get(key);
-        const tableKey = `${row.schema_name}.${row.table_name}`;
-        if (!prodTables.has(tableKey)) continue;
+        const targetTableKey = tableKey(row);
+        if (!prodTableKeys.has(targetTableKey)) continue;
+        if (promotedTables.includes(targetTableKey)) continue;
         await tryAdditive(prod, `column ${key}`, async () => {
           const sequenceName = sequenceNameFromDefault(row.column_default);
           if (sequenceName) {
@@ -624,13 +932,7 @@ async function run() {
               `CREATE SEQUENCE IF NOT EXISTS ${qualified(sequenceSchema, sequence)}`,
             );
           }
-          const safeDefault =
-            row.column_default &&
-            (/^(now\\(\\)|CURRENT_TIMESTAMP|gen_random_uuid\\(\\)|uuid_generate_v4\\(\\)|[-+]?\\d+(?:\\.\\d+)?|'.*')(?:::.*)?$/i.test(
-              row.column_default.trim(),
-            ) ||
-              Boolean(sequenceName));
-          const defaultSql = safeDefault
+          const defaultSql = isSafeDefault(row.column_default)
             ? ` DEFAULT ${row.column_default}`
             : "";
           const generatedSql =
@@ -643,6 +945,51 @@ async function run() {
               `${row.formatted_type}${generatedSql}`,
           );
         });
+      }
+
+      const constraintOrder = { p: 0, u: 1, x: 2, c: 3, f: 4 };
+      const orderedConstraints = [...promotedConstraints].sort((left, right) => {
+        const leftType = constraints.devMap.get(left).contype;
+        const rightType = constraints.devMap.get(right).contype;
+        return (constraintOrder[leftType] ?? 9) - (constraintOrder[rightType] ?? 9);
+      });
+      for (const key of orderedConstraints) {
+        const row = constraints.devMap.get(key);
+        const equivalent = equivalentConstraint(
+          row,
+          [...constraints.prodMap.values()],
+        );
+        if (equivalent) {
+          console.log(
+            `  = constraint ${key} already satisfied by ${equivalent.name}`,
+          );
+          continue;
+        }
+        const existingIndex = indexes.prodMap.get(key);
+        await tryAdditive(prod, `constraint ${key}`, () =>
+          prod.query(
+            constraintSql(row, existingIndex, productionRelationKeys),
+          ),
+        );
+      }
+
+      for (const key of promotedIndexes) {
+        const row = indexes.devMap.get(key);
+        const relationCollision =
+          productionRelationKeys.has(`${row.schema_name}.${row.name}`) &&
+          !indexes.prodMap.has(key);
+        if (relationCollision && row.is_unique && promotedConstraints.includes(key)) {
+          console.log(
+            `  = index ${key} represented by the additive constraint`,
+          );
+          continue;
+        }
+        const alternateName = relationCollision
+          ? `schema_sync_index_${stableHash(key)}`
+          : undefined;
+        await tryAdditive(prod, `index ${key}`, () =>
+          prod.query(indexSql(row, alternateName)),
+        );
       }
 
       // Create only functions absent from production. Existing definitions are
@@ -674,6 +1021,24 @@ async function run() {
         const row = policies.devMap.get(key);
         await tryAdditive(prod, `policy ${key}`, () =>
           prod.query(policySql(row)),
+        );
+      }
+
+      for (const key of rlsCandidates) {
+        const [schema, table] = key.split(".");
+        await tryAdditive(prod, `enable RLS ${key}`, () =>
+          prod.query(
+            `ALTER TABLE ${qualified(schema, table)} ENABLE ROW LEVEL SECURITY`,
+          ),
+        );
+      }
+
+      for (const key of rlsForceCandidates) {
+        const [schema, table] = key.split(".");
+        await tryAdditive(prod, `force RLS ${key}`, () =>
+          prod.query(
+            `ALTER TABLE ${qualified(schema, table)} FORCE ROW LEVEL SECURITY`,
+          ),
         );
       }
 
