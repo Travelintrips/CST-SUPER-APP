@@ -267,7 +267,7 @@ try {
 
   const routines = await client.query(`
     SELECT p.oid::regprocedure::text AS routine_signature
-    SELECT p.proname AS routine_name,
+         , p.proname AS routine_name,
            COALESCE(
              string_agg(
                format_type(argument.oid, NULL),
