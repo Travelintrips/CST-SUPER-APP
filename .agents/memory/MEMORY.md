@@ -1,3 +1,4 @@
+- [DB Pool lock_timeout fix](lock-timeout-db-pool.md) — set lock_timeout via on('connect') handler (not pool options) to prevent DDL hang after kill-restart cycles.
 - [Asset storage rule](asset-storage-rule.md) — gambar/biner wajib ke Supabase Storage, bukan git; history sudah di-rewrite Jul 2026 (475 MB → 139 MB).
 - [Production static asset promotion](production-static-assets.md) — asset dev tidak otomatis ada di bucket production; cek secret runtime live dan verifikasi bucket production sebelum publish.
 - [Recon Batch 2 audit](recon-batch2.md) — 82/82 tests, build bersih, type fix deskripsi ECF, 7 endpoint governance; verdiksi LULUS semua fitur.
