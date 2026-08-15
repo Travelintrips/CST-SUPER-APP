@@ -56,6 +56,7 @@ export BASE_PATH=${BASE_PATH:-/bizportal/}
 # Start HTTP proxy on GW_PORT → VITE_PORT so the Gateway can reach BizPortal
 node -e "
 const http = require('http');
+const net = require('net');
 const GW = $GW_PORT;
 const UP = $VITE_PORT;
 function tryProxy(req, res) {
@@ -68,7 +69,28 @@ function tryProxy(req, res) {
   }
   attempt();
 }
-http.createServer(tryProxy).listen(GW, '0.0.0.0', () => {
+function proxyUpgrade(req, socket, head) {
+  const upstream = net.createConnection({ host: '127.0.0.1', port: UP });
+  const close = () => {
+    socket.destroy();
+    upstream.destroy();
+  };
+  upstream.once('connect', () => {
+    upstream.write(req.method + ' ' + req.url + ' HTTP/' + req.httpVersion + '\r\n');
+    for (let i = 0; i < req.rawHeaders.length; i += 2) {
+      upstream.write(req.rawHeaders[i] + ': ' + req.rawHeaders[i + 1] + '\r\n');
+    }
+    upstream.write('\r\n');
+    if (head && head.length) upstream.write(head);
+    socket.pipe(upstream);
+    upstream.pipe(socket);
+  });
+  upstream.on('error', close);
+  socket.on('error', () => upstream.destroy());
+}
+const server = http.createServer(tryProxy);
+server.on('upgrade', proxyUpgrade);
+server.listen(GW, '0.0.0.0', () => {
   console.log('[PORT CHECK] PID=' + process.pid + ' PORT=' + GW + ' SERVICE=bizportal-proxy');
   console.log('[bizportal] proxy :' + GW + ' -> :' + UP);
   process.stdout.write('PROXY_READY\n');

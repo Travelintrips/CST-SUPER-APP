@@ -10,6 +10,20 @@ const port = rawPort ? Number(rawPort) : 3000;
 const basePath = process.env.BASE_PATH ?? "/bizportal/";
 const BRAND_LOGO_ASSET_PATH = "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo.png";
 const BRAND_LOGO_ASSET_DEV_FALLBACK_ORIGIN = process.env.CUSTOMER_PORTAL_BRAND_ASSET_ORIGIN ?? "https://cstlogistic.co.id";
+const replitDevDomain = (process.env.REPLIT_DEV_DOMAIN ?? "")
+  .replace(/^https?:\/\//, "")
+  .replace(/\/+$/, "");
+const isDeployment = !!process.env.REPLIT_DEPLOYMENT;
+// The preview is served through the Replit gateway, not directly from the
+// internal Vite port. Use the public HTTPS origin for HMR so the browser
+// connects back through the gateway's WebSocket upgrade proxy.
+const viteHmr = !isDeployment && replitDevDomain
+  ? {
+      protocol: "wss" as const,
+      host: replitDevDomain,
+      clientPort: 443,
+    }
+  : false;
 
 // In dev (non-deployment), prefer *_DEV variants so they match the API server's
 // sport_center Supabase connection (SUPABASE_URL_DEV / SUPABASE_ANON_KEY_DEV).
@@ -182,7 +196,7 @@ if (h.indexOf('access_token') !== -1 || h.indexOf('error=') !== -1 ||
     strictPort: true,
     host: "0.0.0.0",
     allowedHosts: true,
-    hmr: false,
+    hmr: viteHmr,
     headers: {
       "X-Frame-Options": "ALLOWALL",
       "Content-Security-Policy": "frame-ancestors *",
