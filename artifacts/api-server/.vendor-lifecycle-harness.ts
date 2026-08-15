@@ -329,6 +329,7 @@ async function run() {
     jar: vendorJar,
   });
   record("vendor login", vendorLogin.status === 200 && vendorJar.size > 0, "email/password login established session");
+  const oldVendorSession = new Map(vendorJar);
 
   const profile = await request("/vendor/profile", { jar: vendorJar });
   record("vendor profile access", profile.status === 200 && Number(profile.body?.supplier?.id || profile.body?.supplier_id || profile.body?.supplierId) === supplierId,
@@ -356,8 +357,17 @@ async function run() {
 
   const logout = await request("/auth/logout", { method: "POST", jar: vendorJar });
   record("vendor logout", logout.status === 200 || logout.status === 204, `status=${logout.status}`);
+  const replayedOldSession = await request("/vendor/profile", { jar: oldVendorSession });
+  record("old session replay denied", replayedOldSession.status === 401, `status=${replayedOldSession.status}`);
   const afterLogout = await request("/vendor/profile", { jar: vendorJar });
   record("logout invalidates session", afterLogout.status === 401, `status=${afterLogout.status}`);
+  const freshVendorJar = new Map();
+  const freshVendorLogin = await request("/auth/login", {
+    method: "POST",
+    body: { email, password },
+    jar: freshVendorJar,
+  });
+  record("fresh vendor login", freshVendorLogin.status === 200 && freshVendorJar.size > 0, "new session established after logout");
 }
 
 let runError: unknown = null;
