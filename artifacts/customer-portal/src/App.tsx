@@ -236,10 +236,24 @@ async function checkOnboardingAndRedirect(
 function OAuthRedirectHandler() {
   const [, setLocation] = useLocation();
   useEffect(() => {
-    if (!supabase) return;
     const path = currentPortalPath();
     // Skip auth check entirely for public standalone pages
     if (isNoAuthRoute(path)) return;
+    let disposed = false;
+
+    // The backend Google flow sets the portal_session_hint cookie rather than
+    // a Supabase session. Resolve that cookie session after returning to /login.
+    if ((path === "/" || path === "/login") && isAuthenticated()) {
+      fetchAndStoreProfile().then(async (profile) => {
+        if (!disposed && profile) {
+          await checkOnboardingAndRedirect(profile.role, "", setLocation);
+        }
+      });
+    }
+
+    if (!supabase) {
+      return () => { disposed = true; };
+    }
 
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!session) return;
@@ -256,7 +270,10 @@ function OAuthRedirectHandler() {
         if (profile) await checkOnboardingAndRedirect(profile.role, session.access_token, setLocation);
       }
     });
-    return () => subscription.unsubscribe();
+    return () => {
+      disposed = true;
+      subscription.unsubscribe();
+    };
   }, [setLocation]);
   return null;
 }

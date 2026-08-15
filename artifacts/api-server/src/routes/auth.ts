@@ -10,7 +10,7 @@ import {
   LogoutMobileSessionResponse,
 } from "@workspace/api-zod";
 import { db } from "@workspace/db";
-import { usersTable, waOtpCodesTable } from "@workspace/db";
+import { usersTable, waOtpCodesTable, portalCustomersTable } from "@workspace/db";
 import { and, desc, eq, gte, ne, sql } from "drizzle-orm";
 import { saveOauthState, consumeOauthState } from "../lib/oauthStateMigration";
 import { sendViaService as sendWhatsApp } from "../lib/waTransport.js";
@@ -29,6 +29,8 @@ import {
 import { writeAuditLog, extractRequestMeta } from "../lib/auditLog.js";
 import { trackSuspiciousActivity } from "../lib/suspiciousActivity.js";
 import { verifySupabaseToken } from "../lib/supabaseAdmin";
+import { signPortalJwt } from "../lib/portalJwt.js";
+import { setPortalSessionCookie } from "../lib/supabaseAuth.js";
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
@@ -174,6 +176,76 @@ async function upsertUser(claims: Record<string, unknown>) {
     })
     .returning();
   return user;
+}
+
+/**
+ * Google OAuth for the public Customer Portal must end in a portal JWT/cookie,
+ * not the internal `sid` session used by BizPortal. This keeps the portal
+ * account model independent from Supabase Auth's external-provider exchange.
+ */
+async function upsertPortalGoogleCustomer(claims: Record<string, unknown>) {
+  const email = String(claims.email ?? "").trim().toLowerCase();
+  if (!email) throw new Error("Google account did not provide an email");
+
+  const googleId = String(claims.sub ?? "");
+  const givenName = String(claims.first_name ?? "").trim();
+  const familyName = String(claims.last_name ?? "").trim();
+  const name = [givenName, familyName].filter(Boolean).join(" ") || email.split("@")[0];
+  const avatarUrl = String(claims.picture ?? "").trim() || null;
+  const portalAdminEmails = [
+    "admcst001@gmail.com",
+    "wangsamasindo@gmail.com",
+    ...(process.env.PORTAL_ADMIN_EMAILS ?? "").split(","),
+  ].map((value) => value.trim().toLowerCase()).filter(Boolean);
+  const role = portalAdminEmails.includes(email) ? "admin" : "customer";
+
+  let [customer] = await db
+    .select()
+    .from(portalCustomersTable)
+    .where(eq(portalCustomersTable.email, email))
+    .limit(1);
+
+  if (!customer) {
+    try {
+      [customer] = await db
+        .insert(portalCustomersTable)
+        .values({
+          name,
+          email,
+          passwordHash: "",
+          role,
+          oauthProvider: "google",
+          oauthId: googleId || null,
+          avatarUrl,
+        })
+        .returning();
+    } catch {
+      // Concurrent first login: the other request may have inserted the row.
+      [customer] = await db
+        .select()
+        .from(portalCustomersTable)
+        .where(eq(portalCustomersTable.email, email))
+        .limit(1);
+    }
+  } else {
+    const [updated] = await db
+      .update(portalCustomersTable)
+      .set({
+        oauthProvider: "google",
+        oauthId: googleId || customer.oauthId,
+        ...(avatarUrl ? { avatarUrl } : {}),
+        ...(role === "admin" && customer.role !== "admin" ? { role } : {}),
+      })
+      .where(eq(portalCustomersTable.id, customer.id))
+      .returning();
+    customer = updated ?? customer;
+  }
+
+  if (!customer) throw new Error("Unable to create portal customer");
+  if ((customer.accountStatus ?? "active") !== "active") {
+    throw new Error("Portal account is not active");
+  }
+  return customer;
 }
 
 router.get("/auth/user", (req: Request, res: Response) => {
@@ -530,11 +602,12 @@ router.get("/login/google", async (req: Request, res: Response) => {
   const redirectUri = `${getGoogleOrigin(req)}/api/callback/google`;
   const returnTo = getSafeReturnTo(req.query.returnTo);
   const state = crypto.randomBytes(16).toString("hex");
+  const isPortalFlow = req.query.portal === "1";
 
   req.log.info({ redirectUri }, "[Google OAuth] initiating login, redirect_uri");
 
   // Store state in DB (domain-agnostic — avoids cross-subdomain cookie issues)
-  await saveOauthState(state, returnTo);
+  await saveOauthState(state, isPortalFlow ? `portal:${returnTo}` : returnTo);
 
   const client = getGoogleOAuthClient(redirectUri);
   const authUrl = client.generateAuthUrl({
@@ -555,16 +628,20 @@ router.get("/callback/google", async (req: Request, res: Response) => {
     "[Google OAuth] callback received"
   );
 
+  // Look up state from DB (domain-agnostic, no cookie dependency)
+  const storedReturnTo = state ? await consumeOauthState(state) : null;
+  const isPortalFlow = !!storedReturnTo?.startsWith("portal:");
+  const returnTo = getSafeReturnTo(
+    isPortalFlow ? storedReturnTo!.slice("portal:".length) : storedReturnTo,
+  );
+
   if (error || !code || !state) {
     req.log.warn({ error, hasCode: !!code, hasState: !!state }, "[Google OAuth] callback error from Google — redirecting to login");
-    res.redirect("/bizportal/");
+    res.redirect(isPortalFlow ? returnTo : "/bizportal/");
     return;
   }
 
-  // Look up state from DB (domain-agnostic, no cookie dependency)
-  const returnTo = await consumeOauthState(state);
-
-  if (!returnTo) {
+  if (!storedReturnTo) {
     req.log.warn({ stateToken: state }, "[Google OAuth] state not found or expired — redirecting to login");
     res.redirect("/bizportal/");
     return;
@@ -618,6 +695,31 @@ router.get("/callback/google", async (req: Request, res: Response) => {
       last_name: payload.family_name || null,
       picture: payload.picture || null,
     };
+
+    if (isPortalFlow) {
+      const portalCustomer = await upsertPortalGoogleCustomer(claims);
+      const portalToken = await signPortalJwt({
+        sub: String(portalCustomer.id),
+        email: portalCustomer.email,
+        customerId: portalCustomer.id,
+        role: portalCustomer.role,
+      });
+      setPortalSessionCookie(res, portalToken);
+
+      const portalMeta = extractRequestMeta(req);
+      writeAuditLog({
+        userId: String(portalCustomer.id),
+        userEmail: portalCustomer.email,
+        action: "login",
+        module: "portal-auth",
+        referenceId: "google-oauth",
+        newData: { email: portalCustomer.email, role: portalCustomer.role, provider: "google" },
+        ipAddress: portalMeta.ipAddress,
+        userAgent: portalMeta.userAgent,
+      });
+      res.redirect(returnTo);
+      return;
+    }
 
     let dbUser: { id: string; email: string | null; firstName: string | null; lastName: string | null; profileImageUrl: string | null; role?: string | null; companyId?: number | null };
     try {

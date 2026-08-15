@@ -3,8 +3,6 @@ import { Link, useLocation } from "wouter";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { supabase } from "@/lib/supabase";
-
 import {
   setPortalProfile,
   saveTrustedDevice, loadTrustedDevice, clearTrustedDevice, REMEMBER_DAYS,
@@ -306,15 +304,16 @@ export default function Login() {
     setForgotLoading(false);
   }
 
-  async function handleGoogleLogin() {
-    if (!supabase) { setErrorMsg(t("login.authUnavailable")); return; }
+  function handleGoogleLogin() {
     setErrorMsg("");
-    // Preserve returnTo so OAuthRedirectHandler can redirect correctly after OAuth callback
+    // Preserve returnTo so the portal callback can redirect correctly after OAuth.
     const rt = new URLSearchParams(window.location.search).get("returnTo");
     if (rt) sessionStorage.setItem("oauth_return_to", rt);
-    const redirectTo = window.location.origin + window.location.pathname;
-    const { error } = await supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo } });
-    if (error) setErrorMsg(error.message);
+    const returnTo = rt && rt.startsWith("/") && !rt.startsWith("//") ? rt : "/login";
+    const query = new URLSearchParams({ returnTo, portal: "1" });
+    // Use the API's Google OAuth flow for the public portal. Supabase's
+    // external-provider exchange is unreliable for this production project.
+    window.location.assign(`${BASE}/api/login/google?${query.toString()}`);
   }
 
   return (
