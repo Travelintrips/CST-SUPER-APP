@@ -8,3 +8,9 @@ Canonical Sport Center settlement may reuse the existing `qris_settlement` candi
 **Why:** The reconciliation code has a generic `qris_settlement` path backed by `public.qris_settlements`, while the target canonical contract is in `sport_center.*`. Routing canonical rows through the generic approval path can create a second journal instead of linking the already-posted settlement journal. The bank-mutation enum has no discoverable canonical transition, so the owner-approved policy must be treated as the source of truth.
 
 **How to apply:** Keep legacy `public.qris_*` flows functional, add a source-aware read adapter, use `net_amount` as the canonical matching amount, bypass generic journal creation for canonical approval, use `approved`/`unmatched` only in the canonical link lifecycle, and preserve NULL historical sources without guessed backfill.
+
+Runtime verification must treat the live Supabase catalog as authoritative: passing unit tests and a present settlement table/view do not prove readiness when the six owner SQL routines are absent or the startup migration chain has not reached `/api/health/ready=true`.
+
+**Why:** The application can compile and its pure contract suite can pass while canonical builder/approval calls still fail against a runtime schema that has not installed the database-owned settlement routines.
+
+**How to apply:** Run the approved DEV and PROD catalog preflight through `load-secrets.mjs` before claiming end-to-end parity; classify missing routines, unresolved source/status ownership, and readiness timeout as publish blockers rather than silently applying a DEV→PROD sync.
