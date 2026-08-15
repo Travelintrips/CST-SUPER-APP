@@ -2248,6 +2248,143 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
   `));
 
   /*
+   * Read-only candidate evidence owner.  Keep this function independent from
+   * the public QRIS matcher: canonical settlement evidence comes only from
+   * sport_center.bank_mutations and is eligible only when the settlement
+   * journal and all evidence dimensions agree.
+   */
+  await db.execute(sql.raw(`
+    CREATE OR REPLACE FUNCTION sport_center.find_settlement_bank_candidates(
+      p_settlement_id bigint,
+      p_date_tolerance_days integer DEFAULT 1
+    )
+    RETURNS TABLE (
+      settlement_id bigint,
+      mutation_id integer,
+      settlement_reference text,
+      settlement_date date,
+      mutation_date date,
+      expected_amount numeric,
+      mutation_amount numeric,
+      amount_difference numeric,
+      allowed_amount_difference numeric,
+      date_difference_days integer,
+      amount_match boolean,
+      date_match boolean,
+      company_match boolean,
+      bank_account_match boolean,
+      provider_match boolean,
+      candidate_eligible boolean
+    )
+    LANGUAGE plpgsql
+    STABLE
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'sport_center'
+    AS $function$
+    BEGIN
+      IF p_date_tolerance_days IS NULL OR p_date_tolerance_days < 0 THEN
+        RAISE EXCEPTION 'DATE_TOLERANCE_MUST_BE_NON_NEGATIVE';
+      END IF;
+
+      RETURN QUERY
+      WITH settlement AS (
+        SELECT
+          b.id,
+          b.settlement_reference,
+          b.company_id,
+          b.provider_code,
+          b.bank_account_id,
+          b.settlement_date,
+          b.net_amount,
+          b.status,
+          b.settlement_journal_id,
+          b.bank_mutation_id
+        FROM sport_center.payment_settlement_batches b
+        JOIN sport_center.accounting_journals sj
+          ON sj.id = b.settlement_journal_id
+         AND sj.status = 'posted'
+         AND sj.journal_type = 'settlement'
+         AND sj.is_reversal = FALSE
+        WHERE b.id = p_settlement_id
+          AND b.status IN ('posted', 'reconciled')
+          AND b.bank_mutation_id IS NULL
+      ),
+      evidence AS (
+        SELECT
+          s.id AS settlement_id,
+          bm.id AS mutation_id,
+          s.settlement_reference,
+          s.settlement_date,
+          bm.transaction_date::date AS mutation_date,
+          s.net_amount AS expected_amount,
+          bm.amount AS mutation_amount,
+          ABS(s.net_amount - bm.amount) AS amount_difference,
+          GREATEST(1::numeric, ABS(s.net_amount) * 0.001) AS allowed_amount_difference,
+          ABS(bm.transaction_date::date - s.settlement_date)::integer
+            AS date_difference_days,
+          ABS(s.net_amount - bm.amount)
+            <= GREATEST(1::numeric, ABS(s.net_amount) * 0.001)
+            AS amount_match,
+          ABS(bm.transaction_date::date - s.settlement_date)
+            <= p_date_tolerance_days
+            AS date_match,
+          (
+            bm.company_id IS NULL
+            OR bm.company_id = s.company_id
+          ) AS company_match,
+          (
+            bm.bank_account_id IS NULL
+            OR btrim(bm.bank_account_id::text) = btrim(s.bank_account_id::text)
+          ) AS bank_account_match,
+          (
+            bm.provider_name IS NULL
+            OR lower(btrim(bm.provider_name::text))
+              = lower(btrim(s.provider_code::text))
+          ) AS provider_match,
+          NOT EXISTS (
+            SELECT 1
+            FROM sport_center.payment_settlement_batches linked
+            WHERE linked.bank_mutation_id = bm.id
+          ) AS mutation_unlinked
+        FROM settlement s
+        JOIN sport_center.bank_mutations bm
+          ON bm.transaction_date::date
+             BETWEEN s.settlement_date - p_date_tolerance_days
+                 AND s.settlement_date + p_date_tolerance_days
+         AND lower(COALESCE(bm.direction::text, ''))
+             IN ('credit', 'in', 'incoming', 'cr')
+      )
+      SELECT
+        e.settlement_id,
+        e.mutation_id,
+        e.settlement_reference,
+        e.settlement_date,
+        e.mutation_date,
+        e.expected_amount,
+        e.mutation_amount,
+        e.amount_difference,
+        e.allowed_amount_difference,
+        e.date_difference_days,
+        e.amount_match,
+        e.date_match,
+        e.company_match,
+        e.bank_account_match,
+        e.provider_match,
+        (
+          e.amount_match
+          AND e.date_match
+          AND e.company_match
+          AND e.bank_account_match
+          AND e.provider_match
+          AND e.mutation_unlinked
+        ) AS candidate_eligible
+      FROM evidence e
+      ORDER BY e.mutation_date, e.mutation_id;
+    END;
+    $function$;
+  `));
+
+  /*
    * Phase 4C-7N: public bank-mutation -> canonical Sport Center bridge.
    *
    * This is deliberately owned by PostgreSQL.  The public row is the UI/API
@@ -2561,6 +2698,51 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
   logger.info(
     "Canonical Sport Center contracts: settlement owner, deterministic grouping, and 4C-7N public bank-mutation bridge aktif",
   );
+}
+
+const REQUIRED_CANONICAL_SETTLEMENT_ROUTINES = [
+  ["resolve_internal_bank_account_id", "integer, text"],
+  ["canonical_settlement_group_identity", "integer, text, text, date, text"],
+  ["mark_settlement_payments_settled", "bigint, text"],
+  ["create_payment_settlement_batch", "text, integer, text, text, date, integer[], text"],
+  ["finalize_payment_settlement", "bigint, text"],
+  ["find_settlement_bank_candidates", "bigint, integer"],
+] as const;
+
+/**
+ * Verify the exact owner-routine signatures after the additive migration.
+ *
+ * This is intentionally separate from provisioning so a migration caller must
+ * prove the live catalog before reporting success.  It only reads pg_catalog.
+ */
+export async function verifyCanonicalSettlementOwnerRoutines(): Promise<void> {
+  const result = await db.execute(sql`
+    SELECT p.proname AS routine_name,
+           pg_get_function_identity_arguments(p.oid) AS identity_arguments
+    FROM pg_catalog.pg_proc p
+    JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'sport_center'
+      AND p.proname IN (
+        ${sql.join(
+          REQUIRED_CANONICAL_SETTLEMENT_ROUTINES.map(([name]) => sql`${name}`),
+          sql`, `,
+        )}
+      )
+  `);
+  const present = new Set(
+    result.rows.map((row) => {
+      const item = row as { routine_name: string; identity_arguments: string };
+      return `${item.routine_name}(${item.identity_arguments})`;
+    }),
+  );
+  const missing = REQUIRED_CANONICAL_SETTLEMENT_ROUTINES
+    .map(([name, args]) => `${name}(${args})`)
+    .filter((signature) => !present.has(signature));
+  if (missing.length > 0) {
+    throw new Error(
+      `CANONICAL_SETTLEMENT_OWNER_ROUTINES_INCOMPLETE: missing ${missing.join(", ")}`,
+    );
+  }
 }
 
 export async function runSportCenterMigration(): Promise<void> {

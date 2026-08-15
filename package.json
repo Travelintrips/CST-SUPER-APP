@@ -12,6 +12,7 @@
     "db:verify:prod": "node scripts/verify-db-target.mjs --env prod",
     "db:preflight:canonical": "node scripts/preflight-canonical-settlement.mjs",
     "db:preflight:canonical:prod": "node scripts/preflight-canonical-settlement.mjs --env production",
+    "db:restore:canonical:dev": "node artifacts/api-server/build-migrations.mjs && cd artifacts/api-server && APP_ENV=development node load-secrets.mjs node dist/run-canonical-contract-migration.mjs",
     "db:migrate:test": "RUNTIME_ENV=test node scripts/apply-migrations.mjs",
     "audit:customer-runtime-dev": "node scripts/runtime-safe-dev-test.mjs",
     "audit:customer-static": "bash scripts/audit-customer-static.sh",

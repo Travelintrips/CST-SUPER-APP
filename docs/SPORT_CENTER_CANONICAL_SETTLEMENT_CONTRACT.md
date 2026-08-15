@@ -4,9 +4,10 @@ Status dokumen: discovery, read-only, contract freeze
 Database evidence: Supabase development, project ref `xssrfshdrtdfupgqwfdw`  
 Audit date: 2026-08-10  
 
-> This document records the actual database contract. It does not introduce a
-> Drizzle model, migration, reconciliation implementation, trigger, function,
-> or schema change.
+> The original discovery snapshot below records the actual database contract
+> without introducing a Drizzle model, reconciliation implementation, trigger,
+> function, or schema change. The subsequent runtime restoration boundary is
+> documented separately below and remains subject to the stated DEV/PROD gate.
 
 ## Final verdict
 
@@ -25,6 +26,35 @@ candidate_id = 1
 ```
 
 without an unambiguous source identity.
+
+## Runtime owner-routine restoration boundary
+
+The six database-owned routines required by the canonical settlement runtime
+are defined by the checked-in restoration implementation in
+`artifacts/api-server/src/modules/sport-center/migration.ts`:
+
+```text
+sport_center.resolve_internal_bank_account_id(integer, text)
+sport_center.canonical_settlement_group_identity(integer, text, text, date, text)
+sport_center.mark_settlement_payments_settled(bigint, text)
+sport_center.create_payment_settlement_batch(text, integer, text, text, date, integer[], text)
+sport_center.finalize_payment_settlement(bigint, text)
+sport_center.find_settlement_bank_candidates(bigint, integer)
+```
+
+The restoration runner is additive and verifies these exact identity
+signatures after execution. It is DEV-only by design and must be run against
+DEV before any separately approved production change:
+
+```text
+pnpm db:restore:canonical:dev
+```
+
+It does not copy DEV objects to PROD, write to PROD, or resolve the separate
+candidate-source and link-only approval blockers below. Production changes
+require the separately approved production mechanism and a read-only preflight
+showing the expected signatures before that change. The repository does not
+perform that production write.
 
 ## A. Canonical source
 
