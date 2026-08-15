@@ -10,6 +10,7 @@
  * Usage:
  *   node scripts/run-sync-schema-additive.mjs
  *   node scripts/run-sync-schema-additive.mjs --apply
+ *   node scripts/run-sync-schema-additive.mjs --write-review /tmp/review.json
  */
 
 import { mkdtemp, rm } from "node:fs/promises";
@@ -21,7 +22,20 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const loader = path.join(root, "artifacts", "api-server", "load-secrets.mjs");
 const worker = path.join(root, "scripts", "sync-schema-additive.mjs");
-const applyMode = process.argv.slice(2).includes("--apply");
+const inputArgs = process.argv.slice(2);
+const applyMode = inputArgs.includes("--apply");
+const reviewFlagIndex = inputArgs.indexOf("--write-review");
+if (
+  reviewFlagIndex >= 0 &&
+  (!inputArgs[reviewFlagIndex + 1] ||
+    inputArgs[reviewFlagIndex + 1].startsWith("--"))
+) {
+  throw new Error("--write-review requires an output path.");
+}
+const reviewArgs =
+  reviewFlagIndex >= 0
+    ? ["--write-review", inputArgs[reviewFlagIndex + 1]]
+    : [];
 
 function runLoaded(appEnv, workerArgs) {
   return new Promise((resolve, reject) => {
@@ -64,7 +78,12 @@ try {
   );
   await runLoaded(
     "production",
-    ["--from-dev-snapshot", snapshot, ...(applyMode ? ["--apply"] : [])],
+    [
+      "--from-dev-snapshot",
+      snapshot,
+      ...reviewArgs,
+      ...(applyMode ? ["--apply"] : []),
+    ],
   );
 } catch (error) {
   console.error(`\n❌ scoped schema reconciliation blocked: ${error.message}`);
