@@ -1,5 +1,3 @@
-{pkgs}: {
-  deps = [
-    pkgs.postgresql_17
-  ];
-}
+deps = [
+  pkgs.postgresql_14
+];
