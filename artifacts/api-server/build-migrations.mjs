@@ -14,7 +14,10 @@ globalThis.require = createRequire(import.meta.url);
 const artifactDir = path.dirname(fileURLToPath(import.meta.url));
 
 await esbuild({
-  entryPoints: [path.resolve(artifactDir, "src/run-dev-migrations.ts")],
+  entryPoints: [
+    path.resolve(artifactDir, "src/run-dev-migrations.ts"),
+    path.resolve(artifactDir, "src/run-canonical-contract-migration.ts"),
+  ],
   platform: "node",
   target: "node20",
   bundle: true,
@@ -60,7 +63,7 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
     "@supabase/supabase-js",
   ],
 }).then(() => {
-  console.log("[build-migrations] Bundle OK → dist/run-dev-migrations.mjs");
+  console.log("[build-migrations] Bundles OK → dist/run-dev-migrations.mjs and dist/run-canonical-contract-migration.mjs");
 }).catch((err) => {
   console.error("[build-migrations] Build failed:", err.message);
   process.exit(1);

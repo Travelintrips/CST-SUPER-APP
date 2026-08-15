@@ -210,7 +210,9 @@ async function runWithRetry<T>(
 ): Promise<void> {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
+      logger.info({ attempt, maxAttempts }, `${name}: starting`);
       await fn();
+      logger.info({ attempt }, `${name}: complete`);
       return;
     } catch (err: unknown) {
       const isTransient = isTransientDbError(err);
@@ -234,13 +236,16 @@ async function runWithRetry<T>(
 async function runCriticalPreStartMigrations() {
   // Accounting posting emits a non-fatal audit event. Upgrade legacy
   // ledger_events before any authenticated posting can be accepted.
+  logger.info("Pre-start migration: ledger events entry_id starting");
   await runLedgerEventsEntryIdMigration();
+  logger.info("Pre-start migration: ledger events entry_id complete");
 
   // Install the canonical Sport Center payment resolver before the long
   // startup migration chain. This is the same idempotent runtime installer
   // used by runSportCenterMigration; it does not post accounting or create
   // settlement records.
   try {
+    logger.info("Pre-start migration: Sport Center mirror trigger starting");
     await ensureSportPaymentMirrorTrigger();
     logger.info("Sport Center canonical payment metadata resolver ready");
   } catch (err) {
@@ -251,12 +256,15 @@ async function runCriticalPreStartMigrations() {
   // Sprint 8B AP handoff must be available before the API accepts lifecycle
   // writes. Run it first so unrelated legacy DDL cannot delay this scope.
   try {
+    logger.info("Pre-start migration: marketplace AP preparation starting");
     await runMktApPreparationMigration();
+    logger.info("Pre-start migration: marketplace AP preparation complete");
   } catch (err) {
     logger.error({ err }, "Marketplace AP preparation migration failed");
     throw err;
   }
   try {
+    logger.info("Pre-start migration: marketplace handoff chain starting");
     await runMktPaymentHandoffMigration();
     await runMktAccountingHandoffMigration();
     // Sprint 09E development-only verification schema. Production schema
@@ -266,6 +274,7 @@ async function runCriticalPreStartMigrations() {
     if (isDevelopment) {
       await runMktReconciliationLinkMigration();
     }
+    logger.info("Pre-start migration: marketplace handoff chain complete");
   } catch (err) {
     logger.error({ err }, "Marketplace payment handoff migration failed");
     throw err;
@@ -1639,8 +1648,10 @@ async function startServer() {
   // delay to let the DB pool stabilize before hammering pgBouncer with DDL.
   // The dev workflow provides four bounded pool clients, so this single
   // migration lane cannot occupy the whole pool and starve login requests.
+  console.log("[startup] Registering serial migration chain");
   sleep(8_000)
     .then(async () => {
+      console.log("[startup] Serial migration chain delay elapsed");
       for (let attempt = 1; attempt <= 10; attempt++) {
         try {
           await runCriticalPreStartMigrations();

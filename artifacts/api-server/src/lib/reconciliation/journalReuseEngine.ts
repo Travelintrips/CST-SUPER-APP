@@ -992,7 +992,7 @@ export async function resolveJournalForEconomicEvent(
       matchedCandidateType: candidateType,
       confidence: 0,
       reasons: [code === JournalReuseErrorCode.CANONICAL_SETTLEMENT_ADAPTER_NOT_IMPLEMENTED
-        ? "Canonical Sport Center settlement adapter is not implemented in Phase 4C-2"
+        ? "Canonical Sport Center settlement requires dedicated link-only approval; generic journal reuse is forbidden"
         : "QRIS settlement source is ambiguous because candidate_source is NULL"],
       evidence: { ...evidence, code },
       duplicateRisk: "high",

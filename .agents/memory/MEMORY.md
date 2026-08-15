@@ -81,3 +81,4 @@
 - [Marketplace catalog kind contract](marketplace-catalog-kind-contract.md) — `type` dan `template_kind` wajib sinkron; mismatch legacy dapat menyembunyikan produk dari tab Marketplace.
 - [Production OpenAI credential validation](production-openai-credential-validation.md) — secret bundle bisa termuat tetapi provider tetap 401; presence bukan bukti autentikasi.
 - [Schema canonicalization bundle gate](schema-canonicalization-bundle-gate.md) — strict DEV/PROD schema reconciliation requires APP_ENV metadata in each GCP bundle.
+- [Canonical owner routine restoration](canonical-owner-routine-restore.md) — restore only through the DEV-only runner, then verify exact pg_proc signatures; never treat source or a table presence as live proof.

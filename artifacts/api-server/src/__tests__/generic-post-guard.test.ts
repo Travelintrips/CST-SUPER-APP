@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  assertGenericApprovalAllowed,
   assertGenericPostAllowed,
   GENERIC_POST_GUARD_CODES,
   GenericPostGuardError,
@@ -26,6 +27,46 @@ function expectGuardError(
 }
 
 describe("Phase 4C-7 generic /post hard guard", () => {
+  it("blocks canonical settlement before generic approval/journal creation", () => {
+    expect(() =>
+      assertGenericApprovalAllowed({
+        candidate_type: "qris_settlement",
+        candidate_id: 1,
+        candidate_source: CANONICAL_SOURCE,
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: GENERIC_POST_GUARD_CODES.CANONICAL_SETTLEMENT_APPROVAL_REQUIRED,
+      }),
+    );
+  });
+
+  it("keeps the same numeric ID eligible for explicit legacy approval", () => {
+    expect(() =>
+      assertGenericApprovalAllowed({
+        candidate_type: "qris_settlement",
+        candidate_id: 1,
+        candidate_source: LEGACY_QRIS_SOURCE,
+      }),
+    ).not.toThrow();
+  });
+
+  it("fails closed for historical or unknown QRIS approval sources", () => {
+    for (const candidateSource of [null, "unknown.settlement_source"]) {
+      expect(() =>
+        assertGenericApprovalAllowed({
+          candidate_type: "qris_settlement",
+          candidate_id: 1,
+          candidate_source: candidateSource,
+        }),
+      ).toThrowError(
+        expect.objectContaining({
+          code: GENERIC_POST_GUARD_CODES.AMBIGUOUS_QRIS_SETTLEMENT_SOURCE,
+        }),
+      );
+    }
+  });
+
   it("blocks canonical settlement identity before generic posting", () => {
     expectGuardError(
       CANONICAL_SOURCE,

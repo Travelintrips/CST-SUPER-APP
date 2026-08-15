@@ -827,7 +827,7 @@ router.post("/reconciliation/match", async (req: any, res: any) => {
     if (candidate_type === "qris_settlement") {
       const source = candidate_source ?? null;
       const error = source === RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER
-        ? "CANONICAL_SETTLEMENT_ADAPTER_NOT_IMPLEMENTED"
+        ? "CANONICAL_SETTLEMENT_APPROVAL_REQUIRED"
         : "AMBIGUOUS_QRIS_SETTLEMENT_SOURCE";
       return res.status(422).json({
         error,

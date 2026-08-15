@@ -3,6 +3,8 @@ import { RECONCILIATION_CANDIDATE_SOURCES } from "@workspace/db";
 export const GENERIC_POST_GUARD_CODES = {
   CANONICAL_SETTLEMENT_ALREADY_ACCOUNTED:
     "CANONICAL_SETTLEMENT_ALREADY_ACCOUNTED",
+  CANONICAL_SETTLEMENT_APPROVAL_REQUIRED:
+    "CANONICAL_SETTLEMENT_APPROVAL_REQUIRED",
   AMBIGUOUS_QRIS_SETTLEMENT_SOURCE: "AMBIGUOUS_QRIS_SETTLEMENT_SOURCE",
 } as const;
 
@@ -18,6 +20,8 @@ export class GenericPostGuardError extends Error {
     this.code = code;
   }
 }
+
+
 
 export type ApprovedReconciliationMatchIdentity = {
   candidate_type?: string | null;
@@ -61,4 +65,40 @@ export function assertGenericPostAllowed(
     GENERIC_POST_GUARD_CODES.AMBIGUOUS_QRIS_SETTLEMENT_SOURCE,
     "Sumber QRIS settlement tidak dapat dibuktikan secara source-aware; generic posting ditolak.",
   );
+}
+
+/**
+ * Generic approval/journal creation is a separate bypass from /post. Canonical
+ * QRIS settlements must reach the dedicated link-only owner before any generic
+ * journal code is allowed to run.
+ */
+export function assertGenericApprovalAllowed(
+  match: ApprovedReconciliationMatchIdentity | null | undefined,
+): void {
+  if (!match || match.candidate_type !== "qris_settlement") return;
+
+  const candidateId = Number(match.candidate_id);
+  if (!Number.isSafeInteger(candidateId) || candidateId <= 0) {
+    throw new GenericPostGuardError(
+      GENERIC_POST_GUARD_CODES.AMBIGUOUS_QRIS_SETTLEMENT_SOURCE,
+      "Identitas QRIS settlement tidak lengkap; generic approval ditolak.",
+    );
+  }
+
+  if (
+    match.candidate_source ===
+    RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER
+  ) {
+    throw new GenericPostGuardError(
+      GENERIC_POST_GUARD_CODES.CANONICAL_SETTLEMENT_APPROVAL_REQUIRED,
+      "Canonical Sport Center settlement wajib memakai approval link-only; generic approval ditolak.",
+    );
+  }
+
+  if (match.candidate_source !== RECONCILIATION_CANDIDATE_SOURCES.LEGACY_QRIS) {
+    throw new GenericPostGuardError(
+      GENERIC_POST_GUARD_CODES.AMBIGUOUS_QRIS_SETTLEMENT_SOURCE,
+      "Sumber QRIS settlement tidak dapat dibuktikan secara source-aware; generic approval ditolak.",
+    );
+  }
 }

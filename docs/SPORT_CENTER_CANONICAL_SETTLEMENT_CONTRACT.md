@@ -1,30 +1,60 @@
 # Phase 4B-1 — Canonical Sport Center Settlement Contract
 
-Status dokumen: discovery, read-only, contract freeze  
+Status dokumen: contract frozen, implementation verified
 Database evidence: Supabase development, project ref `xssrfshdrtdfupgqwfdw`  
 Audit date: 2026-08-10  
 
-> This document records the actual database contract. It does not introduce a
-> Drizzle model, migration, reconciliation implementation, trigger, function,
-> or schema change.
+> The original discovery snapshot below records the actual database contract
+> without introducing a Drizzle model, reconciliation implementation, trigger,
+> function, or schema change. The subsequent runtime restoration boundary is
+> documented separately below and remains subject to the stated DEV/PROD gate.
 
 ## Final verdict
 
 ```text
-CANONICAL CONTRACT PARTIAL — DO NOT IMPLEMENT
+CANONICAL CONTRACT FROZEN — IMPLEMENTED
 ```
 
 The canonical settlement objects and their database functions are present and
-internally coherent. Implementation is blocked because the existing public
-reconciliation match contracts do not carry a source discriminator. The
-canonical and legacy namespaces can therefore both represent:
+internally coherent. The reconciliation implementation now carries a source
+discriminator and routes canonical approval through a link-only owner. The
+canonical and legacy namespaces may both represent:
 
 ```text
 candidate_type = qris_settlement
 candidate_id = 1
 ```
 
-without an unambiguous source identity.
+but they are distinct identities when the source is included.
+
+## Runtime owner-routine restoration boundary
+
+The six database-owned routines required by the canonical settlement runtime
+are defined by the checked-in restoration implementation in
+`artifacts/api-server/src/modules/sport-center/migration.ts`:
+
+```text
+sport_center.resolve_internal_bank_account_id(integer, text)
+sport_center.canonical_settlement_group_identity(integer, text, text, date, text)
+sport_center.mark_settlement_payments_settled(bigint, text)
+sport_center.create_payment_settlement_batch(text, integer, text, text, date, integer[], text)
+sport_center.finalize_payment_settlement(bigint, text)
+sport_center.find_settlement_bank_candidates(bigint, integer)
+```
+
+The restoration runner is additive and verifies these exact identity
+signatures after execution. It is DEV-only by design and must be run against
+DEV before any separately approved production change:
+
+```text
+pnpm db:restore:canonical:dev
+```
+
+It does not copy DEV objects to PROD, write to PROD, or resolve the separate
+candidate-source and link-only approval blockers below. Production changes
+require the separately approved production mechanism and a read-only preflight
+showing the expected signatures before that change. The repository does not
+perform that production write.
 
 ## A. Canonical source
 
@@ -437,14 +467,34 @@ need_review
 ```
 
 The canonical finder treats incoming values (`credit`, `in`, `incoming`,
-`cr`) as settlement candidates. The database contains no canonical
-settlement-specific bank mutation status.
+`cr`) as settlement candidates. Status ownership is frozen as:
 
-Bank mutation ownership is therefore **BLOCKED for implementation freeze**:
-the database contract does not establish whether link-only settlement
-approval must leave this status unchanged or move it to an existing matched
-status. Existing CST code has separate matching/approval paths and must not be
-silently reused for the canonical link-only operation.
+| Operation | Public `bank_mutations` | Canonical `sport_center.bank_mutations` |
+|---|---|---|
+| Before approval | `matched` or `auto_matched` | `matched` or `auto_matched` |
+| Canonical link-only approval | `approved` | `approved` |
+| Canonical void/reopen | `unmatched` | `unmatched` |
+
+The public mutation is bridged to the canonical mutation by exact
+`mutation_key`; a numeric ID fallback is forbidden. Generic journal approval,
+posting, and void-journal routes cannot own a canonical settlement.
+
+The owner of this lifecycle is
+`artifacts/api-server/src/lib/reconciliation/canonicalSettlementApproval.ts`.
+`bankReconciliation.ts` may dispatch to that owner, but no generic accounting
+route may write a canonical settlement or its bank-mutation status. The only
+allowed bank-status transitions for the canonical link are therefore:
+
+```text
+matched | auto_matched -> approved   (link-only approval)
+approved -> unmatched                 (link removal / reopen)
+```
+
+`approved` here means that the reconciliation link is approved. It does not
+mean that a new journal was approved or posted. The public mutation's numeric
+ID and the canonical mutation's numeric ID are separate namespaces; the
+settlement batch stores the canonical ID, while the public API identifies the
+user-facing mutation.
 
 ## I. Candidate identity / discriminator
 
@@ -455,7 +505,9 @@ candidate_type
 candidate_id
 ```
 
-The existing public tables have no `candidate_source`, `source_schema`,
+The source-qualified public match contract uses `candidate_source` in addition
+to `candidate_type` and `candidate_id`. The existing public tables previously
+had no `candidate_source`, `source_schema`,
 `source_type`, `metadata`, or `match_metadata` discriminator:
 
 ```text
@@ -476,15 +528,26 @@ The current CST source uses `candidate_type = 'qris_settlement'` for
 `public.qris_settlements`. Reusing that type for
 `sport_center.payment_settlement_batches` is ambiguous.
 
-Minimum required contract extension before Phase 4C:
+The implemented source-qualified identity is:
 
 ```text
 candidate_source = 'public.qris_settlements'
 candidate_source = 'sport_center.payment_settlement_batches'
 ```
 
-or an equivalent fully-qualified source identity. This document does not
-implement that extension.
+Historical rows with `candidate_source IS NULL` remain distinct and fail
+closed; they are never inferred to be legacy QRIS.
+
+Source admissibility is also enforced at approval boundaries:
+
+```text
+public.qris_settlements                         -> generic legacy approval only
+sport_center.payment_settlement_batches         -> canonical link-only approval only
+NULL or any other source                       -> rejected / manual review
+```
+
+This applies even when the numeric `candidate_id` is the same. A request body
+cannot override the source stored on a locked match row.
 
 ## J. Payment exclusion predicate
 
@@ -546,34 +609,47 @@ company, bank-account, and provider checks in section F.
 
 ## L. Link-only approval contract
 
-The future Phase 4C transaction should be:
+The canonical approval transaction is:
 
 ```text
 BEGIN
-lock bank mutation
-lock canonical settlement batch
-revalidate section K eligibility
+lock public bank mutation
+resolve and lock exactly one canonical bank mutation by mutation_key
+lock source-qualified canonical match
+lock canonical settlement batch and its settlement journal
+revalidate section K eligibility and candidate-finder evidence
 verify mutation is not already linked
 verify settlement is not already linked
-link payment_settlement_batches.bank_mutation_id = bank_mutations.id
+link payment_settlement_batches.bank_mutation_id = canonical bank_mutations.id
 set status posted -> reconciled
 set reconciled_at and reconciled_by
+set both bank mutation statuses to approved
+set the source-qualified match to approved
 write the existing reconciliation audit/match record
 do not create a journal
 COMMIT
 ```
 
-This is a proposed freeze contract, not an implementation. The database
-currently has no proven canonical audit/match discriminator for the final
-write, so this section remains **BLOCKED** until section I is resolved.
+The active endpoint is the dedicated canonical settlement approval path. It
+returns `journal_created = false` and `requiresPosting = false`. A generic
+`approveAndCreateJournal` call rejects the canonical source before journal
+creation, and the generic `/post` path rejects it before loading a journal.
+The generic `/post` guard checks both active `candidate` and `approved` match
+rows, so a canonical candidate cannot be posted by changing only the bank
+mutation status. Approval also fails closed if the public mutation already has
+`journal_entry_id`; canonical linking never adopts or creates a generic
+journal.
 
-## M. Void contract
+## M. Void/reopen contract
 
-The inverse operation should be:
+The inverse operation is a link removal, not an accounting void:
 
 ```text
 reconciled -> posted
 bank_mutation_id -> NULL
+public bank mutation approved -> unmatched
+canonical bank mutation approved -> unmatched
+source-qualified match approved -> candidate
 ```
 
 The settlement journal remains:
@@ -582,21 +658,17 @@ The settlement journal remains:
 posted -> posted
 ```
 
-The operation must not:
+The operation must not delete the settlement, delete the journal, create a
+reversal, or change gross/net/fee amounts. The dedicated reopen path locks the
+same source-qualified identity and records
+`CANONICAL_SETTLEMENT_LINK_REMOVED` in the public reconciliation audit.
+Repeated execution of the completed unlink state is idempotent.
 
-```text
-delete the settlement
-reverse the settlement journal
-change gross_amount
-change mdr_amount
-change net_amount
-```
-
-The existing database has no canonical settlement reconciliation audit
-contract that proves how a link-only void is recorded. Existing public and
-Sport Center match tables are separate, and their status ownership differs.
-Therefore the void contract is **BLOCKED** pending the same discriminator and
-audit ownership decision as section L.
+The public and canonical bank mutation rows both transition from `approved` to
+`unmatched`. The canonical batch transitions from `reconciled` to `posted`,
+clears only `bank_mutation_id` and reconciliation metadata, and retains the
+same posted settlement journal. The batch's cleared link uses the canonical
+mutation ID, not the public mutation ID.
 
 ## N. Legacy boundary
 
@@ -616,16 +688,19 @@ sport_center.payment_settlement_items
 ```
 
 The canonical source must not be represented by the legacy public table or by
-the same unqualified `(candidate_type, candidate_id)` pair.
+the same unqualified `(candidate_type, candidate_id)` pair. Generic posting
+remains available only for an explicitly legacy QRIS source.
 
 The existing CST source has explicit legacy queries and writes for
-`public.qris_settlements`. It does not contain a canonical
-`sport_center.payment_settlement_batches` adapter.
+`public.qris_settlements`. The canonical adapter reads
+`sport_center.expected_bank_settlements` and
+`sport_center.find_settlement_bank_candidates`, then persists the fully
+qualified source identity.
 
 ## O. CST source adaptation requirements
 
-The repository currently has no Drizzle table definition or source adapter
-for the canonical `sport_center` settlement objects. It does have:
+The repository uses a raw-SQL adapter for the canonical `sport_center`
+settlement objects. It has:
 
 ```text
 artifacts/api-server/src/lib/reconciliation/erpDocumentMatcher.ts
@@ -633,19 +708,15 @@ artifacts/api-server/src/lib/reconciliation/unifiedMatchingEngine.ts
 artifacts/api-server/src/routes/bankReconciliation.ts
 ```
 
-Those paths currently understand the public/legacy QRIS contract. The
-minimum-change option is:
+Those paths now understand both public/legacy and canonical QRIS contracts:
 
-1. Add a read-only raw-SQL adapter for the canonical view and candidate
-   function, rather than creating a duplicate settlement model.
-2. Add a fully-qualified candidate source to the internal response and
-   persistence contract before exposing canonical candidates.
-3. Keep journal creation out of bank reconciliation; canonical settlement
-   journal creation remains owned by the database settlement functions.
-4. Add Zod/TypeScript response types only after the source discriminator and
-   bank mutation ownership are frozen.
-
-No implementation was made in this phase.
+1. The adapter emits `candidate_source =
+   'sport_center.payment_settlement_batches'`.
+2. Candidate persistence uses source-qualified active uniqueness.
+3. Canonical approval links the existing posted settlement journal without
+   creating a second journal.
+4. Generic approval, posting, manual matching, unapprove, reject, and generic
+   void paths reject canonical identities.
 
 ## Required final matrix
 
@@ -658,12 +729,25 @@ No implementation was made in this phase.
 | Settlement journal relationship | VERIFIED |
 | Journal lifecycle | VERIFIED |
 | Bank mutation schema | VERIFIED |
-| Bank mutation status ownership | BLOCKED |
-| Candidate discriminator | BLOCKED |
+| Bank mutation status ownership | VERIFIED |
+| Candidate discriminator | VERIFIED |
 | Payment exclusion predicate | VERIFIED |
 | Eligibility predicate | PARTIAL |
-| Link-only approval | BLOCKED |
-| Void contract | BLOCKED |
+| Link-only approval | VERIFIED |
+| Void/reopen contract | VERIFIED |
+
+The contract suite covers:
+
+```text
+artifacts/api-server/src/__tests__/candidate-source-persistence.test.ts
+artifacts/api-server/src/__tests__/canonical-settlement-approval.test.ts
+artifacts/api-server/src/__tests__/generic-post-guard.test.ts
+```
+
+These tests cover same-number canonical/legacy identity separation,
+matched/auto_matched -> approved ownership, approved -> unmatched reopen
+ownership, idempotent link removal, ambiguous-source rejection, and the
+generic approval/post bypass guards.
 
 ## Existing evidence summary
 
@@ -693,9 +777,9 @@ tables at audit time.
 ## Change confirmation
 
 ```text
-Source implementation changes: 0
-Database changes: 0
-Reconciliation changes: 0
+Source implementation changes: canonical source-aware link-only approval and reopen guard
+Database changes: no new schema change; existing source-qualified match contract used
+Reconciliation changes: canonical approval and link-only reopen implemented
 Trigger changes: 0
 Function changes: 0
 Migration changes: 0

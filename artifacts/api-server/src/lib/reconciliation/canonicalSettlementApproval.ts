@@ -6,6 +6,9 @@ import {
 } from "@workspace/db";
 
 export const CANONICAL_APPROVAL_BANK_MUTATION_STATUS = "approved" as const;
+export const CANONICAL_REOPEN_BANK_MUTATION_STATUS = "unmatched" as const;
+export const CANONICAL_REOPEN_SETTLEMENT_STATUS = "posted" as const;
+export const CANONICAL_REOPEN_MATCH_STATUS = "candidate" as const;
 export const CANONICAL_SETTLEMENT_SOURCE =
   RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER;
 
@@ -20,8 +23,10 @@ export const CANONICAL_APPROVAL_CODES = {
   MUTATION_ALREADY_USED: "CANONICAL_BANK_MUTATION_ALREADY_USED",
   SETTLEMENT_ALREADY_USED: "CANONICAL_SETTLEMENT_ALREADY_USED",
   PAYMENT_CONFLICT: "CANONICAL_SETTLEMENT_PAYMENT_RECONCILIATION_CONFLICT",
+  GENERIC_JOURNAL_ALREADY_EXISTS: "CANONICAL_GENERIC_JOURNAL_ALREADY_EXISTS",
   INCONSISTENT_STATE: "CANONICAL_APPROVAL_INCONSISTENT_STATE",
   MATCHING_EVIDENCE_INVALID: "CANONICAL_SETTLEMENT_MATCHING_EVIDENCE_INVALID",
+  REOPEN_NOT_ELIGIBLE: "CANONICAL_SETTLEMENT_REOPEN_NOT_ELIGIBLE",
 } as const;
 
 type CanonicalApprovalCode =
@@ -60,6 +65,16 @@ export function isCanonicalApprovalIdempotentState(row: ApprovalRow): boolean {
     String(row.match_status ?? "").toLowerCase() === "approved" &&
     String(row.canonical_mutation_status ?? "").toLowerCase() === "approved" &&
     String(row.public_mutation_status ?? "").toLowerCase() === "approved"
+  );
+}
+
+export function isCanonicalReopenIdempotentState(row: ApprovalRow): boolean {
+  return (
+    String(row.settlement_status ?? "").toLowerCase() === "posted" &&
+    row.settlement_bank_mutation_id == null &&
+    String(row.match_status ?? "").toLowerCase() === "candidate" &&
+    String(row.canonical_mutation_status ?? "").toLowerCase() === "unmatched" &&
+    String(row.public_mutation_status ?? "").toLowerCase() === "unmatched"
   );
 }
 
@@ -102,6 +117,24 @@ export type CanonicalApprovalResult = {
   journal_entry_id: null;
 };
 
+export type CanonicalReopenResult = {
+  ok: true;
+  idempotent: boolean;
+  action: "canonical_settlement_link_removed";
+  candidate_type: "qris_settlement";
+  candidate_id: number;
+  candidate_source: typeof CANONICAL_SETTLEMENT_SOURCE;
+  mutation_id: number;
+  canonical_mutation_id: number;
+  settlement_status: "posted";
+  bank_mutation_status: "unmatched";
+  match_status: "candidate";
+  bank_mutation_id: null;
+  journal_created: false;
+  journal_reversed: false;
+  settlement_journal_id: number;
+};
+
 /**
  * Link an already-posted Sport Center settlement to an eligible canonical
  * bank mutation. This is deliberately separate from approveAndCreateJournal:
@@ -137,7 +170,8 @@ export async function approveCanonicalSettlementLink(
     // public mutation -> canonical mutation -> source-aware match -> settlement
     // -> settlement journal -> underlying public payment mirrors.
     const { rows: publicMutationRows } = await tx.execute(sql.raw(`
-      SELECT id, mutation_key, status, amount, transaction_date, company_id, bank_account_id
+      SELECT id, mutation_key, status, journal_entry_id, amount, transaction_date,
+             company_id, bank_account_id
       FROM bank_mutations
       WHERE id = ${mutationId}
       FOR UPDATE
@@ -149,6 +183,12 @@ export async function approveCanonicalSettlementLink(
       );
     }
     const publicMutation = publicMutationRows[0] as Record<string, unknown>;
+    if (publicMutation.journal_entry_id != null) {
+      throw new CanonicalSettlementApprovalError(
+        CANONICAL_APPROVAL_CODES.GENERIC_JOURNAL_ALREADY_EXISTS,
+        "Mutasi bank sudah memiliki journal generic; approval canonical link-only dihentikan.",
+      );
+    }
     const mutationKey = String(publicMutation.mutation_key ?? "");
     if (!mutationKey) {
       throw new CanonicalSettlementApprovalError(
@@ -529,6 +569,269 @@ export async function approveCanonicalSettlementLink(
   });
 }
 
+/**
+ * Remove a canonical reconciliation link without touching accounting.
+ *
+ * This is intentionally not routed through the generic void-journal flow:
+ * canonical settlement journals remain posted and the bank mutation is simply
+ * returned to the unmatched candidate lifecycle.
+ */
+export async function reopenCanonicalSettlementLink(
+  client: DbClient,
+  input: CanonicalApprovalInput,
+): Promise<CanonicalReopenResult> {
+  const { mutationId, actor } = input;
+
+  if (!Number.isSafeInteger(mutationId) || mutationId <= 0) {
+    throw new CanonicalSettlementApprovalError(
+      CANONICAL_APPROVAL_CODES.INVALID_MATCH,
+      "Mutasi rekonsiliasi tidak valid.",
+    );
+  }
+
+  return client.transaction(async (tx) => {
+    const { rows: publicRows } = await tx.execute(sql.raw(`
+      SELECT id, mutation_key, status, journal_entry_id
+      FROM bank_mutations
+      WHERE id = ${mutationId}
+      FOR UPDATE
+    `));
+    if (!publicRows.length) {
+      throw new CanonicalSettlementApprovalError(
+        CANONICAL_APPROVAL_CODES.BANK_MUTATION_NOT_FOUND,
+        "Mutasi bank publik tidak ditemukan.",
+      );
+    }
+    const publicMutation = publicRows[0] as Record<string, unknown>;
+    if (publicMutation.journal_entry_id != null) {
+      throw new CanonicalSettlementApprovalError(
+        CANONICAL_APPROVAL_CODES.GENERIC_JOURNAL_ALREADY_EXISTS,
+        "Mutasi bank memiliki journal generic; link canonical tidak boleh dibuka melalui jalur accounting.",
+      );
+    }
+    const mutationKey = String(publicMutation.mutation_key ?? "");
+    if (!mutationKey) {
+      throw new CanonicalSettlementApprovalError(
+        CANONICAL_APPROVAL_CODES.BANK_MUTATION_NOT_FOUND,
+        "Mutasi bank tidak memiliki mutation_key untuk pemetaan canonical.",
+      );
+    }
+
+    const { rows: canonicalRows } = await tx.execute(sql.raw(`
+      SELECT id, mutation_key, status
+      FROM sport_center.bank_mutations
+      WHERE mutation_key = '${escapeSql(mutationKey)}'
+      FOR UPDATE
+    `));
+    if (canonicalRows.length !== 1) {
+      throw new CanonicalSettlementApprovalError(
+        CANONICAL_APPROVAL_CODES.BANK_MUTATION_NOT_FOUND,
+        canonicalRows.length
+          ? "Mutation key memetakan lebih dari satu mutasi Sport Center."
+          : "Mutasi bank canonical Sport Center tidak ditemukan untuk mutation_key ini.",
+      );
+    }
+    const canonicalMutation = canonicalRows[0] as Record<string, unknown>;
+    const canonicalMutationId = Number(canonicalMutation.id);
+
+    const { rows: matchRows } = await tx.execute(sql.raw(`
+      SELECT id, candidate_id, candidate_type, candidate_source, status
+      FROM bank_reconciliation_matches
+      WHERE mutation_id = ${mutationId}
+        AND candidate_type = 'qris_settlement'
+        AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
+        AND status IN ('approved', 'candidate')
+      ORDER BY id
+      LIMIT 2
+      FOR UPDATE
+    `));
+    if (matchRows.length !== 1) {
+      throw new CanonicalSettlementApprovalError(
+        matchRows.length > 1
+          ? CANONICAL_APPROVAL_CODES.INCONSISTENT_STATE
+          : CANONICAL_APPROVAL_CODES.REOPEN_NOT_ELIGIBLE,
+        matchRows.length > 1
+          ? "Terdapat lebih dari satu match canonical untuk mutasi ini."
+          : "Match reconciliation canonical tidak ditemukan untuk mutasi ini.",
+      );
+    }
+    const match = matchRows[0] as Record<string, unknown>;
+    const settlementId = Number(match.candidate_id);
+    if (!Number.isSafeInteger(settlementId) || settlementId <= 0) {
+      throw new CanonicalSettlementApprovalError(
+        CANONICAL_APPROVAL_CODES.INVALID_MATCH,
+        "Identitas candidate canonical tidak lengkap.",
+      );
+    }
+
+    const { rows: settlementRows } = await tx.execute(sql.raw(`
+      SELECT id, status, bank_mutation_id, settlement_journal_id
+      FROM sport_center.payment_settlement_batches
+      WHERE id = ${settlementId}
+      FOR UPDATE
+    `));
+    if (!settlementRows.length) {
+      throw new CanonicalSettlementApprovalError(
+        CANONICAL_APPROVAL_CODES.REOPEN_NOT_ELIGIBLE,
+        "Settlement canonical tidak ditemukan.",
+      );
+    }
+    const settlement = settlementRows[0] as Record<string, unknown>;
+    const settlementJournalId = Number(settlement.settlement_journal_id);
+    if (!Number.isSafeInteger(settlementJournalId) || settlementJournalId <= 0) {
+      throw new CanonicalSettlementApprovalError(
+        CANONICAL_APPROVAL_CODES.JOURNAL_NOT_ELIGIBLE,
+        "Settlement canonical tidak memiliki settlement journal.",
+      );
+    }
+
+    const { rows: journalRows } = await tx.execute(sql.raw(`
+      SELECT id, status, journal_type, is_reversal, settlement_batch_id
+      FROM sport_center.accounting_journals
+      WHERE id = ${settlementJournalId}
+      FOR UPDATE
+    `));
+    const journal = journalRows[0] as Record<string, unknown> | undefined;
+    if (
+      !journal ||
+      String(journal.status ?? "").toLowerCase() !== "posted" ||
+      String(journal.journal_type ?? "").toLowerCase() !== "settlement" ||
+      journal.is_reversal !== false ||
+      Number(journal.settlement_batch_id) !== settlementId
+    ) {
+      throw new CanonicalSettlementApprovalError(
+        CANONICAL_APPROVAL_CODES.JOURNAL_NOT_ELIGIBLE,
+        "Settlement journal harus tetap posted, bertipe settlement, bukan reversal, dan menunjuk batch yang sama.",
+      );
+    }
+
+    const state = {
+      settlement_status: settlement.status as string,
+      settlement_bank_mutation_id: settlement.bank_mutation_id as number | null,
+      match_status: match.status as string,
+      canonical_mutation_status: canonicalMutation.status as string,
+      public_mutation_status: publicMutation.status as string,
+    };
+    if (isCanonicalReopenIdempotentState(state)) {
+      return buildReopenResult(
+        settlementId,
+        mutationId,
+        canonicalMutationId,
+        settlementJournalId,
+        true,
+      );
+    }
+
+    if (
+      String(settlement.status ?? "").toLowerCase() !== "reconciled" ||
+      Number(settlement.bank_mutation_id) !== canonicalMutationId ||
+      String(match.status ?? "").toLowerCase() !== "approved" ||
+      String(canonicalMutation.status ?? "").toLowerCase() !== "approved" ||
+      String(publicMutation.status ?? "").toLowerCase() !== "approved"
+    ) {
+      throw new CanonicalSettlementApprovalError(
+        CANONICAL_APPROVAL_CODES.REOPEN_NOT_ELIGIBLE,
+        "Canonical link hanya dapat dibuka dari state reconciled/approved yang lengkap.",
+      );
+    }
+
+    const settlementUpdate = await tx.execute(sql.raw(`
+      UPDATE sport_center.payment_settlement_batches
+      SET status = 'posted',
+          bank_mutation_id = NULL,
+          reconciled_at = NULL,
+          reconciled_by = NULL,
+          updated_at = NOW()
+      WHERE id = ${settlementId}
+        AND status = 'reconciled'
+        AND bank_mutation_id = ${canonicalMutationId}
+    `));
+    if (!hasRowCount(settlementUpdate)) {
+      throw new CanonicalSettlementApprovalError(
+        CANONICAL_APPROVAL_CODES.INCONSISTENT_STATE,
+        "Settlement berubah saat membuka link canonical.",
+      );
+    }
+
+    const matchUpdate = await tx.execute(sql.raw(`
+      UPDATE bank_reconciliation_matches
+      SET status = 'candidate'
+      WHERE id = ${Number(match.id)}
+        AND mutation_id = ${mutationId}
+        AND candidate_type = 'qris_settlement'
+        AND candidate_id = ${settlementId}
+        AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
+        AND status = 'approved'
+    `));
+    if (!hasRowCount(matchUpdate)) {
+      throw new CanonicalSettlementApprovalError(
+        CANONICAL_APPROVAL_CODES.INCONSISTENT_STATE,
+        "Match canonical berubah saat membuka link.",
+      );
+    }
+
+    const canonicalUpdate = await tx.execute(sql.raw(`
+      UPDATE sport_center.bank_mutations
+      SET status = 'unmatched',
+          approved_by = NULL,
+          approved_at = NULL
+      WHERE id = ${canonicalMutationId}
+        AND status = 'approved'
+    `));
+    if (!hasRowCount(canonicalUpdate)) {
+      throw new CanonicalSettlementApprovalError(
+        CANONICAL_APPROVAL_CODES.INCONSISTENT_STATE,
+        "Mutasi bank canonical berubah saat membuka link.",
+      );
+    }
+
+    const publicUpdate = await tx.execute(sql.raw(`
+      UPDATE bank_mutations
+      SET status = 'unmatched',
+          journal_entry_id = NULL,
+          approved_by = NULL,
+          approved_at = NULL,
+          posted_by = NULL,
+          posted_at = NULL,
+          updated_at = NOW()
+      WHERE id = ${mutationId}
+        AND status = 'approved'
+    `));
+    if (!hasRowCount(publicUpdate)) {
+      throw new CanonicalSettlementApprovalError(
+        CANONICAL_APPROVAL_CODES.INCONSISTENT_STATE,
+        "Mutasi bank publik berubah saat membuka link.",
+      );
+    }
+
+    await tx.execute(sql.raw(`
+      INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
+      VALUES (
+        ${mutationId},
+        'CANONICAL_SETTLEMENT_LINK_REMOVED',
+        '${escapeSql(actor)}',
+        ${jsonSql({
+          mutation_id: mutationId,
+          canonical_mutation_id: canonicalMutationId,
+          candidate_type: "qris_settlement",
+          candidate_id: settlementId,
+          candidate_source: CANONICAL_SETTLEMENT_SOURCE,
+          settlement_journal_id: settlementJournalId,
+          journal_reversed: false,
+        })}
+      )
+    `));
+
+    return buildReopenResult(
+      settlementId,
+      mutationId,
+      canonicalMutationId,
+      settlementJournalId,
+      false,
+    );
+  });
+}
+
 function buildResult(
   settlementId: number,
   mutationId: number,
@@ -550,5 +853,31 @@ function buildResult(
     journal_created: false,
     requiresPosting: false,
     journal_entry_id: null,
+  };
+}
+
+function buildReopenResult(
+  settlementId: number,
+  mutationId: number,
+  canonicalMutationId: number,
+  settlementJournalId: number,
+  idempotent: boolean,
+): CanonicalReopenResult {
+  return {
+    ok: true,
+    idempotent,
+    action: "canonical_settlement_link_removed",
+    candidate_type: "qris_settlement",
+    candidate_id: settlementId,
+    candidate_source: CANONICAL_SETTLEMENT_SOURCE,
+    mutation_id: mutationId,
+    canonical_mutation_id: canonicalMutationId,
+    settlement_status: CANONICAL_REOPEN_SETTLEMENT_STATUS,
+    bank_mutation_status: CANONICAL_REOPEN_BANK_MUTATION_STATUS,
+    match_status: CANONICAL_REOPEN_MATCH_STATUS,
+    bank_mutation_id: null,
+    journal_created: false,
+    journal_reversed: false,
+    settlement_journal_id: settlementJournalId,
   };
 }
