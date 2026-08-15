@@ -113,8 +113,10 @@ export const pool = new Pool({
   // In production: keep the pool alive (allowExitOnIdle: false) so the server
   // is not killed between requests during quiet periods.
   allowExitOnIdle: isTestEnv,
-  // Ensure search_path is always set — pgBouncer in transaction mode may drop it
-  options: '-c search_path=public',
+  // Ensure search_path is always set — pgBouncer in transaction mode may drop it.
+  // lock_timeout prevents startup DDL migrations from hanging forever when a
+  // previous killed instance left an open lock on the same table.
+  options: '-c search_path=public -c lock_timeout=15000',
 });
 
 // ── endPool ───────────────────────────────────────────────────────────────────
@@ -138,7 +140,10 @@ export async function endPool(): Promise<void> {
 // table names (e.g. "companies") resolve correctly.
 if (!isLocalConn) {
   pool.on("connect", (client) => {
-    client.query("SET search_path = public").catch(() => {});
+    // Set search_path — PgBouncer transaction mode does not preserve it
+    // Set lock_timeout — prevents startup DDL migrations from hanging forever
+    // when a previously killed instance left an open lock on the same table.
+    client.query("SET search_path = public; SET lock_timeout = '20s'").catch(() => {});
   });
 }
 
