@@ -505,3 +505,59 @@ source-controlled.
 **FINAL VERDICT:**
 ⚠️ **OWNER DECISION REQUIRED — FUNCTION CONTRACT**
 **DO NOT REPUBLISH**
+
+## Function 1 owner contract freeze
+
+**Function:** `sport_center.create_payment_accounting_draft(integer)`
+
+| Contract area | Current runtime behavior | Repository evidence | Owner decision |
+|---|---|---|---|
+| Journal mapping | QRIS/provider → `PAYMENT_CLEARING`; cash/tunai → `CASH`; otherwise `BANK_RECEIPT`. Revenue is `Pendapatan Sport Center`. | Full canonical body in `artifacts/api-server/src/modules/sport-center/migration.ts:937` and focused contract test. | No |
+| Tax | Gross is rounded; DPP is gross divided by `1 + PPN%`; tax is gross minus DPP; PPN credit line only when tax > 0. | Full body and `payment-accounting-draft-contract.test.ts`. | No |
+| Bank account resolution | Uses `resolve_internal_bank_account_id(company_id, external bank id)`; zero or multiple active matches throw. | Existing resolver and full canonical body. | No |
+| Idempotency | Transaction advisory lock plus `payment_confirmed` non-reversal journal lookup; lowest existing journal ID wins. | Full canonical body and focused test. | No |
+| Exception behavior | Throws on missing payment, non-confirmed status, missing booking, invalid amount, unresolved bank mapping, and failed journal validation. | Full canonical body and focused test. | No |
+| Fee handling | No fee calculation or fee line is present in the current runtime body. | Full canonical body. | No behavior added |
+
+### Freeze result
+
+- **DEV/PROD runtime semantic parity:** `PASS`
+- **Runtime normalized DEV/PROD body hash:**
+  `dc487bc7d49e30867553cb1e193dbf26606a9ea8404c24770c0e59aff496c6ae`
+- **Canonical source/runtime normalized body hash:**
+  `759315773a89a4f4b5b9b7916a37e15860be04ab94f2f4e20e5d66927c4acdb1`
+- **Current runtime contract:** de facto owner baseline, preserved without
+  behavior changes.
+- **Canonical repository definition:** CREATED at
+  `artifacts/api-server/src/modules/sport-center/migration.ts:937`.
+- **Search path:** normalized to exactly
+  `pg_catalog, sport_center, public`.
+- **Focused contract test:** PASS — 5 tests in
+  `artifacts/api-server/src/__tests__/payment-accounting-draft-contract.test.ts`.
+
+### Function 2 joint-remediation status
+
+`sport_center.mirror_confirmed_payment_to_public()` remains unchanged and its
+canonical body remains ready for joint remediation with Function 1. Neither
+function has been applied to DEV or PROD in this phase.
+
+### Quality gates
+
+| Gate | Result |
+|---|---|
+| Focused Function 1 contract test | **PASS** |
+| API typecheck | **PASS** |
+| API build | **PASS** |
+| `git diff --check` | **PASS** |
+| Database writes | **0** |
+| Business data modified | **NO** |
+| RLS changed | **NO** |
+| Master republish | **BLOCKED** |
+
+## Final owner-contract freeze verdict
+
+✅ **FUNCTION 1 CANONICAL CONTRACT FROZEN**
+✅ **BOTH FUNCTIONS READY FOR JOINT REMEDIATION**
+
+Production remediation and master republish remain separate phases and were not
+performed here.
