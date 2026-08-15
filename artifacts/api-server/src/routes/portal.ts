@@ -140,6 +140,7 @@ import {
   completeOnboarding,
   OnboardingServiceError,
 } from "../lib/services/portalVendorOnboardingService.js";
+import { classifyKtpOcrError, ktpOcrClientResponse } from "../lib/services/ktpOcrErrors.js";
 import {
   getVendorDashboard,
   getVendorFullProfile,
@@ -1595,8 +1596,13 @@ router.post("/onboarding/ktp-ocr", requirePortalAuth, _ktpOcrRateLimit, onboardi
     const data = await runKtpOcr(customerId, req.file.buffer, req.file.mimetype);
     res.json({ ok: true, data });
   } catch (err) {
-    console.error("[ktp-ocr]", err);
-    res.status(500).json({ ok: false, error: "OCR gagal. Pastikan OpenAI API key dikonfigurasi." });
+    const failure = ktpOcrClientResponse(err);
+    const classified = classifyKtpOcrError(err);
+    console.error("[ktp-ocr] failed", {
+      code: classified.code,
+      providerStatus: classified.providerStatus ?? null,
+    });
+    res.status(failure.status).json({ ok: false, error: failure.error });
   }
 });
 

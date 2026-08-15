@@ -17,15 +17,16 @@ import { getAdminWa } from "../adminWa.js";
 import { getWaTemplateConfig, renderTemplate } from "../orderNotification.js";
 import { NotificationService } from "./notificationService.js";
 import OpenAI from "openai";
+import { KtpOcrError, classifyKtpOcrError } from "./ktpOcrErrors.js";
 
 // ── OpenAI client ─────────────────────────────────────────────────────────────
 
 function getOnboardingOpenAI(): OpenAI {
-  const directKey = process.env.OPENAI_API_KEY;
+  const directKey = process.env.OPENAI_API_KEY?.trim();
   const intKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
   const baseURL = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
   const apiKey = directKey || intKey;
-  if (!apiKey) throw new Error("OpenAI API key not configured.");
+  if (!apiKey) throw new KtpOcrError("NOT_CONFIGURED");
   return new OpenAI({ apiKey, baseURL: directKey ? undefined : baseURL });
 }
 
@@ -85,49 +86,66 @@ export async function runKtpOcr(
   const base64 = fileBuffer.toString("base64");
   const mime = fileMimetype || "image/jpeg";
 
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o",
-    max_tokens: 800,
-    messages: [{
-      role: "user",
-      content: [
-        {
-          type: "text",
-          text: `Kamu adalah sistem OCR KTP Indonesia. Ekstrak semua field dari KTP ini dan kembalikan HANYA JSON tanpa markdown, format:
+  let response;
+  try {
+    response = await openai.chat.completions.create({
+      model: "gpt-4o",
+      max_tokens: 800,
+      messages: [{
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: `Kamu adalah sistem OCR KTP Indonesia. Ekstrak semua field dari KTP ini dan kembalikan HANYA JSON tanpa markdown, format:
 {"nik":"...","name":"...","birthPlace":"...","birthDate":"...","address":"...","rt":"...","rw":"...","kelurahan":"...","kecamatan":"...","kabupaten":"...","provinsi":"...","gender":"...","religion":"...","maritalStatus":"...","occupation":"...","nationality":"WNI"}
 Isi string kosong jika field tidak terbaca.`,
-        },
-        { type: "image_url", image_url: { url: `data:${mime};base64,${base64}`, detail: "high" } },
-      ],
-    }],
-  });
+          },
+          { type: "image_url", image_url: { url: `data:${mime};base64,${base64}`, detail: "high" } },
+        ],
+      }],
+    });
+  } catch (error) {
+    throw classifyKtpOcrError(error);
+  }
 
   const raw = response.choices[0]?.message?.content ?? "{}";
   const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-  let data: Record<string, string> = {};
-  try { data = JSON.parse(cleaned); } catch { /* fallback empty */ }
+  let data: Record<string, string>;
+  try {
+    const parsed = JSON.parse(cleaned);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("OCR response is not an object");
+    }
+    data = parsed as Record<string, string>;
+  } catch {
+    throw new KtpOcrError("INVALID_RESPONSE");
+  }
 
-  await db.insert(ocrResultsTable).values({
-    customerId,
-    docType: "ktp",
-    nik: data.nik || null,
-    name: data.name || null,
-    birthPlace: data.birthPlace || null,
-    birthDate: data.birthDate || null,
-    address: data.address || null,
-    rt: data.rt || null,
-    rw: data.rw || null,
-    kelurahan: data.kelurahan || null,
-    kecamatan: data.kecamatan || null,
-    kabupaten: data.kabupaten || null,
-    provinsi: data.provinsi || null,
-    gender: data.gender || null,
-    religion: data.religion || null,
-    maritalStatus: data.maritalStatus || null,
-    occupation: data.occupation || null,
-    nationality: data.nationality || null,
-    rawJson: JSON.stringify(data),
-  }).onConflictDoNothing();
+  try {
+    await db.insert(ocrResultsTable).values({
+      customerId,
+      docType: "ktp",
+      nik: data.nik || null,
+      name: data.name || null,
+      birthPlace: data.birthPlace || null,
+      birthDate: data.birthDate || null,
+      address: data.address || null,
+      rt: data.rt || null,
+      rw: data.rw || null,
+      kelurahan: data.kelurahan || null,
+      kecamatan: data.kecamatan || null,
+      kabupaten: data.kabupaten || null,
+      provinsi: data.provinsi || null,
+      gender: data.gender || null,
+      religion: data.religion || null,
+      maritalStatus: data.maritalStatus || null,
+      occupation: data.occupation || null,
+      nationality: data.nationality || null,
+      rawJson: JSON.stringify(data),
+    }).onConflictDoNothing();
+  } catch {
+    throw new KtpOcrError("PROVIDER");
+  }
 
   return data;
 }
