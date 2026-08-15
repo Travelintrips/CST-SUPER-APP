@@ -1,0 +1,78 @@
+import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+const migration = readFileSync(
+  resolve(process.cwd(), "src/modules/sport-center/migration.ts"),
+  "utf8",
+);
+
+const draftFunction = migration.match(
+  /CREATE OR REPLACE FUNCTION sport_center\.create_payment_accounting_draft\(p_payment_id integer\)[\s\S]*?AS \$function\$[\s\S]*?\$function\$/,
+)?.[0] ?? "";
+
+describe("Sport Center payment accounting draft contract", () => {
+  it("contains exactly one complete canonical function definition", () => {
+    expect(draftFunction).not.toBe("");
+    expect(
+      migration.match(
+        /CREATE OR REPLACE FUNCTION sport_center\.create_payment_accounting_draft\(p_payment_id integer\)/g,
+      ),
+    ).toHaveLength(1);
+    expect(draftFunction).not.toContain("v_patched_definition");
+    expect(draftFunction).not.toContain("CANONICAL_PAYMENT_ACCOUNTING_OWNER_PATCH_FAILED");
+  });
+
+  it("preserves the runtime signature, security, and normalized search path", () => {
+    expect(draftFunction).toContain("RETURNS integer");
+    expect(draftFunction).toContain("LANGUAGE plpgsql");
+    expect(draftFunction).toContain("SECURITY DEFINER");
+    expect(draftFunction).toContain(
+      "SET search_path TO 'pg_catalog', 'sport_center', 'public'",
+    );
+    expect(draftFunction).not.toMatch(
+      /SET search_path TO[^\n]*'public'[^\n]*'public'/,
+    );
+  });
+
+  it("locks confirmed payments and reuses the first existing journal", () => {
+    expect(draftFunction).toContain("pg_advisory_xact_lock");
+    expect(draftFunction).toContain("FROM sport_center.sport_payments");
+    expect(draftFunction).toContain("FOR UPDATE");
+    expect(draftFunction).toContain("SPORT_PAYMENT_NOT_CONFIRMED");
+    expect(draftFunction).toContain("journal_type = 'payment_confirmed'");
+    expect(draftFunction).toContain("is_reversal = false");
+    expect(draftFunction).toContain("ORDER BY id");
+    expect(draftFunction).toContain("LIMIT 1");
+    expect(draftFunction).toContain("RETURN v_existing_journal_id");
+  });
+
+  it("preserves payment, tax, account, journal, and validation behavior", () => {
+    expect(draftFunction).toContain("v_dpp := ROUND(");
+    expect(draftFunction).toContain("v_tax := v_gross - v_dpp");
+    expect(draftFunction).toContain("'PAYMENT_CLEARING'");
+    expect(draftFunction).toContain("'CASH'");
+    expect(draftFunction).toContain("'BANK_RECEIPT'");
+    expect(draftFunction).toContain(
+      "sport_center.resolve_internal_bank_account_id(v_company_id, v_payment.bank_account_id::text)",
+    );
+    expect(draftFunction).toContain("INSERT INTO sport_center.accounting_journals");
+    expect(draftFunction).toContain("INSERT INTO sport_center.accounting_journal_lines");
+    expect(draftFunction).toContain("'REVENUE'");
+    expect(draftFunction).toContain("'PPN_OUTPUT'");
+    expect(draftFunction).toContain("IF v_tax > 0 THEN");
+    expect(draftFunction).toContain("sport_center.validate_accounting_journal");
+    expect(draftFunction).toContain("RETURN v_journal_id");
+  });
+
+  it("preserves fail-closed prerequisite errors", () => {
+    for (const marker of [
+      "SPORT_PAYMENT_NOT_FOUND",
+      "SPORT_PAYMENT_NOT_CONFIRMED",
+      "SPORT_BOOKING_NOT_FOUND_FOR_PAYMENT",
+      "INVALID_PAYMENT_AMOUNT",
+    ]) {
+      expect(draftFunction).toContain(marker);
+    }
+  });
+});

@@ -934,49 +934,460 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
   `));
 
   await db.execute(sql.raw(`
-    DO $migration$
+    CREATE OR REPLACE FUNCTION sport_center.create_payment_accounting_draft(p_payment_id integer)
+    RETURNS integer
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'sport_center', 'public'
+    AS $function$
     DECLARE
-      v_definition text;
-      v_patched_definition text;
+        v_payment sport_center.sport_payments%ROWTYPE;
+
+        v_booking_id integer;
+        v_order_number text;
+        v_booking_ppn_rate numeric;
+        v_booking_company_id integer;
+
+        v_company_id integer;
+
+        v_gross numeric(18,2);
+        v_dpp numeric(18,2);
+        v_tax numeric(18,2);
+
+        v_existing_journal_id integer;
+        v_journal_id integer;
+
+        v_debit_account_code text;
+        v_debit_account_name text;
+
+        v_payment_method text;
+        v_payment_provider text;
+        v_payment_type text;
+
+        v_journal_date text;
     BEGIN
-      IF to_regprocedure(
-           'sport_center.create_payment_accounting_draft(integer)'
-         ) IS NULL THEN
-        RAISE EXCEPTION
-          'CANONICAL_PAYMENT_ACCOUNTING_OWNER_MISSING: sport_center.create_payment_accounting_draft(integer)';
-      END IF;
 
-      SELECT pg_get_functiondef(
-        'sport_center.create_payment_accounting_draft(integer)'::regprocedure
-      )
-        INTO v_definition;
+        -- --------------------------------------------------------
+        -- Serialize per payment to avoid concurrent duplicates.
+        -- --------------------------------------------------------
 
-      v_patched_definition := replace(
-        v_definition,
-        'SET search_path TO ''pg_catalog'', ''sport_center''',
-        'SET search_path TO ''pg_catalog'', ''sport_center'', ''public'''
-      );
-      v_patched_definition := replace(
-        v_patched_definition,
-        'v_payment.bank_account_id,',
-        'sport_center.resolve_internal_bank_account_id(v_company_id, v_payment.bank_account_id::text),'
-      );
+        PERFORM pg_advisory_xact_lock(
+            731025,
+            p_payment_id
+        );
 
-      IF v_patched_definition = v_definition
-         OR position(
-              'sport_center.resolve_internal_bank_account_id(v_company_id, v_payment.bank_account_id::text)'
-              IN v_patched_definition
-            ) = 0
-      THEN
-        RAISE EXCEPTION
-          'CANONICAL_PAYMENT_ACCOUNTING_OWNER_PATCH_FAILED: bank identity assignment not found';
-      END IF;
 
-      IF v_patched_definition <> v_definition THEN
-        EXECUTE v_patched_definition;
-      END IF;
+        -- --------------------------------------------------------
+        -- Load payment.
+        -- --------------------------------------------------------
+
+        SELECT *
+          INTO v_payment
+          FROM sport_center.sport_payments
+         WHERE id = p_payment_id
+         FOR UPDATE;
+
+
+        IF NOT FOUND THEN
+            RAISE EXCEPTION
+                'SPORT_PAYMENT_NOT_FOUND: %',
+                p_payment_id;
+        END IF;
+
+
+        -- --------------------------------------------------------
+        -- Only confirmed payment may create accounting draft.
+        -- --------------------------------------------------------
+
+        IF v_payment.status::text <> 'confirmed' THEN
+            RAISE EXCEPTION
+                'SPORT_PAYMENT_NOT_CONFIRMED: payment=% status=%',
+                p_payment_id,
+                v_payment.status;
+        END IF;
+
+
+        -- --------------------------------------------------------
+        -- Idempotency.
+        -- Existing journal wins.
+        -- --------------------------------------------------------
+
+        SELECT id
+          INTO v_existing_journal_id
+          FROM sport_center.accounting_journals
+         WHERE payment_id = p_payment_id
+           AND journal_type = 'payment_confirmed'
+           AND is_reversal = false
+         ORDER BY id
+         LIMIT 1;
+
+
+        IF v_existing_journal_id IS NOT NULL THEN
+            RETURN v_existing_journal_id;
+        END IF;
+
+
+        -- --------------------------------------------------------
+        -- Booking snapshot.
+        -- --------------------------------------------------------
+
+        SELECT
+            b.id,
+            b.order_number,
+            COALESCE(b.ppn_rate, 0),
+            v_payment.company_id
+          INTO
+            v_booking_id,
+            v_order_number,
+            v_booking_ppn_rate,
+            v_booking_company_id
+          FROM sport_center.sport_bookings b
+         WHERE b.id = v_payment.booking_id;
+
+
+        IF v_booking_id IS NULL THEN
+            RAISE EXCEPTION
+                'SPORT_BOOKING_NOT_FOUND_FOR_PAYMENT: payment=% booking=%',
+                p_payment_id,
+                v_payment.booking_id;
+        END IF;
+
+
+        -- --------------------------------------------------------
+        -- Required payment amount.
+        -- --------------------------------------------------------
+
+        v_gross := ROUND(v_payment.amount::numeric, 2);
+
+
+        IF v_gross IS NULL OR v_gross <= 0 THEN
+            RAISE EXCEPTION
+                'INVALID_PAYMENT_AMOUNT: payment=% amount=%',
+                p_payment_id,
+                v_payment.amount;
+        END IF;
+
+
+        -- --------------------------------------------------------
+        -- Tax inclusive calculation.
+        -- --------------------------------------------------------
+
+        IF COALESCE(v_booking_ppn_rate, 0) > 0 THEN
+
+            v_dpp := ROUND(
+                v_gross /
+                (1 + (v_booking_ppn_rate / 100)),
+                2
+            );
+
+            v_tax := v_gross - v_dpp;
+
+        ELSE
+
+            v_dpp := v_gross;
+            v_tax := 0;
+
+        END IF;
+
+
+        -- --------------------------------------------------------
+        -- Snapshot payment metadata.
+        -- --------------------------------------------------------
+
+        v_payment_method :=
+            COALESCE(
+                NULLIF(v_payment.payment_method, ''),
+                'Unknown'
+            );
+
+        v_payment_provider :=
+            NULLIF(v_payment.payment_provider::text, '');
+
+        v_payment_type :=
+            COALESCE(
+                NULLIF(v_payment.payment_type::text, ''),
+                'full_payment'
+            );
+
+
+        -- --------------------------------------------------------
+        -- Company ID — optional for individual bookings.
+        -- Company bookings (payer_type = 'company') carry company_id;
+        -- individual consumer bookings leave it NULL, which is valid.
+        -- --------------------------------------------------------
+
+        v_company_id :=
+            COALESCE(
+                v_payment.company_id,
+                v_booking_company_id
+            );
+
+
+        -- --------------------------------------------------------
+        -- IMPORTANT ACCOUNTING RULE
+        --
+        -- Payment provider / QRIS is NOT bank settlement yet.
+        -- Use Payment Clearing first.
+        --
+        -- Direct cash / bank-transfer can use cash/bank account.
+        -- --------------------------------------------------------
+
+        IF lower(v_payment_method) LIKE '%qris%'
+           OR v_payment_provider IS NOT NULL
+        THEN
+
+            v_debit_account_code :=
+                'PAYMENT_CLEARING';
+
+            v_debit_account_name :=
+                'Payment Clearing';
+
+        ELSIF lower(v_payment_method) LIKE '%cash%'
+           OR lower(v_payment_method) LIKE '%tunai%'
+        THEN
+
+            v_debit_account_code :=
+                'CASH';
+
+            v_debit_account_name :=
+                'Kas';
+
+        ELSE
+
+            v_debit_account_code :=
+                'BANK_RECEIPT';
+
+            v_debit_account_name :=
+                'Bank / Kas Masuk';
+
+        END IF;
+
+
+        -- --------------------------------------------------------
+        -- Journal date.
+        -- Prefer confirmation date.
+        -- --------------------------------------------------------
+
+        v_journal_date :=
+            COALESCE(
+                v_payment.confirmed_at,
+                v_payment.created_at,
+                now()
+            )::date::text;
+
+
+        -- --------------------------------------------------------
+        -- Create accounting journal header.
+        -- --------------------------------------------------------
+
+        INSERT INTO sport_center.accounting_journals
+        (
+            booking_id,
+            payment_id,
+            company_id,
+
+            order_number,
+
+            journal_type,
+            status,
+
+            debit_account,
+            debit_amount,
+
+            credit_revenue_account,
+            credit_revenue_amount,
+
+            credit_ppn_account,
+            credit_ppn_amount,
+
+            journal_date,
+
+            payment_method,
+            payment_provider,
+            payment_type,
+            bank_account_id,
+
+            gross_amount,
+            dpp_amount,
+            tax_amount,
+
+            provider_reference,
+            provider_order_id,
+            merchant_trade_no,
+            provider_trade_no,
+
+            source_schema,
+            source_table,
+            source_id,
+            correlation_id,
+
+            is_reversal,
+            notes,
+
+            created_by
+        )
+        VALUES
+        (
+            v_booking_id,
+            p_payment_id,
+            v_company_id,
+
+            COALESCE(
+                v_order_number,
+                'SC-PAY-' || p_payment_id::text
+            ),
+
+            'payment_confirmed',
+            'draft',
+
+            v_debit_account_name,
+            v_gross,
+
+            'Pendapatan Sport Center',
+            v_dpp,
+
+            'PPN Keluaran',
+            v_tax,
+
+            v_journal_date,
+
+            v_payment_method,
+            v_payment_provider,
+            v_payment_type,
+            sport_center.resolve_internal_bank_account_id(v_company_id, v_payment.bank_account_id::text),
+
+            v_gross,
+            v_dpp,
+            v_tax,
+
+            v_payment.provider_reference,
+            v_payment.provider_order_id,
+            v_payment.merchant_trade_no,
+            v_payment.provider_trade_no,
+
+            'sport_center',
+            'sport_payments',
+            p_payment_id::text,
+            gen_random_uuid()::text,
+
+            false,
+            'Auto-draft dari konfirmasi pembayaran '
+                || COALESCE(
+                    v_order_number,
+                    p_payment_id::text
+                ),
+
+            'system'
+        )
+        RETURNING id INTO v_journal_id;
+
+
+        -- --------------------------------------------------------
+        -- Debit line.
+        -- --------------------------------------------------------
+
+        INSERT INTO sport_center.accounting_journal_lines
+        (
+            journal_id,
+            line_type,
+            account_code,
+            account_name,
+            amount,
+            description
+        )
+        VALUES
+        (
+            v_journal_id,
+            'debit',
+            v_debit_account_code,
+            v_debit_account_name,
+            v_gross,
+            v_debit_account_name || ' - '
+                || COALESCE(
+                    v_order_number,
+                    p_payment_id::text
+                )
+        );
+
+
+        -- --------------------------------------------------------
+        -- Revenue credit line.
+        -- --------------------------------------------------------
+
+        INSERT INTO sport_center.accounting_journal_lines
+        (
+            journal_id,
+            line_type,
+            account_code,
+            account_name,
+            amount,
+            description
+        )
+        VALUES
+        (
+            v_journal_id,
+            'credit',
+            'REVENUE',
+            'Pendapatan Sport Center',
+            v_dpp,
+            'Pendapatan - '
+                || COALESCE(
+                    v_order_number,
+                    p_payment_id::text
+                )
+        );
+
+
+        -- --------------------------------------------------------
+        -- PPN credit line.
+        --
+        -- Only create when tax > 0.
+        -- --------------------------------------------------------
+
+        IF v_tax > 0 THEN
+
+            INSERT INTO sport_center.accounting_journal_lines
+            (
+                journal_id,
+                line_type,
+                account_code,
+                account_name,
+                amount,
+                description
+            )
+            VALUES
+            (
+                v_journal_id,
+                'credit',
+                'PPN_OUTPUT',
+                'PPN Keluaran',
+                v_tax,
+                'PPN Keluaran - '
+                    || COALESCE(
+                        v_order_number,
+                        p_payment_id::text
+                    )
+            );
+
+        END IF;
+
+
+        -- --------------------------------------------------------
+        -- Validate immediately.
+        --
+        -- Journal remains DRAFT after successful validation.
+        -- --------------------------------------------------------
+
+        PERFORM
+            sport_center.validate_accounting_journal(
+                v_journal_id
+            );
+
+
+        RETURN v_journal_id;
+
     END;
-    $migration$;
+    $function$
   `));
 
   const duplicateGroups = await db.execute(sql`
