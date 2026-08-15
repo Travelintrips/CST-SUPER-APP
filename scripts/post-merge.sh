@@ -33,9 +33,11 @@ done
 echo "[2/4] Applying DB migrations..."
 node scripts/apply-migrations.mjs
 
-# Sync schema from DEV to PROD — non-fatal
-echo "[3/4] Syncing schema dev→prod (non-fatal)..."
-node scripts/sync-schema-dev-to-prod.mjs --apply || echo "[post-merge] sync-schema skipped/warning — lihat output di atas."
+# Report schema drift only. Production changes must be explicitly reviewed and
+# applied through scripts/sync-schema-additive.mjs --apply with both runtime
+# Supabase targets resolved by the official secret loader.
+echo "[3/4] Reporting schema drift dev→prod (read-only)..."
+node scripts/sync-schema-dev-to-prod.mjs || echo "[post-merge] schema report skipped/warning — lihat output di atas."
 
 # Seed accounting journals on dev DB (non-fatal safety net).
 # If COA not yet seeded (fresh DB reset), this exits cleanly and defers to
