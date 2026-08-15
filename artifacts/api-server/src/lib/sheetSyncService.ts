@@ -707,34 +707,87 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
 
   const syncAt  = new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" });
   const updates: Array<{ range: string; values: string[][] }> = [];
+  const colorRows: RowColor[] = [];
+  const changedRows = new Set<number>();
+
+  // Avoid rewriting and recoloring the whole sheet when a sync is a no-op.
+  // Status changes from approvals are still written back because the desired
+  // values are compared with the values already read from Google Sheets.
+  const cellEquals = (current: string, desired: string, index: number): boolean => {
+    if (index === scoreIdx) {
+      if (!current && !desired) return true;
+      if (!current || !desired) return false;
+      const currentNumber = Number(current);
+      const desiredNumber = Number(desired);
+      return Number.isFinite(currentNumber) && Number.isFinite(desiredNumber)
+        ? currentNumber === desiredNumber
+        : current === desired;
+    }
+    return current === desired;
+  };
 
   for (const p of parsed) {
     const info = statusMap.get(p.mutation_key);
-    const row  = p.rowIndex;
-    updates.push({ range: `'${tabName}'!${colLetter(mutationKeyIdx)}${row}`, values: [[p.mutation_key]] });
-    updates.push({ range: `'${tabName}'!${colLetter(lastSyncIdx)}${row}`,    values: [[syncAt]] });
-    if (!info) continue;
-    const statusLabel =
-      info.status === "approved"       ? "✅ APPROVED"
-      : info.status === "matched"      ? "🔍 MATCHED"
-      : info.status === "manual_review" ? "⚠️ REVIEW"
-      : "❌ UNMATCHED";
-    // Nama & referensi: tampilkan kandidat terbaik meski belum approved (beri suffix ?)
-    const namaSuffix      = info.detail_name    && !info.is_approved ? " (?)" : "";
-    const refSuffix       = info.detail_ref     && !info.is_approved ? " (?)" : "";
-    const companySuffix   = info.detail_company && !info.is_approved ? " (?)" : "";
-    const serviceSuffix   = info.detail_service && !info.is_approved ? " (?)" : "";
-    const kategori   = info.cand_type
-      ? (info.is_approved ? kategoriLabel(info.cand_type) : `${kategoriLabel(info.cand_type)} (?)`)
-      : "";
-    updates.push({ range: `'${tabName}'!${colLetter(statusIdx)}${row}`,      values: [[statusLabel]] });
-    updates.push({ range: `'${tabName}'!${colLetter(scoreIdx)}${row}`,       values: [[info.score != null ? String(info.score) : ""]] });
-    updates.push({ range: `'${tabName}'!${colLetter(resultIdx)}${row}`,      values: [[info.match_result]] });
-    updates.push({ range: `'${tabName}'!${colLetter(namaIdx)}${row}`,        values: [[info.detail_name + namaSuffix]] });
-    updates.push({ range: `'${tabName}'!${colLetter(referensiIdx)}${row}`,   values: [[info.detail_ref + refSuffix]] });
-    updates.push({ range: `'${tabName}'!${colLetter(kategoriIdx)}${row}`,    values: [[kategori]] });
-    updates.push({ range: `'${tabName}'!${colLetter(perusahaanIdx)}${row}`,  values: [[info.detail_company + companySuffix]] });
-    updates.push({ range: `'${tabName}'!${colLetter(fasilitasIdx)}${row}`,   values: [[info.detail_service + serviceSuffix]] });
+    const row = p.rowIndex;
+    const sourceRow = rows[row - 1] ?? [];
+    const current = (index: number) => String(sourceRow[index] ?? "").trim();
+    const rowUpdates: Array<{ range: string; values: string[][] }> = [];
+
+    const addIfChanged = (index: number, desired: string) => {
+      if (!cellEquals(current(index), desired, index)) {
+        rowUpdates.push({
+          range: `'${tabName}'!${colLetter(index)}${row}`,
+          values: [[desired]],
+        });
+      }
+    };
+
+    addIfChanged(mutationKeyIdx, p.mutation_key);
+
+    if (info) {
+      const statusLabel =
+        info.status === "approved"       ? "✅ APPROVED"
+        : info.status === "matched"      ? "🔍 MATCHED"
+        : info.status === "manual_review" ? "⚠️ REVIEW"
+        : "❌ UNMATCHED";
+      // Nama & referensi: tampilkan kandidat terbaik meski belum approved (beri suffix ?)
+      const namaSuffix      = info.detail_name    && !info.is_approved ? " (?)" : "";
+      const refSuffix       = info.detail_ref     && !info.is_approved ? " (?)" : "";
+      const companySuffix   = info.detail_company && !info.is_approved ? " (?)" : "";
+      const serviceSuffix   = info.detail_service && !info.is_approved ? " (?)" : "";
+      const kategori   = info.cand_type
+        ? (info.is_approved ? kategoriLabel(info.cand_type) : `${kategoriLabel(info.cand_type)} (?)`)
+        : "";
+
+      addIfChanged(statusIdx, statusLabel);
+      addIfChanged(scoreIdx, info.score != null ? String(info.score) : "");
+      addIfChanged(resultIdx, info.match_result);
+      addIfChanged(namaIdx, info.detail_name + namaSuffix);
+      addIfChanged(referensiIdx, info.detail_ref + refSuffix);
+      addIfChanged(kategoriIdx, kategori);
+      addIfChanged(perusahaanIdx, info.detail_company + companySuffix);
+      addIfChanged(fasilitasIdx, info.detail_service + serviceSuffix);
+    }
+
+    if (rowUpdates.length === 0) continue;
+
+    // Only changed rows receive a new sync marker, preserving the marker as a
+    // useful write-back timestamp without forcing a full-sheet update.
+    rowUpdates.push({
+      range: `'${tabName}'!${colLetter(lastSyncIdx)}${row}`,
+      values: [[syncAt]],
+    });
+    updates.push(...rowUpdates);
+    changedRows.add(row);
+
+    let red = 1.0, green = 1.0, blue = 1.0;
+    if (info) {
+      if (info.status === "approved")          { red = 0.85; green = 0.95; blue = 0.85; }
+      else if (info.status === "matched")      { red = 0.85; green = 0.91; blue = 0.98; }
+      else if (info.status === "manual_review") { red = 1.0; green = 0.92; blue = 0.80; }
+      else                                     { red = 1.0; green = 0.97; blue = 0.80; }
+    }
+    colorRows.push({ rowIndex: row, red, green, blue });
   }
 
   if (updates.length > 0) {
@@ -743,20 +796,6 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
     );
   }
 
-  // ── Warnai baris Google Sheet berdasarkan status ──────────────────────────
-  const colorRows: RowColor[] = [];
-  for (const p of parsed) {
-    const info = statusMap.get(p.mutation_key);
-    // default: putih
-    let red = 1.0, green = 1.0, blue = 1.0;
-    if (info) {
-      if (info.status === "approved")       { red = 0.85; green = 0.95; blue = 0.85; } // hijau
-      else if (info.status === "matched")   { red = 0.85; green = 0.91; blue = 0.98; } // biru muda
-      else if (info.status === "manual_review") { red = 1.0; green = 0.92; blue = 0.80; } // oranye
-      else                                  { red = 1.0;  green = 0.97; blue = 0.80; } // kuning
-    }
-    colorRows.push({ rowIndex: p.rowIndex, red, green, blue });
-  }
   if (colorRows.length > 0) {
     await formatRowsColor(sheetId, tabName, colorRows).catch((e) =>
       logger.warn({ err: e?.message }, "[sheetSync] Format warna baris gagal (non-fatal)"),
@@ -789,8 +828,13 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
     }).catch(() => {});
   } catch { /* non-fatal */ }
 
-  // Update revenue summary tab (non-fatal)
-  await updateRevenueSummaryTab(sheetId, company_id ?? null);
+  // Summary refresh requires additional Google Sheets round trips. Refresh it
+  // only when import or matching/status data actually changed.
+  if (newMutations.length > 0 || changedRows.size > 0) {
+    await updateRevenueSummaryTab(sheetId, company_id ?? null);
+  } else {
+    logger.info({ configId, label }, "[sheetSync] Tidak ada perubahan — write-back, format, dan summary dilewati");
+  }
 
   return {
     imported: newMutations.length,
