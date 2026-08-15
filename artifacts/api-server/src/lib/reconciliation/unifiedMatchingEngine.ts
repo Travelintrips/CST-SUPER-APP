@@ -30,6 +30,7 @@ import {
   resolveJournalForEconomicEvent,
   JournalReuseErrorCode,
 } from "./journalReuseEngine.js";
+import { assertGenericApprovalAllowed } from "./genericPostGuard.js";
 import { isQrisSettlementDescription } from "./qrisSettlement.js";
 import {
   isSportPaymentInActiveCanonicalSettlement,
@@ -1353,6 +1354,16 @@ export async function approveAndCreateJournal(
        ]);
        if (selectedType && !allowedCandidateTypes.has(selectedType)) {
          throw Object.assign(new Error("Tipe kandidat rekonsiliasi tidak valid"), { code: "INVALID_MATCH" });
+       }
+       if (
+         selectedType === "qris_settlement" &&
+         selectedCandidateSource === CANONICAL_SETTLEMENT_SOURCE
+       ) {
+         assertGenericApprovalAllowed({
+           candidate_type: selectedType,
+           candidate_id: selectedCandidateId,
+           candidate_source: selectedCandidateSource,
+         });
        }
 
        // ── Step 2: Guard — idempotency and conflicting approved match ────────

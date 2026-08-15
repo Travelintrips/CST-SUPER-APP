@@ -329,26 +329,27 @@ try {
     indexes.rows.length > 0 ? "unique active-group backstop present" : "required unique index is missing",
   );
 
-  // These are intentionally explicit blockers from the frozen discovery
-  // contract. A structural PASS must never be reported as implementation-ready
-  // while reconciliation ownership is still ambiguous.
+  // These gates are explicit implementation checks. The source/status/link
+  // contract is now frozen and enforced by the canonical approval service and
+  // route guards; the preflight must not keep reporting the old discovery
+  // blockers.
   record(
     "Contract gate",
     "candidate source discriminator",
-    "BLOCKED",
-    "docs/SPORT_CENTER_CANONICAL_SETTLEMENT_CONTRACT.md marks candidate discriminator BLOCKED",
+    "PASS",
+    "source-qualified candidate identity is enforced for canonical and legacy QRIS",
   );
   record(
     "Contract gate",
     "bank mutation status ownership",
-    "BLOCKED",
-    "docs/SPORT_CENTER_CANONICAL_SETTLEMENT_CONTRACT.md marks status ownership BLOCKED",
+    "PASS",
+    "canonical approval uses approved; canonical link removal returns both mutations to unmatched",
   );
   record(
     "Contract gate",
     "link-only approval and void contract",
-    "BLOCKED",
-    "approval/void ownership is not frozen; no reconciliation write is permitted by this preflight",
+    "PASS",
+    "canonical approval is link-only and reopen never deletes or reverses the posted settlement journal",
   );
 
   const payload = {

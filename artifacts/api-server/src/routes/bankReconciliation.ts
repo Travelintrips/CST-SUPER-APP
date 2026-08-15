@@ -88,6 +88,7 @@ import {
 import { canonicalSettlementDetailsSql } from "../lib/reconciliation/canonicalSettlementAdapter.js";
 import {
   approveCanonicalSettlementLink,
+  reopenCanonicalSettlementLink,
   CanonicalSettlementApprovalError,
   CANONICAL_SETTLEMENT_SOURCE,
 } from "../lib/reconciliation/canonicalSettlementApproval.js";
@@ -3193,6 +3194,22 @@ router.post("/:mutationId/unapprove", async (req, res) => {
   const { note } = req.body;
 
   try {
+    const { rows: canonicalMatches } = await db.execute(sql.raw(`
+      SELECT id
+      FROM bank_reconciliation_matches
+      WHERE mutation_id = ${mutId}
+        AND candidate_type = 'qris_settlement'
+        AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
+        AND status IN ('approved', 'candidate')
+      LIMIT 2
+    `));
+    if (canonicalMatches.length > 0) {
+      return res.status(409).json({
+        error: "Canonical settlement memakai reopen link-only; gunakan endpoint /reopen.",
+        code: "CANONICAL_SETTLEMENT_LINK_ONLY",
+      });
+    }
+
     await db.transaction(async (tx) => {
       const { rows: locked } = await tx.execute(sql.raw(
         `SELECT id, status, journal_entry_id FROM bank_mutations WHERE id = ${mutId} FOR UPDATE`
@@ -3450,6 +3467,22 @@ router.post("/:mutationId/void-journal", async (req, res) => {
   const { reason } = req.body;
 
   try {
+    const { rows: canonicalMatches } = await db.execute(sql.raw(`
+      SELECT id
+      FROM bank_reconciliation_matches
+      WHERE mutation_id = ${mutId}
+        AND candidate_type = 'qris_settlement'
+        AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
+        AND status IN ('approved', 'candidate')
+      LIMIT 2
+    `));
+    if (canonicalMatches.length > 0) {
+      return res.status(409).json({
+        error: "Canonical settlement memakai void/reopen link-only; journal settlement tetap posted.",
+        code: "CANONICAL_SETTLEMENT_LINK_ONLY",
+      });
+    }
+
     // ── Step 1: Pre-fetch mutation (no lock yet) ──────────────────────────────
     const { rows: preRows } = await db.execute(sql.raw(`
       SELECT id, status, journal_entry_id, company_id
@@ -3553,6 +3586,48 @@ router.post("/:mutationId/reopen", async (req, res) => {
   const { note } = req.body;
 
   try {
+    // Canonical settlements are link-only: reopening removes the bank link and
+    // returns both mutations to unmatched. It must never create a reversal.
+    const { rows: canonicalMatches } = await db.execute(sql.raw(`
+      SELECT id
+      FROM bank_reconciliation_matches
+      WHERE mutation_id = ${mutId}
+        AND candidate_type = 'qris_settlement'
+        AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
+        AND status IN ('approved', 'candidate')
+      ORDER BY id
+      LIMIT 2
+    `));
+    if (canonicalMatches.length > 1) {
+      return res.status(409).json({
+        error: "Terdapat lebih dari satu match canonical untuk mutasi ini.",
+        code: "CANONICAL_APPROVAL_INCONSISTENT_STATE",
+      });
+    }
+    if (canonicalMatches.length === 1) {
+      try {
+        const result = await reopenCanonicalSettlementLink(db as any, {
+          mutationId: mutId,
+          matchId: Number((canonicalMatches[0] as any).id),
+          actor,
+        });
+        audit(req, {
+          action: "reopen-canonical-settlement-link",
+          module: "bank-reconciliation",
+          resourceId: `bank-mutation-${mutId}`,
+          after: result,
+        });
+        triggerWritebackForMutation(mutId).catch(() => {});
+        return res.json(result);
+      } catch (e: any) {
+        const code = e instanceof CanonicalSettlementApprovalError
+          ? e.code
+          : "CANONICAL_REOPEN_FAILED";
+        const status = code === "CANONICAL_BANK_MUTATION_NOT_FOUND" ? 404 : 409;
+        return res.status(status).json({ error: e?.message ?? "Reopen canonical gagal", code });
+      }
+    }
+
     await db.transaction(async (tx) => {
       const { rows: locked } = await tx.execute(sql.raw(
         `SELECT id, status, company_id FROM bank_mutations WHERE id = ${mutId} FOR UPDATE`
@@ -3609,6 +3684,22 @@ router.post("/:mutationId/reject", async (req, res) => {
 
   const { note } = req.body;
   const actor = (req as any).user?.email ?? "admin";
+
+  const { rows: canonicalMatches } = await db.execute(sql.raw(`
+    SELECT id
+    FROM bank_reconciliation_matches
+    WHERE mutation_id = ${mutId}
+      AND candidate_type = 'qris_settlement'
+      AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
+      AND status IN ('approved', 'candidate')
+    LIMIT 2
+  `));
+  if (canonicalMatches.length > 0) {
+    return res.status(409).json({
+      error: "Canonical settlement memakai link-only lifecycle; gunakan /reopen untuk melepas link.",
+      code: "CANONICAL_SETTLEMENT_LINK_ONLY",
+    });
+  }
 
   await db.execute(sql.raw(
     `UPDATE bank_mutations SET status = 'rejected', updated_at = NOW() WHERE id = ${mutId}`
