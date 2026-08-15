@@ -18,8 +18,8 @@ function extractProjectRef(url: string): string | null {
   return directMatch?.[1] ?? null;
 }
 
-function isSameUrl(left: string | undefined, right: string): boolean {
-  if (!left) return false;
+function isSameUrl(left: string | undefined, right: string | undefined): boolean {
+  if (!left || !right) return false;
   try {
     return new URL(left).toString() === new URL(right).toString();
   } catch {
