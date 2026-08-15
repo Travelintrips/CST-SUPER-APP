@@ -771,7 +771,57 @@ export async function backfillCanonicalQrisPaymentMetadata(): Promise<void> {
  * schema.  Keep this additive and guarded so the normal local/public Sport
  * Center migration does not attempt to provision a partial canonical schema.
  */
+async function repairCanonicalBankCoaIdentity(): Promise<void> {
+  const tableExists = await db.execute(sql`
+    SELECT EXISTS (
+      SELECT 1
+      FROM information_schema.tables
+      WHERE table_schema = 'sport_center'
+        AND table_name = 'coa_accounts'
+    ) AS exists
+  `);
+  if (!(tableExists.rows[0] as Record<string, unknown> | undefined)?.exists) {
+    return;
+  }
+
+  /*
+   * Resolve the existing canonical row by its stable code/type identity.
+   * Do not insert or deactivate anything here: an absent or ambiguous
+   * canonical account must remain a visible fail-closed configuration error.
+   */
+  const canonicalBankRows = await db.execute(sql`
+    SELECT id, name, is_active
+    FROM sport_center.coa_accounts
+    WHERE code = '1-1023-CST'
+      AND account_type::text = 'asset'
+      AND is_active = TRUE
+    ORDER BY id
+    FOR UPDATE
+  `);
+  if (canonicalBankRows.rows.length !== 1) {
+    throw new Error(
+      `Canonical bank COA identity unresolved: expected exactly one active ` +
+      `sport_center.coa_accounts row for 1-1023-CST/asset, found ${canonicalBankRows.rows.length}.`,
+    );
+  }
+  const canonicalBank = canonicalBankRows.rows[0] as Record<string, unknown>;
+  if (String(canonicalBank.name ?? "").trim() !== "Bank Mandiri Ciputat") {
+    await db.execute(sql`
+      UPDATE sport_center.coa_accounts
+      SET name = 'Bank Mandiri Ciputat',
+          updated_at = NOW()
+      WHERE id = ${Number(canonicalBank.id)}
+    `);
+    logger.info(
+      { canonicalCoaId: Number(canonicalBank.id) },
+      "Canonical Sport Center bank COA name repaired to Bank Mandiri Ciputat",
+    );
+  }
+}
+
 export async function ensureCanonicalSettlementContracts(): Promise<void> {
+  await repairCanonicalBankCoaIdentity();
+
   const exists = await db.execute(sql`
     SELECT
       EXISTS (

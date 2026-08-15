@@ -475,6 +475,7 @@ export function scoreUnified(
     !!cand.provider_code &&
     !!mutation.provider_name &&
     !!cand.provider_name &&
+    normalizeQrisProvider(mutation.provider_name) !== "unknown" &&
     normalizeQrisProvider(cand.provider_code) !== normalizeQrisProvider(mutation.provider_name) &&
     normalizeQrisProvider(cand.provider_name) !== normalizeQrisProvider(mutation.provider_name);
 

@@ -11,6 +11,8 @@ export type CanonicalSettlementRow = {
   provider_code: string | null;
   provider_name: string | null;
   bank_account_id: number | string | null;
+  /** Internal company_bank_accounts.id resolved from the canonical account number. */
+  bank_account_internal_id?: number | string | null;
   settlement_date: string | Date | null;
   gross_amount: number | string | null;
   mdr_amount: number | string | null;
@@ -66,7 +68,12 @@ export type CanonicalSettlementLookupOptions = {
   bankAmount?: number | null;
   absoluteVarianceTolerance?: number | null;
   percentageVarianceTolerance?: number | null;
-  bankAccountId?: number | null;
+  /**
+   * May be either the internal company_bank_accounts.id used by public bank
+   * mutations or the external account number stored by Sport Center.
+   * The lookup normalizes both identities before returning a candidate.
+   */
+  bankAccountId?: number | string | null;
   providerCode?: string | null;
   from?: string | null;
   to?: string | null;
@@ -161,7 +168,9 @@ export function mapCanonicalSettlementRow(
     provider_code: row.provider_code,
     provider_name: row.provider_name,
     company_id: numberOrNull(row.company_id),
-    bank_account_id: numberOrNull(row.bank_account_id),
+    bank_account_id: numberOrNull(
+      row.bank_account_internal_id ?? row.bank_account_id,
+    ),
     settlement_journal_id: numberOrNull(row.settlement_journal_id),
     bank_mutation_id: numberOrNull(row.bank_mutation_id),
     settlement_rule_version: row.settlement_rule_version == null
@@ -267,19 +276,33 @@ export async function findCanonicalSettlementCandidates(
   options: CanonicalSettlementLookupOptions = {},
 ): Promise<CanonicalSettlementCandidate[]> {
   const result = await db.execute(sql`
-    SELECT ebs.*
+    SELECT ebs.*, account_identity.bank_account_internal_id
     FROM (
       SELECT ${CANONICAL_SETTLEMENT_COLUMNS}
       FROM sport_center.expected_bank_settlements
       WHERE ${canonicalEligibilityFilters(options)}
     ) ebs
+    JOIN LATERAL (
+      SELECT
+        CASE WHEN COUNT(*) = 1 THEN MIN(cba.id) ELSE NULL END
+          AS bank_account_internal_id
+      FROM public.company_bank_accounts cba
+      WHERE cba.company_id = ebs.company_id
+        AND cba.is_active = TRUE
+        AND (
+          cba.account_number::text = ebs.bank_account_id::text
+          OR cba.id::text = ebs.bank_account_id::text
+        )
+    ) account_identity ON account_identity.bank_account_internal_id IS NOT NULL
     JOIN sport_center.accounting_journals aj
       ON aj.id = ebs.settlement_journal_id
      AND aj.status = 'posted'
-    ORDER BY settlement_date, settlement_id
+    ORDER BY ebs.settlement_date, ebs.settlement_id
   `);
 
-  return (result.rows as CanonicalSettlementRow[]).map(mapCanonicalSettlementRow);
+  return (result.rows as Array<CanonicalSettlementRow & {
+    bank_account_internal_id?: number | string | null;
+  }>).map(mapCanonicalSettlementRow);
 }
 
 export async function getCanonicalSettlementForReconciliation(

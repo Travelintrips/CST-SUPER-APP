@@ -127,7 +127,7 @@ const COA_LEAF_TEMPLATES: SeedAccount[] = [
   { code: "1-1020", name: "Bank Mandiri",                     type: "asset",   parentCode: "1-1000" },
   { code: "1-1021", name: "Bank BCA",                         type: "asset",   parentCode: "1-1000" },
   { code: "1-1022", name: "Bank BNI",                         type: "asset",   parentCode: "1-1000" },
-  { code: "1-1023", name: "Bank Mandiri - Sport Center",      type: "asset",   parentCode: "1-1000" },
+  { code: "1-1023", name: "Bank Mandiri Ciputat",              type: "asset",   parentCode: "1-1000" },
   { code: "1-1024", name: "Payment Clearing Sport Center / QRIS", type: "asset", parentCode: "1-1000" },
   { code: "1-1030", name: "Piutang Usaha",                    type: "asset",   parentCode: "1-1000" },
   { code: "1-1031", name: "Piutang Lainnya",                  type: "asset",   parentCode: "1-1000" },
