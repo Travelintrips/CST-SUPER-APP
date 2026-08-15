@@ -29,7 +29,7 @@ import type { MarketplaceItem, FilterFieldDef, ActiveFilters, ServiceCategoryOpt
 import { buildCatalogFilters, matchVendorCatalog } from "@/lib/catalogFilters";
 import { CompareTray, CompareModal } from "@/components/VendorComparison";
 import PageSeo from "@/components/PageSeo";
-import { CUSTOMER_ASSETS } from "@/lib/staticAssets";
+import { CUSTOMER_ASSETS, staticAsset } from "@/lib/staticAssets";
 import { resolveImageUrl } from "@/lib/utils";
 
 // ── Featured product display data (from the existing public featured endpoint)
@@ -1322,7 +1322,7 @@ export default function MarketplacePage() {
         <div
           className="absolute inset-0 bg-cover bg-center"
           style={{
-            backgroundImage: `url('/api/storage/public-objects/portal-assets/static/customer-portal/images/gambar-baru.webp')`,
+            backgroundImage: `url('${CUSTOMER_ASSETS.marketplaceHero}')`,
             transform: "scale(1.04)",
             filter: "brightness(0.38) saturate(1.15)",
           }}
@@ -1330,7 +1330,7 @@ export default function MarketplacePage() {
         {/* Fallback bg layers: local first (deepest), then Supabase port-operations, then gambar-baru on top */}
         <div
           className="absolute inset-0 bg-cover bg-center -z-0"
-          style={{ backgroundImage: "url('/api/storage/public-objects/portal-assets/static/customer-portal/images/port-operations.webp')", filter: "brightness(0.38)" }}
+          style={{ backgroundImage: `url('${CUSTOMER_ASSETS.portOperations}')`, filter: "brightness(0.38)" }}
         />
         <div
           className="absolute inset-0 bg-cover bg-center -z-0"
@@ -1714,22 +1714,22 @@ export default function MarketplacePage() {
                       <p className="text-[13px] font-bold text-slate-500 uppercase tracking-wider mb-4">{t("marketplace.comingSoonCategories")}</p>
                       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
                         {[
-                          { img: "/api/storage/public-objects/portal-assets/static/customer-portal/images/categories/coffee.jpg", catKey: "coffee" },
-                          { img: "/api/storage/public-objects/portal/images/products/batubara-coal.png",                                                                         catKey: "coal"       },
-                          { img: "/api/storage/public-objects/portal/images/categories/iron-steel.jpg",                                                                                      catKey: "iron_steel" },
-                          { img: "/api/storage/public-objects/portal/images/products/sawit-palm-oil.png",                                                                          catKey: "palm_oil"   },
-                          { img: "/api/storage/public-objects/portal/images/products/nikel.png",                                                                               catKey: "nickel"     },
-                          { img: "/api/storage/public-objects/portal/images/categories/copper.jpg",                                                                                         catKey: "copper"     },
-                          { img: "/api/storage/public-objects/portal/images/products/beras-rice.png",                                                                            catKey: "rice"       },
-                          { img: "/api/storage/public-objects/portal/images/categories/sugar.jpg",                                                                                           catKey: "sugar"      },
-                          { img: "/api/storage/public-objects/portal/images/categories/seafood.jpg",                                                                                         catKey: "seafood"    },
-                          { img: "/api/storage/public-objects/portal/images/categories/rubber.jpg",                                                                                         catKey: "rubber"     },
-                          { img: "/api/storage/public-objects/portal/images/categories/live-fish.jpg",                                                                                    catKey: "live_fish"  },
-                          { img: "/api/storage/public-objects/portal/images/categories/bird-nest.jpg",                                                                                   catKey: "bird_nest"  },
-                          { img: "/api/storage/public-objects/portal/images/categories/frozen-food.jpg",                                                                                 catKey: "frozen_food"},
-                          { img: "/api/storage/public-objects/portal/images/categories/furniture.jpg",                                                                                       catKey: "furniture"  },
-                          { img: "/api/storage/public-objects/portal/images/categories/chemical.jpg",                                                                                        catKey: "chemical"   },
-                          { img: "/api/storage/public-objects/portal/images/categories/textile.jpg",                                                                                         catKey: "textile"    },
+                          { img: staticAsset("images/categories/coffee.jpg"), catKey: "coffee" },
+                          { img: staticAsset("images/products/batubara-coal.png"), catKey: "coal" },
+                          { img: staticAsset("images/categories/iron-steel.jpg"), catKey: "iron_steel" },
+                          { img: staticAsset("images/products/sawit-palm-oil.png"), catKey: "palm_oil" },
+                          { img: staticAsset("images/products/nikel.png"), catKey: "nickel" },
+                          { img: staticAsset("images/categories/copper.jpg"), catKey: "copper" },
+                          { img: staticAsset("images/products/beras-rice.png"), catKey: "rice" },
+                          { img: staticAsset("images/categories/sugar.jpg"), catKey: "sugar" },
+                          { img: staticAsset("images/categories/seafood.jpg"), catKey: "seafood" },
+                          { img: staticAsset("images/categories/rubber.jpg"), catKey: "rubber" },
+                          { img: staticAsset("images/categories/live-fish.jpg"), catKey: "live_fish" },
+                          { img: staticAsset("images/categories/bird-nest.jpg"), catKey: "bird_nest" },
+                          { img: staticAsset("images/categories/frozen-food.jpg"), catKey: "frozen_food" },
+                          { img: staticAsset("images/categories/furniture.jpg"), catKey: "furniture" },
+                          { img: staticAsset("images/categories/chemical.jpg"), catKey: "chemical" },
+                          { img: staticAsset("images/categories/textile.jpg"), catKey: "textile" },
                         ].map(({ img, catKey }) => {
                           const sub = t(`marketplace.catSub_${catKey}`, catKey);
                           const label = t(`marketplace.cat_${catKey}`);

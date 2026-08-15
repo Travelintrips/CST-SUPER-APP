@@ -1,5 +1,10 @@
-const STORAGE_ROOT = "/api/storage/public-objects/portal-assets/static/customer-portal";
-const PNG_ONLY_ASSETS = new Set(["images/logo.png", "images/logo-baru.png"]);
+const STORAGE_PATH = "/api/storage/public-objects/portal-assets/static/customer-portal";
+const STORAGE_ORIGIN = (
+  import.meta.env.VITE_CUSTOMER_PORTAL_ASSET_ORIGIN ??
+  "https://cstlogistic.co.id"
+).replace(/\/+$/, "");
+const STORAGE_ROOT = `${STORAGE_ORIGIN}${STORAGE_PATH}`;
+const PNG_ONLY_ASSETS = new Set(["images/logo.png"]);
 
 export function staticAsset(path: string): string {
   const normalized = path.replace(/^\/+/, "");
@@ -17,6 +22,7 @@ export const CUSTOMER_ASSETS = {
   logoBrand: staticAsset("images/logo-baru.png"),
   ogCover: staticAsset("images/og-cover.png"),
   hero: staticAsset("images/hero-bg.webp"),
+  marketplaceHero: staticAsset("images/gambar-baru.webp"),
   warehouse: staticAsset("images/warehouse.webp"),
   portOperations: staticAsset("images/port-operations.webp"),
   customs: staticAsset("images/customs.png"),
