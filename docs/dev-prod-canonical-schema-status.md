@@ -327,3 +327,100 @@ The blocking condition is the two active source-sensitive Sport Center
 function drifts, especially the PROD exception-swallowing mirror behavior.
 The missing production bundle `APP_ENV` is a separate strict schema-sync
 tooling gate. Production security hardening and legacy objects were preserved.
+
+## Final 2-function canonical remediation gate
+
+**Phase result:** BLOCKED BEFORE DATABASE WRITE
+
+### Baseline
+
+| Item | Result |
+|---|---|
+| Branch | `main` |
+| HEAD | `c2b5a4103f9e9b72685faf23e8d526a51d4c164c` |
+| `origin/main` | `a21481176293ad97e75b32c697f3bcfb79af7139` |
+| Working tree before phase | Clean |
+| Existing report | `docs/dev-prod-canonical-schema-status.md` |
+| `git diff --check` | PASS |
+
+### Function 1
+
+- **Function/signature:** `sport_center.create_payment_accounting_draft(integer)`
+- **Canonical source:** `artifacts/api-server/src/modules/sport-center/migration.ts`,
+  lines 936–980.
+- **Previous DEV state:** exists; definition MD5
+  `c060fec112c68ba78e8fbf1ad7e630e4`.
+- **Previous PROD state:** exists; definition MD5
+  `7c9399907817f45c311693a83cf2314f`.
+- **Semantic defect:** definitions differ, and DEV contains repeated
+  `public` search-path artifacts.
+- **Safety result:** **OWNER DECISION REQUIRED**. The installer reads and
+  patches an existing owner definition; it does not contain a complete
+  canonical function body. Replacing either side would require inventing or
+  choosing an owner contract.
+- **Production result:** NOT ATTEMPTED.
+- **Canonical parity:** BLOCKED.
+- **Dependent trigger/caller:** accounting-draft runtime owner/call path; no
+  trigger replacement is specified by the installer.
+- **Rollback available:** not captured because the write phase was not entered.
+
+### Function 2
+
+- **Function/signature:** `sport_center.mirror_confirmed_payment_to_public()`
+- **Canonical source:** `artifacts/api-server/src/modules/sport-center/migration.ts`,
+  lines 314–556; trigger installer at lines 558–573.
+- **Previous DEV state:** definition MD5
+  `828cf0c5a381165960e31d27c326a914`; fail-closed markers present and no
+  `WHEN OTHERS` swallowing.
+- **Previous PROD state:** definition MD5
+  `3e50d577cc1112830cc65df385a97a9c`; `WHEN OTHERS` swallowing present.
+- **Semantic defect:** PROD can swallow mirror failures and diverge from the
+  fail-closed public-payment projection contract.
+- **Safety result:** `CREATE OR REPLACE FUNCTION` is structurally suitable for
+  the unchanged signature, but the two-function transaction was not entered
+  because Function 1 is ambiguous.
+- **Production result:** NOT ATTEMPTED.
+- **Canonical parity:** NOT VERIFIED AFTER REMEDIATION.
+- **Dependent trigger/caller:** `trg_mirror_confirmed_payment_to_public` on
+  `sport_center.sport_payments`; no trigger was changed.
+- **Rollback available:** not captured because the write phase was not entered.
+
+### Database safety
+
+| Item | Result |
+|---|---|
+| Production functions changed | **0** |
+| Tables changed | **0** |
+| Columns changed | **0** |
+| Enums changed | **0** |
+| Indexes changed | **0** |
+| Constraints changed | **0** |
+| RLS changed | **0** |
+| RLS weakened | **NO** |
+| Business rows modified | **NO** |
+| Unrelated functions modified | **0** |
+| Destructive operations | **0** |
+
+### Verification
+
+| Gate | Result |
+|---|---|
+| Function 1 canonical parity | **BLOCKED** |
+| Function 2 canonical parity | **NOT RUN** |
+| Dependent trigger integrity | **NOT CHANGED / NOT RUN AFTER REMEDIATION** |
+| Focused remediation tests | **NOT RUN** |
+| API typecheck | **NOT RUN** |
+| API build | **NOT RUN** |
+| `git diff --check` | **PASS** |
+
+### Stop condition
+
+The phase stopped under the explicit condition **canonical source genuinely
+ambiguous**. No destructive workaround, guessed function body, partial
+production remediation, or republish was performed.
+
+**MASTER REPUBLISH: BLOCKED**
+
+**FINAL VERDICT:**
+❌ **CANONICAL PRODUCTION FUNCTION DEFECT REMAINS**
+**MASTER REPUBLISH BLOCKED**
