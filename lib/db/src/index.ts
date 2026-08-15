@@ -138,7 +138,13 @@ export async function endPool(): Promise<void> {
 // table names (e.g. "companies") resolve correctly.
 if (!isLocalConn) {
   pool.on("connect", (client) => {
-    client.query("SET search_path = public").catch(() => {});
+    // A duplicate development API can otherwise hold DDL locks indefinitely
+    // while the primary instance is running the same startup migration chain.
+    // Keep this fail-safe even though start-dev.sh now yields redundant API
+    // workflows before they can connect to the database.
+    client
+      .query("SET search_path = public; SET lock_timeout = '20s'")
+      .catch(() => {});
   });
 }
 

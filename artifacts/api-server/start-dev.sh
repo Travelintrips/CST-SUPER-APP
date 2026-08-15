@@ -69,6 +69,30 @@ export PG_CONNECTION_TIMEOUT_MS
 RECONCILIATION_WORKER_ENABLED=${RECONCILIATION_WORKER_ENABLED:-false}
 export RECONCILIATION_WORKER_ENABLED
 
+check_port() {
+  node -e "const net=require('net');const s=net.connect($1,'127.0.0.1');s.on('connect',()=>{s.destroy();process.exit(0)});s.on('error',()=>process.exit(1))" 2>/dev/null
+}
+
+# The unified "Start application" workflow owns the primary API on :8080.
+# Artifact workflows start in parallel with it on a fresh Replit session, so
+# give the primary process a short window to bind before doing any work here.
+# This check must happen before the lib/db build and before dev.mjs, otherwise
+# this redundant instance can still enter the migration chain.
+PRIMARY_API_PORT=${PRIMARY_API_PORT:-8080}
+PRIMARY_API_WAIT_SECONDS=${PRIMARY_API_WAIT_SECONDS:-30}
+
+if [ "$API_PORT" != "$PRIMARY_API_PORT" ]; then
+  echo "[start-dev] Checking for primary API on :$PRIMARY_API_PORT before startup..."
+  for ((attempt = 0; attempt < PRIMARY_API_WAIT_SECONDS; attempt++)); do
+    if check_port "$PRIMARY_API_PORT" 2>/dev/null; then
+      echo "[start-dev] Primary API detected on :$PRIMARY_API_PORT; yielding without migrations"
+      exit 0
+    fi
+    sleep 1
+  done
+  echo "[start-dev] Primary API did not bind within ${PRIMARY_API_WAIT_SECONDS}s; starting artifact API on :$API_PORT"
+fi
+
 # Only one API workflow instance may own the forwarder and internal server.
 # A second artifact/workflow invocation stays alive without binding anything,
 # preventing an EADDRINUSE crash loop while the first instance is healthy.
@@ -77,10 +101,6 @@ if ! flock -n 9; then
   echo "[start-dev] Another API workflow instance owns the lock; yielding"
   exec tail -f /dev/null
 fi
-
-check_port() {
-  node -e "const net=require('net');const s=net.connect($1,'127.0.0.1');s.on('connect',()=>{s.destroy();process.exit(0)});s.on('error',()=>process.exit(1))" 2>/dev/null
-}
 
 # Yield if API port is already bound by another instance
 if check_port "$API_PORT"; then
