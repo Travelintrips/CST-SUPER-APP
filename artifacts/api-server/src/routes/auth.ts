@@ -57,7 +57,30 @@ function getOrigin(req: Request): string {
   return `${proto}://${host}`;
 }
 
-function getGoogleOrigin(req: Request): string {
+const CUSTOMER_PORTAL_GOOGLE_HOSTS = new Set([
+  "cstlogistic.co.id",
+  "www.cstlogistic.co.id",
+]);
+
+function getRequestHost(req: Request): string {
+  const forwardedHost = String(req.headers["x-forwarded-host"] || "");
+  const host = (forwardedHost || String(req.headers["host"] || ""))
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+  return host.replace(/:\d+$/, "");
+}
+
+function getGoogleOrigin(req: Request, preferCustomerPortalHost = false): string {
+  // Customer Portal is reached through the verified public domain. Do not let a
+  // stale GOOGLE_REDIRECT_BASE_URL from the Replit deployment override the host
+  // that the customer actually used, otherwise Google rejects the request with
+  // redirect_uri_mismatch.
+  const requestHost = getRequestHost(req);
+  if (preferCustomerPortalHost && CUSTOMER_PORTAL_GOOGLE_HOSTS.has(requestHost)) {
+    return `https://${requestHost}`;
+  }
+
   // In Replit dev (NOT deployed), always prefer the stable dev domain.
   // REPLIT_DEPLOYMENT=1 is injected by Replit in deployed environments only.
   if (process.env.REPLIT_DEV_DOMAIN && !process.env.REPLIT_DEPLOYMENT) {
@@ -599,10 +622,10 @@ router.post("/auth/dev-login", async (req: Request, res: Response) => {
 // ─── Google OAuth ─────────────────────────────────────────────────────────────
 
 router.get("/login/google", async (req: Request, res: Response) => {
-  const redirectUri = `${getGoogleOrigin(req)}/api/callback/google`;
   const returnTo = getSafeReturnTo(req.query.returnTo);
   const state = crypto.randomBytes(16).toString("hex");
   const isPortalFlow = req.query.portal === "1";
+  const redirectUri = `${getGoogleOrigin(req, isPortalFlow)}/api/callback/google`;
 
   req.log.info({ redirectUri }, "[Google OAuth] initiating login, redirect_uri");
 
@@ -647,7 +670,7 @@ router.get("/callback/google", async (req: Request, res: Response) => {
     return;
   }
 
-  const redirectUri = `${getGoogleOrigin(req)}/api/callback/google`;
+  const redirectUri = `${getGoogleOrigin(req, isPortalFlow)}/api/callback/google`;
   const client = getGoogleOAuthClient(redirectUri);
 
   try {
