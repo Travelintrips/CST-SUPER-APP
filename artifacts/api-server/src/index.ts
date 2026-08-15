@@ -127,7 +127,7 @@ let runDriverPodMigration: () => Promise<void>;
 let runDriverAssignmentMigration: () => Promise<void>;
 import { runLogisticsRatesMigration } from "./lib/logisticsRatesMigration.js";
 import { runProductVolumeCbmMigration } from "./routes/ecommerce.js";
-import { db } from "@workspace/db";
+import { db, getPoolConfig } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { runStartupValidation } from "./lib/startupValidator.js";
 import { backfillVendorPerformance } from "./routes/vendorPerformance.js";
@@ -1498,6 +1498,18 @@ async function runCriticalPreStartMigrations() {
 let migrationsComplete = false;
 
 async function startServer() {
+  const poolConfig = getPoolConfig();
+  logger.info(
+    {
+      poolMax: poolConfig.max,
+      poolConnectionTimeoutMs: poolConfig.connectionTimeoutMs,
+      poolIdleTimeoutMs: poolConfig.idleTimeoutMs,
+      startupMigrationConcurrency: 1,
+      startupMigrationStrategy: "serial-on-shared-pool",
+    },
+    "Database pool ready for interactive requests",
+  );
+
   // Health-ready endpoint — must be registered before server.listen so it is
   // available as soon as the socket is open.
   app.get("/api/health/ready", (_req, res) => {
@@ -1617,8 +1629,10 @@ async function startServer() {
   // Integration health check — every 6h, alerts on pass→fail flips via Fonnte WA
   registerWorker("integration-health-check", startIntegrationHealthWorker, 190_000);
 
-  // Run all migrations + seeds in the background with an initial delay
-  // to let the DB pool stabilize before hammering pgBouncer with DDL.
+  // Run all migrations + seeds in one serial promise chain with an initial
+  // delay to let the DB pool stabilize before hammering pgBouncer with DDL.
+  // The dev workflow provides four bounded pool clients, so this single
+  // migration lane cannot occupy the whole pool and starve login requests.
   sleep(8_000)
     .then(async () => {
       for (let attempt = 1; attempt <= 10; attempt++) {

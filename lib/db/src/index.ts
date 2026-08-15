@@ -64,7 +64,8 @@ const isProdEnv = process.env.NODE_ENV === "production" || !!process.env.REPLIT_
 const isTestEnv = process.env.VITEST === "true" || process.env.NODE_ENV === "test";
 
 // Pool config — configurable via env vars.
-// Dev default: max=8
+// Dev default: max=8 (the artifact dev workflow overrides this to 4 so
+// interactive requests have capacity while serial startup migrations run)
 // Prod default: max=2 (reduced to avoid pgBouncer auth-failure throttle)
 // Test: max=2, allowExitOnIdle=true so the pool never keeps the process alive
 
@@ -80,6 +81,18 @@ const PG_IDLE_TIMEOUT_MS = process.env.PG_IDLE_TIMEOUT_MS
 const PG_CONNECTION_TIMEOUT_MS = process.env.PG_CONNECTION_TIMEOUT_MS
   ? parseInt(process.env.PG_CONNECTION_TIMEOUT_MS)
   : 8_000;
+
+export function getPoolConfig(): {
+  max: number;
+  connectionTimeoutMs: number;
+  idleTimeoutMs: number;
+} {
+  return {
+    max: PG_POOL_MAX,
+    connectionTimeoutMs: PG_CONNECTION_TIMEOUT_MS,
+    idleTimeoutMs: PG_IDLE_TIMEOUT_MS,
+  };
+}
 
 if (!IS_TEST) {
   console.log(

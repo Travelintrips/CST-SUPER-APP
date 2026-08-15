@@ -52,11 +52,13 @@ export SAFE_DEV_TEST_MODE CUSTOMER_AUTH_HARNESS_CAPTURE MOCK_WHATSAPP MOCK_EMAIL
 # there is no second forwarder listener and no hidden 18445 process.
 API_PORT=${API_PORT:-18444}
 export API_PORT
-# The development Supabase transaction pooler has a small connection budget.
-# Keep the preview API on one shared client while import-time migrations and
-# the sequential startup chain settle. This prevents parallel boot migrations
-# from opening competing sessions; production uses its own runtime settings.
-PG_POOL_MAX=${PG_POOL_MAX:-1}
+# The development Supabase transaction pooler has a small connection budget,
+# but a single shared client makes login and the initial BizPortal request
+# burst wait behind startup work. The startup migration chain is serial, so
+# four bounded application connections leave interactive requests available
+# without opening an unbounded number of pgBouncer sessions. Production uses
+# its own runtime settings and is never affected by this development override.
+PG_POOL_MAX=${PG_POOL_MAX:-4}
 export PG_POOL_MAX
 PG_CONNECTION_TIMEOUT_MS=${PG_CONNECTION_TIMEOUT_MS:-30000}
 export PG_CONNECTION_TIMEOUT_MS
