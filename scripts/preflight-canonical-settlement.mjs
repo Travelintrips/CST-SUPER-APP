@@ -266,17 +266,18 @@ try {
   );
 
   const routines = await client.query(`
-    SELECT p.proname AS routine_name,
-           pg_get_function_identity_arguments(p.oid) AS identity_arguments
+    SELECT p.oid::regprocedure::text AS routine_signature
     FROM pg_catalog.pg_proc p
     JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
     WHERE n.nspname = 'sport_center'
   `);
   const routineSet = new Set(
-    routines.rows.map((row) => `${row.routine_name}(${row.identity_arguments})`),
+    routines.rows.map((row) =>
+      row.routine_signature.replace(/^.*\./, "").replace(/\s+/g, ""),
+    ),
   );
   for (const [routineName, args] of REQUIRED_ROUTINES) {
-    const signature = `${routineName}(${args})`;
+    const signature = `${routineName}(${args})`.replace(/\s+/g, "");
     record(
       "Routines",
       `sport_center.${signature}`,
