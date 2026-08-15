@@ -17,6 +17,7 @@
 - [Deployment publish build prerequisites](deployment-publish-build.md) — root manifest yang tidak terpakai dapat memicu builder bahasa lain; validasi build publish dan preflight environment harus dipisahkan.
 - [Custom domain deployment ownership](custom-domain-deployment-ownership.md) — getDeploymentInfo() kosong tidak berarti domain publik mati; domain dapat tetap menunjuk ke deployment/project lain.
 - [Google credential separation](google-credential-separation.md) — Service Account Google Sheets dan bootstrap Secret Manager dapat berbeda dan membutuhkan izin berbeda.
+- [Customer Portal Google OAuth](customer-portal-google-oauth.md) — public login uses backend Google OAuth + portal JWT; Supabase external-provider exchange is not the production path.
 - [BizPortal preview API proxy](bizportal-preview-api-proxy.md) — preview BizPortal harus meneruskan `/api` ke API server port 8080 agar login tidak 502.
 - [Dev/Prod DB Isolation](dev-prod-isolation.md) — APP_ENV=development di start-dev.sh; load-secrets.mjs inject *_DEV keys as canonical + shared keys tanpa _DEV counterpart.
 - [accounting_entries missing columns](accounting-entries-missing-columns.md) — is_voided/is_reversed missing → journalReuseEngine FAIL-CLOSED → false MANUAL_REVIEW_REQUIRED saat approve sport payment.
