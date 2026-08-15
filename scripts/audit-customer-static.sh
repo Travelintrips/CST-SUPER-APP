@@ -9,8 +9,10 @@ echo "Node: $(node -v)"
 echo "pnpm: $(pnpm -v)"
 
 node scripts/release-summary.mjs static RUNNING "Static gate is running"
+node scripts/release-summary.mjs regression NOT_RUN "API regression target has not been verified"
 api_test_report=""
-trap 'status=$?; if [[ "$status" -eq 0 ]]; then node scripts/release-summary.mjs static PASS; else node scripts/release-summary.mjs static FAIL "Static gate command failed"; fi; if [[ -n "$api_test_report" ]]; then rm -f "$api_test_report"; fi; exit "$status"' EXIT
+api_regression_started=0
+trap 'status=$?; if [[ "$status" -eq 0 ]]; then node scripts/release-summary.mjs static PASS; else node scripts/release-summary.mjs static FAIL "Static gate command failed"; fi; if [[ "$api_regression_started" -eq 1 ]]; then if [[ "$status" -eq 0 ]]; then node scripts/release-summary.mjs regression PASS "API regression passed on isolated target"; else node scripts/release-summary.mjs regression FAIL "API regression command failed"; fi; fi; if [[ -n "$api_test_report" ]]; then rm -f "$api_test_report"; fi; exit "$status"' EXIT
 
 echo "[static] Shared library typecheck"
 pnpm run typecheck:libs
@@ -25,6 +27,13 @@ echo "[static] API Server typecheck"
 pnpm --filter @workspace/api-server typecheck
 
 echo "[static] API Server unit tests"
+if [[ -z "${TEST_DATABASE_URL:-}" && -z "${STAGING_DATABASE_URL:-}" ]]; then
+  node scripts/release-summary.mjs regression BLOCKED "Set TEST_DATABASE_URL or STAGING_DATABASE_URL; shared DEV/PROD/Helium targets are rejected"
+  echo "[static] API regression BLOCKED: isolated staging target is not configured"
+  exit 1
+fi
+api_regression_started=1
+node scripts/release-summary.mjs regression RUNNING "API regression is running on an isolated target"
 api_test_report="$(mktemp)"
 if ! pnpm --filter @workspace/api-server test --run --reporter=json --outputFile="$api_test_report"; then
   echo "[static] API test suite failed"

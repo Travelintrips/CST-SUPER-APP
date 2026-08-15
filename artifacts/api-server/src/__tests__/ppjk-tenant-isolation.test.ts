@@ -14,7 +14,7 @@
  * Uses:
  *   - Real Express app with the real ppjk router mounted at /api/ppjk
  *   - Real requireRole / requireAdmin middleware (NOT mocked)
- *   - Real DB (SUPABASE_DATABASE_URL_DEV) — skipped automatically if absent
+ *   - Real DB (isolated TEST_DATABASE_URL/STAGING_DATABASE_URL) — fail-closed if absent
  *   - supertest for HTTP assertions
  *
  * Isolation strategy:
@@ -30,14 +30,15 @@ import express from "express";
 import supertest from "supertest";
 import { Pool } from "pg";
 import ppjkRouter, { isPpjkPlatformActor, loadOrderWithTenantCheck } from "../routes/ppjk.js";
+import { getIsolatedTestDatabaseUrl } from "../test-setup.js";
 
 // ── Skip guard ────────────────────────────────────────────────────────────────
-const DB_URL = process.env.SUPABASE_DATABASE_URL_DEV ?? process.env.DATABASE_URL;
-const SKIP = !DB_URL;
+const DB_URL = getIsolatedTestDatabaseUrl();
+const SKIP = false;
 
 function skipIf(fn: () => Promise<void>) {
   if (SKIP) {
-    console.warn("⚠️  Skipping real-DB test — SUPABASE_DATABASE_URL_DEV not set");
+    console.warn("⚠️  Skipping real-DB test — isolated staging target not set");
     return;
   }
   return fn();

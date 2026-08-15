@@ -13,7 +13,7 @@
  *  9. Parser parity — real Sheet/CSV/Excel parsers produce identical canonical keys
  * 10. Manual sync credential handling
  *
- * DB-dependent tests require TEST_DATABASE_URL or SUPABASE_DATABASE_URL_DEV.
+ * DB-dependent tests require TEST_DATABASE_URL or STAGING_DATABASE_URL.
  * Pure-logic tests (sections 1–9) always run.
  */
 

@@ -11,7 +11,7 @@
  * Tests 66–70:  Metrics (pure logic)
  *
  * Pure-logic tests always run (no DB required).
- * DB-dependent tests are skipped when SUPABASE_DATABASE_URL_DEV is not set.
+ * DB-dependent tests must use TEST_DATABASE_URL or STAGING_DATABASE_URL.
  */
 
 import { describe, it, expect, beforeEach } from "vitest";

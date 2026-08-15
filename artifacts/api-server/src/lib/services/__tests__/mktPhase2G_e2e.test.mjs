@@ -4,29 +4,33 @@
  * Full RFQ → vendor invite → vendor quote → vendor selection/PO → issue →
  * vendor accept → production → shipment → shipment events → ready_to_ship →
  * in_transit → goods receipt → delivered → completed → closed lifecycle,
- * executed as raw SQL against SUPABASE_DATABASE_URL_DEV (same convention as
+ * executed as raw SQL against TEST_DATABASE_URL/STAGING_DATABASE_URL (same
  * vendorInvitation.test.mjs / vendorQuoteSubmission.test.mjs — no vitest,
  * no HTTP layer, direct DB reproduction of each service's exact logic).
  *
  * ALL data created here is deleted at the end (success or failure) — see
  * cleanup() which runs in a `finally` block. Nothing is written to PROD;
- * this script only ever reads process.env.SUPABASE_DATABASE_URL_DEV.
+ * this script only ever uses an explicitly provisioned isolated staging target.
  *
  * Run: node src/lib/services/__tests__/mktPhase2G_e2e.test.mjs
  */
 
 import pg from "pg";
 import crypto from "crypto";
+import { resolveIsolatedTestDatabaseUrl } from "../../../../../../scripts/isolated-test-db-target.mjs";
 
 const { Pool } = pg;
 
-if (!process.env.SUPABASE_DATABASE_URL_DEV) {
-  console.error("SUPABASE_DATABASE_URL_DEV tidak diset — abort (tidak akan menyentuh PROD/DB lain).");
-  process.exit(1);
+let TEST_DB_URL;
+try {
+  TEST_DB_URL = resolveIsolatedTestDatabaseUrl();
+} catch (error) {
+  console.error(error.message);
+  process.exit(2);
 }
 
 const pool = new Pool({
-  connectionString: process.env.SUPABASE_DATABASE_URL_DEV,
+  connectionString: TEST_DB_URL,
   options: "-c search_path=public",
   connectionTimeoutMillis: 10000,
 });
@@ -93,7 +97,7 @@ async function cleanup() {
 
 async function run() {
   console.log(`=== Marketplace Phase 2G — E2E lifecycle test (${RUN_TAG}) ===`);
-  console.log(`Target DB: SUPABASE_DATABASE_URL_DEV (dev only)\n`);
+  console.log("Target DB: isolated Supabase staging\n");
 
   // ── Pre-req: pick a real active vendor from suppliers ──────────────────────
   const vendors = await q(`SELECT id, name FROM suppliers WHERE is_active = true LIMIT 1`);

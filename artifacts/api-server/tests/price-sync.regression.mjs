@@ -20,6 +20,7 @@ import {
   getApiBaseUrl,
   waitForApiReady,
 } from "../../../scripts/regression-harness-helpers.mjs";
+import { resolveIsolatedTestDatabaseUrl } from "../../../scripts/isolated-test-db-target.mjs";
 
 assertDevelopmentHarness();
 const BASE = getApiBaseUrl();
@@ -33,6 +34,7 @@ let failed = 0;
 let adminCookie;
 let sessionId;
 let pool;
+const TEST_DB_URL = resolveIsolatedTestDatabaseUrl();
 
 function log(label, status, detail = "") {
   const icon = status === "PASS" ? "✅" : "❌";
@@ -393,7 +395,7 @@ async function run() {
   adminCookie = adminSession.cookie;
   sessionId = adminCookie.slice("sid=".length);
   pool = new pg.Pool({
-    connectionString: process.env.SUPABASE_DATABASE_URL,
+    connectionString: TEST_DB_URL,
     ssl: { rejectUnauthorized: false },
   });
   console.log("=== Price Sync Regression Tests ===\n");

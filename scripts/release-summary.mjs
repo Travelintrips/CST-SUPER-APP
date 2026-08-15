@@ -7,6 +7,7 @@
  * Schema (extended for full HTTP E2E):
  * {
  *   "static":          "PASS|FAIL|RUNNING|INCOMPLETE",
+ *   "regression":      "PASS|FAIL|BLOCKED|RUNNING|NOT_RUN",
  *   "runtimeSafeDev":  "PASS|FAIL|RUNNING|INCOMPLETE",
  *   "httpE2E":         "PASS|FAIL|BLOCKED|RUNNING|INCOMPLETE",
  *   "secretRotation":  "PASS|INCOMPLETE",
@@ -26,6 +27,7 @@ const summaryPath = path.resolve(process.cwd(), "summary.json");
 
 const DEFAULTS = {
   static:             "NO-GO",
+  regression:         "NOT_RUN",
   runtimeSafeDev:     "INCOMPLETE",
   httpE2E:            "BLOCKED",
   secretAvailability: "INCOMPLETE",

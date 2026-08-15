@@ -2,16 +2,17 @@
  * PPJK Phase 2 — Real-DB Integration Tests (UAT Verification)
  *
  * Tests the critical transaction chain: logistic_orders → ppjk_orders.
- * ALL tests use a real PostgreSQL connection (SUPABASE_DATABASE_URL_DEV).
- * NO mocks. Skipped automatically if DB env var is not set.
+ * ALL tests use a real PostgreSQL connection from TEST_DATABASE_URL or
+ * STAGING_DATABASE_URL. NO mocks. The target is fail-closed if not set.
  *
  * Run: pnpm --filter @workspace/api-server test
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { Pool } from "pg";
+import { getIsolatedTestDatabaseUrl } from "../test-setup.js";
 
-const DB_URL = process.env.SUPABASE_DATABASE_URL_DEV ?? process.env.DATABASE_URL;
-const SKIP_REAL_DB = !DB_URL;
+const DB_URL = getIsolatedTestDatabaseUrl();
+const SKIP_REAL_DB = false;
 
 // ─── DB helpers ───────────────────────────────────────────────────────────────
 let pool: Pool;
@@ -52,7 +53,7 @@ afterAll(async () => {
 
 function skipIfNoDb(t: () => Promise<void>) {
   if (SKIP_REAL_DB) {
-    console.warn("⚠️  Skipping real-DB test — SUPABASE_DATABASE_URL_DEV not set");
+    console.warn("⚠️  Skipping real-DB test — isolated staging target not set");
     return;
   }
   if (SKIP_PPJK) {
@@ -64,7 +65,7 @@ function skipIfNoDb(t: () => Promise<void>) {
 
 function skipIfNoLogistic(t: () => Promise<void>) {
   if (SKIP_REAL_DB) {
-    console.warn("⚠️  Skipping real-DB test — SUPABASE_DATABASE_URL_DEV not set");
+    console.warn("⚠️  Skipping real-DB test — isolated staging target not set");
     return;
   }
   if (SKIP_LOGISTIC || SKIP_PPJK) {

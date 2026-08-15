@@ -12,7 +12,7 @@
  *   - Security: no sensitive fields in comparison response
  *
  * NOTE: DB-level tests (race condition, PO uniqueness) require a live test DB.
- * Run: DATABASE_URL=<test-db> pnpm vitest vendorSelectionService.test.ts
+ * Run: TEST_DATABASE_URL=<isolated-staging-db> pnpm vitest vendorSelectionService.test.ts
  * Pure logic tests (scoring) run without DB.
  */
 

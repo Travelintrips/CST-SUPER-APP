@@ -18,6 +18,57 @@ function isTestEnvironment(): boolean {
 const IS_TEST = isTestEnvironment();
 
 function resolveConnectionString(): string {
+  if (IS_TEST) {
+    const testUrl = process.env.TEST_DATABASE_URL ?? process.env.STAGING_DATABASE_URL;
+    if (!testUrl) {
+      throw new Error(
+        "[db] Test database is not configured. Set TEST_DATABASE_URL or STAGING_DATABASE_URL; " +
+        "the test pool will not fall back to DEV, PROD, DATABASE_URL, or Helium/Replit.",
+      );
+    }
+
+    let parsed: URL;
+    try {
+      parsed = new URL(testUrl);
+    } catch {
+      throw new Error("[db] TEST_DATABASE_URL/STAGING_DATABASE_URL is not a valid URL.");
+    }
+
+    const host = parsed.hostname.toLowerCase();
+    if (
+      !["postgres:", "postgresql:"].includes(parsed.protocol) ||
+      host.includes("helium") ||
+      host.includes("replit") ||
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "::1"
+    ) {
+      throw new Error(
+        "[db] Test target rejected. It must be an isolated PostgreSQL database, not Helium/Replit/local DB.",
+      );
+    }
+
+    if (!host.endsWith(".supabase.co") && !host.endsWith(".supabase.com")) {
+      throw new Error("[db] Test target rejected. It must be an isolated Supabase database.");
+    }
+
+    const projectRef =
+      testUrl.match(/postgres(?:ql)?:\/\/[^.]+\.([a-z0-9]+):/i)?.[1] ??
+      testUrl.match(/db\.([a-z0-9]+)\.supabase\.co/i)?.[1] ??
+      null;
+    const reservedRefs = new Set([
+      "nzdweipzckfszczzqtuw",
+      process.env.SUPABASE_DEV_PROJECT_REF ?? "xssrfshdrtdfupgqwfdw",
+    ]);
+    if (projectRef && reservedRefs.has(projectRef)) {
+      throw new Error("[db] Test target rejected. It points to a reserved DEV/PROD Supabase project.");
+    }
+
+    const masked = testUrl.replace(/\/\/[^@]+@/, "//***@").split("?")[0];
+    console.log(`[db] env=test → ${masked}`);
+    return testUrl;
+  }
+
   const isProd = process.env.NODE_ENV === "production" || !!process.env.REPLIT_DEPLOYMENT;
   // PROD: hanya pakai SUPABASE_DATABASE_URL / DATABASE_URL / SUPABASE_PG_URL
   //       JANGAN fallback ke SUPABASE_DATABASE_URL_DEV di prod

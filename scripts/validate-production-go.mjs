@@ -32,6 +32,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveIsolatedTestDatabaseUrl } from "./isolated-test-db-target.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -83,9 +84,17 @@ function gateReason(value) {
 
 // ── Determine if dedicated staging is available ───────────────────────────────
 
+let stagingTargetValidationReason = "";
+let hasValidConfiguredStaging = false;
+try {
+  resolveIsolatedTestDatabaseUrl();
+  hasValidConfiguredStaging = true;
+} catch (error) {
+  stagingTargetValidationReason = error instanceof Error ? error.message : String(error);
+}
+
 const hasDedicatedStaging =
-  envPresent("TEST_DATABASE_URL", 20) ||
-  envPresent("STAGING_DATABASE_URL", 20) ||
+  hasValidConfiguredStaging ||
   summary.stagingTarget?.status === "PASS";
 
 // ── Gate Definitions ──────────────────────────────────────────────────────────
@@ -109,6 +118,30 @@ const gates = [];
       : status === "NOT_RUN"
       ? "NOT_RUN — current static audit evidence not found. Run: pnpm run audit:customer-static"
       : "Run: pnpm run audit:customer-static",
+  });
+}
+
+// Gate 1a — Full API Regression Target
+// This is separate from the static aggregate so an old unit-test report cannot
+// be reused after the database target contract changes.
+{
+  const currentStatus = gateStatus(summary.regression);
+  const status = !summaryLoaded ? "NOT_RUN"
+    : currentStatus === "PASS"    ? "PASS"
+    : currentStatus === "BLOCKED" ? "BLOCKED"
+    : currentStatus === "FAIL"    ? "FAIL"
+    : "NOT_RUN";
+  gates.push({
+    gate: "1a — API Regression",
+    description: "All API tests pass against isolated Supabase staging",
+    status,
+    evidence: currentStatus === "PASS"
+      ? "API regression report: 0 failed/pending/todo on TEST_DATABASE_URL or STAGING_DATABASE_URL"
+      : currentStatus === "BLOCKED"
+      ? "Blocked — provision isolated staging and rerun pnpm run audit:customer-static"
+      : status === "NOT_RUN"
+      ? "NOT_RUN — run: pnpm run audit:customer-static"
+      : "API regression failed; retain the JSON report and fix or reclassify each failure",
   });
 }
 
@@ -193,8 +226,8 @@ const gates = [];
     description: "TEST_DATABASE_URL or STAGING_DATABASE_URL configured",
     status,
     evidence: hasDedicatedStaging
-      ? "Dedicated staging target present"
-      : "Not configured — provision Supabase staging project; see docs/deployment/staging-environment.md",
+      ? "Dedicated isolated Supabase staging target validated"
+      : `${stagingTargetValidationReason || "Not configured"} — see docs/deployment/staging-environment.md`,
   });
 }
 

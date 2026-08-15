@@ -4,8 +4,8 @@
  * Jalankan: node artifacts/api-server/src/lib/services/__tests__/vendorInvitation.test.mjs
  *
  * Prerequisite:
- *   - SUPABASE_DATABASE_URL_DEV set di environment
- *   - mkt_rfqs, mkt_vendor_quotes, suppliers, activity_logs ada di DEV
+ *   - TEST_DATABASE_URL or STAGING_DATABASE_URL set to an isolated Supabase project
+ *   - mkt_rfqs, mkt_vendor_quotes, suppliers, activity_logs exist in staging
  *
  * Test cases:
  *   1. Invite vendor sukses → mkt_vendor_quotes terisi, activity_logs terisi
@@ -20,13 +20,21 @@
 
 import pg from "pg";
 import { randomBytes } from "crypto";
+import { resolveIsolatedTestDatabaseUrl } from "../../../../../../scripts/isolated-test-db-target.mjs";
 
 const { Pool } = pg;
 
-// ── Setup pool langsung ke DEV ────────────────────────────────────────────────
+// ── Setup pool langsung ke isolated staging ───────────────────────────────────
+let TEST_DB_URL;
+try {
+  TEST_DB_URL = resolveIsolatedTestDatabaseUrl();
+} catch (error) {
+  console.error(error.message);
+  process.exit(2);
+}
 
 const pool = new Pool({
-  connectionString: process.env.SUPABASE_DATABASE_URL_DEV,
+  connectionString: TEST_DB_URL,
   ssl: { rejectUnauthorized: false },
   max: 3,
   connectionTimeoutMillis: 10_000,
