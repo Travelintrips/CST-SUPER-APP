@@ -145,13 +145,14 @@ function scheduleInvalidationToast(
   }, 800);
 }
 
-export function useAlertWebSocket() {
+export function useAlertWebSocket({ enabled = true }: { enabled?: boolean } = {}) {
   const qc = useQueryClient();
   const esRef = useRef<EventSource | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const destroyedRef = useRef(false);
 
   useEffect(() => {
+    if (!enabled) return;
     destroyedRef.current = false;
 
     function connect() {
@@ -223,5 +224,5 @@ export function useAlertWebSocket() {
         esRef.current = null;
       }
     };
-  }, [qc]);
+  }, [enabled, qc]);
 }

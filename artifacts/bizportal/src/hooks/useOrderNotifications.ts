@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useSupabaseAuth } from "@/contexts/SupabaseAuthContext";
+import { useAfterFirstPaint } from "@/hooks/useAfterFirstPaint";
 import {
   getListLogisticOrdersQueryKey,
   getGetLogisticOrderQueryKey,
@@ -180,6 +181,7 @@ function dbRowToNotif(row: Record<string, unknown>): OrderNotification {
 
 export function useOrderNotifications() {
   const { isAuthenticated } = useSupabaseAuth();
+  const secondaryReady = useAfterFirstPaint(900);
   const queryClient = useQueryClient();
   const [notifications, setNotifications] = useState<OrderNotification[]>([]);
   const [connected, setConnected] = useState(false);
@@ -200,7 +202,7 @@ export function useOrderNotifications() {
 
   // Fetch active geofence alerts on mount
   useEffect(() => {
-    if (!isAuthenticated) return;
+    if (!isAuthenticated || !secondaryReady) return;
     fetch("/api/drivers/geofence-alerts", { credentials: "include" })
       .then((r) => r.ok ? r.json() as Promise<GeofenceAlertItem[]> : [])
       .then((alerts) => {
@@ -211,11 +213,11 @@ export function useOrderNotifications() {
         setGeofenceAlertMap(new Map(map));
       })
       .catch(() => {});
-  }, [isAuthenticated]);
+  }, [isAuthenticated, secondaryReady]);
 
   // Fetch persisted notifications from DB on mount
   useEffect(() => {
-    if (!isAuthenticated) return;
+    if (!isAuthenticated || !secondaryReady) return;
     if (initializedRef.current) return;
     initializedRef.current = true;
     fetch("/api/notifications?limit=50&read=all", { credentials: "include" })
@@ -236,11 +238,11 @@ export function useOrderNotifications() {
         }
       })
       .catch(() => {});
-  }, [isAuthenticated]);
+  }, [isAuthenticated, secondaryReady]);
 
   // Polling setiap 60 detik — sync unread count dari DB
   useEffect(() => {
-    if (!isAuthenticated) return;
+    if (!isAuthenticated || !secondaryReady) return;
     const poll = async () => {
       try {
         const r = await fetch("/api/notifications/unread-count", { credentials: "include" });
@@ -270,7 +272,7 @@ export function useOrderNotifications() {
 
     const timer = setInterval(poll, POLL_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [isAuthenticated]);
+  }, [isAuthenticated, secondaryReady]);
 
   const markAllRead = useCallback(() => {
     setNotifications((prev) =>

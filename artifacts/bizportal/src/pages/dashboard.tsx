@@ -35,6 +35,7 @@ import { QuickCreateWidget } from "@/components/dashboard/QuickCreateWidget";
 import { QuickAccessWidget } from "@/components/dashboard/QuickAccessWidget";
 import { RecentPagesWidget } from "@/components/dashboard/RecentPagesWidget";
 import { MyWorkspaceWidget } from "@/components/dashboard/MyWorkspaceWidget";
+import { useAfterFirstPaint } from "@/hooks/useAfterFirstPaint";
 
 interface ResponseTimeEntry {
   timestamp: string;
@@ -66,6 +67,31 @@ const RT_WINDOWS = [
   { label: "30 hari", value: "30d" },
 ] as const;
 type RtWindow = typeof RT_WINDOWS[number]["value"];
+
+function DeferredDashboardWidgets({ children }: { children: React.ReactNode }) {
+  const ready = useAfterFirstPaint(700);
+
+  if (!ready) {
+    return (
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4" aria-label="Memuat widget dashboard">
+        <Card>
+          <CardContent className="space-y-3 p-5">
+            <Skeleton className="h-5 w-36" />
+            <Skeleton className="h-16 w-full" />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="space-y-3 p-5">
+            <Skeleton className="h-5 w-44" />
+            <Skeleton className="h-16 w-full" />
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  return <>{children}</>;
+}
 
 async function fetchResponseTimeStats(window: RtWindow): Promise<PathStat[]> {
   const res = await fetch(`/api/dashboard/response-time-stats?window=${window}`);
@@ -161,6 +187,7 @@ interface DashboardSummary {
 export default function DashboardPage() {
   const { t } = useLanguage();
   const { companyQueryParam, isConsolidated, activeCompany } = useCompany();
+  const secondaryReady = useAfterFirstPaint(450);
   const [intervalValue, setIntervalValue] = useState<IntervalValue>(getStoredInterval);
 
   const refetchInterval = intervalValue === "off" ? false : Number(intervalValue);
@@ -227,25 +254,23 @@ export default function DashboardPage() {
     }
   };
 
-  const { data: rtEntries = [], refetch: refetchRt } = useQuery({
+  const { data: rtEntries = [] } = useQuery({
     queryKey: ["dashboard-response-times"],
     queryFn: fetchResponseTimeTrend,
     staleTime: 60_000,
     refetchOnWindowFocus: false,
+    enabled: secondaryReady,
   });
 
   const [rtWindow, setRtWindow] = useState<RtWindow>("24h");
 
-  const { data: rtStats = [], refetch: refetchStats } = useQuery({
+  const { data: rtStats = [] } = useQuery({
     queryKey: ["dashboard-response-time-stats", rtWindow],
     queryFn: () => fetchResponseTimeStats(rtWindow),
     staleTime: 60_000,
     refetchOnWindowFocus: false,
+    enabled: secondaryReady,
   });
-
-  useEffect(() => {
-    if (dataUpdatedAt) { void refetchRt(); void refetchStats(); }
-  }, [dataUpdatedAt, refetchRt, refetchStats]);
 
   const activeFreightCount = summary?.activeFreightCount ?? 0;
   const awaitingQuoteCount = summary?.awaitingQuoteCount ?? 0;
@@ -253,7 +278,7 @@ export default function DashboardPage() {
   const companyBreakdown = summary?.companyBreakdown ?? [];
 
   const { data: portalOrders = [], isLoading: portalLoading, refetch: refetchPortal } = useListLogisticOrders(undefined, {
-    query: { queryKey: getListLogisticOrdersQueryKey(), refetchInterval },
+    query: { queryKey: getListLogisticOrdersQueryKey(), refetchInterval, enabled: secondaryReady },
   });
 
   interface DashDriver { id: number; name: string; phone: string | null; vehiclePlate: string | null; vehicleType: string | null; isActive: boolean; }
@@ -266,6 +291,7 @@ export default function DashboardPage() {
     },
     staleTime: 30_000,
     refetchInterval,
+    enabled: secondaryReady,
   });
   const { data: dashJobs = [] } = useQuery<DashActiveJob[]>({
     queryKey: ["dashboard-driver-jobs"],
@@ -275,6 +301,7 @@ export default function DashboardPage() {
     },
     staleTime: 30_000,
     refetchInterval,
+    enabled: secondaryReady,
   });
   const activeJobByDriver = dashJobs.reduce<Record<number, DashActiveJob>>((acc, job) => {
     if (job.status !== "COMPLETED" && job.status !== "CANCELLED") {
@@ -289,6 +316,8 @@ export default function DashboardPage() {
   const portalInProgress = portalOrders.filter((o) => o.status === "In Progress").length;
   const portalCompleted = portalOrders.filter((o) => o.status === "Completed").length;
   const portalCancelled = portalOrders.filter((o) => o.status === "Cancelled").length;
+  const portalLoadingForView = !secondaryReady || portalLoading;
+  const driversLoadingForView = !secondaryReady || driversLoading;
 
   const [selectedPortalStatus, setSelectedPortalStatus] = useState<string | null>(null);
   const [soDialog, setSoDialog] = useState<LogisticOrder | null>(null);
@@ -821,7 +850,7 @@ export default function DashboardPage() {
                     `}
                   >
                     <p className="text-xs text-muted-foreground mb-1 font-medium">{s.label}</p>
-                    {portalLoading
+                    {portalLoadingForView
                       ? <Skeleton className="h-7 w-10 bg-muted" />
                       : <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
                     }
@@ -849,7 +878,7 @@ export default function DashboardPage() {
                   </Button>
                 </div>
 
-                {portalLoading ? (
+                {portalLoadingForView ? (
                   <div className="p-4 space-y-2">
                     {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-12 w-full bg-muted" />)}
                   </div>
@@ -974,7 +1003,7 @@ export default function DashboardPage() {
                     {s.icon}
                     <p className="text-xs text-muted-foreground font-medium">{s.label}</p>
                   </div>
-                  {driversLoading
+                  {driversLoadingForView
                     ? <Skeleton className="h-7 w-10 bg-muted" />
                     : <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
                   }
@@ -983,7 +1012,7 @@ export default function DashboardPage() {
             </div>
 
             {/* Driver list */}
-            {driversLoading ? (
+            {driversLoadingForView ? (
               <div className="space-y-2">
                 {[1, 2, 3].map((i) => <Skeleton key={i} className="h-12 w-full bg-muted" />)}
               </div>
@@ -1133,38 +1162,40 @@ export default function DashboardPage() {
         </Card>
 
         {/* ── Dashboard Widgets ── */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <SalesWidget />
-          <SportCenterWidget />
-          <AccountingWidget />
-          <ProfitLossComparisonWidget />
-          <LogisticsWidget />
-          <PurchasingWidget />
-          <TasksWidget />
-          <RecentActivitiesWidget />
-          <AiInsightsWidget />
-          <OrderPipelineWidget
-            isLoading={isLoading || portalLoading}
-            portalNew={portalNew}
-            portalInProgress={portalInProgress}
-            portalCompleted={portalCompleted}
-            portalCancelled={portalCancelled}
-            portalTotal={portalOrders.length}
-            quotesActive={summary?.quotesActive ?? 0}
-            salesOrdersConfirmed={summary?.salesOrdersConfirmed ?? 0}
-            salesOrdersThisMonth={summary?.salesOrdersThisMonth ?? 0}
-          />
-          <div className="lg:col-span-2">
-            <QuickActionsWidget />
+        <DeferredDashboardWidgets>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <SalesWidget />
+            <SportCenterWidget />
+            <AccountingWidget />
+            <ProfitLossComparisonWidget />
+            <LogisticsWidget />
+            <PurchasingWidget />
+            <TasksWidget />
+            <RecentActivitiesWidget />
+            <AiInsightsWidget />
+            <OrderPipelineWidget
+              isLoading={isLoading || portalLoadingForView}
+              portalNew={portalNew}
+              portalInProgress={portalInProgress}
+              portalCompleted={portalCompleted}
+              portalCancelled={portalCancelled}
+              portalTotal={portalOrders.length}
+              quotesActive={summary?.quotesActive ?? 0}
+              salesOrdersConfirmed={summary?.salesOrdersConfirmed ?? 0}
+              salesOrdersThisMonth={summary?.salesOrdersThisMonth ?? 0}
+            />
+            <div className="lg:col-span-2">
+              <QuickActionsWidget />
+            </div>
           </div>
-        </div>
 
-        {rtEntries.length > 0 && (
-          <ResponseTimeTrendCard entries={rtEntries} />
-        )}
-        {rtStats.length > 0 && (
-          <ResponseTimeStatsCard stats={rtStats} window={rtWindow} onWindowChange={setRtWindow} />
-        )}
+          {rtEntries.length > 0 && (
+            <ResponseTimeTrendCard entries={rtEntries} />
+          )}
+          {rtStats.length > 0 && (
+            <ResponseTimeStatsCard stats={rtStats} window={rtWindow} onWindowChange={setRtWindow} />
+          )}
+        </DeferredDashboardWidgets>
       </div>
 
       {/* Create Sales Order Dialog */}

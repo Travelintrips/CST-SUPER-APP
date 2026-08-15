@@ -140,6 +140,7 @@ import { SortableNavWrapper } from "./SortableNavWrapper";
 import { PinnedShortcuts } from "./PinnedShortcuts";
 import { QuickCreate } from "./QuickCreate";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { useAfterFirstPaint } from "@/hooks/useAfterFirstPaint";
 
 const IS_DEV = import.meta.env.DEV;
 
@@ -196,6 +197,7 @@ export function AppShell({ children, noPadding }: AppShellProps) {
   const [location, navigate] = useLocation();
   const { t } = useLanguage();
   const { activeCompany, isConsolidated } = useCompany();
+  const secondaryReady = useAfterFirstPaint(500);
   const { data: dbUser } = useGetCurrentUser({
     query: {
       queryKey: getGetCurrentUserQueryKey(),
@@ -204,7 +206,7 @@ export function AppShell({ children, noPadding }: AppShellProps) {
   });
   const { unreadCount, dbUnreadTotal } = useOrderNotificationsContext();
 
-  useAlertWebSocket();
+  useAlertWebSocket({ enabled: secondaryReady });
 
   const getInitials = (name?: string) => {
     if (!name) return "U";
@@ -456,7 +458,7 @@ export function AppShell({ children, noPadding }: AppShellProps) {
 
   const { data: aiDrafts = [] } = useListAiDraftQuotations({
     query: {
-      enabled: (dbUser?.role as string) === "admin" || (dbUser?.role as string) === "owner",
+      enabled: secondaryReady && ((dbUser?.role as string) === "admin" || (dbUser?.role as string) === "owner"),
       refetchInterval: 60_000,
       queryKey: getListAiDraftQuotationsQueryKey(),
     },
@@ -471,7 +473,7 @@ export function AppShell({ children, noPadding }: AppShellProps) {
       return r.json();
     },
     refetchInterval: 60_000,
-    enabled: (dbUser?.role as string) === "admin" || (dbUser?.role as string) === "owner",
+    enabled: secondaryReady && ((dbUser?.role as string) === "admin" || (dbUser?.role as string) === "owner"),
   });
   const tenantOverdueCount = tenantDashboardNav?.invoices?.overdue ?? 0;
 
@@ -671,7 +673,7 @@ export function AppShell({ children, noPadding }: AppShellProps) {
       } catch { return {}; }
     },
     staleTime: 5 * 60 * 1000,
-    enabled: (dbUser?.role as string) === "admin" || (dbUser?.role as string) === "owner",
+    enabled: secondaryReady && ((dbUser?.role as string) === "admin" || (dbUser?.role as string) === "owner"),
   });
 
   const companyKey = isConsolidated ? "__all__" : String(activeCompany?.id ?? 0);
