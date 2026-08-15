@@ -2718,9 +2718,17 @@ const REQUIRED_CANONICAL_SETTLEMENT_ROUTINES = [
 export async function verifyCanonicalSettlementOwnerRoutines(): Promise<void> {
   const result = await db.execute(sql`
     SELECT p.proname AS routine_name,
-           pg_get_function_identity_arguments(p.oid) AS identity_arguments
+           COALESCE(
+             string_agg(
+               format_type(argument.oid, NULL),
+               ', ' ORDER BY argument.ordinality
+             ),
+             ''
+           ) AS identity_arguments
     FROM pg_catalog.pg_proc p
     JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+    LEFT JOIN LATERAL unnest(p.proargtypes)
+      WITH ORDINALITY AS argument(oid, ordinality) ON TRUE
     WHERE n.nspname = 'sport_center'
       AND p.proname IN (
         ${sql.join(
@@ -2728,6 +2736,7 @@ export async function verifyCanonicalSettlementOwnerRoutines(): Promise<void> {
           sql`, `,
         )}
       )
+    GROUP BY p.oid, p.proname
   `);
   const present = new Set(
     result.rows.map((row) => {

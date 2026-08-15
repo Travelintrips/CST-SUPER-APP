@@ -47,6 +47,7 @@ describe("canonical Sport Center owner routine restoration contract", () => {
     expect(migrationSource).toContain(
       "CANONICAL_SETTLEMENT_OWNER_ROUTINES_INCOMPLETE",
     );
+    expect(migrationSource).toContain("format_type(argument.oid, NULL)");
   });
 
   it("guards the restoration runner against production execution", () => {
