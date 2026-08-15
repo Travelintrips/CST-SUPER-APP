@@ -2799,6 +2799,12 @@ router.post("/vendor/catalog", requirePortalAuth, async (req, res) => {
 
   const { name, templateKind, description, kategori, categoryKey, priceSell, unit, moq, origin, hsCode } = req.body ?? {};
   if (!String(name ?? "").trim()) return res.status(400).json({ message: "Nama produk wajib diisi" });
+  const normalizedTemplateKind = templateKind == null || templateKind === ""
+    ? "product"
+    : String(templateKind).trim().toLowerCase();
+  if (!["product", "service"].includes(normalizedTemplateKind)) {
+    return res.status(400).json({ message: "templateKind harus berupa product atau service" });
+  }
 
   try {
     const [row] = await db
@@ -2806,8 +2812,9 @@ router.post("/vendor/catalog", requirePortalAuth, async (req, res) => {
       .values({
         vendorId:     supplier.id,
         vendorName:   supplier.name ?? null,
+        type:         normalizedTemplateKind,
         name:         String(name).trim().slice(0, 200),
-        templateKind: templateKind ?? "product",
+        templateKind: normalizedTemplateKind,
         description:  description ?? null,
         kategori:     kategori ?? null,
         categoryKey:  categoryKey ?? null,
@@ -2840,12 +2847,19 @@ router.put("/vendor/catalog/:id", requirePortalAuth, async (req, res) => {
 
   const { name, templateKind, description, kategori, categoryKey, priceSell, unit, moq, origin, hsCode, specValues } = req.body ?? {};
   if (!String(name ?? "").trim()) return res.status(400).json({ message: "Nama produk wajib diisi" });
+  const normalizedTemplateKind = templateKind == null || templateKind === ""
+    ? "product"
+    : String(templateKind).trim().toLowerCase();
+  if (!["product", "service"].includes(normalizedTemplateKind)) {
+    return res.status(400).json({ message: "templateKind harus berupa product atau service" });
+  }
 
   try {
     const result = await db.execute(sql`
       UPDATE vendor_catalog_items
       SET name          = ${String(name).trim().slice(0, 200)},
-          template_kind = ${templateKind ?? null},
+           type          = ${normalizedTemplateKind},
+           template_kind = ${normalizedTemplateKind},
           description   = ${description ?? null},
           kategori      = ${kategori ?? null},
           category_key  = ${categoryKey ?? null},

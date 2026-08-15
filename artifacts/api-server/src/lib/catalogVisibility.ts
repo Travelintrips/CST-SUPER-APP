@@ -25,6 +25,23 @@ export function isCatalogItemPublic(item: {
 }
 
 /**
+ * Resolve the public catalog kind while older rows are being normalized.
+ *
+ * `type` is the legacy classifier and `templateKind` is the template-engine
+ * classifier. Product rows created by older admin flows can have
+ * `type='product'` while `template_kind='service'`; product is the safe
+ * interpretation for that explicit legacy value.
+ */
+export function resolveCatalogItemKind(item: {
+  type?: string | null;
+  templateKind?: string | null;
+}): "product" | "service" | null {
+  if (item.type === "product" || item.templateKind === "product") return "product";
+  if (item.type === "service" || item.templateKind === "service") return "service";
+  return null;
+}
+
+/**
  * Drizzle WHERE conditions yang setara dengan isCatalogItemPublic.
  * Gabungkan ke query dengan `and(...catalogPublicConditions(), ...)`.
  *

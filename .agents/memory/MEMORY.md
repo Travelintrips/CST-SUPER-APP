@@ -76,3 +76,4 @@
 - [Password reset safe-mode capture](password-reset-safe-mode.md) — safe mode menonaktifkan SMTP; harness reset password perlu capture khusus tanpa mengembalikan token ke API normal.
 - [QRIS bank-account identity](qris-bank-account-identity.md) — payment QRIS dapat menyimpan nomor rekening eksternal, sedangkan mutasi menyimpan ID internal; normalisasi wajib sebelum matching.
 - [QRIS approval response](qris-approval-response.md) — migration runtime jangan diulang setiap approval; tampilkan pending state dan pesan error server.
+- [Marketplace catalog kind contract](marketplace-catalog-kind-contract.md) — `type` dan `template_kind` wajib sinkron; mismatch legacy dapat menyembunyikan produk dari tab Marketplace.
