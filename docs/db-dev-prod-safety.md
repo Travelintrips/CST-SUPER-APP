@@ -47,9 +47,14 @@ Dipanggil sebelum menjalankan migration. Guard:
 5. **Throw** jika `NODE_ENV=production` + URL kosong
 6. **Throw** jika `SUPABASE_MIGRATION_URL` tidak cocok dengan target project atau bukan port `5432`
 
-### `artifacts/api-server/src/lib/envGuard.ts`
+### Runtime DB guard (`artifacts/api-server/src/lib/envGuard.ts`)
 
-Dipanggil saat startup API server dan menjalankan guard lingkungan DB utama. Guard startup tetap menolak koneksi DEV yang mengarah ke PROD ketika `SUPABASE_DATABASE_URL_DEV` tersedia.
+Dipanggil saat startup API server dan memvalidasi koneksi DB runtime utama. Guard startup tetap menolak koneksi DEV yang mengarah ke PROD ketika `SUPABASE_DATABASE_URL_DEV` tersedia.
+
+**Penting:** runtime DB guard ini berbeda dari migration-target guard di
+`scripts/verify-db-target.mjs`. Runtime DB guard memvalidasi URL koneksi aplikasi;
+migration-target guard memvalidasi `SUPABASE_MIGRATION_URL`, termasuk project ref
+dan port. Lulus salah satu guard tidak membuktikan target guard lainnya lulus.
 
 ### `lib/db/src/index.ts` (kandidat URL)
 
@@ -77,7 +82,7 @@ Output contoh:
 ============================================================
 [verify-db] Target env  : development
 [verify-db] URL source  : SUPABASE_DATABASE_URL_DEV
-[verify-db] URL (masked): postgresql://***@aws-1-ap-southeast-2.pooler.supabase.com:6543/postgres
+[verify-db] URL (masked): postgresql://***@aws-1-ap-southeast-2.pooler.supabase.com:5432/postgres
 [verify-db] Project ref : <dev-ref>
 [verify-db] Is PROD ref : false (PROD ref: nzdweipzckfszczzqtuw)
 ============================================================
