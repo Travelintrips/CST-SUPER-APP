@@ -108,7 +108,7 @@ Isi string kosong jika field tidak terbaca.`,
     throw classifyKtpOcrError(error);
   }
 
-  const raw = response.choices[0]?.message?.content ?? "{}";
+  const raw = response.choices[0]?.message?.content ?? "";
   const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
   let data: Record<string, string>;
   try {

@@ -78,3 +78,4 @@
 - [QRIS bank-account identity](qris-bank-account-identity.md) — payment QRIS dapat menyimpan nomor rekening eksternal, sedangkan mutasi menyimpan ID internal; normalisasi wajib sebelum matching.
 - [QRIS approval response](qris-approval-response.md) — migration runtime jangan diulang setiap approval; tampilkan pending state dan pesan error server.
 - [Marketplace catalog kind contract](marketplace-catalog-kind-contract.md) — `type` dan `template_kind` wajib sinkron; mismatch legacy dapat menyembunyikan produk dari tab Marketplace.
+- [Production OpenAI credential validation](production-openai-credential-validation.md) — secret bundle bisa termuat tetapi provider tetap 401; presence bukan bukti autentikasi.
