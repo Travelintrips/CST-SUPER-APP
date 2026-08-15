@@ -22,6 +22,7 @@ export class GenericPostGuardError extends Error {
 }
 
 
+
 export type ApprovedReconciliationMatchIdentity = {
   candidate_type?: string | null;
   candidate_id?: number | string | null;
@@ -74,14 +75,30 @@ export function assertGenericPostAllowed(
 export function assertGenericApprovalAllowed(
   match: ApprovedReconciliationMatchIdentity | null | undefined,
 ): void {
+  if (!match || match.candidate_type !== "qris_settlement") return;
+
+  const candidateId = Number(match.candidate_id);
+  if (!Number.isSafeInteger(candidateId) || candidateId <= 0) {
+    throw new GenericPostGuardError(
+      GENERIC_POST_GUARD_CODES.AMBIGUOUS_QRIS_SETTLEMENT_SOURCE,
+      "Identitas QRIS settlement tidak lengkap; generic approval ditolak.",
+    );
+  }
+
   if (
-    match?.candidate_type === "qris_settlement" &&
     match.candidate_source ===
-      RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER
+    RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER
   ) {
     throw new GenericPostGuardError(
       GENERIC_POST_GUARD_CODES.CANONICAL_SETTLEMENT_APPROVAL_REQUIRED,
       "Canonical Sport Center settlement wajib memakai approval link-only; generic approval ditolak.",
+    );
+  }
+
+  if (match.candidate_source !== RECONCILIATION_CANDIDATE_SOURCES.LEGACY_QRIS) {
+    throw new GenericPostGuardError(
+      GENERIC_POST_GUARD_CODES.AMBIGUOUS_QRIS_SETTLEMENT_SOURCE,
+      "Sumber QRIS settlement tidak dapat dibuktikan secara source-aware; generic approval ditolak.",
     );
   }
 }

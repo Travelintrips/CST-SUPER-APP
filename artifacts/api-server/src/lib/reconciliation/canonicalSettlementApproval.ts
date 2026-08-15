@@ -23,6 +23,7 @@ export const CANONICAL_APPROVAL_CODES = {
   MUTATION_ALREADY_USED: "CANONICAL_BANK_MUTATION_ALREADY_USED",
   SETTLEMENT_ALREADY_USED: "CANONICAL_SETTLEMENT_ALREADY_USED",
   PAYMENT_CONFLICT: "CANONICAL_SETTLEMENT_PAYMENT_RECONCILIATION_CONFLICT",
+  GENERIC_JOURNAL_ALREADY_EXISTS: "CANONICAL_GENERIC_JOURNAL_ALREADY_EXISTS",
   INCONSISTENT_STATE: "CANONICAL_APPROVAL_INCONSISTENT_STATE",
   MATCHING_EVIDENCE_INVALID: "CANONICAL_SETTLEMENT_MATCHING_EVIDENCE_INVALID",
   REOPEN_NOT_ELIGIBLE: "CANONICAL_SETTLEMENT_REOPEN_NOT_ELIGIBLE",
@@ -169,7 +170,8 @@ export async function approveCanonicalSettlementLink(
     // public mutation -> canonical mutation -> source-aware match -> settlement
     // -> settlement journal -> underlying public payment mirrors.
     const { rows: publicMutationRows } = await tx.execute(sql.raw(`
-      SELECT id, mutation_key, status, amount, transaction_date, company_id, bank_account_id
+      SELECT id, mutation_key, status, journal_entry_id, amount, transaction_date,
+             company_id, bank_account_id
       FROM bank_mutations
       WHERE id = ${mutationId}
       FOR UPDATE
@@ -181,6 +183,12 @@ export async function approveCanonicalSettlementLink(
       );
     }
     const publicMutation = publicMutationRows[0] as Record<string, unknown>;
+    if (publicMutation.journal_entry_id != null) {
+      throw new CanonicalSettlementApprovalError(
+        CANONICAL_APPROVAL_CODES.GENERIC_JOURNAL_ALREADY_EXISTS,
+        "Mutasi bank sudah memiliki journal generic; approval canonical link-only dihentikan.",
+      );
+    }
     const mutationKey = String(publicMutation.mutation_key ?? "");
     if (!mutationKey) {
       throw new CanonicalSettlementApprovalError(
@@ -583,7 +591,7 @@ export async function reopenCanonicalSettlementLink(
 
   return client.transaction(async (tx) => {
     const { rows: publicRows } = await tx.execute(sql.raw(`
-      SELECT id, mutation_key, status
+      SELECT id, mutation_key, status, journal_entry_id
       FROM bank_mutations
       WHERE id = ${mutationId}
       FOR UPDATE
@@ -595,6 +603,12 @@ export async function reopenCanonicalSettlementLink(
       );
     }
     const publicMutation = publicRows[0] as Record<string, unknown>;
+    if (publicMutation.journal_entry_id != null) {
+      throw new CanonicalSettlementApprovalError(
+        CANONICAL_APPROVAL_CODES.GENERIC_JOURNAL_ALREADY_EXISTS,
+        "Mutasi bank memiliki journal generic; link canonical tidak boleh dibuka melalui jalur accounting.",
+      );
+    }
     const mutationKey = String(publicMutation.mutation_key ?? "");
     if (!mutationKey) {
       throw new CanonicalSettlementApprovalError(

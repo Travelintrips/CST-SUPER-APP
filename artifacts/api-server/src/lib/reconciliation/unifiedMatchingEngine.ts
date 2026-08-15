@@ -1355,10 +1355,7 @@ export async function approveAndCreateJournal(
        if (selectedType && !allowedCandidateTypes.has(selectedType)) {
          throw Object.assign(new Error("Tipe kandidat rekonsiliasi tidak valid"), { code: "INVALID_MATCH" });
        }
-       if (
-         selectedType === "qris_settlement" &&
-         selectedCandidateSource === CANONICAL_SETTLEMENT_SOURCE
-       ) {
+       if (selectedType === "qris_settlement") {
          assertGenericApprovalAllowed({
            candidate_type: selectedType,
            candidate_id: selectedCandidateId,

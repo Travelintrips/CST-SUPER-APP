@@ -2450,7 +2450,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
     if (
       !completion
       || String(completion.settlement_status).toLowerCase() !== "reconciled"
-      || Number(completion.bank_mutation_id) !== mutationId
+      || Number(completion.bank_mutation_id) !== approval.canonical_mutation_id
       || String(completion.journal_status).toLowerCase() !== "posted"
       || String(completion.public_mutation_status).toLowerCase() !== "approved"
     ) {
@@ -3323,7 +3323,7 @@ router.post("/:mutationId/post", async (req, res) => {
         SELECT candidate_type, candidate_id, candidate_source
         FROM bank_reconciliation_matches
         WHERE mutation_id = ${mutId}
-          AND status = 'approved'
+          AND status IN ('candidate', 'approved')
         ORDER BY id
         LIMIT 2
         FOR UPDATE

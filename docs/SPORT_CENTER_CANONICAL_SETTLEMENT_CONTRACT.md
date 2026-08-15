@@ -479,6 +479,23 @@ The public mutation is bridged to the canonical mutation by exact
 `mutation_key`; a numeric ID fallback is forbidden. Generic journal approval,
 posting, and void-journal routes cannot own a canonical settlement.
 
+The owner of this lifecycle is
+`artifacts/api-server/src/lib/reconciliation/canonicalSettlementApproval.ts`.
+`bankReconciliation.ts` may dispatch to that owner, but no generic accounting
+route may write a canonical settlement or its bank-mutation status. The only
+allowed bank-status transitions for the canonical link are therefore:
+
+```text
+matched | auto_matched -> approved   (link-only approval)
+approved -> unmatched                 (link removal / reopen)
+```
+
+`approved` here means that the reconciliation link is approved. It does not
+mean that a new journal was approved or posted. The public mutation's numeric
+ID and the canonical mutation's numeric ID are separate namespaces; the
+settlement batch stores the canonical ID, while the public API identifies the
+user-facing mutation.
+
 ## I. Candidate identity / discriminator
 
 Legacy public reconciliation contracts use:
@@ -520,6 +537,17 @@ candidate_source = 'sport_center.payment_settlement_batches'
 
 Historical rows with `candidate_source IS NULL` remain distinct and fail
 closed; they are never inferred to be legacy QRIS.
+
+Source admissibility is also enforced at approval boundaries:
+
+```text
+public.qris_settlements                         -> generic legacy approval only
+sport_center.payment_settlement_batches         -> canonical link-only approval only
+NULL or any other source                       -> rejected / manual review
+```
+
+This applies even when the numeric `candidate_id` is the same. A request body
+cannot override the source stored on a locked match row.
 
 ## J. Payment exclusion predicate
 
@@ -606,6 +634,11 @@ The active endpoint is the dedicated canonical settlement approval path. It
 returns `journal_created = false` and `requiresPosting = false`. A generic
 `approveAndCreateJournal` call rejects the canonical source before journal
 creation, and the generic `/post` path rejects it before loading a journal.
+The generic `/post` guard checks both active `candidate` and `approved` match
+rows, so a canonical candidate cannot be posted by changing only the bank
+mutation status. Approval also fails closed if the public mutation already has
+`journal_entry_id`; canonical linking never adopts or creates a generic
+journal.
 
 ## M. Void/reopen contract
 
@@ -630,6 +663,12 @@ reversal, or change gross/net/fee amounts. The dedicated reopen path locks the
 same source-qualified identity and records
 `CANONICAL_SETTLEMENT_LINK_REMOVED` in the public reconciliation audit.
 Repeated execution of the completed unlink state is idempotent.
+
+The public and canonical bank mutation rows both transition from `approved` to
+`unmatched`. The canonical batch transitions from `reconciled` to `posted`,
+clears only `bank_mutation_id` and reconciliation metadata, and retains the
+same posted settlement journal. The batch's cleared link uses the canonical
+mutation ID, not the public mutation ID.
 
 ## N. Legacy boundary
 
@@ -696,6 +735,19 @@ Those paths now understand both public/legacy and canonical QRIS contracts:
 | Eligibility predicate | PARTIAL |
 | Link-only approval | VERIFIED |
 | Void/reopen contract | VERIFIED |
+
+The contract suite covers:
+
+```text
+artifacts/api-server/src/__tests__/candidate-source-persistence.test.ts
+artifacts/api-server/src/__tests__/canonical-settlement-approval.test.ts
+artifacts/api-server/src/__tests__/generic-post-guard.test.ts
+```
+
+These tests cover same-number canonical/legacy identity separation,
+matched/auto_matched -> approved ownership, approved -> unmatched reopen
+ownership, idempotent link removal, ambiguous-source rejection, and the
+generic approval/post bypass guards.
 
 ## Existing evidence summary
 

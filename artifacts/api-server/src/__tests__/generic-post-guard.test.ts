@@ -51,6 +51,22 @@ describe("Phase 4C-7 generic /post hard guard", () => {
     ).not.toThrow();
   });
 
+  it("fails closed for historical or unknown QRIS approval sources", () => {
+    for (const candidateSource of [null, "unknown.settlement_source"]) {
+      expect(() =>
+        assertGenericApprovalAllowed({
+          candidate_type: "qris_settlement",
+          candidate_id: 1,
+          candidate_source: candidateSource,
+        }),
+      ).toThrowError(
+        expect.objectContaining({
+          code: GENERIC_POST_GUARD_CODES.AMBIGUOUS_QRIS_SETTLEMENT_SOURCE,
+        }),
+      );
+    }
+  });
+
   it("blocks canonical settlement identity before generic posting", () => {
     expectGuardError(
       CANONICAL_SOURCE,

@@ -70,6 +70,9 @@ describe("Phase 4C-6 canonical link-only approval contract", () => {
     expect(CANONICAL_APPROVAL_CODES.PAYMENT_CONFLICT).toBe(
       "CANONICAL_SETTLEMENT_PAYMENT_RECONCILIATION_CONFLICT",
     );
+    expect(CANONICAL_APPROVAL_CODES.GENERIC_JOURNAL_ALREADY_EXISTS).toBe(
+      "CANONICAL_GENERIC_JOURNAL_ALREADY_EXISTS",
+    );
   });
 
   it("models canonical reopen as link removal, not accounting reversal", () => {
