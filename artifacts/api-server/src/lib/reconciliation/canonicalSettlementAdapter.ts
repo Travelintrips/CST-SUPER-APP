@@ -253,6 +253,10 @@ function canonicalEligibilityFilters(
     filters.push(sql`(
       provider_code = ${options.providerCode}
       OR (
+        ${options.providerCode} = 'gpn_qris'
+        AND provider_code = 'mandiri_direct'
+      )
+      OR (
         provider_code IS NULL
         AND ABS(expected_bank_amount::numeric - ${options.bankAmount ?? options.amount ?? 0}) < 0.01
       )

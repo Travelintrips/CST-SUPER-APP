@@ -647,7 +647,13 @@ export async function fetchCandidates(
           AND (bank_account_id IS NULL OR bank_account_id = ${mutationBankAccountId})
       `);
       const matchingRows = (rows as Array<Record<string, unknown>>)
-        .filter((row) => normalizeQrisProvider(String(row.provider_code ?? "")) === providerCode)
+        .filter((row) => {
+          const configuredProvider = normalizeQrisProvider(String(row.provider_code ?? ""));
+          return configuredProvider === providerCode
+            // QRTRAVELI/GPN is the bank-side label for Mandiri's
+            // owner-approved settlement rule in this account.
+            || (providerCode === "gpn_qris" && configuredProvider === "mandiri_direct");
+        })
         .sort((a, b) => {
           const specificity = (row: Record<string, unknown>) =>
             (row.company_id != null && Number(row.company_id) === Number(company_id) ? 2 : 0) +
@@ -668,6 +674,21 @@ export async function fetchCandidates(
       return { absolute: 0, percentage: 0, providerCode };
     }
   };
+  const canonicalBankAccountNumber = mutationBankAccountId == null
+    ? Promise.resolve<string | null>(null)
+    : db.execute(sql`
+        SELECT account_number::text AS account_number
+        FROM company_bank_accounts
+        WHERE id = ${mutationBankAccountId}
+          AND is_active = TRUE
+          AND (company_id IS NULL OR company_id = ${company_id ?? null})
+        LIMIT 1
+      `)
+        .then(({ rows }) => {
+          const accountNumber = (rows[0] as Record<string, unknown> | undefined)?.account_number;
+          return accountNumber == null ? null : String(accountNumber);
+        })
+        .catch(() => null);
   const amtFilter = `ABS(##AMT##::numeric - ${Number(amount)}) < 0.01`;
   const mutationLooksQris =
     String(mutation.provider_name ?? "").toUpperCase() === "QRIS" ||
@@ -687,17 +708,20 @@ export async function fetchCandidates(
         .catch(() => false)
     : Promise.resolve(false);
   const canonicalCandidatesPromise = direction === "IN"
-    ? canonicalTolerance().then((tolerance) =>
-      findCanonicalSettlementCandidates({
-        companyId: company_id ?? null,
-        bankAmount: Number(amount),
-        absoluteVarianceTolerance: tolerance.absolute,
-        percentageVarianceTolerance: tolerance.percentage,
-        bankAccountId: mutationBankAccountId,
-        providerCode: tolerance.providerCode,
-        from: transaction_date ? dateOffset(transaction_date, -3) : null,
-        to: transaction_date ? dateOffset(transaction_date, 3) : null,
-      }),
+    ? Promise.all([canonicalTolerance(), canonicalBankAccountNumber]).then(
+      ([tolerance, externalBankAccountNumber]) =>
+        findCanonicalSettlementCandidates({
+          companyId: company_id ?? null,
+          bankAmount: Number(amount),
+          absoluteVarianceTolerance: tolerance.absolute,
+          percentageVarianceTolerance: tolerance.percentage,
+          // expected_bank_settlements stores the external account number;
+          // public bank_mutations stores company_bank_accounts.id.
+          bankAccountId: externalBankAccountNumber ?? mutationBankAccountId,
+          providerCode: tolerance.providerCode,
+          from: transaction_date ? dateOffset(transaction_date, -3) : null,
+          to: transaction_date ? dateOffset(transaction_date, 3) : null,
+        }),
     ).catch((e: any) => {
       logger.warn(
         { err: e.message },
@@ -1001,7 +1025,13 @@ export async function runUnifiedMatching(
   mutation: MutationInput,
   actor: string,
 ): Promise<UnifiedMatchResult> {
-  const candidates = await fetchCandidates(mutation); // company_id sudah diteruskan via mutation
+  const explicitProvider = normalizeQrisProvider(mutation.provider_name);
+  const descriptionProvider = normalizeQrisProvider(mutation.normalized_description);
+  const matchingMutation =
+    explicitProvider === "unknown" && descriptionProvider !== "unknown"
+      ? { ...mutation, provider_name: descriptionProvider }
+      : mutation;
+  const candidates = await fetchCandidates(matchingMutation); // company_id sudah diteruskan via mutation
 
   if (!candidates.length) {
     await db.execute(sql.raw(
@@ -1030,7 +1060,7 @@ export async function runUnifiedMatching(
   }
 
   const scored = dedupeCandidatesByIdentity(candidates)
-    .map(c => scoreUnified(mutation, c))
+    .map(c => scoreUnified(matchingMutation, c))
     .sort((a, b) => b.score - a.score);
 
   // Persist all candidate scores in one statement instead of one round-trip
