@@ -10,8 +10,8 @@ runtime databases. Business rows were not compared.
 | Check | Result |
 |---|---|
 | Branch | `main` |
-| HEAD | `07f8de1525f46d69882dd851c41327e284722ad9` |
-| `origin/main` | `07f8de1525f46d69882dd851c41327e284722ad9` |
+| HEAD | `a21481176293ad97e75b32c697f3bcfb79af7139` |
+| `origin/main` | `a21481176293ad97e75b32c697f3bcfb79af7139` |
 | Working tree at audit start | Clean |
 | PostgreSQL | 17.6 on both databases |
 | DEV safe fingerprint | `c08754327a1da154` |
@@ -149,11 +149,181 @@ The production Secret Manager bundle also needs an owner-approved metadata-only
 update to add `APP_ENV=production`; until then, the strict schema-sync gate
 must remain blocked rather than bypassed in the source-controlled wrapper.
 
+## Final normalized application drift
+
+The counts below are **confirmed canonical application defects**, not raw
+catalog/review-set sizes. The larger review sets above remain available for
+owner-led review and are not treated as automatic migration instructions.
+
+| Object class | Real canonical defects |
+|---|---:|
+| Tables | 0 |
+| Columns | 0 confirmed |
+| Enums | 0 confirmed |
+| PK | 0 confirmed |
+| FK | 0 confirmed |
+| Unique | 0 confirmed |
+| Checks | 0 confirmed |
+| Indexes | 0 confirmed |
+| Functions | 2 |
+| Triggers | 0 confirmed |
+| Views | 0 confirmed |
+| RLS enablement | 0 real defects |
+| RLS policies | 0 real defects |
+| Grants | 0 real defects |
+| Sequences | 0 confirmed |
+
+The two confirmed function defects are source-sensitive runtime objects. The
+552 RLS enablement differences, 20 deny-policy semantics, and other review-set
+differences remain classified as production hardening, valid environment
+differences, legacy objects, or owner-decision items as listed below.
+
+## Final classification
+
+### REQUIRED PROD REMEDIATION
+
+1. Resolve and install the owner-approved definition of
+   `sport_center.mirror_confirmed_payment_to_public()`. PROD currently has a
+   materially different exception-swallowing path from the fail-closed
+   repository contract.
+2. Resolve the owner-approved complete contract for
+   `sport_center.create_payment_accounting_draft(integer)` and install it in
+   PROD only after the contract is proven. The current repository migration
+   patches an existing owner definition; it is not a complete replacement.
+3. Add `APP_ENV=production` to the production GCP bundle through the approved
+   Secret Manager process. This is required for the strict schema-sync gate.
+
+### REQUIRED DEV REMEDIATION
+
+None identified from the existing normalized evidence. DEV already contains the
+canonical active application table set and the fail-closed mirror behavior.
+The accounting-draft function still requires the same owner-contract decision
+before either environment is certified byte-identical.
+
+### VALID ENVIRONMENT DIFFERENCES
+
+- DEV and PROD are separate PostgreSQL 17.6 databases.
+- Production may have stronger RLS enablement and deny policies.
+- Production-only legacy/manual objects listed in the report are preserved.
+- Sequence ownership/range and other environment-managed details require
+  owner approval before any normalization.
+
+### PROD SECURITY HARDENING
+
+- RLS enabled on approximately 552 active application tables in PROD while
+  absent in DEV.
+- Approximately 20 PROD-only deny-policy semantics for `anon` or
+  `authenticated` using `USING (false)` and/or `WITH CHECK (false)`.
+- These must not be disabled, copied downward, or weakened.
+
+### LEGACY OBJECTS
+
+`public.recipes`, `public.employee_kasbon`, `public.hr_kasbon`,
+`public.hr_kasbon_installments`, `public.employee_advances`,
+`public.cash_advance_installments`, `public.sales_deliveries`,
+`public.sales_delivery_lines`, and legacy `sport_center.bookings`.
+The active Sport Center contract uses `sport_center.sport_bookings` and
+`sport_center.sport_payments`.
+
+### OWNER DECISION REQUIRED
+
+- The complete owner definition of `sport_center.create_payment_accounting_draft(integer)`.
+- Any non-additive column/type changes.
+- Ambiguous constraint/index differences.
+- Sequence ownership/range differences.
+- Replacement of either live Sport Center function.
+
+## Sport Center function drift
+
+### Function 1
+
+- **Function:** `sport_center.create_payment_accounting_draft(integer)`
+- **Canonical source:** `artifacts/api-server/src/modules/sport-center/migration.ts`,
+  runtime patch at lines 936–980.
+- **Canonical safe summary:** preserve the existing owner implementation,
+  expose `public` in `search_path`, and resolve the external bank identity
+  through `sport_center.resolve_internal_bank_account_id(...)` before
+  accounting insertion. The source is intentionally a patch, not a complete
+  function definition.
+- **DEV state:** exists; runtime definition MD5
+  `c060fec112c68ba78e8fbf1ad7e630e4`; resolver marker present.
+- **PROD state:** exists; runtime definition MD5
+  `7c9399907817f45c311693a83cf2314f`; resolver marker present.
+- **Outdated environment:** not safely assignable from the current repository.
+  Both definitions depend on an existing owner implementation, and the
+  repository does not provide a complete canonical replacement. DEV also has
+  repeated `public` search-path artifacts.
+- **Impact:** accounting-draft bank identity resolution can diverge between
+  environments and affect journal/account mapping.
+- **Remediation required:** YES, after owner contract approval.
+- **Plan:** capture both current definitions, approve one complete function
+  contract, then use `CREATE OR REPLACE FUNCTION` with the unchanged signature
+  inside a controlled transaction. Verify the resolver marker, function hash,
+  and a rollback copy of the prior definition. No trigger replacement is
+  required by the checked-in patch.
+
+### Function 2
+
+- **Function:** `sport_center.mirror_confirmed_payment_to_public()`
+- **Canonical source:** `artifacts/api-server/src/modules/sport-center/migration.ts`,
+  function at lines 314–556 and trigger recreation at lines 558–573.
+- **Canonical safe summary:** fail-closed metadata resolution, exactly-one
+  public booking bridge, exactly-one company/bank/rule resolution, idempotent
+  public payment projection, and no exception swallowing.
+- **DEV state:** runtime definition MD5
+  `828cf0c5a381165960e31d27c326a914`; fail-closed booking markers present and
+  `WHEN OTHERS` swallowing absent.
+- **PROD state:** runtime definition MD5
+  `3e50d577cc1112830cc65df385a97a9c`; fail-closed booking markers present but
+  `WHEN OTHERS` swallowing is present.
+- **Outdated environment:** PROD is outdated relative to the repository
+  fail-closed behavior.
+- **Impact:** a confirmed Sport Center payment can be projected differently
+  into public payments, and PROD may hide mirror failures instead of stopping
+  the transaction.
+- **Remediation required:** YES.
+- **Plan:** after owner approval, apply the source-controlled function with
+  `CREATE OR REPLACE FUNCTION`; recreate
+  `trg_mirror_confirmed_payment_to_public` on
+  `sport_center.sport_payments` with its current AFTER INSERT/UPDATE and
+  confirmed-row condition. The function depends on the canonical Sport Center
+  tables, public booking/payment bridge, metadata resolver, company mapping,
+  bank mapping, settlement configuration, and business calendar. Run in a
+  controlled transaction; function replacement is atomic, while trigger
+  recreation has a short catalog-lock/gap risk. Roll back using the captured
+  prior function and trigger definitions. Verify function hash, trigger
+  definition, and a transaction rollback proof without modifying business
+  rows.
+
+## APP_ENV gate
+
+The application runtime still requires the process-level `APP_ENV` to select an
+environment. However, the production bundle's missing `APP_ENV` field is
+accepted by the backward-compatible application loader with a warning. The
+field becomes mandatory only when `SCHEMA_SYNC_REQUIRE_BUNDLE_ENV=1` is used.
+Therefore this is a **TOOLING/CONFIGURATION WARNING**, not proof that the
+production application runtime is currently unable to start. The strict
+canonical schema worker remains correctly blocked until the bundle metadata is
+added.
+
+## Final gate
+
+| Item | Result |
+|---|---|
+| Safe remediation applied | **NO** |
+| Production writes | **0** |
+| DEV writes | **0** |
+| Business data modified | **NO** |
+| RLS weakened | **NO** |
+| Destructive operations | **0** |
+| Master republish | **BLOCKED** |
+
 ## Final verdict
 
 ❌ **CANONICAL PRODUCTION SCHEMA DEFECT REMAINS**  
 **DO NOT REPUBLISH**
 
-The verdict is based on the two material source-sensitive function drifts and
-the unresolved production bundle metadata gate, not on raw catalog differences
-alone. PROD security hardening and legacy objects were preserved.
+The blocking condition is the two active source-sensitive Sport Center
+function drifts, especially the PROD exception-swallowing mirror behavior.
+The missing production bundle `APP_ENV` is a separate strict schema-sync
+tooling gate. Production security hardening and legacy objects were preserved.
