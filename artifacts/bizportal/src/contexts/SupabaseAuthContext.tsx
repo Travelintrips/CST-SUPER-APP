@@ -7,6 +7,9 @@ interface AuthContextValue {
   user: AuthUser | null;
   isLoading: boolean;
   isAuthenticated: boolean;
+  isApiReady: boolean;
+  apiReadinessError: string | null;
+  retryApiReadiness: () => void;
   signInWithGoogle: () => void;
   signInWithEmail: (email: string, password: string) => Promise<{ error: string | null }>;
   devLogin: (email: string) => Promise<{ error: string | null }>;
@@ -18,6 +21,9 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 const CACHE_KEY = "biz_auth_user_v1";
+const IS_DEV = import.meta.env.DEV;
+const READINESS_POLL_INTERVAL_MS = 2_000;
+const READINESS_REQUEST_TIMEOUT_MS = 2_500;
 
 function readCache(): AuthUser | null {
   try {
@@ -44,7 +50,69 @@ function getOrigin(): string {
 export function SupabaseAuthProvider({ children }: { children: React.ReactNode }) {
   const cached = readCache();
   const [user, setUser] = useState<AuthUser | null>(cached);
-  const [isLoading, setIsLoading] = useState(!cached);
+  const [isLoading, setIsLoading] = useState(IS_DEV || !cached);
+  const [isApiReady, setIsApiReady] = useState(!IS_DEV);
+  const [apiReadinessError, setApiReadinessError] = useState<string | null>(null);
+  const [readinessRetryKey, setReadinessRetryKey] = useState(0);
+
+  useEffect(() => {
+    // Production keeps the existing auth path: it does not wait on the
+    // development cold-start readiness contract.
+    if (!IS_DEV) return;
+
+    let cancelled = false;
+    let timer: number | undefined;
+
+    const poll = async () => {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(
+        () => controller.abort(),
+        READINESS_REQUEST_TIMEOUT_MS,
+      );
+
+      try {
+        const res = await fetch("/api/health/ready", {
+          credentials: "same-origin",
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const data = await res.json().catch(() => null) as { ready?: boolean } | null;
+
+        if (cancelled) return;
+        if (data?.ready === true) {
+          setIsApiReady(true);
+          setApiReadinessError(null);
+          return;
+        }
+
+        setIsApiReady(false);
+        setApiReadinessError(null);
+      } catch {
+        if (cancelled) return;
+        setIsApiReady(false);
+        setApiReadinessError("API belum dapat dijangkau. Akan mencoba lagi otomatis.");
+      } finally {
+        window.clearTimeout(timeout);
+      }
+
+      if (!cancelled) {
+        timer = window.setTimeout(() => void poll(), READINESS_POLL_INTERVAL_MS);
+      }
+    };
+
+    setIsApiReady(false);
+    void poll();
+
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [readinessRetryKey]);
+
+  const retryApiReadiness = useCallback(() => {
+    setApiReadinessError(null);
+    setReadinessRetryKey((key) => key + 1);
+  }, []);
 
   const fetchUser = useCallback(async () => {
     const controller = new AbortController();
@@ -68,7 +136,10 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
     }
   }, []);
 
-  useEffect(() => { fetchUser(); }, [fetchUser]);
+  useEffect(() => {
+    if (!isApiReady) return;
+    void fetchUser();
+  }, [fetchUser, isApiReady]);
 
   const exchangeToken = useCallback(async (access_token: string) => {
     try {
@@ -184,6 +255,9 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
     user,
     isLoading,
     isAuthenticated: !!user,
+    isApiReady,
+    apiReadinessError,
+    retryApiReadiness,
     signInWithGoogle,
     signInWithEmail,
     devLogin,

@@ -1513,7 +1513,13 @@ async function startServer() {
   // Health-ready endpoint — must be registered before server.listen so it is
   // available as soon as the socket is open.
   app.get("/api/health/ready", (_req, res) => {
-    res.json({ ready: migrationsComplete });
+    // The browser polls this endpoint during development startup. Do not let
+    // a proxy or browser cache serve a stale "starting" response after the
+    // migration chain has completed.
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.set("Pragma", "no-cache");
+    const ready = migrationsComplete;
+    res.json({ ready, status: ready ? "ready" : "starting" });
   });
 
   // E2E safety status — only exposed when SAFE_DEV_TEST_MODE or E2E_TEST_MODE active

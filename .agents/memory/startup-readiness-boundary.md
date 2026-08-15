@@ -9,3 +9,10 @@ The canonical mirror installer can complete before the API's final readiness fla
 **Why:** The API listens before its long migration/seed chain finishes, so port availability and successful resolver installation do not prove the application is fully ready.
 
 **How to apply:** Treat resolver logs, live function checks, replay results, and API readiness as separate evidence. Never certify a finalization that requires healthy startup while the readiness endpoint remains false.
+
+## Frontend boundary
+When the API listens before cold-start migrations finish, put the readiness gate above routes and every provider with startup side effects, not only above dashboard components.
+
+**Why:** Cached auth can mount translation, company, notification, or query providers before the migration chain is ready, recreating the request fan-out the readiness screen is meant to prevent.
+
+**How to apply:** During development startup, allow only a short-timeout poll of `/api/health/ready`; mount auth-dependent providers and normal route trees only after `ready: true`. Keep production behavior unchanged unless its startup contract explicitly requires the gate.
