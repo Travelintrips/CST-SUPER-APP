@@ -83,3 +83,4 @@
 - [Schema canonicalization bundle gate](schema-canonicalization-bundle-gate.md) — strict DEV/PROD schema reconciliation requires APP_ENV metadata in each GCP bundle.
 - [Canonical owner routine restoration](canonical-owner-routine-restore.md) — restore only through the DEV-only runner, then verify exact pg_proc signatures; never treat source or a table presence as live proof.
 - [Live schema diff discipline](live-schema-diff-discipline.md) — raw catalog inequality is not automatically canonical drift; preserve PROD security hardening and classify legacy objects first.
+- [Development migration URL safety](dev-migration-url-safety.md) — verify DEV migration URLs independently; a DEV bundle can expose a write target that points to PROD.
