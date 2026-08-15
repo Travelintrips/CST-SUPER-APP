@@ -82,3 +82,4 @@
 - [Production OpenAI credential validation](production-openai-credential-validation.md) — secret bundle bisa termuat tetapi provider tetap 401; presence bukan bukti autentikasi.
 - [Schema canonicalization bundle gate](schema-canonicalization-bundle-gate.md) — strict DEV/PROD schema reconciliation requires APP_ENV metadata in each GCP bundle.
 - [Canonical owner routine restoration](canonical-owner-routine-restore.md) — restore only through the DEV-only runner, then verify exact pg_proc signatures; never treat source or a table presence as live proof.
+- [Live schema diff discipline](live-schema-diff-discipline.md) — raw catalog inequality is not automatically canonical drift; preserve PROD security hardening and classify legacy objects first.
