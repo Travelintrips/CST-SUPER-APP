@@ -535,7 +535,7 @@ function objectIsExcluded(kind, row, snapshot) {
     return !isPromotedTable(row.schema_name, row.table_name);
   }
   if (kind === "columns" || kind === "constraints" || kind === "indexes" ||
-      kind === "triggers" || kind === "policies") {
+      kind === "triggers" || kind === "policies" || kind === "rls") {
     return !isPromotedTable(row.schema_name, row.table_name);
   }
   if (kind === "functions" || kind === "views") {
@@ -566,7 +566,15 @@ function excludedReason(kind, row, snapshot) {
     return `schema ${row.schema_name} is outside the promoted scope`;
   }
   if (
-    ["tables", "columns", "constraints", "indexes", "triggers", "policies"].includes(
+    [
+      "tables",
+      "columns",
+      "constraints",
+      "indexes",
+      "triggers",
+      "policies",
+      "rls",
+    ].includes(
       kind,
     ) &&
     isExcludedObjectName(row.table_name)
@@ -609,12 +617,11 @@ function definitionMentionsObject(definition, objectName) {
 }
 
 function hasPromotedDependency(kind, row, snapshot) {
+  if (kind === "rls") return false;
   const objectName =
     kind === "tables"
       ? row.table_name
-      : kind === "columns"
-        ? row.column_name
-        : row.name;
+      : row.name;
   const definitions = [
     ...snapshot.constraints,
     ...snapshot.functions,
@@ -634,6 +641,19 @@ function hasPromotedDependency(kind, row, snapshot) {
       return false;
     }
     if (candidate.table_name && isExcludedObjectName(candidate.table_name)) {
+      return false;
+    }
+    if (kind === "columns") {
+      return (
+        definitionReferencesExcludedTable(candidate.definition, [
+          { table_name: row.table_name },
+        ]) &&
+        definitionMentionsObject(candidate.definition, row.table_name)
+      );
+    }
+    if (
+      ["constraints", "indexes", "triggers", "policies"].includes(kind)
+    ) {
       return false;
     }
     return definitionMentionsObject(candidate.definition, objectName);
@@ -679,6 +699,25 @@ function definitionConflicts(devRows, prodRows, keyFn, equalFn) {
       development: row,
       production: prodMap.get(keyFn(row)),
     }));
+}
+
+function conflictDecision(kind, row, snapshot) {
+  if (objectIsExcluded(kind, row, snapshot)) {
+    const dependency = hasPromotedDependency(kind, row, snapshot);
+    return {
+      decision: dependency
+        ? REVIEW_DECISIONS.PROMOTE_REQUIRED
+        : REVIEW_DECISIONS.DEV_ONLY,
+      reason: dependency
+        ? "excluded object is referenced by a promoted-scope object; domain owner must approve promotion"
+        : excludedReason(kind, row, snapshot),
+    };
+  }
+  return {
+    decision: REVIEW_DECISIONS.PRESERVE_PROD,
+    reason:
+      "production definition is preserved; domain owner approval is required before any replacement",
+  };
 }
 
 function buildReview(snapshot, production, diff) {
@@ -761,7 +800,7 @@ function buildReview(snapshot, production, diff) {
       });
     }
   }
-  const conflicts = [
+  const rawConflicts = [
     ...definitionConflicts(
       snapshot.columns,
       production.columns,
@@ -808,12 +847,11 @@ function buildReview(snapshot, production, diff) {
       policyKey,
       (dev, prod) => normalizedPolicy(dev) === normalizedPolicy(prod),
     ).map((item) => ({ kind: "policies", ...item })),
-  ].map((item) => ({
+  ];
+  const conflicts = rawConflicts.map((item) => ({
     kind: item.kind,
     key: item.key,
-    decision: REVIEW_DECISIONS.PRESERVE_PROD,
-    reason:
-      "production definition is preserved; domain owner approval is required before any replacement",
+    ...conflictDecision(item.kind, item.development, snapshot),
   }));
 
   const devEnumMap = new Map();
@@ -878,9 +916,8 @@ function buildReview(snapshot, production, diff) {
       conflicts.push({
         kind: "enums",
         key,
-        decision: REVIEW_DECISIONS.PRESERVE_PROD,
-        reason:
-          "production has labels or ordering not present in development; production enum definition is preserved",
+        development: row,
+        ...conflictDecision("enums", row, snapshot),
       });
     }
   }
@@ -895,9 +932,7 @@ function buildReview(snapshot, production, diff) {
       rlsConflicts.push({
         kind: "rls",
         key,
-        decision: REVIEW_DECISIONS.PRESERVE_PROD,
-        reason:
-          "production RLS configuration is preserved; domain owner approval is required before changing it",
+        ...conflictDecision("rls", devRls, snapshot),
       });
     }
   }
@@ -1286,8 +1321,19 @@ async function run() {
       ).length,
       excludedReviewItems: review.excluded.length,
       promotedReviewItems: review.promoted.length,
-      promoteRequiredReviewItems: review.excluded.filter(
+      promoteRequiredReviewItems: [
+        ...review.excluded,
+        ...review.conflicts,
+      ].filter(
         (item) => item.decision === REVIEW_DECISIONS.PROMOTE_REQUIRED,
+      ).length,
+      excludedDefinitionReviews: review.conflicts.filter((item) =>
+        [REVIEW_DECISIONS.DEV_ONLY, REVIEW_DECISIONS.PROMOTE_REQUIRED].includes(
+          item.decision,
+        ),
+      ).length,
+      domainReviewRequired: review.conflicts.filter(
+        (item) => item.decision === REVIEW_DECISIONS.PRESERVE_PROD,
       ).length,
       definitionConflicts: review.conflicts.length,
       productionOnlyObjects: Object.values(review.productionOnly).reduce(
@@ -1346,7 +1392,9 @@ async function run() {
       `Review classifications  : ${report.excludedReviewItems} excluded objects; ` +
         `${report.promotedReviewItems} PROMOTE_ADDITIVE; ` +
         `${report.promoteRequiredReviewItems} PROMOTE_REQUIRED; ` +
-        `${report.definitionConflicts} definition conflicts`,
+        `${report.definitionConflicts} definition differences ` +
+        `(${report.domainReviewRequired} preserved in PROD, ` +
+        `${report.excludedDefinitionReviews} excluded-scope)`,
     );
     if (review.excluded.length) {
       console.log("\nExcluded object decisions:");
