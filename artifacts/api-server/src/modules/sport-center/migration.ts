@@ -3026,7 +3026,7 @@ export async function runSportCenterMigration(): Promise<void> {
           AND m.source_table = 'sport_payments'
           AND m.source_payment_id = sp.id
           AND NULLIF(BTRIM(m.external_bank_account_id::text), '') IS NOT NULL
-          AND ${PAID_STATUS}
+          AND sp.status::text IN ('confirmed', 'pending')
       `));
 
       // 3. Repair the public mirror's internal account ID from the canonical
@@ -3048,7 +3048,7 @@ export async function runSportCenterMigration(): Promise<void> {
              cba.account_number::text = NULLIF(BTRIM(sp.bank_account_id::text), '')
              OR cba.id::text = NULLIF(BTRIM(sp.bank_account_id::text), '')
            )
-          WHERE ${PAID_STATUS}
+          WHERE sp.status::text IN ('confirmed', 'pending')
             AND NULLIF(BTRIM(sp.bank_account_id::text), '') IS NOT NULL
           GROUP BY sp.id, cba.id
           HAVING COUNT(*) = 1
