@@ -115,31 +115,35 @@ import {
 const router = Router();
 
 function genericCandidateSameDaySql(matchAlias = "m", mutationAlias = "bm"): string {
+  // Some development/runtime snapshots keep legacy transaction dates as TEXT
+  // while newer tables use DATE. Compare their canonical ISO text form so the
+  // list and summary queries do not fail with `date = text`.
+  const mutationDate = `${mutationAlias}.transaction_date::text`;
   return `(
     (${matchAlias}.candidate_type = 'accounting_payment' AND EXISTS (
       SELECT 1 FROM accounting_payments ap_match
       WHERE ap_match.id = ${matchAlias}.candidate_id
-        AND ap_match.date = ${mutationAlias}.transaction_date
+        AND ap_match.date::text = ${mutationDate}
     ))
     OR (${matchAlias}.candidate_type = 'invoice' AND EXISTS (
       SELECT 1 FROM sales_documents sd_match
       WHERE sd_match.id = ${matchAlias}.candidate_id
-        AND COALESCE(sd_match.invoice_date, sd_match.created_at::date) = ${mutationAlias}.transaction_date
+        AND COALESCE(sd_match.invoice_date::text, sd_match.created_at::date::text) = ${mutationDate}
     ))
     OR (${matchAlias}.candidate_type = 'expense' AND EXISTS (
       SELECT 1 FROM expenses e_match
       WHERE e_match.id = ${matchAlias}.candidate_id
-        AND e_match.date = ${mutationAlias}.transaction_date
+        AND e_match.date::text = ${mutationDate}
     ))
     OR (${matchAlias}.candidate_type = 'logistic_order' AND EXISTS (
       SELECT 1 FROM logistic_orders lo_match
       WHERE lo_match.id = ${matchAlias}.candidate_id
-        AND lo_match.created_at::date = ${mutationAlias}.transaction_date
+        AND lo_match.created_at::date::text = ${mutationDate}
     ))
     OR (${matchAlias}.candidate_type = 'tenant_invoice' AND EXISTS (
       SELECT 1 FROM tenant_invoices ti_match
       WHERE ti_match.id = ${matchAlias}.candidate_id
-        AND ti_match.created_at::date = ${mutationAlias}.transaction_date
+        AND ti_match.created_at::date::text = ${mutationDate}
     ))
   )`;
 }
@@ -2889,46 +2893,7 @@ router.get("/mutations", async (req, res) => {
            -- Sport Center candidates use their own settlement-date contract.
            AND (
              m.candidate_type IN ('qris_settlement', 'sport_payment')
-             OR (
-               m.candidate_type = 'accounting_payment'
-               AND EXISTS (
-                 SELECT 1 FROM accounting_payments ap_match
-                 WHERE ap_match.id = m.candidate_id
-                   AND ap_match.date = bm.transaction_date
-               )
-             )
-             OR (
-               m.candidate_type = 'invoice'
-               AND EXISTS (
-                 SELECT 1 FROM sales_documents sd_match
-                 WHERE sd_match.id = m.candidate_id
-                   AND COALESCE(sd_match.invoice_date, sd_match.created_at::date) = bm.transaction_date
-               )
-             )
-             OR (
-               m.candidate_type = 'expense'
-               AND EXISTS (
-                 SELECT 1 FROM expenses e_match
-                 WHERE e_match.id = m.candidate_id
-                   AND e_match.date = bm.transaction_date
-               )
-             )
-             OR (
-               m.candidate_type = 'logistic_order'
-               AND EXISTS (
-                 SELECT 1 FROM logistic_orders lo_match
-                 WHERE lo_match.id = m.candidate_id
-                   AND lo_match.created_at::date = bm.transaction_date
-               )
-             )
-             OR (
-               m.candidate_type = 'tenant_invoice'
-               AND EXISTS (
-                 SELECT 1 FROM tenant_invoices ti_match
-                 WHERE ti_match.id = m.candidate_id
-                   AND ti_match.created_at::date = bm.transaction_date
-               )
-             )
+              OR ${genericCandidateSameDaySql("m", "bm")}
            )
        ) AS candidates,
         (
