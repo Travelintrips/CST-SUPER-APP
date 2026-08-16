@@ -752,6 +752,7 @@ function statusLabel(m: BankMutation): string {
   if (m.status === "void") return STATUS_LABELS.void;
   if (m.status === "approved_pending_posting") return STATUS_LABELS.approved_pending_posting;
   if (m.status === "duplicate_need_review" || hasUnresolvedVariance(m)) return "Perlu Diperiksa";
+  if (m.status === "unmatched" && visibleCandidates(m).length > 0) return "Perlu Diperiksa";
   if (m.status === "unmatched" || !m.candidates?.length) return "Transaksi Belum Lengkap";
   return isExactMatch(m) ? "Cocok" : "Perlu Diperiksa";
 }
@@ -761,6 +762,7 @@ function statusColor(m: BankMutation): string {
   if (m.status === "approved_pending_posting") return STATUS_COLORS.approved_pending_posting;
   if (m.status === "approved" || m.status === "posted") return STATUS_COLORS.approved;
   if (m.status === "duplicate_need_review" || hasUnresolvedVariance(m)) return STATUS_COLORS.duplicate_need_review;
+  if (m.status === "unmatched" && visibleCandidates(m).length > 0) return STATUS_COLORS.duplicate_need_review;
   if (m.status === "unmatched" || !m.candidates?.length) return STATUS_COLORS.unmatched;
   return isExactMatch(m) ? STATUS_COLORS.matched : STATUS_COLORS.duplicate_need_review;
 }
@@ -2205,6 +2207,27 @@ function MutationCard({
               <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
                 <p className="font-semibold">Perlu Diperiksa</p>
                 <p className="mt-0.5">Sistem menemukan transaksi, tetapi nominal atau bukti belum sepenuhnya cocok.</p>
+              </div>
+            )}
+
+            {best && m.status === "unmatched" && !isExactMatch(m) && (
+              <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+                <p className="font-semibold">Kandidat ditemukan — perlu diperiksa</p>
+                <p className="mt-0.5">
+                  Sistem menemukan transaksi yang mungkin terkait, tetapi pencocokan belum dikonfirmasi.
+                </p>
+                <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-amber-800 dark:text-amber-300">
+                  <span>
+                    {best.candidate_type === "sport_payment" ? "Sport Center" : "Transaksi sistem"}
+                  </span>
+                  {best.details?.method && <span>Metode {best.details.method}</span>}
+                  {best.details?.settlementDate && (
+                    <span>Settlement {fmtDate(String(best.details.settlementDate))}</span>
+                  )}
+                  {best.details?.amount != null && (
+                    <span>Nominal {idr(Number(best.details.amount))}</span>
+                  )}
+                </div>
               </div>
             )}
 
