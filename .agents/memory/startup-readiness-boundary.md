@@ -11,11 +11,11 @@ The canonical mirror installer can complete before the API's final readiness fla
 **How to apply:** Treat resolver logs, live function checks, replay results, and API readiness as separate evidence. Never certify a finalization that requires healthy startup while the readiness endpoint remains false.
 
 ## Frontend boundary
-When the API listens before cold-start migrations finish, keep the login/auth shell available immediately, but keep company/data providers and startup side effects behind the readiness gate.
+When the API listens before cold-start migrations finish, distinguish API availability from full migration readiness: use availability to decide whether the shell can render, and keep company/data providers and startup side effects behind the stronger readiness contract.
 
-**Why:** A full-screen readiness gate leaves BizPortal unusable for several minutes during the long serial migration chain, while mounting all data providers early can recreate the request fan-out the gate is meant to prevent.
+**Why:** A full-screen migration-readiness gate leaves BizPortal unusable for several minutes during the long serial migration chain, while mounting all data providers before the API is reachable can recreate the request fan-out the gate is meant to prevent.
 
-**How to apply:** During development startup, poll `/api/health/ready` with a short timeout; allow login/auth discovery to render while it is false, and let `CompanyContext`/data side effects wait for `ready: true`. Keep production behavior unchanged unless its startup contract explicitly requires the gate.
+**How to apply:** During development startup, poll `/api/health/ready` with a short timeout; render the availability/preparing state only when the API cannot be reached, and let `CompanyContext`/data side effects wait for the appropriate readiness signal. Keep production behavior unchanged unless its startup contract explicitly requires the gate.
 When the API listens before cold-start migrations finish, distinguish API availability from full migration readiness. Gate only operations that require the completed schema; allow the login shell and safe auth endpoints to render once the API responds.
 
 **Why:** The API serves safe endpoints such as auth and translations while migrations continue. Blocking the entire portal on the final readiness flag leaves users staring at a loading screen even though the server is reachable.

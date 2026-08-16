@@ -66,6 +66,41 @@ function LoadingSpinner() {
   );
 }
 
+function ApiPreparingScreen() {
+  const { apiReadinessError, retryApiReadiness } = useSupabaseAuth();
+
+  return (
+    <div
+      className="flex min-h-screen items-center justify-center bg-slate-950 px-6 text-white"
+      role="status"
+      aria-live="polite"
+    >
+      <div className="flex w-full max-w-md flex-col items-center gap-5 text-center">
+        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-600/20 ring-1 ring-indigo-500/40">
+          <div className="h-7 w-7 animate-spin rounded-full border-4 border-indigo-300 border-t-transparent" />
+        </div>
+        <div className="space-y-2">
+          <h1 className="text-xl font-semibold">Menyiapkan BizPortal</h1>
+          <p className="text-sm leading-6 text-slate-400">
+            Server sedang menyelesaikan persiapan database. Halaman login akan
+            tersedia otomatis setelah API siap.
+          </p>
+        </div>
+        <div className="w-full rounded-lg border border-slate-800 bg-slate-900/70 px-4 py-3 text-left text-xs text-slate-400">
+          {apiReadinessError ?? "Persiapan masih berjalan. Anda tidak perlu memuat ulang halaman."}
+        </div>
+        <button
+          type="button"
+          onClick={retryApiReadiness}
+          className="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-200 transition-colors hover:border-indigo-500 hover:bg-indigo-500/10"
+        >
+          Coba cek sekarang
+        </button>
+      </div>
+    </div>
+  );
+}
+
 const IS_DEV = import.meta.env.DEV;
 
 type DevUser = { id: string; email: string; firstName: string | null; lastName: string | null; role: string | null };
@@ -447,11 +482,6 @@ function LoginScreen() {
 }
 
 function AuthRouteGuard() {
-  const { isAuthenticated, isLoading } = useSupabaseAuth();
-  const cachedRole = readRoleCache();
-  const { data: dbUser, isLoading: dbLoading } = useGetCurrentUser({
-    query: {
-      enabled: isAuthenticated,
   const { isAuthenticated, isLoading, isApiAvailable } = useSupabaseAuth();
   const cachedRole = readRoleCache();
   const { data: dbUser, isLoading: dbLoading } = useGetCurrentUser({
