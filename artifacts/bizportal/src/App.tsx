@@ -452,6 +452,11 @@ function AuthRouteGuard() {
   const { data: dbUser, isLoading: dbLoading } = useGetCurrentUser({
     query: {
       enabled: isAuthenticated,
+  const { isAuthenticated, isLoading, isApiAvailable } = useSupabaseAuth();
+  const cachedRole = readRoleCache();
+  const { data: dbUser, isLoading: dbLoading } = useGetCurrentUser({
+    query: {
+      enabled: isAuthenticated && isApiAvailable,
       queryKey: getGetCurrentUserQueryKey(),
       staleTime: 5 * 60 * 1000,
       retry: 1,
@@ -460,6 +465,7 @@ function AuthRouteGuard() {
   React.useEffect(() => {
     if (dbUser?.role) writeRoleCache(dbUser.role);
   }, [dbUser?.role]);
+  if (!isApiAvailable) return <ApiPreparingScreen />;
   if (isLoading) return <LoadingSpinner />;
   if (!isAuthenticated) {
     writeRoleCache(null);
@@ -473,6 +479,12 @@ function AuthRouteGuard() {
 }
 
 function AppContent() {
+  const { isApiAvailable } = useSupabaseAuth();
+
+  // Keep every route and side-effect provider behind the same readiness
+  // boundary. This also covers direct deep links that bypass "/".
+  if (!isApiAvailable) return <ApiPreparingScreen />;
+
   return (
     <LanguageProvider>
       <CompanyProvider>

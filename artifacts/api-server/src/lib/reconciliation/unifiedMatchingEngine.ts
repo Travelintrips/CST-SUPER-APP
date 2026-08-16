@@ -494,13 +494,6 @@ export function scoreUnified(
       mutationProvider === "unknown" ||
       !areQrisProvidersCompatible(candidateProvider, mutationProvider)
     );
-    cand.candidateSource === CANONICAL_SETTLEMENT_SOURCE &&
-    !!cand.provider_code &&
-    !!mutation.provider_name &&
-    !!cand.provider_name &&
-    normalizeQrisProvider(mutation.provider_name) !== "unknown" &&
-    normalizeQrisProvider(cand.provider_code) !== normalizeQrisProvider(mutation.provider_name) &&
-    normalizeQrisProvider(cand.provider_name) !== normalizeQrisProvider(mutation.provider_name);
 
   // 1. Amount — MANDATORY for auto-approve (+50)
   const amountMatch =
@@ -513,13 +506,18 @@ export function scoreUnified(
   if (bankAccountMismatch) reason.push("rekening bank tidak cocok");
   if (providerMismatch) reason.push("provider tidak cocok atau tidak tersedia");
 
-  // 2. Date ±1 day (+20)
+  // 2. Date match.
+  // Generic bank-transfer candidates must be on the same calendar date.
+  // QRIS/Sport candidates retain the settlement-specific ±1 day tolerance.
   const mDate = new Date(mutation.transaction_date).getTime();
   const cDate = new Date(cand.date).getTime();
   const diffDays = Math.abs(mDate - cDate) / 86_400_000;
-  const dateMatch = diffDays <= 1;
+  const dateMatch = requiresQrisIdentity ? diffDays <= 1 : diffDays === 0;
   if (diffDays === 0)     { score += 20; reason.push("tanggal sama (+20)"); }
-  else if (diffDays <= 1) { score += 20; reason.push("tanggal beda 1 hari (+20)"); }
+  else if (requiresQrisIdentity && diffDays <= 1) {
+    score += 20;
+    reason.push("tanggal beda 1 hari (+20)");
+  }
   if (
     diffDays === 0 &&
     cand.candidateSource === CANONICAL_SETTLEMENT_SOURCE
@@ -641,8 +639,11 @@ export async function fetchCandidates(
   const { amount, transaction_date, company_id } = mutation;
   const mutationBankAccountId = mutation.bank_account_id != null ? Number(mutation.bank_account_id) : null;
   const direction = String(mutation.direction ?? "IN").toUpperCase() === "OUT" ? "OUT" : "IN";
-  const dateFrom = `'${transaction_date}'::date - 3`;
-  const dateTo   = `'${transaction_date}'::date + 3`;
+  const mutationLooksQris =
+    String(mutation.provider_name ?? "").toUpperCase() === "QRIS" ||
+    isQrisSettlementDescription(mutation.normalized_description);
+  const dateFrom = mutationLooksQris ? `'${transaction_date}'::date - 3` : `'${transaction_date}'::date`;
+  const dateTo   = mutationLooksQris ? `'${transaction_date}'::date + 3` : `'${transaction_date}'::date`;
   const dateOffset = (value: string, days: number): string => {
     const parsed = new Date(`${value}T00:00:00Z`);
     if (Number.isNaN(parsed.getTime())) return value;
@@ -713,9 +714,6 @@ export async function fetchCandidates(
         })
         .catch(() => null);
   const amtFilter = `ABS(##AMT##::numeric - ${Number(amount)}) < 0.01`;
-  const mutationLooksQris =
-    String(mutation.provider_name ?? "").toUpperCase() === "QRIS" ||
-    isQrisSettlementDescription(mutation.normalized_description);
   // The aggregate tables may not exist yet on older runtime databases. Keep
   // the source query fail-safe and only add the aggregate candidate when both
   // tables are present.
@@ -1129,6 +1127,28 @@ export async function runUnifiedMatching(
       AND status = 'candidate'
       ${currentSourceIdentities.length
         ? `AND NOT (${currentSourceIdentities.join(" OR ")})`
+        : ""}
+  `)).catch(() => {});
+
+  // Historical rows have no source discriminator, so they cannot be updated
+  // with the source-aware ON CONFLICT path below. Re-running matching must
+  // replace their active candidate set, otherwise a candidate created under
+  // the old H+1 bank-transfer rule remains visible and can disagree with the
+  // current same-day eligibility shown by the UI and summary endpoint.
+  const currentHistoricalIdentities = scored
+    .filter((s) => s.candidate.candidateSource == null)
+    .map((s) =>
+      `(candidate_type = '${s.candidate.type.replace(/'/g, "''")}'` +
+      ` AND candidate_id = ${s.candidate.id})`,
+    );
+  await db.execute(sql.raw(`
+    UPDATE bank_reconciliation_matches
+    SET status = 'superseded'
+    WHERE mutation_id = ${mutation.id}
+      AND candidate_source IS NULL
+      AND status = 'candidate'
+      ${currentHistoricalIdentities.length
+        ? `AND NOT (${currentHistoricalIdentities.join(" OR ")})`
         : ""}
   `)).catch(() => {});
 

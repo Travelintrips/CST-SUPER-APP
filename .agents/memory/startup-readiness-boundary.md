@@ -16,3 +16,8 @@ When the API listens before cold-start migrations finish, keep the login/auth sh
 **Why:** A full-screen readiness gate leaves BizPortal unusable for several minutes during the long serial migration chain, while mounting all data providers early can recreate the request fan-out the gate is meant to prevent.
 
 **How to apply:** During development startup, poll `/api/health/ready` with a short timeout; allow login/auth discovery to render while it is false, and let `CompanyContext`/data side effects wait for `ready: true`. Keep production behavior unchanged unless its startup contract explicitly requires the gate.
+When the API listens before cold-start migrations finish, distinguish API availability from full migration readiness. Gate only operations that require the completed schema; allow the login shell and safe auth endpoints to render once the API responds.
+
+**Why:** The API serves safe endpoints such as auth and translations while migrations continue. Blocking the entire portal on the final readiness flag leaves users staring at a loading screen even though the server is reachable.
+
+**How to apply:** During development startup, poll `/api/health/ready` with a short timeout, track response reachability separately from `ready: true`, and use the reachability state for the initial shell/auth boundary. Keep the full readiness state available for schema-sensitive work.

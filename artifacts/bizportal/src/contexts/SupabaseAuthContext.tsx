@@ -7,6 +7,8 @@ interface AuthContextValue {
   user: AuthUser | null;
   isLoading: boolean;
   isAuthenticated: boolean;
+  /** The API process can accept requests even while background migrations run. */
+  isApiAvailable: boolean;
   isApiReady: boolean;
   apiReadinessError: string | null;
   retryApiReadiness: () => void;
@@ -51,6 +53,7 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
   const cached = readCache();
   const [user, setUser] = useState<AuthUser | null>(cached);
   const [isLoading, setIsLoading] = useState(IS_DEV || !cached);
+  const [isApiAvailable, setIsApiAvailable] = useState(!IS_DEV);
   const [isApiReady, setIsApiReady] = useState(!IS_DEV);
   const [apiReadinessError, setApiReadinessError] = useState<string | null>(null);
   const [readinessRetryKey, setReadinessRetryKey] = useState(0);
@@ -79,6 +82,7 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
         const data = await res.json().catch(() => null) as { ready?: boolean } | null;
 
         if (cancelled) return;
+        setIsApiAvailable(res.ok);
         if (data?.ready === true) {
           setIsApiReady(true);
           setApiReadinessError(null);
@@ -89,6 +93,7 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
         setApiReadinessError(null);
       } catch {
         if (cancelled) return;
+        setIsApiAvailable(false);
         setIsApiReady(false);
         setApiReadinessError("API belum dapat dijangkau. Akan mencoba lagi otomatis.");
       } finally {
@@ -139,6 +144,9 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
   useEffect(() => {
     void fetchUser();
   }, [fetchUser]);
+    if (!isApiAvailable) return;
+    void fetchUser();
+  }, [fetchUser, isApiAvailable]);
 
   const exchangeToken = useCallback(async (access_token: string) => {
     try {
@@ -254,6 +262,7 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
     user,
     isLoading,
     isAuthenticated: !!user,
+    isApiAvailable,
     isApiReady,
     apiReadinessError,
     retryApiReadiness,
