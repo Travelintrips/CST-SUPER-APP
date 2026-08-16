@@ -187,4 +187,42 @@ describe("Phase 4C-5 canonical settlement matching", () => {
       null,
     ]);
   });
+
+  it("requires the same date for generic bank-transfer candidates", () => {
+    const candidate: MatchCandidate = {
+      id: 91,
+      type: "accounting_payment",
+      candidateSource: null,
+      amount: 3000000,
+      date: "2026-08-04",
+      ref: null,
+      name: "Vendor",
+    };
+    const sameDay = scoreUnified(
+      mutation({
+        amount: 3000000,
+        transaction_date: "2026-08-04",
+        provider_name: "BCA",
+        normalized_description: "TRANSFER VENDOR",
+      }),
+      candidate,
+    );
+    const nextDay = scoreUnified(
+      mutation({
+        amount: 3000000,
+        transaction_date: "2026-08-05",
+        provider_name: "BCA",
+        normalized_description: "TRANSFER VENDOR",
+      }),
+      candidate,
+    );
+
+    expect(sameDay.amount_match).toBe(true);
+    expect(sameDay.date_match).toBe(true);
+    expect(sameDay.score).toBe(70);
+    expect(nextDay.amount_match).toBe(true);
+    expect(nextDay.date_match).toBe(false);
+    expect(nextDay.score).toBe(50);
+    expect(classifyMatch(nextDay)).toBe("unmatched");
+  });
 });

@@ -113,6 +113,36 @@ import {
 } from "../lib/reconciliation/qrisCandidateContract.js";
 
 const router = Router();
+
+function genericCandidateSameDaySql(matchAlias = "m", mutationAlias = "bm"): string {
+  return `(
+    (${matchAlias}.candidate_type = 'accounting_payment' AND EXISTS (
+      SELECT 1 FROM accounting_payments ap_match
+      WHERE ap_match.id = ${matchAlias}.candidate_id
+        AND ap_match.date = ${mutationAlias}.transaction_date
+    ))
+    OR (${matchAlias}.candidate_type = 'invoice' AND EXISTS (
+      SELECT 1 FROM sales_documents sd_match
+      WHERE sd_match.id = ${matchAlias}.candidate_id
+        AND COALESCE(sd_match.invoice_date, sd_match.created_at::date) = ${mutationAlias}.transaction_date
+    ))
+    OR (${matchAlias}.candidate_type = 'expense' AND EXISTS (
+      SELECT 1 FROM expenses e_match
+      WHERE e_match.id = ${matchAlias}.candidate_id
+        AND e_match.date = ${mutationAlias}.transaction_date
+    ))
+    OR (${matchAlias}.candidate_type = 'logistic_order' AND EXISTS (
+      SELECT 1 FROM logistic_orders lo_match
+      WHERE lo_match.id = ${matchAlias}.candidate_id
+        AND lo_match.created_at::date = ${mutationAlias}.transaction_date
+    ))
+    OR (${matchAlias}.candidate_type = 'tenant_invoice' AND EXISTS (
+      SELECT 1 FROM tenant_invoices ti_match
+      WHERE ti_match.id = ${matchAlias}.candidate_id
+        AND ti_match.created_at::date = ${mutationAlias}.transaction_date
+    ))
+  )`;
+}
 // The full-bank matching run can legitimately outlive the browser request
 // timeout. Keep one background run per API process so repeated clicks do not
 // fan out duplicate work against the same mutation set.
@@ -2634,7 +2664,39 @@ router.get("/mutations", async (req, res) => {
 
   // Filters untuk sumber bank_mutations (bm)
   const bmFilters: string[] = [];
-  if (status && status !== "all")        bmFilters.push(`bm.status = '${esc(status)}'`);
+  if (status && status !== "all") {
+    if (status === "duplicate_need_review") {
+      const anyGeneric = `
+        EXISTS (
+          SELECT 1
+          FROM bank_reconciliation_matches filter_any_match
+          WHERE filter_any_match.mutation_id = bm.id
+            AND filter_any_match.status IN ('candidate', 'approved')
+            AND filter_any_match.candidate_type IN (
+              'accounting_payment', 'invoice', 'expense',
+              'logistic_order', 'tenant_invoice'
+            )
+        )`;
+      const validGeneric = `
+        EXISTS (
+          SELECT 1
+          FROM bank_reconciliation_matches filter_valid_match
+          WHERE filter_valid_match.mutation_id = bm.id
+            AND filter_valid_match.status IN ('candidate', 'approved')
+            AND ${genericCandidateSameDaySql("filter_valid_match", "bm")}
+        )`;
+      bmFilters.push(`(
+        bm.status = 'duplicate_need_review'
+        OR (
+          bm.status = 'matched'
+          AND ${anyGeneric}
+          AND NOT ${validGeneric}
+        )
+      )`);
+    } else {
+      bmFilters.push(`bm.status = '${esc(status)}'`);
+    }
+  }
   if (direction && direction !== "all")  bmFilters.push(`bm.direction = '${esc(direction)}'`);
   if (provider && provider !== "all" && provider !== "BANK_IMPORT")
     bmFilters.push(`bm.provider_name = '${esc(provider)}'`);
@@ -2823,6 +2885,51 @@ router.get("/mutations", async (req, res) => {
        FROM bank_reconciliation_matches m
        WHERE m.mutation_id = bm.id
           AND m.status IN ('candidate', 'approved')
+           -- Generic bank-transfer candidates must be same-day. QRIS and
+           -- Sport Center candidates use their own settlement-date contract.
+           AND (
+             m.candidate_type IN ('qris_settlement', 'sport_payment')
+             OR (
+               m.candidate_type = 'accounting_payment'
+               AND EXISTS (
+                 SELECT 1 FROM accounting_payments ap_match
+                 WHERE ap_match.id = m.candidate_id
+                   AND ap_match.date = bm.transaction_date
+               )
+             )
+             OR (
+               m.candidate_type = 'invoice'
+               AND EXISTS (
+                 SELECT 1 FROM sales_documents sd_match
+                 WHERE sd_match.id = m.candidate_id
+                   AND COALESCE(sd_match.invoice_date, sd_match.created_at::date) = bm.transaction_date
+               )
+             )
+             OR (
+               m.candidate_type = 'expense'
+               AND EXISTS (
+                 SELECT 1 FROM expenses e_match
+                 WHERE e_match.id = m.candidate_id
+                   AND e_match.date = bm.transaction_date
+               )
+             )
+             OR (
+               m.candidate_type = 'logistic_order'
+               AND EXISTS (
+                 SELECT 1 FROM logistic_orders lo_match
+                 WHERE lo_match.id = m.candidate_id
+                   AND lo_match.created_at::date = bm.transaction_date
+               )
+             )
+             OR (
+               m.candidate_type = 'tenant_invoice'
+               AND EXISTS (
+                 SELECT 1 FROM tenant_invoices ti_match
+                 WHERE ti_match.id = m.candidate_id
+                   AND ti_match.created_at::date = bm.transaction_date
+               )
+             )
+           )
        ) AS candidates,
         (
           SELECT to_jsonb(qc) || jsonb_build_object(
@@ -3995,9 +4102,37 @@ router.post("/run-matching", async (req, res) => {
 router.get("/summary", async (req, res) => {
   await runBankReconciliationCoreMigration();
   const { rows } = await db.execute(sql.raw(`
-    SELECT status, COUNT(*) as count, SUM(amount) as total_amount
-    FROM bank_mutations
-    GROUP BY status
+    SELECT
+      CASE
+        WHEN bm.status = 'matched'
+          AND NOT EXISTS (
+            SELECT 1
+            FROM bank_reconciliation_matches stale_match
+            WHERE stale_match.mutation_id = bm.id
+              AND stale_match.status IN ('candidate', 'approved')
+              AND stale_match.candidate_type IN (
+                'accounting_payment', 'invoice', 'expense',
+                'logistic_order', 'tenant_invoice'
+              )
+              AND ${genericCandidateSameDaySql("stale_match", "bm")}
+          )
+          AND EXISTS (
+            SELECT 1
+            FROM bank_reconciliation_matches any_generic_match
+            WHERE any_generic_match.mutation_id = bm.id
+              AND any_generic_match.status IN ('candidate', 'approved')
+              AND any_generic_match.candidate_type IN (
+                'accounting_payment', 'invoice', 'expense',
+                'logistic_order', 'tenant_invoice'
+              )
+          )
+        THEN 'duplicate_need_review'
+        ELSE bm.status
+      END AS status,
+      COUNT(*) as count,
+      SUM(bm.amount) as total_amount
+    FROM bank_mutations bm
+    GROUP BY 1
     ORDER BY count DESC
   `));
   return res.json({ summary: rows });

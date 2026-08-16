@@ -800,7 +800,7 @@ function qrisPaymentGross(
 }
 
 function hasUnresolvedVariance(m: BankMutation): boolean {
-  const candidate = m.candidates?.[0];
+  const candidate = visibleCandidates(m)[0];
   const d = candidate?.details;
   const variance = numericValue(d?.varianceAmount ?? d?.amountDifference);
   return Boolean(
@@ -811,9 +811,12 @@ function hasUnresolvedVariance(m: BankMutation): boolean {
 }
 
 function isExactMatch(m: BankMutation): boolean {
-  const candidate = m.candidates?.[0];
+  const candidate = visibleCandidates(m)[0];
   if (!candidate || m.status !== "matched" || hasUnresolvedVariance(m)) return false;
-  return Boolean(candidate.amount_match && candidate.date_match && candidate.match_score >= 90);
+  // A same-day, same-amount bank transfer is selectable for reviewer
+  // confirmation even when it has no reference/proof bonus. The backend still
+  // validates the selected match and COA mapping inside its transaction.
+  return Boolean(candidate.amount_match && candidate.date_match);
 }
 
 function isUiApprovalEligible(m: BankMutation): boolean {
@@ -847,8 +850,28 @@ function isQrisMutation(m: BankMutation): boolean {
   ].some(value => /QRIS|QRTRAVELI|PAYLABS/i.test(String(value ?? "")));
 }
 
+function isSameCalendarDate(left: string | null | undefined, right: string | null | undefined): boolean {
+  if (!left || !right) return false;
+  return String(left).slice(0, 10) === String(right).slice(0, 10);
+}
+
+function isBankTransferCandidate(candidate: Candidate): boolean {
+  return candidate.candidate_type !== "qris_settlement"
+    && candidate.candidate_type !== "sport_payment";
+}
+
+/** Candidates shown to reviewers and used for approval must obey the
+ * same-day rule for generic bank transfers. QRIS/Sport candidates keep their
+ * separate settlement-date contract. */
+function visibleCandidates(m: BankMutation): Candidate[] {
+  return (m.candidates ?? []).filter(candidate =>
+    !isBankTransferCandidate(candidate)
+    || isSameCalendarDate(m.transaction_date, candidate.details?.date),
+  );
+}
+
 function reconciliationEvidence(m: BankMutation): ReconciliationEvidence {
-  const candidate = m.candidates?.[0];
+  const candidate = visibleCandidates(m)[0];
   const d = candidate?.details;
   const audit = m.qris_candidate_audit;
   const bankAmount = numericValue(d?.actualBankAmount) ?? numericValue(m.amount) ?? 0;
@@ -888,6 +911,15 @@ function reconciliationEvidence(m: BankMutation): ReconciliationEvidence {
         customer: null,
         facility: "Sport Center",
       }));
+  if (transactions.length === 0 && candidate) {
+    transactions.push({
+      label: `${CANDIDATE_TYPE_LABELS[candidate.candidate_type] ?? candidate.candidate_type} #${candidate.candidate_id}`,
+      amount: numericValue(d?.amount ?? d?.netAmount ?? d?.expectedAmount) ?? 0,
+      date: d?.date,
+      customer: d?.name ?? candidate.customer_name,
+      facility: d?.sourceType === "sport_center" ? "Sport Center" : null,
+    });
+  }
 
   return { bankAmount, foundAmount, deduction, expectedAmount, missingAmount, transactions };
 }
@@ -2060,7 +2092,7 @@ function MutationCard({
   qrisGenerationPending?: boolean;
   mappingError?: MappingRequiredError;
 }) {
-  const cands  = m.candidates ?? [];
+  const cands  = visibleCandidates(m);
   const qrisAudit = m.qris_candidate_audit;
   const best   = cands[0];
   const amount = Number(m.amount) || 0;
@@ -2541,7 +2573,7 @@ function MutationDetailPanel({
 }) {
   if (!mutation) return null;
   const m     = mutation;
-  const cands = m.candidates ?? [];
+  const cands = visibleCandidates(m);
   const qrisAudit = m.qris_candidate_audit;
   const settledQrisPaymentIds = new Set((qrisAudit?.settled_payment_ids ?? []).map(Number));
   const currentQrisPaymentIds = Array.isArray(qrisAudit?.current_payment_ids)
@@ -4191,7 +4223,7 @@ export default function BankReconciliationPage() {
     }
   };
 
-  const approveDialogCands    = actionDialog?.mutation.candidates ?? [];
+  const approveDialogCands    = actionDialog ? visibleCandidates(actionDialog.mutation) : [];
   const approveSelectedCand   = approveDialogCands.find(c => c.id === selectedCandidateId);
 
   return (
