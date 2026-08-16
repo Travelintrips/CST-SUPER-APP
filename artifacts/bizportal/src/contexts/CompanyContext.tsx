@@ -54,7 +54,7 @@ const STORAGE_KEY = "biz_active_company_id";
 const CONSOLIDATED_STORAGE_VALUE = "all";
 
 export function CompanyProvider({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isApiReady } = useSupabaseAuth();
+  const { isAuthenticated, isApiAvailable } = useSupabaseAuth();
   const [companies, setCompanies] = useState<Company[]>([]);
 
   const [activeCompanyId, setActiveCompanyIdState] = useState<CompanyScope>(() => {
@@ -71,7 +71,7 @@ export function CompanyProvider({ children }: { children: React.ReactNode }) {
   const fetchedRef = useRef(false);
 
   const fetchCompanies = useCallback(async () => {
-    if (!isApiReady) return;
+    if (!isApiAvailable) return;
 
     try {
       const res = await fetch("/api/companies", { credentials: "include" });
@@ -93,20 +93,20 @@ export function CompanyProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setIsLoading(false);
     }
-  }, [activeCompanyId, isApiReady]);
+  }, [activeCompanyId, isApiAvailable]);
 
   useEffect(() => {
     if (isAuthenticated) { fetchedRef.current = false; }
   }, [isAuthenticated]);
 
   useEffect(() => {
-    if (isAuthenticated && isApiReady && !fetchedRef.current) {
+    if (isAuthenticated && isApiAvailable && !fetchedRef.current) {
       fetchedRef.current = true;
       void fetchCompanies();
     } else if (!isAuthenticated) {
       setIsLoading(false);
     }
-  }, [isAuthenticated, isApiReady, fetchCompanies]);
+  }, [isAuthenticated, isApiAvailable, fetchCompanies]);
 
   const setActiveCompany = useCallback((company: Company) => {
     setActiveCompanyIdState(company.id);
