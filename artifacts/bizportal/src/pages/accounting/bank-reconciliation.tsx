@@ -881,19 +881,27 @@ function isBankTransferCandidate(candidate: Candidate, mutation: BankMutation): 
  * separate settlement-date contract. `sport_payment` is not automatically
  * QRIS: its payment method decides which contract applies. */
 function visibleCandidates(m: BankMutation): Candidate[] {
-  return (m.candidates ?? []).filter(candidate =>
-    (
-      !isBankTransferCandidate(candidate, m)
-      && isQrisMutation(m)
-    )
-    || (
-      isBankTransferCandidate(candidate, m)
-      && isSameCalendarDate(
-        m.transaction_date,
-        candidate.details?.settlementDate ?? candidate.details?.date,
-      )
-    ),
-  );
+  const seen = new Set<string>();
+  return (m.candidates ?? [])
+    .filter(candidate => {
+      const isBankTransfer = isBankTransferCandidate(candidate, m);
+      // For bank-transfer Sport Center payments use the payment date. The
+      // settlement date belongs to QRIS and is commonly H+1, which previously
+      // hid valid bank-transfer candidates from the reviewer.
+      const candidateDate = isBankTransfer
+        ? candidate.details?.date
+        : candidate.details?.settlementDate ?? candidate.details?.date;
+      const dateEligible = !isBankTransfer
+        || isSameCalendarDate(m.transaction_date, candidateDate);
+      const identity = [
+        candidate.candidate_type,
+        candidate.candidate_id,
+        candidate.candidate_source ?? "<historical-null>",
+      ].join(":");
+      if (!dateEligible || seen.has(identity)) return false;
+      seen.add(identity);
+      return true;
+    });
 }
 
 function reconciliationEvidence(m: BankMutation): ReconciliationEvidence {
@@ -2321,10 +2329,20 @@ function MutationCard({
                 size="sm"
                 variant="outline"
                 className="h-7 text-xs gap-1 border-amber-300 text-amber-800 hover:bg-amber-50 dark:text-amber-300"
-                onClick={() => onDetail(m)}
+                onClick={() => {
+                  // A reviewer may explicitly approve a suggested bank-transfer
+                  // candidate from the selection dialog. QRIS stays on its
+                  // dedicated batch-review flow.
+                  if (cands.length > 0 && !isQrisMutation(m)) onApprove(m);
+                  else onDetail(m);
+                }}
               >
-                <Eye className="w-3.5 h-3.5" />
-                Periksa Transaksi
+                {cands.length > 0 && !isQrisMutation(m)
+                  ? <CheckCircle2 className="w-3.5 h-3.5" />
+                  : <Eye className="w-3.5 h-3.5" />}
+                {cands.length > 0 && !isQrisMutation(m)
+                  ? "Pilih Kandidat & Approve"
+                  : "Periksa Transaksi"}
               </Button>
             )}
             {/* Post ke Accounting — only for approved_pending_posting; disabled when mapping-required */}
@@ -3068,6 +3086,20 @@ function MutationDetailPanel({
               Setujui Pencocokan
             </Button>
           )}
+          {!mappingError
+            && !isUiApprovalEligible(m)
+            && canApprove(m)
+            && cands.length > 0
+            && !isQrisMutation(m)
+            && (
+              <Button
+                className="flex-1 gap-1.5 bg-indigo-600 hover:bg-indigo-700 min-w-[170px]"
+                onClick={() => { onClose(); onApprove(m); }}
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                Pilih Kandidat &amp; Approve
+              </Button>
+            )}
           {!isUiApprovalEligible(m) && (m.status === "unmatched" || m.status === "matched" || m.status === "duplicate_need_review") && (
             <Button
               variant="outline"

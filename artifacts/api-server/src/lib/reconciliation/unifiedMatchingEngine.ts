@@ -228,6 +228,14 @@ export function dedupeCandidatesByIdentity(
   });
 }
 
+function isQrisCandidateForMatching(candidate: MatchCandidate): boolean {
+  return candidate.type === "qris_settlement"
+    || (
+      candidate.type === "sport_payment"
+      && /qris/i.test(String(candidate.payment_method ?? ""))
+    );
+}
+
 type ContraResolution = {
   accountId: number;
   label: string;
@@ -466,8 +474,7 @@ export function scoreUnified(
 
   // QRIS candidates are company/provider scoped. A mismatch or missing
   // identity must never be overridden by an exact amount.
-  const requiresQrisIdentity =
-    cand.type === "qris_settlement" || cand.type === "sport_payment";
+  const requiresQrisIdentity = isQrisCandidateForMatching(cand);
   const companyMismatch =
     requiresQrisIdentity &&
     (
@@ -767,6 +774,12 @@ export async function fetchCandidates(
     ? qrisAmountFilter
     : `ABS(sp.amount::numeric - ${Number(amount)}) < 0.01`;
   const settlementDateExpr = `COALESCE(sp.settlement_date, COALESCE(sp.paid_at::date, sp.created_at::date) + 1)`;
+  // A Sport Center payment is not automatically QRIS. Bank-transfer payments
+  // must match by payment date; only QRIS uses the settlement date (often H+1).
+  const sportCandidateDateExpr = `CASE
+    WHEN COALESCE(sp.method, '') ILIKE '%qris%' THEN ${settlementDateExpr}
+    ELSE COALESCE(sp.paid_at::date, sp.created_at::date)
+  END`;
   const aggregateMatchFilter = qrisSettlementTablesAvailable ? `
            AND NOT EXISTS (
              SELECT 1
@@ -857,7 +870,7 @@ export async function fetchCandidates(
       q: `
         SELECT sp.id,
                ${mutationLooksQris ? verifiedSportNet : "sp.amount"} AS amount,
-               ${settlementDateExpr}::text AS date,
+               ${mutationLooksQris ? settlementDateExpr : sportCandidateDateExpr}::text AS date,
                COALESCE(c.name, sb.customer_name, '') AS name,
                CONCAT('SPORT-', sp.booking_id::text) AS ref,
                sp.company_id,
@@ -880,7 +893,7 @@ export async function fetchCandidates(
         WHERE ${sportAmountFilter}
           AND '${direction}' = 'IN'
           ${company_id ? `AND sp.company_id = ${Number(company_id)}` : ""}
-          AND ${settlementDateExpr} BETWEEN ${dateFrom} AND ${dateTo}
+           AND ${mutationLooksQris ? settlementDateExpr : sportCandidateDateExpr} BETWEEN ${dateFrom} AND ${dateTo}
           AND sp.status = 'paid'
            AND (${mutationLooksQris ? "COALESCE(sp.method, '') ILIKE '%qris%'" : "TRUE"})
            ${aggregateMatchFilter}

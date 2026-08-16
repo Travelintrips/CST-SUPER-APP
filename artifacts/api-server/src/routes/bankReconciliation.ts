@@ -259,6 +259,58 @@ export async function runBankReconciliationCoreMigration() {
     logger.warn({ err: e?.cause?.message ?? e?.message }, "[bankRecon] source-aware candidate unique backstop unavailable");
   });
 
+  // Historical candidates have no source discriminator. Older matching runs
+  // could append the same (mutation, type, id) repeatedly, which made the
+  // reviewer see identical cards and made selection ambiguous. Keep one active
+  // row (prefer an already-approved row), preserve the rest as history, then
+  // prevent the duplicate from returning.
+  await db.execute(sql.raw(`
+    UPDATE public.bank_reconciliation_matches duplicate_candidate
+    SET status = 'superseded'
+    WHERE duplicate_candidate.candidate_source IS NULL
+      AND duplicate_candidate.status = 'candidate'
+      AND EXISTS (
+        SELECT 1
+        FROM public.bank_reconciliation_matches approved_candidate
+        WHERE approved_candidate.mutation_id = duplicate_candidate.mutation_id
+          AND approved_candidate.candidate_type = duplicate_candidate.candidate_type
+          AND approved_candidate.candidate_id = duplicate_candidate.candidate_id
+          AND approved_candidate.candidate_source IS NULL
+          AND approved_candidate.status = 'approved'
+      )
+  `)).catch((e: any) => {
+    logger.warn({ err: e?.cause?.message ?? e?.message }, "[bankRecon] historical candidate approval cleanup skipped");
+  });
+  await db.execute(sql.raw(`
+    WITH duplicate_groups AS (
+      SELECT mutation_id, candidate_type, candidate_id, MIN(id) AS keep_id
+      FROM public.bank_reconciliation_matches
+      WHERE candidate_source IS NULL
+        AND status = 'candidate'
+      GROUP BY mutation_id, candidate_type, candidate_id
+      HAVING COUNT(*) > 1
+    )
+    UPDATE public.bank_reconciliation_matches duplicate_candidate
+    SET status = 'superseded'
+    FROM duplicate_groups
+    WHERE duplicate_candidate.mutation_id = duplicate_groups.mutation_id
+      AND duplicate_candidate.candidate_type = duplicate_groups.candidate_type
+      AND duplicate_candidate.candidate_id = duplicate_groups.candidate_id
+      AND duplicate_candidate.candidate_source IS NULL
+      AND duplicate_candidate.status = 'candidate'
+      AND duplicate_candidate.id <> duplicate_groups.keep_id
+  `)).catch((e: any) => {
+    logger.warn({ err: e?.cause?.message ?? e?.message }, "[bankRecon] historical candidate dedupe skipped");
+  });
+  await db.execute(sql.raw(`
+    CREATE UNIQUE INDEX IF NOT EXISTS brm_historical_identity_active_unique
+    ON public.bank_reconciliation_matches (mutation_id, candidate_type, candidate_id)
+    WHERE candidate_source IS NULL
+      AND status IN ('candidate', 'approved')
+  `)).catch((e: any) => {
+    logger.warn({ err: e?.cause?.message ?? e?.message }, "[bankRecon] historical candidate unique backstop unavailable");
+  });
+
   await db.execute(sql.raw(`
     CREATE TABLE IF NOT EXISTS bank_reconciliation_audit (
       id SERIAL PRIMARY KEY,
