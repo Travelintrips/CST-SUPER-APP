@@ -494,13 +494,6 @@ export function scoreUnified(
       mutationProvider === "unknown" ||
       !areQrisProvidersCompatible(candidateProvider, mutationProvider)
     );
-    cand.candidateSource === CANONICAL_SETTLEMENT_SOURCE &&
-    !!cand.provider_code &&
-    !!mutation.provider_name &&
-    !!cand.provider_name &&
-    normalizeQrisProvider(mutation.provider_name) !== "unknown" &&
-    normalizeQrisProvider(cand.provider_code) !== normalizeQrisProvider(mutation.provider_name) &&
-    normalizeQrisProvider(cand.provider_name) !== normalizeQrisProvider(mutation.provider_name);
 
   // 1. Amount — MANDATORY for auto-approve (+50)
   const amountMatch =
@@ -1134,6 +1127,28 @@ export async function runUnifiedMatching(
       AND status = 'candidate'
       ${currentSourceIdentities.length
         ? `AND NOT (${currentSourceIdentities.join(" OR ")})`
+        : ""}
+  `)).catch(() => {});
+
+  // Historical rows have no source discriminator, so they cannot be updated
+  // with the source-aware ON CONFLICT path below. Re-running matching must
+  // replace their active candidate set, otherwise a candidate created under
+  // the old H+1 bank-transfer rule remains visible and can disagree with the
+  // current same-day eligibility shown by the UI and summary endpoint.
+  const currentHistoricalIdentities = scored
+    .filter((s) => s.candidate.candidateSource == null)
+    .map((s) =>
+      `(candidate_type = '${s.candidate.type.replace(/'/g, "''")}'` +
+      ` AND candidate_id = ${s.candidate.id})`,
+    );
+  await db.execute(sql.raw(`
+    UPDATE bank_reconciliation_matches
+    SET status = 'superseded'
+    WHERE mutation_id = ${mutation.id}
+      AND candidate_source IS NULL
+      AND status = 'candidate'
+      ${currentHistoricalIdentities.length
+        ? `AND NOT (${currentHistoricalIdentities.join(" OR ")})`
         : ""}
   `)).catch(() => {});
 

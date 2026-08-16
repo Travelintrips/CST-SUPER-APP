@@ -4151,7 +4151,10 @@ export default function BankReconciliationPage() {
   const handleConfirmApprove = () => {
     if (!actionDialog) return;
     const m      = actionDialog.mutation;
-    const chosen = (m.candidates ?? []).find(c => c.id === selectedCandidateId);
+    // Use the same same-day candidate set rendered by the dialog. The raw
+    // mutation payload can still contain a historical H+1 candidate from a
+    // previous matching run, which must never be approved accidentally.
+    const chosen = approveDialogCands.find(c => c.id === selectedCandidateId);
     approveMut.mutate({
       mutId: m.id,
       matchId: chosen?.id,
