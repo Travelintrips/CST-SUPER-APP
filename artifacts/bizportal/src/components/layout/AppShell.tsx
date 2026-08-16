@@ -1129,7 +1129,7 @@ export function AppShell({ children, noPadding }: AppShellProps) {
           <div className={noPadding ? "flex-1 overflow-hidden flex flex-col" : "flex-1 overflow-auto p-4 sm:p-6 lg:p-8"}>
             {(location.startsWith("/tenant") || location.startsWith("/sport-center")) && !isConsolidated && activeCompany && ![1, 4].includes(activeCompany.id) ? (
               <div className="flex flex-col items-center justify-center min-h-[60vh] gap-5 p-8">
-                <div className="rounded-full bg-red-100 dark:bg-red-950/40 p-5 border border-red-200 dark:border-red-800">
+                <div className="rounded-full bg-red-100 dark:bg-red-950 p-5 border border-red-200 dark:border-red-800">
                   <Lock className="h-10 w-10 text-red-500" />
                 </div>
                 <div className="text-center space-y-2">
@@ -1138,7 +1138,7 @@ export function AppShell({ children, noPadding }: AppShellProps) {
                     Modul <strong>Tenant & Property</strong> hanya tersedia untuk:
                   </p>
                   <div className="flex flex-col items-center gap-2 mt-3">
-                    <span className="inline-flex items-center gap-2 rounded-full bg-indigo-100 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 text-sm font-semibold px-5 py-2">
+                    <span className="inline-flex items-center gap-2 rounded-full bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 text-sm font-semibold px-5 py-2">
                       PT Cahaya Sejati Teknologi
                     </span>
                     <span className="inline-flex items-center gap-2 rounded-full bg-violet-100 dark:bg-violet-950/40 text-violet-700 dark:text-violet-300 text-sm font-semibold px-5 py-2">

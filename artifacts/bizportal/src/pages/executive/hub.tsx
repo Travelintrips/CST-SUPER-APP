@@ -9,7 +9,7 @@ const SECTIONS = [
     description: "Dashboard eksekutif, ringkasan konsolidasi keuangan, dan persetujuan pending.",
     icon: Trophy,
     color: "text-amber-600",
-    bg: "bg-amber-50 dark:bg-amber-950/30",
+    bg: "bg-amber-50 dark:bg-amber-950",
     border: "border-amber-200 dark:border-amber-800",
   },
   {
@@ -18,7 +18,7 @@ const SECTIONS = [
     description: "Dashboard holding, P&L konsolidasi, arus kas, dan laporan grup.",
     icon: Building2,
     color: "text-blue-600",
-    bg: "bg-blue-50 dark:bg-blue-950/30",
+    bg: "bg-blue-50 dark:bg-blue-950",
     border: "border-blue-200 dark:border-blue-800",
   },
   {
@@ -27,7 +27,7 @@ const SECTIONS = [
     description: "Dashboard analitik, profitabilitas komoditi, dan profitabilitas rute.",
     icon: BarChart3,
     color: "text-green-600",
-    bg: "bg-green-50 dark:bg-green-950/30",
+    bg: "bg-green-50 dark:bg-green-950",
     border: "border-green-200 dark:border-green-800",
   },
   {
@@ -52,7 +52,7 @@ export default function ExecutiveHubPage() {
             <span>Executive</span>
           </nav>
           <div className="flex items-center gap-3">
-            <div className="rounded-lg p-2 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
+            <div className="rounded-lg p-2 bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800">
               <Trophy className="h-5 w-5 text-amber-600" />
             </div>
             <div>

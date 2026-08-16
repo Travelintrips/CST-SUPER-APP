@@ -568,7 +568,7 @@ export default function LogisticsRfqDetailPage() {
               <p>
                 Re-blast ke <strong>semua {data.vendorStats.total} vendor</strong> yang sudah di-blast sebelumnya.
               </p>
-              <div className="bg-orange-50 border border-orange-200 rounded p-3 space-y-1 text-xs dark:bg-orange-950/20 dark:border-orange-800">
+              <div className="bg-orange-50 border border-orange-200 rounded p-3 space-y-1 text-xs dark:bg-orange-950 dark:border-orange-800">
                 <div className="font-medium text-orange-800 dark:text-orange-400 mb-1">Yang akan terjadi:</div>
                 <div className="text-orange-700 dark:text-orange-500">• <code className="bg-orange-100 dark:bg-orange-900/40 px-1 rounded">basic_price</code> semua vendor link akan di-recalculate & diperbarui</div>
                 <div className="text-orange-700 dark:text-orange-500">• Deadline baru: <strong>{deadlineHours} jam</strong> dari sekarang</div>

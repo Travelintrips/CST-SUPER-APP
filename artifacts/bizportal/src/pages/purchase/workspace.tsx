@@ -112,10 +112,10 @@ const SECTIONS: WorkspaceSection[] = [
 ];
 
 const SECTION_COLORS: Record<string, { text: string; bg: string; border: string; activeBg: string }> = {
-  "purchase-flow":         { text: "text-blue-600",   bg: "bg-blue-50 dark:bg-blue-950/30",   border: "border-blue-200 dark:border-blue-800",   activeBg: "bg-blue-100 dark:bg-blue-900/50" },
+  "purchase-flow":         { text: "text-blue-600",   bg: "bg-blue-50 dark:bg-blue-950",   border: "border-blue-200 dark:border-blue-800",   activeBg: "bg-blue-100 dark:bg-blue-900/50" },
   "vendor-management":     { text: "text-purple-600", bg: "bg-purple-50 dark:bg-purple-950/30", border: "border-purple-200 dark:border-purple-800", activeBg: "bg-purple-100 dark:bg-purple-900/50" },
-  "invoices-docs":         { text: "text-green-600",  bg: "bg-green-50 dark:bg-green-950/30",  border: "border-green-200 dark:border-green-800",  activeBg: "bg-green-100 dark:bg-green-900/50" },
-  "landed-cost":           { text: "text-orange-600", bg: "bg-orange-50 dark:bg-orange-950/30", border: "border-orange-200 dark:border-orange-800", activeBg: "bg-orange-100 dark:bg-orange-900/50" },
+  "invoices-docs":         { text: "text-green-600",  bg: "bg-green-50 dark:bg-green-950",  border: "border-green-200 dark:border-green-800",  activeBg: "bg-green-100 dark:bg-green-900/50" },
+  "landed-cost":           { text: "text-orange-600", bg: "bg-orange-50 dark:bg-orange-950", border: "border-orange-200 dark:border-orange-800", activeBg: "bg-orange-100 dark:bg-orange-900/50" },
   "procurement-analytics": { text: "text-rose-600",   bg: "bg-rose-50 dark:bg-rose-950/30",   border: "border-rose-200 dark:border-rose-800",   activeBg: "bg-rose-100 dark:bg-rose-900/50" },
 };
 

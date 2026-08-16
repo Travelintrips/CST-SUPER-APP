@@ -10,7 +10,7 @@ const SECTIONS = [
     description: "Data tenant, booking, rekap, dan audit log penyewa.",
     icon: Users,
     color: "text-blue-600",
-    bg: "bg-blue-50 dark:bg-blue-950/30",
+    bg: "bg-blue-50 dark:bg-blue-950",
     border: "border-blue-200 dark:border-blue-800",
   },
   {
@@ -28,7 +28,7 @@ const SECTIONS = [
     description: "Invoice, pembayaran sewa, laporan keuangan, dan rekonsiliasi tenant.",
     icon: Banknote,
     color: "text-green-600",
-    bg: "bg-green-50 dark:bg-green-950/30",
+    bg: "bg-green-50 dark:bg-green-950",
     border: "border-green-200 dark:border-green-800",
   },
   {
@@ -37,7 +37,7 @@ const SECTIONS = [
     description: "Booking lapangan, members, fasilitas, pembayaran, dan laporan SC.",
     icon: Trophy,
     color: "text-orange-600",
-    bg: "bg-orange-50 dark:bg-orange-950/30",
+    bg: "bg-orange-50 dark:bg-orange-950",
     border: "border-orange-200 dark:border-orange-800",
   },
 ];

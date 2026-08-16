@@ -384,7 +384,7 @@ export default function NotificationsPage() {
         {newArrived > 0 && (
           <button
             onClick={() => { setPage(0); setNewArrived(0); }}
-            className="flex w-full items-center justify-center gap-2 rounded-lg border border-indigo-300 bg-indigo-50 dark:bg-indigo-950/30 dark:border-indigo-700 px-4 py-2.5 text-xs font-medium text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-950/50 transition-colors animate-in slide-in-from-top-2 duration-300"
+            className="flex w-full items-center justify-center gap-2 rounded-lg border border-indigo-300 bg-indigo-50 dark:bg-indigo-950 dark:border-indigo-700 px-4 py-2.5 text-xs font-medium text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-950/50 transition-colors animate-in slide-in-from-top-2 duration-300"
           >
             <Sparkles size={13} className="animate-pulse" />
             {newArrived} notifikasi baru masuk — klik untuk melihat
@@ -508,7 +508,7 @@ export default function NotificationsPage() {
                     key={n.id}
                     className={`group flex gap-3 px-4 py-3.5 transition-colors ${
                       isUnread
-                        ? "bg-blue-50/50 dark:bg-blue-950/15 hover:bg-blue-50 dark:hover:bg-blue-950/25"
+                        ? "bg-blue-50/50 dark:bg-blue-950 hover:bg-blue-50 dark:hover:bg-blue-950/25"
                         : "hover:bg-muted/40"
                     }`}
                   >

@@ -105,7 +105,7 @@ function StatCard({
             )}
             <div className="text-xs text-muted-foreground mt-0.5 leading-tight">{label}</div>
           </div>
-          <div className={`rounded-lg p-2 ${value > 0 ? "bg-red-50 dark:bg-red-950/30" : "bg-muted"}`}>
+          <div className={`rounded-lg p-2 ${value > 0 ? "bg-red-50 dark:bg-red-950" : "bg-muted"}`}>
             <Icon className={`h-4 w-4 ${value > 0 ? color : "text-muted-foreground"}`} />
           </div>
         </div>

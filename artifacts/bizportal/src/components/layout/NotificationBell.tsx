@@ -210,7 +210,7 @@ export function NotificationBell() {
 
         {/* Banner aktifkan notifikasi browser */}
         {notifPermission === "default" && (
-          <div className="flex items-center gap-3 border-b border-border bg-amber-50 dark:bg-amber-950/30 px-4 py-2.5">
+          <div className="flex items-center gap-3 border-b border-border bg-amber-50 dark:bg-amber-950 px-4 py-2.5">
             <BellRing size={15} className="text-amber-500 shrink-0" />
             <div className="flex-1 min-w-0">
               <p className="text-xs font-medium text-amber-800 dark:text-amber-300">Aktifkan notifikasi suara</p>
@@ -226,7 +226,7 @@ export function NotificationBell() {
         )}
 
         {notifPermission === "denied" && (
-          <div className="flex items-center gap-2 border-b border-border bg-red-50 dark:bg-red-950/20 px-4 py-2">
+          <div className="flex items-center gap-2 border-b border-border bg-red-50 dark:bg-red-950 px-4 py-2">
             <BellOff size={13} className="text-red-400 shrink-0" />
             <p className="text-[11px] text-red-600 dark:text-red-400">
               Notifikasi diblokir browser. Ubah di pengaturan situs.
@@ -277,7 +277,7 @@ export function NotificationBell() {
                 <a
                   key={n.id}
                   href={`/bizportal${orderHref(n)}`}
-                  className={`flex gap-3 px-4 py-3 hover:bg-muted/50 transition-colors cursor-pointer ${n.readAt === null ? "bg-blue-50/60 dark:bg-blue-950/20" : ""}`}
+                  className={`flex gap-3 px-4 py-3 hover:bg-muted/50 transition-colors cursor-pointer ${n.readAt === null ? "bg-blue-50/60 dark:bg-blue-950" : ""}`}
                 >
                   <div className="mt-0.5">{typeIcon(n.type)}</div>
                   <div className="flex-1 min-w-0">

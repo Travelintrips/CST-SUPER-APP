@@ -384,7 +384,7 @@ export default function LogisticsPage() {
                 <button
                   type="button"
                   onClick={() => handleStatFilterToggle("rfq_sent")}
-                  className={`relative space-y-1 text-left rounded-md p-2 -m-2 transition-colors cursor-pointer hover:bg-amber-50 dark:hover:bg-amber-950/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${(freightStatusFilter === "rfq_sent" || dismissingFilter === "rfq_sent") ? "ring-2 ring-amber-400 bg-amber-50 dark:bg-amber-950/20" : ""}`}
+                  className={`relative space-y-1 text-left rounded-md p-2 -m-2 transition-colors cursor-pointer hover:bg-amber-50 dark:hover:bg-amber-950/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${(freightStatusFilter === "rfq_sent" || dismissingFilter === "rfq_sent") ? "ring-2 ring-amber-400 bg-amber-50 dark:bg-amber-950" : ""}`}
                   title={freightStatusFilter === "rfq_sent" ? "Klik untuk hapus filter" : "Filter: Menunggu Persetujuan Quote"}
                 >
                   {(freightStatusFilter === "rfq_sent" || dismissingFilter === "rfq_sent") && (
@@ -403,7 +403,7 @@ export default function LogisticsPage() {
                 <button
                   type="button"
                   onClick={() => handleStatFilterToggle("confirmed")}
-                  className={`relative space-y-1 text-left rounded-md p-2 -m-2 transition-colors cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-950/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${(freightStatusFilter === "confirmed" || dismissingFilter === "confirmed") ? "ring-2 ring-blue-400 bg-blue-50 dark:bg-blue-950/20" : ""}`}
+                  className={`relative space-y-1 text-left rounded-md p-2 -m-2 transition-colors cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-950/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${(freightStatusFilter === "confirmed" || dismissingFilter === "confirmed") ? "ring-2 ring-blue-400 bg-blue-50 dark:bg-blue-950" : ""}`}
                   title={freightStatusFilter === "confirmed" ? "Klik untuk hapus filter" : "Filter: Dikonfirmasi"}
                 >
                   {(freightStatusFilter === "confirmed" || dismissingFilter === "confirmed") && (
@@ -422,7 +422,7 @@ export default function LogisticsPage() {
                 <button
                   type="button"
                   onClick={() => handleStatFilterToggle("in_transit")}
-                  className={`relative space-y-1 text-left rounded-md p-2 -m-2 transition-colors cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-950/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${(freightStatusFilter === "in_transit" || dismissingFilter === "in_transit") ? "ring-2 ring-indigo-400 bg-indigo-50 dark:bg-indigo-950/20" : ""}`}
+                  className={`relative space-y-1 text-left rounded-md p-2 -m-2 transition-colors cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-950/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${(freightStatusFilter === "in_transit" || dismissingFilter === "in_transit") ? "ring-2 ring-indigo-400 bg-indigo-50 dark:bg-indigo-950" : ""}`}
                   title={freightStatusFilter === "in_transit" ? "Klik untuk hapus filter" : "Filter: Dalam Perjalanan"}
                 >
                   {(freightStatusFilter === "in_transit" || dismissingFilter === "in_transit") && (

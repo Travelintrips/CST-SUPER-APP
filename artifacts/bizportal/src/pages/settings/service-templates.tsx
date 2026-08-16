@@ -192,7 +192,7 @@ function VersionHistoryDialog({
               return (
                 <div
                   key={row.id}
-                  className={`border rounded-lg overflow-hidden ${isLatest ? "border-blue-200 bg-blue-50/40 dark:border-blue-800 dark:bg-blue-950/20" : ""}`}
+                  className={`border rounded-lg overflow-hidden ${isLatest ? "border-blue-200 bg-blue-50/40 dark:border-blue-800 dark:bg-blue-950" : ""}`}
                 >
                   <button
                     type="button"
@@ -251,7 +251,7 @@ function VersionHistoryDialog({
                                     className={`flex items-center gap-2 text-xs rounded px-2 py-1 font-mono ${
                                       d.kind === "+"
                                         ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400"
-                                        : "bg-red-50 text-red-600 dark:bg-red-950/30 dark:text-red-400"
+                                        : "bg-red-50 text-red-600 dark:bg-red-950 dark:text-red-400"
                                     }`}
                                   >
                                     <span className="font-bold text-base leading-none">{d.kind}</span>
@@ -609,7 +609,7 @@ export default function ServiceTemplatesPage() {
           <h1 className="text-xl font-semibold">Service Templates</h1>
         </div>
 
-        <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 p-4 text-sm text-amber-800 dark:text-amber-300">
+        <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950 dark:border-amber-800 p-4 text-sm text-amber-800 dark:text-amber-300">
           <AlertTriangle className="h-5 w-5 mt-0.5 shrink-0" />
           <div>
             <span className="font-semibold">Perhatian:</span> Service Templates belum menjadi runtime utama Vendor Mini Form.

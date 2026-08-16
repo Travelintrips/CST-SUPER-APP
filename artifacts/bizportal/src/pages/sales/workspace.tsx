@@ -54,10 +54,10 @@ const SECTIONS: Section[] = [
 ];
 
 const COLORS: Record<string, { text: string; bg: string; border: string }> = {
-  "sales-pipeline":     { text: "text-blue-600",   bg: "bg-blue-50 dark:bg-blue-950/30",    border: "border-blue-200 dark:border-blue-800" },
-  "sales-documents":    { text: "text-green-600",  bg: "bg-green-50 dark:bg-green-950/30",   border: "border-green-200 dark:border-green-800" },
+  "sales-pipeline":     { text: "text-blue-600",   bg: "bg-blue-50 dark:bg-blue-950",    border: "border-blue-200 dark:border-blue-800" },
+  "sales-documents":    { text: "text-green-600",  bg: "bg-green-50 dark:bg-green-950",   border: "border-green-200 dark:border-green-800" },
   "digital-channels":   { text: "text-purple-600", bg: "bg-purple-50 dark:bg-purple-950/30", border: "border-purple-200 dark:border-purple-800" },
-  "ai-sales-assistant": { text: "text-amber-600",  bg: "bg-amber-50 dark:bg-amber-950/30",   border: "border-amber-200 dark:border-amber-800" },
+  "ai-sales-assistant": { text: "text-amber-600",  bg: "bg-amber-50 dark:bg-amber-950",   border: "border-amber-200 dark:border-amber-800" },
 };
 
 export default function SalesWorkspacePage({ section }: { section?: string }) {

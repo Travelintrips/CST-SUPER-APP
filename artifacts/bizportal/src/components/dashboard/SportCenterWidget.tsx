@@ -73,7 +73,7 @@ export function SportCenterWidget() {
       value: idr(kpi?.revenue_today ?? 0),
       icon: DollarSign,
       color: "text-blue-500",
-      bg: "bg-blue-50 dark:bg-blue-950/30",
+      bg: "bg-blue-50 dark:bg-blue-950",
       border: "border-blue-200/60 dark:border-blue-800/40",
     },
     {
@@ -99,7 +99,7 @@ export function SportCenterWidget() {
       sub: `${kpi?.occupied_hours_today ?? 0}h / ${kpi?.available_hours_today ?? 0}h`,
       icon: Flame,
       color: "text-orange-500",
-      bg: "bg-orange-50 dark:bg-orange-950/30",
+      bg: "bg-orange-50 dark:bg-orange-950",
       border: "border-orange-200/60 dark:border-orange-800/40",
     },
     {
@@ -109,7 +109,7 @@ export function SportCenterWidget() {
       color: (kpi?.net_profit_today ?? 0) >= 0 ? "text-teal-500" : "text-destructive",
       bg: (kpi?.net_profit_today ?? 0) >= 0
         ? "bg-teal-50 dark:bg-teal-950/30"
-        : "bg-red-50 dark:bg-red-950/30",
+        : "bg-red-50 dark:bg-red-950",
       border: (kpi?.net_profit_today ?? 0) >= 0
         ? "border-teal-200/60 dark:border-teal-800/40"
         : "border-red-200/60 dark:border-red-800/40",
@@ -119,7 +119,7 @@ export function SportCenterWidget() {
       value: String(kpi?.members_active ?? 0),
       icon: Users,
       color: "text-indigo-500",
-      bg: "bg-indigo-50 dark:bg-indigo-950/30",
+      bg: "bg-indigo-50 dark:bg-indigo-950",
       border: "border-indigo-200/60 dark:border-indigo-800/40",
     },
   ];
@@ -204,7 +204,7 @@ export function SportCenterWidget() {
 
         {/* Refund info strip */}
         {!isLoading && (kpi?.refunds_today ?? 0) > 0 && (
-          <div className="mt-3 flex items-center gap-2 rounded-md border border-red-200/60 bg-red-50/60 dark:border-red-800/30 dark:bg-red-950/20 px-3 py-2">
+          <div className="mt-3 flex items-center gap-2 rounded-md border border-red-200/60 bg-red-50/60 dark:border-red-800/30 dark:bg-red-950 px-3 py-2">
             <ArrowDownRight className="h-3.5 w-3.5 text-red-500 shrink-0" />
             <span className="text-xs text-red-600 dark:text-red-400">
               Refund hari ini: <strong>{idr(kpi?.refunds_today ?? 0)}</strong>

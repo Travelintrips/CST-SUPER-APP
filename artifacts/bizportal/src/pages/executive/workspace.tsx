@@ -54,9 +54,9 @@ const SECTIONS: Section[] = [
 ];
 
 const COLORS: Record<string, { text: string; bg: string; border: string }> = {
-  "executive-overview": { text: "text-amber-600",  bg: "bg-amber-50 dark:bg-amber-950/30",  border: "border-amber-200 dark:border-amber-800" },
-  "holding-group":      { text: "text-blue-600",   bg: "bg-blue-50 dark:bg-blue-950/30",    border: "border-blue-200 dark:border-blue-800" },
-  "analytics":          { text: "text-green-600",  bg: "bg-green-50 dark:bg-green-950/30",   border: "border-green-200 dark:border-green-800" },
+  "executive-overview": { text: "text-amber-600",  bg: "bg-amber-50 dark:bg-amber-950",  border: "border-amber-200 dark:border-amber-800" },
+  "holding-group":      { text: "text-blue-600",   bg: "bg-blue-50 dark:bg-blue-950",    border: "border-blue-200 dark:border-blue-800" },
+  "analytics":          { text: "text-green-600",  bg: "bg-green-50 dark:bg-green-950",   border: "border-green-200 dark:border-green-800" },
   "executive-logistics":{ text: "text-purple-600", bg: "bg-purple-50 dark:bg-purple-950/30", border: "border-purple-200 dark:border-purple-800" },
 };
 

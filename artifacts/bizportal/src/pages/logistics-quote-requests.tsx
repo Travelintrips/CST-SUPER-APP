@@ -340,7 +340,7 @@ export default function LogisticsQuoteRequestsPage() {
 
               {/* Estimate */}
               {selected.estimatedTotal && (
-                <div className="rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800 p-4 space-y-1.5">
+                <div className="rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950 dark:border-blue-800 p-4 space-y-1.5">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Estimasi Biaya</p>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
                     {selected.estimatedChargeableWeight && <><span className="text-muted-foreground">Chargeable</span><span>{selected.estimatedChargeableWeight} kg</span></>}

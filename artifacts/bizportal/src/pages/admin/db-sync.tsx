@@ -293,7 +293,7 @@ export default function DbSyncPage() {
         </div>
 
         {/* Warning */}
-        <Alert className="border-orange-200 bg-orange-50 dark:bg-orange-950/20">
+        <Alert className="border-orange-200 bg-orange-50 dark:bg-orange-950">
           <AlertCircle className="h-4 w-4 text-orange-500" />
           <AlertDescription className="text-sm">
             <strong>Perhatian:</strong> Operasi <em>Push</em> akan menimpa data di Supabase dengan data Replit.

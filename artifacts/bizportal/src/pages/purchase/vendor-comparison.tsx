@@ -312,7 +312,7 @@ export default function VendorComparisonPage() {
                     const sc = scores[Number(q.id)];
                     const isBest = sc && sc.total === bestScore && bestScore > 0;
                     return (
-                      <th key={String(q.id)} className={`text-center py-3 px-4 font-medium min-w-[180px] ${isBest ? "bg-green-50 dark:bg-green-950/30" : ""}`}>
+                      <th key={String(q.id)} className={`text-center py-3 px-4 font-medium min-w-[180px] ${isBest ? "bg-green-50 dark:bg-green-950" : ""}`}>
                         <div className="flex items-center justify-center gap-1">
                           {isBest && <Trophy className="h-3.5 w-3.5 text-yellow-500" />}
                           {String(q.supplierName)}
@@ -395,7 +395,7 @@ export default function VendorComparisonPage() {
                 {/* ── Logistics Unit section ───────────────────────────────────── */}
                 {selectedUnit && (
                   <>
-                    <tr className="border-t bg-blue-50/50 dark:bg-blue-950/20">
+                    <tr className="border-t bg-blue-50/50 dark:bg-blue-950">
                       <td colSpan={quotations.length + 1} className="py-1.5 px-4">
                         <span className="text-xs font-semibold text-blue-700 dark:text-blue-400 flex items-center gap-1">
                           <Package2 className="h-3.5 w-3.5" /> Analisis per Satuan: {selectedUnit.name} ({selectedUnit.symbol})
@@ -405,7 +405,7 @@ export default function VendorComparisonPage() {
 
                     {/* Harga per satuan (hanya dari grandTotal) */}
                     {qty > 0 && (
-                      <tr className="border-t bg-blue-50/30 dark:bg-blue-950/10">
+                      <tr className="border-t bg-blue-50/30 dark:bg-blue-950">
                         <td className="py-2 px-4 text-xs text-blue-700 dark:text-blue-400">
                           Harga per {selectedUnit.symbol} <span className="text-muted-foreground">(dari total)</span>
                         </td>
@@ -425,7 +425,7 @@ export default function VendorComparisonPage() {
                     )}
 
                     {/* Biaya pengiriman input per vendor */}
-                    <tr className="border-t bg-blue-50/30 dark:bg-blue-950/10">
+                    <tr className="border-t bg-blue-50/30 dark:bg-blue-950">
                       <td className="py-2 px-4 text-xs text-blue-700 dark:text-blue-400">
                         Ongkir / Biaya Pengiriman (IDR)
                       </td>
@@ -444,7 +444,7 @@ export default function VendorComparisonPage() {
 
                     {/* Ongkir per satuan */}
                     {qty > 0 && (
-                      <tr className="border-t bg-blue-50/30 dark:bg-blue-950/10">
+                      <tr className="border-t bg-blue-50/30 dark:bg-blue-950">
                         <td className="py-2 px-4 text-xs text-blue-700 dark:text-blue-400">
                           Ongkir per {selectedUnit.symbol}
                         </td>
@@ -460,7 +460,7 @@ export default function VendorComparisonPage() {
                     )}
 
                     {/* Total Landed Cost */}
-                    <tr className="border-t bg-blue-50/50 dark:bg-blue-950/20 font-semibold">
+                    <tr className="border-t bg-blue-50/50 dark:bg-blue-950 font-semibold">
                       <td className="py-2.5 px-4 text-xs text-blue-800 dark:text-blue-300">
                         Total Landed Cost
                         <div className="font-normal text-muted-foreground">(harga + ongkir)</div>
@@ -483,7 +483,7 @@ export default function VendorComparisonPage() {
 
                     {/* Landed cost per satuan */}
                     {qty > 0 && (
-                      <tr className="border-t bg-blue-50/50 dark:bg-blue-950/20 font-semibold">
+                      <tr className="border-t bg-blue-50/50 dark:bg-blue-950 font-semibold">
                         <td className="py-2.5 px-4 text-xs text-blue-800 dark:text-blue-300">
                           Landed Cost per {selectedUnit.symbol}
                         </td>
@@ -554,14 +554,14 @@ export default function VendorComparisonPage() {
                 {/* ── Scoring row ─────────────────────────────────────────────── */}
                 {showScoring && weightSum === 100 && (
                   <>
-                    <tr className="border-t bg-yellow-50/50 dark:bg-yellow-950/20">
+                    <tr className="border-t bg-yellow-50/50 dark:bg-yellow-950">
                       <td colSpan={quotations.length + 1} className="py-1.5 px-4">
                         <span className="text-xs font-semibold text-yellow-700 dark:text-yellow-400">
                           Skor Vendor (bobot: Harga {weights.price}% | Lead Time {weights.delivery}% | Term Bayar {weights.payment}%)
                         </span>
                       </td>
                     </tr>
-                    <tr className="border-t bg-yellow-50/30 dark:bg-yellow-950/10">
+                    <tr className="border-t bg-yellow-50/30 dark:bg-yellow-950">
                       <td className="py-2 px-4 text-xs text-yellow-700 dark:text-yellow-400">Sub-skor Harga</td>
                       {(quotations as Record<string, unknown>[]).map(q => {
                         const sc = scores[Number(q.id)];
@@ -575,7 +575,7 @@ export default function VendorComparisonPage() {
                         );
                       })}
                     </tr>
-                    <tr className="border-t bg-yellow-50/30 dark:bg-yellow-950/10">
+                    <tr className="border-t bg-yellow-50/30 dark:bg-yellow-950">
                       <td className="py-2 px-4 text-xs text-yellow-700 dark:text-yellow-400">Sub-skor Lead Time</td>
                       {(quotations as Record<string, unknown>[]).map(q => {
                         const sc = scores[Number(q.id)];
@@ -589,7 +589,7 @@ export default function VendorComparisonPage() {
                         );
                       })}
                     </tr>
-                    <tr className="border-t bg-yellow-50/50 dark:bg-yellow-950/20 font-bold">
+                    <tr className="border-t bg-yellow-50/50 dark:bg-yellow-950 font-bold">
                       <td className="py-3 px-4 text-sm text-yellow-800 dark:text-yellow-300 flex items-center gap-1">
                         <Trophy className="h-4 w-4 text-yellow-500" /> Skor Total
                       </td>

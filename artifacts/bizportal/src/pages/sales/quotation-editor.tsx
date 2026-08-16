@@ -267,8 +267,8 @@ function StockBadge({ productId, salesUomId, qty }: { productId: number; salesUo
   const symbol = data.salesUomSymbol;
 
   const colorClass =
-    avail <= 0 ? "text-red-500 bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-800"
-    : avail < qty ? "text-amber-600 bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800"
+    avail <= 0 ? "text-red-500 bg-red-50 dark:bg-red-950 border-red-200 dark:border-red-800"
+    : avail < qty ? "text-amber-600 bg-amber-50 dark:bg-amber-950 border-amber-200 dark:border-amber-800"
     : "text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800";
 
   const label = avail <= 0 ? "Stok habis" : `Stok: ${new Intl.NumberFormat("id-ID", { maximumFractionDigits: 2 }).format(avail)} ${symbol}`;

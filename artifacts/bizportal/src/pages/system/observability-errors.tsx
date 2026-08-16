@@ -275,7 +275,7 @@ export default function ObservabilityErrorsPage() {
 
       {/* Recurring Errors */}
       {(stats?.recurringErrors?.length ?? 0) > 0 && (
-        <Card className="border-orange-200 bg-orange-50 dark:bg-orange-950/20">
+        <Card className="border-orange-200 bg-orange-50 dark:bg-orange-950">
           <CardHeader>
             <CardTitle className="text-sm flex items-center gap-2 text-orange-700 dark:text-orange-400">
               <AlertTriangle className="w-4 h-4" />

@@ -681,13 +681,13 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const STATUS_COLORS: Record<string, string> = {
-  unmatched:               "bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/30 dark:text-amber-300",
-  matched:                 "bg-green-50 text-green-700 border-green-200 dark:bg-green-950/30 dark:text-green-400",
-  duplicate_need_review:   "bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/30 dark:text-amber-300",
-  approved_pending_posting:"bg-yellow-50 text-yellow-700 border-yellow-200 dark:bg-yellow-950/30 dark:text-yellow-400",
-  approved:                "bg-green-50 text-green-700 border-green-200 dark:bg-green-950/30 dark:text-green-400",
-  posted:                  "bg-green-50 text-green-700 border-green-200 dark:bg-green-950/30 dark:text-green-400",
-  rejected:                "bg-red-50 text-red-600 border-red-200 dark:bg-red-950/30 dark:text-red-400",
+  unmatched:               "bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950 dark:text-amber-300",
+  matched:                 "bg-green-50 text-green-700 border-green-200 dark:bg-green-950 dark:text-green-400",
+  duplicate_need_review:   "bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950 dark:text-amber-300",
+  approved_pending_posting:"bg-yellow-50 text-yellow-700 border-yellow-200 dark:bg-yellow-950 dark:text-yellow-400",
+  approved:                "bg-green-50 text-green-700 border-green-200 dark:bg-green-950 dark:text-green-400",
+  posted:                  "bg-green-50 text-green-700 border-green-200 dark:bg-green-950 dark:text-green-400",
+  rejected:                "bg-red-50 text-red-600 border-red-200 dark:bg-red-950 dark:text-red-400",
   void:                    "bg-gray-100 text-gray-500 border-gray-200 dark:bg-gray-900/30 dark:text-gray-400",
 };
 
@@ -961,10 +961,10 @@ function CandidateDetailsBlock({
         </p>
       )}
       {hasVarianceEvidence && (
-        <div className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-2 text-[11px] text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-2 text-[11px] text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
           <div className="flex items-center justify-between gap-2">
             <p className="font-semibold">Variance settlement QRIS</p>
-            <Badge variant="outline" className="border-amber-400 bg-amber-100 text-amber-900 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-200">
+            <Badge variant="outline" className="border-amber-400 bg-amber-100 text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
               Perlu Review
             </Badge>
           </div>
@@ -1048,7 +1048,7 @@ function QrisPaymentItemsSummary({
       <CollapsibleTrigger asChild>
         <button
           type="button"
-          className="flex w-full items-center justify-between gap-2 rounded border border-amber-200 bg-amber-100/70 px-2 py-1.5 text-left text-[11px] font-medium text-amber-950 transition-colors hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100"
+          className="flex w-full items-center justify-between gap-2 rounded border border-amber-200 bg-amber-100/70 px-2 py-1.5 text-left text-[11px] font-medium text-amber-950 transition-colors hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100"
           onClick={event => event.stopPropagation()}
           onKeyDown={event => event.stopPropagation()}
           aria-label={`${open ? "Sembunyikan" : "Lihat"} daftar booking QRIS`}
@@ -1468,7 +1468,7 @@ function AIActionCenter({
 
   if (unmatched === 0 && matched === 0 && needReview === 0 && pendingPost === 0) {
     return (
-      <Card className="border-green-200 bg-green-50/50 dark:bg-green-950/20 dark:border-green-800">
+      <Card className="border-green-200 bg-green-50/50 dark:bg-green-950 dark:border-green-800">
         <CardContent className="p-4 flex items-center gap-3">
           <CheckCircle2 className="w-8 h-8 text-green-500 shrink-0" />
           <div>
@@ -1526,7 +1526,7 @@ function AIActionCenter({
 
           {/* Step 3: menunggu posting */}
           {pendingPost > 0 && (
-            <div className="flex-1 rounded-lg border border-yellow-200 bg-yellow-50/50 dark:bg-yellow-950/20 dark:border-yellow-800 p-3 space-y-2">
+            <div className="flex-1 rounded-lg border border-yellow-200 bg-yellow-50/50 dark:bg-yellow-950 dark:border-yellow-800 p-3 space-y-2">
               <div className="flex items-start gap-2">
                 <Clock className="w-4 h-4 text-yellow-600 mt-0.5 shrink-0" />
                 <div>
@@ -1543,7 +1543,7 @@ function AIActionCenter({
 
           {/* Step 4: duplikat */}
           {needReview > 0 && (
-            <div className="flex-1 rounded-lg border border-orange-200 bg-orange-50/50 dark:bg-orange-950/20 dark:border-orange-800 p-3 space-y-2">
+            <div className="flex-1 rounded-lg border border-orange-200 bg-orange-50/50 dark:bg-orange-950 dark:border-orange-800 p-3 space-y-2">
               <div className="flex items-start gap-2">
                 <AlertTriangle className="w-4 h-4 text-orange-500 mt-0.5 shrink-0" />
                 <div>
@@ -1813,7 +1813,7 @@ function QrisMutationCard({
       <CardContent className="p-3 sm:p-4">
         <div className="flex items-start gap-3">
           <div className={`mt-0.5 shrink-0 w-9 h-9 rounded-full flex items-center justify-center ${
-            isIN ? "bg-green-100 text-green-600 dark:bg-green-950/40" : "bg-red-100 text-red-600 dark:bg-red-950/40"
+            isIN ? "bg-green-100 text-green-600 dark:bg-green-950" : "bg-red-100 text-red-600 dark:bg-red-950"
           }`}>
             {isIN ? <ArrowDownLeft className="w-4 h-4" /> : <ArrowUpRight className="w-4 h-4" />}
           </div>
@@ -1832,7 +1832,7 @@ function QrisMutationCard({
               </div>
               <Badge
                 variant="outline"
-                className={`shrink-0 text-[10px] ${isMatched ? "border-green-300 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-950/30 dark:text-green-300" : "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300"}`}
+                className={`shrink-0 text-[10px] ${isMatched ? "border-green-300 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-950 dark:text-green-300" : "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300"}`}
               >
                 {statusText}
               </Badge>
@@ -1854,7 +1854,7 @@ function QrisMutationCard({
               ))}
             </div>
             {isPartialSettlement && (
-              <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-[10px] leading-relaxed text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+              <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-[10px] leading-relaxed text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
                 Stat menunjukkan total bank, status payment, MDR sisa, nominal sisa payment, dan selisih batch.
                 Selisih Batch Awal membandingkan mutasi bank dengan netto batch sebelum sebagian payment disetujui.
               </p>
@@ -1936,13 +1936,13 @@ function QrisMutationCard({
             )}
 
             {audit.review_reason && !isMatched && (
-              <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+              <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
                 {audit.review_reason}
               </p>
             )}
 
             {mappingError && (
-              <Alert className="mt-3 border-orange-300 bg-orange-50 text-orange-900 dark:border-orange-700 dark:bg-orange-950/30 dark:text-orange-200" onClick={e => e.stopPropagation()}>
+              <Alert className="mt-3 border-orange-300 bg-orange-50 text-orange-900 dark:border-orange-700 dark:bg-orange-950 dark:text-orange-200" onClick={e => e.stopPropagation()}>
                 <AlertTriangle className="h-4 w-4 text-orange-500 shrink-0" />
                 <AlertDescription className="text-xs space-y-1">
                   <p className="font-semibold">COA spesifik belum tersedia. Jurnal belum dibuat.</p>
@@ -2099,7 +2099,7 @@ function MutationCard({
         <div className="flex items-start gap-3">
           {/* Direction icon */}
           <div className={`mt-0.5 shrink-0 w-9 h-9 rounded-full flex items-center justify-center ${
-            isIN ? "bg-green-100 text-green-600 dark:bg-green-950/40" : "bg-red-100 text-red-600 dark:bg-red-950/40"
+            isIN ? "bg-green-100 text-green-600 dark:bg-green-950" : "bg-red-100 text-red-600 dark:bg-red-950"
           }`}>
             {isIN ? <ArrowDownLeft className="w-4 h-4" /> : <ArrowUpRight className="w-4 h-4" />}
           </div>
@@ -2134,7 +2134,7 @@ function MutationCard({
 
             {/* Friendly matching summary — scoring details live in the detail panel. */}
             {best && isExactMatch(m) && (
-              <div className="mt-2 rounded-md border border-green-200 bg-green-50/70 px-3 py-2 text-xs dark:border-green-800 dark:bg-green-950/20">
+              <div className="mt-2 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-xs dark:border-green-800 dark:bg-green-950">
                 <p className="font-semibold text-green-800 dark:text-green-300">
                   Cocok dengan transaksi {best.candidate_type === "sport_payment" || best.candidate_type === "qris_settlement" ? "Sport Center" : "di sistem"}
                 </p>
@@ -2146,7 +2146,7 @@ function MutationCard({
             )}
 
             {m.status === "matched" && !isExactMatch(m) && (
-              <div className="mt-2 rounded-md border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-200">
+              <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
                 <p className="font-semibold">Perlu Diperiksa</p>
                 <p className="mt-0.5">Sistem menemukan transaksi, tetapi nominal atau bukti belum sepenuhnya cocok.</p>
               </div>
@@ -2206,7 +2206,7 @@ function MutationCard({
         {/* Mapping-Required Warning (Task #6) */}
         {mappingError && (
           <Alert
-            className="mt-3 border-orange-300 bg-orange-50 text-orange-900 dark:bg-orange-950/30 dark:border-orange-700 dark:text-orange-200"
+            className="mt-3 border-orange-300 bg-orange-50 text-orange-900 dark:bg-orange-950 dark:border-orange-700 dark:text-orange-200"
             onClick={e => e.stopPropagation()}
           >
             <AlertTriangle className="h-4 w-4 text-orange-500 shrink-0" />
@@ -2601,7 +2601,7 @@ function MutationDetailPanel({
                       </div>
                     </div>
                     {incomplete && evidence.missingAmount > 0 && (
-                      <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-3 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+                      <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-3 text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
                         <p className="font-semibold">Masih ada {idr(evidence.missingAmount)} yang belum ditemukan.</p>
                         <p className="mt-1 text-xs leading-relaxed">Sistem belum menemukan transaksi Sport Center yang menjelaskan seluruh uang masuk bank ini.</p>
                         <Button
@@ -2715,11 +2715,11 @@ function MutationDetailPanel({
                       )}
                       <p className="text-xs text-muted-foreground">{c.match_reason}</p>
                       <div className="flex flex-wrap gap-1">
-                        {c.amount_match   && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950/30 px-1.5 py-0.5 rounded">✓ Nominal</span>}
-                        {c.date_match     && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950/30 px-1.5 py-0.5 rounded">✓ Tanggal</span>}
-                        {c.name_match     && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950/30 px-1.5 py-0.5 rounded">✓ Nama</span>}
-                        {c.order_id_match && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950/30 px-1.5 py-0.5 rounded">✓ Order ID</span>}
-                        {c.proof_match    && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950/30 px-1.5 py-0.5 rounded">✓ Bukti Transfer</span>}
+                        {c.amount_match   && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950 px-1.5 py-0.5 rounded">✓ Nominal</span>}
+                        {c.date_match     && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950 px-1.5 py-0.5 rounded">✓ Tanggal</span>}
+                        {c.name_match     && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950 px-1.5 py-0.5 rounded">✓ Nama</span>}
+                        {c.order_id_match && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950 px-1.5 py-0.5 rounded">✓ Order ID</span>}
+                        {c.proof_match    && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950 px-1.5 py-0.5 rounded">✓ Bukti Transfer</span>}
                       </div>
                        <CandidateDetailsBlock candidate={c} />
                     </div>
@@ -2757,7 +2757,7 @@ function MutationDetailPanel({
                           <CheckCircle2 className="w-3 h-3" /> Disetujui
                         </Badge>
                       ) : (
-                        <Badge variant="outline" className="border-amber-400 bg-amber-100 text-amber-900 dark:border-amber-700 dark:bg-amber-950/50 dark:text-amber-200 text-xs">
+                        <Badge variant="outline" className="border-amber-400 bg-amber-100 text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200 text-xs">
                           {QRIS_AUDIT_STATUS_LABELS[qrisAudit.reconciliation_status] ?? qrisAudit.reconciliation_status}
                         </Badge>
                       )}
@@ -2765,7 +2765,7 @@ function MutationDetailPanel({
                   </div>
 
                   {/* Summary */}
-                  <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3 space-y-2 dark:border-indigo-800 dark:bg-indigo-950/20">
+                  <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3 space-y-2 dark:border-indigo-800 dark:bg-indigo-950">
                     <div className="min-w-0 grid grid-cols-1 gap-y-1 text-xs sm:grid-cols-2 sm:gap-x-3">
                       <span className="min-w-0 text-slate-600 dark:text-slate-400">Provider</span>
                       <span className="min-w-0 font-medium break-all sm:text-right">{qrisAudit.provider_code || "Belum dikenali"}</span>
@@ -2836,7 +2836,7 @@ function MutationDetailPanel({
                     )}
 
                     {qrisAudit.review_reason && (
-                      <p className="rounded border border-amber-300 bg-amber-50 px-2 py-1.5 text-[11px] font-medium leading-relaxed text-slate-950 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-50">
+                      <p className="rounded border border-amber-300 bg-amber-50 px-2 py-1.5 text-[11px] font-medium leading-relaxed text-slate-950 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-50">
                         {qrisAudit.review_reason}
                       </p>
                     )}
@@ -2865,7 +2865,7 @@ function MutationDetailPanel({
                     if (isReview) {
                       return (
                         <div className="space-y-2">
-                          <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-200 space-y-1">
+                          <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200 space-y-1">
                             <p className="font-semibold flex items-center gap-1">
                               <AlertTriangle className="w-3 h-3 shrink-0" />
                               Perlu verifikasi — provider atau MDR belum cocok
@@ -2941,7 +2941,7 @@ function MutationDetailPanel({
                       <span className={`px-2 py-0.5 rounded-full border text-[10px] font-medium ${
                         isVoid  ? "bg-gray-100 text-gray-500 border-gray-300" :
                         active  ? "bg-primary text-primary-foreground border-primary" :
-                        done    ? "bg-green-100 text-green-700 border-green-200 dark:bg-green-950/30 dark:text-green-400" :
+                        done    ? "bg-green-100 text-green-700 border-green-200 dark:bg-green-950 dark:text-green-400" :
                                   "bg-muted text-muted-foreground border-muted"
                       }`}>{step.label}</span>
                       {i < arr.length - 1 && <span className="text-muted-foreground">→</span>}
@@ -2966,7 +2966,7 @@ function MutationDetailPanel({
         {/* Mapping-Required Warning (Task #6) */}
         {mappingError && (
           <div className="px-4 pb-2 shrink-0">
-            <Alert className="border-orange-300 bg-orange-50 text-orange-900 dark:bg-orange-950/30 dark:border-orange-700 dark:text-orange-200">
+            <Alert className="border-orange-300 bg-orange-50 text-orange-900 dark:bg-orange-950 dark:border-orange-700 dark:text-orange-200">
               <AlertTriangle className="h-4 w-4 text-orange-500 shrink-0" />
               <AlertDescription className="text-xs space-y-1">
                 <p className="font-semibold">COA spesifik belum tersedia. Jurnal belum dibuat.</p>
@@ -4279,7 +4279,7 @@ export default function BankReconciliationPage() {
           </CardHeader>
           <CardContent className="pt-0">
             {qrisCompanyId == null ? (
-              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
                 Pilih satu perusahaan aktif terlebih dahulu. Analisis QRIS tidak dijalankan dalam mode semua perusahaan agar data tidak tercampur.
               </div>
             ) : qrisAuditLoading ? (
@@ -4296,9 +4296,9 @@ export default function BankReconciliationPage() {
                     return (
                        <div key={status} className={`rounded-lg border px-2.5 py-2 ${
                         status === "MATCHED"
-                            ? "border-green-300 bg-green-50 text-green-800 dark:border-green-800 dark:bg-green-950/30 dark:text-green-300"
+                            ? "border-green-300 bg-green-50 text-green-800 dark:border-green-800 dark:bg-green-950 dark:text-green-300"
                           : status === "REVIEW"
-                             ? "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300"
+                             ? "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300"
                              : "border-slate-300 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300"
                        }`}>
                          <p className="text-[11px] font-medium leading-tight">{QRIS_AUDIT_STATUS_LABELS[status]}</p>
@@ -4312,7 +4312,7 @@ export default function BankReconciliationPage() {
                    {showQrisAuditList ? "Sembunyikan Pemeriksaan" : "Lihat Semua Pemeriksaan"}
                  </Button>
                   {showQrisAuditList && qrisApprovableCandidates.length > 0 && (
-                    <div className="flex flex-col gap-2 rounded-md border border-indigo-200 bg-indigo-50/60 px-3 py-2.5 text-xs dark:border-indigo-800 dark:bg-indigo-950/20 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex flex-col gap-2 rounded-md border border-indigo-200 bg-indigo-50/60 px-3 py-2.5 text-xs dark:border-indigo-800 dark:bg-indigo-950 sm:flex-row sm:items-center sm:justify-between">
                       <label className="flex min-w-0 cursor-pointer items-center gap-2">
                         <Checkbox
                           checked={
@@ -4363,7 +4363,7 @@ export default function BankReconciliationPage() {
                                   <CheckCircle2 className="w-2.5 h-2.5" /> Disetujui
                                 </Badge>
                               ) : (
-                                <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+                                <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300">
                                   {QRIS_AUDIT_STATUS_LABELS[candidate.reconciliation_status] ?? candidate.reconciliation_status}
                                 </Badge>
                               )}
@@ -4559,7 +4559,7 @@ export default function BankReconciliationPage() {
             </p>
           </div>
           {selectedQrisCandidates.length > 0 && (
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-indigo-200 bg-indigo-50/70 px-3 py-2.5 text-xs dark:border-indigo-800 dark:bg-indigo-950/20">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-indigo-200 bg-indigo-50/70 px-3 py-2.5 text-xs dark:border-indigo-800 dark:bg-indigo-950">
               <p className="font-medium text-indigo-950 dark:text-indigo-100">
                 {selectedQrisCandidates.length} batch QRIS dipilih
               </p>
@@ -4720,11 +4720,11 @@ export default function BankReconciliationPage() {
                       )}
                       <p className="text-xs text-muted-foreground">{c.match_reason}</p>
                       <div className="flex gap-1.5 mt-1 flex-wrap">
-                        {c.amount_match   && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950/30 px-1.5 py-0.5 rounded">✓ Nominal</span>}
-                        {c.date_match     && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950/30 px-1.5 py-0.5 rounded">✓ Tanggal</span>}
-                        {c.name_match     && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950/30 px-1.5 py-0.5 rounded">✓ Nama</span>}
-                        {c.order_id_match && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950/30 px-1.5 py-0.5 rounded">✓ Order ID</span>}
-                        {c.proof_match    && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950/30 px-1.5 py-0.5 rounded">✓ Bukti Transfer</span>}
+                        {c.amount_match   && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950 px-1.5 py-0.5 rounded">✓ Nominal</span>}
+                        {c.date_match     && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950 px-1.5 py-0.5 rounded">✓ Tanggal</span>}
+                        {c.name_match     && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950 px-1.5 py-0.5 rounded">✓ Nama</span>}
+                        {c.order_id_match && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950 px-1.5 py-0.5 rounded">✓ Order ID</span>}
+                        {c.proof_match    && <span className="text-[10px] text-green-600 bg-green-50 dark:bg-green-950 px-1.5 py-0.5 rounded">✓ Bukti Transfer</span>}
                       </div>
                        <CandidateDetailsBlock candidate={c} compact />
                     </div>
@@ -5242,7 +5242,7 @@ export default function BankReconciliationPage() {
                         <strong>{providers.join(", ") || "belum dikenali"}</strong>.
                       </p>
                       {reviewCandidates.length > 0 && (
-                        <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200 space-y-1">
+                        <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200 space-y-1">
                           <p className="font-semibold flex items-center gap-1">
                             <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
                             Peringatan: {reviewCandidates.length} batch berstatus REVIEW

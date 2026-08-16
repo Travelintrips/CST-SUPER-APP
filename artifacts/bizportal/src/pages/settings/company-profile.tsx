@@ -342,7 +342,7 @@ export default function CompanyProfilePage() {
 
                     {/* Scan Preview Result */}
                     {scanPreview && (
-                      <div className="mt-4 rounded-lg border border-green-400/50 bg-green-50/60 dark:bg-green-950/20 p-3 space-y-2">
+                      <div className="mt-4 rounded-lg border border-green-400/50 bg-green-50/60 dark:bg-green-950 p-3 space-y-2">
                         <div className="flex items-center gap-2">
                           <CheckCircle2 className="h-4 w-4 text-green-600 shrink-0" />
                           <p className="text-sm font-medium text-green-800 dark:text-green-300">
@@ -387,7 +387,7 @@ export default function CompanyProfilePage() {
                 </Card>
 
                 {/* NPWP Banner */}
-                <Card className={cn("border-2", form.npwpStatus === "Aktif" ? "border-green-400/60 bg-green-50/50 dark:bg-green-950/20" : "border-border")}>
+                <Card className={cn("border-2", form.npwpStatus === "Aktif" ? "border-green-400/60 bg-green-50/50 dark:bg-green-950" : "border-border")}>
                   <CardContent className="p-4 flex items-center justify-between gap-4">
                     <div className="flex items-center gap-3">
                       <div className={cn("rounded-full p-2", form.npwpStatus === "Aktif" ? "bg-green-100 dark:bg-green-900" : "bg-muted")}>

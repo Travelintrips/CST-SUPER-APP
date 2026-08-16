@@ -248,7 +248,7 @@ export default function LogisticsDriverPerformancePage() {
                       </TableRow>
                     )
                     : drivers.map((d, i) => (
-                      <TableRow key={d.driverId} className={i < 3 ? "bg-amber-50/40 dark:bg-amber-950/10" : ""}>
+                      <TableRow key={d.driverId} className={i < 3 ? "bg-amber-50/40 dark:bg-amber-950" : ""}>
                         <TableCell><RankBadge rank={i + 1} /></TableCell>
                         <TableCell>
                           <div>

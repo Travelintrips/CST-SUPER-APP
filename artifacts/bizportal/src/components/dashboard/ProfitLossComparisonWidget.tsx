@@ -243,7 +243,7 @@ export function ProfitLossComparisonWidget() {
                 className={`rounded-lg border p-3 ${
                   netPositive
                     ? "border-emerald-200/60 bg-emerald-50 dark:bg-emerald-950/20 dark:border-emerald-800/40"
-                    : "border-red-200/60 bg-red-50 dark:bg-red-950/20 dark:border-red-800/40"
+                    : "border-red-200/60 bg-red-50 dark:bg-red-950 dark:border-red-800/40"
                 }`}
               >
                 <p className="text-[10px] text-muted-foreground mb-1">Laba Bersih {labelCurr}</p>

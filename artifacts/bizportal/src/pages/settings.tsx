@@ -2049,8 +2049,8 @@ function WaLogsCard() {
             {logs.map(log => (
               <div key={log.id}
                 className={`rounded-lg border text-xs transition-colors ${log.status === "sent"
-                  ? "border-green-200 bg-green-50/40 dark:bg-green-950/20 dark:border-green-900"
-                  : "border-red-200 bg-red-50/40 dark:bg-red-950/20 dark:border-red-900"}`}>
+                  ? "border-green-200 bg-green-50/40 dark:bg-green-950 dark:border-green-900"
+                  : "border-red-200 bg-red-50/40 dark:bg-red-950 dark:border-red-900"}`}>
                 {/* Row header */}
                 <div className="flex items-center gap-2.5 px-3 py-2 cursor-pointer select-none"
                   onClick={() => setExpanded(expanded === log.id ? null : log.id)}>

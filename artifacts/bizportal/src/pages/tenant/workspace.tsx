@@ -69,10 +69,10 @@ const SECTIONS: Section[] = [
 ];
 
 const COLORS: Record<string, { text: string; bg: string; border: string }> = {
-  "tenant-management":  { text: "text-blue-600",   bg: "bg-blue-50 dark:bg-blue-950/30",    border: "border-blue-200 dark:border-blue-800" },
+  "tenant-management":  { text: "text-blue-600",   bg: "bg-blue-50 dark:bg-blue-950",    border: "border-blue-200 dark:border-blue-800" },
   "property-operations":{ text: "text-purple-600", bg: "bg-purple-50 dark:bg-purple-950/30", border: "border-purple-200 dark:border-purple-800" },
-  "billing-finance":    { text: "text-green-600",  bg: "bg-green-50 dark:bg-green-950/30",   border: "border-green-200 dark:border-green-800" },
-  "sport-center":       { text: "text-orange-600", bg: "bg-orange-50 dark:bg-orange-950/30", border: "border-orange-200 dark:border-orange-800" },
+  "billing-finance":    { text: "text-green-600",  bg: "bg-green-50 dark:bg-green-950",   border: "border-green-200 dark:border-green-800" },
+  "sport-center":       { text: "text-orange-600", bg: "bg-orange-50 dark:bg-orange-950", border: "border-orange-200 dark:border-orange-800" },
 };
 
 export default function TenantWorkspacePage({ section }: { section?: string }) {

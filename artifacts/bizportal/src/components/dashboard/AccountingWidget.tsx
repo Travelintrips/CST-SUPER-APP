@@ -107,7 +107,7 @@ export function AccountingWidget() {
       value: idr(data?.totalAr ?? 0),
       icon: TrendingUp,
       color: "text-blue-600 dark:text-blue-400",
-      bg: "bg-blue-50 dark:bg-blue-950/30",
+      bg: "bg-blue-50 dark:bg-blue-950",
       border: "border-blue-200/60 dark:border-blue-800/40",
       href: "/accounting/partner-balances",
       badge:
@@ -121,7 +121,7 @@ export function AccountingWidget() {
       value: idr(data?.totalAp ?? 0),
       icon: TrendingDown,
       color: "text-amber-600 dark:text-amber-400",
-      bg: "bg-amber-50 dark:bg-amber-950/30",
+      bg: "bg-amber-50 dark:bg-amber-950",
       border: "border-amber-200/60 dark:border-amber-800/40",
       href: "/accounting/partner-balances",
       badge:
@@ -159,7 +159,7 @@ export function AccountingWidget() {
         : "text-red-600 dark:text-red-400",
       bg: plPositive
         ? "bg-emerald-50 dark:bg-emerald-950/30"
-        : "bg-red-50 dark:bg-red-950/30",
+        : "bg-red-50 dark:bg-red-950",
       border: plPositive
         ? "border-emerald-200/60 dark:border-emerald-800/40"
         : "border-red-200/60 dark:border-red-800/40",

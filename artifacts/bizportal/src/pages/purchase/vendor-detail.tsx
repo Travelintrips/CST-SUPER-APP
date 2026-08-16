@@ -1461,7 +1461,7 @@ export default function VendorDetailPage() {
             </div>
             {txError && <p className="text-sm text-destructive">{txError}</p>}
             {txWarnings.length > 0 && (
-              <div className="rounded-md border border-yellow-200 bg-yellow-50 dark:border-yellow-800 dark:bg-yellow-950/30 px-4 py-3 flex gap-3 items-start">
+              <div className="rounded-md border border-yellow-200 bg-yellow-50 dark:border-yellow-800 dark:bg-yellow-950 px-4 py-3 flex gap-3 items-start">
                 <span className="text-yellow-600 dark:text-yellow-400 mt-0.5 shrink-0">⚠</span>
                 <div className="text-sm text-yellow-800 dark:text-yellow-300">
                   <p className="font-medium">Sebagian sumber transaksi belum dapat dimuat. Data yang ditampilkan mungkin belum lengkap.</p>

@@ -92,12 +92,12 @@ const ALL_SECTIONS: Section[] = [
 ];
 
 const COLORS: Record<string, { text: string; bg: string; border: string }> = {
-  "users-roles":       { text: "text-blue-600",   bg: "bg-blue-50 dark:bg-blue-950/30",    border: "border-blue-200 dark:border-blue-800" },
-  "communications":    { text: "text-green-600",  bg: "bg-green-50 dark:bg-green-950/30",   border: "border-green-200 dark:border-green-800" },
+  "users-roles":       { text: "text-blue-600",   bg: "bg-blue-50 dark:bg-blue-950",    border: "border-blue-200 dark:border-blue-800" },
+  "communications":    { text: "text-green-600",  bg: "bg-green-50 dark:bg-green-950",   border: "border-green-200 dark:border-green-800" },
   "portal-management": { text: "text-purple-600", bg: "bg-purple-50 dark:bg-purple-950/30", border: "border-purple-200 dark:border-purple-800" },
-  "system-settings":   { text: "text-orange-600", bg: "bg-orange-50 dark:bg-orange-950/30", border: "border-orange-200 dark:border-orange-800" },
-  "audit-center":      { text: "text-red-600",    bg: "bg-red-50 dark:bg-red-950/30",       border: "border-red-200 dark:border-red-800" },
-  "super-admin":       { text: "text-red-600",    bg: "bg-red-50 dark:bg-red-950/30",       border: "border-red-200 dark:border-red-800" },
+  "system-settings":   { text: "text-orange-600", bg: "bg-orange-50 dark:bg-orange-950", border: "border-orange-200 dark:border-orange-800" },
+  "audit-center":      { text: "text-red-600",    bg: "bg-red-50 dark:bg-red-950",       border: "border-red-200 dark:border-red-800" },
+  "super-admin":       { text: "text-red-600",    bg: "bg-red-50 dark:bg-red-950",       border: "border-red-200 dark:border-red-800" },
 };
 
 export default function AdministrationWorkspacePage({ section }: { section?: string }) {

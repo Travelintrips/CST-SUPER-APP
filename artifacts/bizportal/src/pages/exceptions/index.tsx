@@ -633,11 +633,11 @@ export default function ExceptionsPage() {
         <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3">
           {[
             { label: "Total", value: stats?.total ?? 0, color: "text-slate-700 dark:text-slate-200", bg: "" },
-            { label: "Terbuka", value: stats?.open ?? 0, color: "text-blue-700", bg: "bg-blue-50 dark:bg-blue-950/30" },
-            { label: "Diproses", value: stats?.in_progress ?? 0, color: "text-amber-700", bg: "bg-amber-50 dark:bg-amber-950/30" },
+            { label: "Terbuka", value: stats?.open ?? 0, color: "text-blue-700", bg: "bg-blue-50 dark:bg-blue-950" },
+            { label: "Diproses", value: stats?.in_progress ?? 0, color: "text-amber-700", bg: "bg-amber-50 dark:bg-amber-950" },
             { label: "Selesai", value: stats?.resolved ?? 0, color: "text-emerald-700", bg: "bg-emerald-50 dark:bg-emerald-950/30" },
-            { label: "Kritis", value: stats?.critical ?? 0, color: "text-red-700", bg: "bg-red-50 dark:bg-red-950/30" },
-            { label: "Tinggi", value: stats?.high ?? 0, color: "text-orange-700", bg: "bg-orange-50 dark:bg-orange-950/30" },
+            { label: "Kritis", value: stats?.critical ?? 0, color: "text-red-700", bg: "bg-red-50 dark:bg-red-950" },
+            { label: "Tinggi", value: stats?.high ?? 0, color: "text-orange-700", bg: "bg-orange-50 dark:bg-orange-950" },
           ].map(({ label, value, color, bg }) => (
             <Card key={label} className={`border ${bg}`}>
               <CardContent className="pt-4 pb-3 px-4">

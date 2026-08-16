@@ -55,14 +55,14 @@ const INITIAL_STEPS: PipelineStep[] = [
 
 function DocChecklist({ data }: { data: any }) {
   return (
-    <div className="rounded-xl border bg-blue-50 dark:bg-blue-950/30 p-4 space-y-3 mt-2">
+    <div className="rounded-xl border bg-blue-50 dark:bg-blue-950 p-4 space-y-3 mt-2">
       <div className="flex items-center gap-2 font-semibold text-sm text-blue-900 dark:text-blue-100">
         <FileText className="h-4 w-4" />
         Checklist Dokumen Import — {data.commodity} dari {data.origin}
       </div>
       <div className="space-y-2">
         {data.checklist?.map((doc: any) => (
-          <div key={doc.id} className="flex items-start gap-3 p-2.5 rounded-lg bg-white dark:bg-blue-950/50 border border-blue-100 dark:border-blue-800">
+          <div key={doc.id} className="flex items-start gap-3 p-2.5 rounded-lg bg-white dark:bg-blue-950 border border-blue-100 dark:border-blue-800">
             <span className="text-lg leading-none mt-0.5">{doc.icon}</span>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
@@ -77,7 +77,7 @@ function DocChecklist({ data }: { data: any }) {
         ))}
       </div>
       {data.tips?.length > 0 && (
-        <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 p-3">
+        <div className="rounded-lg bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 p-3">
           <div className="text-xs font-semibold text-amber-800 dark:text-amber-200 mb-1.5">💡 Tips</div>
           <ul className="space-y-1">
             {data.tips.map((t: string, i: number) => (
@@ -130,7 +130,7 @@ function HsCodeCard({ data }: { data: any }) {
         ))}
       </div>
       {data.warning && (
-        <div className="flex gap-2 text-xs text-amber-700 bg-amber-50 dark:bg-amber-950/30 rounded-lg p-2.5 border border-amber-200">
+        <div className="flex gap-2 text-xs text-amber-700 bg-amber-50 dark:bg-amber-950 rounded-lg p-2.5 border border-amber-200">
           <AlertCircle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
           {data.warning}
         </div>
@@ -150,7 +150,7 @@ function RfqCard({ data }: { data: any }) {
   const d = data.details ?? {};
   const ModeIcon = d.mode === "Air Freight" ? Plane : Ship;
   return (
-    <div className="rounded-xl border bg-green-50 dark:bg-green-950/30 p-4 space-y-3 mt-2">
+    <div className="rounded-xl border bg-green-50 dark:bg-green-950 p-4 space-y-3 mt-2">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 font-semibold text-sm text-green-900 dark:text-green-100">
           <ClipboardList className="h-4 w-4" />
@@ -178,7 +178,7 @@ function RfqCard({ data }: { data: any }) {
           { label: "Volume",     value: d.volume },
           { label: "Jumlah",     value: d.quantity },
         ].map(({ label, value }) => (
-          <div key={label} className="rounded-lg bg-white dark:bg-green-950/50 border border-green-100 dark:border-green-800 p-2">
+          <div key={label} className="rounded-lg bg-white dark:bg-green-950 border border-green-100 dark:border-green-800 p-2">
             <div className="text-[10px] text-muted-foreground uppercase tracking-wide">{label}</div>
             <div className="text-sm font-medium mt-0.5">{value || "—"}</div>
           </div>
@@ -202,7 +202,7 @@ function RfqCard({ data }: { data: any }) {
 
 function VendorCard({ data }: { data: any }) {
   return (
-    <div className="rounded-xl border bg-orange-50 dark:bg-orange-950/30 p-4 space-y-3 mt-2">
+    <div className="rounded-xl border bg-orange-50 dark:bg-orange-950 p-4 space-y-3 mt-2">
       <div className="flex items-center gap-2 font-semibold text-sm text-orange-900 dark:text-orange-100">
         <Users className="h-4 w-4" />
         Vendor Freight untuk {data.mode} — dari {data.origin ?? "China"}
@@ -214,7 +214,7 @@ function VendorCard({ data }: { data: any }) {
       ) : (
         <div className="space-y-2">
           {data.vendors?.map((v: any) => (
-            <div key={v.id} className="flex items-center gap-3 p-3 rounded-lg bg-white dark:bg-orange-950/50 border border-orange-100 dark:border-orange-800">
+            <div key={v.id} className="flex items-center gap-3 p-3 rounded-lg bg-white dark:bg-orange-950 border border-orange-100 dark:border-orange-800">
               <div className="h-9 w-9 rounded-lg bg-orange-100 dark:bg-orange-900 flex items-center justify-center text-lg flex-shrink-0">
                 {v.logo ?? "🏢"}
               </div>
@@ -278,7 +278,7 @@ function EstimateCard({ data }: { data: any }) {
             </div>
           )}
           {data.customs?.note?.startsWith("Tambahkan") && (
-            <div className="text-xs text-amber-700 bg-amber-50 dark:bg-amber-950/30 rounded-lg p-2 border border-amber-200">
+            <div className="text-xs text-amber-700 bg-amber-50 dark:bg-amber-950 rounded-lg p-2 border border-amber-200">
               💡 {data.customs.note}
             </div>
           )}
@@ -298,7 +298,7 @@ function BtkiTariffCard({ data }: { data: any }) {
   const { toast } = useToast();
   if (!data.found && !data.keywordMatch && !data.results) {
     return (
-      <div className="rounded-xl border bg-amber-50 dark:bg-amber-950/30 p-4 mt-2 space-y-2">
+      <div className="rounded-xl border bg-amber-50 dark:bg-amber-950 p-4 mt-2 space-y-2">
         <div className="flex items-center gap-2 font-semibold text-sm text-amber-900 dark:text-amber-100">
           <Tag className="h-4 w-4" /> Tarif BTKI 2022
         </div>
@@ -321,7 +321,7 @@ function BtkiTariffCard({ data }: { data: any }) {
   const pref = tariff.preferensial ?? {};
 
   return (
-    <div className="rounded-xl border bg-indigo-50 dark:bg-indigo-950/30 p-4 space-y-3 mt-2">
+    <div className="rounded-xl border bg-indigo-50 dark:bg-indigo-950 p-4 space-y-3 mt-2">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 font-semibold text-sm text-indigo-900 dark:text-indigo-100">
           <Tag className="h-4 w-4" />
@@ -341,19 +341,19 @@ function BtkiTariffCard({ data }: { data: any }) {
 
       {/* Tarif Grid */}
       <div className="grid grid-cols-2 gap-2">
-        <div className="rounded-lg bg-white dark:bg-indigo-950/50 border border-indigo-100 dark:border-indigo-800 p-3">
+        <div className="rounded-lg bg-white dark:bg-indigo-950 border border-indigo-100 dark:border-indigo-800 p-3">
           <div className="text-xs text-muted-foreground mb-1">BM MFN (tarif umum)</div>
           <div className="text-xl font-bold text-orange-600">{tariff.bmMfn ?? "—"}</div>
         </div>
-        <div className="rounded-lg bg-white dark:bg-indigo-950/50 border border-indigo-100 dark:border-indigo-800 p-3">
+        <div className="rounded-lg bg-white dark:bg-indigo-950 border border-indigo-100 dark:border-indigo-800 p-3">
           <div className="text-xs text-muted-foreground mb-1">PPN Impor</div>
           <div className="text-xl font-bold text-blue-600">{tariff.ppn ?? "11%"}</div>
         </div>
-        <div className="rounded-lg bg-white dark:bg-indigo-950/50 border border-indigo-100 dark:border-indigo-800 p-3">
+        <div className="rounded-lg bg-white dark:bg-indigo-950 border border-indigo-100 dark:border-indigo-800 p-3">
           <div className="text-xs text-muted-foreground mb-1">PPh 22 (importir API)</div>
           <div className="text-lg font-bold text-slate-700 dark:text-slate-300">{tariff.pph22Api ?? "2.5%"}</div>
         </div>
-        <div className="rounded-lg bg-white dark:bg-indigo-950/50 border border-indigo-100 dark:border-indigo-800 p-3">
+        <div className="rounded-lg bg-white dark:bg-indigo-950 border border-indigo-100 dark:border-indigo-800 p-3">
           <div className="text-xs text-muted-foreground mb-1">PPh 22 (non-API)</div>
           <div className="text-lg font-bold text-slate-700 dark:text-slate-300">{tariff.pph22NonApi ?? "7.5%"}</div>
         </div>
@@ -361,7 +361,7 @@ function BtkiTariffCard({ data }: { data: any }) {
 
       {/* Preferential Rates */}
       {Object.keys(pref).length > 0 && (
-        <div className="rounded-lg bg-green-50 dark:bg-green-950/30 border border-green-100 dark:border-green-800 p-3 space-y-2">
+        <div className="rounded-lg bg-green-50 dark:bg-green-950 border border-green-100 dark:border-green-800 p-3 space-y-2">
           <div className="text-xs font-semibold text-green-800 dark:text-green-200">🤝 Tarif Preferensial (FTA)</div>
           <div className="grid grid-cols-2 gap-x-4 gap-y-1">
             {Object.entries(pref).map(([fta, rate]) => (
@@ -381,7 +381,7 @@ function BtkiTariffCard({ data }: { data: any }) {
 
       {/* LARTAS Alert */}
       {lartas.import !== undefined && (
-        <div className={`rounded-lg border p-3 space-y-1 ${lartas.import ? "bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800" : "bg-green-50 dark:bg-green-950/30 border-green-200 dark:border-green-800"}`}>
+        <div className={`rounded-lg border p-3 space-y-1 ${lartas.import ? "bg-red-50 dark:bg-red-950 border-red-200 dark:border-red-800" : "bg-green-50 dark:bg-green-950 border-green-200 dark:border-green-800"}`}>
           <div className="flex items-center gap-2 text-sm font-semibold">
             {lartas.import ? <ShieldAlert className="h-4 w-4 text-red-600" /> : <ShieldCheck className="h-4 w-4 text-green-600" />}
             <span className={lartas.import ? "text-red-800 dark:text-red-200" : "text-green-800 dark:text-green-200"}>
@@ -433,7 +433,7 @@ function LartasCard({ data }: { data: any }) {
   const refs = data.references ?? {};
 
   return (
-    <div className={`rounded-xl border p-4 space-y-3 mt-2 ${data.lartasActive ? "bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800" : "bg-green-50 dark:bg-green-950/30 border-green-200 dark:border-green-800"}`}>
+    <div className={`rounded-xl border p-4 space-y-3 mt-2 ${data.lartasActive ? "bg-red-50 dark:bg-red-950 border-red-200 dark:border-red-800" : "bg-green-50 dark:bg-green-950 border-green-200 dark:border-green-800"}`}>
       <div className="flex items-center gap-2 font-semibold text-sm">
         {data.lartasActive ? <ShieldAlert className="h-4 w-4 text-red-600" /> : <ShieldCheck className="h-4 w-4 text-green-600" />}
         <span className={data.lartasActive ? "text-red-800 dark:text-red-200" : "text-green-800 dark:text-green-200"}>
@@ -445,7 +445,7 @@ function LartasCard({ data }: { data: any }) {
         <p className="text-sm text-green-700">{data.message}</p>
       ) : (
         <div className="space-y-3">
-          <div className="rounded-lg bg-white dark:bg-red-950/50 border border-red-100 dark:border-red-800 p-3 space-y-2">
+          <div className="rounded-lg bg-white dark:bg-red-950 border border-red-100 dark:border-red-800 p-3 space-y-2">
             <div className="text-xs text-muted-foreground">Regulator</div>
             <div className="font-semibold text-sm text-red-800 dark:text-red-200">{data.regulator}</div>
             {data.description && <p className="text-xs text-muted-foreground">{data.description}</p>}
@@ -455,7 +455,7 @@ function LartasCard({ data }: { data: any }) {
             <div className="space-y-1">
               <div className="text-xs font-semibold text-red-800 dark:text-red-200">Dokumen / Izin yang Diperlukan:</div>
               {(data.perizinan as any).docs?.map((doc: string) => (
-                <div key={doc} className="flex items-start gap-2 text-xs p-2 bg-white dark:bg-red-950/50 rounded border border-red-100 dark:border-red-800">
+                <div key={doc} className="flex items-start gap-2 text-xs p-2 bg-white dark:bg-red-950 rounded border border-red-100 dark:border-red-800">
                   <AlertCircle className="h-3.5 w-3.5 text-red-500 flex-shrink-0 mt-0.5" />
                   <span>{doc}</span>
                 </div>
@@ -568,7 +568,7 @@ function LandedCostCard({ data }: { data: any }) {
 
       {/* LARTAS alert */}
       {data.lartasAlert && (
-        <div className="rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 p-2.5 text-xs text-red-800 dark:text-red-200 flex gap-2">
+        <div className="rounded-lg bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 p-2.5 text-xs text-red-800 dark:text-red-200 flex gap-2">
           <ShieldAlert className="h-3.5 w-3.5 flex-shrink-0 mt-0.5 text-red-600" />
           {data.lartasAlert}
         </div>
@@ -920,9 +920,9 @@ export default function LogisticsImportAssistantPage() {
                     <div key={step.id}>
                       <div className={`rounded-xl p-3 border transition-all duration-300
                         ${step.status === "done"
-                          ? "bg-green-50 dark:bg-green-950/30 border-green-200 dark:border-green-800"
+                          ? "bg-green-50 dark:bg-green-950 border-green-200 dark:border-green-800"
                           : step.status === "active"
-                            ? "bg-blue-50 dark:bg-blue-950/30 border-blue-300 dark:border-blue-700 ring-1 ring-blue-300"
+                            ? "bg-blue-50 dark:bg-blue-950 border-blue-300 dark:border-blue-700 ring-1 ring-blue-300"
                             : "bg-background border-border opacity-60"
                         }`}
                       >

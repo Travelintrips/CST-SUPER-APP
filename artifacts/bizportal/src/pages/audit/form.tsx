@@ -491,9 +491,9 @@ export default function AuditReportFormPage() {
                           key={item.id}
                           className={cn(
                             "px-4 py-3 border-b last:border-b-0",
-                            st === "not_ok" ? "bg-red-50/50 dark:bg-red-950/10" :
-                            st === "warning" ? "bg-yellow-50/50 dark:bg-yellow-950/10" :
-                            st === "ok" ? "bg-green-50/30 dark:bg-green-950/10" : ""
+                            st === "not_ok" ? "bg-red-50/50 dark:bg-red-950" :
+                            st === "warning" ? "bg-yellow-50/50 dark:bg-yellow-950" :
+                            st === "ok" ? "bg-green-50/30 dark:bg-green-950" : ""
                           )}
                         >
                           <div className="flex items-start gap-3">
@@ -583,15 +583,15 @@ export default function AuditReportFormPage() {
             </CardHeader>
             <CardContent>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <div className="rounded-lg bg-green-50 border border-green-200 p-3 text-center dark:bg-green-950/30">
+                <div className="rounded-lg bg-green-50 border border-green-200 p-3 text-center dark:bg-green-950">
                   <div className="text-2xl font-bold text-green-700">{totalOk}</div>
                   <div className="text-xs text-green-600">✅ OK / Sesuai</div>
                 </div>
-                <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-center dark:bg-red-950/30">
+                <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-center dark:bg-red-950">
                   <div className="text-2xl font-bold text-red-700">{totalNotOk}</div>
                   <div className="text-xs text-red-600">❌ Masalah</div>
                 </div>
-                <div className="rounded-lg bg-yellow-50 border border-yellow-200 p-3 text-center dark:bg-yellow-950/30">
+                <div className="rounded-lg bg-yellow-50 border border-yellow-200 p-3 text-center dark:bg-yellow-950">
                   <div className="text-2xl font-bold text-yellow-700">{totalWarning}</div>
                   <div className="text-xs text-yellow-600">⚠️ Perlu Perhatian</div>
                 </div>
