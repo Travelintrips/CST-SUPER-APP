@@ -137,9 +137,8 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
   }, []);
 
   useEffect(() => {
-    if (!isApiReady) return;
     void fetchUser();
-  }, [fetchUser, isApiReady]);
+  }, [fetchUser]);
 
   const exchangeToken = useCallback(async (access_token: string) => {
     try {
