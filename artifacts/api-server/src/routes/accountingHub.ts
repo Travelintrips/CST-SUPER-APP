@@ -432,14 +432,59 @@ router.get("/hub/trial-balance", async (req, res) => {
     const where = sql`WHERE ${sql.join(conditions, sql` AND `)}`;
 
     const rows = await db.execute<any>(sql`
+      WITH RECURSIVE coa_tree AS (
+        SELECT id, parent_id
+        FROM chart_of_accounts
+      ),
+      account_rollup AS (
+        SELECT id AS source_account_id, id AS report_account_id
+        FROM coa_tree
+
+        UNION
+
+        SELECT
+          ar.source_account_id,
+          parent.id AS report_account_id
+        FROM account_rollup ar
+        JOIN coa_tree current_account
+          ON current_account.id = ar.report_account_id
+        JOIN coa_tree parent
+          ON parent.id = current_account.parent_id
+      ),
+      aggregated_lines AS (
+        SELECT
+          ar.report_account_id AS account_id,
+          e.company_id, e.branch_id, e.division_id,
+          SUM(el.debit)::numeric  AS total_debit,
+          SUM(el.credit)::numeric AS total_credit
+        FROM accounting_entry_lines el
+        JOIN accounting_entries e
+          ON e.id = el.entry_id
+        JOIN account_rollup ar
+          ON ar.source_account_id = el.account_id
+        ${where}
+        GROUP BY
+          ar.report_account_id,
+          e.company_id,
+          e.branch_id,
+          e.division_id
+      )
       SELECT
-        coa.id AS account_id, coa.code, coa.name, coa.type,
-        e.company_id, e.branch_id, e.division_id,
+        coa.id AS account_id,
+        coa.code,
+        coa.name,
+        coa.type,
+        coa.parent_id,
+        coa.is_header,
+        coa.is_postable,
+        al.company_id,
+        al.branch_id,
+        al.division_id,
         c.company_name,
         c.company_code,
-        SUM(el.debit)::numeric   AS total_debit,
-        SUM(el.credit)::numeric  AS total_credit,
-        (SUM(el.debit) - SUM(el.credit))::numeric AS balance,
+        al.total_debit,
+        al.total_credit,
+        (al.total_debit - al.total_credit)::numeric AS balance,
         -- Counterparty company for intercompany accounts (2-2098 / 1-1099)
         -- Current path ref format: 'IC-ADV-{num}' (postIntercompanyDisbursementPair / postIntercompanyRepaymentPair)
         -- Legacy ref format kept for backward compat: 'IC-{num}' (old single-book path, no longer generated)
@@ -452,7 +497,7 @@ router.get("/hub/trial-balance", async (req, res) => {
               OR ae2.ref = 'IC-ADV-' || ca2.advance_number
             )
             JOIN companies cp ON cp.id = ca2.source_company_id
-            WHERE ae2.company_id = e.company_id
+            WHERE ae2.company_id = al.company_id
               AND ae2.source_module LIKE 'advance_intercompany%'
               AND ae2.status = 'posted'
           )
@@ -465,21 +510,20 @@ router.get("/hub/trial-balance", async (req, res) => {
             )
             -- Show the OTHER party: if this company is the funder, show responsible; if responsible, show funder (CST)
             JOIN companies cp ON cp.id = CASE
-              WHEN ca2.source_company_id = e.company_id THEN ca2.responsible_company_id
+              WHEN ca2.source_company_id = al.company_id THEN ca2.responsible_company_id
               ELSE ca2.source_company_id
             END
-            WHERE ae2.company_id = e.company_id
+            WHERE ae2.company_id = al.company_id
               AND ae2.source_module LIKE 'advance_intercompany%'
               AND ae2.status = 'posted'
           )
           ELSE NULL
         END AS counterparty_companies
-      FROM accounting_entry_lines el
-      JOIN accounting_entries e   ON e.id = el.entry_id
-      JOIN chart_of_accounts coa  ON coa.id = el.account_id
-      LEFT JOIN companies c       ON c.id = e.company_id
-      ${where}
-      GROUP BY coa.id, coa.code, coa.name, coa.type, e.company_id, e.branch_id, e.division_id, c.company_name, c.company_code
+      FROM aggregated_lines al
+      JOIN chart_of_accounts coa
+        ON coa.id = al.account_id
+      LEFT JOIN companies c
+        ON c.id = al.company_id
       ORDER BY coa.code ASC
     `).then(r => r.rows);
 

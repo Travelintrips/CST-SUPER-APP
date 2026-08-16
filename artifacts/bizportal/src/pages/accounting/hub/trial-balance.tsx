@@ -8,6 +8,7 @@ import { RefreshCw, ArrowLeft, ExternalLink } from "lucide-react";
 
 interface TBRow {
   account_id: number; code: string; name: string; type: string;
+  parent_id: number | null; is_header: boolean; is_postable: boolean;
   company_id: number; branch_id: number | null; division_id: number | null;
   company_name: string | null; company_code: string | null;
   total_debit: string; total_credit: string; balance: string;
@@ -86,6 +87,7 @@ export default function AccountingHubTrialBalancePage() {
   }
 
   function drillDown(r: TBRow) {
+    if (r.is_header) return;
     const params = new URLSearchParams({ account_id: String(r.account_id) });
     if (filters.company_id) params.set("company_id", filters.company_id);
     if (filters.date_from)  params.set("date_from",  filters.date_from);
@@ -175,13 +177,20 @@ export default function AccountingHubTrialBalancePage() {
                 {rws.map(r => (
                   <tr
                     key={r.account_id}
-                    className="border-t hover:bg-primary/5 cursor-pointer group"
+                    className={`border-t group ${r.is_header ? "bg-emerald-50/50" : "hover:bg-primary/5 cursor-pointer"}`}
                     onClick={() => drillDown(r)}
-                    title={`Klik untuk lihat detail transaksi akun ${r.code} – ${r.name}`}
+                    title={r.is_header
+                      ? `Saldo akumulasi akun child ${r.code} – ${r.name}`
+                      : `Klik untuk lihat detail transaksi akun ${r.code} – ${r.name}`}
                   >
                     <td className="px-3 py-2 font-mono text-xs group-hover:text-primary">{r.code}</td>
-                    <td className="px-3 py-2 group-hover:text-primary font-medium">
+                    <td className={`px-3 py-2 group-hover:text-primary ${r.is_header ? "font-bold" : "font-medium"}`}>
                       <span>{r.name}</span>
+                      {r.is_header && (
+                        <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+                          Total child
+                        </span>
+                      )}
                       {codeCounts[r.code] > 1 && r.company_name && (
                         <span className="ml-2 text-xs font-normal text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
                           {r.company_name}
