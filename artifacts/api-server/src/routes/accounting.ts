@@ -2704,12 +2704,22 @@ router.get("/reports/trial-balance", async (req, res) => {
     .from(chartOfAccountsTable)
     .orderBy(chartOfAccountsTable.code);
   const { lines } = await buildLedgerWindow(range.from, range.to, scope, ccId);
+  const accountsById = new Map(accounts.map((account) => [account.id, account]));
   const totals = new Map<number, { debit: number; credit: number }>();
   for (const l of lines) {
-    const cur = totals.get(l.accountId) ?? { debit: 0, credit: 0 };
-    cur.debit += Number(l.debit);
-    cur.credit += Number(l.credit);
-    totals.set(l.accountId, cur);
+    // Report balances at every ancestor level. Header accounts normally do
+    // not have direct journal lines, so summing only l.accountId makes the
+    // parent disappear in production even though the child has a balance.
+    let account = accountsById.get(l.accountId);
+    const visited = new Set<number>();
+    while (account && !visited.has(account.id)) {
+      visited.add(account.id);
+      const cur = totals.get(account.id) ?? { debit: 0, credit: 0 };
+      cur.debit += Number(l.debit);
+      cur.credit += Number(l.credit);
+      totals.set(account.id, cur);
+      account = account.parentId != null ? accountsById.get(account.parentId) : undefined;
+    }
   }
   const rows = accounts.map((a) => {
     const t = totals.get(a.id) ?? { debit: 0, credit: 0 };

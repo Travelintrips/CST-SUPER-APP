@@ -85,3 +85,4 @@
 - [Live schema diff discipline](live-schema-diff-discipline.md) — raw catalog inequality is not automatically canonical drift; preserve PROD security hardening and classify legacy objects first.
 - [Development migration URL safety](dev-migration-url-safety.md) — verify DEV migration URLs independently; a DEV bundle can expose a write target that points to PROD.
 - [Safe DEV accounting fixture drift](safe-dev-accounting-fixture.md) — runtime harnesses must resolve accounting fixtures semantically; shared DEV IDs can drift and block otherwise safe proofs.
+- [Trial balance parent rollup](trial-balance-parent-rollup.md) — hierarchical reports must roll child lines to ancestors and preserve the authenticated company/period scope in proofs.
