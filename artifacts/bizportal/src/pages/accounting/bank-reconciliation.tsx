@@ -855,23 +855,41 @@ function isSameCalendarDate(left: string | null | undefined, right: string | nul
   return String(left).slice(0, 10) === String(right).slice(0, 10);
 }
 
-function isBankTransferCandidate(candidate: Candidate): boolean {
-  return candidate.candidate_type !== "qris_settlement"
-    && candidate.candidate_type !== "sport_payment";
+function isQrisCandidate(candidate: Candidate, mutation: BankMutation): boolean {
+  if (candidate.candidate_type === "qris_settlement") return true;
+  if (candidate.candidate_type !== "sport_payment") return false;
+
+  // `sport_payment` identifies the source table, not the payment method.
+  // Canonical Sport Center payments can be QRIS or ordinary bank transfers.
+  // Prefer the persisted payment method; fall back to the bank mutation for
+  // older candidate rows that were saved before method was included in details.
+  const paymentMethod = candidate.details?.method ?? candidate.details?.paymentType;
+  if (paymentMethod != null && String(paymentMethod).trim() !== "") {
+    return /qris/i.test(String(paymentMethod));
+  }
+  return isQrisMutation(mutation);
+}
+
+function isBankTransferCandidate(candidate: Candidate, mutation: BankMutation): boolean {
+  return !isQrisCandidate(candidate, mutation);
 }
 
 /** Candidates shown to reviewers and used for approval must obey the
- * same-day rule for generic bank transfers. QRIS/Sport candidates keep their
- * separate settlement-date contract. */
+ * same-day rule for generic bank transfers. QRIS candidates keep their
+ * separate settlement-date contract. `sport_payment` is not automatically
+ * QRIS: its payment method decides which contract applies. */
 function visibleCandidates(m: BankMutation): Candidate[] {
   return (m.candidates ?? []).filter(candidate =>
     (
-      !isBankTransferCandidate(candidate)
+      !isBankTransferCandidate(candidate, m)
       && isQrisMutation(m)
     )
     || (
-      isBankTransferCandidate(candidate)
-      && isSameCalendarDate(m.transaction_date, candidate.details?.date)
+      isBankTransferCandidate(candidate, m)
+      && isSameCalendarDate(
+        m.transaction_date,
+        candidate.details?.settlementDate ?? candidate.details?.date,
+      )
     ),
   );
 }
