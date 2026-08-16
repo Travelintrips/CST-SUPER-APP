@@ -436,7 +436,10 @@ async function fetchActiveCandidates(
           AND COALESCE(sd.status, 'draft') NOT IN ('cancelled','rejected','void','deleted','voided')
       `,
     }] : []),
-    ...(direction === "IN" ? [{
+    // A Sport Center QRIS payment is only a candidate when the bank mutation
+    // itself contains QRIS/provider evidence. Payment method=QRIS on the ERP
+    // row is not proof that an unrelated bank transfer is QRIS.
+    ...(direction === "IN" && mutationIsQris ? [{
       type: "sport_payments" as ActiveErpSourceType,
       q: `
         SELECT
@@ -457,7 +460,7 @@ async function fetchActiveCandidates(
           AND ${sportSettlementDate} BETWEEN ${dateFrom} AND ${dateTo}
           AND COALESCE(sp.status, 'pending') = 'paid'
            AND COALESCE(sp.method, '') ILIKE '%qris%'
-           ${mutationIsQris ? aggregateMatchFilter : ""}
+            ${aggregateMatchFilter}
            ${sportPaymentCanonicalSettlementExclusionSql("sp")}
       `,
     }] : []),

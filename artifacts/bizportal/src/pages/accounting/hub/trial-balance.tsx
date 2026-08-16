@@ -53,6 +53,7 @@ export default function AccountingHubTrialBalancePage() {
     const version = ++requestVersion.current;
     setLoading(true);
     setError(null);
+    setRows([]);   // bersihkan data lama agar tidak tampil stale saat ganti filter
     try {
       const params = new URLSearchParams();
       Object.entries(filters).forEach(([k, v]) => { if (v) params.set(k, v); });
@@ -200,7 +201,10 @@ export default function AccountingHubTrialBalancePage() {
                           Total child
                         </span>
                       )}
-                      {codeCounts[r.code] > 1 && r.company_name && (
+                      {/* Tampilkan badge company hanya saat mode "Semua Perusahaan" (tidak ada filter company)
+                          supaya parent account yang muncul untuk banyak company bisa dibedakan.
+                          Saat filter company aktif, semua baris sudah milik company yang sama — badge tidak relevan. */}
+                      {!filters.company_id && codeCounts[r.code] > 1 && r.company_name && (
                         <span className="ml-2 text-xs font-normal text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
                           {r.company_name}
                         </span>
