@@ -809,6 +809,46 @@ describe("runErpDocumentMatching — direction filtering (DB mock)", () => {
     expect(queriedSalesDocs).toBe(true);
   });
 
+  it("IN transfer bank tanpa evidence QRIS → sport_payments tidak menjadi kandidat", async () => {
+    mockExecute.mockResolvedValue({ rows: [] });
+
+    await runErpDocumentMatching({
+      id: 30, companyId: 10, amount: 2_000_000,
+      direction: "IN",
+      transactionDate: "2026-07-15",
+      normalizedDescription: "transfer CENAIDJA",
+      providerName: null,
+      providerOrderId: null,
+      bankAccountId: null,
+    });
+
+    const queriedSportPayments = mockExecute.mock.calls.some((c: any[]) => {
+      const q = sqlObjToString(c[0]);
+      return q.includes("FROM sport_payments");
+    });
+    expect(queriedSportPayments).toBe(false);
+  });
+
+  it("IN mutation dengan evidence QRIS → sport_payments tetap tersedia sebagai kandidat", async () => {
+    mockExecute.mockResolvedValue({ rows: [] });
+
+    await runErpDocumentMatching({
+      id: 31, companyId: 10, amount: 2_000_000,
+      direction: "IN",
+      transactionDate: "2026-07-15",
+      normalizedDescription: "QRTRAVELI SETTLEMENT",
+      providerName: "QRIS",
+      providerOrderId: null,
+      bankAccountId: null,
+    });
+
+    const queriedSportPayments = mockExecute.mock.calls.some((c: any[]) => {
+      const q = sqlObjToString(c[0]);
+      return q.includes("FROM sport_payments");
+    });
+    expect(queriedSportPayments).toBe(true);
+  });
+
   it("OUT mutation → cash_advances query dieksekusi; cash_bank_account_id di-resolve ke cba.id", async () => {
     mockExecute.mockResolvedValue({ rows: [] });
 

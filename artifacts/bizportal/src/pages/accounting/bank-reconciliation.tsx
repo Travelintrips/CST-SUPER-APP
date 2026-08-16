@@ -830,24 +830,24 @@ function mutationHeading(m: BankMutation): string {
 }
 
 function mutationSourceLabel(m: BankMutation): string {
-  if (m.qris_candidate_audit || m.candidates?.some(c => c.candidate_type === "qris_settlement" || c.candidate_type === "sport_payment")) {
+  const hasQrisCandidate = m.qris_candidate_audit || m.candidates?.some(c =>
+    c.candidate_type === "qris_settlement" || c.candidate_type === "sport_payment"
+  );
+  if (hasQrisCandidate && isQrisMutation(m)) {
     return "QRIS Sport Center";
   }
+  if (isQrisMutation(m)) return m.provider_name || "QRIS";
   return m.provider_name || (m.direction === "IN" ? "Rekening Bank" : "Bank");
 }
 
 function isQrisMutation(m: BankMutation): boolean {
-  if (m.qris_candidate_audit || m.candidates?.some(c =>
-    c.candidate_type === "qris_settlement" || c.candidate_type === "sport_payment"
-  )) {
-    return true;
-  }
+  if (m.qris_candidate_audit) return true;
   return [
     m.provider_name,
     m.provider_order_id,
     m.description,
     m.normalized_description,
-  ].some(value => /QRIS|QRTRAVELI|PAYLABS/i.test(String(value ?? "")));
+  ].some(value => /QRIS|QR[A-Z0-9]{4,}|QR\s*(?:CODE|PAY|PAYMENT)|PAYLABS/i.test(String(value ?? "")));
 }
 
 function isSameCalendarDate(left: string | null | undefined, right: string | null | undefined): boolean {
@@ -865,8 +865,14 @@ function isBankTransferCandidate(candidate: Candidate): boolean {
  * separate settlement-date contract. */
 function visibleCandidates(m: BankMutation): Candidate[] {
   return (m.candidates ?? []).filter(candidate =>
-    !isBankTransferCandidate(candidate)
-    || isSameCalendarDate(m.transaction_date, candidate.details?.date),
+    (
+      !isBankTransferCandidate(candidate)
+      && isQrisMutation(m)
+    )
+    || (
+      isBankTransferCandidate(candidate)
+      && isSameCalendarDate(m.transaction_date, candidate.details?.date)
+    ),
   );
 }
 
