@@ -509,23 +509,14 @@ function AuthRouteGuard() {
 }
 
 function AppContent() {
-  const { isApiReady, isAuthenticated, isLoading } = useSupabaseAuth();
+  const { isApiAvailable, isApiReady, isAuthenticated } = useSupabaseAuth();
 
-  // Keep every route and side-effect provider behind the same readiness
-  // boundary. This also covers direct deep links that bypass "/".
-  // The auth check itself is safe to run while the API finishes its startup
-  // migrations, so do not hide the login page behind that longer-running gate.
-  // Authenticated users still wait before any route/provider side effects are
-  // mounted.
-  if (!isApiReady) {
-    if (!isLoading && !isAuthenticated) return <LoginScreen />;
-    return <ApiPreparingScreen />;
-  }
-  const { isApiAvailable } = useSupabaseAuth();
-
-  // Keep every route and side-effect provider behind the same readiness
-  // boundary. This also covers direct deep links that bypass "/".
+  // The auth check is safe while the API finishes its startup migrations, so
+  // show the login page as soon as the API responds. Authenticated users still
+  // wait before route/provider side effects are mounted.
   if (!isApiAvailable) return <ApiPreparingScreen />;
+  if (!isApiReady && !isAuthenticated) return <LoginScreen />;
+  if (!isApiReady) return <ApiPreparingScreen />;
 
   return (
     <LanguageProvider>
