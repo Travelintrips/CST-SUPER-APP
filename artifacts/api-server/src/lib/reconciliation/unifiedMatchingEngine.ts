@@ -155,6 +155,8 @@ export interface MatchCandidate {
   settlement_reference?: string | null;
   settlement_status?: string | null;
   payment_method?: string | null;
+  payment_type?: string | null;
+  sport_payment_type?: "bank_transfer" | "qris" | "paylabs" | null;
   settlement_item_count?: number | null;
   settlement_partial?: boolean;
   company_id?: number | null;
@@ -232,7 +234,7 @@ function isQrisCandidateForMatching(candidate: MatchCandidate): boolean {
   return candidate.type === "qris_settlement"
     || (
       candidate.type === "sport_payment"
-      && /qris/i.test(String(candidate.payment_method ?? ""))
+      && candidate.sport_payment_type === "qris"
     );
 }
 
@@ -646,9 +648,13 @@ export async function fetchCandidates(
   const { amount, transaction_date, company_id } = mutation;
   const mutationBankAccountId = mutation.bank_account_id != null ? Number(mutation.bank_account_id) : null;
   const direction = String(mutation.direction ?? "IN").toUpperCase() === "OUT" ? "OUT" : "IN";
+  const mutationLooksPaylabs =
+    /paylabs/i.test(String(mutation.provider_name ?? "")) ||
+    /paylabs/i.test(String(mutation.normalized_description ?? ""));
   const mutationLooksQris =
-    String(mutation.provider_name ?? "").toUpperCase() === "QRIS" ||
-    isQrisSettlementDescription(mutation.normalized_description);
+    !mutationLooksPaylabs &&
+    (String(mutation.provider_name ?? "").toUpperCase() === "QRIS" ||
+      isQrisSettlementDescription(mutation.normalized_description));
   const dateFrom = mutationLooksQris ? `'${transaction_date}'::date - 3` : `'${transaction_date}'::date`;
   const dateTo   = mutationLooksQris ? `'${transaction_date}'::date + 3` : `'${transaction_date}'::date`;
   const dateOffset = (value: string, days: number): string => {
@@ -774,10 +780,20 @@ export async function fetchCandidates(
     ? qrisAmountFilter
     : `ABS(sp.amount::numeric - ${Number(amount)}) < 0.01`;
   const settlementDateExpr = `COALESCE(sp.settlement_date, COALESCE(sp.paid_at::date, sp.created_at::date) + 1)`;
+  const sportPaymentTypeExpr = `CASE
+    WHEN LOWER(COALESCE(sp.payment_provider::text, '')) LIKE '%paylabs%'
+      OR LOWER(COALESCE(sp.payment_type::text, '')) LIKE '%paylabs%'
+      OR LOWER(COALESCE(sp.method::text, '')) LIKE '%paylabs%'
+      THEN 'paylabs'
+    WHEN LOWER(COALESCE(sp.payment_type::text, '')) LIKE '%qris%'
+      OR LOWER(COALESCE(sp.method::text, '')) LIKE '%qris%'
+      THEN 'qris'
+    ELSE 'bank_transfer'
+  END`;
   // A Sport Center payment is not automatically QRIS. Bank-transfer payments
   // must match by payment date; only QRIS uses the settlement date (often H+1).
   const sportCandidateDateExpr = `CASE
-    WHEN COALESCE(sp.method, '') ILIKE '%qris%' THEN ${settlementDateExpr}
+    WHEN ${sportPaymentTypeExpr} = 'qris' THEN ${settlementDateExpr}
     ELSE COALESCE(sp.paid_at::date, sp.created_at::date)
   END`;
   const aggregateMatchFilter = qrisSettlementTablesAvailable ? `
@@ -883,7 +899,9 @@ export async function fetchCandidates(
                COALESCE(sp.other_fee_amount, 0) AS other_fee_amount,
                ${settlementDateExpr}::text AS settlement_date,
                sp.settlement_reference,
-               sp.method AS payment_method,
+                sp.method AS payment_method,
+                sp.payment_type,
+                ${sportPaymentTypeExpr} AS sport_payment_type,
                sp.settlement_status,
                1 AS settlement_item_count,
                (COALESCE(sp.settlement_status, 'unsettled') IN ('partial', 'partially_settled', 'partially-settled')) AS settlement_partial
@@ -895,7 +913,7 @@ export async function fetchCandidates(
           ${company_id ? `AND sp.company_id = ${Number(company_id)}` : ""}
            AND ${mutationLooksQris ? settlementDateExpr : sportCandidateDateExpr} BETWEEN ${dateFrom} AND ${dateTo}
           AND sp.status = 'paid'
-           AND (${mutationLooksQris ? "COALESCE(sp.method, '') ILIKE '%qris%'" : "TRUE"})
+           AND ${sportPaymentTypeExpr} = '${mutationLooksQris ? "qris" : mutationLooksPaylabs ? "paylabs" : "bank_transfer"}'
            ${aggregateMatchFilter}
            ${canonicalSportPaymentExclusion}
           AND (
@@ -1020,6 +1038,10 @@ export async function fetchCandidates(
         settlement_reference: r.settlement_reference ? String(r.settlement_reference) : null,
         settlement_status: r.settlement_status ? String(r.settlement_status) : null,
         payment_method: r.payment_method ? String(r.payment_method) : null,
+         payment_type: r.payment_type ? String(r.payment_type) : null,
+         sport_payment_type: r.sport_payment_type
+           ? String(r.sport_payment_type) as "bank_transfer" | "qris" | "paylabs"
+           : null,
         settlement_item_count: r.settlement_item_count != null ? Number(r.settlement_item_count) : null,
         settlement_partial: Boolean(r.settlement_partial),
         company_id: r.company_id != null ? Number(r.company_id) : null,

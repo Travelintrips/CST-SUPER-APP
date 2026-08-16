@@ -114,6 +114,34 @@ import {
 
 const router = Router();
 
+type SportPaymentType = "bank_transfer" | "qris" | "paylabs";
+
+/**
+ * Sport Center's public mirror has both the legacy `method` field and the
+ * newer `payment_type` / `payment_provider` fields. Keep the classification in
+ * SQL so list filters and candidate details use exactly the same contract.
+ *
+ * Paylabs is intentionally checked before QRIS: Paylabs can offer QRIS as one
+ * of its rails, but it remains a Paylabs transaction for reconciliation and
+ * must not be mixed into the direct-QRIS settlement cohort.
+ */
+function sportPaymentTypeSql(alias = "sp"): string {
+  return `CASE
+    WHEN LOWER(COALESCE(${alias}.payment_provider::text, '')) LIKE '%paylabs%'
+      OR LOWER(COALESCE(${alias}.payment_type::text, '')) LIKE '%paylabs%'
+      OR LOWER(COALESCE(${alias}.method::text, '')) LIKE '%paylabs%'
+      THEN 'paylabs'
+    WHEN LOWER(COALESCE(${alias}.payment_type::text, '')) LIKE '%qris%'
+      OR LOWER(COALESCE(${alias}.method::text, '')) LIKE '%qris%'
+      THEN 'qris'
+    ELSE 'bank_transfer'
+  END`;
+}
+
+function isSportPaymentType(value: string | undefined): value is SportPaymentType {
+  return value === "bank_transfer" || value === "qris" || value === "paylabs";
+}
+
 function genericCandidateSameDaySql(matchAlias = "m", mutationAlias = "bm"): string {
   // Some development/runtime snapshots keep legacy transaction dates as TEXT
   // while newer tables use DATE. Compare their canonical ISO text form so the
@@ -2707,6 +2735,7 @@ router.get("/mutations", async (req, res) => {
     limit = "100", offset = "0",
     company_id,
     mutation_id,
+    payment_type,
   } = req.query as Record<string, string>;
   const lim = Math.min(parseInt(limit) || 100, 500);
   const off = parseInt(offset) || 0;
@@ -2763,6 +2792,45 @@ router.get("/mutations", async (req, res) => {
   if (search) {
     const s = esc(search);
     bmFilters.push(`(bm.description ILIKE '%${s}%' OR bm.normalized_description ILIKE '%${s}%' OR bm.provider_order_id ILIKE '%${s}%' OR bm.mutation_key ILIKE '%${s}%')`);
+  }
+  if (payment_type && payment_type !== "all") {
+    if (!isSportPaymentType(payment_type)) {
+      return res.status(400).json({ error: "payment_type tidak valid" });
+    }
+    const requestedType = esc(payment_type);
+    const sportTypeFromCandidate = `(
+      SELECT ${sportPaymentTypeSql("sp_filter")}
+      FROM bank_reconciliation_matches m_filter_method
+      JOIN sport_payments sp_filter ON sp_filter.id = m_filter_method.candidate_id
+      WHERE m_filter_method.mutation_id = bm.id
+        AND m_filter_method.candidate_type = 'sport_payment'
+        AND m_filter_method.status IN ('candidate', 'approved')
+      ORDER BY m_filter_method.match_score DESC, m_filter_method.id DESC
+      LIMIT 1
+    )`;
+    const explicitBankTypeMarker = `(LOWER(CONCAT_WS(' ',
+      COALESCE(bm.provider_name, ''),
+      COALESCE(bm.provider_order_id, ''),
+      COALESCE(bm.description, ''),
+      COALESCE(bm.normalized_description, '')
+    )) LIKE '%paylabs%' OR LOWER(CONCAT_WS(' ',
+      COALESCE(bm.provider_name, ''),
+      COALESCE(bm.provider_order_id, ''),
+      COALESCE(bm.description, ''),
+      COALESCE(bm.normalized_description, '')
+    )) LIKE '%qris%')`;
+    bmFilters.push(`(
+      ${sportTypeFromCandidate} = '${requestedType}'
+      OR (
+        '${requestedType}' IN ('qris', 'paylabs')
+        AND ${explicitBankTypeMarker}
+        AND ${requestedType} = CASE
+          WHEN LOWER(CONCAT_WS(' ', COALESCE(bm.provider_name, ''), COALESCE(bm.provider_order_id, ''), COALESCE(bm.description, ''), COALESCE(bm.normalized_description, ''))) LIKE '%paylabs%'
+            THEN 'paylabs'
+          ELSE 'qris'
+        END
+      )
+    )`);
   }
   const bmWhere = bmFilters.length ? `WHERE ${bmFilters.join(" AND ")}` : "";
 
@@ -2824,6 +2892,10 @@ router.get("/mutations", async (req, res) => {
           'paymentNumber', sp.payment_number,
           'memo', sp.notes,
           'method', sp.method,
+           'paymentMethod', sp.method,
+           'paymentType', sp.payment_type,
+           'paymentProvider', sp.payment_provider,
+           'sportPaymentType', ${sportPaymentTypeSql("sp")},
           'status', sp.status,
           'bookingId', sp.booking_id
         )
@@ -2849,6 +2921,9 @@ router.get("/mutations", async (req, res) => {
           'name', qs.settlement_reference,
           'reference', qs.settlement_reference,
           'method', 'qris',
+           'paymentMethod', 'qris',
+           'paymentType', 'qris',
+           'sportPaymentType', 'qris',
           'status', qs.status,
            'settlementItemCount', (SELECT COUNT(*) FROM qris_settlement_items qsi WHERE qsi.settlement_id = qs.id),
            'settlementItems', COALESCE((
@@ -2933,6 +3008,23 @@ router.get("/mutations", async (req, res) => {
       bm.provider_name, bm.provider_order_id,
       bm.status::text, bm.journal_entry_id, bm.company_id,
       bm.uploaded_proof_url, bm.source,
+       COALESCE(
+         (
+           SELECT ${sportPaymentTypeSql("sp_type")}
+           FROM bank_reconciliation_matches m_type
+           JOIN sport_payments sp_type ON sp_type.id = m_type.candidate_id
+           WHERE m_type.mutation_id = bm.id
+             AND m_type.candidate_type = 'sport_payment'
+             AND m_type.status IN ('candidate', 'approved')
+           ORDER BY m_type.match_score DESC, m_type.id DESC
+           LIMIT 1
+         ),
+         CASE
+           WHEN LOWER(CONCAT_WS(' ', COALESCE(bm.provider_name, ''), COALESCE(bm.provider_order_id, ''), COALESCE(bm.description, ''), COALESCE(bm.normalized_description, ''))) LIKE '%paylabs%' THEN 'paylabs'
+           WHEN LOWER(CONCAT_WS(' ', COALESCE(bm.provider_name, ''), COALESCE(bm.provider_order_id, ''), COALESCE(bm.description, ''), COALESCE(bm.normalized_description, ''))) LIKE '%qris%' THEN 'qris'
+           ELSE NULL
+         END
+       ) AS sport_payment_type,
        'bank_mutations' AS _source_table,
        (SELECT json_agg(
           to_jsonb(m) || jsonb_build_object('details', ${candidateDetailsSql})
@@ -3086,6 +3178,7 @@ router.get("/mutations", async (req, res) => {
       NULL::integer AS company_id,
       NULL::text AS uploaded_proof_url,
       'bank_import' AS source,
+       NULL::text AS sport_payment_type,
       'bank_import' AS _source_table,
        NULL::json AS candidates,
        NULL::jsonb AS qris_candidate_audit

@@ -485,8 +485,11 @@ interface CandidateDetails {
   paymentNumber?: string | null;
   memo?: string | null;
   method?: string | null;
+  paymentMethod?: string | null;
   status?: string | null;
   paymentType?: string | null;
+  paymentProvider?: string | null;
+  sportPaymentType?: "bank_transfer" | "qris" | "paylabs" | null;
   sourceType?: string | null;
   bookingId?: number | null;
   documentType?: string | null;
@@ -543,6 +546,7 @@ interface BankMutation {
   mutation_key: string;
   normalized_description: string;
   provider_name: string | null;
+  sport_payment_type?: "bank_transfer" | "qris" | "paylabs" | null;
   provider_order_id: string | null;
   status: MutationStatus;
   matched_payment_id: number | null;
@@ -666,6 +670,24 @@ const CANDIDATE_TYPE_LABELS: Record<string, string> = {
   talangan: "Dana Talangan",
   transfer: "Transfer Internal",
 };
+
+type SportPaymentType = "bank_transfer" | "qris" | "paylabs";
+
+const SPORT_PAYMENT_TYPE_LABELS: Record<SportPaymentType, string> = {
+  bank_transfer: "Transfer Bank",
+  qris: "QRIS",
+  paylabs: "Paylabs",
+};
+
+const SPORT_PAYMENT_TYPE_STYLES: Record<SportPaymentType, string> = {
+  bank_transfer: "border-slate-300 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300",
+  qris: "border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950 dark:text-indigo-300",
+  paylabs: "border-violet-300 bg-violet-50 text-violet-700 dark:border-violet-800 dark:bg-violet-950 dark:text-violet-300",
+};
+
+function sportPaymentTypeLabel(type: SportPaymentType | null | undefined): string | null {
+  return type ? SPORT_PAYMENT_TYPE_LABELS[type] : null;
+}
 
 // Backend status → Indonesian UI label mapping
 // SOURCE: bank_mutations.status values from bankReconciliation.ts routes
@@ -842,14 +864,46 @@ function mutationSourceLabel(m: BankMutation): string {
   return m.provider_name || (m.direction === "IN" ? "Rekening Bank" : "Bank");
 }
 
+function isPaylabsMutation(m: BankMutation): boolean {
+  return [
+    m.provider_name,
+    m.provider_order_id,
+    m.description,
+    m.normalized_description,
+  ].some(value => /PAYLABS/i.test(String(value ?? "")));
+}
+
 function isQrisMutation(m: BankMutation): boolean {
   if (m.qris_candidate_audit) return true;
+  if (isPaylabsMutation(m)) return false;
   return [
     m.provider_name,
     m.provider_order_id,
     m.description,
     m.normalized_description,
   ].some(value => /QRIS|QR[A-Z0-9]{4,}|QR\s*(?:CODE|PAY|PAYMENT)|PAYLABS/i.test(String(value ?? "")));
+}
+
+function sportPaymentTypeFromDetails(details?: CandidateDetails | null): SportPaymentType | null {
+  if (!details) return null;
+  if (details.sportPaymentType) return details.sportPaymentType;
+  if (/paylabs/i.test(String(details.paymentProvider ?? ""))) return "paylabs";
+  if (/paylabs/i.test(String(details.paymentType ?? "")) || /paylabs/i.test(String(details.method ?? ""))) return "paylabs";
+  if (/qris/i.test(String(details.paymentType ?? "")) || /qris/i.test(String(details.method ?? ""))) return "qris";
+  if (details.sourceType === "sport_center") return "bank_transfer";
+  return null;
+}
+
+function candidateSportPaymentType(candidate: Candidate | undefined, mutation: BankMutation): SportPaymentType | null {
+  if (!candidate) return mutation.sport_payment_type ?? (isPaylabsMutation(mutation) ? "paylabs" : isQrisMutation(mutation) ? "qris" : null);
+  if (candidate.candidate_type === "qris_settlement") return "qris";
+  if (candidate.candidate_type !== "sport_payment") return null;
+  return sportPaymentTypeFromDetails(candidate.details) ?? mutation.sport_payment_type ?? null;
+}
+
+function mutationSportPaymentType(mutation: BankMutation): SportPaymentType | null {
+  const best = visibleCandidates(mutation)[0];
+  return candidateSportPaymentType(best, mutation) ?? mutation.sport_payment_type ?? null;
 }
 
 function isSameCalendarDate(left: string | null | undefined, right: string | null | undefined): boolean {
@@ -865,15 +919,12 @@ function isQrisCandidate(candidate: Candidate, mutation: BankMutation): boolean 
   // Canonical Sport Center payments can be QRIS or ordinary bank transfers.
   // Prefer the persisted payment method; fall back to the bank mutation for
   // older candidate rows that were saved before method was included in details.
-  const paymentMethod = candidate.details?.method ?? candidate.details?.paymentType;
-  if (paymentMethod != null && String(paymentMethod).trim() !== "") {
-    return /qris/i.test(String(paymentMethod));
-  }
-  return isQrisMutation(mutation);
+  return candidateSportPaymentType(candidate, mutation) === "qris";
 }
 
 function isBankTransferCandidate(candidate: Candidate, mutation: BankMutation): boolean {
-  return !isQrisCandidate(candidate, mutation);
+  if (candidate.candidate_type !== "sport_payment") return true;
+  return candidateSportPaymentType(candidate, mutation) === "bank_transfer";
 }
 
 /** Candidates shown to reviewers and used for approval must obey the
@@ -1008,8 +1059,10 @@ function CandidateDetailsBlock({
     { label: "Referensi", value: d.reference },
     { label: "Referensi settlement", value: d.settlementReference },
     { label: "Jumlah transaksi settlement", value: d.settlementItemCount },
-    { label: "Metode", value: d.method },
+    { label: "Jenis payment", value: sportPaymentTypeLabel(d.sportPaymentType) },
+    { label: "Metode", value: d.paymentMethod ?? d.method },
     { label: "Tipe", value: d.paymentType ?? d.documentType },
+    { label: "Provider", value: d.paymentProvider },
     { label: "Status", value: d.status },
     { label: "Memo / Catatan", value: d.memo },
   ].filter(row => row.value != null && String(row.value).trim() !== "");
@@ -1891,6 +1944,9 @@ function QrisMutationCard({
                 <p className="text-xs text-muted-foreground mt-0.5">
                   {fmtDate(m.transaction_date)} · QRIS Sport Center
                 </p>
+                <Badge variant="outline" className={`mt-1 text-[10px] ${SPORT_PAYMENT_TYPE_STYLES.qris}`}>
+                  Jenis payment: QRIS
+                </Badge>
                 <p className="mt-1 text-[11px] text-muted-foreground break-words">
                   Mutasi: {m.description}
                   {m.provider_order_id && <span> · Ref: {m.provider_order_id}</span>}
@@ -1966,7 +2022,7 @@ function QrisMutationCard({
                           <span className="truncate text-xs font-medium">{booking}</span>
                           <span className="min-w-0 truncate text-xs text-muted-foreground">{payment}</span>
                           <span className="truncate text-xs text-muted-foreground">{paidAt ? fmtDate(String(paidAt)) : "—"}</span>
-                          <span className="truncate text-xs text-muted-foreground">QRIS</span>
+                           <span className="truncate text-xs text-muted-foreground">QRIS</span>
                           <span className="text-right text-xs font-medium tabular-nums">{idr(gross)}</span>
                           <span className="flex justify-center">
                             {canSelect && audit.id != null && paymentId != null && onToggleQrisPayment ? (
@@ -2179,6 +2235,14 @@ function MutationCard({
                   {fmtDate(m.transaction_date)}
                   {" · "}{mutationSourceLabel(m)}
                 </p>
+                 {(() => {
+                   const paymentType = mutationSportPaymentType(m);
+                   return paymentType ? (
+                     <Badge variant="outline" className={`mt-1 text-[10px] ${SPORT_PAYMENT_TYPE_STYLES[paymentType]}`}>
+                       Jenis payment: {SPORT_PAYMENT_TYPE_LABELS[paymentType]}
+                     </Badge>
+                   ) : null;
+                 })()}
                 <Collapsible className="mt-1" onClick={e => e.stopPropagation()}>
                   <CollapsibleTrigger asChild>
                     <button type="button" className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
@@ -2228,7 +2292,12 @@ function MutationCard({
                   <span>
                     {best.candidate_type === "sport_payment" ? "Sport Center" : "Transaksi sistem"}
                   </span>
-                  {best.details?.method && <span>Metode {best.details.method}</span>}
+                   {candidateSportPaymentType(best, m) && (
+                     <span>Jenis payment {SPORT_PAYMENT_TYPE_LABELS[candidateSportPaymentType(best, m)!]}</span>
+                   )}
+                   {(best.details?.paymentMethod ?? best.details?.method) && (
+                     <span>Metode {best.details?.paymentMethod ?? best.details?.method}</span>
+                   )}
                   {best.details?.settlementDate && (
                     <span>Settlement {fmtDate(String(best.details.settlementDate))}</span>
                   )}
@@ -3477,6 +3546,7 @@ export default function BankReconciliationPage() {
   const [filterStatus,   setFilterStatus]   = useState("all");
   const [filterDir,      setFilterDir]      = useState("all");
   const [filterProvider, setFilterProvider] = useState("all");
+  const [filterPaymentType, setFilterPaymentType] = useState<"all" | SportPaymentType>("all");
   const [filterFrom,     setFilterFrom]     = useState("");
   const [filterTo,       setFilterTo]       = useState("");
   const [filterSearch,   setFilterSearch]   = useState(
@@ -3507,7 +3577,7 @@ export default function BankReconciliationPage() {
   const [postDialogJournalStatus, setPostDialogJournalStatus] = useState<string | null>(null);
 
   // ── Queries ──────────────────────────────────────────────────────────────
-  const queryKey = ["bank-reconciliation", filterStatus, filterDir, filterProvider, filterFrom, filterTo, filterSearch, page];
+  const queryKey = ["bank-reconciliation", filterStatus, filterDir, filterProvider, filterPaymentType, filterFrom, filterTo, filterSearch, page];
 
   const { data, isLoading, refetch } = useQuery({
     queryKey,
@@ -3516,6 +3586,7 @@ export default function BankReconciliationPage() {
       if (filterStatus !== "all")   params.set("status",    filterStatus);
       if (filterDir    !== "all")   params.set("direction", filterDir);
       if (filterProvider !== "all") params.set("provider",  filterProvider);
+       if (filterPaymentType !== "all") params.set("payment_type", filterPaymentType);
       if (filterFrom) params.set("from", filterFrom);
       if (filterTo)   params.set("to",   filterTo);
       if (filterSearch) params.set("search", filterSearch);
@@ -4250,7 +4321,7 @@ export default function BankReconciliationPage() {
   const handlePostAllPending    = () => { setFilterStatus("approved_pending_posting"); setPage(0); };
 
   const resetFilters = () => {
-    setFilterStatus("all"); setFilterDir("all"); setFilterProvider("all");
+    setFilterStatus("all"); setFilterDir("all"); setFilterProvider("all"); setFilterPaymentType("all");
     setFilterFrom(""); setFilterTo(""); setFilterSearch(""); setPage(0);
   };
 
@@ -4654,6 +4725,15 @@ export default function BankReconciliationPage() {
                       <SelectItem value="SHOPEEPAY">ShopeePay</SelectItem>
                     </SelectContent>
                   </Select>
+                  <Select value={filterPaymentType} onValueChange={v => { setFilterPaymentType(v as "all" | SportPaymentType); setPage(0); }}>
+                    <SelectTrigger className="w-[165px] h-8 text-xs"><SelectValue placeholder="Jenis payment" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Semua Jenis Payment</SelectItem>
+                      <SelectItem value="bank_transfer">Transfer Bank</SelectItem>
+                      <SelectItem value="qris">QRIS</SelectItem>
+                      <SelectItem value="paylabs">Paylabs</SelectItem>
+                    </SelectContent>
+                  </Select>
                   <div className="flex items-center gap-1.5">
                     <DatePicker value={filterFrom} onChange={v => { setFilterFrom(v); setPage(0); }} className="w-[130px]" placeholder="Dari tanggal" />
                     <span className="text-muted-foreground text-sm">–</span>
@@ -4702,12 +4782,12 @@ export default function BankReconciliationPage() {
                 <div className="text-center">
                   <p className="font-medium">Tidak ada data ditemukan</p>
                   <p className="text-sm">
-                    {filterStatus !== "all" || filterDir !== "all" || filterSearch
+                     {filterStatus !== "all" || filterDir !== "all" || filterPaymentType !== "all" || filterSearch
                       ? "Coba ubah filter atau reset pencarian"
                       : "Import mutasi bank atau sync Google Sheet untuk memulai"}
                   </p>
                 </div>
-                {(filterStatus !== "all" || filterDir !== "all" || filterSearch) && (
+                {(filterStatus !== "all" || filterDir !== "all" || filterPaymentType !== "all" || filterSearch) && (
                   <Button variant="outline" size="sm" onClick={resetFilters}>Reset Filter</Button>
                 )}
               </CardContent>
