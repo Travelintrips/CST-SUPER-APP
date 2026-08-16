@@ -1,5 +1,5 @@
 import { DatePicker } from "@/components/ui/date-picker";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -39,6 +39,7 @@ export default function AccountingHubTrialBalancePage() {
   const [companies, setCompanies] = useState<CompanyOption[]>([]);
   const [filters, setFilters] = useState({ company_id: "", date_from: "", date_to: "" });
   const [, navigate] = useLocation();
+  const requestVersion = useRef(0);
 
   // Load company list for dropdown
   useEffect(() => {
@@ -48,7 +49,8 @@ export default function AccountingHubTrialBalancePage() {
       .catch(() => {});
   }, []);
 
-  const load = async () => {
+  const load = useCallback(async () => {
+    const version = ++requestVersion.current;
     setLoading(true);
     setError(null);
     try {
@@ -57,19 +59,26 @@ export default function AccountingHubTrialBalancePage() {
       const res = await fetch(`/api/accounting/hub/trial-balance?${params}`, { credentials: "include" });
       if (!res.ok) {
         const msg = await res.text().catch(() => "");
-        setError(`Gagal memuat data: ${res.status}${msg ? ` — ${msg}` : ""}`);
+        if (version === requestVersion.current) {
+          setError(`Gagal memuat data: ${res.status}${msg ? ` — ${msg}` : ""}`);
+        }
         return;
       }
       const json = await res.json();
+      // A slower all-company request must not overwrite a newer company
+      // selection that finished first.
+      if (version !== requestVersion.current) return;
       setRows(json.data ?? []);
-    } catch (e: any) {
-      setError(e.message ?? "Terjadi kesalahan saat memuat data");
+    } catch (e: unknown) {
+      if (version === requestVersion.current) {
+        setError(e instanceof Error ? e.message : "Terjadi kesalahan saat memuat data");
+      }
     } finally {
-      setLoading(false);
+      if (version === requestVersion.current) setLoading(false);
     }
-  };
+  }, [filters]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { void load(); }, [load]);
 
   const totDebit  = rows.reduce((s, r) => s + Number(r.total_debit), 0);
   const totCredit = rows.reduce((s, r) => s + Number(r.total_credit), 0);
@@ -176,7 +185,7 @@ export default function AccountingHubTrialBalancePage() {
                 </tr>
                 {rws.map(r => (
                   <tr
-                    key={r.account_id}
+                    key={`${r.account_id}-${r.company_id ?? "global"}-${r.branch_id ?? "all"}-${r.division_id ?? "all"}`}
                     className={`border-t group ${r.is_header ? "bg-emerald-50/50" : "hover:bg-primary/5 cursor-pointer"}`}
                     onClick={() => drillDown(r)}
                     title={r.is_header

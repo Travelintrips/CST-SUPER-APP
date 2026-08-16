@@ -53,8 +53,19 @@ function parseFilters(query: Record<string, any>) {
     : "date";
   const sortDir: "asc" | "desc" = query.sort_dir === "asc" ? "asc" : "desc";
 
+  const rawCompanyId = query.company_id ?? query.companyId;
+  const parsedCompanyId = rawCompanyId === undefined || rawCompanyId === ""
+    ? undefined
+    : Number(rawCompanyId);
+
   return {
-    companyId: query.company_id ? Number(query.company_id) : undefined,
+    // Accept both query conventions. The Hub UI currently sends snake_case,
+    // while the shared company context and older clients use camelCase.
+    // Invalid values are treated as absent so a malformed optional filter
+    // cannot turn into a SQL comparison against NaN.
+    companyId: parsedCompanyId != null && Number.isInteger(parsedCompanyId) && parsedCompanyId > 0
+      ? parsedCompanyId
+      : undefined,
     branchId:  query.branch_id  ? Number(query.branch_id)  : undefined,
     divisionId: query.division_id ? Number(query.division_id) : undefined,
     dateFrom:  query.date_from  as string | undefined,
