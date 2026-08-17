@@ -2335,6 +2335,9 @@ function MutationCard({
   onDetail,
   onApproveQris,
   onApproveQrisBatch,
+  selectedCandidateId,
+  onToggleCandidate,
+  onApproveCandidate,
   approveQrisPending,
   selectedQrisPaymentIds,
   onToggleQrisPayment,
@@ -2354,6 +2357,9 @@ function MutationCard({
   onDetail:  (m: BankMutation) => void;
   onApproveQris: (m: BankMutation) => void;
   onApproveQrisBatch?: (candidateId: number, mutationId: number, candidate: QrisCandidateAudit, paymentIds?: number[]) => void;
+  selectedCandidateId?: number | null;
+  onToggleCandidate?: (mutationId: number, candidateId: number, checked: boolean) => void;
+  onApproveCandidate?: (m: BankMutation, candidate: Candidate) => void;
   approveQrisPending?: boolean;
   selectedQrisPaymentIds: Record<number, number[]>;
   onToggleQrisPayment?: (candidateId: number, paymentId: number, checked: boolean) => void;
@@ -2366,6 +2372,7 @@ function MutationCard({
   const cands  = visibleCandidates(m);
   const qrisAudits = qrisAuditsForMutation(m);
   const best   = cands[0];
+  const matchingCandidates = cands.filter(candidate => candidate.amount_match && candidate.date_match);
   const amount = Number(m.amount) || 0;
   const isIN   = m.direction === "IN";
   const isQris = isQrisMutation(m);
@@ -2496,6 +2503,64 @@ function MutationCard({
               </div>
             )}
 
+            {!isQris && matchingCandidates.length > 0 && (
+              <div
+                className="mt-2 rounded-md border border-green-200 bg-green-50/70 px-3 py-2 dark:border-green-800 dark:bg-green-950/50"
+                onClick={e => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-semibold text-green-800 dark:text-green-300">
+                    Kandidat yang cocok
+                  </p>
+                  <span className="text-[10px] text-green-700 dark:text-green-400">
+                    Pilih satu kandidat
+                  </span>
+                </div>
+                <div className="mt-1.5 space-y-1.5">
+                  {matchingCandidates.map(candidate => {
+                    const candidateDetails = candidate.details;
+                    const checked = selectedCandidateId === candidate.id;
+                    const candidateName = candidateDetails?.name ?? candidate.customer_name;
+                    const candidateReference =
+                      candidateDetails?.paymentNumber
+                      ?? candidateDetails?.reference
+                      ?? `#${candidate.candidate_id}`;
+                    return (
+                      <label
+                        key={candidate.id}
+                        className={`flex cursor-pointer items-start gap-2 rounded border px-2 py-1.5 transition-colors ${
+                          checked
+                            ? "border-green-500 bg-white shadow-sm dark:border-green-500 dark:bg-green-950/70"
+                            : "border-green-200 bg-white/60 hover:bg-white dark:border-green-900 dark:bg-green-950/30 dark:hover:bg-green-950/70"
+                        }`}
+                      >
+                        <Checkbox
+                          checked={checked}
+                          onCheckedChange={value => onToggleCandidate?.(m.id, candidate.id, value === true)}
+                          onClick={e => e.stopPropagation()}
+                          aria-label={`Pilih kandidat ${candidateReference}`}
+                          className="mt-0.5"
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="flex items-center justify-between gap-2">
+                            <span className="truncate text-xs font-medium text-green-950 dark:text-green-100">
+                              {candidateName || `${CANDIDATE_TYPE_LABELS[candidate.candidate_type] ?? candidate.candidate_type} #${candidate.candidate_id}`}
+                            </span>
+                            <ScoreBadge score={candidate.match_score} />
+                          </span>
+                          <span className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-green-700 dark:text-green-300">
+                            <span>{candidateReference}</span>
+                            {candidateDetails?.date && <span>{fmtDate(String(candidateDetails.date))}</span>}
+                            {candidateDetails?.amount != null && <span>{idr(candidateDetails.amount)}</span>}
+                          </span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {!best && m.status === "unmatched" && (
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-amber-600 dark:text-amber-400">
                 <span className="flex items-center gap-1">
@@ -2575,13 +2640,22 @@ function MutationCard({
               <Button
                 size="sm"
                 className="h-7 text-xs gap-1 bg-green-600 hover:bg-green-700 disabled:opacity-50"
-                onClick={() => onApprove(m)}
+                disabled={matchingCandidates.length > 0 && selectedCandidateId == null}
+                title={matchingCandidates.length > 0 && selectedCandidateId == null ? "Pilih kandidat yang cocok terlebih dahulu" : undefined}
+                onClick={() => {
+                  const selected = matchingCandidates.find(candidate => candidate.id === selectedCandidateId);
+                  if (selected && onApproveCandidate) {
+                    onApproveCandidate(m, selected);
+                  } else {
+                    onApprove(m);
+                  }
+                }}
               >
                 <CheckCircle2 className="w-3.5 h-3.5" />
                 Setujui
               </Button>
             )}
-            {!isUiApprovalEligible(m) && (m.status === "unmatched" || m.status === "matched" || m.status === "duplicate_need_review") && (
+            {!isUiApprovalEligible(m) && matchingCandidates.length === 0 && (m.status === "unmatched" || m.status === "matched" || m.status === "duplicate_need_review") && (
               <Button
                 size="sm"
                 variant="outline"
@@ -3753,6 +3827,7 @@ export default function BankReconciliationPage() {
   const [qrisDetailLoadingId, setQrisDetailLoadingId] = useState<number | null>(null);
   const [selectedQrisCandidateIds, setSelectedQrisCandidateIds] = useState<number[]>([]);
   const [selectedQrisPaymentIds, setSelectedQrisPaymentIds] = useState<Record<number, number[]>>({});
+  const [selectedCandidateByMutation, setSelectedCandidateByMutation] = useState<Record<number, number | null>>({});
   const [selectedCandidateId, setSelectedCandidateId] = useState<number | null>(null);
   const [reverseReason,       setReverseReason]       = useState("");
   const [showDeleteAll,       setShowDeleteAll]       = useState(false);
@@ -4549,6 +4624,23 @@ export default function BankReconciliationPage() {
     });
   };
 
+  const toggleCandidate = (mutationId: number, candidateId: number, checked: boolean) => {
+    setSelectedCandidateByMutation(current => ({
+      ...current,
+      [mutationId]: checked ? candidateId : null,
+    }));
+  };
+
+  const handleDirectApproveCandidate = (m: BankMutation, candidate: Candidate) => {
+    approveMut.mutate({
+      mutId: m.id,
+      matchId: candidate.id,
+      candidateType: candidate.candidate_type,
+      candidateId: candidate.candidate_id,
+      candidateSource: candidate.candidate_source ?? null,
+    });
+  };
+
   const handleApproveAllMatched = () => { setFilterStatus("matched"); setPage(0); };
   const handlePostAllPending    = () => { setFilterStatus("approved_pending_posting"); setPage(0); };
 
@@ -5049,6 +5141,9 @@ export default function BankReconciliationPage() {
                   onDetail={setDetailMutation}
                   onApproveQris={handleApproveQris}
                   onApproveQrisBatch={handleApproveQrisBatch}
+                   selectedCandidateId={selectedCandidateByMutation[m.id] ?? null}
+                   onToggleCandidate={toggleCandidate}
+                   onApproveCandidate={handleDirectApproveCandidate}
                   approveQrisPending={approveQrisBatchMut.isPending}
                   selectedQrisPaymentIds={selectedPaymentIdsByMutation(m)}
                   onToggleQrisPayment={toggleQrisPayment}
