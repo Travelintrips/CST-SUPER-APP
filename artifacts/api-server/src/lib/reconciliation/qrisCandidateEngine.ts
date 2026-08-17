@@ -269,7 +269,18 @@ export function generateQrisMutationBatchCandidates(input: {
     );
     const evidence = providerEvidence(mutation, input.accountProviderRules);
     const accountRules = input.accountProviderRules?.[String(mutation.bankAccountId)];
-    const rule = accountRules?.[evidence.providerCode]
+    const directAccountRule = accountRules?.[evidence.providerCode];
+    const compatibleAccountRules = Object.values(accountRules ?? {}).filter((candidateRule) =>
+      areQrisProvidersCompatible(candidateRule.providerCode, evidence.providerCode),
+    );
+    // A bank statement can identify Mandiri's payment-side provider as
+    // gpn_qris (for example QRTRAVELI). Prefer the single explicit account
+    // rule for the compatible payment provider so the candidate's fee
+    // tolerance agrees with the canonical settlement builder.
+    const compatibleAccountRule = directAccountRule ?? (
+      compatibleAccountRules.length === 1 ? compatibleAccountRules[0] : undefined
+    );
+    const rule = compatibleAccountRule
       ?? rules[evidence.providerCode]
       ?? (requireExplicitSettlementMetadata ? undefined : rules.unknown);
     const ruleVersion = rule?.ruleVersion ?? (requireExplicitSettlementMetadata ? "" : "legacy-v1");

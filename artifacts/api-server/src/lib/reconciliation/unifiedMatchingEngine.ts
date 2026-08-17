@@ -1215,29 +1215,41 @@ export async function runUnifiedMatching(
   `)).catch(() => {});
 
   if (sourceAwareValues.length) {
-    await db.execute(sql.raw(`
-      INSERT INTO bank_reconciliation_matches
-        (mutation_id, candidate_type, candidate_id, match_score, match_reason,
-         amount_match, date_match, name_match, order_id_match, proof_match, status,
-         candidate_source)
-      VALUES ${sourceAwareValues.join(",\n")}
-      ON CONFLICT
-        (mutation_id, candidate_type, candidate_id, candidate_source)
-        WHERE candidate_source IS NOT NULL
-          AND status IN ('candidate', 'approved')
-      DO UPDATE SET
-        match_score = EXCLUDED.match_score,
-        match_reason = EXCLUDED.match_reason,
-        amount_match = EXCLUDED.amount_match,
-        date_match = EXCLUDED.date_match,
-        name_match = EXCLUDED.name_match,
-        order_id_match = EXCLUDED.order_id_match,
-        proof_match = EXCLUDED.proof_match,
-        status = CASE
-          WHEN bank_reconciliation_matches.status = 'approved' THEN 'approved'
-          ELSE 'candidate'
-        END
-    `)).catch(() => {});
+    try {
+      await db.execute(sql.raw(`
+        INSERT INTO bank_reconciliation_matches
+          (mutation_id, candidate_type, candidate_id, match_score, match_reason,
+           amount_match, date_match, name_match, order_id_match, proof_match, status,
+           candidate_source)
+        VALUES ${sourceAwareValues.join(",\n")}
+        ON CONFLICT
+          (mutation_id, candidate_type, candidate_id, candidate_source)
+          WHERE candidate_source IS NOT NULL
+            AND status IN ('candidate', 'approved')
+        DO UPDATE SET
+          match_score = EXCLUDED.match_score,
+          match_reason = EXCLUDED.match_reason,
+          amount_match = EXCLUDED.amount_match,
+          date_match = EXCLUDED.date_match,
+          name_match = EXCLUDED.name_match,
+          order_id_match = EXCLUDED.order_id_match,
+          proof_match = EXCLUDED.proof_match,
+          status = CASE
+            WHEN bank_reconciliation_matches.status = 'approved' THEN 'approved'
+            ELSE 'candidate'
+          END
+      `));
+    } catch (error: any) {
+      logger.error(
+        {
+          err: error?.message ?? String(error),
+          mutationId: mutation.id,
+          sourceAwareCandidateCount: sourceAwareValues.length,
+        },
+        "[unifiedMatchingEngine] source-aware match persistence failed",
+      );
+      throw error;
+    }
   }
 
   // Historical NULL-source persistence remains deliberately unchanged: NULL

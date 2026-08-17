@@ -218,7 +218,10 @@ export function providerRulesByBankAccountFromRows(
     if (accountId == null) continue;
     const provider = normalizeQrisProvider(row.providerCode ?? row.provider_code);
     if (provider === "unknown") continue;
-    const accountRules = result[String(accountId)] ?? { ...DEFAULT_QRIS_PROVIDER_RULES };
+    // Keep this map limited to explicit account configuration. Global
+    // defaults are resolved by the caller after account-specific rules have
+    // had a chance to select a compatible payment-side provider.
+    const accountRules = result[String(accountId)] ?? {};
     accountRules[provider] = {
       ...accountRules[provider],
       providerCode: provider,
