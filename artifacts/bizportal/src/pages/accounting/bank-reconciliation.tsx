@@ -1417,7 +1417,7 @@ function StepProgressBar({
     (summaryMap.approved_pending_posting?.count ?? 0) === 0;
 
   const activeStep =
-    pendingPost > 0 ? 5 :
+    hasPendingPost ? 5 :
     allProcessed && (hasApproved || hasPosted) ? 6 :
     workflowStage === "sync" ? 1 :
     workflowStage === "matching" ? 2 :
