@@ -27,3 +27,14 @@ explicit request would weaken the isolation boundary.
 **How to apply:** Carry `company_id` from the QRIS candidate/mutation into both
 approval button paths, validate it as a positive integer in the UI, and keep
 the backend company filter and payment-company checks authoritative.
+
+When the payment lock query includes a `LEFT JOIN LATERAL`, target the lock
+explicitly at the non-nullable payment relation (`FOR SHARE OF sp`) instead of
+using an unqualified `FOR SHARE`.
+
+**Why:** PostgreSQL rejects an unqualified row lock when it would also apply to
+the nullable side of an outer join, turning a valid QRIS approval into a 500.
+
+**How to apply:** Lock the canonical payment rows only; read journal-provider
+fallback data through the lateral join without trying to lock its nullable
+side.

@@ -2379,7 +2379,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
           LIMIT 1
         ) journal_provider ON TRUE
         WHERE id IN (${candidatePaymentIds.join(",")})
-        FOR SHARE
+        FOR SHARE OF sp
       `));
       const { rows: liveSettlementRows } = await tx.execute(sql.raw(`
         SELECT psi.payment_id, psi.settlement_id, psb.net_amount, psb.status
