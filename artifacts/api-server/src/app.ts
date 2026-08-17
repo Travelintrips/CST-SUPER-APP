@@ -200,6 +200,19 @@ app.use(express.json({ limit: "20mb" }));
 app.use(express.urlencoded({ extended: true, limit: "20mb" }));
 app.use(cookieParser());
 
+// ─── Process liveness ─────────────────────────────────────────────────────────
+// Register this before bearer/auth middleware. It answers only whether this
+// Node process can accept an HTTP request; it must not wait for the database,
+// migrations, external services, session storage, or any authentication work.
+app.get("/api/health/live", (_req: Request, res: Response) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate");
+  res.status(200).json({
+    status: "ok",
+    service: "api",
+    uptime_seconds: Math.floor(process.uptime()),
+  });
+});
+
 // Rate-limit bearer-token requests before any auth processing.
 // Applies only to requests carrying "Authorization: Bearer ..." headers
 // (portal/mobile Supabase tokens). Internal BizPortal session-cookie
@@ -214,19 +227,6 @@ app.use(
   ["/api/login", "/api/callback", "/api/auth", "/api/logout"],
   authRateLimiter,
 );
-
-// ─── Process liveness ─────────────────────────────────────────────────────────
-// This endpoint intentionally sits before auth and route handlers. It answers
-// only whether this Node process can accept an HTTP request; it must not wait
-// for the database, migrations, external services, or session storage.
-app.get("/api/health/live", (_req: Request, res: Response) => {
-  res.set("Cache-Control", "no-store, no-cache, must-revalidate");
-  res.status(200).json({
-    status: "ok",
-    service: "api",
-    uptime_seconds: Math.floor(process.uptime()),
-  });
-});
 
 // Auth routes (login/callback/logout/mobile-auth) — mounted under /api
 app.use("/api", authRouter);
