@@ -25,6 +25,8 @@ describe("startup readiness steady-state contract", () => {
   });
 
   it("uses a persistent marker helper with a safe legacy fallback", () => {
+    expect(startupState).toContain("information_schema.tables");
+    expect(startupState).toContain("CREATE TABLE IF NOT EXISTS app_config");
     expect(startupState).toContain("FROM app_config");
     expect(startupState).toContain("ON CONFLICT (key) DO UPDATE");
     expect(startupState).toContain("return false");

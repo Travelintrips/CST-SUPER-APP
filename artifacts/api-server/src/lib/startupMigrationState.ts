@@ -4,6 +4,28 @@ import { logger } from "./logger.js";
 
 const KEY_PREFIX = "api_startup_migration:";
 
+async function ensureStartupMarkerStore(): Promise<void> {
+  const result = await db.execute(sql`
+    SELECT 1
+    FROM information_schema.tables
+    WHERE table_schema = 'public'
+      AND table_name = 'app_config'
+    LIMIT 1
+  `);
+
+  if (result.rows.length > 0) return;
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS app_config (
+      key        TEXT PRIMARY KEY,
+      value      TEXT NOT NULL DEFAULT '',
+      description TEXT NOT NULL DEFAULT '',
+      is_secret  BOOLEAN NOT NULL DEFAULT false,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+}
+
 /**
  * Persistent completion markers for expensive bootstrap migrations.
  *
@@ -18,6 +40,7 @@ export async function isStartupMigrationComplete(
 ): Promise<boolean> {
   const key = `${KEY_PREFIX}${name}`;
   try {
+    await ensureStartupMarkerStore();
     const result = await db.execute(sql`
       SELECT value
       FROM app_config
@@ -38,6 +61,7 @@ export async function markStartupMigrationComplete(
 ): Promise<boolean> {
   const key = `${KEY_PREFIX}${name}`;
   try {
+    await ensureStartupMarkerStore();
     await db.execute(sql`
       INSERT INTO app_config (key, value, description, updated_at)
       VALUES (${key}, ${version}, ${description}, NOW())
@@ -46,6 +70,7 @@ export async function markStartupMigrationComplete(
             description = EXCLUDED.description,
             updated_at = NOW()
     `);
+    logger.info({ name, version }, "Startup migration marker persisted");
     return true;
   } catch (err) {
     // A missing/legacy app_config table must not make an otherwise successful
