@@ -171,6 +171,10 @@ import { runTokenSecurityMigration } from "./lib/tokenSecurityMigration.js";
 import { runMasterPriceMigration } from "./lib/masterPriceMigration.js";
 import { runQaFixtureMigration } from "./lib/qaFixtureMigration.js";
 import { runDeferredStartupTasks } from "./lib/deferredStartupTasks.js";
+import {
+  isStartupMigrationComplete,
+  markStartupMigrationComplete,
+} from "./lib/startupMigrationState.js";
 
 // Port resolution order (deterministic, no ambiguity):
 // 1. REPLIT_API_PORT — set by Replit deployment infra
@@ -281,7 +285,14 @@ async function runWithRetry<T>(
 
 // ── Pre-startup critical schema migrations (run BEFORE accepting requests) ────
 // These ensure Drizzle ORM columns exist before any query can be executed.
+const PRE_START_SCHEMA_BOOTSTRAP_VERSION = "schema-bootstrap-v1";
+
 async function runCriticalPreStartMigrations() {
+  if (await isStartupMigrationComplete("api_pre_start_schema", PRE_START_SCHEMA_BOOTSTRAP_VERSION)) {
+    logger.info("Pre-start schema bootstrap already provisioned; repeated DDL/backfill skipped");
+    return;
+  }
+
   // Accounting posting emits a non-fatal audit event. Upgrade legacy
   // ledger_events before any authenticated posting can be accepted.
   logger.info("Pre-start migration: ledger events entry_id starting");
@@ -1547,6 +1558,11 @@ async function runCriticalPreStartMigrations() {
     logger.warn({ err }, "journal_sequences migration failed (non-fatal)");
   }
 
+  await markStartupMigrationComplete(
+    "api_pre_start_schema",
+    PRE_START_SCHEMA_BOOTSTRAP_VERSION,
+    "Critical API pre-start schema bootstrap and legacy compatibility columns",
+  );
 }
 
 // Flag set to true once the full migration + seed chain completes.
