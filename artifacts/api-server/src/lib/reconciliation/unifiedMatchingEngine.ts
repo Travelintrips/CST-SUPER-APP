@@ -650,6 +650,7 @@ export async function fetchCandidates(
   const direction = String(mutation.direction ?? "IN").toUpperCase() === "OUT" ? "OUT" : "IN";
   const mutationLooksPaylabs =
     /paylabs/i.test(String(mutation.provider_name ?? "")) ||
+    /paylabs/i.test(String(mutation.provider_order_id ?? "")) ||
     /paylabs/i.test(String(mutation.normalized_description ?? ""));
   const mutationLooksQris =
     !mutationLooksPaylabs &&
@@ -779,6 +780,11 @@ export async function fetchCandidates(
   const sportAmountFilter = mutationLooksQris
     ? qrisAmountFilter
     : `ABS(sp.amount::numeric - ${Number(amount)}) < 0.01`;
+  const sportPaymentTypeForMutation = mutationLooksPaylabs
+    ? "paylabs"
+    : mutationLooksQris
+      ? "qris"
+      : "bank_transfer";
   const settlementDateExpr = `COALESCE(sp.settlement_date, COALESCE(sp.paid_at::date, sp.created_at::date) + 1)`;
   const sportPaymentTypeExpr = `CASE
     WHEN LOWER(COALESCE(sp.payment_provider::text, '')) LIKE '%paylabs%'
@@ -892,8 +898,11 @@ export async function fetchCandidates(
           ${coFilter.replace("##TBL##", "e")}
       `,
     },
-    ...(mutationLooksQris ? [{
-      // sport_payment: filter per company + bank_account jika tersedia
+    ...(direction === "IN" ? [{
+      // Sport Center payments have three reconciliation rails:
+      // ordinary bank transfer, direct QRIS settlement, and Paylabs.
+      // QRIS uses verified net/settlement-date matching; the other two
+      // use the payment amount and payment date.
       type: "sport_payment" as CandidateType,
       q: `
         SELECT sp.id,
@@ -921,11 +930,10 @@ export async function fetchCandidates(
         LEFT JOIN customers c ON c.id = sp.customer_id
         LEFT JOIN sport_bookings sb ON sb.id = sp.booking_id
         WHERE ${sportAmountFilter}
-          AND '${direction}' = 'IN'
           ${company_id ? `AND sp.company_id = ${Number(company_id)}` : ""}
-           AND ${mutationLooksQris ? settlementDateExpr : sportCandidateDateExpr} BETWEEN ${dateFrom} AND ${dateTo}
+          AND ${mutationLooksQris ? settlementDateExpr : sportCandidateDateExpr} BETWEEN ${dateFrom} AND ${dateTo}
           AND sp.status = 'paid'
-           AND ${sportPaymentTypeExpr} = '${mutationLooksQris ? "qris" : mutationLooksPaylabs ? "paylabs" : "bank_transfer"}'
+          AND ${sportPaymentTypeExpr} = '${sportPaymentTypeForMutation}'
            ${aggregateMatchFilter}
            ${canonicalSportPaymentExclusion}
           AND (

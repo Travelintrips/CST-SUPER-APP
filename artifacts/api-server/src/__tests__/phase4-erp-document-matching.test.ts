@@ -57,6 +57,10 @@ vi.mock("@workspace/db", () => ({
   db: {
     execute: (...args: any[]) => mockExecute(...args),
   },
+  RECONCILIATION_CANDIDATE_SOURCES: {
+    LEGACY_QRIS: "qris_settlement",
+    CANONICAL_SPORT_CENTER: "sport_center.canonical_settlement",
+  },
 }));
 
 // ─── Helper factories ─────────────────────────────────────────────────────────
@@ -730,6 +734,7 @@ describe("Evidence priority hierarchy", () => {
 // ─── runErpDocumentMatching: direct integration tests (DB mocked) ─────────────
 
 import { runErpDocumentMatching } from "../lib/reconciliation/erpDocumentMatcher.js";
+import { fetchCandidates } from "../lib/reconciliation/unifiedMatchingEngine.js";
 
 /**
  * Mengkonversi drizzle SQL object (sql.raw(...)) ke string yang bisa dicari.
@@ -874,6 +879,53 @@ describe("runErpDocumentMatching — direction filtering (DB mock)", () => {
       return q.includes("cash_advances") && q.includes("company_bank_accounts");
     });
     expect(queriedCBA).toBe(true);
+  });
+});
+
+describe("fetchCandidates — Sport Center payment rails", () => {
+  afterEach(() => {
+    mockExecute.mockReset();
+    mockExecute.mockResolvedValue({ rows: [] });
+  });
+
+  async function sportPaymentQueryFor(input: {
+    normalized_description?: string | null;
+    provider_name?: string | null;
+    provider_order_id?: string | null;
+  }): Promise<string | undefined> {
+    await fetchCandidates({
+      amount: 2_000_000,
+      transaction_date: "2026-07-15",
+      company_id: 10,
+      direction: "IN",
+      bank_account_id: null,
+      provider_order_id: input.provider_order_id ?? null,
+      provider_name: input.provider_name ?? null,
+      normalized_description: input.normalized_description ?? null,
+    });
+    return mockExecute.mock.calls
+      .map((c: any[]) => sqlObjToString(c[0]))
+      .find((q: string) => q.includes("FROM sport_payments"));
+  }
+
+  it("includes ordinary bank-transfer Sport Center payments", async () => {
+    const query = await sportPaymentQueryFor({
+      normalized_description: "transfer CENAIDJA",
+    });
+
+    expect(query).toBeDefined();
+    expect(query).toContain("= 'bank_transfer'");
+  });
+
+  it("includes Paylabs Sport Center payments without routing them to direct QRIS", async () => {
+    const query = await sportPaymentQueryFor({
+      normalized_description: "PAYLABS SETTLEMENT",
+      provider_name: "Paylabs",
+      provider_order_id: "PL-20260715-001",
+    });
+
+    expect(query).toBeDefined();
+    expect(query).toContain("= 'paylabs'");
   });
 });
 
