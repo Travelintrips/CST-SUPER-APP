@@ -1505,6 +1505,9 @@ async function runCriticalPreStartMigrations() {
 // Exposed via GET /api/health/ready so tests and clients can poll before
 // triggering write operations that touch migrating tables.
 let migrationsComplete = false;
+const processStartedAt = Date.now();
+let migrationStartedAt: number | null = null;
+let migrationCompletedAt: number | null = null;
 
 async function startServer() {
   const poolConfig = getPoolConfig();
@@ -1528,7 +1531,17 @@ async function startServer() {
     res.set("Cache-Control", "no-store, no-cache, must-revalidate");
     res.set("Pragma", "no-cache");
     const ready = migrationsComplete;
-    res.json({ ready, status: ready ? "ready" : "starting" });
+    res.json({
+      ready,
+      status: ready ? "ready" : "starting",
+      phase: ready ? "ready" : migrationStartedAt == null ? "waiting_to_start" : "migrating",
+      uptime_seconds: Math.floor((Date.now() - processStartedAt) / 1000),
+      migration_started_at: migrationStartedAt ? new Date(migrationStartedAt).toISOString() : null,
+      migration_completed_at: migrationCompletedAt ? new Date(migrationCompletedAt).toISOString() : null,
+      migration_elapsed_ms: migrationStartedAt
+        ? (migrationCompletedAt ?? Date.now()) - migrationStartedAt
+        : null,
+    });
   });
 
   // E2E safety status — only exposed when SAFE_DEV_TEST_MODE or E2E_TEST_MODE active
@@ -1651,6 +1664,7 @@ async function startServer() {
   console.log("[startup] Registering serial migration chain");
   sleep(8_000)
     .then(async () => {
+      migrationStartedAt = Date.now();
       console.log("[startup] Serial migration chain delay elapsed");
       for (let attempt = 1; attempt <= 10; attempt++) {
         try {
@@ -1881,6 +1895,7 @@ async function startServer() {
     )
     .then(() => {
       migrationsComplete = true;
+      migrationCompletedAt = Date.now();
       // Do not let background workers compete with the startup migration chain
       // for the small development session-pooler connection budget.
       startAll();

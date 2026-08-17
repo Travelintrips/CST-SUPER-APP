@@ -67,7 +67,14 @@ function LoadingSpinner() {
 }
 
 function ApiPreparingScreen() {
-  const { apiReadinessError, retryApiReadiness } = useSupabaseAuth();
+  const { isApiAvailable, apiReadinessError, retryApiReadiness } = useSupabaseAuth();
+  const title = isApiAvailable ? "Menyiapkan BizPortal" : "API BizPortal tidak terjangkau";
+  const description = isApiAvailable
+    ? "Server sedang menyelesaikan persiapan database. Halaman login akan tersedia otomatis setelah API siap."
+    : "Browser belum dapat mencapai proses API melalui proxy. Sistem akan mencoba kembali otomatis.";
+  const defaultMessage = isApiAvailable
+    ? "Persiapan masih berjalan. Anda tidak perlu memuat ulang halaman."
+    : "API belum merespons. Pastikan workflow API berjalan; sistem akan mencoba kembali.";
 
   return (
     <div
@@ -80,14 +87,11 @@ function ApiPreparingScreen() {
           <div className="h-7 w-7 animate-spin rounded-full border-4 border-indigo-300 border-t-transparent" />
         </div>
         <div className="space-y-2">
-          <h1 className="text-xl font-semibold">Menyiapkan BizPortal</h1>
-          <p className="text-sm leading-6 text-slate-400">
-            Server sedang menyelesaikan persiapan database. Halaman login akan
-            tersedia otomatis setelah API siap.
-          </p>
+          <h1 className="text-xl font-semibold">{title}</h1>
+          <p className="text-sm leading-6 text-slate-400">{description}</p>
         </div>
         <div className="w-full rounded-lg border border-slate-800 bg-slate-900/70 px-4 py-3 text-left text-xs text-slate-400">
-          {apiReadinessError ?? "Persiapan masih berjalan. Anda tidak perlu memuat ulang halaman."}
+          {apiReadinessError ?? defaultMessage}
         </div>
         <button
           type="button"

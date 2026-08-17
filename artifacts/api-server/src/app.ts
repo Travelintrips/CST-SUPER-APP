@@ -215,6 +215,19 @@ app.use(
   authRateLimiter,
 );
 
+// ─── Process liveness ─────────────────────────────────────────────────────────
+// This endpoint intentionally sits before auth and route handlers. It answers
+// only whether this Node process can accept an HTTP request; it must not wait
+// for the database, migrations, external services, or session storage.
+app.get("/api/health/live", (_req: Request, res: Response) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate");
+  res.status(200).json({
+    status: "ok",
+    service: "api",
+    uptime_seconds: Math.floor(process.uptime()),
+  });
+});
+
 // Auth routes (login/callback/logout/mobile-auth) — mounted under /api
 app.use("/api", authRouter);
 

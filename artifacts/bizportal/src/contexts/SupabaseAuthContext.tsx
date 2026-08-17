@@ -25,6 +25,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 const CACHE_KEY = "biz_auth_user_v1";
 const IS_DEV = import.meta.env.DEV;
 const READINESS_POLL_INTERVAL_MS = 2_000;
+const LIVENESS_REQUEST_TIMEOUT_MS = 1_500;
 const READINESS_REQUEST_TIMEOUT_MS = 2_500;
 
 function readCache(): AuthUser | null {
@@ -67,37 +68,63 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
     let timer: number | undefined;
 
     const poll = async () => {
-      const controller = new AbortController();
-      const timeout = window.setTimeout(
-        () => controller.abort(),
-        READINESS_REQUEST_TIMEOUT_MS,
-      );
-
+      let liveOk = false;
       try {
-        const res = await fetch("/api/health/ready", {
+        const controller = new AbortController();
+        const timeout = window.setTimeout(
+          () => controller.abort(),
+          LIVENESS_REQUEST_TIMEOUT_MS,
+        );
+        const res = await fetch("/api/health/live", {
           credentials: "same-origin",
           cache: "no-store",
           signal: controller.signal,
         });
-        const data = await res.json().catch(() => null) as { ready?: boolean } | null;
-
-        if (cancelled) return;
-        setIsApiAvailable(res.ok);
-        if (data?.ready === true) {
-          setIsApiReady(true);
-          setApiReadinessError(null);
-          return;
-        }
-
-        setIsApiReady(false);
-        setApiReadinessError(null);
+        liveOk = res.ok;
+        window.clearTimeout(timeout);
       } catch {
-        if (cancelled) return;
+        liveOk = false;
+      }
+
+      if (cancelled) return;
+      setIsApiAvailable(liveOk);
+
+      if (!liveOk) {
         setIsApiAvailable(false);
         setIsApiReady(false);
         setApiReadinessError("API belum dapat dijangkau. Akan mencoba lagi otomatis.");
-      } finally {
-        window.clearTimeout(timeout);
+      } else {
+        try {
+          const controller = new AbortController();
+          const timeout = window.setTimeout(
+            () => controller.abort(),
+            READINESS_REQUEST_TIMEOUT_MS,
+          );
+          const res = await fetch("/api/health/ready", {
+            credentials: "same-origin",
+            cache: "no-store",
+            signal: controller.signal,
+          });
+          const data = await res.json().catch(() => null) as { ready?: boolean } | null;
+          window.clearTimeout(timeout);
+
+          if (cancelled) return;
+          setIsApiAvailable(true);
+          if (data?.ready === true) {
+            setIsApiReady(true);
+            setApiReadinessError(null);
+          } else {
+            setIsApiReady(false);
+            setApiReadinessError(null);
+          }
+        } catch {
+          if (cancelled) return;
+          // Liveness succeeded, so a slow/blocked readiness probe is not an
+          // unavailable API. Keep the distinction visible to the user.
+          setIsApiAvailable(true);
+          setIsApiReady(false);
+          setApiReadinessError("API hidup, tetapi persiapan database masih berjalan. Akan mencoba lagi otomatis.");
+        }
       }
 
       if (!cancelled) {
