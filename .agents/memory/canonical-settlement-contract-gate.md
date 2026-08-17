@@ -14,3 +14,5 @@ Runtime verification must treat the live Supabase catalog as authoritative: pass
 **Why:** The application can compile and its pure contract suite can pass while canonical builder/approval calls still fail against a runtime schema that has not installed the database-owned settlement routines.
 
 **How to apply:** Run the approved DEV and PROD catalog preflight through `load-secrets.mjs` before claiming end-to-end parity; classify missing routines, unresolved source/status ownership, and readiness timeout as publish blockers rather than silently applying a DEV→PROD sync.
+
+When diagnosing an apparent duplicate or missing bank link, inspect canonical settlement items by payment ID as well as batch `bank_mutation_id` and net amount; a posted batch can be unlinked and have the wrong net, so the bank mutation lookup alone misses the stale settlement.
