@@ -3131,7 +3131,7 @@ router.get("/mutations", async (req, res) => {
            FROM qris_mutation_batch_candidates qc
             WHERE qc.mutation_id = bm.id
                 AND (
-                 -- Keep the current candidate visible for normal review.
+                -- Only active candidates belong in the main mutation queue.
                  UPPER(COALESCE(qc.status, '')) NOT IN (
                    'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
                  )
@@ -3146,22 +3146,6 @@ router.get("/mutations", async (req, res) => {
                      )
                      ${canonicalSettledExcludeSql}
                  )
-                 -- If the current candidate was invalidated, keep the latest
-                 -- stale/ineligible evidence visible in the detail panel so the
-                 -- reviewer can see the payment items and the exact reason.
-                 -- This is display-only: approval guards still reject these
-                 -- statuses.
-                 OR (
-                   UPPER(COALESCE(qc.status, '')) IN ('STALE', 'INELIGIBLE')
-                   AND NOT EXISTS (
-                     SELECT 1
-                     FROM qris_mutation_batch_candidates qc_active
-                     WHERE qc_active.mutation_id = bm.id
-                       AND UPPER(COALESCE(qc_active.status, '')) NOT IN (
-                         'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
-                       )
-                   )
-                 )
                )
               AND (
                UPPER(COALESCE(bm.provider_name, '')) LIKE '%QRIS%'
@@ -3174,13 +3158,8 @@ router.get("/mutations", async (req, res) => {
                OR UPPER(COALESCE(bm.description, '')) LIKE '%QRTRAVELI%'
              )
            ORDER BY
-             CASE
-               WHEN UPPER(COALESCE(qc.status, '')) IN ('STALE', 'INELIGIBLE')
-                 THEN 1
-               ELSE 0
-             END,
-              qc.updated_at DESC,
-              qc.id DESC
+            qc.updated_at DESC,
+            qc.id DESC
            LIMIT 1
          ) AS qris_candidate_audit,
          (
@@ -3266,11 +3245,6 @@ router.get("/mutations", async (req, res) => {
              ), 0)
            )
            ORDER BY
-             CASE
-               WHEN UPPER(COALESCE(qc.status, '')) IN ('STALE', 'INELIGIBLE')
-                 THEN 1
-               ELSE 0
-             END,
              qc.updated_at DESC,
              qc.id DESC
           ), '[]'::jsonb)
@@ -3290,17 +3264,6 @@ router.get("/mutations", async (req, res) => {
                      WHERE qsi.sport_payment_id = (item->>'paymentId')::int
                    )
                    ${canonicalSettledExcludeSql}
-               )
-               OR (
-                 UPPER(COALESCE(qc.status, '')) IN ('STALE', 'INELIGIBLE')
-                 AND NOT EXISTS (
-                   SELECT 1
-                   FROM qris_mutation_batch_candidates qc_active
-                   WHERE qc_active.mutation_id = bm.id
-                     AND UPPER(COALESCE(qc_active.status, '')) NOT IN (
-                       'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
-                     )
-                 )
                )
              )
              AND (

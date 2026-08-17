@@ -772,10 +772,14 @@ function isCanonicalSettlementMutation(m: BankMutation): boolean {
 }
 
 function qrisAuditsForMutation(m: BankMutation): QrisCandidateAudit[] {
-  if (Array.isArray(m.qris_candidate_audits) && m.qris_candidate_audits.length > 0) {
-    return m.qris_candidate_audits;
-  }
-  return m.qris_candidate_audit ? [m.qris_candidate_audit] : [];
+  const audits = Array.isArray(m.qris_candidate_audits) && m.qris_candidate_audits.length > 0
+    ? m.qris_candidate_audits
+    : m.qris_candidate_audit
+      ? [m.qris_candidate_audit]
+      : [];
+  return audits.filter((audit) =>
+    !["stale", "superseded", "ineligible"].includes(String(audit.status ?? "").toLowerCase()),
+  );
 }
 
 function statusLabel(m: BankMutation): string {
