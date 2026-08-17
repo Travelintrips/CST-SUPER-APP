@@ -85,6 +85,35 @@ export function normalizeQrisProvider(value: string | null | undefined): QrisPro
 }
 
 /**
+ * Resolve a provider from the same evidence hierarchy used during candidate
+ * generation. A persisted literal such as "unknown" is not evidence and must
+ * not mask a provider encoded in the settlement reference or description.
+ */
+export function resolveQrisProviderFromEvidence(input: {
+  providerName?: string | null;
+  providerOrderId?: string | null;
+  settlementReference?: string | null;
+  providerBatchReference?: string | null;
+  providerTransactionReference?: string | null;
+  description?: string | null;
+}): QrisProviderCode {
+  const explicit = normalizeQrisProvider(input.providerName);
+  if (explicit !== "unknown") return explicit;
+
+  for (const reference of [
+    input.providerOrderId,
+    input.settlementReference,
+    input.providerBatchReference,
+    input.providerTransactionReference,
+  ]) {
+    const provider = normalizeQrisProvider(reference);
+    if (provider !== "unknown") return provider;
+  }
+
+  return normalizeQrisProvider(input.description);
+}
+
+/**
  * Provider identity is required for an automatic reconciliation. The only
  * intentional cross-label mapping is Mandiri's payment-side provider label
  * settling through the GPN label used by some bank statements.

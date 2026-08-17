@@ -76,6 +76,7 @@ import { isQrisSettlementDescription } from "../lib/reconciliation/qrisSettlemen
 import {
   areQrisProvidersCompatible,
   normalizeQrisProvider,
+  resolveQrisProviderFromEvidence,
 } from "../lib/reconciliation/providerSettlementRules.js";
 import {
   generateQrisCandidates,
@@ -2287,14 +2288,32 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       const candidateProvider = normalizeQrisProvider(row.provider_code == null
         ? null
         : String(row.provider_code));
-      const mutationProvider = normalizeQrisProvider(
-        row.bank_provider_name == null
-          ? String(row.bank_description ?? "")
+      const mutationProvider = resolveQrisProviderFromEvidence({
+        providerName: row.bank_provider_name == null
+          ? null
           : String(row.bank_provider_name),
-      );
-      if (candidateProvider === "unknown" || mutationProvider === "unknown") {
+        providerOrderId: row.bank_provider_order_id == null
+          ? null
+          : String(row.bank_provider_order_id),
+        description: row.bank_description == null
+          ? null
+          : String(row.bank_description),
+      });
+      if (candidateProvider === "unknown") {
         throw Object.assign(
-          new Error("Provider payment dan mutasi wajib tersedia untuk approval QRIS"),
+          new Error(
+            `Provider payment pada kandidat QRIS tidak dikenali (kandidat #${candidateId}). ` +
+            "Regenerasi kandidat setelah provider payment canonical diperbaiki.",
+          ),
+          { code: "INVALID_CANDIDATE" },
+        );
+      }
+      if (mutationProvider === "unknown") {
+        throw Object.assign(
+          new Error(
+            `Provider mutasi bank #${Number(row.mutation_id)} tidak dikenali. ` +
+            "Isi provider mutasi atau pastikan deskripsi/reference settlement memuat provider QRIS.",
+          ),
           { code: "INVALID_CANDIDATE" },
         );
       }
@@ -2341,8 +2360,24 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       }
 
       const { rows: livePaymentRows } = await tx.execute(sql.raw(`
-        SELECT id, amount, company_id, payment_provider, payment_method
+        SELECT
+          sp.id,
+          sp.amount,
+          sp.company_id,
+          sp.payment_provider,
+          sp.payment_method,
+          journal_provider.payment_provider AS journal_payment_provider
         FROM sport_center.sport_payments
+        sp
+        LEFT JOIN LATERAL (
+          SELECT aj.payment_provider
+          FROM sport_center.accounting_journals aj
+          WHERE aj.payment_id = sp.id
+            AND aj.journal_type = 'payment_confirmed'
+            AND aj.is_reversal = FALSE
+          ORDER BY aj.id DESC
+          LIMIT 1
+        ) journal_provider ON TRUE
         WHERE id IN (${candidatePaymentIds.join(",")})
         FOR SHARE
       `));
@@ -2382,6 +2417,48 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       if (selectedLivePayments.length !== selectedIds.length) {
         throw Object.assign(
           new Error("Payment canonical pada kandidat tidak ditemukan"),
+          { code: "INVALID_CANDIDATE" },
+        );
+      }
+      const missingPaymentProviders = selectedLivePayments
+        .map((payment) => {
+          const paymentProvider = normalizeQrisProvider(
+            payment.payment_provider == null
+              ? null
+              : String(payment.payment_provider),
+          );
+          if (paymentProvider !== "unknown") return null;
+          const journalProvider = normalizeQrisProvider(
+            payment.journal_payment_provider == null
+              ? null
+              : String(payment.journal_payment_provider),
+          );
+          return {
+            id: Number(payment.id),
+            journalProvider,
+          };
+        })
+        .filter((item): item is { id: number; journalProvider: ReturnType<typeof normalizeQrisProvider> } => item !== null);
+      if (missingPaymentProviders.length > 0) {
+        const journalOnly = missingPaymentProviders
+          .filter((item) => item.journalProvider !== "unknown")
+          .map((item) => `#${item.id} (jurnal=${item.journalProvider})`);
+        const sourceOnly = missingPaymentProviders
+          .filter((item) => item.journalProvider === "unknown")
+          .map((item) => `#${item.id}`);
+        const detail = [
+          journalOnly.length > 0
+            ? `provider hanya ada di accounting_journals: ${journalOnly.join(", ")}`
+            : "",
+          sourceOnly.length > 0
+            ? `provider canonical kosong/unknown: ${sourceOnly.join(", ")}`
+            : "",
+        ].filter(Boolean).join("; ");
+        throw Object.assign(
+          new Error(
+            `Provider payment canonical belum tersedia untuk approval QRIS (${detail}). ` +
+            "Perbaiki sport_center.sport_payments.payment_provider lalu regenerasi kandidat.",
+          ),
           { code: "INVALID_CANDIDATE" },
         );
       }

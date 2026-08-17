@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { addBusinessDays, jakartaDateFromTimestamp } from "../lib/reconciliation/businessCalendar.js";
-import { normalizeQrisProvider } from "../lib/reconciliation/providerSettlementRules.js";
+import {
+  normalizeQrisProvider,
+  resolveQrisProviderFromEvidence,
+} from "../lib/reconciliation/providerSettlementRules.js";
 import { calculateObservedDeduction, classifyBankMutationSource } from "../lib/reconciliation/qrisSettlement.js";
 import { generateQrisMutationBatchCandidates } from "../lib/reconciliation/qrisCandidateEngine.js";
 import { resolveActiveBankAccountId } from "../lib/reconciliation/bankAccountIdentity.js";
@@ -21,6 +24,18 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     expect(normalizeQrisProvider("Mandiri Direct")).toBe("mandiri_direct");
     expect(normalizeQrisProvider("Paylabs")).toBe("paylabs");
     expect(normalizeQrisProvider("QRIS")).toBe("unknown");
+  });
+
+  it("falls back from a literal unknown provider field to bank evidence", () => {
+    expect(resolveQrisProviderFromEvidence({
+      providerName: "unknown",
+      description: "QRTRAVELI SETTLEMENT",
+    })).toBe("gpn_qris");
+    expect(resolveQrisProviderFromEvidence({
+      providerName: "unknown",
+      providerOrderId: "PAYLABS-SETTLEMENT-123",
+      description: "QRIS",
+    })).toBe("paylabs");
   });
 
   it("resolves an external account number to the internal account ID", () => {
