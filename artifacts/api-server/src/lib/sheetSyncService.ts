@@ -745,10 +745,19 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
     addIfChanged(mutationKeyIdx, p.mutation_key);
 
     if (info) {
+      const normalizedStatus = String(info.status ?? "").toLowerCase();
       const statusLabel =
-        info.status === "approved"       ? "✅ APPROVED"
-        : info.status === "matched"      ? "🔍 MATCHED"
-        : info.status === "manual_review" ? "⚠️ REVIEW"
+        normalizedStatus === "posted"
+          ? "✅ POSTED"
+        : normalizedStatus === "approved_pending_posting" ||
+          normalizedStatus === "approved"
+          ? "✅ APPROVED"
+        : normalizedStatus === "matched" ||
+          normalizedStatus === "reconciled" ||
+          normalizedStatus === "auto_matched"
+          ? "🔍 MATCHED"
+        : normalizedStatus === "manual_review"
+          ? "⚠️ REVIEW"
         : "❌ UNMATCHED";
       // Nama & referensi: tampilkan kandidat terbaik meski belum approved (beri suffix ?)
       const namaSuffix      = info.detail_name    && !info.is_approved ? " (?)" : "";

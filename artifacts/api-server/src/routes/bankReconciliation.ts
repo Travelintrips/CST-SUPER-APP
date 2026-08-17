@@ -3334,7 +3334,7 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
         resourceId: `bank-mutation-${mutId}`,
         after: canonicalResult,
       });
-      triggerWritebackForMutation(mutId).catch(() => {});
+      triggerWritebackForMutation(resolvedMutId).catch(() => {});
       trackMutationApproval({
         mutationId: resolvedMutId,
         actor,
@@ -3393,7 +3393,7 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
 
   // Writeback langsung ke Google Sheet (fire-and-forget, non-blocking)
   // agar kolom nama_customer, kategori, status_rekon terupdate tanpa tunggu sync 60-detik
-  triggerWritebackForMutation(mutId).catch(() => {});
+  triggerWritebackForMutation(resolvedMutId).catch(() => {});
 
   // Runtime Usage Tracking — best-effort, never blocks or rolls back the journal
   trackMutationApproval({
@@ -3486,6 +3486,7 @@ router.post("/:mutationId/unapprove", async (req, res) => {
       `));
     });
 
+    triggerWritebackForMutation(mutId).catch(() => {});
     audit(req, { action: "unapprove", module: "accounting", resourceId: `bank-mutation-${mutId}` });
     return res.json({ ok: true });
   } catch (e: any) {
@@ -3658,6 +3659,9 @@ router.post("/:mutationId/post", async (req, res) => {
       `));
     });
 
+    // Approval write-back may have run before /post completed. Refresh the
+    // sheet after the mutation reaches its final posted state.
+    triggerWritebackForMutation(mutId).catch(() => {});
     audit(req, { action: "post-journal", module: "accounting", resourceId: `bank-mutation-${mutId}` });
     return res.json({ ok: true });
 
