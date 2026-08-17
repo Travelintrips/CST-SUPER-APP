@@ -983,7 +983,7 @@ function reconciliationEvidence(m: BankMutation): ReconciliationEvidence {
 
   const settlementItems = d?.settlementItems ?? [];
   const auditItems = audit?.payment_items ?? [];
-  const transactions = settlementItems.length > 0
+  const transactions: ReconciliationEvidence["transactions"] = settlementItems.length > 0
     ? settlementItems.map((item, index) => ({
         label: item.paymentNumber ?? `Booking ${item.bookingId != null ? `SC-${String(item.bookingId).padStart(4, "0")}` : `#${index + 1}`}`,
         amount: numericValue(item.netAmount ?? item.grossAmount) ?? 0,
@@ -1912,6 +1912,8 @@ function QrisMutationCard({
   onToggleQrisPayment,
   onToggleAllQrisPayments,
   onRunMatching,
+  onGenerateQrisCandidates,
+  qrisGenerationPending,
   mappingError,
 }: {
   m: BankMutation;
@@ -1925,9 +1927,13 @@ function QrisMutationCard({
   onToggleQrisPayment?: (candidateId: number, paymentId: number, checked: boolean) => void;
   onToggleAllQrisPayments?: (candidate: QrisCandidateAudit, checked: boolean) => void;
   onRunMatching: () => void;
+  onGenerateQrisCandidates?: () => void;
+  qrisGenerationPending?: boolean;
   mappingError?: MappingRequiredError;
 }) {
   const allItems = audit.payment_items ?? [];
+  const auditStatus = String(audit.status ?? "").toLowerCase();
+  const isReadOnlyEvidence = ["stale", "superseded", "ineligible"].includes(auditStatus);
   const settledPaymentIds = new Set((audit.settled_payment_ids ?? []).map(Number));
   const currentPaymentIds = Array.isArray(audit.current_payment_ids)
     ? new Set(audit.current_payment_ids.map(Number))
@@ -1944,6 +1950,9 @@ function QrisMutationCard({
   const availablePaymentIds = availableItems
     .map((item) => Number(item.paymentId ?? item.payment_id))
     .filter((id) => Number.isInteger(id) && id > 0);
+  // A stale candidate is deliberately not approvable, but its last snapshot is
+  // still useful evidence for correcting the source payment before regeneration.
+  const displayItems = isReadOnlyEvidence ? allItems : availableItems;
   const selectedPaymentIds = selectedQrisPaymentIds.filter((id) => availablePaymentIds.includes(id));
   const allPaymentsSelected = availablePaymentIds.length > 0
     && availablePaymentIds.every((id) => selectedPaymentIds.includes(id));
@@ -1961,25 +1970,35 @@ function QrisMutationCard({
       0,
     );
   const hasLiveScope = currentPaymentIds !== null;
-  const isPartialSettlement = hasLiveScope && availablePaymentIds.length < allItems.length;
-  const candidateGross = hasLiveScope
-    ? (numericValue(audit.current_gross_amount) ?? 0)
-    : snapshotGross;
+  const isPartialSettlement = !isReadOnlyEvidence && hasLiveScope && availablePaymentIds.length < allItems.length;
+  const candidateGross = isReadOnlyEvidence
+    ? snapshotGross
+    : hasLiveScope
+      ? (numericValue(audit.current_gross_amount) ?? 0)
+      : snapshotGross;
   const originalExpectedNet = numericValue(audit.net_amount) ?? Math.max(0, bankAmount - (numericValue(audit.observed_deduction) ?? 0));
-  const expectedNet = hasLiveScope
+  const expectedNet = hasLiveScope && !isReadOnlyEvidence
     ? (numericValue(audit.current_expected_amount)
       ?? (snapshotGross > 0 ? candidateGross * originalExpectedNet / snapshotGross : 0))
     : originalExpectedNet;
-  const mdr = hasLiveScope
+  const mdr = hasLiveScope && !isReadOnlyEvidence
     ? Math.max(0, candidateGross - expectedNet)
     : numericValue(audit.observed_deduction) ?? 0;
   const difference = bankAmount - originalExpectedNet;
+  const differenceAbs = Math.abs(difference);
+  const differenceExplanation = differenceAbs < 0.5
+    ? "Tidak ada selisih nominal pada snapshot kandidat. Kandidat tetap perlu diregenerasi karena bukti canonical-nya sudah stale."
+    : difference > 0
+      ? `Bank lebih besar ${idrWhole(difference)} daripada netto payment. Periksa payment yang belum masuk, tanggal settlement, atau biaya MDR.`
+      : `Netto payment lebih besar ${idrWhole(differenceAbs)} daripada mutasi bank. Periksa nominal payment, provider, dan potongan MDR.`;
   const metricScopeLabel = isPartialSettlement ? " tersisa" : "";
-  const differenceLabel = isPartialSettlement ? "Selisih Batch Awal" : "Selisih";
+  const differenceLabel = isPartialSettlement ? "Selisih Batch Awal" : "Selisih Bank vs Netto";
   const liveGrossForItem = (item: QrisPaymentItem) => {
     const paymentId = item.paymentId ?? item.payment_id;
     const liveAmount = paymentId == null ? undefined : currentPaymentAmounts[String(paymentId)];
-    return numericValue(liveAmount) ?? numericValue(item.grossAmount ?? item.gross_amount) ?? 0;
+    return isReadOnlyEvidence
+      ? numericValue(item.grossAmount ?? item.gross_amount) ?? 0
+      : numericValue(liveAmount) ?? numericValue(item.grossAmount ?? item.gross_amount) ?? 0;
   };
   const isApprovedItem = (item: QrisPaymentItem) => {
     const paymentId = item.paymentId ?? item.payment_id;
@@ -1994,10 +2013,13 @@ function QrisMutationCard({
     0,
   );
   const approvedPaymentCount = approvedItems.length;
-  const remainingPaymentCount = items.length;
+  const remainingPaymentCount = isReadOnlyEvidence ? availablePaymentIds.length : items.length;
+  const displayedPaymentCount = isReadOnlyEvidence ? allItems.length : remainingPaymentCount;
   const statusText = isApproved
     ? "Sudah Disetujui"
-    : isMatched
+    : isReadOnlyEvidence
+      ? "Bukti Stale — Revisi"
+      : isMatched
       ? "Cocok"
       : "Perlu Diperiksa";
 
@@ -2044,11 +2066,11 @@ function QrisMutationCard({
             <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
               {[
                 { label: "Total Uang Masuk", value: idr(bankAmount), tone: "text-foreground" },
-                { label: "Payment Disetujui", value: `${approvedPaymentCount} payment${approvedGross > 0 ? ` · ${idr(approvedGross)}` : ""}`, tone: "text-green-600" },
-                { label: "Payment Belum Disetujui", value: `${remainingPaymentCount} payment`, tone: remainingPaymentCount > 0 ? "text-amber-600" : "text-green-600" },
+                { label: isReadOnlyEvidence ? "Payment pada Snapshot" : "Payment Disetujui", value: isReadOnlyEvidence ? `${allItems.length} payment` : `${approvedPaymentCount} payment${approvedGross > 0 ? ` · ${idr(approvedGross)}` : ""}`, tone: isReadOnlyEvidence ? "text-amber-600" : "text-green-600" },
+                { label: isReadOnlyEvidence ? "Siap Di-approve" : "Payment Belum Disetujui", value: isReadOnlyEvidence ? `${availablePaymentIds.length} payment` : `${remainingPaymentCount} payment`, tone: remainingPaymentCount > 0 ? "text-amber-600" : "text-green-600" },
                 { label: `MDR (Estimasi${metricScopeLabel})`, value: idrWhole(mdr), tone: "text-foreground" },
-                { label: "Sisa Payment", value: `${idr(candidateGross)} · ${remainingPaymentCount} payment`, tone: "text-foreground" },
-                { label: differenceLabel, value: idrWhole(Math.abs(difference)), tone: difference === 0 ? "text-green-600" : "text-red-600" },
+                { label: isReadOnlyEvidence ? "Gross Snapshot" : "Sisa Payment", value: `${idr(candidateGross)} · ${displayedPaymentCount} payment`, tone: "text-foreground" },
+                { label: differenceLabel, value: idrWhole(differenceAbs), tone: differenceAbs < 0.5 ? "text-green-600" : "text-red-600" },
               ].map(metric => (
                 <div key={metric.label} className="min-w-0 rounded-md border bg-muted/20 px-2.5 py-2">
                   <p className="text-[10px] leading-tight text-muted-foreground">{metric.label}</p>
@@ -2056,6 +2078,36 @@ function QrisMutationCard({
                 </div>
               ))}
             </div>
+            {(isReadOnlyEvidence || differenceAbs >= 0.5) && (
+              <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2.5 text-xs text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
+                <div className="flex items-start gap-2">
+                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-300" />
+                  <div className="min-w-0 flex-1 space-y-2">
+                    <p className="font-semibold">
+                      {isReadOnlyEvidence ? "Sumber kandidat dan langkah revisi" : "Dari mana selisih ini berasal?"}
+                    </p>
+                    <div className="grid gap-x-4 gap-y-1 sm:grid-cols-2">
+                      <span>Mutasi bank: <strong>{idr(bankAmount)}</strong></span>
+                      <span>Gross payment: <strong>{idr(snapshotGross)}</strong></span>
+                      <span>Potongan MDR/biaya: <strong>{idr(mdr)}</strong></span>
+                      <span>Netto yang diharapkan: <strong>{idr(originalExpectedNet)}</strong></span>
+                      <span className="sm:col-span-2">Selisih bank − netto: <strong>{idrWhole(difference)}</strong></span>
+                    </div>
+                    <p className="leading-relaxed">{differenceExplanation}</p>
+                    <p className="leading-relaxed">
+                      Sumber bukti: <strong>{audit.candidate_source ?? "Sport Center payment"}</strong>
+                      {" · "}provider <strong>{audit.provider_code || "—"}</strong>
+                      {" · "}status <strong>{auditStatus.toUpperCase() || "—"}</strong>.
+                    </p>
+                    <ol className="list-decimal space-y-0.5 pl-4 leading-relaxed">
+                      <li>Revisi data sumber payment di Sport Center (nominal, provider, tanggal, atau metadata QRIS), bukan mengubah nominal mutasi bank.</li>
+                      <li>Jalankan <strong>AI Matching</strong> ulang agar bukti live terbaca.</li>
+                      <li>Setelah kandidat baru berstatus <strong>MATCHED</strong> atau <strong>REVIEW</strong>, pilih payment lalu approve.</li>
+                    </ol>
+                  </div>
+                </div>
+              </div>
+            )}
             {isPartialSettlement && (
               <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-[10px] leading-relaxed text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
                 Stat menunjukkan total bank, status payment, MDR sisa, nominal sisa payment, dan selisih batch.
@@ -2063,12 +2115,16 @@ function QrisMutationCard({
               </p>
             )}
 
-            {items.length > 0 ? (
+            {displayItems.length > 0 ? (
               <div className="mt-3 overflow-hidden rounded-md border" onClick={e => e.stopPropagation()}>
                 <div className="flex items-center justify-between gap-2 border-b bg-muted/30 px-2.5 py-2">
                   <div>
-                    <p className="text-xs font-semibold">Kandidat Transaksi Sport Center</p>
-                    <p className="text-[10px] text-muted-foreground">Pilih transaksi yang akan diproses sebagai satu batch QRIS.</p>
+                    <p className="text-xs font-semibold">{isReadOnlyEvidence ? "Bukti Kandidat Terakhir (Read-only)" : "Kandidat Transaksi Sport Center"}</p>
+                    <p className="text-[10px] text-muted-foreground">
+                      {isReadOnlyEvidence
+                        ? "Snapshot ini membantu menemukan sumber selisih. Perbaiki sumbernya lalu buat kandidat baru."
+                        : "Pilih transaksi yang akan diproses sebagai satu batch QRIS."}
+                    </p>
                   </div>
                   {canSelect && audit.id != null && onToggleAllQrisPayments && (
                     <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-[10px] font-medium">
@@ -2092,7 +2148,7 @@ function QrisMutationCard({
                       <span className="text-right">Nominal (Gross)</span>
                       <span className="text-center">Pilih</span>
                     </div>
-                    {items.map((item, index) => {
+                    {displayItems.map((item, index) => {
                       const paymentId = item.paymentId ?? item.payment_id;
                       const booking = item.bookingNumber ?? item.booking_number ?? (item.booking_id != null ? `SC-${String(item.booking_id).padStart(4, "0")}` : "—");
                       const payment = item.paymentNumber ?? item.payment_number ?? (paymentId != null ? `#${paymentId}` : "—");
@@ -2118,6 +2174,8 @@ function QrisMutationCard({
                               />
                             ) : settledPaymentIds.has(Number(paymentId)) ? (
                               <Badge variant="outline" className="text-[9px] border-green-300 text-green-700">Tersettle</Badge>
+                            ) : isReadOnlyEvidence ? (
+                              <Badge variant="outline" className="text-[9px] border-amber-300 text-amber-700">Audit</Badge>
                             ) : (
                               <span className="text-muted-foreground">—</span>
                             )}
@@ -2128,7 +2186,9 @@ function QrisMutationCard({
                   </div>
                 </div>
                 <p className="border-t bg-muted/15 px-2.5 py-1.5 text-[10px] text-muted-foreground">
-                   Legenda: MDR (Estimasi) = Total potongan QRIS · Approval hanya memproses payment yang dipilih.
+                   {isReadOnlyEvidence
+                     ? "Audit = bukti snapshot, bukan persetujuan. Revisi sumber payment lalu buat kandidat baru."
+                     : "Legenda: MDR (Estimasi) = Total potongan QRIS · Approval hanya memproses payment yang dipilih."}
                 </p>
               </div>
             ) : (
@@ -2177,7 +2237,7 @@ function QrisMutationCard({
                   Reject
                 </Button>
               )}
-              {!isApproved && audit.id != null && onApproveQrisBatch && (
+              {!isApproved && audit.id != null && onApproveQrisBatch && canSelect && (
                 <Button
                   size="sm"
                   className="ml-auto h-8 gap-1.5 bg-green-600 text-xs text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
@@ -2190,6 +2250,29 @@ function QrisMutationCard({
                     : <CheckCircle2 className="h-3.5 w-3.5" />}
                   {approveQrisPending ? "Memproses approval QRIS..." : `Approve QRIS Terpilih (${selectedPaymentIds.length})`}
                 </Button>
+              )}
+              {!isApproved && audit.id != null && !canSelect && (
+                <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
+                  <span className="text-[11px] text-amber-700 dark:text-amber-300">
+                    {isReadOnlyEvidence
+                      ? "Revisi sumber dan buat kandidat baru sebelum approve."
+                      : `Status ${audit.reconciliation_status || "UNMATCHED"} belum eligible.`}
+                  </span>
+                  {isReadOnlyEvidence && onGenerateQrisCandidates && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 gap-1.5 border-amber-400 text-xs text-amber-800 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-200"
+                      disabled={qrisGenerationPending}
+                      onClick={onGenerateQrisCandidates}
+                    >
+                      {qrisGenerationPending
+                        ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        : <RotateCcw className="h-3.5 w-3.5" />}
+                      {qrisGenerationPending ? "Memuat kandidat..." : "Buat Kandidat Baru"}
+                    </Button>
+                  )}
+                </div>
               )}
               {isApproved && (
                 <Badge className="ml-auto bg-green-600 text-white">
@@ -2284,6 +2367,8 @@ function MutationCard({
         onToggleQrisPayment={onToggleQrisPayment}
         onToggleAllQrisPayments={onToggleAllQrisPayments}
         onRunMatching={onRunMatching}
+        onGenerateQrisCandidates={onGenerateQrisCandidates}
+        qrisGenerationPending={qrisGenerationPending}
         mappingError={mappingError}
       />
     );
