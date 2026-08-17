@@ -15,6 +15,7 @@ describe("canonical Sport Center owner routine restoration contract", () => {
       "mark_settlement_payments_settled(",
       "create_payment_settlement_batch(",
       "finalize_payment_settlement(",
+      "recover_posted_settlement_from_bank_mutation(",
       "find_settlement_bank_candidates(",
     ]) {
       expect(migrationSource).toContain(

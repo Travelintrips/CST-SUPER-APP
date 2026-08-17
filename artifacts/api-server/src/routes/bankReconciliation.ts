@@ -93,6 +93,7 @@ import {
   CanonicalSettlementApprovalError,
   CANONICAL_SETTLEMENT_SOURCE,
 } from "../lib/reconciliation/canonicalSettlementApproval.js";
+import { recoverPostedSettlementFromBankMutation } from "../lib/reconciliation/canonicalSettlementRecovery.js";
 import { buildCanonicalSportCenterSettlements } from "../lib/reconciliation/canonicalSettlementBuilder.js";
 import {
   assertGenericPostAllowed,
@@ -3599,6 +3600,55 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
   }).catch(() => {});
 
   return res.json(responseBody);
+});
+
+// ─── POST /api/bank-reconciliation/:mutationId/recover-canonical-settlement ──
+// Owner-only recovery for a posted settlement whose actual bank net differs
+// from the original calculated net. The database routine keeps the existing
+// posted settlement journal and performs the metadata/link correction atomically.
+router.post("/:mutationId/recover-canonical-settlement", async (req, res) => {
+  await runBankReconciliationCoreMigration();
+  const mutationId = parseInt(String(req.params.mutationId ?? ""), 10);
+  const settlementId = Number(req.body?.settlement_id);
+  if (
+    !Number.isSafeInteger(mutationId) ||
+    mutationId <= 0 ||
+    !Number.isSafeInteger(settlementId) ||
+    settlementId <= 0
+  ) {
+    return res.status(400).json({
+      error: "mutationId dan settlement_id wajib berupa ID positif.",
+      code: "CANONICAL_SETTLEMENT_RECOVERY_INVALID_ID",
+    });
+  }
+
+  const actor = String((req as any).user?.email ?? "admin").trim();
+  try {
+    const result = await recoverPostedSettlementFromBankMutation(db as any, {
+      settlementId,
+      publicMutationId: mutationId,
+      actor,
+    });
+
+    audit(req, {
+      action: "recover-canonical-settlement",
+      module: "bank-reconciliation",
+      resourceId: `bank-mutation-${mutationId}`,
+      after: result,
+    });
+    triggerWritebackForMutation(mutationId).catch(() => {});
+    return res.json(result);
+  } catch (error: any) {
+    const message = error?.cause?.message ?? error?.message ?? "Owner recovery gagal";
+    logger.warn(
+      { err: message, mutationId, settlementId },
+      "[bankRecon/recover-canonical-settlement] rejected",
+    );
+    return res.status(409).json({
+      error: message,
+      code: "CANONICAL_SETTLEMENT_RECOVERY_FAILED",
+    });
+  }
 });
 
 // ─── POST /api/bank-reconciliation/:mutationId/unapprove ─────────────────────

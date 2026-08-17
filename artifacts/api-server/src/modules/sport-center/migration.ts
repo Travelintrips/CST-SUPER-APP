@@ -2271,6 +2271,566 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
   `));
 
   /*
+   * Owner recovery for a posted settlement whose bank evidence has a
+   * different net amount than the original calculation.
+   *
+   * This is intentionally one database-owned transaction.  It does not
+   * create, reverse, or replace an accounting journal; it corrects only the
+   * settlement metadata and reconciliation link after re-checking the
+   * already-settled payment set and the actual bank evidence.
+   */
+  await db.execute(sql.raw(`
+    CREATE OR REPLACE FUNCTION sport_center.recover_posted_settlement_from_bank_mutation(
+      p_settlement_id bigint,
+      p_public_mutation_id integer,
+      p_actor text DEFAULT 'canonical-settlement-recovery'
+    )
+    RETURNS TABLE (
+      settlement_id bigint,
+      public_mutation_id integer,
+      canonical_mutation_id integer,
+      match_id integer,
+      old_net_amount numeric,
+      recovered_net_amount numeric,
+      adjustment_amount numeric,
+      settlement_status text,
+      public_mutation_status text,
+      canonical_mutation_status text,
+      idempotent boolean
+    )
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'sport_center', 'public'
+    AS $function$
+    DECLARE
+      v_public public.bank_mutations%ROWTYPE;
+      v_batch sport_center.payment_settlement_batches%ROWTYPE;
+      v_journal sport_center.accounting_journals%ROWTYPE;
+      v_canonical sport_center.bank_mutations%ROWTYPE;
+      v_config_count integer;
+      v_internal_bank_account_id integer;
+      v_active_item_count integer;
+      v_other_settlement_count integer;
+      v_active_match_count integer;
+      v_match_id integer;
+      v_existing_match record;
+      v_old_net numeric;
+      v_base_net numeric;
+      v_recovered_net numeric;
+      v_adjustment numeric;
+      v_date_difference integer;
+      v_idempotent boolean := false;
+      v_mutation_key text;
+      v_actor text;
+    BEGIN
+      IF p_settlement_id IS NULL OR p_settlement_id <= 0
+         OR p_public_mutation_id IS NULL OR p_public_mutation_id <= 0
+      THEN
+        RAISE EXCEPTION 'CANONICAL_SETTLEMENT_RECOVERY_INVALID_ID';
+      END IF;
+
+      v_actor := NULLIF(BTRIM(p_actor), '');
+      IF v_actor IS NULL THEN
+        RAISE EXCEPTION 'CANONICAL_SETTLEMENT_RECOVERY_ACTOR_REQUIRED';
+      END IF;
+
+      PERFORM pg_advisory_xact_lock(
+        hashtext(
+          'canonical-settlement-recovery:'
+          || p_settlement_id::text
+          || ':'
+          || p_public_mutation_id::text
+        )
+      );
+
+      SELECT *
+        INTO v_public
+        FROM public.bank_mutations
+       WHERE id = p_public_mutation_id
+       FOR UPDATE;
+
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'CANONICAL_SETTLEMENT_RECOVERY_PUBLIC_MUTATION_NOT_FOUND: %',
+          p_public_mutation_id;
+      END IF;
+
+      SELECT *
+        INTO v_batch
+        FROM sport_center.payment_settlement_batches
+       WHERE id = p_settlement_id
+       FOR UPDATE;
+
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'CANONICAL_SETTLEMENT_RECOVERY_SETTLEMENT_NOT_FOUND: %',
+          p_settlement_id;
+      END IF;
+
+      IF v_batch.settlement_journal_id IS NULL THEN
+        RAISE EXCEPTION 'CANONICAL_SETTLEMENT_RECOVERY_JOURNAL_REQUIRED: %',
+          p_settlement_id;
+      END IF;
+
+      SELECT *
+        INTO v_journal
+        FROM sport_center.accounting_journals
+       WHERE id = v_batch.settlement_journal_id
+       FOR UPDATE;
+
+      IF NOT FOUND
+         OR v_journal.status <> 'posted'
+         OR v_journal.journal_type <> 'settlement'
+         OR v_journal.is_reversal IS DISTINCT FROM FALSE
+         OR v_journal.settlement_batch_id IS DISTINCT FROM p_settlement_id
+      THEN
+        RAISE EXCEPTION
+          'CANONICAL_SETTLEMENT_RECOVERY_JOURNAL_NOT_ELIGIBLE: settlement=% journal=%',
+          p_settlement_id,
+          v_batch.settlement_journal_id;
+      END IF;
+
+      v_mutation_key := NULLIF(BTRIM(v_public.mutation_key), '');
+      IF v_mutation_key IS NULL
+         OR v_public.company_id IS NULL
+         OR v_public.transaction_date IS NULL
+         OR v_public.amount IS NULL
+         OR v_public.amount <= 0
+         OR LOWER(COALESCE(v_public.direction, '')) NOT IN
+             ('in', 'credit', 'incoming', 'cr')
+      THEN
+        RAISE EXCEPTION
+          'CANONICAL_SETTLEMENT_RECOVERY_BANK_EVIDENCE_INVALID: mutation=%',
+          p_public_mutation_id;
+      END IF;
+
+      IF v_public.journal_entry_id IS NOT NULL THEN
+        RAISE EXCEPTION
+          'CANONICAL_SETTLEMENT_RECOVERY_GENERIC_JOURNAL_EXISTS: mutation=%',
+          p_public_mutation_id;
+      END IF;
+
+      IF v_batch.company_id IS DISTINCT FROM v_public.company_id THEN
+        RAISE EXCEPTION
+          'CANONICAL_SETTLEMENT_RECOVERY_COMPANY_MISMATCH: settlement=% mutation=%',
+          p_settlement_id,
+          p_public_mutation_id;
+      END IF;
+
+      v_date_difference :=
+        ABS(v_public.transaction_date::date - v_batch.settlement_date)::integer;
+      IF v_date_difference > 1 THEN
+        RAISE EXCEPTION
+          'CANONICAL_SETTLEMENT_RECOVERY_DATE_OUTSIDE_TOLERANCE: settlement=% mutation=% days=%',
+          p_settlement_id,
+          p_public_mutation_id,
+          v_date_difference;
+      END IF;
+
+      IF v_public.amount > v_batch.gross_amount THEN
+        RAISE EXCEPTION
+          'CANONICAL_SETTLEMENT_RECOVERY_NET_EXCEEDS_GROSS: settlement=% mutation=%',
+          p_settlement_id,
+          p_public_mutation_id;
+      END IF;
+
+      SELECT COUNT(*)::integer
+        INTO v_config_count
+        FROM sport_center.payment_settlement_configs psc
+       WHERE psc.company_id = v_batch.company_id
+         AND LOWER(BTRIM(psc.provider_code)) =
+             LOWER(BTRIM(v_batch.provider_code))
+         AND BTRIM(psc.bank_account_id) = BTRIM(v_batch.bank_account_id)
+         AND psc.is_active = TRUE
+         AND psc.source = 'OWNER_APPROVED'
+         AND psc.effective_from <= v_batch.settlement_date
+         AND (
+           psc.effective_until IS NULL
+           OR v_batch.settlement_date < psc.effective_until
+         );
+
+      IF v_config_count <> 1 THEN
+        RAISE EXCEPTION
+          'CANONICAL_SETTLEMENT_RECOVERY_CONFIG_INVALID: settlement=% configs=%',
+          p_settlement_id,
+          v_config_count;
+      END IF;
+
+      v_internal_bank_account_id :=
+        sport_center.resolve_internal_bank_account_id(
+          v_batch.company_id,
+          v_batch.bank_account_id
+        );
+      IF v_public.bank_account_id IS NOT NULL
+         AND v_public.bank_account_id::text <>
+             v_internal_bank_account_id::text
+      THEN
+        RAISE EXCEPTION
+          'CANONICAL_SETTLEMENT_RECOVERY_BANK_ACCOUNT_MISMATCH: settlement=% mutation=%',
+          p_settlement_id,
+          p_public_mutation_id;
+      END IF;
+
+      PERFORM i.id
+        FROM sport_center.payment_settlement_items i
+       WHERE i.settlement_id = p_settlement_id
+         AND i.item_status = 'active'
+       FOR UPDATE;
+
+      SELECT COUNT(*)::integer
+        INTO v_active_item_count
+        FROM sport_center.payment_settlement_items
+       WHERE settlement_id = p_settlement_id
+         AND item_status = 'active';
+
+      IF v_active_item_count = 0 THEN
+        RAISE EXCEPTION
+          'CANONICAL_SETTLEMENT_RECOVERY_ACTIVE_ITEMS_REQUIRED: settlement=%',
+          p_settlement_id;
+      END IF;
+
+      SELECT COUNT(DISTINCT other_items.settlement_id)::integer
+        INTO v_other_settlement_count
+        FROM sport_center.payment_settlement_items target_items
+        JOIN sport_center.payment_settlement_items other_items
+          ON other_items.payment_id = target_items.payment_id
+         AND other_items.item_status = 'active'
+         AND other_items.settlement_id <> p_settlement_id
+       WHERE target_items.settlement_id = p_settlement_id
+         AND target_items.item_status = 'active';
+
+      IF v_other_settlement_count <> 0 THEN
+        RAISE EXCEPTION
+          'CANONICAL_SETTLEMENT_RECOVERY_PAYMENT_ALREADY_SETTLED: settlement=% conflicts=%',
+          p_settlement_id,
+          v_other_settlement_count;
+      END IF;
+
+      SELECT COUNT(*)::integer
+        INTO v_active_match_count
+        FROM public.bank_reconciliation_matches
+       WHERE mutation_id = p_public_mutation_id
+         AND status IN ('candidate', 'approved');
+
+      IF v_active_match_count > 1 THEN
+        RAISE EXCEPTION
+          'CANONICAL_SETTLEMENT_RECOVERY_MULTIPLE_ACTIVE_MATCHES: mutation=%',
+          p_public_mutation_id;
+      END IF;
+
+      SELECT *
+        INTO v_existing_match
+        FROM public.bank_reconciliation_matches
+       WHERE mutation_id = p_public_mutation_id
+         AND status IN ('candidate', 'approved')
+       ORDER BY id
+       LIMIT 1
+       FOR UPDATE;
+
+      v_old_net := v_batch.net_amount;
+      v_base_net := ROUND(
+        (
+          v_batch.gross_amount
+          - v_batch.mdr_amount
+          - v_batch.provider_fee_amount
+          - v_batch.fee_tax_amount
+          - v_batch.tax_withheld_amount
+        )::numeric,
+        2
+      );
+      v_recovered_net := ROUND(v_public.amount::numeric, 2);
+      v_adjustment := ROUND(v_recovered_net - v_base_net, 2);
+
+      SELECT *
+        INTO v_canonical
+        FROM sport_center.bank_mutations
+       WHERE mutation_key = v_mutation_key
+       FOR UPDATE;
+
+      IF FOUND
+         AND (
+           v_canonical.source_table IS DISTINCT FROM 'public.bank_mutations'
+           OR v_canonical.source_id IS DISTINCT FROM p_public_mutation_id::text
+         )
+      THEN
+        RAISE EXCEPTION
+          'CANONICAL_SETTLEMENT_RECOVERY_IDENTITY_CONFLICT: mutation=%',
+          p_public_mutation_id;
+      END IF;
+
+      IF FOUND THEN
+        SELECT COUNT(*)::integer
+          INTO v_other_settlement_count
+          FROM sport_center.payment_settlement_batches
+         WHERE bank_mutation_id = v_canonical.id
+           AND id <> p_settlement_id;
+
+        IF v_other_settlement_count <> 0 THEN
+          RAISE EXCEPTION
+            'CANONICAL_SETTLEMENT_RECOVERY_MUTATION_ALREADY_LINKED: mutation=%',
+            p_public_mutation_id;
+        END IF;
+      ELSE
+        INSERT INTO sport_center.bank_mutations (
+          bank_account_id,
+          transaction_date,
+          description,
+          credit_amount,
+          debit_amount,
+          amount,
+          direction,
+          mutation_key,
+          normalized_description,
+          provider_name,
+          provider_order_id,
+          status,
+          company_id,
+          source,
+          source_classification,
+          source_app,
+          source_module,
+          source_table,
+          source_id,
+          provenance
+        )
+        VALUES (
+          v_batch.bank_account_id,
+          v_public.transaction_date,
+          v_public.description,
+          v_public.amount,
+          0,
+          v_public.amount,
+          'IN',
+          v_mutation_key,
+          v_public.normalized_description,
+          v_batch.provider_code,
+          v_public.provider_order_id,
+          'unmatched'::sport_center.bank_mutation_status,
+          v_batch.company_id,
+          'PUBLIC_BANK_MUTATION_BRIDGE',
+          'actual_bank_mutation',
+          'cst-super-app',
+          'canonical_settlement_recovery',
+          'public.bank_mutations',
+          p_public_mutation_id::text,
+          jsonb_build_object(
+            'bridge', 'public_to_sport_center',
+            'recovery', 'posted_settlement_net_correction',
+            'public_mutation_id', p_public_mutation_id,
+            'settlement_id', p_settlement_id
+          )
+        )
+        RETURNING * INTO v_canonical;
+      END IF;
+
+      IF v_canonical.status IN ('rejected'::sport_center.bank_mutation_status)
+         AND NOT (
+           v_batch.status = 'reconciled'
+           AND v_batch.bank_mutation_id = v_canonical.id
+           AND v_public.status = 'approved'
+         )
+      THEN
+        RAISE EXCEPTION
+          'CANONICAL_SETTLEMENT_RECOVERY_CANONICAL_MUTATION_REJECTED: mutation=%',
+          p_public_mutation_id;
+      END IF;
+
+      IF v_batch.status = 'reconciled'
+         AND v_batch.bank_mutation_id = v_canonical.id
+         AND v_public.status = 'approved'
+         AND v_existing_match.id IS NOT NULL
+         AND v_existing_match.candidate_id = p_settlement_id
+         AND v_existing_match.candidate_source =
+             'sport_center.payment_settlement_batches'
+         AND v_existing_match.status = 'approved'
+      THEN
+        v_idempotent := true;
+        v_recovered_net := v_batch.net_amount;
+        v_adjustment := v_batch.adjustment_amount;
+        v_match_id := v_existing_match.id;
+      ELSE
+        IF v_batch.status <> 'posted' OR v_batch.bank_mutation_id IS NOT NULL THEN
+          RAISE EXCEPTION
+            'CANONICAL_SETTLEMENT_RECOVERY_SETTLEMENT_NOT_POSTED_UNLINKED: settlement=% status=% bank_mutation=%',
+            p_settlement_id,
+            v_batch.status,
+            v_batch.bank_mutation_id;
+        END IF;
+
+        IF v_public.status <> 'unmatched' THEN
+          RAISE EXCEPTION
+            'CANONICAL_SETTLEMENT_RECOVERY_PUBLIC_MUTATION_NOT_UNMATCHED: mutation=% status=%',
+            p_public_mutation_id,
+            v_public.status;
+        END IF;
+
+        IF v_existing_match.id IS NOT NULL
+           AND (
+             v_existing_match.candidate_type <> 'qris_settlement'
+             OR v_existing_match.candidate_id <> p_settlement_id
+             OR v_existing_match.candidate_source <>
+                'sport_center.payment_settlement_batches'
+           )
+        THEN
+          RAISE EXCEPTION
+            'CANONICAL_SETTLEMENT_RECOVERY_MATCH_CONFLICT: mutation=%',
+            p_public_mutation_id;
+        END IF;
+
+        UPDATE sport_center.bank_mutations
+           SET status = 'approved'::sport_center.bank_mutation_status,
+               approved_by = v_actor,
+               approved_at = NOW(),
+               updated_at = NOW()
+         WHERE id = v_canonical.id
+           AND status IN (
+             'unmatched'::sport_center.bank_mutation_status,
+             'matched'::sport_center.bank_mutation_status,
+             'auto_matched'::sport_center.bank_mutation_status
+           );
+
+        IF NOT FOUND THEN
+          RAISE EXCEPTION
+            'CANONICAL_SETTLEMENT_RECOVERY_CANONICAL_STATE_CHANGED: mutation=%',
+            p_public_mutation_id;
+        END IF;
+
+        UPDATE sport_center.payment_settlement_batches
+           SET net_amount = v_recovered_net,
+               adjustment_amount = v_adjustment,
+               bank_mutation_id = v_canonical.id,
+               status = 'reconciled',
+               reconciled_at = NOW(),
+               reconciled_by = v_actor,
+               notes = CONCAT(
+                 COALESCE(notes || E'\\n', ''),
+                 'OWNER_RECOVERY: net ',
+                 v_old_net::text,
+                 ' -> ',
+                 v_recovered_net::text,
+                 ' from public.bank_mutations ',
+                 p_public_mutation_id::text
+               ),
+               updated_at = NOW()
+         WHERE id = p_settlement_id
+           AND status = 'posted'
+           AND bank_mutation_id IS NULL;
+
+        IF NOT FOUND THEN
+          RAISE EXCEPTION
+            'CANONICAL_SETTLEMENT_RECOVERY_SETTLEMENT_STATE_CHANGED: settlement=%',
+            p_settlement_id;
+        END IF;
+
+        UPDATE public.bank_mutations
+           SET status = 'approved',
+               approved_by = v_actor,
+               approved_at = NOW(),
+               updated_at = NOW()
+         WHERE id = p_public_mutation_id
+           AND status = 'unmatched';
+
+        IF NOT FOUND THEN
+          RAISE EXCEPTION
+            'CANONICAL_SETTLEMENT_RECOVERY_PUBLIC_STATE_CHANGED: mutation=%',
+            p_public_mutation_id;
+        END IF;
+
+        IF v_existing_match.id IS NULL THEN
+          INSERT INTO public.bank_reconciliation_matches (
+            mutation_id,
+            candidate_type,
+            candidate_id,
+            match_score,
+            match_reason,
+            amount_match,
+            date_match,
+            name_match,
+            order_id_match,
+            proof_match,
+            status,
+            candidate_source
+          )
+          VALUES (
+            p_public_mutation_id,
+            'qris_settlement',
+            p_settlement_id::integer,
+            100,
+            'OWNER_RECOVERY_NET_CORRECTION',
+            TRUE,
+            TRUE,
+            FALSE,
+            FALSE,
+            FALSE,
+            'approved',
+            'sport_center.payment_settlement_batches'
+          )
+          RETURNING id INTO v_match_id;
+        ELSE
+          UPDATE public.bank_reconciliation_matches
+             SET candidate_type = 'qris_settlement',
+                 candidate_id = p_settlement_id::integer,
+                 match_score = 100,
+                 match_reason = 'OWNER_RECOVERY_NET_CORRECTION',
+                 amount_match = TRUE,
+                 date_match = TRUE,
+                 status = 'approved',
+                 candidate_source =
+                   'sport_center.payment_settlement_batches'
+           WHERE id = v_existing_match.id;
+          v_match_id := v_existing_match.id;
+        END IF;
+      END IF;
+
+      IF v_canonical.status <> 'approved'::sport_center.bank_mutation_status THEN
+        UPDATE sport_center.bank_mutations
+           SET status = 'approved'::sport_center.bank_mutation_status,
+               approved_by = v_actor,
+               approved_at = COALESCE(approved_at, NOW()),
+               updated_at = NOW()
+         WHERE id = v_canonical.id;
+      END IF;
+
+      INSERT INTO public.bank_reconciliation_audit (
+        mutation_id,
+        action,
+        actor,
+        meta
+      )
+      VALUES (
+        p_public_mutation_id,
+        'CANONICAL_SETTLEMENT_OWNER_RECOVERY',
+        v_actor,
+        jsonb_build_object(
+          'settlement_id', p_settlement_id,
+          'public_mutation_id', p_public_mutation_id,
+          'canonical_mutation_id', v_canonical.id,
+          'match_id', v_match_id,
+          'old_net_amount', v_old_net,
+          'recovered_net_amount', v_recovered_net,
+          'adjustment_amount', v_adjustment,
+          'settlement_journal_id', v_batch.settlement_journal_id,
+          'journal_created', FALSE,
+          'journal_reversed', FALSE,
+          'idempotent', v_idempotent
+        )
+      );
+
+      settlement_id := p_settlement_id;
+      public_mutation_id := p_public_mutation_id;
+      canonical_mutation_id := v_canonical.id;
+      match_id := v_match_id;
+      old_net_amount := v_old_net;
+      recovered_net_amount := v_recovered_net;
+      adjustment_amount := v_adjustment;
+      settlement_status := 'reconciled';
+      public_mutation_status := 'approved';
+      canonical_mutation_status := 'approved';
+      idempotent := v_idempotent;
+      RETURN NEXT;
+    END;
+    $function$;
+  `));
+
+  /*
    * Read-only candidate evidence owner.  Keep this function independent from
    * the public QRIS matcher: canonical settlement evidence comes only from
    * sport_center.bank_mutations and is eligible only when the settlement
@@ -2729,6 +3289,7 @@ const REQUIRED_CANONICAL_SETTLEMENT_ROUTINES = [
   ["mark_settlement_payments_settled", "bigint, text"],
   ["create_payment_settlement_batch", "text, integer, text, text, date, integer[], text"],
   ["finalize_payment_settlement", "bigint, text"],
+  ["recover_posted_settlement_from_bank_mutation", "bigint, integer, text"],
   ["find_settlement_bank_candidates", "bigint, integer"],
 ] as const;
 
@@ -2777,7 +3338,7 @@ export async function verifyCanonicalSettlementOwnerRoutines(): Promise<void> {
   }
 }
 
-const SPORT_CENTER_BOOTSTRAP_VERSION = "schema-bootstrap-v1";
+const SPORT_CENTER_BOOTSTRAP_VERSION = "schema-bootstrap-v2";
 
 export async function runSportCenterMigration(): Promise<void> {
   if (await isStartupMigrationComplete("sport_center_bootstrap", SPORT_CENTER_BOOTSTRAP_VERSION)) {
