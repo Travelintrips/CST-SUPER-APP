@@ -811,6 +811,15 @@ export async function fetchCandidates(
 
   // R5 fix: isolasi per perusahaan — hanya ambil kandidat dari company yang sama
   const coFilter = company_id ? `AND ##TBL##.company_id = ${Number(company_id)}` : "";
+  // accounting_payments may use operational types such as transfer or
+  // bank_transfer, not only inbound/outbound. Exclude opposite-direction
+  // keywords instead of requiring one exact enum value.
+  const accountingPaymentDirectionFilter = direction === "OUT"
+    ? `LOWER(COALESCE(ap.payment_type::text, '')) NOT ILIKE '%receipt%'
+       AND LOWER(COALESCE(ap.payment_type::text, '')) NOT ILIKE '%inbound%'`
+    : `LOWER(COALESCE(ap.payment_type::text, '')) NOT ILIKE '%payment%'
+       AND LOWER(COALESCE(ap.payment_type::text, '')) NOT ILIKE '%outbound%'
+       AND LOWER(COALESCE(ap.payment_type::text, '')) NOT ILIKE '%vendor%'`;
 
   const sources: Array<{
     q: string;
@@ -828,7 +837,10 @@ export async function fetchCandidates(
         WHERE ${amtFilter.replace("##AMT##", "ap.amount")}
           AND ap.date BETWEEN ${dateFrom} AND ${dateTo}
           AND ap.status = 'posted'
-          AND ap.payment_type = '${direction === "IN" ? "inbound" : "outbound"}'
+          AND (
+            ${accountingPaymentDirectionFilter}
+            OR ap.payment_type IS NULL
+          )
           -- Sport Center payments are represented canonically by sport_payments.
           -- Their accounting_payments row is only the accounting/journal link;
           -- including it here would create a second candidate for one event.
@@ -880,9 +892,9 @@ export async function fetchCandidates(
           ${coFilter.replace("##TBL##", "e")}
       `,
     },
-    {
+    ...(mutationLooksQris ? [{
       // sport_payment: filter per company + bank_account jika tersedia
-      type: "sport_payment",
+      type: "sport_payment" as CandidateType,
       q: `
         SELECT sp.id,
                ${mutationLooksQris ? verifiedSportNet : "sp.amount"} AS amount,
@@ -921,7 +933,7 @@ export async function fetchCandidates(
             OR ${mutationBankAccountId != null ? `sp.bank_account_id = ${mutationBankAccountId}` : "TRUE"}
           )
       `,
-    },
+    }] : []),
     ...(mutationLooksQris && qrisSettlementTablesAvailable ? [{
       type: "qris_settlement" as CandidateType,
       candidateSource: RECONCILIATION_CANDIDATE_SOURCES.LEGACY_QRIS,
@@ -952,7 +964,7 @@ export async function fetchCandidates(
       `,
     }] : []),
     {
-      type: "tenant_invoice",
+      type: "tenant_invoice" as CandidateType,
       q: `
         SELECT ti.id, ti.total_amount AS amount,
                ti.created_at::date::text AS date,
