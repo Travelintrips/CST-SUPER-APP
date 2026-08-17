@@ -915,6 +915,7 @@ describe("fetchCandidates — Sport Center payment rails", () => {
 
     expect(query).toBeDefined();
     expect(query).toContain("= 'bank_transfer'");
+    expect(query).toContain("AT TIME ZONE 'Asia/Jakarta'");
   });
 
   it("includes Paylabs Sport Center payments without routing them to direct QRIS", async () => {

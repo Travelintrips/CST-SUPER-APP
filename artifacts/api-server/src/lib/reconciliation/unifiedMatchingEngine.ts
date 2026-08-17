@@ -785,7 +785,14 @@ export async function fetchCandidates(
     : mutationLooksQris
       ? "qris"
       : "bank_transfer";
-  const settlementDateExpr = `COALESCE(sp.settlement_date, COALESCE(sp.paid_at::date, sp.created_at::date) + 1)`;
+  // Bank mutations are imported as Indonesian calendar dates, while Sport
+  // Center timestamps are stored as timestamptz.  Normalize timestamp-backed
+  // payment dates to the operational timezone before comparing them; e.g.
+  // 2026-08-16 18:53 UTC is 2026-08-17 in Asia/Jakarta.
+  const sportPaymentDateExpr =
+    `COALESCE((sp.paid_at AT TIME ZONE 'Asia/Jakarta')::date, ` +
+    `(sp.created_at AT TIME ZONE 'Asia/Jakarta')::date)`;
+  const settlementDateExpr = `COALESCE(sp.settlement_date, ${sportPaymentDateExpr} + 1)`;
   const sportPaymentTypeExpr = `CASE
     WHEN LOWER(COALESCE(sp.payment_provider::text, '')) LIKE '%paylabs%'
       OR LOWER(COALESCE(sp.payment_type::text, '')) LIKE '%paylabs%'
@@ -800,7 +807,7 @@ export async function fetchCandidates(
   // must match by payment date; only QRIS uses the settlement date (often H+1).
   const sportCandidateDateExpr = `CASE
     WHEN ${sportPaymentTypeExpr} = 'qris' THEN ${settlementDateExpr}
-    ELSE COALESCE(sp.paid_at::date, sp.created_at::date)
+    ELSE ${sportPaymentDateExpr}
   END`;
   const aggregateMatchFilter = qrisSettlementTablesAvailable ? `
            AND NOT EXISTS (
