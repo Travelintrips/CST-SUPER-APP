@@ -60,8 +60,8 @@ async function runQrisSettlementMigrationOnce(): Promise<void> {
       settlement_delay_business_days INTEGER NOT NULL DEFAULT 1,
       match_window_business_days INTEGER NOT NULL DEFAULT 1,
       max_effective_deduction_rate NUMERIC(7,6) NOT NULL DEFAULT 0.100000,
-       absolute_variance_tolerance NUMERIC(16,2) NOT NULL DEFAULT 5000.00,
-       percentage_variance_tolerance NUMERIC(7,4) NOT NULL DEFAULT 1.0000,
+       absolute_variance_tolerance NUMERIC(16,2) NOT NULL DEFAULT 10000.00,
+       percentage_variance_tolerance NUMERIC(7,4) NOT NULL DEFAULT 2.0000,
       is_active BOOLEAN NOT NULL DEFAULT TRUE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -72,8 +72,22 @@ async function runQrisSettlementMigrationOnce(): Promise<void> {
     ALTER TABLE qris_provider_settlement_rules
       ADD COLUMN IF NOT EXISTS bank_account_id INTEGER,
        ADD COLUMN IF NOT EXISTS rule_version TEXT NOT NULL DEFAULT 'default-v1',
-       ADD COLUMN IF NOT EXISTS absolute_variance_tolerance NUMERIC(16,2) NOT NULL DEFAULT 5000.00,
-       ADD COLUMN IF NOT EXISTS percentage_variance_tolerance NUMERIC(7,4) NOT NULL DEFAULT 1.0000
+        ADD COLUMN IF NOT EXISTS absolute_variance_tolerance NUMERIC(16,2) NOT NULL DEFAULT 10000.00,
+        ADD COLUMN IF NOT EXISTS percentage_variance_tolerance NUMERIC(7,4) NOT NULL DEFAULT 2.0000
+  `).catch(() => {});
+  // Promote rows created with the previous default. Explicitly configured
+  // non-default values are preserved.
+  await db.execute(sql`
+    UPDATE qris_provider_settlement_rules
+    SET percentage_variance_tolerance = 2.0000
+    WHERE rule_version = 'default-v1'
+      AND percentage_variance_tolerance = 1.0000
+  `).catch(() => {});
+  await db.execute(sql`
+    UPDATE qris_provider_settlement_rules
+    SET absolute_variance_tolerance = 10000.00
+    WHERE rule_version = 'default-v1'
+      AND absolute_variance_tolerance = 5000.00
   `).catch(() => {});
   // Settlement routing is company + account + provider. The legacy unique
   // constraint is too broad for companies with multiple settlement accounts.

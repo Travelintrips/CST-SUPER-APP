@@ -20,8 +20,8 @@ export const DEFAULT_QRIS_PROVIDER_RULES: Record<QrisProviderCode, QrisProviderR
     settlementDelayBusinessDays: 1,
     matchWindowBusinessDays: 1,
     maxEffectiveDeductionRate: 0.1,
-    absoluteVarianceTolerance: 5000,
-    percentageVarianceTolerance: 1,
+    absoluteVarianceTolerance: 10000,
+    percentageVarianceTolerance: 2,
   },
   paylabs: {
     providerCode: "paylabs",
@@ -29,8 +29,8 @@ export const DEFAULT_QRIS_PROVIDER_RULES: Record<QrisProviderCode, QrisProviderR
     settlementDelayBusinessDays: 1,
     matchWindowBusinessDays: 1,
     maxEffectiveDeductionRate: 0.1,
-    absoluteVarianceTolerance: 5000,
-    percentageVarianceTolerance: 1,
+    absoluteVarianceTolerance: 10000,
+    percentageVarianceTolerance: 2,
   },
   // GPN (Gerbang Pembayaran Nasional) is Indonesia's national QRIS switching
   // network.  BCA and other banks label their QRIS settlements with labels such
@@ -42,8 +42,8 @@ export const DEFAULT_QRIS_PROVIDER_RULES: Record<QrisProviderCode, QrisProviderR
     settlementDelayBusinessDays: 1,
     matchWindowBusinessDays: 1,
     maxEffectiveDeductionRate: 0.1,
-    absoluteVarianceTolerance: 5000,
-    percentageVarianceTolerance: 1,
+    absoluteVarianceTolerance: 10000,
+    percentageVarianceTolerance: 2,
   },
   unknown: {
     providerCode: "unknown",
@@ -51,8 +51,8 @@ export const DEFAULT_QRIS_PROVIDER_RULES: Record<QrisProviderCode, QrisProviderR
     settlementDelayBusinessDays: 1,
     matchWindowBusinessDays: 1,
     maxEffectiveDeductionRate: 0.1,
-    absoluteVarianceTolerance: 5000,
-    percentageVarianceTolerance: 1,
+    absoluteVarianceTolerance: 10000,
+    percentageVarianceTolerance: 2,
   },
 };
 
