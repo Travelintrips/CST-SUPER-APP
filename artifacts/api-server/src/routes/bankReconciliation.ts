@@ -3129,23 +3129,40 @@ router.get("/mutations", async (req, res) => {
              ), 0)
           )
           FROM qris_mutation_batch_candidates qc
-          WHERE qc.mutation_id = bm.id
-              AND (
-                UPPER(COALESCE(qc.status, '')) NOT IN (
-                  'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
-                )
-                OR EXISTS (
-                  SELECT 1
-                  FROM jsonb_array_elements(COALESCE(qc.payment_items, '[]'::jsonb)) item
-                  WHERE item->>'paymentId' IS NOT NULL
-                    AND NOT EXISTS (
-                      SELECT 1
-                      FROM qris_settlement_items qsi
-                      WHERE qsi.sport_payment_id = (item->>'paymentId')::int
-                    )
-                    ${canonicalSettledExcludeSql}
-                )
-              )
+           WHERE qc.mutation_id = bm.id
+               AND (
+                 -- Keep the current candidate visible for normal review.
+                 UPPER(COALESCE(qc.status, '')) NOT IN (
+                   'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
+                 )
+                 OR EXISTS (
+                   SELECT 1
+                   FROM jsonb_array_elements(COALESCE(qc.payment_items, '[]'::jsonb)) item
+                   WHERE item->>'paymentId' IS NOT NULL
+                     AND NOT EXISTS (
+                       SELECT 1
+                       FROM qris_settlement_items qsi
+                       WHERE qsi.sport_payment_id = (item->>'paymentId')::int
+                     )
+                     ${canonicalSettledExcludeSql}
+                 )
+                 -- If the current candidate was invalidated, keep the latest
+                 -- stale/ineligible evidence visible in the detail panel so the
+                 -- reviewer can see the payment items and the exact reason.
+                 -- This is display-only: approval guards still reject these
+                 -- statuses.
+                 OR (
+                   UPPER(COALESCE(qc.status, '')) IN ('STALE', 'INELIGIBLE')
+                   AND NOT EXISTS (
+                     SELECT 1
+                     FROM qris_mutation_batch_candidates qc_active
+                     WHERE qc_active.mutation_id = bm.id
+                       AND UPPER(COALESCE(qc_active.status, '')) NOT IN (
+                         'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
+                       )
+                   )
+                 )
+               )
              AND (
                UPPER(COALESCE(bm.provider_name, '')) LIKE '%QRIS%'
                OR UPPER(COALESCE(bm.provider_name, '')) LIKE '%QRTRAVELI%'
@@ -3156,7 +3173,14 @@ router.get("/mutations", async (req, res) => {
                OR UPPER(COALESCE(bm.description, '')) LIKE '%QRIS%'
                OR UPPER(COALESCE(bm.description, '')) LIKE '%QRTRAVELI%'
              )
-          ORDER BY qc.updated_at DESC, qc.id DESC
+           ORDER BY
+             CASE
+               WHEN UPPER(COALESCE(qc.status, '')) IN ('STALE', 'INELIGIBLE')
+                 THEN 1
+               ELSE 0
+             END,
+             qc.updated_at DESC,
+             qc.id DESC
           LIMIT 1
         ) AS qris_candidate_audit
     FROM bank_mutations bm
