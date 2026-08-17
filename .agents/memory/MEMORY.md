@@ -89,4 +89,5 @@
 - [Bank matching direction semantics](bank-matching-direction-semantics.md) — accept operational transfer types for bank candidates and gate Sport Center candidates on QRIS evidence.
 - [GitHub push authentication](github-push-authentication.md) — secret presence does not prove a PAT has valid repository write access; prefer verified GitHub connection or scoped replacement.
 - [Health readiness contract](health-readiness-contract.md) — liveness must precede auth middleware; readiness may remain starting during the serial migration chain.
+- [Persistent gate readiness timing](persistent-gate-readiness-timing.md) — initialize migration timing before the gated pre-start callback, because a completed marker can skip that callback on restart.
 - [Managed artifact removal](managed-artifact-removal.md) — managed artifacts must be deleted from Library; workflow APIs can stop but not remove their registry entry.

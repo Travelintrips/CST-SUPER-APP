@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 const apiIndex = readFileSync(resolve(process.cwd(), "src/index.ts"), "utf8");
 const rlsMigration = readFileSync(resolve(process.cwd(), "src/lib/rlsMigration.ts"), "utf8");
 const startupState = readFileSync(resolve(process.cwd(), "src/lib/startupMigrationState.ts"), "utf8");
+const startupRegistry = readFileSync(resolve(process.cwd(), "src/lib/startupMigrationRegistry.ts"), "utf8");
 const bankImport = readFileSync(resolve(process.cwd(), "src/routes/bankMutationImport.ts"), "utf8");
 const bankMasters = readFileSync(resolve(process.cwd(), "src/routes/bankMutationMasters.ts"), "utf8");
 const sportMigration = readFileSync(resolve(process.cwd(), "src/modules/sport-center/migration.ts"), "utf8");
@@ -24,13 +25,37 @@ describe("startup readiness steady-state contract", () => {
     expect(apiIndex).toContain("Critical API pre-start schema bootstrap and legacy compatibility columns");
   });
 
-  it("uses a persistent marker helper with a safe legacy fallback", () => {
-    expect(startupState).toContain("information_schema.tables");
-    expect(startupState).toContain("CREATE TABLE IF NOT EXISTS app_config");
-    expect(startupState).toContain("FROM app_config");
-    expect(startupState).toContain("ON CONFLICT (key) DO UPDATE");
-    expect(startupState).toContain("return false");
-    expect(startupState).toContain("retaining legacy migration path");
+  it("uses a dedicated persistent state table with explicit lifecycle states", () => {
+    expect(startupState).toContain("CREATE TABLE IF NOT EXISTS startup_migration_state");
+    expect(startupState).toContain("stage_name    TEXT PRIMARY KEY");
+    expect(startupState).toContain("status        TEXT NOT NULL DEFAULT 'pending'");
+    expect(startupState).toContain("'pending', 'running', 'completed', 'failed'");
+    expect(startupState).toContain("stage_version TEXT NOT NULL");
+    expect(startupState).toContain("last_error    TEXT");
+    expect(startupState).toContain("ON CONFLICT (stage_name) DO UPDATE SET");
+  });
+
+  it("takes a per-stage advisory lock and re-checks after locking", () => {
+    expect(startupState).toContain("pg_try_advisory_lock");
+    expect(startupState).toContain("pg_advisory_unlock");
+    expect(startupState).toContain("Mandatory TOCTOU re-check after acquiring the per-stage lock");
+    expect(startupState).toContain("LOCK_WAIT_TIMEOUT_MS");
+  });
+
+  it("only marks completion after success and records failures safely", () => {
+    expect(startupState).toContain("await run()");
+    expect(startupState).toContain("updateState(stage.name, stage.version, \"completed\")");
+    expect(startupState).toContain("updateState(stage.name, stage.version, \"failed\", sanitizeError(error))");
+    expect(startupState).toContain("process crash");
+  });
+
+  it("has an explicit 114-stage registry with stable names and metadata", () => {
+    const rows = startupRegistry.match(/^  \["/gm) ?? [];
+    expect(rows).toHaveLength(114);
+    expect(startupRegistry).toContain("version: 1");
+    expect(startupRegistry).toContain("critical: true");
+    expect(startupRegistry).toContain('"schema"');
+    expect(startupRegistry).toContain("getStartupStageDefinition");
   });
 
   it("does not repeat bank mutation schema and cleanup work after provisioning", () => {

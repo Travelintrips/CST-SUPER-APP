@@ -174,7 +174,12 @@ import { runDeferredStartupTasks } from "./lib/deferredStartupTasks.js";
 import {
   isStartupMigrationComplete,
   markStartupMigrationComplete,
+  runStartupMigrationStage,
 } from "./lib/startupMigrationState.js";
+import {
+  STARTUP_MIGRATION_REGISTRY,
+  getStartupStageDefinition,
+} from "./lib/startupMigrationRegistry.js";
 
 // Port resolution order (deterministic, no ambiguity):
 // 1. REPLIT_API_PORT — set by Replit deployment infra
@@ -206,10 +211,31 @@ type StartupTiming = {
 };
 
 const startupTimings: StartupTiming[] = [];
+const startupStageSummary = {
+  total: STARTUP_MIGRATION_REGISTRY.length,
+  executed: 0,
+  skipped: 0,
+  failed: 0,
+};
 const processMonotonicStartedAt = performance.now();
 
 function startupElapsedMs(): number {
   return Math.round(performance.now() - processMonotonicStartedAt);
+}
+
+function logStartupStageSummary(): void {
+  logger.info(
+    {
+      total: startupStageSummary.total,
+      executed: startupStageSummary.executed,
+      skipped: startupStageSummary.skipped,
+      failed: startupStageSummary.failed,
+      duration_ms: migrationStartedAt != null
+        ? (migrationCompletedAt ?? Date.now()) - migrationStartedAt
+        : null,
+    },
+    "Startup stage summary",
+  );
 }
 
 function recordStartupTiming(
@@ -224,18 +250,20 @@ function recordStartupTiming(
 }
 
 async function timeStartupStage<T>(name: string, fn: () => Promise<T>): Promise<T> {
-  const startedAt = performance.now();
-  logger.info({ startup_elapsed_ms: startupElapsedMs() }, `${name}: timing start`);
-  try {
-    const result = await fn();
-    const duration_ms = recordStartupTiming(name, startedAt, "complete");
-    logger.info({ duration_ms, startup_elapsed_ms: startupElapsedMs() }, `${name}: timing complete`);
-    return result;
-  } catch (err) {
-    const duration_ms = recordStartupTiming(name, startedAt, "failed");
-    logger.error({ err, duration_ms }, `${name}: timing failed`);
-    throw err;
-  }
+  return runGatedStartupStage(name, async () => {
+    const startedAt = performance.now();
+    logger.info({ startup_elapsed_ms: startupElapsedMs() }, `${name}: timing start`);
+    try {
+      const result = await fn();
+      const duration_ms = recordStartupTiming(name, startedAt, "complete");
+      logger.info({ duration_ms, startup_elapsed_ms: startupElapsedMs() }, `${name}: timing complete`);
+      return result;
+    } catch (err) {
+      const duration_ms = recordStartupTiming(name, startedAt, "failed");
+      logger.error({ err, duration_ms }, `${name}: timing failed`);
+      throw err;
+    }
+  });
 }
 
 function isTransientDbError(err: unknown): boolean {
@@ -252,34 +280,55 @@ async function runWithRetry<T>(
   maxAttempts = 5,
   delayMs = 15_000
 ): Promise<void> {
-  const stageStartedAt = performance.now();
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const attemptStartedAt = performance.now();
-    try {
-      logger.info(
-        { attempt, maxAttempts, startup_elapsed_ms: startupElapsedMs() },
-        `${name}: starting`,
-      );
-      await fn();
-      const duration_ms = recordStartupTiming(name, stageStartedAt, "complete", attempt);
-      logger.info({ attempt, duration_ms, startup_elapsed_ms: startupElapsedMs() }, `${name}: complete`);
-      return;
-    } catch (err: unknown) {
-      const attempt_duration_ms = Math.max(0, Math.round(performance.now() - attemptStartedAt));
-      const isTransient = isTransientDbError(err);
-      if (isTransient && attempt < maxAttempts) {
-        const backoff = delayMs * attempt;
-        logger.warn(
-          { attempt, maxAttempts, backoff, attempt_duration_ms },
-          `${name}: transient DB error, retrying after ${backoff}ms...`
+  await runGatedStartupStage(name, async () => {
+    const stageStartedAt = performance.now();
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const attemptStartedAt = performance.now();
+      try {
+        logger.info(
+          { attempt, maxAttempts, startup_elapsed_ms: startupElapsedMs() },
+          `${name}: starting`,
         );
-        await sleep(backoff);
-      } else {
-        const duration_ms = recordStartupTiming(name, stageStartedAt, "failed", attempt);
-        logger.error({ err, duration_ms }, `${name} failed (giving up after ${attempt} attempts)`);
+        await fn();
+        const duration_ms = recordStartupTiming(name, stageStartedAt, "complete", attempt);
+        logger.info({ attempt, duration_ms, startup_elapsed_ms: startupElapsedMs() }, `${name}: complete`);
         return;
+      } catch (err: unknown) {
+        const attempt_duration_ms = Math.max(0, Math.round(performance.now() - attemptStartedAt));
+        const isTransient = isTransientDbError(err);
+        if (isTransient && attempt < maxAttempts) {
+          const backoff = delayMs * attempt;
+          logger.warn(
+            { attempt, maxAttempts, backoff, attempt_duration_ms },
+            `${name}: transient DB error, retrying after ${backoff}ms...`
+          );
+          await sleep(backoff);
+        } else {
+          const duration_ms = recordStartupTiming(name, stageStartedAt, "failed", attempt);
+          logger.error({ err, duration_ms }, `${name} failed (giving up after ${attempt} attempts)`);
+          throw err;
+        }
       }
     }
+  });
+}
+
+async function runGatedStartupStage<T>(
+  displayName: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const stage = getStartupStageDefinition(displayName);
+  try {
+    const result = await runStartupMigrationStage(stage, fn);
+    if (result.status === "skipped") {
+      startupStageSummary.skipped++;
+      return undefined as T;
+    }
+    startupStageSummary.executed++;
+    return result.value as T;
+  } catch (error) {
+    startupStageSummary.failed++;
+    throw error;
   }
 }
 
@@ -1727,8 +1776,9 @@ async function startServer() {
   // migration lane cannot occupy the whole pool and starve login requests.
   console.log("[startup] Registering serial migration chain");
   sleep(8_000)
-    .then(() => timeStartupStage("Pre-start schema migrations", async () => {
+    .then(() => {
       migrationStartedAt = Date.now();
+      return timeStartupStage("Pre-start schema migrations", async () => {
       console.log("[startup] Serial migration chain delay elapsed");
       for (let attempt = 1; attempt <= 10; attempt++) {
         try {
@@ -1750,7 +1800,8 @@ async function startServer() {
           }
         }
       }
-    }))
+      });
+    })
     .then(() => runWithRetry("Sessions migration", runSessionsMigration))
     .then(() => runWithRetry("Companies migration", runCompaniesMigration))
     .then(() => runWithRetry("Holding migration", runHoldingMigration))
@@ -1974,6 +2025,7 @@ async function startServer() {
         },
         "Startup migration timing summary",
       );
+      logStartupStageSummary();
       logger.info("All startup migrations complete — /api/health/ready → true");
       void runDeferredStartupTasks();
     })
@@ -2048,6 +2100,7 @@ async function startServer() {
       }).catch((err) => logger.error({ err }, "[fleet] Background migration runner failed"));
     })
     .catch((err) => {
+      logStartupStageSummary();
       logger.error({ err }, "Startup migration/seed chain failed");
     });
 }
