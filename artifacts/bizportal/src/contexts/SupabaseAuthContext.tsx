@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
 import type { AuthUser } from "@workspace/api-client-react";
 import { supabase } from "@/lib/supabaseClient";
 
@@ -25,8 +25,8 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 const CACHE_KEY = "biz_auth_user_v1";
 const IS_DEV = import.meta.env.DEV;
 const READINESS_POLL_INTERVAL_MS = 2_000;
-const LIVENESS_REQUEST_TIMEOUT_MS = 1_500;
-const READINESS_REQUEST_TIMEOUT_MS = 2_500;
+const LIVENESS_REQUEST_TIMEOUT_MS = 5_000;
+const READINESS_REQUEST_TIMEOUT_MS = 5_000;
 
 function readCache(): AuthUser | null {
   try {
@@ -58,6 +58,7 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
   const [isApiReady, setIsApiReady] = useState(!IS_DEV);
   const [apiReadinessError, setApiReadinessError] = useState<string | null>(null);
   const [readinessRetryKey, setReadinessRetryKey] = useState(0);
+  const apiHasBeenReadyRef = useRef(false);
 
   useEffect(() => {
     // Production keeps the existing auth path: it does not wait on the
@@ -90,9 +91,18 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
       setIsApiAvailable(liveOk);
 
       if (!liveOk) {
-        setIsApiAvailable(false);
-        setIsApiReady(false);
-        setApiReadinessError("API belum dapat dijangkau. Akan mencoba lagi otomatis.");
+        // Do not unmount an already usable portal because one proxied probe
+        // timed out. API-backed queries can report their own errors while the
+        // next health probe retries in the background.
+        if (apiHasBeenReadyRef.current) {
+          setIsApiAvailable(true);
+          setIsApiReady(true);
+          setApiReadinessError(null);
+        } else {
+          setIsApiAvailable(false);
+          setIsApiReady(false);
+          setApiReadinessError("API belum dapat dijangkau. Akan mencoba lagi otomatis.");
+        }
       } else {
         try {
           const controller = new AbortController();
@@ -111,6 +121,7 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
           if (cancelled) return;
           setIsApiAvailable(true);
           if (data?.ready === true) {
+            apiHasBeenReadyRef.current = true;
             setIsApiReady(true);
             setApiReadinessError(null);
           } else {
@@ -122,8 +133,13 @@ export function SupabaseAuthProvider({ children }: { children: React.ReactNode }
           // Liveness succeeded, so a slow/blocked readiness probe is not an
           // unavailable API. Keep the distinction visible to the user.
           setIsApiAvailable(true);
-          setIsApiReady(false);
-          setApiReadinessError("API hidup, tetapi persiapan database masih berjalan. Akan mencoba lagi otomatis.");
+          if (apiHasBeenReadyRef.current) {
+            setIsApiReady(true);
+            setApiReadinessError(null);
+          } else {
+            setIsApiReady(false);
+            setApiReadinessError("API hidup, tetapi persiapan database masih berjalan. Akan mencoba lagi otomatis.");
+          }
         }
       }
 
