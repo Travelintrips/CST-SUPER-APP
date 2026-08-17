@@ -556,6 +556,8 @@ interface BankMutation {
   candidates: Candidate[] | null;
   /** Provider-aware QRIS candidate. Audit-only; never used by approve/post. */
   qris_candidate_audit?: QrisCandidateAudit | null;
+  /** All provider-aware QRIS candidates for this mutation, ordered by live evidence. */
+  qris_candidate_audits?: QrisCandidateAudit[] | null;
   uploaded_proof_url?: string | null;
   source?: string;
   import_batch_id?: number | null;
@@ -769,6 +771,13 @@ function isCanonicalSettlementMutation(m: BankMutation): boolean {
   ) ?? false;
 }
 
+function qrisAuditsForMutation(m: BankMutation): QrisCandidateAudit[] {
+  if (Array.isArray(m.qris_candidate_audits) && m.qris_candidate_audits.length > 0) {
+    return m.qris_candidate_audits;
+  }
+  return m.qris_candidate_audit ? [m.qris_candidate_audit] : [];
+}
+
 function statusLabel(m: BankMutation): string {
   if (m.status === "approved") return STATUS_LABELS.approved;
   if (m.status === "posted") return STATUS_LABELS.posted;
@@ -828,11 +837,15 @@ function qrisPaymentGross(
 function hasUnresolvedVariance(m: BankMutation): boolean {
   const candidate = visibleCandidates(m)[0];
   const d = candidate?.details;
+  const qrisAudit = qrisAuditsForMutation(m)[0];
   const variance = numericValue(d?.varianceAmount ?? d?.amountDifference);
   return Boolean(
     d?.settlementPartial ||
     (variance != null && Math.abs(variance) >= 0.01) ||
-    ["REVIEW", "UNMATCHED"].includes(String(m.qris_candidate_audit?.reconciliation_status ?? "").toUpperCase()),
+    qrisAuditsForMutation(m).some((audit) =>
+      ["REVIEW", "UNMATCHED"].includes(String(audit.reconciliation_status ?? "").toUpperCase()),
+    ) ||
+    ["REVIEW", "UNMATCHED"].includes(String(qrisAudit?.reconciliation_status ?? "").toUpperCase()),
   );
 }
 
@@ -856,7 +869,7 @@ function mutationHeading(m: BankMutation): string {
 }
 
 function mutationSourceLabel(m: BankMutation): string {
-  const hasQrisCandidate = m.qris_candidate_audit || m.candidates?.some(c =>
+  const hasQrisCandidate = qrisAuditsForMutation(m).length > 0 || m.candidates?.some(c =>
     c.candidate_type === "qris_settlement" || c.candidate_type === "sport_payment"
   );
   if (hasQrisCandidate && isQrisMutation(m)) {
@@ -876,7 +889,7 @@ function isPaylabsMutation(m: BankMutation): boolean {
 }
 
 function isQrisMutation(m: BankMutation): boolean {
-  if (m.qris_candidate_audit) return true;
+  if (qrisAuditsForMutation(m).length > 0) return true;
   if (isPaylabsMutation(m)) return false;
   return [
     m.provider_name,
@@ -960,7 +973,7 @@ function visibleCandidates(m: BankMutation): Candidate[] {
 function reconciliationEvidence(m: BankMutation): ReconciliationEvidence {
   const candidate = visibleCandidates(m)[0];
   const d = candidate?.details;
-  const audit = m.qris_candidate_audit;
+  const audit = m.qris_candidate_audit ?? qrisAuditsForMutation(m)[0];
   const bankAmount = numericValue(d?.actualBankAmount) ?? numericValue(m.amount) ?? 0;
   const expectedAmount =
     numericValue(d?.expectedAmount) ??
@@ -2338,7 +2351,7 @@ function MutationCard({
   onApproveQris: (m: BankMutation) => void;
   onApproveQrisBatch?: (candidateId: number, mutationId: number, candidate: QrisCandidateAudit, paymentIds?: number[]) => void;
   approveQrisPending?: boolean;
-  selectedQrisPaymentIds: number[];
+  selectedQrisPaymentIds: Record<number, number[]>;
   onToggleQrisPayment?: (candidateId: number, paymentId: number, checked: boolean) => void;
   onToggleAllQrisPayments?: (candidate: QrisCandidateAudit, checked: boolean) => void;
   onRunMatching: () => void;
@@ -2347,30 +2360,35 @@ function MutationCard({
   mappingError?: MappingRequiredError;
 }) {
   const cands  = visibleCandidates(m);
-  const qrisAudit = m.qris_candidate_audit;
+  const qrisAudits = qrisAuditsForMutation(m);
   const best   = cands[0];
   const amount = Number(m.amount) || 0;
   const isIN   = m.direction === "IN";
   const isQris = isQrisMutation(m);
 
-  if (qrisAudit) {
+  if (qrisAudits.length > 0) {
     return (
-      <QrisMutationCard
-        m={m}
-        audit={qrisAudit}
-        onReject={onReject}
-        onDetail={onDetail}
-        onDelete={onDelete}
-        onApproveQrisBatch={onApproveQrisBatch}
-        approveQrisPending={approveQrisPending}
-        selectedQrisPaymentIds={selectedQrisPaymentIds}
-        onToggleQrisPayment={onToggleQrisPayment}
-        onToggleAllQrisPayments={onToggleAllQrisPayments}
-        onRunMatching={onRunMatching}
-        onGenerateQrisCandidates={onGenerateQrisCandidates}
-        qrisGenerationPending={qrisGenerationPending}
-        mappingError={mappingError}
-      />
+      <div className="space-y-2">
+        {qrisAudits.map((audit, index) => (
+          <QrisMutationCard
+            key={`${m.id}-qris-${audit.id ?? index}`}
+            m={m}
+            audit={audit}
+            onReject={onReject}
+            onDetail={onDetail}
+            onDelete={onDelete}
+            onApproveQrisBatch={onApproveQrisBatch}
+            approveQrisPending={approveQrisPending}
+            selectedQrisPaymentIds={audit.id != null ? selectedQrisPaymentIds[audit.id] ?? [] : []}
+            onToggleQrisPayment={onToggleQrisPayment}
+            onToggleAllQrisPayments={onToggleAllQrisPayments}
+            onRunMatching={onRunMatching}
+            onGenerateQrisCandidates={onGenerateQrisCandidates}
+            qrisGenerationPending={qrisGenerationPending}
+            mappingError={mappingError}
+          />
+        ))}
+      </div>
     );
   }
 
@@ -2874,7 +2892,7 @@ function MutationDetailPanel({
   if (!mutation) return null;
   const m     = mutation;
   const cands = visibleCandidates(m);
-  const qrisAudit = m.qris_candidate_audit;
+  const qrisAudit = m.qris_candidate_audit ?? qrisAuditsForMutation(m)[0];
   const settledQrisPaymentIds = new Set((qrisAudit?.settled_payment_ids ?? []).map(Number));
   const currentQrisPaymentIds = Array.isArray(qrisAudit?.current_payment_ids)
     ? new Set(qrisAudit.current_payment_ids.map(Number))
@@ -3886,6 +3904,13 @@ export default function BankReconciliationPage() {
     const available = new Set(getAvailableQrisPaymentIds(candidate));
     return (selectedQrisPaymentIds[candidate.id] ?? []).filter((id) => available.has(id));
   };
+
+  const selectedPaymentIdsByMutation = (mutation: BankMutation): Record<number, number[]> =>
+    Object.fromEntries(
+      qrisAuditsForMutation(mutation)
+        .filter((candidate): candidate is QrisCandidateAudit & { id: number } => candidate.id != null)
+        .map((candidate) => [candidate.id, selectedPaymentIdsForCandidate(candidate)]),
+    );
 
   const toggleQrisPayment = (candidateId: number, paymentId: number, checked: boolean) => {
     setSelectedQrisPaymentIds((current) => {
@@ -5021,11 +5046,7 @@ export default function BankReconciliationPage() {
                   onApproveQris={handleApproveQris}
                   onApproveQrisBatch={handleApproveQrisBatch}
                   approveQrisPending={approveQrisBatchMut.isPending}
-                  selectedQrisPaymentIds={
-                    m.qris_candidate_audit?.id != null
-                      ? selectedPaymentIdsForCandidate(m.qris_candidate_audit)
-                      : []
-                  }
+                  selectedQrisPaymentIds={selectedPaymentIdsByMutation(m)}
                   onToggleQrisPayment={toggleQrisPayment}
                   onToggleAllQrisPayments={toggleAllQrisPayments}
                     onRunMatching={() => {

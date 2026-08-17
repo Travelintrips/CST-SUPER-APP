@@ -3128,9 +3128,9 @@ router.get("/mutations", async (req, res) => {
                )
              ), 0)
           )
-          FROM qris_mutation_batch_candidates qc
-           WHERE qc.mutation_id = bm.id
-               AND (
+           FROM qris_mutation_batch_candidates qc
+            WHERE qc.mutation_id = bm.id
+                AND (
                  -- Keep the current candidate visible for normal review.
                  UPPER(COALESCE(qc.status, '')) NOT IN (
                    'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
@@ -3163,7 +3163,7 @@ router.get("/mutations", async (req, res) => {
                    )
                  )
                )
-             AND (
+              AND (
                UPPER(COALESCE(bm.provider_name, '')) LIKE '%QRIS%'
                OR UPPER(COALESCE(bm.provider_name, '')) LIKE '%QRTRAVELI%'
                OR UPPER(COALESCE(bm.provider_name, '')) LIKE '%PAYLABS%'
@@ -3179,10 +3179,141 @@ router.get("/mutations", async (req, res) => {
                  THEN 1
                ELSE 0
              END,
+              qc.updated_at DESC,
+              qc.id DESC
+           LIMIT 1
+         ) AS qris_candidate_audit,
+         (
+          SELECT COALESCE(jsonb_agg(
+            to_jsonb(qc) || jsonb_build_object(
+             'settled_payment_ids', COALESCE((
+               SELECT jsonb_agg(settled.payment_id ORDER BY settled.payment_id)
+               FROM (
+                 SELECT qsi.sport_payment_id AS payment_id
+                 FROM qris_settlement_items qsi
+                 WHERE qsi.sport_payment_id IN (
+                   SELECT (item->>'paymentId')::int
+                   FROM jsonb_array_elements(qc.payment_items) item
+                   WHERE item->>'paymentId' IS NOT NULL
+                 )
+                 ${canonicalSettledUnionSql}
+               ) settled
+             ), '[]'::jsonb),
+             'current_payment_ids', COALESCE((
+               SELECT jsonb_agg(current_payment.payment_id ORDER BY current_payment.payment_id)
+               FROM (
+                 SELECT (item->>'paymentId')::int AS payment_id
+                 FROM jsonb_array_elements(qc.payment_items) item
+                 WHERE item->>'paymentId' IS NOT NULL
+                   AND NOT EXISTS (
+                     SELECT 1
+                     FROM qris_settlement_items qsi
+                     WHERE qsi.sport_payment_id = (item->>'paymentId')::int
+                   )
+                   ${canonicalSettledExcludeSql}
+               ) current_payment
+             ), '[]'::jsonb),
+             'current_payment_amounts', COALESCE((
+               SELECT jsonb_object_agg(current_payment.payment_id::text, current_payment.amount)
+               FROM (
+                 SELECT sp.id AS payment_id, sp.amount
+                 FROM sport_center.sport_payments sp
+                 WHERE sp.id IN (
+                   SELECT (item->>'paymentId')::int
+                   FROM jsonb_array_elements(qc.payment_items) item
+                   WHERE item->>'paymentId' IS NOT NULL
+                     AND NOT EXISTS (
+                       SELECT 1
+                       FROM qris_settlement_items qsi
+                       WHERE qsi.sport_payment_id = (item->>'paymentId')::int
+                     )
+                     ${canonicalSettledExcludeSql}
+                 )
+               ) current_payment
+             ), '{}'::jsonb),
+             'current_gross_amount', COALESCE((
+              SELECT SUM(sp.amount)
+              FROM sport_center.sport_payments sp
+              WHERE sp.id IN (
+                SELECT (item->>'paymentId')::int
+                FROM jsonb_array_elements(qc.payment_items) item
+                WHERE item->>'paymentId' IS NOT NULL
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM qris_settlement_items qsi
+                    WHERE qsi.sport_payment_id = (item->>'paymentId')::int
+                  )
+                  ${canonicalSettledExcludeSql}
+              )
+            ), 0),
+             'current_expected_amount', COALESCE((
+               SELECT CASE
+                 WHEN NULLIF(qc.gross_amount, 0) IS NULL THEN 0
+                 ELSE SUM(sp.amount) * qc.net_amount / NULLIF(qc.gross_amount, 0)
+               END
+               FROM sport_center.sport_payments sp
+               WHERE sp.id IN (
+                 SELECT (item->>'paymentId')::int
+                 FROM jsonb_array_elements(qc.payment_items) item
+                 WHERE item->>'paymentId' IS NOT NULL
+                   AND NOT EXISTS (
+                     SELECT 1
+                     FROM qris_settlement_items qsi
+                     WHERE qsi.sport_payment_id = (item->>'paymentId')::int
+                   )
+                   ${canonicalSettledExcludeSql}
+               )
+             ), 0)
+           )
+           ORDER BY
+             CASE
+               WHEN UPPER(COALESCE(qc.status, '')) IN ('STALE', 'INELIGIBLE')
+                 THEN 1
+               ELSE 0
+             END,
              qc.updated_at DESC,
              qc.id DESC
-          LIMIT 1
-        ) AS qris_candidate_audit
+          ), '[]'::jsonb)
+          FROM qris_mutation_batch_candidates qc
+           WHERE qc.mutation_id = bm.id
+             AND (
+               UPPER(COALESCE(qc.status, '')) NOT IN (
+                 'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
+               )
+               OR EXISTS (
+                 SELECT 1
+                 FROM jsonb_array_elements(COALESCE(qc.payment_items, '[]'::jsonb)) item
+                 WHERE item->>'paymentId' IS NOT NULL
+                   AND NOT EXISTS (
+                     SELECT 1
+                     FROM qris_settlement_items qsi
+                     WHERE qsi.sport_payment_id = (item->>'paymentId')::int
+                   )
+                   ${canonicalSettledExcludeSql}
+               )
+               OR (
+                 UPPER(COALESCE(qc.status, '')) IN ('STALE', 'INELIGIBLE')
+                 AND NOT EXISTS (
+                   SELECT 1
+                   FROM qris_mutation_batch_candidates qc_active
+                   WHERE qc_active.mutation_id = bm.id
+                     AND UPPER(COALESCE(qc_active.status, '')) NOT IN (
+                       'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
+                     )
+                 )
+               )
+             )
+             AND (
+               UPPER(COALESCE(bm.provider_name, '')) LIKE '%QRIS%'
+               OR UPPER(COALESCE(bm.provider_name, '')) LIKE '%QRTRAVELI%'
+               OR UPPER(COALESCE(bm.provider_name, '')) LIKE '%PAYLABS%'
+               OR UPPER(COALESCE(bm.provider_name, '')) LIKE '%MANDIRI%'
+               OR UPPER(COALESCE(bm.provider_order_id, '')) LIKE '%QRIS%'
+               OR UPPER(COALESCE(bm.provider_order_id, '')) LIKE '%QRTRAVELI%'
+               OR UPPER(COALESCE(bm.description, '')) LIKE '%QRIS%'
+               OR UPPER(COALESCE(bm.description, '')) LIKE '%QRTRAVELI%'
+             )
+         ) AS qris_candidate_audits
     FROM bank_mutations bm
     ${bmWhere}
   `;
@@ -3211,7 +3342,8 @@ router.get("/mutations", async (req, res) => {
        NULL::text AS sport_payment_type,
       'bank_import' AS _source_table,
        NULL::json AS candidates,
-       NULL::jsonb AS qris_candidate_audit
+        NULL::jsonb AS qris_candidate_audit,
+        '[]'::jsonb AS qris_candidate_audits
     FROM bank_mutation_imports bmi
     ${bmiWhere}
   ` : "";
