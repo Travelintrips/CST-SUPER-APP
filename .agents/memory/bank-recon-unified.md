@@ -44,3 +44,4 @@ because partial unique indexes don't support simple column-based conflict target
 - Never call `safeAccountingPost` or `postEntry` directly from reconciliation paths
 - `findMatchingTransaction` in bankMutationImport.ts is deprecated — always use `runUnifiedMatching`
 - `/duplicate` endpoint is locked to super_admin/owner only
+- Regression tests for unified candidate routing should mock and call `fetchCandidates` directly; the legacy ERP document matcher has a separate candidate contract and is not proof of unified routing.

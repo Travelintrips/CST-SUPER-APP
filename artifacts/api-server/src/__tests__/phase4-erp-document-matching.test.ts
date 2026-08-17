@@ -927,6 +927,20 @@ describe("fetchCandidates — Sport Center payment rails", () => {
     expect(query).toBeDefined();
     expect(query).toContain("= 'paylabs'");
   });
+
+  it("includes QRIS Sport Center payments using net amount and settlement date", async () => {
+    const query = await sportPaymentQueryFor({
+      normalized_description: "QRTRAVELI SETTLEMENT",
+      provider_name: "QRIS",
+    });
+
+    expect(query).toBeDefined();
+    expect(query).toContain("= 'qris'");
+    expect(query).toContain("sp.net_amount");
+    expect(query).toContain("settlement_date");
+    expect(query).not.toContain("= 'paylabs'");
+    expect(query).not.toContain("= 'bank_transfer'");
+  });
 });
 
 describe("runErpDocumentMatching — bank account match (DB mock)", () => {
