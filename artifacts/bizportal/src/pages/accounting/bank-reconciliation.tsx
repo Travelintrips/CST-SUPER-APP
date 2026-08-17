@@ -1236,11 +1236,24 @@ function QrisPaymentItemsSummary({
 // JournalEntryLines — fetches real journal entry lines when entry ID is known
 // ─────────────────────────────────────────────────────────────────────────────
 
-function JournalEntryLines({ entryId, onStatusLoaded }: { entryId: number; onStatusLoaded?: (status: string) => void }) {
+function JournalEntryLines({
+  entryId,
+  companyId,
+  onStatusLoaded,
+}: {
+  entryId: number;
+  companyId?: number | null;
+  onStatusLoaded?: (status: string) => void;
+}) {
   const { data, isLoading, error } = useQuery({
-    queryKey: ["accounting-entry", entryId],
+    queryKey: ["accounting-entry", entryId, companyId],
     queryFn: async () => {
-      const r = await fetch(`/api/accounting/entries/${entryId}`, { credentials: "include" });
+      const params = new URLSearchParams();
+      if (Number.isInteger(companyId) && Number(companyId) > 0) {
+        params.set("companyId", String(companyId));
+      }
+      const query = params.toString();
+      const r = await fetch(`/api/accounting/entries/${entryId}${query ? `?${query}` : ""}`, { credentials: "include" });
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{ status: string; ref?: string; totalDebit: string; totalCredit: string; lines: JournalLine[] }>;
     },
@@ -1319,7 +1332,7 @@ function JournalPreview({
 }) {
   // Case 1: real journal entry exists → show actual lines
   if (journalEntryId) {
-    return <JournalEntryLines entryId={journalEntryId} />;
+    return <JournalEntryLines entryId={journalEntryId} companyId={mutation.company_id} />;
   }
 
   // Case 2: candidate from matching API → show candidate-based estimate
@@ -5621,6 +5634,7 @@ export default function BankReconciliationPage() {
               {actionDialog.mutation.journal_entry_id && (
                 <JournalEntryLines
                   entryId={actionDialog.mutation.journal_entry_id}
+                  companyId={actionDialog.mutation.company_id}
                   onStatusLoaded={setPostDialogJournalStatus}
                 />
               )}
