@@ -43,3 +43,16 @@ the existing immutability trigger correctly rejects posted financial changes.
 **How to apply:** Keep the recovery capability marker transaction-local, set it
 only immediately before the guarded owner UPDATE, and preserve the trigger's
 normal protections outside that narrow path.
+
+The reconciliation UI must treat an approved canonical settlement match as a
+completed state even when an older QRIS audit snapshot remains
+`candidate_review/MATCHED`. Once all snapshot payments are already linked, the
+empty available-payment list is evidence of completion, not a request to run
+matching again.
+
+**Why:** Canonical owner recovery writes the authoritative match and settlement
+state without mutating legacy QRIS candidate snapshots.
+
+**How to apply:** Derive UI action eligibility from the canonical approved
+match and bank mutation status; show a completed/reconciled explanation instead
+of an empty-candidate prompt.

@@ -1989,7 +1989,11 @@ function QrisMutationCard({
   const isIN = m.direction === "IN";
   const isMatched = String(audit.reconciliation_status ?? "").toUpperCase() === "MATCHED";
   const isReview = String(audit.reconciliation_status ?? "").toUpperCase() === "REVIEW";
-  const isApproved = String(audit.status ?? "").toLowerCase() === "approved";
+  const isCanonicalReconciled = isCanonicalSettlementMutation(m)
+    && ["approved", "posted"].includes(String(m.status ?? "").toLowerCase());
+  const isApproved = isCanonicalReconciled
+    || ["approved", "posted"].includes(String(m.status ?? "").toLowerCase())
+    || String(audit.status ?? "").toLowerCase() === "approved";
   // REVIEW candidates are explicitly approvable through the existing override
   // flow, so they must be selectable in the card as well as in the batch toolbar.
   const canSelect = audit.id != null && (isMatched || isReview) && !isApproved && availablePaymentIds.length > 0;
@@ -2045,8 +2049,10 @@ function QrisMutationCard({
   const approvedPaymentCount = approvedItems.length;
   const remainingPaymentCount = isReadOnlyEvidence ? availablePaymentIds.length : items.length;
   const displayedPaymentCount = isReadOnlyEvidence ? allItems.length : remainingPaymentCount;
-  const statusText = isApproved
-    ? "Sudah Disetujui"
+  const statusText = isCanonicalReconciled
+    ? "Sudah Direkonsiliasi"
+    : isApproved
+      ? "Sudah Disetujui"
     : isReadOnlyEvidence
       ? "Bukti Stale — Revisi"
       : isMatched
@@ -2221,6 +2227,14 @@ function QrisMutationCard({
                      : "Legenda: MDR (Estimasi) = Total potongan QRIS · Approval hanya memproses payment yang dipilih."}
                 </p>
               </div>
+            ) : isCanonicalReconciled ? (
+              <div className="mt-3 rounded-md border border-green-300 bg-green-50 px-3 py-3 text-xs text-green-900 dark:border-green-800 dark:bg-green-950 dark:text-green-100">
+                <p className="font-semibold">Settlement canonical sudah direkonsiliasi.</p>
+                <p className="mt-1 leading-relaxed">
+                  Payment pada batch ini sudah ditautkan ke mutasi bank melalui owner recovery.
+                  Tidak perlu menjalankan AI Matching atau approval ulang.
+                </p>
+              </div>
             ) : (
               <div className="mt-3 rounded-md border border-dashed px-3 py-4 text-center">
                 <p className="text-sm font-medium">Belum ada kandidat match</p>
@@ -2306,7 +2320,8 @@ function QrisMutationCard({
               )}
               {isApproved && (
                 <Badge className="ml-auto bg-green-600 text-white">
-                  <CheckCircle2 className="mr-1 h-3 w-3" /> Batch QRIS Disetujui
+                  <CheckCircle2 className="mr-1 h-3 w-3" />
+                  {isCanonicalReconciled ? "Settlement Canonical Direkonsiliasi" : "Batch QRIS Disetujui"}
                 </Badge>
               )}
               <Button
