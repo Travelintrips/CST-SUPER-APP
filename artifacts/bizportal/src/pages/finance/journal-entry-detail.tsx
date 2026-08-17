@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Link, useRoute } from "wouter";
 import { ArrowLeft, FileText, Calendar, Hash, User, AlertTriangle, CheckCircle2, Clock, Link2 } from "lucide-react";
+import { useCompany } from "@/contexts/CompanyContext";
 
 const idr = (n: number) =>
   new Intl.NumberFormat("id-ID", { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(Math.abs(n));
@@ -73,6 +74,7 @@ function InfoItem({ icon: Icon, label, value }: { icon: React.ElementType; label
 export default function JournalEntryDetailPage() {
   const [, params] = useRoute("/finance/journal-entry/:id");
   const id = params?.id ? Number(params.id) : null;
+  const { activeCompanyId } = useCompany();
 
   const [entry, setEntry] = useState<EntryDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -80,12 +82,18 @@ export default function JournalEntryDetailPage() {
 
   useEffect(() => {
     if (!id) { setLoading(false); return; }
+    if (typeof activeCompanyId !== "number" || activeCompanyId <= 0) {
+      setEntry(null);
+      setError("Pilih perusahaan aktif terlebih dahulu");
+      setLoading(false);
+      return;
+    }
     setLoading(true);
-    apiFetch<EntryDetail>(`/api/accounting/entries/${id}`)
+    apiFetch<EntryDetail>(`/api/accounting/entries/${id}?companyId=${activeCompanyId}`)
       .then(setEntry)
       .catch(() => setError("Jurnal tidak ditemukan"))
       .finally(() => setLoading(false));
-  }, [id]);
+  }, [id, activeCompanyId]);
 
   const lines = entry?.lines ?? [];
   const totalDebit = lines.reduce((s, l) => s + Number(l.debit ?? 0), 0);
