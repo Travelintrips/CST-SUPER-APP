@@ -37,7 +37,14 @@ export async function runLedgerEventsEntryIdMigration(): Promise<void> {
  * schema is not present, we skip provisioning with a warning instead of
  * creating a trigger that can never work.
  */
-export async function ensureSportPaymentMirrorTrigger(): Promise<void> {
+let sportPaymentMirrorTriggerEnsurePromise: Promise<void> | null = null;
+
+export function ensureSportPaymentMirrorTrigger(): Promise<void> {
+  if (sportPaymentMirrorTriggerEnsurePromise) {
+    return sportPaymentMirrorTriggerEnsurePromise;
+  }
+
+  const provisioning = (async () => {
   const requiredObjects = await db.execute(sql`
     SELECT
       EXISTS (
@@ -139,6 +146,9 @@ export async function ensureSportPaymentMirrorTrigger(): Promise<void> {
       { objects },
       "Sport Center payment mirror trigger: schema/kolom wajib belum tersedia — provisioning dilewati",
     );
+    // A later startup stage may add the missing columns. Do not memoize this
+    // guarded no-op, otherwise runSportCenterMigration would never retry.
+    sportPaymentMirrorTriggerEnsurePromise = null;
     return;
   }
 
@@ -632,6 +642,15 @@ export async function ensureSportPaymentMirrorTrigger(): Promise<void> {
   logger.info(
     "Sport Center payment mirror trigger: resolver, function, unique idempotency index, trigger, replay, dan get_unmirrored_confirmed_payments aktif",
   );
+  })();
+
+  // Keep concurrent callers on the same DDL lane. Clear the cache on failure so
+  // a later retry can repair a transient DB/lock problem.
+  sportPaymentMirrorTriggerEnsurePromise = provisioning.catch((err) => {
+    sportPaymentMirrorTriggerEnsurePromise = null;
+    throw err;
+  });
+  return sportPaymentMirrorTriggerEnsurePromise;
 }
 
 /**
