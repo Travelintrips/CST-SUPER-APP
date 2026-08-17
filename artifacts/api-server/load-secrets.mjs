@@ -308,11 +308,15 @@ export function injectSecrets(payload, appEnv, legacyMode, target) {
         if (envKey.endsWith("_DEV")) hasDevVariant.add(envKey.slice(0, -4));
       }
 
-      // Step 1: inject _DEV keys as canonical names (GCP payload wins)
+      // Step 1: inject _DEV keys as canonical names AND keep the _DEV suffixed key
+      // (legacy parity with new-mode: both SUPABASE_DATABASE_URL_DEV and
+      //  SUPABASE_DATABASE_URL are set so the runtime env guard in index.ts
+      //  correctly detects that we're using the dev DB, not the prod DB.)
       for (const [rawKey, value] of Object.entries(payload)) {
         if (!rawKey.endsWith("_DEV")) continue;
         const canonical = rawKey.slice(0, -4);
-        inject(canonical, value);
+        inject(rawKey, value);      // keep _DEV suffixed key available
+        inject(canonical, value);   // also inject as canonical name
       }
       // Fill gaps from process.env _DEV keys
       for (const [envKey, value] of Object.entries(target)) {
