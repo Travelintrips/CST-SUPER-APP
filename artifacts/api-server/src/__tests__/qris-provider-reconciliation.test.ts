@@ -238,7 +238,7 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
   it("uses the compatible owner rule instead of the broad GPN default", () => {
     const result = generateQrisMutationBatchCandidates({
       payments: [{
-        id: 261, companyId: 1, bankAccountId: 17, amount: 100_000,
+        id: 261, companyId: 1, bankAccountId: 17, amount: 200_000,
         method: "QRIS", status: "paid", paidAt: "2026-08-12",
         expectedSettlementDate: "2026-08-13",
         settlementRuleVersion: "PROD-MANDIRI-SC-20260810-v1",
@@ -266,8 +266,9 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
 
     expect(result[0]?.providerCode).toBe("gpn_qris");
     expect(result[0]?.paymentItems.map((item) => item.paymentId)).toEqual([261]);
+    expect(result[0]?.settlementRuleVersion).toBe("PROD-MANDIRI-SC-20260810-v1");
+    expect(result[0]?.effectiveDeductionRate).toBeCloseTo(0.05, 6);
     expect(result[0]?.status).toBe("REVIEW");
-    expect(result[0]?.reason).toContain("Observed deduction/rate di luar tolerance provider.");
   });
 
   it("calculates gross 10m versus bank credit 9.93m as 70k deduction", () => {

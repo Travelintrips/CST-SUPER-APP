@@ -14,3 +14,5 @@ Natural-batch matching must not use unrestricted amount-only subset-sum. Build t
 **Why:** A valid MDR rate can occur for many arbitrary payment combinations, and a provider may send multiple settlements to the same company account on one date. Amount-only selection can therefore create false positives even when the fee rate looks correct.
 
 **How to apply:** Treat negative observed deduction as non-match, keep unknown provider and missing bank-account dimensions review-only, record provider detection source and rule version, and enforce one mutation per candidate plus one payment per final settlement at the database layer. Never enable final reconciliation or accounting posting as part of candidate hardening.
+
+Regression fixtures for provider-compatible deductions should keep bank credit below gross; otherwise the engine correctly enters its negative-deduction/ambiguous-gross review branch before tolerance evaluation.
