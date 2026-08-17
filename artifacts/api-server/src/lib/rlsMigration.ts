@@ -57,43 +57,93 @@ const CRITICAL_TABLES = [
 ];
 
 export async function runRlsMigration(): Promise<void> {
-  let enabled = 0;
+  let changed = 0;
   let skipped = 0;
+
+  const quotedTables = CRITICAL_TABLES.map((table) => `'${table.replace(/'/g, "''")}'`).join(", ");
+  let catalogRows: Array<{
+    table_name: string;
+    rls_enabled: boolean;
+    policy_ok: boolean;
+  }> = [];
+
+  try {
+    const catalog = await db.execute(sql.raw(`
+      SELECT
+        c.relname AS table_name,
+        c.relrowsecurity AS rls_enabled,
+        EXISTS (
+          SELECT 1
+          FROM pg_policies p
+          WHERE p.schemaname = 'public'
+            AND p.tablename = c.relname
+            AND p.policyname = 'deny_direct_anon_access'
+            AND p.cmd = 'ALL'
+            AND p.roles @> ARRAY['anon'::name, 'authenticated'::name]
+            AND replace(replace(COALESCE(p.qual, ''), '(', ''), ')', '') = 'false'
+            AND replace(replace(COALESCE(p.with_check, ''), '(', ''), ')', '') = 'false'
+        ) AS policy_ok
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public'
+        AND c.relkind = 'r'
+        AND c.relname IN (${quotedTables})
+    `));
+    catalogRows = (catalog.rows ?? []) as typeof catalogRows;
+  } catch (err) {
+    // Do not weaken the security posture if the optimization query is not
+    // supported by an older runtime. Fall back to the original per-table
+    // enforcement path below.
+    logger.warn({ err }, "RLS migration catalog probe failed; using enforcement fallback");
+  }
+
+  const catalogByTable = new Map(catalogRows.map((row) => [row.table_name, row]));
 
   for (const table of CRITICAL_TABLES) {
     try {
-      // Check if table exists before enabling RLS
-      const exists = await db.execute(sql`
-        SELECT 1 FROM information_schema.tables
-        WHERE table_schema = 'public' AND table_name = ${table}
-        LIMIT 1
-      `);
-
-      if ((exists as unknown as { rows: unknown[] }).rows.length === 0) {
+      const catalogState = catalogByTable.get(table);
+      if (catalogRows.length > 0 && !catalogState) {
         skipped++;
         continue;
       }
 
-      // Enable RLS (idempotent)
-      await db.execute(sql.raw(`ALTER TABLE "${table}" ENABLE ROW LEVEL SECURITY`));
+      // If the catalog probe failed, retain the old existence check and
+      // fail-safe enforcement behavior.
+      if (!catalogState) {
+        const exists = await db.execute(sql`
+          SELECT 1 FROM information_schema.tables
+          WHERE table_schema = 'public' AND table_name = ${table}
+          LIMIT 1
+        `);
+        if ((exists as unknown as { rows: unknown[] }).rows.length === 0) {
+          skipped++;
+          continue;
+        }
+      }
 
-      // Drop old deny policy if exists (recreate to ensure it's correct)
-      await db.execute(
-        sql.raw(`DROP POLICY IF EXISTS "deny_direct_anon_access" ON "${table}"`)
-      );
+      const needsPolicyRepair = !catalogState || !catalogState.policy_ok;
+      if (needsPolicyRepair) {
+        await db.execute(
+          sql.raw(`DROP POLICY IF EXISTS "deny_direct_anon_access" ON "${table}"`)
+        );
 
-      // Deny all access from anon and authenticated Supabase roles
-      // The service_role used by the API server bypasses RLS entirely
-      await db.execute(sql.raw(`
-        CREATE POLICY "deny_direct_anon_access"
-          ON "${table}"
-          FOR ALL
-          TO anon, authenticated
-          USING (false)
-          WITH CHECK (false)
-      `));
+        // Deny all access from anon and authenticated Supabase roles
+        // The service_role used by the API server bypasses RLS entirely
+        await db.execute(sql.raw(`
+          CREATE POLICY "deny_direct_anon_access"
+            ON "${table}"
+            FOR ALL
+            TO anon, authenticated
+            USING (false)
+            WITH CHECK (false)
+        `));
+        changed++;
+      }
 
-      enabled++;
+      if (!catalogState?.rls_enabled) {
+        await db.execute(sql.raw(`ALTER TABLE "${table}" ENABLE ROW LEVEL SECURITY`));
+        changed++;
+      }
     } catch (err) {
       // Non-fatal: some tables may use different schemas or have constraints
       const msg = err instanceof Error ? err.message : String(err);
@@ -103,7 +153,7 @@ export async function runRlsMigration(): Promise<void> {
   }
 
   logger.info(
-    { enabled, skipped, total: CRITICAL_TABLES.length },
-    "RLS migration: deny policies applied to critical tables"
+    { changed, skipped, total: CRITICAL_TABLES.length },
+    "RLS migration: deny policies verified on critical tables"
   );
 }

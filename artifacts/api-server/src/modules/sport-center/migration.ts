@@ -2,6 +2,10 @@ import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../../lib/logger.js";
 import { pullLegacyBookingsFromSupabase, pullFacilitiesFromSupabase, pullPaymentsFromSupabase } from "./supabaseSync.js";
+import {
+  isStartupMigrationComplete,
+  markStartupMigrationComplete,
+} from "../../lib/startupMigrationState.js";
 
 /**
  * Upgrade the shared ledger audit table used by accounting posting.
@@ -2773,7 +2777,14 @@ export async function verifyCanonicalSettlementOwnerRoutines(): Promise<void> {
   }
 }
 
+const SPORT_CENTER_BOOTSTRAP_VERSION = "schema-bootstrap-v1";
+
 export async function runSportCenterMigration(): Promise<void> {
+  if (await isStartupMigrationComplete("sport_center_bootstrap", SPORT_CENTER_BOOTSTRAP_VERSION)) {
+    logger.info("Sport Center bootstrap already provisioned; startup schema/data sync skipped");
+    return;
+  }
+
   try {
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS sport_facilities (
@@ -3773,6 +3784,11 @@ export async function runSportCenterMigration(): Promise<void> {
       logger.warn({ err: viewErr }, "Sport Center migration: expected_bank_settlements view creation failed (non-fatal)");
     }
 
+    await markStartupMigrationComplete(
+      "sport_center_bootstrap",
+      SPORT_CENTER_BOOTSTRAP_VERSION,
+      "Sport Center schema, canonical settlement contracts, and initial legacy synchronization",
+    );
     logger.info("Sport Center migration: selesai");
   } catch (err) {
     logger.error({ err }, "Sport Center migration: gagal");
@@ -3785,6 +3801,11 @@ export async function runSportCenterMigration(): Promise<void> {
  * Idempoten — hanya dijalankan sekali.
  */
 export async function runSportCenterCompanyInvoiceMigration(): Promise<void> {
+  if (await isStartupMigrationComplete("sport_center_company_invoice", SPORT_CENTER_BOOTSTRAP_VERSION)) {
+    logger.info("Sport Center company invoice bootstrap already provisioned; startup DDL skipped");
+    return;
+  }
+
   try {
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS sport_company_clients (
@@ -3846,6 +3867,11 @@ export async function runSportCenterCompanyInvoiceMigration(): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_scii_booking ON sport_company_invoice_items(booking_id);
     `);
 
+    await markStartupMigrationComplete(
+      "sport_center_company_invoice",
+      SPORT_CENTER_BOOTSTRAP_VERSION,
+      "Sport Center company client and invoice tables",
+    );
     logger.info("Sport Center company invoice migration: selesai");
   } catch (err) {
     logger.warn({ err }, "Sport Center company invoice migration: gagal (non-fatal)");
@@ -3858,6 +3884,11 @@ export async function runSportCenterCompanyInvoiceMigration(): Promise<void> {
  * Idempoten: jika sudah tidak ada baris yang salah, skip.
  */
 export async function runSportCenterAccountCorrection(): Promise<void> {
+  if (await isStartupMigrationComplete("sport_center_account_correction", SPORT_CENTER_BOOTSTRAP_VERSION)) {
+    logger.info("Sport Center account correction already applied; startup data correction skipped");
+    return;
+  }
+
   try {
     const BOOKING_SOURCES = [
       "sport_center_booking",
@@ -3940,6 +3971,11 @@ export async function runSportCenterAccountCorrection(): Promise<void> {
         logger.info("Sport Center account correction: tidak ada baris yang perlu dikoreksi");
       }
     });
+    await markStartupMigrationComplete(
+      "sport_center_account_correction",
+      SPORT_CENTER_BOOTSTRAP_VERSION,
+      "One-time correction of legacy Sport Center revenue account mappings",
+    );
   } catch (err) {
     logger.warn({ err }, "Sport Center account correction: gagal (non-fatal)");
   }
@@ -3950,6 +3986,11 @@ export async function runSportCenterAccountCorrection(): Promise<void> {
  * Idempoten — pakai CREATE TABLE IF NOT EXISTS.
  */
 export async function runSportExpensesMigration(): Promise<void> {
+  if (await isStartupMigrationComplete("sport_expenses", SPORT_CENTER_BOOTSTRAP_VERSION)) {
+    logger.info("Sport Expenses bootstrap already provisioned; startup DDL skipped");
+    return;
+  }
+
   try {
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS sport_expenses (
@@ -3987,6 +4028,11 @@ export async function runSportExpensesMigration(): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_sport_expenses_status   ON sport_expenses(status)
     `);
 
+    await markStartupMigrationComplete(
+      "sport_expenses",
+      SPORT_CENTER_BOOTSTRAP_VERSION,
+      "Sport Center expense table and indexes",
+    );
     logger.info("Sport Expenses migration: selesai");
   } catch (err) {
     logger.warn({ err }, "Sport Expenses migration: gagal (non-fatal)");

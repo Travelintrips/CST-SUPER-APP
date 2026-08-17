@@ -15,6 +15,10 @@ import { checkRevenueFieldLock, reportImmutabilityViolation } from "../lib/ledge
 import { queueIntegrityError } from "../lib/errorContainment.js";
 import { safeAccountingPost } from "../lib/safeAccountingPost.js";
 import { sportPaymentCanonicalSettlementExclusionSql } from "../lib/reconciliation/sportPaymentCanonicalSettlement.js";
+import {
+  isStartupMigrationComplete,
+  markStartupMigrationComplete,
+} from "../lib/startupMigrationState.js";
 
 const router = Router();
 
@@ -25,9 +29,16 @@ router.use(async (req, res, next) => {
 
 // ─── Inline migration ─────────────────────────────────────────────────────────
 let migrated = false;
+const BANK_MUTATION_IMPORT_VERSION = "schema-bootstrap-v1";
 
 export async function runBankMutationImportMigration() {
   if (migrated) return;
+  if (await isStartupMigrationComplete("bank_mutation_import", BANK_MUTATION_IMPORT_VERSION)) {
+    migrated = true;
+    logger.info("Bank mutation import migration already provisioned; startup DDL skipped");
+    return;
+  }
+
   try {
   await db.execute(sql.raw(`SET search_path TO public`));
 
@@ -458,6 +469,11 @@ export async function runBankMutationImportMigration() {
     WHERE NOT EXISTS (SELECT 1 FROM master_coa_mapping WHERE erp_category = 'REVENUE_AIRPORT_TRANSFER')
   `)).catch(() => {});
 
+  await markStartupMigrationComplete(
+    "bank_mutation_import",
+    BANK_MUTATION_IMPORT_VERSION,
+    "Bank mutation import tables, normalization schema, and baseline accounting mappings",
+  );
   migrated = true;
   } catch (err) {
     logger.error({ err }, 'runBankMutationImportMigration: DDL error (non-fatal, endpoints will still work)');

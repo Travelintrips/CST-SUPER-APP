@@ -3,6 +3,10 @@ import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { requireAdmin } from "../lib/requireAdmin.js";
 import { logger } from "../lib/logger.js";
+import {
+  isStartupMigrationComplete,
+  markStartupMigrationComplete,
+} from "../lib/startupMigrationState.js";
 
 const router = Router();
 router.use(async (req, res, next) => {
@@ -12,8 +16,16 @@ router.use(async (req, res, next) => {
 
 // ─── Inline Migration ────────────────────────────────────────────────────────
 let migrated = false;
+const BANK_MUTATION_MASTERS_VERSION = "schema-bootstrap-v1";
+
 export async function runBankMutationMastersMigration() {
   if (migrated) return;
+  if (await isStartupMigrationComplete("bank_mutation_masters", BANK_MUTATION_MASTERS_VERSION)) {
+    migrated = true;
+    logger.info("Bank mutation masters migration already provisioned; startup DDL skipped");
+    return;
+  }
+
   await db.execute(sql.raw(`
     -- Fase 7: Dynamic COA Mapping
     CREATE TABLE IF NOT EXISTS master_coa_mapping (
@@ -160,6 +172,11 @@ export async function runBankMutationMastersMigration() {
     -- Hapus legacy bank accounts tanpa company_id (tidak terpakai, sumber duplikasi)
     DELETE FROM master_bank_accounts WHERE company_id IS NULL;
   `));
+  await markStartupMigrationComplete(
+    "bank_mutation_masters",
+    BANK_MUTATION_MASTERS_VERSION,
+    "Bank mutation master tables, indexes, and baseline mappings",
+  );
   migrated = true;
 }
 
