@@ -30,3 +30,16 @@ misclassify a successful live catalog check.
 
 **How to apply:** Run the preflight through `load-secrets.mjs`, record the
 individual routine results, and report the contract-gate blockers separately.
+
+The posted-settlement immutability trigger must recognize the owner recovery
+context explicitly. Recovery is allowed only as a transaction-local,
+fail-closed `posted -> reconciled` transition that changes the bank-derived
+net, adjustment, and bank link; ordinary updates and all other financial
+fields remain blocked.
+
+**Why:** A restored recovery function can still fail at the live UPDATE because
+the existing immutability trigger correctly rejects posted financial changes.
+
+**How to apply:** Keep the recovery capability marker transaction-local, set it
+only immediately before the guarded owner UPDATE, and preserve the trigger's
+normal protections outside that narrow path.

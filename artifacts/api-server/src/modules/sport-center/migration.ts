@@ -2271,6 +2271,113 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
   `));
 
   /*
+   * The posted-settlement guard remains fail-closed for every ordinary UPDATE.
+   * The owner recovery routine below needs one narrow, transaction-local
+   * exception: posted -> reconciled, with only the bank-derived net,
+   * adjustment, and bank link changing.  A custom transaction-local setting
+   * is used as an explicit capability marker; the recovery routine sets it
+   * immediately before its guarded UPDATE.
+   */
+  await db.execute(sql.raw(`
+    CREATE OR REPLACE FUNCTION sport_center.guard_posted_settlement_batch()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'pg_catalog', 'sport_center'
+    AS $function$
+    DECLARE
+      v_owner_recovery boolean :=
+        current_setting('sport_center.canonical_settlement_recovery', true)
+          = 'owner-net-correction-v1';
+    BEGIN
+      IF TG_OP = 'DELETE' THEN
+        IF OLD.status IN ('posted', 'reconciled', 'reversed') THEN
+          RAISE EXCEPTION
+            'POSTED_SETTLEMENT_CANNOT_BE_DELETED: %',
+            OLD.id;
+        END IF;
+        RETURN OLD;
+      END IF;
+
+      IF OLD.status IN ('posted', 'reconciled', 'reversed') THEN
+        IF v_owner_recovery THEN
+          IF OLD.status <> 'posted'
+             OR NEW.status <> 'reconciled'
+             OR OLD.bank_mutation_id IS NOT NULL
+             OR NEW.bank_mutation_id IS NULL
+             OR NEW.net_amount IS NULL
+             OR NEW.adjustment_amount IS NULL
+             OR NEW.company_id IS DISTINCT FROM OLD.company_id
+             OR NEW.provider_code IS DISTINCT FROM OLD.provider_code
+             OR NEW.provider_name IS DISTINCT FROM OLD.provider_name
+             OR NEW.bank_account_id IS DISTINCT FROM OLD.bank_account_id
+             OR NEW.settlement_date IS DISTINCT FROM OLD.settlement_date
+             OR NEW.settlement_reference IS DISTINCT FROM OLD.settlement_reference
+             OR NEW.gross_amount IS DISTINCT FROM OLD.gross_amount
+             OR NEW.mdr_amount IS DISTINCT FROM OLD.mdr_amount
+             OR NEW.provider_fee_amount IS DISTINCT FROM OLD.provider_fee_amount
+             OR NEW.fee_tax_amount IS DISTINCT FROM OLD.fee_tax_amount
+             OR NEW.tax_withheld_amount IS DISTINCT FROM OLD.tax_withheld_amount
+             OR NEW.settlement_journal_id IS DISTINCT FROM OLD.settlement_journal_id
+             OR NEW.settlement_rule_version IS DISTINCT FROM OLD.settlement_rule_version
+             OR NEW.provider_settlement_reference IS DISTINCT FROM OLD.provider_settlement_reference
+             OR NEW.provider_batch_id IS DISTINCT FROM OLD.provider_batch_id
+          THEN
+            RAISE EXCEPTION
+              'POSTED_SETTLEMENT_RECOVERY_UPDATE_NOT_ALLOWED: %',
+              OLD.id;
+          END IF;
+        ELSIF NEW.company_id IS DISTINCT FROM OLD.company_id
+           OR NEW.provider_code IS DISTINCT FROM OLD.provider_code
+           OR NEW.provider_name IS DISTINCT FROM OLD.provider_name
+           OR NEW.bank_account_id IS DISTINCT FROM OLD.bank_account_id
+           OR NEW.settlement_date IS DISTINCT FROM OLD.settlement_date
+           OR NEW.settlement_reference IS DISTINCT FROM OLD.settlement_reference
+           OR NEW.gross_amount IS DISTINCT FROM OLD.gross_amount
+           OR NEW.mdr_amount IS DISTINCT FROM OLD.mdr_amount
+           OR NEW.provider_fee_amount IS DISTINCT FROM OLD.provider_fee_amount
+           OR NEW.fee_tax_amount IS DISTINCT FROM OLD.fee_tax_amount
+           OR NEW.tax_withheld_amount IS DISTINCT FROM OLD.tax_withheld_amount
+           OR NEW.adjustment_amount IS DISTINCT FROM OLD.adjustment_amount
+           OR NEW.net_amount IS DISTINCT FROM OLD.net_amount
+           OR NEW.settlement_journal_id IS DISTINCT FROM OLD.settlement_journal_id
+           OR NEW.settlement_rule_version IS DISTINCT FROM OLD.settlement_rule_version
+           OR NEW.provider_settlement_reference IS DISTINCT FROM OLD.provider_settlement_reference
+           OR NEW.provider_batch_id IS DISTINCT FROM OLD.provider_batch_id
+        THEN
+          RAISE EXCEPTION
+            'POSTED_SETTLEMENT_FINANCIAL_DATA_IS_IMMUTABLE: %',
+            OLD.id;
+        END IF;
+      END IF;
+
+      IF OLD.status = 'posted'
+         AND NEW.status NOT IN ('posted', 'reconciled', 'reversed')
+      THEN
+        RAISE EXCEPTION
+          'INVALID_POSTED_SETTLEMENT_STATUS_TRANSITION: % -> %',
+          OLD.status,
+          NEW.status;
+      END IF;
+
+      IF OLD.status = 'reconciled'
+         AND NEW.status NOT IN ('reconciled', 'reversed')
+      THEN
+        RAISE EXCEPTION
+          'INVALID_RECONCILED_SETTLEMENT_STATUS_TRANSITION: % -> %',
+          OLD.status,
+          NEW.status;
+      END IF;
+
+      IF OLD.status = 'reversed' AND NEW.status <> 'reversed' THEN
+        RAISE EXCEPTION 'REVERSED_SETTLEMENT_IS_FINAL: %', OLD.id;
+      END IF;
+
+      RETURN NEW;
+    END;
+    $function$;
+  `));
+
+  /*
    * Owner recovery for a posted settlement whose bank evidence has a
    * different net amount than the original calculation.
    *
@@ -2477,9 +2584,9 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
 
       SELECT COUNT(*)::integer
         INTO v_active_item_count
-        FROM sport_center.payment_settlement_items
-       WHERE settlement_id = p_settlement_id
-         AND item_status = 'active';
+        FROM sport_center.payment_settlement_items active_items
+       WHERE active_items.settlement_id = p_settlement_id
+         AND active_items.item_status = 'active';
 
       IF v_active_item_count = 0 THEN
         RAISE EXCEPTION
@@ -2692,6 +2799,12 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
             'CANONICAL_SETTLEMENT_RECOVERY_CANONICAL_STATE_CHANGED: mutation=%',
             p_public_mutation_id;
         END IF;
+
+        PERFORM set_config(
+          'sport_center.canonical_settlement_recovery',
+          'owner-net-correction-v1',
+          true
+        );
 
         UPDATE sport_center.payment_settlement_batches
            SET net_amount = v_recovered_net,
