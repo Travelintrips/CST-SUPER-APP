@@ -2042,7 +2042,7 @@ function QrisMutationCard({
 
   return (
     <Card
-      className={`transition-all hover:shadow-md ${CARD_BORDER[m.status] ?? ""} cursor-pointer group text-black [&_*]:!text-black`}
+      className={`transition-all hover:shadow-md ${CARD_BORDER[m.status] ?? ""} cursor-pointer group`}
       onClick={() => onDetail(m)}
       tabIndex={0}
       onKeyDown={e => e.key === "Enter" && onDetail(m)}
