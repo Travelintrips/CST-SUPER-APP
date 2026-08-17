@@ -1795,8 +1795,8 @@ async function startServer() {
             );
             await sleep(backoff);
           } else {
-            logger.warn({ err }, "Pre-start migrations failed (non-fatal)");
-            return;
+            logger.error({ err }, "Pre-start migrations failed");
+            throw err;
           }
         }
       }
@@ -1971,27 +1971,13 @@ async function startServer() {
         });
       }
     }))
-    .then(() => timeStartupStage("Accounting defaults seed", () => seedAccountingDefaults().catch((err) => {
-      logger.error({ err }, "Accounting seed failed");
-    })))
-    .then(() => timeStartupStage("Development COA sync", () => syncDevCoaToFixture().catch((err) => {
-      logger.warn({ err }, "COA dev sync failed (non-fatal)");
-    })))
-    .then(() => timeStartupStage("Additional tax seed", () => seedAdditionalTaxes().catch((err) => {
-      logger.warn({ err }, "Additional tax seed failed (non-fatal)");
-    })))
-    .then(() => timeStartupStage("Expense category account backfill", () => backfillExpenseCategoryAccounts().catch((err) => {
-      logger.warn({ err }, "Expense category account backfill failed (non-fatal)");
-    })))
-    .then(() => timeStartupStage("MDR expense category backfill", () => backfillMdrExpenseCategory().catch((err) => {
-      logger.warn({ err }, "MDR expense category backfill failed (non-fatal)");
-    })))
-    .then(() => timeStartupStage("UOM seed", () => seedUom().catch((err) => {
-      logger.warn({ err }, "UOM seed failed (non-fatal)");
-    })))
-    .then(() => timeStartupStage("Product templates seed", () => seedProductTemplates().catch((err) => {
-      logger.warn({ err }, "Product templates seed failed (non-fatal)");
-    })))
+    .then(() => timeStartupStage("Accounting defaults seed", seedAccountingDefaults))
+    .then(() => timeStartupStage("Development COA sync", syncDevCoaToFixture))
+    .then(() => timeStartupStage("Additional tax seed", seedAdditionalTaxes))
+    .then(() => timeStartupStage("Expense category account backfill", backfillExpenseCategoryAccounts))
+    .then(() => timeStartupStage("MDR expense category backfill", backfillMdrExpenseCategory))
+    .then(() => timeStartupStage("UOM seed", seedUom))
+    .then(() => timeStartupStage("Product templates seed", seedProductTemplates))
     .then(() => timeStartupStage("Logistics/catalog/demo seed chain", () =>
       seedLogisticsServiceItems()
         .then(() => seedCatalogProducts())
@@ -2006,6 +1992,7 @@ async function startServer() {
         .then(() => remediateOrphanProducts())
         .catch((seedErr) => {
           logger.error({ err: seedErr }, "Logistics/demo seed failed");
+          throw seedErr;
         })
     ))
     .then(() => {

@@ -3874,7 +3874,8 @@ export async function runSportCenterCompanyInvoiceMigration(): Promise<void> {
     );
     logger.info("Sport Center company invoice migration: selesai");
   } catch (err) {
-    logger.warn({ err }, "Sport Center company invoice migration: gagal (non-fatal)");
+    logger.error({ err }, "Sport Center company invoice migration: gagal");
+    throw err;
   }
 }
 
@@ -3977,7 +3978,8 @@ export async function runSportCenterAccountCorrection(): Promise<void> {
       "One-time correction of legacy Sport Center revenue account mappings",
     );
   } catch (err) {
-    logger.warn({ err }, "Sport Center account correction: gagal (non-fatal)");
+    logger.error({ err }, "Sport Center account correction: gagal");
+    throw err;
   }
 }
 
@@ -4035,7 +4037,8 @@ export async function runSportExpensesMigration(): Promise<void> {
     );
     logger.info("Sport Expenses migration: selesai");
   } catch (err) {
-    logger.warn({ err }, "Sport Expenses migration: gagal (non-fatal)");
+    logger.error({ err }, "Sport Expenses migration: gagal");
+    throw err;
   }
 }
 

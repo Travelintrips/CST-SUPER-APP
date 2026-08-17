@@ -476,8 +476,10 @@ export async function runBankMutationImportMigration() {
   );
   migrated = true;
   } catch (err) {
-    logger.error({ err }, 'runBankMutationImportMigration: DDL error (non-fatal, endpoints will still work)');
-    migrated = true; // jangan retry terus-terusan setiap request
+    logger.error({ err }, "runBankMutationImportMigration: DDL error");
+    // Do not turn a failed migration into a completed process-local fast path.
+    // The startup runner must persist `failed` and retry on the next startup.
+    throw err;
   }
 }
 

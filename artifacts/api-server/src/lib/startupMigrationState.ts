@@ -1,6 +1,7 @@
 import { db, pool } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import type { PoolClient } from "pg";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { logger } from "./logger.js";
 
 export type StartupMigrationStatus = "pending" | "running" | "completed" | "failed";
@@ -21,6 +22,7 @@ const STARTUP_STATE_TABLE = "startup_migration_state";
 const LOCK_WAIT_TIMEOUT_MS = 30_000;
 const LOCK_POLL_MS = 250;
 let storeReady: Promise<void> | null = null;
+const stageLockContext = new AsyncLocalStorage<{ name: string; client: PoolClient }>();
 
 function versionText(version: string | number): string {
   return String(version);
@@ -145,8 +147,26 @@ export async function runStartupMigrationStage<T>(
   run: () => Promise<T>,
 ): Promise<StartupStageResult<T>> {
   const lookupStartedAt = performance.now();
-  await ensureStartupStateStore();
-  const storedVersion = await readCompletedVersion(stage.name);
+  try {
+    await ensureStartupStateStore();
+  } catch (error) {
+    logger.error(
+      { name: stage.name, version: stage.version, err: sanitizeError(error) },
+      `[startup-stage] metadata store unavailable name=${stage.name} version=${stage.version}`,
+    );
+    throw error;
+  }
+
+  let storedVersion: string | null;
+  try {
+    storedVersion = await readCompletedVersion(stage.name);
+  } catch (error) {
+    logger.error(
+      { name: stage.name, version: stage.version, err: sanitizeError(error) },
+      `[startup-stage] CHECK failed name=${stage.name} version=${stage.version}`,
+    );
+    throw error;
+  }
   const registryLookupMs = Math.max(0, Math.round(performance.now() - lookupStartedAt));
 
   logger.info(
@@ -190,7 +210,12 @@ export async function runStartupMigrationStage<T>(
 
     const executionStartedAt = performance.now();
     try {
-      const value = await run();
+      // Compatibility migrations still persist their own historical marker.
+      // Carry the lock through the callback so that marker writes do not try
+      // to acquire the same session advisory lock a second time.
+      const value = await stageLockContext.run({ name: stage.name, client: lock }, async () => {
+        return await run();
+      });
       const executionMs = Math.max(0, Math.round(performance.now() - executionStartedAt));
       const completionStartedAt = performance.now();
       await updateState(stage.name, stage.version, "completed");
@@ -256,7 +281,21 @@ export async function markStartupMigrationComplete(
   _description: string,
 ): Promise<boolean> {
   await ensureStartupStateStore();
-  await updateState(name, version, "completed");
+  const context = stageLockContext.getStore();
+  if (context?.name === name) {
+    await updateState(name, version, "completed");
+  } else {
+    // Standalone callers (for example a route-triggered legacy fast path)
+    // still need the same serialization guarantee as the startup runner.
+    // The operation itself should preferably be called through the runner;
+    // this lock at least prevents competing marker writes from racing.
+    const lock = await acquireStageLock(name);
+    try {
+      await updateState(name, version, "completed");
+    } finally {
+      await releaseStageLock(lock, name);
+    }
+  }
   logger.info({ name, version }, "Startup migration marker persisted");
   return true;
 }
