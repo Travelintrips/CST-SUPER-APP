@@ -1,6 +1,6 @@
 import { db, pool } from "@workspace/db";
 import { sql } from "drizzle-orm";
-import type { PoolClient } from "pg";
+import type { PoolClient, QueryResult } from "pg";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { logger } from "./logger.js";
 
@@ -21,7 +21,15 @@ export interface StartupStageResult<T> {
 export type StartupMigrationGateMetrics = {
   store_initialization_roundtrips: number;
   store_initialization_ms: number | null;
+  store_initialization_pool_acquire_ms: number | null;
+  store_initialization_query_ms: number | null;
   bulk_registry_reads: number;
+  bulk_registry_pool_acquire_ms: number | null;
+  bulk_registry_query_ms: number | null;
+  bulk_registry_rows: number | null;
+  bulk_registry_processing_ms: number | null;
+  bulk_registry_connection_reused: boolean;
+  pool_connection_acquisitions: number;
   marker_reads: number;
   lock_attempts: number;
   lock_acquisitions: number;
@@ -45,7 +53,15 @@ const stageLockContext = new AsyncLocalStorage<{ name: string; client: PoolClien
 const gateMetrics: StartupMigrationGateMetrics = {
   store_initialization_roundtrips: 0,
   store_initialization_ms: null,
+  store_initialization_pool_acquire_ms: null,
+  store_initialization_query_ms: null,
   bulk_registry_reads: 0,
+  bulk_registry_pool_acquire_ms: null,
+  bulk_registry_query_ms: null,
+  bulk_registry_rows: null,
+  bulk_registry_processing_ms: null,
+  bulk_registry_connection_reused: false,
+  pool_connection_acquisitions: 0,
   marker_reads: 0,
   lock_attempts: 0,
   lock_acquisitions: 0,
@@ -67,11 +83,46 @@ function sanitizeError(error: unknown): string {
     .slice(0, 1_000);
 }
 
-async function ensureStartupStateStore(): Promise<void> {
+async function executeMeasuredQuery(
+  text: string,
+  values: readonly unknown[] = [],
+  existingClient?: PoolClient,
+): Promise<{
+  result: QueryResult;
+  poolAcquireMs: number;
+  queryMs: number;
+}> {
+  let client = existingClient;
+  let ownsClient = false;
+  let poolAcquireMs = 0;
+  if (!client) {
+    const acquireStartedAt = performance.now();
+    client = await pool.connect();
+    poolAcquireMs = Math.max(0, Math.round(performance.now() - acquireStartedAt));
+    gateMetrics.pool_connection_acquisitions++;
+    ownsClient = true;
+  }
+  try {
+    const queryStartedAt = performance.now();
+    const result = await client.query(text, [...values]);
+    return {
+      result,
+      poolAcquireMs,
+      queryMs: Math.max(0, Math.round(performance.now() - queryStartedAt)),
+    };
+  } finally {
+    if (ownsClient) client.release();
+  }
+}
+
+async function ensureStartupStateStore(
+  existingClient?: PoolClient,
+  existingPoolAcquireMs?: number,
+  operationStartedAt = performance.now(),
+): Promise<void> {
   if (!storeReady) {
     gateMetrics.store_initialization_roundtrips++;
-    const startedAt = performance.now();
-    storeReady = db.execute(sql`
+    storeReady = executeMeasuredQuery(`
       CREATE TABLE IF NOT EXISTS startup_migration_state (
         stage_name    TEXT PRIMARY KEY,
         stage_version TEXT NOT NULL,
@@ -82,10 +133,13 @@ async function ensureStartupStateStore(): Promise<void> {
         last_error    TEXT,
         updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
-    `).then(() => {
+    `, [], existingClient).then(({ poolAcquireMs, queryMs }) => {
+      gateMetrics.store_initialization_pool_acquire_ms =
+        existingPoolAcquireMs ?? poolAcquireMs;
+      gateMetrics.store_initialization_query_ms = queryMs;
       gateMetrics.store_initialization_ms = Math.max(
         0,
-        Math.round(performance.now() - startedAt),
+        Math.round(performance.now() - operationStartedAt),
       );
     }).catch((error) => {
       storeReady = null;
@@ -193,41 +247,67 @@ export async function primeStartupMigrationRegistry(
   }
 
   registrySnapshotLoadPromise = (async () => {
-    await ensureStartupStateStore();
-    const startedAt = performance.now();
-    const result = await db.execute(sql`
-      SELECT stage_name, stage_version, status
-      FROM startup_migration_state
-    `);
-    gateMetrics.bulk_registry_reads++;
-
-    const knownNames = new Set(stages.map((stage) => stage.name));
-    const snapshot = new Map<string, PersistentStageState>();
-    for (const row of result.rows as Array<{
-      stage_name?: unknown;
-      stage_version?: unknown;
-      status?: unknown;
-    }>) {
-      const name = String(row.stage_name ?? "");
-      const status = String(row.status ?? "") as StartupMigrationStatus;
-      if (
-        knownNames.has(name) &&
-        (status === "pending" ||
-          status === "running" ||
-          status === "completed" ||
-          status === "failed")
-      ) {
-        snapshot.set(name, {
-          stageVersion: String(row.stage_version ?? ""),
-          status,
-        });
-      }
+    let sharedClient: PoolClient | null = null;
+    const storeStartedAt = performance.now();
+    let sharedPoolAcquireMs: number | undefined;
+    if (!storeReady) {
+      const acquireStartedAt = performance.now();
+      sharedClient = await pool.connect();
+      gateMetrics.pool_connection_acquisitions++;
+      sharedPoolAcquireMs = Math.max(0, Math.round(performance.now() - acquireStartedAt));
     }
-    registrySnapshot = snapshot;
-    gateMetrics.registry_snapshot_load_ms = Math.max(
-      0,
-      Math.round(performance.now() - startedAt),
-    );
+
+    try {
+      await ensureStartupStateStore(
+        sharedClient ?? undefined,
+        sharedPoolAcquireMs,
+        storeStartedAt,
+      );
+      const startedAt = performance.now();
+      const { result, poolAcquireMs, queryMs } = await executeMeasuredQuery(`
+        SELECT stage_name, stage_version, status
+        FROM startup_migration_state
+      `, [], sharedClient ?? undefined);
+      gateMetrics.bulk_registry_reads++;
+      gateMetrics.bulk_registry_pool_acquire_ms = poolAcquireMs;
+      gateMetrics.bulk_registry_query_ms = queryMs;
+      gateMetrics.bulk_registry_rows = result.rows.length;
+      gateMetrics.bulk_registry_connection_reused = sharedClient !== null;
+
+      const knownNames = new Set(stages.map((stage) => stage.name));
+      const snapshot = new Map<string, PersistentStageState>();
+      for (const row of result.rows as Array<{
+        stage_name?: unknown;
+        stage_version?: unknown;
+        status?: unknown;
+      }>) {
+        const name = String(row.stage_name ?? "");
+        const status = String(row.status ?? "") as StartupMigrationStatus;
+        if (
+          knownNames.has(name) &&
+          (status === "pending" ||
+            status === "running" ||
+            status === "completed" ||
+            status === "failed")
+        ) {
+          snapshot.set(name, {
+            stageVersion: String(row.stage_version ?? ""),
+            status,
+          });
+        }
+      }
+      registrySnapshot = snapshot;
+      gateMetrics.bulk_registry_processing_ms = Math.max(
+        0,
+        Math.round(performance.now() - startedAt - queryMs),
+      );
+      gateMetrics.registry_snapshot_load_ms = Math.max(
+        0,
+        Math.round(performance.now() - startedAt),
+      );
+    } finally {
+      sharedClient?.release();
+    }
   })().catch((error) => {
     registrySnapshotLoadPromise = null;
     throw error;
