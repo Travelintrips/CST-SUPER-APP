@@ -92,3 +92,4 @@
 - [Persistent gate readiness timing](persistent-gate-readiness-timing.md) — initialize migration timing before the gated pre-start callback, because a completed marker can skip that callback on restart.
 - [Managed artifact removal](managed-artifact-removal.md) — managed artifacts must be deleted from Library; workflow APIs can stop but not remove their registry entry.
 - [Persistent gate failure safety](persistent-gate-failure-safety.md) — gated stage callbacks must propagate failures; compatibility marker writes need lock-aware context to avoid false completion and recursive advisory-lock waits.
+- [Steady-state startup gate](steady-state-startup-gate.md) — use authoritative registry initialization as DB readiness; snapshot only completed matches and retain locked fallback semantics.

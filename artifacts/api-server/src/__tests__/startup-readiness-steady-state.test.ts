@@ -42,6 +42,17 @@ describe("startup readiness steady-state contract", () => {
     expect(startupState).toContain("LOCK_WAIT_TIMEOUT_MS");
   });
 
+  it("bulk-loads the registry and only uses the snapshot for completed version matches", () => {
+    expect(startupState).toContain("primeStartupMigrationRegistry");
+    expect(startupState).toContain("SELECT stage_name, stage_version, status");
+    expect(startupState).toContain('lookupSource: "bulk_snapshot"');
+    expect(startupState).toContain('= "database"');
+    expect(startupState).toContain('snapshotState?.status === "completed"');
+    expect(startupState).toContain("storedVersion = await readCompletedVersion(stage.name)");
+    expect(startupState).toContain("status === \"failed\"");
+    expect(startupState).toContain("status === \"running\"");
+  });
+
   it("only marks completion after success and records failures safely", () => {
     expect(startupState).toContain("await run()");
     expect(startupState).toContain("updateState(stage.name, stage.version, \"completed\")");
@@ -78,5 +89,12 @@ describe("startup readiness steady-state contract", () => {
     expect(rlsMigration).toContain("const needsPolicyRepair = !catalogState || !catalogState.policy_ok;");
     expect(rlsMigration).toContain("if (needsPolicyRepair)");
     expect(rlsMigration).toContain("if (!catalogState?.rls_enabled)");
+  });
+
+  it("uses condition-based registry readiness instead of the fixed startup sleep", () => {
+    expect(apiIndex).toContain("initializeStartupMigrationRegistry");
+    expect(apiIndex).toContain("fixed_startup_delay_ms: 0");
+    expect(apiIndex).not.toContain("sleep(8_000)");
+    expect(apiIndex).toContain("database_ready_ms: registryInitializationMs");
   });
 });

@@ -174,6 +174,8 @@ import { runDeferredStartupTasks } from "./lib/deferredStartupTasks.js";
 import {
   isStartupMigrationComplete,
   markStartupMigrationComplete,
+  getStartupMigrationGateMetrics,
+  primeStartupMigrationRegistry,
   runStartupMigrationStage,
 } from "./lib/startupMigrationState.js";
 import {
@@ -218,6 +220,7 @@ const startupStageSummary = {
   failed: 0,
 };
 const processMonotonicStartedAt = performance.now();
+logger.info({ startup_elapsed_ms: 0 }, "Startup process initialized; configuration loaded");
 
 function startupElapsedMs(): number {
   return Math.round(performance.now() - processMonotonicStartedAt);
@@ -311,6 +314,28 @@ async function runWithRetry<T>(
       }
     }
   });
+}
+
+async function initializeStartupMigrationRegistry(): Promise<number> {
+  const startedAt = performance.now();
+  for (let attempt = 1; attempt <= 10; attempt++) {
+    try {
+      await primeStartupMigrationRegistry(STARTUP_MIGRATION_REGISTRY);
+      return Math.max(0, Math.round(performance.now() - startedAt));
+    } catch (err: unknown) {
+      if (isTransientDbError(err) && attempt < 10) {
+        const backoff = Math.min(attempt * 15_000, 120_000);
+        logger.warn(
+          { attempt, backoff },
+          "[startup] Migration registry initialization transient DB error; retrying",
+        );
+        await sleep(backoff);
+      } else {
+        throw err;
+      }
+    }
+  }
+  throw new Error("Migration registry initialization exhausted retry policy");
 }
 
 async function runGatedStartupStage<T>(
@@ -1770,16 +1795,29 @@ async function startServer() {
   // Integration health check — every 6h, alerts on pass→fail flips via Fonnte WA
   registerWorker("integration-health-check", startIntegrationHealthWorker, 190_000);
 
-  // Run all migrations + seeds in one serial promise chain with an initial
-  // delay to let the DB pool stabilize before hammering pgBouncer with DDL.
+  // Run all migrations + seeds in one serial promise chain after the
+  // condition-based registry initialization. It creates/opens the persistent
+  // state store and bulk-reads it once; transient DB errors use the same
+  // bounded retry policy as the pre-start migration.
   // The dev workflow provides four bounded pool clients, so this single
   // migration lane cannot occupy the whole pool and starve login requests.
   console.log("[startup] Registering serial migration chain");
-  sleep(8_000)
-    .then(() => {
+  Promise.resolve()
+    .then(async () => {
       migrationStartedAt = Date.now();
+      const registryInitializationMs = await initializeStartupMigrationRegistry();
+      logger.info(
+        {
+          registry_initialization_ms: registryInitializationMs,
+          database_ready_ms: registryInitializationMs,
+          startup_elapsed_ms: startupElapsedMs(),
+          migration_runner_started: true,
+          fixed_startup_delay_ms: 0,
+        },
+        "[startup] Database ready and migration registry initialized; fixed startup delay bypassed",
+      );
       return timeStartupStage("Pre-start schema migrations", async () => {
-      console.log("[startup] Serial migration chain delay elapsed");
+      console.log("[startup] Migration registry initialization complete");
       for (let attempt = 1; attempt <= 10; attempt++) {
         try {
           await runCriticalPreStartMigrations();
@@ -2009,6 +2047,7 @@ async function startServer() {
           startup_elapsed_ms: startupElapsedMs(),
           migration_count: startupTimings.length,
           migration_timings: startupTimings,
+          startup_gate_metrics: getStartupMigrationGateMetrics(),
         },
         "Startup migration timing summary",
       );
@@ -2088,6 +2127,10 @@ async function startServer() {
     })
     .catch((err) => {
       logStartupStageSummary();
+      logger.error(
+        { startup_gate_metrics: getStartupMigrationGateMetrics() },
+        "Startup migration gate metrics at failure",
+      );
       logger.error({ err }, "Startup migration/seed chain failed");
     });
 }
