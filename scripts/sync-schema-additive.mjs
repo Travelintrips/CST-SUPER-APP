@@ -9,6 +9,7 @@
  * Usage:
  *   node scripts/sync-schema-additive.mjs              # report only
  *   node scripts/sync-schema-additive.mjs --apply      # apply additive diff
+ *   node scripts/sync-schema-additive.mjs --apply-safe # apply safe additive diff; skip PROMOTE_REQUIRED
  *   node scripts/sync-schema-additive.mjs --write-review /tmp/review.json
  *
  * The two connection URLs must be supplied by the official secret loader:
@@ -21,7 +22,8 @@ import fs from "node:fs/promises";
 
 const { Client } = pg;
 const args = process.argv.slice(2);
-const applyMode = args.includes("--apply");
+const safeApplyMode = args.includes("--apply-safe");
+const applyMode = args.includes("--apply") || safeApplyMode;
 
 function flagValue(flag) {
   const index = args.indexOf(flag);
@@ -1426,9 +1428,15 @@ async function run() {
       return;
     }
     if (report.promoteRequiredReviewItems > 0) {
-      throw new Error(
-        `${report.promoteRequiredReviewItems} excluded object(s) are PROMOTE_REQUIRED. ` +
-          "Obtain domain-owner approval and update the promotion scope before --apply.",
+      if (!safeApplyMode) {
+        throw new Error(
+          `${report.promoteRequiredReviewItems} excluded object(s) are PROMOTE_REQUIRED. ` +
+            "Obtain domain-owner approval and update the promotion scope before --apply.",
+        );
+      }
+      console.log(
+        `\nSAFE APPLY — skipping ${report.promoteRequiredReviewItems} PROMOTE_REQUIRED ` +
+          "object(s); only PROMOTE_ADDITIVE actions will run.",
       );
     }
 

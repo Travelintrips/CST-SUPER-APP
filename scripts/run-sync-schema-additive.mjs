@@ -10,6 +10,7 @@
  * Usage:
  *   node scripts/run-sync-schema-additive.mjs
  *   node scripts/run-sync-schema-additive.mjs --apply
+ *   node scripts/run-sync-schema-additive.mjs --apply-safe
  *   node scripts/run-sync-schema-additive.mjs --write-review /tmp/review.json
  */
 
@@ -24,6 +25,7 @@ const loader = path.join(root, "artifacts", "api-server", "load-secrets.mjs");
 const worker = path.join(root, "scripts", "sync-schema-additive.mjs");
 const inputArgs = process.argv.slice(2);
 const applyMode = inputArgs.includes("--apply");
+const safeApplyMode = inputArgs.includes("--apply-safe");
 const reviewFlagIndex = inputArgs.indexOf("--write-review");
 if (
   reviewFlagIndex >= 0 &&
@@ -82,7 +84,11 @@ try {
       "--from-dev-snapshot",
       snapshot,
       ...reviewArgs,
-      ...(applyMode ? ["--apply"] : []),
+      ...(safeApplyMode
+        ? ["--apply-safe"]
+        : applyMode
+          ? ["--apply"]
+          : []),
     ],
   );
 } catch (error) {
