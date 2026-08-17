@@ -194,6 +194,46 @@ if (Number.isNaN(port) || port <= 0) {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+type StartupTiming = {
+  name: string;
+  duration_ms: number;
+  status: "complete" | "failed";
+  attempts?: number;
+};
+
+const startupTimings: StartupTiming[] = [];
+const processMonotonicStartedAt = performance.now();
+
+function startupElapsedMs(): number {
+  return Math.round(performance.now() - processMonotonicStartedAt);
+}
+
+function recordStartupTiming(
+  name: string,
+  startedAt: number,
+  status: StartupTiming["status"],
+  attempts?: number,
+): number {
+  const duration_ms = Math.max(0, Math.round(performance.now() - startedAt));
+  startupTimings.push({ name, duration_ms, status, ...(attempts ? { attempts } : {}) });
+  return duration_ms;
+}
+
+async function timeStartupStage<T>(name: string, fn: () => Promise<T>): Promise<T> {
+  const startedAt = performance.now();
+  logger.info({ startup_elapsed_ms: startupElapsedMs() }, `${name}: timing start`);
+  try {
+    const result = await fn();
+    const duration_ms = recordStartupTiming(name, startedAt, "complete");
+    logger.info({ duration_ms, startup_elapsed_ms: startupElapsedMs() }, `${name}: timing complete`);
+    return result;
+  } catch (err) {
+    const duration_ms = recordStartupTiming(name, startedAt, "failed");
+    logger.error({ err, duration_ms }, `${name}: timing failed`);
+    throw err;
+  }
+}
+
 function isTransientDbError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const TRANSIENT = ["ECIRCUITBREAKER", "password authentication failed", "timeout exceeded", "ECONNREFUSED", "ETIMEDOUT", "temporarily blocked"];
@@ -208,23 +248,31 @@ async function runWithRetry<T>(
   maxAttempts = 5,
   delayMs = 15_000
 ): Promise<void> {
+  const stageStartedAt = performance.now();
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const attemptStartedAt = performance.now();
     try {
-      logger.info({ attempt, maxAttempts }, `${name}: starting`);
+      logger.info(
+        { attempt, maxAttempts, startup_elapsed_ms: startupElapsedMs() },
+        `${name}: starting`,
+      );
       await fn();
-      logger.info({ attempt }, `${name}: complete`);
+      const duration_ms = recordStartupTiming(name, stageStartedAt, "complete", attempt);
+      logger.info({ attempt, duration_ms, startup_elapsed_ms: startupElapsedMs() }, `${name}: complete`);
       return;
     } catch (err: unknown) {
+      const attempt_duration_ms = Math.max(0, Math.round(performance.now() - attemptStartedAt));
       const isTransient = isTransientDbError(err);
       if (isTransient && attempt < maxAttempts) {
         const backoff = delayMs * attempt;
         logger.warn(
-          { attempt, maxAttempts, backoff },
+          { attempt, maxAttempts, backoff, attempt_duration_ms },
           `${name}: transient DB error, retrying after ${backoff}ms...`
         );
         await sleep(backoff);
       } else {
-        logger.error({ err }, `${name} failed (giving up after ${attempt} attempts)`);
+        const duration_ms = recordStartupTiming(name, stageStartedAt, "failed", attempt);
+        logger.error({ err, duration_ms }, `${name} failed (giving up after ${attempt} attempts)`);
         return;
       }
     }
@@ -1663,7 +1711,7 @@ async function startServer() {
   // migration lane cannot occupy the whole pool and starve login requests.
   console.log("[startup] Registering serial migration chain");
   sleep(8_000)
-    .then(async () => {
+    .then(() => timeStartupStage("Pre-start schema migrations", async () => {
       migrationStartedAt = Date.now();
       console.log("[startup] Serial migration chain delay elapsed");
       for (let attempt = 1; attempt <= 10; attempt++) {
@@ -1686,7 +1734,7 @@ async function startServer() {
           }
         }
       }
-    })
+    }))
     .then(() => runWithRetry("Sessions migration", runSessionsMigration))
     .then(() => runWithRetry("Companies migration", runCompaniesMigration))
     .then(() => runWithRetry("Holding migration", runHoldingMigration))
@@ -1749,12 +1797,12 @@ async function startServer() {
     .then(() => runWithRetry("Sport Center company invoice migration", runSportCenterCompanyInvoiceMigration))
     .then(() => runWithRetry("Sport Expenses migration", runSportExpensesMigration))
     .then(() => runWithRetry("Tenant migration", runTenantMigration))
-    .then(async () => {
+    .then(() => timeStartupStage("Driver migration module load", async () => {
       // Lazy-load driver route to avoid startup OOM on rapid crash-loop restarts
       const driverMod = await import("./routes/driver.js");
       runDriverPodMigration = driverMod.runDriverPodMigration;
       runDriverAssignmentMigration = driverMod.runDriverAssignmentMigration;
-    })
+    }))
     .then(() => runWithRetry("Driver POD migration", runDriverPodMigration))
     .then(() => runWithRetry("Driver assignment migration", runDriverAssignmentMigration))
     .then(() => runWithRetry("Vendor company assignments migration", runVendorCompanyAssignmentsMigration))
@@ -1849,35 +1897,35 @@ async function startServer() {
     // enableRealtimeTables uses Supabase Management API — only run in production.
     // In dev, Supabase realtime is configured once at project level; re-running
     // on every restart causes unnecessary API calls and potential throttling.
-    .then(() => {
+    .then(() => timeStartupStage("Supabase realtime enable", async () => {
       if (process.env["REPLIT_DEPLOYMENT"] === "1" || process.env["ENABLE_REALTIME_TABLES"] === "1") {
-        return enableRealtimeTables().catch((err) => {
+        await enableRealtimeTables().catch((err) => {
           logger.warn({ err }, "Supabase Realtime table enable failed (non-fatal)");
         });
       }
-    })
-    .then(() => seedAccountingDefaults().catch((err) => {
+    }))
+    .then(() => timeStartupStage("Accounting defaults seed", () => seedAccountingDefaults().catch((err) => {
       logger.error({ err }, "Accounting seed failed");
-    }))
-    .then(() => syncDevCoaToFixture().catch((err) => {
+    })))
+    .then(() => timeStartupStage("Development COA sync", () => syncDevCoaToFixture().catch((err) => {
       logger.warn({ err }, "COA dev sync failed (non-fatal)");
-    }))
-    .then(() => seedAdditionalTaxes().catch((err) => {
+    })))
+    .then(() => timeStartupStage("Additional tax seed", () => seedAdditionalTaxes().catch((err) => {
       logger.warn({ err }, "Additional tax seed failed (non-fatal)");
-    }))
-    .then(() => backfillExpenseCategoryAccounts().catch((err) => {
+    })))
+    .then(() => timeStartupStage("Expense category account backfill", () => backfillExpenseCategoryAccounts().catch((err) => {
       logger.warn({ err }, "Expense category account backfill failed (non-fatal)");
-    }))
-    .then(() => backfillMdrExpenseCategory().catch((err) => {
+    })))
+    .then(() => timeStartupStage("MDR expense category backfill", () => backfillMdrExpenseCategory().catch((err) => {
       logger.warn({ err }, "MDR expense category backfill failed (non-fatal)");
-    }))
-    .then(() => seedUom().catch((err) => {
+    })))
+    .then(() => timeStartupStage("UOM seed", () => seedUom().catch((err) => {
       logger.warn({ err }, "UOM seed failed (non-fatal)");
-    }))
-    .then(() => seedProductTemplates().catch((err) => {
+    })))
+    .then(() => timeStartupStage("Product templates seed", () => seedProductTemplates().catch((err) => {
       logger.warn({ err }, "Product templates seed failed (non-fatal)");
-    }))
-    .then(() =>
+    })))
+    .then(() => timeStartupStage("Logistics/catalog/demo seed chain", () =>
       seedLogisticsServiceItems()
         .then(() => seedCatalogProducts())
         .then(() => {
@@ -1892,13 +1940,24 @@ async function startServer() {
         .catch((seedErr) => {
           logger.error({ err: seedErr }, "Logistics/demo seed failed");
         })
-    )
+    ))
     .then(() => {
       migrationsComplete = true;
       migrationCompletedAt = Date.now();
       // Do not let background workers compete with the startup migration chain
       // for the small development session-pooler connection budget.
       startAll();
+      logger.info(
+        {
+          migration_elapsed_ms: migrationStartedAt != null
+            ? migrationCompletedAt - migrationStartedAt
+            : null,
+          startup_elapsed_ms: startupElapsedMs(),
+          migration_count: startupTimings.length,
+          migration_timings: startupTimings,
+        },
+        "Startup migration timing summary",
+      );
       logger.info("All startup migrations complete — /api/health/ready → true");
       void runDeferredStartupTasks();
     })
