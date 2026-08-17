@@ -66,6 +66,8 @@ interface TestResult {
   serviceAccountEmail?: string | null;
 }
 
+type WorkflowStage = "sync" | "matching" | "candidates" | "review";
+
 // ── Mapping-Required Error (Task #6: Fail-Closed Journal Mapping) ─────────────
 interface MappingRequiredError {
   code: string;
@@ -1381,12 +1383,19 @@ function JournalPreview({
 const STEPS = [
   { id: 1, label: "Sync Mutasi",        icon: CloudDownload },
   { id: 2, label: "AI Matching",         icon: Zap },
-  { id: 3, label: "Approve",            icon: CheckCircle2 },
-  { id: 4, label: "Posting Accounting", icon: ReceiptText },
-  { id: 5, label: "Selesai",            icon: CircleCheck },
+  { id: 3, label: "Kandidat QRIS",      icon: CreditCard },
+  { id: 4, label: "Review / Approve",   icon: CheckCircle2 },
+  { id: 5, label: "Posting Accounting", icon: ReceiptText },
+  { id: 6, label: "Selesai",            icon: CircleCheck },
 ];
 
-function StepProgressBar({ summaryMap }: { summaryMap: Record<string, { count: number; amount: number }> }) {
+function StepProgressBar({
+  summaryMap,
+  workflowStage,
+}: {
+  summaryMap: Record<string, { count: number; amount: number }>;
+  workflowStage: WorkflowStage;
+}) {
   const totalMutations =
     (summaryMap.unmatched?.count ?? 0) +
     (summaryMap.matched?.count ?? 0) +
@@ -1408,12 +1417,15 @@ function StepProgressBar({ summaryMap }: { summaryMap: Record<string, { count: n
     (summaryMap.approved_pending_posting?.count ?? 0) === 0;
 
   const activeStep =
-    !hasAny          ? 1 :
-    !hasMatched      ? 2 :
-    allProcessed && (hasApproved || hasPosted) ? 5 :
-    !hasPendingPost && !hasPosted ? 3 :
-    hasPendingPost   ? 4 :
-    allProcessed     ? 5 : 3;
+    pendingPost > 0 ? 5 :
+    allProcessed && (hasApproved || hasPosted) ? 6 :
+    workflowStage === "sync" ? 1 :
+    workflowStage === "matching" ? 2 :
+    workflowStage === "candidates" ? 3 :
+    !hasAny ? 1 :
+    !hasMatched ? 2 :
+    !hasPendingPost && !hasPosted ? 4 :
+    allProcessed ? 6 : 4;
 
   return (
     <Card className="overflow-hidden">
@@ -1566,26 +1578,34 @@ function SummaryCards({
 function AIActionCenter({
   summaryMap,
   onRunMatching,
+  onGenerateQrisCandidates,
   onApproveAll,
   onPostAll,
   onSyncSheet,
   matchingPending,
+  matchingBackgroundPending,
+  qrisGenerationPending,
   syncPending,
+  workflowStage,
 }: {
   summaryMap: Record<string, { count: number; amount: number }>;
   onRunMatching: () => void;
+  onGenerateQrisCandidates?: () => void;
   onApproveAll: () => void;
   onPostAll: () => void;
   onSyncSheet: () => void;
   matchingPending: boolean;
+  matchingBackgroundPending: boolean;
+  qrisGenerationPending: boolean;
   syncPending: boolean;
+  workflowStage: WorkflowStage;
 }) {
   const unmatched     = summaryMap.unmatched?.count ?? 0;
   const matched       = summaryMap.matched?.count ?? 0;
   const needReview    = summaryMap.duplicate_need_review?.count ?? 0;
   const pendingPost   = summaryMap.approved_pending_posting?.count ?? 0;
 
-  if (unmatched === 0 && matched === 0 && needReview === 0 && pendingPost === 0) {
+  if (unmatched === 0 && matched === 0 && needReview === 0 && pendingPost === 0 && !onGenerateQrisCandidates) {
     return (
       <Card className="border-green-200 bg-green-50/50 dark:bg-green-950 dark:border-green-800">
         <CardContent className="p-4 flex items-center gap-3">
@@ -1608,25 +1628,80 @@ function AIActionCenter({
         </div>
       </CardHeader>
       <CardContent className="px-4 pb-4">
+        <div className="mb-3 rounded-md border border-indigo-200 bg-indigo-50/70 px-3 py-2 text-xs text-indigo-950 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-100">
+          <p className="font-semibold">Urutan operasional aman</p>
+          <p className="mt-0.5 text-indigo-800/80 dark:text-indigo-200/80">
+            1. Sync mutasi bank <span className="mx-1">→</span>
+            2. Tunggu matching selesai <span className="mx-1">→</span>
+            3. Generate kandidat QRIS <span className="mx-1">→</span>
+            4. Review / approve QRIS
+          </p>
+        </div>
         <div className="flex flex-col sm:flex-row gap-3">
-          {/* Step 1: belum match */}
+          {/* Step 2: belum match */}
           {unmatched > 0 && (
             <div className="flex-1 rounded-lg border bg-background p-3 space-y-2">
               <div className="flex items-start gap-2">
                 <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
                 <div>
                   <p className="text-sm font-semibold">{unmatched} Mutasi Belum Dicocokkan</p>
-                  <p className="text-xs text-muted-foreground">Jalankan AI untuk mencocokkan otomatis</p>
+                  <p className="text-xs text-muted-foreground">
+                    {workflowStage === "sync"
+                      ? "Sync mutasi bank terlebih dahulu"
+                      : matchingBackgroundPending
+                        ? "Matching sedang berjalan di background"
+                        : "Jalankan AI untuk mencocokkan otomatis"}
+                  </p>
                 </div>
               </div>
-              <Button size="sm" className="w-full gap-1.5" onClick={onRunMatching} disabled={matchingPending}>
-                {matchingPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-                {matchingPending ? "Mencocokkan..." : "Jalankan AI Matching"}
+              <Button
+                size="sm"
+                className="w-full gap-1.5"
+                onClick={onRunMatching}
+                disabled={matchingPending || matchingBackgroundPending || workflowStage !== "matching"}
+              >
+                {matchingPending || matchingBackgroundPending
+                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  : <Zap className="w-3.5 h-3.5" />}
+                {matchingPending || matchingBackgroundPending
+                  ? "Menunggu matching selesai..."
+                  : workflowStage === "sync"
+                    ? "Sync mutasi terlebih dahulu"
+                    : "Jalankan AI Matching"}
               </Button>
             </div>
           )}
 
-          {/* Step 2: siap approve */}
+          {/* Step 3: generate QRIS candidates */}
+          {onGenerateQrisCandidates && (
+            <div className="flex-1 rounded-lg border border-indigo-200 bg-indigo-50/40 dark:border-indigo-800 dark:bg-indigo-950/20 p-3 space-y-2">
+              <div className="flex items-start gap-2">
+                <CreditCard className="w-4 h-4 text-indigo-600 mt-0.5 shrink-0" />
+                <div>
+                  <p className="text-sm font-semibold">Kandidat QRIS</p>
+                  <p className="text-xs text-muted-foreground">
+                    {workflowStage === "candidates"
+                      ? "Matching selesai, kandidat siap dibuat untuk direview"
+                      : "Tombol aktif setelah matching selesai"}
+                  </p>
+                </div>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="w-full gap-1.5 border-indigo-300 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-300"
+                onClick={onGenerateQrisCandidates}
+                disabled={qrisGenerationPending || matchingPending || matchingBackgroundPending || workflowStage !== "candidates"}
+              >
+                {qrisGenerationPending
+                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  : <CreditCard className="w-3.5 h-3.5" />}
+                {qrisGenerationPending ? "Membuat kandidat..." : "Generate Kandidat QRIS"}
+              </Button>
+            </div>
+          )}
+
+          {/* Step 4: siap approve */}
           {matched > 0 && (
             <div className="flex-1 rounded-lg border bg-background p-3 space-y-2">
               <div className="flex items-start gap-2">
@@ -1643,7 +1718,7 @@ function AIActionCenter({
             </div>
           )}
 
-          {/* Step 3: menunggu posting */}
+          {/* Step 5: menunggu posting */}
           {pendingPost > 0 && (
             <div className="flex-1 rounded-lg border border-yellow-200 bg-yellow-50/50 dark:bg-yellow-950 dark:border-yellow-800 p-3 space-y-2">
               <div className="flex items-start gap-2">
@@ -1660,7 +1735,7 @@ function AIActionCenter({
             </div>
           )}
 
-          {/* Step 4: duplikat */}
+          {/* Review manual */}
           {needReview > 0 && (
             <div className="flex-1 rounded-lg border border-orange-200 bg-orange-50/50 dark:bg-orange-950 dark:border-orange-800 p-3 space-y-2">
               <div className="flex items-start gap-2">
@@ -1675,7 +1750,13 @@ function AIActionCenter({
 
           {/* Sync shortcut */}
           <div className="flex-none flex flex-col gap-2 sm:w-auto">
-            <Button size="sm" variant="outline" className="gap-1.5 whitespace-nowrap" onClick={onSyncSheet} disabled={syncPending}>
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5 whitespace-nowrap"
+              onClick={onSyncSheet}
+              disabled={syncPending || matchingPending || matchingBackgroundPending || qrisGenerationPending}
+            >
               {syncPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CloudDownload className="w-3.5 h-3.5" />}
               Sync Google Sheet
             </Button>
@@ -3558,6 +3639,8 @@ export default function BankReconciliationPage() {
   const PAGE_SIZE = 20;
 
   // ── UI state ──────────────────────────────────────────────────────────────
+  const [workflowStage, setWorkflowStage] = useState<WorkflowStage>("sync");
+  const [matchingBackgroundPending, setMatchingBackgroundPending] = useState(false);
   const [detailMutation,      setDetailMutation]      = useState<BankMutation | null>(null);
   const [actionDialog,        setActionDialog]        = useState<{ mutation: BankMutation; mode: DialogMode } | null>(null);
   const [qrisDetailLoadingId, setQrisDetailLoadingId] = useState<number | null>(null);
@@ -3648,6 +3731,7 @@ export default function BankReconciliationPage() {
     },
       onSuccess: async (result) => {
       toast({ title: `Kandidat QRIS dibuat: ${result.generated} kandidat` });
+        setWorkflowStage("review");
         await refetchQrisAudit();
       qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
     },
@@ -3657,6 +3741,20 @@ export default function BankReconciliationPage() {
   const [qrisBatchConfirm, setQrisBatchConfirm] = useState<{
     selections: QrisApprovalSelection[];
   } | null>(null);
+
+  const waitForMatchingCompletion = async () => {
+    const deadline = Date.now() + 5 * 60 * 1000;
+    while (Date.now() < deadline) {
+      const response = await fetch("/api/bank-reconciliation/run-matching/status", {
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Status matching tidak dapat dibaca");
+      const status = await response.json() as { running?: boolean };
+      if (!status.running) return;
+      await new Promise(resolve => window.setTimeout(resolve, 1000));
+    }
+    throw new Error("Matching belum selesai setelah 5 menit. Periksa status lalu coba lagi.");
+  };
 
   const qrisCandidates = (qrisAuditData?.candidates ?? []).filter((candidate) =>
     !["approved", "completed", "superseded", "stale", "ineligible"].includes(
@@ -3969,7 +4067,11 @@ export default function BankReconciliationPage() {
       if (!r.ok) throw new Error(await r.text());
       return r.json();
     },
-    onSuccess: (d) => { toast({ title: `Import selesai: ${d.imported} baris, ${d.duplicates} duplikat` }); invalidate(); },
+    onSuccess: (d) => {
+      setWorkflowStage("matching");
+      toast({ title: `Import selesai: ${d.imported} baris, ${d.duplicates} duplikat` });
+      invalidate();
+    },
     onError: (e: Error) => toast({ title: "Gagal import", description: e.message, variant: "destructive" }),
   });
 
@@ -3981,20 +4083,32 @@ export default function BankReconciliationPage() {
       if (!r.ok) throw new Error(await r.text());
       return r.json();
     },
-    onSuccess: (d) => {
+    onSuccess: async (d) => {
+      setWorkflowStage("matching");
+      setMatchingBackgroundPending(Boolean(d.queued));
       toast({
         title: d.queued
           ? "AI Matching sedang berjalan di background"
           : `AI Matching selesai: ${d.processed} mutasi diproses`,
         description: d.queued
-          ? "Kandidat QRIS akan dicari otomatis setelah permintaan ini diterima."
-          : undefined,
+          ? "Tunggu sampai proses selesai, lalu buat kandidat QRIS secara terpisah."
+          : "Tahap berikutnya adalah membuat kandidat QRIS secara eksplisit.",
       });
       invalidate();
-      // AI Matching creates generic reconciliation matches. QRIS batch
-      // candidates are a separate persisted review contract, so refresh them
-      // in the same user action instead of requiring a hidden second step.
-      if (qrisCompanyId != null) qrisDryRunMut.mutate();
+      try {
+        if (d.queued) await waitForMatchingCompletion();
+        setWorkflowStage("candidates");
+        toast({ title: "AI Matching selesai", description: "Sekarang Anda dapat membuat kandidat QRIS." });
+        invalidate();
+      } catch (e) {
+        toast({
+          title: "Gagal memantau matching",
+          description: e instanceof Error ? e.message : String(e),
+          variant: "destructive",
+        });
+      } finally {
+        setMatchingBackgroundPending(false);
+      }
     },
     onError: (e: Error) => toast({ title: "Gagal matching", description: e.message, variant: "destructive" }),
   });
@@ -4116,7 +4230,11 @@ export default function BankReconciliationPage() {
       if (!r.ok) throw new Error(await r.text());
       return r.json();
     },
-    onSuccess: (d) => { toast({ title: d.message ?? "Sync dari Google Sheet selesai" }); invalidate(); },
+    onSuccess: (d) => {
+      setWorkflowStage("matching");
+      toast({ title: d.message ?? "Sync dari Google Sheet selesai" });
+      invalidate();
+    },
     onError: (e: Error) => toast({ title: "Sync gagal", description: e.message, variant: "destructive" }),
   });
 
@@ -4415,17 +4533,27 @@ export default function BankReconciliationPage() {
         </div>
 
         {/* ── Step Progress ─────────────────────────────────── */}
-        <StepProgressBar summaryMap={summaryMap} />
+        <StepProgressBar summaryMap={summaryMap} workflowStage={workflowStage} />
 
         {/* ── AI Action Center ──────────────────────────────── */}
         <AIActionCenter
           summaryMap={summaryMap}
-          onRunMatching={() => matchMut.mutate()}
+          onRunMatching={() => {
+            if (workflowStage !== "matching") {
+              toast({ title: "Sync mutasi bank terlebih dahulu", description: "Urutan aman dimulai dari sync mutasi bank." });
+              return;
+            }
+            matchMut.mutate();
+          }}
+          onGenerateQrisCandidates={qrisCompanyId != null ? () => qrisDryRunMut.mutate() : undefined}
           onApproveAll={handleApproveAllMatched}
           onPostAll={handlePostAllPending}
           onSyncSheet={() => sheetSyncMut.mutate()}
           matchingPending={matchMut.isPending}
+          matchingBackgroundPending={matchingBackgroundPending}
+          qrisGenerationPending={qrisDryRunMut.isPending}
           syncPending={sheetSyncMut.isPending}
+          workflowStage={workflowStage}
         />
 
         {/* ── Summary Cards ─────────────────────────────────── */}
@@ -4815,8 +4943,16 @@ export default function BankReconciliationPage() {
                   }
                   onToggleQrisPayment={toggleQrisPayment}
                   onToggleAllQrisPayments={toggleAllQrisPayments}
-                   onRunMatching={() => matchMut.mutate()}
-                   onGenerateQrisCandidates={qrisCompanyId != null ? () => qrisDryRunMut.mutate() : undefined}
+                    onRunMatching={() => {
+                      if (workflowStage !== "matching") {
+                        toast({ title: "Sync mutasi bank terlebih dahulu", description: "Urutan aman dimulai dari sync mutasi bank." });
+                        return;
+                      }
+                      matchMut.mutate();
+                    }}
+                    onGenerateQrisCandidates={qrisCompanyId != null && workflowStage === "candidates"
+                      ? () => qrisDryRunMut.mutate()
+                      : undefined}
                    qrisGenerationPending={qrisDryRunMut.isPending}
                   mappingError={mappingRequiredErrors.get(m.id)}
                 />
@@ -4848,8 +4984,14 @@ export default function BankReconciliationPage() {
         onReverse={handleOpenReverse}
         onReopen={handleOpenReopen}
         onApproveQris={handleApproveQris}
-        onFindMissing={() => matchMut.mutate()}
-        matchingPending={matchMut.isPending}
+        onFindMissing={() => {
+          if (workflowStage !== "matching") {
+            toast({ title: "Sync mutasi bank terlebih dahulu", description: "Urutan aman dimulai dari sync mutasi bank." });
+            return;
+          }
+          matchMut.mutate();
+        }}
+        matchingPending={matchMut.isPending || matchingBackgroundPending}
         mappingError={detailMutation ? mappingRequiredErrors.get(detailMutation.id) : undefined}
         onApproveQrisBatch={handleApproveQrisBatch}
         approveQrisPending={approveQrisBatchMut.isPending}

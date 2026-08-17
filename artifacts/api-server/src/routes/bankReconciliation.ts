@@ -1323,6 +1323,12 @@ router.get("/qris-candidates", async (req, res) => {
 router.post("/qris-candidates/generate", async (req, res) => {
   await runQrisSettlementMigration();
   try {
+    if (unifiedMatchingJobActive) {
+      return res.status(409).json({
+        error: "Matching mutasi bank masih berjalan. Tunggu sampai matching selesai sebelum membuat kandidat QRIS.",
+        code: "MATCHING_IN_PROGRESS",
+      });
+    }
     const companyId = req.body?.companyId ?? req.body?.company_id ?? resolveCompanyId(req);
     const dryRun = req.body?.dryRun !== false && req.body?.dry_run !== false;
     const result = await generateQrisCandidates({
@@ -3984,6 +3990,13 @@ router.delete("/:mutationId/upload-proof", async (req, res) => {
 
 // ─── POST /api/bank-reconciliation/run-matching ───────────────────────────────
 // Jalankan ulang unified matching engine untuk semua atau sebagian mutasi
+router.get("/run-matching/status", async (_req, res) => {
+  return res.json({
+    ok: true,
+    running: unifiedMatchingJobActive,
+  });
+});
+
 router.post("/run-matching", async (req, res) => {
   await runBankReconciliationCoreMigration();
   await runReconRulesMigration();
