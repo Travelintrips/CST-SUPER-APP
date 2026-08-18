@@ -197,13 +197,32 @@ export async function approveCanonicalSettlementLink(
       );
     }
 
-    const { rows: canonicalMutationRows } = await tx.execute(sql.raw(`
+    let canonicalMutationRows = (await tx.execute(sql.raw(`
       SELECT id, mutation_key, status, amount, transaction_date, direction,
              company_id, bank_account_id, provider_name
       FROM sport_center.bank_mutations
       WHERE mutation_key = '${escapeSql(mutationKey)}'
       FOR UPDATE
-    `));
+    `))).rows as Array<Record<string, unknown>>;
+    if (!canonicalMutationRows.length) {
+      /*
+       * Historical public mutations may predate the PostgreSQL bridge trigger.
+       * Replay the database-owned bridge only after the exact key lookup
+       * misses; it is not an ID/amount fallback and it remains fail-closed
+       * unless the canonical settlement/configuration boundary is unique.
+       */
+      await tx.execute(sql.raw(`
+        SELECT sport_center.replay_public_bank_mutation_bridge(${mutationId})
+          AS canonical_mutation_id
+      `));
+      canonicalMutationRows = (await tx.execute(sql.raw(`
+        SELECT id, mutation_key, status, amount, transaction_date, direction,
+               company_id, bank_account_id, provider_name
+        FROM sport_center.bank_mutations
+        WHERE mutation_key = '${escapeSql(mutationKey)}'
+        FOR UPDATE
+      `))).rows as Array<Record<string, unknown>>;
+    }
     if (canonicalMutationRows.length !== 1) {
       throw new CanonicalSettlementApprovalError(
         CANONICAL_APPROVAL_CODES.BANK_MUTATION_NOT_FOUND,
