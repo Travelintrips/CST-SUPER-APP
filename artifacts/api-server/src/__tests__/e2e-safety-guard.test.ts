@@ -183,6 +183,9 @@ describe("e2eSafetyGuard public API", () => {
 describe("safeDev — isSafeDevTestMode / externalIntegrationsDisabled", () => {
   afterEach(() => {
     delete process.env.SAFE_DEV_TEST_MODE;
+    delete process.env.ALLOW_DEV_STORAGE_WRITES;
+    delete process.env.APP_ENV;
+    delete process.env.SUPABASE_URL_DEV;
     vi.resetModules();
   });
 
@@ -196,5 +199,35 @@ describe("safeDev — isSafeDevTestMode / externalIntegrationsDisabled", () => {
     safeDev = await import("../lib/safeDev.js");
     expect(safeDev.isSafeDevTestMode()).toBe(true);
     expect(safeDev.externalIntegrationsDisabled()).toBe(true);
+  });
+
+  it("allows only configured development Supabase Storage requests", async () => {
+    const originalFetch = globalThis.fetch;
+    const passthroughFetch = vi.fn(async () => new Response("ok", { status: 200 }));
+    globalThis.fetch = passthroughFetch as typeof globalThis.fetch;
+    setEnv({
+      SAFE_DEV_TEST_MODE: "true",
+      APP_ENV: "development",
+      ALLOW_DEV_STORAGE_WRITES: "true",
+      SUPABASE_URL_DEV: "https://dev-project.supabase.co",
+    });
+
+    try {
+      const safeDev = await import("../lib/safeDev.js");
+      safeDev.installSafeDevOutboundGuard();
+
+      await expect(
+        fetch("https://dev-project.supabase.co/storage/v1/object/public/public-assets/probe.png"),
+      ).resolves.toMatchObject({ status: 200 });
+      await expect(
+        fetch("https://dev-project.supabase.co/rest/v1/portal_content"),
+      ).rejects.toThrow(/external HTTP is disabled/i);
+      await expect(
+        fetch("https://other-project.supabase.co/storage/v1/object/public/public-assets/probe.png"),
+      ).rejects.toThrow(/external HTTP is disabled/i);
+      expect(passthroughFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
