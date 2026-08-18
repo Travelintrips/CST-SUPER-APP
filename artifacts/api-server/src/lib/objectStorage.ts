@@ -138,7 +138,15 @@ async function supabaseUpload(
   contentType: string,
 ): Promise<void> {
   // E2E / SAFE_DEV guard: skip real storage upload in test modes
-  if (isSafeDevTestMode() || process.env.E2E_TEST_MODE === "true") {
+  // Human-facing development previews explicitly opt into real writes to the
+  // development Supabase bucket; E2E_TEST_MODE remains fail-closed.
+  const allowDevelopmentStorageWrite =
+    process.env.APP_ENV === "development" &&
+    process.env.ALLOW_DEV_STORAGE_WRITES === "true";
+  if (
+    (isSafeDevTestMode() && !allowDevelopmentStorageWrite) ||
+    process.env.E2E_TEST_MODE === "true"
+  ) {
     return; // storage is test-only; no real write performed
   }
   const sb = getSupabase();

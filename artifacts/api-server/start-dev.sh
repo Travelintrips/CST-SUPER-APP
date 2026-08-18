@@ -37,15 +37,18 @@ export APP_ENV
 
 # Development lifecycle harnesses must never send real outbound traffic. Keep
 # the safe defaults here so the managed artifact workflow cannot accidentally
-# start an unsafe dev API; production uses start.sh/start:secure instead.
+# start an unsafe dev API; authenticated media uploads are the one explicit
+# exception and are limited to the development Supabase Storage project.
+# Production uses start.sh/start:secure instead.
 SAFE_DEV_TEST_MODE=${SAFE_DEV_TEST_MODE:-true}
+ALLOW_DEV_STORAGE_WRITES=${ALLOW_DEV_STORAGE_WRITES:-true}
 CUSTOMER_AUTH_HARNESS_CAPTURE=${CUSTOMER_AUTH_HARNESS_CAPTURE:-0}
 MOCK_WHATSAPP=${MOCK_WHATSAPP:-true}
 MOCK_EMAIL=${MOCK_EMAIL:-true}
 MOCK_PAYMENT=${MOCK_PAYMENT:-true}
 MOCK_STORAGE=${MOCK_STORAGE:-true}
 USE_TEST_STORAGE=${USE_TEST_STORAGE:-true}
-export SAFE_DEV_TEST_MODE CUSTOMER_AUTH_HARNESS_CAPTURE MOCK_WHATSAPP MOCK_EMAIL MOCK_PAYMENT MOCK_STORAGE USE_TEST_STORAGE
+export SAFE_DEV_TEST_MODE ALLOW_DEV_STORAGE_WRITES CUSTOMER_AUTH_HARNESS_CAPTURE MOCK_WHATSAPP MOCK_EMAIL MOCK_PAYMENT MOCK_STORAGE USE_TEST_STORAGE
 
 # ── Deterministic single-listener configuration ─────────────────────────────
 # The artifact workflow exposes 18444. Express binds directly to that port;

@@ -14,6 +14,37 @@ export function isSafeDevTestMode(): boolean {
   return process.env.SAFE_DEV_TEST_MODE === SAFE_DEV_TEST_MODE;
 }
 
+/**
+ * The development UI needs real image bytes in Supabase Storage so an upload
+ * cannot report success while leaving only a database row behind. Keep the
+ * broader safe-dev outbound block in place and allow only Storage API calls to
+ * the configured development Supabase origin.
+ */
+function isAllowedDevelopmentStorageRequest(url: URL): boolean {
+  if (process.env.APP_ENV !== "development" || process.env.ALLOW_DEV_STORAGE_WRITES !== "true") {
+    return false;
+  }
+
+  const configuredUrls = [
+    process.env.SUPABASE_URL_DEV,
+    process.env.SUPABASE_URL,
+    process.env.VITE_SUPABASE_URL_DEV,
+    process.env.VITE_SUPABASE_URL,
+  ].filter(Boolean) as string[];
+
+  return configuredUrls.some((raw) => {
+    try {
+      const normalized = raw.startsWith("http://") || raw.startsWith("https://")
+        ? raw
+        : `https://${raw}.supabase.co`;
+      const configured = new URL(normalized);
+      return configured.origin === url.origin && url.pathname.startsWith("/storage/v1/");
+    } catch {
+      return false;
+    }
+  });
+}
+
 /** Returns true when either SAFE_DEV_TEST_MODE or E2E_TEST_MODE is active. */
 export function externalIntegrationsDisabled(): boolean {
   return isSafeDevTestMode() || process.env.E2E_TEST_MODE === "true";
@@ -41,7 +72,7 @@ export function installSafeDevOutboundGuard(): void {
       || parsed.hostname === "127.0.0.1"
       || parsed.hostname === "::1";
 
-    if (!isLocal) {
+    if (!isLocal && !isAllowedDevelopmentStorageRequest(parsed)) {
       if (!outboundBlockLogged) {
         outboundBlockLogged = true;
         console.info("[SAFE_DEV_TEST_MODE] External HTTP disabled; outbound request blocked");
@@ -60,5 +91,8 @@ export function logSafeDevStartupBanner(): void {
   const tag = isSafeDevTestMode() ? "SAFE_DEV_TEST_MODE" : "E2E_TEST_MODE";
   console.info(`[${tag}] TEST SAFETY MODE ENABLED`);
   console.info(`[${tag}] External integrations disabled`);
+  if (isSafeDevTestMode() && process.env.ALLOW_DEV_STORAGE_WRITES === "true") {
+    console.info("[SAFE_DEV_TEST_MODE] Development Supabase Storage writes enabled for authenticated media uploads");
+  }
   console.info(`[${tag}] WhatsApp, email, payment gateway, webhook, external HTTP, and background notification workers disabled`);
 }
