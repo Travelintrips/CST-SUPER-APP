@@ -455,7 +455,7 @@ router.post("/marketplace/:id/quote", marketplaceSubmitLimiter, async (req, res)
   } catch (e: any) {
     const code = (e as any)?.statusCode;
     if (code === 404) return res.status(404).json({ error: e.message });
-    if (code === 400) return res.status(400).json({ error: e.message });
+    if (code === 400 || code === 409 || code === 422) return res.status(code).json({ error: e.message });
     throw e;
   }
 });
@@ -477,7 +477,7 @@ router.post("/marketplace/:id/order", marketplaceSubmitLimiter, async (req, res)
   } catch (e: any) {
     const code = (e as any)?.statusCode;
     if (code === 404) return res.status(404).json({ error: e.message });
-    if (code === 400) return res.status(400).json({ error: e.message });
+    if (code === 400 || code === 409 || code === 422) return res.status(code).json({ error: e.message });
     throw e;
   }
 });

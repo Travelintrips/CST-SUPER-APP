@@ -36,6 +36,10 @@ import { requirePortalAdmin } from "../lib/supabaseAuth.js";
 import { verifyPortalJwt } from "../lib/portalJwt.js";
 import { verifySupabaseToken } from "../lib/supabaseAdmin.js";
 import { externalIntegrationsDisabled } from "../lib/safeDev.js";
+import {
+  PortalCompanyScopeError,
+  resolvePortalCustomerCompanyIdByEmail,
+} from "../lib/services/portalCompanyScope.js";
 
 // Best-effort: resolve the authenticated portal customer's email from an
 // Authorization bearer token, if present and valid. Returns null on any
@@ -403,6 +407,16 @@ logisticOrdersPublicRouter.post("/", async (req: Request, res: Response) => {
 
   const orderNumber = generateOrderNumber();
 
+  let portalCompanyId: number;
+  try {
+    portalCompanyId = await resolvePortalCustomerCompanyIdByEmail(body.email, { required: true }) as number;
+  } catch (error) {
+    if (error instanceof PortalCompanyScopeError) {
+      return res.status(error.statusCode).json({ message: error.message });
+    }
+    throw error;
+  }
+
   // Step 2: resolve Product Template jika categoryKey dikirim
   const templateInfo = await resolveTemplateForCategory(body.categoryKey ?? null);
 
@@ -410,6 +424,7 @@ logisticOrdersPublicRouter.post("/", async (req: Request, res: Response) => {
   // If PPJK insert fails, the logistic order is rolled back too. No fire-and-forget.
   const orderValues = {
     orderNumber,
+    companyId: portalCompanyId,
     companyName: body.companyName,
     customerName: body.customerName,
     email: body.email,
@@ -1041,6 +1056,7 @@ logisticOrdersRouter.post("/:orderNumber/create-paylabs-link", async (req: Reque
     .select({
       id: logisticOrdersTable.id,
       orderNumber: logisticOrdersTable.orderNumber,
+      companyId: logisticOrdersTable.companyId,
       customerName: logisticOrdersTable.customerName,
       phone: logisticOrdersTable.phone,
       grandTotal: logisticOrdersTable.grandTotal,
@@ -1052,6 +1068,11 @@ logisticOrdersRouter.post("/:orderNumber/create-paylabs-link", async (req: Reque
   if (!order) return res.status(404).json({ message: "Pesanan tidak ditemukan" });
   if (order.status === "Cancelled") {
     return res.status(400).json({ message: "Order sudah dibatalkan" });
+  }
+  if (order.companyId == null) {
+    return res.status(422).json({
+      message: "Order belum memiliki company yang tidak ambigu; payment link tidak dapat dibuat.",
+    });
   }
 
   const existing = await db
@@ -1086,6 +1107,7 @@ logisticOrdersRouter.post("/:orderNumber/create-paylabs-link", async (req: Reque
     // Blocked: no .returning() in this path and simulation is dev-only; safe to defer.
     // File: artifacts/api-server/src/routes/logisticOrders.ts, simulation payment creation.
     await db.insert(paymentsTable).values({
+      companyId: order.companyId,
       refKind: "logistic",
       refId: order.id,
       refDocNumber: orderNumber,
@@ -1168,6 +1190,7 @@ logisticOrdersRouter.post("/:orderNumber/create-paylabs-link", async (req: Reque
 
   const paymentUrl = (paylabsResp?.["url"] ?? paylabsResp?.["h5Url"] ?? null) as string | null;
   const [created] = await db.insert(paymentsTable).values({
+    companyId: order.companyId,
     refKind: "logistic",
     refId: order.id,
     refDocNumber: orderNumber,

@@ -11,6 +11,7 @@ const REGISTRY_ROWS: readonly RegistryRow[] = [
   ["companies", "Companies migration", "schema"],
   ["holding", "Holding migration", "schema"],
   ["portal", "Portal migration", "schema"],
+  ["portal_payment_company_scope", "Portal payment company scope migration", "backfill"],
   ["accounting", "Accounting migration", "schema"],
   ["coa_governance", "COA governance migration", "schema"],
   ["coa_proposal", "COA proposal migration", "schema"],
@@ -125,7 +126,7 @@ const REGISTRY_ROWS: readonly RegistryRow[] = [
 export const STARTUP_MIGRATION_REGISTRY: readonly StartupStageDefinition[] = REGISTRY_ROWS.map(
   ([name, _displayName, category]) => ({
     name,
-    version: 1,
+    version: name === "portal_payment_company_scope" ? 3 : 1,
     critical: true,
     category,
   }),

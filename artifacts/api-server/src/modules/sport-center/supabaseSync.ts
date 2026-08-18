@@ -882,6 +882,7 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
         throw new Error(`CANONICAL_PAYMENT_JOURNAL_NOT_POSTED: payment=${paymentId}`);
       }
 
+      const dateValue = String(raw.journal_date ?? raw.paid_at ?? new Date().toISOString()).slice(0, 10);
       const result = await db.transaction(async (tx) => {
         const canonicalEventId = String(
           raw.source_event_id ?? raw.journal_source_event_id ?? "",
@@ -966,7 +967,6 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
           };
         }
 
-        const dateValue = String(raw.journal_date ?? raw.paid_at ?? new Date().toISOString()).slice(0, 10);
         const entry = await postEntryWithClient(
           tx,
           {

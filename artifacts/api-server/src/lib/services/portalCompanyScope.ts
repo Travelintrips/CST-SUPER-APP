@@ -4,6 +4,11 @@ import {
   portalCustomersTable,
 } from "@workspace/db";
 import { and, eq, sql } from "drizzle-orm";
+export {
+  companyScopesMatch,
+  normalizeCompanyId,
+} from "./portalCompanyScopeUtils.js";
+import { normalizeCompanyId } from "./portalCompanyScopeUtils.js";
 
 export class PortalCompanyScopeError extends Error {
   constructor(

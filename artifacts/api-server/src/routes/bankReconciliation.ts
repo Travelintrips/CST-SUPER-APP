@@ -71,6 +71,7 @@ import { buildGraphFromMutation, buildGraphFromInvoice } from "../lib/reconcilia
 import { findBestMultiInvoiceMatch } from "../lib/reconciliation/multiInvoiceMatchingEngine.js";
 import { buildAllocationPlan, getCompanyAllocationStrategy, applyAllocationPlan } from "../lib/reconciliation/paymentAllocationEngine.js";
 import { resolveCompanyId } from "../lib/resolveCompany.js";
+import { normalizeCompanyId } from "../lib/services/portalCompanyScopeUtils.js";
 import { runQrisSettlementMigration } from "../lib/reconciliation/qrisSettlementMigration.js";
 import { isQrisSettlementDescription } from "../lib/reconciliation/qrisSettlement.js";
 import {
@@ -4301,10 +4302,25 @@ router.post("/run-matching", async (req, res) => {
 
   const processMutation = async (m: any) => {
     try {
+      // Company scope is a hard prerequisite for every matching layer. Do not
+      // pass NULL through as company 0: rule/ECF layers could otherwise run
+      // before the unified engine's fail-closed guard.
+      const mutationCompanyId = normalizeCompanyId(m.company_id);
+      if (mutationCompanyId == null) {
+        await db.execute(sql`
+          UPDATE bank_mutations
+          SET status = 'unmatched', updated_at = NOW()
+          WHERE id = ${Number(m.id)}
+            AND status IN ('unmatched', 'matched', 'duplicate_need_review')
+        `).catch(() => {});
+        logger.warn({ mutationId: m.id }, "[run-matching] skipped: bank mutation has no company_id");
+        return;
+      }
+
       // ── 1. Decision Stack pre-processing (Rule Engine + ECF) ─────────────────
       const decisionInput: MutationForDecisionStack = {
         id:                   m.id,
-        companyId:            m.company_id != null ? Number(m.company_id) : 0,
+        companyId:            mutationCompanyId,
         amount:               Number(m.amount),
         direction:            String(m.direction ?? "IN"),
         transactionDate:      String(m.transaction_date ?? "").slice(0, 10),

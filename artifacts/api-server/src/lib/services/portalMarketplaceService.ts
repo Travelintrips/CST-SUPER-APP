@@ -16,7 +16,10 @@ import {
 } from "@workspace/db";
 import { eq, and, asc, sql } from "drizzle-orm";
 import { getCatalogItemPublic } from "./portalVendorCatalogService.js";
-import { resolvePortalCustomerCompanyId } from "./portalCompanyScope.js";
+import {
+  resolvePortalCustomerCompanyId,
+  resolvePortalCustomerCompanyIdByEmail,
+} from "./portalCompanyScope.js";
 import {
   isMarketplaceNewPipelineEnabled,
   createMktRfqEntry,
@@ -111,6 +114,15 @@ export async function submitMarketplaceQuote(params: {
     item_type,
   } = body;
 
+  // Every portal order that can later become an invoice/payment must have an
+  // unambiguous company owner. Guests are still allowed to submit the public
+  // form, but only when their email maps to exactly one active membership.
+  // Never persist a payment-capable order with a NULL company_id.
+  const portalCompanyId = await resolvePortalCustomerCompanyIdByEmail(
+    portalEmailFromToken ?? email?.trim() ?? "",
+    { required: true },
+  ) as number;
+
   const resolvedName  = (buyer_name  ?? customerName ?? "").trim();
   const resolvedPhone = (guest_contact ?? phone       ?? "").trim();
   if (!resolvedName)  throw makeServiceError(400, "Nama buyer wajib diisi");
@@ -193,7 +205,7 @@ export async function submitMarketplaceQuote(params: {
     };
     let membershipCtx: MembershipCtx | null = null;
     if (portalCustomer) {
-      const companyId = await resolvePortalCustomerCompanyId(portalCustomer.id, { required: true });
+      const companyId = await resolvePortalCustomerCompanyId(portalCustomer.id, { required: true }) as number;
       const [m] = await db.select({
         companyId:     portalCompanyMembersTable.companyId,
         buyerRole:     portalCompanyMembersTable.buyerRole,
@@ -220,7 +232,7 @@ export async function submitMarketplaceQuote(params: {
         buyerEmail:         portalCustomer?.email ?? portalEmailFromToken ?? email?.trim() ?? "",
         buyerPhone:         resolvedPhone,
         buyerCompany:       company_name?.trim() ?? portalCustomer?.company ?? null,
-        companyId:          membershipCtx?.companyId ?? null,
+        companyId:          portalCompanyId,
         portalCustomerId:   portalCustomer?.id ?? null,
         buyerRole:          membershipCtx?.buyerRole ?? null,
         buyerDepartment:    membershipCtx?.department ?? null,
@@ -247,7 +259,7 @@ export async function submitMarketplaceQuote(params: {
       orderNumber,
       customerName:       resolvedName,
       email:              portalEmailFromToken ?? email?.trim() ?? "",
-      companyId:          membershipCtx?.companyId ?? null,
+      companyId:          portalCompanyId,
       phone:              resolvedPhone,
       shippingAddress:    shippingAddress?.trim() || "TBD — Quote Request",
       notes:              combinedNotes,
@@ -344,6 +356,11 @@ export async function createMarketplaceOrder(params: {
   if (!phone?.trim())           throw makeServiceError(400, "No. WhatsApp wajib diisi");
   if (!shippingAddress?.trim()) throw makeServiceError(400, "Alamat pengiriman wajib diisi");
 
+  const portalCompanyId = await resolvePortalCustomerCompanyIdByEmail(
+    email?.trim() ?? "",
+    { required: true },
+  );
+
   // ── 3. Price calculations ─────────────────────────────────────────────────
   const qtyNum     = Math.max(1, Number(qty) || 1);
   const unitStr    = (unit?.trim() || item.unit || "unit");
@@ -393,6 +410,7 @@ export async function createMarketplaceOrder(params: {
   const order = await db.transaction(async (tx) => {
     const [hdr] = await tx.insert(portalProductOrdersTable).values({
       orderNumber,
+      companyId:        portalCompanyId,
       customerName:      customerName.trim(),
       email:             email?.trim() ?? "",
       phone:             phone.trim(),

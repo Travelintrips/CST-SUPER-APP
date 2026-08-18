@@ -495,13 +495,17 @@ router.post("/sales/:id/create-link", async (req, res) => {
   }
 
   // Company scoping: block creating a payment link for a sales document owned
-  // by a different company than the caller's resolved scope. Documents with
-  // company_id IS NULL (legacy) are allowed through (documented risk).
+  // by a different company than the caller's resolved scope.
   const scope = resolveCompanyScope(req);
   if (scope !== "all" && doc.companyId != null && doc.companyId !== scope) {
     return res.status(403).json({ message: "Sales document belongs to a different company" });
   }
   const paymentCompanyId = doc.companyId ?? (scope !== "all" ? scope : null);
+  if (paymentCompanyId == null) {
+    return res.status(422).json({
+      message: "Sales document belum memiliki company yang tidak ambigu; payment link tidak dapat dibuat.",
+    });
+  }
 
   // Lookup customer phone number for Paylabs (required field)
   let customerPhone = "081234567890"; // fallback
