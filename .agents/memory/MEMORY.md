@@ -95,4 +95,5 @@
 - [Persistent gate failure safety](persistent-gate-failure-safety.md) — gated stage callbacks must propagate failures; compatibility marker writes need lock-aware context to avoid false completion and recursive advisory-lock waits.
 - [Steady-state startup gate](steady-state-startup-gate.md) — use authoritative registry initialization as DB readiness; snapshot only completed matches and retain locked fallback semantics.
 - [Bank recon workflow gate](bank-recon-workflow-gate.md) — queued matching is not completion; QRIS candidate generation must be explicit and blocked while matching is active.
+- [Customer Portal asset fallback](customer-portal-asset-fallback.md) — legacy image paths can return JSON 400; use verified Storage fallbacks and regenerate the source-derived manifest.
 - [QRIS account rule defaults](qris-account-rule-defaults.md) — account-scoped provider rows may omit optional tolerances; merge them with provider defaults before matching.
