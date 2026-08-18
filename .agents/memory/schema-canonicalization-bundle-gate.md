@@ -16,3 +16,8 @@ the gate risks cross-environment schema reads or writes.
 change process, then rerun the strict read-only canonical report before any
 production remediation. Never work around the gate by changing the wrapper to
 ignore the missing metadata.
+
+The production bundle now carries `APP_ENV=production` and a verified
+`SUPABASE_MIGRATION_URL` for the PROD project on direct/session port 5432.
+The target guard and direct connection proof both pass; future DDL must still
+run through the same loader and target verification.
