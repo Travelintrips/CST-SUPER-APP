@@ -1,3 +1,5 @@
 { pkgs }: {
-  deps = [];
+  deps = [
+    pkgs.azure-functions-core-tools
+  ];
 }
