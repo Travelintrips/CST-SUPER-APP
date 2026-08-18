@@ -15,6 +15,7 @@
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../logger.js";
+import { normalizeCompanyId } from "../services/portalCompanyScopeUtils.js";
 
 export type AllocationCandidateType = "invoice" | "advance";
 
@@ -168,11 +169,18 @@ export function scoreAllocationCandidate(
   if (dateMatched) reason.push(`tanggal cocok (+${weights.weight_date})`);
 
   // 6. Company — company_id must match exactly
-  const companyMatched = !!(mutation.company_id && cand.company_id && mutation.company_id === cand.company_id);
+  const mutationCompanyId = normalizeCompanyId(mutation.company_id);
+  const candidateCompanyId = normalizeCompanyId(cand.company_id);
+  const companyMatched =
+    mutationCompanyId != null &&
+    candidateCompanyId != null &&
+    mutationCompanyId === candidateCompanyId;
   const companyPts = companyMatched ? weights.weight_company : 0;
   if (companyMatched) reason.push(`entitas/company cocok (+${weights.weight_company})`);
 
-  const score = amountPts + referencePts + invoicePts + customerPts + datePts + companyPts;
+  const score = companyMatched
+    ? amountPts + referencePts + invoicePts + customerPts + datePts + companyPts
+    : 0;
 
   return {
     candidate: cand,
@@ -216,7 +224,12 @@ export async function fetchAllocationCandidates(
   mutation: Pick<AllocationMutationInput, "amount" | "transaction_date" | "company_id">,
 ): Promise<AllocationCandidate[]> {
   const candidates: AllocationCandidate[] = [];
-  const { transaction_date, company_id } = mutation;
+  const { transaction_date } = mutation;
+  const company_id = normalizeCompanyId(mutation.company_id);
+  if (company_id == null) {
+    logger.warn("[bankAllocationScoring] matching skipped: bank mutation has no valid company_id");
+    return candidates;
+  }
 
   // ── Invoice candidates ──────────────────────────────────────────────────────
   try {
@@ -233,7 +246,7 @@ export async function fetchAllocationCandidates(
         AND  COALESCE(sd.status, '') NOT IN ('paid', 'cancelled', 'void')
         AND  sd.issue_date BETWEEN ${transaction_date}::date - 30
                                AND ${transaction_date}::date + 30
-        ${company_id != null ? sql`AND sd.company_id = ${company_id}` : sql``}
+         AND sd.company_id = ${company_id}
     `).then((r) => r.rows);
 
     for (const r of invoiceRows) {
@@ -264,7 +277,7 @@ export async function fetchAllocationCandidates(
       WHERE  COALESCE(ca.lifecycle_status, '') IN ('outstanding', 'partially_settled', 'disbursed', 'approved')
         AND  ca.created_at::date BETWEEN ${transaction_date}::date - 30
                                      AND ${transaction_date}::date + 30
-        ${company_id != null ? sql`AND ca.company_id = ${company_id}` : sql``}
+         AND ca.company_id = ${company_id}
     `).then((r) => r.rows);
 
     for (const r of advanceRows) {

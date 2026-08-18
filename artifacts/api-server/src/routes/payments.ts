@@ -18,6 +18,7 @@ import { transitionLogisticOrderStatus } from "../lib/services/logisticOrderStat
 import { sendPaymentProofWaLink } from "../lib/paymentProofService.js";
 import { isSafeDevTestMode } from "../lib/safeDev.js";
 import { isNewPaidTransition } from "../lib/paymentWebhookConsistency.js";
+import { normalizeCompanyId } from "../lib/services/portalCompanyScopeUtils.js";
 
 const router = Router();
 
@@ -500,7 +501,7 @@ router.post("/sales/:id/create-link", async (req, res) => {
   if (scope !== "all" && doc.companyId != null && doc.companyId !== scope) {
     return res.status(403).json({ message: "Sales document belongs to a different company" });
   }
-  const paymentCompanyId = doc.companyId ?? (scope !== "all" ? scope : null);
+  const paymentCompanyId = normalizeCompanyId(doc.companyId);
   if (paymentCompanyId == null) {
     return res.status(422).json({
       message: "Sales document belum memiliki company yang tidak ambigu; payment link tidak dapat dibuat.",
@@ -689,9 +690,17 @@ paymentsWebhookRouter.post("/paylabs/webhook", async (req, res) => {
   // no company authorization check applies here. Opportunistically backfill
   // company_id on legacy rows (company_id IS NULL) from the parent document
   // so later admin reads/writes on this payment are correctly scoped.
-  const webhookDerivedCompanyId = payment.companyId == null
+  const webhookDerivedCompanyId = normalizeCompanyId(payment.companyId) == null
     ? await deriveLegacyPaymentCompanyId(payment.refKind, payment.refId)
     : null;
+  const webhookCompanyId =
+    normalizeCompanyId(payment.companyId) ?? normalizeCompanyId(webhookDerivedCompanyId);
+  if (webhookCompanyId == null) {
+    return res.status(422).json({
+      errCode: "422",
+      errMsg: "Payment belum memiliki company yang tidak ambigu; status tidak dapat diproses.",
+    });
+  }
 
   await db
     .update(paymentsTable)
@@ -701,7 +710,7 @@ paymentsWebhookRouter.post("/paylabs/webhook", async (req, res) => {
       raw: req.body,
       updatedAt: new Date(),
       ...(webhookPaymentMethod ? { paymentMethod: webhookPaymentMethod } : {}),
-      ...(webhookDerivedCompanyId != null ? { companyId: webhookDerivedCompanyId } : {}),
+      companyId: webhookCompanyId,
     })
     .where(eq(paymentsTable.id, payment.id));
 
@@ -717,7 +726,7 @@ paymentsWebhookRouter.post("/paylabs/webhook", async (req, res) => {
           netAmount: Number(salesDoc.totalAmount),
           taxAmount: Number(salesDoc.taxAmount ?? 0),
           taxAccountId: null,
-          companyId: webhookDerivedCompanyId ?? payment.companyId,
+          companyId: webhookCompanyId,
         });
         if (!invoicePosted) {
           console.warn(`[payments] sales invoice posting pending recovery for payment #${payment.id}`);
@@ -752,7 +761,7 @@ paymentsWebhookRouter.post("/paylabs/webhook", async (req, res) => {
       refDocNumber: payment.refDocNumber,
       amount: Number(payment.amount),
       paymentMethod: webhookPaymentMethod ?? payment.paymentMethod ?? undefined,
-      companyId: webhookDerivedCompanyId ?? payment.companyId,
+      companyId: webhookCompanyId,
     });
     if (!paymentPosted) {
       console.warn(`[payments] payment journal posting pending recovery for payment #${payment.id}`);
@@ -775,8 +784,15 @@ router.post("/:id/simulate-paid", async (req, res) => {
   // company_id, the row stays unscoped and is treated as accessible (legacy
   // fallback) rather than blocking a legitimate admin operation.
   const scope = resolveCompanyScope(req);
-  const derivedCompanyId = payment.companyId ?? (await deriveLegacyPaymentCompanyId(payment.refKind, payment.refId));
-  if (scope !== "all" && derivedCompanyId != null && derivedCompanyId !== scope) {
+  const derivedCompanyId =
+    normalizeCompanyId(payment.companyId) ??
+    normalizeCompanyId(await deriveLegacyPaymentCompanyId(payment.refKind, payment.refId));
+  if (derivedCompanyId == null) {
+    return res.status(422).json({
+      message: "Payment belum memiliki company yang tidak ambigu; simulasi pembayaran ditolak.",
+    });
+  }
+  if (scope !== "all" && derivedCompanyId !== scope) {
     return res.status(403).json({ message: "Payment belongs to a different company" });
   }
 
@@ -786,7 +802,7 @@ router.post("/:id/simulate-paid", async (req, res) => {
       status: "paid",
       paidAt: new Date(),
       updatedAt: new Date(),
-      ...(payment.companyId == null && derivedCompanyId != null ? { companyId: derivedCompanyId } : {}),
+      companyId: derivedCompanyId,
     })
     .where(eq(paymentsTable.id, id));
   if (payment.status !== "paid") {

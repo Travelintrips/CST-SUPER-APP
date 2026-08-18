@@ -40,6 +40,7 @@ import {
   PortalCompanyScopeError,
   resolvePortalCustomerCompanyIdByEmail,
 } from "../lib/services/portalCompanyScope.js";
+import { normalizeCompanyId } from "../lib/services/portalCompanyScopeUtils.js";
 
 // Best-effort: resolve the authenticated portal customer's email from an
 // Authorization bearer token, if present and valid. Returns null on any
@@ -2020,10 +2021,11 @@ logisticOrdersRouter.put("/:id/status", async (req: Request, res: Response) => {
   if (status === "Completed" || status === "Delivered") {
     const logTax = Number(updated.tax ?? 0);
     const logBase = Number(updated.grandTotal ?? 0) - logTax;
-    if (logBase > 0) {
+    const companyId = normalizeCompanyId(updated.companyId);
+    if (logBase > 0 && companyId != null) {
       import("../lib/taxAutoService.js").then(({ recordTransactionTax }) => {
         void recordTransactionTax({
-          companyId: updated.companyId ?? 1,
+          companyId,
           transactionType: "logistic_order",
           transactionId: updated.id,
           transactionRef: updated.orderNumber,

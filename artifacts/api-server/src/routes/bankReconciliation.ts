@@ -4935,7 +4935,12 @@ router.post("/smart-import", upload.single("file"), async (req, res) => {
     const buffer = req.file.buffer;
     const contentStr = buffer.toString("utf-8");
     const actor = (req as any).user?.email ?? "system";
-    const companyId = req.body?.company_id ? Number(req.body.company_id) : null;
+    const companyId = normalizeCompanyId(req.body?.company_id);
+    if (companyId == null) {
+      return res.status(422).json({
+        error: "company_id wajib berupa ID perusahaan positif untuk import bank.",
+      });
+    }
     const forceFormat = req.body?.format as string | undefined;
 
     // ── Detect & parse ────────────────────────────────────────────────────────

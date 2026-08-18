@@ -42,6 +42,7 @@ import {
   getActiveWeights,
   type AllocationMutationInput,
 } from "../lib/reconciliation/bankAllocationScoring.js";
+import { normalizeCompanyId } from "../lib/services/portalCompanyScopeUtils.js";
 
 const router = Router();
 
@@ -91,9 +92,10 @@ async function generateAllocationNo(companyId: number): Promise<string> {
  * Fails-closed: denies if requester has a companyId and it doesn't match the match row.
  */
 function ownershipAllowed(m: any, userCompanyId: number | null): boolean {
+  const matchCompanyId = normalizeCompanyId(m.company_id);
+  if (matchCompanyId == null) return false;
   if (!userCompanyId) return true;           // super-admin: no company bound
-  if (!m.company_id) return true;            // match has no company — allow (legacy data)
-  return Number(m.company_id) === userCompanyId;
+  return matchCompanyId === normalizeCompanyId(userCompanyId);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

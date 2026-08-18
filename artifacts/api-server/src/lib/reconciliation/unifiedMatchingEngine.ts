@@ -32,6 +32,7 @@ import {
 } from "./journalReuseEngine.js";
 import { assertGenericApprovalAllowed } from "./genericPostGuard.js";
 import { isQrisSettlementDescription } from "./qrisSettlement.js";
+import { normalizeCompanyId } from "../services/portalCompanyScopeUtils.js";
 import {
   isSportPaymentInActiveCanonicalSettlement,
   sportPaymentCanonicalSettlementExclusionSql,
@@ -479,13 +480,15 @@ export function scoreUnified(
   // QRIS candidates are company/provider scoped. A mismatch or missing
   // identity must never be overridden by an exact amount.
   const requiresQrisIdentity = isQrisCandidateForMatching(cand);
+  const mutationCompanyId = normalizeCompanyId(mutation.company_id);
+  const candidateCompanyId = normalizeCompanyId(cand.company_id);
+  // Company scope is mandatory for every candidate type, not only QRIS.
+  // Amount/reference/date evidence must never turn an unscoped or
+  // cross-company row into a reviewable match.
   const companyMismatch =
-    requiresQrisIdentity &&
-    (
-      cand.company_id == null ||
-      mutation.company_id == null ||
-      Number(cand.company_id) !== Number(mutation.company_id)
-    );
+    mutationCompanyId == null ||
+    candidateCompanyId == null ||
+    candidateCompanyId !== mutationCompanyId;
   const bankAccountMismatch =
     cand.bank_account_id != null &&
     mutation.bank_account_id != null &&
@@ -647,7 +650,8 @@ export async function fetchCandidates(
   mutation: Pick<MutationInput, "amount" | "transaction_date" | "company_id" | "direction" | "bank_account_id" | "provider_order_id" | "provider_name" | "normalized_description">,
 ): Promise<MatchCandidate[]> {
   const candidates: MatchCandidate[] = [];
-  const { amount, transaction_date, company_id } = mutation;
+  const { amount, transaction_date } = mutation;
+  const company_id = normalizeCompanyId(mutation.company_id);
   // A bank mutation without company scope must never search the shared
   // candidate pool. Returning no candidates is safer than a cross-company
   // suggestion; callers should repair/import it with an explicit company.
@@ -1420,11 +1424,17 @@ export async function approveAndCreateJournal(
       }
       const mut = locked[0] as Record<string, unknown>;
 
-      const companyId   = mut["company_id"]     != null ? Number(mut["company_id"])     : null;
+      const companyId   = normalizeCompanyId(mut["company_id"]);
       const bankAccId   = mut["bank_account_id"] != null ? Number(mut["bank_account_id"]) : null;
       const txDate      = String(mut["transaction_date"] ?? "").split("T")[0];
       const amount      = Number(mut["amount"]);
       const direction   = String(mut["direction"] ?? "IN");
+      if (companyId == null) {
+        throw Object.assign(
+          new Error("Mutasi tidak memiliki company_id yang valid; approval diblokir"),
+          { code: "COMPANY_SCOPE_REQUIRED" },
+        );
+      }
 
        // A match row is the source of truth. Do not let a stale or tampered
        // browser payload change the candidate selected by the reviewer.

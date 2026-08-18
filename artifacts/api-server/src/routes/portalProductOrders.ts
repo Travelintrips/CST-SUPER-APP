@@ -39,6 +39,7 @@ import { postSalesInvoice } from "../lib/accounting.js";
 import { getAdminGroupWa } from "../lib/adminWa.js";
 import {
   PortalCompanyScopeError,
+  normalizeCompanyId,
   resolvePortalCustomerCompanyIdByEmail,
 } from "../lib/services/portalCompanyScope.js";
 
@@ -303,6 +304,14 @@ async function maybeCreateSalesOrder(orderId: number): Promise<{ docNumber: stri
   const [order] = await db.select().from(portalProductOrdersTable).where(eq(portalProductOrdersTable.id, orderId));
   if (!order) return null;
   if ((order as any).salesDocId) return { docNumber: (order as any).salesDocNumber, docId: (order as any).salesDocId };
+  const companyId = normalizeCompanyId(order.companyId);
+  if (companyId == null) {
+    logger.warn(
+      { orderId, orderNumber: order.orderNumber },
+      "[portalProductOrders] sales order creation blocked: company scope is missing or invalid",
+    );
+    return null;
+  }
 
   const items = await db.select().from(portalProductOrderItemsTable).where(eq(portalProductOrderItemsTable.orderId, orderId));
   if (items.length === 0) return null;
@@ -313,7 +322,7 @@ async function maybeCreateSalesOrder(orderId: number): Promise<{ docNumber: stri
   const taxAmount = Math.max(0, grandTotal - subtotal);
 
   const [doc] = await db.insert(salesDocumentsTable).values({
-    companyId: order.companyId ?? null,
+    companyId,
     kind: "order",
     docNumber,
     customerName: order.customerName,
@@ -355,7 +364,7 @@ async function maybeCreateSalesOrder(orderId: number): Promise<{ docNumber: stri
     netAmount: subtotal,
     taxAmount,
     taxAccountId: null,
-    companyId: order.companyId ?? null,
+    companyId,
   }).catch((err: unknown) => logger.error({ err }, "postSalesInvoice portal product failed"));
 
   return { docNumber, docId: doc.id };
@@ -644,7 +653,7 @@ portalProductOrdersRouter.post("/orders",
   try {
     companyId = await resolvePortalCustomerCompanyIdByEmail(
       resolvedEmail,
-      { required: Boolean(portalEmail) },
+      { required: true },
     );
   } catch (error) {
     if (error instanceof PortalCompanyScopeError) {
@@ -958,7 +967,7 @@ portalProductOrdersRouter.put("/orders/:id/status", async (req: Request, res: Re
 
   // T002: Confirmed → buat Sales Order
   if (status.trim() === "Confirmed" && existing.status !== "Confirmed") {
-    if (existing.companyId == null) {
+    if (normalizeCompanyId(existing.companyId) == null) {
       return res.status(422).json({
         message: "Order belum memiliki company yang tidak ambigu; tidak dapat dibuat menjadi Sales Order.",
       });
@@ -1171,7 +1180,7 @@ portalProductOrdersRouter.post("/orders/:id/confirm-payment", async (req: Reques
 
   const [order] = await db.select().from(portalProductOrdersTable).where(eq(portalProductOrdersTable.id, id));
   if (!order) return res.status(404).json({ message: "Order tidak ditemukan" });
-  if (order.companyId == null) {
+  if (normalizeCompanyId(order.companyId) == null) {
     return res.status(422).json({
       message: "Pembayaran ditolak: order belum memiliki company yang tidak ambigu.",
     });

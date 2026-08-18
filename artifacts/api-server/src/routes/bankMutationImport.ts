@@ -3379,7 +3379,7 @@ async function postBatchInternal(
             description: row.description ?? null,
             ref: row.unique_key ?? null,
             source: "bank_mutation_import" as any,
-            companyId: companyId ?? 1,
+             companyId,
             lines: [
               { accountId: drAccId, debit: amount, credit: 0, description: row.description ?? null },
               { accountId: crAccId, debit: 0, credit: amount, description: row.description ?? null },

@@ -80,6 +80,39 @@ export async function runPortalPaymentCompanyMigration(): Promise<void> {
   });
 
   await db.execute(sql`
+    WITH eligible_memberships AS (
+      SELECT pcm.portal_customer_id, MIN(pcm.company_id) AS company_id
+      FROM portal_company_members pcm
+      WHERE pcm.is_active = TRUE
+      GROUP BY pcm.portal_customer_id
+      HAVING COUNT(DISTINCT pcm.company_id) = 1
+    )
+    UPDATE logistic_orders lo
+    SET company_id = em.company_id
+    FROM portal_customers pc
+    JOIN eligible_memberships em ON em.portal_customer_id = pc.id
+    WHERE lo.company_id IS NULL
+      AND lo.source = 'portal'
+      AND LOWER(lo.email) = LOWER(pc.email)
+  `).catch((error: unknown) => {
+    logger.warn({ error }, "[portalCompanyScope] logistic_orders backfill skipped");
+  });
+
+  await db.execute(sql`
+    UPDATE sales_documents sd
+    SET company_id = ppo.company_id
+    FROM portal_product_orders ppo
+    WHERE sd.company_id IS NULL
+      AND ppo.company_id IS NOT NULL
+      AND (
+        sd.id = ppo.sales_doc_id
+        OR (sd.source = 'portal_product' AND sd.doc_number = ppo.sales_doc_number)
+      )
+  `).catch((error: unknown) => {
+    logger.warn({ error }, "[portalCompanyScope] portal product sales-document backfill skipped");
+  });
+
+  await db.execute(sql`
     UPDATE payments p
     SET company_id = sd.company_id
     FROM sales_documents sd
