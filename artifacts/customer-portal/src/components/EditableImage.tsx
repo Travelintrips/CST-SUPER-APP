@@ -35,7 +35,9 @@ export function EditableImage({ contentKey, defaultSrc, alt, className = "", pri
   // Invalid legacy CMS paths must fall through to the existing canonical
   // default, not back to the original URL (which would create a broken
   // browser image request).
-  const resolvedCandidate = src.startsWith("/") ? resolveImageUrl(src) : src;
+  const resolvedCandidate = src.startsWith("/")
+    ? resolveImageUrl(src, { allowLegacyObjectId: true })
+    : src;
   const resolved = resolvedCandidate ?? defaultSrc;
   const handleError = () => {
     if (resolved !== defaultSrc) setFailedSrc(candidateSrc);

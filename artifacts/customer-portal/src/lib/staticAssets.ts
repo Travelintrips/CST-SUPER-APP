@@ -6,7 +6,7 @@ const SUPABASE_ORIGIN = (import.meta.env.VITE_SUPABASE_URL ?? "").replace(/\/+$/
 const STORAGE_ROOT = SUPABASE_ORIGIN
   ? `${SUPABASE_ORIGIN}/storage/v1/object/public/public-assets${STORAGE_PATH}`
   : `/api/storage/public-objects${STORAGE_PATH}`;
-const PNG_ONLY_ASSETS = new Set(["images/logo.png"]);
+const PNG_ONLY_ASSETS = new Set(["images/logo.png", "images/logo-baru.png"]);
 
 export function staticAsset(path: string): string {
   const normalized = path.replace(/^\/+/, "");
