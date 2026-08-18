@@ -5565,15 +5565,17 @@ router.post("/mutations/:mutationId/multi-invoice-match", async (req, res) => {
     // Fetch invoice candidates
     const { rows: invRows } = await db.execute(sql.raw(`
       SELECT sd.id AS invoice_id, sd.doc_number AS invoice_ref,
-             sd.total_amount AS amount, sd.due_date::text AS due_date,
+             COALESCE(NULLIF(sd.grand_total, 0), sd.total_amount) AS amount,
+             sd.due_date::text AS due_date,
              COALESCE(c.name, '') AS customer_name
       FROM sales_documents sd
       LEFT JOIN customers c ON c.id = sd.customer_id
       WHERE sd.kind = 'invoice'
         AND sd.company_id = ${companyId}
-        AND sd.status NOT IN ('paid','cancelled','void')
-        AND sd.total_amount <= ${amount} * 1.05
-        AND sd.total_amount >= ${amount} * 0.01
+        AND sd.status NOT IN ('cancelled','void')
+        AND sd.payment_status IN ('unpaid','partial')
+        AND COALESCE(NULLIF(sd.grand_total, 0), sd.total_amount) <= ${amount} * 1.05
+        AND COALESCE(NULLIF(sd.grand_total, 0), sd.total_amount) >= ${amount} * 0.01
         AND COALESCE(sd.invoice_date, sd.created_at::date) >= '${txDate}'::date - 90
       ORDER BY sd.total_amount DESC
       LIMIT 100

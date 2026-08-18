@@ -171,6 +171,10 @@ export const vmfActivityLogTable = pgTable("vmf_activity_log", {
 export const customerInvoiceLinksTable = pgTable("customer_invoice_links", {
   id: serial("id").primaryKey(),
   token: text("token").notNull().unique(),
+  // Company owner is copied from the canonical sales/logistic/portal order.
+  // It is nullable only for legacy rows awaiting the startup backfill; all
+  // newly-created customer portal invoices must provide it.
+  companyId: integer("company_id"),
   salesDocId: integer("sales_doc_id"),
   orderId: integer("order_id"),
   orderNumber: text("order_number"),

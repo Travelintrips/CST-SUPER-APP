@@ -19,6 +19,7 @@ import {
   notificationLogsTable,
   suppliersTable,
   logisticOrdersTable,
+  portalProductOrdersTable,
   logisticOrderItemsTable,
   logisticOrderRfqsTable,
   salesDocumentsTable,
@@ -48,6 +49,7 @@ import { getAdminWa, getAdminGroupWa } from "../lib/adminWa.js";
 import { wasRecentlyNotified, logNotification } from "../lib/notificationLog.js";
 import { createSalesOrderFromVmfApproval } from "../lib/vmfSoIntegration.js";
 import { updateOrderProgress } from "../lib/orderProgress.js";
+import { normalizeCompanyId } from "../lib/services/portalCompanyScopeUtils.js";
 import {
   sendCustomerApprovedNotification,
 
@@ -66,6 +68,51 @@ import {
   sendOpConfirmSubmittedNotification,
   type LogisticOrderData,
 } from "../lib/orderNotification.js";
+
+/**
+ * Resolve the company owner of a customer portal invoice from its canonical
+ * parent. Never derive tenant ownership from customer email/phone.
+ */
+async function resolveCustomerInvoiceCompanyId(
+  salesDocId: number | null,
+  orderId: number | null,
+): Promise<number | null> {
+  const companyIds: number[] = [];
+
+  if (salesDocId != null) {
+    const [doc] = await db
+      .select({ companyId: salesDocumentsTable.companyId })
+      .from(salesDocumentsTable)
+      .where(eq(salesDocumentsTable.id, salesDocId));
+    const companyId = normalizeCompanyId(doc?.companyId);
+    if (companyId == null) {
+      throw new Error("Sales document belum memiliki company yang valid.");
+    }
+    companyIds.push(companyId);
+  }
+
+  if (orderId != null) {
+    const [logisticOrder] = await db
+      .select({ companyId: logisticOrdersTable.companyId })
+      .from(logisticOrdersTable)
+      .where(eq(logisticOrdersTable.id, orderId));
+    const [productOrder] = await db
+      .select({ companyId: portalProductOrdersTable.companyId })
+      .from(portalProductOrdersTable)
+      .where(eq(portalProductOrdersTable.id, orderId));
+
+    for (const candidate of [logisticOrder?.companyId, productOrder?.companyId]) {
+      const companyId = normalizeCompanyId(candidate);
+      if (companyId != null) companyIds.push(companyId);
+    }
+  }
+
+  const uniqueCompanyIds = [...new Set(companyIds)];
+  if (uniqueCompanyIds.length > 1) {
+    throw new Error("Parent invoice memiliki company yang tidak konsisten.");
+  }
+  return uniqueCompanyIds[0] ?? null;
+}
 
 // Boot migration: add template columns to customer_approvals + vendor_mini_form_submissions + confirmed_at to customer_invoice_links
 db.execute(sql.raw(`
@@ -3958,6 +4005,16 @@ vendorMiniFormRouter.post("/admin/customer-invoices", async (req: Request, res: 
       }
     }
 
+    const resolvedCompanyId = await resolveCustomerInvoiceCompanyId(
+      salesDocId != null ? Number(salesDocId) : null,
+      orderId != null ? Number(orderId) : null,
+    );
+    if (resolvedCompanyId == null) {
+      return res.status(422).json({
+        error: "Invoice Customer Portal wajib memiliki sales document atau order dengan company yang valid.",
+      });
+    }
+
     let subtotal: number | null = null;
     let taxRate = 11;
     let taxAmount: number | null = null;
@@ -4069,6 +4126,7 @@ vendorMiniFormRouter.post("/admin/customer-invoices", async (req: Request, res: 
 
     const [link] = await db.insert(customerInvoiceLinksTable).values({
       token,
+      companyId: resolvedCompanyId,
       salesDocId: salesDocId ?? null,
       orderId: orderId ?? null,
       orderNumber: orderNumber ?? null,
@@ -4270,18 +4328,88 @@ vendorMiniFormRouter.post("/admin/customer-invoices/:id/confirm-payment", async 
 
     const grandTotal = link.grandTotal ? Number(link.grandTotal) : 0;
     const paid = amountPaid ?? grandTotal;
+    const companyId = normalizeCompanyId(link.companyId);
+    if (companyId == null) {
+      return res.status(422).json({
+        error: "Pembayaran ditolak: invoice Customer Portal belum memiliki company yang valid.",
+      });
+    }
+    if (!Number.isFinite(paid) || paid <= 0 || grandTotal <= 0 || paid > grandTotal) {
+      return res.status(422).json({
+        error: "Jumlah pembayaran harus positif dan tidak boleh melebihi grand total invoice.",
+      });
+    }
     const newPaymentStatus = paid >= grandTotal ? "paid" : "partial";
     const fmtRp = (n: number) => `Rp ${Math.round(n).toLocaleString("id-ID")}`;
 
-    await db.update(customerInvoiceLinksTable)
-      .set({
-        amountPaid: String(paid),
-        paymentMethod: paymentMethod ?? link.paymentMethod ?? null,
-        paymentStatus: newPaymentStatus,
-        status: newPaymentStatus === "paid" ? "paid" : link.status,
-        confirmedAt: new Date(),
-      } as any)
-      .where(eq(customerInvoiceLinksTable.id, id));
+    // Resolve the canonical sales document before mutating payment status.
+    // Bank reconciliation consumes this document, not a free-form invoice
+    // link, so a link without a company-scoped canonical document is
+    // intentionally not confirmable.
+    let canonicalSalesDocId = link.salesDocId ?? null;
+    if (canonicalSalesDocId == null && link.orderId != null) {
+      const [logisticDoc] = await db
+        .select({ id: salesDocumentsTable.id })
+        .from(salesDocumentsTable)
+        .where(eq(salesDocumentsTable.logisticOrderId, link.orderId))
+        .limit(1);
+      const { rows: productOrderRows } = await db.execute(sql`
+        SELECT sales_doc_id
+        FROM portal_product_orders
+        WHERE id = ${link.orderId}
+        LIMIT 1
+      `);
+      const productOrderSalesDocId = Number(productOrderRows[0]?.sales_doc_id ?? 0);
+      const candidateIds = [
+        logisticDoc?.id ?? null,
+        productOrderSalesDocId > 0 ? productOrderSalesDocId : null,
+      ].filter((candidate): candidate is number => candidate != null);
+      if (new Set(candidateIds).size > 1) {
+        return res.status(422).json({
+          error: "Invoice memiliki lebih dari satu sales document canonical.",
+        });
+      }
+      canonicalSalesDocId = candidateIds[0] ?? null;
+    }
+    if (canonicalSalesDocId == null) {
+      return res.status(422).json({
+        error: "Pembayaran ditolak: invoice belum terhubung ke sales document canonical untuk rekonsiliasi bank.",
+      });
+    }
+
+    const [salesDoc] = await db
+      .select({
+        id: salesDocumentsTable.id,
+        companyId: salesDocumentsTable.companyId,
+      })
+      .from(salesDocumentsTable)
+      .where(eq(salesDocumentsTable.id, canonicalSalesDocId));
+    if (!salesDoc || normalizeCompanyId(salesDoc.companyId) !== companyId) {
+      return res.status(422).json({
+        error: "Company invoice tidak cocok dengan sales document canonical.",
+      });
+    }
+
+    await db.transaction(async (tx) => {
+      await tx.update(customerInvoiceLinksTable)
+        .set({
+          companyId,
+          salesDocId: canonicalSalesDocId,
+          amountPaid: String(paid),
+          paymentMethod: paymentMethod ?? link.paymentMethod ?? null,
+          paymentStatus: newPaymentStatus,
+          status: newPaymentStatus === "paid" ? "paid" : link.status,
+          confirmedAt: new Date(),
+        } as any)
+        .where(eq(customerInvoiceLinksTable.id, id));
+
+      await tx.update(salesDocumentsTable)
+        .set({
+          amountPaid: String(paid),
+          paymentStatus: newPaymentStatus,
+        } as any)
+        .where(eq(salesDocumentsTable.id, canonicalSalesDocId));
+    });
 
     // Transisi order → Payment Received
     if (link.orderId) {

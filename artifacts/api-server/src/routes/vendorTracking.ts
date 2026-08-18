@@ -15,6 +15,7 @@ import { requireClerkUser } from "../lib/requireAdmin.js";
 import { sendViaService as sendWhatsApp } from "../lib/waTransport.js";
 import { getAdminGroupWa } from "../lib/adminWa.js";
 import { getPreferredDomain } from "../lib/domain.js";
+import { normalizeCompanyId } from "../lib/services/portalCompanyScopeUtils.js";
 import { logger } from "../lib/logger.js";
 import { transitionLogisticOrderStatus } from "../lib/services/logisticOrderStatusService.js";
 import rateLimit from "express-rate-limit";
@@ -491,6 +492,12 @@ vendorTrackingAdminRouter.post("/rfq/:rfqId/complete-order", async (req: Request
     let invoiceNumber: string | null = null;
 
     if (generateInvoice) {
+      const companyId = normalizeCompanyId(order.companyId);
+      if (companyId == null) {
+        return res.status(422).json({
+          message: "Invoice Customer Portal tidak dapat dibuat sebelum order memiliki company yang valid.",
+        });
+      }
       const subtotal = Math.round(grandTotal / 1.11);
       const taxAmount = grandTotal - subtotal;
       const yearMonth = new Date().toISOString().slice(0, 7).replace("-", "");
@@ -502,6 +509,7 @@ vendorTrackingAdminRouter.post("/rfq/:rfqId/complete-order", async (req: Request
 
       await db.insert(customerInvoiceLinksTable).values({
         token: invoiceToken,
+        companyId,
         orderId: order.id,
         orderNumber: order.orderNumber,
         invoiceNumber,

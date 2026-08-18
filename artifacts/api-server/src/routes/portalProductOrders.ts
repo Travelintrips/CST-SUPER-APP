@@ -376,6 +376,14 @@ async function maybeCreateInvoiceLink(orderId: number): Promise<string | null> {
   const [order] = await db.select().from(portalProductOrdersTable).where(eq(portalProductOrdersTable.id, orderId));
   if (!order) return null;
   if ((order as any).invoiceToken) return (order as any).invoiceToken as string;
+  const companyId = normalizeCompanyId(order.companyId);
+  if (companyId == null) {
+    logger.warn(
+      { orderId, orderNumber: order.orderNumber },
+      "[portalProductOrders] invoice link blocked: order has no company scope",
+    );
+    return null;
+  }
 
   const items = await db.select().from(portalProductOrderItemsTable)
     .where(eq(portalProductOrderItemsTable.orderId, orderId));
@@ -438,6 +446,7 @@ async function maybeCreateInvoiceLink(orderId: number): Promise<string | null> {
 
   await db.insert(customerInvoiceLinksTable).values({
     token,
+    companyId,
     salesDocId: (order as any).salesDocId ?? null,
     orderId: order.id,
     orderNumber: order.orderNumber,

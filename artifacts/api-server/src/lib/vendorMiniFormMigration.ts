@@ -204,6 +204,7 @@ export async function runVendorMiniFormMigration(): Promise<void> {
       CREATE TABLE IF NOT EXISTS customer_invoice_links (
         id              SERIAL PRIMARY KEY,
         token           TEXT NOT NULL UNIQUE,
+        company_id      INTEGER,
         sales_doc_id    INTEGER,
         order_id        INTEGER,
         order_number    TEXT,
@@ -241,8 +242,41 @@ export async function runVendorMiniFormMigration(): Promise<void> {
         ADD COLUMN IF NOT EXISTS category_key      TEXT,
         ADD COLUMN IF NOT EXISTS template_id       TEXT,
         ADD COLUMN IF NOT EXISTS template_version  TEXT,
-        ADD COLUMN IF NOT EXISTS template_snapshot JSONB
+        ADD COLUMN IF NOT EXISTS template_snapshot JSONB,
+        ADD COLUMN IF NOT EXISTS company_id        INTEGER
     `));
+    // Backfill ownership from the canonical parent.  Do not guess a company
+    // from customer email or invoice text: unresolved legacy rows remain
+    // review-only and are blocked from new payment confirmation.
+    await db.execute(sql.raw(`
+      UPDATE customer_invoice_links cil
+      SET company_id = sd.company_id
+      FROM sales_documents sd
+      WHERE cil.company_id IS NULL
+        AND cil.sales_doc_id = sd.id
+        AND sd.company_id IS NOT NULL
+    `)).catch(() => {});
+    await db.execute(sql.raw(`
+      UPDATE customer_invoice_links cil
+      SET company_id = lo.company_id
+      FROM logistic_orders lo
+      WHERE cil.company_id IS NULL
+        AND cil.order_id = lo.id
+        AND lo.company_id IS NOT NULL
+    `)).catch(() => {});
+    await db.execute(sql.raw(`
+      UPDATE customer_invoice_links cil
+      SET company_id = ppo.company_id
+      FROM portal_product_orders ppo
+      WHERE cil.company_id IS NULL
+        AND cil.order_id = ppo.id
+        AND ppo.company_id IS NOT NULL
+    `)).catch(() => {});
+    await db.execute(sql.raw(`
+      CREATE INDEX IF NOT EXISTS cil_company_id_idx
+        ON customer_invoice_links(company_id)
+        WHERE company_id IS NOT NULL
+    `)).catch(() => {});
 
     // ── Media Foundation: idempotent ADD COLUMN IF NOT EXISTS ─────────────────
     await db.execute(sql.raw(`

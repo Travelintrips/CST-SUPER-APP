@@ -893,7 +893,8 @@ export async function fetchCandidates(
     {
       type: "invoice",
       q: `
-        SELECT sd.id, sd.total_amount AS amount,
+        SELECT sd.id,
+               COALESCE(NULLIF(sd.grand_total, 0), sd.total_amount) AS amount,
                COALESCE(sd.invoice_date, sd.created_at::date)::text AS date,
                COALESCE(c.name, '') AS name,
                sd.doc_number AS ref
@@ -901,8 +902,9 @@ export async function fetchCandidates(
         LEFT JOIN customers c ON c.id = sd.customer_id
         WHERE sd.invoice_number IS NOT NULL
           AND '${direction}' = 'IN'
+          AND sd.company_id = ${Number(company_id)}
           AND sd.payment_status = 'paid'
-          AND ${amtFilter.replace("##AMT##", "sd.total_amount")}
+          AND ${amtFilter.replace("##AMT##", "COALESCE(NULLIF(sd.grand_total, 0), sd.total_amount)")}
           AND COALESCE(sd.invoice_date, sd.created_at::date) BETWEEN ${dateFrom} AND ${dateTo}
           ${coFilter.replace("##TBL##", "sd")}
       `,
