@@ -97,3 +97,15 @@ development bucket.
 **How to apply:** Keep `APP_ENV=development` in the testing configuration and
 `APP_ENV=production` in production configuration, remove the duplicate secret,
 restart both workflows, and verify the browser-requested asset URLs.
+
+The public HTML can remain on an older asset contract even after the
+workspace build is clean; a production smoke must inspect route HTML metadata
+as well as image responses before closure.
+
+**Why:** The live custom domain continued to emit `og-cover.png` after the
+workspace bundle had switched to `og-cover.webp`, and the old object returned
+404.
+
+**How to apply:** Fetch `/`, `/marketplace`, and `/login` from the actual
+production domain, scan OG/Twitter/JSON-LD references, and require a
+republish before calling the public build current.
