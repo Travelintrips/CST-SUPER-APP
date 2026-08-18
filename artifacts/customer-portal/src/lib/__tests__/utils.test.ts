@@ -16,6 +16,11 @@ describe("resolveImageUrl", () => {
     expect(resolveImageUrl(input)).toBe(`${CANONICAL_ROOT}${relative}`);
   });
 
+  it("keeps published PNG branding references on PNG", () => {
+    expect(resolveImageUrl("/portal/images/logo.png")).toBe(`${CANONICAL_ROOT}logo.png`);
+    expect(resolveImageUrl("/portal/images/logo-baru.png")).toBe(`${CANONICAL_ROOT}logo-baru.png`);
+  });
+
   it("keeps canonical storage URLs unchanged", () => {
     const canonical = `${CANONICAL_ROOT}foo.webp`;
     expect(resolveImageUrl(canonical)).toBe(canonical);
@@ -27,6 +32,12 @@ describe("resolveImageUrl", () => {
         "/api/storage/public-objects/portal-assets/db674887-3d77-4679-8725-bb8866fe53de",
       ),
     ).toBeNull();
+  });
+
+  it("allows a verified CMS legacy UUID when explicitly requested", () => {
+    const legacy =
+      "/api/storage/public-objects/portal-assets/de648c66-00ae-46c4-8bc2-fbd7a7368b3c";
+    expect(resolveImageUrl(legacy, { allowLegacyObjectId: true })).toBe(legacy);
   });
 
   it("keeps a newly uploaded UUID asset with an extension", () => {
