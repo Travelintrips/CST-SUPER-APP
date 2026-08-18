@@ -35,6 +35,7 @@ const REGISTRY_ROWS: readonly RegistryRow[] = [
   ["supplier_enhancement", "Supplier enhancement migration (status/marketplace/documents/reviews)", "schema"],
   ["nav_preferences", "Nav preferences migration", "schema"],
   ["vendor_mini_form", "Vendor mini form migration", "schema"],
+  ["customer_invoice_company_scope", "Customer invoice company scope migration", "backfill"],
   ["product_first_flow", "Product-first flow migration", "schema"],
   ["customer_quote_flow", "Customer quote flow migration", "schema"],
   ["enterprise", "Enterprise migration", "schema"],

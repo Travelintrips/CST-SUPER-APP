@@ -60,6 +60,7 @@
 - [Sport Center isolation proof boundary](sport-center-isolation-verification.md) — runtime proof wajib memakai Supabase development DB; heliumdb yang reachable belum tentu punya schema aplikasi.
 - [Development accounting purge guard](development-accounting-purge-guard.md) — posted accounting entries are trigger-protected; explicit dev-only purge needs worker quiescence, one transaction, and post-delete FK verification.
 - [Startup readiness boundary](startup-readiness-boundary.md) — resolver can install and replay can pass while /api/health/ready remains false during a long background migration chain; do not certify runtime healthy.
+- [Startup additive stage](startup-additive-stage.md) — completed legacy registry markers can skip newer schema work; repairs need their own idempotent stage and catalog verification.
 - [Baseline consistency and generated output](baseline-consistency-generated-output.md) — cold-checkout dan post-build typecheck dapat berbeda saat package membutuhkan file generated yang di-ignore Git.
 - [Canonical settlement contract gate](canonical-settlement-contract-gate.md) — reuse qris_settlement hanya aman dengan source discriminator; canonical runtime contract harus terverifikasi sebelum implementasi.
 - [Phase 4C-1 runtime bootstrap](phase4c1-runtime-bootstrap.md) — runtime DDL can fail non-fatally; prove additive reconciliation columns against development after applying the checked-in migration.

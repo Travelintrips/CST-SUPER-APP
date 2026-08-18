@@ -60,12 +60,13 @@ describe("startup readiness steady-state contract", () => {
     expect(startupState).toContain("process crash");
   });
 
-  it("has an explicit 114-stage registry with stable names and metadata", () => {
+  it("has an explicit 116-stage registry with stable names and metadata", () => {
     const rows = startupRegistry.match(/^  \["/gm) ?? [];
-    expect(rows).toHaveLength(114);
-    expect(startupRegistry).toContain("version: 1");
+    expect(rows).toHaveLength(116);
+    expect(startupRegistry).toContain(": 1");
     expect(startupRegistry).toContain("critical: true");
     expect(startupRegistry).toContain('"schema"');
+    expect(startupRegistry).toContain('"customer_invoice_company_scope"');
     expect(startupRegistry).toContain("getStartupStageDefinition");
   });
 

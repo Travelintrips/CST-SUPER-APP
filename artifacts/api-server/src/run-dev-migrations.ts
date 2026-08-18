@@ -68,6 +68,7 @@ import { runNotificationLogMigration } from "./lib/notificationLogMigration.js";
 import { runAdminNotificationsMigration } from "./lib/adminNotificationsMigration.js";
 import { runVendorNotificationsMigration } from "./lib/vendorNotificationsMigration.js";
 import { runVendorMiniFormMigration } from "./lib/vendorMiniFormMigration.js";
+import { runCustomerInvoiceCompanyScopeMigration } from "./lib/customerInvoiceCompanyScopeMigration.js";
 import { runCustomerQuoteFlowMigration } from "./lib/customerQuoteFlowMigration.js";
 import { runEnterpriseMigration } from "./lib/enterpriseMigration.js";
 import { runShortLinksMigration } from "./lib/shortLinksMigration.js";
@@ -198,6 +199,7 @@ async function main() {
   await runSafe("adminNotifications", runAdminNotificationsMigration);
   await runSafe("vendorNotifications", runVendorNotificationsMigration);
   await runSafe("vendorMiniForm", runVendorMiniFormMigration);
+  await runSafe("customerInvoiceCompanyScope", runCustomerInvoiceCompanyScopeMigration);
   await runSafe("customerQuoteFlow", runCustomerQuoteFlowMigration);
   await runSafe("enterprise", runEnterpriseMigration);
   await runSafe("shortLinks", runShortLinksMigration);

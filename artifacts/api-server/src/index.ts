@@ -56,6 +56,7 @@ import { runAdminNotificationsMigration } from "./lib/adminNotificationsMigratio
 import { runVendorNotificationsMigration } from "./lib/vendorNotificationsMigration.js";
 
 import { runVendorMiniFormMigration } from "./lib/vendorMiniFormMigration";
+import { runCustomerInvoiceCompanyScopeMigration } from "./lib/customerInvoiceCompanyScopeMigration.js";
 import { runCustomerQuoteFlowMigration } from "./lib/customerQuoteFlowMigration";
 import { runEnterpriseMigration } from "./lib/enterpriseMigration";
 import { runShortLinksMigration } from "./lib/shortLinksMigration";
@@ -1869,6 +1870,7 @@ async function startServer() {
     .then(() => runWithRetry("Supplier enhancement migration (status/marketplace/documents/reviews)", runSupplierEnhancementMigration))
     .then(() => runWithRetry("Nav preferences migration", runNavPreferencesMigration))
     .then(() => runWithRetry("Vendor mini form migration", runVendorMiniFormMigration))
+    .then(() => runWithRetry("Customer invoice company scope migration", runCustomerInvoiceCompanyScopeMigration))
     .then(() => runWithRetry("Product-first flow migration", runProductFirstFlowMigration))
     .then(() => runWithRetry("Customer quote flow migration", runCustomerQuoteFlowMigration))
     .then(() => runWithRetry("Enterprise migration", runEnterpriseMigration))
