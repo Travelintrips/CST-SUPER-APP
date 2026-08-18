@@ -352,8 +352,44 @@ export function ensureSportPaymentMirrorTrigger(): Promise<void> {
       v_business_day boolean;
       v_remaining integer;
       v_payment_number text;
+      v_source jsonb;
+      v_source_status text;
     BEGIN
+      -- resolve_and_persist_payment_metadata() updates canonical metadata
+      -- inside this trigger. Do not re-enter the mirror projection for that
+      -- internal update or the all-column trigger would recurse forever.
+      IF pg_trigger_depth() > 1 THEN
+        RETURN NEW;
+      END IF;
+
+      -- Keep the projection broad: a change to any column on the canonical
+      -- payment must reach the public mirror. JSONB is intentional here so a
+      -- legacy source column can be optional without making the trigger
+      -- impossible to install on an older runtime snapshot.
+      v_source := to_jsonb(NEW);
+      v_source_status := COALESCE(v_source->>'status', '');
+
       IF NEW.status::text <> 'confirmed' THEN
+        -- A payment can be cancelled/refunded after it was confirmed. The
+        -- public mirror must show that source state even though a posted
+        -- accounting journal is never rewritten by this projection.
+        UPDATE public.sport_payments
+           SET amount = COALESCE(NULLIF(v_source->>'amount', '')::numeric, amount),
+               method = COALESCE(NULLIF(v_source->>'payment_method', ''), method),
+               status = CASE
+                 WHEN v_source_status IN ('cancelled', 'canceled') THEN 'cancelled'
+                 WHEN v_source_status = 'refunded' THEN 'refunded'
+                 WHEN v_source_status <> '' THEN v_source_status
+                 ELSE status
+               END,
+               paid_at = COALESCE(
+                 NULLIF(v_source->>'confirmed_at', '')::timestamptz,
+                 NULLIF(v_source->>'paid_at', '')::timestamptz,
+                 paid_at
+               ),
+               payment_type = COALESCE(NULLIF(v_source->>'payment_type', ''), payment_type),
+               updated_at = now()
+         WHERE payment_number = 'SCPAY-SC-' || NEW.id::text;
         RETURN NEW;
       END IF;
 
@@ -537,33 +573,129 @@ export function ensureSportPaymentMirrorTrigger(): Promise<void> {
             source_schema = EXCLUDED.source_schema,
             source_table = EXCLUDED.source_table,
             source_payment_id = EXCLUDED.source_payment_id,
-            amount = CASE
-              WHEN public.sport_payments.posting_status IN ('unposted', 'failed')
-                THEN EXCLUDED.amount
-              ELSE public.sport_payments.amount
-            END,
-            method = CASE
-              WHEN public.sport_payments.posting_status IN ('unposted', 'failed')
-                THEN EXCLUDED.method
-              ELSE public.sport_payments.method
-            END,
-            paid_at = CASE
-              WHEN public.sport_payments.posting_status IN ('unposted', 'failed')
-                THEN EXCLUDED.paid_at
-              ELSE public.sport_payments.paid_at
-            END,
-            payment_type = CASE
-              WHEN public.sport_payments.posting_status IN ('unposted', 'failed')
-                THEN EXCLUDED.payment_type
-              ELSE public.sport_payments.payment_type
-            END,
-            tax_rate = CASE
-              WHEN public.sport_payments.posting_status IN ('unposted', 'failed')
-                THEN EXCLUDED.tax_rate
-              ELSE public.sport_payments.tax_rate
-            END,
+             -- The public table is a source projection, not a second ledger.
+             -- Always reflect source changes here. The accounting trigger
+             -- below decides which fields are safe to copy into the ledger.
+             amount = EXCLUDED.amount,
+             method = EXCLUDED.method,
+             paid_at = EXCLUDED.paid_at,
+             payment_type = EXCLUDED.payment_type,
+             tax_rate = EXCLUDED.tax_rate,
+             tax_amount = EXCLUDED.tax_amount,
             updated_at = now();
 
+      RETURN NEW;
+    END;
+    $function$
+  `);
+
+  // Keep public accounting rows in sync whenever the public projection
+  // changes. This also covers legacy/BizPortal updates that write directly to
+  // public.sport_payments rather than through the canonical schema trigger.
+  //
+  // Financial fields are copied only while the accounting row/journal is not
+  // posted. A posted journal remains immutable; if its source amount/status
+  // changes, the source row is explicitly marked manual_review so the owner
+  // can use the reversal/correction workflow.
+  await db.execute(sql`
+    CREATE OR REPLACE FUNCTION public.sync_sport_payment_to_accounting()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'public'
+    AS $function$
+    DECLARE
+      v_financial_conflict boolean := FALSE;
+    BEGIN
+      -- Prevent the review marker update below from recursively syncing.
+      IF pg_trigger_depth() > 1 THEN
+        RETURN NEW;
+      END IF;
+
+      IF TG_OP = 'UPDATE'
+         AND (
+           OLD.amount IS DISTINCT FROM NEW.amount
+           OR OLD.status IS DISTINCT FROM NEW.status
+           OR OLD.paid_at IS DISTINCT FROM NEW.paid_at
+         )
+         AND EXISTS (
+           SELECT 1
+           FROM accounting_payments ap
+           LEFT JOIN accounting_entries ae ON ae.id = ap.entry_id
+           WHERE ap.source_type = 'sport_center'
+             AND ap.source_doc_id = NEW.id
+             AND (ap.status::text = 'posted' OR ae.status::text = 'posted')
+         )
+      THEN
+        v_financial_conflict := TRUE;
+      END IF;
+
+      -- payment_method is observational metadata and may be corrected even
+      -- when the linked journal is posted. Amount/date stay write-once after
+      -- posting to preserve the audit trail.
+      UPDATE accounting_payments ap
+         SET payment_method = NULLIF(BTRIM(NEW.method::text), ''),
+             amount = CASE
+               WHEN ap.status::text NOT IN ('posted', 'voided')
+                AND NOT EXISTS (
+                  SELECT 1 FROM accounting_entries ae
+                  WHERE ae.id = ap.entry_id AND ae.status::text = 'posted'
+                )
+               THEN NEW.amount
+               ELSE ap.amount
+             END,
+             date = CASE
+               WHEN ap.status::text NOT IN ('posted', 'voided')
+                AND NOT EXISTS (
+                  SELECT 1 FROM accounting_entries ae
+                  WHERE ae.id = ap.entry_id AND ae.status::text = 'posted'
+                )
+               THEN COALESCE(NEW.paid_at::date, ap.date)
+               ELSE ap.date
+             END,
+             updated_at = now()
+       WHERE ap.source_type = 'sport_center'
+         AND ap.source_doc_id = NEW.id;
+
+      -- Keep journal metadata aligned. The immutability trigger permits this
+      -- update because payment_method is not a financial column.
+      UPDATE accounting_entries ae
+         SET payment_method = NULLIF(BTRIM(NEW.method::text), ''),
+             date = CASE
+               WHEN ae.status::text <> 'posted'
+               THEN COALESCE(NEW.paid_at::date, ae.date)
+               ELSE ae.date
+             END
+       WHERE ae.id IN (
+         SELECT ap.entry_id
+         FROM accounting_payments ap
+         WHERE ap.source_type = 'sport_center'
+           AND ap.source_doc_id = NEW.id
+           AND ap.entry_id IS NOT NULL
+       );
+
+      IF v_financial_conflict THEN
+        UPDATE public.sport_payments
+           SET posting_status = 'manual_review',
+               posting_error = LEFT(
+                 'Sumber Sport Center berubah setelah accounting posted; gunakan reversal/correction workflow',
+                 1000
+               ),
+               updated_at = now()
+         WHERE id = NEW.id
+           AND (
+             posting_status IS DISTINCT FROM 'manual_review'
+             OR posting_error IS DISTINCT FROM
+               'Sumber Sport Center berubah setelah accounting posted; gunakan reversal/correction workflow'
+           );
+      END IF;
+
+      RETURN NEW;
+    EXCEPTION WHEN OTHERS THEN
+      -- Do not roll back a valid source/mirror update because an optional
+      -- legacy accounting column or trigger is unavailable. The next worker
+      -- run can retry and the source remains visible for repair.
+      RAISE WARNING 'Sport Center accounting projection failed for payment %: %', NEW.id, SQLERRM;
       RETURN NEW;
     END;
     $function$
@@ -577,11 +709,23 @@ export function ensureSportPaymentMirrorTrigger(): Promise<void> {
       EXECUTE 'DROP TRIGGER IF EXISTS trg_mirror_confirmed_payment_to_public
                ON sport_center.sport_payments';
       EXECUTE 'CREATE TRIGGER trg_mirror_confirmed_payment_to_public
-               AFTER INSERT OR UPDATE OF status, amount, payment_method, payment_type, confirmed_at
+               AFTER INSERT OR UPDATE
                ON sport_center.sport_payments
                FOR EACH ROW
-               WHEN (NEW.status::text = ''confirmed'')
                EXECUTE FUNCTION sport_center.mirror_confirmed_payment_to_public()';
+    END;
+    $migration$
+  `);
+  await db.execute(sql`
+    DO $migration$
+    BEGIN
+      EXECUTE 'DROP TRIGGER IF EXISTS trg_sync_sport_payment_to_accounting
+               ON public.sport_payments';
+      EXECUTE 'CREATE TRIGGER trg_sync_sport_payment_to_accounting
+               AFTER INSERT OR UPDATE
+               ON public.sport_payments
+               FOR EACH ROW
+               EXECUTE FUNCTION public.sync_sport_payment_to_accounting()';
     END;
     $migration$
   `);

@@ -364,16 +364,16 @@ async function runGatedStartupStage<T>(
 const PRE_START_SCHEMA_BOOTSTRAP_VERSION = "schema-bootstrap-v1";
 
 async function runCriticalPreStartMigrations() {
-  if (await isStartupMigrationComplete("api_pre_start_schema", PRE_START_SCHEMA_BOOTSTRAP_VERSION)) {
-    logger.info("Pre-start schema bootstrap already provisioned; repeated DDL/backfill skipped");
-    return;
-  }
-
   // Accounting posting emits a non-fatal audit event. Upgrade legacy
   // ledger_events before any authenticated posting can be accepted.
-  logger.info("Pre-start migration: ledger events entry_id starting");
-  await runLedgerEventsEntryIdMigration();
-  logger.info("Pre-start migration: ledger events entry_id complete");
+  // The Sport Center installer is intentionally outside the completion gate:
+  // existing environments may already have the bootstrap marker while still
+  // needing a newly-added trigger/function. Its DDL is idempotent and guarded
+  // by schema readiness, so running it on every startup is safe.
+  const preStartAlreadyComplete = await isStartupMigrationComplete(
+    "api_pre_start_schema",
+    PRE_START_SCHEMA_BOOTSTRAP_VERSION,
+  );
 
   // Install the canonical Sport Center payment resolver before the long
   // startup migration chain. This is the same idempotent runtime installer
@@ -387,6 +387,15 @@ async function runCriticalPreStartMigrations() {
     logger.error({ err }, "Sport Center canonical payment resolver installation failed");
     throw err;
   }
+
+  if (preStartAlreadyComplete) {
+    logger.info("Pre-start schema bootstrap already provisioned; repeated DDL/backfill skipped");
+    return;
+  }
+
+  logger.info("Pre-start migration: ledger events entry_id starting");
+  await runLedgerEventsEntryIdMigration();
+  logger.info("Pre-start migration: ledger events entry_id complete");
 
   // Sprint 8B AP handoff must be available before the API accepts lifecycle
   // writes. Run it first so unrelated legacy DDL cannot delay this scope.
@@ -1902,6 +1911,9 @@ async function startServer() {
     .then(() => runWithRetry("Paylabs payment methods migration", runPaylabsPaymentMethodsMigration))
     .then(() => runWithRetry("Cost Center migration", runCostCenterMigration))
     .then(() => runWithRetry("Sport Center migration", runSportCenterMigration))
+     // Refresh additive Sport Center payment projection DDL even when the
+     // long migration is already marked complete in an existing database.
+     .then(() => runWithRetry("Sport Center payment mirror trigger refresh", ensureSportPaymentMirrorTrigger))
     .then(() => runWithRetry("Sport Center account correction", runSportCenterAccountCorrection))
     .then(() => runWithRetry("Sport Center company invoice migration", runSportCenterCompanyInvoiceMigration))
     .then(() => runWithRetry("Sport Expenses migration", runSportExpensesMigration))
