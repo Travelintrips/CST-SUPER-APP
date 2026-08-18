@@ -84,3 +84,16 @@ broken image request.
 use the configured `public-assets` CDN for valid canonical keys, and route
 invalid values to the existing branding or neutral fallback without changing
 database rows.
+
+Preview frontend and API must use the same `APP_ENV`; do not keep `APP_ENV` as a
+Replit Secret when it is already configured per environment, because a
+production value can make the frontend resolve assets against the production
+bucket while the preview API reads development data.
+
+**Why:** A preview with a production frontend bundle and development API
+returned valid catalog rows but blank images whose objects existed only in the
+development bucket.
+
+**How to apply:** Keep `APP_ENV=development` in the testing configuration and
+`APP_ENV=production` in production configuration, remove the duplicate secret,
+restart both workflows, and verify the browser-requested asset URLs.
