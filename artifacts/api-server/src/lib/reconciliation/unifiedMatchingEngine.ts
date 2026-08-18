@@ -648,6 +648,15 @@ export async function fetchCandidates(
 ): Promise<MatchCandidate[]> {
   const candidates: MatchCandidate[] = [];
   const { amount, transaction_date, company_id } = mutation;
+  // A bank mutation without company scope must never search the shared
+  // candidate pool. Returning no candidates is safer than a cross-company
+  // suggestion; callers should repair/import it with an explicit company.
+  if (company_id == null) {
+    logger.warn(
+      "[unifiedMatchingEngine] matching skipped: bank mutation has no company_id",
+    );
+    return candidates;
+  }
   const mutationBankAccountId = mutation.bank_account_id != null ? Number(mutation.bank_account_id) : null;
   const direction = String(mutation.direction ?? "IN").toUpperCase() === "OUT" ? "OUT" : "IN";
   const mutationLooksPaylabs =
@@ -825,7 +834,7 @@ export async function fetchCandidates(
     `AND ${sportPaymentCanonicalSettlementExclusionSql("sp")}`;
 
   // R5 fix: isolasi per perusahaan — hanya ambil kandidat dari company yang sama
-  const coFilter = company_id ? `AND ##TBL##.company_id = ${Number(company_id)}` : "";
+  const coFilter = `AND ##TBL##.company_id = ${Number(company_id)}`;
   // accounting_payments may use operational types such as transfer or
   // bank_transfer, not only inbound/outbound. Exclude opposite-direction
   // keywords instead of requiring one exact enum value.
@@ -940,7 +949,7 @@ export async function fetchCandidates(
         LEFT JOIN customers c ON c.id = sp.customer_id
         LEFT JOIN sport_bookings sb ON sb.id = sp.booking_id
         WHERE ${sportAmountFilter}
-          ${company_id ? `AND sp.company_id = ${Number(company_id)}` : ""}
+          AND sp.company_id = ${Number(company_id)}
           AND ${mutationLooksQris ? settlementDateExpr : sportCandidateDateExpr} BETWEEN ${dateFrom} AND ${dateTo}
           AND sp.status = 'paid'
           AND ${sportPaymentTypeExpr} = '${sportPaymentTypeForMutation}'

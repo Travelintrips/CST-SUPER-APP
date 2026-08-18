@@ -37,6 +37,10 @@ import { signVendorResponseToken, verifyVendorResponseToken } from "../lib/vendo
 import { postStockOut, StockShortageError } from "../lib/inventoryStock.js";
 import { postSalesInvoice } from "../lib/accounting.js";
 import { getAdminGroupWa } from "../lib/adminWa.js";
+import {
+  PortalCompanyScopeError,
+  resolvePortalCustomerCompanyIdByEmail,
+} from "../lib/services/portalCompanyScope.js";
 
 export const portalProductOrdersRouter = Router();
 
@@ -309,7 +313,7 @@ async function maybeCreateSalesOrder(orderId: number): Promise<{ docNumber: stri
   const taxAmount = Math.max(0, grandTotal - subtotal);
 
   const [doc] = await db.insert(salesDocumentsTable).values({
-    companyId: null,
+    companyId: order.companyId ?? null,
     kind: "order",
     docNumber,
     customerName: order.customerName,
@@ -351,7 +355,7 @@ async function maybeCreateSalesOrder(orderId: number): Promise<{ docNumber: stri
     netAmount: subtotal,
     taxAmount,
     taxAccountId: null,
-    companyId: null,
+    companyId: order.companyId ?? null,
   }).catch((err: unknown) => logger.error({ err }, "postSalesInvoice portal product failed"));
 
   return { docNumber, docId: doc.id };
@@ -636,6 +640,18 @@ portalProductOrdersRouter.post("/orders",
   // Jika customer sedang login (portalEmail ada), gunakan email dari token sebagai canonical email
   // agar order selalu muncul di dashboard customer yang sudah login.
   const resolvedEmail = portalEmail ?? email!.trim();
+  let companyId: number | null = null;
+  try {
+    companyId = await resolvePortalCustomerCompanyIdByEmail(
+      resolvedEmail,
+      { required: Boolean(portalEmail) },
+    );
+  } catch (error) {
+    if (error instanceof PortalCompanyScopeError) {
+      return res.status(error.statusCode).json({ message: error.message });
+    }
+    throw error;
+  }
   const isPickup = shippingMethod === "pickup" || !shippingAddress?.trim();
   if (!Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ message: "Minimal satu produk harus dipilih" });
@@ -706,6 +722,7 @@ portalProductOrdersRouter.post("/orders",
       .insert(portalProductOrdersTable)
       .values({
         orderNumber,
+        companyId,
         customerName: customerName.trim(),
         email: resolvedEmail,
         phone: phone.trim(),
@@ -941,6 +958,11 @@ portalProductOrdersRouter.put("/orders/:id/status", async (req: Request, res: Re
 
   // T002: Confirmed → buat Sales Order
   if (status.trim() === "Confirmed" && existing.status !== "Confirmed") {
+    if (existing.companyId == null) {
+      return res.status(422).json({
+        message: "Order belum memiliki company yang tidak ambigu; tidak dapat dibuat menjadi Sales Order.",
+      });
+    }
     maybeCreateSalesOrder(id).then((soResult) => {
       if (soResult) logger.info({ orderId: id, soNumber: soResult.docNumber }, "SO auto-created for portal product order");
     }).catch((err: unknown) => logger.error({ err }, "maybeCreateSalesOrder failed"));
@@ -1149,6 +1171,11 @@ portalProductOrdersRouter.post("/orders/:id/confirm-payment", async (req: Reques
 
   const [order] = await db.select().from(portalProductOrdersTable).where(eq(portalProductOrdersTable.id, id));
   if (!order) return res.status(404).json({ message: "Order tidak ditemukan" });
+  if (order.companyId == null) {
+    return res.status(422).json({
+      message: "Pembayaran ditolak: order belum memiliki company yang tidak ambigu.",
+    });
+  }
 
   await db.execute(sql`
     UPDATE portal_product_orders

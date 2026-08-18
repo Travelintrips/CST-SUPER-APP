@@ -16,6 +16,7 @@ import {
 } from "@workspace/db";
 import { eq, and, asc, sql } from "drizzle-orm";
 import { getCatalogItemPublic } from "./portalVendorCatalogService.js";
+import { resolvePortalCustomerCompanyId } from "./portalCompanyScope.js";
 import {
   isMarketplaceNewPipelineEnabled,
   createMktRfqEntry,
@@ -181,7 +182,8 @@ export async function submitMarketplaceQuote(params: {
       } catch { /* non-fatal — treat as guest */ }
     }
 
-    // Phase 2B.1: resolve company membership (non-fatal)
+    // Phase 2B.1: resolve company membership. An authenticated customer must
+    // have exactly one active company; never choose one arbitrarily.
     type MembershipCtx = {
       companyId:     number;
       buyerRole:     string;
@@ -191,23 +193,24 @@ export async function submitMarketplaceQuote(params: {
     };
     let membershipCtx: MembershipCtx | null = null;
     if (portalCustomer) {
-      try {
-        const [m] = await db.select({
-          companyId:     portalCompanyMembersTable.companyId,
-          buyerRole:     portalCompanyMembersTable.buyerRole,
-          department:    portalCompanyMembersTable.department,
-          costCenter:    portalCompanyMembersTable.costCenter,
-          approvalLevel: portalCompanyMembersTable.approvalLevel,
-        })
-        .from(portalCompanyMembersTable)
-        .where(and(
-          eq(portalCompanyMembersTable.portalCustomerId, portalCustomer.id),
-          eq(portalCompanyMembersTable.isActive, true),
-        ))
-        .orderBy(asc(portalCompanyMembersTable.createdAt))
-        .limit(1);
-        if (m) membershipCtx = m;
-      } catch { /* non-fatal — company_id stays null */ }
+      const companyId = await resolvePortalCustomerCompanyId(portalCustomer.id, { required: true });
+      const [m] = await db.select({
+        companyId:     portalCompanyMembersTable.companyId,
+        buyerRole:     portalCompanyMembersTable.buyerRole,
+        department:    portalCompanyMembersTable.department,
+        costCenter:    portalCompanyMembersTable.costCenter,
+        approvalLevel: portalCompanyMembersTable.approvalLevel,
+      })
+      .from(portalCompanyMembersTable)
+      .where(and(
+        eq(portalCompanyMembersTable.portalCustomerId, portalCustomer.id),
+        eq(portalCompanyMembersTable.companyId, companyId),
+        eq(portalCompanyMembersTable.isActive, true),
+      ))
+      .orderBy(asc(portalCompanyMembersTable.createdAt))
+      .limit(1);
+      if (!m) throw new Error("Portal company membership disappeared during order creation");
+      membershipCtx = m;
     }
 
     try {
@@ -244,6 +247,7 @@ export async function submitMarketplaceQuote(params: {
       orderNumber,
       customerName:       resolvedName,
       email:              portalEmailFromToken ?? email?.trim() ?? "",
+      companyId:          membershipCtx?.companyId ?? null,
       phone:              resolvedPhone,
       shippingAddress:    shippingAddress?.trim() || "TBD — Quote Request",
       notes:              combinedNotes,

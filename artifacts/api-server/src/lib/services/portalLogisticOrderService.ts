@@ -31,6 +31,7 @@ import { getWaTemplateConfig, renderTemplate } from "../orderNotification.js";
 import { sendMail, isSmtpConfigured } from "../mailer.js";
 import { saveAndBroadcast } from "../notificationStore.js";
 import { transitionLogisticOrderStatus } from "./logisticOrderStatusService.js";
+import { resolvePortalCustomerCompanyId } from "./portalCompanyScope.js";
 
 // ─── Typed Error ───────────────────────────────────────────────────────────────
 
@@ -362,6 +363,7 @@ export async function createSalesOrder(
     .from(portalCustomersTable)
     .where(eq(portalCustomersTable.id, portalCustomerId));
   if (!portalCustomer) throw new LogisticOrderServiceError(401, "Customer not found");
+  const companyId = await resolvePortalCustomerCompanyId(portalCustomer.id, { required: true });
 
   const { items, notes, expectedDate, paymentType } = params;
 
@@ -388,6 +390,7 @@ export async function createSalesOrder(
   const [doc] = await db
     .insert(salesDocumentsTable)
     .values({
+      companyId,
       docNumber,
       kind: "order",
       status: "draft",
