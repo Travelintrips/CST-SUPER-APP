@@ -2024,6 +2024,7 @@ function CoaReferenceDialog({
   const [creatingCoa, setCreatingCoa] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newCoaRole, setNewCoaRole] = useState<"parent" | "child">("child");
+  const [parentSearch, setParentSearch] = useState("");
   const [newCoaForm, setNewCoaForm] = useState({
     code: "",
     name: "",
@@ -2075,6 +2076,7 @@ function CoaReferenceDialog({
     setCreatingCoa(false);
     setCreating(false);
     setNewCoaRole("child");
+    setParentSearch("");
     setNewCoaForm({
       code: "",
       name: "",
@@ -2108,6 +2110,10 @@ function CoaReferenceDialog({
       (account.companyId == null || account.companyId === companyId),
     )
     .sort((a, b) => a.code.localeCompare(b.code));
+  const filteredParentAccounts = parentAccounts.filter(account => {
+    const query = parentSearch.trim().toLowerCase();
+    return !query || `${account.code} ${account.name}`.toLowerCase().includes(query);
+  });
   const canApplyCurrent =
     !!mutation &&
     canApprove(mutation) &&
@@ -2117,6 +2123,7 @@ function CoaReferenceDialog({
   const startCreateCoa = () => {
     setCreatingCoa(true);
     setNewCoaRole("child");
+    setParentSearch("");
     setNewCoaForm(form => ({
       ...form,
       name: search.trim() || "",
@@ -2147,11 +2154,12 @@ function CoaReferenceDialog({
     const code = nextSequentialCoaCode(account);
     setCreatingCoa(true);
     setNewCoaRole("child");
+    setParentSearch("");
     setNewCoaForm({
       code,
       name: account.name,
       type: account.type,
-      parentId: account.parentId ?? null,
+      parentId: account.id,
     });
   };
 
@@ -2376,6 +2384,7 @@ function CoaReferenceDialog({
                       const role = value as "parent" | "child";
                       setNewCoaRole(role);
                       if (role === "parent") {
+                           setParentSearch("");
                         setNewCoaForm(form => ({ ...form, parentId: null }));
                       }
                     }}
@@ -2435,6 +2444,15 @@ function CoaReferenceDialog({
                 {newCoaRole === "child" && (
                   <div className="space-y-1.5">
                     <label className="text-xs font-medium">Parent akun</label>
+                     <div className="relative">
+                       <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                       <Input
+                         className="pl-9"
+                         value={parentSearch}
+                         onChange={event => setParentSearch(event.target.value)}
+                         placeholder="Cari parent berdasarkan kode atau nama..."
+                       />
+                     </div>
                     <Select
                       value={newCoaForm.parentId ? String(newCoaForm.parentId) : "__none"}
                       onValueChange={value => setNewCoaForm(form => ({
@@ -2447,13 +2465,23 @@ function CoaReferenceDialog({
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="__none">Pilih parent akun...</SelectItem>
-                        {parentAccounts.map(account => (
+                         {filteredParentAccounts.map(account => (
                           <SelectItem key={account.id} value={String(account.id)}>
                             {account.code} — {account.name}
                           </SelectItem>
                         ))}
+                         {filteredParentAccounts.length === 0 && (
+                           <SelectItem value="__no_parent_results" disabled>
+                             Parent tidak ditemukan
+                           </SelectItem>
+                         )}
                       </SelectContent>
                     </Select>
+                     {parentSearch.trim() && filteredParentAccounts.length === 0 && (
+                       <p className="text-[11px] text-amber-700">
+                         Tidak ada parent yang cocok dengan pencarian.
+                       </p>
+                     )}
                     {parentAccountsLoading && (
                       <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
                         <Loader2 className="h-3 w-3 animate-spin" /> Memuat parent...
