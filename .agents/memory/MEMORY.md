@@ -101,3 +101,4 @@
 - [Bank recon workflow gate](bank-recon-workflow-gate.md) — queued matching is not completion; QRIS candidate generation must be explicit and blocked while matching is active.
 - [Customer Portal asset fallback](customer-portal-asset-fallback.md) — legacy image paths can return JSON 400; use verified Storage fallbacks and regenerate the source-derived manifest.
 - [QRIS account rule defaults](qris-account-rule-defaults.md) — account-scoped provider rows may omit optional tolerances; merge them with provider defaults before matching.
+- [Supabase missing-object status](supabase-storage-missing-status.md) — public Storage may wrap a semantic 404/NoSuchKey as HTTP 400; verify body plus listing absence.
