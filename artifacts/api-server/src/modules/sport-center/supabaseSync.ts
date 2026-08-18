@@ -887,13 +887,14 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
           raw.source_event_id ?? raw.journal_source_event_id ?? "",
         ).trim() || null;
         const existing = await tx.execute(sql`
-          SELECT ae.id AS entry_id, ae.source_id, ae.source_event_id,
+          SELECT ae.id AS entry_id, ae.company_id, ae.journal_id,
+                 ae.source_id, ae.source_event_id,
                  ap.id AS payment_id
           FROM accounting_entries ae
           LEFT JOIN accounting_payments ap
             ON ap.entry_id = ae.id
            AND ap.source_type = 'sport_center'
-           AND ap.source_doc_id = ${paymentId}
+            AND ap.source_doc_id = ${mirrorPaymentId}
           WHERE ae.company_id = ${companyId}
             AND ae.source = 'sport_center_payment'
             AND (
@@ -911,6 +912,52 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
             throw new Error(
               `CANONICAL_PAYMENT_EVENT_CONFLICT: event=${canonicalEventId} already belongs to payment=${row.source_id}`,
             );
+          }
+          if (row.payment_id == null) {
+            const paymentNumber = `PAY/SC/${dateValue.replaceAll("-", "")}/${String(paymentId).padStart(6, "0")}`;
+            const paymentInsert = await tx.execute(sql`
+              INSERT INTO accounting_payments
+                (company_id, payment_number, payment_type, status, amount, journal_id,
+                 partner_name, date, ref, memo, payment_method, entry_id,
+                 source_type, source_doc_id, created_by_id, created_at, updated_at)
+              VALUES
+                (${companyId}, ${paymentNumber}, 'inbound', 'posted', ${gross},
+                 ${row.journal_id ?? qrisJournalId}, ${raw.customer_name ?? null}, ${dateValue}::date,
+                 ${`SCPAY-SC-${paymentId}`},
+                 ${`Canonical Sport Center payment event ${raw.source_event_id ?? raw.journal_source_event_id ?? paymentId}`},
+                 ${normalizePaymentMethod(String(raw.payment_method ?? "")) ?? "qris"},
+                 ${Number(row.entry_id)}, 'sport_center', ${mirrorPaymentId},
+                 'canonical-sport-center-owner', NOW(), NOW())
+              ON CONFLICT DO NOTHING
+              RETURNING id
+            `);
+            const accountingPaymentId =
+              Number((paymentInsert.rows[0] as Record<string, unknown> | undefined)?.id ?? 0) || null;
+            if (accountingPaymentId == null) {
+              const linked = await tx.execute(sql`
+                SELECT id
+                FROM accounting_payments
+                WHERE company_id = ${companyId}
+                  AND source_type = 'sport_center'
+                  AND source_doc_id = ${mirrorPaymentId}
+                LIMIT 1
+              `);
+              if (linked.rows.length === 0) {
+                throw new Error(
+                  `CANONICAL_ACCOUNTING_PAYMENT_LINK_FAILED: mirror=${mirrorPaymentId} entry=${row.entry_id}`,
+                );
+              }
+              return {
+                entryId: Number(row.entry_id),
+                accountingPaymentId: Number((linked.rows[0] as Record<string, unknown>).id),
+                created: false,
+              };
+            }
+            return {
+              entryId: Number(row.entry_id),
+              accountingPaymentId,
+              created: true,
+            };
           }
           return {
             entryId: Number(row.entry_id),
@@ -971,7 +1018,7 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
              ${`SCPAY-SC-${paymentId}`},
              ${`Canonical Sport Center payment event ${raw.source_event_id ?? raw.journal_source_event_id ?? paymentId}`},
              ${normalizePaymentMethod(String(raw.payment_method ?? "")) ?? "qris"},
-             ${entry.id}, 'sport_center', ${paymentId}, 'canonical-sport-center-owner', NOW(), NOW())
+              ${entry.id}, 'sport_center', ${mirrorPaymentId}, 'canonical-sport-center-owner', NOW(), NOW())
           RETURNING id
         `);
         return {
