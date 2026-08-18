@@ -29,6 +29,10 @@ import {
 import { Link, useLocation } from "wouter";
 import { AIReviewSourcePanel } from "@/components/ai-review";
 import { useCompany } from "@/contexts/CompanyContext";
+import {
+  getAvailableQrisPaymentIds as getAvailableQrisPaymentIdsFromCandidate,
+  getQrisCandidatePresentationState,
+} from "@/lib/qrisCandidatePresentation";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -1989,6 +1993,10 @@ function QrisMutationCard({
   const isIN = m.direction === "IN";
   const isMatched = String(audit.reconciliation_status ?? "").toUpperCase() === "MATCHED";
   const isReview = String(audit.reconciliation_status ?? "").toUpperCase() === "REVIEW";
+  const qrisPresentationState = getQrisCandidatePresentationState(audit);
+  const isDepleted = qrisPresentationState === "depleted";
+  const isEmptyMatchedCandidate = qrisPresentationState === "empty";
+  const isStaleMatchedCandidate = qrisPresentationState === "stale";
   const isCanonicalReconciled = isCanonicalSettlementMutation(m)
     && ["approved", "posted"].includes(String(m.status ?? "").toLowerCase());
   const isApproved = isCanonicalReconciled
@@ -2037,9 +2045,10 @@ function QrisMutationCard({
   const isApprovedItem = (item: QrisPaymentItem) => {
     const paymentId = item.paymentId ?? item.payment_id;
     if (paymentId == null) return false;
-    return currentPaymentIds
-      ? !currentPaymentIds.has(Number(paymentId))
-      : settledPaymentIds.has(Number(paymentId));
+    // A missing live scope is not by itself proof of approval. Only the
+    // settlement evidence returned by the API can justify this green metric;
+    // otherwise a stale/inconsistent candidate would look fully approved.
+    return settledPaymentIds.has(Number(paymentId));
   };
   const approvedItems = allItems.filter(isApprovedItem);
   const approvedGross = approvedItems.reduce(
@@ -2053,11 +2062,19 @@ function QrisMutationCard({
     ? "Sudah Direkonsiliasi"
     : isApproved
       ? "Sudah Disetujui"
-    : isReadOnlyEvidence
-      ? "Bukti Stale — Revisi"
-      : isMatched
-      ? "Cocok"
-      : "Perlu Diperiksa";
+      : isDepleted
+        ? "Sudah Diproses"
+        : isReadOnlyEvidence
+          ? "Bukti Stale — Revisi"
+          : isEmptyMatchedCandidate || isStaleMatchedCandidate
+            ? "Perlu Diperbarui"
+            : isMatched
+              ? "Cocok"
+              : "Perlu Diperiksa";
+  const positiveStatus = isCanonicalReconciled
+    || isApproved
+    || isDepleted
+    || (isMatched && !isEmptyMatchedCandidate && !isStaleMatchedCandidate);
 
   return (
     <Card
@@ -2093,7 +2110,7 @@ function QrisMutationCard({
               </div>
               <Badge
                 variant="outline"
-                className={`shrink-0 text-[10px] ${isMatched ? "border-green-300 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-950 dark:text-green-300" : "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300"}`}
+                 className={`shrink-0 text-[10px] ${positiveStatus ? "border-green-300 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-950 dark:text-green-300" : "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300"}`}
               >
                 {statusText}
               </Badge>
@@ -2235,6 +2252,27 @@ function QrisMutationCard({
                   Tidak perlu menjalankan AI Matching atau approval ulang.
                 </p>
               </div>
+            ) : isDepleted ? (
+              <div className="mt-3 rounded-md border border-green-300 bg-green-50 px-3 py-3 text-xs text-green-900 dark:border-green-800 dark:bg-green-950 dark:text-green-100">
+                <p className="font-semibold">Semua payment pada batch ini sudah diproses.</p>
+                <p className="mt-1 leading-relaxed">
+                  Kandidat MATCHED tidak memiliki payment tersisa. Tidak perlu approval atau matching ulang.
+                </p>
+              </div>
+            ) : isEmptyMatchedCandidate ? (
+              <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-3 text-xs text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
+                <p className="font-semibold">Kandidat MATCHED belum memiliki payment item.</p>
+                <p className="mt-1 leading-relaxed">
+                  Kandidat ini tidak dapat di-approve. Jalankan matching lalu buat kandidat QRIS baru setelah payment canonical tersedia.
+                </p>
+              </div>
+            ) : isStaleMatchedCandidate ? (
+              <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-3 text-xs text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
+                <p className="font-semibold">Kandidat MATCHED sudah stale.</p>
+                <p className="mt-1 leading-relaxed">
+                  Tidak ada payment aktif yang bisa diproses dan bukti settlement tidak lengkap. Regenerasi kandidat; approval tetap dikunci.
+                </p>
+              </div>
             ) : (
               <div className="mt-3 rounded-md border border-dashed px-3 py-4 text-center">
                 <p className="text-sm font-medium">Belum ada kandidat match</p>
@@ -2259,7 +2297,7 @@ function QrisMutationCard({
             )}
 
             <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t pt-3" onClick={e => e.stopPropagation()}>
-              {(!items.length || !isMatched) && !isApproved && (
+              {!isApproved && !isDepleted && !isMatched && (
                 <Button
                   size="sm"
                   variant="outline"
@@ -2268,6 +2306,20 @@ function QrisMutationCard({
                 >
                   <Zap className="h-3.5 w-3.5" />
                   Jalankan AI Matching
+                </Button>
+              )}
+              {!isApproved && !isDepleted && (isEmptyMatchedCandidate || isStaleMatchedCandidate) && onGenerateQrisCandidates && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1.5 border-amber-400 text-xs text-amber-800 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-200"
+                  disabled={qrisGenerationPending}
+                  onClick={onGenerateQrisCandidates}
+                >
+                  {qrisGenerationPending
+                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    : <RotateCcw className="h-3.5 w-3.5" />}
+                  {qrisGenerationPending ? "Memuat kandidat..." : "Buat Kandidat Baru"}
                 </Button>
               )}
               {canReject(m) && (
@@ -2300,6 +2352,10 @@ function QrisMutationCard({
                   <span className="text-[11px] text-amber-700 dark:text-amber-300">
                     {isReadOnlyEvidence
                       ? "Revisi sumber dan buat kandidat baru sebelum approve."
+                      : isDepleted
+                        ? "Semua payment sudah diproses; approval ulang dikunci."
+                        : isEmptyMatchedCandidate || isStaleMatchedCandidate
+                          ? "Kandidat perlu diregenerasi sebelum approve."
                       : `Status ${audit.reconciliation_status || "UNMATCHED"} belum eligible.`}
                   </span>
                   {isReadOnlyEvidence && onGenerateQrisCandidates && (
@@ -3971,15 +4027,8 @@ export default function BankReconciliationPage() {
       String(candidate.status ?? "").toLowerCase(),
     ),
   );
-  const getAvailableQrisPaymentIds = (candidate: QrisCandidateAudit): number[] => {
-    if (Array.isArray(candidate.current_payment_ids)) {
-      return candidate.current_payment_ids.map(Number).filter((id) => Number.isInteger(id) && id > 0);
-    }
-    const settled = new Set((candidate.settled_payment_ids ?? []).map(Number));
-    return (candidate.payment_items ?? [])
-      .map((item) => Number(item.paymentId ?? item.payment_id))
-      .filter((id) => Number.isInteger(id) && id > 0 && !settled.has(id));
-  };
+  const getAvailableQrisPaymentIds = (candidate: QrisCandidateAudit): number[] =>
+    getAvailableQrisPaymentIdsFromCandidate(candidate);
   const isQrisCandidateEligible = (candidate: QrisCandidateAudit): boolean =>
     candidate.id != null
     && String(candidate.reconciliation_status ?? "").toUpperCase() === "MATCHED"
