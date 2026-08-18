@@ -2124,6 +2124,34 @@ function CoaReferenceDialog({
     }));
   };
 
+  const nextSequentialCoaCode = (account: CoaAccountReference): string => {
+    const match = account.code.match(/^(.*?)(\d+)([^0-9]*)$/);
+    if (!match) return "";
+
+    const [, prefix, digits, suffix] = match;
+    const siblingNumbers = accounts
+      .map(candidate => candidate.code.match(/^(.*?)(\d+)([^0-9]*)$/))
+      .filter((candidate): candidate is RegExpMatchArray =>
+        !!candidate && candidate[1] === prefix && candidate[3] === suffix,
+      )
+      .map(candidate => Number(candidate[2]))
+      .filter(Number.isFinite);
+    const nextNumber = Math.max(Number(digits), ...siblingNumbers) + 1;
+    return `${prefix}${String(nextNumber).padStart(digits.length, "0")}${suffix}`;
+  };
+
+  const startCreateCoaFromAccount = (account: CoaAccountReference) => {
+    const code = nextSequentialCoaCode(account);
+    setCreatingCoa(true);
+    setNewCoaRole("child");
+    setNewCoaForm({
+      code,
+      name: account.name,
+      type: account.type,
+      parentId: account.parentId ?? null,
+    });
+  };
+
   const createCoa = async () => {
     if (!companyId) {
       toast({ title: "Perusahaan aktif belum dipilih", variant: "destructive" });
@@ -2462,20 +2490,35 @@ function CoaReferenceDialog({
                     </div>
                   ) : (
                     visibleAccounts.map(account => (
-                      <button
+                      <div
                         key={account.id}
-                        type="button"
-                        className={`flex w-full items-center gap-2 border-b px-3 py-2 text-left last:border-b-0 ${
+                        className={`flex w-full items-center gap-1 border-b last:border-b-0 ${
                           selectedCode === account.code
                             ? "bg-indigo-50 text-indigo-900 dark:bg-indigo-950 dark:text-indigo-100"
                             : "hover:bg-muted/50"
                         }`}
-                        onClick={() => setSelectedCode(account.code)}
                       >
-                        <span className="w-20 shrink-0 font-mono text-xs font-semibold">{account.code}</span>
-                        <span className="min-w-0 flex-1 truncate text-xs">{account.name}</span>
-                        <span className="text-[10px] text-muted-foreground">{account.type}</span>
-                      </button>
+                        <button
+                          type="button"
+                          className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left"
+                          onClick={() => setSelectedCode(account.code)}
+                        >
+                          <span className="w-20 shrink-0 font-mono text-xs font-semibold">{account.code}</span>
+                          <span className="min-w-0 flex-1 truncate text-xs">{account.name}</span>
+                          <span className="text-[10px] text-muted-foreground">{account.type}</span>
+                        </button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="mr-1 h-7 w-7 shrink-0 text-indigo-600 hover:bg-indigo-100 hover:text-indigo-800 dark:hover:bg-indigo-900"
+                          title={`Tambah COA sejajar setelah ${account.code}`}
+                          aria-label={`Tambah COA sejajar setelah ${account.code}`}
+                          onClick={() => startCreateCoaFromAccount(account)}
+                        >
+                          <Plus className="h-4 w-4" />
+                        </Button>
+                      </div>
                     ))
                   )}
                 </div>
