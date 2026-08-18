@@ -29,11 +29,11 @@ QRIS harus menyimpan gross payment, provider/reference, MDR, dan net settlement 
 
 ## Runtime company boundary
 
-Pada runtime Supabase development, `sport_center.sport_bookings` tidak menyimpan `company_id`; company booking harus di-resolve dari `facility_id` melalui tepat satu mapping fasilitas yang aktif dan owner-approved. Sinkronisasi booking publik tidak boleh menghardcode company default.
+Pada runtime Supabase development, `sport_center.sport_bookings` tidak menyimpan `company_id`; untuk domain Sport Center saat ini, payment dan booking secara bisnis default ke `company_id = 1`. Nilai ini adalah keputusan tenant tunggal yang disengaja, bukan bukti otomatis adanya mismatch.
 
-**Why:** Hardcode dapat tampak benar selama semua fasilitas masih berada di perusahaan 1, tetapi akan salah saat fasilitas dipindahkan atau perusahaan kedua ditambahkan.
+**Why:** Sport Center saat ini memang dimiliki satu company. Risiko baru muncul jika domain ini dibuka untuk company lain atau facility mapping mulai lintas company.
 
-**How to apply:** Validasi mapping sebelum membuat atau memperbarui `public.sport_bookings`, lalu cocokkan `public.sport_bookings.company_id` dengan hasil mapping dan payment canonical.
+**How to apply:** Pertahankan default company 1 untuk jalur Sport Center, tetapi perlakukan sebagai aturan eksplisit dan validasi konsistensinya pada mirror, payment, serta jurnal. Jangan mengubah menjadi multi-company resolver tanpa keputusan bisnis baru.
 
 Mirror `posting_status='posted'` belum cukup membuktikan accounting selesai. Harus ada `accounting_payment_id` yang valid, `accounting_payments.company_id` yang sama, dan `entry_id` menuju jurnal ber-company sama.
 
