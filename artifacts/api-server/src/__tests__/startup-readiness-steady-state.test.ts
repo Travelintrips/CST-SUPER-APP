@@ -11,15 +11,31 @@ const bankMasters = readFileSync(resolve(process.cwd(), "src/routes/bankMutation
 const sportMigration = readFileSync(resolve(process.cwd(), "src/modules/sport-center/migration.ts"), "utf8");
 
 describe("startup readiness steady-state contract", () => {
-  it("persists bootstrap completion and skips the pre-start DDL/backfill pass", () => {
-    const guard = apiIndex.indexOf(
-      'isStartupMigrationComplete("api_pre_start_schema", PRE_START_SCHEMA_BOOTSTRAP_VERSION)',
+  it("installs additive Sport Center repair DDL before skipping the legacy pre-start pass", () => {
+    const preStartBlockStart = apiIndex.indexOf(
+      "async function runCriticalPreStartMigrations()",
     );
-    const marker = apiIndex.indexOf(
+    const preStartBlockEnd = apiIndex.indexOf(
+      "// Flag set to true once the full migration + seed chain completes.",
+    );
+    const preStartBlock = apiIndex.slice(preStartBlockStart, preStartBlockEnd);
+    const mirrorInstaller = preStartBlock.indexOf(
+      "await ensureSportPaymentMirrorTrigger();",
+    );
+    const guard = preStartBlock.indexOf(
+      'isStartupMigrationComplete(\n    "api_pre_start_schema",\n    PRE_START_SCHEMA_BOOTSTRAP_VERSION,\n  )',
+    );
+    const earlyReturn = preStartBlock.indexOf(
+      "if (preStartAlreadyComplete)",
+    );
+    const marker = preStartBlock.indexOf(
       'markStartupMigrationComplete(\n    "api_pre_start_schema"',
     );
 
+    expect(mirrorInstaller).toBeGreaterThan(-1);
     expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(mirrorInstaller);
+    expect(mirrorInstaller).toBeLessThan(earlyReturn);
     expect(marker).toBeGreaterThan(guard);
     expect(apiIndex).toContain("repeated DDL/backfill skipped");
     expect(apiIndex).toContain("Critical API pre-start schema bootstrap and legacy compatibility columns");
@@ -60,13 +76,14 @@ describe("startup readiness steady-state contract", () => {
     expect(startupState).toContain("process crash");
   });
 
-  it("has an explicit 116-stage registry with stable names and metadata", () => {
+  it("has an explicit 117-stage registry with stable names and metadata", () => {
     const rows = startupRegistry.match(/^  \["/gm) ?? [];
-    expect(rows).toHaveLength(116);
+    expect(rows).toHaveLength(117);
     expect(startupRegistry).toContain(": 1");
     expect(startupRegistry).toContain("critical: true");
     expect(startupRegistry).toContain('"schema"');
     expect(startupRegistry).toContain('"customer_invoice_company_scope"');
+    expect(startupRegistry).toContain('"sport_center_payment_mirror_refresh"');
     expect(startupRegistry).toContain("getStartupStageDefinition");
   });
 
