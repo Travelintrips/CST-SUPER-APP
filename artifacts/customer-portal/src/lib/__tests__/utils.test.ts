@@ -7,8 +7,8 @@ const CANONICAL_ROOT =
 describe("resolveImageUrl", () => {
   it.each([
     ["/images/foo.webp", "foo.webp"],
-    ["/images/foo.png", "foo.webp"],
-    ["/portal/images/nested/foo.jpg", "nested/foo.webp"],
+    ["/images/foo.png", "foo.png"],
+    ["/portal/images/nested/foo.jpg", "nested/foo.jpg"],
     ["/portal/images/foo.webp", "foo.webp"],
     ["/api/storage/public-objects/portal/images/foo.webp", "foo.webp"],
     ["/api/storage/public-objects/images/foo.webp", "foo.webp"],
@@ -26,6 +26,17 @@ describe("resolveImageUrl", () => {
     expect(resolveImageUrl(canonical)).toBe(canonical);
   });
 
+  it("keeps an absolute Supabase public CDN URL unchanged", () => {
+    const canonical =
+      "https://example.supabase.co/storage/v1/object/public/public-assets/portal-assets/static/customer-portal/images/logo-baru.png";
+    expect(resolveImageUrl(canonical)).toBe(canonical);
+  });
+
+  it("resolves an API public-object path through the canonical mechanism", () => {
+    expect(resolveImageUrl("/api/storage/public-objects/portal-assets/static/customer-portal/images/logo-baru.png"))
+      .toBe(`${CANONICAL_ROOT}logo-baru.png`);
+  });
+
   it("rejects a legacy bare object UUID before the browser requests it", () => {
     expect(
       resolveImageUrl(
@@ -38,6 +49,12 @@ describe("resolveImageUrl", () => {
     const legacy =
       "/api/storage/public-objects/portal-assets/de648c66-00ae-46c4-8bc2-fbd7a7368b3c";
     expect(resolveImageUrl(legacy, { allowLegacyObjectId: true })).toBe(legacy);
+  });
+
+  it("does not globally bypass UUID rejection", () => {
+    const legacy =
+      "/api/storage/public-objects/portal-assets/de648c66-00ae-46c4-8bc2-fbd7a7368b3c";
+    expect(resolveImageUrl(legacy)).toBeNull();
   });
 
   it("keeps a newly uploaded UUID asset with an extension", () => {
@@ -57,4 +74,8 @@ describe("resolveImageUrl", () => {
       expect(resolveImageUrl(input)).toBeNull();
     },
   );
+
+  it("does not corrupt a PNG branding asset into WebP", () => {
+    expect(resolveImageUrl("/images/logo-baru.png")).not.toContain(".webp");
+  });
 });

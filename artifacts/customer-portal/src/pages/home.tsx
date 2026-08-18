@@ -200,6 +200,7 @@ export default function Home() {
           alt={t("home.altCargoShip", "Cargo ship at sea")}
           className="absolute inset-0 w-full h-full object-cover z-0"
           priority
+          allowLegacyObjectId
         />
 
         {/* Multi-layer gradient overlay */}

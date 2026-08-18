@@ -345,7 +345,7 @@ router.get("/storage/public-objects/{*filePath}", async (req: Request, res: Resp
         ? filePath.slice("images/".length)
         : null;
     if (legacyImagePath !== null) {
-      const canonical = `portal-assets/static/customer-portal/images/${legacyImagePath.replace(/\.(png|jpe?g)$/i, ".webp")}`;
+      const canonical = `portal-assets/static/customer-portal/images/${legacyImagePath}`;
       const encoded = canonical.split("/").map(encodeURIComponent).join("/");
       return res.redirect(308, `${req.baseUrl}/storage/public-objects/${encoded}`);
     }

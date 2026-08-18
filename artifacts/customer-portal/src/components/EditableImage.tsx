@@ -10,6 +10,8 @@ interface EditableImageProps {
   defaultSrc: string;
   alt: string;
   className?: string;
+  /** Only enable this for a specifically verified legacy CMS object. */
+  allowLegacyObjectId?: boolean;
   /** Above-the-fold images (e.g. hero background): load eagerly at high
    * priority instead of the browser's default lazy/auto behavior, so the
    * final image appears immediately on first paint instead of after a
@@ -17,7 +19,14 @@ interface EditableImageProps {
   priority?: boolean;
 }
 
-export function EditableImage({ contentKey, defaultSrc, alt, className = "", priority = false }: EditableImageProps) {
+export function EditableImage({
+  contentKey,
+  defaultSrc,
+  alt,
+  className = "",
+  priority = false,
+  allowLegacyObjectId = false,
+}: EditableImageProps) {
   const { editMode, content, updateField, uploadImage } = useEditMode();
   const { t } = useLanguage();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -36,7 +45,7 @@ export function EditableImage({ contentKey, defaultSrc, alt, className = "", pri
   // default, not back to the original URL (which would create a broken
   // browser image request).
   const resolvedCandidate = src.startsWith("/")
-    ? resolveImageUrl(src, { allowLegacyObjectId: true })
+    ? resolveImageUrl(src, { allowLegacyObjectId })
     : src;
   const resolved = resolvedCandidate ?? defaultSrc;
   const handleError = () => {

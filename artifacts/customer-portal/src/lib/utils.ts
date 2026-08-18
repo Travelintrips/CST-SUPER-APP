@@ -28,6 +28,14 @@ const SUPABASE_PUBLIC_ASSET_ROOT = SUPABASE_ORIGIN
   : null;
 const LEGACY_OBJECT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+export interface ResolveImageUrlOptions {
+  /**
+   * Narrow compatibility escape hatch for a CMS record whose extensionless
+   * UUID has been verified to point at a real public image object.
+   */
+  allowLegacyObjectId?: boolean;
+}
+
 /**
  * Resolve a stored image URL to a displayable URL.
  *
@@ -41,7 +49,10 @@ const LEGACY_OBJECT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-
  * `null` is intentional for an invalid/missing asset. Callers should render
  * their existing fallback rather than reusing the original invalid value.
  */
-export function resolveImageUrl(url: string | null | undefined): string | null {
+ export function resolveImageUrl(
+   url: string | null | undefined,
+   options: ResolveImageUrlOptions = {},
+ ): string | null {
   if (!url) return null;
   const trimmed = url.trim();
   if (!trimmed) return null;
@@ -61,7 +72,9 @@ export function resolveImageUrl(url: string | null | undefined): string | null {
   // the broken URL.
   if (trimmed.startsWith(CANONICAL_PORTAL_ASSET_ROOT)) {
     const objectKey = trimmed.slice(CANONICAL_PORTAL_ASSET_ROOT.length);
-    if (LEGACY_OBJECT_ID.test(objectKey)) return null;
+    if (LEGACY_OBJECT_ID.test(objectKey)) {
+      return options.allowLegacyObjectId ? trimmed : null;
+    }
     return SUPABASE_PUBLIC_ASSET_ROOT
       ? `${SUPABASE_PUBLIC_ASSET_ROOT}portal-assets/${objectKey}`
       : trimmed;
@@ -80,10 +93,10 @@ export function resolveImageUrl(url: string | null | undefined): string | null {
     if (trimmed.startsWith(prefix)) {
       const relative = trimmed.slice(prefix.length);
       if (!relative || relative.split("/").some((part) => part === "." || part === ".." || part.includes("\\"))) return null;
-      const canonicalKey = `portal-assets/static/customer-portal/images/${relative.replace(/\.(png|jpe?g)$/i, ".webp")}`;
+      const canonicalKey = `portal-assets/static/customer-portal/images/${relative}`;
       return SUPABASE_PUBLIC_ASSET_ROOT
         ? `${SUPABASE_PUBLIC_ASSET_ROOT}${canonicalKey}`
-        : `${CANONICAL_CUSTOMER_IMAGE_ROOT}${relative.replace(/\.(png|jpe?g)$/i, ".webp")}`;
+        : `${CANONICAL_CUSTOMER_IMAGE_ROOT}${relative}`;
     }
   }
   return trimmed;
