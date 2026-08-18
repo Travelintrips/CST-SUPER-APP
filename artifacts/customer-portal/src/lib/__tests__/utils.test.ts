@@ -29,6 +29,12 @@ describe("resolveImageUrl", () => {
     ).toBeNull();
   });
 
+  it("keeps a newly uploaded UUID asset with an extension", () => {
+    const uploaded =
+      "/api/storage/public-objects/portal-assets/7e07e12c-173a-45fe-a701-309013b788ef.webp";
+    expect(resolveImageUrl(uploaded)).toBe(uploaded);
+  });
+
   it("keeps valid external URLs unchanged", () => {
     const external = "https://external-valid.example/image.webp";
     expect(resolveImageUrl(external)).toBe(external);

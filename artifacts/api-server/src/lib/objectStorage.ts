@@ -85,6 +85,7 @@ function extFromMime(mime: string): string {
     "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png",
     "image/webp": "webp", "image/gif": "gif", "image/heic": "heic",
     "image/heif": "heic", "image/tiff": "tiff", "image/bmp": "bmp",
+    "image/svg+xml": "svg",
     "application/pdf": "pdf",
     "application/msword": "doc",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
@@ -339,9 +340,16 @@ export class ObjectStorageService {
     options: { skipImageCompression?: boolean } = {},
   ): Promise<string> {
     const prepared = await this.prepareUpload(buffer, contentType, options.skipImageCompression);
-    const path = `portal-assets/${objectKey}`;
+    // Public image URLs are passed through the frontend asset resolver. A bare
+    // UUID under portal-assets is reserved for legacy/stale CMS references, so
+    // newly uploaded assets must carry an extension that matches the stored
+    // content type (including the webp result of image compression).
+    const normalizedObjectKey = /(?:^|\/)[^/]+\.[^/]+$/.test(objectKey)
+      ? objectKey
+      : `${objectKey}.${extFromMime(prepared.contentType)}`;
+    const path = `portal-assets/${normalizedObjectKey}`;
     await supabaseUpload(PUBLIC_BUCKET, path, prepared.buffer, prepared.contentType);
-    return `/api/storage/public-objects/portal-assets/${objectKey}`;
+    return `/api/storage/public-objects/portal-assets/${normalizedObjectKey}`;
   }
 
   // ── uploadPublicRaw: public bucket, arbitrary subPath ────────────────────────
