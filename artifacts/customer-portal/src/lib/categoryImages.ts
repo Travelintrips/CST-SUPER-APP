@@ -121,8 +121,9 @@ const SERVICE_IMAGES: Array<{ keywords: string[]; url: string }> = [
   },
 ];
 
-// Default service image — upload to Supabase Storage portal bucket at this path
-const DEFAULT_SERVICE = LOCAL("services/default-service.jpg");
+// Reuse a verified service object instead of a legacy default path that may not
+// exist in every environment. This is a display fallback, not CMS data.
+const DEFAULT_SERVICE = SVCIMG("ocean-freight.png");
 
 // ── Product images (order: most-specific first) ──────────────────────────────
 // All IDs below are verified HTTP 200 as of 2026-05.

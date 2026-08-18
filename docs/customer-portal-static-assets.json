@@ -31,102 +31,6 @@
       ]
     },
     {
-      "storagePath": "portal-assets/static/customer-portal/images/categories/bird-nest.webp",
-      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/categories/bird-nest.webp",
-      "contentType": "image/webp",
-      "sourceFiles": [
-        "src/pages/marketplace.tsx"
-      ]
-    },
-    {
-      "storagePath": "portal-assets/static/customer-portal/images/categories/chemical.webp",
-      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/categories/chemical.webp",
-      "contentType": "image/webp",
-      "sourceFiles": [
-        "src/pages/marketplace.tsx"
-      ]
-    },
-    {
-      "storagePath": "portal-assets/static/customer-portal/images/categories/coffee.webp",
-      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/categories/coffee.webp",
-      "contentType": "image/webp",
-      "sourceFiles": [
-        "src/pages/marketplace.tsx"
-      ]
-    },
-    {
-      "storagePath": "portal-assets/static/customer-portal/images/categories/copper.webp",
-      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/categories/copper.webp",
-      "contentType": "image/webp",
-      "sourceFiles": [
-        "src/pages/marketplace.tsx"
-      ]
-    },
-    {
-      "storagePath": "portal-assets/static/customer-portal/images/categories/frozen-food.webp",
-      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/categories/frozen-food.webp",
-      "contentType": "image/webp",
-      "sourceFiles": [
-        "src/pages/marketplace.tsx"
-      ]
-    },
-    {
-      "storagePath": "portal-assets/static/customer-portal/images/categories/furniture.webp",
-      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/categories/furniture.webp",
-      "contentType": "image/webp",
-      "sourceFiles": [
-        "src/pages/marketplace.tsx"
-      ]
-    },
-    {
-      "storagePath": "portal-assets/static/customer-portal/images/categories/iron-steel.webp",
-      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/categories/iron-steel.webp",
-      "contentType": "image/webp",
-      "sourceFiles": [
-        "src/pages/marketplace.tsx"
-      ]
-    },
-    {
-      "storagePath": "portal-assets/static/customer-portal/images/categories/live-fish.webp",
-      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/categories/live-fish.webp",
-      "contentType": "image/webp",
-      "sourceFiles": [
-        "src/pages/marketplace.tsx"
-      ]
-    },
-    {
-      "storagePath": "portal-assets/static/customer-portal/images/categories/rubber.webp",
-      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/categories/rubber.webp",
-      "contentType": "image/webp",
-      "sourceFiles": [
-        "src/pages/marketplace.tsx"
-      ]
-    },
-    {
-      "storagePath": "portal-assets/static/customer-portal/images/categories/seafood.webp",
-      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/categories/seafood.webp",
-      "contentType": "image/webp",
-      "sourceFiles": [
-        "src/pages/marketplace.tsx"
-      ]
-    },
-    {
-      "storagePath": "portal-assets/static/customer-portal/images/categories/sugar.webp",
-      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/categories/sugar.webp",
-      "contentType": "image/webp",
-      "sourceFiles": [
-        "src/pages/marketplace.tsx"
-      ]
-    },
-    {
-      "storagePath": "portal-assets/static/customer-portal/images/categories/textile.webp",
-      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/categories/textile.webp",
-      "contentType": "image/webp",
-      "sourceFiles": [
-        "src/pages/marketplace.tsx"
-      ]
-    },
-    {
       "storagePath": "portal-assets/static/customer-portal/images/customs-document.webp",
       "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/customs-document.webp",
       "contentType": "image/webp",
@@ -149,7 +53,7 @@
       "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/gambar-baru.webp",
       "contentType": "image/webp",
       "sourceFiles": [
-        "src/pages/marketplace.tsx"
+        "src/lib/staticAssets.ts"
       ]
     },
     {
@@ -179,6 +83,14 @@
         "public/sw.js",
         "src/lib/staticAssets.ts",
         "src/pages/jasa-detail.tsx"
+      ]
+    },
+    {
+      "storagePath": "portal-assets/static/customer-portal/images/logo-baru.webp",
+      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo-baru.webp",
+      "contentType": "image/webp",
+      "sourceFiles": [
+        "index.html"
       ]
     },
     {
@@ -216,8 +128,7 @@
       "sourceFiles": [
         "src/lib/jasa-shared.ts",
         "src/lib/staticAssets.ts",
-        "src/pages/jasa-kategori.tsx",
-        "src/pages/marketplace.tsx"
+        "src/pages/jasa-kategori.tsx"
       ]
     },
     {
@@ -250,7 +161,8 @@
       "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/green-bean-arabica.webp",
       "contentType": "image/webp",
       "sourceFiles": [
-        "src/lib/categoryImages.ts"
+        "src/lib/categoryImages.ts",
+        "src/pages/marketplace.tsx"
       ]
     },
     {
@@ -258,7 +170,8 @@
       "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/products/kursi-kantor-ergonomis.webp",
       "contentType": "image/webp",
       "sourceFiles": [
-        "src/lib/categoryImages.ts"
+        "src/lib/categoryImages.ts",
+        "src/pages/marketplace.tsx"
       ]
     },
     {
@@ -345,14 +258,6 @@
       "sourceFiles": [
         "src/lib/categoryImages.ts",
         "src/pages/jasa-detail.tsx"
-      ]
-    },
-    {
-      "storagePath": "portal-assets/static/customer-portal/images/services/default-service.webp",
-      "publicPath": "/api/storage/public-objects/portal-assets/static/customer-portal/images/services/default-service.webp",
-      "contentType": "image/webp",
-      "sourceFiles": [
-        "src/lib/categoryImages.ts"
       ]
     },
     {

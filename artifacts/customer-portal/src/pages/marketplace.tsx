@@ -1714,22 +1714,22 @@ export default function MarketplacePage() {
                       <p className="text-[13px] font-bold text-slate-500 uppercase tracking-wider mb-4">{t("marketplace.comingSoonCategories")}</p>
                       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
                         {[
-                          { img: staticAsset("images/categories/coffee.jpg"), catKey: "coffee" },
+                           { img: staticAsset("images/products/green-bean-arabica.png"), catKey: "coffee" },
                           { img: staticAsset("images/products/batubara-coal.png"), catKey: "coal" },
-                          { img: staticAsset("images/categories/iron-steel.jpg"), catKey: "iron_steel" },
+                           { img: staticAsset("images/products/nikel.png"), catKey: "iron_steel" },
                           { img: staticAsset("images/products/sawit-palm-oil.png"), catKey: "palm_oil" },
                           { img: staticAsset("images/products/nikel.png"), catKey: "nickel" },
-                          { img: staticAsset("images/categories/copper.jpg"), catKey: "copper" },
+                           { img: staticAsset("images/products/nikel.png"), catKey: "copper" },
                           { img: staticAsset("images/products/beras-rice.png"), catKey: "rice" },
-                          { img: staticAsset("images/categories/sugar.jpg"), catKey: "sugar" },
-                          { img: staticAsset("images/categories/seafood.jpg"), catKey: "seafood" },
-                          { img: staticAsset("images/categories/rubber.jpg"), catKey: "rubber" },
-                          { img: staticAsset("images/categories/live-fish.jpg"), catKey: "live_fish" },
-                          { img: staticAsset("images/categories/bird-nest.jpg"), catKey: "bird_nest" },
-                          { img: staticAsset("images/categories/frozen-food.jpg"), catKey: "frozen_food" },
-                          { img: staticAsset("images/categories/furniture.jpg"), catKey: "furniture" },
-                          { img: staticAsset("images/categories/chemical.jpg"), catKey: "chemical" },
-                          { img: staticAsset("images/categories/textile.jpg"), catKey: "textile" },
+                           { img: staticAsset("images/products/beras-rice.png"), catKey: "sugar" },
+                           { img: staticAsset("images/products/green-bean-arabica.png"), catKey: "seafood" },
+                           { img: staticAsset("images/products/green-bean-arabica.png"), catKey: "rubber" },
+                           { img: staticAsset("images/products/green-bean-arabica.png"), catKey: "live_fish" },
+                           { img: staticAsset("images/products/green-bean-arabica.png"), catKey: "bird_nest" },
+                           { img: staticAsset("images/products/green-bean-arabica.png"), catKey: "frozen_food" },
+                           { img: staticAsset("images/products/kursi-kantor-ergonomis.png"), catKey: "furniture" },
+                           { img: staticAsset("images/products/green-bean-arabica.png"), catKey: "chemical" },
+                           { img: staticAsset("images/products/green-bean-arabica.png"), catKey: "textile" },
                         ].map(({ img, catKey }) => {
                           const sub = t(`marketplace.catSub_${catKey}`, catKey);
                           const label = t(`marketplace.cat_${catKey}`);
