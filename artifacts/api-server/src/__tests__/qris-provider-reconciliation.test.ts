@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { addBusinessDays, jakartaDateFromTimestamp } from "../lib/reconciliation/businessCalendar.js";
 import {
   normalizeQrisProvider,
+  providerRulesByBankAccountFromRows,
   resolveQrisProviderFromEvidence,
 } from "../lib/reconciliation/providerSettlementRules.js";
 import { calculateObservedDeduction, classifyBankMutationSource } from "../lib/reconciliation/qrisSettlement.js";
@@ -269,6 +270,27 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     expect(result[0]?.settlementRuleVersion).toBe("PROD-MANDIRI-SC-20260810-v1");
     expect(result[0]?.effectiveDeductionRate).toBeCloseTo(0.05, 6);
     expect(result[0]?.status).toBe("REVIEW");
+  });
+
+  it("inherits provider defaults when an account rule omits optional tolerances", () => {
+    const rules = providerRulesByBankAccountFromRows([
+      {
+        bank_account_id: 17,
+        provider_code: "paylabs",
+        rule_version: "ACCOUNT-RULE-v1",
+        settlement_delay_business_days: 1,
+        match_window_business_days: 1,
+        max_effective_deduction_rate: 0.01,
+      },
+    ]);
+
+    expect(rules["17"]?.paylabs).toMatchObject({
+      providerCode: "paylabs",
+      bankAccountId: 17,
+      ruleVersion: "ACCOUNT-RULE-v1",
+      absoluteVarianceTolerance: 10_000,
+      percentageVarianceTolerance: 2,
+    });
   });
 
   it("calculates gross 10m versus bank credit 9.93m as 70k deduction", () => {

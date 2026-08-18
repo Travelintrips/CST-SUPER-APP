@@ -222,27 +222,28 @@ export function providerRulesByBankAccountFromRows(
     // defaults are resolved by the caller after account-specific rules have
     // had a chance to select a compatible payment-side provider.
     const accountRules = result[String(accountId)] ?? {};
+    const baseRule = accountRules[provider] ?? DEFAULT_QRIS_PROVIDER_RULES[provider];
     accountRules[provider] = {
-      ...accountRules[provider],
+      ...baseRule,
       providerCode: provider,
       bankAccountId: Number(accountId),
       ruleVersion: row.ruleVersion ?? row.rule_version ?? "legacy-v1",
       settlementDelayBusinessDays: Number(row.settlementDelayBusinessDays
         ?? row.settlement_delay_business_days
-        ?? accountRules[provider].settlementDelayBusinessDays),
+        ?? baseRule.settlementDelayBusinessDays),
       matchWindowBusinessDays: Number(row.matchWindowBusinessDays
         ?? row.match_window_business_days
-        ?? accountRules[provider].matchWindowBusinessDays),
+        ?? baseRule.matchWindowBusinessDays),
       maxEffectiveDeductionRate: Number(row.maxEffectiveDeductionRate
         ?? row.max_effective_deduction_rate
-        ?? accountRules[provider].maxEffectiveDeductionRate),
+        ?? baseRule.maxEffectiveDeductionRate),
       absoluteVarianceTolerance: Number(row.absoluteVarianceTolerance
         ?? row.absolute_variance_tolerance
-        ?? accountRules[provider].absoluteVarianceTolerance
+        ?? baseRule.absoluteVarianceTolerance
         ?? 0),
       percentageVarianceTolerance: Number(row.percentageVarianceTolerance
         ?? row.percentage_variance_tolerance
-        ?? accountRules[provider].percentageVarianceTolerance
+        ?? baseRule.percentageVarianceTolerance
         ?? 0),
     };
     result[String(accountId)] = accountRules;
