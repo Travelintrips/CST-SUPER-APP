@@ -579,6 +579,7 @@ interface CoaAccountReference {
   name: string;
   type: string;
   isActive: boolean;
+  parentId?: number | null;
   normalBalance?: "DEBIT" | "CREDIT" | string;
   companyId?: number | null;
 }
@@ -2020,13 +2021,22 @@ function CoaReferenceDialog({
   const [selectedCode, setSelectedCode] = useState("");
   const [conditionValue, setConditionValue] = useState("");
   const [saving, setSaving] = useState<"rule" | "current" | null>(null);
+  const [creatingCoa, setCreatingCoa] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [newCoaRole, setNewCoaRole] = useState<"parent" | "child">("child");
+  const [newCoaForm, setNewCoaForm] = useState({
+    code: "",
+    name: "",
+    type: "asset",
+    parentId: null as number | null,
+  });
 
   const companyId = mutation?.company_id ?? activeCompanyId;
   // The bank account is the opposite side of the selected COA:
   // IN = bank debit, so the contra account is credit;
   // OUT = bank credit, so the contra account is debit.
   const contraNormalBalance = mutation?.direction === "IN" ? "CREDIT" : "DEBIT";
-  const { data: accountData, isLoading: accountsLoading } = useQuery({
+  const { data: accountData, isLoading: accountsLoading, refetch: refetchAccounts } = useQuery({
     queryKey: ["coa-reference-accounts", companyId, contraNormalBalance],
     queryFn: async () => {
       const params = new URLSearchParams({
@@ -2040,6 +2050,21 @@ function CoaReferenceDialog({
     enabled: open && companyId != null,
     staleTime: 60_000,
   });
+  const {
+    data: parentAccountData,
+    isLoading: parentAccountsLoading,
+    refetch: refetchParentAccounts,
+  } = useQuery({
+    queryKey: ["coa-reference-parent-accounts", companyId],
+    queryFn: async () => {
+      const params = new URLSearchParams({ companyId: String(companyId) });
+      const response = await fetch(`/api/accounting/accounts?${params.toString()}`, { credentials: "include" });
+      if (!response.ok) throw new Error("Daftar parent COA tidak dapat dimuat");
+      return response.json() as Promise<CoaAccountReference[]>;
+    },
+    enabled: creatingCoa && companyId != null,
+    staleTime: 60_000,
+  });
 
   useEffect(() => {
     if (!open || !mutation) return;
@@ -2047,6 +2072,15 @@ function CoaReferenceDialog({
     setSelectedCode("");
     setConditionValue(mutation.normalized_description || mutation.description || "");
     setSaving(null);
+    setCreatingCoa(false);
+    setCreating(false);
+    setNewCoaRole("child");
+    setNewCoaForm({
+      code: "",
+      name: "",
+      type: mutation.direction === "IN" ? "liability" : "asset",
+      parentId: null,
+    });
   }, [open, mutation]);
 
   const accounts = (accountData ?? [])
@@ -2057,11 +2091,99 @@ function CoaReferenceDialog({
     return !query || `${account.code} ${account.name} ${account.type}`.toLowerCase().includes(query);
   });
   const selectedAccount = accounts.find(account => account.code === selectedCode) ?? null;
+  const allowedNewCoaTypes = contraNormalBalance === "CREDIT"
+    ? [
+        { value: "liability", label: "Liabilitas" },
+        { value: "equity", label: "Ekuitas" },
+        { value: "revenue", label: "Pendapatan" },
+      ]
+    : [
+        { value: "asset", label: "Aset" },
+        { value: "expense", label: "Beban" },
+      ];
+  const parentAccounts = (parentAccountData ?? [])
+    .filter(account =>
+      account.isActive !== false &&
+      account.type === newCoaForm.type &&
+      (account.companyId == null || account.companyId === companyId),
+    )
+    .sort((a, b) => a.code.localeCompare(b.code));
   const canApplyCurrent =
     !!mutation &&
     canApprove(mutation) &&
     !isQrisMutation(mutation) &&
     visibleCandidates(mutation).length === 0;
+
+  const startCreateCoa = () => {
+    setCreatingCoa(true);
+    setNewCoaRole("child");
+    setNewCoaForm(form => ({
+      ...form,
+      name: search.trim() || "",
+      parentId: null,
+    }));
+  };
+
+  const createCoa = async () => {
+    if (!companyId) {
+      toast({ title: "Perusahaan aktif belum dipilih", variant: "destructive" });
+      return;
+    }
+    const code = newCoaForm.code.trim();
+    const name = newCoaForm.name.trim();
+    if (!code || !name) {
+      toast({ title: "Kode dan nama COA wajib diisi", variant: "destructive" });
+      return;
+    }
+    if (newCoaRole === "child" && !newCoaForm.parentId) {
+      toast({ title: "Pilih parent untuk COA child", variant: "destructive" });
+      return;
+    }
+
+    setCreating(true);
+    try {
+      const response = await fetch("/api/accounting/accounts", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          companyId,
+          code,
+          name,
+          type: newCoaForm.type,
+          parentId: newCoaRole === "child" ? newCoaForm.parentId : null,
+          isActive: true,
+          accountCategory: newCoaForm.type.toUpperCase(),
+          normalBalance: contraNormalBalance,
+          isHeader: newCoaRole === "parent",
+          isPostable: newCoaRole !== "parent",
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(body.message ?? body.error ?? "Gagal membuat COA baru");
+      }
+
+      const created = body as CoaAccountReference;
+      await refetchAccounts();
+      await refetchParentAccounts();
+      setSelectedCode(created.code ?? code);
+      setSearch("");
+      setCreatingCoa(false);
+      toast({
+        title: "COA baru berhasil dibuat",
+        description: `${created.code ?? code} — ${created.name ?? name} siap dipakai sebagai referensi.`,
+      });
+    } catch (error) {
+      toast({
+        title: "Gagal membuat COA baru",
+        description: error instanceof Error ? error.message : String(error),
+        variant: "destructive",
+      });
+    } finally {
+      setCreating(false);
+    }
+  };
 
   const save = async (applyCurrent: boolean) => {
     if (!mutation) return;
@@ -2201,32 +2323,173 @@ function CoaReferenceDialog({
               Hanya akun dengan saldo normal {contraNormalBalance === "CREDIT" ? "kredit" : "debit"} yang ditampilkan
               sebagai lawan jurnal bank.
             </p>
-            <div className="max-h-52 overflow-y-auto rounded-md border">
-              {accountsLoading ? (
-                <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Memuat daftar COA...
+            {creatingCoa ? (
+              <div className="space-y-3 rounded-md border border-indigo-200 bg-indigo-50/40 p-3 dark:bg-indigo-950/20">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold">Buat COA baru</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      COA akan langsung ditambahkan ke perusahaan aktif.
+                    </p>
+                  </div>
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setCreatingCoa(false)}>
+                    Kembali
+                  </Button>
                 </div>
-              ) : visibleAccounts.length === 0 ? (
-                <p className="p-3 text-xs text-muted-foreground">Akun COA tidak ditemukan.</p>
-              ) : (
-                visibleAccounts.map(account => (
-                  <button
-                    key={account.id}
-                    type="button"
-                    className={`flex w-full items-center gap-2 border-b px-3 py-2 text-left last:border-b-0 ${
-                      selectedCode === account.code
-                        ? "bg-indigo-50 text-indigo-900 dark:bg-indigo-950 dark:text-indigo-100"
-                        : "hover:bg-muted/50"
-                    }`}
-                    onClick={() => setSelectedCode(account.code)}
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium">Jenis akun</label>
+                  <Select
+                    value={newCoaRole}
+                    onValueChange={value => {
+                      const role = value as "parent" | "child";
+                      setNewCoaRole(role);
+                      if (role === "parent") {
+                        setNewCoaForm(form => ({ ...form, parentId: null }));
+                      }
+                    }}
                   >
-                    <span className="w-20 shrink-0 font-mono text-xs font-semibold">{account.code}</span>
-                    <span className="min-w-0 flex-1 truncate text-xs">{account.name}</span>
-                    <span className="text-[10px] text-muted-foreground">{account.type}</span>
-                  </button>
-                ))
-              )}
-            </div>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="parent">Parent / akun grup</SelectItem>
+                      <SelectItem value="child">Child / akun detail</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[11px] text-muted-foreground">
+                    Parent dibuat sebagai akun header. Child harus ditempatkan di bawah parent yang sesuai.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium">Kode COA</label>
+                    <Input
+                      value={newCoaForm.code}
+                      onChange={event => setNewCoaForm(form => ({ ...form, code: event.target.value }))}
+                      placeholder="Contoh: 2-1200"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium">Nama COA</label>
+                    <Input
+                      value={newCoaForm.name}
+                      onChange={event => setNewCoaForm(form => ({ ...form, name: event.target.value }))}
+                      placeholder="Contoh: Pendapatan Jasa"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium">Kelompok akun</label>
+                  <Select
+                    value={newCoaForm.type}
+                    onValueChange={value => setNewCoaForm(form => ({ ...form, type: value, parentId: null }))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {allowedNewCoaTypes.map(option => (
+                        <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[11px] text-muted-foreground">
+                    Saldo normal otomatis: {contraNormalBalance === "CREDIT" ? "kredit" : "debit"}.
+                  </p>
+                </div>
+
+                {newCoaRole === "child" && (
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium">Parent akun</label>
+                    <Select
+                      value={newCoaForm.parentId ? String(newCoaForm.parentId) : "__none"}
+                      onValueChange={value => setNewCoaForm(form => ({
+                        ...form,
+                        parentId: value === "__none" ? null : Number(value),
+                      }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Pilih parent akun..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none">Pilih parent akun...</SelectItem>
+                        {parentAccounts.map(account => (
+                          <SelectItem key={account.id} value={String(account.id)}>
+                            {account.code} — {account.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {parentAccountsLoading && (
+                      <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                        <Loader2 className="h-3 w-3 animate-spin" /> Memuat parent...
+                      </p>
+                    )}
+                    {!parentAccountsLoading && parentAccounts.length === 0 && (
+                      <p className="text-[11px] text-amber-700">
+                        Belum ada parent dengan kelompok akun ini. Buat parent terlebih dahulu.
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                <Button
+                  type="button"
+                  className="w-full gap-1.5 bg-indigo-600 text-white hover:bg-indigo-700"
+                  onClick={createCoa}
+                  disabled={creating || (newCoaRole === "child" && parentAccounts.length === 0)}
+                >
+                  {creating && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  Buat & Pilih COA
+                </Button>
+              </div>
+            ) : (
+              <>
+                <div className="max-h-52 overflow-y-auto rounded-md border">
+                  {accountsLoading ? (
+                    <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" /> Memuat daftar COA...
+                    </div>
+                  ) : visibleAccounts.length === 0 ? (
+                    <div className="space-y-2 p-3 text-xs text-muted-foreground">
+                      <p>Akun COA tidak ditemukan untuk pencarian atau saldo normal ini.</p>
+                      <Button type="button" size="sm" variant="outline" className="gap-1.5" onClick={startCreateCoa}>
+                        <Plus className="h-3.5 w-3.5" /> Buat COA baru
+                      </Button>
+                    </div>
+                  ) : (
+                    visibleAccounts.map(account => (
+                      <button
+                        key={account.id}
+                        type="button"
+                        className={`flex w-full items-center gap-2 border-b px-3 py-2 text-left last:border-b-0 ${
+                          selectedCode === account.code
+                            ? "bg-indigo-50 text-indigo-900 dark:bg-indigo-950 dark:text-indigo-100"
+                            : "hover:bg-muted/50"
+                        }`}
+                        onClick={() => setSelectedCode(account.code)}
+                      >
+                        <span className="w-20 shrink-0 font-mono text-xs font-semibold">{account.code}</span>
+                        <span className="min-w-0 flex-1 truncate text-xs">{account.name}</span>
+                        <span className="text-[10px] text-muted-foreground">{account.type}</span>
+                      </button>
+                    ))
+                  )}
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="mt-1 w-full gap-1.5 text-indigo-700 hover:bg-indigo-50 hover:text-indigo-800"
+                  onClick={startCreateCoa}
+                >
+                  <Plus className="h-3.5 w-3.5" /> Tambah COA baru sebagai parent atau child
+                </Button>
+              </>
+            )}
             {selectedAccount && (
               <p className="text-xs text-indigo-700 dark:text-indigo-300">
                 Terpilih: <strong>{selectedAccount.code} — {selectedAccount.name}</strong>
