@@ -55,7 +55,7 @@ export default function PageSeo({
       <meta property="og:description" content={resolvedOgDesc} />
       <meta property="og:image" content={resolvedOgImage} />
       <meta property="og:image:secure_url" content={resolvedOgImage} />
-      <meta property="og:image:type" content="image/png" />
+      <meta property="og:image:type" content="image/webp" />
       <meta property="og:image:width" content="1200" />
       <meta property="og:image:height" content="630" />
       <meta property="og:image:alt" content={resolvedOgImageAlt} />
