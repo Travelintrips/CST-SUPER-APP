@@ -11,11 +11,11 @@ import { useEffect, useState } from "react";
 import { resolveImageUrl } from "@/lib/utils";
 
 export function useStorageBg(storageUrl: string): string {
-  const [url, setUrl] = useState(resolveImageUrl(storageUrl) ?? storageUrl);
+  const [url, setUrl] = useState(resolveImageUrl(storageUrl) ?? "");
 
   useEffect(() => {
-    setUrl(resolveImageUrl(storageUrl) ?? storageUrl);
+    setUrl(resolveImageUrl(storageUrl) ?? "");
   }, [storageUrl]);
 
-  return `url('${url}')`;
+  return url ? `url('${url}')` : "none";
 }

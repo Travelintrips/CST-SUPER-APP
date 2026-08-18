@@ -89,7 +89,7 @@ export function Footer() {
 
   const rawLogoSrc = content["footer_logo"] ?? content["navbar_logo"];
   const logoSrc = rawLogoSrc
-    ? (rawLogoSrc.startsWith("/") ? (resolveImageUrl(rawLogoSrc) ?? rawLogoSrc) : rawLogoSrc)
+    ? (rawLogoSrc.startsWith("/") ? (resolveImageUrl(rawLogoSrc) ?? staticAsset("images/logo.png")) : rawLogoSrc)
     : staticAsset("images/logo.png");
 
   const brandName = company?.name

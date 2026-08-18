@@ -21,6 +21,7 @@ import { LanguageSelector } from "@/components/layout/LanguageSelector";
 import { useLanguage } from "@/i18n/LanguageContext";
 import { useEditMode } from "@/contexts/EditModeContext";
 import { staticAsset } from "@/lib/staticAssets";
+import { resolveImageUrl } from "@/lib/utils";
 
 interface NavServiceItem {
   icon: LucideIcon;
@@ -318,8 +319,9 @@ export function Navbar() {
   const searchRef    = useRef<HTMLDivElement>(null);
   const searchInput  = useRef<HTMLInputElement>(null);
 
-  const logoSrc = content["navbar_logo"]
-    ? content["navbar_logo"]
+  const rawLogoSrc = content["navbar_logo"];
+  const logoSrc = rawLogoSrc
+    ? (rawLogoSrc.startsWith("/") ? (resolveImageUrl(rawLogoSrc) ?? staticAsset("images/logo.png")) : rawLogoSrc)
     : staticAsset("images/logo.png");
 
   async function handleLogoUpload(file: File) {

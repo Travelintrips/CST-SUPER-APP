@@ -18,22 +18,55 @@ export function assetUrl(path: string): string {
   return `${BASE}${path}`;
 }
 
+const CANONICAL_PORTAL_ASSET_ROOT =
+  "/api/storage/public-objects/portal-assets/";
+const CANONICAL_CUSTOMER_IMAGE_ROOT =
+  `${CANONICAL_PORTAL_ASSET_ROOT}static/customer-portal/images/`;
+const SUPABASE_ORIGIN = (import.meta.env.VITE_SUPABASE_URL ?? "").replace(/\/+$/, "");
+const SUPABASE_PUBLIC_ASSET_ROOT = SUPABASE_ORIGIN
+  ? `${SUPABASE_ORIGIN}/storage/v1/object/public/public-assets/`
+  : null;
+const LEGACY_OBJECT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 /**
  * Resolve a stored image URL to a displayable URL.
- * - Paths starting with /objects/ (BizPortal format) → /api/storage/objects/...
- * - Paths already starting with /api/storage → used as-is
- * - Other URLs (http/https or null) → returned as-is or null
+ *
+ * CMS and catalog records have existed in several formats, so this is the
+ * single boundary where those values become browser URLs:
+ * - canonical CDN URLs are kept unchanged;
+ * - legacy image paths are mapped to the canonical Customer Portal root;
+ * - a bare legacy object UUID is rejected instead of becoming a guaranteed
+ *   400/404 image request.
+ *
+ * `null` is intentional for an invalid/missing asset. Callers should render
+ * their existing fallback rather than reusing the original invalid value.
  */
 export function resolveImageUrl(url: string | null | undefined): string | null {
   if (!url) return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
   const isAbsoluteUrl = /^[a-z][a-z\d+.-]*:/i.test(url) || url.startsWith("//");
   if (
     !isAbsoluteUrl &&
-    (url.includes("\\") || url.split("/").some((part) => part === "." || part === ".."))
+    (trimmed.includes("\\") || trimmed.split("/").some((part) => part === "." || part === ".."))
   ) {
     return null;
   }
-  if (url.startsWith("/objects/")) return `/api/storage${url}`;
+  if (trimmed.startsWith("/objects/")) return `/api/storage${trimmed}`;
+
+  // A previous CMS upload path was persisted as
+  // /api/storage/public-objects/portal-assets/<uuid>. That UUID is a database
+  // object identifier, not a public storage object key, and the API correctly
+  // returns 404 for it. Reject it before an <img> or CSS background can fetch
+  // the broken URL.
+  if (trimmed.startsWith(CANONICAL_PORTAL_ASSET_ROOT)) {
+    const objectKey = trimmed.slice(CANONICAL_PORTAL_ASSET_ROOT.length);
+    if (LEGACY_OBJECT_ID.test(objectKey)) return null;
+    return SUPABASE_PUBLIC_ASSET_ROOT
+      ? `${SUPABASE_PUBLIC_ASSET_ROOT}portal-assets/${objectKey}`
+      : trimmed;
+  }
+
   // Legacy CMS values and old hard-coded paths all resolve to the same
   // canonical Customer Portal storage root. Keep path segments intact; do
   // not normalize arbitrary URLs or allow a caller to escape the image root.
@@ -44,11 +77,14 @@ export function resolveImageUrl(url: string | null | undefined): string | null {
     "/images/",
   ];
   for (const prefix of legacyPrefixes) {
-    if (url.startsWith(prefix)) {
-      const relative = url.slice(prefix.length);
+    if (trimmed.startsWith(prefix)) {
+      const relative = trimmed.slice(prefix.length);
       if (!relative || relative.split("/").some((part) => part === "." || part === ".." || part.includes("\\"))) return null;
-      return `/api/storage/public-objects/portal-assets/static/customer-portal/images/${relative.replace(/\.(png|jpe?g)$/i, ".webp")}`;
+      const canonicalKey = `portal-assets/static/customer-portal/images/${relative.replace(/\.(png|jpe?g)$/i, ".webp")}`;
+      return SUPABASE_PUBLIC_ASSET_ROOT
+        ? `${SUPABASE_PUBLIC_ASSET_ROOT}${canonicalKey}`
+        : `${CANONICAL_CUSTOMER_IMAGE_ROOT}${relative.replace(/\.(png|jpe?g)$/i, ".webp")}`;
     }
   }
-  return url;
+  return trimmed;
 }

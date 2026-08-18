@@ -21,6 +21,14 @@ describe("resolveImageUrl", () => {
     expect(resolveImageUrl(canonical)).toBe(canonical);
   });
 
+  it("rejects a legacy bare object UUID before the browser requests it", () => {
+    expect(
+      resolveImageUrl(
+        "/api/storage/public-objects/portal-assets/db674887-3d77-4679-8725-bb8866fe53de",
+      ),
+    ).toBeNull();
+  });
+
   it("keeps valid external URLs unchanged", () => {
     const external = "https://external-valid.example/image.webp";
     expect(resolveImageUrl(external)).toBe(external);

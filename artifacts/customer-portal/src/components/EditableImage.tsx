@@ -32,7 +32,11 @@ export function EditableImage({ contentKey, defaultSrc, alt, className = "", pri
 
   const candidateSrc = content[contentKey] ?? defaultSrc;
   const src = candidateSrc === failedSrc ? defaultSrc : candidateSrc;
-  const resolved = src.startsWith("/") ? (resolveImageUrl(src) ?? src) : src;
+  // Invalid legacy CMS paths must fall through to the existing canonical
+  // default, not back to the original URL (which would create a broken
+  // browser image request).
+  const resolvedCandidate = src.startsWith("/") ? resolveImageUrl(src) : src;
+  const resolved = resolvedCandidate ?? defaultSrc;
   const handleError = () => {
     if (resolved !== defaultSrc) setFailedSrc(candidateSrc);
   };

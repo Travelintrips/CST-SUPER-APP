@@ -68,3 +68,19 @@ or a binary file into the repository.
 **How to apply:** Keep the canonical PNG link unchanged, scope the
 development-only proxy to that asset path, and retry bucket promotion
 separately.
+
+Canonical catalog media paths under `portal-assets/catalog-media/` and
+`portal-assets/catalog-videos/` must retain the `portal-assets/` bucket prefix
+when converted to Supabase public CDN URLs. A bare UUID directly under
+`portal-assets/` is a stale CMS identifier, not an object key, and must be
+rejected before rendering.
+
+**Why:** The storage proxy returned HTTP 400 for catalog URLs whose bucket
+prefix was mishandled, while the same objects were valid at the correctly
+prefixed public CDN path; the CMS hero UUID returned 404 and could create a
+broken image request.
+
+**How to apply:** Keep this normalization in the shared frontend resolver,
+use the configured `public-assets` CDN for valid canonical keys, and route
+invalid values to the existing branding or neutral fallback without changing
+database rows.
