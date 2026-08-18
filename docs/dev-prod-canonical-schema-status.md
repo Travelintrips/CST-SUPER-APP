@@ -561,3 +561,83 @@ function has been applied to DEV or PROD in this phase.
 
 Production remediation and master republish remain separate phases and were not
 performed here.
+
+## Customer Portal master republish gate — scope correction D
+
+### Scope
+
+| Area | Scope |
+|---|---|
+| Customer Portal | **IN SCOPE** |
+| Customer Portal API | **IN SCOPE** |
+| Sport Center Accounting | **OUT OF SCOPE** |
+| General Accounting | **OUT OF SCOPE** |
+
+This is an N2N Customer Portal release-scope gate. The broader Sprint 10 and
+general production-readiness documents contain separate staging, security,
+operational, and owner-authorization gates; those are not reclassified as
+Customer Portal canonical-schema defects here.
+
+### Remaining two functions
+
+| Function | Direct Customer Portal dependency | Classification |
+|---|---|---|
+| `sport_center.create_payment_accounting_draft(integer)` | **NO** | **OUT OF CUSTOMER PORTAL REPUBLISH SCOPE** |
+| `sport_center.mirror_confirmed_payment_to_public()` | **NO** | **OUT OF CUSTOMER PORTAL REPUBLISH SCOPE** |
+
+Targeted repository trace found these names only in the Sport Center migration,
+Sport Center-focused tests, and canonicalization documentation. No direct
+caller or runtime path was found in Customer Portal UI, portal auth/customer
+account flows, vendor account/onboarding, Marketplace/vendor catalog, KTP OCR,
+storage metadata, or Customer Portal API routes.
+
+Both functions are retained as:
+
+**KNOWN SPORT CENTER SCHEMA FOLLOW-UP**
+
+They must not block Customer Portal republish without a later proof of direct
+runtime dependency.
+
+### Customer Portal canonical schema gate
+
+The existing verified N2N evidence remains valid for the in-scope areas:
+
+| Area | Result |
+|---|---|
+| Authentication | **PASS** |
+| Session revocation | **PASS** |
+| Customer profile/account | **PASS** |
+| Vendor profile/account | **PASS** |
+| Vendor invitation and supplier mapping | **PASS** |
+| Marketplace publication/API contract | **PASS** |
+| Vendor catalog | **PASS** |
+| KTP onboarding/OCR | **PASS** |
+| Customer Portal document/storage metadata | **PASS** |
+
+**CUSTOMER_PORTAL_SCHEMA_GATE:** `PASS`
+**Remaining Customer Portal canonical schema defects:** `0`
+
+No contrary Customer Portal-specific evidence was introduced by the targeted
+trace. Sport Center/accounting differences remain outside this gate, and PROD
+RLS hardening remains preserved.
+
+### Environment and Git safety
+
+| Check | Result |
+|---|---|
+| PROD RLS hardening | **PRESERVED** |
+| RLS weakened | **NO** |
+| Database writes | **0** |
+| Business data modified | **NO** |
+| Branch | `main` |
+| `HEAD` | `3eddcf72832801357ebd01fecf7a470c18888e7a` |
+| `origin/main` | `3eddcf72832801357ebd01fecf7a470c18888e7a` |
+| Working tree | `M docs/dev-prod-canonical-schema-status.md` (documentation-only gate record) |
+| `git diff --check` | **PASS** |
+
+### Customer Portal master republish decision
+
+✅ **CUSTOMER PORTAL READY FOR MASTER REPUBLISH**
+
+Republish was **NOT** performed in this phase. It remains a manual action from
+the separately authorized Replit account.
