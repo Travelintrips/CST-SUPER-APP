@@ -2129,14 +2129,17 @@ function CoaReferenceDialog({
     if (!match) return "";
 
     const [, prefix, digits, suffix] = match;
-    const siblingNumbers = accounts
+    const usedSiblingNumbers = new Set(
+      accounts
       .map(candidate => candidate.code.match(/^(.*?)(\d+)([^0-9]*)$/))
       .filter((candidate): candidate is RegExpMatchArray =>
         !!candidate && candidate[1] === prefix && candidate[3] === suffix,
       )
       .map(candidate => Number(candidate[2]))
-      .filter(Number.isFinite);
-    const nextNumber = Math.max(Number(digits), ...siblingNumbers) + 1;
+      .filter(Number.isFinite),
+    );
+    let nextNumber = Number(digits) + 1;
+    while (usedSiblingNumbers.has(nextNumber)) nextNumber += 1;
     return `${prefix}${String(nextNumber).padStart(digits.length, "0")}${suffix}`;
   };
 
