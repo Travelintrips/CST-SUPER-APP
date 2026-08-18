@@ -579,6 +579,7 @@ interface CoaAccountReference {
   name: string;
   type: string;
   isActive: boolean;
+  normalBalance?: "DEBIT" | "CREDIT" | string;
   companyId?: number | null;
 }
 
@@ -2021,10 +2022,18 @@ function CoaReferenceDialog({
   const [saving, setSaving] = useState<"rule" | "current" | null>(null);
 
   const companyId = mutation?.company_id ?? activeCompanyId;
+  // The bank account is the opposite side of the selected COA:
+  // IN = bank debit, so the contra account is credit;
+  // OUT = bank credit, so the contra account is debit.
+  const contraNormalBalance = mutation?.direction === "IN" ? "CREDIT" : "DEBIT";
   const { data: accountData, isLoading: accountsLoading } = useQuery({
-    queryKey: ["coa-reference-accounts", companyId],
+    queryKey: ["coa-reference-accounts", companyId, contraNormalBalance],
     queryFn: async () => {
-      const response = await fetch("/api/accounting/accounts", { credentials: "include" });
+      const params = new URLSearchParams({
+        companyId: String(companyId),
+        normalBalance: contraNormalBalance,
+      });
+      const response = await fetch(`/api/accounting/accounts?${params.toString()}`, { credentials: "include" });
       if (!response.ok) throw new Error("Daftar COA tidak dapat dimuat");
       return response.json() as Promise<CoaAccountReference[]>;
     },
@@ -2176,7 +2185,9 @@ function CoaReferenceDialog({
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-xs font-medium">Pilih akun COA</label>
+            <label className="text-xs font-medium">
+              Pilih akun COA sisi {contraNormalBalance === "CREDIT" ? "kredit" : "debit"}
+            </label>
             <div className="relative">
               <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
               <Input
@@ -2186,6 +2197,10 @@ function CoaReferenceDialog({
                 placeholder="Cari kode atau nama akun..."
               />
             </div>
+            <p className="text-[11px] text-muted-foreground">
+              Hanya akun dengan saldo normal {contraNormalBalance === "CREDIT" ? "kredit" : "debit"} yang ditampilkan
+              sebagai lawan jurnal bank.
+            </p>
             <div className="max-h-52 overflow-y-auto rounded-md border">
               {accountsLoading ? (
                 <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">

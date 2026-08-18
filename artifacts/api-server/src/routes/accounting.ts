@@ -243,9 +243,18 @@ router.get("/accounts/check-code", async (req, res) => {
 
 router.get("/accounts", async (req, res) => {
   const scope = resolveCompanyScope(req);
+  const requestedNormalBalance = String(req.query.normalBalance ?? "").trim().toUpperCase();
+  const normalBalance =
+    requestedNormalBalance === "DEBIT" || requestedNormalBalance === "CREDIT"
+      ? requestedNormalBalance
+      : null;
   const condition = scope === "all"
     ? undefined
     : or(isNull(chartOfAccountsTable.companyId), eq(chartOfAccountsTable.companyId, scope));
+  const accountConditions = [
+    condition,
+    normalBalance ? eq(chartOfAccountsTable.normalBalance, normalBalance as "DEBIT" | "CREDIT") : undefined,
+  ].filter((value): value is SQL => value !== undefined);
 
   const rows = await db
     .select({
@@ -263,7 +272,7 @@ router.get("/accounts", async (req, res) => {
     })
     .from(chartOfAccountsTable)
     .leftJoin(companiesTable, eq(chartOfAccountsTable.companyId, companiesTable.id))
-    .where(condition)
+    .where(accountConditions.length > 0 ? and(...accountConditions) : undefined)
     .orderBy(chartOfAccountsTable.code);
 
   return res.json(rows.map((r) => ({
