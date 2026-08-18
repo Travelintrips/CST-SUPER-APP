@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -571,6 +571,15 @@ interface BankMutation {
   journal_entry_id?: number | null;
   posted_at?: string | null;
   posted_by?: string | null;
+}
+
+interface CoaAccountReference {
+  id: number;
+  code: string;
+  name: string;
+  type: string;
+  isActive: boolean;
+  companyId?: number | null;
 }
 
 const CANONICAL_SETTLEMENT_SOURCE = "sport_center.payment_settlement_batches";
@@ -1988,6 +1997,269 @@ function ProofUploadButton({ mutationId, proofUrl }: { mutationId: number; proof
   );
 }
 
+// ── COA Reference Dialog ──────────────────────────────────────────────────────
+// A bank mutation can create a reusable manual rule. This keeps the selected
+// account useful for the current review and for future mutations with the same
+// bank description, without silently changing the chart of accounts.
+function CoaReferenceDialog({
+  mutation,
+  open,
+  activeCompanyId,
+  onClose,
+  onSaved,
+}: {
+  mutation: BankMutation | null;
+  open: boolean;
+  activeCompanyId: number | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { toast } = useToast();
+  const [search, setSearch] = useState("");
+  const [selectedCode, setSelectedCode] = useState("");
+  const [conditionValue, setConditionValue] = useState("");
+  const [saving, setSaving] = useState<"rule" | "current" | null>(null);
+
+  const companyId = mutation?.company_id ?? activeCompanyId;
+  const { data: accountData, isLoading: accountsLoading } = useQuery({
+    queryKey: ["coa-reference-accounts", companyId],
+    queryFn: async () => {
+      const response = await fetch("/api/accounting/accounts", { credentials: "include" });
+      if (!response.ok) throw new Error("Daftar COA tidak dapat dimuat");
+      return response.json() as Promise<CoaAccountReference[]>;
+    },
+    enabled: open && companyId != null,
+    staleTime: 60_000,
+  });
+
+  useEffect(() => {
+    if (!open || !mutation) return;
+    setSearch("");
+    setSelectedCode("");
+    setConditionValue(mutation.normalized_description || mutation.description || "");
+    setSaving(null);
+  }, [open, mutation]);
+
+  const accounts = (accountData ?? [])
+    .filter(account => account.isActive !== false)
+    .sort((a, b) => a.code.localeCompare(b.code));
+  const visibleAccounts = accounts.filter(account => {
+    const query = search.trim().toLowerCase();
+    return !query || `${account.code} ${account.name} ${account.type}`.toLowerCase().includes(query);
+  });
+  const selectedAccount = accounts.find(account => account.code === selectedCode) ?? null;
+  const canApplyCurrent =
+    !!mutation &&
+    canApprove(mutation) &&
+    !isQrisMutation(mutation) &&
+    visibleCandidates(mutation).length === 0;
+
+  const save = async (applyCurrent: boolean) => {
+    if (!mutation) return;
+    if (!companyId) {
+      toast({ title: "Perusahaan aktif belum dipilih", variant: "destructive" });
+      return;
+    }
+    if (!selectedAccount) {
+      toast({ title: "Pilih akun COA terlebih dahulu", variant: "destructive" });
+      return;
+    }
+    const condition = conditionValue.trim();
+    if (!condition) {
+      toast({ title: "Referensi aturan belum diisi", variant: "destructive" });
+      return;
+    }
+
+    setSaving(applyCurrent ? "current" : "rule");
+    try {
+      const ruleResponse = await fetch("/api/bank-reconciliation/rules", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          company_id: companyId,
+          name: `COA ${mutation.direction === "IN" ? "Uang Masuk" : "Uang Keluar"} — ${condition.slice(0, 60)}`,
+          description: `Dibuat dari referensi mutasi bank #${mutation.id}: ${mutation.description}`,
+          priority: 120,
+          is_active: true,
+          direction: mutation.direction,
+          condition_field: "description",
+          condition_operator: "contains",
+          condition_value: condition,
+          target_type: mutation.direction === "IN" ? "income" : "expense",
+          target_coa_code: selectedAccount.code,
+          confidence_score: 100,
+          stop_processing: true,
+        }),
+      });
+      const ruleBody = await ruleResponse.json().catch(() => ({}));
+      if (!ruleResponse.ok) {
+        throw new Error(ruleBody.error ?? "Gagal menyimpan referensi COA");
+      }
+
+      if (applyCurrent) {
+        const approveResponse = await fetch(`/api/bank-reconciliation/${mutation.id}/approve`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            manual_coa_code: selectedAccount.code,
+            note: `COA dipetakan dari referensi manual: ${selectedAccount.code}`,
+          }),
+        });
+        const approveBody = await approveResponse.json().catch(() => ({}));
+        if (!approveResponse.ok) {
+          throw new Error(
+            approveBody.error ??
+            "Referensi tersimpan, tetapi draft jurnal untuk mutasi ini belum berhasil dibuat.",
+          );
+        }
+        toast({
+          title: "COA dipetakan dan draft jurnal dibuat",
+          description: `${selectedAccount.code} — ${selectedAccount.name}`,
+        });
+      } else {
+        toast({
+          title: "Referensi COA tersimpan",
+          description: `Mutasi berikutnya dengan referensi ini akan diarahkan ke ${selectedAccount.code}.`,
+        });
+      }
+      onSaved();
+      onClose();
+    } catch (error) {
+      toast({
+        title: "Gagal menyimpan pemetaan COA",
+        description: error instanceof Error ? error.message : String(error),
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  if (!mutation) return null;
+
+  return (
+    <Dialog open={open} onOpenChange={value => !value && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <BookOpen className="h-4 w-4 text-indigo-600" />
+            Referensi COA
+          </DialogTitle>
+          <DialogDescription>
+            Pilih akun tujuan untuk {mutation.direction === "IN" ? "uang masuk" : "uang keluar"} ini.
+            Aturan akan dipakai lagi untuk mutasi dengan keterangan yang sama.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3">
+          <div className="rounded-md border bg-muted/30 p-3 text-sm">
+            <p className="font-medium">{mutation.description}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {fmtDate(mutation.transaction_date)} · {idr(mutation.amount)} ·{" "}
+              {mutation.direction === "IN" ? "Uang Masuk" : "Uang Keluar"}
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium">Referensi untuk transaksi berikutnya</label>
+            <Input
+              value={conditionValue}
+              onChange={event => setConditionValue(event.target.value)}
+              placeholder="Contoh: BUNGA, ADMIN BANK, TRANSFER DARI..."
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Sistem mencocokkan teks ini pada keterangan mutasi, dengan arah{" "}
+              <strong>{mutation.direction}</strong>.
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium">Pilih akun COA</label>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                className="pl-9"
+                value={search}
+                onChange={event => setSearch(event.target.value)}
+                placeholder="Cari kode atau nama akun..."
+              />
+            </div>
+            <div className="max-h-52 overflow-y-auto rounded-md border">
+              {accountsLoading ? (
+                <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Memuat daftar COA...
+                </div>
+              ) : visibleAccounts.length === 0 ? (
+                <p className="p-3 text-xs text-muted-foreground">Akun COA tidak ditemukan.</p>
+              ) : (
+                visibleAccounts.map(account => (
+                  <button
+                    key={account.id}
+                    type="button"
+                    className={`flex w-full items-center gap-2 border-b px-3 py-2 text-left last:border-b-0 ${
+                      selectedCode === account.code
+                        ? "bg-indigo-50 text-indigo-900 dark:bg-indigo-950 dark:text-indigo-100"
+                        : "hover:bg-muted/50"
+                    }`}
+                    onClick={() => setSelectedCode(account.code)}
+                  >
+                    <span className="w-20 shrink-0 font-mono text-xs font-semibold">{account.code}</span>
+                    <span className="min-w-0 flex-1 truncate text-xs">{account.name}</span>
+                    <span className="text-[10px] text-muted-foreground">{account.type}</span>
+                  </button>
+                ))
+              )}
+            </div>
+            {selectedAccount && (
+              <p className="text-xs text-indigo-700 dark:text-indigo-300">
+                Terpilih: <strong>{selectedAccount.code} — {selectedAccount.name}</strong>
+              </p>
+            )}
+          </div>
+
+          {!canApplyCurrent && canApprove(mutation) && visibleCandidates(mutation).length > 0 && (
+            <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              Mutasi ini memiliki kandidat transaksi. Simpan aturan COA untuk transaksi berikutnya,
+              lalu gunakan alur review untuk memilih kandidat yang benar.
+            </p>
+          )}
+          {isQrisMutation(mutation) && canApprove(mutation) && (
+            <p className="rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-800">
+              Untuk QRIS, referensi COA disimpan sebagai aturan berikutnya. Approval saat ini tetap
+              mengikuti alur settlement QRIS agar jurnal settlement tidak terduplikasi.
+            </p>
+          )}
+        </div>
+
+        <DialogFooter className="flex-col gap-2 sm:flex-row">
+          <Button variant="outline" onClick={onClose}>Batal</Button>
+          <Button
+            variant="outline"
+            className="gap-1.5 border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+            onClick={() => save(false)}
+            disabled={saving !== null || !selectedAccount}
+          >
+            {saving === "rule" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Simpan untuk Berikutnya
+          </Button>
+          {canApplyCurrent && (
+            <Button
+              className="gap-1.5 bg-indigo-600 text-white hover:bg-indigo-700"
+              onClick={() => save(true)}
+              disabled={saving !== null || !selectedAccount}
+            >
+              {saving === "current" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Simpan & Buat Draft
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Mutation Card
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1995,6 +2267,7 @@ function ProofUploadButton({ mutationId, proofUrl }: { mutationId: number; proof
 function QrisMutationCard({
   m,
   audit,
+  onMapCoa,
   onReject,
   onDetail,
   onDelete,
@@ -2010,6 +2283,7 @@ function QrisMutationCard({
 }: {
   m: BankMutation;
   audit: QrisCandidateAudit;
+  onMapCoa: (m: BankMutation) => void;
   onReject: (m: BankMutation) => void;
   onDetail: (m: BankMutation) => void;
   onDelete: (id: number) => void;
@@ -2355,6 +2629,15 @@ function QrisMutationCard({
             )}
 
             <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t pt-3" onClick={e => e.stopPropagation()}>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 gap-1.5 border-indigo-300 text-xs text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:text-indigo-300"
+                onClick={() => onMapCoa(m)}
+              >
+                <BookOpen className="h-3.5 w-3.5" />
+                Referensi COA
+              </Button>
               {!isApproved && !isDepleted && !isMatched && (
                 <Button
                   size="sm"
@@ -2468,6 +2751,7 @@ function QrisMutationCard({
 
 function MutationCard({
   m,
+  onMapCoa,
   onApprove,
   onPost,
   onReject,
@@ -2490,6 +2774,7 @@ function MutationCard({
   mappingError,
 }: {
   m: BankMutation;
+  onMapCoa: (m: BankMutation) => void;
   onApprove: (m: BankMutation) => void;
   onPost:    (m: BankMutation) => void;
   onReject:  (m: BankMutation) => void;
@@ -2527,6 +2812,7 @@ function MutationCard({
             key={`${m.id}-qris-${audit.id ?? index}`}
             m={m}
             audit={audit}
+            onMapCoa={onMapCoa}
             onReject={onReject}
             onDetail={onDetail}
             onDelete={onDelete}
@@ -2777,6 +3063,15 @@ function MutationCard({
           onClick={e => e.stopPropagation()}
         >
           <div className="flex gap-1.5 flex-wrap">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 gap-1 border-indigo-300 text-xs text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:text-indigo-300"
+              onClick={() => onMapCoa(m)}
+            >
+              <BookOpen className="h-3.5 w-3.5" />
+              Referensi COA
+            </Button>
             {/* One clear primary action per mutation. Backend remains the final guard. */}
             {!mappingError && isUiApprovalEligible(m) && (
               <Button
@@ -3965,6 +4260,7 @@ export default function BankReconciliationPage() {
   const [workflowStage, setWorkflowStage] = useState<WorkflowStage>("sync");
   const [matchingBackgroundPending, setMatchingBackgroundPending] = useState(false);
   const [detailMutation,      setDetailMutation]      = useState<BankMutation | null>(null);
+  const [coaReferenceTarget,  setCoaReferenceTarget]  = useState<BankMutation | null>(null);
   const [actionDialog,        setActionDialog]        = useState<{ mutation: BankMutation; mode: DialogMode } | null>(null);
   const [qrisDetailLoadingId, setQrisDetailLoadingId] = useState<number | null>(null);
   const [selectedQrisCandidateIds, setSelectedQrisCandidateIds] = useState<number[]>([]);
@@ -5267,6 +5563,7 @@ export default function BankReconciliationPage() {
                 <MutationCard
                   key={m.id}
                   m={m}
+                  onMapCoa={setCoaReferenceTarget}
                   onApprove={handleOpenApprove}
                   onPost={handleOpenPost}
                   onReject={handleOpenReject}
@@ -5312,6 +5609,14 @@ export default function BankReconciliationPage() {
           )}
         </div>
       </div>
+
+      <CoaReferenceDialog
+        mutation={coaReferenceTarget}
+        open={!!coaReferenceTarget}
+        activeCompanyId={qrisCompanyId}
+        onClose={() => setCoaReferenceTarget(null)}
+        onSaved={invalidate}
+      />
 
       {/* ── Detail Side Panel ─────────────────────────────────── */}
       <MutationDetailPanel
