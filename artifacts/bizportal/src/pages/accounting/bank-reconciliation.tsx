@@ -950,13 +950,56 @@ function isBankTransferCandidate(candidate: Candidate, mutation: BankMutation): 
   return candidateSportPaymentType(candidate, mutation) === "bank_transfer";
 }
 
+function normalizeCandidateBusinessReference(reference: string): string {
+  return reference
+    .trim()
+    .toUpperCase()
+    .replace(/^(?:INV-|TENANT-)/, "");
+}
+
+function candidateBusinessIdentity(candidate: Candidate): string | null {
+  const details = candidate.details;
+  const reference = details?.paymentNumber ?? details?.reference;
+  if (!reference) return null;
+
+  const normalizedReference = normalizeCandidateBusinessReference(String(reference));
+  if (!normalizedReference) return null;
+
+  if (
+    (candidate.candidate_type === "sport_payment" || candidate.candidate_type === "accounting_payment") &&
+    /^(?:SCPAY-|SPORT-)/.test(normalizedReference)
+  ) {
+    return `sport-payment:${normalizedReference}`;
+  }
+
+  if (
+    (candidate.candidate_type === "invoice" || candidate.candidate_type === "tenant_invoice") &&
+    /^PAY-/.test(normalizedReference)
+  ) {
+    return `payment-document:${normalizedReference}`;
+  }
+
+  return null;
+}
+
+function candidateBusinessPriority(candidate: Candidate): number {
+  switch (candidate.candidate_type) {
+    case "sport_payment": return 100;
+    case "qris_settlement": return 90;
+    case "tenant_invoice": return 60;
+    case "invoice": return 50;
+    case "accounting_payment": return 40;
+    default: return 0;
+  }
+}
+
 /** Candidates shown to reviewers and used for approval must obey the
  * same-day rule for generic bank transfers. QRIS candidates keep their
  * separate settlement-date contract. `sport_payment` is not automatically
  * QRIS: its payment method decides which contract applies. */
 function visibleCandidates(m: BankMutation): Candidate[] {
   const seen = new Set<string>();
-  return (m.candidates ?? [])
+  const eligible = (m.candidates ?? [])
     .filter(candidate => {
       const isBankTransfer = isBankTransferCandidate(candidate, m);
       // For bank-transfer Sport Center payments use the payment date. The
@@ -976,6 +1019,21 @@ function visibleCandidates(m: BankMutation): Candidate[] {
       seen.add(identity);
       return true;
     });
+
+  const seenBusiness = new Map<string, Candidate>();
+  for (const candidate of eligible) {
+    const businessIdentity = candidateBusinessIdentity(candidate);
+    if (!businessIdentity) continue;
+    const existing = seenBusiness.get(businessIdentity);
+    if (!existing || candidateBusinessPriority(candidate) > candidateBusinessPriority(existing)) {
+      seenBusiness.set(businessIdentity, candidate);
+    }
+  }
+
+  return eligible.filter(candidate => {
+    const businessIdentity = candidateBusinessIdentity(candidate);
+    return !businessIdentity || seenBusiness.get(businessIdentity) === candidate;
+  });
 }
 
 function reconciliationEvidence(m: BankMutation): ReconciliationEvidence {
@@ -2589,14 +2647,14 @@ function MutationCard({
 
             {!isQris && matchingCandidates.length > 0 && (
               <div
-                className="mt-2 rounded-md border border-green-200 bg-green-50/70 px-3 py-2 dark:border-green-800 dark:bg-green-950/50"
+                className="mt-2 rounded-md border border-green-800/60 bg-card px-3 py-2"
                 onClick={e => e.stopPropagation()}
               >
                 <div className="flex items-center justify-between gap-2">
-                  <p className="text-xs font-semibold text-green-800 dark:text-green-300">
+                  <p className="text-xs font-semibold text-green-300">
                     Kandidat yang cocok
                   </p>
-                  <span className="text-[10px] text-green-700 dark:text-green-400">
+                  <span className="text-[10px] text-green-400">
                     Pilih satu kandidat
                   </span>
                 </div>
@@ -2614,8 +2672,8 @@ function MutationCard({
                         key={candidate.id}
                         className={`flex cursor-pointer items-start gap-2 rounded border px-2 py-1.5 transition-colors ${
                           checked
-                            ? "border-green-500 bg-white shadow-sm dark:border-green-500 dark:bg-green-950/70"
-                            : "border-green-200 bg-white/60 hover:bg-white dark:border-green-900 dark:bg-green-950/30 dark:hover:bg-green-950/70"
+                            ? "border-green-400 bg-muted shadow-sm"
+                            : "border-border bg-background/70 hover:bg-muted"
                         }`}
                       >
                         <Checkbox
@@ -2627,12 +2685,12 @@ function MutationCard({
                         />
                         <span className="min-w-0 flex-1">
                           <span className="flex items-center justify-between gap-2">
-                            <span className="truncate text-xs font-medium text-green-950 dark:text-green-100">
+                            <span className="truncate text-xs font-medium text-foreground">
                               {candidateName || `${CANDIDATE_TYPE_LABELS[candidate.candidate_type] ?? candidate.candidate_type} #${candidate.candidate_id}`}
                             </span>
                             <ScoreBadge score={candidate.match_score} />
                           </span>
-                          <span className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-green-700 dark:text-green-300">
+                          <span className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground">
                             <span>{candidateReference}</span>
                             {candidateDetails?.date && <span>{fmtDate(String(candidateDetails.date))}</span>}
                             {candidateDetails?.amount != null && <span>{idr(candidateDetails.amount)}</span>}

@@ -2972,7 +2972,7 @@ router.get("/mutations", async (req, res) => {
            'settlementStatus', sp.settlement_status,
            'settlementPartial', COALESCE(sp.settlement_status, 'unsettled') IN ('partial', 'partially_settled', 'partially-settled'),
           'name', COALESCE(sb.customer_name, c.name),
-          'reference', CONCAT('SPORT-', sp.booking_id::text),
+           'reference', COALESCE(sp.payment_number, CONCAT('SPORT-', sp.booking_id::text)),
           'paymentNumber', sp.payment_number,
           'memo', sp.notes,
           'method', sp.method,

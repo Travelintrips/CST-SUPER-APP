@@ -41,6 +41,8 @@ import {
   CANONICAL_SETTLEMENT_SOURCE,
   findCanonicalSettlementCandidates,
 } from "./canonicalSettlementAdapter.js";
+export { dedupeCandidatesByBusinessIdentity } from "./candidateBusinessIdentity.js";
+import { dedupeCandidatesByBusinessIdentity } from "./candidateBusinessIdentity.js";
 
 type OptionalCandidateSource = "logistic_order" | "invoice" | "tenant_invoice";
 
@@ -916,7 +918,7 @@ export async function fetchCandidates(
                ${mutationLooksQris ? verifiedSportNet : "sp.amount"} AS amount,
                ${mutationLooksQris ? settlementDateExpr : sportCandidateDateExpr}::text AS date,
                COALESCE(c.name, sb.customer_name, '') AS name,
-               CONCAT('SPORT-', sp.booking_id::text) AS ref,
+                COALESCE(sp.payment_number, CONCAT('SPORT-', sp.booking_id::text)) AS ref,
                sp.company_id,
                sp.bank_account_id,
                LOWER(BTRIM(sp.payment_provider::text)) AS provider_code,
@@ -1079,7 +1081,7 @@ export async function fetchCandidates(
     }
   }
 
-  return dedupeCandidatesByIdentity(candidates);
+  return dedupeCandidatesByBusinessIdentity(dedupeCandidatesByIdentity(candidates));
 }
 
 // ─── Audit helper ─────────────────────────────────────────────────────────────
