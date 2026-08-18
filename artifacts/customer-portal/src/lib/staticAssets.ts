@@ -22,7 +22,7 @@ export function staticAsset(path: string): string {
 export const CUSTOMER_ASSETS = {
   logo: staticAsset("images/logo.png"),
   logoBrand: staticAsset("images/logo-baru.png"),
-  ogCover: staticAsset("images/og-cover.png"),
+  ogCover: staticAsset("images/og-cover.webp"),
   hero: staticAsset("images/hero-bg.webp"),
   marketplaceHero: staticAsset("images/gambar-baru.webp"),
   warehouse: staticAsset("images/warehouse.webp"),
