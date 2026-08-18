@@ -3042,7 +3042,8 @@ router.get("/mutations", async (req, res) => {
           'amount', sd.total_amount,
           'date', COALESCE(sd.invoice_date::text, sd.created_at::date::text),
           'reference', sd.doc_number,
-          'documentType', sd.kind
+          'documentType', sd.kind,
+          'paymentStatus', sd.payment_status
         )
         FROM sales_documents sd
         WHERE sd.id = m.candidate_id
@@ -3073,7 +3074,8 @@ router.get("/mutations", async (req, res) => {
           'amount', ti.total_amount,
           'date', ti.issued_date::text,
           'name', COALESCE(t.business_name, t.owner_name),
-          'reference', ti.invoice_number
+          'reference', ti.invoice_number,
+          'paymentStatus', ti.status
         )
         FROM tenant_invoices ti
         LEFT JOIN tenants t ON t.id = ti.tenant_id
@@ -3123,6 +3125,29 @@ router.get("/mutations", async (req, res) => {
              m.candidate_type IN ('qris_settlement', 'sport_payment')
               OR ${genericCandidateSameDaySql("m", "bm")}
            )
+            -- Hanya tampilkan dokumen yang sudah benar-benar dibayar.
+            -- Invoice/tenant invoice yang belum paid bukan bukti penerimaan bank.
+            AND (
+              m.candidate_type NOT IN ('invoice', 'tenant_invoice')
+              OR (
+                m.candidate_type = 'invoice'
+                AND EXISTS (
+                  SELECT 1
+                  FROM sales_documents sd_paid
+                  WHERE sd_paid.id = m.candidate_id
+                    AND sd_paid.payment_status = 'paid'
+                )
+              )
+              OR (
+                m.candidate_type = 'tenant_invoice'
+                AND EXISTS (
+                  SELECT 1
+                  FROM tenant_invoices ti_paid
+                  WHERE ti_paid.id = m.candidate_id
+                    AND ti_paid.status = 'paid'
+                )
+              )
+            )
        ) AS candidates,
         (
           SELECT to_jsonb(qc) || jsonb_build_object(

@@ -51,11 +51,11 @@ const OPTIONAL_SOURCE_REQUIREMENTS: Record<OptionalCandidateSource, Record<strin
     logistic_orders: ["id", "grand_total", "created_at", "sender_name", "order_number", "company_id"],
   },
   invoice: {
-    sales_documents: ["id", "total_amount", "invoice_date", "invoice_number", "customer_id", "company_id"],
+    sales_documents: ["id", "total_amount", "invoice_date", "invoice_number", "customer_id", "company_id", "payment_status"],
     customers: ["id", "name"],
   },
   tenant_invoice: {
-    tenant_invoices: ["id", "total_amount", "created_at", "tenant_id", "tenant_name", "invoice_number", "company_id"],
+    tenant_invoices: ["id", "total_amount", "created_at", "tenant_id", "tenant_name", "invoice_number", "company_id", "status"],
     tenants: ["id", "name"],
   },
 };
@@ -888,6 +888,7 @@ export async function fetchCandidates(
         LEFT JOIN customers c ON c.id = sd.customer_id
         WHERE sd.invoice_number IS NOT NULL
           AND '${direction}' = 'IN'
+          AND sd.payment_status = 'paid'
           AND ${amtFilter.replace("##AMT##", "sd.total_amount")}
           AND COALESCE(sd.invoice_date, sd.created_at::date) BETWEEN ${dateFrom} AND ${dateTo}
           ${coFilter.replace("##TBL##", "sd")}
@@ -991,6 +992,7 @@ export async function fetchCandidates(
         LEFT JOIN tenants t ON t.id = ti.tenant_id
         WHERE ${amtFilter.replace("##AMT##", "ti.total_amount")}
           AND '${direction}' = 'IN'
+          AND ti.status = 'paid'
           ${coFilter.replace("##TBL##", "ti")}
           AND ti.created_at::date BETWEEN ${dateFrom} AND ${dateTo}
       `,

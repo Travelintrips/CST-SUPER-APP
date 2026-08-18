@@ -430,6 +430,7 @@ async function fetchActiveCandidates(
         FROM sales_documents sd
         LEFT JOIN customers c ON c.id = sd.customer_id
         WHERE sd.doc_type = 'invoice'
+          AND sd.payment_status = 'paid'
           AND ${amtCond("sd.total_amount")}
           AND sd.issue_date::date BETWEEN ${dateFrom} AND ${dateTo}
           AND sd.company_id = ${companyId}
