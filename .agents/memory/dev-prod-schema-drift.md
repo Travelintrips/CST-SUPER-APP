@@ -21,3 +21,19 @@ only safe additive promotion was the source-controlled Sport Center settlement
 recovery function, which was installed in PROD and verified by a second
 read-only report. One AI-table dependency remains an explicit owner decision;
 do not promote it automatically.
+
+## Live catalog verification
+
+A scoped report can briefly show additive index candidates while the API startup
+bootstrap is still completing. Before applying any DDL, query the live
+`pg_catalog` in both environments and compare the exact index definitions and
+validity. If the object is already present and identical, treat the report item
+as resolved and do not issue a no-op production write.
+
+**Why:** A report snapshot and the live catalog can be separated by startup
+bootstrap timing; applying from the stale snapshot adds unnecessary production
+risk without improving parity.
+
+**How to apply:** Keep the report as evidence, then run a second read-only
+catalog check immediately before `--apply`; preserve PROD-only objects and RLS
+hardening regardless of the report's raw differences.
