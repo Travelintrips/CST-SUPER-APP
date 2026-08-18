@@ -1,9 +1,11 @@
-const STORAGE_PATH = "/api/storage/public-objects/portal-assets/static/customer-portal";
-const STORAGE_ORIGIN = (
-  import.meta.env.VITE_CUSTOMER_PORTAL_ASSET_ORIGIN ??
-  "https://cstlogistic.co.id"
-).replace(/\/+$/, "");
-const STORAGE_ROOT = `${STORAGE_ORIGIN}${STORAGE_PATH}`;
+const STORAGE_PATH = "/portal-assets/static/customer-portal";
+const SUPABASE_ORIGIN = (import.meta.env.VITE_SUPABASE_URL ?? "").replace(/\/+$/, "");
+// Public branding/content assets live in the public-assets bucket. Use the
+// configured Supabase CDN directly so preview does not depend on an old
+// cstlogistic.co.id deployment or a development API bucket that may be empty.
+const STORAGE_ROOT = SUPABASE_ORIGIN
+  ? `${SUPABASE_ORIGIN}/storage/v1/object/public/public-assets${STORAGE_PATH}`
+  : `/api/storage/public-objects${STORAGE_PATH}`;
 const PNG_ONLY_ASSETS = new Set(["images/logo.png"]);
 
 export function staticAsset(path: string): string {

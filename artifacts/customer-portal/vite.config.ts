@@ -11,6 +11,11 @@ const HERO_ASSET_PATH = "/api/storage/public-objects/portal-assets/static/custom
 const BRAND_LOGO_ASSET_PATH = "/api/storage/public-objects/portal-assets/static/customer-portal/images/logo.png";
 const HERO_ASSET_DEV_FALLBACK_ORIGIN = process.env.CUSTOMER_PORTAL_HERO_ASSET_ORIGIN ?? "https://cstlogistic.co.id";
 const BRAND_LOGO_ASSET_DEV_FALLBACK_ORIGIN = process.env.CUSTOMER_PORTAL_BRAND_ASSET_ORIGIN ?? "https://cstlogistic.co.id";
+const PUBLIC_ASSET_CDN_ORIGIN = (
+  process.env.VITE_SUPABASE_URL ??
+  process.env.SUPABASE_URL ??
+  ""
+).replace(/\/+$/, "");
 
 export default defineConfig({
   base: basePath,
@@ -128,6 +133,23 @@ export default defineConfig({
     },
     hmr: false,
     proxy: {
+      // Keep relative storage URLs working in preview while reading the
+      // canonical public-assets bucket. This also covers DB-backed images
+      // resolved to /api/storage/public-objects/... URLs.
+      ...(process.env.NODE_ENV !== "production" && PUBLIC_ASSET_CDN_ORIGIN
+        ? {
+            "/api/storage/public-objects": {
+              target: PUBLIC_ASSET_CDN_ORIGIN,
+              changeOrigin: true,
+              secure: true,
+              rewrite: (path) =>
+                path.replace(
+                  /^\/api\/storage\/public-objects/,
+                  "/storage/v1/object/public/public-assets",
+                ),
+            },
+          }
+        : {}),
       // Development storage can lag the promoted production static-asset
       // bucket. Keep the canonical application URL while allowing the
       // above-the-fold hero to render in preview until that bucket is synced.

@@ -15,7 +15,9 @@ the production bucket has not received the assets.
 **How to apply:** Before certifying a publish, run the storage asset verifier
 against both development and production bundles, then republish after any
 production secret/configuration change. Validate the public asset URLs from the
-live domain after publish.
+live domain after publish. In Replit preview, do not default asset URLs to the
+custom website domain; use the configured Supabase public-assets CDN or a
+same-origin proxy so preview is independent of stale domain ownership.
 
 Also verify the browser-requested path and response MIME, not only whether the
 canonical production objects exist. A stale frontend bundle can request a
