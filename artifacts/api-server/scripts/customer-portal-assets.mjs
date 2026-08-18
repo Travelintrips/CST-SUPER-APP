@@ -47,12 +47,17 @@ function normalizeSupabaseUrl(raw) {
 export function normalizeStoragePath(rawPath) {
   let value = String(rawPath ?? "").trim().replace(/^\/+/, "");
   value = value.replace(/^api\/storage\/public-objects\/portal-assets\/static\/customer-portal\//, "");
+  value = value.replace(/^api\/storage\/public-objects\/portal-assets\//, "portal-assets/");
   value = value.replace(/^portal-assets\/static\/customer-portal\//, "");
   value = value.replace(/^api\/storage\/public-objects\/portal\/images\//, "images/");
   value = value.replace(/^api\/storage\/public-objects\/images\//, "images/");
   value = value.replace(/^portal\/images\//, "images/");
   value = value.replace(/^images\//, "images/");
   if (!IMAGE_EXTENSIONS.test(value)) return null;
+  // CMS uploads live directly under portal-assets/<key>, while source-derived
+  // static assets live under portal-assets/static/customer-portal/. Preserve
+  // the former path instead of incorrectly nesting it under the static root.
+  if (value.startsWith("portal-assets/")) return value;
   if (BRAND_PNG_PATHS.has(value)) return `${STORAGE_ROOT}/${value}`;
   return `${STORAGE_ROOT}/${value.replace(RASTER_EXTENSIONS, ".webp")}`;
 }

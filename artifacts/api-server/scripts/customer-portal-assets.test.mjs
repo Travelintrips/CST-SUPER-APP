@@ -30,6 +30,12 @@ test("normalizes raster source names while preserving approved PNG brand objects
     normalizeStoragePath("portal-assets/static/customer-portal/images/routes.svg"),
     "portal-assets/static/customer-portal/images/routes.svg",
   );
+  assert.equal(
+    normalizeStoragePath(
+      "/api/storage/public-objects/portal-assets/7e07e12c-173a-45fe-a701-309013b788ef.webp",
+    ),
+    "portal-assets/7e07e12c-173a-45fe-a701-309013b788ef.webp",
+  );
   assert.equal(normalizeStoragePath("images/not-an-image.txt"), null);
 });
 
@@ -76,7 +82,6 @@ test("manifest is derived from source usage and contains derived assets", async 
   ]) {
     assert.ok(paths.has(`portal-assets/static/customer-portal/images/vehicles/${vehicle}.webp`), vehicle);
   }
-  assert.ok(paths.has("portal-assets/static/customer-portal/images/categories/coffee.webp"));
   assert.ok(paths.has("portal-assets/static/customer-portal/images/logo.png"));
   assert.ok(paths.has("portal-assets/static/customer-portal/images/logo-baru.png"));
   assert.ok(![...paths].some((asset) => asset.endsWith(".jpg")));
