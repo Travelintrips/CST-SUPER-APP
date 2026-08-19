@@ -23,10 +23,10 @@ describe("startup readiness steady-state contract", () => {
     );
     const preStartBlock = apiIndex.slice(preStartBlockStart, preStartBlockEnd);
     const mirrorInstaller = preStartBlock.indexOf(
-      "await ensureSportPaymentMirrorTrigger();",
+      'runPreStartSubstep("sport_payment_mirror_trigger", ensureSportPaymentMirrorTrigger)',
     );
     const guard = preStartBlock.indexOf(
-      'isStartupMigrationComplete(\n    "api_pre_start_schema",\n    PRE_START_SCHEMA_BOOTSTRAP_VERSION,\n  )',
+      'isStartupMigrationComplete(\n      "api_pre_start_schema",\n      PRE_START_SCHEMA_BOOTSTRAP_VERSION,\n    )',
     );
     const earlyReturn = preStartBlock.indexOf(
       "if (preStartAlreadyComplete)",
@@ -42,6 +42,8 @@ describe("startup readiness steady-state contract", () => {
     expect(marker).toBeGreaterThan(guard);
     expect(apiIndex).toContain("repeated DDL/backfill skipped");
     expect(apiIndex).toContain("Critical API pre-start schema bootstrap and legacy compatibility columns");
+    expect(apiIndex).toContain("startup.pre_start_schema.substep");
+    expect(apiIndex).toContain("pre_start_schema substep timeout");
   });
 
   it("uses a dedicated persistent state table with explicit lifecycle states", () => {
@@ -84,6 +86,13 @@ describe("startup readiness steady-state contract", () => {
     expect(startupState).toContain("readCompletedVersion(name, context?.client)");
     expect(startupState).toContain("updateState(name, version, \"completed\", null, context.client)");
     expect(startupState).toContain("await updateState(stage.name, stage.version, \"completed\", null, lock)");
+  });
+
+  it("observes AsyncLocalStorage client propagation across the gated callback", () => {
+    expect(startupState).toContain("client_context_at_entry");
+    expect(startupState).toContain("client_context_in_nested_marker");
+    expect(startupState).toContain("client_context_after_await");
+    expect(startupState).toContain("client_context_same_stage");
   });
 
   it("exposes only a safe configured API revision on healthz", () => {

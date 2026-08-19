@@ -466,9 +466,28 @@ export async function runStartupMigrationStage<T>(
       // Compatibility migrations still persist their own historical marker.
       // Carry the lock through the callback so that marker writes do not try
       // to acquire the same session advisory lock a second time.
+      const contextAtEntry = stageLockContext.getStore();
+      logger.info(
+        {
+          name: stage.name,
+          version: stage.version,
+          client_context_at_entry: contextAtEntry?.client != null,
+        },
+        "[startup-stage] EXEC starting",
+      );
       const value = await stageLockContext.run({ name: stage.name, client: lock }, async () => {
         return await run();
       });
+      const contextAfterAwait = stageLockContext.getStore();
+      logger.info(
+        {
+          name: stage.name,
+          version: stage.version,
+          client_context_after_await: contextAfterAwait?.client != null,
+          client_context_same_stage: contextAfterAwait?.name === stage.name,
+        },
+        "[startup-stage] EXEC settled",
+      );
       const executionMs = Math.max(0, Math.round(performance.now() - executionStartedAt));
       const completionStartedAt = performance.now();
       await updateState(stage.name, stage.version, "completed", null, lock);
@@ -525,6 +544,15 @@ export async function isStartupMigrationComplete(
   version: string | number,
 ): Promise<boolean> {
   const context = stageLockContext.getStore();
+  logger.info(
+    {
+      name,
+      version,
+      client_context_in_nested_marker: context?.client != null,
+      client_context_stage: context?.name ?? null,
+    },
+    "[startup-stage] nested marker check",
+  );
   await ensureStartupStateStore(context?.client);
   return (await readCompletedVersion(name, context?.client)) === versionText(version);
 }
