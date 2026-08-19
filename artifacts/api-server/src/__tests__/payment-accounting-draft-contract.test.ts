@@ -47,6 +47,37 @@ describe("Sport Center payment accounting draft contract", () => {
     expect(draftFunction).toContain("RETURN v_existing_journal_id");
   });
 
+  it("resolves a complete public posting before any Sport Center journal write", () => {
+    const canonicalCheck = draftFunction.indexOf(
+      "Canonical accounting idempotency",
+    );
+    const journalInsert = draftFunction.indexOf(
+      "INSERT INTO sport_center.accounting_journals",
+    );
+
+    expect(canonicalCheck).toBeGreaterThan(-1);
+    expect(canonicalCheck).toBeLessThan(journalInsert);
+    expect(draftFunction).toContain("FULL JOIN public.accounting_entries");
+    expect(draftFunction).toContain(
+      "ap.source_type = 'sport_center'",
+    );
+    expect(draftFunction).toContain(
+      "ap.source_doc_id = p_payment_id",
+    );
+    expect(draftFunction).toContain(
+      "ae.source_payment_id = p_payment_id",
+    );
+    expect(draftFunction).toContain(
+      "v_existing_payment_status <> 'posted'",
+    );
+    expect(draftFunction).toContain(
+      "v_existing_entry_status <> 'posted'",
+    );
+    expect(draftFunction).toContain(
+      "RETURN NULL",
+    );
+  });
+
   it("preserves payment, tax, account, journal, and validation behavior", () => {
     expect(draftFunction).toContain("v_dpp := ROUND(");
     expect(draftFunction).toContain("v_tax := v_gross - v_dpp");
