@@ -1235,7 +1235,10 @@ export default function MarketplacePage() {
       if (!res.ok) throw new Error("Gagal memuat marketplace");
       return res.json() as Promise<MarketplaceItem[]>;
     },
-    staleTime: 60_000,
+    // Publication transitions must be reflected without waiting for a
+    // client-side cache window to expire.
+    staleTime: 0,
+    refetchOnWindowFocus: true,
   });
 
   // ── Build filters from fetched items ──────────────────────────────────────

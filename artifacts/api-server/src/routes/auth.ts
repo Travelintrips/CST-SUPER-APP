@@ -35,11 +35,11 @@ import { setPortalSessionCookie } from "../lib/supabaseAuth.js";
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
 
-// Startup diagnostic — shows secret length & suffix to verify correct value is loaded
+// Startup diagnostic intentionally reports presence only. Never log credential
+// fragments or lengths because logs are retained outside the application.
 console.log(
-  `[Google OAuth] client_id suffix: ...${(GOOGLE_CLIENT_ID ?? "").slice(-20)}` +
-  ` | secret length: ${(GOOGLE_CLIENT_SECRET ?? "").length}` +
-  ` | secret suffix: ...${(GOOGLE_CLIENT_SECRET ?? "").slice(-4)}`
+  `[Google OAuth] client_id configured: ${Boolean(GOOGLE_CLIENT_ID)}` +
+  ` | client_secret configured: ${Boolean(GOOGLE_CLIENT_SECRET)}`
 );
 
 function getGoogleOAuthClient(redirectUri: string) {

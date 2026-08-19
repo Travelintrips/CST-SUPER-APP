@@ -327,12 +327,11 @@ router.get("/marketplace", async (req, res) => {
   const { kind, category, vendorId, q, search } = req.query as {
     kind?: string; category?: string; vendorId?: string; q?: string; search?: string;
   };
-  // Skip cache when a search term is present (personalised result)
-  if (q || search) {
-    res.setHeader("Cache-Control", "no-store");
-  } else {
-    res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=120");
-  }
+  // Publication state is changed by authenticated vendor/admin workflows.
+  // Do not let a browser, CDN, or proxy serve a stale published/draft result.
+  // The database predicate remains the security boundary; this header keeps
+  // the public UI consistent immediately after a state transition.
+  res.setHeader("Cache-Control", "no-store");
   return res.json(await listPublicMarketplaceItems({ kind, category, vendorId, q, search }));
 });
 
