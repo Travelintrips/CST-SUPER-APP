@@ -475,10 +475,12 @@ export async function runStartupMigrationStage<T>(
         },
         "[startup-stage] EXEC starting",
       );
+      let contextAfterAwait: { name: string; client: PoolClient } | undefined;
       const value = await stageLockContext.run({ name: stage.name, client: lock }, async () => {
-        return await run();
+        const result = await run();
+        contextAfterAwait = stageLockContext.getStore();
+        return result;
       });
-      const contextAfterAwait = stageLockContext.getStore();
       logger.info(
         {
           name: stage.name,
