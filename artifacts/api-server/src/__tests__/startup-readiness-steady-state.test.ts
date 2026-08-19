@@ -76,6 +76,13 @@ describe("startup readiness steady-state contract", () => {
     expect(startupState).toContain("process crash");
   });
 
+  it("reuses the stage-lock client for nested compatibility markers", () => {
+    expect(startupState).toContain("await ensureStartupStateStore(context?.client)");
+    expect(startupState).toContain("readCompletedVersion(name, context?.client)");
+    expect(startupState).toContain("updateState(name, version, \"completed\", null, context.client)");
+    expect(startupState).toContain("await updateState(stage.name, stage.version, \"completed\", null, lock)");
+  });
+
   it("has an explicit 117-stage registry with stable names and metadata", () => {
     const rows = startupRegistry.match(/^  \["/gm) ?? [];
     expect(rows).toHaveLength(117);

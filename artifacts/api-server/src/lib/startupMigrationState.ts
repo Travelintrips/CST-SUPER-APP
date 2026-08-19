@@ -149,15 +149,25 @@ async function ensureStartupStateStore(
   await storeReady;
 }
 
-async function readCompletedVersion(name: string): Promise<string | null> {
+async function readCompletedVersion(
+  name: string,
+  existingClient?: PoolClient,
+): Promise<string | null> {
   gateMetrics.marker_reads++;
-  const result = await db.execute(sql`
+  const queryText = `
     SELECT stage_version
     FROM startup_migration_state
-    WHERE stage_name = ${name}
+    WHERE stage_name = $1
       AND status = 'completed'
     LIMIT 1
-  `);
+  `;
+  const result = existingClient
+    ? await existingClient.query(queryText, [name])
+    : await db.execute(sql`SELECT stage_version
+      FROM startup_migration_state
+      WHERE stage_name = ${name}
+        AND status = 'completed'
+      LIMIT 1`);
   return String(
     (result.rows[0] as { stage_version?: unknown } | undefined)?.stage_version ?? "",
   ) || null;
@@ -168,18 +178,19 @@ async function updateState(
   version: string | number,
   status: StartupMigrationStatus,
   lastError: string | null = null,
+  existingClient?: PoolClient,
 ): Promise<void> {
   gateMetrics.metadata_writes++;
-  await db.execute(sql`
+  const queryText = `
     INSERT INTO startup_migration_state
       (stage_name, stage_version, status, started_at, completed_at, last_error, updated_at)
     VALUES (
-      ${name},
-      ${versionText(version)},
-      ${status},
-      CASE WHEN ${status} = 'running' THEN NOW() ELSE NULL END,
-      CASE WHEN ${status} = 'completed' THEN NOW() ELSE NULL END,
-      ${lastError},
+      $1,
+      $2,
+      $3,
+      CASE WHEN $3 = 'running' THEN NOW() ELSE NULL END,
+      CASE WHEN $3 = 'completed' THEN NOW() ELSE NULL END,
+      $4,
       NOW()
     )
     ON CONFLICT (stage_name) DO UPDATE SET
@@ -195,7 +206,42 @@ async function updateState(
       END,
       last_error = EXCLUDED.last_error,
       updated_at = NOW()
-  `);
+  `;
+  if (existingClient) {
+    await existingClient.query(queryText, [
+      name,
+      versionText(version),
+      status,
+      lastError,
+    ]);
+  } else {
+    await db.execute(sql`
+      INSERT INTO startup_migration_state
+        (stage_name, stage_version, status, started_at, completed_at, last_error, updated_at)
+      VALUES (
+        ${name},
+        ${versionText(version)},
+        ${status},
+        CASE WHEN ${status} = 'running' THEN NOW() ELSE NULL END,
+        CASE WHEN ${status} = 'completed' THEN NOW() ELSE NULL END,
+        ${lastError},
+        NOW()
+      )
+      ON CONFLICT (stage_name) DO UPDATE SET
+        stage_version = EXCLUDED.stage_version,
+        status = EXCLUDED.status,
+        started_at = CASE
+          WHEN EXCLUDED.status = 'running' THEN NOW()
+          ELSE startup_migration_state.started_at
+        END,
+        completed_at = CASE
+          WHEN EXCLUDED.status = 'completed' THEN NOW()
+          ELSE NULL
+        END,
+        last_error = EXCLUDED.last_error,
+        updated_at = NOW()
+    `);
+  }
 }
 
 async function acquireStageLock(name: string): Promise<PoolClient> {
@@ -393,7 +439,7 @@ export async function runStartupMigrationStage<T>(
   const lockWaitMs = Math.max(0, Math.round(performance.now() - lockStartedAt));
   try {
     // Mandatory TOCTOU re-check after acquiring the per-stage lock.
-    const lockedStoredVersion = await readCompletedVersion(stage.name);
+    const lockedStoredVersion = await readCompletedVersion(stage.name, lock);
     if (lockedStoredVersion === versionText(stage.version)) {
       logger.info(
         { name: stage.name, version: stage.version, lock_wait_ms: lockWaitMs },
@@ -403,7 +449,7 @@ export async function runStartupMigrationStage<T>(
     }
 
     const metadataStartedAt = performance.now();
-    await updateState(stage.name, stage.version, "running");
+    await updateState(stage.name, stage.version, "running", null, lock);
     const metadataWriteMs = Math.max(0, Math.round(performance.now() - metadataStartedAt));
     logger.info(
       {
@@ -425,7 +471,7 @@ export async function runStartupMigrationStage<T>(
       });
       const executionMs = Math.max(0, Math.round(performance.now() - executionStartedAt));
       const completionStartedAt = performance.now();
-      await updateState(stage.name, stage.version, "completed");
+      await updateState(stage.name, stage.version, "completed", null, lock);
       const completionMetadataWriteMs = Math.max(
         0,
         Math.round(performance.now() - completionStartedAt),
@@ -445,7 +491,7 @@ export async function runStartupMigrationStage<T>(
     } catch (error) {
       const executionMs = Math.max(0, Math.round(performance.now() - executionStartedAt));
       try {
-        await updateState(stage.name, stage.version, "failed", sanitizeError(error));
+          await updateState(stage.name, stage.version, "failed", sanitizeError(error), lock);
       } catch (metadataError) {
         logger.error(
           { name: stage.name, version: stage.version, err: metadataError },
@@ -478,8 +524,9 @@ export async function isStartupMigrationComplete(
   name: string,
   version: string | number,
 ): Promise<boolean> {
-  await ensureStartupStateStore();
-  return (await readCompletedVersion(name)) === versionText(version);
+  const context = stageLockContext.getStore();
+  await ensureStartupStateStore(context?.client);
+  return (await readCompletedVersion(name, context?.client)) === versionText(version);
 }
 
 export async function markStartupMigrationComplete(
@@ -487,10 +534,10 @@ export async function markStartupMigrationComplete(
   version: string | number,
   _description: string,
 ): Promise<boolean> {
-  await ensureStartupStateStore();
   const context = stageLockContext.getStore();
+  await ensureStartupStateStore(context?.client);
   if (context?.name === name) {
-    await updateState(name, version, "completed");
+    await updateState(name, version, "completed", null, context.client);
   } else {
     // Standalone callers (for example a route-triggered legacy fast path)
     // still need the same serialization guarantee as the startup runner.
