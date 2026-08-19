@@ -55,6 +55,7 @@ import {
 import { logger } from "../lib/logger.js";
 import { postEntry, createDraftEntry, type PostingLine } from "../lib/accounting.js";
 import { recalculatePaymentStatus } from "../lib/services/index.js";
+import { reverseHistoricalDuplicate } from "../lib/accounting/historicalDuplicateReversal.js";
 import { transitionLogisticOrderStatus } from "../lib/services/logisticOrderStatusService.js";
 import { sendViaService as sendWhatsApp } from "../lib/waTransport.js";
 import { getAdminWa } from "../lib/adminWa.js";
@@ -2129,6 +2130,52 @@ router.post("/payments/:id/void", async (req, res) => {
     return res
       .status(400)
       .json({ message: String((err as Error)?.message ?? err) });
+  }
+});
+
+// POST /api/accounting/historical-duplicate-reversal
+// Controlled owner path for confirmed legacy sport-center double postings.
+// This route never selects or mutates accounting_payments automatically.
+router.post("/historical-duplicate-reversal", async (req, res) => {
+  const legacyEntryId = Number(req.body?.legacyEntryId);
+  const canonicalReplacementEntryId = Number(req.body?.canonicalReplacementEntryId);
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  const actor = String((req.user as any)?.email ?? (req.user as any)?.id ?? "admin");
+  const expectedCompanyId = resolveCompanyId(req);
+
+  if (!Number.isInteger(legacyEntryId) || !Number.isInteger(canonicalReplacementEntryId) ||
+      !reason || !expectedCompanyId) {
+    return res.status(400).json({
+      error: "legacyEntryId, canonicalReplacementEntryId, company context, dan reason wajib diisi",
+    });
+  }
+
+  try {
+    const result = await reverseHistoricalDuplicate({
+      legacyEntryId,
+      canonicalReplacementEntryId,
+      expectedCompanyId,
+      reason,
+      actor,
+    });
+    if (!result.ok) {
+      const status = result.code === "COMPANY_MISMATCH" ? 403 :
+        result.code === "NOT_FOUND" || result.code === "CANONICAL_NOT_FOUND" ? 404 :
+        result.code === "ALREADY_REVERSED" || result.code === "SAME_ENTRY" ? 409 : 422;
+      return res.status(status).json(result);
+    }
+    return res.json({
+      ...result,
+      legacyEntryId,
+      canonicalReplacementEntryId,
+      accountingPaymentsMutated: false,
+    });
+  } catch (err) {
+    return res.status(422).json({
+      ok: false,
+      error: String((err as Error)?.message ?? err),
+      code: "HISTORICAL_DUPLICATE_REVERSAL_FAILED",
+    });
   }
 });
 

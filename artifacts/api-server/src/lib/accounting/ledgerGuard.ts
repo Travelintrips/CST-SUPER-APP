@@ -202,7 +202,7 @@ export async function runGuardMigration(): Promise<void> {
       IF NEW.status = 'posted'
          AND NEW.company_id IS NOT NULL
          AND NEW.date IS NOT NULL
-         AND NEW.source NOT IN ('closing_entry', 'reversal', 'bank_reconciliation_void')
+      AND NEW.source NOT IN ('closing_entry', 'reversal', 'bank_reconciliation_void', 'historical_duplicate_reversal')
       THEN
         SELECT is_closed, override_allowed INTO v_is_closed, v_override
         FROM financial_periods
@@ -285,7 +285,7 @@ export async function runGuardMigration(): Promise<void> {
       -- draft→posted lewat UPDATE harus dicek di sini juga.
       IF OLD.status = 'draft' AND NEW.status = 'posted'
          AND NEW.company_id IS NOT NULL AND NEW.date IS NOT NULL
-         AND NEW.source NOT IN ('closing_entry', 'reversal', 'bank_reconciliation_void')
+          AND NEW.source NOT IN ('closing_entry', 'reversal', 'bank_reconciliation_void', 'historical_duplicate_reversal')
       THEN
         SELECT is_closed, override_allowed INTO v_is_closed, v_override
         FROM financial_periods
@@ -350,7 +350,8 @@ export async function runGuardMigration(): Promise<void> {
   //
   // Fix: UPDATE function check_period_locked() agar:
   //   a) Skip jika status='draft' atau 'pending_approval' (insert interim)
-  //   b) Skip source-source exempt (closing_entry, reversal, bank_reconciliation_void)
+  //   b) Skip source-source exempt (closing_entry, reversal, bank_reconciliation_void,
+  //      historical_duplicate_reversal)
   //      supaya konsisten dengan ae_period_lock_insert_guard
   await db.execute(sql.raw(`
     CREATE OR REPLACE FUNCTION check_period_locked()

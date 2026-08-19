@@ -93,6 +93,19 @@ export async function runAccountingMigration(): Promise<void> {
         END IF;
       END $$
     `);
+    await db.execute(sql`
+      ALTER TABLE accounting_entries
+        ADD COLUMN IF NOT EXISTS voided_by TEXT
+    `);
+    await db.execute(sql`
+      ALTER TYPE accounting_entry_source
+        ADD VALUE IF NOT EXISTS 'historical_duplicate_reversal'
+    `);
+    await db.execute(sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS accounting_entries_historical_duplicate_reversal_uniq
+      ON accounting_entries(company_id, source, source_id)
+      WHERE source::text = 'historical_duplicate_reversal' AND source_id IS NOT NULL
+    `);
 
     // ── accounting_payment_status enum: tambahkan nilai yang dipakai di kode ──
     // DB awal hanya punya 'posted' dan 'voided'; kode butuh pending_approval/approved/rejected

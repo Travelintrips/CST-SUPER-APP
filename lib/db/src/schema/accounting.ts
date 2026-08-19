@@ -122,6 +122,7 @@ export const accountingEntrySourceEnum = pgEnum("accounting_entry_source", [
   "gsheet_import",
   "bank_reconciliation",         // Reconciliation approval journal — canonical posting path
   "bank_reconciliation_void",    // Reversal of a reconciliation journal
+  "historical_duplicate_reversal", // Controlled reversal of confirmed historical duplicate
   "fleet_cash_payment",
   "marketplace_commission", // Added Phase 1C — 2026-07-02
   "kasbon",                 // Advance disbursement/repayment — already in DB enum
@@ -320,6 +321,7 @@ export const accountingEntriesTable = pgTable("accounting_entries", {
   postedAt: timestamp("posted_at"),
   voidedAt: timestamp("voided_at"),
   voidEntryId: integer("void_entry_id"),
+  voidedBy: text("voided_by"),
 }, (t) => ({
   uniqAutoSource: uniqueIndex("accounting_entries_source_uniq")
     .on(t.source, t.sourceId)

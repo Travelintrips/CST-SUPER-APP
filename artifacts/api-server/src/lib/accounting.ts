@@ -698,6 +698,7 @@ const GOVERNANCE_EXEMPT_SOURCES = new Set([
   "reversal",
   "bank_reconciliation",
   "bank_reconciliation_void",
+  "historical_duplicate_reversal",
   "closing_entry",       // digunakan oleh closeFinancialPeriod()
   "governance_approval", // digunakan oleh financeGovernance approve route
 ]);

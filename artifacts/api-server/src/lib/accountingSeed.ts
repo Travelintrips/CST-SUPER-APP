@@ -305,6 +305,7 @@ async function applyRuntimeMigrations(): Promise<void> {
   try { await db.execute(sql.raw(`ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'reversal'`)); } catch { /* already exists */ }
   try { await db.execute(sql.raw(`ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'bank_reconciliation'`)); } catch { /* already exists */ }
   try { await db.execute(sql.raw(`ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'bank_reconciliation_void'`)); } catch { /* already exists */ }
+  try { await db.execute(sql.raw(`ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'historical_duplicate_reversal'`)); } catch { /* already exists */ }
   try { await db.execute(sql.raw(`ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'fund_transfer'`)); } catch { /* already exists */ }
   try { await db.execute(sql.raw(`ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'sport_center_booking'`)); } catch { /* already exists */ }
   try { await db.execute(sql.raw(`ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'sport_center_booking_reversal'`)); } catch { /* already exists */ }
@@ -1308,6 +1309,7 @@ const ENUM_PATCHES = [
   `ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'reversal'`,
   `ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'bank_reconciliation'`,
   `ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'bank_reconciliation_void'`,
+  `ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'historical_duplicate_reversal'`,
   `ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'fund_transfer'`,
   `ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'cogs_delivery'`,
   `ALTER TYPE accounting_entry_source ADD VALUE IF NOT EXISTS 'logistic_vendor_cost'`,
