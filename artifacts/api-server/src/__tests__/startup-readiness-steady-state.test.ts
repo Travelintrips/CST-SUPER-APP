@@ -71,8 +71,8 @@ describe("startup readiness steady-state contract", () => {
 
   it("only marks completion after success and records failures safely", () => {
     expect(startupState).toContain("await run()");
-    expect(startupState).toContain("updateState(stage.name, stage.version, \"completed\")");
-    expect(startupState).toContain("updateState(stage.name, stage.version, \"failed\", sanitizeError(error))");
+    expect(startupState).toContain("updateState(stage.name, stage.version, \"completed\", null, lock)");
+    expect(startupState).toContain("updateState(stage.name, stage.version, \"failed\", sanitizeError(error), lock)");
     expect(startupState).toContain("process crash");
   });
 
