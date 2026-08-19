@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { getApiRevision } from "../lib/buildMetadata.js";
 
 const apiIndex = readFileSync(resolve(process.cwd(), "src/index.ts"), "utf8");
 const rlsMigration = readFileSync(resolve(process.cwd(), "src/lib/rlsMigration.ts"), "utf8");
 const startupState = readFileSync(resolve(process.cwd(), "src/lib/startupMigrationState.ts"), "utf8");
 const startupRegistry = readFileSync(resolve(process.cwd(), "src/lib/startupMigrationRegistry.ts"), "utf8");
+const healthRoute = readFileSync(resolve(process.cwd(), "src/routes/health.ts"), "utf8");
+const buildMetadata = readFileSync(resolve(process.cwd(), "src/lib/buildMetadata.ts"), "utf8");
 const bankImport = readFileSync(resolve(process.cwd(), "src/routes/bankMutationImport.ts"), "utf8");
 const bankMasters = readFileSync(resolve(process.cwd(), "src/routes/bankMutationMasters.ts"), "utf8");
 const sportMigration = readFileSync(resolve(process.cwd(), "src/modules/sport-center/migration.ts"), "utf8");
@@ -81,6 +84,16 @@ describe("startup readiness steady-state contract", () => {
     expect(startupState).toContain("readCompletedVersion(name, context?.client)");
     expect(startupState).toContain("updateState(name, version, \"completed\", null, context.client)");
     expect(startupState).toContain("await updateState(stage.name, stage.version, \"completed\", null, lock)");
+  });
+
+  it("exposes only a safe configured API revision on healthz", () => {
+    expect(healthRoute).toContain("revision: getApiRevision()");
+    expect(buildMetadata).toContain("REPLIT_DEPLOYMENT_REVISION");
+    expect(buildMetadata).toContain("SAFE_REVISION");
+    expect(buildMetadata).toContain('"unknown"');
+    expect(buildMetadata).not.toContain("JSON.stringify(process.env");
+    expect(getApiRevision({ REPLIT_DEPLOYMENT_REVISION: "f144be2" })).toBe("f144be2");
+    expect(getApiRevision({ REPLIT_DEPLOYMENT_REVISION: "secret value\n" })).toBe("unknown");
   });
 
   it("has an explicit 117-stage registry with stable names and metadata", () => {

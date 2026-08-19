@@ -12,6 +12,26 @@ globalThis.require = createRequire(import.meta.url);
 const artifactDir = path.dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = path.resolve(artifactDir, "../..");
 
+function resolveBuildRevision() {
+  const configured =
+    process.env.REPLIT_DEPLOYMENT_REVISION ??
+    process.env.REPLIT_GIT_COMMIT_SHA ??
+    process.env.GIT_COMMIT_SHA ??
+    process.env.BUILD_SHA ??
+    process.env.SOURCE_VERSION;
+  if (configured?.trim()) return configured.trim();
+
+  try {
+    return execSync("git rev-parse HEAD", {
+      cwd: workspaceRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return "unknown";
+  }
+}
+
 function buildLib(name) {
   const libDir = path.resolve(workspaceRoot, "lib", name);
   console.log(`[build] Compiling lib/${name}...`);
@@ -32,6 +52,7 @@ async function buildAll() {
   await rm(distDir, { recursive: true, force: true });
 
   const t0 = Date.now();
+  const buildRevision = resolveBuildRevision();
   const result = await esbuild({
     entryPoints: [path.resolve(artifactDir, "src/index.ts")],
     platform: "node",
@@ -43,6 +64,9 @@ async function buildAll() {
     // Silent: suppress esbuild's built-in reporter (which adds ⚠️ for files >500KB).
     // We print our own summary below using metafile data.
     logLevel: "error",
+    define: {
+      "__API_BUILD_REVISION__": JSON.stringify(buildRevision),
+    },
     metafile: true,
     // Keep explicit list for native addons that can't be bundled.
     external: [

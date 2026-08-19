@@ -5,6 +5,7 @@ import { getWorkerHeartbeats, getWorkerAggregateStatus } from "../lib/workerHear
 import { getE2ESafetyStatus, isProductionMode } from "../lib/e2eSafetyGuard.js";
 import { checkSequenceDesync } from "../lib/accountingMigration.js";
 import { checkSmtpConnection } from "../lib/mailer.js";
+import { getApiRevision } from "../lib/buildMetadata.js";
 
 const router: IRouter = Router();
 const startedAt = Date.now();
@@ -129,6 +130,7 @@ router.get("/healthz", async (_req, res) => {
     dbLatencyMs: db.latencyMs,
     uptimeSeconds,
     version,
+    revision: getApiRevision(),
     services: {
       db: db.status,
       whatsapp: whatsapp.status,
