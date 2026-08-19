@@ -90,7 +90,9 @@ function phaseElapsed(startedAt: number | null, status: StartupPhaseStatus | nul
   return status === "running" ? elapsedSince(startedAt) : Math.max(0, Date.now() - startedAt);
 }
 
-function errorCategory(error: unknown): StartupReadinessSnapshot["failed_substep_category"] {
+function errorCategory(
+  error: unknown,
+): NonNullable<StartupReadinessSnapshot["failed_substep_category"]> {
   const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
   if (message.includes("timeout") || message.includes("timed out")) return "timeout";
   if (
