@@ -566,7 +566,7 @@ export async function markStartupMigrationComplete(
 ): Promise<boolean> {
   const context = stageLockContext.getStore();
   await ensureStartupStateStore(context?.client);
-  if (context?.name === name) {
+    if (context?.client) {
     await updateState(name, version, "completed", null, context.client);
   } else {
     // Standalone callers (for example a route-triggered legacy fast path)

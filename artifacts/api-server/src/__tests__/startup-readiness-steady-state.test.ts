@@ -96,6 +96,8 @@ describe("startup readiness steady-state contract", () => {
     expect(startupState).toContain("await ensureStartupStateStore(context?.client)");
     expect(startupState).toContain("readCompletedVersion(name, context?.client)");
     expect(startupState).toContain("updateState(name, version, \"completed\", null, context.client)");
+    expect(startupState).toContain("if (context?.client)");
+    expect(startupState).not.toContain("if (context?.name === name)");
     expect(startupState).toContain("await updateState(stage.name, stage.version, \"completed\", null, lock)");
   });
 
@@ -176,6 +178,30 @@ describe("startup readiness steady-state contract", () => {
     expect(snapshot.failed_substep).toBe("failed_substep");
     expect(snapshot.current_substep_status).toBe("failed");
     expect(snapshot.failed_substep_category).toBe("unknown");
+    expect(snapshot.failed_substep_error).toEqual({
+      category: "unknown",
+      error_name: "Error",
+      error_code: null,
+      operation: "failed_substep",
+    });
+    expect(JSON.stringify(snapshot)).not.toContain("password");
+    expect(JSON.stringify(snapshot)).not.toContain("do-not-expose");
+  });
+
+  it("exposes only safe marker failure classification", () => {
+    markStartupSubstepStarting("api_pre_start_schema_marker_completion");
+    markStartupSubstepFailed("api_pre_start_schema_marker_completion", {
+      name: "DatabaseError",
+      code: "42P01",
+      message: "password=do-not-expose",
+    });
+    const snapshot = getStartupReadinessSnapshot();
+    expect(snapshot.failed_substep_error).toEqual({
+      category: "unknown",
+      error_name: "Error",
+      error_code: "42P01",
+      operation: "api_pre_start_schema_marker_completion",
+    });
     expect(JSON.stringify(snapshot)).not.toContain("password");
     expect(JSON.stringify(snapshot)).not.toContain("do-not-expose");
   });

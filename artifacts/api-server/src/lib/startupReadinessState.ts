@@ -15,6 +15,12 @@ export type StartupReadinessSnapshot = {
   current_substep_status: StartupSubstepStatus | null;
   failed_stage: string | null;
   failed_substep: string | null;
+  failed_substep_error: {
+    category: "timeout" | "database" | "unknown";
+    error_name: string;
+    error_code: string | null;
+    operation: string;
+  } | null;
   failed_substep_category: "timeout" | "database" | "unknown" | null;
   startup_registry_progress: {
     completed_stages: number;
@@ -41,6 +47,7 @@ type MutableState = {
   currentSubstepElapsedMs: number | null;
   failedStage: string | null;
   failedSubstep: string | null;
+  failedSubstepError: StartupReadinessSnapshot["failed_substep_error"];
   failedSubstepCategory: StartupReadinessSnapshot["failed_substep_category"];
   registryCompletedStages: number;
   registryTotalStages: number;
@@ -63,6 +70,7 @@ const state: MutableState = {
   currentSubstepElapsedMs: null,
   failedStage: null,
   failedSubstep: null,
+  failedSubstepError: null,
   failedSubstepCategory: null,
   registryCompletedStages: 0,
   registryTotalStages: 0,
@@ -97,12 +105,29 @@ function errorCategory(error: unknown): StartupReadinessSnapshot["failed_substep
   return "unknown";
 }
 
+function safeErrorName(error: unknown): string {
+  if (error instanceof Error && error.name && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(error.name)) {
+    return error.name;
+  }
+  return "Error";
+}
+
+function safeErrorCode(error: unknown): string | null {
+  const code = error && typeof error === "object" && "code" in error
+    ? (error as { code?: unknown }).code
+    : null;
+  return typeof code === "string" && /^[A-Za-z0-9_-]{1,32}$/.test(code)
+    ? code
+    : null;
+}
+
 export function markStartupSubstepStarting(substep: string): void {
   state.currentSubstep = substep;
   state.currentSubstepStartedAt = Date.now();
   state.currentSubstepStatus = "running";
   state.currentSubstepElapsedMs = 0;
   state.failedSubstep = null;
+  state.failedSubstepError = null;
   state.failedSubstepCategory = null;
 }
 
@@ -173,6 +198,7 @@ export function markStartupSubstepCompleted(substep: string): void {
   state.currentSubstepStatus = null;
   state.currentSubstepElapsedMs = null;
   state.failedSubstep = null;
+  state.failedSubstepError = null;
   state.failedSubstepCategory = null;
 }
 
@@ -183,6 +209,12 @@ export function markStartupSubstepFailed(substep: string, error: unknown): void 
   state.currentSubstepElapsedMs = startedAt == null ? null : elapsedSince(startedAt);
   state.failedSubstep = substep;
   state.failedSubstepCategory = errorCategory(error);
+  state.failedSubstepError = {
+    category: state.failedSubstepCategory,
+    error_name: safeErrorName(error),
+    error_code: safeErrorCode(error),
+    operation: substep,
+  };
 }
 
 export function getStartupReadinessSnapshot(): StartupReadinessSnapshot {
@@ -208,6 +240,7 @@ export function getStartupReadinessSnapshot(): StartupReadinessSnapshot {
     current_substep_status: state.currentSubstepStatus,
     failed_stage: state.failedStage,
     failed_substep: state.failedSubstep,
+    failed_substep_error: state.failedSubstepError,
     failed_substep_category: state.failedSubstepCategory,
     startup_registry_progress: {
       completed_stages: state.registryCompletedStages,
