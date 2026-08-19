@@ -4,9 +4,16 @@ import { resolve } from "node:path";
 import { getApiRevision } from "../lib/buildMetadata.js";
 import {
   getStartupReadinessSnapshot,
+  markMigrationFinalizeCompleted,
+  markMigrationFinalizeStarting,
+  markStartupSeedPhaseCompleted,
+  markStartupSeedPhaseStarting,
+  markStartupStageCompleted,
+  markStartupStageStarting,
   markStartupSubstepCompleted,
   markStartupSubstepFailed,
   markStartupSubstepStarting,
+  setStartupRegistryProgress,
 } from "../lib/startupReadinessState.js";
 
 const apiIndex = readFileSync(resolve(process.cwd(), "src/index.ts"), "utf8");
@@ -37,9 +44,7 @@ describe("startup readiness steady-state contract", () => {
     const earlyReturn = preStartBlock.indexOf(
       "if (preStartAlreadyComplete)",
     );
-    const marker = preStartBlock.indexOf(
-      'markStartupMigrationComplete(\n    "api_pre_start_schema"',
-    );
+    const marker = preStartBlock.indexOf('markStartupMigrationComplete(');
 
     expect(mirrorInstaller).toBeGreaterThan(-1);
     expect(guard).toBeGreaterThan(-1);
@@ -173,6 +178,40 @@ describe("startup readiness steady-state contract", () => {
     expect(snapshot.failed_substep_category).toBe("unknown");
     expect(JSON.stringify(snapshot)).not.toContain("password");
     expect(JSON.stringify(snapshot)).not.toContain("do-not-expose");
+  });
+
+  it("exposes the complete post-pre-start finalization tail", () => {
+    markStartupSubstepStarting("api_pre_start_schema_marker_completion");
+    markStartupSubstepCompleted("api_pre_start_schema_marker_completion");
+    markStartupStageStarting("Pre-start schema migrations");
+    markStartupStageCompleted("Pre-start schema migrations");
+    setStartupRegistryProgress(4, 117, "accounting");
+    markStartupStageStarting("Accounting migration");
+    let snapshot = getStartupReadinessSnapshot();
+    expect(snapshot.current_stage).toBe("Accounting migration");
+    expect(snapshot.current_stage_status).toBe("running");
+    expect(snapshot.startup_registry_progress).toEqual({
+      completed_stages: 4,
+      total_stages: 117,
+      current_stage_name: "accounting",
+    });
+
+    markStartupStageCompleted("Accounting migration");
+    setStartupRegistryProgress(5, 117, null);
+    markStartupSeedPhaseStarting("accounting_defaults");
+    markStartupSeedPhaseCompleted("accounting_defaults");
+    markMigrationFinalizeStarting();
+    markMigrationFinalizeCompleted();
+    snapshot = getStartupReadinessSnapshot();
+
+    expect(snapshot.last_completed_stage).toBe("Accounting migration");
+    expect(snapshot.seed_phase).toMatchObject({
+      name: "accounting_defaults",
+      status: "completed",
+    });
+    expect(snapshot.migration_finalize_status).toBe("completed");
+    expect(JSON.stringify(snapshot)).not.toContain("password");
+    expect(JSON.stringify(snapshot)).not.toContain("connectionString");
   });
 
   it("keeps build revision deterministic and safe", () => {

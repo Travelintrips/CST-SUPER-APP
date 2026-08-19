@@ -51,9 +51,18 @@ import { runUserRoleMigration } from "./lib/userRoleMigration";
 import { runAuditLogMigration } from "./lib/auditLogMigration";
 import {
   getStartupReadinessSnapshot,
+  markMigrationFinalizeCompleted,
+  markMigrationFinalizeStarting,
+  markStartupSeedPhaseCompleted,
+  markStartupSeedPhaseFailed,
+  markStartupSeedPhaseStarting,
+  markStartupStageCompleted,
+  markStartupStageFailed,
+  markStartupStageStarting,
   markStartupSubstepCompleted,
   markStartupSubstepFailed,
   markStartupSubstepStarting,
+  setStartupRegistryProgress,
 } from "./lib/startupReadinessState";
 
 import { runNavPreferencesMigration } from "./lib/navPreferencesMigration";
@@ -351,16 +360,51 @@ async function runGatedStartupStage<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
   const stage = getStartupStageDefinition(displayName);
+  markStartupStageStarting(displayName);
+  const isRegistryStage = STARTUP_MIGRATION_REGISTRY.some(
+    (registryStage) => registryStage.name === stage.name,
+  );
+  if (isRegistryStage) {
+    setStartupRegistryProgress(
+      startupStageSummary.executed + startupStageSummary.skipped,
+      STARTUP_MIGRATION_REGISTRY.length,
+      stage.name,
+    );
+  }
   try {
     const result = await runStartupMigrationStage(stage, fn);
     if (result.status === "skipped") {
       startupStageSummary.skipped++;
+      markStartupStageCompleted(displayName);
+      if (isRegistryStage) {
+        setStartupRegistryProgress(
+          startupStageSummary.executed + startupStageSummary.skipped,
+          STARTUP_MIGRATION_REGISTRY.length,
+          null,
+        );
+      }
       return undefined as T;
     }
     startupStageSummary.executed++;
+    markStartupStageCompleted(displayName);
+    if (isRegistryStage) {
+      setStartupRegistryProgress(
+        startupStageSummary.executed + startupStageSummary.skipped,
+        STARTUP_MIGRATION_REGISTRY.length,
+        null,
+      );
+    }
     return result.value as T;
   } catch (error) {
     startupStageSummary.failed++;
+    markStartupStageFailed(displayName);
+    if (isRegistryStage) {
+      setStartupRegistryProgress(
+        startupStageSummary.executed + startupStageSummary.skipped,
+        STARTUP_MIGRATION_REGISTRY.length,
+        stage.name,
+      );
+    }
     throw error;
   }
 }
@@ -1712,11 +1756,18 @@ async function runCriticalPreStartMigrations() {
     600_000,
   );
 
-  await markStartupMigrationComplete(
-    "api_pre_start_schema",
-    PRE_START_SCHEMA_BOOTSTRAP_VERSION,
-    "Critical API pre-start schema bootstrap and legacy compatibility columns",
-  );
+  markStartupSubstepStarting("api_pre_start_schema_marker_completion");
+  try {
+    await markStartupMigrationComplete(
+      "api_pre_start_schema",
+      PRE_START_SCHEMA_BOOTSTRAP_VERSION,
+      "Critical API pre-start schema bootstrap and legacy compatibility columns",
+    );
+    markStartupSubstepCompleted("api_pre_start_schema_marker_completion");
+  } catch (error) {
+    markStartupSubstepFailed("api_pre_start_schema_marker_completion", error);
+    throw error;
+  }
 }
 
 // Flag set to true once the full migration + seed chain completes.
@@ -2101,33 +2152,101 @@ async function startServer() {
         });
       }
     }))
-    .then(() => timeStartupStage("Accounting defaults seed", seedAccountingDefaults))
-    .then(() => timeStartupStage("Development COA sync", syncDevCoaToFixture))
-    .then(() => timeStartupStage("Additional tax seed", seedAdditionalTaxes))
-    .then(() => timeStartupStage("Expense category account backfill", backfillExpenseCategoryAccounts))
-    .then(() => timeStartupStage("MDR expense category backfill", backfillMdrExpenseCategory))
-    .then(() => timeStartupStage("UOM seed", seedUom))
-    .then(() => timeStartupStage("Product templates seed", seedProductTemplates))
-    .then(() => timeStartupStage("Logistics/catalog/demo seed chain", () =>
-      seedLogisticsServiceItems()
-        .then(() => seedCatalogProducts())
-        .then(() => {
-          // Demo fixtures are dev-only — skip in production deployments to keep
-          // the production database free of synthetic test data.
-          if (process.env["REPLIT_DEPLOYMENT"] !== "1") {
-            return seedDemoData().then(() => seedDemoDrivers());
-          }
-        })
-        .then(() => seedAirFreightRates())
-        .then(() => remediateOrphanProducts())
-        .catch((seedErr) => {
-          logger.error({ err: seedErr }, "Logistics/demo seed failed");
-          throw seedErr;
-        })
-    ))
+    .then(() => timeStartupStage("Accounting defaults seed", async () => {
+      markStartupSeedPhaseStarting("accounting_defaults");
+      try {
+        await seedAccountingDefaults();
+        markStartupSeedPhaseCompleted("accounting_defaults");
+      } catch (error) {
+        markStartupSeedPhaseFailed("accounting_defaults");
+        throw error;
+      }
+    }))
+    .then(() => timeStartupStage("Development COA sync", async () => {
+      markStartupSeedPhaseStarting("development_coa_sync");
+      try {
+        await syncDevCoaToFixture();
+        markStartupSeedPhaseCompleted("development_coa_sync");
+      } catch (error) {
+        markStartupSeedPhaseFailed("development_coa_sync");
+        throw error;
+      }
+    }))
+    .then(() => timeStartupStage("Additional tax seed", async () => {
+      markStartupSeedPhaseStarting("additional_tax");
+      try {
+        await seedAdditionalTaxes();
+        markStartupSeedPhaseCompleted("additional_tax");
+      } catch (error) {
+        markStartupSeedPhaseFailed("additional_tax");
+        throw error;
+      }
+    }))
+    .then(() => timeStartupStage("Expense category account backfill", async () => {
+      markStartupSeedPhaseStarting("expense_category_account_backfill");
+      try {
+        await backfillExpenseCategoryAccounts();
+        markStartupSeedPhaseCompleted("expense_category_account_backfill");
+      } catch (error) {
+        markStartupSeedPhaseFailed("expense_category_account_backfill");
+        throw error;
+      }
+    }))
+    .then(() => timeStartupStage("MDR expense category backfill", async () => {
+      markStartupSeedPhaseStarting("mdr_expense_category_backfill");
+      try {
+        await backfillMdrExpenseCategory();
+        markStartupSeedPhaseCompleted("mdr_expense_category_backfill");
+      } catch (error) {
+        markStartupSeedPhaseFailed("mdr_expense_category_backfill");
+        throw error;
+      }
+    }))
+    .then(() => timeStartupStage("UOM seed", async () => {
+      markStartupSeedPhaseStarting("uom");
+      try {
+        await seedUom();
+        markStartupSeedPhaseCompleted("uom");
+      } catch (error) {
+        markStartupSeedPhaseFailed("uom");
+        throw error;
+      }
+    }))
+    .then(() => timeStartupStage("Product templates seed", async () => {
+      markStartupSeedPhaseStarting("product_templates");
+      try {
+        await seedProductTemplates();
+        markStartupSeedPhaseCompleted("product_templates");
+      } catch (error) {
+        markStartupSeedPhaseFailed("product_templates");
+        throw error;
+      }
+    }))
+    .then(() => timeStartupStage("Logistics/catalog/demo seed chain", async () => {
+      markStartupSeedPhaseStarting("logistics_catalog_demo");
+      try {
+        await seedLogisticsServiceItems();
+        await seedCatalogProducts();
+        // Demo fixtures are dev-only — skip in production deployments to keep
+        // the production database free of synthetic test data.
+        if (process.env["REPLIT_DEPLOYMENT"] !== "1") {
+          await seedDemoData();
+          await seedDemoDrivers();
+        }
+        await seedAirFreightRates();
+        await remediateOrphanProducts();
+        markStartupSeedPhaseCompleted("logistics_catalog_demo");
+      } catch (seedErr) {
+        markStartupSeedPhaseFailed("logistics_catalog_demo");
+        logger.error({ err: seedErr }, "Logistics/demo seed failed");
+        throw seedErr;
+      }
+    }))
     .then(() => {
+      markMigrationFinalizeStarting();
       migrationsComplete = true;
       migrationCompletedAt = Date.now();
+      markMigrationFinalizeCompleted();
       // Do not let background workers compete with the startup migration chain
       // for the small development session-pooler connection budget.
       startAll();

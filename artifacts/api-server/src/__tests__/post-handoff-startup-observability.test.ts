@@ -14,7 +14,7 @@ describe("post-marketplace handoff startup observability", () => {
       handoff,
     );
     const marker = apiIndex.indexOf(
-      'await markStartupMigrationComplete(\n    "api_pre_start_schema"',
+      'markStartupSubstepStarting("api_pre_start_schema_marker_completion")',
       continuation,
     );
 
@@ -28,7 +28,7 @@ describe("post-marketplace handoff startup observability", () => {
   it("keeps the continuation on the existing bounded substep state machine", () => {
     const wrapper = apiIndex.slice(
       apiIndex.indexOf('runPreStartSubstep(\n    "legacy_pre_start_schema_continuation"'),
-      apiIndex.indexOf('await markStartupMigrationComplete(\n    "api_pre_start_schema"'),
+      apiIndex.indexOf('markStartupSubstepStarting("api_pre_start_schema_marker_completion")'),
     );
 
     expect(wrapper).toContain("runPreStartSubstep");
