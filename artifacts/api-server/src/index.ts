@@ -363,6 +363,53 @@ async function runGatedStartupStage<T>(
 // These ensure Drizzle ORM columns exist before any query can be executed.
 const PRE_START_SCHEMA_BOOTSTRAP_VERSION = "schema-bootstrap-v1";
 
+const PRE_START_SUBSTEP_TIMEOUT_MS = 120_000;
+
+async function runPreStartSubstep<T>(
+  substep: string,
+  fn: () => Promise<T>,
+  timeoutMs = PRE_START_SUBSTEP_TIMEOUT_MS,
+): Promise<T> {
+  const startedAt = performance.now();
+  logger.info(
+    { stage: "pre_start_schema", substep, state: "starting", elapsed_ms: 0 },
+    "startup.pre_start_schema.substep",
+  );
+  let timeoutHandle: NodeJS.Timeout | undefined;
+  try {
+    const timeout = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        reject(new Error(`pre_start_schema substep timeout: ${substep}`));
+      }, timeoutMs);
+    });
+    const result = await Promise.race([fn(), timeout]);
+    logger.info(
+      {
+        stage: "pre_start_schema",
+        substep,
+        state: "completed",
+        elapsed_ms: Math.max(0, Math.round(performance.now() - startedAt)),
+      },
+      "startup.pre_start_schema.substep",
+    );
+    return result;
+  } catch (err) {
+    logger.error(
+      {
+        stage: "pre_start_schema",
+        substep,
+        state: "failed",
+        elapsed_ms: Math.max(0, Math.round(performance.now() - startedAt)),
+        err,
+      },
+      "startup.pre_start_schema.substep",
+    );
+    throw err;
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+  }
+}
+
 async function runCriticalPreStartMigrations() {
   // Accounting posting emits a non-fatal audit event. Upgrade legacy
   // ledger_events before any authenticated posting can be accepted.
@@ -370,9 +417,12 @@ async function runCriticalPreStartMigrations() {
   // existing environments may already have the bootstrap marker while still
   // needing a newly-added trigger/function. Its DDL is idempotent and guarded
   // by schema readiness, so running it on every startup is safe.
-  const preStartAlreadyComplete = await isStartupMigrationComplete(
-    "api_pre_start_schema",
-    PRE_START_SCHEMA_BOOTSTRAP_VERSION,
+  const preStartAlreadyComplete = await runPreStartSubstep(
+    "marker_check",
+    () => isStartupMigrationComplete(
+      "api_pre_start_schema",
+      PRE_START_SCHEMA_BOOTSTRAP_VERSION,
+    ),
   );
 
   // Install the canonical Sport Center payment resolver before the long
@@ -381,7 +431,7 @@ async function runCriticalPreStartMigrations() {
   // settlement records.
   try {
     logger.info("Pre-start migration: Sport Center mirror trigger starting");
-    await ensureSportPaymentMirrorTrigger();
+    await runPreStartSubstep("sport_payment_mirror_trigger", ensureSportPaymentMirrorTrigger);
     logger.info("Sport Center canonical payment metadata resolver ready");
   } catch (err) {
     logger.error({ err }, "Sport Center canonical payment resolver installation failed");
@@ -394,14 +444,14 @@ async function runCriticalPreStartMigrations() {
   }
 
   logger.info("Pre-start migration: ledger events entry_id starting");
-  await runLedgerEventsEntryIdMigration();
+  await runPreStartSubstep("ledger_events_entry_id", runLedgerEventsEntryIdMigration);
   logger.info("Pre-start migration: ledger events entry_id complete");
 
   // Sprint 8B AP handoff must be available before the API accepts lifecycle
   // writes. Run it first so unrelated legacy DDL cannot delay this scope.
   try {
     logger.info("Pre-start migration: marketplace AP preparation starting");
-    await runMktApPreparationMigration();
+    await runPreStartSubstep("marketplace_ap_preparation", runMktApPreparationMigration);
     logger.info("Pre-start migration: marketplace AP preparation complete");
   } catch (err) {
     logger.error({ err }, "Marketplace AP preparation migration failed");
@@ -409,14 +459,14 @@ async function runCriticalPreStartMigrations() {
   }
   try {
     logger.info("Pre-start migration: marketplace handoff chain starting");
-    await runMktPaymentHandoffMigration();
-    await runMktAccountingHandoffMigration();
+    await runPreStartSubstep("marketplace_payment_handoff", runMktPaymentHandoffMigration);
+    await runPreStartSubstep("marketplace_accounting_handoff", runMktAccountingHandoffMigration);
     // Sprint 09E development-only verification schema. Production schema
     // changes are applied through the publish flow, never startup DDL.
     const isDevelopment = process.env["NODE_ENV"] !== "production"
       && !process.env["REPLIT_DEPLOYMENT"];
     if (isDevelopment) {
-      await runMktReconciliationLinkMigration();
+      await runPreStartSubstep("marketplace_reconciliation_link", runMktReconciliationLinkMigration);
     }
     logger.info("Pre-start migration: marketplace handoff chain complete");
   } catch (err) {
