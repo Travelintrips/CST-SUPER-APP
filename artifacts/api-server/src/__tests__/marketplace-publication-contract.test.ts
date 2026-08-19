@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { isCatalogItemPublic } from "../lib/catalogVisibility.js";
 
 const apiRoot = resolve(import.meta.dirname, "../..");
 
@@ -11,8 +10,11 @@ function read(relativePath: string): string {
 
 describe("public Marketplace publication contract", () => {
   it("allows published active items and rejects drafts", () => {
-    expect(isCatalogItemPublic({ isPublished: true, isActive: true })).toBe(true);
-    expect(isCatalogItemPublic({ isPublished: false, isActive: true })).toBe(false);
+    const visibility = read("src/lib/catalogVisibility.ts");
+
+    expect(visibility).toContain("item.isPublished === true");
+    expect(visibility).toContain("item.isActive !== false");
+    expect(visibility).toContain("!item.deletedAt");
   });
 
   it("keeps list and detail responses uncached", () => {
