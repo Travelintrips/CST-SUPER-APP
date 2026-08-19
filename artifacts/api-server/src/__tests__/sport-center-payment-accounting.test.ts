@@ -161,6 +161,98 @@ describe("bulkIngestModule('sport_center') — sport center payments accounting"
     expect(mockPost).not.toHaveBeenCalled();
   });
 
+  it("recognizes an adopted canonical entry by source_payment_id without inserting", async () => {
+    mockExecute
+      .mockResolvedValueOnce({ rows: [makeSportPaymentRow({ id: 268, amount: "700000" })] })
+      .mockResolvedValueOnce({
+      rows: [{
+        payment_id: 5776,
+        payment_status: "posted",
+        payment_amount: "700000",
+        payment_entry_id: 28058,
+        entry_id: 28058,
+        entry_status: "posted",
+        entry_total_debit: "700000",
+        entry_total_credit: "700000",
+        entry_source_payment_id: 268,
+      }],
+      });
+
+    const result = await bulkIngestModule("sport_center", 1);
+
+    expect(result.skipped).toBe(1);
+    expect(result.posted).toBe(0);
+    expect(result.errors).toBe(0);
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(mockExecute).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails closed when an existing accounting identity has a mismatched amount", async () => {
+    mockExecute
+      .mockResolvedValueOnce({ rows: [makeSportPaymentRow({ id: 268, amount: "700000" })] })
+      .mockResolvedValueOnce({
+      rows: [{
+        payment_id: 5776,
+        payment_status: "posted",
+        payment_amount: "699000",
+        payment_entry_id: 28058,
+        entry_id: 28058,
+        entry_status: "posted",
+        entry_total_debit: "699000",
+        entry_total_credit: "699000",
+        entry_source_payment_id: 268,
+      }],
+      });
+
+    const result = await bulkIngestModule("sport_center", 1);
+
+    expect(result.errors).toBe(1);
+    expect(result.posted).toBe(0);
+    expect(result.skipped).toBe(0);
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(result.failedRows[0]?.error).toContain("ACCOUNTING_IDEMPOTENCY_MISMATCH");
+  });
+
+  it("recovers a unique source_payment_id race by re-reading the posted entry", async () => {
+    mockPost.mockResolvedValueOnce({
+      ok: false,
+      error: "duplicate key value violates unique constraint \"uq_public_accounting_entries_source_payment_id\"",
+      errorCode: "UNIQUE_VIOLATION",
+    });
+    mockExecute
+      .mockResolvedValueOnce({ rows: [makeSportPaymentRow({ id: 268, amount: "700000" })] }) // candidates
+      .mockResolvedValueOnce({ rows: [] }) // pre-insert idempotency check
+      .mockResolvedValueOnce({ rows: [{ cash_journal_id: 10, bank_journal_id: 11 }] }) // journal
+      .mockResolvedValueOnce({ rows: [{ cnt: 2 }] }) // payment number
+      .mockResolvedValueOnce({ rows: [{ id: 5777 }] }) // accounting payment insert
+      .mockResolvedValueOnce({ rows: [{ default_bank_account_id: 50, default_cash_account_id: null }] }) // bank account
+      .mockResolvedValueOnce({ rows: [{ name: "Bank BCA" }] }) // account name
+      .mockResolvedValueOnce({ rows: [{ sales_income_account_id: 40 }] }) // revenue
+      .mockResolvedValueOnce({ rows: [] }) // entry by ref
+      .mockResolvedValueOnce({ // re-read after unique race
+        rows: [{
+          payment_id: 5776,
+          payment_status: "posted",
+          payment_amount: "700000",
+          payment_entry_id: 28058,
+          entry_id: 28058,
+          entry_status: "posted",
+          entry_total_debit: "700000",
+          entry_total_credit: "700000",
+          entry_source_payment_id: 268,
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [] }) // link race payment
+      .mockResolvedValueOnce({ rows: [] }); // mirror status
+
+    const result = await bulkIngestModule("sport_center", 1);
+
+    expect(result.posted).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(result.errors).toBe(0);
+    expect(result.failedRows).toHaveLength(0);
+  });
+
   // ── 5. Nothing to do ─────────────────────────────────────────────────────
 
   it("returns all-zero counts and does not call the posting engine when no payments are pending", async () => {

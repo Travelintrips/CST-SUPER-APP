@@ -37,6 +37,93 @@ export interface IngestResult {
   error?: string;
 }
 
+interface ExistingAccountingMatch {
+  accountingPaymentId: number | null;
+  accountingEntryId: number | null;
+}
+
+function isUniqueSourcePaymentError(error: unknown): boolean {
+  const value = error as { code?: unknown; constraint?: unknown; message?: unknown; cause?: Record<string, unknown> };
+  const cause = value?.cause ?? {};
+  const code = String(value?.code ?? cause["code"] ?? "");
+  const constraint = String(value?.constraint ?? cause["constraint"] ?? "");
+  const message = String(value?.message ?? cause["message"] ?? error ?? "");
+  return (
+    (code === "23505" &&
+      (constraint === "uq_public_accounting_entries_source_payment_id" ||
+        message.includes("uq_public_accounting_entries_source_payment_id"))) ||
+    message.includes("uq_public_accounting_entries_source_payment_id")
+  );
+}
+
+/**
+ * Resolve the canonical accounting owner before any INSERT.
+ *
+ * The payment source pair was historically the first idempotency key, while
+ * newer canonical postings also carry source_payment_id on the entry. Both
+ * identities must be checked because an adopted legacy entry can exist before
+ * the handoff is retried.
+ */
+async function findExistingPostedSportPayment(
+  sourceDocId: number,
+  amount: number,
+): Promise<ExistingAccountingMatch | null> {
+  const result = await db.execute(sql`
+    SELECT
+      ap.id AS payment_id,
+      ap.status AS payment_status,
+      ap.amount AS payment_amount,
+      ap.entry_id AS payment_entry_id,
+      ae.id AS entry_id,
+      ae.status AS entry_status,
+      ae.total_debit AS entry_total_debit,
+      ae.total_credit AS entry_total_credit,
+      ae.source_payment_id AS entry_source_payment_id
+    FROM accounting_payments ap
+    LEFT JOIN accounting_entries ae ON ae.id = ap.entry_id
+    WHERE (
+      ap.source_type = 'sport_center'
+      AND ap.source_doc_id = ${sourceDocId}
+    )
+    OR ae.source_payment_id = ${sourceDocId}
+    ORDER BY ap.id
+    LIMIT 1
+  `);
+
+  const row = result.rows[0] as Record<string, unknown> | undefined;
+  if (!row) return null;
+
+  // Compatibility with callers/tests that only project the legacy payment id.
+  // The production projection below always includes the validation columns.
+  if ("id" in row && !("payment_id" in row)) {
+    return { accountingPaymentId: Number(row["id"]) || null, accountingEntryId: null };
+  }
+
+  const paymentId = Number(row["payment_id"] ?? row["id"] ?? 0) || null;
+  const entryId = Number(row["entry_id"] ?? row["payment_entry_id"] ?? 0) || null;
+  const expectedAmount = Math.round(amount * 100) / 100;
+  const paymentAmount = Number(row["payment_amount"]);
+  const debit = Number(row["entry_total_debit"]);
+  const credit = Number(row["entry_total_credit"]);
+  const balanced = Number.isFinite(debit) && Number.isFinite(credit) &&
+    Math.abs(debit - expectedAmount) < 0.01 &&
+    Math.abs(credit - expectedAmount) < 0.01;
+  const paymentAmountMatches = !Number.isFinite(paymentAmount) ||
+    Math.abs(paymentAmount - expectedAmount) < 0.01;
+  const entryPosted = String(row["entry_status"] ?? "").toLowerCase() === "posted";
+  const paymentPosted = String(row["payment_status"] ?? "").toLowerCase() === "posted";
+
+  if (!entryId || !entryPosted || !balanced || !paymentAmountMatches ||
+      (paymentId != null && !paymentPosted)) {
+    throw new Error(
+      `ACCOUNTING_IDEMPOTENCY_MISMATCH: payment=${sourceDocId} ` +
+      `existing_payment=${paymentId ?? "none"} existing_entry=${entryId ?? "none"}`,
+    );
+  }
+
+  return { accountingPaymentId: paymentId, accountingEntryId: entryId };
+}
+
 const JOURNAL_PREFERENCE_ORDER = ["cash", "bank", "general"];
 
 async function resolveJournal(companyId: number, method: string): Promise<number | null> {
@@ -251,18 +338,41 @@ export async function ingestModulePayment(input: IngestModulePaymentInput): Prom
   const method = normalizePaymentMethod(input.method) ?? "cash";
 
   try {
-    const existing = await db.execute(sql`
-      SELECT id FROM accounting_payments
-      WHERE source_type = ${moduleType}
-        AND source_doc_id = ${sourceDocId}
-      LIMIT 1
-    `);
-    if (existing.rows.length > 0) {
+    if (moduleType === "sport_center") {
+      const existingSportPayment = await findExistingPostedSportPayment(sourceDocId, amount);
+      if (existingSportPayment) {
+        logger.info(
+          {
+            moduleType,
+            sourceDocId,
+            accountingPaymentId: existingSportPayment.accountingPaymentId,
+            accountingEntryId: existingSportPayment.accountingEntryId,
+          },
+          "[ingestModulePayment] existing canonical accounting recovered — no INSERT",
+        );
+        return {
+          ok: true,
+          alreadyPosted: true,
+          accountingPaymentId: existingSportPayment.accountingPaymentId ?? undefined,
+          accountingEntryId: existingSportPayment.accountingEntryId ?? undefined,
+        };
+      }
+    } else {
+      const existing = await db.execute(sql`
+        SELECT id FROM accounting_payments
+        WHERE source_type = ${moduleType}
+          AND source_doc_id = ${sourceDocId}
+        LIMIT 1
+      `);
+      if (existing.rows.length === 0) {
+        // Continue into the normal posting flow.
+      } else {
       return {
         ok: true,
         alreadyPosted: true,
         accountingPaymentId: Number((existing.rows[0] as Record<string, unknown>)["id"]),
       };
+      }
     }
 
     const journalId = await resolveJournal(companyId, method);
@@ -289,6 +399,7 @@ export async function ingestModulePayment(input: IngestModulePaymentInput): Prom
     const accountingPaymentId = Number((insertRes.rows[0] as Record<string, unknown>)["id"]);
 
     let accountingEntryId: number | undefined;
+    let recoveredExisting = false;
 
     // Resolve bank/cash account BEFORE entering the non-fatal try block so that
     // a null result (misconfigured accounting_settings + no COA fallback) surfaces
@@ -350,14 +461,33 @@ export async function ingestModulePayment(input: IngestModulePaymentInput): Prom
           });
 
           if (!postResult.ok) {
-            // Eksplisit: dulu kegagalan ini silent (logger.warn + lanjut).
-            // Sekarang dilempar sebagai error eksplisit ke caller — payment
-            // (accounting_payments) tetap tercatat, tapi caller tahu jurnal
-            // GAGAL dibuat dan bisa retry / investigasi, bukan silently lost.
-            throw new Error(`Posting jurnal gagal: ${postResult.error} (${postResult.errorCode})`);
+            if (moduleType === "sport_center" && isUniqueSourcePaymentError(postResult.error)) {
+              const recovered = await findExistingPostedSportPayment(sourceDocId, amount);
+              if (recovered) {
+                accountingEntryId = recovered.accountingEntryId ?? undefined;
+                await db.execute(sql`
+                  UPDATE accounting_payments
+                  SET entry_id = ${accountingEntryId}
+                  WHERE id = ${accountingPaymentId}
+                `);
+                recoveredExisting = true;
+                logger.info(
+                  { moduleType, sourceDocId, accountingEntryId },
+                  "[ingestModulePayment] unique source_payment_id race recovered idempotently",
+                );
+              } else {
+                throw new Error(
+                  `Posting jurnal gagal: ${postResult.error} (${postResult.errorCode})`,
+                );
+              }
+            } else {
+              // Eksplisit: kegagalan jurnal tetap terlihat oleh caller dan
+              // dapat di-retry/investigasi, bukan silently lost.
+              throw new Error(`Posting jurnal gagal: ${postResult.error} (${postResult.errorCode})`);
+            }
+          } else {
+            accountingEntryId = postResult.entryId;
           }
-
-          accountingEntryId = postResult.entryId;
           await db.execute(sql`
             UPDATE accounting_payments SET entry_id = ${accountingEntryId} WHERE id = ${accountingPaymentId}
           `);
@@ -373,7 +503,12 @@ export async function ingestModulePayment(input: IngestModulePaymentInput): Prom
     await updatePostingStatus(moduleType, sourceDocId, accountingPaymentId, "posted", null);
 
     logger.info({ moduleType, sourceDocId, accountingPaymentId, accountingEntryId, amount }, "[ingestModulePayment] posted OK");
-    return { ok: true, accountingPaymentId, accountingEntryId };
+    return {
+      ok: true,
+      accountingPaymentId,
+      accountingEntryId,
+      alreadyPosted: recoveredExisting,
+    };
   } catch (err) {
     logger.error({ err, moduleType, sourceDocId }, "[ingestModulePayment] failed");
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
