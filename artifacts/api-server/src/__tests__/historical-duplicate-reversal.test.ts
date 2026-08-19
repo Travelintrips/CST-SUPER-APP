@@ -27,7 +27,7 @@ function evidence(overrides: Partial<HistoricalDuplicateEvidence> = {}): Histori
       sourcePaymentId: 198, totalDebit: 160000, totalCredit: 160000,
       paymentSourceType: "sport_center", paymentSourceDocId: 198, paymentStatus: "posted",
       paymentAmount: 160000, sportPaymentId: 198, sportPaymentStatus: "confirmed",
-      sportBookingId: 283, sportBookingOrderNumber: "SC-0239",
+      sportBookingId: 283, sportBookingRowId: 283, sportBookingOrderNumber: "SC-0239",
     },
     legacyLines: [
       { accountId: 1104, debit: 160000, credit: 0 },
@@ -48,6 +48,21 @@ describe("historical duplicate reversal validation", () => {
     expect(result.safe).toBe(true);
   });
 
+  it("accepts an adopted canonical entry without an accounting_payments linkage", () => {
+    const base = evidence();
+    const result = validateHistoricalDuplicateEvidence({
+      ...base,
+      canonical: {
+        ...base.canonical,
+        paymentSourceType: null,
+        paymentSourceDocId: null,
+        paymentStatus: null,
+        paymentAmount: null,
+      },
+    });
+    expect(result.safe).toBe(true);
+  });
+
   it("rejects a mismatched booking/order ref", () => {
     const result = validateHistoricalDuplicateEvidence(evidence({
       canonical: { ...evidence().canonical, sportBookingOrderNumber: "SC-OTHER" },
@@ -58,7 +73,7 @@ describe("historical duplicate reversal validation", () => {
 
   it("rejects a payment belonging to a different booking", () => {
     const result = validateHistoricalDuplicateEvidence(evidence({
-      canonical: { ...evidence().canonical, sportBookingId: 999 },
+      canonical: { ...evidence().canonical, sportBookingRowId: 999 },
     }));
     expect(result.safe).toBe(false);
     expect(result.reasons).toContain("canonical payment identity chain mismatch");

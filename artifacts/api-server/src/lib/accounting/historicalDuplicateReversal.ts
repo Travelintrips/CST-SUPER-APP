@@ -32,6 +32,7 @@ export interface HistoricalDuplicateEvidence {
     sportPaymentId: number | null;
     sportPaymentStatus: string | null;
     sportBookingId: number | null;
+    sportBookingRowId: number | null;
     sportBookingOrderNumber: string | null;
   };
   legacyLines: Array<{ accountId: number; debit: number; credit: number }>;
@@ -75,15 +76,26 @@ export function validateHistoricalDuplicateEvidence(
     reasons.push("legacy ref does not match canonical sport booking order_number");
   }
   if (canonical.sourcePaymentId == null ||
-      canonical.paymentSourceDocId !== canonical.sourcePaymentId ||
-      canonical.sportPaymentId !== canonical.sourcePaymentId) {
+      canonical.sportPaymentId !== canonical.sourcePaymentId ||
+      canonical.sportBookingId == null ||
+      canonical.sportBookingRowId !== canonical.sportBookingId) {
     reasons.push("canonical payment identity chain mismatch");
   }
-  if (canonical.sportBookingId == null) reasons.push("canonical sport payment has no booking");
-  if (canonical.paymentSourceType !== "sport_center") reasons.push("canonical accounting payment source mismatch");
-  if (canonical.paymentStatus !== "posted") reasons.push("canonical accounting payment is not posted");
+  if (canonical.paymentSourceDocId != null &&
+      canonical.paymentSourceDocId !== canonical.sourcePaymentId) {
+    reasons.push("canonical accounting payment identity mismatch");
+  }
+  // Older canonical entries may legitimately predate an accounting_payments
+  // linkage. When a linkage exists, it must be valid; the sport payment and
+  // canonical entry identity remain mandatory either way.
+  if (canonical.paymentSourceType != null && canonical.paymentSourceType !== "sport_center") {
+    reasons.push("canonical accounting payment source mismatch");
+  }
+  if (canonical.paymentSourceType != null && canonical.paymentStatus !== "posted") {
+    reasons.push("canonical accounting payment is not posted");
+  }
   if (canonical.sportPaymentStatus !== "confirmed") reasons.push("canonical sport payment is not confirmed");
-  if (canonical.paymentAmount == null || !closeEnough(canonical.paymentAmount, canonical.totalDebit)) {
+  if (canonical.paymentAmount != null && !closeEnough(canonical.paymentAmount, canonical.totalDebit)) {
     reasons.push("canonical accounting payment amount mismatch");
   }
 
@@ -104,6 +116,7 @@ export interface ReverseHistoricalDuplicateInput {
   canonicalEntryId: number;
   actor: string;
   reason: string;
+  validateOnly?: boolean;
 }
 
 export interface ReverseHistoricalDuplicateResult {
@@ -111,6 +124,57 @@ export interface ReverseHistoricalDuplicateResult {
   reversalEntryId?: number;
   error?: string;
   code?: "NOT_FOUND" | "NOT_SAFE" | "ALREADY_REVERSED";
+}
+
+export const VERIFIED_HISTORICAL_DUPLICATE_PAIRS = [
+  [14593, 28585],
+  [14594, 28587],
+  [20966, 28601],
+  [20967, 28602],
+  [28382, 28688],
+  [28383, 28689],
+  [28384, 28690],
+] as const;
+
+export interface HistoricalDuplicateBatchResult {
+  ok: boolean;
+  preflight: ReverseHistoricalDuplicateResult[];
+  applied: ReverseHistoricalDuplicateResult[];
+}
+
+/**
+ * Controlled batch harness. Every pair is validated read-only first; no
+ * reversal starts unless every verified pair is safe.
+ */
+export async function reverseVerifiedHistoricalDuplicateBatch(input: {
+  actor: string;
+  reason: string;
+}): Promise<HistoricalDuplicateBatchResult> {
+  const preflight: ReverseHistoricalDuplicateResult[] = [];
+  for (const [legacyEntryId, canonicalEntryId] of VERIFIED_HISTORICAL_DUPLICATE_PAIRS) {
+    const result = await reverseHistoricalDuplicate({
+      legacyEntryId,
+      canonicalEntryId,
+      actor: input.actor,
+      reason: input.reason,
+      validateOnly: true,
+    });
+    preflight.push(result);
+    if (!result.ok) return { ok: false, preflight, applied: [] };
+  }
+
+  const applied: ReverseHistoricalDuplicateResult[] = [];
+  for (const [legacyEntryId, canonicalEntryId] of VERIFIED_HISTORICAL_DUPLICATE_PAIRS) {
+    const result = await reverseHistoricalDuplicate({
+      legacyEntryId,
+      canonicalEntryId,
+      actor: input.actor,
+      reason: input.reason,
+    });
+    applied.push(result);
+    if (!result.ok) return { ok: false, preflight, applied };
+  }
+  return { ok: true, preflight, applied };
 }
 
 function numeric(value: unknown): number {
@@ -149,7 +213,8 @@ export async function reverseHistoricalDuplicate(
            ap.source_type AS payment_source_type, ap.source_doc_id AS payment_source_doc_id,
            ap.status::text AS payment_status, ap.amount AS payment_amount,
            sp.id AS sport_payment_id, sp.status::text AS sport_payment_status,
-           sp.booking_id AS sport_booking_id, sb.order_number AS sport_booking_order_number,
+           sp.booking_id AS sport_booking_id, sb.id AS sport_booking_row_id,
+           sb.order_number AS sport_booking_order_number,
            ae.journal_id, ae.date
     FROM accounting_entries ae
     LEFT JOIN accounting_payments ap
@@ -206,6 +271,7 @@ export async function reverseHistoricalDuplicate(
       sportPaymentId: canonicalRow.sport_payment_id == null ? null : numeric(canonicalRow.sport_payment_id),
       sportPaymentStatus: canonicalRow.sport_payment_status == null ? null : String(canonicalRow.sport_payment_status),
       sportBookingId: canonicalRow.sport_booking_id == null ? null : numeric(canonicalRow.sport_booking_id),
+      sportBookingRowId: canonicalRow.sport_booking_row_id == null ? null : numeric(canonicalRow.sport_booking_row_id),
       sportBookingOrderNumber: canonicalRow.sport_booking_order_number == null ? null : String(canonicalRow.sport_booking_order_number),
     },
     legacyLines: lineRows(legacyLinesResult.rows),
@@ -216,6 +282,7 @@ export async function reverseHistoricalDuplicate(
   if (!validation.safe) {
     return { ok: false, code: "NOT_SAFE", error: validation.reasons.join("; ") };
   }
+  if (input.validateOnly) return { ok: true };
 
   const reversalLines: PostingLine[] = evidence.legacyLines.map((line) => ({
     accountId: line.accountId,
@@ -228,7 +295,6 @@ export async function reverseHistoricalDuplicate(
   try {
     reversal = await postEntry({
       journalId,
-      journalCode: "JNL",
       date: new Date(),
       ref: evidence.legacy.ref,
       description: input.reason,
@@ -237,7 +303,7 @@ export async function reverseHistoricalDuplicate(
       createdById: input.actor,
       companyId: evidence.legacy.companyId,
       lines: reversalLines,
-    });
+    }, "JNL");
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
