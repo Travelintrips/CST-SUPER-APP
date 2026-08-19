@@ -37,3 +37,22 @@ export function hasMatchingBankDebit(
     sameAmount(legacyBank["debit"], canonicalBank["debit"]),
   );
 }
+
+export function hasMatchingSportPaymentBookingIdentity(input: {
+  legacyRef: string | null;
+  bookingId: number | null;
+  bookingOrderNumber: string | null;
+  canonicalSourcePaymentId: number | null;
+  paymentId: number | null;
+  paymentBookingId: number | null;
+}): boolean {
+  return Boolean(
+    input.legacyRef &&
+    input.bookingId != null &&
+    input.bookingOrderNumber &&
+    input.legacyRef === input.bookingOrderNumber &&
+    input.canonicalSourcePaymentId != null &&
+    input.paymentId === input.canonicalSourcePaymentId &&
+    input.paymentBookingId === input.bookingId,
+  );
+}

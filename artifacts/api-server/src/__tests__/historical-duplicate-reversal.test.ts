@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   hasMatchingBankDebit,
+  hasMatchingSportPaymentBookingIdentity,
   invertHistoricalDuplicateLines,
 } from "../lib/accounting/historicalDuplicateReversalMath.js";
 
@@ -25,6 +26,17 @@ describe("historical duplicate reversal contract", () => {
     expect(hasMatchingBankDebit(legacy, canonical)).toBe(true);
     expect(hasMatchingBankDebit(legacy, [{ account_id: 102, debit: 160000, credit: 0 }])).toBe(false);
     expect(hasMatchingBankDebit(legacy, [{ account_id: 101, debit: 150000, credit: 0 }])).toBe(false);
+  });
+
+  it("resolves identity from legacy ref and canonical source_payment_id, not entry source_id", () => {
+    expect(hasMatchingSportPaymentBookingIdentity({
+      legacyRef: "SC-0239",
+      bookingId: 283,
+      bookingOrderNumber: "SC-0239",
+      canonicalSourcePaymentId: 198,
+      paymentId: 198,
+      paymentBookingId: 283,
+    })).toBe(true);
   });
 
   it("does not infer payment mutation from multiple accounting payment rows", () => {

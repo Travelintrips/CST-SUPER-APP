@@ -4,6 +4,7 @@ import { postEntryWithClient } from "../accounting.js";
 import type { DbClient } from "../financial/financialTransaction.js";
 import {
   hasMatchingBankDebit,
+  hasMatchingSportPaymentBookingIdentity,
   invertHistoricalDuplicateLines,
 } from "./historicalDuplicateReversalMath.js";
 
@@ -124,16 +125,30 @@ export async function reverseHistoricalDuplicate(
       return errorResult("Bank debit account atau amount tidak sama", "BANK_DEBIT_MISMATCH");
     }
 
-    // The canonical source_id is the sport payment and the legacy source_id is
-    // the booking. Requiring this relationship prevents a false replacement.
+    // Identity is resolved from legacy ref -> booking order_number and
+    // canonical source_payment_id -> sport payment -> booking. Entry source_id
+    // values are historical provenance fields and are intentionally ignored.
     const identityRes = await tx.execute(sql`
-      SELECT id
-      FROM sport_payments
-      WHERE id = ${Number(canonical["source_id"])}
-        AND booking_id = ${Number(legacy["source_id"])}
+      SELECT
+        sp.id AS payment_id,
+        sp.booking_id AS payment_booking_id,
+        sb.id AS booking_id,
+        sb.order_number AS booking_order_number
+      FROM sport_center.sport_payments sp
+      JOIN sport_center.sport_bookings sb ON sb.id = sp.booking_id
+      WHERE sp.id = ${Number(canonical["source_payment_id"])}
+        AND sb.order_number = ${String(legacy["ref"] ?? "")}
       LIMIT 1
     `);
-    if (!identityRes.rows.length) {
+    const identity = identityRes.rows[0] as Row | undefined;
+    if (!identity || !hasMatchingSportPaymentBookingIdentity({
+      legacyRef: legacy["ref"] == null ? null : String(legacy["ref"]),
+      bookingId: identity["booking_id"] == null ? null : Number(identity["booking_id"]),
+      bookingOrderNumber: identity["booking_order_number"] == null ? null : String(identity["booking_order_number"]),
+      canonicalSourcePaymentId: canonical["source_payment_id"] == null ? null : Number(canonical["source_payment_id"]),
+      paymentId: identity["payment_id"] == null ? null : Number(identity["payment_id"]),
+      paymentBookingId: identity["payment_booking_id"] == null ? null : Number(identity["payment_booking_id"]),
+    })) {
       return errorResult("Canonical payment tidak terbukti milik booking legacy yang sama", "BUSINESS_IDENTITY_MISMATCH");
     }
 
