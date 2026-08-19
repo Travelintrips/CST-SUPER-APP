@@ -64,7 +64,7 @@ export function markStartupSubstepCompleted(substep: string): void {
   state.currentSubstep = null;
   state.currentSubstepStartedAt = null;
   state.currentSubstepStatus = null;
-  state.currentSubstepElapsedMs = startedAt == null ? null : elapsedSince(startedAt);
+  state.currentSubstepElapsedMs = null;
   state.failedSubstep = null;
   state.failedSubstepCategory = null;
 }

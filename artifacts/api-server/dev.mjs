@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { context as esbuildContext } from "esbuild";
 import esbuildPluginPino from "esbuild-plugin-pino";
-import { spawn } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 
 globalThis.require = createRequire(import.meta.url);
 
@@ -25,6 +25,25 @@ if (fs.existsSync(distDir)) {
 }
 fs.mkdirSync(distDir, { recursive: true });
 const entry = path.resolve(artifactDir, "src/index.ts");
+
+function resolveBuildRevision() {
+  const configured =
+    process.env.REPLIT_DEPLOYMENT_REVISION ??
+    process.env.REPLIT_GIT_COMMIT_SHA ??
+    process.env.GIT_COMMIT_SHA ??
+    process.env.BUILD_SHA ??
+    process.env.SOURCE_VERSION;
+  if (configured?.trim()) return configured.trim();
+  try {
+    return execSync("git rev-parse HEAD", {
+      cwd: workspaceRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return "unknown";
+  }
+}
 
 let serverProcess = null;
 let restarting = false;
@@ -125,6 +144,9 @@ const ctx = await esbuildContext({
   outdir: distDir,
   outExtension: { ".js": ".mjs" },
   logLevel: "error",
+  define: {
+    "__API_BUILD_REVISION__": JSON.stringify(resolveBuildRevision()),
+  },
   sourcemap: "linked",
   external,
   alias: {

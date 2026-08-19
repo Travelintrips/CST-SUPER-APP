@@ -49,6 +49,12 @@ import { runOrgUniqueCodesMigration } from "./lib/orgUniqueCodesMigration";
 import { runOrgRoleMigration } from "./lib/orgRoleMigration";
 import { runUserRoleMigration } from "./lib/userRoleMigration";
 import { runAuditLogMigration } from "./lib/auditLogMigration";
+import {
+  getStartupReadinessSnapshot,
+  markStartupSubstepCompleted,
+  markStartupSubstepFailed,
+  markStartupSubstepStarting,
+} from "./lib/startupReadinessState";
 
 import { runNavPreferencesMigration } from "./lib/navPreferencesMigration";
 import { runNotificationLogMigration } from "./lib/notificationLogMigration";
@@ -371,6 +377,7 @@ async function runPreStartSubstep<T>(
   timeoutMs = PRE_START_SUBSTEP_TIMEOUT_MS,
 ): Promise<T> {
   const startedAt = performance.now();
+  markStartupSubstepStarting(substep);
   logger.info(
     { stage: "pre_start_schema", substep, state: "starting", elapsed_ms: 0 },
     "startup.pre_start_schema.substep",
@@ -392,8 +399,10 @@ async function runPreStartSubstep<T>(
       },
       "startup.pre_start_schema.substep",
     );
+    markStartupSubstepCompleted(substep);
     return result;
   } catch (err) {
+    markStartupSubstepFailed(substep, err);
     logger.error(
       {
         stage: "pre_start_schema",
@@ -1740,6 +1749,7 @@ async function startServer() {
       migration_elapsed_ms: migrationStartedAt
         ? (migrationCompletedAt ?? Date.now()) - migrationStartedAt
         : null,
+        ...getStartupReadinessSnapshot(),
     });
   });
 
@@ -1899,6 +1909,12 @@ async function startServer() {
           }
         }
       }
+      }).then(() => {
+        // A completed persistent gate may skip the callback entirely. Expose
+        // that safe gate completion without fabricating a migration substep.
+        if (getStartupReadinessSnapshot().last_completed_substep == null) {
+          markStartupSubstepCompleted("pre_start_schema");
+        }
       });
     })
     .then(() => runWithRetry("Sessions migration", runSessionsMigration))

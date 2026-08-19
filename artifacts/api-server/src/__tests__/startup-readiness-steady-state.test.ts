@@ -178,7 +178,7 @@ describe("startup readiness steady-state contract", () => {
   it("keeps build revision deterministic and safe", () => {
     const buildScript = readFileSync(resolve(process.cwd(), "build.mjs"), "utf8");
     expect(buildScript).toContain('git rev-parse HEAD');
-    expect(buildScript).toContain("__API_BUILD_REVISION__");
+    expect(buildMetadata).toContain("declare const __API_BUILD_REVISION__");
     expect(getApiRevision({})).not.toContain("process.env");
     expect(getApiRevision({ BUILD_SHA: "a".repeat(40) })).toMatch(/^[a-f0-9]{40}$/);
     expect(getApiRevision({ BUILD_SHA: "secret value\n" })).toBe("unknown");
