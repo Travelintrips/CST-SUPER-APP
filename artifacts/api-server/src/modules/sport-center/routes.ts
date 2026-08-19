@@ -5,7 +5,7 @@ import { requireAdmin } from "../../lib/requireAdmin.js";
 import { resolveCompanyId } from "../../lib/resolveCompany.js";
 import { assertCompanyAccess } from "../../lib/assertCompanyAccess.js";
 import { handleSportCenterSse, broadcastSportCenterEvent } from "./broadcast.js";
-import { normalizePaymentMethod, resolvePaymentDestination, postSportCenterBookingReversal, postSportCenterRefund, postSportCenterMembershipPayment, postSportCenterBookingRefundDirect, postSportCenterExpenseEntry, postEntry, resolveSportCenterBookingAccountId, resolveCostCenterId, type DbClient as SportDbClient } from "../../lib/accounting.js";
+import { normalizePaymentMethod, resolvePaymentDestination, postSportCenterBookingReversal, postSportCenterRefund, postSportCenterMembershipPayment, postSportCenterPaymentAtomic, postSportCenterBookingRefundDirect, postSportCenterExpenseEntry, postEntry, resolveSportCenterBookingAccountId, resolveCostCenterId, type DbClient as SportDbClient } from "../../lib/accounting.js";
 import { ensureAccountingSettings } from "../../lib/accountingSeed.js";
 import { getActiveTaxRate, seedDefaultTaxRules } from "../../lib/taxRulesMigration.js";
 import { syncFacilityUpsert, syncFacilityDelete, syncAllFacilities, syncBookingUpsert, syncAllBookings, getLastSyncLogs, pullLegacyBookingsFromSupabase, pullPaymentsFromSupabase, pullFacilitiesFromSupabase, syncPaymentsToAccounting, runDailyPaymentSync } from "./supabaseSync.js";
@@ -1606,10 +1606,20 @@ router.post("/members/:id/payment", async (req, res) => {
     const paymentNumber = await nextPaymentNumber(companyId);
     const actorId = (req.user as { id: string } | undefined)?.id ?? null;
 
-    // Atomic transaction: INSERT sport_payments only.
+    // Atomic transaction: persist the membership method, source payment, and
+    // accounting journal/payment together. The previous implementation only
+    // inserted a public sport_payments row and explicitly left accounting
+    // isolated, so the membership record and journal could never show the
+    // selected method consistently.
     let payment: Record<string, unknown>;
     try {
       const txResult = await db.transaction(async (tx) => {
+        await tx.execute(sql`
+          UPDATE sport_center.sport_memberships
+          SET payment_method = ${normalizedPaymentMethod}
+          WHERE id = ${memberId}
+        `);
+
         const payRes = await tx.execute(sql`
           INSERT INTO sport_payments
             (company_id, payment_number, payment_type, member_id, customer_id, amount, method, status, paid_at, notes, created_by)
@@ -1620,6 +1630,22 @@ router.post("/members/:id/payment", async (req, res) => {
           RETURNING *
         `);
         const row = payRes.rows[0] as Record<string, unknown>;
+
+        await postSportCenterPaymentAtomic(tx, {
+          type: "membership",
+          paymentId: Number(row.id),
+          paymentNumber: String(row.payment_number),
+          sourceId: Number(row.id),
+          sourceRef: String(member.member_number ?? `MEM-${memberId}`),
+          customerName: String(member.name ?? "Member"),
+          memberNumber: String(member.member_number ?? `MEM-${memberId}`),
+          amount: amt,
+          method: normalizedPaymentMethod,
+          date: new Date().toISOString().slice(0, 10),
+          companyId,
+          createdById: actorId,
+        });
+
         return row;
       });
 
@@ -1639,7 +1665,7 @@ router.post("/members/:id/payment", async (req, res) => {
       VALUES (
         ${companyId}, 'member', ${memberId},
         'MEMBERSHIP_PAYMENT_CREATED', ${actorId},
-        ${JSON.stringify({ member_id: memberId, amount: amt, payment_method: normalizedPaymentMethod, payment_number: paymentNumber, accounting_isolated: true })}::jsonb
+        ${JSON.stringify({ member_id: memberId, amount: amt, payment_method: normalizedPaymentMethod, payment_number: paymentNumber, accounting_isolated: false })}::jsonb
       )
     `).catch((err: unknown) => console.error("[sport-center] audit log (membership) failed:", err));
 
