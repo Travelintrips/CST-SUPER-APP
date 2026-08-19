@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { getApiRevision } from "../lib/buildMetadata.js";
+import {
+  getStartupReadinessSnapshot,
+  markStartupSubstepCompleted,
+  markStartupSubstepFailed,
+  markStartupSubstepStarting,
+} from "../lib/startupReadinessState.js";
 
 const apiIndex = readFileSync(resolve(process.cwd(), "src/index.ts"), "utf8");
 const rlsMigration = readFileSync(resolve(process.cwd(), "src/lib/rlsMigration.ts"), "utf8");
@@ -143,5 +149,38 @@ describe("startup readiness steady-state contract", () => {
     expect(apiIndex).toContain("fixed_startup_delay_ms: 0");
     expect(apiIndex).not.toContain("sleep(8_000)");
     expect(apiIndex).toContain("database_ready_ms: registryInitializationMs");
+  });
+
+  it("exposes safe current, completed, and failed pre-start substep state", () => {
+    markStartupSubstepStarting("test_substep");
+    let snapshot = getStartupReadinessSnapshot();
+    expect(snapshot.current_substep).toBe("test_substep");
+    expect(snapshot.current_substep_status).toBe("running");
+    expect(snapshot.current_substep_started_at).toMatch(/Z$/);
+    expect(snapshot.current_substep_elapsed_ms).toBeGreaterThanOrEqual(0);
+
+    markStartupSubstepCompleted("test_substep");
+    snapshot = getStartupReadinessSnapshot();
+    expect(snapshot.last_completed_substep).toBe("test_substep");
+    expect(snapshot.current_substep).toBeNull();
+    expect(snapshot.current_substep_status).toBeNull();
+
+    markStartupSubstepStarting("failed_substep");
+    markStartupSubstepFailed("failed_substep", new Error("password=do-not-expose"));
+    snapshot = getStartupReadinessSnapshot();
+    expect(snapshot.failed_substep).toBe("failed_substep");
+    expect(snapshot.current_substep_status).toBe("failed");
+    expect(snapshot.failed_substep_category).toBe("unknown");
+    expect(JSON.stringify(snapshot)).not.toContain("password");
+    expect(JSON.stringify(snapshot)).not.toContain("do-not-expose");
+  });
+
+  it("keeps build revision deterministic and safe", () => {
+    const buildScript = readFileSync(resolve(process.cwd(), "build.mjs"), "utf8");
+    expect(buildScript).toContain('git rev-parse HEAD');
+    expect(buildScript).toContain("__API_BUILD_REVISION__");
+    expect(getApiRevision({})).not.toContain("process.env");
+    expect(getApiRevision({ BUILD_SHA: "a".repeat(40) })).toMatch(/^[a-f0-9]{40}$/);
+    expect(getApiRevision({ BUILD_SHA: "secret value\n" })).toBe("unknown");
   });
 });
