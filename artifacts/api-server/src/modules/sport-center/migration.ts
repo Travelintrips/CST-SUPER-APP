@@ -156,6 +156,65 @@ export function ensureSportPaymentMirrorTrigger(): Promise<void> {
     return;
   }
 
+  // Existing Supabase environments may already own this canonical contract
+  // through a runtime migration. Do not DROP or replace those objects: the API
+  // role may be allowed to inspect them but not own them. Only the fully
+  // absent contract takes the creation path below; a partial contract remains
+  // fail-closed instead of silently weakening the mirror boundary.
+  const existingContract = await db.execute(sql`
+    SELECT
+      EXISTS (
+        SELECT 1
+        FROM pg_trigger t
+        JOIN pg_class c ON c.oid = t.tgrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'sport_center'
+          AND c.relname = 'sport_payments'
+          AND t.tgname = 'trg_mirror_confirmed_payment_to_public'
+          AND NOT t.tgisinternal
+      ) AS mirror_trigger_exists,
+      to_regprocedure(
+        'sport_center.resolve_and_persist_payment_metadata(integer)'
+      ) IS NOT NULL AS resolver_exists,
+      to_regprocedure(
+        'sport_center.mirror_confirmed_payment_to_public()'
+      ) IS NOT NULL AS mirror_function_exists,
+      to_regprocedure(
+        'public.sync_sport_payment_to_accounting()'
+      ) IS NOT NULL AS accounting_function_exists,
+      to_regprocedure(
+        'sport_center.get_unmirrored_confirmed_payments()'
+      ) IS NOT NULL AS unmirrored_function_exists,
+      to_regprocedure(
+        'sport_center.replay_confirmed_payment_mirror(integer)'
+      ) IS NOT NULL AS replay_function_exists,
+      EXISTS (
+        SELECT 1
+        FROM pg_class i
+        JOIN pg_namespace n ON n.oid = i.relnamespace
+        WHERE n.nspname = 'public'
+          AND i.relname = 'uq_sport_payments_payment_number'
+          AND i.relkind = 'i'
+      ) AS payment_number_index_exists
+  `);
+  const contract = existingContract.rows[0] as Record<string, boolean> | undefined;
+  const contractComplete =
+    contract?.mirror_trigger_exists === true &&
+    contract.resolver_exists === true &&
+    contract.mirror_function_exists === true &&
+    contract.accounting_function_exists === true &&
+    contract.unmirrored_function_exists === true &&
+    contract.replay_function_exists === true &&
+    contract.payment_number_index_exists === true;
+
+  if (contractComplete) {
+    logger.info(
+      "Sport Center payment mirror trigger: existing canonical contract verified; destructive refresh skipped",
+    );
+    sportPaymentMirrorTriggerEnsurePromise = null;
+    return;
+  }
+
   // The trigger uses this key as its idempotency boundary.  Let a duplicate
   // existing value fail loudly instead of silently weakening the guarantee.
   await db.execute(sql`
@@ -703,31 +762,50 @@ export function ensureSportPaymentMirrorTrigger(): Promise<void> {
     $function$
   `);
 
-  // CREATE TRIGGER has no IF NOT EXISTS. Recreate this named trigger on every
-  // migration run so an old definition cannot survive a code/schema upgrade.
+  // CREATE TRIGGER has no IF NOT EXISTS. The catalog guard preserves a valid
+  // runtime-owned trigger; this creation path is only reached when the
+  // contract preflight found it absent.
   await db.execute(sql`
     DO $migration$
     BEGIN
-      EXECUTE 'DROP TRIGGER IF EXISTS trg_mirror_confirmed_payment_to_public
-               ON sport_center.sport_payments';
-      EXECUTE 'CREATE TRIGGER trg_mirror_confirmed_payment_to_public
-               AFTER INSERT OR UPDATE
-               ON sport_center.sport_payments
-               FOR EACH ROW
-               EXECUTE FUNCTION sport_center.mirror_confirmed_payment_to_public()';
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_trigger t
+        JOIN pg_class c ON c.oid = t.tgrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'sport_center'
+          AND c.relname = 'sport_payments'
+          AND t.tgname = 'trg_mirror_confirmed_payment_to_public'
+          AND NOT t.tgisinternal
+      ) THEN
+        EXECUTE 'CREATE TRIGGER trg_mirror_confirmed_payment_to_public
+                 AFTER INSERT OR UPDATE
+                 ON sport_center.sport_payments
+                 FOR EACH ROW
+                 EXECUTE FUNCTION sport_center.mirror_confirmed_payment_to_public()';
+      END IF;
     END;
     $migration$
   `);
   await db.execute(sql`
     DO $migration$
     BEGIN
-      EXECUTE 'DROP TRIGGER IF EXISTS trg_sync_sport_payment_to_accounting
-               ON public.sport_payments';
-      EXECUTE 'CREATE TRIGGER trg_sync_sport_payment_to_accounting
-               AFTER INSERT OR UPDATE
-               ON public.sport_payments
-               FOR EACH ROW
-               EXECUTE FUNCTION public.sync_sport_payment_to_accounting()';
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_trigger t
+        JOIN pg_class c ON c.oid = t.tgrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relname = 'sport_payments'
+          AND t.tgname = 'trg_sync_sport_payment_to_accounting'
+          AND NOT t.tgisinternal
+      ) THEN
+        EXECUTE 'CREATE TRIGGER trg_sync_sport_payment_to_accounting
+                 AFTER INSERT OR UPDATE
+                 ON public.sport_payments
+                 FOR EACH ROW
+                 EXECUTE FUNCTION public.sync_sport_payment_to_accounting()';
+      END IF;
     END;
     $migration$
   `);
