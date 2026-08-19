@@ -21,7 +21,8 @@ export async function runAccountingHubMigration(): Promise<void> {
         ADD COLUMN IF NOT EXISTS posted_at     TIMESTAMP,
         ADD COLUMN IF NOT EXISTS voided_at     TIMESTAMP,
         ADD COLUMN IF NOT EXISTS void_entry_id INTEGER,
-        ADD COLUMN IF NOT EXISTS payment_method TEXT
+         ADD COLUMN IF NOT EXISTS payment_method TEXT,
+         ADD COLUMN IF NOT EXISTS payment_provider TEXT
     `);
 
     // ── 2. accounting_payments: tambah kolom hub ────────────────────────────
@@ -33,20 +34,24 @@ export async function runAccountingHubMigration(): Promise<void> {
         ADD COLUMN IF NOT EXISTS source_module TEXT,
         ADD COLUMN IF NOT EXISTS posted_at     TIMESTAMP,
         ADD COLUMN IF NOT EXISTS voided_at     TIMESTAMP,
-        ADD COLUMN IF NOT EXISTS payment_method TEXT
+         ADD COLUMN IF NOT EXISTS payment_method TEXT,
+         ADD COLUMN IF NOT EXISTS payment_provider TEXT
     `);
 
-    // ── 2b. Backfill source payment method ───────────────────────────────────
+    // ── 2b. Backfill source payment metadata ──────────────────────────────────
     // Sport Center is canonical in sport_center.sport_payments, while the
     // accounting mirror uses public.sport_payments.method.
     await db.execute(sql`
       UPDATE accounting_payments ap
-      SET payment_method = sp.method
+      SET payment_method = sp.method,
+          payment_provider = sp.payment_provider
       FROM sport_payments sp
       WHERE ap.source_type = 'sport_center'
         AND ap.source_doc_id = sp.id
-        AND sp.method IS NOT NULL
-        AND ap.payment_method IS DISTINCT FROM sp.method
+        AND (
+          (sp.method IS NOT NULL AND ap.payment_method IS DISTINCT FROM sp.method)
+          OR (sp.payment_provider IS NOT NULL AND ap.payment_provider IS DISTINCT FROM sp.payment_provider)
+        )
     `).catch((err) => logger.warn({ err }, "[AccountingHub] Sport Center payment method backfill failed"));
 
     // ── 2b-pre. Patch fn_block_posted_entry_update SEBELUM backfill ────────────
@@ -93,7 +98,8 @@ export async function runAccountingHubMigration(): Promise<void> {
     // any financial values (debit/credit amounts).
     await db.execute(sql`
       UPDATE accounting_entries ae
-      SET payment_method = COALESCE(sp.method, ap.payment_method)
+      SET payment_method = COALESCE(sp.method, ap.payment_method),
+          payment_provider = COALESCE(sp.payment_provider, ap.payment_provider)
       FROM accounting_payments ap
       LEFT JOIN sport_payments sp
         ON ap.source_type = 'sport_center'
@@ -101,8 +107,13 @@ export async function runAccountingHubMigration(): Promise<void> {
       WHERE ae.id = ap.entry_id
         AND ap.source_type = 'sport_center'
         AND (ae.payment_method IS NULL OR ae.payment_method = 'cash')
-        AND COALESCE(sp.method, ap.payment_method) IS NOT NULL
-        AND COALESCE(sp.method, ap.payment_method) <> 'cash'
+        AND (
+          (
+            COALESCE(sp.method, ap.payment_method) IS NOT NULL
+            AND COALESCE(sp.method, ap.payment_method) <> 'cash'
+          )
+          OR COALESCE(sp.payment_provider, ap.payment_provider) IS NOT NULL
+        )
     `).then((r) => {
       const n = (r as { rowCount?: number }).rowCount ?? 0;
       if (n > 0) logger.info({ updated: n }, "[AccountingHub] Sport Center journal payment method backfill via accounting_payments");
@@ -115,13 +126,16 @@ export async function runAccountingHubMigration(): Promise<void> {
     // payment per booking, so source_id can safely resolve the mirror row.
     await db.execute(sql`
       UPDATE accounting_entries ae
-      SET payment_method = sp.method
+      SET payment_method = sp.method,
+          payment_provider = sp.payment_provider
       FROM sport_payments sp
       WHERE ae.source = 'sport_center_booking'
         AND ae.source_id = sp.booking_id
-        AND (ae.payment_method IS NULL OR ae.payment_method = 'cash')
-        AND sp.method IS NOT NULL
-        AND sp.method <> 'cash'
+        AND (
+          (ae.payment_method IS NULL OR ae.payment_method = 'cash')
+          OR ae.payment_provider IS DISTINCT FROM sp.payment_provider
+        )
+        AND (sp.method IS NOT NULL OR sp.payment_provider IS NOT NULL)
     `).then((r) => {
       const n = (r as { rowCount?: number }).rowCount ?? 0;
       if (n > 0) logger.info({ updated: n }, "[AccountingHub] Legacy Sport Center journal payment method backfill via source_id");
@@ -155,16 +169,19 @@ export async function runAccountingHubMigration(): Promise<void> {
     // Overrides 'cash' default when actual method is more specific.
     await db.execute(sql`
       UPDATE accounting_entries ae
-      SET payment_method = sp.method
+      SET payment_method = sp.method,
+          payment_provider = sp.payment_provider
       FROM sport_bookings sb
       JOIN sport_payments sp
         ON sp.payment_number = 'SCPAY-SC-' || sb.sc_booking_id::text
       WHERE ae.source = 'sport_center_booking'
         AND ae.ref = sb.booking_number
         AND sb.sc_booking_id IS NOT NULL
-        AND (ae.payment_method IS NULL OR ae.payment_method = 'cash')
-        AND sp.method IS NOT NULL
-        AND sp.method <> 'cash'
+        AND (
+          (ae.payment_method IS NULL OR ae.payment_method = 'cash')
+          OR ae.payment_provider IS DISTINCT FROM sp.payment_provider
+        )
+        AND (sp.method IS NOT NULL OR sp.payment_provider IS NOT NULL)
     `).then((r) => {
       const n = (r as { rowCount?: number }).rowCount ?? 0;
       if (n > 0) logger.info({ updated: n }, "[AccountingHub] Sport Center payment method backfill via booking-number ref");

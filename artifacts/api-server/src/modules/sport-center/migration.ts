@@ -635,6 +635,7 @@ export function ensureSportPaymentMirrorTrigger(): Promise<void> {
       -- posting to preserve the audit trail.
       UPDATE accounting_payments ap
          SET payment_method = NULLIF(BTRIM(NEW.method::text), ''),
+             payment_provider = NULLIF(BTRIM(NEW.payment_provider::text), ''),
              amount = CASE
                WHEN ap.status::text NOT IN ('posted', 'voided')
                 AND NOT EXISTS (
@@ -661,6 +662,7 @@ export function ensureSportPaymentMirrorTrigger(): Promise<void> {
       -- update because payment_method is not a financial column.
       UPDATE accounting_entries ae
          SET payment_method = NULLIF(BTRIM(NEW.method::text), ''),
+             payment_provider = NULLIF(BTRIM(NEW.payment_provider::text), ''),
              date = CASE
                WHEN ae.status::text <> 'posted'
                THEN COALESCE(NEW.paid_at::date, ae.date)

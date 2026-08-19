@@ -890,7 +890,7 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
         const existing = await tx.execute(sql`
           SELECT ae.id AS entry_id, ae.company_id, ae.journal_id,
                  ae.source_id, ae.source_event_id,
-                 ap.id AS payment_id
+                  ap.id AS payment_id
           FROM accounting_entries ae
           LEFT JOIN accounting_payments ap
             ON ap.entry_id = ae.id
@@ -914,12 +914,29 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
               `CANONICAL_PAYMENT_EVENT_CONFLICT: event=${canonicalEventId} already belongs to payment=${row.source_id}`,
             );
           }
+          if (row.payment_id != null) {
+            await tx.execute(sql`
+              UPDATE accounting_payments
+              SET payment_method = ${normalizePaymentMethod(String(raw.payment_method ?? "")) ?? "qris"},
+                  payment_provider = ${raw.payment_provider ?? null},
+                  updated_at = NOW()
+              WHERE id = ${Number(row.payment_id)}
+            `);
+          }
+          if (row.entry_id != null) {
+            await tx.execute(sql`
+              UPDATE accounting_entries
+              SET payment_method = ${normalizePaymentMethod(String(raw.payment_method ?? "")) ?? "qris"},
+                  payment_provider = ${raw.payment_provider ?? null}
+              WHERE id = ${Number(row.entry_id)}
+            `);
+          }
           if (row.payment_id == null) {
             const paymentNumber = `PAY/SC/${dateValue.replaceAll("-", "")}/${String(paymentId).padStart(6, "0")}`;
             const paymentInsert = await tx.execute(sql`
               INSERT INTO accounting_payments
                 (company_id, payment_number, payment_type, status, amount, journal_id,
-                 partner_name, date, ref, memo, payment_method, entry_id,
+                 partner_name, date, ref, memo, payment_method, payment_provider, entry_id,
                  source_type, source_doc_id, created_by_id, created_at, updated_at)
               VALUES
                 (${companyId}, ${paymentNumber}, 'inbound', 'posted', ${gross},
@@ -927,6 +944,7 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
                  ${`SCPAY-SC-${paymentId}`},
                  ${`Canonical Sport Center payment event ${raw.source_event_id ?? raw.journal_source_event_id ?? paymentId}`},
                  ${normalizePaymentMethod(String(raw.payment_method ?? "")) ?? "qris"},
+                  ${raw.payment_provider ?? null},
                  ${Number(row.entry_id)}, 'sport_center', ${mirrorPaymentId},
                  'canonical-sport-center-owner', NOW(), NOW())
               ON CONFLICT DO NOTHING
@@ -975,6 +993,9 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
             ref: `SCPAY-SC-${paymentId}`,
             description: `Canonical Sport Center payment ${raw.order_number ?? paymentId}`,
             paymentMethod: normalizePaymentMethod(String(raw.payment_method ?? "")) ?? "qris",
+            paymentProvider: raw.payment_provider == null
+              ? null
+              : String(raw.payment_provider),
             source: "sport_center_payment",
             sourceId: paymentId,
             sourceEventId: canonicalEventId,
@@ -1010,7 +1031,7 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
         const paymentInsert = await tx.execute(sql`
           INSERT INTO accounting_payments
             (company_id, payment_number, payment_type, status, amount, journal_id,
-             partner_name, date, ref, memo, payment_method, entry_id,
+              partner_name, date, ref, memo, payment_method, payment_provider, entry_id,
              source_type, source_doc_id, created_by_id, created_at, updated_at)
           VALUES
             (${companyId}, ${paymentNumber}, 'inbound', 'posted', ${gross},
@@ -1018,6 +1039,7 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
              ${`SCPAY-SC-${paymentId}`},
              ${`Canonical Sport Center payment event ${raw.source_event_id ?? raw.journal_source_event_id ?? paymentId}`},
              ${normalizePaymentMethod(String(raw.payment_method ?? "")) ?? "qris"},
+              ${raw.payment_provider ?? null},
               ${entry.id}, 'sport_center', ${mirrorPaymentId}, 'canonical-sport-center-owner', NOW(), NOW())
           RETURNING id
         `);
