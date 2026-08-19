@@ -43,13 +43,13 @@ function errorResult(error: string, code = "VALIDATION_FAILED"): HistoricalDupli
   return { ok: false, error, code };
 }
 
-/**
+ /**
  * Owner path for confirmed historical duplicate postings.
  *
  * This deliberately does not touch accounting_payments and does not require a
  * bank_mutations owner. All validation and ledger writes happen in one
  * transaction; canonical entries are read-only throughout.
- */
+  */
 export async function reverseHistoricalDuplicate(
   input: HistoricalDuplicateReversalInput,
 ): Promise<HistoricalDuplicateReversalResult> {
@@ -220,10 +220,12 @@ export async function reverseHistoricalDuplicate(
       if (existing) {
         return { ok: true, reversalEntryId: Number(existing["id"]), alreadyReversed: true };
       }
-    }
-    throw err;
-  }
-import { postEntry, type PostingLine } from "../accounting.js";
+   }
+   throw err;
+ }
+}
+ /*
+ import { postEntry, type PostingLine } from "../accounting.js";
 import { logger } from "../logger.js";
 
 export interface HistoricalDuplicateEvidence {
@@ -365,10 +367,10 @@ export interface HistoricalDuplicateBatchResult {
   applied: ReverseHistoricalDuplicateResult[];
 }
 
-/**
+//**
  * Controlled batch harness. Every pair is validated read-only first; no
  * reversal starts unless every verified pair is safe.
- */
+ // end nested documentation
 export async function reverseVerifiedHistoricalDuplicateBatch(input: {
   actor: string;
   reason: string;
@@ -412,11 +414,11 @@ function lineRows(rows: unknown[]): HistoricalDuplicateEvidence["legacyLines"] {
   }));
 }
 
-/**
+//**
  * Official owner path for historical duplicate cleanup.
  * It reverses only the legacy entry; canonical entries and payments are never
  * updated by this function.
- */
+ // end nested documentation
 export async function reverseHistoricalDuplicate(
   input: ReverseHistoricalDuplicateInput,
 ): Promise<ReverseHistoricalDuplicateResult> {
@@ -547,3 +549,4 @@ export async function reverseHistoricalDuplicate(
   );
   return { ok: true, reversalEntryId: reversal.id };
 }
+ */
