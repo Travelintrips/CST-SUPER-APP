@@ -105,3 +105,4 @@
 - [Supabase missing-object status](supabase-storage-missing-status.md) — public Storage may wrap a semantic 404/NoSuchKey as HTTP 400; verify body plus listing absence.
 - [Portal functional recovery boundary](portal-functional-recovery-boundary.md) — SMTP health and controlled auth proof are required; public catalog publication responses must not be cached.
 - [Accounting payment provider metadata](accounting-payment-provider.md) — provider disimpan nullable di accounting payment/entry dan boleh dikoreksi tanpa mengubah nilai finansial posted.
+- [Pre-start marker identity](pre-start-marker-identity.md) — gate `pre_start_schema` berbeda dari compatibility marker `api_pre_start_schema`; diagnose the gate first.
