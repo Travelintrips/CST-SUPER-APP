@@ -483,6 +483,13 @@ async function runCriticalPreStartMigrations() {
     throw err;
   }
 
+  // The legacy compatibility chain runs after marketplace_accounting_handoff
+  // and before the persistent pre-start marker. Keep the whole continuation
+  // inside the existing bounded observability wrapper so a production stall
+  // cannot leave readiness migrating with every substep field empty.
+  await runPreStartSubstep(
+    "legacy_pre_start_schema_continuation",
+    async () => {
   // Buat wa_otp_codes dan trusted_devices PERTAMA — diperlukan untuk WA OTP login
   // Gunakan try/catch terpisah agar tidak menghalangi migrasi lain
   try {
@@ -1701,6 +1708,9 @@ async function runCriticalPreStartMigrations() {
   } catch (err) {
     logger.warn({ err }, "journal_sequences migration failed (non-fatal)");
   }
+    },
+    600_000,
+  );
 
   await markStartupMigrationComplete(
     "api_pre_start_schema",
