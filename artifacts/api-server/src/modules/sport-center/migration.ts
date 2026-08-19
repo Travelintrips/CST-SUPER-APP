@@ -1204,6 +1204,17 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
         v_existing_journal_id integer;
         v_journal_id integer;
 
+        v_existing_accounting_payment_id integer;
+        v_existing_accounting_entry_id integer;
+        v_existing_payment_status text;
+        v_existing_entry_status text;
+        v_existing_payment_amount numeric;
+        v_existing_entry_total_debit numeric;
+        v_existing_entry_total_credit numeric;
+        v_existing_entry_source_payment_id integer;
+        v_existing_entry_source text;
+        v_existing_entry_source_id integer;
+
         v_debit_account_code text;
         v_debit_account_name text;
 
@@ -1251,6 +1262,87 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
                 'SPORT_PAYMENT_NOT_CONFIRMED: payment=% status=%',
                 p_payment_id,
                 v_payment.status;
+        END IF;
+
+        -- --------------------------------------------------------
+        -- Canonical accounting idempotency.
+        --
+        -- A public accounting payment may already own this source
+        -- payment even when the Sport Center journal was never created
+        -- (or was created by an older retry). Resolve that posting
+        -- before any Sport Center journal/header/line INSERT.
+        --
+        -- FULL JOIN is intentional: legacy/adopted entries can carry
+        -- source_payment_id without an accounting_payments row, while
+        -- normal postings are reached through accounting_payments.entry_id.
+        -- --------------------------------------------------------
+
+        SELECT
+            ap.id,
+            ae.id,
+            ap.status::text,
+            ae.status::text,
+            ap.amount,
+            ae.total_debit,
+            ae.total_credit,
+            ae.source_payment_id,
+            ae.source::text,
+            ae.source_id
+          INTO
+            v_existing_accounting_payment_id,
+            v_existing_accounting_entry_id,
+            v_existing_payment_status,
+            v_existing_entry_status,
+            v_existing_payment_amount,
+            v_existing_entry_total_debit,
+            v_existing_entry_total_credit,
+            v_existing_entry_source_payment_id,
+            v_existing_entry_source,
+            v_existing_entry_source_id
+          FROM public.accounting_payments ap
+          FULL JOIN public.accounting_entries ae
+            ON ae.id = ap.entry_id
+         WHERE (
+             ap.source_type = 'sport_center'
+             AND ap.source_doc_id = p_payment_id
+           )
+           OR ae.source_payment_id = p_payment_id
+           OR (
+             ae.source::text = 'sport_center_payment'
+             AND ae.source_id = p_payment_id
+           )
+         ORDER BY COALESCE(ap.id, ae.id)
+         LIMIT 1;
+
+        IF v_existing_accounting_payment_id IS NOT NULL
+           OR v_existing_accounting_entry_id IS NOT NULL
+        THEN
+            IF v_existing_accounting_payment_id IS NULL
+               OR v_existing_accounting_entry_id IS NULL
+               OR v_existing_payment_status <> 'posted'
+               OR v_existing_entry_status <> 'posted'
+               OR ABS(COALESCE(v_existing_payment_amount, -1) - ROUND(v_payment.amount::numeric, 2)) > 0.01
+               OR ABS(COALESCE(v_existing_entry_total_debit, -1) - ROUND(v_payment.amount::numeric, 2)) > 0.01
+               OR ABS(COALESCE(v_existing_entry_total_credit, -1) - ROUND(v_payment.amount::numeric, 2)) > 0.01
+               OR (
+                 COALESCE(v_existing_entry_source_payment_id, -1) <> p_payment_id
+                 AND NOT (
+                   v_existing_entry_source = 'sport_center_payment'
+                   AND v_existing_entry_source_id = p_payment_id
+                 )
+               )
+            THEN
+                RAISE EXCEPTION
+                    'ACCOUNTING_IDEMPOTENCY_MISMATCH: payment=% accounting_payment=% accounting_entry=%',
+                    p_payment_id,
+                    COALESCE(v_existing_accounting_payment_id, 0),
+                    COALESCE(v_existing_accounting_entry_id, 0);
+            END IF;
+
+            -- The public posting is authoritative. Returning NULL tells
+            -- callers there is no Sport Center journal to create; most
+            -- importantly, this branch performs zero Sport Center writes.
+            RETURN NULL;
         END IF;
 
 
