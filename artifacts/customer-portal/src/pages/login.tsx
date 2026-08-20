@@ -37,6 +37,7 @@ export default function Login() {
   const [errorMsg, setErrorMsg] = useState("");
   const returnTo = new URLSearchParams(window.location.search).get("returnTo");
   const { t } = useLanguage();
+  const oauthError = new URLSearchParams(window.location.search).get("oauth_error");
 
   const [mode, setMode] = useState<LoginMode>("otp");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -58,6 +59,12 @@ export default function Login() {
   const [forgotLoading, setForgotLoading] = useState(false);
   const [forgotMsg, setForgotMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [devLoading, setDevLoading] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (oauthError === "google_callback_failed") {
+      setErrorMsg(t("login.googleCallbackFailed", "Login Google gagal saat memproses callback. Silakan coba lagi."));
+    }
+  }, [oauthError, t]);
 
   const loginSchema = z.object({
     email: z.string().email({ message: t("login.email") }),
