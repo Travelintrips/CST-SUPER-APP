@@ -1,6 +1,7 @@
 export type StartupSubstepStatus = "running" | "completed" | "failed";
 export type StartupStageStatus = "running" | "completed" | "failed";
 export type StartupPhaseStatus = "running" | "completed" | "failed";
+export type ModuleReadiness = "ready" | "not_ready" | "not_started";
 
 export type StartupReadinessSnapshot = {
   current_stage: string | null;
@@ -33,6 +34,13 @@ export type StartupReadinessSnapshot = {
     elapsed_ms: number | null;
   };
   migration_finalize_status: StartupPhaseStatus | null;
+  global_ready: boolean;
+  customer_portal_ready: boolean;
+  sport_center_ready: boolean;
+  customer_portal_required_stages: {
+    completed: string[];
+    missing: string[];
+  };
 };
 
 type MutableState = {
@@ -56,6 +64,9 @@ type MutableState = {
   seedPhaseStartedAt: number | null;
   seedPhaseStatus: StartupPhaseStatus | null;
   migrationFinalizeStatus: StartupPhaseStatus | null;
+  completedStageNames: Set<string>;
+  failedStageNames: Set<string>;
+  coreDatabaseReady: boolean;
 };
 
 const state: MutableState = {
@@ -79,6 +90,9 @@ const state: MutableState = {
   seedPhaseStartedAt: null,
   seedPhaseStatus: null,
   migrationFinalizeStatus: null,
+  completedStageNames: new Set(),
+  failedStageNames: new Set(),
+  coreDatabaseReady: false,
 };
 
 function elapsedSince(startedAt: number): number {
@@ -133,25 +147,60 @@ export function markStartupSubstepStarting(substep: string): void {
   state.failedSubstepCategory = null;
 }
 
-export function markStartupStageStarting(stage: string): void {
+export function markStartupStageStarting(stage: string, stageName = stage): void {
   state.currentStage = stage;
   state.currentStageStartedAt = Date.now();
   state.currentStageStatus = "running";
   state.failedStage = null;
+  state.failedStageNames.delete(stageName);
 }
 
-export function markStartupStageCompleted(stage: string): void {
+export function markStartupStageCompleted(stage: string, stageName = stage): void {
   state.lastCompletedStage = stage;
   state.currentStage = null;
   state.currentStageStartedAt = null;
   state.currentStageStatus = null;
   state.failedStage = null;
+  state.completedStageNames.add(stageName);
+  state.failedStageNames.delete(stageName);
 }
 
-export function markStartupStageFailed(stage: string): void {
+export function markStartupStageFailed(stage: string, stageName = stage): void {
   state.currentStage = stage;
   state.currentStageStatus = "failed";
   state.failedStage = stage;
+  state.failedStageNames.add(stageName);
+}
+
+export function markCoreDatabaseReady(): void {
+  state.coreDatabaseReady = true;
+}
+
+const CUSTOMER_PORTAL_REQUIRED_STAGES = [
+  "pre_start_schema",
+  "sessions",
+  "portal",
+  "oauth_state",
+] as const;
+
+export function getModuleReadiness(globalReady: boolean): {
+  global_ready: boolean;
+  customer_portal_ready: boolean;
+  sport_center_ready: boolean;
+  customer_portal_required_stages: { completed: string[]; missing: string[] };
+} {
+  const completed = CUSTOMER_PORTAL_REQUIRED_STAGES.filter((stage) =>
+    state.completedStageNames.has(stage),
+  );
+  const missing = CUSTOMER_PORTAL_REQUIRED_STAGES.filter((stage) =>
+    !state.completedStageNames.has(stage),
+  );
+  return {
+    global_ready: globalReady,
+    customer_portal_ready: state.coreDatabaseReady && missing.length === 0,
+    sport_center_ready: state.completedStageNames.has("sport_center"),
+    customer_portal_required_stages: { completed, missing },
+  };
 }
 
 export function setStartupRegistryProgress(
@@ -255,5 +304,6 @@ export function getStartupReadinessSnapshot(): StartupReadinessSnapshot {
       elapsed_ms: phaseElapsed(state.seedPhaseStartedAt, state.seedPhaseStatus),
     },
     migration_finalize_status: state.migrationFinalizeStatus,
+    ...getModuleReadiness(false),
   };
 }
