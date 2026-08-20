@@ -114,3 +114,27 @@ data is retained by this gate.
 Full payment-shape and concurrency proofs remain the responsibility of the
 existing central-finance runtime harness; this change does not create or seed
 Transfer Bank/Paylabs fixtures.
+
+## CF-SC-10B execution result — 2026-08-20
+
+The processor orchestration contract passed (`4/4` assertions). The actual
+development-only processor smoke also passed its durable-event and accounting
+portion:
+
+- `payment_accounting_outbox`: claimed `1`, transitioned to `posted`
+- `central_finance_processing`: `pending → processing → posted`
+- canonical accounting owner: reached successfully
+- journal: balanced (`100000.00` debit; `90090.09` revenue credit; `9909.91` tax credit)
+- DEV rollback proof: passed; the `CF-SC-10B` fixture marker count returned to `0`
+
+The full CF-SC-10B gate remains **FAIL / blocked**, not PASS. The observed
+processor path did not create a settlement batch or a `public.bank_mutations`
+row, so settlement/public-mutation completion is not proven. The processor
+currently delegates only to `sport_center.create_payment_accounting_draft`; it
+does not directly invoke the settlement owner, consistent with the existing
+orchestration contract test. The settlement test suite also requires a
+dedicated `TEST_DATABASE_URL` or `STAGING_DATABASE_URL`, which is not configured
+and must not silently fall back to the shared DEV database.
+
+No production writes, production migrations, Paylabs calls, WhatsApp sends, or
+legacy cleanup were performed. The shared DEV configuration was not modified.

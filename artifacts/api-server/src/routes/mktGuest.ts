@@ -22,7 +22,7 @@
  */
 
 import { Router, type Request, type Response } from "express";
-import { rateLimit } from "express-rate-limit";
+import { ipKeyGenerator, rateLimit } from "express-rate-limit";
 import { z } from "zod/v4";
 import { requirePortalAuth, type PortalAuthReq } from "../lib/supabaseAuth.js";
 import { hashToken } from "../lib/tokenUtils.js";
@@ -40,7 +40,7 @@ const guestViewLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { ok: false, error: "RATE_LIMIT", message: "Terlalu banyak permintaan. Coba lagi dalam 15 menit." },
-  keyGenerator: (req) => `mkt-guest-view:${String((req.params as { token?: string }).token ?? req.ip)}`,
+  keyGenerator: (req) => `mkt-guest-view:${String((req.params as { token?: string }).token ?? ipKeyGenerator(req.ip ?? "unknown"))}`,
 });
 
 // Guest claim: 5 req / jam per IP (sangat restriktif — operasi sekali jalan)
@@ -50,7 +50,7 @@ const guestClaimLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { ok: false, error: "RATE_LIMIT", message: "Terlalu banyak percobaan claim. Coba lagi dalam 1 jam." },
-  keyGenerator: (req) => `mkt-guest-claim:${req.ip ?? "unknown"}`,
+  keyGenerator: (req) => `mkt-guest-claim:${ipKeyGenerator(req.ip ?? "unknown")}`,
 });
 
 // ── Zod schemas ───────────────────────────────────────────────────────────────

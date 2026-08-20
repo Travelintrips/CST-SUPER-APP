@@ -112,3 +112,4 @@
 - [Portal phone login normalization](portal-phone-login-normalization.md) — OTP login must compare normalized phone identities, not raw stored strings, because legacy accounts may use 08/+62/62 formats.
 - [Customer Portal finance scope](customer-portal-finance-scope.md) — Customer Portal uses company 1; Paylabs and tax configuration remain intentionally deferred.
 - [CF-SC-10 shared config](cf-sc10-shared-config.md) — central Sport Center mode uses exact shared finance_project rows; legacy settlement remains a documented adapter.
+- [CF-SC-10B proof boundary](cf-sc10b-proof-boundary.md) — accounting post alone does not prove settlement/public mutation; final gate needs an observed canonical handoff.

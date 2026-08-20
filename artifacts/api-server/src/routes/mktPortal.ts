@@ -23,7 +23,7 @@
  */
 
 import { Router, type Request, type Response } from "express";
-import { rateLimit } from "express-rate-limit";
+import { ipKeyGenerator, rateLimit } from "express-rate-limit";
 import { z } from "zod/v4";
 import { requirePortalAuth, type PortalAuthReq } from "../lib/supabaseAuth.js";
 import {
@@ -53,7 +53,7 @@ const readLimiter = rateLimit({
   message: { ok: false, error: "RATE_LIMIT", message: "Terlalu banyak permintaan. Coba lagi dalam 15 menit." },
   keyGenerator: (req) => {
     const pid = (req as PortalAuthReq).portalCustomerId;
-    return `mkt-portal-read:${pid ?? req.ip}`;
+    return `mkt-portal-read:${pid ?? ipKeyGenerator(req.ip ?? "unknown")}`;
   },
 });
 
@@ -66,7 +66,7 @@ const writeLimiter = rateLimit({
   message: { ok: false, error: "RATE_LIMIT", message: "Terlalu banyak permintaan write. Coba lagi dalam 15 menit." },
   keyGenerator: (req) => {
     const pid = (req as PortalAuthReq).portalCustomerId;
-    return `mkt-portal-write:${pid ?? req.ip}`;
+    return `mkt-portal-write:${pid ?? ipKeyGenerator(req.ip ?? "unknown")}`;
   },
 });
 
@@ -79,7 +79,7 @@ const selectLimiter = rateLimit({
   message: { ok: false, error: "RATE_LIMIT", message: "Terlalu banyak permintaan vendor selection. Coba lagi dalam 15 menit." },
   keyGenerator: (req) => {
     const pid = (req as PortalAuthReq).portalCustomerId;
-    return `mkt-portal-select:${pid ?? req.ip}`;
+    return `mkt-portal-select:${pid ?? ipKeyGenerator(req.ip ?? "unknown")}`;
   },
 });
 
