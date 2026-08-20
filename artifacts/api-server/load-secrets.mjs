@@ -62,6 +62,7 @@ import { spawn } from "node:child_process";
 
 const ALLOWED_ENVIRONMENTS = ["development", "production"];
 const SAFE_SECRET_VERSION = /^[A-Za-z0-9._-]{1,200}$/;
+const SAFE_IDENTITY_VALUE = /^[A-Za-z0-9._-]{1,200}$/;
 
 /**
  * Extract only the non-secret version identifier from Secret Manager's
@@ -72,6 +73,30 @@ export function extractSecretVersion(resourceName) {
   const match = resourceName.match(/\/versions\/([^/]+)$/);
   const version = match?.[1] ?? "";
   return SAFE_SECRET_VERSION.test(version) ? version : null;
+}
+
+/**
+ * Build the non-secret startup identity passed to the child application.
+ * Keep this separate from the secret payload so observability cannot
+ * accidentally inherit credentials or other bundle values.
+ */
+export function buildStartupIdentity({
+  appEnv,
+  projectId,
+  bundleId,
+  legacyMode,
+  secretVersion,
+} = {}) {
+  const safeValue = (value) =>
+    typeof value === "string" && SAFE_IDENTITY_VALUE.test(value) ? value : null;
+
+  return {
+    APP_SECRET_ARCHITECTURE_MODE: legacyMode ? "LEGACY" : "NEW",
+    APP_SECRET_PROJECT_ID: safeValue(projectId),
+    APP_SECRET_BUNDLE_ID: safeValue(bundleId),
+    APP_SECRET_BUNDLE_VERSION: safeValue(secretVersion),
+    APP_ENV: appEnv === "development" || appEnv === "production" ? appEnv : null,
+  };
 }
 
 /** Default bundle name prefix for new-architecture bundles. */
@@ -420,7 +445,10 @@ async function main() {
   }
 
   // ── Phase 3: Determine bundle name ──────────────────────────────────────────
-  const { secretName, legacyMode, bundleName } = resolveBundleName(appEnv, credentials, process.env);
+  const { secretName, projectId: selectedSecretProjectId, legacyMode, bundleName } =
+    resolveBundleName(appEnv, credentials, process.env);
+  const selectedSecretBundleId = bundleName ??
+    (process.env.GCP_SECRET_ID || (secretName.match(/\/secrets\/([^/]+)\/versions\//)?.[1] ?? null));
 
   if (legacyMode) {
     console.warn(
@@ -486,6 +514,16 @@ async function main() {
     // Keep only the non-secret version identifier in the child runtime.
     merged.APP_SECRET_BUNDLE_VERSION = resolvedSecretVersion;
   }
+  Object.assign(
+    merged,
+    buildStartupIdentity({
+      appEnv,
+      projectId: selectedSecretProjectId,
+      bundleId: selectedSecretBundleId,
+      legacyMode,
+      secretVersion: resolvedSecretVersion,
+    }),
+  );
   let injectedCount, overriddenCount, loadedKeys;
 
   try {

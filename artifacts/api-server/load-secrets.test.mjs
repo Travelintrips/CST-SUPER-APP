@@ -13,6 +13,7 @@ import {
   validateBootstrapJson,
   resolveBundleName,
   extractSecretVersion,
+  buildStartupIdentity,
   injectSecrets,
   validateRequiredSecrets,
 } from "./load-secrets.mjs";
@@ -23,6 +24,38 @@ describe("Secret Manager version observability", () => {
     expect(extractSecretVersion("projects/test/secrets/x/versions/latest")).toBe("latest");
     expect(extractSecretVersion("projects/test/secrets/x/versions/secret value")).toBeNull();
     expect(extractSecretVersion("secret payload")).toBeNull();
+  });
+
+  it("builds safe startup identity metadata without secret material", () => {
+    expect(buildStartupIdentity({
+      appEnv: "production",
+      projectId: "secret-504012",
+      bundleId: "cst-super-app-production",
+      legacyMode: false,
+      secretVersion: "12",
+    })).toEqual({
+      APP_SECRET_ARCHITECTURE_MODE: "NEW",
+      APP_SECRET_PROJECT_ID: "secret-504012",
+      APP_SECRET_BUNDLE_ID: "cst-super-app-production",
+      APP_SECRET_BUNDLE_VERSION: "12",
+      APP_ENV: "production",
+    });
+  });
+
+  it("returns null for unsafe or missing identity values", () => {
+    expect(buildStartupIdentity({
+      appEnv: "staging",
+      projectId: "project/with-secret",
+      bundleId: "bundle\nwith-secret",
+      legacyMode: true,
+      secretVersion: null,
+    })).toEqual({
+      APP_SECRET_ARCHITECTURE_MODE: "LEGACY",
+      APP_SECRET_PROJECT_ID: null,
+      APP_SECRET_BUNDLE_ID: null,
+      APP_SECRET_BUNDLE_VERSION: null,
+      APP_ENV: null,
+    });
   });
 });
 

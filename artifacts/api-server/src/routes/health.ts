@@ -135,6 +135,10 @@ router.get("/healthz", async (_req, res) => {
     uptimeSeconds,
     version,
     revision: getApiRevision(),
+    appEnv: process.env.APP_ENV ?? null,
+    secretArchitectureMode: process.env.APP_SECRET_ARCHITECTURE_MODE ?? null,
+    secretProjectId: process.env.APP_SECRET_PROJECT_ID ?? null,
+    secretBundleId: process.env.APP_SECRET_BUNDLE_ID ?? null,
     secretBundleVersion: process.env.APP_SECRET_BUNDLE_VERSION ?? null,
     services: {
       db: db.status,
