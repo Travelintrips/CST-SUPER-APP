@@ -115,12 +115,14 @@ async function createAndFinalizeSettlement(client: QueryClient, claim: Claim): P
     provider_code: string | null;
     bank_account_id: string | null;
     settlement_date: string | null;
+    settlement_rule_version: string | null;
   }>(
     `SELECT company_id,
             payment_method::text AS payment_method,
             payment_provider::text AS provider_code,
             bank_account_id::text AS bank_account_id,
-            expected_settlement_date::text AS settlement_date
+            expected_settlement_date::text AS settlement_date,
+            settlement_rule_version
        FROM sport_center.sport_payments
       WHERE id = $1`,
     [claim.paymentId],
@@ -131,20 +133,47 @@ async function createAndFinalizeSettlement(client: QueryClient, claim: Claim): P
     throw new Error(`BLOCKED_CONFIG_MISSING: settlement identity for payment=${claim.paymentId}`);
   }
 
-  const batch = await client.query<{ settlement_id: string }>(
-    `SELECT sport_center.create_payment_settlement_batch(
-       $1, $2, $3, $4, $5::date, $6::integer[], $7
-     ) AS settlement_id`,
-    [
-      claim.correlationId,
-      row.company_id,
-      row.provider_code,
-      row.bank_account_id,
-      row.settlement_date,
-      [claim.paymentId],
-      "central-finance-processor",
-    ],
-  );
+  let batch;
+  await client.query("SAVEPOINT settlement_batch_attempt");
+  try {
+    batch = await client.query<{ settlement_id: string }>(
+      `SELECT sport_center.create_payment_settlement_batch(
+         $1, $2, $3, $4, $5::date, $6::integer[], $7
+       ) AS settlement_id`,
+      [
+        claim.correlationId,
+        row.company_id,
+        row.provider_code,
+        row.bank_account_id,
+        row.settlement_date,
+        [claim.paymentId],
+        "central-finance-processor",
+      ],
+    );
+    await client.query("RELEASE SAVEPOINT settlement_batch_attempt");
+  } catch (error) {
+    const message = String(error instanceof Error ? error.message : error);
+    await client.query("ROLLBACK TO SAVEPOINT settlement_batch_attempt");
+    if (!/CANONICAL_SETTLEMENT_IDEMPOTENCY_CONFLICT/i.test(message)) throw error;
+    if (!row.settlement_rule_version) {
+      throw new Error(`SETTLEMENT_RULE_VERSION_MISSING: payment=${claim.paymentId}`);
+    }
+    batch = await client.query<{ settlement_id: string }>(
+      `SELECT sport_center.create_payment_settlement_supplemental_batch(
+         $1, $2, $3, $4::date, $5, $6::integer[], $7
+       ) AS settlement_id`,
+      [
+        row.company_id,
+        row.provider_code,
+        row.bank_account_id,
+        row.settlement_date,
+        row.settlement_rule_version,
+        [claim.paymentId],
+        "central-finance-processor",
+      ],
+    );
+    await client.query("RELEASE SAVEPOINT settlement_batch_attempt");
+  }
   const settlementId = batch.rows[0]?.settlement_id;
   if (!settlementId) throw new Error(`SETTLEMENT_BATCH_NOT_CREATED: payment=${claim.paymentId}`);
 

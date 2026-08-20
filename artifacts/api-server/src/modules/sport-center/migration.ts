@@ -3708,6 +3708,7 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
       v_bank_account_id text;
       v_existing_source_table text;
       v_existing_source_id text;
+      v_requested_settlement_id bigint;
     BEGIN
       SELECT *
         INTO v_public
@@ -3742,6 +3743,20 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
           p_public_mutation_id;
       END IF;
 
+      /*
+       * Canonical Finance handoff supplies the owning settlement batch in
+       * source_account.  Use it as an exact scope when present; amount/date
+       * alone is ambiguous for same-day DP and pelunasan batches.
+       */
+      IF v_public.source_account LIKE 'sport_center.payment_settlement_batches:%'
+      THEN
+        v_requested_settlement_id :=
+          substring(
+            v_public.source_account
+            FROM 'sport_center\.payment_settlement_batches:([0-9]+)$'
+          )::bigint;
+      END IF;
+
       SELECT COUNT(*)::integer
         INTO v_public_key_count
         FROM public.bank_mutations
@@ -3769,6 +3784,10 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
          AND aj.is_reversal = FALSE
        WHERE b.status = 'posted'
          AND b.bank_mutation_id IS NULL
+          AND (
+            v_requested_settlement_id IS NULL
+            OR b.id = v_requested_settlement_id
+          )
          AND b.company_id = v_public.company_id
          AND b.settlement_date = v_public.transaction_date::date
          AND b.net_amount = v_public.amount
@@ -3818,6 +3837,10 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
          AND (psc.effective_until IS NULL OR b.settlement_date < psc.effective_until)
        WHERE b.status = 'posted'
          AND b.bank_mutation_id IS NULL
+          AND (
+            v_requested_settlement_id IS NULL
+            OR b.id = v_requested_settlement_id
+          )
          AND b.company_id = v_public.company_id
          AND b.settlement_date = v_public.transaction_date::date
          AND b.net_amount = v_public.amount

@@ -169,8 +169,6 @@ async function evidence(client, paymentIds) {
         WHERE mutation_key = ANY(SELECT 'SC-PAY-' || x::text FROM unnest($1::int[]) x)) AS public_mutations,
       (SELECT COUNT(*)::int FROM sport_center.bank_mutations
         WHERE source = 'PUBLIC_BANK_MUTATION_BRIDGE'
-          AND source_app = 'cst-super-app'
-          AND source_table = 'public.bank_mutations'
           AND canonical_key = ANY(
             SELECT 'sport_center:payment:' || x::text FROM unnest($1::int[]) x
           )) AS canonical_bridge_mutations,
@@ -192,7 +190,16 @@ async function positive(client, label, specs) {
   }
   const first = await process(client);
   assert(first.claimed >= ids.length, `${label}: processor claimed=${first.claimed}`);
-  assert(first.posted >= ids.length, `${label}: processor posted=${first.posted}`);
+  if (first.posted < ids.length) {
+    const failures = await client.query(`
+      SELECT payment_id, status, last_error
+        FROM sport_center.payment_accounting_outbox
+       WHERE payment_id = ANY($1::int[])
+    `, [ids]);
+    throw new Error(
+      `${label}: processor posted=${first.posted}; failures=${JSON.stringify(failures.rows)}`,
+    );
+  }
   const retry = await process(client);
   assert(retry.claimed === 0, `${label}: retry claimed=${retry.claimed}`);
   const row = await evidence(client, ids);
@@ -263,13 +270,6 @@ async function main() {
       note: "Config corruption and two-client races require dedicated case harnesses; no shared config was modified.",
     }, null, 2));
   } catch (error) {
-    const canonical = await client.query(`
-      SELECT id, source, source_app, source_table, source_id, canonical_key
-        FROM sport_center.bank_mutations
-       ORDER BY id DESC
-       LIMIT 5
-    `).catch(() => ({ rows: [] }));
-    console.error(`CF_SC_10C_CANONICAL_DEBUG=${JSON.stringify(canonical.rows)}`);
     await client.query("ROLLBACK").catch(() => {});
     console.error(error instanceof Error ? error.stack : String(error));
     globalThis.process.exitCode = 1;
