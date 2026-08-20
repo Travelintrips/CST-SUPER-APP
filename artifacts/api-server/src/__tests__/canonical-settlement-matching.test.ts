@@ -195,6 +195,7 @@ describe("Phase 4C-5 canonical settlement matching", () => {
       candidateSource: null,
       amount: 3000000,
       date: "2026-08-04",
+      company_id: 7,
       ref: null,
       name: "Vendor",
     };
@@ -219,10 +220,10 @@ describe("Phase 4C-5 canonical settlement matching", () => {
 
     expect(sameDay.amount_match).toBe(true);
     expect(sameDay.date_match).toBe(true);
-    expect(sameDay.score).toBe(70);
+    expect(sameDay.score).toBe(80);
     expect(nextDay.amount_match).toBe(true);
     expect(nextDay.date_match).toBe(false);
-    expect(nextDay.score).toBe(50);
+    expect(nextDay.score).toBe(60);
     expect(classifyMatch(nextDay)).toBe("unmatched");
   });
 });

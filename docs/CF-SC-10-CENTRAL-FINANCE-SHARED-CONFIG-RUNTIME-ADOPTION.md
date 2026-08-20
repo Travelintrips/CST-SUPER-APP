@@ -150,3 +150,55 @@ mutation handoff. It does not claim the larger optional-provider, configuration
 corruption, multi-client race, or DP/pelunasan matrix unless those cases are
 run separately. No production writes, production migrations, Paylabs calls,
 WhatsApp sends, or legacy cleanup were performed.
+
+## Mutation ownership and bridge contract
+
+`public.bank_mutations` is the canonical public mutation owner for the Central
+Finance payment handoff. A central settlement creates exactly one deterministic
+public evidence row using:
+
+```text
+mutation_key = SC-PAY:<payment_id>
+canonical_key = sport_center:payment:<payment_id>
+source_account = sport_center.payment_settlement_batches:<settlement_batch_id>
+```
+
+The `sport_center.bank_mutations` row with
+`source = PUBLIC_BANK_MUTATION_BRIDGE` is an approved canonical bridge
+representation of that public owner. It is not the retired legacy
+booking/accounting producer. Provenance must classify these rows separately:
+
+| Classification | Required result |
+|---|---:|
+| Public canonical mutation | one per canonical payment |
+| Sport Center canonical bridge row | only the verified bridge representation |
+| Legacy booking mutation | `0` |
+| Other unexpected Sport Center mutation | `0` |
+
+Bridge resolution uses the exact settlement identity carried by
+`public.bank_mutations.source_account`, then validates company, date, amount,
+posted settlement journal, and owner-approved provider/account configuration.
+Company/date/amount are evidence attributes, not uniqueness identities. A
+missing or ambiguous exact settlement scope fails closed.
+
+## CF-SC-10C execution result — 2026-08-21
+
+The development-only rollback matrix passed after restoring and verifying the
+latest canonical owner routine in the development database. The prior DP
+failure was caused by a stale live bridge function that did not yet apply the
+exact `source_account` settlement scope; no assertion was weakened.
+
+| Case | Result | Processing | Accounting | Settlement | Public mutation | SC bridge | Legacy |
+|---|---|---:|---:|---:|---:|---:|---:|
+| QRIS full | PASS | 1 | 1 | 1 | 1 | 1 | 0 |
+| QRIS DP | PASS | 1 | 1 | 1 | 1 | 1 | 0 |
+| QRIS pelunasan | PASS | 1 | 1 | 1 | 1 | 1 | 0 |
+| Group payment | PASS | 1 | 1 | 1 | 1 | 1 | 0 |
+
+Transfer Bank, Paylabs, and unknown provider were each claimed but remained
+manual review with zero accounting, settlement, or mutation effects. The
+supplemental settlement fallback and savepoint rollback path are retained in
+the processor owner and the CF-SC run completed atomically. The harness rolled
+back all fixtures and reported zero production writes. Development readiness
+was `200`, all 119 startup stages were complete, and the latest bridge function
+was verified in the live DEV catalog before the harness ran.

@@ -113,3 +113,4 @@
 - [Customer Portal finance scope](customer-portal-finance-scope.md) — Customer Portal uses company 1; Paylabs and tax configuration remain intentionally deferred.
 - [CF-SC-10 shared config](cf-sc10-shared-config.md) — central Sport Center mode uses exact shared finance_project rows; legacy settlement remains a documented adapter.
 - [CF-SC-10B proof boundary](cf-sc10b-proof-boundary.md) — accounting post alone does not prove settlement/public mutation; final gate needs an observed canonical handoff.
+- [Canonical bridge live installation](canonical-bridge-live-install.md) — startup markers can skip a newer bridge function; verify pg_get_functiondef and restore the DEV additive contract before proofs.
