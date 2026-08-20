@@ -25,6 +25,7 @@ import { remediateOrphanProducts } from "./lib/remediateOrphanProducts";
 import { seedProductTemplates } from "./routes/productTemplates.js";
 import { runPortalMigration } from "./lib/portalMigration";
 import { runPortalPaymentCompanyMigration } from "./lib/portalPaymentCompanyMigration.js";
+import { runCustomerPortalPaymentBoundaryMigration } from "./lib/customerPortalPaymentBoundaryMigration.js";
 import { runVendorProfileFieldsMigration } from "./lib/vendorProfileFieldsMigration";
 import { runSupplierEnhancementMigration } from "./lib/supplierEnhancementMigration";
 import { runAccountingMigration, repairKasErSportCenterEntries, repairOrphanedEntryLines, syncAccountingSequences, checkSequenceDesync } from "./lib/accountingMigration";
@@ -112,7 +113,7 @@ import { registerWorker, startAll } from "./lib/startupOrchestrator.js";
 import { startTokenCleanupWorker } from "./workers/tokenCleanupWorker.js";
 import { initAlertsBroadcast } from "./lib/alertsBroadcast.js";
 import { warmupMailer } from "./lib/mailer.js";
-import { ensureSportPaymentMirrorTrigger, runLedgerEventsEntryIdMigration, runSportCenterMigration, runSportCenterAccountCorrection, runSportCenterCompanyInvoiceMigration, runSportExpensesMigration } from "./modules/sport-center/migration.js";
+import { ensureCanonicalSettlementContracts, ensureSportPaymentMirrorTrigger, runLedgerEventsEntryIdMigration, runSportCenterMigration, runSportCenterAccountCorrection, runSportCenterCompanyInvoiceMigration, runSportExpensesMigration } from "./modules/sport-center/migration.js";
 import { runTenantMigration } from "./modules/tenant/migration.js";
 import { startRecurringExpenseWorker } from "./modules/sport-center/recurringExpenseWorker.js";
 import { startMemberReminderWorker } from "./modules/sport-center/memberReminderWorker.js";
@@ -1986,6 +1987,7 @@ async function startServer() {
     .then(() => runWithRetry("Companies migration", runCompaniesMigration))
     .then(() => runWithRetry("Holding migration", runHoldingMigration))
     .then(() => runWithRetry("Portal migration", runPortalMigration))
+    .then(() => runWithRetry("Customer Portal payment boundary migration", runCustomerPortalPaymentBoundaryMigration))
     .then(() => runWithRetry("Portal payment company scope migration", runPortalPaymentCompanyMigration))
     .then(() => runWithRetry("Accounting migration", runAccountingMigration))
     .then(() => runWithRetry("COA governance migration", runCoaGovernanceMigration))
@@ -2042,6 +2044,7 @@ async function startServer() {
     .then(() => runWithRetry("Paylabs payment methods migration", runPaylabsPaymentMethodsMigration))
     .then(() => runWithRetry("Cost Center migration", runCostCenterMigration))
     .then(() => runWithRetry("Sport Center migration", runSportCenterMigration))
+      .then(() => runWithRetry("Sport Center canonical finance config refresh", ensureCanonicalSettlementContracts))
      // Refresh additive Sport Center payment projection DDL even when the
      // long migration is already marked complete in an existing database.
      .then(() => runWithRetry("Sport Center payment mirror trigger refresh", ensureSportPaymentMirrorTrigger))
