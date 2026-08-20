@@ -57,16 +57,22 @@ export async function resolveFinanceProjectConfig(
   if (!Number.isInteger(input.companyId) || input.companyId <= 0) {
     throw new Error("SHARED_CONFIG_COMPANY_INVALID");
   }
-  const result = await db.execute(sql`
-    SELECT *
-    FROM sport_center.resolve_shared_finance_config(
-      ${input.projectCode},
-      ${input.companyId},
-      ${input.paymentMethod},
-      ${input.providerCode},
-      ${input.effectiveDate}::date
-    )
-  `);
+  let result: { rows: unknown[] };
+  try {
+    result = await db.execute(sql`
+      SELECT *
+      FROM sport_center.resolve_shared_finance_config(
+        ${input.projectCode},
+        ${input.companyId},
+        ${input.paymentMethod},
+        ${input.providerCode},
+        ${input.effectiveDate}::date
+      )
+    `);
+  } catch (error) {
+    const cause = (error as { cause?: { message?: unknown } }).cause?.message;
+    throw new Error(String(cause ?? (error instanceof Error ? error.message : error)));
+  }
   const row = result.rows[0] as ResolverRow | undefined;
   if (!row) throw new Error("BLOCKED_CONFIG_MISSING");
 

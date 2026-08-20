@@ -1190,10 +1190,13 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
       v_role text;
       v_count integer;
       v_map record;
+      v_payment_config_id integer;
+      v_tax_mapping_id integer;
+      v_bank_id integer;
       v_ids integer[] := ARRAY[]::integer[];
     BEGIN
-      SELECT COUNT(*)::integer AS count, MIN(c.id) AS id
-        INTO v_count, v_config
+      SELECT COUNT(*)::integer
+        INTO v_count
         FROM public.finance_project_configs c
        WHERE c.project_code = p_project_code
          AND c.company_id = p_company_id
@@ -1205,9 +1208,16 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
           CASE WHEN v_count = 0 THEN 'MISSING' ELSE 'AMBIGUOUS' END,
           p_project_code, p_company_id, v_count;
       END IF;
+      SELECT c.* INTO v_config
+        FROM public.finance_project_configs c
+       WHERE c.project_code = p_project_code
+         AND c.company_id = p_company_id
+         AND c.is_active = TRUE
+         AND c.effective_from <= p_effective_date
+         AND (c.effective_to IS NULL OR p_effective_date < c.effective_to);
 
-      SELECT COUNT(*)::integer AS count, MIN(pc.id) AS id
-        INTO v_count, v_payment
+      SELECT COUNT(*)::integer
+        INTO v_count
         FROM public.finance_project_payment_configs pc
        WHERE pc.finance_project_config_id = v_config.id
          AND upper(btrim(pc.payment_method)) = upper(btrim(p_payment_method))
@@ -1220,12 +1230,20 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
           CASE WHEN v_count = 0 THEN 'MISSING' ELSE 'AMBIGUOUS' END,
           p_payment_method, p_provider_code, v_count;
       END IF;
+      SELECT pc.id INTO v_payment_config_id
+        FROM public.finance_project_payment_configs pc
+       WHERE pc.finance_project_config_id = v_config.id
+         AND upper(btrim(pc.payment_method)) = upper(btrim(p_payment_method))
+         AND lower(btrim(pc.provider_code)) = lower(btrim(p_provider_code))
+         AND pc.is_active = TRUE
+         AND pc.effective_from <= p_effective_date
+         AND (pc.effective_to IS NULL OR p_effective_date < pc.effective_to);
       SELECT pc.* INTO v_payment
         FROM public.finance_project_payment_configs pc
-       WHERE pc.id = v_payment.id;
+       WHERE pc.id = v_payment_config_id;
 
       SELECT COUNT(*)::integer AS count, MIN(tm.id) AS id
-        INTO v_count, v_tax
+        INTO v_count, v_tax_mapping_id
         FROM public.finance_project_tax_mappings tm
        WHERE tm.finance_project_config_id = v_config.id
          AND tm.transaction_type = 'sport_booking_payment'
@@ -1253,10 +1271,10 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
         RAISE EXCEPTION 'BLOCKED_CONFIG_%: tax mapping matches=%',
           CASE WHEN v_count = 0 THEN 'MISSING' ELSE 'AMBIGUOUS' END, v_count;
       END IF;
-      SELECT tm.* INTO v_tax FROM public.finance_project_tax_mappings tm WHERE tm.id = v_tax.id;
+      SELECT tm.* INTO v_tax FROM public.finance_project_tax_mappings tm WHERE tm.id = v_tax_mapping_id;
 
-      SELECT COUNT(*)::integer AS count, MIN(cba.id) AS id
-        INTO v_count, v_bank
+      SELECT COUNT(*)::integer
+        INTO v_count
         FROM public.company_bank_accounts cba
        WHERE cba.id = v_payment.bank_account_id
          AND cba.company_id = p_company_id
@@ -1266,7 +1284,12 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
           CASE WHEN v_count = 0 THEN 'MISSING' ELSE 'AMBIGUOUS' END,
           v_payment.bank_account_id, p_company_id, v_count;
       END IF;
-      SELECT cba.* INTO v_bank FROM public.company_bank_accounts cba WHERE cba.id = v_bank.id;
+      SELECT cba.id INTO v_bank_id
+        FROM public.company_bank_accounts cba
+       WHERE cba.id = v_payment.bank_account_id
+         AND cba.company_id = p_company_id
+         AND cba.is_active = TRUE;
+      SELECT cba.* INTO v_bank FROM public.company_bank_accounts cba WHERE cba.id = v_bank_id;
 
       IF NOT EXISTS (
         SELECT 1 FROM public.tax_rules tr
@@ -1417,6 +1440,8 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
         v_booking_company_id integer;
 
         v_company_id integer;
+        v_shared record;
+        v_finance_mode text;
 
         v_gross numeric(18,2);
         v_dpp numeric(18,2);
@@ -1438,6 +1463,10 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
 
         v_debit_account_code text;
         v_debit_account_name text;
+        v_revenue_account_code text := 'REVENUE';
+        v_revenue_account_name text := 'Pendapatan Sport Center';
+        v_tax_account_code text := 'PPN_OUTPUT';
+        v_tax_account_name text := 'PPN Keluaran';
 
         v_payment_method text;
         v_payment_provider text;
@@ -1627,6 +1656,24 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
                 v_payment.amount;
         END IF;
 
+        v_finance_mode := lower(COALESCE(current_setting('sport_center.finance_mode', true), 'legacy'));
+        IF v_finance_mode = 'central' THEN
+            SELECT *
+              INTO v_shared
+              FROM sport_center.resolve_shared_finance_config(
+                'sport_center',
+                COALESCE(v_payment.company_id, v_booking_company_id),
+                v_payment.payment_method::text,
+                v_payment.payment_provider::text,
+                COALESCE(v_payment.confirmed_at, v_payment.created_at, now())::date
+              );
+            v_booking_ppn_rate := v_shared.tax_rate;
+            v_revenue_account_code := v_shared.revenue_coa_code;
+            v_revenue_account_name := v_shared.revenue_coa_name;
+            v_tax_account_code := v_shared.tax_output_coa_code;
+            v_tax_account_name := v_shared.tax_output_coa_name;
+        END IF;
+
 
         -- --------------------------------------------------------
         -- Tax inclusive calculation.
@@ -1647,6 +1694,11 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
             v_dpp := v_gross;
             v_tax := 0;
 
+        END IF;
+
+        IF v_finance_mode = 'central' THEN
+            v_debit_account_code := v_shared.receiving_bank_coa_code;
+            v_debit_account_name := v_shared.receiving_bank_coa_name;
         END IF;
 
 
@@ -1803,10 +1855,10 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
             v_debit_account_name,
             v_gross,
 
-            'Pendapatan Sport Center',
+            v_revenue_account_name,
             v_dpp,
 
-            'PPN Keluaran',
+            v_tax_account_name,
             v_tax,
 
             v_journal_date,
@@ -1814,7 +1866,10 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
             v_payment_method,
             v_payment_provider,
             v_payment_type,
-            sport_center.resolve_internal_bank_account_id(v_company_id, v_payment.bank_account_id::text),
+            CASE
+              WHEN v_finance_mode = 'central' THEN v_shared.bank_account_id
+              ELSE sport_center.resolve_internal_bank_account_id(v_company_id, v_payment.bank_account_id::text)
+            END,
 
             v_gross,
             v_dpp,
@@ -1887,8 +1942,8 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
         (
             v_journal_id,
             'credit',
-            'REVENUE',
-            'Pendapatan Sport Center',
+            v_revenue_account_code,
+            v_revenue_account_name,
             v_dpp,
             'Pendapatan - '
                 || COALESCE(
@@ -1919,10 +1974,10 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
             (
                 v_journal_id,
                 'credit',
-                'PPN_OUTPUT',
-                'PPN Keluaran',
+            v_tax_account_code,
+            v_tax_account_name,
                 v_tax,
-                'PPN Keluaran - '
+                v_tax_account_name || ' - '
                     || COALESCE(
                         v_order_number,
                         p_payment_id::text
