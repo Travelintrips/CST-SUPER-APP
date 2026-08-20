@@ -7,16 +7,19 @@
 
 ## Executive verdict
 
-**CF-CP-3: NOT READY for CF-CP-4.**
+**CF-CP-3: CONDITIONAL / BLOCKED ONLY ON DEFERRED TAX CONTRACT.**
 
 The Central Finance foundation exists in the development runtime, but Customer
-Portal does not yet have a verified project configuration, an approved
-Paylabs-to-bank ownership mapping, or a Customer Portal-specific tax and COA
-contract. No schema or data mutation was performed by this audit.
+Portal still does not have a verified project configuration or a
+Customer Portal-specific tax contract. The business owner has now designated
+company ID `1` as the Customer Portal owner. Paylabs and bank settlement
+configuration are intentionally outside the current scope. No schema or data
+mutation was performed by this audit.
 
-The correct next state is **OWNER_CONFIG_REQUIRED**, not a generated or guessed
-configuration. In particular, this audit must not manufacture Paylabs,
-receiving-bank, tax, COA, settlement, or reconciliation values.
+The correct next state is **OWNER_CONFIG_REQUIRED** for the project/tax
+configuration that is still deferred, not a generated or guessed
+configuration. In particular, this audit must not manufacture tax, COA,
+settlement, or reconciliation values.
 
 ## Verified canonical identity
 
@@ -42,8 +45,7 @@ Production remains on the legacy path.
 **CUSTOMER PORTAL CANONICAL COMPANY SOURCE =**
 `public.sales_documents.company_id`
 
-**CUSTOMER PORTAL COMPANY ID =**
-**Not proven as a single approved runtime value in this audit.**
+**CUSTOMER PORTAL COMPANY ID = `1` (owner decision)**
 
 ### Evidence and interpretation
 
@@ -60,12 +62,12 @@ CF-CP-3. They remain a follow-up review item before any shared-engine cutover.
 
 ### Ownership blocker
 
-Before CF-CP-4, an authenticated/runtime proof must show:
+The owner decision resolves the intended company scope to company ID `1`.
+Before accounting activation, an authenticated/runtime proof should still show:
 
-1. the relevant Customer Portal sales document,
-2. its exact `company_id`,
-3. the company row it references,
-4. the same company ID carried into the payment and finance-event contract.
+1. the relevant Customer Portal sales document has `company_id = 1`,
+2. company `1` is the referenced canonical company row,
+3. the same company ID is carried into the payment and finance-event contract.
 
 No implicit company `1` may be used to satisfy that proof.
 
@@ -115,9 +117,18 @@ fixture or a completed finance-event cohort suitable for settlement testing.
 
 ## 4. Paylabs finance configuration discovery
 
+### Scope decision
+
+**PAYLABS = DEFERRED / OUT OF CURRENT SCOPE**
+
+The owner has explicitly asked to ignore Paylabs for the current phase. No
+Paylabs payment configuration, receiving bank, settlement, or fee work is
+required for the current CF-CP-3 closeout. It remains a prerequisite only if a
+future phase enables Paylabs settlement or reconciliation.
+
 ### Result
 
-**OWNER_CONFIG_REQUIRED**
+**NOT ASSESSED BY DESIGN**
 
 No complete, Customer Portal-specific, non-secret configuration was proven for
 all of the following:
@@ -141,9 +152,13 @@ name, or an environment secret.
 
 ## 5. Bank ownership
 
+### Scope decision
+
+Because Paylabs is deferred, receiving-bank ownership is also deferred.
+
 ### Result
 
-**BANK OWNERSHIP = UNPROVEN**
+**BANK OWNERSHIP = DEFERRED**
 
 Because no approved Customer Portal Paylabs receiving-account mapping was found,
 there is no canonical `company_bank_accounts.id` that can be reported as the
@@ -162,9 +177,16 @@ implicitly.
 
 ## 6. Customer Portal tax contract
 
+### Scope decision
+
+**TAX RULE = DEFERRED**
+
+The owner has stated that tax rules will be configured later. No tax rule is
+selected or reused in this phase.
+
 ### Result
 
-**TAX CONTRACT = UNPROVEN / OWNER_CONFIG_REQUIRED**
+**TAX CONTRACT = DEFERRED / OWNER_CONFIG_REQUIRED**
 
 The development runtime contains generic sales tax rules, but the audit did not
 prove that one of them is the Customer Portal rule. The following contract
@@ -211,25 +233,19 @@ the verified application contract. No secret value was printed.
 
 1. **Missing project config:** create/approve
    `customer_portal` shared project configuration through the owner workflow.
-2. **Unproven company ownership:** prove the exact Customer Portal company ID
-   from `sales_documents.company_id` and preserve it through payment/event flow.
-3. **Missing provider finance contract:** approve Paylabs non-secret settlement,
-   fee, tax, currency, tolerance, and effective-period values.
-4. **Missing bank ownership proof:** resolve one active
-   `company_bank_accounts.id` owned by the canonical company; fail closed on
-   ambiguity.
-5. **Missing tax contract:** approve a Customer Portal-specific taxable and
-   inclusive/exclusive rule; do not reuse Sport Center rule 8.
-6. **Missing COA mapping:** approve project/company-scoped accounts before
+2. **Deferred tax contract:** configure a Customer Portal-specific taxable and
+   inclusive/exclusive rule later; do not reuse Sport Center rule 8.
+3. **Missing COA mapping:** approve project/company-scoped accounts before
    accounting posting.
-7. **Insufficient runtime fixture:** provide a real or explicitly approved
+4. **Insufficient runtime fixture:** provide a real or explicitly approved
    non-production fixture proving the payment-confirmed event contract before
    settlement/reconciliation work.
 
 ## Explicit non-actions
 
 - No `INSERT`, `UPDATE`, `DELETE`, or `DDL` was executed for this audit.
-- No Paylabs credential, merchant secret, or private key was exposed.
+- Paylabs was intentionally excluded from this phase; no Paylabs credential,
+  merchant secret, or private key was exposed.
 - No Sport Center configuration was modified.
 - No settlement or reconciliation implementation was enabled.
 - No guessed bank, tax, COA, MDR, fee, delay, tolerance, or currency value was
@@ -240,10 +256,11 @@ the verified application contract. No secret value was printed.
 CF-CP-4 may begin only after an owner-approved configuration exists and a
 read-only re-audit proves, for the same company and project:
 
-1. active project config,
-2. active Paylabs payment config,
-3. one unambiguous active company bank account,
-4. explicit tax mapping,
-5. explicit COA mapping,
-6. effective dates and currency,
-7. a payment-confirmed runtime fixture with no duplicate event identity.
+1. active project config for company `1`,
+2. explicit tax mapping (when tax is brought into scope),
+3. explicit COA mapping,
+4. a payment-confirmed runtime fixture with no duplicate event identity.
+
+If Paylabs settlement is later enabled, its payment config, bank account,
+effective dates, currency, fees, and tolerance must be audited separately
+before that settlement phase begins.

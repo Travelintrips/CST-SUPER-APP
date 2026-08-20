@@ -108,3 +108,4 @@
 - [Accounting payment provider metadata](accounting-payment-provider.md) — provider disimpan nullable di accounting payment/entry dan boleh dikoreksi tanpa mengubah nilai finansial posted.
 - [Pre-start marker identity](pre-start-marker-identity.md) — gate `pre_start_schema` berbeda dari compatibility marker `api_pre_start_schema`; diagnose the gate first.
 - [Historical reversal live contract](historical-reversal-live-contract.md) — stale reversal runners must not authorize production; validate the active owner and live payment-booking identity first.
+- [Customer Portal finance scope](customer-portal-finance-scope.md) — Customer Portal uses company 1; Paylabs and tax configuration remain intentionally deferred.
