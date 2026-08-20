@@ -4187,6 +4187,27 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
           p_settlement_id, v_public_id;
       END IF;
 
+      /*
+       * The bridge routine is also invoked by the public-bank-mutation
+       * trigger.  Do not trust only its scalar return value when this
+       * handoff is the caller that owns the settlement FK: resolve the
+       * canonical identity again by mutation_key in the current transaction.
+       * This prevents a stale/legacy bridge return value from linking a
+       * settlement to an ID that is not the canonical row for this payment.
+       */
+      SELECT id
+        INTO v_canonical_id
+        FROM sport_center.bank_mutations
+       WHERE mutation_key = v_mutation_key
+         AND company_id = v_batch.company_id
+       FOR UPDATE;
+
+      IF v_canonical_id IS NULL THEN
+        RAISE EXCEPTION
+          'CANONICAL_MUTATION_IDENTITY_UNRESOLVED: settlement=% key=%',
+          p_settlement_id, v_mutation_key;
+      END IF;
+
       UPDATE sport_center.bank_mutations
          SET canonical_key = v_canonical_key,
              source_app = 'sport_center',

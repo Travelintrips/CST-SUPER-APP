@@ -88,7 +88,24 @@ async function claimBatch(client: QueryClient, transactionClient?: pg.PoolClient
 }
 
 async function finish(client: QueryClient, claim: Claim, status: "posted" | "failed" | "manual_review", error?: unknown) {
-  const message = error == null ? null : String(error instanceof Error ? error.message : error).slice(0, 1000);
+  const message = error == null ? null : (() => {
+    if (!(error instanceof Error)) return String(error).slice(0, 1000);
+    const detail = error as Error & {
+      detail?: string;
+      constraint?: string;
+      table?: string;
+      column?: string;
+      where?: string;
+    };
+    return [
+      detail.message,
+      detail.detail && `detail=${detail.detail}`,
+      detail.constraint && `constraint=${detail.constraint}`,
+      detail.table && `table=${detail.table}`,
+      detail.column && `column=${detail.column}`,
+      detail.where && `where=${detail.where}`,
+    ].filter(Boolean).join(" | ").slice(0, 1000);
+  })();
   const retryAt = status === "failed" ? "NOW() + LEAST(INTERVAL '1 hour', INTERVAL '5 minutes' * GREATEST(attempts, 1))" : "NOW()";
   await client.query(
     `UPDATE sport_center.central_finance_processing
