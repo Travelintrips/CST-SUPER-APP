@@ -33,11 +33,11 @@ async function ensureProcessingRows(client: QueryClient): Promise<void> {
 }
 
 async function claimBatch(client: QueryClient, transactionClient?: pg.PoolClient): Promise<Claim[]> {
-  const tx = transactionClient ?? (client as pg.Pool).connect
-    ? await (client as pg.Pool).connect()
-    : null;
+  const clientCanConnect = typeof (client as pg.Pool).connect === "function";
+  const tx = transactionClient ??
+    (clientCanConnect ? await (client as pg.Pool).connect() : client as pg.PoolClient);
   if (!tx) throw new Error("CENTRAL_FINANCE_CLIENT_INVALID");
-  const managesTransaction = transactionClient == null;
+  const managesTransaction = transactionClient == null && clientCanConnect;
   try {
     if (managesTransaction) await tx.query("BEGIN");
     const result = await tx.query(`

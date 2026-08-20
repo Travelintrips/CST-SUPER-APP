@@ -9,7 +9,8 @@
     "backup-db-drive": "tsx ./src/backupDbToGoogleDrive.ts",
     "backup-all": "tsx ./src/backupAll.ts",
     "restore-drive": "tsx ./src/restoreFromGoogleDrive.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "cf-sc-10b:dev": "node --import tsx ./src/cf-sc-10b-harness.mjs"
   },
   "devDependencies": {
     "@types/node": "catalog:",
