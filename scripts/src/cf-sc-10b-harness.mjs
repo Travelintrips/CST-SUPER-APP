@@ -296,7 +296,28 @@ async function main() {
     assert(Number(before.processing_count) === 10, `expected 10 existing processing rows, found ${before.processing_count}`);
 
     await client.query("BEGIN");
+    await client.query("SET LOCAL sport_center.finance_mode = 'central'");
     fixture = await createFixture(client);
+    const paymentShape = await client.query(
+      `SELECT company_id, payment_method::text AS payment_method,
+              payment_provider::text AS payment_provider, confirmed_at::date AS effective_date
+         FROM sport_center.sport_payments
+        WHERE id = $1`,
+      [fixture.paymentId],
+    );
+    const paymentRow = paymentShape.rows[0];
+    const exactConfig = await client.query(
+      `SELECT * FROM sport_center.resolve_shared_finance_config(
+        'sport_center', $1, $2, $3, $4
+      )`,
+      [
+        paymentRow.company_id,
+        paymentRow.payment_method,
+        paymentRow.payment_provider,
+        paymentRow.effective_date,
+      ],
+    );
+    assert(exactConfig.rows[0], `resolver returned no row for fixture shape ${JSON.stringify(paymentRow)}`);
     const { processCentralFinance } = await import("../../artifacts/api-server/src/lib/centralFinance.ts");
     const processor = await processCentralFinance({ client });
     assert(processor.claimed === 1, `processor claimed=${processor.claimed}`);

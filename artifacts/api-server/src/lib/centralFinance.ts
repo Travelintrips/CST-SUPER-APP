@@ -111,11 +111,13 @@ async function finish(client: QueryClient, claim: Claim, status: "posted" | "fai
 async function createAndFinalizeSettlement(client: QueryClient, claim: Claim): Promise<void> {
   const payment = await client.query<{
     company_id: number;
+    payment_method: string;
     provider_code: string | null;
     bank_account_id: string | null;
     settlement_date: string | null;
   }>(
     `SELECT company_id,
+            payment_method::text AS payment_method,
             payment_provider::text AS provider_code,
             bank_account_id::text AS bank_account_id,
             expected_settlement_date::text AS settlement_date
@@ -146,10 +148,50 @@ async function createAndFinalizeSettlement(client: QueryClient, claim: Claim): P
   const settlementId = batch.rows[0]?.settlement_id;
   if (!settlementId) throw new Error(`SETTLEMENT_BATCH_NOT_CREATED: payment=${claim.paymentId}`);
 
+  const config = await client.query<{ receiving_bank_coa_code: string }>(
+    `SELECT receiving_bank_coa_code
+       FROM sport_center.resolve_shared_finance_config(
+         'sport_center', $1, $2, $3, $4::date
+       )`,
+    [row.company_id, row.payment_method, row.provider_code, row.settlement_date],
+  );
+  const bankCoaCode = config.rows[0]?.receiving_bank_coa_code;
+  if (!bankCoaCode) {
+    throw new Error(`BANK_COA_CODE_MISSING: payment=${claim.paymentId}`);
+  }
+  await client.query(
+    `SELECT sport_center.create_settlement_journal_draft($1::bigint, $2, $3)`,
+    [settlementId, bankCoaCode, "central-finance-processor"],
+  );
   await client.query(
     `SELECT sport_center.finalize_payment_settlement($1::bigint, $2)`,
     [settlementId, "central-finance-processor"],
   );
+}
+
+async function promoteCanonicalPaymentJournal(client: QueryClient, paymentId: number): Promise<void> {
+  const promoted = await client.query<{ id: number }>(
+    `UPDATE sport_center.accounting_journals j
+        SET status = 'posted',
+            posted_by = COALESCE(j.posted_by, 'central-finance-processor'),
+            posted_at = COALESCE(j.posted_at, NOW()),
+            updated_at = NOW()
+      WHERE j.payment_id = $1
+        AND j.journal_type = 'payment_confirmed'
+        AND j.is_reversal = FALSE
+        AND j.status = 'draft'
+        AND j.debit_amount = j.credit_revenue_amount + j.credit_ppn_amount
+        AND (
+          SELECT COUNT(*)
+            FROM sport_center.accounting_journal_lines l
+           WHERE l.journal_id = j.id
+        ) >= 2
+      RETURNING j.id`,
+    [paymentId],
+  );
+  if (!promoted.rows[0]) {
+    throw new Error(`ACCOUNTING_JOURNAL_NOT_POSTABLE: payment=${paymentId}`);
+  }
 }
 
 export async function processCentralFinance(options: { client?: pg.PoolClient } = {}): Promise<{
@@ -174,6 +216,7 @@ export async function processCentralFinance(options: { client?: pg.PoolClient } 
       // The database function owns shared config, tax, COA, journal and
       // payment-level idempotency. This layer only orchestrates the durable event.
       await db.query("SELECT sport_center.create_payment_accounting_draft($1)", [claim.paymentId]);
+      await promoteCanonicalPaymentJournal(db, claim.paymentId);
       await createAndFinalizeSettlement(db, claim);
       await finish(db, claim, "posted");
       await db.query("RELEASE SAVEPOINT central_finance_claim");
