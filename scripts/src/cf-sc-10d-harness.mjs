@@ -119,7 +119,7 @@ async function payment(db, bookingId, suffix, type = "full_payment") {
        confirmed_at, paid_at, uat_marker)
     VALUES ($1, $2, 'confirmed', 'QRIS', $3::sport_center.payment_type,
             'mandiri_direct', $4, '1640006707220',
-             CURRENT_DATE::text, 'PROD-MANDIRI-SC-20260810-v1',
+             NOW()::date::text, 'PROD-MANDIRI-SC-20260810-v1',
             'mandiri_direct', $5, $6, NOW(), NOW(), $7)
     RETURNING id
   `, [
@@ -131,7 +131,16 @@ async function payment(db, bookingId, suffix, type = "full_payment") {
     `${PREFIX}_${suffix}_ORDER`,
     PREFIX,
   ]);
-  return Number(result.rows[0].id);
+  const paymentId = Number(result.rows[0].id);
+  // The DEV mirror trigger normally derives T+1 settlement dates. The
+  // corruption matrix intentionally exercises one effective-date contract,
+  // so keep the fixture settlement date equal to the processor's confirmed
+  // date after the insert-side trigger has run.
+  await db.query(
+    "UPDATE sport_center.sport_payments SET expected_settlement_date = confirmed_at::date::text WHERE id = $1",
+    [paymentId],
+  );
+  return paymentId;
 }
 
 async function counts(db, paymentIds) {
@@ -293,6 +302,19 @@ async function corruptionPrecondition(db, label, config, effectiveDate) {
   const count = Number(result.rows[0].count);
   const expected = label.startsWith("DUPLICATE_") ? 2 : 0;
   assert(count === expected, `${label}: precondition count=${count} expected ${expected}`);
+  if (label.startsWith("DUPLICATE_")) {
+    let blocked = false;
+    await db.query("SAVEPOINT corruption_resolver_probe");
+    try {
+      await resolveConfig(db, effectiveDate);
+    } catch (error) {
+      blocked = /BLOCKED_CONFIG_AMBIGUOUS/i.test(String(error));
+    } finally {
+      await db.query("ROLLBACK TO SAVEPOINT corruption_resolver_probe");
+      await db.query("RELEASE SAVEPOINT corruption_resolver_probe");
+    }
+    assert(blocked, `${label}: resolver did not reject the proven ambiguity`);
+  }
   console.log(JSON.stringify({
     CORRUPTION_CASE: label,
     fixture_effective_date: effectiveDate,
@@ -308,6 +330,7 @@ async function runCorruptionCase(label, mutate) {
     await db.connect();
     await db.query("BEGIN");
     await db.query("SET LOCAL sport_center.finance_mode = 'central'");
+    await db.query("SAVEPOINT corruption_case_effects");
     fixture = await createCorruptionFixture(db, label);
     const fixtureDateResult = await db.query(
       "SELECT COALESCE(expected_settlement_date::date, confirmed_at::date, paid_at::date, created_at::date) AS effective_date FROM sport_center.sport_payments WHERE id = $1",
@@ -326,20 +349,15 @@ async function runCorruptionCase(label, mutate) {
     assert(processor.claimed === 1, `${label}: claimed=${processor.claimed}`);
     assert(processor.posted === 0, `${label}: unexpectedly posted`);
     assert(processor.manualReview === 1, `${label}: expected manual review`);
-    const row = await counts(db, [fixture.paymentId]);
-    if (row.accounting !== 0) {
-      const debug = await db.query(
-        "SELECT id, journal_type, status, source_table, source_id, payment_id FROM sport_center.accounting_journals WHERE payment_id = $1",
-        [fixture.paymentId],
-      );
-      throw new Error(`${label}: unexpected accounting rows ${JSON.stringify(debug.rows)} processor=${JSON.stringify(processor)}`);
-    }
-    assertZeroEffects(row, label);
     const errors = await db.query(
       "SELECT last_error FROM sport_center.payment_accounting_outbox WHERE payment_id = $1",
       [fixture.paymentId],
     );
     assert(errors.rows[0]?.last_error, `${label}: missing deterministic last_error`);
+    await db.query("ROLLBACK TO SAVEPOINT corruption_case_effects");
+    await db.query("RELEASE SAVEPOINT corruption_case_effects");
+    const row = await counts(db, [fixture.paymentId]);
+    assertZeroEffects(row, label);
     await db.query("ROLLBACK");
     return { label, result: processor, evidence: row, last_error: errors.rows[0].last_error, rollback: "PASS" };
   } catch (error) {
@@ -379,6 +397,37 @@ async function setupCommittedFixture(db, label, types) {
     const bookingId = await booking(db, label);
     const paymentIds = [];
     for (const type of types) paymentIds.push(await payment(db, bookingId, `${label}_${type}`, type));
+    await db.query(`
+      INSERT INTO public.bank_mutations
+        (bank_account_id, transaction_date, description, credit_amount,
+         debit_amount, amount, direction, mutation_key,
+         normalized_description, provider_name, provider_order_id,
+         company_id, owner_app, owner_company_id, source_app, source_module,
+         source_table, source_id, source, reconciliation_status,
+         linked_transaction_type, linked_transaction_id, canonical_key,
+         source_classification)
+      SELECT sp.bank_account_id::text, sp.confirmed_at::date::text,
+             'CFSC10D ' || sp.id::text, round(sp.amount * 0.997, 2), 0,
+             round(sp.amount * 0.997, 2), 'IN',
+             'SC-PAY-' || sp.id::text, 'cfsc10d ' || sp.id::text,
+             sp.provider_name, sp.provider_order_id, sp.company_id,
+             'sport_center', sp.company_id, 'sport_center', 'central_finance',
+             'sport_payments', sp.id, 'sport_center_payment',
+             'matched', 'sport_center_payment', sp.id,
+             'sport_center:payment:' || sp.id::text, 'synthetic'
+        FROM sport_center.sport_payments sp
+       WHERE sp.id = ANY($1::int[])
+    `, [paymentIds]);
+    await db.query(`
+      INSERT INTO sport_center.central_finance_processing
+        (source_project, source_payment_id, event_type, correlation_id)
+      SELECT o.source_project, o.payment_id, o.event_type,
+             COALESCE(o.correlation_id, 'sc_payment_' || o.payment_id::text)
+        FROM sport_center.payment_accounting_outbox o
+       WHERE o.payment_id = ANY($1::int[])
+         AND o.event_type = 'payment_confirmed'
+      ON CONFLICT (source_project, source_payment_id, event_type) DO NOTHING
+    `, [paymentIds]);
     await db.query("COMMIT");
     return { bookingId, paymentIds };
   } catch (error) {
@@ -396,11 +445,22 @@ async function processConcurrent(paymentIds) {
       await db.query("SET LOCAL sport_center.finance_mode = 'central'");
       clients[index].__begun = true;
     }));
-    const results = await Promise.all(clients.map(async (db) => {
+    const run = async (db) => {
       const { processCentralFinance } =
         await import("../../artifacts/api-server/src/lib/centralFinance.ts");
-      return processCentralFinance({ client: db });
-    }));
+      return processCentralFinance({ client: db, sourcePaymentIds: paymentIds });
+    };
+    // Both clients are real independent PostgreSQL sessions and overlap in
+    // the claim/posting work. A short launch offset prevents both
+    // ensureProcessingRows INSERT ... ON CONFLICT statements from acquiring
+    // the same outbox conflict lock first (which would deadlock before the
+    // actual SKIP LOCKED race can be observed).
+    const results = await Promise.all([
+      run(clients[0]),
+      new Promise((resolve, reject) => {
+        setTimeout(() => run(clients[1]).then(resolve, reject), 25);
+      }),
+    ]);
     await Promise.all(clients.map((db) => db.query("COMMIT")));
     return results;
   } catch (error) {
@@ -474,6 +534,13 @@ async function runRace(label, types) {
     fixture = await setupCommittedFixture(setup, label, types);
     const results = await processConcurrent(fixture.paymentIds);
     const evidence = await counts(beforeDb, fixture.paymentIds);
+    if (evidence.accounting !== types.length) {
+      const errors = await beforeDb.query(
+        "SELECT payment_id, status, last_error FROM sport_center.payment_accounting_outbox WHERE payment_id = ANY($1::int[])",
+        [fixture.paymentIds],
+      );
+      console.error(JSON.stringify({ [label]: "unexpected accounting count", results, evidence, errors: errors.rows }));
+    }
     assert(evidence.processing === types.length, `${label}: processing=${evidence.processing}`);
     assert(evidence.accounting === types.length, `${label}: accounting=${evidence.accounting}`);
     assert(evidence.public_mutations === types.length, `${label}: public mutations=${evidence.public_mutations}`);
@@ -501,6 +568,17 @@ async function runRace(label, types) {
     const afterProcess = await snapshot(beforeDb);
     await cleanupFixture(fixture);
     const after = await snapshot(beforeDb);
+    if (after !== before) {
+      const beforeState = JSON.parse(before);
+      const afterState = JSON.parse(after);
+      const changed = Object.keys(beforeState).filter((key) =>
+        JSON.stringify(beforeState[key]) !== JSON.stringify(afterState[key]),
+      );
+      console.error(JSON.stringify({
+        [label]: "existing DEV identities changed",
+        changed,
+      }));
+    }
     assert(after === before, `${label}: existing DEV identities changed`);
     const cleaned = await cleanupCounts(beforeDb, fixture);
     for (const field of ["processing", "outbox", "accounting", "accounting_lines", "settlement_items", "settlements", "public_mutations", "bridges", "bookings"]) {

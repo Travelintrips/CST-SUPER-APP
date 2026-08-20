@@ -20,7 +20,8 @@ function isDeterministicConfigError(message: string): boolean {
   return /BLOCKED_CONFIG|COMPANY_|PAYMENT_METHOD_|PROVIDER_|TAX_|COA_|BANK_|AMBIGUOUS|NOT_CONFIRMED|NOT_FOUND/i.test(message);
 }
 
-async function ensureProcessingRows(client: QueryClient): Promise<void> {
+async function ensureProcessingRows(client: QueryClient, sourcePaymentIds?: number[]): Promise<void> {
+  const filter = sourcePaymentIds?.length ? "AND o.payment_id = ANY($1::int[])" : "";
   await client.query(`
     INSERT INTO sport_center.central_finance_processing
       (source_project, source_payment_id, event_type, correlation_id)
@@ -28,11 +29,19 @@ async function ensureProcessingRows(client: QueryClient): Promise<void> {
            COALESCE(o.correlation_id, 'sc_payment_' || o.payment_id::text)
       FROM sport_center.payment_accounting_outbox o
      WHERE o.event_type = 'payment_confirmed'
+       ${filter}
+       AND NOT EXISTS (
+         SELECT 1
+           FROM sport_center.central_finance_processing c
+          WHERE c.source_project = o.source_project
+            AND c.source_payment_id = o.payment_id
+            AND c.event_type = o.event_type
+       )
     ON CONFLICT (source_project, source_payment_id, event_type) DO NOTHING
-  `);
+  `, sourcePaymentIds?.length ? [sourcePaymentIds] : []);
 }
 
-async function claimBatch(client: QueryClient, transactionClient?: pg.PoolClient): Promise<Claim[]> {
+async function claimBatch(client: QueryClient, transactionClient?: pg.PoolClient, sourcePaymentIds?: number[]): Promise<Claim[]> {
   const clientCanConnect = typeof (client as pg.Pool).connect === "function";
   const tx = transactionClient ??
     (clientCanConnect ? await (client as pg.Pool).connect() : client as pg.PoolClient);
@@ -40,6 +49,7 @@ async function claimBatch(client: QueryClient, transactionClient?: pg.PoolClient
   const managesTransaction = transactionClient == null && clientCanConnect;
   try {
     if (managesTransaction) await tx.query("BEGIN");
+    const paymentFilter = sourcePaymentIds?.length ? "AND c.source_payment_id = ANY($1::int[])" : "";
     const result = await tx.query(`
       SELECT c.id, o.id AS outbox_id, c.source_payment_id,
              c.correlation_id
@@ -51,10 +61,11 @@ async function claimBatch(client: QueryClient, transactionClient?: pg.PoolClient
          AND c.available_at <= NOW()
          AND (c.locked_at IS NULL OR c.locked_at < NOW() - INTERVAL '15 minutes')
          AND o.status <> 'posted'
+          ${paymentFilter}
        ORDER BY c.id
        FOR UPDATE OF c SKIP LOCKED
        LIMIT 50
-    `);
+    `, sourcePaymentIds?.length ? [sourcePaymentIds] : []);
     const claims: Claim[] = result.rows.map((row) => ({
       id: Number(row.id),
       outboxId: Number(row.outbox_id),
@@ -227,7 +238,7 @@ async function promoteCanonicalPaymentJournal(client: QueryClient, paymentId: nu
   }
 }
 
-export async function processCentralFinance(options: { client?: pg.PoolClient } = {}): Promise<{
+export async function processCentralFinance(options: { client?: pg.PoolClient; sourcePaymentIds?: number[] } = {}): Promise<{
   claimed: number;
   posted: number;
   retried: number;
@@ -238,8 +249,8 @@ export async function processCentralFinance(options: { client?: pg.PoolClient } 
     return { claimed: 0, posted: 0, retried: 0, manualReview: 0 };
   }
 
-  await ensureProcessingRows(db);
-  const claims = await claimBatch(db, options.client);
+  await ensureProcessingRows(db, options.sourcePaymentIds);
+  const claims = await claimBatch(db, options.client, options.sourcePaymentIds);
   let posted = 0;
   let retried = 0;
   let manualReview = 0;
