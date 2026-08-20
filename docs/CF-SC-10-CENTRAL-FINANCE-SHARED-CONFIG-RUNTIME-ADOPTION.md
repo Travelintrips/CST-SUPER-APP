@@ -115,26 +115,38 @@ Full payment-shape and concurrency proofs remain the responsibility of the
 existing central-finance runtime harness; this change does not create or seed
 Transfer Bank/Paylabs fixtures.
 
-## CF-SC-10B execution result — 2026-08-20
+## CF-SC-10B execution result — 2026-08-21
 
-The processor orchestration contract passed (`4/4` assertions). The actual
-development-only processor smoke also passed its durable-event and accounting
-portion:
+The development-only rollback harness now runs through the existing `esbuild`
+runner; no `tsx` dependency was installed. The harness also verifies that the
+database-owned canonical handoff function is present before any fixture write.
+
+The QRIS full-payment smoke passed end to end:
 
 - `payment_accounting_outbox`: claimed `1`, transitioned to `posted`
 - `central_finance_processing`: `pending → processing → posted`
-- canonical accounting owner: reached successfully
-- journal: balanced (`100000.00` debit; `90090.09` revenue credit; `9909.91` tax credit)
-- DEV rollback proof: passed; the `CF-SC-10B` fixture marker count returned to `0`
+- shared config: project `2`, payment config `2`, tax rule `8`
+- COA roles: receiving bank `75594`, revenue `72354`, tax output `49109`, MDR expense `75590`
+- MDR/currency: `0.003` / `IDR`
+- canonical accounting journal: posted and balanced (`100000.00` debit;
+  `90090.09` revenue credit; `9909.91` tax credit)
+- settlement batch: `33`, posted, one item
+- public mutation: `21`, linked through `canonical_bank_mutation_id`
+- canonical mutation identity: `SC-PAY-<fixture_payment_id>` /
+  `sport_center:payment:<fixture_payment_id>`
+- legacy `bank_mutation_id`: `NULL`
+- rollback proof: passed; fixture rows were absent from a separate connection
+- existing DEV outbox/processing identities changed: `0`
+- production writes: `0`
 
-The full CF-SC-10B gate remains **FAIL / blocked**, not PASS. The observed
-processor path did not create a settlement batch or a `public.bank_mutations`
-row, so settlement/public-mutation completion is not proven. The processor
-currently delegates only to `sport_center.create_payment_accounting_draft`; it
-does not directly invoke the settlement owner, consistent with the existing
-orchestration contract test. The settlement test suite also requires a
-dedicated `TEST_DATABASE_URL` or `STAGING_DATABASE_URL`, which is not configured
-and must not silently fall back to the shared DEV database.
+The targeted processor/boundary/canonical-settlement tests passed (`14/14`),
+workspace and API typecheck passed, API build passed, and `git diff --check`
+passed. A dedicated `TEST_DATABASE_URL` is now available for suites that
+require an isolated runtime database; the CF-SC-10B harness itself continues
+to use only the explicitly guarded development Supabase target.
 
-No production writes, production migrations, Paylabs calls, WhatsApp sends, or
-legacy cleanup were performed. The shared DEV configuration was not modified.
+This execution proves the QRIS full-payment path and canonical settlement/public
+mutation handoff. It does not claim the larger optional-provider, configuration
+corruption, multi-client race, or DP/pelunasan matrix unless those cases are
+run separately. No production writes, production migrations, Paylabs calls,
+WhatsApp sends, or legacy cleanup were performed.

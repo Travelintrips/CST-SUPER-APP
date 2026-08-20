@@ -102,6 +102,7 @@ async function verifyRuntime(client) {
       "create_payment_accounting_draft",
       "create_payment_settlement_batch",
       "finalize_payment_settlement",
+      "ensure_canonical_bank_mutation_for_settlement",
     ]],
   );
   const names = new Set(functions.rows.map((row) => row.name));
@@ -110,6 +111,7 @@ async function verifyRuntime(client) {
     "create_payment_accounting_draft",
     "create_payment_settlement_batch",
     "finalize_payment_settlement",
+    "ensure_canonical_bank_mutation_for_settlement",
   ]) {
     assert(names.has(name), `missing required function sport_center.${name}`);
   }
