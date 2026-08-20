@@ -1,7 +1,12 @@
 import nodemailer from "nodemailer";
 import crypto from "node:crypto";
 import { logNotification } from "./notificationLog.js";
-import { getSmtpPassWithSource, getSmtpFromWithSource } from "./appSecrets.js";
+import {
+  getSmtpPass,
+  getSmtpPassWithSource,
+  getSmtpFromWithSource,
+} from "./appSecrets.js";
+import { getCachedOrEnvConfig } from "./appConfig.js";
 import { externalIntegrationsDisabled } from "./safeDev.js";
 
 let _hasSmtpKey: boolean = !!(process.env.SMTP_PASS?.trim());
@@ -73,7 +78,7 @@ export interface SmtpHealthResult {
   configSources: SmtpConfig["sources"] | null;
 }
 
-function safeFingerprint(input: {
+export function fingerprintSmtpConfig(input: {
   host: string;
   port: number;
   secure: boolean;
@@ -133,7 +138,7 @@ export async function resolveSmtpConfig(): Promise<SmtpConfig> {
     pass: passSetting.source === "DB" ? "DB" : "GCP_ENV",
     from: fromSetting.source === "DB" ? "DB" : "GCP_ENV",
   };
-  const fingerprint = safeFingerprint({
+  const fingerprint = fingerprintSmtpConfig({
     host,
     port,
     secure,
@@ -238,7 +243,7 @@ export async function checkSmtpConnection(): Promise<{
   errorCode: string | null;
   configFingerprint: string | null;
   configSources: SmtpConfig["sources"] | null;
-}>: Promise<SmtpHealthResult> {
+}> {
   if (externalIntegrationsDisabled()) {
     return {
       status: "unconfigured",

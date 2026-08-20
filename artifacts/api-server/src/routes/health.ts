@@ -16,6 +16,10 @@ interface ExternalCheckResult {
   status: ServiceStatus;
   latencyMs: number | null;
   detail?: string;
+  errorCategory?: string | null;
+  errorCode?: string | null;
+  configFingerprint?: string | null;
+  configSources?: Record<string, string> | null;
 }
 
 const cache = new Map<string, { result: ExternalCheckResult; expiresAt: number }>();
@@ -137,6 +141,10 @@ router.get("/healthz", async (_req, res) => {
       whatsappLatencyMs: whatsapp.latencyMs,
       smtp: smtp.status,
       smtpLatencyMs: smtp.latencyMs,
+       smtpErrorCategory: smtp.errorCategory,
+       smtpErrorCode: smtp.errorCode,
+       smtpConfigFingerprint: smtp.configFingerprint,
+       smtpConfigSources: smtp.configSources,
     },
     workers: {
       aggregate: workerAggregate,
