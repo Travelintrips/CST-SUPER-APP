@@ -57,12 +57,12 @@ function client() {
   });
 }
 
-async function resolveConfig(db) {
+async function resolveConfig(db, effectiveDate = new Date().toISOString().slice(0, 10)) {
   const result = await db.query(`
     SELECT * FROM sport_center.resolve_shared_finance_config(
-      'sport_center', $1, 'QRIS', 'mandiri_direct', CURRENT_DATE
+      'sport_center', $1, 'QRIS', 'mandiri_direct', $2::date
     )
-  `, [COMPANY_ID]);
+  `, [COMPANY_ID, effectiveDate]);
   return result.rows[0] ?? null;
 }
 
@@ -119,7 +119,7 @@ async function payment(db, bookingId, suffix, type = "full_payment") {
        confirmed_at, paid_at, uat_marker)
     VALUES ($1, $2, 'confirmed', 'QRIS', $3::sport_center.payment_type,
             'mandiri_direct', $4, '1640006707220',
-            (CURRENT_DATE + 1)::text, 'PROD-MANDIRI-SC-20260810-v1',
+             CURRENT_DATE::text, 'PROD-MANDIRI-SC-20260810-v1',
             'mandiri_direct', $5, $6, NOW(), NOW(), $7)
     RETURNING id
   `, [
@@ -194,25 +194,25 @@ async function createCorruptionFixture(db, label) {
   return { bookingId, paymentId };
 }
 
-async function duplicateProjectConfig(db) {
+async function duplicateProjectConfig(db, _config, effectiveDate) {
   await db.query(
-    "UPDATE public.finance_project_configs SET effective_from = CURRENT_DATE - 1 WHERE id = $1",
-    [CONFIG.configId],
+    "UPDATE public.finance_project_configs SET effective_from = ($2::date - 1) WHERE id = $1",
+    [CONFIG.configId, effectiveDate],
   );
   await db.query(`
     INSERT INTO public.finance_project_configs
       (project_code, company_id, display_name, is_active, effective_from, effective_to,
        config_version, metadata, created_by, updated_by)
-    SELECT project_code, company_id, display_name, true, CURRENT_DATE, effective_to,
-           config_version, metadata, 'CFSC10D', 'CFSC10D'
+    SELECT project_code, company_id, display_name, true, $2::date, effective_to,
+           config_version + 1, metadata, 'CFSC10D', 'CFSC10D'
       FROM public.finance_project_configs WHERE id = $1
-  `, [CONFIG.configId]);
+  `, [CONFIG.configId, effectiveDate]);
 }
 
-async function duplicatePaymentConfig(db) {
+async function duplicatePaymentConfig(db, _config, effectiveDate) {
   await db.query(
-    "UPDATE public.finance_project_payment_configs SET effective_from = CURRENT_DATE - 1 WHERE id = $1",
-    [CONFIG.paymentConfigId],
+    "UPDATE public.finance_project_payment_configs SET effective_from = ($2::date - 1) WHERE id = $1",
+    [CONFIG.paymentConfigId, effectiveDate],
   );
   await db.query(`
     INSERT INTO public.finance_project_payment_configs
@@ -225,9 +225,9 @@ async function duplicatePaymentConfig(db) {
        currency_code, settlement_delay_business_days, mdr_rate, fixed_provider_fee,
        fee_tax_rate, fee_tax_inclusive, settlement_tolerance_amount,
        settlement_tolerance_rate, calculation_method, rounding_method, rounding_scale,
-       true, CURRENT_DATE, effective_to, config_version, metadata, 'CFSC10D', 'CFSC10D'
+       true, $2::date, effective_to, config_version + 1, metadata, 'CFSC10D', 'CFSC10D'
       FROM public.finance_project_payment_configs WHERE id = $1
-  `, [CONFIG.paymentConfigId]);
+  `, [CONFIG.paymentConfigId, effectiveDate]);
 }
 
 async function disableTax(db, config) {
@@ -237,22 +237,68 @@ async function disableTax(db, config) {
   );
 }
 
-async function disableRole(db, role, config) {
+async function disableRole(db, role, config, effectiveDate) {
   const result = await db.query(`
     SELECT id FROM public.finance_project_coa_mappings
      WHERE finance_project_config_id = $1
        AND account_role = $2
        AND is_active = true
-       AND effective_from <= CURRENT_DATE
-       AND (effective_to IS NULL OR CURRENT_DATE < effective_to)
+       AND effective_from <= $3::date
+       AND (effective_to IS NULL OR $3::date < effective_to)
      ORDER BY ((payment_method IS NOT NULL)::int + (provider_code IS NOT NULL)::int) DESC, id
      LIMIT 1
-  `, [Number(config.config_id), role]);
+  `, [Number(config.config_id), role, effectiveDate]);
   assert(result.rows[0], `${role}: active mapping not found`);
   await db.query(
     "UPDATE public.finance_project_coa_mappings SET is_active = false WHERE id = $1",
     [result.rows[0].id],
   );
+}
+
+async function corruptionPrecondition(db, label, config, effectiveDate) {
+  const params = [Number(config.config_id), effectiveDate];
+  let query;
+  if (label === "DUPLICATE_PROJECT_CONFIG") {
+    params[0] = COMPANY_ID;
+    query = `SELECT COUNT(*)::int AS count
+               FROM public.finance_project_configs
+              WHERE project_code = 'sport_center' AND company_id = $1
+                AND is_active = true AND effective_from <= $2::date
+                AND (effective_to IS NULL OR $2::date < effective_to)`;
+  } else if (label === "DUPLICATE_PAYMENT_CONFIG") {
+    query = `SELECT COUNT(*)::int AS count
+               FROM public.finance_project_payment_configs
+              WHERE finance_project_config_id = $1
+                AND upper(btrim(payment_method)) = 'QRIS'
+                AND lower(btrim(provider_code)) = 'mandiri_direct'
+                AND is_active = true AND effective_from <= $2::date
+                AND (effective_to IS NULL OR $2::date < effective_to)`;
+  } else if (label === "MISSING_TAX") {
+    query = `SELECT COUNT(*)::int AS count
+               FROM public.finance_project_tax_mappings
+              WHERE finance_project_config_id = $1
+                AND transaction_type = 'sport_booking_payment'
+                AND is_active = true AND effective_from <= $2::date
+                AND (effective_to IS NULL OR $2::date < effective_to)`;
+  } else {
+    const role = label.replace("MISSING_", "");
+    query = `SELECT COUNT(*)::int AS count
+               FROM public.finance_project_coa_mappings
+              WHERE finance_project_config_id = $1 AND account_role = $3
+                AND is_active = true AND effective_from <= $2::date
+                AND (effective_to IS NULL OR $2::date < effective_to)`;
+    params.push(role);
+  }
+  const result = await db.query(query, params);
+  const count = Number(result.rows[0].count);
+  const expected = label.startsWith("DUPLICATE_") ? 2 : 0;
+  assert(count === expected, `${label}: precondition count=${count} expected ${expected}`);
+  console.log(JSON.stringify({
+    CORRUPTION_CASE: label,
+    fixture_effective_date: effectiveDate,
+    [`${label.toLowerCase().replaceAll("-", "_")}_candidate_count`]: count,
+  }));
+  return count;
 }
 
 async function runCorruptionCase(label, mutate) {
@@ -263,9 +309,17 @@ async function runCorruptionCase(label, mutate) {
     await db.query("BEGIN");
     await db.query("SET LOCAL sport_center.finance_mode = 'central'");
     fixture = await createCorruptionFixture(db, label);
-    const normal = await resolveConfig(db);
+    const fixtureDateResult = await db.query(
+      "SELECT COALESCE(expected_settlement_date::date, confirmed_at::date, paid_at::date, created_at::date) AS effective_date FROM sport_center.sport_payments WHERE id = $1",
+      [fixture.paymentId],
+    );
+    const effectiveDate = fixtureDateResult.rows[0]?.effective_date;
+    assert(effectiveDate, `${label}: fixture effective date missing`);
+    fixture.effectiveDate = effectiveDate;
+    const normal = await resolveConfig(db, effectiveDate);
     assertConfig(normal, `${label} precondition`);
-    await mutate(db, normal);
+    await mutate(db, normal, effectiveDate);
+    await corruptionPrecondition(db, label, normal, effectiveDate);
     const { processCentralFinance } =
       await import("../../artifacts/api-server/src/lib/centralFinance.ts");
     const processor = await processCentralFinance({ client: db });
@@ -301,10 +355,10 @@ async function runCorruptionMatrix() {
     ["DUPLICATE_PROJECT_CONFIG", duplicateProjectConfig],
     ["DUPLICATE_PAYMENT_CONFIG", duplicatePaymentConfig],
     ["MISSING_TAX", disableTax],
-    ["MISSING_RECEIVING_BANK", (db, config) => disableRole(db, "RECEIVING_BANK", config)],
-    ["MISSING_REVENUE", (db, config) => disableRole(db, "REVENUE", config)],
-    ["MISSING_TAX_OUTPUT", (db, config) => disableRole(db, "TAX_OUTPUT", config)],
-    ["MISSING_MDR_EXPENSE", (db, config) => disableRole(db, "MDR_EXPENSE", config)],
+    ["MISSING_RECEIVING_BANK", (db, config, date) => disableRole(db, "RECEIVING_BANK", config, date)],
+    ["MISSING_REVENUE", (db, config, date) => disableRole(db, "REVENUE", config, date)],
+    ["MISSING_TAX_OUTPUT", (db, config, date) => disableRole(db, "TAX_OUTPUT", config, date)],
+    ["MISSING_MDR_EXPENSE", (db, config, date) => disableRole(db, "MDR_EXPENSE", config, date)],
   ];
   const results = [];
   for (const [label, mutate] of cases) results.push(await runCorruptionCase(label, mutate));
