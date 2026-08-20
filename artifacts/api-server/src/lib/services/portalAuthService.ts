@@ -13,7 +13,7 @@ import {
   userProfilesTable,
   portalCustomerProfilesTable,
 } from "@workspace/db";
-import { eq, and, desc, gte, or, isNull } from "drizzle-orm";
+import { eq, and, desc, gte, or, isNull, inArray, sql } from "drizzle-orm";
 import { randomUUID, randomInt, randomBytes } from "crypto";
 import { hashToken } from "../tokenUtils.js";
 import bcrypt from "bcryptjs";
@@ -73,6 +73,30 @@ export function hasUsablePortalPassword(passwordHash: string | null | undefined)
 // +62XXXXXXX, and the malformed 620XXXXXXX (extra leading-0 after country code).
 export function normalizePhoneID(raw: string): string {
   return normalizePhone(String(raw));
+}
+
+function phoneMatchCandidates(normalizedPhone: string): string[] {
+  const candidates = new Set([
+    normalizedPhone,
+    `0${normalizedPhone.slice(2)}`,
+    `+${normalizedPhone}`,
+    `620${normalizedPhone.slice(2)}`,
+  ]);
+  return [...candidates];
+}
+
+async function findPortalCustomersByPhone(normalizedPhone: string) {
+  const candidates = phoneMatchCandidates(normalizedPhone);
+  const digitsOnlyPhone = sql`regexp_replace(coalesce(${portalCustomersTable.phone}, ''), '[^0-9]', '', 'g')`;
+
+  return db
+    .select()
+    .from(portalCustomersTable)
+    .where(or(
+      inArray(portalCustomersTable.phone, candidates),
+      eq(digitsOnlyPhone, normalizedPhone),
+    ))
+    .limit(2);
 }
 
 function genOtp(): string {
@@ -260,11 +284,7 @@ export async function waRegister(params: {
   const role = ALLOWED_ROLES.includes(String(requestedRole)) ? String(requestedRole) : "customer";
 
   // Cek apakah phone sudah terdaftar
-  const [existingByPhone] = await db
-    .select()
-    .from(portalCustomersTable)
-    .where(eq(portalCustomersTable.phone, phone))
-    .limit(1);
+  const [existingByPhone] = await findPortalCustomersByPhone(phone);
   if (existingByPhone) {
     throw new AuthServiceError(409, "Nomor HP sudah terdaftar. Silakan login.");
   }
@@ -360,11 +380,7 @@ export async function waLogin(
   if (!otp) throw new AuthServiceError(400, "Token verifikasi tidak valid.");
   if (otp.expiresAt < new Date()) throw new AuthServiceError(400, "Token kadaluarsa.");
 
-  const matches = await db
-    .select()
-    .from(portalCustomersTable)
-    .where(eq(portalCustomersTable.phone, otp.phone))
-    .limit(2);
+  const matches = await findPortalCustomersByPhone(otp.phone);
 
   if (matches.length === 0) {
     throw new AuthServiceError(404, "Nomor HP belum terdaftar.", {
