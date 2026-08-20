@@ -155,10 +155,8 @@ async function snapshot(client) {
 async function createFixture(client) {
   const facility = await client.query(
     `SELECT id FROM sport_center.sport_facilities
-      WHERE company_id = $1
       ORDER BY id
       LIMIT 1`,
-    [COMPANY_ID],
   );
   assert(facility.rows[0], "no DEV Sport Center facility available for fixture");
 
@@ -167,13 +165,13 @@ async function createFixture(client) {
     `INSERT INTO sport_center.sport_bookings
       (order_number, customer_name, customer_email, customer_phone,
        facility_id, booking_date, start_time, end_time, duration_hours,
-       total_price, status, payment_status, base_price,
-       tax_rate, tax_amount, grand_total, ppn_rate, ppn_amount, dpp,
+       total_price, status, base_price,
+       grand_total, ppn_rate, ppn_amount, dpp,
        uat_marker)
      VALUES
       ($1, $2, $3, $4, $5, CURRENT_DATE, '10:00', '11:00', 1,
-       $6, 'confirmed', 'pending_payment', $6,
-       0, 0, $6, 0, 0, $6, $7)
+       $6, 'confirmed', $6,
+       $6, 0, 0, $6, $7)
      RETURNING id`,
     [orderNumber, `${PREFIX} Customer`, `${PREFIX.toLowerCase()}@example.invalid`, "0000000000",
       facility.rows[0].id, AMOUNT, PREFIX],
@@ -198,17 +196,19 @@ async function createFixture(client) {
   );
   const paymentId = Number(payment.rows[0].id);
 
-  await client.query(
-    `INSERT INTO sport_center.payment_accounting_outbox
-      (payment_id, event_type, source_project, source_schema, source_table,
-       booking_id, company_id, amount, payment_type, payment_method,
-       payment_provider, provider_order_id, paid_at, confirmed_at,
-       correlation_id, status)
-     VALUES
-      ($1, 'payment_confirmed', 'SPORT_CENTER', 'sport_center', 'sport_payments',
-       $2, $3, $4, 'full_payment', 'QRIS', 'mandiri_direct', $5,
-       NOW(), NOW(), $6, 'pending')`,
-    [paymentId, bookingId, COMPANY_ID, AMOUNT, `${PREFIX}_ORDER`, `${PREFIX}_EVENT`],
+  const outbox = await client.query(
+    `SELECT id, payment_id, event_type
+       FROM sport_center.payment_accounting_outbox
+      WHERE payment_id = $1 AND event_type = 'payment_confirmed'
+      ORDER BY id DESC
+      LIMIT 1`,
+    [paymentId],
+  );
+  assert(outbox.rows[0], "payment confirmation trigger did not create an outbox event");
+  assert(
+    Number(outbox.rows[0].payment_id) === paymentId &&
+      outbox.rows[0].event_type === "payment_confirmed",
+    "outbox event identity is not owned by this fixture",
   );
   return { bookingId, paymentId, orderNumber };
 }
@@ -300,7 +300,18 @@ async function main() {
     const { processCentralFinance } = await import("../../artifacts/api-server/src/lib/centralFinance.ts");
     const processor = await processCentralFinance({ client });
     assert(processor.claimed === 1, `processor claimed=${processor.claimed}`);
-    assert(processor.posted === 1, `processor posted=${processor.posted}`);
+    if (processor.posted !== 1) {
+      const failure = await client.query(
+        `SELECT status, last_error
+           FROM sport_center.payment_accounting_outbox
+          WHERE payment_id = $1 AND event_type = 'payment_confirmed'`,
+        [fixture.paymentId],
+      );
+      throw new Error(
+        `CF_SC_10B_PROCESSOR_FAILED: posted=${processor.posted}, retried=${processor.retried}, ` +
+        `manualReview=${processor.manualReview}, detail=${JSON.stringify(failure.rows[0] ?? null)}`,
+      );
+    }
     assert(processor.retried === 0, `processor retried=${processor.retried}`);
     assert(processor.manualReview === 0, `processor manualReview=${processor.manualReview}`);
     const evidence = await verifyFixture(client, fixture.paymentId);

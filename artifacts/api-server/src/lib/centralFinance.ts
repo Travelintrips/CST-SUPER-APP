@@ -170,13 +170,16 @@ export async function processCentralFinance(options: { client?: pg.PoolClient } 
   let manualReview = 0;
   for (const claim of claims) {
     try {
+      await db.query("SAVEPOINT central_finance_claim");
       // The database function owns shared config, tax, COA, journal and
       // payment-level idempotency. This layer only orchestrates the durable event.
       await db.query("SELECT sport_center.create_payment_accounting_draft($1)", [claim.paymentId]);
       await createAndFinalizeSettlement(db, claim);
       await finish(db, claim, "posted");
+      await db.query("RELEASE SAVEPOINT central_finance_claim");
       posted++;
     } catch (error) {
+      await db.query("ROLLBACK TO SAVEPOINT central_finance_claim").catch(() => {});
       const status = isDeterministicConfigError(String(error instanceof Error ? error.message : error))
         ? "manual_review"
         : "failed";
