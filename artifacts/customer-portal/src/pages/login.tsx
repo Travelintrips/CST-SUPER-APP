@@ -37,6 +37,7 @@ export default function Login() {
   const [errorMsg, setErrorMsg] = useState("");
   const returnTo = new URLSearchParams(window.location.search).get("returnTo");
   const { t } = useLanguage();
+  const oauthError = new URLSearchParams(window.location.search).get("oauth_error");
 
   const [mode, setMode] = useState<LoginMode>("otp");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -58,6 +59,12 @@ export default function Login() {
   const [forgotLoading, setForgotLoading] = useState(false);
   const [forgotMsg, setForgotMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [devLoading, setDevLoading] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (oauthError === "google_callback_failed") {
+      setErrorMsg(t("login.googleCallbackFailed", "Login Google gagal saat memproses callback. Silakan coba lagi."));
+    }
+  }, [oauthError, t]);
 
   const loginSchema = z.object({
     email: z.string().email({ message: t("login.email") }),
@@ -374,6 +381,12 @@ export default function Login() {
                 {t("login.signIn")} Google
               </button>
             </div>
+            {errorMsg && (
+              <Alert variant="destructive" className="mb-4">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>{errorMsg}</AlertDescription>
+              </Alert>
+            )}
 
             <div className="flex rounded-lg bg-muted p-1 mb-5">
               <button type="button" onClick={() => { setMode("otp"); setErrorMsg(""); setWaStep("phone"); setWaCode(""); }} className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${mode === "otp" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
@@ -546,12 +559,6 @@ export default function Login() {
 
             {mode === "password" && (
               <>
-                {errorMsg && (
-                  <Alert variant="destructive" className="mb-4">
-                    <AlertCircle className="h-4 w-4" />
-                    <AlertDescription>{errorMsg}</AlertDescription>
-                  </Alert>
-                )}
                 <Form {...form}>
                   <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
                     <FormField control={form.control} name="email" render={({ field }) => (

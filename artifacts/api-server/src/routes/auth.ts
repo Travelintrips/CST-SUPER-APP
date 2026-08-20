@@ -31,6 +31,12 @@ import { trackSuspiciousActivity } from "../lib/suspiciousActivity.js";
 import { verifySupabaseToken } from "../lib/supabaseAdmin";
 import { signPortalJwt } from "../lib/portalJwt.js";
 import { setPortalSessionCookie } from "../lib/supabaseAuth.js";
+import {
+  decodeGoogleOAuthContext,
+  encodeGoogleOAuthContext,
+  getGoogleOAuthCallbackContext,
+  getGoogleOAuthFailureRedirect,
+} from "../lib/googleOAuthRouting.js";
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
@@ -50,11 +56,50 @@ const OIDC_COOKIE_TTL = 10 * 60 * 1000;
 
 const router: IRouter = Router();
 
+type GoogleOAuthFailureCategory =
+  | "STATE_MISSING"
+  | "STATE_INVALID"
+  | "STATE_EXPIRED"
+  | "STATE_STORAGE_FAILURE"
+  | "CODE_MISSING"
+  | "TOKEN_EXCHANGE_FAILED"
+  | "GOOGLE_PROFILE_FAILED"
+  | "EMAIL_MISSING"
+  | "ACCOUNT_RESOLUTION_FAILED"
+  | "ACCOUNT_NOT_ALLOWED"
+  | "SESSION_CREATION_FAILED"
+  | "COOKIE_FAILED"
+  | "FINAL_REDIRECT_FAILED";
+
+function logGoogleOAuthFailure(
+  req: Request,
+  category: GoogleOAuthFailureCategory,
+  error?: unknown,
+): void {
+  // Never include authorization codes, OAuth state, tokens, JWTs, session IDs,
+  // cookie values, or client secrets in callback diagnostics.
+  req.log.error(
+    {
+      category,
+      error: error instanceof Error ? error.message : undefined,
+    },
+    "[Google OAuth] callback failed",
+  );
+}
+
 function getOrigin(req: Request): string {
   const proto = req.headers["x-forwarded-proto"] || "https";
   const host =
     req.headers["x-forwarded-host"] || req.headers["host"] || "localhost";
   return `${proto}://${host}`;
+}
+
+function getSafeReturnTo(value: unknown): string {
+  if (value === "popup") return "popup";
+  if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//")) {
+    return "/";
+  }
+  return value;
 }
 
 const CUSTOMER_PORTAL_GOOGLE_HOSTS = new Set([
@@ -135,14 +180,6 @@ function setOidcCookie(res: Response, name: string, value: string) {
     path: "/",
     maxAge: OIDC_COOKIE_TTL,
   });
-}
-
-function getSafeReturnTo(value: unknown): string {
-  if (value === "popup") return "popup";
-  if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//")) {
-    return "/";
-  }
-  return value;
 }
 
 async function upsertUser(claims: Record<string, unknown>) {
@@ -622,7 +659,7 @@ router.post("/auth/dev-login", async (req: Request, res: Response) => {
 // ─── Google OAuth ─────────────────────────────────────────────────────────────
 
 router.get("/login/google", async (req: Request, res: Response) => {
-  const returnTo = getSafeReturnTo(req.query.returnTo);
+  const returnTo = typeof req.query.returnTo === "string" ? req.query.returnTo : "/";
   const state = crypto.randomBytes(16).toString("hex");
   const isPortalFlow = req.query.portal === "1";
   const redirectUri = `${getGoogleOrigin(req, isPortalFlow)}/api/callback/google`;
@@ -630,7 +667,10 @@ router.get("/login/google", async (req: Request, res: Response) => {
   req.log.info({ redirectUri }, "[Google OAuth] initiating login, redirect_uri");
 
   // Store state in DB (domain-agnostic — avoids cross-subdomain cookie issues)
-  await saveOauthState(state, isPortalFlow ? `portal:${returnTo}` : returnTo);
+  await saveOauthState(
+    state,
+    encodeGoogleOAuthContext(isPortalFlow ? "customer_portal" : "bizportal", returnTo),
+  );
 
   const client = getGoogleOAuthClient(redirectUri);
   const authUrl = client.generateAuthUrl({
@@ -653,20 +693,23 @@ router.get("/callback/google", async (req: Request, res: Response) => {
 
   // Look up state from DB (domain-agnostic, no cookie dependency)
   const storedReturnTo = state ? await consumeOauthState(state) : null;
-  const isPortalFlow = !!storedReturnTo?.startsWith("portal:");
-  const returnTo = getSafeReturnTo(
-    isPortalFlow ? storedReturnTo!.slice("portal:".length) : storedReturnTo,
-  );
+  const storedContext = decodeGoogleOAuthContext(storedReturnTo);
+  const callbackContext = getGoogleOAuthCallbackContext(storedReturnTo);
+  const isPortalFlow = callbackContext.flow === "customer_portal";
+  const returnTo = callbackContext.returnTo;
+  const failureRedirect = getGoogleOAuthFailureRedirect(storedContext?.flow ?? null);
 
   if (error || !code || !state) {
+    logGoogleOAuthFailure(req, !state ? "STATE_MISSING" : "CODE_MISSING");
     req.log.warn({ error, hasCode: !!code, hasState: !!state }, "[Google OAuth] callback error from Google — redirecting to login");
-    res.redirect(isPortalFlow ? returnTo : "/bizportal/");
+    res.redirect(failureRedirect);
     return;
   }
 
   if (!storedReturnTo) {
-    req.log.warn({ stateToken: state }, "[Google OAuth] state not found or expired — redirecting to login");
-    res.redirect("/bizportal/");
+    logGoogleOAuthFailure(req, "STATE_INVALID");
+    req.log.warn("[Google OAuth] state not found or expired — redirecting to safe flow fallback");
+    res.redirect(returnTo);
     return;
   }
 
@@ -691,8 +734,9 @@ router.get("/callback/google", async (req: Request, res: Response) => {
 
     if (!tokenRes.ok) {
       const errBody = await tokenRes.json().catch(() => ({})) as Record<string, unknown>;
-      req.log.error({ status: tokenRes.status, errBody }, "[Google OAuth] token endpoint error");
-      throw new Error(`Token exchange failed: ${errBody.error ?? tokenRes.status}`);
+      const providerError = String(errBody.error ?? tokenRes.status);
+      logGoogleOAuthFailure(req, "TOKEN_EXCHANGE_FAILED", new Error(providerError));
+      throw new Error(`Token exchange failed: ${providerError}`);
     }
 
     const tokenData = await tokenRes.json() as {
@@ -702,14 +746,24 @@ router.get("/callback/google", async (req: Request, res: Response) => {
       expires_in?: number;
     };
 
-    if (!tokenData.id_token) throw new Error("No id_token in token response");
+    if (!tokenData.id_token) {
+      logGoogleOAuthFailure(req, "GOOGLE_PROFILE_FAILED", new Error("No id_token in token response"));
+      throw new Error("No id_token in token response");
+    }
 
     const ticket = await client.verifyIdToken({
       idToken: tokenData.id_token,
       audience: GOOGLE_CLIENT_ID,
     });
     const payload = ticket.getPayload();
-    if (!payload || !payload.sub) throw new Error("Invalid token payload");
+    if (!payload || !payload.sub) {
+      logGoogleOAuthFailure(req, "GOOGLE_PROFILE_FAILED", new Error("Invalid token payload"));
+      throw new Error("Invalid token payload");
+    }
+    if (!payload.email) {
+      logGoogleOAuthFailure(req, "EMAIL_MISSING");
+      throw new Error("Google account did not provide an email");
+    }
 
     const claims: Record<string, unknown> = {
       sub: `google_${payload.sub}`,
@@ -720,14 +774,36 @@ router.get("/callback/google", async (req: Request, res: Response) => {
     };
 
     if (isPortalFlow) {
-      const portalCustomer = await upsertPortalGoogleCustomer(claims);
-      const portalToken = await signPortalJwt({
-        sub: String(portalCustomer.id),
-        email: portalCustomer.email,
-        customerId: portalCustomer.id,
-        role: portalCustomer.role,
-      });
-      setPortalSessionCookie(res, portalToken);
+      let portalCustomer;
+      try {
+        portalCustomer = await upsertPortalGoogleCustomer(claims);
+      } catch (accountError) {
+        const category = accountError instanceof Error && accountError.message.includes("not active")
+          ? "ACCOUNT_NOT_ALLOWED"
+          : "ACCOUNT_RESOLUTION_FAILED";
+        logGoogleOAuthFailure(req, category, accountError);
+        throw accountError;
+      }
+
+      let portalToken: string;
+      try {
+        portalToken = await signPortalJwt({
+          sub: String(portalCustomer.id),
+          email: portalCustomer.email,
+          customerId: portalCustomer.id,
+          role: portalCustomer.role,
+        });
+      } catch (sessionError) {
+        logGoogleOAuthFailure(req, "SESSION_CREATION_FAILED", sessionError);
+        throw sessionError;
+      }
+
+      try {
+        setPortalSessionCookie(res, portalToken);
+      } catch (cookieError) {
+        logGoogleOAuthFailure(req, "COOKIE_FAILED", cookieError);
+        throw cookieError;
+      }
 
       const portalMeta = extractRequestMeta(req);
       writeAuditLog({
@@ -740,7 +816,12 @@ router.get("/callback/google", async (req: Request, res: Response) => {
         ipAddress: portalMeta.ipAddress,
         userAgent: portalMeta.userAgent,
       });
-      res.redirect(returnTo);
+      try {
+        req.log.info("[Google OAuth] callback succeeded");
+        res.redirect(returnTo);
+      } catch (redirectError) {
+        logGoogleOAuthFailure(req, "FINAL_REDIRECT_FAILED", redirectError);
+      }
       return;
     }
 
@@ -810,7 +891,9 @@ router.get("/callback/google", async (req: Request, res: Response) => {
     }
     res.redirect(returnTo);
   } catch (err) {
-    req.log.error({ err }, "[Google OAuth] callback token exchange error");
+    if (!(err instanceof Error && err.message.startsWith("Token exchange failed:"))) {
+      logGoogleOAuthFailure(req, "GOOGLE_PROFILE_FAILED", err);
+    }
     if (returnTo === "popup") {
       res.send(`<!DOCTYPE html><html><body><script>
         try { window.opener && window.opener.postMessage("auth:error", "*"); } catch(e){}
@@ -818,7 +901,10 @@ router.get("/callback/google", async (req: Request, res: Response) => {
       </script><p>Login gagal. Tutup tab ini dan coba lagi.</p></body></html>`);
       return;
     }
-    res.redirect(returnTo);
+    const failureTarget = isPortalFlow
+      ? `${returnTo}${returnTo.includes("?") ? "&" : "?"}oauth_error=google_callback_failed`
+      : returnTo;
+    res.redirect(failureTarget);
   }
 });
 

@@ -11,6 +11,7 @@ const REGISTRY_ROWS: readonly RegistryRow[] = [
   ["companies", "Companies migration", "schema"],
   ["holding", "Holding migration", "schema"],
   ["portal", "Portal migration", "schema"],
+  ["customer_portal_payment_boundary", "Customer Portal payment boundary migration", "schema"],
   ["portal_payment_company_scope", "Portal payment company scope migration", "backfill"],
   ["accounting", "Accounting migration", "schema"],
   ["coa_governance", "COA governance migration", "schema"],
@@ -67,6 +68,7 @@ const REGISTRY_ROWS: readonly RegistryRow[] = [
   ["paylabs_payment_methods", "Paylabs payment methods migration", "schema"],
   ["cost_center", "Cost Center migration", "schema"],
   ["sport_center", "Sport Center migration", "schema"],
+  ["sport_center_canonical_finance_config", "Sport Center canonical finance config refresh", "repair"],
   ["sport_center_payment_mirror_refresh", "Sport Center payment mirror trigger refresh", "repair"],
   ["sport_center_account_correction", "Sport Center account correction", "repair"],
   ["sport_center_company_invoice", "Sport Center company invoice migration", "schema"],
@@ -128,7 +130,11 @@ const REGISTRY_ROWS: readonly RegistryRow[] = [
 export const STARTUP_MIGRATION_REGISTRY: readonly StartupStageDefinition[] = REGISTRY_ROWS.map(
   ([name, _displayName, category]) => ({
     name,
-    version: name === "portal_payment_company_scope" ? 3 : 1,
+    version: name === "portal_payment_company_scope"
+      ? 3
+      : name === "customer_portal_payment_boundary"
+        ? 2
+        : 1,
     critical: true,
     category,
   }),

@@ -14,6 +14,7 @@ import {
   resolveBundleName,
   extractSecretVersion,
   buildStartupIdentity,
+  buildRuntimeIdentity,
   injectSecrets,
   validateRequiredSecrets,
 } from "./load-secrets.mjs";
@@ -58,6 +59,38 @@ describe("Secret Manager version observability", () => {
     });
   });
 
+  it("builds safe NEW runtime identity metadata", () => {
+    expect(buildRuntimeIdentity({
+      appEnv: "production",
+      legacyMode: false,
+      projectId: "secret-504012",
+      bundleName: "cst-super-app-production",
+      secretName: "projects/secret-504012/secrets/cst-super-app-production/versions/latest",
+      resolvedSecretVersion: "12",
+    })).toEqual({
+      architectureMode: "NEW",
+      projectId: "secret-504012",
+      bundleId: "cst-super-app-production",
+      version: "12",
+      appEnv: "production",
+    });
+  });
+
+  it("derives the legacy bundle id without exposing secret payload", () => {
+    expect(buildRuntimeIdentity({
+      appEnv: "production",
+      legacyMode: true,
+      projectId: "legacy-project",
+      secretName: "projects/legacy-project/secrets/legacy-bundle/versions/latest",
+      resolvedSecretVersion: "3",
+    })).toEqual({
+      architectureMode: "LEGACY",
+      projectId: "legacy-project",
+      bundleId: "legacy-bundle",
+      version: "3",
+      appEnv: "production",
+    });
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

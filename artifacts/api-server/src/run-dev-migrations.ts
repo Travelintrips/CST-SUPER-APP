@@ -95,7 +95,7 @@ import { runProductFirstFlowMigration } from "./lib/productFirstFlowMigration.js
 import { runStep4TemplateMigration } from "./lib/step4TemplateMigration.js";
 import { runServiceTemplateMigration } from "./lib/serviceTemplateMigration.js";
 import { runPaylabsConfigMigration, runPaylabsPaymentMethodsMigration } from "./routes/payments.js";
-import { runSportCenterMigration, runSportCenterAccountCorrection, runSportCenterCompanyInvoiceMigration, runSportExpensesMigration } from "./modules/sport-center/migration.js";
+import { ensureCanonicalSettlementContracts, runSportCenterMigration, runSportCenterAccountCorrection, runSportCenterCompanyInvoiceMigration, runSportExpensesMigration } from "./modules/sport-center/migration.js";
 import { runTenantMigration } from "./modules/tenant/migration.js";
 import { runBtkiMigration } from "./lib/btkiMigration.js";
 import { runTokenSecurityMigration } from "./lib/tokenSecurityMigration.js";
@@ -234,6 +234,7 @@ async function main() {
   await runSafe("paylabsConfig", runPaylabsConfigMigration);
   await runSafe("paylabsPaymentMethods", runPaylabsPaymentMethodsMigration);
   await runSafe("sportCenter", runSportCenterMigration);
+  await runSafe("sportCenterCanonicalFinanceConfig", ensureCanonicalSettlementContracts);
   await runSafe("sportCenterAccountCorrection", runSportCenterAccountCorrection);
   await runSafe("sportCenterCompanyInvoice", runSportCenterCompanyInvoiceMigration);
   await runSafe("sportExpenses", runSportExpensesMigration);

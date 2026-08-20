@@ -19,6 +19,7 @@ import { sendPaymentProofWaLink } from "../lib/paymentProofService.js";
 import { isSafeDevTestMode } from "../lib/safeDev.js";
 import { isNewPaidTransition } from "../lib/paymentWebhookConsistency.js";
 import { normalizeCompanyId } from "../lib/services/portalCompanyScopeUtils.js";
+import { confirmCustomerPortalPayment } from "../lib/customerPortalPaymentFinance.js";
 
 const router = Router();
 
@@ -702,19 +703,33 @@ paymentsWebhookRouter.post("/paylabs/webhook", async (req, res) => {
     });
   }
 
-  await db
-    .update(paymentsTable)
-    .set({
-      status: newStatus,
-      paidAt,
-      raw: req.body,
-      updatedAt: new Date(),
-      ...(webhookPaymentMethod ? { paymentMethod: webhookPaymentMethod } : {}),
+  let paidTransition = isNewPaidTransition(payment.status, newStatus);
+  if (newStatus === "paid") {
+    const confirmation = await confirmCustomerPortalPayment({
+      paymentId: payment.id,
       companyId: webhookCompanyId,
-    })
-    .where(eq(paymentsTable.id, payment.id));
+      paymentMethod: webhookPaymentMethod ?? payment.paymentMethod,
+      provider: payment.provider,
+      providerReference: merchantTradeNo,
+      raw: req.body,
+      confirmedAt: paidAt ?? new Date(),
+    });
+    paidTransition = confirmation.firstPaidTransition;
+  } else {
+    await db
+      .update(paymentsTable)
+      .set({
+        status: newStatus,
+        paidAt,
+        raw: req.body,
+        updatedAt: new Date(),
+        ...(webhookPaymentMethod ? { paymentMethod: webhookPaymentMethod } : {}),
+        companyId: webhookCompanyId,
+      })
+      .where(eq(paymentsTable.id, payment.id));
+  }
 
-  if (isNewPaidTransition(payment.status, newStatus)) {
+  if (paidTransition) {
     if (payment.refKind === "sales") {
       const [salesDoc] = await db.select().from(salesDocumentsTable).where(eq(salesDocumentsTable.id, payment.refId));
       const invoiceResult = await markSalesInvoiced(payment.refId, "paylabs");
@@ -796,16 +811,14 @@ router.post("/:id/simulate-paid", async (req, res) => {
     return res.status(403).json({ message: "Payment belongs to a different company" });
   }
 
-  await db
-    .update(paymentsTable)
-    .set({
-      status: "paid",
-      paidAt: new Date(),
-      updatedAt: new Date(),
-      companyId: derivedCompanyId,
-    })
-    .where(eq(paymentsTable.id, id));
-  if (payment.status !== "paid") {
+  const confirmation = await confirmCustomerPortalPayment({
+    paymentId: id,
+    companyId: derivedCompanyId,
+    paymentMethod: payment.paymentMethod,
+    provider: payment.provider,
+    providerReference: payment.providerMerchantTradeNo,
+  });
+  if (confirmation.firstPaidTransition) {
     if (payment.refKind === "sales") {
       const [salesDoc2] = await db.select().from(salesDocumentsTable).where(eq(salesDocumentsTable.id, payment.refId));
       const invoiceResult2 = await markSalesInvoiced(payment.refId, "paylabs");

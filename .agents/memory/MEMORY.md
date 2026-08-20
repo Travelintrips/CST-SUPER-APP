@@ -109,3 +109,5 @@
 - [Pre-start marker identity](pre-start-marker-identity.md) — gate `pre_start_schema` berbeda dari compatibility marker `api_pre_start_schema`; diagnose the gate first.
 - [Historical reversal live contract](historical-reversal-live-contract.md) — stale reversal runners must not authorize production; validate the active owner and live payment-booking identity first.
 - [Portal phone login normalization](portal-phone-login-normalization.md) — OTP login must compare normalized phone identities, not raw stored strings, because legacy accounts may use 08/+62/62 formats.
+- [Customer Portal finance scope](customer-portal-finance-scope.md) — Customer Portal uses company 1; Paylabs and tax configuration remain intentionally deferred.
+- [CF-SC-10 shared config](cf-sc10-shared-config.md) — central Sport Center mode uses exact shared finance_project rows; legacy settlement remains a documented adapter.
