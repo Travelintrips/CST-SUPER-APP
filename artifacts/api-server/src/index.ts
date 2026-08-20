@@ -51,6 +51,8 @@ import { runUserRoleMigration } from "./lib/userRoleMigration";
 import { runAuditLogMigration } from "./lib/auditLogMigration";
 import {
   getStartupReadinessSnapshot,
+  getModuleReadiness,
+  markCoreDatabaseReady,
   markMigrationFinalizeCompleted,
   markMigrationFinalizeStarting,
   markStartupSeedPhaseCompleted,
@@ -360,7 +362,7 @@ async function runGatedStartupStage<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
   const stage = getStartupStageDefinition(displayName);
-  markStartupStageStarting(displayName);
+  markStartupStageStarting(displayName, stage.name);
   const isRegistryStage = STARTUP_MIGRATION_REGISTRY.some(
     (registryStage) => registryStage.name === stage.name,
   );
@@ -375,7 +377,7 @@ async function runGatedStartupStage<T>(
     const result = await runStartupMigrationStage(stage, fn);
     if (result.status === "skipped") {
       startupStageSummary.skipped++;
-      markStartupStageCompleted(displayName);
+      markStartupStageCompleted(displayName, stage.name);
       if (isRegistryStage) {
         setStartupRegistryProgress(
           startupStageSummary.executed + startupStageSummary.skipped,
@@ -386,7 +388,7 @@ async function runGatedStartupStage<T>(
       return undefined as T;
     }
     startupStageSummary.executed++;
-    markStartupStageCompleted(displayName);
+    markStartupStageCompleted(displayName, stage.name);
     if (isRegistryStage) {
       setStartupRegistryProgress(
         startupStageSummary.executed + startupStageSummary.skipped,
@@ -397,7 +399,7 @@ async function runGatedStartupStage<T>(
     return result.value as T;
   } catch (error) {
     startupStageSummary.failed++;
-    markStartupStageFailed(displayName);
+    markStartupStageFailed(displayName, stage.name);
     if (isRegistryStage) {
       setStartupRegistryProgress(
         startupStageSummary.executed + startupStageSummary.skipped,
@@ -1811,6 +1813,7 @@ async function startServer() {
         ? (migrationCompletedAt ?? Date.now()) - migrationStartedAt
         : null,
         ...getStartupReadinessSnapshot(),
+        ...getModuleReadiness(ready),
     });
   });
 
@@ -1938,6 +1941,7 @@ async function startServer() {
     .then(async () => {
       migrationStartedAt = Date.now();
       const registryInitializationMs = await initializeStartupMigrationRegistry();
+      markCoreDatabaseReady();
       logger.info(
         {
           registry_initialization_ms: registryInitializationMs,

@@ -195,11 +195,35 @@ export function getModuleReadiness(globalReady: boolean): {
   const missing = CUSTOMER_PORTAL_REQUIRED_STAGES.filter((stage) =>
     !state.completedStageNames.has(stage),
   );
+  return evaluateModuleReadiness(
+    globalReady,
+    state.coreDatabaseReady,
+    completed,
+    missing,
+    state.completedStageNames.has("sport_center"),
+  );
+}
+
+export function evaluateModuleReadiness(
+  globalReady: boolean,
+  coreDatabaseReady: boolean,
+  completed: readonly string[],
+  missing: readonly string[],
+  sportCenterReady: boolean,
+): {
+  global_ready: boolean;
+  customer_portal_ready: boolean;
+  sport_center_ready: boolean;
+  customer_portal_required_stages: { completed: string[]; missing: string[] };
+} {
   return {
     global_ready: globalReady,
-    customer_portal_ready: state.coreDatabaseReady && missing.length === 0,
-    sport_center_ready: state.completedStageNames.has("sport_center"),
-    customer_portal_required_stages: { completed, missing },
+    customer_portal_ready: coreDatabaseReady && missing.length === 0,
+    sport_center_ready: sportCenterReady,
+    customer_portal_required_stages: {
+      completed: [...completed],
+      missing: [...missing],
+    },
   };
 }
 

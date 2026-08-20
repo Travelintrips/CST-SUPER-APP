@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { getApiRevision } from "../lib/buildMetadata.js";
 import {
   getStartupReadinessSnapshot,
+  evaluateModuleReadiness,
   markMigrationFinalizeCompleted,
   markMigrationFinalizeStarting,
   markStartupSeedPhaseCompleted,
@@ -238,6 +239,43 @@ describe("startup readiness steady-state contract", () => {
     expect(snapshot.migration_finalize_status).toBe("completed");
     expect(JSON.stringify(snapshot)).not.toContain("password");
     expect(JSON.stringify(snapshot)).not.toContain("connectionString");
+  });
+
+  it("keeps Customer Portal ready when an unrelated module fails", () => {
+    const result = evaluateModuleReadiness(
+      false,
+      true,
+      ["pre_start_schema", "sessions", "portal", "oauth_state"],
+      [],
+      false,
+    );
+    expect(result).toMatchObject({
+      global_ready: false,
+      customer_portal_ready: true,
+      sport_center_ready: false,
+    });
+  });
+
+  it("keeps Customer Portal fail-closed when core readiness fails", () => {
+    const result = evaluateModuleReadiness(
+      false,
+      false,
+      ["pre_start_schema", "sessions", "portal", "oauth_state"],
+      [],
+      false,
+    );
+    expect(result.customer_portal_ready).toBe(false);
+  });
+
+  it("keeps Customer Portal fail-closed when a required migration fails", () => {
+    const result = evaluateModuleReadiness(
+      false,
+      true,
+      ["pre_start_schema", "sessions"],
+      ["portal", "oauth_state"],
+      false,
+    );
+    expect(result.customer_portal_ready).toBe(false);
   });
 
   it("keeps build revision deterministic and safe", () => {
