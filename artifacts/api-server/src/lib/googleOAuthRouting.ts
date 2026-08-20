@@ -39,7 +39,9 @@ export function decodeGoogleOAuthContext(
 export function getGoogleOAuthFailureRedirect(flow: GoogleOAuthFlow | null): string {
   return flow === "customer_portal"
     ? CUSTOMER_GOOGLE_LOGIN_FAILURE
-    : BIZPORTAL_GOOGLE_LOGIN_FAILURE;
+    : flow === "bizportal"
+      ? BIZPORTAL_GOOGLE_LOGIN_FAILURE
+      : CUSTOMER_GOOGLE_LOGIN_FAILURE;
 }
 
 export function getGoogleOAuthCallbackContext(

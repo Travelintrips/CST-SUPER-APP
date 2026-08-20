@@ -94,6 +94,14 @@ function getOrigin(req: Request): string {
   return `${proto}://${host}`;
 }
 
+function getSafeReturnTo(value: unknown): string {
+  if (value === "popup") return "popup";
+  if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//")) {
+    return "/";
+  }
+  return value;
+}
+
 const CUSTOMER_PORTAL_GOOGLE_HOSTS = new Set([
   "cstlogistic.co.id",
   "www.cstlogistic.co.id",

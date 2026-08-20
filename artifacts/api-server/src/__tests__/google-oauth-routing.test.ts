@@ -38,7 +38,7 @@ describe("Google OAuth flow routing", () => {
       flow: "customer_portal",
       returnTo: CUSTOMER_GOOGLE_LOGIN_FAILURE,
     });
-    expect(getGoogleOAuthFailureRedirect(null)).toBe(BIZPORTAL_GOOGLE_LOGIN_FAILURE);
+    expect(getGoogleOAuthFailureRedirect(null)).toBe(CUSTOMER_GOOGLE_LOGIN_FAILURE);
   });
 
   it("rejects external and protocol-relative return paths", () => {
