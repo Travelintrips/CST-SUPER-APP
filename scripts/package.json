@@ -11,7 +11,8 @@
     "restore-drive": "tsx ./src/restoreFromGoogleDrive.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "cf-sc-10b:dev": "pnpm exec esbuild ./src/cf-sc-10b-harness.mjs --bundle --platform=node --format=esm --packages=external --external:../runtime-db-guard.mjs --outfile=./src/.cf-sc-10b-harness.mjs && node ./src/.cf-sc-10b-harness.mjs; status=$?; rm -f ./src/.cf-sc-10b-harness.mjs; exit $status",
-    "cf-sc-10c:dev": "pnpm exec esbuild ./src/cf-sc-10c-harness.mjs --bundle --platform=node --format=esm --packages=external --external:../runtime-db-guard.mjs --outfile=./src/.cf-sc-10c-harness.mjs && node ./src/.cf-sc-10c-harness.mjs; status=$?; rm -f ./src/.cf-sc-10c-harness.mjs; exit $status"
+    "cf-sc-10c:dev": "pnpm exec esbuild ./src/cf-sc-10c-harness.mjs --bundle --platform=node --format=esm --packages=external --external:../runtime-db-guard.mjs --outfile=./src/.cf-sc-10c-harness.mjs && node ./src/.cf-sc-10c-harness.mjs; status=$?; rm -f ./src/.cf-sc-10c-harness.mjs; exit $status",
+    "cf-sc-10d:dev": "pnpm exec esbuild ./src/cf-sc-10d-harness.mjs --bundle --platform=node --format=esm --packages=external --external:../runtime-db-guard.mjs --outfile=./src/.cf-sc-10d-harness.mjs && node ./src/.cf-sc-10d-harness.mjs; status=$?; rm -f ./src/.cf-sc-10d-harness.mjs; exit $status"
   },
   "devDependencies": {
     "@types/node": "catalog:",
