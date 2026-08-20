@@ -35,6 +35,7 @@
 - [Production COA ID mismatch](prod-coa-id-mismatch.md) — import data produksi tanpa COA → Trial Balance kosong; remap account_id via session_replication_role + CASE UPDATE.
 - [Dev COA ID sync on startup](coa-dev-sync.md) — syncDevCoaToFixture() auto-remaps dev IDs to prod IDs after DB reset; fixture in coa-prod-fixture.json; refresh with generate-coa-fixture.mjs.
 - [Customer Portal bootstrap secrets](customer-portal-bootstrap-secrets.md) — Customer Portal startup invokes Secret Manager loader and fails closed when bootstrap credentials are unavailable.
+- [Portal auth cookie and reset origin](portal-auth-cookie-and-reset-origin.md) — login must persist HttpOnly session cookies; production reset links must use the canonical portal origin.
 - [Activity log runtime schema](activity-log-runtime-schema.md) — Supabase dev activity_logs can lag the app schema and block marketplace E2E setup/cleanup.
 - [QRIS settlement matching](qris-settlement-matching.md) — QRIS reconciliation needs provider/reference, gross-net fee handling, and a matcher path that includes Sport Center payments.
 - [QRIS provider-aware rollout](qris-provider-aware-rollout.md) — provider must be explicit; unknown/synthetic evidence stays review-only until explicit final approval.
