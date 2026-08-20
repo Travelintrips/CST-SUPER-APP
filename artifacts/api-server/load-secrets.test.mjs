@@ -12,9 +12,19 @@ import {
   resolveEnvironment,
   validateBootstrapJson,
   resolveBundleName,
+  extractSecretVersion,
   injectSecrets,
   validateRequiredSecrets,
 } from "./load-secrets.mjs";
+
+describe("Secret Manager version observability", () => {
+  it("extracts only a safe non-secret version identifier", () => {
+    expect(extractSecretVersion("projects/test/secrets/cst-super-app-production/versions/12")).toBe("12");
+    expect(extractSecretVersion("projects/test/secrets/x/versions/latest")).toBe("latest");
+    expect(extractSecretVersion("projects/test/secrets/x/versions/secret value")).toBeNull();
+    expect(extractSecretVersion("secret payload")).toBeNull();
+  });
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers

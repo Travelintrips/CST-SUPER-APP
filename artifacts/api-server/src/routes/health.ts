@@ -135,6 +135,7 @@ router.get("/healthz", async (_req, res) => {
     uptimeSeconds,
     version,
     revision: getApiRevision(),
+    secretBundleVersion: process.env.APP_SECRET_BUNDLE_VERSION ?? null,
     services: {
       db: db.status,
       whatsapp: whatsapp.status,

@@ -111,6 +111,7 @@ describe("startup readiness steady-state contract", () => {
 
   it("exposes only a safe configured API revision on healthz", () => {
     expect(healthRoute).toContain("revision: getApiRevision()");
+    expect(healthRoute).toContain("secretBundleVersion: process.env.APP_SECRET_BUNDLE_VERSION ?? null");
     expect(buildMetadata).toContain("REPLIT_DEPLOYMENT_REVISION");
     expect(buildMetadata).toContain("SAFE_REVISION");
     expect(buildMetadata).toContain('"unknown"');

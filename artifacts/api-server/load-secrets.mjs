@@ -61,6 +61,18 @@ import { spawn } from "node:child_process";
 // ─────────────────────────────────────────────────────────────────────────────
 
 const ALLOWED_ENVIRONMENTS = ["development", "production"];
+const SAFE_SECRET_VERSION = /^[A-Za-z0-9._-]{1,200}$/;
+
+/**
+ * Extract only the non-secret version identifier from Secret Manager's
+ * resolved resource name. The payload itself is never involved.
+ */
+export function extractSecretVersion(resourceName) {
+  if (typeof resourceName !== "string") return null;
+  const match = resourceName.match(/\/versions\/([^/]+)$/);
+  const version = match?.[1] ?? "";
+  return SAFE_SECRET_VERSION.test(version) ? version : null;
+}
 
 /** Default bundle name prefix for new-architecture bundles. */
 const DEFAULT_BUNDLE_PREFIX = "cst-super-app";
@@ -433,9 +445,11 @@ async function main() {
   const client = new SecretManagerServiceClient({ credentials });
 
   let secretPayload;
+  let resolvedSecretVersion = null;
   try {
     const [version] = await client.accessSecretVersion({ name: secretName });
     secretPayload = version.payload?.data?.toString("utf8");
+    resolvedSecretVersion = extractSecretVersion(version.name);
   } catch (err) {
     console.error(`[load-secrets] ERROR: Failed to fetch "${secretName}": ${err.message}`);
     console.error(
@@ -467,6 +481,11 @@ async function main() {
 
   // ── Phase 6: Inject secrets ─────────────────────────────────────────────────
   const merged = { ...process.env };
+  delete merged.APP_SECRET_BUNDLE_VERSION;
+  if (resolvedSecretVersion) {
+    // Keep only the non-secret version identifier in the child runtime.
+    merged.APP_SECRET_BUNDLE_VERSION = resolvedSecretVersion;
+  }
   let injectedCount, overriddenCount, loadedKeys;
 
   try {
