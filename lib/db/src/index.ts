@@ -198,7 +198,10 @@ if (!isLocalConn) {
     // Set search_path — PgBouncer transaction mode does not preserve it.
     // Set lock_timeout — prevents startup DDL migrations from hanging forever
     // when a previously killed instance left an open lock on the same table.
-    client.query("SET search_path = public; SET lock_timeout = '20s'").catch(() => {});
+    const mode = process.env.SPORT_CENTER_FINANCE_MODE === "central" ? "central" : "legacy";
+    client.query(
+      `SET search_path = public; SET lock_timeout = '20s'; SET sport_center.finance_mode = '${mode}'`,
+    ).catch(() => {});
   });
 }
 

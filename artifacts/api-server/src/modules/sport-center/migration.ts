@@ -1137,6 +1137,227 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
   // 1640006707220.  Keep the external value untouched and resolve it only at
   // the owner boundary.
   await db.execute(sql.raw(`
+    CREATE OR REPLACE FUNCTION sport_center.resolve_shared_finance_config(
+      p_project_code text,
+      p_company_id integer,
+      p_payment_method text,
+      p_provider_code text,
+      p_effective_date date
+    )
+    RETURNS TABLE (
+      config_id integer,
+      config_version integer,
+      payment_config_id integer,
+      tax_mapping_id integer,
+      effective_configuration_identity text,
+      tax_rule_id integer,
+      tax_rate numeric,
+      tax_direction text,
+      bank_account_id integer,
+      bank_account_number text,
+      bank_name text,
+      currency_code text,
+      settlement_delay_business_days integer,
+      mdr_rate numeric,
+      fixed_provider_fee numeric,
+      fee_tax_rate numeric,
+      fee_tax_inclusive boolean,
+      receiving_bank_coa_id integer,
+      receiving_bank_coa_code text,
+      receiving_bank_coa_name text,
+      revenue_coa_id integer,
+      revenue_coa_code text,
+      revenue_coa_name text,
+      tax_output_coa_id integer,
+      tax_output_coa_code text,
+      tax_output_coa_name text,
+      mdr_expense_coa_id integer,
+      mdr_expense_coa_code text,
+      mdr_expense_coa_name text,
+      clearing_coa_id integer,
+      clearing_coa_code text,
+      clearing_coa_name text
+    )
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'public'
+    AS $function$
+    DECLARE
+      v_config record;
+      v_payment record;
+      v_tax record;
+      v_bank record;
+      v_role text;
+      v_count integer;
+      v_map record;
+      v_ids integer[] := ARRAY[]::integer[];
+    BEGIN
+      SELECT COUNT(*)::integer AS count, MIN(c.id) AS id
+        INTO v_count, v_config
+        FROM public.finance_project_configs c
+       WHERE c.project_code = p_project_code
+         AND c.company_id = p_company_id
+         AND c.is_active = TRUE
+         AND c.effective_from <= p_effective_date
+         AND (c.effective_to IS NULL OR p_effective_date < c.effective_to);
+      IF v_count <> 1 THEN
+        RAISE EXCEPTION 'BLOCKED_CONFIG_%: project=% company=% matches=%',
+          CASE WHEN v_count = 0 THEN 'MISSING' ELSE 'AMBIGUOUS' END,
+          p_project_code, p_company_id, v_count;
+      END IF;
+
+      SELECT COUNT(*)::integer AS count, MIN(pc.id) AS id
+        INTO v_count, v_payment
+        FROM public.finance_project_payment_configs pc
+       WHERE pc.finance_project_config_id = v_config.id
+         AND upper(btrim(pc.payment_method)) = upper(btrim(p_payment_method))
+         AND lower(btrim(pc.provider_code)) = lower(btrim(p_provider_code))
+         AND pc.is_active = TRUE
+         AND pc.effective_from <= p_effective_date
+         AND (pc.effective_to IS NULL OR p_effective_date < pc.effective_to);
+      IF v_count <> 1 THEN
+        RAISE EXCEPTION 'BLOCKED_CONFIG_%: payment=% provider=% matches=%',
+          CASE WHEN v_count = 0 THEN 'MISSING' ELSE 'AMBIGUOUS' END,
+          p_payment_method, p_provider_code, v_count;
+      END IF;
+      SELECT pc.* INTO v_payment
+        FROM public.finance_project_payment_configs pc
+       WHERE pc.id = v_payment.id;
+
+      SELECT COUNT(*)::integer AS count, MIN(tm.id) AS id
+        INTO v_count, v_tax
+        FROM public.finance_project_tax_mappings tm
+       WHERE tm.finance_project_config_id = v_config.id
+         AND tm.transaction_type = 'sport_booking_payment'
+         AND (tm.payment_method IS NULL OR upper(btrim(tm.payment_method)) = upper(btrim(p_payment_method)))
+         AND (tm.provider_code IS NULL OR lower(btrim(tm.provider_code)) = lower(btrim(p_provider_code)))
+         AND tm.is_active = TRUE
+         AND tm.effective_from <= p_effective_date
+         AND (tm.effective_to IS NULL OR p_effective_date < tm.effective_to)
+         AND NOT EXISTS (
+           SELECT 1
+             FROM public.finance_project_tax_mappings more_specific
+            WHERE more_specific.finance_project_config_id = tm.finance_project_config_id
+              AND more_specific.transaction_type = tm.transaction_type
+              AND more_specific.is_active = TRUE
+              AND more_specific.effective_from <= p_effective_date
+              AND (more_specific.effective_to IS NULL OR p_effective_date < more_specific.effective_to)
+              AND (more_specific.payment_method IS NULL OR upper(btrim(more_specific.payment_method)) = upper(btrim(p_payment_method)))
+              AND (more_specific.provider_code IS NULL OR lower(btrim(more_specific.provider_code)) = lower(btrim(p_provider_code)))
+              AND (
+                (more_specific.payment_method IS NOT NULL)::integer
+                + (more_specific.provider_code IS NOT NULL)::integer
+              ) > (tm.payment_method IS NOT NULL)::integer + (tm.provider_code IS NOT NULL)::integer
+         );
+      IF v_count <> 1 THEN
+        RAISE EXCEPTION 'BLOCKED_CONFIG_%: tax mapping matches=%',
+          CASE WHEN v_count = 0 THEN 'MISSING' ELSE 'AMBIGUOUS' END, v_count;
+      END IF;
+      SELECT tm.* INTO v_tax FROM public.finance_project_tax_mappings tm WHERE tm.id = v_tax.id;
+
+      SELECT COUNT(*)::integer AS count, MIN(cba.id) AS id
+        INTO v_count, v_bank
+        FROM public.company_bank_accounts cba
+       WHERE cba.id = v_payment.bank_account_id
+         AND cba.company_id = p_company_id
+         AND cba.is_active = TRUE;
+      IF v_count <> 1 THEN
+        RAISE EXCEPTION 'BLOCKED_CONFIG_%: bank account=% company=% matches=%',
+          CASE WHEN v_count = 0 THEN 'MISSING' ELSE 'AMBIGUOUS' END,
+          v_payment.bank_account_id, p_company_id, v_count;
+      END IF;
+      SELECT cba.* INTO v_bank FROM public.company_bank_accounts cba WHERE cba.id = v_bank.id;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM public.tax_rules tr
+         WHERE tr.id = v_tax.tax_rule_id
+           AND tr.company_id = p_company_id
+           AND tr.is_active = TRUE
+           AND (tr.effective_from IS NULL OR tr.effective_from <= p_effective_date)
+           AND (tr.effective_to IS NULL OR p_effective_date < tr.effective_to)
+      ) THEN
+        RAISE EXCEPTION 'BLOCKED_CONFIG_TAX_INVALID: tax_rule=%', v_tax.tax_rule_id;
+      END IF;
+
+      config_id := v_config.id;
+      config_version := v_config.config_version;
+      payment_config_id := v_payment.id;
+      tax_mapping_id := v_tax.id;
+      effective_configuration_identity :=
+        p_project_code || ':' || v_config.id::text || ':' ||
+        v_payment.id::text || ':' || v_tax.id::text || ':' ||
+        v_config.config_version::text || ':' || v_payment.config_version::text;
+      SELECT tr.id, tr.tax_rate, tr.direction INTO tax_rule_id, tax_rate, tax_direction
+        FROM public.tax_rules tr WHERE tr.id = v_tax.tax_rule_id;
+      bank_account_id := v_bank.id;
+      bank_account_number := v_bank.account_number;
+      bank_name := v_bank.bank_name;
+      currency_code := v_payment.currency_code;
+      settlement_delay_business_days := v_payment.settlement_delay_business_days;
+      mdr_rate := v_payment.mdr_rate;
+      fixed_provider_fee := v_payment.fixed_provider_fee;
+      fee_tax_rate := v_payment.fee_tax_rate;
+      fee_tax_inclusive := v_payment.fee_tax_inclusive;
+
+      FOREACH v_role IN ARRAY ARRAY['RECEIVING_BANK','REVENUE','TAX_OUTPUT','MDR_EXPENSE','CLEARING']
+      LOOP
+        SELECT COUNT(*)::integer AS count
+          INTO v_count
+          FROM public.finance_project_coa_mappings cm
+         WHERE cm.finance_project_config_id = v_config.id
+           AND cm.account_role = v_role
+           AND (cm.payment_method IS NULL OR upper(btrim(cm.payment_method)) = upper(btrim(p_payment_method)))
+           AND (cm.provider_code IS NULL OR lower(btrim(cm.provider_code)) = lower(btrim(p_provider_code)))
+           AND cm.is_active = TRUE
+           AND cm.effective_from <= p_effective_date
+           AND (cm.effective_to IS NULL OR p_effective_date < cm.effective_to)
+           AND NOT EXISTS (
+             SELECT 1 FROM public.finance_project_coa_mappings specific
+              WHERE specific.finance_project_config_id = cm.finance_project_config_id
+                AND specific.account_role = cm.account_role
+                AND specific.is_active = TRUE
+                AND specific.effective_from <= p_effective_date
+                AND (specific.effective_to IS NULL OR p_effective_date < specific.effective_to)
+                AND (specific.payment_method IS NULL OR upper(btrim(specific.payment_method)) = upper(btrim(p_payment_method)))
+                AND (specific.provider_code IS NULL OR lower(btrim(specific.provider_code)) = lower(btrim(p_provider_code)))
+                AND (
+                  (specific.payment_method IS NOT NULL)::integer
+                  + (specific.provider_code IS NOT NULL)::integer
+                ) > (cm.payment_method IS NOT NULL)::integer + (cm.provider_code IS NOT NULL)::integer
+           );
+        IF v_role = 'CLEARING' AND v_count = 0 THEN CONTINUE; END IF;
+        IF v_count <> 1 THEN
+          RAISE EXCEPTION 'BLOCKED_CONFIG_%: COA role=% matches=%',
+            CASE WHEN v_count = 0 THEN 'MISSING' ELSE 'AMBIGUOUS' END, v_role, v_count;
+        END IF;
+        SELECT ca.id, ca.code, ca.name
+          INTO v_map
+          FROM public.finance_project_coa_mappings cm
+          JOIN public.chart_of_accounts ca ON ca.id = cm.coa_id
+         WHERE cm.finance_project_config_id = v_config.id
+           AND cm.account_role = v_role
+           AND (cm.payment_method IS NULL OR upper(btrim(cm.payment_method)) = upper(btrim(p_payment_method)))
+           AND (cm.provider_code IS NULL OR lower(btrim(cm.provider_code)) = lower(btrim(p_provider_code)))
+           AND cm.is_active = TRUE
+           AND ca.company_id = p_company_id
+           AND ca.is_active = TRUE
+           AND cm.effective_from <= p_effective_date
+           AND (cm.effective_to IS NULL OR p_effective_date < cm.effective_to)
+         ORDER BY ((cm.payment_method IS NOT NULL)::integer + (cm.provider_code IS NOT NULL)::integer) DESC
+         LIMIT 1;
+        IF v_role = 'RECEIVING_BANK' THEN receiving_bank_coa_id := v_map.id; receiving_bank_coa_code := v_map.code; receiving_bank_coa_name := v_map.name;
+        ELSIF v_role = 'REVENUE' THEN revenue_coa_id := v_map.id; revenue_coa_code := v_map.code; revenue_coa_name := v_map.name;
+        ELSIF v_role = 'TAX_OUTPUT' THEN tax_output_coa_id := v_map.id; tax_output_coa_code := v_map.code; tax_output_coa_name := v_map.name;
+        ELSIF v_role = 'MDR_EXPENSE' THEN mdr_expense_coa_id := v_map.id; mdr_expense_coa_code := v_map.code; mdr_expense_coa_name := v_map.name;
+        ELSE clearing_coa_id := v_map.id; clearing_coa_code := v_map.code; clearing_coa_name := v_map.name;
+        END IF;
+      END LOOP;
+      RETURN NEXT;
+    END;
+    $function$;
+  `));
+
+  await db.execute(sql.raw(`
     CREATE OR REPLACE FUNCTION sport_center.resolve_internal_bank_account_id(
       p_company_id integer,
       p_external_bank_account_id text
