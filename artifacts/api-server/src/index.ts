@@ -126,6 +126,7 @@ import { startProductFirstExceptionWorker } from "./lib/productFirstExceptionWor
 import { startRekonsiliasiWorker } from "./lib/rekonsiliasiWorker.js";
 import { startLedgerConsistencyWorker } from "./lib/jobs/ledgerConsistencyCheck.js";
 import { startOutboxProcessor } from "./lib/accounting/outboxProcessor.js";
+import { startCentralFinanceProcessor } from "./lib/centralFinance.js";
 import { startFinancialEventBusWorker } from "./lib/financialEventBus.js";
 import { startFailedJobReplayWorker } from "./lib/financial/failedJobSystem.js";
 import { startDualWriteRetryWorker, startDualWriteIntegrityWorker } from "./lib/services/dualWriteReliabilityService.js";
@@ -1906,6 +1907,7 @@ async function startServer() {
   registerWorker("daily-report-wa", startDailyReportWorker, 95_000);
   registerWorker("ledger-consistency-check", startLedgerConsistencyWorker, 95_000);
   registerWorker("financial-outbox-processor", startOutboxProcessor, 3_000);
+  registerWorker("central-finance-processor", startCentralFinanceProcessor, 4_000);
   registerWorker("financial-event-bus", startFinancialEventBusWorker, 5_000);
   registerWorker("failed-job-replay", startFailedJobReplayWorker, 110_000);
   // Phase 2A.2 — Dual Write Reliability workers
