@@ -57,6 +57,7 @@ describe("Secret Manager version observability", () => {
       APP_ENV: null,
     });
   });
+
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
