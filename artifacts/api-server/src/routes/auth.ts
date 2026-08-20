@@ -31,6 +31,12 @@ import { trackSuspiciousActivity } from "../lib/suspiciousActivity.js";
 import { verifySupabaseToken } from "../lib/supabaseAdmin";
 import { signPortalJwt } from "../lib/portalJwt.js";
 import { setPortalSessionCookie } from "../lib/supabaseAuth.js";
+import {
+  decodeGoogleOAuthContext,
+  encodeGoogleOAuthContext,
+  getGoogleOAuthCallbackContext,
+  getGoogleOAuthFailureRedirect,
+} from "../lib/googleOAuthRouting.js";
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
@@ -166,14 +172,6 @@ function setOidcCookie(res: Response, name: string, value: string) {
     path: "/",
     maxAge: OIDC_COOKIE_TTL,
   });
-}
-
-function getSafeReturnTo(value: unknown): string {
-  if (value === "popup") return "popup";
-  if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//")) {
-    return "/";
-  }
-  return value;
 }
 
 async function upsertUser(claims: Record<string, unknown>) {
@@ -653,7 +651,7 @@ router.post("/auth/dev-login", async (req: Request, res: Response) => {
 // ─── Google OAuth ─────────────────────────────────────────────────────────────
 
 router.get("/login/google", async (req: Request, res: Response) => {
-  const returnTo = getSafeReturnTo(req.query.returnTo);
+  const returnTo = typeof req.query.returnTo === "string" ? req.query.returnTo : "/";
   const state = crypto.randomBytes(16).toString("hex");
   const isPortalFlow = req.query.portal === "1";
   const redirectUri = `${getGoogleOrigin(req, isPortalFlow)}/api/callback/google`;
@@ -661,7 +659,10 @@ router.get("/login/google", async (req: Request, res: Response) => {
   req.log.info({ redirectUri }, "[Google OAuth] initiating login, redirect_uri");
 
   // Store state in DB (domain-agnostic — avoids cross-subdomain cookie issues)
-  await saveOauthState(state, isPortalFlow ? `portal:${returnTo}` : returnTo);
+  await saveOauthState(
+    state,
+    encodeGoogleOAuthContext(isPortalFlow ? "customer_portal" : "bizportal", returnTo),
+  );
 
   const client = getGoogleOAuthClient(redirectUri);
   const authUrl = client.generateAuthUrl({
@@ -684,22 +685,23 @@ router.get("/callback/google", async (req: Request, res: Response) => {
 
   // Look up state from DB (domain-agnostic, no cookie dependency)
   const storedReturnTo = state ? await consumeOauthState(state) : null;
-  const isPortalFlow = !!storedReturnTo?.startsWith("portal:");
-  const returnTo = getSafeReturnTo(
-    isPortalFlow ? storedReturnTo!.slice("portal:".length) : storedReturnTo,
-  );
+  const storedContext = decodeGoogleOAuthContext(storedReturnTo);
+  const callbackContext = getGoogleOAuthCallbackContext(storedReturnTo);
+  const isPortalFlow = callbackContext.flow === "customer_portal";
+  const returnTo = callbackContext.returnTo;
+  const failureRedirect = getGoogleOAuthFailureRedirect(storedContext?.flow ?? null);
 
   if (error || !code || !state) {
     logGoogleOAuthFailure(req, !state ? "STATE_MISSING" : "CODE_MISSING");
     req.log.warn({ error, hasCode: !!code, hasState: !!state }, "[Google OAuth] callback error from Google — redirecting to login");
-    res.redirect(isPortalFlow ? returnTo : "/bizportal/");
+    res.redirect(failureRedirect);
     return;
   }
 
   if (!storedReturnTo) {
     logGoogleOAuthFailure(req, "STATE_INVALID");
-    req.log.warn("[Google OAuth] state not found or expired — redirecting to login");
-    res.redirect("/bizportal/");
+    req.log.warn("[Google OAuth] state not found or expired — redirecting to safe flow fallback");
+    res.redirect(returnTo);
     return;
   }
 
