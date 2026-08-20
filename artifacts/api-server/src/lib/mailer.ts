@@ -1,7 +1,7 @@
 import nodemailer from "nodemailer";
+import crypto from "node:crypto";
 import { logNotification } from "./notificationLog.js";
-import { getSmtpPass, getSmtpFrom } from "./appSecrets.js";
-import { getCachedOrEnvConfig } from "./appConfig.js";
+import { getSmtpPassWithSource, getSmtpFromWithSource } from "./appSecrets.js";
 import { externalIntegrationsDisabled } from "./safeDev.js";
 
 let _hasSmtpKey: boolean = !!(process.env.SMTP_PASS?.trim());
@@ -34,9 +34,119 @@ export interface SendMailOptions {
   }>;
 }
 
+export type SmtpErrorCategory =
+  | "CONFIG"
+  | "DNS"
+  | "CONNECT"
+  | "TLS"
+  | "AUTH"
+  | "MAIL_FROM"
+  | "RCPT"
+  | "SEND"
+  | "UNKNOWN";
+
+type SmtpSource = "ENV" | "DEFAULT" | "DB" | "FALLBACK" | "GCP_ENV";
+
+export interface SmtpConfig {
+  host: string;
+  port: number;
+  secure: boolean;
+  user: string;
+  pass: string;
+  from: string;
+  fingerprint: string;
+  sources: {
+    host: SmtpSource;
+    port: SmtpSource;
+    user: SmtpSource;
+    pass: SmtpSource;
+    from: SmtpSource;
+  };
+}
+
+export interface SmtpHealthResult {
+  status: "ok" | "error" | "unconfigured";
+  latencyMs: number | null;
+  errorCategory: SmtpErrorCategory | null;
+  errorCode: string | null;
+  configFingerprint: string | null;
+  configSources: SmtpConfig["sources"] | null;
+}
+
+function safeFingerprint(input: {
+  host: string;
+  port: number;
+  secure: boolean;
+  userPresent: boolean;
+  passPresent: boolean;
+  fromPresent: boolean;
+}): string {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(input))
+    .digest("hex")
+    .slice(0, 16);
+}
+
+export function classifySmtpError(err: unknown): {
+  category: SmtpErrorCategory;
+  code: string | null;
+} {
+  const error = err as { code?: unknown; responseCode?: unknown; command?: unknown };
+  const code = typeof error.code === "string" ? error.code.toUpperCase() : "";
+  const responseCode =
+    typeof error.responseCode === "number" ? error.responseCode : null;
+
+  if (responseCode === 535 || code === "EAUTH") return { category: "AUTH", code: responseCode === 535 ? "SMTP_535" : "EAUTH" };
+  if (responseCode === 550) return { category: "MAIL_FROM", code: "SMTP_550" };
+  if (responseCode === 553) return { category: "MAIL_FROM", code: "SMTP_553" };
+  if (responseCode === 450 || responseCode === 451 || responseCode === 452) {
+    return { category: "RCPT", code: `SMTP_${responseCode}` };
+  }
+  if (code === "ENOTFOUND" || code === "EAI_AGAIN") return { category: "DNS", code };
+  if (code === "ECONNREFUSED" || code === "ECONNECTION") return { category: "CONNECT", code };
+  if (code === "ETIMEDOUT" || code === "ESOCKET") return { category: "CONNECT", code };
+  if (code === "EPROTO" || code === "CERT_HAS_EXPIRED" || code === "DEPTH_ZERO_SELF_SIGNED_CERT") {
+    return { category: "TLS", code };
+  }
+  if (typeof error.command === "string" && error.command.toUpperCase() === "MAIL") {
+    return { category: "MAIL_FROM", code: code || null };
+  }
+  if (typeof error.command === "string" && error.command.toUpperCase() === "RCPT") {
+    return { category: "RCPT", code: code || null };
+  }
+  if (code) return { category: "SEND", code };
+  return { category: "UNKNOWN", code: null };
+}
+
+export async function resolveSmtpConfig(): Promise<SmtpConfig> {
+  const passSetting = await getSmtpPassWithSource();
+  const fromSetting = await getSmtpFromWithSource();
+  const host = process.env.SMTP_HOST ?? process.env["SMTP-HOST"] ?? "smtp.hostinger.com";
+  const port = parseInt(process.env.SMTP_PORT ?? "465", 10);
+  const user = process.env.SMTP_USER ?? fromSetting.value;
+  const secure = port === 465;
+  const sources: SmtpConfig["sources"] = {
+    host: process.env.SMTP_HOST || process.env["SMTP-HOST"] ? "ENV" : "DEFAULT",
+    port: process.env.SMTP_PORT ? "ENV" : "DEFAULT",
+    user: process.env.SMTP_USER ? "ENV" : fromSetting.source === "DB" ? "DB" : "FALLBACK",
+    pass: passSetting.source === "DB" ? "DB" : "GCP_ENV",
+    from: fromSetting.source === "DB" ? "DB" : "GCP_ENV",
+  };
+  const fingerprint = safeFingerprint({
+    host,
+    port,
+    secure,
+    userPresent: Boolean(user),
+    passPresent: Boolean(passSetting.value),
+    fromPresent: Boolean(fromSetting.value),
+  });
+  return { host, port, secure, user, pass: passSetting.value, from: fromSetting.value, fingerprint, sources };
+}
+
 async function createTransport() {
-  const pass = await getSmtpPass();
-  const from = await getSmtpFrom();
+  const config = await resolveSmtpConfig();
+  const { pass, user } = config;
 
   _hasSmtpKey = !!pass;
 
@@ -44,20 +154,15 @@ async function createTransport() {
     throw new Error("SMTP_PASS belum diset. Masukkan password email Hostinger di Secrets.");
   }
 
-  const host = process.env.SMTP_HOST ?? process.env["SMTP-HOST"] ?? "smtp.hostinger.com";
-  const port = parseInt(process.env.SMTP_PORT ?? "465", 10);
-  const user = process.env.SMTP_USER ?? from;
-  const secure = port === 465;
-
   const transporter = nodemailer.createTransport({
-    host,
-    port,
-    secure,
+    host: config.host,
+    port: config.port,
+    secure: config.secure,
     auth: { user, pass },
     tls: { rejectUnauthorized: false },
   });
 
-  return { transporter, from: user };
+  return { transporter, from: user, config };
 }
 
 export async function sendMail(opts: SendMailOptions): Promise<void> {
@@ -129,22 +234,45 @@ export async function sendMail(opts: SendMailOptions): Promise<void> {
 export async function checkSmtpConnection(): Promise<{
   status: "ok" | "error" | "unconfigured";
   latencyMs: number | null;
-  detail?: string;
-}> {
+  errorCategory: SmtpErrorCategory | null;
+  errorCode: string | null;
+  configFingerprint: string | null;
+  configSources: SmtpConfig["sources"] | null;
+}>: Promise<SmtpHealthResult> {
   if (externalIntegrationsDisabled()) {
-    return { status: "unconfigured", latencyMs: null };
+    return {
+      status: "unconfigured",
+      latencyMs: null,
+      errorCategory: null,
+      errorCode: null,
+      configFingerprint: null,
+      configSources: null,
+    };
   }
 
   const startedAt = Date.now();
+  let config: SmtpConfig | null = null;
   try {
+    config = await resolveSmtpConfig();
     const { transporter } = await createTransport();
     await transporter.verify();
-    return { status: "ok", latencyMs: Date.now() - startedAt };
+    return {
+      status: "ok",
+      latencyMs: Date.now() - startedAt,
+      errorCategory: null,
+      errorCode: null,
+      configFingerprint: config.fingerprint,
+      configSources: config.sources,
+    };
   } catch (err) {
+    const classified = classifySmtpError(err);
     return {
       status: "error",
       latencyMs: Date.now() - startedAt,
-      detail: err instanceof Error ? err.message : String(err),
+      errorCategory: classified.category,
+      errorCode: classified.code,
+      configFingerprint: config?.fingerprint ?? null,
+      configSources: config?.sources ?? null,
     };
   }
 }

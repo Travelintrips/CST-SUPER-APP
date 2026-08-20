@@ -2,7 +2,7 @@ import { db, portalContentTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const cache = new Map<string, { value: string; expiresAt: number }>();
+const cache = new Map<string, { value: string; expiresAt: number; source: "DB" | "ENV" | "DEFAULT" }>();
 
 export interface SecretDef {
   key: string;
@@ -201,18 +201,33 @@ export function maskSecret(value: string): string {
 }
 
 export async function getSetting(key: string, envFallback = ""): Promise<string> {
+  return (await getSettingWithSource(key, envFallback)).value;
+}
+
+export async function getSettingWithSource(
+  key: string,
+  envFallback = "",
+  defaultValue = "",
+): Promise<{ value: string; source: "DB" | "ENV" | "DEFAULT" }> {
   const cached = cache.get(key);
-  if (cached && Date.now() < cached.expiresAt) return cached.value;
+  if (cached && Date.now() < cached.expiresAt) {
+    return { value: cached.value, source: cached.source };
+  }
   try {
     const [row] = await db
       .select()
       .from(portalContentTable)
       .where(eq(portalContentTable.key, key));
-    const value = row?.value?.trim() || envFallback;
-    cache.set(key, { value, expiresAt: Date.now() + CACHE_TTL_MS });
-    return value;
+    const dbValue = row?.value?.trim() || "";
+    const value = dbValue || envFallback || defaultValue;
+    const source = dbValue ? "DB" : envFallback ? "ENV" : "DEFAULT";
+    cache.set(key, { value, source, expiresAt: Date.now() + CACHE_TTL_MS });
+    return { value, source };
   } catch {
-    return envFallback;
+    const value = envFallback || defaultValue;
+    const source = envFallback ? "ENV" : "DEFAULT";
+    cache.set(key, { value, source, expiresAt: Date.now() + CACHE_TTL_MS });
+    return { value, source };
   }
 }
 
@@ -243,6 +258,13 @@ export async function getSmtpPass(): Promise<string> {
   return getSetting("smtp_pass", process.env.SMTP_PASS ?? "");
 }
 
+export async function getSmtpPassWithSource(): Promise<{
+  value: string;
+  source: "DB" | "ENV" | "DEFAULT";
+}> {
+  return getSettingWithSource("smtp_pass", process.env.SMTP_PASS ?? "");
+}
+
 export async function getSmtpFrom(): Promise<string> {
   return getSetting(
     "smtp_from",
@@ -250,6 +272,16 @@ export async function getSmtpFrom(): Promise<string> {
   );
 }
 
+export async function getSmtpFromWithSource(): Promise<{
+  value: string;
+  source: "DB" | "ENV" | "DEFAULT";
+}> {
+  return getSettingWithSource(
+    "smtp_from",
+    process.env.SMTP_FROM ?? "",
+    "noreply@cstlogistic.co.id",
+  );
+}
 export async function getAdminEmail(): Promise<string> {
   return getSetting("admin_email", process.env.ADMIN_EMAIL ?? "");
 }
