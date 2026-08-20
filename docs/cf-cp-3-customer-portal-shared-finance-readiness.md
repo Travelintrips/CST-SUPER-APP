@@ -9,15 +9,13 @@
 
 **CF-CP-3: CONDITIONAL / BLOCKED ONLY ON DEFERRED TAX CONTRACT.**
 
-The Central Finance foundation exists in the development runtime, but Customer
-Portal still does not have a verified project configuration or a
-Customer Portal-specific tax contract. The business owner has now designated
-company ID `1` as the Customer Portal owner. Paylabs and bank settlement
-configuration are intentionally outside the current scope. No schema or data
-mutation was performed by this audit.
+The Central Finance foundation exists in the development runtime. The
+Customer Portal project configuration has now been adopted for company ID `1`.
+Tax configuration remains deferred, while Paylabs and bank settlement
+configuration are intentionally outside the current scope. No tax, provider,
+bank, COA, settlement, or reconciliation data was seeded.
 
-The correct next state is **OWNER_CONFIG_REQUIRED** for the project/tax
-configuration that is still deferred, not a generated or guessed
+The remaining state is **OWNER_CONFIG_REQUIRED** only for the deferred tax/COA
 configuration. In particular, this audit must not manufacture tax, COA,
 settlement, or reconciliation values.
 
@@ -75,7 +73,11 @@ No implicit company `1` may be used to satisfy that proof.
 
 ### Result
 
-**CUSTOMER_PORTAL_PROJECT_CONFIG = MISSING**
+**CUSTOMER_PORTAL_PROJECT_CONFIG = EXISTS**
+
+An active development config now exists for `project_code = customer_portal`
+and `company_id = 1`. See the CF-CP-4A completion record for the exact
+post-transaction evidence.
 
 The following shared configuration foundation is present in development:
 
@@ -231,13 +233,11 @@ the verified application contract. No secret value was printed.
 
 ## Blockers for CF-CP-4
 
-1. **Missing project config:** create/approve
-   `customer_portal` shared project configuration through the owner workflow.
-2. **Deferred tax contract:** configure a Customer Portal-specific taxable and
+1. **Deferred tax contract:** configure a Customer Portal-specific taxable and
    inclusive/exclusive rule later; do not reuse Sport Center rule 8.
-3. **Missing COA mapping:** approve project/company-scoped accounts before
+2. **Missing COA mapping:** approve project/company-scoped accounts before
    accounting posting.
-4. **Insufficient runtime fixture:** provide a real or explicitly approved
+3. **Insufficient runtime fixture:** provide a real or explicitly approved
    non-production fixture proving the payment-confirmed event contract before
    settlement/reconciliation work.
 
