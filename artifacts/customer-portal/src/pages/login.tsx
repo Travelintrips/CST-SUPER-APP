@@ -381,6 +381,12 @@ export default function Login() {
                 {t("login.signIn")} Google
               </button>
             </div>
+            {errorMsg && (
+              <Alert variant="destructive" className="mb-4">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>{errorMsg}</AlertDescription>
+              </Alert>
+            )}
 
             <div className="flex rounded-lg bg-muted p-1 mb-5">
               <button type="button" onClick={() => { setMode("otp"); setErrorMsg(""); setWaStep("phone"); setWaCode(""); }} className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-all ${mode === "otp" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
@@ -553,12 +559,6 @@ export default function Login() {
 
             {mode === "password" && (
               <>
-                {errorMsg && (
-                  <Alert variant="destructive" className="mb-4">
-                    <AlertCircle className="h-4 w-4" />
-                    <AlertDescription>{errorMsg}</AlertDescription>
-                  </Alert>
-                )}
                 <Form {...form}>
                   <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
                     <FormField control={form.control} name="email" render={({ field }) => (
