@@ -21,8 +21,13 @@ describe("central finance processor orchestration contract", () => {
       'SELECT sport_center.create_payment_accounting_draft($1)',
     );
     expect(processor).not.toContain("postSportCenterBookingPayment");
-    expect(processor).not.toContain("create_payment_settlement_batch");
     expect(processor).not.toContain("resolveConfig");
+  });
+
+  it("reaches the canonical settlement batch and finalize owners", () => {
+    expect(processor).toContain("sport_center.create_payment_settlement_batch");
+    expect(processor).toContain("sport_center.finalize_payment_settlement");
+    expect(processor).toContain("central-finance-processor");
   });
 
   it("finishes both durable identities and distinguishes retry from review", () => {

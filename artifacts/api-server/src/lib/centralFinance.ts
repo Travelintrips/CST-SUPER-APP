@@ -103,6 +103,50 @@ async function finish(client: pg.Pool, claim: Claim, status: "posted" | "failed"
   );
 }
 
+async function createAndFinalizeSettlement(client: pg.Pool, claim: Claim): Promise<void> {
+  const payment = await client.query<{
+    company_id: number;
+    provider_code: string | null;
+    bank_account_id: string | null;
+    settlement_date: string | null;
+  }>(
+    `SELECT company_id,
+            payment_provider::text AS provider_code,
+            bank_account_id::text AS bank_account_id,
+            expected_settlement_date::text AS settlement_date
+       FROM sport_center.sport_payments
+      WHERE id = $1`,
+    [claim.paymentId],
+  );
+  const row = payment.rows[0];
+  if (!row) throw new Error(`SPORT_PAYMENT_NOT_FOUND: ${claim.paymentId}`);
+  if (!row.provider_code || !row.bank_account_id || !row.settlement_date) {
+    throw new Error(`BLOCKED_CONFIG_MISSING: settlement identity for payment=${claim.paymentId}`);
+  }
+
+  const batch = await client.query<{ settlement_id: string }>(
+    `SELECT sport_center.create_payment_settlement_batch(
+       $1, $2, $3, $4, $5::date, $6::integer[], $7
+     ) AS settlement_id`,
+    [
+      claim.correlationId,
+      row.company_id,
+      row.provider_code,
+      row.bank_account_id,
+      row.settlement_date,
+      [claim.paymentId],
+      "central-finance-processor",
+    ],
+  );
+  const settlementId = batch.rows[0]?.settlement_id;
+  if (!settlementId) throw new Error(`SETTLEMENT_BATCH_NOT_CREATED: payment=${claim.paymentId}`);
+
+  await client.query(
+    `SELECT sport_center.finalize_payment_settlement($1::bigint, $2)`,
+    [settlementId, "central-finance-processor"],
+  );
+}
+
 export async function processCentralFinance(): Promise<{
   claimed: number;
   posted: number;
@@ -124,6 +168,7 @@ export async function processCentralFinance(): Promise<{
       // The database function owns shared config, tax, COA, journal and
       // payment-level idempotency. This layer only orchestrates the durable event.
       await db.query("SELECT sport_center.create_payment_accounting_draft($1)", [claim.paymentId]);
+      await createAndFinalizeSettlement(db, claim);
       await finish(db, claim, "posted");
       posted++;
     } catch (error) {
