@@ -3983,8 +3983,224 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
     $migration$;
   `));
 
+  /*
+   * CF-SC-10B: canonical settlement -> public mutation handoff.
+   *
+   * The public row remains the UI/import identity and the existing
+   * project_public_bank_mutation_to_canonical() function remains the only
+   * producer of sport_center.bank_mutations.  This owner only creates the
+   * deterministic public evidence row, invokes that bridge, and records the
+   * resulting canonical id on the settlement batch.
+   */
+  await db.execute(sql.raw(`
+    ALTER TABLE sport_center.payment_settlement_batches
+      ADD COLUMN IF NOT EXISTS canonical_bank_mutation_id INTEGER
+  `));
+
+  await db.execute(sql.raw(`
+    ALTER TABLE sport_center.bank_mutations
+      ADD COLUMN IF NOT EXISTS canonical_key TEXT
+  `));
+
+  await db.execute(sql.raw(`
+    CREATE UNIQUE INDEX IF NOT EXISTS sport_center_bank_mutations_canonical_key_uidx
+      ON sport_center.bank_mutations (canonical_key)
+      WHERE canonical_key IS NOT NULL
+  `));
+
+  await db.execute(sql.raw(`
+    CREATE UNIQUE INDEX IF NOT EXISTS payment_settlement_batches_canonical_mutation_uidx
+      ON sport_center.payment_settlement_batches (canonical_bank_mutation_id)
+      WHERE canonical_bank_mutation_id IS NOT NULL
+  `));
+
+  await db.execute(sql.raw(`
+    CREATE OR REPLACE FUNCTION sport_center.ensure_canonical_bank_mutation_for_settlement(
+      p_settlement_id bigint,
+      p_actor text DEFAULT 'central-finance-processor'
+    )
+    RETURNS integer
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'sport_center', 'public'
+    AS $function$
+    DECLARE
+      v_batch sport_center.payment_settlement_batches%ROWTYPE;
+      v_payment_id integer;
+      v_public_id integer;
+      v_canonical_id integer;
+      v_mutation_key text;
+      v_canonical_key text;
+      v_description text;
+      v_existing_count integer;
+      v_existing_company integer;
+    BEGIN
+      IF p_settlement_id IS NULL OR p_settlement_id <= 0 THEN
+        RAISE EXCEPTION 'CANONICAL_MUTATION_SETTLEMENT_ID_INVALID: %', p_settlement_id;
+      END IF;
+
+      PERFORM pg_advisory_xact_lock(
+        hashtext('canonical-mutation-handoff:' || p_settlement_id::text)
+      );
+
+      SELECT *
+        INTO v_batch
+        FROM sport_center.payment_settlement_batches
+       WHERE id = p_settlement_id
+       FOR UPDATE;
+
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'CANONICAL_MUTATION_SETTLEMENT_NOT_FOUND: %', p_settlement_id;
+      END IF;
+
+      IF v_batch.canonical_bank_mutation_id IS NOT NULL THEN
+        RETURN v_batch.canonical_bank_mutation_id;
+      END IF;
+
+      IF v_batch.status <> 'posted'
+         OR v_batch.bank_mutation_id IS NOT NULL
+         OR v_batch.net_amount IS NULL
+         OR v_batch.net_amount <= 0
+      THEN
+        RAISE EXCEPTION
+          'CANONICAL_MUTATION_SETTLEMENT_NOT_READY: settlement=% status=% legacy_mutation=%',
+          p_settlement_id, v_batch.status, v_batch.bank_mutation_id;
+      END IF;
+
+      SELECT COUNT(*)::integer, MIN(i.payment_id)
+        INTO v_existing_count, v_payment_id
+        FROM sport_center.payment_settlement_items i
+       WHERE i.settlement_id = p_settlement_id
+         AND i.item_status = 'active';
+
+      IF v_existing_count <> 1 OR v_payment_id IS NULL THEN
+        RAISE EXCEPTION
+          'CANONICAL_MUTATION_PAYMENT_IDENTITY_UNRESOLVED: settlement=% items=%',
+          p_settlement_id, v_existing_count;
+      END IF;
+
+      v_mutation_key := 'SC-PAY-' || v_payment_id::text;
+      v_canonical_key := 'sport_center:payment:' || v_payment_id::text;
+      v_description := 'Sport Center payment settlement ' || v_payment_id::text;
+
+      PERFORM pg_advisory_xact_lock(hashtext('canonical-mutation-key:' || v_mutation_key));
+
+      SELECT COUNT(*)::integer, MIN(company_id)
+        INTO v_existing_count, v_existing_company
+        FROM public.bank_mutations
+       WHERE mutation_key = v_mutation_key;
+
+      IF v_existing_count > 1
+         OR (v_existing_count = 1 AND v_existing_company IS DISTINCT FROM v_batch.company_id)
+      THEN
+        RAISE EXCEPTION
+          'CANONICAL_MUTATION_IDENTITY_CONFLICT: key=% rows=% company=% expected_company=%',
+          v_mutation_key, v_existing_count, v_existing_company, v_batch.company_id;
+      END IF;
+
+      IF v_existing_count = 0 THEN
+        INSERT INTO public.bank_mutations (
+          bank_account_id,
+          transaction_date,
+          description,
+          credit_amount,
+          debit_amount,
+          amount,
+          direction,
+          mutation_key,
+          normalized_description,
+          provider_name,
+          provider_order_id,
+          status,
+          company_id,
+          canonical_key,
+          source,
+          source_account
+        )
+        VALUES (
+          NULL,
+          v_batch.settlement_date,
+          v_description,
+          v_batch.net_amount,
+          0,
+          v_batch.net_amount,
+          'IN',
+          v_mutation_key,
+          upper(regexp_replace(v_description, '[^A-Za-z0-9 ]', '', 'g')),
+          v_batch.provider_code,
+          v_batch.settlement_reference,
+          'matched',
+          v_batch.company_id,
+          v_canonical_key,
+          'CENTRAL_FINANCE_CANONICAL_HANDOFF',
+          'sport_center.payment_settlement_batches:' || p_settlement_id::text
+        )
+        RETURNING id INTO v_public_id;
+      ELSE
+        SELECT id
+          INTO v_public_id
+          FROM public.bank_mutations
+         WHERE mutation_key = v_mutation_key
+           AND company_id = v_batch.company_id
+         FOR UPDATE;
+        UPDATE public.bank_mutations
+           SET canonical_key = COALESCE(canonical_key, v_canonical_key),
+               status = CASE WHEN status = 'unmatched' THEN 'matched' ELSE status END,
+               updated_at = NOW()
+         WHERE id = v_public_id;
+      END IF;
+
+      /*
+       * This is the existing canonical owner.  It validates the public
+       * evidence against exactly one posted settlement and upserts the
+       * canonical Sport Center mutation idempotently.
+       */
+      v_canonical_id :=
+        sport_center.project_public_bank_mutation_to_canonical(v_public_id);
+
+      IF v_canonical_id IS NULL THEN
+        RAISE EXCEPTION
+          'CANONICAL_MUTATION_BRIDGE_UNRESOLVED: settlement=% public_mutation=%',
+          p_settlement_id, v_public_id;
+      END IF;
+
+      UPDATE sport_center.bank_mutations
+         SET canonical_key = v_canonical_key,
+             source_app = 'sport_center',
+             source_module = 'central_finance',
+             source_table = 'sport_payments',
+             source_id = v_payment_id::text,
+             provenance = jsonb_build_object(
+               'owner', 'sport_center.ensure_canonical_bank_mutation_for_settlement',
+               'public_mutation_id', v_public_id,
+               'payment_id', v_payment_id,
+               'settlement_id', p_settlement_id,
+               'actor', p_actor
+             ),
+             updated_at = NOW()
+       WHERE id = v_canonical_id
+         AND company_id = v_batch.company_id;
+
+      UPDATE sport_center.payment_settlement_batches
+         SET canonical_bank_mutation_id = v_canonical_id,
+             updated_at = NOW()
+       WHERE id = p_settlement_id
+         AND canonical_bank_mutation_id IS NULL
+         AND bank_mutation_id IS NULL;
+
+      IF NOT FOUND THEN
+        RAISE EXCEPTION
+          'CANONICAL_MUTATION_SETTLEMENT_LINK_CONFLICT: settlement=% canonical=%',
+          p_settlement_id, v_canonical_id;
+      END IF;
+
+      RETURN v_canonical_id;
+    END;
+    $function$;
+  `));
+
   logger.info(
-    "Canonical Sport Center contracts: settlement owner, deterministic grouping, and 4C-7N public bank-mutation bridge aktif",
+    "Canonical Sport Center contracts: settlement owner, deterministic grouping, 4C-7N bridge, and CF-SC-10B mutation handoff aktif",
   );
 }
 

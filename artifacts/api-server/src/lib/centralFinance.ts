@@ -167,6 +167,10 @@ async function createAndFinalizeSettlement(client: QueryClient, claim: Claim): P
     `SELECT sport_center.finalize_payment_settlement($1::bigint, $2)`,
     [settlementId, "central-finance-processor"],
   );
+  await client.query(
+    `SELECT sport_center.ensure_canonical_bank_mutation_for_settlement($1::bigint, $2)`,
+    [settlementId, "central-finance-processor"],
+  );
 }
 
 async function promoteCanonicalPaymentJournal(client: QueryClient, paymentId: number): Promise<void> {
