@@ -38,6 +38,38 @@ function assertAccountUsable(customer: {
   );
 }
 
+const CUSTOMER_PORTAL_PRODUCTION_HOSTS = new Set([
+  "cstlogistic.co.id",
+  "www.cstlogistic.co.id",
+]);
+
+/**
+ * Reset links must never use an arbitrary origin supplied by the browser.
+ * Apart from being a phishing/open-redirect risk, a stale preview origin
+ * makes production reset emails unusable. Keep development flexible, but
+ * always use the canonical public portal in production.
+ */
+function resolvePortalWebOrigin(requestedOrigin: string): string {
+  const isDevelopment = process.env.APP_ENV === "development" && !process.env.REPLIT_DEPLOYMENT;
+  const fallback = isDevelopment
+    ? (process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : "http://localhost:3000")
+    : "https://cstlogistic.co.id";
+
+  try {
+    const parsed = new URL(String(requestedOrigin || fallback));
+    const host = parsed.hostname.toLowerCase();
+    if (isDevelopment && (host === "localhost" || host === "127.0.0.1" || host.endsWith(".replit.dev"))) {
+      return parsed.origin;
+    }
+    if (CUSTOMER_PORTAL_PRODUCTION_HOSTS.has(host) && parsed.protocol === "https:") {
+      return parsed.origin;
+    }
+  } catch {
+    // Fall through to the safe canonical origin.
+  }
+  return fallback;
+}
+
 // ─── Typed Error ───────────────────────────────────────────────────────────────
 
 export class AuthServiceError extends Error {
@@ -766,8 +798,7 @@ export async function syncProfile(
  * Security: rate-limited per IP; uses CSPRNG; stores bcrypt hash (not plaintext)
  */
 export async function requestEmailOtp(email: string) {
-  // BLK-02 fix: use REPLIT_DEPLOYMENT as the canonical production signal (per ADR-0001 / envGuard)
-  const isDev = !process.env.REPLIT_DEPLOYMENT;
+  const isDev = process.env.APP_ENV === "development" && !process.env.REPLIT_DEPLOYMENT;
   const emailLower = String(email).toLowerCase().trim();
 
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailLower)) {
@@ -820,6 +851,10 @@ export async function requestEmailOtp(email: string) {
       // Production: SMTP failure = hard error agar user tahu email tidak terkirim
       // Dev: non-fatal; _dev_code dikembalikan di bawah
       if (!isDev) {
+        await db
+          .update(portalCustomersTable)
+          .set({ resetPasswordToken: null, resetPasswordExpiry: null })
+          .where(eq(portalCustomersTable.id, customer.id));
         throw new AuthServiceError(500, "Gagal mengirim email OTP. Coba lagi atau hubungi admin.", { cause: smtpErr });
       }
     }
@@ -920,7 +955,7 @@ export async function verifyEmailOtp(email: string, code: string) {
  */
 export async function forgotPasswordCustom(email: string, origin: string) {
   const emailLower = String(email).toLowerCase().trim();
-  const isDev = !process.env.REPLIT_DEPLOYMENT;
+  const isDev = process.env.APP_ENV === "development" && !process.env.REPLIT_DEPLOYMENT;
 
   // Always respond with same message to prevent email enumeration
   const genericOk = { sent: true, message: "Jika email terdaftar, link reset password telah dikirim ke email Anda." };
@@ -943,13 +978,18 @@ export async function forgotPasswordCustom(email: string, origin: string) {
     .set({ resetPasswordToken: `pwreset:${tokenHash}`, resetPasswordExpiry: expiry })
     .where(eq(portalCustomersTable.id, customer.id));
 
-  const resetUrl = `${origin}/reset-password?token=${encodeURIComponent(rawToken)}&email=${encodeURIComponent(emailLower)}`;
+  const resetOrigin = resolvePortalWebOrigin(origin);
+  const resetUrl = `${resetOrigin}/reset-password?token=${encodeURIComponent(rawToken)}&email=${encodeURIComponent(emailLower)}`;
   captureSafeDevResetArtifact(emailLower, rawToken);
 
   const smtpOk = isSmtpConfigured();
   // Production must never report success when the reset email cannot be
   // delivered. Development keeps the existing safe/test-mode behavior.
   if (!smtpOk && !isDev) {
+    await db
+      .update(portalCustomersTable)
+      .set({ resetPasswordToken: null, resetPasswordExpiry: null })
+      .where(eq(portalCustomersTable.id, customer.id));
     throw new AuthServiceError(503, "Layanan email belum dikonfigurasi. Hubungi admin.");
   }
 
@@ -980,6 +1020,10 @@ export async function forgotPasswordCustom(email: string, origin: string) {
       // sendMail already records the provider error in notification_logs when
       // the SMTP transport reaches the provider.
       if (!isDev) {
+        await db
+          .update(portalCustomersTable)
+          .set({ resetPasswordToken: null, resetPasswordExpiry: null })
+          .where(eq(portalCustomersTable.id, customer.id));
         throw new AuthServiceError(
           502,
           "Gagal mengirim email reset password. Coba lagi atau hubungi admin.",

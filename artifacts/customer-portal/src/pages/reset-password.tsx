@@ -70,6 +70,7 @@ export default function ResetPassword() {
         const res = await fetch(`${BASE}/api/portal/auth/reset-password-with-token`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          credentials: "include",
           body: JSON.stringify({ email: emailFromUrl, token: tokenFromUrl, password }),
         });
         const json = await res.json() as { ok?: boolean; message?: string };

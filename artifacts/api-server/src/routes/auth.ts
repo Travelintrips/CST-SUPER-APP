@@ -659,6 +659,11 @@ router.post("/auth/dev-login", async (req: Request, res: Response) => {
 // ─── Google OAuth ─────────────────────────────────────────────────────────────
 
 router.get("/login/google", async (req: Request, res: Response) => {
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+    req.log.error("[Google OAuth] production credentials are not configured");
+    res.status(503).send("Login Google sedang tidak tersedia. Hubungi admin.");
+    return;
+  }
   const returnTo = typeof req.query.returnTo === "string" ? req.query.returnTo : "/";
   const state = crypto.randomBytes(16).toString("hex");
   const isPortalFlow = req.query.portal === "1";
@@ -702,6 +707,12 @@ router.get("/callback/google", async (req: Request, res: Response) => {
   if (error || !code || !state) {
     logGoogleOAuthFailure(req, !state ? "STATE_MISSING" : "CODE_MISSING");
     req.log.warn({ error, hasCode: !!code, hasState: !!state }, "[Google OAuth] callback error from Google — redirecting to login");
+    res.redirect(failureRedirect);
+    return;
+  }
+
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+    logGoogleOAuthFailure(req, "GOOGLE_PROFILE_FAILED", new Error("Google OAuth credentials are not configured"));
     res.redirect(failureRedirect);
     return;
   }

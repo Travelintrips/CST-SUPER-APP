@@ -5,6 +5,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import {
   setPortalProfile,
+  persistAuthCookie,
   saveTrustedDevice, loadTrustedDevice, clearTrustedDevice, REMEMBER_DAYS,
 } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
@@ -155,6 +156,7 @@ export default function Login() {
       const res = await fetch(`${BASE}/api/portal/auth/otp/request`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ email: otpEmail.trim() }),
       });
       const json = await res.json() as { message?: string; _dev_code?: string };
@@ -176,11 +178,13 @@ export default function Login() {
       const res = await fetch(`${BASE}/api/portal/auth/otp/verify`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ email: otpEmail.trim(), code: otpCode.trim() }),
       });
       const json = await res.json() as { token?: string; message?: string; user?: { id: number; role: string; name: string; email: string } };
       if (!res.ok || !json.token) { setOtpMsg({ type: "err", text: json.message ?? t("login.otpInvalid") }); }
       else {
+        await persistAuthCookie(json.token);
         setPortalProfile({ customerId: json.user!.id, role: json.user!.role, name: json.user!.name, email: json.user!.email });
         redirectAfterLogin(json.user!.role);
       }
@@ -278,11 +282,13 @@ export default function Login() {
       const res = await fetch(`${BASE}/api/portal/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ email: data.email, password: data.password }),
       });
       const json = await res.json() as { token?: string; message?: string; user?: { id: number; role: string; name: string; email: string } };
       if (!res.ok || !json.token) { setErrorMsg(json.message ?? t("login.emailOrPasswordWrong")); }
       else {
+        await persistAuthCookie(json.token);
         setPortalProfile({ customerId: json.user!.id, role: json.user!.role, name: json.user!.name, email: json.user!.email });
         redirectAfterLogin(json.user!.role);
       }
@@ -300,6 +306,7 @@ export default function Login() {
       const res = await fetch(`${BASE}/api/portal/auth/forgot-password`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ email, origin: window.location.origin + BASE }),
       });
       const json = await res.json() as { message?: string };
