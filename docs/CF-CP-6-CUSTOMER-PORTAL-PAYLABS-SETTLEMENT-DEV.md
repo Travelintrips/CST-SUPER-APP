@@ -1,6 +1,6 @@
 # CF-CP-6 — Customer Portal Paylabs Settlement (Development Only)
 
-**Status:** `PARTIAL / RUNTIME BLOCKED`
+**Status:** `PARTIAL / JASA_MAPPING_AND_REMAINING_RUNTIME_PROOFS`
 
 Dokumen ini mencatat proof Customer Portal Central Finance yang aman untuk
 development. Tidak ada jalur CF-CP-6 yang mengaktifkan central mode di
@@ -48,6 +48,11 @@ Fixture memakai prefix `CFCP6_E2E_`, memanggil
 `processCustomerPortalFinance()`, memeriksa accounting/public mutation/
 Customer Portal settlement, mengulang consumer untuk idempotency, memeriksa
 isolasi Sport Center, dan membersihkan semua row fixture.
+
+The cleanup path also transitions the harness-created posted journal entries
+to `draft` with the existing cancellation metadata before deleting their
+lines. This is limited to the exact fixture IDs and preserves the posted-ledger
+immutability guard.
 
 ## Boundary migration and snapshot
 
@@ -117,17 +122,17 @@ runtime, two-client race, rollback, dan readiness tidak boleh diklaim lulus.
 | API build | PASS |
 | Focused CF-CP tests | 11/11 PASS |
 | Broad suite | NOT RUN (baseline/unrelated excluded) |
-| Goods E2E | BLOCKED_BOOTSTRAP_SECRET |
-| Jasa E2E | NOT RUN |
+| Goods E2E | PASS |
+| Jasa E2E | BLOCKED_SERVICE_MAPPING |
 | Negative matrix | NOT RUN |
 | Retry/idempotency runtime | NOT RUN |
 | Two-client race | NOT RUN |
 | Rollback/cleanup runtime | NOT RUN |
-| Existing DEV data changed | 0 writes performed |
-| Sport Center direct effects | 0 writes performed |
-| Readiness | BLOCKED_API_START |
-| Customer Portal ready | NO |
-| Sport Center ready | NO |
+| Existing DEV data changed | 0 |
+| Sport Center direct effects | 0 |
+| Readiness | PASS |
+| Customer Portal ready | YES |
+| Sport Center ready | YES |
 | Normal Customer Portal mode | LEGACY (configured default) |
 | PROD writes/migrations/processors | 0 |
 | PROD cutover | NO |
@@ -135,17 +140,17 @@ runtime, two-client race, rollback, dan readiness tidak boleh diklaim lulus.
 ## Final status
 
 ```text
-CF-CP-6 = PARTIAL / BLOCKED_RUNTIME_BOOTSTRAP
-GOODS E2E = PASS (verified checkpoint; not rerun because the API could not start)
-JASA E2E = NOT_RUN
+CF-CP-6 = PARTIAL
+GOODS E2E = PASS
+JASA E2E = BLOCKED_SERVICE_MAPPING
 NEGATIVE MATRIX = NOT_RUN
 TRANSIENT RETRY = NOT_RUN
 TWO-CLIENT = NOT_RUN
-GOODS ACCOUNTING = 1 (verified checkpoint)
-PUBLIC MUTATION = 1 (verified checkpoint)
-SETTLEMENT = 1 (verified checkpoint)
-RETRY IDEMPOTENCY = PASS (verified checkpoint)
-ROLLBACK/CLEANUP = PASS (verified checkpoint)
+GOODS ACCOUNTING = 1
+PUBLIC MUTATION = 1
+SETTLEMENT = 1
+RETRY IDEMPOTENCY = PASS
+ROLLBACK/CLEANUP = PASS
 EXISTING DEV DATA CHANGED = 0
 SPORT CENTER DIRECT EFFECTS = 0
 SHARED DECLARATION BUILD = PASS
@@ -155,24 +160,24 @@ API BUILD = PASS
 FOCUSED TESTS = 11/11 PASS
 BROAD SUITE = NOT_RUN / BASELINE_UNRELATED_EXCLUDED
 GIT DIFF CHECK = PASS
-READINESS = BLOCKED_API_START
-CUSTOMER PORTAL READY = NO
-SPORT CENTER READY = NO
+READINESS = PASS
+CUSTOMER PORTAL READY = YES
+SPORT CENTER READY = YES
 NORMAL CUSTOMER PORTAL MODE = LEGACY
 PROD WRITES = 0
 PROD CUTOVER = NO
 READY FOR CF-CP-7 = NO
-BLOCKER = missing GCP_SECRET_MANAGER_BOOTSTRAP_JSON
+BLOCKER = no active Jasa service-specific COA mapping; negative/retry/concurrency live proofs still need dedicated DEV harness coverage
 ```
 
-This status does not claim the unexecuted runtime gates. Once the development
-bootstrap secret is provisioned, restart the API, run the existing harness and
-the remaining DEV-only proofs, then verify readiness before changing this
-status.
+The DEV bootstrap secret is now available and readiness is proven. This status
+does not claim the unexecuted negative, transient, or two-client runtime gates,
+and does not invent a Jasa mapping that is absent from DEV configuration.
 
 ## Next runtime command
 
-Setelah bootstrap secret tersedia, restart workflow API lalu jalankan:
+Untuk mengulang goods proof setelah perubahan kode, restart workflow API lalu
+jalankan:
 
 ```text
 cd artifacts/api-server

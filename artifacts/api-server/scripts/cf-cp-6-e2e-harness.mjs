@@ -205,7 +205,7 @@ async function prove(client) {
            count(l.id)::int AS line_count
       FROM accounting_entries e
       LEFT JOIN accounting_entry_lines l ON l.entry_id=e.id
-     WHERE e.source='sales' AND e.source_id=$1
+      WHERE e.source='sales_invoice' AND e.source_id=$1
      GROUP BY e.id
   `, [created.documentId]);
   assert(accounting, "sales accounting entry missing");
@@ -226,9 +226,9 @@ async function prove(client) {
   assert(mutation.source_table === "payments" && Number(mutation.source_id) === created.paymentId, "mutation source mismatch");
 
   const settlement = await one(client, `
-    SELECT b.id, b.provider_code, b.bank_account_id, b.gross_amount, b.mdr_amount,
+      SELECT b.id, b.provider_code, b.bank_account_id, b.gross_amount, b.mdr_amount,
            b.fixed_fee_amount, b.fee_tax_amount, b.net_amount,
-           b.settlement_rule_version, count(i.id)::int AS item_count
+            b.settlement_rule_version, b.settlement_journal_id, count(i.id)::int AS item_count
       FROM customer_portal_settlement_batches b
       JOIN customer_portal_settlement_items i ON i.settlement_id=b.id
      WHERE i.payment_id=$1
@@ -236,6 +236,7 @@ async function prove(client) {
   `, [created.paymentId]);
   assert(settlement, "Customer Portal settlement missing");
   created.settlementId = Number(settlement.id);
+  created.accountingEntryIds.push(Number(settlement.settlement_journal_id));
   assert(Number(settlement.item_count) === 1, "settlement item count must be one");
   assert(Number(settlement.mdr_amount) === Math.round(GROSS * 0.003 * 100) / 100, "MDR economics mismatch");
   assert(Number(settlement.fixed_fee_amount) === 0 && Number(settlement.fee_tax_amount) === 0, "fee economics mismatch");
@@ -258,6 +259,11 @@ async function cleanup(client) {
     if (created.settlementId) await client.query("DELETE FROM customer_portal_settlement_items WHERE settlement_id=$1", [created.settlementId]);
     if (created.settlementId) await client.query("DELETE FROM customer_portal_settlement_batches WHERE id=$1", [created.settlementId]);
     for (const id of created.accountingEntryIds) {
+      await client.query(`
+        UPDATE accounting_entries
+           SET status='draft', cancel_reason='CFCP6_E2E fixture cleanup', cancelled_at=NOW()
+         WHERE id=$1 AND status='posted'
+      `, [id]);
       await client.query("DELETE FROM accounting_entry_lines WHERE entry_id=$1", [id]);
       await client.query("DELETE FROM accounting_entries WHERE id=$1", [id]);
     }
