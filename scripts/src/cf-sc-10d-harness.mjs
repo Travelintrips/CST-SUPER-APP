@@ -17,7 +17,7 @@ import {
 } from "../runtime-db-guard.mjs";
 
 const { Client } = pg;
-const PREFIX = `CFSC10D_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+const PREFIX = `CFSC10B_RACE_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 const COMPANY_ID = 1;
 const AMOUNT = 100_000;
 const CONFIG = {
@@ -352,6 +352,7 @@ async function runCorruptionCase(label, mutate) {
     assert(effectiveDate, `${label}: fixture effective date missing`);
     fixture.effectiveDate = effectiveDate;
     const fixtureBaseline = await counts(db, [fixture.paymentId]);
+    const normal = await resolveConfig(db, effectiveDate);
     assertConfig(normal, `${label} precondition`);
     await mutate(db, normal, effectiveDate);
     await corruptionPrecondition(db, label, normal, effectiveDate);
@@ -383,10 +384,6 @@ async function runCorruptionCase(label, mutate) {
      assertZeroEffects(rolledBack, label);
     await db.query("ROLLBACK");
      return { label, result: processor, evidence: rolledBack, last_error: errors.rows[0].last_error, rollback: "PASS" };
-    const rolledBack = await counts(db, [fixture.paymentId]);
-    assertZeroEffects(rolledBack, label);
-    await db.query("ROLLBACK");
-    return { label, result: processor, evidence: rolledBack, last_error: errors.rows[0].last_error, rollback: "PASS" };
   } catch (error) {
     await db.query("ROLLBACK").catch(() => {});
     throw error;
