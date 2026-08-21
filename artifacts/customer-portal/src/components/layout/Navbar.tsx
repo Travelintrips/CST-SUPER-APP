@@ -588,6 +588,45 @@ export function Navbar() {
                       </div>
                     )}
                   </div>
+                  {/* Calculators remain available after login */}
+                  <div className="relative group">
+                    <button
+                      className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-[13px] font-semibold transition-all duration-150 whitespace-nowrap ${
+                        location === "/kalkulator-impor" || location === "/kalkulator-biaya-logistik"
+                          ? "bg-sky-100 text-sky-800"
+                          : "bg-sky-50 text-sky-700 hover:bg-sky-100 hover:text-sky-800"
+                      }`}
+                      style={{ border: "1px solid rgba(14,165,233,0.3)" }}
+                      aria-haspopup="menu"
+                    >
+                      <Calculator className="h-3.5 w-3.5 shrink-0" />
+                      {t("nav.hsCode")}
+                      <ChevronDown className="h-3.5 w-3.5 transition-transform duration-200 group-hover:rotate-180" />
+                    </button>
+                    <div className="absolute top-full left-0 mt-1 z-50 w-56 hidden group-hover:block pt-1">
+                      <div className="rounded-2xl overflow-hidden py-1.5 bg-white border border-slate-200 shadow-xl">
+                        <div className="px-4 py-1.5">
+                          <span className="text-[10px] font-bold uppercase tracking-widest text-amber-500">{t("nav.hsCode")}</span>
+                        </div>
+                        <Link href="/kalkulator-impor">
+                          <div className={`flex items-center gap-3 px-4 py-2.5 text-[13.5px] font-medium transition-colors cursor-pointer ${
+                            location === "/kalkulator-impor" ? "bg-sky-50 text-sky-700" : "text-slate-700 hover:bg-slate-50 hover:text-sky-700"
+                          }`}>
+                            <Calculator className="h-4 w-4 text-amber-400 shrink-0" />
+                            {t("nav.importTariffCalc")}
+                          </div>
+                        </Link>
+                        <Link href="/kalkulator-biaya-logistik">
+                          <div className={`flex items-center gap-3 px-4 py-2.5 text-[13.5px] font-medium transition-colors cursor-pointer ${
+                            location === "/kalkulator-biaya-logistik" ? "bg-sky-50 text-sky-700" : "text-slate-700 hover:bg-slate-50 hover:text-sky-700"
+                          }`}>
+                            <Calculator className="h-4 w-4 text-amber-400 shrink-0" />
+                            {t("nav.logisticCostCalc")}
+                          </div>
+                        </Link>
+                      </div>
+                    </div>
+                  </div>
                   <Link href="/jasa" className={navItemCls(
                     location.startsWith("/jasa") || location === "/book" ||
                     location === "/air-freight-booking" || location === "/ocean-freight-booking" ||
@@ -1235,6 +1274,34 @@ export function Navbar() {
                       </Link>
                     );
                   })}
+                  <Link href="/kalkulator-impor" onClick={() => setIsOpen(false)}>
+                    <div className={`flex items-center gap-3 px-3 py-3 rounded-xl cursor-pointer transition-all mb-0.5 ${
+                      location === "/kalkulator-impor" ? "bg-sky-50" : "hover:bg-slate-50 active:bg-slate-100"
+                    }`}>
+                      <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
+                        style={{ background: location === "/kalkulator-impor" ? "#0ea5e918" : "#f1f5f9" }}>
+                        <Calculator className="h-3.5 w-3.5" style={{ color: location === "/kalkulator-impor" ? "#0ea5e9" : "#64748b" }} />
+                      </div>
+                      <span className={`text-[14px] font-semibold flex-1 ${location === "/kalkulator-impor" ? "text-sky-700" : "text-slate-700"}`}>
+                        {t("nav.importTariffCalc")}
+                      </span>
+                      <ChevronRight className="h-3.5 w-3.5 text-slate-300 shrink-0" />
+                    </div>
+                  </Link>
+                  <Link href="/kalkulator-biaya-logistik" onClick={() => setIsOpen(false)}>
+                    <div className={`flex items-center gap-3 px-3 py-3 rounded-xl cursor-pointer transition-all mb-0.5 ${
+                      location === "/kalkulator-biaya-logistik" ? "bg-sky-50" : "hover:bg-slate-50 active:bg-slate-100"
+                    }`}>
+                      <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
+                        style={{ background: location === "/kalkulator-biaya-logistik" ? "#0ea5e918" : "#f1f5f9" }}>
+                        <Calculator className="h-3.5 w-3.5" style={{ color: location === "/kalkulator-biaya-logistik" ? "#0ea5e9" : "#64748b" }} />
+                      </div>
+                      <span className={`text-[14px] font-semibold flex-1 ${location === "/kalkulator-biaya-logistik" ? "text-sky-700" : "text-slate-700"}`}>
+                        {t("nav.logisticCostCalc")}
+                      </span>
+                      <ChevronRight className="h-3.5 w-3.5 text-slate-300 shrink-0" />
+                    </div>
+                  </Link>
                 </>
                 );
               })()
