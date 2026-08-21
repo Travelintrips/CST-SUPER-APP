@@ -353,13 +353,12 @@ async function runCorruptionCase(label, mutate) {
     fixture.effectiveDate = effectiveDate;
     const normal = await resolveConfig(db, effectiveDate);
     const fixtureBaseline = await counts(db, [fixture.paymentId]);
-    const normal = await resolveConfig(db);
     assertConfig(normal, `${label} precondition`);
     await mutate(db, normal, effectiveDate);
     await corruptionPrecondition(db, label, normal, effectiveDate);
     const { processCentralFinance } =
       await import("../../artifacts/api-server/src/lib/centralFinance.ts");
-    const processor = await processCentralFinance({ client: db });
+    const processor = await processCentralFinance({ client: db, fixturePaymentIds: [fixture.paymentId] });
     assert(processor.claimed === 1, `${label}: claimed=${processor.claimed}`);
     assert(processor.posted === 0, `${label}: unexpectedly posted`);
     assert(processor.manualReview === 1, `${label}: expected manual review`);
@@ -381,10 +380,10 @@ async function runCorruptionCase(label, mutate) {
     assert(errors.rows[0]?.last_error, `${label}: missing deterministic last_error`);
     await db.query("ROLLBACK TO SAVEPOINT corruption_case_effects");
     await db.query("RELEASE SAVEPOINT corruption_case_effects");
-    const row = await counts(db, [fixture.paymentId]);
-    assertZeroEffects(row, label);
+    const rolledBack = await counts(db, [fixture.paymentId]);
+    assertZeroEffects(rolledBack, label);
     await db.query("ROLLBACK");
-    return { label, result: processor, evidence: row, last_error: errors.rows[0].last_error, rollback: "PASS" };
+    return { label, result: processor, evidence: rolledBack, last_error: errors.rows[0].last_error, rollback: "PASS" };
   } catch (error) {
     await db.query("ROLLBACK").catch(() => {});
     throw error;
@@ -422,27 +421,6 @@ async function setupCommittedFixture(db, label, types) {
     const bookingId = await booking(db, label);
     const paymentIds = [];
     for (const type of types) paymentIds.push(await payment(db, bookingId, `${label}_${type}`, type));
-    await db.query(`
-      INSERT INTO public.bank_mutations
-        (bank_account_id, transaction_date, description, credit_amount,
-         debit_amount, amount, direction, mutation_key,
-         normalized_description, provider_name, provider_order_id,
-         company_id, owner_app, owner_company_id, source_app, source_module,
-         source_table, source_id, source, reconciliation_status,
-         linked_transaction_type, linked_transaction_id, canonical_key,
-         source_classification)
-      SELECT sp.bank_account_id::text, sp.confirmed_at::date::text,
-             'CFSC10D ' || sp.id::text, round(sp.amount * 0.997, 2), 0,
-             round(sp.amount * 0.997, 2), 'IN',
-             'SC-PAY-' || sp.id::text, 'cfsc10d ' || sp.id::text,
-             sp.provider_name, sp.provider_order_id, sp.company_id,
-             'sport_center', sp.company_id, 'sport_center', 'central_finance',
-             'sport_payments', sp.id, 'sport_center_payment',
-             'matched', 'sport_center_payment', sp.id,
-             'sport_center:payment:' || sp.id::text, 'synthetic'
-        FROM sport_center.sport_payments sp
-       WHERE sp.id = ANY($1::int[])
-    `, [paymentIds]);
     await db.query(`
       INSERT INTO sport_center.central_finance_processing
         (source_project, source_payment_id, event_type, correlation_id)
@@ -486,7 +464,7 @@ async function processConcurrent(paymentIds) {
     const run = async (db) => {
       const { processCentralFinance } =
         await import("../../artifacts/api-server/src/lib/centralFinance.ts");
-      return processCentralFinance({ client: db, sourcePaymentIds: paymentIds });
+      return processCentralFinance({ client: db, fixturePaymentIds: paymentIds });
     };
     // Both clients are real independent PostgreSQL sessions and overlap in
     // the claim/posting work. A short launch offset prevents both
@@ -499,8 +477,6 @@ async function processConcurrent(paymentIds) {
         setTimeout(() => run(clients[1]).then(resolve, reject), 25);
       }),
     ]);
-      return processCentralFinance({ client: db, fixturePaymentIds: paymentIds });
-    }));
     await Promise.all(clients.map((db) => db.query("COMMIT")));
     return results;
   } catch (error) {
@@ -519,6 +495,13 @@ async function cleanupFixture(fixture) {
     // This setting is DEV-only and is scoped to this exact cleanup transaction.
     await db.query("SET LOCAL session_replication_role = 'replica'");
     const ids = fixture.paymentIds;
+    const settlementRows = await db.query(
+      `SELECT DISTINCT settlement_id
+         FROM sport_center.payment_settlement_items
+        WHERE payment_id = ANY($1::int[])`,
+      [ids],
+    );
+    const settlementIds = settlementRows.rows.map((row) => Number(row.settlement_id));
     await db.query(
       "DELETE FROM public.bank_mutations WHERE mutation_key = ANY(SELECT 'SC-PAY-' || x::text FROM unnest($1::int[]) x)",
       [ids],
@@ -536,10 +519,12 @@ async function cleanupFixture(fixture) {
       [ids],
     );
     await db.query("DELETE FROM sport_center.payment_settlement_items WHERE payment_id = ANY($1::int[])", [ids]);
-    await db.query(
-      "DELETE FROM sport_center.payment_settlement_batches WHERE id NOT IN (SELECT settlement_id FROM sport_center.payment_settlement_items) AND settlement_reference LIKE $1",
-      [`${PREFIX}%`],
-    );
+    if (settlementIds.length) {
+      await db.query(
+        "DELETE FROM sport_center.payment_settlement_batches WHERE id = ANY($1::bigint[])",
+        [settlementIds],
+      );
+    }
     await db.query("DELETE FROM sport_center.central_finance_processing WHERE source_payment_id = ANY($1::int[])", [ids]);
     await db.query("DELETE FROM sport_center.payment_accounting_outbox WHERE payment_id = ANY($1::int[])", [ids]);
     await db.query("DELETE FROM sport_center.sport_payments WHERE id = ANY($1::int[])", [ids]);
@@ -620,7 +605,7 @@ async function runRace(label, types) {
         changed,
       }));
     }
-    assert(after === before, `${label}: existing DEV identities changed`);
+    if (after !== before) {
       console.error(`${label}: existing DEV snapshot diff=${JSON.stringify(snapshotDiff(before, after))}`);
       throw new Error(`CF_SC_10D_ASSERTION_FAILED: ${label}: existing DEV identities changed`);
     }

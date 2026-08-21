@@ -202,3 +202,32 @@ the processor owner and the CF-SC run completed atomically. The harness rolled
 back all fixtures and reported zero production writes. Development readiness
 was `200`, all 119 startup stages were complete, and the latest bridge function
 was verified in the live DEV catalog before the harness ran.
+
+## CF-SC-10D execution result — 2026-08-21
+
+The development-only corruption and concurrency proof passed end to end after
+restoring the live canonical owner routines and correcting the runtime foreign
+key to reference `sport_center.bank_mutations(id)` explicitly. The previous
+constraint resolved `bank_mutations` to `public.bank_mutations`, while the
+owner routine correctly produced a Sport Center canonical ID.
+
+| Proof | Result |
+|---|---|
+| Duplicate/missing shared-config corruption matrix | PASS; manual review, no new processor effects |
+| Same-payment two-client race | PASS; one client posted, the other skipped |
+| DP + pelunasan two-client race | PASS; one effect per payment |
+| Settlement/public/canonical identity checks | PASS |
+| Existing DEV snapshot after cleanup | PASS; unchanged |
+| Production writes/migrations/cutover | `0` / `0` / `NO` |
+
+The race harness passes fixture payment IDs explicitly through processing-row
+backfill and claim selection, so a targeted proof cannot touch unrelated DEV
+outbox rows. Cleanup captures exact settlement batch IDs from fixture items
+before removing those items rather than using a broad settlement prefix.
+
+The 10D run verified one processing row, outbox, accounting journal, settlement
+item, settlement batch, public mutation, and canonical bridge row per payment
+for full payment, DP, pelunasan, and grouped payment, with zero legacy
+mutation rows. CF-SC-10C was rerun afterward and passed with the same counts.
+No production writes, production migrations, Paylabs calls, WhatsApp sends, or
+legacy cleanup were performed.
