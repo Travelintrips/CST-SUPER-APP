@@ -284,6 +284,10 @@ export async function processCentralFinance(options: { client?: pg.PoolClient; f
       await db.query("SAVEPOINT central_finance_claim");
       // The database function owns shared config, tax, COA, journal and
       // payment-level idempotency. This layer only orchestrates the durable event.
+      // A fixture/client invocation runs inside its caller's transaction. Keep
+      // the mode explicit on that same session so the DB owner cannot silently
+      // fall back to legacy resolution.
+      await db.query("SELECT set_config('sport_center.finance_mode', 'central', true)");
       await db.query("SELECT sport_center.create_payment_accounting_draft($1)", [claim.paymentId]);
       await promoteCanonicalPaymentJournal(db, claim.paymentId);
       await createAndFinalizeSettlement(db, claim);
