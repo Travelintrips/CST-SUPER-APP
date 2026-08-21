@@ -129,3 +129,4 @@
 - [CF-SC-10B harness baseline](cf-sc-10b-harness-baseline.md) — compare dynamic existing-row snapshots; never assume a fixed DEV outbox/processing count.
 - [CF-CP-6 harness packaging](cf-cp-6-harness-packaging.md) — bundle workspace TS packages in API workspace; keep pg/pino external and always remove generated proof bundles.
 - [CF-CP-6B migration](cf-cp-6b-migration.md) — Jasa mapping identity must include service scope; proof harnesses must load development secrets.
+- [CF-CP-6C fixture isolation](cf-cp-6c-fixture-isolation.md) — skip reused IDs across actual finance-owner tables; cleanup exact owned rows after posted-entry guards.

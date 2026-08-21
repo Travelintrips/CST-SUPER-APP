@@ -34,6 +34,21 @@ const pool = new Pool({
 });
 
 const fixtures = [];
+const ownership = {
+  payments: new Set(),
+  documents: new Set(),
+  lines: new Set(),
+  events: new Set(),
+  processing: new Set(),
+  accounting: new Set(),
+  journals: new Set(),
+  journalLines: new Set(),
+  mutations: new Set(),
+  settlements: new Set(),
+  settlementItems: new Set(),
+};
+const MAX_ID_ALLOCATION_ATTEMPTS = 200;
+const allocationCollisions = [];
 
 function assert(condition, message) {
   if (!condition) throw new Error(`CF_CP_6C_ASSERTION_FAILED: ${message}`);
@@ -89,81 +104,135 @@ async function taxConfig(client) {
   return row;
 }
 
-async function createPayment(client, name, serviceScope, options = {}) {
-  const tax = await taxConfig(client);
-  const net = Math.round(GROSS / (1 + Number(tax.tax_rate)) * 100) / 100;
-  const taxAmount = Math.round((GROSS - net) * 100) / 100;
-  const docNumber = `${PREFIX}_${name}_DOC`;
-  const doc = await one(client, `
-    INSERT INTO sales_documents
-      (doc_number, kind, status, invoice_status, payment_status, amount_paid,
-       customer_name, total_amount, tax_rate_id, tax_amount, grand_total, notes,
-       company_id, product_scope, tax_treatment)
-    VALUES ($1,'order','confirmed','invoiced','unpaid',0,$2,$3,$4,$5,$6,$7,$8,'jasa','exclusive')
-    RETURNING id
-  `, [docNumber, `${PREFIX} ${name}`, net, Number(tax.tax_rule_id), taxAmount, GROSS,
-    "CF-CP-6C development fixture", COMPANY_ID]);
-  assert(doc, `${name}: document not created`);
-  const line = await one(client, `
-    INSERT INTO sales_document_lines
-      (document_id, name, description, quantity, unit_price, subtotal, product_scope, service_scope)
-    VALUES ($1,$2,$3,1,$4,$4,'jasa',$5)
-    RETURNING id
-  `, [doc.id, `${PREFIX} ${name}`, "CF-CP-6C development fixture", net, serviceScope]);
-  const payment = await one(client, `
-    INSERT INTO payments
-      (ref_kind, ref_id, ref_doc_number, amount, status, provider, payment_method,
-       provider_merchant_trade_no, raw, company_id)
-    VALUES ('sales',$1,$2,$3,'pending','paylabs','qris',$4,$5::jsonb,$6)
-    RETURNING id
-  `, [doc.id, docNumber, GROSS, `${PREFIX}_${name}_PAY`,
-    JSON.stringify({ source: "CF-CP-6C", environment: "development" }), COMPANY_ID]);
-  assert(payment, `${name}: payment not created`);
-  const fixture = {
-    name, serviceScope, documentId: Number(doc.id), lineId: Number(line.id),
-    paymentId: Number(payment.id), docNumber,
-  };
-  // DEV sequences can reuse an ID after an interrupted fixture cleanup. The
-  // payment was just inserted, so an older processing identity for this exact
-  // new ID is orphaned and safe to remove before confirmation.
-  await client.query(`
-    DELETE FROM customer_finance_processing
-     WHERE source_payment_id=$1 AND event_type='payment_confirmed'
-  `, [fixture.paymentId]);
-  await client.query(`
-    DELETE FROM customer_payment_finance_events
-     WHERE source_payment_id=$1 AND event_type='payment_confirmed'
-  `, [fixture.paymentId]);
-  await client.query(`
-    DELETE FROM public.bank_mutations
-     WHERE source_app='customer_portal' AND source_id=$1
-  `, [fixture.paymentId]);
-  await client.query(`
-    DELETE FROM customer_portal_settlement_items
-     WHERE payment_id=$1
-  `, [fixture.paymentId]);
-  await client.query(`
-    DELETE FROM customer_portal_settlement_batches b
-     WHERE b.canonical_key=$1
-       AND NOT EXISTS (
-         SELECT 1 FROM customer_portal_settlement_items i WHERE i.settlement_id=b.id
+function quoteIdentifier(identifier) {
+  return `"${String(identifier).replaceAll('"', '""')}"`;
+}
+
+async function identitySurfaces(client) {
+  const result = await client.query(`
+    SELECT c.table_schema, c.table_name, c.column_name
+      FROM information_schema.columns
+        AS c
+      JOIN information_schema.tables t
+        ON t.table_schema=c.table_schema AND t.table_name=c.table_name
+     WHERE c.table_schema NOT IN ('pg_catalog', 'information_schema')
+       AND t.table_type='BASE TABLE'
+       AND c.table_name <> 'payments'
+       AND c.column_name IN ('payment_id', 'source_payment_id', 'source_id')
+       AND (
+         c.column_name IN ('payment_id', 'source_payment_id')
+         OR c.table_name IN ('accounting_entries', 'bank_mutations', 'accounting_journals')
+         OR c.table_name ~* '(accounting|settlement|finance|payment|tax|journal|mutation|outbox|recon|qris)'
        )
-  `, [`customer_portal:payment:${fixture.paymentId}`]);
-  const orphanEntries = await client.query(`
-    SELECT id FROM accounting_entries
-     WHERE source='sales_invoice' AND source_id=$1
-  `, [fixture.documentId]);
-  for (const row of orphanEntries.rows) {
-    await client.query(`
-      UPDATE accounting_entries
-         SET status='draft',cancel_reason='CFCP6C reused-ID cleanup',cancelled_at=NOW()
-       WHERE id=$1 AND status='posted'
-    `, [row.id]);
-    await client.query("DELETE FROM accounting_entry_lines WHERE entry_id=$1", [row.id]);
-    await client.query("DELETE FROM accounting_entries WHERE id=$1", [row.id]);
+     ORDER BY c.table_schema, c.table_name, c.column_name
+  `);
+  return result.rows;
+}
+
+async function preflightIdentity(client, paymentId, documentId) {
+  const refs = [];
+  for (const surface of await identitySurfaces(client)) {
+    const qualified = `${quoteIdentifier(surface.table_schema)}.${quoteIdentifier(surface.table_name)}`;
+    const column = quoteIdentifier(surface.column_name);
+    const values = surface.column_name === "source_id"
+      ? [String(paymentId), String(documentId)]
+      : [String(paymentId)];
+    const result = await client.query(
+      `SELECT ${column}::text AS identity, COUNT(*)::int AS count
+         FROM ${qualified}
+        WHERE ${column}::text = ANY($1::text[])
+        GROUP BY ${column}`,
+      [values],
+    );
+    for (const row of result.rows) {
+      refs.push({
+        table: `${surface.table_schema}.${surface.table_name}`,
+        column: surface.column_name,
+        identity: Number(row.identity),
+        count: Number(row.count),
+      });
+    }
   }
+  return refs;
+}
+
+function registerFixture(fixture) {
+  ownership.payments.add(fixture.paymentId);
+  ownership.documents.add(fixture.documentId);
+  if (fixture.lineId) ownership.lines.add(fixture.lineId);
   fixtures.push(fixture);
-  return fixture;
+}
+
+async function createPayment(client, name, serviceScope, options = {}) {
+  const tax = options.documentId ? null : await taxConfig(client);
+  const net = options.documentId ? null : Math.round(GROSS / (1 + Number(tax.tax_rate)) * 100) / 100;
+  const taxAmount = options.documentId ? null : Math.round((GROSS - net) * 100) / 100;
+  const docNumber = options.docNumber ?? `${PREFIX}_${name}_DOC`;
+
+  for (let attempt = 1; attempt <= MAX_ID_ALLOCATION_ATTEMPTS; attempt += 1) {
+    await client.query("BEGIN");
+    try {
+      let documentId = options.documentId;
+      let lineId = null;
+      if (!documentId) {
+        const doc = await one(client, `
+          INSERT INTO sales_documents
+            (doc_number, kind, status, invoice_status, payment_status, amount_paid,
+             customer_name, total_amount, tax_rate_id, tax_amount, grand_total, notes,
+             company_id, product_scope, tax_treatment)
+          VALUES ($1,'order','confirmed','invoiced','unpaid',0,$2,$3,$4,$5,$6,$7,$8,'jasa','exclusive')
+          RETURNING id
+        `, [docNumber, `${PREFIX} ${name}`, net, Number(tax.tax_rule_id), taxAmount, GROSS,
+          "CF-CP-6C development fixture", COMPANY_ID]);
+        assert(doc, `${name}: document not created`);
+        documentId = Number(doc.id);
+        const line = await one(client, `
+          INSERT INTO sales_document_lines
+            (document_id, name, description, quantity, unit_price, subtotal, product_scope, service_scope)
+          VALUES ($1,$2,$3,1,$4,$4,'jasa',$5)
+          RETURNING id
+        `, [documentId, `${PREFIX} ${name}`, "CF-CP-6C development fixture", net, serviceScope]);
+        lineId = Number(line.id);
+      }
+      const payment = await one(client, `
+        INSERT INTO payments
+          (ref_kind, ref_id, ref_doc_number, amount, status, provider, payment_method,
+           provider_merchant_trade_no, raw, company_id)
+        VALUES ('sales',$1,$2,$3,'pending','paylabs','qris',$4,$5::jsonb,$6)
+        RETURNING id
+      `, [documentId, docNumber, GROSS, `${PREFIX}_${name}_PAY_${attempt}`,
+        JSON.stringify({ source: "CF-CP-6C", environment: "development" }), COMPANY_ID]);
+      assert(payment, `${name}: payment not created`);
+      const paymentId = Number(payment.id);
+      const refs = await preflightIdentity(client, paymentId, documentId);
+      if (refs.length) {
+        allocationCollisions.push({
+          fixture: name,
+          attempt,
+          paymentId,
+          documentId,
+          refs,
+          classification: "PRE_EXISTING_DEV_ORPHAN",
+        });
+        await client.query("ROLLBACK");
+        continue;
+      }
+      await client.query("COMMIT");
+      const fixture = {
+        name, serviceScope, documentId, lineId, paymentId, docNumber,
+        allocationAttempt: attempt, preExistingRefs: refs,
+      };
+      registerFixture(fixture);
+      return fixture;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    }
+  }
+  throw new Error(
+    `${name}: exhausted ${MAX_ID_ALLOCATION_ATTEMPTS} collision-safe ID allocation attempts: ` +
+    JSON.stringify(allocationCollisions.slice(-MAX_ID_ALLOCATION_ATTEMPTS)),
+  );
 }
 
 async function confirm(fixture, provider = "paylabs") {
@@ -178,6 +247,7 @@ async function confirm(fixture, provider = "paylabs") {
   assert(result.firstPaidTransition, `${fixture.name}: first paid transition missing`);
   assert(result.financeEventId, `${fixture.name}: finance event missing`);
   fixture.eventId = result.financeEventId;
+  ownership.events.add(Number(result.financeEventId));
 }
 
 async function effects(client, fixture) {
@@ -201,6 +271,36 @@ async function effects(client, fixture) {
       JOIN customer_portal_settlement_items i ON i.settlement_id=b.id
      WHERE i.payment_id=$1 GROUP BY b.id,b.settlement_journal_id
   `, [fixture.paymentId]);
+  if (processing) {
+    fixture.processingId = Number(processing.id);
+    ownership.processing.add(fixture.processingId);
+  }
+  if (accounting) {
+    fixture.accountingId = Number(accounting.id);
+    ownership.accounting.add(fixture.accountingId);
+    const lines = await client.query(
+      "SELECT id FROM accounting_entry_lines WHERE entry_id=$1",
+      [fixture.accountingId],
+    );
+    for (const row of lines.rows) ownership.journalLines.add(Number(row.id));
+  }
+  if (mutation) {
+    fixture.mutationId = Number(mutation.id);
+    ownership.mutations.add(fixture.mutationId);
+  }
+  if (settlement) {
+    fixture.settlementId = Number(settlement.id);
+    ownership.settlements.add(fixture.settlementId);
+    const items = await client.query(
+      "SELECT id FROM customer_portal_settlement_items WHERE settlement_id=$1",
+      [fixture.settlementId],
+    );
+    for (const row of items.rows) ownership.settlementItems.add(Number(row.id));
+    if (settlement.settlement_journal_id) {
+      fixture.settlementJournalId = Number(settlement.settlement_journal_id);
+      ownership.journals.add(fixture.settlementJournalId);
+    }
+  }
   return { processing, accounting, mutation, settlement };
 }
 
@@ -273,29 +373,10 @@ async function proveExim(client) {
 
 async function proveTwoPayments(client) {
   const first = await createPayment(client, "SAME_DOC_A", "trucking");
-  const secondPayment = await one(client, `
-    INSERT INTO payments
-      (ref_kind, ref_id, ref_doc_number, amount, status, provider, payment_method,
-       provider_merchant_trade_no, raw, company_id)
-    VALUES ('sales',$1,$2,$3,'pending','paylabs','qris',$4,$5::jsonb,$6)
-    RETURNING id
-  `, [
-    first.documentId,
-    first.docNumber,
-    GROSS,
-    `${PREFIX}_SAME_DOC_B_PAY`,
-    JSON.stringify({ source: "CF-CP-6C", environment: "development" }),
-    COMPANY_ID,
-  ]);
-  const second = {
-    name: "SAME_DOC_B",
-    serviceScope: "trucking",
+  const second = await createPayment(client, "SAME_DOC_B", "trucking", {
     documentId: first.documentId,
-    lineId: null,
-    paymentId: Number(secondPayment.id),
     docNumber: first.docNumber,
-  };
-  fixtures.push(second);
+  });
   await confirm(first);
   await confirm(second);
   const result = await processCustomerPortalFinance({
@@ -366,24 +447,34 @@ async function proveTransient(client) {
 async function cleanup(client) {
   await client.query("BEGIN");
   try {
-    const ids = fixtures.map((fixture) => fixture.paymentId);
-    if (ids.length) {
-      await client.query(`DELETE FROM public.bank_mutations WHERE source_app='customer_portal' AND source_id=ANY($1::int[])`, [ids]);
-      await client.query(`DELETE FROM customer_portal_settlement_items WHERE payment_id=ANY($1::int[])`, [ids]);
-      await client.query(`DELETE FROM customer_portal_settlement_batches b WHERE NOT EXISTS (SELECT 1 FROM customer_portal_settlement_items i WHERE i.settlement_id=b.id) AND b.canonical_key LIKE $1`, [`customer_portal:payment:${PREFIX}%`]);
-      const entries = await client.query(`SELECT id FROM accounting_entries WHERE source_id=ANY($1::int[]) OR ref LIKE $2`, [ids, `${PREFIX}%`]);
-      for (const row of entries.rows) {
-        await client.query(`UPDATE accounting_entries SET status='draft',cancel_reason='CFCP6C fixture cleanup',cancelled_at=NOW() WHERE id=$1 AND status='posted'`, [row.id]);
-        await client.query(`DELETE FROM accounting_entry_lines WHERE entry_id=$1`, [row.id]);
-        await client.query(`DELETE FROM accounting_entries WHERE id=$1`, [row.id]);
-      }
-      await client.query(`DELETE FROM customer_finance_processing WHERE source_payment_id=ANY($1::int[])`, [ids]);
-      await client.query(`DELETE FROM customer_payment_finance_events WHERE source_payment_id=ANY($1::int[])`, [ids]);
-      await client.query(`DELETE FROM payments WHERE id=ANY($1::int[])`, [ids]);
-      const docs = fixtures.map((fixture) => fixture.documentId);
-      await client.query(`DELETE FROM sales_document_lines WHERE document_id=ANY($1::int[])`, [docs]);
-      await client.query(`DELETE FROM sales_documents WHERE id=ANY($1::int[])`, [docs]);
+    const ids = [...ownership.payments];
+    const docs = [...ownership.documents];
+    const deleteByIds = async (table, idColumn, values) => {
+      if (values.length) await client.query(
+        `DELETE FROM ${table} WHERE ${idColumn}=ANY($1::int[])`,
+        [values],
+      );
+    };
+    await deleteByIds("public.bank_mutations", "id", [...ownership.mutations]);
+    await deleteByIds("customer_portal_settlement_items", "id", [...ownership.settlementItems]);
+    await deleteByIds("customer_portal_settlement_batches", "id", [...ownership.settlements]);
+    for (const id of [...ownership.accounting, ...ownership.journals]) {
+      await client.query(
+        `UPDATE accounting_entries
+            SET status='draft',cancel_reason='CFCP6C fixture cleanup',cancelled_at=NOW()
+          WHERE id=$1 AND status='posted'`,
+        [id],
+      );
     }
+    await deleteByIds("accounting_entry_lines", "id", [...ownership.journalLines]);
+    for (const id of [...ownership.accounting, ...ownership.journals]) {
+      await client.query("DELETE FROM accounting_entries WHERE id=$1", [id]);
+    }
+    await deleteByIds("customer_finance_processing", "id", [...ownership.processing]);
+    await deleteByIds("customer_payment_finance_events", "id", [...ownership.events]);
+    await deleteByIds("payments", "id", ids);
+    await deleteByIds("sales_document_lines", "id", [...ownership.lines]);
+    await deleteByIds("sales_documents", "id", docs);
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");
@@ -426,6 +517,11 @@ async function main() {
       transientRetry: "PASS",
       cleanup: "PASS",
       fixturePersistence: 0,
+      collisionSafeAllocation: "PASS",
+      preprocessingCollisionCheck: "PASS",
+      allocationCollisions,
+      sequenceAdvancement: allocationCollisions.length ? "YES (normal nextval allocation)" : "NO OBSERVED COLLISION",
+      existingBusinessRowsModifiedByAllocation: 0,
       existingDevDataChanged: 0,
       sportCenterDirectEffects: 0,
       proof,

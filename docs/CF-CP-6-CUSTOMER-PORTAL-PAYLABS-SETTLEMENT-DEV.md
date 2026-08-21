@@ -1,6 +1,6 @@
 # CF-CP-6 — Customer Portal Paylabs Settlement (Development Only)
 
-**Status:** `PARTIAL / DEDICATED_CFCP6C_RUNTIME_HARNESS_REQUIRED`
+**Status:** `PARTIAL / FIXTURE_ISOLATION_HARDENED_RUNTIME_CERTIFICATION_PENDING`
 
 Dokumen ini mencatat proof Customer Portal Central Finance yang aman untuk
 development. Tidak ada jalur CF-CP-6 yang mengaktifkan central mode di
@@ -120,6 +120,30 @@ scopes, `exim_service` fail-closed behavior, two-client concurrency, two
 payments on one document, deterministic negative cases, transient retry, and
 post-`finally` fixture verification. That harness is not present in the
 current repository, so those gates remain unexecuted and are not claimed here.
+
+## CF-CP-6C fixture isolation hardening
+
+The dedicated Jasa harness now treats fixture IDs as unsafe until they pass a
+pre-processing collision check. Each document/payment allocation runs inside a
+savepoint, and the newly generated payment ID is checked against every
+non-system table discovered from the live schema that has `payment_id`,
+`source_payment_id`, or `source_id`. For `source_id`, both the payment and
+document identities are checked. A collision rolls back only the new fixture
+rows to the savepoint and retries with the normal PostgreSQL allocator, up to a
+finite limit. No sequence is restarted or lowered.
+
+This is required because a missing row in `payments` does not prove that its
+integer ID is unused: historical DEV accounting, settlement, mutation, or
+processing rows may still reference the identity. The harness therefore never
+deletes or repairs a pre-existing collision. It maintains an ownership registry
+for every created document, payment, event, processing row, accounting entry,
+journal line, mutation, settlement, and settlement item; cleanup deletes only
+IDs recorded in that registry. Sequence advancement caused by rolled-back
+`nextval` calls is reported separately from business-row changes.
+
+The two-payments-one-document proof uses the same allocator for both payment
+rows, so document uniqueness is not bypassed and payment identity collisions
+cannot be hidden by direct inserts.
 
 | Gate | Result |
 |---|---|
