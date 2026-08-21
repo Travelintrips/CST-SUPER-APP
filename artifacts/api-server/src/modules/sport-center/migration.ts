@@ -1046,6 +1046,31 @@ async function repairCanonicalBankCoaIdentity(): Promise<void> {
     FOR UPDATE
   `);
   if (canonicalBankRows.rows.length !== 1) {
+    /*
+     * PROD Central Finance owns COA identity in public.chart_of_accounts.
+     * Some production snapshots retain the legacy sport_center.coa_accounts
+     * relation without its historical row.  The targeted CF-SC-12B migration
+     * has already verified the public canonical identity, so do not recreate or
+     * rewrite a legacy row merely to satisfy this optional repair helper.
+     */
+    const publicCanonicalBank = await db.execute(sql`
+      SELECT id, code, name
+      FROM public.chart_of_accounts
+      WHERE id = 75590
+        AND company_id = 1
+        AND code = '1-1023-CST'
+        AND name = 'Bank Mandiri Ciputat'
+        AND is_active = TRUE
+        AND is_postable = TRUE
+        AND is_header = FALSE
+    `);
+    if (canonicalBankRows.rows.length === 0 && publicCanonicalBank.rows.length === 1) {
+      logger.info(
+        { canonicalCoaId: 75590 },
+        "Canonical Sport Center bank COA resolved from public.chart_of_accounts",
+      );
+      return;
+    }
     throw new Error(
       `Canonical bank COA identity unresolved: expected exactly one active ` +
       `sport_center.coa_accounts row for 1-1023-CST/asset, found ${canonicalBankRows.rows.length}.`,

@@ -7,6 +7,11 @@
  * the caller explicitly opts in with CF_SC_12B_APPLY=true.
  */
 import pg from "pg";
+import {
+  DEV_PROJECT_REF,
+  PROD_PROJECT_REF,
+  extractProjectRef,
+} from "./runtime-db-guard.mjs";
 
 const { Client } = pg;
 const apply = process.env.CF_SC_12B_APPLY === "true";
@@ -18,6 +23,15 @@ if (process.env.APP_ENV !== "production" || !apply) {
   );
 }
 if (!prodUrl) throw new Error("CF-SC-12B requires the canonical production PostgreSQL URL.");
+if (extractProjectRef(prodUrl) !== PROD_PROJECT_REF) {
+  throw new Error("CF_SC_12B_PROD_TARGET_UNVERIFIED: production URL is not the verified PROD Supabase project.");
+}
+if (DEV_PROJECT_REF === PROD_PROJECT_REF) {
+  throw new Error("CF_SC_12B_TARGET_CONTRACT_INVALID: pinned DEV and PROD project references match.");
+}
+if (String(process.env.SPORT_CENTER_FINANCE_MODE ?? "legacy").toLowerCase() !== "legacy") {
+  throw new Error("CF_SC_12B_PROD_MODE_NOT_LEGACY");
+}
 
 const client = new Client({ connectionString: prodUrl, ssl: { rejectUnauthorized: false } });
 
@@ -260,7 +274,7 @@ async function seedConfiguration() {
         (finance_project_config_id, account_role, coa_id, effective_from, created_by, updated_by)
       VALUES ($1, $2, $3, DATE '2026-01-01', 'CF-SC-12B', 'CF-SC-12B')
       ON CONFLICT (finance_project_config_id, account_role, coa_id,
-                   COALESCE(payment_method, ''), COALESCE(provider_code, ''), config_version)
+                   (COALESCE(payment_method, '')), (COALESCE(provider_code, '')), config_version)
       DO UPDATE SET updated_at=NOW()
     `, [projectId, role, coaId]);
   }
@@ -285,12 +299,14 @@ await client.connect();
 try {
   await one("BEGIN");
   await one("SET LOCAL lock_timeout = '10s'");
-  const mode = await one("SELECT COALESCE(current_setting('app.sport_center_finance_mode', true), 'legacy') AS mode");
-  if (String(mode.rows[0]?.mode).toLowerCase() !== "legacy") throw new Error("CF_SC_12B_PROD_MODE_NOT_LEGACY");
+  const target = await one("SELECT current_database() AS database_name, version() AS server_version");
   await createFoundationTables();
   await installSettlementLink();
-  const { ensureCanonicalSettlementContracts } = await import("../artifacts/api-server/dist/modules/sport-center/migration.mjs");
-  await ensureCanonicalSettlementContracts();
+  await one("COMMIT");
+  const { installCfSc12bCertifiedOwner } = await import("../artifacts/api-server/dist/run-cf-sc-12b-owner.mjs");
+  await installCfSc12bCertifiedOwner();
+  await one("BEGIN");
+  await one("SET LOCAL lock_timeout = '10s'");
   const config = await seedConfiguration();
   const resolved = await resolveProof();
   await one("COMMIT");
@@ -305,6 +321,8 @@ try {
     tax_output_coa_id: config.taxOutputId,
     receiving_bank_coa_id: Number(resolved.receiving_bank_coa_id),
     mdr_expense_coa_id: Number(resolved.mdr_expense_coa_id),
+    prod_database: target.rows[0]?.database_name,
+    postgres_version: target.rows[0]?.server_version?.match(/^PostgreSQL ([^ ]+)/)?.[1] ?? null,
     processor_runs: 0,
     payment_writes: 0,
     accounting_writes: 0,
