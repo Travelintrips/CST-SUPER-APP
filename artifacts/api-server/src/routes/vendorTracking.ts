@@ -236,15 +236,14 @@ vendorTrackingPublicRouter.post("/:token/update", trackingPostLimiter, async (re
       sendWhatsApp(adminGroupWa, msgAdmin, { context: "vendor-tracking-update" }).catch(() => {});
     }
 
-    const customerPhone = String(tracking.customer_phone ?? "");
-    if (customerPhone) {
-      const msgCustomer = `📦 *Update Pengiriman — ${orderNumber}*\n\nNo. Order: ${orderNumber}\nStatus Terkini: *${label}*${notesStr}\n\n_${ts()}_`;
-      sendWhatsApp(customerPhone, msgCustomer, { context: "vendor-tracking-customer" }).catch(() => {});
-    }
-
     if (status === "COMPLETED") {
       await transitionLogisticOrderStatus(Number(tracking.order_id), "Completed", {
-        actorType: "vendor", actorName: vendorName, source: "vendor-tracking", force: true, skipAudit: false,
+        actorType: "vendor",
+        actorName: vendorName,
+        source: "vendor-tracking",
+        force: true,
+        forceReason: "Vendor tracking menandai seluruh proses pengiriman selesai; dipertahankan sebagai administrative completion override",
+        skipAudit: false,
       }).catch(() => {});
 
       if (adminGroupWa) {
@@ -435,7 +434,12 @@ vendorTrackingAdminRouter.post("/rfq/:rfqId/complete-order", async (req: Request
     if (!order) return res.status(404).json({ message: "Order tidak ditemukan" });
 
     await transitionLogisticOrderStatus(order.id, "Completed", {
-      actorType: "admin", actorName: "Admin", source: "complete-order", force: true, skipAudit: false,
+      actorType: "admin",
+      actorName: "Admin",
+      source: "complete-order",
+      force: true,
+      forceReason: "Admin menyelesaikan order melalui endpoint complete-order dan meminta override lifecycle secara eksplisit",
+      skipAudit: false,
     });
 
     const [selectedLink] = await db.select({

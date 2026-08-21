@@ -24,7 +24,7 @@ import { logger } from "../logger.js";
 import { writeAuditLog } from "../auditLog.js";
 
 /** Status yang memicu notifikasi WA ke customer (In Progress sudah ditangani di confirm_fulfillment) */
-const CUSTOMER_NOTIFY_STATUS_SET = new Set([
+export const CUSTOMER_NOTIFY_STATUS_SET = new Set([
   // Customer-facing lifecycle events. Keeping this list here makes the
   // transition service the only place that decides when customer WA is sent.
   "Order Received",

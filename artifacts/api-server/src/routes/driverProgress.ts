@@ -265,31 +265,6 @@ driverProgressPublicRouter.post("/:token", async (req: Request, res: Response) =
       }
     }
 
-    // WA ke customer (generic, untuk step non-COMPLETED)
-    // COMPLETED ditangani oleh logisticOrderStatusService via CUSTOMER_NOTIFY_STATUS_SET
-    if (String(stepKey) !== "COMPLETED") {
-      try {
-        const [order] = await db.select({
-          phone: logisticOrdersTable.phone,
-          orderNumber: logisticOrdersTable.orderNumber,
-          customerName: logisticOrdersTable.customerName,
-        }).from(logisticOrdersTable).where(eq(logisticOrdersTable.id, orderId));
-
-        if (order?.phone) {
-          const domain = process.env.REPLIT_DEV_DOMAIN || getPreferredDomain() || "cstlogistic.co.id";
-          const waMsg =
-            `🚚 *Update Pengiriman — B2B Marketplace and Logistic*\n\n` +
-            `Halo ${order.customerName},\n\n` +
-            `Order *${order.orderNumber}* telah diperbarui:\n` +
-            `📍 Status: *${STEP_LABEL[String(stepKey)] ?? stepKey}*\n\n` +
-            `Pantau pengiriman:\nhttps://${domain}/track`;
-          sendWhatsApp(order.phone, waMsg).catch(() => {});
-        }
-      } catch {
-        // non-fatal
-      }
-    }
-
     // WA ke admin group untuk PICKUP dan DELIVERED (via WA Mini Form / INTERNAL driver)
     if (["PICKUP", "DELIVERED"].includes(String(stepKey))) {
       try {
@@ -357,33 +332,6 @@ driverProgressPublicRouter.post("/:token", async (req: Request, res: Response) =
           sendWhatsApp(adminGroupWa, msg).catch(() => {});
         }
 
-        if (order?.phone) {
-          let gpsBlock = "";
-          if (lat != null && lng != null) {
-            const tsLine = parsedDeviceTs
-              ? `🕐 Waktu: ${new Date(parsedDeviceTs).toLocaleString("id-ID", {
-                  day: "numeric", month: "short", year: "numeric",
-                  hour: "2-digit", minute: "2-digit", second: "2-digit",
-                  timeZone: "Asia/Jakarta",
-                })} WIB`
-              : "";
-            gpsBlock =
-              `\n\n📍 *Lokasi Driver*\n` +
-              `Koordinat: ${lat.toFixed(6)}, ${lng.toFixed(6)}\n` +
-              (tsLine ? `${tsLine}\n` : "") +
-              (mapUrl ? `🗺️ Google Maps: ${mapUrl}\n` : "") +
-              (streetViewUrl ? `🏙️ Street View: ${streetViewUrl}` : "");
-          }
-          const waMsg =
-            `🚚 *Update Pengiriman — B2B Marketplace and Logistic*\n\n` +
-            `Halo ${order.customerName},\n\n` +
-            `Order *${order.orderNumber}* telah diperbarui:\n` +
-            `📦 Status: *${STEP_LABEL[String(stepKey)] ?? stepKey}*` +
-            (driverName !== "Driver" ? `\n👤 Driver: ${driverName}` : "") +
-            `${gpsBlock}\n\n` +
-            `Pantau pengiriman:\nhttps://${domain}/track`;
-          sendWhatsApp(order.phone, waMsg).catch(() => {});
-        }
       } catch {
         // non-fatal
       }
