@@ -1,6 +1,6 @@
 # CF-CP-4A — Customer Portal Product Tax and COA Adoption (Development)
 
-**Status:** `PARTIAL / OWNER_TAX_DECISION_REQUIRED`  
+**Status:** `PARTIAL / OWNER_TAX_DECISION_REQUIRED / JASA_REVENUE_AMBIGUOUS`  
 **Environment:** Development only  
 **Date:** 2026-08-21
 
@@ -19,6 +19,9 @@ The deterministic parts of CF-CP-4A are implemented and verified:
 
 No placeholder tax or COA mapping was seeded because the runtime evidence does
 not prove a unique treatment for each product family.
+
+CF-CP-4B adds the product-scoped COA discriminator and adopts only the
+deterministic goods revenue mapping. Paylabs and settlement remain deferred.
 
 ## Canonical ownership
 
@@ -107,7 +110,18 @@ Canonical company-1 candidates found include:
 | revenue candidate | 49121 | `4-1015-CST` | Pendapatan Penjualan Barang CST |
 | MDR candidate | 75590 | `5-3050-CST` | Biaya MDR & Payment Gateway CST |
 
-These are not adopted as Customer Portal mappings:
+CF-CP-4B revenue resolution:
+
+- **goods adopted:** `49121 / 4-1015-CST / Pendapatan Penjualan Barang CST`;
+  the account is active, postable, and its canonical name exactly identifies
+  goods sales.
+- **jasa remains ambiguous:** active candidates include freight `49116`, air
+  freight `49118`, customs `49120`, handling `73051`, and document service
+  `73052`. No Customer Portal sales posting proves one account.
+- `finance_project_coa_mappings.product_scope` was added additively; the
+  idempotent `customer_portal / goods / REVENUE` mapping points to `49121`.
+
+The following are not adopted as Customer Portal mappings:
 
 - no Customer Portal sales journal proves the revenue account;
 - the two product families may require different revenue accounts;
@@ -116,7 +130,11 @@ These are not adopted as Customer Portal mappings:
   before payment;
 - `MDR_EXPENSE` is a deferred provider role.
 
-No separate Customer Portal COA was created.
+No new COA account was created. The shared `TAX_OUTPUT` candidate remains
+`49109 / 2-1020-CST / PPN Keluaran CST`; it will be reused if either product
+family is approved as taxable. `RECEIVABLE` is `NOT_REQUIRED` for this phase:
+there are no Customer Portal sales invoice/payment accounting entries and the
+current flow has no proven receivable posting.
 
 ## Paylabs and bank boundary
 

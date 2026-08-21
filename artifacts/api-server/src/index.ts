@@ -27,6 +27,7 @@ import { runPortalMigration } from "./lib/portalMigration";
 import { runPortalPaymentCompanyMigration } from "./lib/portalPaymentCompanyMigration.js";
 import { runCustomerPortalPaymentBoundaryMigration } from "./lib/customerPortalPaymentBoundaryMigration.js";
 import { runCustomerPortalProductTaxMigration } from "./lib/customerPortalProductTaxMigration.js";
+import { runCustomerPortalProductCoaMigration } from "./lib/customerPortalProductCoaMigration.js";
 import { runVendorProfileFieldsMigration } from "./lib/vendorProfileFieldsMigration";
 import { runSupplierEnhancementMigration } from "./lib/supplierEnhancementMigration";
 import { runAccountingMigration, repairKasErSportCenterEntries, repairOrphanedEntryLines, syncAccountingSequences, checkSequenceDesync } from "./lib/accountingMigration";
@@ -1992,6 +1993,7 @@ async function startServer() {
     .then(() => runWithRetry("Portal migration", runPortalMigration))
     .then(() => runWithRetry("Customer Portal payment boundary migration", runCustomerPortalPaymentBoundaryMigration))
     .then(() => runWithRetry("Customer Portal product tax scope migration", runCustomerPortalProductTaxMigration))
+    .then(() => runWithRetry("Customer Portal product COA migration", runCustomerPortalProductCoaMigration))
     .then(() => runWithRetry("Portal payment company scope migration", runPortalPaymentCompanyMigration))
     .then(() => runWithRetry("Accounting migration", runAccountingMigration))
     .then(() => runWithRetry("COA governance migration", runCoaGovernanceMigration))
