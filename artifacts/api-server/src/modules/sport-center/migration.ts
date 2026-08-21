@@ -4020,6 +4020,33 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
       ADD COLUMN IF NOT EXISTS canonical_bank_mutation_id INTEGER
   `));
 
+  /*
+   * The canonical settlement link must point at the Sport Center canonical
+   * mutation table.  An older runtime installed this FK with an unqualified
+   * reference while public.bank_mutations was first in search_path, which
+   * made every handoff fail as soon as it supplied a canonical ID.
+   */
+  await db.execute(sql.raw(`
+    DO $migration$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'payment_settlement_batches_canonical_bank_mutation_fk'
+          AND conrelid = 'sport_center.payment_settlement_batches'::regclass
+      ) THEN
+        ALTER TABLE sport_center.payment_settlement_batches
+          DROP CONSTRAINT payment_settlement_batches_canonical_bank_mutation_fk;
+      END IF;
+
+      ALTER TABLE sport_center.payment_settlement_batches
+        ADD CONSTRAINT payment_settlement_batches_canonical_bank_mutation_fk
+        FOREIGN KEY (canonical_bank_mutation_id)
+        REFERENCES sport_center.bank_mutations(id);
+    END;
+    $migration$;
+  `));
+
   await db.execute(sql.raw(`
     ALTER TABLE sport_center.bank_mutations
       ADD COLUMN IF NOT EXISTS canonical_key TEXT
@@ -4185,6 +4212,27 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
         RAISE EXCEPTION
           'CANONICAL_MUTATION_BRIDGE_UNRESOLVED: settlement=% public_mutation=%',
           p_settlement_id, v_public_id;
+      END IF;
+
+      /*
+       * The bridge routine is also invoked by the public-bank-mutation
+       * trigger.  Do not trust only its scalar return value when this
+       * handoff is the caller that owns the settlement FK: resolve the
+       * canonical identity again by mutation_key in the current transaction.
+       * This prevents a stale/legacy bridge return value from linking a
+       * settlement to an ID that is not the canonical row for this payment.
+       */
+      SELECT id
+        INTO v_canonical_id
+        FROM sport_center.bank_mutations
+       WHERE mutation_key = v_mutation_key
+         AND company_id = v_batch.company_id
+       FOR UPDATE;
+
+      IF v_canonical_id IS NULL THEN
+        RAISE EXCEPTION
+          'CANONICAL_MUTATION_IDENTITY_UNRESOLVED: settlement=% key=%',
+          p_settlement_id, v_mutation_key;
       END IF;
 
       UPDATE sport_center.bank_mutations

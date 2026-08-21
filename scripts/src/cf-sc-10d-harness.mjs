@@ -179,6 +179,18 @@ function assertZeroEffects(row, label) {
   }
 }
 
+function snapshotDiff(before, after) {
+  const left = JSON.parse(before);
+  const right = JSON.parse(after);
+  const diff = {};
+  for (const key of Object.keys(left)) {
+    if (JSON.stringify(left[key]) !== JSON.stringify(right[key])) {
+      diff[key] = { before: left[key], after: right[key] };
+    }
+  }
+  return diff;
+}
+
 async function snapshot(db) {
   const result = await db.query(`
     SELECT jsonb_build_object(
@@ -340,6 +352,8 @@ async function runCorruptionCase(label, mutate) {
     assert(effectiveDate, `${label}: fixture effective date missing`);
     fixture.effectiveDate = effectiveDate;
     const normal = await resolveConfig(db, effectiveDate);
+    const fixtureBaseline = await counts(db, [fixture.paymentId]);
+    const normal = await resolveConfig(db);
     assertConfig(normal, `${label} precondition`);
     await mutate(db, normal, effectiveDate);
     await corruptionPrecondition(db, label, normal, effectiveDate);
@@ -349,6 +363,17 @@ async function runCorruptionCase(label, mutate) {
     assert(processor.claimed === 1, `${label}: claimed=${processor.claimed}`);
     assert(processor.posted === 0, `${label}: unexpectedly posted`);
     assert(processor.manualReview === 1, `${label}: expected manual review`);
+    const row = await counts(db, [fixture.paymentId]);
+    if (row.accounting !== fixtureBaseline.accounting || row.accounting_lines !== fixtureBaseline.accounting_lines) {
+      const debug = await db.query(
+        "SELECT id, journal_type, status, source_table, source_id, payment_id FROM sport_center.accounting_journals WHERE payment_id = $1",
+        [fixture.paymentId],
+      );
+      throw new Error(`${label}: processor added accounting rows; baseline=${JSON.stringify(fixtureBaseline)} after=${JSON.stringify(row)} rows=${JSON.stringify(debug.rows)} processor=${JSON.stringify(processor)}`);
+    }
+    for (const field of ["settlement_items", "settlements", "public_mutations", "bridges"]) {
+      assert(row[field] === 0, `${label}: ${field}=${row[field]} expected 0`);
+    }
     const errors = await db.query(
       "SELECT last_error FROM sport_center.payment_accounting_outbox WHERE payment_id = $1",
       [fixture.paymentId],
@@ -436,6 +461,19 @@ async function setupCommittedFixture(db, label, types) {
   }
 }
 
+async function prepareProcessingRows(db, paymentIds) {
+  await db.query(`
+    INSERT INTO sport_center.central_finance_processing
+      (source_project, source_payment_id, event_type, correlation_id)
+    SELECT o.source_project, o.payment_id, o.event_type,
+           COALESCE(o.correlation_id, 'sc_payment_' || o.payment_id::text)
+      FROM sport_center.payment_accounting_outbox o
+     WHERE o.event_type = 'payment_confirmed'
+       AND o.payment_id = ANY($1::int[])
+    ON CONFLICT (source_project, source_payment_id, event_type) DO NOTHING
+  `, [paymentIds]);
+}
+
 async function processConcurrent(paymentIds) {
   const clients = [client(), client()];
   try {
@@ -461,6 +499,8 @@ async function processConcurrent(paymentIds) {
         setTimeout(() => run(clients[1]).then(resolve, reject), 25);
       }),
     ]);
+      return processCentralFinance({ client: db, fixturePaymentIds: paymentIds });
+    }));
     await Promise.all(clients.map((db) => db.query("COMMIT")));
     return results;
   } catch (error) {
@@ -532,6 +572,7 @@ async function runRace(label, types) {
     await beforeDb.connect();
     const before = await snapshot(beforeDb);
     fixture = await setupCommittedFixture(setup, label, types);
+    await prepareProcessingRows(setup, fixture.paymentIds);
     const results = await processConcurrent(fixture.paymentIds);
     const evidence = await counts(beforeDb, fixture.paymentIds);
     if (evidence.accounting !== types.length) {
@@ -580,6 +621,9 @@ async function runRace(label, types) {
       }));
     }
     assert(after === before, `${label}: existing DEV identities changed`);
+      console.error(`${label}: existing DEV snapshot diff=${JSON.stringify(snapshotDiff(before, after))}`);
+      throw new Error(`CF_SC_10D_ASSERTION_FAILED: ${label}: existing DEV identities changed`);
+    }
     const cleaned = await cleanupCounts(beforeDb, fixture);
     for (const field of ["processing", "outbox", "accounting", "accounting_lines", "settlement_items", "settlements", "public_mutations", "bridges", "bookings"]) {
       assert(cleaned[field] === 0, `${label}: cleanup ${field}=${cleaned[field]}`);
