@@ -10,6 +10,10 @@ const migrationSource = readFileSync(
   new URL("../lib/customerPortalPaymentBoundaryMigration.ts", import.meta.url),
   "utf8",
 );
+const modeSource = readFileSync(
+  new URL("../lib/financeBoundary.ts", import.meta.url),
+  "utf8",
+);
 const proofSource = readFileSync(
   new URL("../routes/paymentProof.ts", import.meta.url),
   "utf8",
@@ -32,8 +36,8 @@ describe("CF-CP-2 customer portal payment boundary", () => {
   });
 
   it("keeps central mode disabled and shadows only outside production", () => {
-    expect(boundarySource).toContain('mode === "shadow"');
-    expect(boundarySource).toContain('env !== "production"');
+    expect(modeSource).toContain('mode === "shadow"');
+    expect(modeSource).toContain('env === "production"');
     expect(boundarySource).not.toContain("settlement");
     expect(boundarySource).not.toContain("reconciliation");
   });

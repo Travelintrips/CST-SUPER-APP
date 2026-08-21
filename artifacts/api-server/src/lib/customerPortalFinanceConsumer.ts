@@ -86,7 +86,7 @@ export async function processCustomerPortalFinance(options: {
         throw manualReview("tax snapshot incomplete or conflicting");
       }
       if (e.doc_number == null) throw manualReview("sales document missing");
-      const posted = await postSalesInvoice({
+      const accountingPosted = await postSalesInvoice({
         salesDocId: Number(e.sales_document_id),
         docNumber: String(e.doc_number),
         customerName: String(e.customer_name ?? "Customer Portal"),
@@ -95,7 +95,7 @@ export async function processCustomerPortalFinance(options: {
         taxAccountId: 49109,
         companyId: 1,
       });
-      if (!posted) throw new Error("CUSTOMER_PORTAL_ACCOUNTING_POST_FAILED");
+      if (!accountingPosted) throw new Error("CUSTOMER_PORTAL_ACCOUNTING_POST_FAILED");
       await client.query(`
         UPDATE customer_finance_processing
            SET status='posted', processed_at=NOW(), locked_at=NULL, last_error=NULL, updated_at=NOW()
