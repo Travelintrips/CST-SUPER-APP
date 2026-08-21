@@ -645,6 +645,35 @@ export function Navbar() {
                     <span className="hidden 2xl:inline">{t("nav.invoicePayment")}</span>
                     <span className="2xl:hidden">{t("nav.invoice")}</span>
                   </Link>
+                  <div className="relative group 2xl:hidden">
+                    <button
+                      className={navItemCls(location === "/portal-dokumen" || location === "/portal-invoice")}
+                      aria-haspopup="menu"
+                    >
+                      Lainnya
+                      <ChevronDown className="h-3.5 w-3.5 transition-transform duration-200 group-hover:rotate-180" />
+                    </button>
+                    <div className="absolute top-full right-0 mt-1 z-50 w-52 hidden group-hover:block pt-1">
+                      <div className="rounded-2xl overflow-hidden py-1.5 bg-white border border-slate-200 shadow-xl">
+                        <Link href="/portal-dokumen">
+                          <div className={`flex items-center gap-3 px-4 py-2.5 text-[13px] font-medium ${
+                            location === "/portal-dokumen" ? "bg-sky-50 text-sky-700" : "text-slate-700 hover:bg-slate-50"
+                          }`}>
+                            <FolderOpen className="h-4 w-4 text-violet-500 shrink-0" />
+                            {t("nav.documents")}
+                          </div>
+                        </Link>
+                        <Link href="/portal-invoice">
+                          <div className={`flex items-center gap-3 px-4 py-2.5 text-[13px] font-medium ${
+                            location === "/portal-invoice" ? "bg-sky-50 text-sky-700" : "text-slate-700 hover:bg-slate-50"
+                          }`}>
+                            <Receipt className="h-4 w-4 text-emerald-500 shrink-0" />
+                            {t("nav.invoicePayment")}
+                          </div>
+                        </Link>
+                      </div>
+                    </div>
+                  </div>
                   <Link href="/company-profile" className={navItemCls(
                     location === "/company-profile" || location === "/account-security"
                   )}>
