@@ -519,11 +519,10 @@ export function Navbar() {
           </div>
 
           {/* ── Desktop Nav — center ─────────────────────── */}
-          {/* Keep the full navigation for wide screens only. At laptop/tablet
-              widths the combined public/authenticated links do not fit beside
-              search, language, and auth actions, so use the mobile drawer
-              instead of allowing labels to overlap. */}
-          <div className="hidden 2xl:flex items-center gap-0 xl:gap-0.5 flex-1 min-w-0">
+          {/* Desktop navigation remains visible on laptops/PCs. Lower-priority
+              items collapse into "Lainnya" at narrower desktop widths so the
+              header stays desktop without allowing labels to overlap. */}
+          <div className="hidden lg:flex items-center gap-0 xl:gap-0.5 flex-1 min-w-0">
 
             {isAuth ? (
               /* ── Portal Nav (logged-in customer) ──────── */
@@ -672,9 +671,9 @@ export function Navbar() {
                       </div>
                     </div>
                   </div>
-                  <Link href="/company-profile" className={navItemCls(
+                   <Link href="/company-profile" className={`hidden xl:flex ${navItemCls(
                     location === "/company-profile" || location === "/account-security"
-                  )}>
+                   )}`}>
                     <span className="hidden 2xl:inline">{t("nav.companyProfile")}</span>
                     <span className="2xl:hidden">{t("nav.profile")}</span>
                   </Link>
@@ -834,7 +833,7 @@ export function Navbar() {
                 </div>
 
                 {/* More dropdown */}
-                <div className="relative" ref={moreRef}>
+                <div className="relative hidden 2xl:block" ref={moreRef}>
                   <button
                     className={navItemCls(location === "/calculator")}
                     onClick={() => setMoreOpen((v) => !v)}
@@ -881,7 +880,7 @@ export function Navbar() {
           </div>
 
           {/* ── Right Actions ──────────────────────────────── */}
-          <div className="hidden 2xl:flex items-center gap-1 xl:gap-1.5 shrink-0 ml-auto">
+          <div className="hidden lg:flex items-center gap-1 xl:gap-1.5 shrink-0 ml-auto">
 
             {/* Search — always visible */}
             <div className="relative" ref={searchRef}>
@@ -1053,7 +1052,7 @@ export function Navbar() {
           </div>
 
           {/* ── Mobile Header Right ─────────────────────── */}
-          <div className="2xl:hidden flex items-center gap-1 ml-auto">
+          <div className="lg:hidden flex items-center gap-1 ml-auto">
             <button
               onClick={() => {
                 setSearchOpen((v) => !v);
@@ -1087,7 +1086,7 @@ export function Navbar() {
 
         {/* ── Mobile Search Bar ───────────────────────────── */}
         {searchOpen && (
-          <div className="2xl:hidden pb-3" ref={searchRef}>
+          <div className="lg:hidden pb-3" ref={searchRef}>
             <form onSubmit={handleSearchSubmit} className="flex items-center gap-2">
               <div
                 className="flex-1 flex items-center gap-2 px-3 py-2.5 rounded-xl border"
@@ -1159,7 +1158,7 @@ export function Navbar() {
       <>
         {/* Backdrop — premium dark blur */}
         <div
-          className={`2xl:hidden fixed inset-0 z-[60] transition-all duration-300 ${isOpen ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}`}
+          className={`lg:hidden fixed inset-0 z-[60] transition-all duration-300 ${isOpen ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}`}
           style={{ background: "rgba(8,15,34,0.72)", backdropFilter: "blur(6px)" }}
           onClick={() => setIsOpen(false)}
           aria-hidden="true"
@@ -1167,7 +1166,7 @@ export function Navbar() {
 
         {/* Premium slide panel */}
         <div
-          className={`2xl:hidden fixed top-0 right-0 h-full z-[70] flex flex-col transition-transform duration-300 ease-out ${isOpen ? "translate-x-0" : "translate-x-full"}`}
+          className={`lg:hidden fixed top-0 right-0 h-full z-[70] flex flex-col transition-transform duration-300 ease-out ${isOpen ? "translate-x-0" : "translate-x-full"}`}
           style={{
             width: "min(88vw, 360px)",
             background: "#fff",
