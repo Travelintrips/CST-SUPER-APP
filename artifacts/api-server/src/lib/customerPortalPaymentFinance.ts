@@ -1,6 +1,7 @@
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { customerPortalPaymentCorrelation } from "./customerPortalPaymentContract.js";
+import { getCustomerPortalFinanceMode } from "./financeBoundary.js";
 
 type ConfirmationInput = {
   paymentId: number;
@@ -75,13 +76,14 @@ export async function confirmCustomerPortalPayment(
 
     const correlationId = customerPortalPaymentCorrelation(input.paymentId);
     let financeEventId: number | null = null;
-    if (isCustomerPortalShadowMode()) {
+    if (getCustomerPortalFinanceMode() !== "legacy") {
       const event = await tx.execute(sql`
         INSERT INTO customer_payment_finance_events (
           source_project, source_payment_id, event_type, correlation_id,
           company_id, customer_id, sales_document_id, order_id,
           amount, currency, payment_method, payment_provider,
-          provider_reference, paid_at, confirmed_at, schema_version
+          provider_reference, paid_at, confirmed_at, schema_version,
+          product_scope, service_scope, tax_rule_id, tax_rate, tax_amount, tax_treatment
         )
         SELECT
           'customer_portal',
@@ -102,7 +104,15 @@ export async function confirmCustomerPortalPayment(
           ${input.providerReference ?? payment.provider_merchant_trade_no},
           p.paid_at,
           ${input.confirmedAt ?? new Date()},
-          1
+          1,
+          sd.product_scope,
+          (SELECT sdl.service_scope FROM sales_document_lines sdl
+            WHERE sdl.document_id = sd.id AND sdl.service_scope IS NOT NULL
+            ORDER BY sdl.id LIMIT 1),
+          sd.tax_rate_id,
+          NULL,
+          sd.tax_amount,
+          sd.tax_treatment
         FROM payments p
         LEFT JOIN sales_documents sd
           ON p.ref_kind = 'sales'::payment_ref_kind
@@ -126,11 +136,3 @@ export async function confirmCustomerPortalPayment(
   });
 }
 
-function isCustomerPortalShadowMode(): boolean {
-  // Production remains byte-for-byte legacy unless explicitly enabled in a
-  // development environment. "central" is intentionally not implemented.
-  const env = process.env.APP_ENV ?? process.env.NODE_ENV ?? "development";
-  const mode = process.env.CUSTOMER_PORTAL_FINANCE_MODE ??
-    (env === "development" ? "shadow" : "legacy");
-  return env !== "production" && mode === "shadow";
-}

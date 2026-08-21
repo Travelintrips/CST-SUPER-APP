@@ -1,4 +1,5 @@
 import app from "./app";
+import pg from "pg";
 import { logger } from "./lib/logger";
 import { bootstrapConfigFromSupabase } from "./lib/configBootstrap";
 import { runTranslationsMigration } from "./lib/translationsMigration";
@@ -130,6 +131,8 @@ import { startRekonsiliasiWorker } from "./lib/rekonsiliasiWorker.js";
 import { startLedgerConsistencyWorker } from "./lib/jobs/ledgerConsistencyCheck.js";
 import { startOutboxProcessor } from "./lib/accounting/outboxProcessor.js";
 import { startCentralFinanceProcessor } from "./lib/centralFinance.js";
+import { processCustomerPortalFinance } from "./lib/customerPortalFinanceConsumer.js";
+import { runCustomerPortalFinanceProcessingMigration } from "./lib/customerPortalFinanceProcessingMigration.js";
 import { startFinancialEventBusWorker } from "./lib/financialEventBus.js";
 import { startFailedJobReplayWorker } from "./lib/financial/failedJobSystem.js";
 import { startDualWriteRetryWorker, startDualWriteIntegrityWorker } from "./lib/services/dualWriteReliabilityService.js";
@@ -1911,6 +1914,18 @@ async function startServer() {
   registerWorker("ledger-consistency-check", startLedgerConsistencyWorker, 95_000);
   registerWorker("financial-outbox-processor", startOutboxProcessor, 3_000);
   registerWorker("central-finance-processor", startCentralFinanceProcessor, 4_000);
+  registerWorker("customer-portal-finance-processor", () => {
+    if ((process.env.APP_ENV ?? process.env.NODE_ENV) === "production") return;
+    if (process.env.CUSTOMER_PORTAL_FINANCE_MODE !== "central") return;
+    const url = process.env.SUPABASE_DATABASE_URL_DEV;
+    if (!url) return;
+    const pool = new pg.Pool({ connectionString: url, ssl: { rejectUnauthorized: false }, max: 1 });
+    const tick = () => void pool.connect().then(async (client) => {
+      try { await processCustomerPortalFinance({ client }); } finally { client.release(); }
+    }).catch(() => undefined);
+    setTimeout(tick, 5_000).unref();
+    setInterval(tick, 10_000).unref();
+  }, 4_000);
   registerWorker("financial-event-bus", startFinancialEventBusWorker, 5_000);
   registerWorker("failed-job-replay", startFailedJobReplayWorker, 110_000);
   // Phase 2A.2 — Dual Write Reliability workers
@@ -1993,6 +2008,7 @@ async function startServer() {
     .then(() => runWithRetry("Holding migration", runHoldingMigration))
     .then(() => runWithRetry("Portal migration", runPortalMigration))
     .then(() => runWithRetry("Customer Portal payment boundary migration", runCustomerPortalPaymentBoundaryMigration))
+    .then(() => runWithRetry("Customer Portal finance processing migration", runCustomerPortalFinanceProcessingMigration))
     .then(() => runWithRetry("Customer Portal product tax scope migration", runCustomerPortalProductTaxMigration))
     .then(() => runWithRetry("Customer Portal product COA migration", runCustomerPortalProductCoaMigration))
     .then(() => runWithRetry("Customer Portal service type migration", runCustomerPortalServiceTypeMigration))

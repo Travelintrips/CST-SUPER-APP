@@ -27,6 +27,12 @@ export async function runCustomerPortalPaymentBoundaryMigration(): Promise<void>
       provider_reference TEXT,
       paid_at TIMESTAMPTZ NOT NULL,
       confirmed_at TIMESTAMPTZ NOT NULL,
+      product_scope TEXT,
+      service_scope TEXT,
+      tax_rule_id INTEGER,
+      tax_rate NUMERIC(8,4),
+      tax_amount NUMERIC(14,2),
+      tax_treatment TEXT,
       schema_version INTEGER NOT NULL DEFAULT 1,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       CONSTRAINT customer_payment_finance_events_identity
@@ -34,6 +40,15 @@ export async function runCustomerPortalPaymentBoundaryMigration(): Promise<void>
       CONSTRAINT customer_payment_finance_events_correlation_unique
         UNIQUE (correlation_id)
     )
+  `);
+  await db.execute(sql`
+    ALTER TABLE customer_payment_finance_events
+      ADD COLUMN IF NOT EXISTS product_scope TEXT,
+      ADD COLUMN IF NOT EXISTS service_scope TEXT,
+      ADD COLUMN IF NOT EXISTS tax_rule_id INTEGER,
+      ADD COLUMN IF NOT EXISTS tax_rate NUMERIC(8,4),
+      ADD COLUMN IF NOT EXISTS tax_amount NUMERIC(14,2),
+      ADD COLUMN IF NOT EXISTS tax_treatment TEXT
   `);
   await db.execute(sql`
     CREATE INDEX IF NOT EXISTS customer_payment_finance_events_payment_idx

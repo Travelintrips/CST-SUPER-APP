@@ -20,6 +20,7 @@ import { isSafeDevTestMode } from "../lib/safeDev.js";
 import { isNewPaidTransition } from "../lib/paymentWebhookConsistency.js";
 import { normalizeCompanyId } from "../lib/services/portalCompanyScopeUtils.js";
 import { confirmCustomerPortalPayment } from "../lib/customerPortalPaymentFinance.js";
+import { shouldRunCustomerPortalLegacyFinanceWrites } from "../lib/financeBoundary.js";
 
 const router = Router();
 
@@ -733,7 +734,7 @@ paymentsWebhookRouter.post("/paylabs/webhook", async (req, res) => {
     if (payment.refKind === "sales") {
       const [salesDoc] = await db.select().from(salesDocumentsTable).where(eq(salesDocumentsTable.id, payment.refId));
       const invoiceResult = await markSalesInvoiced(payment.refId, "paylabs");
-      if (invoiceResult.ok && !invoiceResult.alreadySet && salesDoc) {
+      if (shouldRunCustomerPortalLegacyFinanceWrites() && invoiceResult.ok && !invoiceResult.alreadySet && salesDoc) {
         const invoicePosted = await postSalesInvoice({
           salesDocId: salesDoc.id,
           docNumber: salesDoc.docNumber,
@@ -822,7 +823,7 @@ router.post("/:id/simulate-paid", async (req, res) => {
     if (payment.refKind === "sales") {
       const [salesDoc2] = await db.select().from(salesDocumentsTable).where(eq(salesDocumentsTable.id, payment.refId));
       const invoiceResult2 = await markSalesInvoiced(payment.refId, "paylabs");
-      if (invoiceResult2.ok && !invoiceResult2.alreadySet && salesDoc2) {
+      if (shouldRunCustomerPortalLegacyFinanceWrites() && invoiceResult2.ok && !invoiceResult2.alreadySet && salesDoc2) {
         const invoicePosted = await postSalesInvoice({
           salesDocId: salesDoc2.id,
           docNumber: salesDoc2.docNumber,

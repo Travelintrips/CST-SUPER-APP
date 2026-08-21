@@ -71,6 +71,7 @@ import { runVendorMiniFormMigration } from "./lib/vendorMiniFormMigration.js";
 import { runCustomerInvoiceCompanyScopeMigration } from "./lib/customerInvoiceCompanyScopeMigration.js";
 import { runCustomerPortalProductCoaMigration } from "./lib/customerPortalProductCoaMigration.js";
 import { runCustomerPortalServiceTypeMigration } from "./lib/customerPortalServiceTypeMigration.js";
+import { runCustomerPortalFinanceProcessingMigration } from "./lib/customerPortalFinanceProcessingMigration.js";
 import { runCustomerQuoteFlowMigration } from "./lib/customerQuoteFlowMigration.js";
 import { runEnterpriseMigration } from "./lib/enterpriseMigration.js";
 import { runShortLinksMigration } from "./lib/shortLinksMigration.js";
@@ -204,6 +205,7 @@ async function main() {
   await runSafe("customerInvoiceCompanyScope", runCustomerInvoiceCompanyScopeMigration);
   await runSafe("customerPortalProductCoa", runCustomerPortalProductCoaMigration);
   await runSafe("customerPortalServiceType", runCustomerPortalServiceTypeMigration);
+  await runSafe("customerPortalFinanceProcessing", runCustomerPortalFinanceProcessingMigration);
   await runSafe("customerQuoteFlow", runCustomerQuoteFlowMigration);
   await runSafe("enterprise", runEnterpriseMigration);
   await runSafe("shortLinks", runShortLinksMigration);
