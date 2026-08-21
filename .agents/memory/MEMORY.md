@@ -91,6 +91,7 @@
 - [Schema canonicalization bundle gate](schema-canonicalization-bundle-gate.md) — strict DEV/PROD schema reconciliation requires APP_ENV metadata in each GCP bundle.
 - [Canonical owner routine restoration](canonical-owner-routine-restore.md) — restore only through the DEV-only runner, then verify exact pg_proc signatures; never treat source or a table presence as live proof.
 - [Live schema diff discipline](live-schema-diff-discipline.md) — raw catalog inequality is not automatically canonical drift; preserve PROD security hardening and classify legacy objects first.
+- [CF-SC-11 PROD parity blocker](cf-sc11-prod-parity-blocker.md) — legacy objects may exist while the shared Central Finance contract, canonical FK, and startup stages are still missing or failed.
 - [Development migration URL safety](dev-migration-url-safety.md) — verify DEV migration URLs independently; a DEV bundle can expose a write target that points to PROD.
 - [Safe DEV accounting fixture drift](safe-dev-accounting-fixture.md) — runtime harnesses must resolve accounting fixtures semantically; shared DEV IDs can drift and block otherwise safe proofs.
 - [Trial balance parent rollup](trial-balance-parent-rollup.md) — hierarchical reports must roll child lines to ancestors and preserve the authenticated company/period scope in proofs.
