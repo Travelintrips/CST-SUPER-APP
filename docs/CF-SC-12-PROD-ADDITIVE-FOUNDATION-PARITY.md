@@ -246,3 +246,24 @@ one reviewed additive migration. Do not advance the startup marker merely to
 hide the failed COA identity check.
 
 **STOP.**
+
+## Current platform recheck — 2026-08-21
+
+The CF-SC-12A read-only gate was rechecked from the current workspace before
+any production query was attempted. The database service reported that this
+Repl does not have a production database:
+
+```text
+PROD CONNECTION = NOT AVAILABLE
+READ ONLY       = NOT REACHED
+PROD QUERIES    = 0
+PROD WRITES     = 0
+PROD MIGRATIONS = 0
+```
+
+Because a production replica/database is not provisioned for this workspace,
+the current run cannot independently revalidate the historical PROD evidence
+above. DEV was deliberately not used as a substitute, and no COA
+classification or additive proposal was promoted from assumption. CF-SC-12A
+therefore remains `BLOCKED`; resume only after an explicitly identifiable PROD
+database is available for read-only inspection.
