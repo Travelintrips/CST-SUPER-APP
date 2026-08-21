@@ -46,6 +46,7 @@ async function ensureProcessingRows(client: QueryClient, fixturePaymentIds?: num
        )
     ON CONFLICT (source_project, source_payment_id, event_type) DO NOTHING
   `, params);
+}
 async function claimBatch(client: QueryClient, transactionClient?: pg.PoolClient, fixturePaymentIds?: number[]): Promise<Claim[]> {
   const clientCanConnect = typeof (client as pg.Pool).connect === "function";
   const tx = transactionClient ??
