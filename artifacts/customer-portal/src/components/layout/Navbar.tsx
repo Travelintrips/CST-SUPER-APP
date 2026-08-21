@@ -833,7 +833,7 @@ export function Navbar() {
                 </div>
 
                 {/* More dropdown */}
-                <div className="relative hidden 2xl:block" ref={moreRef}>
+                <div className="relative hidden xl:block" ref={moreRef}>
                   <button
                     className={navItemCls(location === "/calculator")}
                     onClick={() => setMoreOpen((v) => !v)}
@@ -882,14 +882,14 @@ export function Navbar() {
           {/* ── Right Actions ──────────────────────────────── */}
           <div className="hidden lg:flex items-center gap-1 xl:gap-1.5 shrink-0 ml-auto">
 
-            {/* Search — always visible */}
+            {/* Search — compact icon until focused, then expands */}
             <div className="relative" ref={searchRef}>
               <form onSubmit={handleSearchSubmit} className="flex items-center">
                 <div
                   className={`flex items-center py-2 rounded-xl border transition-all duration-200 cursor-pointer ${
                     searchFocused
                       ? "w-[220px] gap-2 px-3"
-                      : "w-9 xl:w-[150px] 2xl:w-[220px] gap-0 xl:gap-2 px-2.5 xl:px-3 justify-center xl:justify-start"
+                      : "w-9 gap-0 px-2.5 justify-center"
                   }`}
                   style={{
                     background: "rgba(248,250,252,0.9)",
@@ -910,7 +910,7 @@ export function Navbar() {
                     className={`bg-transparent text-[13px] text-slate-800 placeholder-slate-400 outline-none transition-all duration-200 ${
                       searchFocused
                         ? "w-full opacity-100"
-                        : "w-0 opacity-0 xl:w-full xl:opacity-100"
+                        : "w-0 opacity-0"
                     }`}
                     autoComplete="off"
                   />
