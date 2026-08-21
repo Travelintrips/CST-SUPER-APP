@@ -4,6 +4,30 @@
 **Input gate:** CF-SC-11 PROD read-only parity = `BLOCKED`  
 **Scope:** additive foundation only; production must remain legacy
 
+## CF-SC-12B targeted runner
+
+The repository now contains a dedicated, additive production runner:
+
+```text
+scripts/cf-sc-12b-targeted-prod-migration.mjs
+CF_SC_12B_APPLY=true pnpm db:migrate:cf-sc-12b:prod
+```
+
+It is deliberately not part of generic DEV→PROD reconciliation and is not
+called during application startup. It refuses to write unless both
+`APP_ENV=production` and the explicit opt-in `CF_SC_12B_APPLY=true` are
+present. The runner creates only the five CF-SC-12B foundation tables,
+prechecks canonical settlement references before adding the FK, installs the
+checked-in certified Sport Center owner functions, seeds the verified PROD
+business identities, and performs a resolver proof in the same transaction.
+It does not process payments, settlements, reconciliation, provider calls, or
+notifications.
+
+The runner has been added to the codebase but has **not** been executed by this
+workspace session. Therefore the result below remains the historical
+pre-migration result until an explicitly authorized PROD run produces a
+read-only parity report and idempotency proof.
+
 ## Final result
 
 ```text
