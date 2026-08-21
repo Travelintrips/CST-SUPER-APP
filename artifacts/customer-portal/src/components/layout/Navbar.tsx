@@ -233,14 +233,14 @@ function getAutocompleteSuggestions(
   q: string,
   liveItems: MarketplaceResult[],
 ): AutocompleteEntry[] {
-  if (q.length < 2) return DEFAULT_SUGGESTIONS;
-
   const liveResults: AutocompleteEntry[] = liveItems
     .filter((item) =>
-      item.name.toLowerCase().includes(q) ||
-      (item.description ?? "").toLowerCase().includes(q),
+      item.name.trim().length > 0 &&
+      (q.length < 2 ||
+        item.name.toLowerCase().includes(q) ||
+        (item.description ?? "").toLowerCase().includes(q)),
     )
-    .slice(0, 5)
+    .slice(0, q.length < 2 ? 6 : 8)
     .map((item) => {
       const isSvc = item.templateKind === "service";
       const cat = isSvc ? item.serviceType : item.categoryKey;
@@ -254,16 +254,10 @@ function getAutocompleteSuggestions(
       };
     });
 
-  const liveLabels = new Set(liveResults.map((r) => r.label.toLowerCase()));
-  const staticResults = AUTOCOMPLETE_MAP.filter(
-    (e) =>
-      !liveLabels.has(e.label.toLowerCase()) &&
-      (e.label.toLowerCase().includes(q) ||
-        e.description.toLowerCase().includes(q) ||
-        e.terms.some((t) => t.includes(q) || q.includes(t))),
-  ).slice(0, 3);
-
-  return [...liveResults, ...staticResults].slice(0, 8);
+  // Search suggestions must reflect the currently published/active catalog.
+  // Do not append AUTOCOMPLETE_MAP: its entries are examples and can become
+  // stale when products or services are removed from the marketplace.
+  return liveResults;
 }
 
 const NAV_BASE: React.CSSProperties = {
@@ -455,7 +449,7 @@ export function Navbar() {
     staleTime: 5 * 60 * 1000,
   });
 
-  // Smart autocomplete: ≥2 chars → search live items + static, else show defaults
+  // Smart autocomplete is sourced only from currently published marketplace items.
   const autocompleteSuggestions = getAutocompleteSuggestions(
     searchQuery.trim().toLowerCase(),
     liveItems,
