@@ -87,4 +87,55 @@ export async function runCustomerPortalServiceTypeMigration(): Promise<void> {
        )
      ORDER BY tr.id
    `);
+
+  await db.execute(sql`
+    INSERT INTO finance_project_coa_mappings (
+      finance_project_config_id, account_role, coa_id, product_scope,
+      service_scope, payment_method, provider_code, is_active, effective_from,
+      effective_to, metadata, created_by, updated_by
+    )
+    SELECT 3, 'REVENUE', mapping.coa_id, 'jasa', mapping.service_scope,
+           NULL, NULL, TRUE, CURRENT_DATE, NULL,
+           jsonb_build_object(
+             'source', 'CF-CP-6B',
+             'evidence', 'canonical service type and company-1 CST revenue COA',
+             'service_code', mapping.service_scope,
+             'account_code', mapping.account_code
+           ),
+           'CF-CP-6B', 'CF-CP-6B'
+      FROM (
+        VALUES
+          ('trucking'::text, '4-1013-CST'::text),
+          ('sea_freight'::text, '4-1011-CST'::text),
+          ('air_freight'::text, '4-1012-CST'::text),
+          ('ppjk'::text, '4-1014-CST'::text),
+          ('handling'::text, '4-1018-CST'::text),
+          ('document'::text, '4-1019-CST'::text)
+      ) AS mapping(service_scope, account_code)
+      JOIN chart_of_accounts ca
+        ON ca.company_id = 1
+       AND ca.code = mapping.account_code
+       AND ca.is_active = TRUE
+       AND ca.is_postable = TRUE
+     WHERE EXISTS (
+       SELECT 1
+         FROM finance_project_configs
+        WHERE id = 3
+          AND project_code = 'customer_portal'
+          AND company_id = 1
+          AND is_active = TRUE
+     )
+       AND NOT EXISTS (
+       SELECT 1
+         FROM finance_project_coa_mappings existing
+        WHERE existing.finance_project_config_id = 3
+          AND existing.account_role = 'REVENUE'
+          AND existing.product_scope = 'jasa'
+          AND lower(existing.service_scope) = lower(mapping.service_scope)
+          AND existing.is_active = TRUE
+          AND existing.effective_from <= CURRENT_DATE
+          AND (existing.effective_to IS NULL OR CURRENT_DATE < existing.effective_to)
+     )
+    RETURNING id
+  `);
 }
