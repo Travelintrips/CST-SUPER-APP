@@ -59,16 +59,26 @@ export async function resolveFinanceProjectConfig(
   }
   let result: { rows: unknown[] };
   try {
-    result = await db.execute(sql`
-      SELECT *
-      FROM sport_center.resolve_shared_finance_config(
-        ${input.projectCode},
-        ${input.companyId},
-        ${input.paymentMethod},
-        ${input.providerCode},
-        ${input.effectiveDate}::date
-      )
-    `);
+    result = await db.execute(input.projectCode === "customer_portal"
+      ? sql`
+        SELECT *
+        FROM public.resolve_customer_portal_finance_config(
+          ${input.companyId},
+          ${input.paymentMethod},
+          ${input.providerCode},
+          ${input.effectiveDate}::date
+        )
+      `
+      : sql`
+        SELECT *
+        FROM sport_center.resolve_shared_finance_config(
+          ${input.projectCode},
+          ${input.companyId},
+          ${input.paymentMethod},
+          ${input.providerCode},
+          ${input.effectiveDate}::date
+        )
+      `);
   } catch (error) {
     const cause = (error as { cause?: { message?: unknown } }).cause?.message;
     throw new Error(String(cause ?? (error instanceof Error ? error.message : error)));
