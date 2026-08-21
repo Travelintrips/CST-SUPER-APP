@@ -123,3 +123,4 @@
 - [PROD COA resolution](prod-coa-resolution.md) — exact linked COA can be postable yet non-canonical when ownership is NULL; prove parent/sibling structure before additive repair.
 - [CF-SC-12B targeted runner](cf-sc12b-targeted-runner.md) — apply the additive PROD foundation only through an explicit guarded runner; never from startup or generic reconciliation.
 - [CF-SC-10B processor boundary](cf-sc10b-processor-boundary.md) — central processor orchestrates outbox state and delegates accounting ownership to the DB function; keep legacy mode until smoke passes.
+- [CF-SC-10B harness baseline](cf-sc-10b-harness-baseline.md) — compare dynamic existing-row snapshots; never assume a fixed DEV outbox/processing count.
