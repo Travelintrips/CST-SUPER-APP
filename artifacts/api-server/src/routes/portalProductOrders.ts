@@ -36,12 +36,39 @@ import { broadcastToAdmins, broadcastToPortal } from "../lib/sseManager";
 import { signVendorResponseToken, verifyVendorResponseToken } from "../lib/vendorResponseToken.js";
 import { postStockOut, StockShortageError } from "../lib/inventoryStock.js";
 import { postSalesInvoice } from "../lib/accounting.js";
+import {
+  assertCustomerPortalServiceScope,
+  calculateCustomerPortalExclusiveTax,
+  normalizeCustomerPortalProductScope,
+} from "../lib/customerPortalTaxContract.js";
 import { getAdminGroupWa } from "../lib/adminWa.js";
 import {
   PortalCompanyScopeError,
   normalizeCompanyId,
   resolvePortalCustomerCompanyIdByEmail,
 } from "../lib/services/portalCompanyScope.js";
+
+async function resolveCustomerPortalTaxSnapshot(productScope: "goods" | "jasa") {
+  const result = await db.execute(sql`
+    SELECT tm.tax_rule_id, tr.tax_rate
+      FROM finance_project_tax_mappings tm
+      JOIN finance_project_configs fpc ON fpc.id = tm.finance_project_config_id
+      JOIN tax_rules tr ON tr.id = tm.tax_rule_id
+     WHERE fpc.project_code = 'customer_portal'
+       AND fpc.company_id = 1
+       AND fpc.is_active = TRUE
+       AND tm.transaction_type = 'sales_order'
+       AND tm.product_scope = ${productScope}
+       AND tm.is_active = TRUE
+       AND tr.is_active = TRUE
+       AND tr.direction = 'output'
+     ORDER BY tm.effective_from DESC, tm.id DESC
+     LIMIT 2
+  `);
+  if (result.rows.length !== 1) throw new Error("CUSTOMER_PORTAL_TAX_MAPPING_NOT_DETERMINISTIC");
+  const row = result.rows[0] as { tax_rule_id: number; tax_rate: string | number };
+  return { taxRuleId: Number(row.tax_rule_id), rate: Number(row.tax_rate) / 100, treatment: "exclusive" as const, productScope };
+}
 
 export const portalProductOrdersRouter = Router();
 
@@ -397,7 +424,12 @@ async function maybeCreateInvoiceLink(orderId: number): Promise<string | null> {
   let subtotal: number;
   let grandTotal: number;
   let taxAmount: number;
-  const taxRate = 11;
+  const productScope = normalizeCustomerPortalProductScope(order.productCategory);
+  const orderTax = order as typeof order & { taxRuleId?: number | null; taxRate?: string | number | null };
+  const taxSnapshot = orderTax.taxRuleId && orderTax.taxRate != null
+    ? { taxRuleId: Number(orderTax.taxRuleId), rate: Number(orderTax.taxRate) / 100, treatment: "exclusive" as const, productScope }
+    : await resolveCustomerPortalTaxSnapshot(productScope);
+  const taxRate = taxSnapshot.rate * 100;
 
   if (isProductFirst) {
     // Product line items
@@ -424,9 +456,8 @@ async function maybeCreateInvoiceLink(orderId: number): Promise<string | null> {
     }
 
     const lineTotal = productCost + shipCost + truckCostVal;
-    taxAmount = Math.round(lineTotal * taxRate / 100);
+    ({ taxAmount, grandTotal } = calculateCustomerPortalExclusiveTax(lineTotal, taxSnapshot));
     subtotal = lineTotal;
-    grandTotal = lineTotal + taxAmount;
   } else {
     // Standard order — use stored totals
     subtotal = parseFloat(order.subtotal);
@@ -475,10 +506,10 @@ function computeProductFirstBreakdown(
   productSubtotal: number,
   shipCost: number,
   truckCostVal: number,
-  taxRate = 11,
+  taxRate: number,
 ) {
   const lineTotal = productSubtotal + shipCost + truckCostVal;
-  const ppn = Math.round(lineTotal * taxRate / 100);
+  const { taxAmount: ppn } = calculateCustomerPortalExclusiveTax(lineTotal, { rate: taxRate / 100 });
   return { productCost: productSubtotal, shipCost, truckCostVal, ppn, grandTotal: lineTotal + ppn };
 }
 
@@ -489,9 +520,10 @@ function buildProductFirstInvoiceWa(
   shipCost: number,
   truckCostVal: number,
   invoiceUrl: string,
+  taxRate: number,
 ): string {
   const fmtRp = (n: number) => `Rp ${Math.round(n).toLocaleString("id-ID")}`;
-  const { ppn, grandTotal } = computeProductFirstBreakdown(productSubtotal, shipCost, truckCostVal);
+  const { ppn, grandTotal } = computeProductFirstBreakdown(productSubtotal, shipCost, truckCostVal, taxRate);
   const truckLine = truckCostVal > 0 ? `\n🚛 Biaya Truk    : ${fmtRp(truckCostVal)}` : "";
   return (
     `📦 *Pesanan Dikirim — ${orderNumber}*\n` +
@@ -641,7 +673,7 @@ portalProductOrdersRouter.post("/orders",
     shippingAddress?: string | null;
     shippingMethod?: string;
     notes?: string;
-    items?: { productId?: number; productName: string; productSku?: string; unit?: string; unitPrice: number; qty: number; subtotal: number; weightKg?: number | null; lengthCm?: number | null; widthCm?: number | null; heightCm?: number | null; goodsType?: string | null }[];
+    items?: { productId?: number; productName: string; productSku?: string; unit?: string; unitPrice: number; qty: number; subtotal: number; weightKg?: number | null; lengthCm?: number | null; widthCm?: number | null; heightCm?: number | null; goodsType?: string | null; productScope?: string | null; serviceScope?: string | null; serviceType?: string | null }[];
     productCategory?: string;
     templateId?: string;
     templateVersion?: string;
@@ -694,8 +726,25 @@ portalProductOrdersRouter.post("/orders",
     }
   }
 
+  const resolvedItems = await Promise.all(items.map(async (item) => {
+    let sourceScope = item.productScope ?? null;
+    if (!sourceScope && item.productId) {
+      const product = await db.execute(sql`SELECT item_type FROM products WHERE id = ${item.productId} LIMIT 1`);
+      sourceScope = (product.rows[0] as { item_type?: string } | undefined)?.item_type ?? null;
+    }
+    const productScope = normalizeCustomerPortalProductScope(sourceScope ?? productCategory);
+    const serviceScope = assertCustomerPortalServiceScope(
+      productScope,
+      item.serviceScope ?? item.serviceType ?? (productScope === "jasa" ? productCategory : null),
+    );
+    return { item, productScope, serviceScope };
+  }));
+  const scopes = new Set(resolvedItems.map((row) => row.productScope));
+  if (scopes.size !== 1) return res.status(400).json({ message: "Satu order Customer Portal tidak boleh mencampur product scope" });
+  const productScope = resolvedItems[0].productScope;
+  const taxSnapshot = await resolveCustomerPortalTaxSnapshot(productScope);
   const subtotal = items.reduce((s, i) => s + (i.subtotal ?? 0), 0);
-  const grandTotal = subtotal;
+  const { taxAmount, grandTotal } = calculateCustomerPortalExclusiveTax(subtotal, taxSnapshot);
   const orderNumber = generateOrderNumber();
   const trackingToken = generateToken();
 
@@ -747,6 +796,10 @@ portalProductOrdersRouter.post("/orders",
         shippingAddress: shippingAddress?.trim() ?? (isPickup ? "AMBIL SENDIRI" : ""),
         notes: notes?.trim() ?? null,
         subtotal: String(subtotal),
+         taxAmount: String(taxAmount),
+         taxRate: String(Number(taxSnapshot.rate * 100)),
+         taxRuleId: taxSnapshot.taxRuleId,
+         taxTreatment: taxSnapshot.treatment,
         grandTotal: String(grandTotal),
         status: "New Order",
         productCategory: categoryForLookup,
@@ -769,7 +822,7 @@ portalProductOrdersRouter.post("/orders",
       await tx.execute(sql`UPDATE portal_product_orders SET product_approve_token = ${productApproveToken} WHERE id = ${order.id}`);
     }
 
-    const itemRows = items.map((i) => ({
+    const itemRows = resolvedItems.map(({ item: i, productScope: itemScope, serviceScope }) => ({
       orderId: order.id,
       productId: i.productId ?? null,
       productName: i.productName,
@@ -783,6 +836,8 @@ portalProductOrdersRouter.post("/orders",
       widthCm: i.widthCm != null ? String(i.widthCm) : null,
       heightCm: i.heightCm != null ? String(i.heightCm) : null,
       goodsType: i.goodsType ?? null,
+      productScope: itemScope,
+      serviceScope,
     }));
     const insertedItems = await tx.insert(portalProductOrderItemsTable).values(itemRows).returning();
 
@@ -1001,7 +1056,7 @@ portalProductOrdersRouter.put("/orders/:id/status", async (req: Request, res: Re
             const productSubtotal = parseFloat(updated.subtotal ?? "0");
             const shipCost = updated.shipmentCost != null ? parseFloat(updated.shipmentCost) : 0;
             const truckCostVal = updated.truckCost != null ? parseFloat(updated.truckCost) : 0;
-            msg = buildProductFirstInvoiceWa(updated.orderNumber, updated.customerName, productSubtotal, shipCost, truckCostVal, invoiceUrl);
+            msg = buildProductFirstInvoiceWa(updated.orderNumber, updated.customerName, productSubtotal, shipCost, truckCostVal, invoiceUrl, Number((updated as any).taxRate ?? 0));
           } else {
             msg = `📦 *Pesanan Dikirim — ${updated.orderNumber}*\n` +
               `Halo ${updated.customerName}, pesanan Anda sedang dalam pengiriman!\n\n` +
@@ -1296,7 +1351,7 @@ portalProductOrdersRouter.post("/orders/:id/resend-invoice", async (req: Request
       const productSubtotal = parseFloat(order.subtotal ?? "0");
       const shipCost = order.shipmentCost != null ? parseFloat(order.shipmentCost) : 0;
       const truckCostVal = order.truckCost != null ? parseFloat(order.truckCost) : 0;
-      msg = buildProductFirstInvoiceWa(order.orderNumber, order.customerName, productSubtotal, shipCost, truckCostVal, invoiceUrl);
+      msg = buildProductFirstInvoiceWa(order.orderNumber, order.customerName, productSubtotal, shipCost, truckCostVal, invoiceUrl, Number((order as any).taxRate ?? 0));
     } else {
       msg = `🧾 *Invoice Pesanan ${order.orderNumber}*\n` +
         `Halo ${order.customerName}, berikut link invoice Anda:\n${invoiceUrl}\n\nTerima kasih! 🙏`;
@@ -1336,8 +1391,13 @@ portalProductOrdersRouter.post("/admin/orders/:id/set-shipment-cost", async (req
   if (invoiceToken) {
     const productSubtotal = parseFloat(order.subtotal ?? "0");
     const lineTotal = productSubtotal + shipCostNum + truckCostNum;
-    const ppn = Math.round(lineTotal * 11 / 100);
-    const newGrandTotal = lineTotal + ppn;
+    const scope = normalizeCustomerPortalProductScope(order.productCategory);
+    const orderTax = order as typeof order & { taxRuleId?: number | null; taxRate?: string | number | null };
+    const taxSnapshot = orderTax.taxRuleId && orderTax.taxRate != null
+      ? { taxRuleId: Number(orderTax.taxRuleId), rate: Number(orderTax.taxRate) / 100, treatment: "exclusive" as const, productScope: scope }
+      : await resolveCustomerPortalTaxSnapshot(scope);
+    const { taxAmount: ppn, grandTotal: newGrandTotal } =
+      calculateCustomerPortalExclusiveTax(lineTotal, taxSnapshot);
 
     // Rebuild line items
     const items = await db.select().from(portalProductOrderItemsTable)

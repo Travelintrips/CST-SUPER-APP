@@ -19,6 +19,10 @@ export const portalProductOrdersTable = pgTable("portal_product_orders", {
   shippingAddress: text("shipping_address").notNull(),
   notes: text("notes"),
   subtotal: numeric("subtotal", { precision: 14, scale: 2 }).notNull().default("0"),
+  taxAmount: numeric("tax_amount", { precision: 14, scale: 2 }).notNull().default("0"),
+  taxRate: numeric("tax_rate", { precision: 8, scale: 4 }),
+  taxRuleId: integer("tax_rule_id"),
+  taxTreatment: text("tax_treatment"),
   grandTotal: numeric("grand_total", { precision: 14, scale: 2 }).notNull().default("0"),
   status: text("status").notNull().default("New Order"),
   // Product Template Engine fields
@@ -72,6 +76,8 @@ export const portalProductOrderItemsTable = pgTable("portal_product_order_items"
   widthCm: numeric("width_cm", { precision: 10, scale: 2 }),
   heightCm: numeric("height_cm", { precision: 10, scale: 2 }),
   goodsType: text("goods_type"),
+  productScope: text("product_scope"),
+  serviceScope: text("service_scope"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

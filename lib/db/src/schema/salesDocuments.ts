@@ -47,6 +47,8 @@ export const salesDocumentsTable = pgTable("sales_documents", {
   taxRateId: integer("tax_rate_id"),
   taxAmount: numeric("tax_amount", { precision: 14, scale: 2 }).notNull().default("0"),
   grandTotal: numeric("grand_total", { precision: 14, scale: 2 }).notNull().default("0"),
+  taxTreatment: text("tax_treatment"),
+  productScope: text("product_scope"),
   origin: text("origin"),
   destination: text("destination"),
   transportMode: text("transport_mode"),
@@ -113,6 +115,8 @@ export const salesDocumentLinesTable = pgTable("sales_document_lines", {
     orderItemId?: number;
     vendorCatalogItemId?: number | null;
     vendorFulfillmentId?: number | null;
+    productScope?: "goods" | "jasa";
+    serviceScope?: string | null;
   } | null>(),
 }, (t) => [
   index("sales_doc_lines_doc_idx").on(t.documentId),
