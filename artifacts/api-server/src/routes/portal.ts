@@ -130,7 +130,6 @@ import {
   deleteLogisticAdminService,
 } from "../lib/services/portalLogisticAdminService.js";
 import multer from "multer";
-import { randomUUID } from "crypto";
 import { verifyPortalJwt } from "../lib/portalJwt.js";
 import { verifySupabaseToken } from "../lib/supabaseAdmin.js";
 import {
@@ -2717,6 +2716,111 @@ router.post("/vendors/:vendorId/contact", _contactInquiryLimiter, async (req, re
 
 const _vendorImgUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
+/**
+ * Resubmit the current item snapshot through the canonical review queue.
+ * An existing submitted row is reused so retries and media edits are idempotent.
+ */
+async function resubmitCatalogItemForReview(itemId: number, supplierId: number) {
+  const [item] = await db
+    .select()
+    .from(vendorCatalogItemsTable)
+    .where(and(
+      eq(vendorCatalogItemsTable.id, itemId),
+      eq(vendorCatalogItemsTable.vendorId, supplierId),
+    ));
+  if (!item) return null;
+
+  const now = new Date();
+  await db.update(vendorCatalogItemsTable)
+    .set({
+      status: "pending_review",
+      isPublished: false,
+      isActive: true,
+      publishedAt: null,
+      updatedAt: now,
+    })
+    .where(and(
+      eq(vendorCatalogItemsTable.id, itemId),
+      eq(vendorCatalogItemsTable.vendorId, supplierId),
+    ));
+
+  const [pending] = await db
+    .select({ id: vendorCatalogSubmissionsTable.id })
+    .from(vendorCatalogSubmissionsTable)
+    .where(and(
+      eq(vendorCatalogSubmissionsTable.catalogItemId, itemId),
+      eq(vendorCatalogSubmissionsTable.status, "submitted"),
+    ))
+    .limit(1);
+
+  const values = {
+    supplierId,
+    vendorName: item.vendorName,
+    categoryKey: item.categoryKey,
+    serviceType: item.serviceType,
+    templateKind: item.templateKind ?? item.type,
+    templateId: item.templateId,
+    templateVersion: item.templateVersion,
+    templateSnapshot: item.templateSnapshot as Record<string, unknown> | null,
+    specValues: item.specValues as Record<string, unknown> | null,
+    name: item.name,
+    description: item.description,
+    unit: item.unit,
+    mediaAssets: item.mediaAssets ?? [],
+    priceBase: item.priceBase,
+    currency: item.currency,
+    stockStatus: item.stockStatus,
+    stockQty: item.stockQty,
+    leadTime: item.leadTime,
+    validityDate: item.validityDate,
+    location: item.location,
+    origin: item.origin,
+    status: "submitted" as const,
+    catalogItemId: itemId,
+    updatedAt: now,
+  };
+
+  let submissionId = pending?.id;
+  const shouldNotify = !submissionId;
+  if (submissionId) {
+    await db.update(vendorCatalogSubmissionsTable)
+      .set(values)
+      .where(and(
+        eq(vendorCatalogSubmissionsTable.id, submissionId),
+        eq(vendorCatalogSubmissionsTable.status, "submitted"),
+      ));
+  } else {
+    const [created] = await db.insert(vendorCatalogSubmissionsTable)
+      .values({ ...values, linkId: null, token: randomUUID(), submittedAt: now })
+      .returning({ id: vendorCatalogSubmissionsTable.id });
+    submissionId = created?.id;
+  }
+
+  if (submissionId) {
+    await db.update(vendorCatalogItemsTable)
+      .set({ sourceSubmissionId: submissionId, updatedAt: now })
+      .where(eq(vendorCatalogItemsTable.id, itemId));
+  }
+
+  if (shouldNotify) void NotificationService.saveAndBroadcast("vendor_product_submitted", {
+    type: "vendor_product_submitted",
+    orderId: itemId,
+    orderNumber: String(itemId),
+    customerName: item.vendorName ?? "Vendor",
+    title: "Produk Menunggu Persetujuan",
+    body: `"${item.name}" dari ${item.vendorName ?? "Vendor"} menunggu review admin.`,
+    targetRole: "admin",
+    supplierId,
+    productName: item.name,
+    catalogItemId: itemId,
+    submissionId,
+  }).catch((notificationError: unknown) => {
+    console.error("[portal] vendor product resubmission notification failed", notificationError);
+  });
+
+  return { itemId, submissionId };
+}
+
 // GET /api/portal/vendor/catalog — list vendor's own catalog items with media
 router.get("/vendor/catalog", requirePortalAuth, async (req, res) => {
   const customerId = (req as PortalAuthReq).portalCustomerId;
@@ -2921,11 +3025,16 @@ router.put("/vendor/catalog/:id", requirePortalAuth, async (req, res) => {
           origin        = ${origin ?? null},
           hs_code       = ${hsCode ?? null},
           spec_values   = ${specValues != null ? JSON.stringify(specValues) : null}::jsonb,
+           status        = 'pending_review',
+           is_published  = false,
+           is_active     = true,
+           published_at  = NULL,
           updated_at    = NOW()
       WHERE id = ${id} AND vendor_id = ${supplier.id}
       RETURNING id
     `);
     if (!(result as any).rows?.length) return res.status(404).json({ message: "Item tidak ditemukan atau bukan milik vendor ini" });
+     await resubmitCatalogItemForReview(id, supplier.id);
     return res.json({ ok: true });
   } catch (e: any) {
     console.error("[portal] PUT vendor/catalog error", e);
@@ -3014,6 +3123,7 @@ router.patch("/vendor/catalog/:id/media-assets", requirePortalAuth, async (req, 
       SET media_assets = ${JSON.stringify(validation.clean)}::jsonb, updated_at = NOW()
       WHERE id = ${id} AND vendor_id = ${supplier.id}
     `);
+    await resubmitCatalogItemForReview(id, supplier.id);
     return res.json({ ok: true, count: validation.clean.length });
   } catch (e: any) {
     console.error("[portal] vendor PATCH media-assets error", e);

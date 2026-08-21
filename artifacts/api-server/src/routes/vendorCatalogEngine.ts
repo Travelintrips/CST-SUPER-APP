@@ -602,8 +602,30 @@ vendorCatalogEngineAdminRouter.post("/submissions/:id/approve", async (req, res)
       ? { ..._approveTpl }
       : null;
 
-  // Copy semua submission data ke catalog item + publish
   const now = new Date();
+  const reviewer = user?.email ?? user?.name ?? "admin";
+
+  // Claim the submission atomically before publishing. This closes the
+  // approve-vs-reject/double-approve race at the state-machine boundary.
+  const [claimedSubmission] = await db
+    .update(vendorCatalogSubmissionsTable)
+    .set({
+      status: "approved",
+      reviewedBy: reviewer,
+      reviewedAt: now,
+      reviewNotes: reviewNotes?.trim() ?? null,
+      updatedAt: now,
+    })
+    .where(and(
+      eq(vendorCatalogSubmissionsTable.id, id),
+      eq(vendorCatalogSubmissionsTable.status, "submitted"),
+    ))
+    .returning();
+  if (!claimedSubmission) {
+    return res.status(409).json({ message: "Submission sudah diproses oleh reviewer lain" });
+  }
+
+  // Copy semua submission data ke catalog item + publish
   const [updatedItem] = await db
     .update(vendorCatalogItemsTable)
     .set({
@@ -630,18 +652,6 @@ vendorCatalogEngineAdminRouter.post("/submissions/:id/approve", async (req, res)
     .returning();
 
   if (!updatedItem) return res.status(404).json({ message: "Catalog item tidak ditemukan" });
-
-  // Update submission status
-  await db
-    .update(vendorCatalogSubmissionsTable)
-    .set({
-      status:      "approved",
-      reviewedBy:  user?.email ?? user?.name ?? "admin",
-      reviewedAt:  now,
-      reviewNotes: reviewNotes?.trim() ?? null,
-      updatedAt:   now,
-    })
-    .where(eq(vendorCatalogSubmissionsTable.id, id));
 
   // Notify vendor via WA (non-blocking)
   void sendProductApprovedNotification(
@@ -677,26 +687,35 @@ vendorCatalogEngineAdminRouter.post("/submissions/:id/reject", async (req, res) 
   const user = (req as any).session?.user;
   const reviewNotes = req.body.reviewNotes as string | undefined;
   const now = new Date();
+  const reviewer = user?.email ?? user?.name ?? "admin";
 
-  // Set catalog item kembali ke draft
+  // Claim first so reject cannot race with another approval.
+  const [claimedSubmission] = await db
+    .update(vendorCatalogSubmissionsTable)
+    .set({
+      status: "rejected",
+      reviewedBy: reviewer,
+      reviewedAt: now,
+      reviewNotes: reviewNotes?.trim() ?? null,
+      updatedAt: now,
+    })
+    .where(and(
+      eq(vendorCatalogSubmissionsTable.id, id),
+      eq(vendorCatalogSubmissionsTable.status, "submitted"),
+    ))
+    .returning();
+  if (!claimedSubmission) {
+    return res.status(409).json({ message: "Submission sudah diproses oleh reviewer lain" });
+  }
+
+  // Keep rejected items explicitly non-public. Vendors may edit and resubmit,
+  // but there must be no vendor-side publish path from the rejected state.
   if (row.catalogItemId) {
     await db
       .update(vendorCatalogItemsTable)
-      .set({ status: "draft", isPublished: false, updatedAt: now })
+      .set({ status: "rejected", isPublished: false, isActive: true, updatedAt: now })
       .where(eq(vendorCatalogItemsTable.id, row.catalogItemId));
   }
-
-  // Update submission
-  await db
-    .update(vendorCatalogSubmissionsTable)
-    .set({
-      status:      "rejected",
-      reviewedBy:  user?.email ?? user?.name ?? "admin",
-      reviewedAt:  now,
-      reviewNotes: reviewNotes?.trim() ?? null,
-      updatedAt:   now,
-    })
-    .where(eq(vendorCatalogSubmissionsTable.id, id));
 
   // Notify vendor via WA (non-blocking)
   if (row.catalogItemId) {
@@ -715,7 +734,7 @@ vendorCatalogEngineAdminRouter.post("/submissions/:id/reject", async (req, res) 
   }
 
   return res.json({
-    message:       "Submission ditolak, item dikembalikan ke draft",
+    message:       "Submission ditolak, item tetap non-publik",
     catalogItemId: row.catalogItemId,
     status:        "rejected",
   });
