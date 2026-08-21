@@ -1,5 +1,6 @@
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
+import type pg from "pg";
 
 export type FinanceAccountRole =
   | "RECEIVING_BANK"
@@ -47,45 +48,7 @@ function number(value: unknown, field: string): number {
   return parsed;
 }
 
-/**
- * The database owner and the API use the same fail-closed SQL resolver.
- * The resolver never falls back to the Sport Center legacy tables.
- */
-export async function resolveFinanceProjectConfig(
-  input: ResolveFinanceProjectConfigInput,
-): Promise<FinanceProjectConfig> {
-  if (!Number.isInteger(input.companyId) || input.companyId <= 0) {
-    throw new Error("SHARED_CONFIG_COMPANY_INVALID");
-  }
-  let result: { rows: unknown[] };
-  try {
-    result = await db.execute(input.projectCode === "customer_portal"
-      ? sql`
-        SELECT *
-        FROM public.resolve_customer_portal_finance_config(
-          ${input.companyId},
-          ${input.paymentMethod},
-          ${input.providerCode},
-          ${input.effectiveDate}::date
-        )
-      `
-      : sql`
-        SELECT *
-        FROM sport_center.resolve_shared_finance_config(
-          ${input.projectCode},
-          ${input.companyId},
-          ${input.paymentMethod},
-          ${input.providerCode},
-          ${input.effectiveDate}::date
-        )
-      `);
-  } catch (error) {
-    const cause = (error as { cause?: { message?: unknown } }).cause?.message;
-    throw new Error(String(cause ?? (error instanceof Error ? error.message : error)));
-  }
-  const row = result.rows[0] as ResolverRow | undefined;
-  if (!row) throw new Error("BLOCKED_CONFIG_MISSING");
-
+function mapResolverRow(row: ResolverRow): FinanceProjectConfig {
   const roles = ["RECEIVING_BANK", "REVENUE", "TAX_OUTPUT", "MDR_EXPENSE", "CLEARING"] as const;
   const accountIds: FinanceProjectConfig["accountIds"] = {};
   const accountCodes: FinanceProjectConfig["accountCodes"] = {};
@@ -121,4 +84,93 @@ export async function resolveFinanceProjectConfig(
     accountCodes,
     accountNames,
   };
+}
+
+function resolverSql(input: ResolveFinanceProjectConfigInput) {
+  if (input.projectCode !== "customer_portal" && input.projectCode !== "sport_center") {
+    throw new Error(`SHARED_CONFIG_PROJECT_UNSUPPORTED: ${input.projectCode}`);
+  }
+  return input.projectCode === "customer_portal"
+    ? sql`
+      SELECT *
+      FROM public.resolve_customer_portal_finance_config(
+        ${input.companyId},
+        ${input.paymentMethod},
+        ${input.providerCode},
+        ${input.effectiveDate}::date
+      )
+    `
+    : sql`
+      SELECT *
+      FROM sport_center.resolve_shared_finance_config(
+        ${input.projectCode},
+        ${input.companyId},
+        ${input.paymentMethod},
+        ${input.providerCode},
+        ${input.effectiveDate}::date
+      )
+    `;
+}
+
+function resolverText(input: ResolveFinanceProjectConfigInput): string {
+  if (input.projectCode !== "customer_portal" && input.projectCode !== "sport_center") {
+    throw new Error(`SHARED_CONFIG_PROJECT_UNSUPPORTED: ${input.projectCode}`);
+  }
+  return input.projectCode === "customer_portal"
+    ? `SELECT * FROM public.resolve_customer_portal_finance_config($1, $2, $3, $4::date)`
+    : `SELECT * FROM sport_center.resolve_shared_finance_config($1, $2, $3, $4, $5::date)`;
+}
+
+function resolverParams(input: ResolveFinanceProjectConfigInput): unknown[] {
+  return input.projectCode === "customer_portal"
+    ? [input.companyId, input.paymentMethod, input.providerCode, input.effectiveDate]
+    : [
+      input.projectCode,
+      input.companyId,
+      input.paymentMethod,
+      input.providerCode,
+      input.effectiveDate,
+    ];
+}
+
+function mapResolverResult(result: { rows: unknown[] }): FinanceProjectConfig {
+  const row = result.rows[0] as ResolverRow | undefined;
+  if (!row) throw new Error("BLOCKED_CONFIG_MISSING");
+  return mapResolverRow(row);
+}
+
+/**
+ * The database owner and the API use the same fail-closed SQL resolver.
+ * The resolver never falls back to the Sport Center legacy tables.
+ */
+export async function resolveFinanceProjectConfig(
+  input: ResolveFinanceProjectConfigInput,
+): Promise<FinanceProjectConfig> {
+  if (!Number.isInteger(input.companyId) || input.companyId <= 0) {
+    throw new Error("SHARED_CONFIG_COMPANY_INVALID");
+  }
+  let result: { rows: unknown[] };
+  try {
+    result = await db.execute(resolverSql(input));
+  } catch (error) {
+    const cause = (error as { cause?: { message?: unknown } }).cause?.message;
+    throw new Error(String(cause ?? (error instanceof Error ? error.message : error)));
+  }
+  return mapResolverResult(result);
+}
+
+export async function resolveFinanceProjectConfigWithClient(
+  client: Pick<pg.PoolClient, "query">,
+  input: ResolveFinanceProjectConfigInput,
+): Promise<FinanceProjectConfig> {
+  if (!Number.isInteger(input.companyId) || input.companyId <= 0) {
+    throw new Error("SHARED_CONFIG_COMPANY_INVALID");
+  }
+  try {
+    const result = await client.query(resolverText(input), resolverParams(input));
+    return mapResolverResult(result);
+  } catch (error) {
+    const cause = (error as { cause?: { message?: unknown } }).cause?.message;
+    throw new Error(String(cause ?? (error instanceof Error ? error.message : error)));
+  }
 }

@@ -1,6 +1,7 @@
 import pg from "pg";
 import { getCustomerPortalFinanceMode } from "./financeBoundary.js";
 import { postSalesInvoice } from "./accounting.js";
+import { resolveFinanceProjectConfigWithClient } from "./financeProjectConfigResolver.js";
 
 type QueryClient = Pick<pg.Pool, "query">;
 
@@ -86,13 +87,26 @@ export async function processCustomerPortalFinance(options: {
         throw manualReview("tax snapshot incomplete or conflicting");
       }
       if (e.doc_number == null) throw manualReview("sales document missing");
+      const effectiveDate = new Date(e.paid_at ?? new Date()).toISOString().slice(0, 10);
+      const config = await resolveFinanceProjectConfigWithClient(client, {
+        projectCode: "customer_portal",
+        companyId: 1,
+        paymentMethod: String(e.payment_method ?? ""),
+        providerCode: String(e.payment_provider ?? ""),
+        effectiveDate,
+      });
+      if (config.taxRuleId !== Number(e.tax_rule_id)) {
+        throw manualReview("tax snapshot does not match Customer Portal resolver");
+      }
+      const taxAccountId = config.accountIds.TAX_OUTPUT;
+      if (!taxAccountId) throw manualReview("Customer Portal TAX_OUTPUT mapping missing");
       const accountingPosted = await postSalesInvoice({
         salesDocId: Number(e.sales_document_id),
         docNumber: String(e.doc_number),
         customerName: String(e.customer_name ?? "Customer Portal"),
         netAmount: Number(e.total_amount),
         taxAmount: Number(e.document_tax_amount ?? e.tax_amount ?? 0),
-        taxAccountId: 49109,
+        taxAccountId,
         companyId: 1,
       });
       if (!accountingPosted) throw new Error("CUSTOMER_PORTAL_ACCOUNTING_POST_FAILED");
