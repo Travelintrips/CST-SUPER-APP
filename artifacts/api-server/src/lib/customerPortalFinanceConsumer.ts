@@ -17,18 +17,21 @@ function manualReview(message: string): Error {
 export async function processCustomerPortalFinance(options: {
   client: pg.PoolClient;
   limit?: number;
+  sourcePaymentIds?: number[];
 }): Promise<{ claimed: number; posted: number; manualReview: number; retried: number }> {
   if (getCustomerPortalFinanceMode() !== "central" || (process.env.APP_ENV ?? process.env.NODE_ENV) === "production") {
     return { claimed: 0, posted: 0, manualReview: 0, retried: 0 };
   }
   const client = options.client;
   const limit = options.limit ?? 50;
+  const sourcePaymentIds = options.sourcePaymentIds ?? null;
   await client.query(`
     INSERT INTO customer_finance_processing
       (source_project, source_payment_id, event_type, correlation_id)
     SELECT source_project, source_payment_id, event_type, correlation_id
       FROM customer_payment_finance_events e
      WHERE e.event_type = 'payment_confirmed'
+           AND ($1::int[] IS NULL OR e.source_payment_id = ANY($1::int[]))
        AND NOT EXISTS (
          SELECT 1 FROM customer_finance_processing p
           WHERE p.source_project=e.source_project
@@ -36,13 +39,14 @@ export async function processCustomerPortalFinance(options: {
             AND p.event_type=e.event_type
         )
        ON CONFLICT (source_project, source_payment_id, event_type) DO NOTHING
-  `);
+  `, [sourcePaymentIds]);
   const claimed = await client.query(`
     UPDATE customer_finance_processing p
        SET status='processing', attempts=attempts+1, locked_at=NOW(), updated_at=NOW()
      WHERE p.id IN (
        SELECT p2.id FROM customer_finance_processing p2
-        WHERE p2.status IN ('pending','failed')
+         WHERE p2.status IN ('pending','failed')
+           AND ($2::int[] IS NULL OR p2.source_payment_id = ANY($2::int[]))
           AND p2.available_at <= NOW()
           AND (p2.locked_at IS NULL OR p2.locked_at < NOW() - INTERVAL '15 minutes')
         ORDER BY p2.id
@@ -50,7 +54,7 @@ export async function processCustomerPortalFinance(options: {
         LIMIT $1
      )
      RETURNING p.*
-  `, [limit]);
+  `, [limit, sourcePaymentIds]);
   let posted = 0, manualReviewCount = 0, retried = 0;
   for (const row of claimed.rows as Array<{ id: number; source_payment_id: number }>) {
     try {

@@ -13,7 +13,7 @@ import { processCustomerPortalFinance } from "../src/lib/customerPortalFinanceCo
 import { resolveFinanceProjectConfigWithClient } from "../src/lib/financeProjectConfigResolver.js";
 
 const { Pool } = pg;
-const PREFIX = `CFCP6C_${Date.now()}`;
+const PREFIX = `CFCP6C_${Date.now()}_${process.pid}`;
 const COMPANY_ID = 1;
 const GROSS = 111_000;
 const SUPPORTED = {
@@ -123,6 +123,45 @@ async function createPayment(client, name, serviceScope, options = {}) {
     name, serviceScope, documentId: Number(doc.id), lineId: Number(line.id),
     paymentId: Number(payment.id), docNumber,
   };
+  // DEV sequences can reuse an ID after an interrupted fixture cleanup. The
+  // payment was just inserted, so an older processing identity for this exact
+  // new ID is orphaned and safe to remove before confirmation.
+  await client.query(`
+    DELETE FROM customer_finance_processing
+     WHERE source_payment_id=$1 AND event_type='payment_confirmed'
+  `, [fixture.paymentId]);
+  await client.query(`
+    DELETE FROM customer_payment_finance_events
+     WHERE source_payment_id=$1 AND event_type='payment_confirmed'
+  `, [fixture.paymentId]);
+  await client.query(`
+    DELETE FROM public.bank_mutations
+     WHERE source_app='customer_portal' AND source_id=$1
+  `, [fixture.paymentId]);
+  await client.query(`
+    DELETE FROM customer_portal_settlement_items
+     WHERE payment_id=$1
+  `, [fixture.paymentId]);
+  await client.query(`
+    DELETE FROM customer_portal_settlement_batches b
+     WHERE b.canonical_key=$1
+       AND NOT EXISTS (
+         SELECT 1 FROM customer_portal_settlement_items i WHERE i.settlement_id=b.id
+       )
+  `, [`customer_portal:payment:${fixture.paymentId}`]);
+  const orphanEntries = await client.query(`
+    SELECT id FROM accounting_entries
+     WHERE source='sales_invoice' AND source_id=$1
+  `, [fixture.documentId]);
+  for (const row of orphanEntries.rows) {
+    await client.query(`
+      UPDATE accounting_entries
+         SET status='draft',cancel_reason='CFCP6C reused-ID cleanup',cancelled_at=NOW()
+       WHERE id=$1 AND status='posted'
+    `, [row.id]);
+    await client.query("DELETE FROM accounting_entry_lines WHERE entry_id=$1", [row.id]);
+    await client.query("DELETE FROM accounting_entries WHERE id=$1", [row.id]);
+  }
   fixtures.push(fixture);
   return fixture;
 }
@@ -165,9 +204,12 @@ async function effects(client, fixture) {
   return { processing, accounting, mutation, settlement };
 }
 
-function assertPosted(name, result, expectedCoa) {
+function assertPosted(name, result, expectedCoa, expectedAttempts = 1) {
   assert(result.processing?.status === "posted", `${name}: processing not posted`);
-  assert(Number(result.processing.attempts) === 1, `${name}: attempts != 1`);
+  assert(
+    Number(result.processing.attempts) === expectedAttempts,
+    `${name}: attempts != ${expectedAttempts}`,
+  );
   assert(result.accounting && Number(result.accounting.lines) === 3, `${name}: accounting missing`);
   assert(result.mutation, `${name}: public mutation missing`);
   assert(result.settlement && Number(result.settlement.items) === 1, `${name}: settlement missing`);
@@ -183,7 +225,7 @@ async function proveMappings(client) {
        AND m.product_scope='jasa' AND m.is_active
      ORDER BY m.service_scope
   `);
-  const mapping = Object.fromEntries(mappingRows.rows.map((row) => [row.service_scope, row.account_code]));
+  const mapping = Object.fromEntries(mappingRows.rows.map((row) => [row.service_scope, row.code]));
   for (const [scope, code] of Object.entries(SUPPORTED)) {
     assert(mapping[scope] === code, `${scope}: expected ${code}, got ${mapping[scope] ?? "missing"}`);
   }
@@ -193,8 +235,21 @@ async function proveMappings(client) {
     await confirm(fixture);
     cases.push(fixture);
   }
-  const processed = await processCustomerPortalFinance({ client, limit: 20 });
-  assert(processed.posted === 6, `Jasa supported posted count: ${JSON.stringify(processed)}`);
+  const processed = await processCustomerPortalFinance({
+    client,
+    limit: 20,
+    sourcePaymentIds: cases.map((fixture) => fixture.paymentId),
+  });
+  const processingRows = await client.query(`
+    SELECT source_payment_id,status,attempts,available_at
+      FROM customer_finance_processing
+     WHERE source_payment_id=ANY($1::int[])
+     ORDER BY source_payment_id
+  `, [cases.map((fixture) => fixture.paymentId)]);
+  assert(
+    processed.posted === 6,
+    `Jasa supported posted count: ${JSON.stringify({ processed, rows: processingRows.rows })}`,
+  );
   for (const fixture of cases) {
     const result = await effects(client, fixture);
     assertPosted(fixture.serviceScope, result, SUPPORTED[fixture.serviceScope]);
@@ -205,21 +260,49 @@ async function proveMappings(client) {
 async function proveExim(client) {
   const fixture = await createPayment(client, "EXIM_SERVICE", "exim_service");
   await confirm(fixture);
-  const result = await processCustomerPortalFinance({ client, limit: 1 });
+  const result = await processCustomerPortalFinance({ client, limit: 1, sourcePaymentIds: [fixture.paymentId] });
   const state = await effects(client, fixture);
   assert(result.manualReview === 1, `exim_service must manual-review: ${JSON.stringify(result)}`);
   assert(state.processing?.status === "manual_review", "exim_service status");
-  assert(!state.accounting && !state.mutation && !state.settlement, "exim_service financial effects");
+  assert(
+    !state.accounting && !state.mutation && !state.settlement,
+    `exim_service financial effects: ${JSON.stringify(state)}`,
+  );
   return { processing: state.processing.status, accounting: 0, mutation: 0, settlement: 0 };
 }
 
 async function proveTwoPayments(client) {
   const first = await createPayment(client, "SAME_DOC_A", "trucking");
-  const second = await createPayment(client, "SAME_DOC_B", "trucking");
-  await client.query("UPDATE sales_documents SET doc_number=$2 WHERE id=$1", [second.documentId, first.docNumber]);
+  const secondPayment = await one(client, `
+    INSERT INTO payments
+      (ref_kind, ref_id, ref_doc_number, amount, status, provider, payment_method,
+       provider_merchant_trade_no, raw, company_id)
+    VALUES ('sales',$1,$2,$3,'pending','paylabs','qris',$4,$5::jsonb,$6)
+    RETURNING id
+  `, [
+    first.documentId,
+    first.docNumber,
+    GROSS,
+    `${PREFIX}_SAME_DOC_B_PAY`,
+    JSON.stringify({ source: "CF-CP-6C", environment: "development" }),
+    COMPANY_ID,
+  ]);
+  const second = {
+    name: "SAME_DOC_B",
+    serviceScope: "trucking",
+    documentId: first.documentId,
+    lineId: null,
+    paymentId: Number(secondPayment.id),
+    docNumber: first.docNumber,
+  };
+  fixtures.push(second);
   await confirm(first);
   await confirm(second);
-  const result = await processCustomerPortalFinance({ client, limit: 10 });
+  const result = await processCustomerPortalFinance({
+    client,
+    limit: 10,
+    sourcePaymentIds: [first.paymentId, second.paymentId],
+  });
   const a = await effects(client, first);
   const b = await effects(client, second);
   assert(result.posted === 2, `same-document payments posted: ${JSON.stringify(result)}`);
@@ -241,8 +324,8 @@ async function proveRace() {
   const b = await pool.connect();
   try {
     const results = await Promise.all([
-      processCustomerPortalFinance({ client: a, limit: 1 }),
-      processCustomerPortalFinance({ client: b, limit: 1 }),
+      processCustomerPortalFinance({ client: a, limit: 1, sourcePaymentIds: [fixture.paymentId] }),
+      processCustomerPortalFinance({ client: b, limit: 1, sourcePaymentIds: [fixture.paymentId] }),
     ]);
     const claimed = results.map((result) => result.claimed);
     assert(claimed.reduce((sum, value) => sum + value, 0) === 1, `race claim count: ${claimed}`);
@@ -258,7 +341,7 @@ async function proveRace() {
 async function proveTransient(client) {
   const fixture = await createPayment(client, "TRANSIENT", "trucking");
   await confirm(fixture, "unknown_provider");
-  const first = await processCustomerPortalFinance({ client, limit: 1 });
+  const first = await processCustomerPortalFinance({ client, limit: 1, sourcePaymentIds: [fixture.paymentId] });
   const before = await effects(client, fixture);
   assert(first.retried === 1, `transient first run: ${JSON.stringify(first)}`);
   assert(before.processing?.status === "failed" && Number(before.processing.attempts) === 1, "transient failed state");
@@ -272,10 +355,10 @@ async function proveTransient(client) {
        SET available_at=NOW()
      WHERE source_payment_id=$1
   `, [fixture.paymentId]);
-  const second = await processCustomerPortalFinance({ client, limit: 1 });
+  const second = await processCustomerPortalFinance({ client, limit: 1, sourcePaymentIds: [fixture.paymentId] });
   const after = await effects(client, fixture);
   assert(second.posted === 1, `transient recovery: ${JSON.stringify(second)}`);
-  assertPosted("transient-recovery", after);
+  assertPosted("transient-recovery", after, undefined, 2);
   assert(Number(after.processing.attempts) === 2, "transient attempts must increment");
   return { before: before.processing.status, after: after.processing.status, attempts: after.processing.attempts };
 }
