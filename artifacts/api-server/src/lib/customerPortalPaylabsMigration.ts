@@ -197,7 +197,19 @@ export async function runCustomerPortalPaylabsMigration(): Promise<void> {
         RAISE EXCEPTION 'BLOCKED_CONFIG_TAX_INVALID: tax_rule=%', v_tax.tax_rule_id;
       END IF;
 
-      SELECT ca.id, ca.code, ca.name INTO v_receiving
+       SELECT COUNT(*)::integer INTO v_count
+         FROM public.finance_project_coa_mappings cm
+         JOIN public.chart_of_accounts ca ON ca.id = cm.coa_id
+        WHERE cm.finance_project_config_id = v_config.id
+          AND cm.account_role = 'RECEIVING_BANK' AND cm.is_active = TRUE
+          AND (cm.payment_method IS NULL OR lower(cm.payment_method) = lower(p_payment_method))
+          AND (cm.provider_code IS NULL OR lower(cm.provider_code) = lower(p_provider_code))
+          AND ca.company_id = p_company_id AND ca.is_active = TRUE AND ca.is_postable = TRUE;
+       IF v_count <> 1 THEN
+         RAISE EXCEPTION 'BLOCKED_CONFIG_%: RECEIVING_BANK mappings=%',
+           CASE WHEN v_count = 0 THEN 'MISSING' ELSE 'AMBIGUOUS' END, v_count;
+       END IF;
+       SELECT ca.id, ca.code, ca.name INTO v_receiving
         FROM public.finance_project_coa_mappings cm
         JOIN public.chart_of_accounts ca ON ca.id = cm.coa_id
        WHERE cm.finance_project_config_id = v_config.id
@@ -207,21 +219,51 @@ export async function runCustomerPortalPaylabsMigration(): Promise<void> {
          AND ca.company_id = p_company_id AND ca.is_active = TRUE AND ca.is_postable = TRUE
        ORDER BY (cm.payment_method IS NOT NULL)::integer + (cm.provider_code IS NOT NULL)::integer DESC
        LIMIT 1;
-      SELECT ca.id, ca.code, ca.name INTO v_revenue
+       SELECT COUNT(*)::integer INTO v_count
+         FROM public.finance_project_coa_mappings cm
+         JOIN public.chart_of_accounts ca ON ca.id = cm.coa_id
+        WHERE cm.finance_project_config_id = v_config.id AND cm.account_role = 'REVENUE'
+          AND cm.product_scope = 'goods' AND cm.is_active = TRUE
+          AND ca.company_id = p_company_id AND ca.is_active = TRUE AND ca.is_postable = TRUE;
+       IF v_count <> 1 THEN
+         RAISE EXCEPTION 'BLOCKED_CONFIG_%: goods REVENUE mappings=%',
+           CASE WHEN v_count = 0 THEN 'MISSING' ELSE 'AMBIGUOUS' END, v_count;
+       END IF;
+       SELECT ca.id, ca.code, ca.name INTO v_revenue
         FROM public.finance_project_coa_mappings cm
         JOIN public.chart_of_accounts ca ON ca.id = cm.coa_id
        WHERE cm.finance_project_config_id = v_config.id AND cm.account_role = 'REVENUE'
          AND cm.product_scope = 'goods' AND cm.is_active = TRUE
          AND ca.company_id = p_company_id AND ca.is_active = TRUE AND ca.is_postable = TRUE
        LIMIT 1;
-      SELECT ca.id, ca.code, ca.name INTO v_tax_output
+       SELECT COUNT(*)::integer INTO v_count
+         FROM public.finance_project_coa_mappings cm
+         JOIN public.chart_of_accounts ca ON ca.id = cm.coa_id
+        WHERE cm.finance_project_config_id = v_config.id AND cm.account_role = 'TAX_OUTPUT'
+          AND cm.is_active = TRUE AND ca.company_id = p_company_id
+          AND ca.is_active = TRUE AND ca.is_postable = TRUE;
+       IF v_count <> 1 THEN
+         RAISE EXCEPTION 'BLOCKED_CONFIG_%: TAX_OUTPUT mappings=%',
+           CASE WHEN v_count = 0 THEN 'MISSING' ELSE 'AMBIGUOUS' END, v_count;
+       END IF;
+       SELECT ca.id, ca.code, ca.name INTO v_tax_output
         FROM public.finance_project_coa_mappings cm
         JOIN public.chart_of_accounts ca ON ca.id = cm.coa_id
        WHERE cm.finance_project_config_id = v_config.id AND cm.account_role = 'TAX_OUTPUT'
          AND cm.is_active = TRUE AND ca.company_id = p_company_id
          AND ca.is_active = TRUE AND ca.is_postable = TRUE
        LIMIT 1;
-      SELECT ca.id, ca.code, ca.name INTO v_mdr
+       SELECT COUNT(*)::integer INTO v_count
+         FROM public.finance_project_coa_mappings cm
+         JOIN public.chart_of_accounts ca ON ca.id = cm.coa_id
+        WHERE cm.finance_project_config_id = v_config.id AND cm.account_role = 'MDR_EXPENSE'
+          AND cm.is_active = TRUE AND ca.company_id = p_company_id
+          AND ca.is_active = TRUE AND ca.is_postable = TRUE;
+       IF v_count <> 1 THEN
+         RAISE EXCEPTION 'BLOCKED_CONFIG_%: MDR_EXPENSE mappings=%',
+           CASE WHEN v_count = 0 THEN 'MISSING' ELSE 'AMBIGUOUS' END, v_count;
+       END IF;
+       SELECT ca.id, ca.code, ca.name INTO v_mdr
         FROM public.finance_project_coa_mappings cm
         JOIN public.chart_of_accounts ca ON ca.id = cm.coa_id
        WHERE cm.finance_project_config_id = v_config.id AND cm.account_role = 'MDR_EXPENSE'

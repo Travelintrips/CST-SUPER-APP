@@ -88,18 +88,18 @@ async function snapshot(client) {
   `);
 }
 
-async function taxConfig(client) {
+async function taxConfig(client, productScope = "jasa") {
   const row = await one(client, `
     SELECT tm.tax_rule_id, tr.tax_rate
       FROM finance_project_tax_mappings tm
       JOIN tax_rules tr ON tr.id=tm.tax_rule_id
      WHERE tm.finance_project_config_id=3
        AND tm.transaction_type='sales_order'
-       AND tm.product_scope='jasa'
+       AND tm.product_scope=$1
        AND tm.is_active
      ORDER BY tm.id
      LIMIT 1
-  `);
+  `, [productScope]);
   assert(row, "active Jasa tax mapping is missing");
   return row;
 }
@@ -164,7 +164,8 @@ function registerFixture(fixture) {
 }
 
 async function createPayment(client, name, serviceScope, options = {}) {
-  const tax = options.documentId ? null : await taxConfig(client);
+  const productScope = options.productScope ?? "jasa";
+  const tax = options.documentId ? null : await taxConfig(client, productScope);
   const net = options.documentId ? null : Math.round(GROSS / (1 + Number(tax.tax_rate)) * 100) / 100;
   const taxAmount = options.documentId ? null : Math.round((GROSS - net) * 100) / 100;
   const docNumber = options.docNumber ?? `${PREFIX}_${name}_DOC`;
@@ -180,18 +181,19 @@ async function createPayment(client, name, serviceScope, options = {}) {
             (doc_number, kind, status, invoice_status, payment_status, amount_paid,
              customer_name, total_amount, tax_rate_id, tax_amount, grand_total, notes,
              company_id, product_scope, tax_treatment)
-          VALUES ($1,'order','confirmed','invoiced','unpaid',0,$2,$3,$4,$5,$6,$7,$8,'jasa','exclusive')
+          VALUES ($1,'order','confirmed','invoiced','unpaid',0,$2,$3,$4,$5,$6,$7,$8,$9,'exclusive')
           RETURNING id
         `, [docNumber, `${PREFIX} ${name}`, net, Number(tax.tax_rule_id), taxAmount, GROSS,
-          "CF-CP-6C development fixture", COMPANY_ID]);
+          "CF-CP-6C development fixture", COMPANY_ID, productScope]);
         assert(doc, `${name}: document not created`);
         documentId = Number(doc.id);
         const line = await one(client, `
           INSERT INTO sales_document_lines
             (document_id, name, description, quantity, unit_price, subtotal, product_scope, service_scope)
-          VALUES ($1,$2,$3,1,$4,$4,'jasa',$5)
+          VALUES ($1,$2,$3,1,$4,$4,$5,$6)
           RETURNING id
-        `, [documentId, `${PREFIX} ${name}`, "CF-CP-6C development fixture", net, serviceScope]);
+        `, [documentId, `${PREFIX} ${name}`, "CF-CP-6C development fixture", net, productScope,
+          productScope === "jasa" ? serviceScope : null]);
         lineId = Number(line.id);
       }
       const payment = await one(client, `
@@ -371,6 +373,153 @@ async function proveExim(client) {
   return { processing: state.processing.status, accounting: 0, mutation: 0, settlement: 0 };
 }
 
+async function negativeCase(client, name, serviceScope, provider, mutate) {
+  const fixture = await createPayment(client, `NEG_${name}`, serviceScope);
+  await confirm(fixture, provider);
+  await client.query("BEGIN");
+  try {
+    const precondition = await mutate(client, fixture);
+    assert(precondition, `${name}: corruption precondition was not proven`);
+    const result = await processCustomerPortalFinance({
+      client,
+      limit: 1,
+      sourcePaymentIds: [fixture.paymentId],
+    });
+    const state = await effects(client, fixture);
+    assert(
+      result.manualReview === 1 && state.processing?.status === "manual_review",
+      `${name}: expected manual review, got ${JSON.stringify({ result, state })}`,
+    );
+    assert(
+      !state.accounting && !state.mutation && !state.settlement,
+      `${name}: financial effects were created: ${JSON.stringify(state)}`,
+    );
+    await client.query("ROLLBACK");
+    return { name, status: "PASS", precondition };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  }
+}
+
+async function deleteActiveRows(client, table, predicate, values) {
+  const count = await one(client, `SELECT COUNT(*)::int AS count FROM ${table} WHERE ${predicate}`, values);
+  await client.query(`DELETE FROM ${table} WHERE ${predicate}`, values);
+  return Number(count?.count ?? 0);
+}
+
+async function duplicateCurrentRow(client, table, predicate, values, dateColumn = "effective_from") {
+  const row = await one(client, `SELECT * FROM ${table} WHERE ${predicate} ORDER BY id LIMIT 1`, values);
+  assert(row, `${table}: source row missing for ambiguity case`);
+  const columns = Object.keys(row).filter((column) =>
+    !["id", "created_at", "updated_at"].includes(column) && row[column] !== null,
+  );
+  const insertValues = columns.map((column) => row[column]);
+  const dateIndex = columns.indexOf(dateColumn);
+  if (dateIndex >= 0) insertValues[dateIndex] = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+  const placeholders = columns.map((_, index) => `$${index + 1}`).join(",");
+  await client.query(
+    `INSERT INTO ${table} (${columns.map(quoteIdentifier).join(",")})
+     VALUES (${placeholders})`,
+    insertValues,
+  );
+  const count = await one(client, `SELECT COUNT(*)::int AS count FROM ${table} WHERE ${predicate}`, values);
+  return Number(count?.count ?? 0) > 1;
+}
+
+async function proveNegativeMatrix(client) {
+  const cases = [];
+  cases.push(await negativeCase(client, "UNKNOWN_PROVIDER", "trucking", "unknown_provider",
+    async () => true));
+  cases.push(await negativeCase(client, "MISSING_PAYMENT_CONFIG", "trucking", "paylabs",
+    async (db) => (await deleteActiveRows(
+      db,
+      "finance_project_payment_configs",
+      "finance_project_config_id=3 AND lower(payment_method)='qris' AND lower(provider_code)='paylabs' AND is_active",
+      [],
+    )) === 1));
+  cases.push(await negativeCase(client, "MISSING_RECEIVING_BANK", "trucking", "paylabs",
+    async (db) => (await deleteActiveRows(
+      db,
+      "finance_project_coa_mappings",
+      "finance_project_config_id=3 AND account_role='RECEIVING_BANK' AND is_active",
+      [],
+    )) >= 1));
+  cases.push(await negativeCase(client, "AMBIGUOUS_RECEIVING_BANK", "trucking", "paylabs",
+    async (db) => duplicateCurrentRow(
+      db,
+      "finance_project_coa_mappings",
+      "finance_project_config_id=3 AND account_role='RECEIVING_BANK' AND is_active",
+      [],
+    )));
+  cases.push(await negativeCase(client, "MISSING_MDR_EXPENSE", "trucking", "paylabs",
+    async (db) => (await deleteActiveRows(
+      db,
+      "finance_project_coa_mappings",
+      "finance_project_config_id=3 AND account_role='MDR_EXPENSE' AND is_active",
+      [],
+    )) >= 1));
+  cases.push(await negativeCase(client, "MISSING_TAX_OUTPUT", "trucking", "paylabs",
+    async (db) => (await deleteActiveRows(
+      db,
+      "finance_project_coa_mappings",
+      "finance_project_config_id=3 AND account_role='TAX_OUTPUT' AND is_active",
+      [],
+    )) >= 1));
+  cases.push(await negativeCase(client, "COMPANY_MISMATCH", "trucking", "paylabs",
+    async (db, fixture) => {
+      const company = await one(db, "SELECT id FROM companies WHERE id <> $1 ORDER BY id LIMIT 1", [COMPANY_ID]);
+      if (!company) return false;
+      await db.query("UPDATE customer_payment_finance_events SET company_id=$2 WHERE source_payment_id=$1", [fixture.paymentId, company.id]);
+      return true;
+    }));
+  cases.push(await negativeCase(client, "JASA_MISSING_SERVICE", "trucking", "paylabs",
+    async (db, fixture) => {
+      await db.query("UPDATE customer_payment_finance_events SET service_scope=NULL WHERE source_payment_id=$1", [fixture.paymentId]);
+      return true;
+    }));
+  cases.push(await negativeCase(client, "JASA_UNKNOWN_SERVICE", "unknown_service", "paylabs",
+    async () => true));
+  cases.push(await negativeCase(client, "EXIM_SERVICE", "exim_service", "paylabs",
+    async () => true));
+  cases.push(await negativeCase(client, "MISSING_REVENUE", "trucking", "paylabs",
+    async (db) => (await deleteActiveRows(
+      db,
+      "finance_project_coa_mappings",
+      "finance_project_config_id=3 AND account_role='REVENUE' AND product_scope='jasa' AND service_scope='trucking' AND is_active",
+      [],
+    )) >= 1));
+  cases.push(await negativeCase(client, "AMBIGUOUS_REVENUE", "trucking", "paylabs",
+    async (db) => duplicateCurrentRow(
+      db,
+      "finance_project_coa_mappings",
+      "finance_project_config_id=3 AND account_role='REVENUE' AND product_scope='jasa' AND service_scope='trucking' AND is_active",
+      [],
+    )));
+  cases.push(await negativeCase(client, "MISSING_TAX", "goods", "paylabs",
+    async (db) => (await deleteActiveRows(
+      db,
+      "finance_project_tax_mappings",
+      "finance_project_config_id=3 AND transaction_type='sales_order' AND product_scope='goods' AND is_active",
+      [],
+    )) >= 1));
+  cases.push(await negativeCase(client, "AMBIGUOUS_TAX", "goods", "paylabs",
+    async (db) => duplicateCurrentRow(
+      db,
+      "finance_project_tax_mappings",
+      "finance_project_config_id=3 AND transaction_type='sales_order' AND product_scope='goods' AND is_active",
+      [],
+    )));
+  cases.push(await negativeCase(client, "TAX_SNAPSHOT_MISMATCH", "goods", "paylabs",
+    async (db, fixture) => {
+      const otherTax = await one(db, "SELECT id FROM tax_rules WHERE company_id=$1 AND is_active AND id <> (SELECT tax_rule_id FROM sales_documents WHERE id=$2) ORDER BY id LIMIT 1", [COMPANY_ID, fixture.documentId]);
+      if (!otherTax) return false;
+      await db.query("UPDATE customer_payment_finance_events SET tax_rule_id=$2 WHERE source_payment_id=$1", [fixture.paymentId, otherTax.id]);
+      return true;
+    }));
+  return cases;
+}
+
 async function proveTwoPayments(client) {
   const first = await createPayment(client, "SAME_DOC_A", "trucking");
   const second = await createPayment(client, "SAME_DOC_B", "trucking", {
@@ -490,11 +639,12 @@ async function main() {
   let failure;
   try {
     const mappings = await proveMappings(client);
+    const negativeMatrix = await proveNegativeMatrix(client);
     const exim = await proveExim(client);
     const sameDocument = await proveTwoPayments(client);
     const race = await proveRace();
     const transient = await proveTransient(client);
-    proof = { mappings, exim, sameDocument, race, transient };
+    proof = { mappings, negativeMatrix, exim, sameDocument, race, transient };
   } catch (error) {
     failure = error;
   } finally {
@@ -512,6 +662,7 @@ async function main() {
       status: "PASS",
       jasaMappings: "6/6 PASS",
       eximService: "FAIL_CLOSED",
+      negativeMatrix: "15/15 PASS",
       samePaymentRace: "PASS",
       twoPaymentsSameDocument: "PASS",
       transientRetry: "PASS",
