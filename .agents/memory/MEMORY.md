@@ -127,3 +127,4 @@
 - [Customer order WhatsApp ownership](customer-order-whatsapp-ownership.md) — customer lifecycle WA must originate from the canonical logistic transition service; driver/vendor routes keep only internal notifications.
 - [Project resolver ownership](project-resolver-ownership.md) — project-aware finance resolution must fail closed for unknown projects and reuse the caller transaction when processing.
 - [CF-SC-10B harness baseline](cf-sc-10b-harness-baseline.md) — compare dynamic existing-row snapshots; never assume a fixed DEV outbox/processing count.
+- [CF-CP-6 harness packaging](cf-cp-6-harness-packaging.md) — bundle workspace TS packages in API workspace; keep pg/pino external and always remove generated proof bundles.
