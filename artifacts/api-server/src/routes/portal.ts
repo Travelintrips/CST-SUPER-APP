@@ -1,4 +1,4 @@
-import { randomBytes } from "crypto";
+import { randomBytes, randomUUID } from "crypto";
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { LOGISTICS_SUBCATEGORIES as LOGISTICS_SUBCATEGORIES_FALLBACK } from "@workspace/logistics-constants";
 import { rateLimit, ipKeyGenerator, type ValueDeterminingMiddleware } from "express-rate-limit";
@@ -2796,7 +2796,7 @@ router.delete("/vendor/catalog/media/:mediaId", requirePortalAuth, async (req, r
 
 // ── Vendor: direct catalog CRUD ───────────────────────────────────────────────
 
-// POST /api/portal/vendor/catalog — Create new catalog item (draft, direct — no approval flow)
+// POST /api/portal/vendor/catalog — Create new catalog item (pending review)
 router.post("/vendor/catalog", requirePortalAuth, async (req, res) => {
   const customerId = (req as PortalAuthReq).portalCustomerId;
   const supplier = await getLinkedSupplier(customerId);
@@ -2812,6 +2812,30 @@ router.post("/vendor/catalog", requirePortalAuth, async (req, res) => {
   }
 
   try {
+    // Direct vendor submissions must follow the same approval contract as the
+    // catalog-engine form. The submission record gives admins a reviewable
+    // queue item and keeps the product hidden until approval.
+    const [submission] = await db
+      .insert(vendorCatalogSubmissionsTable)
+      .values({
+        linkId:         null,
+        token:          randomUUID(),
+        supplierId:     supplier.id,
+        vendorName:     supplier.name ?? null,
+        categoryKey:    categoryKey ?? null,
+        serviceType:    normalizedTemplateKind === "service" ? (categoryKey ?? null) : null,
+        templateKind:   normalizedTemplateKind,
+        specValues:     null,
+        name:           String(name).trim().slice(0, 200),
+        description:    description ?? null,
+        unit:           unit ?? null,
+        mediaAssets:    [],
+        priceBase:      "0",
+        currency:       "IDR",
+        status:         "submitted",
+      })
+      .returning({ id: vendorCatalogSubmissionsTable.id });
+
     const [row] = await db
       .insert(vendorCatalogItemsTable)
       .values({
@@ -2828,12 +2852,35 @@ router.post("/vendor/catalog", requirePortalAuth, async (req, res) => {
         moq:          moq != null ? String(moq) : null,
         origin:       origin ?? null,
         hsCode:       hsCode ?? null,
-        status:       "draft",
+        status:       "pending_review",
         isPublished:  false,
         isActive:     true,
         mediaAssets:  [],
+        sourceSubmissionId: submission.id,
       })
       .returning({ id: vendorCatalogItemsTable.id });
+
+    await db
+      .update(vendorCatalogSubmissionsTable)
+      .set({ catalogItemId: row.id, updatedAt: new Date() })
+      .where(eq(vendorCatalogSubmissionsTable.id, submission.id));
+
+    void NotificationService.saveAndBroadcast("vendor_product_submitted", {
+      type:         "vendor_product_submitted",
+      orderId:      row.id,
+      orderNumber:  String(row.id),
+      customerName: supplier.name ?? "Vendor",
+      title:        "Produk Baru Menunggu Persetujuan",
+      body:         `"${String(name).trim().slice(0, 200)}" dari ${supplier.name ?? "Vendor"} menunggu review admin.`,
+      targetRole:   "admin",
+      supplierId:   supplier.id,
+      productName:  String(name).trim().slice(0, 200),
+      catalogItemId: row.id,
+      submissionId:  submission.id,
+    }).catch((notificationError: unknown) => {
+      console.error("[portal] vendor product notification failed", notificationError);
+    });
+
     return res.status(201).json({ id: row.id, ok: true });
   } catch (e: any) {
     console.error("[portal] POST vendor/catalog error", e);

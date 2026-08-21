@@ -14,7 +14,7 @@ type NotifType =
   | "freight_new" | "freight_status" | "freight_stage"
   | "ecommerce" | "product"
   | "sales_new" | "purchase_rfq" | "purchase_po" | "vendor_quote"
-  | "vendor_po_accepted";
+  | "vendor_po_accepted" | "vendor_product_submitted";
 
 interface DbNotification {
   id: number;
@@ -43,6 +43,7 @@ const TYPE_LABELS: Record<string, string> = {
   purchase_po:       "Purchase Order",
   vendor_quote:      "Penawaran Vendor",
   vendor_po_accepted:"Vendor Konfirmasi PO",
+  vendor_product_submitted: "Produk Vendor Menunggu Review",
 };
 
 const TYPE_COLORS: Record<string, string> = {
@@ -77,6 +78,7 @@ const TYPE_HREFS: Record<string, (orderId: number | null) => string> = {
   purchase_po:        (id) => id ? `/bizportal/purchase/documents/${id}` : "/bizportal/purchase/documents",
   vendor_quote:       (id) => id ? `/bizportal/logistics/portal-orders/${id}` : "/bizportal/logistics/portal-orders",
   vendor_po_accepted: (id) => id ? `/bizportal/purchase/orders/${id}` : "/bizportal/purchase/orders",
+  vendor_product_submitted: () => "/bizportal/purchase/vendor-catalog-engine",
 };
 
 function TypeIcon({ type }: { type: string }) {
@@ -94,6 +96,7 @@ function TypeIcon({ type }: { type: string }) {
   if (type === "purchase_po")       return <ShoppingCart size={15} className={`${cls} text-lime-600`} />;
   if (type === "vendor_quote")      return <MessageSquare size={15} className={`${cls} text-sky-500`} />;
   if (type === "vendor_po_accepted") return <CheckCheck size={15} className={`${cls} text-green-600`} />;
+  if (type === "vendor_product_submitted") return <Package size={15} className={`${cls} text-orange-500`} />;
   return <Package size={15} className={`${cls} text-green-500`} />;
 }
 
@@ -173,6 +176,9 @@ function notifDesc(n: DbNotification): string {
     const price = typeof p.vendorPrice === "number" ? ` · ${formatRupiah(p.vendorPrice)}` : "";
     return `${p.rfqNumber ?? ""}${pos}${price}`;
   }
+  if (n.type === "vendor_product_submitted") {
+    return `${p.productName ?? n.customer_name} · Menunggu persetujuan admin`;
+  }
   return "";
 }
 
@@ -186,6 +192,7 @@ const ALL_TYPES: { value: string; label: string }[] = [
   { value: "purchase_po",    label: "PO Beli" },
   { value: "vendor_quote",      label: "Penawaran Vendor" },
   { value: "vendor_po_accepted", label: "Vendor Konfirmasi PO" },
+  { value: "vendor_product_submitted", label: "Produk Vendor" },
   { value: "portal_sales",   label: "Order Portal" },
   { value: "ecommerce",      label: "E-commerce" },
   { value: "product",        label: "Order Produk" },
