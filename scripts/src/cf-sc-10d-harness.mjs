@@ -352,13 +352,12 @@ async function runCorruptionCase(label, mutate) {
     assert(effectiveDate, `${label}: fixture effective date missing`);
     fixture.effectiveDate = effectiveDate;
     const fixtureBaseline = await counts(db, [fixture.paymentId]);
-    const normal = await resolveConfig(db);
     assertConfig(normal, `${label} precondition`);
     await mutate(db, normal, effectiveDate);
     await corruptionPrecondition(db, label, normal, effectiveDate);
     const { processCentralFinance } =
       await import("../../artifacts/api-server/src/lib/centralFinance.ts");
-    const processor = await processCentralFinance({ client: db });
+    const processor = await processCentralFinance({ client: db, fixturePaymentIds: [fixture.paymentId] });
     assert(processor.claimed === 1, `${label}: claimed=${processor.claimed}`);
     assert(processor.posted === 0, `${label}: unexpectedly posted`);
     assert(processor.manualReview === 1, `${label}: expected manual review`);
@@ -384,6 +383,10 @@ async function runCorruptionCase(label, mutate) {
      assertZeroEffects(rolledBack, label);
     await db.query("ROLLBACK");
      return { label, result: processor, evidence: rolledBack, last_error: errors.rows[0].last_error, rollback: "PASS" };
+    const rolledBack = await counts(db, [fixture.paymentId]);
+    assertZeroEffects(rolledBack, label);
+    await db.query("ROLLBACK");
+    return { label, result: processor, evidence: rolledBack, last_error: errors.rows[0].last_error, rollback: "PASS" };
   } catch (error) {
     await db.query("ROLLBACK").catch(() => {});
     throw error;
@@ -464,7 +467,7 @@ async function processConcurrent(paymentIds) {
     const run = async (db) => {
       const { processCentralFinance } =
         await import("../../artifacts/api-server/src/lib/centralFinance.ts");
-      return processCentralFinance({ client: db, sourcePaymentIds: paymentIds });
+      return processCentralFinance({ client: db, fixturePaymentIds: paymentIds });
     };
     // Both clients are real independent PostgreSQL sessions and overlap in
     // the claim/posting work. A short launch offset prevents both
@@ -501,6 +504,13 @@ async function cleanupFixture(fixture) {
         FROM sport_center.payment_settlement_items
        WHERE payment_id = ANY($1::int[])
     `, [ids]);
+    const settlementRows = await db.query(
+      `SELECT DISTINCT settlement_id
+         FROM sport_center.payment_settlement_items
+        WHERE payment_id = ANY($1::int[])`,
+      [ids],
+    );
+    const settlementIds = settlementRows.rows.map((row) => Number(row.settlement_id));
     await db.query(
       "DELETE FROM public.bank_mutations WHERE mutation_key = ANY(SELECT 'SC-PAY-' || x::text FROM unnest($1::int[]) x)",
       [ids],
@@ -521,6 +531,12 @@ async function cleanupFixture(fixture) {
     await db.query(
       "DELETE FROM sport_center.payment_settlement_batches WHERE id IN (SELECT settlement_id FROM cfsc10d_cleanup_settlements)",
     );
+    if (settlementIds.length) {
+      await db.query(
+        "DELETE FROM sport_center.payment_settlement_batches WHERE id = ANY($1::bigint[])",
+        [settlementIds],
+      );
+    }
     await db.query("DELETE FROM sport_center.central_finance_processing WHERE source_payment_id = ANY($1::int[])", [ids]);
     await db.query("DELETE FROM sport_center.payment_accounting_outbox WHERE payment_id = ANY($1::int[])", [ids]);
     await db.query("DELETE FROM sport_center.sport_payments WHERE id = ANY($1::int[])", [ids]);
@@ -602,6 +618,10 @@ async function runRace(label, types) {
       }));
     }
     assert(after === before, `${label}: existing DEV identities changed`);
+    if (after !== before) {
+      console.error(`${label}: existing DEV snapshot diff=${JSON.stringify(snapshotDiff(before, after))}`);
+      throw new Error(`CF_SC_10D_ASSERTION_FAILED: ${label}: existing DEV identities changed`);
+    }
     const cleaned = await cleanupCounts(beforeDb, fixture);
     for (const field of ["processing", "outbox", "accounting", "accounting_lines", "settlement_items", "settlements", "public_mutations", "bridges", "bookings"]) {
       assert(cleaned[field] === 0, `${label}: cleanup ${field}=${cleaned[field]}`);
