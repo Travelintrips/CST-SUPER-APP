@@ -1147,6 +1147,7 @@ export async function postSalesInvoice(args: {
   netAmount: number;
   taxAmount: number;
   taxAccountId: number | null;
+  revenueAccountId?: number | null;
   createdById?: string | null;
   companyId?: number | null;
 }): Promise<boolean> {
@@ -1177,7 +1178,7 @@ export async function postSalesInvoice(args: {
         description: `Piutang ${args.customerName} - ${args.docNumber}`,
       },
       {
-        accountId: settings.salesIncomeAccountId,
+        accountId: args.revenueAccountId ?? settings.salesIncomeAccountId,
         debit: 0,
         credit: round2(args.netAmount),
         description: `Pendapatan ${args.docNumber}`,

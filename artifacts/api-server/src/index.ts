@@ -134,6 +134,7 @@ import { startOutboxProcessor } from "./lib/accounting/outboxProcessor.js";
 import { startCentralFinanceProcessor } from "./lib/centralFinance.js";
 import { processCustomerPortalFinance } from "./lib/customerPortalFinanceConsumer.js";
 import { runCustomerPortalFinanceProcessingMigration } from "./lib/customerPortalFinanceProcessingMigration.js";
+import { runCustomerPortalSettlementMigration } from "./lib/customerPortalSettlementMigration.js";
 import { startFinancialEventBusWorker } from "./lib/financialEventBus.js";
 import { startFailedJobReplayWorker } from "./lib/financial/failedJobSystem.js";
 import { startDualWriteRetryWorker, startDualWriteIntegrityWorker } from "./lib/services/dualWriteReliabilityService.js";
@@ -2010,6 +2011,7 @@ async function startServer() {
     .then(() => runWithRetry("Portal migration", runPortalMigration))
     .then(() => runWithRetry("Customer Portal payment boundary migration", runCustomerPortalPaymentBoundaryMigration))
     .then(() => runWithRetry("Customer Portal finance processing migration", runCustomerPortalFinanceProcessingMigration))
+    .then(() => runWithRetry("Customer Portal settlement migration", runCustomerPortalSettlementMigration))
     .then(() => runWithRetry("Customer Portal product tax scope migration", runCustomerPortalProductTaxMigration))
     .then(() => runWithRetry("Customer Portal product COA migration", runCustomerPortalProductCoaMigration))
     .then(() => runWithRetry("Customer Portal service type migration", runCustomerPortalServiceTypeMigration))

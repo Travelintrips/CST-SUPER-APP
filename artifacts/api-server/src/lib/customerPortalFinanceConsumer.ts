@@ -2,6 +2,7 @@ import pg from "pg";
 import { getCustomerPortalFinanceMode } from "./financeBoundary.js";
 import { postSalesInvoice } from "./accounting.js";
 import { resolveFinanceProjectConfigWithClient } from "./financeProjectConfigResolver.js";
+import { settleCustomerPortalPayment } from "./customerPortalSettlementAdapter.js";
 
 type QueryClient = Pick<pg.Pool, "query">;
 
@@ -77,11 +78,12 @@ export async function processCustomerPortalFinance(options: {
       }
       if (e.product_scope === "jasa") {
         const mapping = await client.query(`
-          SELECT 1 FROM finance_project_coa_mappings
+          SELECT coa_id FROM finance_project_coa_mappings
            WHERE finance_project_config_id=3 AND account_role='REVENUE'
              AND product_scope='jasa' AND service_scope=$1 AND is_active
         `, [String(e.service_scope).trim().toLowerCase()]);
         if (mapping.rows.length !== 1) throw manualReview("service revenue mapping is not deterministic");
+        e.service_revenue_coa_id = Number(mapping.rows[0].coa_id);
       }
       if (e.tax_rule_id == null || e.tax_rate == null || e.tax_treatment !== "exclusive") {
         throw manualReview("tax snapshot incomplete or conflicting");
@@ -107,9 +109,19 @@ export async function processCustomerPortalFinance(options: {
         netAmount: Number(e.total_amount),
         taxAmount: Number(e.document_tax_amount ?? e.tax_amount ?? 0),
         taxAccountId,
+        revenueAccountId: e.service_revenue_coa_id ?? config.accountIds.REVENUE ?? null,
         companyId: 1,
       });
       if (!accountingPosted) throw new Error("CUSTOMER_PORTAL_ACCOUNTING_POST_FAILED");
+      await settleCustomerPortalPayment(client, {
+        paymentId: Number(row.source_payment_id),
+        companyId: 1,
+        providerCode: String(e.payment_provider),
+        providerReference: e.provider_reference == null ? null : String(e.provider_reference),
+        settlementDate: effectiveDate,
+        grossAmount: Number(e.amount),
+        config,
+      });
       await client.query(`
         UPDATE customer_finance_processing
            SET status='posted', processed_at=NOW(), locked_at=NULL, last_error=NULL, updated_at=NOW()

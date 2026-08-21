@@ -13,6 +13,7 @@ const REGISTRY_ROWS: readonly RegistryRow[] = [
   ["portal", "Portal migration", "schema"],
   ["customer_portal_payment_boundary", "Customer Portal payment boundary migration", "schema"],
   ["customer_portal_finance_processing", "Customer Portal finance processing migration", "schema"],
+  ["customer_portal_settlement", "Customer Portal settlement migration", "schema"],
   ["customer_portal_product_tax", "Customer Portal product tax scope migration", "schema"],
   ["customer_portal_product_coa", "Customer Portal product COA migration", "schema"],
   ["customer_portal_service_type", "Customer Portal service type migration", "schema"],
@@ -142,6 +143,8 @@ export const STARTUP_MIGRATION_REGISTRY: readonly StartupStageDefinition[] = REG
        : name === "customer_portal_payment_boundary"
         ? 2
         : name === "customer_portal_finance_processing"
+          ? 1
+        : name === "customer_portal_settlement"
           ? 1
         : name === "customer_portal_product_tax"
           ? 1
