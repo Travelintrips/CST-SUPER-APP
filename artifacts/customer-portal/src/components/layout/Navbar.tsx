@@ -638,10 +638,10 @@ export function Navbar() {
                   <Link href="/orders" className={navItemCls(location === "/orders")}>
                     {t("nav.myShipments")}
                   </Link>
-                  <Link href="/portal-dokumen" className={navItemCls(location === "/portal-dokumen")}>
+                  <Link href="/portal-dokumen" className={`hidden 2xl:flex ${navItemCls(location === "/portal-dokumen")}`}>
                     {t("nav.documents")}
                   </Link>
-                  <Link href="/portal-invoice" className={navItemCls(location === "/portal-invoice")}>
+                  <Link href="/portal-invoice" className={`hidden 2xl:flex ${navItemCls(location === "/portal-invoice")}`}>
                     <span className="hidden 2xl:inline">{t("nav.invoicePayment")}</span>
                     <span className="2xl:hidden">{t("nav.invoice")}</span>
                   </Link>
