@@ -909,13 +909,25 @@ vendorJobPublicRouter.post("/:token/progress", upload.single("photo"), async (re
     // Map status ke job_status
     const newJobStatus = status.toLowerCase().replace(/\s+/g, "_");
 
+    // The logistic order status is lifecycle-governed. Never update it
+    // directly here: doing so bypasses the state machine, audit trail, and
+    // customer notification/deduplication layer.
+    const transition = await transitionLogisticOrderStatus(job.order_id, status, {
+      source: "vendorJobOrder:vendor_progress",
+      actorType: "vendor",
+      actorName: job.vendor_name ?? null,
+    });
+    if (!transition.ok) {
+      return res.status(422).json({
+        error: transition.error ?? "Transisi status order tidak diizinkan",
+        allowedTransitions: transition.allowedTransitions ?? [],
+        code: "INVALID_TRANSITION",
+      });
+    }
+
     await db.execute(sql`
       UPDATE vendor_job_orders SET status = ${newJobStatus} WHERE token = ${token}
     `);
-
-    await db.update(logisticOrdersTable)
-      .set({ status } as any)
-      .where(eq(logisticOrdersTable.id, job.order_id));
 
     await db.execute(sql`
       UPDATE logistic_orders SET job_status = ${newJobStatus} WHERE id = ${job.order_id}

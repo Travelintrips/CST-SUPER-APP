@@ -17,7 +17,7 @@
 
 import { db } from "@workspace/db";
 import { logisticOrdersTable, customerOrderLinksTable } from "@workspace/db";
-import { eq, sql, desc } from "drizzle-orm";
+import { and, eq, sql, desc } from "drizzle-orm";
 import { normalizeStatus, CUSTOMER_WA_MESSAGES } from "../logisticStatusConstants.js";
 import { logOrderStatusChange } from "../auditTrail.js";
 import { logger } from "../logger.js";
@@ -25,11 +25,21 @@ import { writeAuditLog } from "../auditLog.js";
 
 /** Status yang memicu notifikasi WA ke customer (In Progress sudah ditangani di confirm_fulfillment) */
 const CUSTOMER_NOTIFY_STATUS_SET = new Set([
-  // ── Phase 2A: product-first statuses yang perlu dikabari customer ──────────
+  // Customer-facing lifecycle events. Keeping this list here makes the
+  // transition service the only place that decides when customer WA is sent.
+  "Order Received",
+  "Admin Review",
+  "Product RFQ Sent",
+  "Product Quote Received",
+  "Product Vendor Selected",
+  "Customer Product Approval",
   "Shipment Selection Pending", // customer perlu pilih mode pengiriman
   "Ready for Pickup",           // produk siap dijemput
-  // ──────────────────────────────────────────────────────────────────────────
+  "RFQ Sent",
+  "Quote Received",
+  "Customer Approval",
   "Vendor Confirmed",
+  "In Progress",
   "Pickup", "In Transit", "Arrived", "Delivered", "POD Uploaded",
   "Invoice Issued", "Payment Received",
   "Completed", "Cancelled",
@@ -74,7 +84,10 @@ export const LOGISTIC_ORDER_VALID_TRANSITIONS: Record<string, string[]> = {
   "Product Vendor Selected":    ["Customer Product Approval", "Product Quote Received", "Admin Review", "Cancelled"],
   "Customer Product Approval":  ["Shipment Selection Pending", "Product Vendor Selected", "Admin Review", "Cancelled"],
   "Shipment Selection Pending": ["RFQ Sent", "Ready for Pickup", "Customer Product Approval", "Admin Review", "Cancelled"],
-  "Ready for Pickup":           ["Delivered", "Invoice Issued", "Cancelled"],
+  // Normal shipment flow must go through Pickup. Direct delivery from
+  // Ready for Pickup is reserved for an explicit administrative force
+  // transition with a recorded reason.
+  "Ready for Pickup":           ["Pickup", "Cancelled"],
   // ─────────────────────────────────────────────────────────────────────────
   "RFQ Sent":          ["Quote Received", "Admin Review", "Customer Approval", "Cancelled"],
   "Quote Received":    ["Customer Approval", "RFQ Sent", "Admin Review", "Cancelled"],
@@ -229,15 +242,42 @@ export async function transitionLogisticOrderStatus(
   }
   // ─────────────────────────────────────────────────────────────────────────────
 
-  // Execute DB update
-  await db
+  // Update conditionally on the status that was read. This prevents two
+  // concurrent requests from both committing the same logical transition and
+  // both dispatching a customer notification.
+  const updateResult = await db
     .update(logisticOrdersTable)
     .set({
       status: newStatus,
       updatedAt: new Date(),
       version: sql`${logisticOrdersTable.version} + 1`,
     } as any)
-    .where(eq(logisticOrdersTable.id, orderId));
+    .where(and(eq(logisticOrdersTable.id, orderId), eq(logisticOrdersTable.status, row.status)));
+
+  if (updateResult.rowCount !== 1) {
+    const [latest] = await db
+      .select({ status: logisticOrdersTable.status })
+      .from(logisticOrdersTable)
+      .where(eq(logisticOrdersTable.id, orderId));
+    if (latest && normalizeStatus(latest.status) === newStatus) {
+      return {
+        ok: true,
+        orderId,
+        orderNumber: row.orderNumber,
+        fromStatus: newStatus,
+        toStatus: newStatus,
+        alreadyAt: true,
+      };
+    }
+    return {
+      ok: false,
+      orderId,
+      orderNumber: row.orderNumber,
+      fromStatus: latest?.status ?? row.status,
+      toStatus: newStatus,
+      error: "Status order berubah bersamaan. Silakan ulangi dengan data terbaru.",
+    };
+  }
 
   // Audit trail — non-fatal
   if (!opts.skipAudit) {
@@ -291,11 +331,47 @@ async function sendCustomerStatusWa(orderId: number, orderNumber: string, newSta
     .where(eq(logisticOrdersTable.id, orderId));
 
   const customerPhone = (order?.phone ?? "").trim();
-  if (!customerPhone) return;
+  const context = `customer-logistic-order:${newStatus}`;
+  const refId = `${orderId}:${newStatus}`;
+  if (!customerPhone) {
+    const { logNotification } = await import("../notificationLog.js");
+    await logNotification({
+      channel: "wa",
+      recipient: "(empty)",
+      message: `Customer status ${newStatus} untuk order ${orderNumber}`,
+      status: "skipped",
+      errorMsg: "Nomor WhatsApp customer kosong",
+      context,
+      refType: "logistic_order",
+      refId,
+    });
+    return;
+  }
+
+  const digits = customerPhone.replace(/[^\d+]/g, "").replace(/^\+/, "");
+  if (digits.length < 8) {
+    const { logNotification } = await import("../notificationLog.js");
+    await logNotification({
+      channel: "wa",
+      recipient: "(invalid)",
+      message: `Customer status ${newStatus} untuk order ${orderNumber}`,
+      status: "skipped",
+      errorMsg: "Nomor WhatsApp customer tidak valid",
+      context,
+      refType: "logistic_order",
+      refId,
+    });
+    return;
+  }
 
   // Ambil tracking token (jika ada)
-  const { getPreferredDomain } = await import("../domain.js");
-  const domain = getPreferredDomain() || "cstlogistic.co.id";
+  const { getRequiredPublicDomain } = await import("../domain.js");
+  let domain: string | null = null;
+  try {
+    domain = getRequiredPublicDomain();
+  } catch (error) {
+    logger.warn({ error, orderId }, "Public tracking domain is not configured; sending notification without tracking link");
+  }
   let trackingUrl: string | undefined;
   try {
     const [link] = await db
@@ -304,7 +380,7 @@ async function sendCustomerStatusWa(orderId: number, orderNumber: string, newSta
       .where(eq(customerOrderLinksTable.orderId, orderId))
       .orderBy(desc(customerOrderLinksTable.createdAt))
       .limit(1);
-    if (link?.token) trackingUrl = `https://${domain}/order-track/${link.token}`;
+    if (link?.token && domain) trackingUrl = `https://${domain}/order-track/${link.token}`;
   } catch {
     // Tidak fatal — kirim tanpa link
   }
@@ -313,7 +389,11 @@ async function sendCustomerStatusWa(orderId: number, orderNumber: string, newSta
   if (!msgFn) return;
 
   const { sendViaService } = await import("../waTransport.js");
-  await sendViaService(customerPhone, msgFn(orderNumber, trackingUrl));
+  await sendViaService(customerPhone, msgFn(orderNumber, trackingUrl), {
+    context,
+    refType: "logistic_order",
+    refId,
+  });
 }
 
 // ── Convenience Helpers ───────────────────────────────────────────────────────
