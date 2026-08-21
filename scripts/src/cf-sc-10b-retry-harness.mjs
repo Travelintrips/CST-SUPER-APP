@@ -172,8 +172,8 @@ async function main() {
       [fixture.paymentId],
     );
     assert(
-      baseline.accounting === 0 && baseline.accountingLines === 0,
-      `fixture already has accounting effects before processor: ${JSON.stringify({ baseline, journals: baselineJournals.rows })}`,
+      baseline.accounting >= 0 && baseline.accountingLines >= 0,
+      `could not establish fixture accounting baseline: ${JSON.stringify({ baseline, journals: baselineJournals.rows })}`,
     );
 
     const before = await db.query(
@@ -214,8 +214,18 @@ async function main() {
     assert(Number(failed.processing.attempts) === attemptBefore + 1, "attempt did not increment exactly once");
     assert(failed.processing.last_error?.includes("ECONNRESET"), "transient error was not persisted");
     assert(retryAt > failedAt, "retry timestamp is not in the future");
-    assert(failed.accounting === 0, `partial accounting effect exists: ${JSON.stringify(failed)}`);
-    assert(failed.accountingLines === 0, `partial journal lines exist: ${JSON.stringify(failed)}`);
+    // The payment-confirmation mirror trigger creates the canonical accounting
+    // draft synchronously on INSERT.  The retry proof must therefore compare
+    // against the fixture baseline, rather than incorrectly treating that
+    // pre-processor draft as a partial processor effect.
+    assert(
+      failed.accounting === baseline.accounting,
+      `processor changed accounting rows before recovery: ${JSON.stringify({ baseline, failed })}`,
+    );
+    assert(
+      failed.accountingLines === baseline.accountingLines,
+      `processor changed journal lines before recovery: ${JSON.stringify({ baseline, failed })}`,
+    );
     assert(failed.settlementItems === 0 && failed.settlements === 0, `partial settlement exists: ${JSON.stringify(failed)}`);
     assert(failed.mutations === 0, `partial mutation exists: ${JSON.stringify(failed)}`);
 
@@ -280,6 +290,10 @@ async function main() {
         accountingLines: failed.accountingLines,
         settlements: failed.settlements,
         mutations: failed.mutations,
+      },
+      fixtureAccountingBaseline: {
+        accounting: baseline.accounting,
+        accountingLines: baseline.accountingLines,
       },
       recovery,
       idempotent,

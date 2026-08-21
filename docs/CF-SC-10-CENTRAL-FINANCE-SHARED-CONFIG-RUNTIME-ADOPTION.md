@@ -141,15 +141,46 @@ The QRIS full-payment smoke passed end to end:
 
 The targeted processor/boundary/canonical-settlement tests passed (`14/14`),
 workspace and API typecheck passed, API build passed, and `git diff --check`
-passed. A dedicated `TEST_DATABASE_URL` is now available for suites that
-require an isolated runtime database; the CF-SC-10B harness itself continues
-to use only the explicitly guarded development Supabase target.
+passed. The dedicated `TEST_DATABASE_URL` suites remain unavailable in this
+workspace; the CF-SC-10B harness itself uses only the explicitly guarded
+development Supabase target.
 
 This execution proves the QRIS full-payment path and canonical settlement/public
 mutation handoff. It does not claim the larger optional-provider, configuration
 corruption, multi-client race, or DP/pelunasan matrix unless those cases are
 run separately. No production writes, production migrations, Paylabs calls,
 WhatsApp sends, or legacy cleanup were performed.
+
+### CF-SC-10B transient retry/backoff proof — 2026-08-21
+
+The final retry proof used the actual `processCentralFinance()` implementation
+and a controlled `ECONNRESET` injected immediately before the canonical
+accounting owner. It ran with `APP_ENV=development`,
+`SAFE_DEV_TEST_MODE=true`, and central mode against the guarded DEV Supabase
+project only.
+
+- transient classification: `ECONNRESET` → retryable; `manual_review=false`
+- processing identity: `pending`, attempts `0` → `failed`, attempts `1`
+- retry field: `available_at`, populated in the future; measured backoff
+  approximately `296,937 ms` (runtime-defined five-minute attempt-1 backoff)
+- error state: `failed`, `last_error` persisted with `ECONNRESET`
+- before recovery: settlement items `0`, settlement batches `0`, public
+  mutations `0`
+- trigger baseline: the payment-confirmation trigger created one accounting
+  draft and three journal lines during fixture INSERT; the transient attempt
+  added no accounting rows or lines beyond that baseline
+- recovery: one claim, one posted processing identity, one accounting journal,
+  one settlement batch, and one public mutation
+- post-recovery retry: zero claims and no duplicate accounting, settlement, or
+  mutation effects
+- rollback/cleanup: all fixture-owned payment, outbox, processing, accounting,
+  settlement, and mutation rows were absent from an independent verifier
+- production writes/migrations/processor runs: `0`
+
+The retry harness was corrected to compare transient-failure effects against
+the insert-trigger baseline. Treating the trigger-created draft as a
+processor-produced partial effect would incorrectly fail the proof before the
+processor ran.
 
 ## Mutation ownership and bridge contract
 

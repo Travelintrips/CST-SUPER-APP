@@ -1,10 +1,10 @@
 ---
 name: CF-SC-10B proof boundary
-description: Development smoke evidence and the missing settlement/public-mutation handoff in Central Finance processor orchestration.
+description: Development smoke evidence, canonical settlement handoff, and retry-proof baseline rules for Central Finance processor orchestration.
 ---
 
-The Central Finance processor can claim and post a confirmed Sport Center payment through the shared accounting owner, but a successful accounting post alone does not prove settlement or `public.bank_mutations` completion. The processor's orchestration must reach the canonical settlement owner and explicit public-mutation handoff before CF-SC-10B is complete.
+The Central Finance processor must prove the complete ownership chain: durable claim, shared accounting owner, canonical settlement owner, and explicit public-mutation handoff. Retry proofs must compare financial effects with the payment-insert trigger baseline because that trigger can create the accounting draft before the processor runs.
 
-**Why:** A rollback-only DEV smoke on 2026-08-20 produced one posted outbox row, one posted processing identity, and a balanced accounting journal, but no settlement batch or public bank mutation.
+**Why:** Accounting success alone once masked a missing settlement/public-mutation handoff. The live retry fixture also showed that insert-side trigger effects are valid pre-processor state, so a zero-effect assertion must be baseline-relative.
 
-**How to apply:** Keep processor contract tests aligned with the ownership boundary, and require DEV proof of both canonical settlement and public mutation identities. When bundling the rollback harness with esbuild, keep `runtime-db-guard.mjs` external so its CLI guard is not executed as a bundled side effect.
+**How to apply:** Require DEV proof of settlement and public mutation identities, and assert transient attempts add no rows beyond the fixture baseline. When bundling the rollback harness with esbuild, keep `runtime-db-guard.mjs` external so its CLI guard is not executed as a bundled side effect.
