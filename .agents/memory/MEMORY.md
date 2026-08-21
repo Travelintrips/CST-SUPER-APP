@@ -119,3 +119,4 @@
 - [CF-SC-10B proof boundary](cf-sc10b-proof-boundary.md) — accounting post alone does not prove settlement/public mutation; final gate needs an observed canonical handoff.
 - [Canonical bridge live installation](canonical-bridge-live-install.md) — startup markers can skip a newer bridge function; verify pg_get_functiondef and restore the DEV additive contract before proofs.
 - [CF-SC-10D bridge fixture contract](cf-sc-10d-bridge-fixture.md) — let canonical handoff create public mutations; preinserted incomplete rows fail the exact settlement bridge.
+- [PROD COA resolution](prod-coa-resolution.md) — exact linked COA can be postable yet non-canonical when ownership is NULL; prove parent/sibling structure before additive repair.

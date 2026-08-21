@@ -20,8 +20,6 @@ function isDeterministicConfigError(message: string): boolean {
   return /BLOCKED_CONFIG|COMPANY_|PAYMENT_METHOD_|PROVIDER_|TAX_|COA_|BANK_|AMBIGUOUS|NOT_CONFIRMED|NOT_FOUND/i.test(message);
 }
 
-async function ensureProcessingRows(client: QueryClient, sourcePaymentIds?: number[]): Promise<void> {
-  const filter = sourcePaymentIds?.length ? "AND o.payment_id = ANY($1::int[])" : "";
 async function ensureProcessingRows(client: QueryClient, fixturePaymentIds?: number[]): Promise<void> {
   const filter = fixturePaymentIds?.length
     ? "AND o.payment_id = ANY($1::int[])"
@@ -43,11 +41,7 @@ async function ensureProcessingRows(client: QueryClient, fixturePaymentIds?: num
             AND c.event_type = o.event_type
        )
     ON CONFLICT (source_project, source_payment_id, event_type) DO NOTHING
-  `, sourcePaymentIds?.length ? [sourcePaymentIds] : []);
-}
-
-async function claimBatch(client: QueryClient, transactionClient?: pg.PoolClient, sourcePaymentIds?: number[]): Promise<Claim[]> {
-  `, params);
+  `, fixturePaymentIds?.length ? [fixturePaymentIds] : []);
 }
 
 async function claimBatch(client: QueryClient, transactionClient?: pg.PoolClient, fixturePaymentIds?: number[]): Promise<Claim[]> {
@@ -58,7 +52,6 @@ async function claimBatch(client: QueryClient, transactionClient?: pg.PoolClient
   const managesTransaction = transactionClient == null && clientCanConnect;
   try {
     if (managesTransaction) await tx.query("BEGIN");
-    const paymentFilter = sourcePaymentIds?.length ? "AND c.source_payment_id = ANY($1::int[])" : "";
     const paymentFilter = fixturePaymentIds?.length
       ? "AND c.source_payment_id = ANY($1::int[])"
       : "";
@@ -77,7 +70,6 @@ async function claimBatch(client: QueryClient, transactionClient?: pg.PoolClient
        ORDER BY c.id
        FOR UPDATE OF c SKIP LOCKED
        LIMIT 50
-    `, sourcePaymentIds?.length ? [sourcePaymentIds] : []);
     `, fixturePaymentIds?.length ? [fixturePaymentIds] : []);
     const claims: Claim[] = result.rows.map((row) => ({
       id: Number(row.id),
@@ -268,8 +260,17 @@ async function promoteCanonicalPaymentJournal(client: QueryClient, paymentId: nu
   }
 }
 
-mentIds);
-  const claims = await claimBatch(db, options.client, options.sourcePaymentIds);
+export async function processCentralFinance(options: { client?: pg.PoolClient; fixturePaymentIds?: number[] } = {}): Promise<{
+  claimed: number;
+  posted: number;
+  retried: number;
+  manualReview: number;
+}> {
+  const db = options.client ?? getPool();
+  if (!db || !isCentralFinanceMode() || process.env.NODE_ENV === "production") {
+    return { claimed: 0, posted: 0, retried: 0, manualReview: 0 };
+  }
+
   await ensureProcessingRows(db, options.fixturePaymentIds);
   const claims = await claimBatch(db, options.client, options.fixturePaymentIds);
   let posted = 0;
