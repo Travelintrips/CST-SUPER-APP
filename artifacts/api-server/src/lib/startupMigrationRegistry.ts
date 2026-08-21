@@ -18,6 +18,7 @@ const REGISTRY_ROWS: readonly RegistryRow[] = [
   ["customer_portal_product_coa", "Customer Portal product COA migration", "schema"],
   ["customer_portal_service_type", "Customer Portal service type migration", "schema"],
   ["customer_portal_paylabs", "Customer Portal Paylabs config migration", "seed"],
+  ["customer_portal_settlement", "Customer Portal settlement migration", "schema"],
   ["portal_payment_company_scope", "Portal payment company scope migration", "backfill"],
   ["accounting", "Accounting migration", "schema"],
   ["coa_governance", "COA governance migration", "schema"],
