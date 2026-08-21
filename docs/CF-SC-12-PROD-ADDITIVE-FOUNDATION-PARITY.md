@@ -4,6 +4,30 @@
 **Input gate:** CF-SC-11 PROD read-only parity = `BLOCKED`  
 **Scope:** additive foundation only; production must remain legacy
 
+## CF-SC-12B targeted runner
+
+The repository now contains a dedicated, additive production runner:
+
+```text
+scripts/cf-sc-12b-targeted-prod-migration.mjs
+CF_SC_12B_APPLY=true pnpm db:migrate:cf-sc-12b:prod
+```
+
+It is deliberately not part of generic DEV→PROD reconciliation and is not
+called during application startup. It refuses to write unless both
+`APP_ENV=production` and the explicit opt-in `CF_SC_12B_APPLY=true` are
+present. The runner creates only the five CF-SC-12B foundation tables,
+prechecks canonical settlement references before adding the FK, installs the
+checked-in certified Sport Center owner functions, seeds the verified PROD
+business identities, and performs a resolver proof in the same transaction.
+It does not process payments, settlements, reconciliation, provider calls, or
+notifications.
+
+The runner has been added to the codebase but has **not** been executed by this
+workspace session. Therefore the result below remains the historical
+pre-migration result until an explicitly authorized PROD run produces a
+read-only parity report and idempotency proof.
+
 ## Final result
 
 ```text
@@ -310,3 +334,54 @@ The earlier “production database not available” result came from the Replit
 database-pane abstraction, not from the application's external Supabase
 production connection. CF-SC-12A COA discovery is the next phase and was not
 run as part of this connection-resolution task.
+
+## CF-SC-12A-2 — deterministic PROD COA remediation
+
+The production bundle was revalidated through the official loader. The
+transaction-level audit confirmed PostgreSQL 17.6, `transaction_read_only=on`
+for verification, and legacy finance behavior (the application default when
+`SPORT_CENTER_FINANCE_MODE` is unset). No central processor, payment
+simulation, provider call, WhatsApp send, settlement execution, reconciliation,
+or historical backfill was run.
+
+The two COA identities were deterministic and were repaired in one guarded
+production transaction:
+
+| Role | Result |
+|---|---|
+| `RECEIVING_BANK` | Reused ID `75590`; repaired `company_id` from `NULL` to `1` |
+| `RECEIVING_BANK` code/name | `1-1023-CST` / `Bank Mandiri Ciputat` |
+| Receiving bank link | `company_bank_accounts.id=2` remains linked to `coa_id=75590` |
+| Receiving bank postability | `is_postable=true`, `is_header=false`, active |
+| `MDR_EXPENSE` | Created ID `75594` |
+| MDR code/name | `5-3050-CST` / `Biaya MDR & Payment Gateway CST` |
+| MDR structure | company `1`, parent `3496` (`5-3000`), expense, debit, postable |
+| Existing payment/accounting history modified | `0` |
+
+The read-only post-fix gate passed for both COA roles. The shared CF-SC-12
+foundation remains blocked: all five required foundation tables are still
+absent and the live production function set is incomplete. The generic
+DEV→PROD additive reconciler reported unrelated production conflicts and was
+not applied; no broad schema promotion or startup-marker advancement was used
+to conceal that gap.
+
+```text
+CF-SC-12A-2 = PASS (COA remediation)
+RECEIVING_BANK FIX = REUSED_EXISTING_OWNERSHIP_REPAIRED
+RECEIVING_BANK PROD COA ID = 75590
+MDR FIX = CREATED_NEW
+MDR PROD COA ID = 75594
+EXISTING PAYMENT HISTORY MODIFIED = 0
+CF-SC-12 FOUNDATION = BLOCKED
+SHARED CONFIG = BLOCKED
+FUNCTION PARITY = BLOCKED
+FK PARITY = BLOCKED
+STARTUP MARKER = NOT ADVANCED
+PROD MODE BEFORE = LEGACY
+PROD MODE AFTER = LEGACY
+CENTRAL PROCESSOR RUNS = 0
+PROD PAYLABS CALLS = 0
+PROD WHATSAPP = 0
+PROD CUTOVER = NO
+LEGACY CLEANUP = NO
+```
