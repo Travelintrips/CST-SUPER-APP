@@ -45,6 +45,20 @@ function isAllowedDevelopmentStorageRequest(url: URL): boolean {
   });
 }
 
+/**
+ * Address autocomplete is a development UI capability, not a write-side
+ * integration. Allow only the Google Maps web-service paths used by the
+ * geocoding proxy while SAFE_DEV_TEST_MODE remains enabled.
+ */
+function isAllowedDevelopmentMapsRequest(url: URL): boolean {
+  if (process.env.APP_ENV !== "development") return false;
+  if (url.hostname !== "maps.googleapis.com") return false;
+
+  return url.pathname === "/maps/api/place/autocomplete/json"
+    || url.pathname === "/maps/api/place/details/json"
+    || url.pathname === "/maps/api/distancematrix/json";
+}
+
 /** Returns true when either SAFE_DEV_TEST_MODE or E2E_TEST_MODE is active. */
 export function externalIntegrationsDisabled(): boolean {
   return isSafeDevTestMode() || process.env.E2E_TEST_MODE === "true";
@@ -72,7 +86,11 @@ export function installSafeDevOutboundGuard(): void {
       || parsed.hostname === "127.0.0.1"
       || parsed.hostname === "::1";
 
-    if (!isLocal && !isAllowedDevelopmentStorageRequest(parsed)) {
+    if (
+      !isLocal
+      && !isAllowedDevelopmentStorageRequest(parsed)
+      && !isAllowedDevelopmentMapsRequest(parsed)
+    ) {
       if (!outboundBlockLogged) {
         outboundBlockLogged = true;
         console.info("[SAFE_DEV_TEST_MODE] External HTTP disabled; outbound request blocked");

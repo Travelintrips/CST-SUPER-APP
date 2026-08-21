@@ -2,6 +2,7 @@
 - [Startup pooler latency](startup-pooler-latency.md) — cold pooler checkout can dominate registry startup; measure phases and reuse one client for adjacent checks.
 - [Asset storage rule](asset-storage-rule.md) — gambar/biner wajib ke Supabase Storage, bukan git; history sudah di-rewrite Jul 2026 (475 MB → 139 MB).
 - [Development Storage writes](development-storage-writes.md) — safe-dev tetap memblokir integrasi eksternal, tetapi preview upload boleh menulis hanya ke Supabase Storage development.
+- [Safe-dev Google Maps exception](safe-dev-google-maps.md) — autocomplete alamat perlu allowlist sempit ke path Google Maps, tanpa membuka outbound eksternal umum.
 - [CMS upload object keys](cms-upload-object-key.md) — public CMS upload wajib memakai key ber-ekstensi sesuai bytes hasil kompresi; bare UUID ditolak resolver frontend.
 - [Supabase Node 20 WebSocket](supabase-node20-websocket.md) — one-off Supabase client scripts di Node 20 memerlukan transport `ws` eksplisit.
 - [Production static asset promotion](production-static-assets.md) — asset dev tidak otomatis ada di bucket production; cek secret runtime live dan verifikasi bucket production sebelum publish.
