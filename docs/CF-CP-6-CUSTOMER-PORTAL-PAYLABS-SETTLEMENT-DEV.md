@@ -67,6 +67,31 @@ melaporkan `executed=1`, `failed=0`.
 **BOUNDARY MIGRATION = PASS (reported checkpoint)**  
 **SNAPSHOT COLUMNS = PASS (reported checkpoint)**
 
+## Quality gates
+
+The canonical workspace order was executed on 2026-08-22:
+
+1. shared/generated declaration build: `pnpm run typecheck:libs` — **PASS**;
+2. API typecheck: `pnpm --filter @workspace/api-server typecheck` —
+   **PASS**;
+3. workspace typecheck: `pnpm run typecheck` — **PASS**;
+4. API build: `pnpm --filter @workspace/api-server build` — **PASS**;
+5. focused CF-CP tests — **11/11 PASS**;
+6. `git diff --check` — **PASS**.
+
+Focused test files:
+
+```text
+artifacts/api-server/src/__tests__/customer-portal-payment-boundary.test.ts
+artifacts/api-server/src/__tests__/customer-portal-resolver-routing.test.ts
+artifacts/api-server/src/__tests__/paylabs-accounting-consistency.test.ts
+```
+
+The broad Vitest suite was not used for this gate. It is intentionally excluded
+from the CF-CP result because its historical invocation included unrelated
+projects and environment-dependent database tests. No `RELATED_CF_CP_REGRESSION`
+was found in the focused set.
+
 ## Runtime execution result
 
 Runtime proof belum dapat dijalankan pada workspace ini karena API
@@ -85,9 +110,13 @@ runtime, two-client race, rollback, dan readiness tidak boleh diklaim lulus.
 |---|---|
 | Harness packaging | PASS |
 | PG module resolution | PASS |
+| Shared declaration build | PASS |
 | API typecheck | PASS |
+| Workspace typecheck | PASS |
 | Bundle syntax check | PASS |
 | API build | PASS |
+| Focused CF-CP tests | 11/11 PASS |
+| Broad suite | NOT RUN (baseline/unrelated excluded) |
 | Goods E2E | BLOCKED_BOOTSTRAP_SECRET |
 | Jasa E2E | NOT RUN |
 | Negative matrix | NOT RUN |
@@ -96,8 +125,50 @@ runtime, two-client race, rollback, dan readiness tidak boleh diklaim lulus.
 | Rollback/cleanup runtime | NOT RUN |
 | Existing DEV data changed | 0 writes performed |
 | Sport Center direct effects | 0 writes performed |
+| Readiness | BLOCKED_API_START |
+| Customer Portal ready | NO |
+| Sport Center ready | NO |
+| Normal Customer Portal mode | LEGACY (configured default) |
 | PROD writes/migrations/processors | 0 |
 | PROD cutover | NO |
+
+## Final status
+
+```text
+CF-CP-6 = PARTIAL / BLOCKED_RUNTIME_BOOTSTRAP
+GOODS E2E = PASS (verified checkpoint; not rerun because the API could not start)
+JASA E2E = NOT_RUN
+NEGATIVE MATRIX = NOT_RUN
+TRANSIENT RETRY = NOT_RUN
+TWO-CLIENT = NOT_RUN
+GOODS ACCOUNTING = 1 (verified checkpoint)
+PUBLIC MUTATION = 1 (verified checkpoint)
+SETTLEMENT = 1 (verified checkpoint)
+RETRY IDEMPOTENCY = PASS (verified checkpoint)
+ROLLBACK/CLEANUP = PASS (verified checkpoint)
+EXISTING DEV DATA CHANGED = 0
+SPORT CENTER DIRECT EFFECTS = 0
+SHARED DECLARATION BUILD = PASS
+API TYPECHECK = PASS
+WORKSPACE TYPECHECK = PASS
+API BUILD = PASS
+FOCUSED TESTS = 11/11 PASS
+BROAD SUITE = NOT_RUN / BASELINE_UNRELATED_EXCLUDED
+GIT DIFF CHECK = PASS
+READINESS = BLOCKED_API_START
+CUSTOMER PORTAL READY = NO
+SPORT CENTER READY = NO
+NORMAL CUSTOMER PORTAL MODE = LEGACY
+PROD WRITES = 0
+PROD CUTOVER = NO
+READY FOR CF-CP-7 = NO
+BLOCKER = missing GCP_SECRET_MANAGER_BOOTSTRAP_JSON
+```
+
+This status does not claim the unexecuted runtime gates. Once the development
+bootstrap secret is provisioned, restart the API, run the existing harness and
+the remaining DEV-only proofs, then verify readiness before changing this
+status.
 
 ## Next runtime command
 
