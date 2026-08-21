@@ -51,6 +51,10 @@ export async function settleCustomerPortalPayment(
   const canonicalKey = `customer_portal:payment:${input.paymentId}`;
   const mutationKey = `CP-PAY-${input.paymentId}`;
 
+  await client.query(
+    `SELECT pg_advisory_xact_lock(hashtext($1))`,
+    [`customer-portal-settlement:${canonicalKey}`],
+  );
   const existing = await client.query<{
     settlement_id: string;
     journal_entry_id: number;

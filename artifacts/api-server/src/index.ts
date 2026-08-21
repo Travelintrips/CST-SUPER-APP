@@ -31,7 +31,6 @@ import { runCustomerPortalProductTaxMigration } from "./lib/customerPortalProduc
 import { runCustomerPortalProductCoaMigration } from "./lib/customerPortalProductCoaMigration.js";
 import { runCustomerPortalServiceTypeMigration } from "./lib/customerPortalServiceTypeMigration.js";
 import { runCustomerPortalPaylabsMigration } from "./lib/customerPortalPaylabsMigration.js";
-import { runCustomerPortalSettlementMigration } from "./lib/customerPortalSettlementMigration.js";
 import { runVendorProfileFieldsMigration } from "./lib/vendorProfileFieldsMigration";
 import { runSupplierEnhancementMigration } from "./lib/supplierEnhancementMigration";
 import { runAccountingMigration, repairKasErSportCenterEntries, repairOrphanedEntryLines, syncAccountingSequences, checkSequenceDesync } from "./lib/accountingMigration";

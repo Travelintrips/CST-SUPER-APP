@@ -2,14 +2,28 @@ import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 
 /**
- * CF-CP-7: project-owned Customer Portal settlement storage.
- *
- * The public mutation is the canonical external identity. Customer Portal
- * settlement rows are deliberately not stored in sport_center.*.
+ * Customer Portal owns these settlement rows. No sport_center.* table or
+ * owner routine is used here; the public bank mutation is the canonical
+ * external identity shared with reconciliation.
  */
 export async function runCustomerPortalSettlementMigration(): Promise<void> {
   const env = process.env.APP_ENV ?? process.env.NODE_ENV ?? "development";
   if (env !== "development") return;
+
+  await db.execute(sql`
+    ALTER TABLE public.bank_mutations
+      ADD COLUMN IF NOT EXISTS canonical_key TEXT
+  `);
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS bank_mutations_customer_portal_canonical_uidx
+      ON public.bank_mutations (canonical_key)
+      WHERE canonical_key LIKE 'customer_portal:payment:%'
+  `);
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS bank_mutations_customer_portal_mutation_uidx
+      ON public.bank_mutations (mutation_key)
+      WHERE mutation_key LIKE 'CP-PAY-%'
+  `);
 
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS customer_portal_settlement_batches (
@@ -36,7 +50,8 @@ export async function runCustomerPortalSettlementMigration(): Promise<void> {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS customer_portal_settlement_items (
       id BIGSERIAL PRIMARY KEY,
-      settlement_id BIGINT NOT NULL REFERENCES customer_portal_settlement_batches(id) ON DELETE CASCADE,
+      settlement_id BIGINT NOT NULL
+        REFERENCES customer_portal_settlement_batches(id) ON DELETE CASCADE,
       payment_id INTEGER NOT NULL,
       gross_amount NUMERIC(18,2) NOT NULL,
       status TEXT NOT NULL DEFAULT 'active'
@@ -49,23 +64,4 @@ export async function runCustomerPortalSettlementMigration(): Promise<void> {
     CREATE INDEX IF NOT EXISTS customer_portal_settlement_items_settlement_idx
       ON customer_portal_settlement_items (settlement_id)
   `);
-
-  // Existing Sport Center public-mutation projection remains unchanged for
-  // Sport Center rows, while Customer Portal owns its own public mutation.
-  await db.execute(sql.raw(`
-    CREATE OR REPLACE FUNCTION sport_center.project_public_bank_mutation_to_canonical_trigger()
-    RETURNS trigger
-    LANGUAGE plpgsql
-    SECURITY DEFINER
-    SET search_path TO 'pg_catalog', 'sport_center', 'public'
-    AS $function$
-    BEGIN
-      IF NEW.source_app = 'customer_portal' THEN
-        RETURN NEW;
-      END IF;
-      PERFORM sport_center.project_public_bank_mutation_to_canonical(NEW.id);
-      RETURN NEW;
-    END;
-    $function$;
-  `));
 }
