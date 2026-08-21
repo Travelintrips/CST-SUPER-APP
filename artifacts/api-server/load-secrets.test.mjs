@@ -534,6 +534,22 @@ describe("Legacy mode: backward compat with GCP_PROJECT_ID + GCP_SECRET_ID", () 
     expect(legacyMode).toBe(true);
   });
 
+  it("keeps canonical bootstrap authoritative when stale legacy selectors remain", () => {
+    const credentials = { project_id: "secret-504012" };
+    const { legacyMode, bundleName, secretName } = resolveBundleName(
+      "production",
+      credentials,
+      {
+        GCP_PROJECT_ID: "secret-504012",
+        GCP_SECRET_ID: "replit-app-secrets",
+        GCP_SECRET_MANAGER_BOOTSTRAP_JSON: "{\"project_id\":\"secret-504012\"}",
+      },
+    );
+    expect(legacyMode).toBe(false);
+    expect(bundleName).toBe("cst-super-app-production");
+    expect(secretName).toContain("cst-super-app-production");
+  });
+
   it("selects _DEV keys in legacy dev mode", () => {
     const target = {};
     injectSecrets(makeLegacyBundle(), "development", true, target);

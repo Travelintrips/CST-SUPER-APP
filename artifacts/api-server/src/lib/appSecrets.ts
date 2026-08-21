@@ -255,28 +255,20 @@ export async function getFonnteToken(): Promise<string> {
 }
 
 export async function getSmtpPass(): Promise<string> {
-  // SMTP credentials are deployment secrets. Do not allow a stale CMS/app
-  // config row to override the environment-specific production credential.
-  const envValue = process.env.SMTP_PASS?.trim();
-  if (envValue) return envValue;
-  return getSetting("smtp_pass", "");
+  return getSetting("smtp_pass", process.env.SMTP_PASS ?? "");
 }
 
 export async function getSmtpPassWithSource(): Promise<{
   value: string;
   source: "DB" | "ENV" | "DEFAULT";
 }> {
-  const envValue = process.env.SMTP_PASS?.trim();
-  if (envValue) return { value: envValue, source: "ENV" };
-  return getSettingWithSource("smtp_pass", "");
+  return getSettingWithSource("smtp_pass", process.env.SMTP_PASS ?? "");
 }
 
 export async function getSmtpFrom(): Promise<string> {
-  const envValue = process.env.SMTP_FROM?.trim();
-  if (envValue) return envValue;
   return getSetting(
     "smtp_from",
-    "noreply@cstlogistic.co.id",
+    process.env.SMTP_FROM ?? "noreply@cstlogistic.co.id",
   );
 }
 
@@ -284,11 +276,9 @@ export async function getSmtpFromWithSource(): Promise<{
   value: string;
   source: "DB" | "ENV" | "DEFAULT";
 }> {
-  const envValue = process.env.SMTP_FROM?.trim();
-  if (envValue) return { value: envValue, source: "ENV" };
   return getSettingWithSource(
     "smtp_from",
-    "",
+    process.env.SMTP_FROM ?? "",
     "noreply@cstlogistic.co.id",
   );
 }

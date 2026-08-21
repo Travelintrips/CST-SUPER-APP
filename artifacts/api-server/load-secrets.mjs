@@ -198,12 +198,14 @@ export function validateBootstrapJson(raw) {
  * Determine which bundle to load and whether we are in legacy mode.
  *
  * New mode  (recommended, single credential):
- *   GCP_PROJECT_ID and GCP_SECRET_ID are NOT set.
+ *   canonical bootstrap is present and SECRET_MANAGER_LEGACY_MODE is not "1".
+ *   Stale GCP_PROJECT_ID/GCP_SECRET_ID values do not override this mode.
  *   Bundle name = "{bundlePrefix}-{APP_ENV}" (e.g. "cst-super-app-development").
  *   project_id comes from the bootstrap JSON.
  *
  * Legacy mode (backward compat, three credentials):
- *   GCP_PROJECT_ID and GCP_SECRET_ID are set.
+ *   canonical bootstrap is absent and GCP_PROJECT_ID/GCP_SECRET_ID are set,
+ *   or SECRET_MANAGER_LEGACY_MODE is explicitly "1".
  *   Bundle name = GCP_SECRET_ID (single mixed bundle with *_DEV suffix keys).
  *   project_id comes from GCP_PROJECT_ID (or bootstrap JSON if different).
  *
@@ -215,7 +217,16 @@ export function validateBootstrapJson(raw) {
 export function resolveBundleName(appEnv, credentials, env) {
   const legacyProjectId = env.GCP_PROJECT_ID;
   const legacySecretId  = env.GCP_SECRET_ID;
-  const legacyMode      = !!(legacyProjectId && legacySecretId);
+  const hasCanonicalBootstrap = Boolean(
+    env.GCP_SECRET_MANAGER_BOOTSTRAP_JSON ||
+    env.GOOGLE_SECRET_MANAGER_SERVICE_ACCOUNT_JSON,
+  );
+  const explicitLegacyMode = env.SECRET_MANAGER_LEGACY_MODE === "1";
+  // The canonical bootstrap is authoritative. Legacy selectors may remain in
+  // an old deployment's environment and must not silently redirect production
+  // to replit-app-secrets when the canonical environment bundle is available.
+  const legacyMode = !hasCanonicalBootstrap && !!(legacyProjectId && legacySecretId)
+    || explicitLegacyMode;
 
   const projectId = legacyProjectId ?? credentials.project_id;
 
