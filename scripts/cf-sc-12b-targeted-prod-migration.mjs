@@ -250,8 +250,10 @@ async function seedConfiguration() {
   await one(`
     INSERT INTO public.finance_project_payment_configs
       (finance_project_config_id, payment_method, provider_code, bank_account_id,
-       currency_code, settlement_delay_business_days, mdr_rate, created_by, updated_by)
-    VALUES ($1, 'QRIS', 'mandiri_direct', 2, 'IDR', 1, 0.003, 'CF-SC-12B', 'CF-SC-12B')
+       currency_code, settlement_delay_business_days, mdr_rate, effective_from,
+       created_by, updated_by)
+    VALUES ($1, 'QRIS', 'mandiri_direct', 2, 'IDR', 1, 0.003, DATE '2026-01-01',
+            'CF-SC-12B', 'CF-SC-12B')
     ON CONFLICT (finance_project_config_id, payment_method, provider_code, config_version)
     DO UPDATE SET updated_at=NOW()
   `, [projectId]);
