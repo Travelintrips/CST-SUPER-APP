@@ -71,6 +71,115 @@ SET TRANSACTION READ ONLY;
 
 The transaction was rolled back.
 
+## PROD COA GAP RESOLUTION
+
+CF-SC-12A read-only discovery was completed on 2026-08-21. No INSERT,
+UPDATE, DELETE, or DDL was issued.
+
+### Exact Mandiri bank linkage
+
+The owner-approved active PROD bank row is:
+
+| Field | Value |
+|---|---|
+| `company_bank_accounts.id` | `2` |
+| `bank_name` | `Bank Mandiri` |
+| `name` | `Bank Mandiri Ciputat` |
+| `account_number` | `164***20` |
+| `company_id` | `1` |
+| `currency_code` | `IDR` |
+| `account_type` | `bank` |
+| `coa_id` | `75590` |
+
+The explicit bank→COA link is **FAIL**: `chart_of_accounts.id=75590` does not
+exist in PROD. This is an orphan reference and was not repaired automatically.
+
+### RECEIVING_BANK candidates
+
+| Candidate | Evidence | Result |
+|---|---|---|
+| `75590` | Explicit `company_bank_accounts.coa_id` link | Invalid/orphan; no PROD COA row |
+| `49098 / 1-1020-CST / Bank Mandiri CST` | Active PROD asset COA; used by 88 accounting entries, including current Sport Center QRIS payment entries | Valid existing different code |
+| `35204 / 1-1020 / Bank Mandiri` | Active generic Bank Mandiri asset COA | Candidate by name only; not selected |
+
+The current Sport Center QRIS accounting entries debit `49098`, while the
+orphan `75590` is used by 308 entries across mixed business flows (including
+Sport Center and tenant-rent payments). Therefore `49098` is the strongest
+existing business candidate, but the broken explicit link and mixed historical
+usage require owner confirmation before it can be treated as the canonical
+receiving-bank mapping.
+
+```text
+RECEIVING_BANK = VALID_EXISTING_DIFFERENT_CODE
+RECEIVING_BANK PROD COA ID = 49098
+RECEIVING_BANK PROD CODE = 1-1020-CST
+RECEIVING_BANK PROD NAME = Bank Mandiri CST
+BANK→COA LINK = FAIL (orphan coa_id=75590)
+```
+
+### MDR candidates and actual usage
+
+The exact expected account `5-3050-CST / Biaya MDR & Payment Gateway CST` is
+absent. No PROD COA with an unambiguous MDR, merchant discount, payment
+gateway, or QRIS-fee identity was found.
+
+The closest active CST expense account is:
+
+```text
+49139 / 5-3010-CST / Beban Bunga & Administrasi Bank CST
+```
+
+Its observed usage is four debit entries totaling IDR 10,500:
+
+- two manual bank-fee/admin entries;
+- one bank-reconciliation entry explicitly mapped to `5-3010-CST`;
+- no evidence that these entries represent QRIS merchant discount/MDR.
+
+It must not be reused automatically as `MDR_EXPENSE`.
+
+```text
+MDR_EXPENSE = TRULY_MISSING
+MDR PROD COA ID = NONE
+MDR PROD CODE = NONE
+MDR PROD NAME = NONE
+MDR ACCOUNTING USAGE = NOT_FOUND (explicit MDR/QRIS merchant-fee usage)
+```
+
+### Proposed additive COA plan — not executed
+
+| Role | Proposed code | Proposed name | Type | Category | Normal balance | Parent | Reason |
+|---|---|---|---|---|---|---|---|
+| `MDR_EXPENSE` | `5-3050-CST` | `Biaya MDR & Payment Gateway CST` | expense | expense | debit | `OWNER_DECISION_REQUIRED` | Dedicated expense identity for QRIS/payment-provider MDR |
+
+The code is available in the exact-code collision check, but the parent
+account/category cannot be safely proven from the current PROD catalog:
+the expected CST expense-child parent identity is not present as a resolved
+active parent row in this read-only result. No account was created.
+
+```text
+NEW COA REQUIRED = PARTIAL
+OWNER DECISION REQUIRED = YES
+PROPOSED COA PLAN = 5-3050-CST, pending owner-approved parent/category and bank-link decision
+```
+
+### CF-SC-12A result
+
+```text
+CF-SC-12A = BLOCKED
+PROD WRITES = 0
+PROD MIGRATIONS = 0
+PROD MODE = LEGACY
+READY TO RESUME CF-SC-12 = NO
+BLOCKERS =
+  1. bank_account_id=2 has orphan coa_id=75590;
+  2. owner confirmation is required before selecting 49098 as RECEIVING_BANK;
+  3. MDR_EXPENSE is truly missing;
+  4. additive MDR parent/category requires owner decision.
+```
+
+The PostgreSQL 16.10 versus 17.6 `pg_dump` mismatch remains a separate
+tooling note only; it is not a finance classification blocker for CF-SC-12A.
+
 ## Certified DEV contract freeze
 
 The source of truth was kept as the certified DEV runtime and checked-in
