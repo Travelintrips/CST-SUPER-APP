@@ -3029,6 +3029,21 @@ router.post("/vendor/catalog/:id/publish", requirePortalAuth, async (req, res) =
   const supplier = await getLinkedSupplier(customerId);
   if (!supplier) return res.status(403).json({ message: "Akun belum terhubung ke data vendor" });
   try {
+    const [item] = await db
+      .select({ status: vendorCatalogItemsTable.status })
+      .from(vendorCatalogItemsTable)
+      .where(and(
+        eq(vendorCatalogItemsTable.id, id),
+        eq(vendorCatalogItemsTable.vendorId, supplier.id),
+      ));
+    if (!item) return res.status(404).json({ message: "Item tidak ditemukan atau bukan milik vendor ini" });
+    if (item.status !== "published") {
+      return res.status(409).json({
+        message: "Produk harus disetujui admin terlebih dahulu sebelum dapat dipublikasikan.",
+        code: "ADMIN_APPROVAL_REQUIRED",
+      });
+    }
+
     const result = await db.execute(sql`
       UPDATE vendor_catalog_items
       SET is_published = true, is_active = true, status = 'published',

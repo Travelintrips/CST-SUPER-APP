@@ -634,6 +634,7 @@ function VendorCatalogManagementSection() {
 
           const statusMap: Record<string, { label: string; cls: string }> = {
             published: { label: t("vendorDashboard.statusPublished"), cls: "bg-emerald-100 text-emerald-800 border-emerald-200" },
+            pending_review: { label: "Menunggu persetujuan admin", cls: "bg-blue-100 text-blue-800 border-blue-200" },
             draft:     { label: t("vendorDashboard.statusDraft"),      cls: "bg-amber-100 text-amber-800 border-amber-200" },
             archived:  { label: t("vendorDashboard.statusArchived"),   cls: "bg-gray-100 text-gray-600 border-gray-200" },
           };
@@ -652,7 +653,7 @@ function VendorCatalogManagementSection() {
                   {item.kategori && <span className="text-xs text-muted-foreground shrink-0 hidden sm:block">{item.kategori}</span>}
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
-                  {!archived && (
+                  {!archived && item.status !== "pending_review" && (
                     item.isPublished ? (
                       <Button size="sm" variant="outline" disabled={isActing}
                         className="h-7 text-xs gap-1 border-amber-200 text-amber-700 hover:bg-amber-50"
