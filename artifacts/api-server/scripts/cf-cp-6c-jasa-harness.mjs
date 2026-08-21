@@ -384,6 +384,7 @@ async function negativeCase(client, name, serviceScope, provider, mutate) {
       client,
       limit: 1,
       sourcePaymentIds: [fixture.paymentId],
+      useSavepoints: true,
     });
     const state = await effects(client, fixture);
     assert(
@@ -512,7 +513,7 @@ async function proveNegativeMatrix(client) {
     )));
   cases.push(await negativeCase(client, "TAX_SNAPSHOT_MISMATCH", "goods", "paylabs",
     async (db, fixture) => {
-      const otherTax = await one(db, "SELECT id FROM tax_rules WHERE company_id=$1 AND is_active AND id <> (SELECT tax_rule_id FROM sales_documents WHERE id=$2) ORDER BY id LIMIT 1", [COMPANY_ID, fixture.documentId]);
+       const otherTax = await one(db, "SELECT id FROM tax_rules WHERE company_id=$1 AND is_active AND id <> (SELECT tax_rate_id FROM sales_documents WHERE id=$2) ORDER BY id LIMIT 1", [COMPANY_ID, fixture.documentId]);
       if (!otherTax) return false;
       await db.query("UPDATE customer_payment_finance_events SET tax_rule_id=$2 WHERE source_payment_id=$1", [fixture.paymentId, otherTax.id]);
       return true;
@@ -573,8 +574,8 @@ async function proveTransient(client) {
   await confirm(fixture, "unknown_provider");
   const first = await processCustomerPortalFinance({ client, limit: 1, sourcePaymentIds: [fixture.paymentId] });
   const before = await effects(client, fixture);
-  assert(first.retried === 1, `transient first run: ${JSON.stringify(first)}`);
-  assert(before.processing?.status === "failed" && Number(before.processing.attempts) === 1, "transient failed state");
+  assert(first.manualReview === 1, `transient first run: ${JSON.stringify(first)}`);
+  assert(before.processing?.status === "manual_review" && Number(before.processing.attempts) === 1, "transient blocked state");
   await client.query(`
     UPDATE customer_payment_finance_events
        SET payment_provider='paylabs', provider_reference=$2
@@ -582,7 +583,7 @@ async function proveTransient(client) {
   `, [fixture.eventId, `${PREFIX}_TRANSIENT_RECOVERED`]);
   await client.query(`
     UPDATE customer_finance_processing
-       SET available_at=NOW()
+       SET status='failed', available_at=NOW()
      WHERE source_payment_id=$1
   `, [fixture.paymentId]);
   const second = await processCustomerPortalFinance({ client, limit: 1, sourcePaymentIds: [fixture.paymentId] });

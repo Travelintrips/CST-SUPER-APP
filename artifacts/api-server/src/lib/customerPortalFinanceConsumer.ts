@@ -18,6 +18,7 @@ export async function processCustomerPortalFinance(options: {
   client: pg.PoolClient;
   limit?: number;
   sourcePaymentIds?: number[];
+  useSavepoints?: boolean;
 }): Promise<{ claimed: number; posted: number; manualReview: number; retried: number }> {
   if (getCustomerPortalFinanceMode() !== "central" || (process.env.APP_ENV ?? process.env.NODE_ENV) === "production") {
     return { claimed: 0, posted: 0, manualReview: 0, retried: 0 };
@@ -58,6 +59,9 @@ export async function processCustomerPortalFinance(options: {
   let posted = 0, manualReviewCount = 0, retried = 0;
   for (const row of claimed.rows as Array<{ id: number; source_payment_id: number }>) {
     try {
+      if (options.useSavepoints) {
+        await client.query("SAVEPOINT customer_portal_finance_row");
+      }
       const event = await client.query(`
         SELECT e.*, p.company_id AS payment_company_id, sd.company_id AS document_company_id,
                sd.total_amount, sd.tax_amount AS document_tax_amount,
@@ -132,10 +136,19 @@ export async function processCustomerPortalFinance(options: {
            SET status='posted', processed_at=NOW(), locked_at=NULL, last_error=NULL, updated_at=NOW()
          WHERE id=$1
       `, [row.id]);
+      if (options.useSavepoints) {
+        await client.query("RELEASE SAVEPOINT customer_portal_finance_row");
+      }
       posted++;
     } catch (error) {
       const message = errorText(error);
-      const status = message.includes("CUSTOMER_PORTAL_MANUAL_REVIEW") ? "manual_review" : "failed";
+      const status =
+        message.includes("CUSTOMER_PORTAL_MANUAL_REVIEW") || message.includes("BLOCKED_CONFIG_")
+          ? "manual_review"
+          : "failed";
+      if (options.useSavepoints) {
+        await client.query("ROLLBACK TO SAVEPOINT customer_portal_finance_row");
+      }
       await client.query(`
         UPDATE customer_finance_processing
            SET status=$2, last_error=$3, locked_at=NULL,
