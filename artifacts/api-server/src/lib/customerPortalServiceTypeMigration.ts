@@ -45,6 +45,21 @@ export async function runCustomerPortalServiceTypeMigration(): Promise<void> {
       WHERE product_scope IS NOT NULL
   `);
   await db.execute(sql`
+    DROP INDEX IF EXISTS uq_finance_project_coa_mappings_identity
+  `);
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_finance_project_coa_mappings_identity
+      ON finance_project_coa_mappings (
+        finance_project_config_id,
+        account_role,
+        product_scope,
+        COALESCE(service_scope, ''),
+        COALESCE(payment_method, ''),
+        COALESCE(provider_code, ''),
+        effective_from
+      )
+  `);
+  await db.execute(sql`
     DROP INDEX IF EXISTS uq_finance_project_tax_mappings_identity
   `);
   await db.execute(sql`
@@ -94,7 +109,7 @@ export async function runCustomerPortalServiceTypeMigration(): Promise<void> {
       service_scope, payment_method, provider_code, is_active, effective_from,
       effective_to, metadata, created_by, updated_by
     )
-    SELECT 3, 'REVENUE', mapping.coa_id, 'jasa', mapping.service_scope,
+    SELECT 3, 'REVENUE', ca.id, 'jasa', mapping.service_scope,
            NULL, NULL, TRUE, CURRENT_DATE, NULL,
            jsonb_build_object(
              'source', 'CF-CP-6B',
