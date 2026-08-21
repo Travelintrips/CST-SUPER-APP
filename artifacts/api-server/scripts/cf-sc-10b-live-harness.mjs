@@ -40,17 +40,20 @@ const prefix = `CFSC10B_${process.pid}_${Date.now()}`;
 const client = await pool.connect();
 let paymentId;
 let bookingId;
-let committedForConcurrency = false;
 
 const query = (sql, params) => client.query(sql, params);
 const countFixture = async (db = pool) => {
   const result = await db.query(
-    `SELECT
-       (SELECT COUNT(*) FROM sport_center.sport_payments WHERE provider_name = $1 OR provider_id = $1) AS payments,
-       (SELECT COUNT(*) FROM sport_center.payment_accounting_outbox WHERE correlation_id LIKE $2) AS outbox,
-       (SELECT COUNT(*) FROM sport_center.central_finance_processing WHERE correlation_id LIKE $2) AS processing,
-       (SELECT COUNT(*) FROM sport_center.accounting_journals WHERE order_number LIKE $2 OR source_id LIKE $2) AS journals`,
-    [prefix, `${prefix}%`],
+    `WITH fixture_payments AS (
+       SELECT id FROM sport_center.sport_payments
+        WHERE provider_name = $1 OR provider_id = $1
+     )
+     SELECT
+       (SELECT COUNT(*) FROM fixture_payments) AS payments,
+       (SELECT COUNT(*) FROM sport_center.payment_accounting_outbox WHERE payment_id IN (SELECT id FROM fixture_payments)) AS outbox,
+       (SELECT COUNT(*) FROM sport_center.central_finance_processing WHERE source_payment_id IN (SELECT id FROM fixture_payments)) AS processing,
+       (SELECT COUNT(*) FROM sport_center.accounting_journals WHERE payment_id IN (SELECT id FROM fixture_payments)) AS journals`,
+    [prefix],
   );
   return result.rows[0];
 };
@@ -126,8 +129,6 @@ try {
   const afterSecond = await accountingState();
   if (second.claimed !== 0 || afterSecond.length !== 1) throw new Error(`Idempotency failed: ${JSON.stringify(second)}`);
 
-  await query("COMMIT");
-  committedForConcurrency = true;
   console.log(JSON.stringify({
     environment: "development",
     normalMode: "legacy",
@@ -139,29 +140,15 @@ try {
     first,
     second,
     journal: afterSecond[0],
-    rollbackOnly: false,
-    note: "Concurrency proof requires a committed visible fixture; cleanup is guarded and verified separately.",
+    rollbackOnly: true,
+    skipLockedTwoClient: "NOT_RUN: strict rollback-only visibility prevents a second independent transaction from seeing uncommitted fixtures",
   }, null, 2));
+  await query("ROLLBACK");
 } catch (error) {
   await query("ROLLBACK").catch(() => {});
   throw error;
 } finally {
   client.release();
-}
-
-if (committedForConcurrency) {
-  const cleanup = await pool.connect();
-  try {
-    await cleanup.query("BEGIN");
-    await cleanup.query("DELETE FROM sport_center.sport_payments WHERE provider_name = $1 OR provider_id = $1", [prefix]);
-    await cleanup.query("DELETE FROM sport_center.sport_bookings WHERE order_number LIKE $1", [`${prefix}%`]);
-    await cleanup.query("COMMIT");
-  } catch (error) {
-    await cleanup.query("ROLLBACK").catch(() => {});
-    throw error;
-  } finally {
-    cleanup.release();
-  }
 }
 
 const remaining = await countFixture();

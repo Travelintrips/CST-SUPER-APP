@@ -280,28 +280,35 @@ export async function processCentralFinance(options: { client?: pg.PoolClient; f
   let retried = 0;
   let manualReview = 0;
   for (const claim of claims) {
+    const ownedConnection = options.client ? null : await (db as pg.Pool).connect();
+    const workingClient = ownedConnection ?? db;
     try {
-      await db.query("SAVEPOINT central_finance_claim");
+      if (ownedConnection) await ownedConnection.query("BEGIN");
+      await workingClient.query("SAVEPOINT central_finance_claim");
       // The database function owns shared config, tax, COA, journal and
       // payment-level idempotency. This layer only orchestrates the durable event.
       // A fixture/client invocation runs inside its caller's transaction. Keep
       // the mode explicit on that same session so the DB owner cannot silently
       // fall back to legacy resolution.
-      await db.query("SELECT set_config('sport_center.finance_mode', 'central', true)");
-      await db.query("SELECT sport_center.create_payment_accounting_draft($1)", [claim.paymentId]);
-      await promoteCanonicalPaymentJournal(db, claim.paymentId);
-      await createAndFinalizeSettlement(db, claim);
-      await finish(db, claim, "posted");
-      await db.query("RELEASE SAVEPOINT central_finance_claim");
+      await workingClient.query("SELECT set_config('sport_center.finance_mode', 'central', true)");
+      await workingClient.query("SELECT sport_center.create_payment_accounting_draft($1)", [claim.paymentId]);
+      await promoteCanonicalPaymentJournal(workingClient, claim.paymentId);
+      await createAndFinalizeSettlement(workingClient, claim);
+      await finish(workingClient, claim, "posted");
+      await workingClient.query("RELEASE SAVEPOINT central_finance_claim");
+      if (ownedConnection) await ownedConnection.query("COMMIT");
       posted++;
     } catch (error) {
-      await db.query("ROLLBACK TO SAVEPOINT central_finance_claim").catch(() => {});
+      await workingClient.query("ROLLBACK TO SAVEPOINT central_finance_claim").catch(() => {});
       const status = isDeterministicConfigError(String(error instanceof Error ? error.message : error))
         ? "manual_review"
         : "failed";
-      await finish(db, claim, status, error);
+      await finish(workingClient, claim, status, error);
+      if (ownedConnection) await ownedConnection.query("COMMIT");
       if (status === "manual_review") manualReview++;
       else retried++;
+    } finally {
+      ownedConnection?.release();
     }
   }
   return { claimed: claims.length, posted, retried, manualReview };
