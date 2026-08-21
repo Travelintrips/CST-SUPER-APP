@@ -267,3 +267,46 @@ above. DEV was deliberately not used as a substitute, and no COA
 classification or additive proposal was promoted from assumption. CF-SC-12A
 therefore remains `BLOCKED`; resume only after an explicitly identifiable PROD
 database is available for read-only inspection.
+
+## CF-SC-12A-1 — production connection resolution
+
+The production connection contract was resolved without changing application
+finance behavior:
+
+| Item | Result |
+|---|---|
+| Secret source | GCP Secret Manager bundle `cst-super-app-production` |
+| Canonical key | `SUPABASE_DATABASE_URL` |
+| Production secret | PRESENT; loader validation passed |
+| Development secret | `SUPABASE_DATABASE_URL_DEV`, from `cst-super-app-development` |
+| DEV business database | Supabase PostgreSQL |
+| PROD business database | Supabase PostgreSQL |
+| Production database | `postgres` |
+| PostgreSQL server | 17.6 |
+| Schemas | `public`, `sport_center` |
+| Read-only transaction | ENFORCED (`transaction_read_only=on`) |
+| DEV/PROD isolation | CONFIRMED: metadata fingerprints differ |
+
+Both checks used a dedicated PostgreSQL client, executed `BEGIN` followed by
+`SET TRANSACTION READ ONLY`, selected harmless connection/schema metadata only,
+and ended with `ROLLBACK`. No business-table query, migration, processor run,
+or application start occurred.
+
+```text
+CF-SC-12A-1 = PASS
+PROD CONNECTION = PASS
+READ ONLY = YES
+DEV DB != PROD DB = YES
+PRODUCTION DATABASE CREATED = NO
+DEV USED AS PROD SUBSTITUTE = NO
+PROD WRITES = 0
+PROD MIGRATIONS = 0
+PROD PROCESSOR RUNS = 0
+READY TO RESUME CF-SC-12A = YES (connection gate only)
+EXTERNAL ACTION REQUIRED = NONE
+```
+
+The earlier “production database not available” result came from the Replit
+database-pane abstraction, not from the application's external Supabase
+production connection. CF-SC-12A COA discovery is the next phase and was not
+run as part of this connection-resolution task.

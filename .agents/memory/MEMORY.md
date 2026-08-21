@@ -22,6 +22,7 @@
 - [Deployment publish build prerequisites](deployment-publish-build.md) — root manifest yang tidak terpakai dapat memicu builder bahasa lain; validasi build publish dan preflight environment harus dipisahkan.
 - [Custom domain deployment ownership](custom-domain-deployment-ownership.md) — getDeploymentInfo() kosong tidak berarti domain publik mati; domain dapat tetap menunjuk ke deployment/project lain.
 - [Production DB availability gate](production-db-availability-gate.md) — audit PROD harus berhenti jika workspace belum memiliki production database; jangan substitusi DEV atau inferensi historis.
+- [Production connection contract](production-connection-contract.md) — PROD business DB eksternal Supabase dimuat dari GCP bundle production; jangan samakan dengan abstraction DB pane Replit.
 - [Google credential separation](google-credential-separation.md) — Service Account Google Sheets dan bootstrap Secret Manager dapat berbeda dan membutuhkan izin berbeda.
 - [Customer Portal Google OAuth](customer-portal-google-oauth.md) — public login uses backend Google OAuth + portal JWT; Supabase external-provider exchange is not the production path.
 - [BizPortal preview API proxy](bizportal-preview-api-proxy.md) — preview BizPortal harus meneruskan `/api` ke API server port 8080 agar login tidak 502.
