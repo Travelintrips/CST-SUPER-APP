@@ -1,6 +1,6 @@
 # CF-CP-6 — Customer Portal Paylabs Settlement (Development Only)
 
-**Status:** `PARTIAL / JASA_MAPPING_AND_REMAINING_RUNTIME_PROOFS`
+**Status:** `PARTIAL / DEDICATED_CFCP6C_RUNTIME_HARNESS_REQUIRED`
 
 Dokumen ini mencatat proof Customer Portal Central Finance yang aman untuk
 development. Tidak ada jalur CF-CP-6 yang mengaktifkan central mode di
@@ -99,17 +99,27 @@ was found in the focused set.
 
 ## Runtime execution result
 
-Runtime proof belum dapat dijalankan pada workspace ini karena API
-development gagal start sebelum membuka port `18444`. Log loader menunjukkan:
+The development Secret Manager bootstrap credential is now configured through
+Replit Secrets, and the API successfully loaded the development bundle. The
+existing Goods harness was rerun against the guarded DEV project and passed:
 
 ```text
-GCP_SECRET_MANAGER_BOOTSTRAP_JSON is not set
+Goods accounting = 1
+Goods public mutation = 1
+Goods settlement = 1
+MDR = 333.00
+net settlement = 110667.00
+retry idempotency = PASS
+rollback cleanup = PASS
+existing DEV data changed = 0
+Sport Center direct effects = 0
 ```
 
-Secret tersebut harus dipasang melalui Replit Secrets; nilainya tidak pernah
-dimasukkan ke source code atau chat. Karena database DEV belum dapat dimuat,
-fixture write, consumer, accounting, settlement, negative matrix, retry
-runtime, two-client race, rollback, dan readiness tidak boleh diklaim lulus.
+The attached CF-CP-6C checklist requires a dedicated harness for six Jasa
+scopes, `exim_service` fail-closed behavior, two-client concurrency, two
+payments on one document, deterministic negative cases, transient retry, and
+post-`finally` fixture verification. That harness is not present in the
+current repository, so those gates remain unexecuted and are not claimed here.
 
 | Gate | Result |
 |---|---|
@@ -123,14 +133,15 @@ runtime, two-client race, rollback, dan readiness tidak boleh diklaim lulus.
 | Focused CF-CP tests | 11/11 PASS |
 | Broad suite | NOT RUN (baseline/unrelated excluded) |
 | Goods E2E | PASS |
-| Jasa E2E | BLOCKED_SERVICE_MAPPING |
+| Jasa mapping inventory | 6/6 present in DEV |
+| Jasa E2E | NOT RUN (dedicated CFCP6C harness absent) |
 | Negative matrix | NOT RUN |
 | Retry/idempotency runtime | NOT RUN |
 | Two-client race | NOT RUN |
 | Rollback/cleanup runtime | NOT RUN |
 | Existing DEV data changed | 0 |
 | Sport Center direct effects | 0 |
-| Readiness | PASS |
+| Readiness | PASS (HTTP 200; dynamic registry complete) |
 | Customer Portal ready | YES |
 | Sport Center ready | YES |
 | Normal Customer Portal mode | LEGACY (configured default) |
@@ -142,7 +153,8 @@ runtime, two-client race, rollback, dan readiness tidak boleh diklaim lulus.
 ```text
 CF-CP-6 = PARTIAL
 GOODS E2E = PASS
-JASA E2E = BLOCKED_SERVICE_MAPPING
+JASA MAPPING INVENTORY = 6/6
+JASA E2E = NOT_RUN (DEDICATED_CFCP6C_HARNESS_ABSENT)
 NEGATIVE MATRIX = NOT_RUN
 TRANSIENT RETRY = NOT_RUN
 TWO-CLIENT = NOT_RUN
@@ -167,12 +179,23 @@ NORMAL CUSTOMER PORTAL MODE = LEGACY
 PROD WRITES = 0
 PROD CUTOVER = NO
 READY FOR CF-CP-7 = NO
-BLOCKER = no active Jasa service-specific COA mapping; negative/retry/concurrency live proofs still need dedicated DEV harness coverage
+BLOCKER = dedicated six-scope/negative/retry/concurrency CFCP6C harness is absent
 ```
 
-The DEV bootstrap secret is now available and readiness is proven. This status
-does not claim the unexecuted negative, transient, or two-client runtime gates,
-and does not invent a Jasa mapping that is absent from DEV configuration.
+The DEV bootstrap secret is available and readiness is proven. The DEV mapping
+inventory contains the six supported service scopes:
+
+```text
+trucking    -> 4-1013-CST
+sea_freight -> 4-1011-CST
+air_freight -> 4-1012-CST
+ppjk        -> 4-1014-CST
+handling    -> 4-1018-CST
+document    -> 4-1019-CST
+```
+
+This status does not claim the unexecuted six-scope, negative, transient, or
+two-client runtime gates.
 
 ## Next runtime command
 
