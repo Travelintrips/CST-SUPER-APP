@@ -144,6 +144,8 @@ export const STARTUP_MIGRATION_REGISTRY: readonly StartupStageDefinition[] = REG
           ? 1
         : name === "customer_portal_product_tax"
           ? 1
+        : name === "customer_portal_service_type"
+          ? 2
         : name === "customer_portal_product_coa"
           ? 1
         : 1,

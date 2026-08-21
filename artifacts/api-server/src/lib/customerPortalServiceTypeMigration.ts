@@ -3,6 +3,10 @@ import { sql } from "drizzle-orm";
 
 /**
  * CF-CP-4D additive transaction snapshot and service-scoped revenue contract.
+ *
+ * Version 2 also repairs the original tax-mapping identity index. The first
+ * version attempted to seed goods and jasa, but the legacy unique index did
+ * not include product_scope, so PostgreSQL rejected the two-row insert.
  * This stage is development-only and never posts Central Finance entries.
  */
 export async function runCustomerPortalServiceTypeMigration(): Promise<void> {
@@ -41,6 +45,20 @@ export async function runCustomerPortalServiceTypeMigration(): Promise<void> {
       WHERE product_scope IS NOT NULL
   `);
   await db.execute(sql`
+    DROP INDEX IF EXISTS uq_finance_project_tax_mappings_identity
+  `);
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_finance_project_tax_mappings_identity
+      ON finance_project_tax_mappings (
+        finance_project_config_id,
+        transaction_type,
+        COALESCE(payment_method, ''),
+        COALESCE(provider_code, ''),
+        COALESCE(product_scope, ''),
+        effective_from
+      )
+  `);
+  await db.execute(sql`
     INSERT INTO finance_project_tax_mappings
       (finance_project_config_id, transaction_type, tax_rule_id, product_scope,
        is_active, effective_from, metadata, created_by, updated_by)
@@ -68,5 +86,5 @@ export async function runCustomerPortalServiceTypeMigration(): Promise<void> {
             AND tm.is_active = TRUE
        )
      ORDER BY tr.id
-  `).catch(() => {});
+   `);
 }
