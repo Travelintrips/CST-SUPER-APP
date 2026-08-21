@@ -262,9 +262,6 @@ async function promoteCanonicalPaymentJournal(client: QueryClient, paymentId: nu
   }
 }
 
-async function processCentralFinance(options: CentralFinanceOptions = {}) {
-  const db = options.client ?? getPool();
-  if (!db) return { claimed: 0, posted: 0, retried: 0, manualReview: 0 };
 export async function processCentralFinance(options: { client?: pg.PoolClient; fixturePaymentIds?: number[] } = {}): Promise<{
   claimed: number;
   posted: number;
