@@ -122,9 +122,8 @@ export async function settleCustomerPortalPayment(
        payment_method, payment_provider, status, source, source_id,
        source_event_id, total_debit, total_credit, source_module,
        source_table, posted_at)
-     VALUES ($1,$2,$3,$4::date,$5,$6,'qris',$7,'draft','sales_payment',$8,
-             $9,$10,$10,'central_finance','payments',NULL)
-     ON CONFLICT (source, source_id) DO NOTHING
+       VALUES ($1,$2,$3,$4::date,$5,$6,'qris',$7,'draft','sales_payment',$8,
+              NULL,$9,$9,'central_finance','payments',NULL)
      RETURNING id`,
     [
       input.companyId,

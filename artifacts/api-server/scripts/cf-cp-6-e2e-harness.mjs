@@ -108,7 +108,7 @@ async function createFixture(client) {
       (doc_number, kind, status, invoice_status, payment_status,
        amount_paid, customer_name, total_amount, tax_rate_id, tax_amount,
        grand_total, notes, company_id, product_scope, tax_treatment)
-    VALUES ($1, 'invoice', 'confirmed', 'issued', 'unpaid',
+    VALUES ($1, 'order', 'confirmed', 'invoiced', 'unpaid',
             0, $2, $3, $4, $5, $6, $7, $8, 'goods', 'exclusive')
     RETURNING id
   `, [
@@ -176,10 +176,19 @@ async function prove(client) {
   `, [created.eventId]);
   assert(event?.product_scope === "goods", "event product snapshot must be goods");
   assert(Number(event?.tax_rule_id) === config.taxRuleId, "event tax rule snapshot mismatch");
+  assert(event?.tax_rate != null, `event tax rate snapshot missing (tax_rule_id=${event?.tax_rule_id ?? "null"})`);
   assert(event?.tax_treatment === "exclusive", "event tax treatment must be exclusive");
 
   const first = await processCustomerPortalFinance({ client, limit: 1 });
-  assert(first.claimed === 1 && first.posted === 1, `first consumer run must claim/post 1: ${JSON.stringify(first)}`);
+  const firstProcessing = await one(client, `
+    SELECT status, last_error
+      FROM customer_finance_processing
+     WHERE source_payment_id=$1 AND event_type='payment_confirmed'
+  `, [created.paymentId]);
+  assert(
+    first.claimed === 1 && first.posted === 1,
+    `first consumer run must claim/post 1: ${JSON.stringify(first)} error=${firstProcessing?.last_error ?? "none"}`,
+  );
 
   const retry = await processCustomerPortalFinance({ client, limit: 1 });
   assert(retry.claimed === 0 && retry.posted === 0, `retry must be idempotent: ${JSON.stringify(retry)}`);

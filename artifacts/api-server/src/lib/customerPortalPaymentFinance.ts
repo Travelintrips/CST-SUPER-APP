@@ -110,7 +110,9 @@ export async function confirmCustomerPortalPayment(
             WHERE sdl.document_id = sd.id AND sdl.service_scope IS NOT NULL
             ORDER BY sdl.id LIMIT 1),
           sd.tax_rate_id,
-          NULL,
+          (SELECT tr.tax_rate FROM tax_rules tr
+            WHERE tr.id = sd.tax_rate_id AND tr.company_id = ${input.companyId}
+            LIMIT 1),
           sd.tax_amount,
           sd.tax_treatment
         FROM payments p
