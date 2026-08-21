@@ -202,3 +202,51 @@ the processor owner and the CF-SC run completed atomically. The harness rolled
 back all fixtures and reported zero production writes. Development readiness
 was `200`, all 119 startup stages were complete, and the latest bridge function
 was verified in the live DEV catalog before the harness ran.
+
+## CF-SC-10D execution result — 2026-08-21
+
+The development-only CF-SC-10D harness passed end to end using the guarded
+development Supabase target. The fixture effective date was taken from the
+actual processor-effective payment date; settlement evidence used the
+configured MDR calculation (`0.003` of gross, rounded to two decimals).
+
+### Fail-closed corruption matrix
+
+| Corruption case | Candidate count | Processor result | Financial effects |
+|---|---:|---|---:|
+| Duplicate project config | 2 | `manual_review` / `BLOCKED_CONFIG_AMBIGUOUS` | 0 |
+| Duplicate payment config | 2 | `manual_review` / `BLOCKED_CONFIG_AMBIGUOUS` | 0 |
+| Missing tax mapping | 0 | `manual_review` | 0 |
+| Missing `RECEIVING_BANK` | 0 | `manual_review` | 0 |
+| Missing `REVENUE` | 0 | `manual_review` | 0 |
+| Missing `TAX_OUTPUT` | 0 | `manual_review` | 0 |
+| Missing `MDR_EXPENSE` | 0 | `manual_review` | 0 |
+
+Every case used a savepoint and verified that accounting, settlement, public
+mutation, and bridge effects returned to zero after rollback. Duplicate
+configuration cases also probed the resolver and confirmed ambiguity was
+rejected rather than resolved by first-row selection.
+
+### Two-client race and lifecycle cleanup
+
+The same-payment race and the DP + pelunasan race used two independent
+PostgreSQL clients with a short launch offset. Both races passed with one
+processing owner per payment, one posted accounting journal, one settlement
+item/batch, one public mutation, and one canonical bridge per fixture payment.
+The second client did not create duplicate claims or duplicate financial
+effects. Cleanup captures fixture settlement IDs before deleting items, then
+removes only those fixture-owned batches.
+
+The harness compared before/after snapshots of existing development outbox,
+processing, accounting, public mutation, and settlement identities. Existing
+DEV identities were unchanged, and fixture cleanup returned zero for
+processing, outbox, accounting, journal lines, settlement items, settlement
+batches, public mutations, bridges, and bookings.
+
+### Certification boundary
+
+CF-SC-10D proves the central QRIS runtime contract, fail-closed configuration
+behavior, canonical mutation bridge, concurrency ownership, and rollback
+cleanup in development. It does not enable central mode in production, write
+or migrate production data, perform cutover, activate Paylabs or WhatsApp, or
+remove legacy data. Production remains `SPORT_CENTER_FINANCE_MODE=legacy`.
