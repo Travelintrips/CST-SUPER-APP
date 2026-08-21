@@ -172,12 +172,12 @@ reconciliation row was written by this phase.
 
 Quality gates:
 
-- workspace typecheck: pending after final restart;
-- API typecheck: pending after final restart;
-- API build: pending after final restart;
+- workspace typecheck: PASS;
+- API typecheck: PASS;
+- API build: PASS;
 - CF-CP-2 tests: previously `4/4 PASS`;
-- new product-tax/adapter tests: pending after final restart;
-- `git diff --check`: pending after final edits.
+- new product-tax/adapter tests: `8/8 PASS` across product-tax and payment-boundary suites;
+- `git diff --check`: PASS.
 
 Production writes and cutover: `0` / `NO`.
 
