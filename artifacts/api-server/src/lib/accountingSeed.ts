@@ -615,11 +615,16 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
       ADD COLUMN IF NOT EXISTS company_id integer
   `);
 
-  // ── Dedup chart_of_accounts: keep min(id) per code, reroute FK refs ──────
+  // ── Dedup chart_of_accounts without rewriting posted ledger history ──────
+  // Posted entry lines are immutable.  If a duplicate account is referenced by
+  // posted history, preserve that account row (and its historical account_id),
+  // move only mutable references, and give the preserved row a unique legacy
+  // code so the canonical account can still satisfy the unique-code indexes.
   await db.execute(sql`
     DO $$
     DECLARE
       loser RECORD;
+      has_posted_history BOOLEAN;
     BEGIN
       FOR loser IN
         SELECT coa.id AS loser_id, winners.keep_id
@@ -628,7 +633,22 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
           SELECT code, MIN(id) AS keep_id FROM chart_of_accounts GROUP BY code HAVING COUNT(*) > 1
         ) winners ON coa.code = winners.code AND coa.id <> winners.keep_id
       LOOP
-        UPDATE accounting_entry_lines SET account_id = loser.keep_id WHERE account_id = loser.loser_id;
+        SELECT EXISTS (
+          SELECT 1
+          FROM accounting_entry_lines ael
+          JOIN accounting_entries ae ON ae.id = ael.entry_id
+          WHERE ael.account_id = loser.loser_id
+            AND ae.status::text = 'posted'
+        ) INTO has_posted_history;
+
+        -- Draft/unposted lines remain mutable; posted lines must retain their
+        -- original account identity for auditability and ledger immutability.
+        UPDATE accounting_entry_lines ael
+        SET account_id = loser.keep_id
+        FROM accounting_entries ae
+        WHERE ael.account_id = loser.loser_id
+          AND ae.id = ael.entry_id
+          AND ae.status::text <> 'posted';
         UPDATE accounting_journals SET default_debit_account_id = loser.keep_id WHERE default_debit_account_id = loser.loser_id;
         UPDATE accounting_journals SET default_credit_account_id = loser.keep_id WHERE default_credit_account_id = loser.loser_id;
         UPDATE accounting_settings SET ar_account_id = loser.keep_id WHERE ar_account_id = loser.loser_id;
@@ -642,7 +662,13 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
         UPDATE accounting_settings SET inventory_account_id = loser.keep_id WHERE inventory_account_id = loser.loser_id;
         UPDATE accounting_settings SET cogs_account_id = loser.keep_id WHERE cogs_account_id = loser.loser_id;
         UPDATE accounting_taxes SET account_id = loser.keep_id WHERE account_id = loser.loser_id;
-        DELETE FROM chart_of_accounts WHERE id = loser.loser_id;
+        IF has_posted_history THEN
+          UPDATE chart_of_accounts
+          SET code = code || '-LEGACY-' || loser.loser_id
+          WHERE id = loser.loser_id;
+        ELSE
+          DELETE FROM chart_of_accounts WHERE id = loser.loser_id;
+        END IF;
       END LOOP;
     END $$
   `);
