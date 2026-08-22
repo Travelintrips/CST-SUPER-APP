@@ -100,7 +100,7 @@ import { runOrderProgressMigration } from "./lib/orderProgress.js";
 import { runExceptionEnumMigration, runOrderExceptionsMigration } from "./lib/services/exceptionService.js";
 import { runVendorCompanyAssignmentsMigration } from "./lib/vendorCompanyAssignmentsMigration.js";
 import { runVendorCatalogSchemaMigration } from "./lib/vendorCatalogSchemaMigration.js";
-import { runFeaturedProductMigration } from "./lib/featuredProductMigration.js";
+import { runFeaturedProductMigration, ensureVendorFeaturedPackage } from "./lib/featuredProductMigration.js";
 import { runMktVendorInvoiceMigration } from "./lib/mktVendorInvoiceMigration.js";
 import { runMktApPreparationMigration } from "./lib/mktApPreparationMigration.js";
 import { runMktPaymentHandoffMigration } from "./lib/mktPaymentHandoffMigration.js";
@@ -2352,6 +2352,11 @@ async function startServer() {
     .then(() =>
       runQaFixtureMigration().catch((err) => {
         logger.warn({ err }, "QA fixture migration failed (non-fatal)");
+      })
+    )
+    .then(() =>
+      ensureVendorFeaturedPackage().catch((err) => {
+        logger.warn({ err }, "Vendor featured package refresh failed (non-fatal)");
       })
     )
     .then(() => {

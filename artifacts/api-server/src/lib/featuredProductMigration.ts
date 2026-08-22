@@ -2,6 +2,29 @@ import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "./logger";
 
+/** Ensures the vendor-facing default exists in already-migrated databases. */
+export async function ensureVendorFeaturedPackage(): Promise<void> {
+  await db.execute(sql`
+    INSERT INTO mkt_featured_packages (
+      code, name, description, duration_days, price, currency,
+      placement_type, priority_weight, internal_only, is_active
+    )
+    VALUES (
+      'VENDOR-30D',
+      'Produk Unggulan · 30 Hari',
+      'Paket default pengajuan Produk Unggulan vendor. Persetujuan admin diperlukan sebelum aktif.',
+      30,
+      0,
+      'IDR',
+      'homepage_top',
+      10,
+      FALSE,
+      TRUE
+    )
+    ON CONFLICT (code) DO NOTHING
+  `);
+}
+
 /**
  * Featured Product / Produk Unggulan Marketplace — additive migration.
  *
@@ -81,25 +104,7 @@ export async function runFeaturedProductMigration(): Promise<void> {
     // non-internal package the vendor UI has nothing to select and therefore
     // cannot render the submit action. Admins can edit/deactivate this package
     // or create additional paid packages from the admin screen.
-    await db.execute(sql`
-      INSERT INTO mkt_featured_packages (
-        code, name, description, duration_days, price, currency,
-        placement_type, priority_weight, internal_only, is_active
-      )
-      VALUES (
-        'VENDOR-30D',
-        'Produk Unggulan · 30 Hari',
-        'Paket default pengajuan Produk Unggulan vendor. Persetujuan admin diperlukan sebelum aktif.',
-        30,
-        0,
-        'IDR',
-        'homepage_top',
-        10,
-        FALSE,
-        TRUE
-      )
-      ON CONFLICT (code) DO NOTHING
-    `);
+    await ensureVendorFeaturedPackage();
 
     // ── mkt_featured_product_requests ─────────────────────────────────────────
     await db.execute(sql`
