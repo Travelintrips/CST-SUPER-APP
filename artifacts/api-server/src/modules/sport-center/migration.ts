@@ -209,10 +209,8 @@ export function ensureSportPaymentMirrorTrigger(): Promise<void> {
 
   if (contractComplete) {
     logger.info(
-      "Sport Center payment mirror trigger: existing canonical contract verified; destructive refresh skipped",
+      "Sport Center payment mirror trigger: existing canonical contract verified; refreshing non-destructive function definitions",
     );
-    sportPaymentMirrorTriggerEnsurePromise = null;
-    return;
   }
 
   // The trigger uses this key as its idempotency boundary.  Let a duplicate
