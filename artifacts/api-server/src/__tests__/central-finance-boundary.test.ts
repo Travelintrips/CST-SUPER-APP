@@ -21,6 +21,13 @@ describe("central finance mode boundary", () => {
     expect(shouldRunLegacyFinanceWrites()).toBe(false);
   });
 
+  it("keeps legacy as the financial owner in shadow mode", () => {
+    process.env.SPORT_CENTER_FINANCE_MODE = "shadow";
+    expect(getSportCenterFinanceMode()).toBe("shadow");
+    expect(isCentralFinanceMode()).toBe(false);
+    expect(shouldRunLegacyFinanceWrites()).toBe(true);
+  });
+
   it("fails closed for unsupported values", () => {
     process.env.SPORT_CENTER_FINANCE_MODE = "unsupported";
     expect(getSportCenterFinanceMode()).toBe("legacy");
