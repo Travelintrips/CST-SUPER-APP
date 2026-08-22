@@ -430,3 +430,61 @@ mode and worker heartbeat are not directly exposed
 Shell quoting failures observed during the audit were confined to temporary
 audit runners and did not represent PostgreSQL or production application
 failures.
+
+## Post-deploy verification — latest PROD state
+
+**Observation:** 2026-08-23, after the reported deployment
+**Method:** canonical external PROD Supabase read-only transaction plus public
+deployment health check
+
+The deployment is now live with a successful build. The production readiness
+endpoint returned HTTP 200 and the complete readiness contract passed:
+
+```text
+ready = true
+global_ready = true
+sport_center_ready = true
+customer_portal_ready = true
+failed_stage = null
+```
+
+However, the reported repair is not yet present in the production database.
+The active `sport_center.mirror_confirmed_payment_to_public()` definition still
+contains the posted-payment metadata conflict guard and the legacy
+`COALESCE(... payment_method ..., method)` behavior. The active trigger is
+present and enabled, but this does not prove that its function body is the
+repaired version.
+
+The current read-only SC-0015 evidence is:
+
+```text
+SOURCE PAYMENT METHOD = Transfer Bank
+PUBLIC MIRROR METHOD = Transfer Bank
+PUBLIC MIRROR ACCOUNTING_PAYMENT_ID = NULL
+PUBLIC MIRROR ENTRY_ID = 28409
+PUBLIC ACCOUNTING PAYMENT LINK = NOT FOUND
+PUBLIC ACCOUNTING ENTRY METHOD = Transfer Bank
+```
+
+The source payment is confirmed and uses provider `unknown`; its canonical
+source ID is `15`, and the public mirror is `SCPAY-SC-15`. No duplicate journal
+was created by this verification. The production startup marker query did not
+expose a completed `sport_payment_mirror_trigger_v2` marker.
+
+Therefore the latest status is:
+
+```text
+PROD DEPLOYMENT BUILD = PASS
+PROD READINESS = PASS
+PROD FUNCTION REPAIR = NOT_APPLIED
+SC-0015 DATA REPAIR = NOT_APPLIED
+CF-SC-14B = BLOCKED_BY_PROD_RUNTIME_PARITY
+CENTRAL CUTOVER = NO
+```
+
+The remaining blocker is not application readiness. It is the mismatch between
+the deployed source and the live production database function/data state. Do
+not manually mutate SC-0015 or production function definitions from a
+read-only audit. The controlled deployment/migration path must first install
+the repaired function contract, after which SC-0015 requires a controlled
+repair and a fresh read-only verification.
