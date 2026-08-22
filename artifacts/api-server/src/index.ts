@@ -132,6 +132,8 @@ import { startRekonsiliasiWorker } from "./lib/rekonsiliasiWorker.js";
 import { startLedgerConsistencyWorker } from "./lib/jobs/ledgerConsistencyCheck.js";
 import { startOutboxProcessor } from "./lib/accounting/outboxProcessor.js";
 import { startCentralFinanceProcessor } from "./lib/centralFinance.js";
+import { runSportCenterShadowObserverMigration } from "./lib/sportCenterShadowObserverMigration.js";
+import { startSportCenterShadowObserver } from "./lib/sportCenterShadowObserver.js";
 import { processCustomerPortalFinance } from "./lib/customerPortalFinanceConsumer.js";
 import { runCustomerPortalFinanceProcessingMigration } from "./lib/customerPortalFinanceProcessingMigration.js";
 import { runCustomerPortalSettlementMigration } from "./lib/customerPortalSettlementMigration.js";
@@ -1916,6 +1918,7 @@ async function startServer() {
   registerWorker("ledger-consistency-check", startLedgerConsistencyWorker, 95_000);
   registerWorker("financial-outbox-processor", startOutboxProcessor, 3_000);
   registerWorker("central-finance-processor", startCentralFinanceProcessor, 4_000);
+  registerWorker("sport-center-shadow-observer", startSportCenterShadowObserver, 4_000);
   registerWorker("customer-portal-finance-processor", () => {
     if ((process.env.APP_ENV ?? process.env.NODE_ENV) === "production") return;
     if (process.env.CUSTOMER_PORTAL_FINANCE_MODE !== "central") return;
@@ -2073,6 +2076,7 @@ async function startServer() {
     .then(() => runWithRetry("Paylabs payment methods migration", runPaylabsPaymentMethodsMigration))
     .then(() => runWithRetry("Cost Center migration", runCostCenterMigration))
     .then(() => runWithRetry("Sport Center migration", runSportCenterMigration))
+    .then(() => runWithRetry("Sport Center shadow observer migration", runSportCenterShadowObserverMigration))
       .then(() => runWithRetry("Sport Center canonical finance config refresh", ensureCanonicalSettlementContracts))
      // Refresh additive Sport Center payment projection DDL even when the
      // long migration is already marked complete in an existing database.

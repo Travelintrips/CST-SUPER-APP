@@ -1,4 +1,4 @@
-# CF-SC-14 — Sport Center PROD Shadow Certification
+# CF-SC-14A — Sport Center PROD Shadow Certification
 
 **Date:** 2026-08-22  
 **Scope:** controlled shadow certification only  
@@ -7,15 +7,24 @@
 ## Final verdict
 
 ```text
-CF-SC-14 = BLOCKED
+CF-SC-14A = IMPLEMENTED — DEV CERTIFICATION PENDING
 SHADOW ACTIVATED = NO
 READY FOR CONTROLLED CENTRAL CUTOVER = NO
 ```
 
 ## Blocker
 
-The current runtime has a safe mode boundary for `legacy`, `shadow`, and
-`central`, but it does not yet have a production shadow observer satisfying
+The prior blocker was the absence of a dedicated observer. CF-SC-14A adds that
+observer in development-first form. Production shadow remains disabled until
+the development fixture matrix is executed and approved.
+
+The observer is separate from the central processor and does not invoke any
+posting, settlement, mutation, or reconciliation owner. It consumes confirmed
+Sport Center outbox events, resolves the shared finance contract, reads the
+legacy journal, classifies the result, and stores sanitized evidence in
+`sport_center.shadow_observer_comparisons`.
+
+The remaining certification blocker is execution of the live DEV proof matrix:
 the required contract:
 
 - observe eligible real Sport Center payment events after an activation time;
@@ -34,7 +43,7 @@ restarted into shadow.
 
 ## Safety proof
 
-The mode boundary regression test now asserts:
+The mode boundary regression test asserts:
 
 ```text
 SPORT_CENTER_FINANCE_MODE=shadow
@@ -50,6 +59,10 @@ to Central. The production processor guard remains unchanged:
 Central processor in production = no-op
 legacy remains financial owner = yes
 ```
+
+The observer has no imports or calls to `processCentralFinance`, and its
+write-set is restricted to comparison metadata. `shadow` does not satisfy
+`isCentralFinanceMode()`, so there is no shadow → central processor path.
 
 ## Pre-shadow snapshot
 
@@ -102,11 +115,10 @@ report. No production data was exposed or copied into this document.
 
 ## Required next step
 
-Implement and certify a dedicated shadow observer before any activation. It
-must use an activation timestamp, a source-qualified idempotency key, read-only
-financial comparison queries, bounded processing, explicit unsupported
-provider/type handling, and a proof that its writes cannot reach accounting,
-settlement, mutation, or reconciliation owners.
+Run the DEV fixture certification with an explicit
+`SPORT_CENTER_FINANCE_MODE=shadow`, then return DEV to `legacy`. The observer
+supports an activation timestamp and defaults to skipping historical events
+when that timestamp is configured; no historical PROD backfill is enabled.
 
 After that implementation is independently verified:
 
