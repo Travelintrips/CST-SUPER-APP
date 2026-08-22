@@ -299,3 +299,134 @@ The API typecheck baseline remains blocked by unrelated implicit-`any` errors
 and generated declaration ordering outside CF-SC-14A; no CF-SC-14A-related
 type failure was found. Central mode and production cutover remain prohibited
 by this phase.
+
+## CF-SC-14B OBS final read-only proof
+
+**Observation date:** 2026-08-23
+**Scope:** canonical external PROD Supabase, read-only proof only
+**Safety:** no PROD DDL, DML, mode change, restart, redeploy, republish, or
+central cutover was performed.
+
+The authoritative production bundle was loaded through the official production
+secret loader. The proof used a single PostgreSQL transaction with
+`SET TRANSACTION READ ONLY`; `SHOW transaction_read_only` returned `on`.
+The Window #2 cutoff was passed as a bound parameter:
+`2026-08-22T18:56:48.094Z`.
+
+### Shadow comparison result
+
+The production table `sport_center.shadow_observer_comparisons` exists and
+contains exactly 363 rows. All 363 rows have `shadow_started_at IS NULL`, so
+they remain the preserved Window #1 baseline. No Window #2 comparison rows
+exist, and no historical Window #2 comparisons were found.
+
+```text
+WINDOW 1 COMPARISONS = 363 / actual
+WINDOW 2 COMPARISONS = 0 / actual
+WINDOW 2 HISTORICAL PAYMENTS COMPARED = 0 / PASS
+WINDOW 2 MATCH = 0
+WINDOW 2 ALLOWED DIFFERENCE = 0
+WINDOW 2 MISMATCH = 0
+WINDOW 2 MANUAL REVIEW = 0
+WINDOW 2 NOT_OBSERVED = 0
+```
+
+The production `sport_center.shadow_observer_config` table exists but has no
+rows. This is consistent with the absence of an activated production shadow
+window and must not be treated as a successful runtime-worker heartbeat.
+
+### Provenance-based zero-effect proof
+
+Relevant production schemas and provenance fields were introspected before
+counting. The proof used source/correlation/canonical/provenance fields where
+available and bounded the counts by the Window #2 cutoff; it did not use total
+table growth as a proxy for Shadow effects.
+
+```text
+SHADOW ACCOUNTING ENTRIES = 0
+SHADOW ACCOUNTING JOURNALS = 0
+SHADOW JOURNAL LINES = 0 attributable to Shadow
+SHADOW SETTLEMENT BATCHES = 0
+SHADOW SETTLEMENT ITEMS = 0
+SHADOW PUBLIC MUTATIONS = 0
+SHADOW SPORT CENTER MUTATIONS = 0
+SHADOW RECONCILIATION EFFECTS = 0
+```
+
+The relevant accounting journal and settlement surfaces had no rows created
+since the cutoff. Public accounting entry lines had unrelated post-cutoff
+activity, but no Shadow/Central provenance. Sport Center journal lines do not
+carry an independent provenance identity; their attributable count is
+therefore supported by the absence of new Sport Center journals and by the
+provenance scan, not by a claim that every legacy line is globally attributable.
+
+### Central processor proof
+
+```text
+CENTRAL PROCESSING ROWS CREATED = 0 / actual
+CENTRAL POSTED ROWS = 0 / actual
+CENTRAL PROCESSOR EXECUTION EFFECT = 0
+CENTRAL PROCESSOR CALL COUNT = NOT DIRECTLY INSTRUMENTED
+```
+
+`sport_center.central_finance_processing` was present and had zero rows
+created since the cutoff, zero posted rows created since the cutoff, and zero
+processed transitions since the cutoff. No exact application call count is
+claimed because production does not expose a direct call counter.
+
+### Runtime, legacy owner, and readiness
+
+The production bundle loaded successfully, but it did not expose
+`SPORT_CENTER_FINANCE_MODE` or `SPORT_CENTER_SHADOW_STARTED_AT`. Therefore:
+
+```text
+RUNTIME MODE = STRONGLY_INFERRED_LEGACY, NOT DIRECTLY EXPOSED
+SHADOW WORKER = STARTUP_NOT_CONFIRMED
+LEGACY FINANCIAL OWNER = ACTIVE BY BOUNDARY EVIDENCE
+```
+
+The deployment metadata reported an existing public deployment URL but
+`hasSuccessfulBuild=false`. A read-only request to
+`/api/health/ready` returned HTTP 404 with “This app isn't live yet”; no
+deployment logs were available. Consequently the required readiness contract
+could not be certified:
+
+```text
+READINESS = FAIL
+HTTP 200 / ready=true = NOT_OBSERVED
+failed_stage = NOT_OBSERVED
+sport_center_ready = NOT_OBSERVED
+customer_portal_ready = NOT_OBSERVED
+```
+
+### CF-SC-14B final classification
+
+The database zero-effect and Window #2 historical-cutoff proofs pass, but the
+required runtime readiness proof does not. Since there are also no naturally
+occurring eligible Window #2 payments, this is not
+`WAITING_FOR_REAL_ACTIVITY`; the readiness gate is an independent blocker.
+
+```text
+CF-SC-14B OBSERVABILITY = BLOCKED
+PROD READ-ONLY DB ACCESS = PASS
+TRANSACTION READ ONLY = ON
+WINDOW 1 COMPARISONS = 363 / actual
+WINDOW 2 COMPARISONS = 0 / actual
+WINDOW 2 HISTORICAL PAYMENTS COMPARED = 0 / PASS
+SHADOW FINANCIAL EFFECTS = 0
+CENTRAL PROCESSING EFFECT = 0
+RUNTIME MODE = STRONGLY_INFERRED_LEGACY
+SHADOW WORKER = STARTUP_NOT_CONFIRMED
+LEGACY FINANCIAL OWNER = ACTIVE
+READINESS = FAIL
+OBSERVED NEW REAL PAYMENTS = 0
+CF-SC-14B = BLOCKED
+CENTRAL CUTOVER = NO
+READY FOR CF-SC-15 = NO
+BLOCKERS = deployment is not live/readiness endpoint unavailable; runtime
+mode and worker heartbeat are not directly exposed
+```
+
+Shell quoting failures observed during the audit were confined to temporary
+audit runners and did not represent PostgreSQL or production application
+failures.

@@ -140,3 +140,4 @@
 - [Production startup lock deadlock](production-startup-lock-deadlock.md) — a new deployment can stay unready when an older backend retains a per-stage advisory lock; do not bypass markers or terminate production sessions casually.
 - [Accounting seed posted-ledger safety](accounting-seed-posted-ledger.md) — COA deduplication must preserve posted journal line identities and reroute only mutable references.
 - [Accounting tax deduplication FK safety](accounting-tax-dedup-fk.md) — reconcile transaction tax references before removing duplicate accounting tax rows.
+- [PROD read-only proof runner](prod-readonly-proof-runner.md) — run temporary Node proofs from the workspace and bind parameters only when SQL contains placeholders.
