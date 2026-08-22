@@ -39,7 +39,7 @@ export async function processCustomerPortalFinance(options: {
             AND p.source_payment_id=e.source_payment_id
             AND p.event_type=e.event_type
         )
-       ON CONFLICT (source_project, source_payment_id, event_type) DO NOTHING
+        ON CONFLICT DO NOTHING
   `, [sourcePaymentIds]);
   const claimed = await client.query(`
     UPDATE customer_finance_processing p

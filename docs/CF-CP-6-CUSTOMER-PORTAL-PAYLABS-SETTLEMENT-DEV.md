@@ -1,6 +1,6 @@
 # CF-CP-6 — Customer Portal Paylabs Settlement (Development Only)
 
-**Status:** `PARTIAL / FIXTURE_ISOLATION_HARDENED_RUNTIME_CERTIFICATION_PENDING`
+**Status:** `PASS / DEVELOPMENT_ONLY / READY_FOR_CF_CP_7`
 
 Dokumen ini mencatat proof Customer Portal Central Finance yang aman untuk
 development. Tidak ada jalur CF-CP-6 yang mengaktifkan central mode di
@@ -43,7 +43,7 @@ Harness memverifikasi sebelum fixture write:
 - config bank account `17`, MDR `0.003`, fixed fee `0`, fee tax `0`, dan
   settlement delay satu hari kerja.
 
-Fixture memakai prefix `CFCP6_E2E_`, memanggil
+Fixture memakai prefix `CFCP6C_<run>_<pid>_`, memanggil
 `confirmCustomerPortalPayment()`, memanggil consumer
 `processCustomerPortalFinance()`, memeriksa accounting/public mutation/
 Customer Portal settlement, mengulang consumer untuk idempotency, memeriksa
@@ -81,7 +81,7 @@ The canonical workspace order was executed on 2026-08-22:
    **PASS**;
 3. workspace typecheck: `pnpm run typecheck` — **PASS**;
 4. API build: `pnpm --filter @workspace/api-server build` — **PASS**;
-5. focused CF-CP tests — **11/11 PASS**;
+5. focused CF-CP tests — **14/14 PASS**;
 6. `git diff --check` — **PASS**.
 
 Focused test files:
@@ -115,11 +115,11 @@ existing DEV data changed = 0
 Sport Center direct effects = 0
 ```
 
-The attached CF-CP-6C checklist requires a dedicated harness for six Jasa
-scopes, `exim_service` fail-closed behavior, two-client concurrency, two
-payments on one document, deterministic negative cases, transient retry, and
-post-`finally` fixture verification. That harness is not present in the
-current repository, so those gates remain unexecuted and are not claimed here.
+The dedicated CF-CP-6C/6D harness is now present and was executed successfully
+against the guarded DEV Supabase database. It covers six Jasa scopes,
+`exim_service` fail-closed behavior, two-client concurrency, two payments on
+one document, the complete 15-case negative matrix, transient retry, and
+post-`finally` fixture verification.
 
 ## CF-CP-6C fixture isolation hardening
 
@@ -154,15 +154,16 @@ cannot be hidden by direct inserts.
 | Workspace typecheck | PASS |
 | Bundle syntax check | PASS |
 | API build | PASS |
-| Focused CF-CP tests | 11/11 PASS |
+| Focused CF-CP tests | 14/14 PASS |
 | Broad suite | NOT RUN (baseline/unrelated excluded) |
 | Goods E2E | PASS |
 | Jasa mapping inventory | 6/6 present in DEV |
-| Jasa E2E | NOT RUN (dedicated CFCP6C harness absent) |
-| Negative matrix | NOT RUN |
-| Retry/idempotency runtime | NOT RUN |
-| Two-client race | NOT RUN |
-| Rollback/cleanup runtime | NOT RUN |
+| Jasa E2E | PASS |
+| Negative matrix | 15/15 PASS |
+| Retry/idempotency runtime | PASS |
+| Two-client race | PASS (1 + 0 claims) |
+| Two payments / one document | PASS (2 posted) |
+| Rollback/cleanup runtime | PASS |
 | Existing DEV data changed | 0 |
 | Sport Center direct effects | 0 |
 | Readiness | PASS (HTTP 200; dynamic registry complete) |
@@ -175,13 +176,15 @@ cannot be hidden by direct inserts.
 ## Final status
 
 ```text
-CF-CP-6 = PARTIAL
+CF-CP-6 = PASS
 GOODS E2E = PASS
 JASA MAPPING INVENTORY = 6/6
-JASA E2E = NOT_RUN (DEDICATED_CFCP6C_HARNESS_ABSENT)
-NEGATIVE MATRIX = NOT_RUN
-TRANSIENT RETRY = NOT_RUN
-TWO-CLIENT = NOT_RUN
+JASA E2E = PASS (6/6)
+EXIM_SERVICE = FAIL_CLOSED
+NEGATIVE MATRIX = 15/15 PASS
+TRANSIENT RETRY = PASS (attempts 0 -> 1 -> 2)
+TWO-CLIENT = PASS (claims 1 + 0)
+TWO PAYMENTS SAME DOCUMENT = PASS (2 accounting / 2 mutations / 2 settlements)
 GOODS ACCOUNTING = 1
 PUBLIC MUTATION = 1
 SETTLEMENT = 1
@@ -193,7 +196,7 @@ SHARED DECLARATION BUILD = PASS
 API TYPECHECK = PASS
 WORKSPACE TYPECHECK = PASS
 API BUILD = PASS
-FOCUSED TESTS = 11/11 PASS
+FOCUSED TESTS = 14/14 PASS
 BROAD SUITE = NOT_RUN / BASELINE_UNRELATED_EXCLUDED
 GIT DIFF CHECK = PASS
 READINESS = PASS
@@ -202,8 +205,8 @@ SPORT CENTER READY = YES
 NORMAL CUSTOMER PORTAL MODE = LEGACY
 PROD WRITES = 0
 PROD CUTOVER = NO
-READY FOR CF-CP-7 = NO
-BLOCKER = dedicated six-scope/negative/retry/concurrency CFCP6C harness is absent
+READY FOR CF-CP-7 = YES
+BLOCKER = NONE
 ```
 
 The DEV bootstrap secret is available and readiness is proven. The DEV mapping
@@ -218,8 +221,51 @@ handling    -> 4-1018-CST
 document    -> 4-1019-CST
 ```
 
-This status does not claim the unexecuted six-scope, negative, transient, or
-two-client runtime gates.
+The negative matrix covered unknown provider, missing/ambiguous payment and
+COA configuration, company mismatch, missing/unknown Jasa service scope,
+`exim_service`, missing/ambiguous revenue and tax mappings, and tax snapshot
+mismatch. Every case proved its precondition, ended in `manual_review`, and
+created zero accounting, public mutation, or settlement effects. Corruption
+was inside a transaction/savepoint and canonical configuration was restored
+before the next case.
+
+During closure, two deterministic harness/runtime issues were corrected:
+
+1. ambiguity fixtures now allocate an unused historical `effective_from` date
+   instead of colliding with the mapping identity unique key;
+2. processing enqueue now uses conflict-safe idempotency for all unique
+   constraints, including `correlation_id`, so concurrent clients produce one
+   processing row without a unique-key error.
+
+The savepoint option remains opt-in to the guarded proof path. Normal worker
+execution does not enable it, and the focused suite confirms the default
+runtime path remains unchanged. Historical pre-existing DEV orphan references
+were detected and preserved; they were not deleted or repaired.
+
+## CF-CP-6D closure evidence
+
+```text
+Jasa scopes                  = 6/6 PASS
+Negative matrix              = 15/15 PASS
+All negative financial       = 0 accounting / 0 mutation / 0 settlement
+Goods regression             = PASS
+Goods MDR / net              = 333.00 / 110667.00
+Same-payment race            = PASS (1 + 0 claims)
+Same-document payments      = PASS (2 / 2 / 2)
+Transient retry              = PASS (attempts 0 -> 1 -> 2)
+Fixture persistence         = 0
+Existing DEV business change = 0
+Sport Center direct effects  = 0
+Focused tests               = 14/14 PASS
+API typecheck/build          = PASS / PASS
+Workspace typecheck         = PASS
+git diff --check             = PASS
+Readiness                    = HTTP 200, ready=true
+Customer Portal / Sport     = YES / YES
+Normal Customer Portal mode  = LEGACY
+PROD writes/migrations       = 0
+PROD cutover                 = NO
+```
 
 ## Next runtime command
 

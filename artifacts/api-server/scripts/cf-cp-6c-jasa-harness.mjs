@@ -415,15 +415,31 @@ async function duplicateCurrentRow(client, table, predicate, values, dateColumn 
   const columns = Object.keys(row).filter((column) =>
     !["id", "created_at", "updated_at"].includes(column) && row[column] !== null,
   );
-  const insertValues = columns.map((column) => row[column]);
   const dateIndex = columns.indexOf(dateColumn);
-  if (dateIndex >= 0) insertValues[dateIndex] = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
   const placeholders = columns.map((_, index) => `$${index + 1}`).join(",");
-  await client.query(
-    `INSERT INTO ${table} (${columns.map(quoteIdentifier).join(",")})
-     VALUES (${placeholders})`,
-    insertValues,
-  );
+  const baseDate = dateIndex >= 0
+    ? new Date(row[dateColumn])
+    : null;
+  let inserted = false;
+  for (let offset = 1; offset <= 31 && !inserted; offset += 1) {
+    const insertValues = columns.map((column) => row[column]);
+    if (dateIndex >= 0) {
+      const candidateDate = new Date(baseDate);
+      candidateDate.setUTCDate(candidateDate.getUTCDate() - offset);
+      insertValues[dateIndex] = candidateDate.toISOString().slice(0, 10);
+    }
+    try {
+      await client.query(
+        `INSERT INTO ${table} (${columns.map(quoteIdentifier).join(",")})
+         VALUES (${placeholders})`,
+        insertValues,
+      );
+      inserted = true;
+    } catch (error) {
+      if (error?.code !== "23505" || dateIndex < 0) throw error;
+    }
+  }
+  assert(inserted, `${table}: could not allocate unique ambiguity effective date`);
   const count = await one(client, `SELECT COUNT(*)::int AS count FROM ${table} WHERE ${predicate}`, values);
   return Number(count?.count ?? 0) > 1;
 }
