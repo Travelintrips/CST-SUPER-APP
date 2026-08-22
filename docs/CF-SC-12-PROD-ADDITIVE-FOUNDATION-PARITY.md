@@ -574,3 +574,59 @@ copied. The production marker consequently remains `FAILED`, production
 mode remains `legacy`, and readiness/CF-SC-12C certification are still
 `BLOCKED` pending an owner-approved direct migration URL in the production
 bundle followed by another official runner attempt.
+
+## CF-SC-12C-3 — authoritative production connection recovery
+
+On 2026-08-22 the official production loader was rerun against the current
+`cst-super-app-production` bundle. The bundle loaded successfully with 38 keys,
+including both `SUPABASE_DATABASE_URL` and `SUPABASE_MIGRATION_URL`; no secret
+values were printed or persisted.
+
+Sanitized connection validation produced:
+
+```text
+PROD PROJECT REF = nzdweipzckfszczzqtuw
+RUNTIME CONNECTION = Supabase pooler, port 6543
+RUNTIME USERNAME FORMAT = postgres.nzdweipzckfszczzqtuw
+RUNTIME HOST DNS = PASS
+RUNTIME DB AUTH = FAIL (28P01 password authentication failed)
+MIGRATION CONNECTION = Supabase direct host, port 5432
+MIGRATION HOST DNS = FAIL (ENOTFOUND)
+MIGRATION DB AUTH = NOT REACHED
+DEV != PROD = NOT REACHED; no fallback performed
+```
+
+The approved bootstrap credential can access the current production bundle, but
+the service account cannot list Secret Manager versions (`code 7`). Supabase
+CLI is not installed in the workspace, and no other approved source exposed a
+current production database password or an authoritative replacement migration
+host. The existing values were therefore not repaired, no password rotation was
+attempted, and no new Secret Manager version was created.
+
+The official `runStartupMigrationStage` recovery was not retried because both
+required connection paths did not validate. No advisory lock was acquired, no
+startup marker was changed, and no business-finance effect occurred:
+
+```text
+CF-SC-12C-3 = BLOCKED
+OFFICIAL CF-SC-12C RETRY = NOT_REACHED
+SPORT_CENTER MARKER = FAILED / UNCHANGED
+MANUAL MARKER UPDATE = NO
+PROD MODE = LEGACY
+PROD PROCESSOR RUNS = 0
+PROD PAYMENT WRITES = 0
+PROD ACCOUNTING WRITES = 0
+PROD SETTLEMENT EFFECTS = 0
+PROD MUTATION EFFECTS = 0
+READINESS = NOT_REACHED
+CF-SC-12 COMPLETE = NO
+READY FOR CF-SC-13 = NO
+EXTERNAL ACTION REQUIRED = OWNER_INFRA_ACTION_REQUIRED
+```
+
+Required infrastructure action: provide the current production Supabase
+connection contract through an approved source, specifically the valid runtime
+database credential and canonical migration connection parameters. Do not
+derive the direct host, reuse the stale password, or rotate the password until
+all production consumers and an approved rotation path are verified. After the
+bundle is repaired, rerun the official CF-SC-12C startup recovery.
