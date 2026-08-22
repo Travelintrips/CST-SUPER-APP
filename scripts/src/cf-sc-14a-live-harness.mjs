@@ -54,9 +54,34 @@ async function setup(db, suffix, type) {
   return { bookingId: Number(booking.rows[0].id), paymentId: Number(payment.rows[0].id) };
 }
 
+async function syncFixtureSequences(db) {
+  // Earlier failed DEV proofs can remove source rows while leaving sequences
+  // behind. Advance only the two fixture-owned source sequences; never touch
+  // accounting or public business rows.
+  await db.query(`
+    SELECT setval(
+      pg_get_serial_sequence('sport_center.sport_bookings', 'id'),
+      COALESCE((SELECT MAX(id) FROM sport_center.sport_bookings), 1),
+      true
+    ),
+    setval(
+      pg_get_serial_sequence('sport_center.sport_payments', 'id'),
+      COALESCE((SELECT MAX(id) FROM sport_center.sport_payments), 1),
+      true
+    )
+  `);
+}
+
 async function legacyPost(db, paymentId) {
-  await db.query("SELECT set_config('sport_center.finance_mode', 'legacy', false)");
-  await db.query("SELECT sport_center.create_payment_accounting_draft($1)", [paymentId]);
+  await db.query("BEGIN");
+  try {
+    await db.query("SET LOCAL sport_center.finance_mode = 'legacy'");
+    await db.query("SELECT sport_center.create_payment_accounting_draft($1)", [paymentId]);
+    await db.query("COMMIT");
+  } catch (error) {
+    await db.query("ROLLBACK").catch(() => {});
+    throw error;
+  }
 }
 
 async function financeSnapshot(db, ids) {
@@ -91,6 +116,7 @@ async function main() {
   await setupDb.connect();
   const fixtures = [];
   try {
+    await syncFixtureSequences(setupDb);
     const activation = new Date(Date.now() - 1000).toISOString();
     for (const [suffix, type] of [["FULL", "full_payment"], ["DP", "dp"], ["PELUNASAN", "pelunasan"], ["GROUP", "group_payment"]]) {
       const fixture = await setup(setupDb, suffix, type);

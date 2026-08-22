@@ -7,7 +7,7 @@
 ## Final verdict
 
 ```text
-CF-SC-14A = IMPLEMENTED — DEV CERTIFICATION PENDING
+CF-SC-14A = BLOCKED — DEV GUARD PASS, LIVE LEGACY RUNTIME INCOMPATIBLE
 SHADOW ACTIVATED = NO
 READY FOR CONTROLLED CENTRAL CUTOVER = NO
 ```
@@ -100,6 +100,29 @@ Because shadow was not activated, there are no comparison matches, allowed
 differences, mismatches, manual reviews, or observed payment identities to
 report. No production data was exposed or copied into this document.
 
+## Live resume result
+
+The generic regression-test guard remains unchanged and still requires an
+isolated `TEST_DATABASE_URL` or `STAGING_DATABASE_URL`. CF-SC-14A uses the
+narrow `AUTHORIZED_DEV_RUNTIME_PROOF` classification instead: it requires
+explicit development mode, `SAFE_DEV_TEST_MODE=true`, the canonical DEV
+Supabase target, different DEV/PROD fingerprints, no selected PROD target, and
+the `CF-SC-14A` harness identity.
+
+The focused guard matrix passed 5/5 cases (canonical DEV allowed; safe mode,
+PROD target, unknown target, and missing environment rejected). The live run
+reached the managed DEV secret loader and database, but the legacy prerequisite
+was blocked by the existing runtime function contract:
+
+```text
+ACCOUNTING_IDEMPOTENCY_MISMATCH: payment=<fixture> accounting_payment=0 accounting_entry=<existing>
+```
+
+The existing posted row was preserved. The harness now advances only the
+Sport Center booking/payment fixture sequences to avoid ID reuse after failed
+runs. Cleanup verification reported zero `CFSC14A_` payments, bookings, outbox
+rows, and shadow comparisons. No PROD configuration or data was changed.
+
 ## Quality gates
 
 | Gate | Result |
@@ -110,7 +133,8 @@ report. No production data was exposed or copied into this document.
 | Pooler regression | PASS |
 | Shadow boundary regression | PASS after adding the guard |
 | Git diff check | PASS |
-| Production shadow observer | BLOCKED — not implemented |
+| Authorized DEV runtime guard | PASS — 5/5 focused cases |
+| DEV live shadow certification | BLOCKED — legacy runtime idempotency mismatch |
 | Production readiness in legacy mode | PASS |
 
 ## Required next step
