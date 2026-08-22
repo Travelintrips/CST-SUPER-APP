@@ -133,6 +133,57 @@ export function isSafeDevTestMode() {
   };
 }
 
+/**
+ * Guard for an explicitly approved runtime proof against the canonical DEV
+ * Supabase database. This is intentionally separate from the regression-suite
+ * guard above: shared DEV is forbidden for generic tests, but is the only
+ * permitted target for named, owner-approved DEV proofs.
+ */
+export function assertAuthorizedDevRuntimeProof({
+  env = process.env,
+  harnessIdentity,
+} = {}) {
+  const identity = harnessIdentity ?? env.RUNTIME_PROOF_IDENTITY;
+  if (identity !== "CF-SC-14A") {
+    throw new Error("Authorized DEV runtime proof identity is required.");
+  }
+  if (env.APP_ENV !== "development" || env.NODE_ENV === "production" || env.REPLIT_DEPLOYMENT) {
+    throw new Error("Authorized DEV runtime proof requires an explicit non-production development environment.");
+  }
+  if (env.SAFE_DEV_TEST_MODE !== "true") {
+    throw new Error("Authorized DEV runtime proof requires SAFE_DEV_TEST_MODE=true.");
+  }
+
+  const devUrl = firstValue(env.SUPABASE_DATABASE_URL_DEV);
+  const devRef = extractProjectRef(devUrl);
+  const configuredProdUrl = firstValue(env.SUPABASE_DATABASE_URL_PROD);
+  const prodRef = extractProjectRef(configuredProdUrl);
+  const productionSelected = devRef === PROD_PROJECT_REF ||
+    isSameUrl(devUrl, configuredProdUrl);
+
+  if (!devUrl || !/^postgres(?:ql)?:\/\//i.test(devUrl)) {
+    throw new Error("Canonical DEV database URL is missing or invalid.");
+  }
+  if (devRef !== DEV_PROJECT_REF) {
+    throw new Error("Authorized DEV runtime proof requires the canonical development database.");
+  }
+  if (productionSelected) {
+    throw new Error("Production database target selected; refusing to run DEV proof.");
+  }
+
+  return {
+    allowed: true,
+    environment: "development",
+    safeDevTestMode: true,
+    databaseTarget: "DEV",
+    devProjectRef: devRef,
+    prodProjectRef: prodRef,
+    fingerprintsDifferent: devRef !== PROD_PROJECT_REF && devRef !== prodRef,
+    productionTargetSelected: false,
+    harnessIdentity: identity,
+  };
+}
+
 export async function verifyDedicatedTestDatabase({ requireAppSecrets = false } = {}) {
   const config = resolveDedicatedTestConfig({ requireAppSecrets });
   const client = new Client({

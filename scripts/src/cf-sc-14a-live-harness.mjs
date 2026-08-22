@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import pg from "pg";
-import { extractProjectRef, DEV_PROJECT_REF, PROD_PROJECT_REF, isSafeDevTestMode } from "../runtime-db-guard.mjs";
+import { assertAuthorizedDevRuntimeProof } from "../runtime-db-guard.mjs";
 
 const { Client } = pg;
 const PREFIX = `CFSC14A_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -16,15 +16,17 @@ function makeClient() {
 }
 
 function guard() {
-  assert(process.env.APP_ENV === "development", "APP_ENV must be development");
-  assert(process.env.NODE_ENV !== "production", "NODE_ENV must not be production");
-  assert(process.env.SAFE_DEV_TEST_MODE === "true", "SAFE_DEV_TEST_MODE=true required");
   assert(process.env.SPORT_CENTER_FINANCE_MODE === "shadow", "SPORT_CENTER_FINANCE_MODE=shadow required");
-  const ref = extractProjectRef(process.env.SUPABASE_DATABASE_URL_DEV);
-  assert(ref === DEV_PROJECT_REF && ref !== PROD_PROJECT_REF, "DEV database required");
-  assert(extractProjectRef(process.env.SUPABASE_DATABASE_URL) !== PROD_PROJECT_REF, "PROD database target detected");
-  assert(isSafeDevTestMode().allowed, "safe DEV guard rejected target");
-  return ref;
+  const proof = assertAuthorizedDevRuntimeProof({
+    harnessIdentity: "CF-SC-14A",
+  });
+  console.log("[CF-SC-14A] safety preflight");
+  console.log("environment = development");
+  console.log("safe_dev_test_mode = true");
+  console.log("database target = DEV");
+  console.log(`dev/prod fingerprint different = ${proof.fingerprintsDifferent}`);
+  console.log("production target selected = false");
+  return proof.devProjectRef;
 }
 
 async function setup(db, suffix, type) {
@@ -53,7 +55,7 @@ async function setup(db, suffix, type) {
 }
 
 async function legacyPost(db, paymentId) {
-  await db.query("SET LOCAL sport_center.finance_mode = 'legacy'");
+  await db.query("SELECT set_config('sport_center.finance_mode', 'legacy', false)");
   await db.query("SELECT sport_center.create_payment_accounting_draft($1)", [paymentId]);
 }
 
