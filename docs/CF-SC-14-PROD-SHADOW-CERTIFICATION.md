@@ -427,6 +427,85 @@ BLOCKERS = deployment is not live/readiness endpoint unavailable; runtime
 mode and worker heartbeat are not directly exposed
 ```
 
+## CF-SC-14C final PROD runtime observability proof
+
+**Observation date:** 2026-08-23
+**Scope:** canonical external PROD Supabase and live production health
+diagnostics; no database write, finance-mode change, central cutover, or
+additional publish was performed after the observability fields became live.
+
+The observability-only revision is live and source-equivalent to the certified
+application source:
+
+```text
+ACTIVE PROD REVISION = 8829c93245364eb49e2c0a76453554af6826fdce
+CERTIFIED SOURCE COMMIT = c7c99c2
+CERTIFIED SOURCE TREE = b21764d720b2d8904afe79fcc64b1635e9acda4f
+SOURCE EQUIVALENCE = PASS
+```
+
+The live `/api/healthz` response directly exposed the effective runtime
+boundary. It did not expose the required Shadow configuration:
+
+```text
+RUNTIME FINANCE MODE = legacy
+SHADOW OBSERVER = disabled
+LEGACY FINANCIAL OWNER = true
+CENTRAL POSTING ENABLED = false
+```
+
+This is intentionally reported from the live response, not inferred from
+stored environment configuration. A registered central-finance processor
+does not change the `central_posting_enabled=false` result.
+
+The live `/api/health/ready` response returned HTTP 200 with:
+
+```text
+READY = true
+GLOBAL READY = true
+SPORT CENTER READY = true
+CUSTOMER PORTAL READY = true
+FAILED STAGE = null
+```
+
+The final production verification used one explicit PostgreSQL transaction:
+`BEGIN`, `SET TRANSACTION READ ONLY`, `SHOW transaction_read_only`, the
+following SELECT-only checks, and `ROLLBACK`. The server returned
+`transaction_read_only=on`.
+
+```text
+WINDOW 1 COMPARISONS = 363
+WINDOW 2 HISTORICAL COMPARISONS = 0
+WINDOW 2 COMPARISONS = 0
+SHADOW ACCOUNTING EFFECTS = 0
+SHADOW JOURNAL EFFECTS = 0
+SHADOW SETTLEMENT EFFECTS = 0
+SHADOW MUTATION EFFECTS = 0
+SHADOW RECONCILIATION EFFECTS = 0
+CENTRAL PROCESSING ROWS = 0
+CENTRAL POSTED ROWS = 0
+VERIFICATION WRITES = 0
+```
+
+The zero-effect counts represent zero rows in the relevant production
+surfaces since the Window #2 cutoff. No synthetic payment or production
+fixture was created.
+
+```text
+CF-SC-14C = FAIL
+PROD READ-ONLY CONNECTION = PASS
+TRANSACTION_READ_ONLY = ON
+READINESS = PASS
+RUNTIME FINANCE MODE = FAIL (legacy, required shadow)
+SHADOW OBSERVER = FAIL (disabled, required enabled/active)
+LEGACY FINANCIAL OWNER = ACTIVE
+CENTRAL POSTING ENABLED = FALSE
+CF-SC-14B = BLOCKED
+CENTRAL CUTOVER = NO
+READY FOR CF-SC-15 = NO
+BLOCKER = production runtime is legacy/observer-disabled; no mode change was authorized
+```
+
 Shell quoting failures observed during the audit were confined to temporary
 audit runners and did not represent PostgreSQL or production application
 failures.
