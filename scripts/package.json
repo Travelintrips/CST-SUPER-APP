@@ -14,6 +14,7 @@
     "cf-sc-10b:retry:dev": "pnpm exec esbuild ./src/cf-sc-10b-retry-harness.mjs --bundle --platform=node --format=esm --packages=external --external:../runtime-db-guard.mjs --outfile=./src/.cf-sc-10b-retry-harness.mjs && node ./src/.cf-sc-10b-retry-harness.mjs; status=$?; rm -f ./src/.cf-sc-10b-retry-harness.mjs; exit $status",
     "cf-sc-10c:dev": "pnpm exec esbuild ./src/cf-sc-10c-harness.mjs --bundle --platform=node --format=esm --packages=external --external:../runtime-db-guard.mjs --outfile=./src/.cf-sc-10c-harness.mjs && node ./src/.cf-sc-10c-harness.mjs; status=$?; rm -f ./src/.cf-sc-10c-harness.mjs; exit $status",
     "cf-sc-10d:dev": "pnpm exec esbuild ./src/cf-sc-10d-harness.mjs --bundle --platform=node --format=esm --packages=external --external:../runtime-db-guard.mjs --outfile=./src/.cf-sc-10d-harness.mjs && node ./src/.cf-sc-10d-harness.mjs; status=$?; rm -f ./src/.cf-sc-10d-harness.mjs; exit $status"
+    ,"cf-sc-14a:live:dev": "pnpm exec esbuild ./src/cf-sc-14a-live-harness.mjs --bundle --platform=node --format=esm --packages=bundle --external:pg --outfile=./src/.cf-sc-14a-live-harness.mjs && APP_ENV=development NODE_ENV=development SAFE_DEV_TEST_MODE=true SPORT_CENTER_FINANCE_MODE=shadow node ../artifacts/api-server/load-secrets.mjs node ./src/.cf-sc-14a-live-harness.mjs; status=$?; rm -f ./src/.cf-sc-14a-live-harness.mjs; exit $status"
   },
   "devDependencies": {
     "@types/node": "catalog:",

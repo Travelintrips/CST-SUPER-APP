@@ -84,10 +84,11 @@ async function claim(
        SELECT o.payment_id, o.event_type,
               COALESCE(o.correlation_id, 'sc_payment_' || o.payment_id::text) AS correlation_id
          FROM sport_center.payment_accounting_outbox o
+         JOIN sport_center.sport_payments p ON p.id = o.payment_id
         WHERE o.event_type = 'payment_confirmed'
           AND ($1::int[] IS NULL OR o.payment_id = ANY($1::int[]))
-          AND ($2::timestamptz IS NULL OR o.created_at >= $2::timestamptz)
-          AND ($3::boolean OR $2::timestamptz IS NULL OR o.created_at >= $2::timestamptz)
+          AND ($2::timestamptz IS NULL OR p.confirmed_at >= $2::timestamptz)
+          AND ($3::boolean OR $2::timestamptz IS NULL OR p.confirmed_at >= $2::timestamptz)
         FOR UPDATE OF o SKIP LOCKED
      )
      INSERT INTO sport_center.shadow_observer_comparisons
