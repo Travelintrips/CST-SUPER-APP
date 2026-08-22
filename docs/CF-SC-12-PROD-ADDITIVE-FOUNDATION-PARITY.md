@@ -684,3 +684,40 @@ migration URLs must be copied from the current Supabase connection-string
 controls, using the exact pooler/runtime and direct/migration formats; the
 password must not be guessed or manually transformed. Both paths must pass
 read-only authentication before the official startup recovery can be retried.
+
+## CF-SC-12C-3 final recovery result
+
+After the current production connection values became valid, both runtime and
+migration read-only authentication checks passed. The official runner was
+executed with `APP_ENV=production`, `NODE_ENV=production`, and
+`SPORT_CENTER_FINANCE_MODE=legacy`. It returned `already_completed` and
+`status=skipped`, so no replay or additional startup mutation was required.
+
+The production marker was independently verified from the live database using
+the actual marker schema:
+
+```text
+stage_name = sport_center
+stage_version = 1
+status = completed
+completed_at = present
+last_error = empty
+```
+
+```text
+CF-SC-12C-3 = PASS
+AUTHORITATIVE PROD PROJECT = PASS
+RUNTIME DB AUTH = PASS
+MIGRATION DB AUTH = PASS
+DEV != PROD = PASS by target guard
+OFFICIAL CF-SC-12C RETRY = PASS (already_completed / skipped)
+SPORT_CENTER MARKER = COMPLETE
+MANUAL MARKER UPDATE = NO
+PROD PROCESSOR RUNS = 0
+PROD PAYMENT WRITES = 0
+PROD ACCOUNTING WRITES = 0
+PROD SETTLEMENT EFFECTS = 0
+PROD MUTATION EFFECTS = 0
+PROD MODE = LEGACY
+PROD CUTOVER = NO
+```
