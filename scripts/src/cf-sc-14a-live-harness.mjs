@@ -45,13 +45,31 @@ async function discoverPaymentIdentitySurfaces(db) {
              SELECT 1 FROM information_schema.columns t
               WHERE t.table_schema = c.table_schema
                 AND t.table_name = c.table_name
-                AND t.column_name IN ('source_type', 'source', 'source_schema')
-           ) AS has_source_discriminator
+                AND t.column_name = 'id'
+           ) AS has_id,
+           EXISTS (
+             SELECT 1 FROM information_schema.columns t
+              WHERE t.table_schema = c.table_schema
+                AND t.table_name = c.table_name
+                AND t.column_name = 'source_type'
+           ) AS has_source_type,
+           EXISTS (
+             SELECT 1 FROM information_schema.columns t
+              WHERE t.table_schema = c.table_schema
+                AND t.table_name = c.table_name
+                AND t.column_name = 'source'
+           ) AS has_source
       FROM information_schema.columns c
      WHERE c.table_schema IN ('public', 'sport_center')
        AND c.column_name IN
          ('payment_id', 'source_payment_id', 'source_doc_id', 'sc_payment_id',
           'source_id', 'mutation_key', 'canonical_key')
+       AND EXISTS (
+         SELECT 1 FROM information_schema.columns i
+          WHERE i.table_schema = c.table_schema
+            AND i.table_name = c.table_name
+            AND i.column_name = 'id'
+       )
        AND c.table_name NOT IN ('sport_payments')
      ORDER BY c.table_schema, c.table_name, c.column_name
   `);
@@ -78,9 +96,9 @@ async function findPaymentReferences(db, paymentId, ownership) {
     } else if (surface.column_name === "canonical_key") {
       predicate = `${column} = $1`;
       value = `sport_center:payment:${paymentId}`;
-    } else if (surface.column_name === "source_doc_id" && surface.has_source_discriminator) {
+    } else if (surface.column_name === "source_doc_id" && surface.has_source_type) {
       predicate = `${column} = $1 AND source_type = 'sport_center'`;
-    } else if (surface.column_name === "source_id" && surface.has_source_discriminator) {
+    } else if (surface.column_name === "source_id" && surface.has_source) {
       predicate = `${column} = $1 AND source::text = 'sport_center_payment'`;
     } else {
       predicate = `${column} = $1`;
@@ -88,7 +106,7 @@ async function findPaymentReferences(db, paymentId, ownership) {
     const rows = await db.query(
       `SELECT ${quoteIdent("id")} AS row_id FROM ${table} WHERE ${predicate}`,
       [value],
-    ).catch(() => ({ rows: [] }));
+    );
     for (const row of rows.rows) {
       const rowId = row.row_id == null ? null : Number(row.row_id);
       if (!owned.has(rowId)) references.push({
@@ -130,14 +148,14 @@ async function setupCandidate(db, suffix, type, ownership) {
   `, [`${PREFIX}_${suffix}_ORDER`, `${PREFIX} Customer`, `${PREFIX.toLowerCase()}@example.invalid`, facility.rows[0].id, AMOUNT, PREFIX]);
   const payment = await db.query(`
     INSERT INTO sport_center.sport_payments
-      (booking_id, amount, status, payment_method, payment_type, payment_provider,
+       (booking_id, amount, status, payment_method, payment_type, payment_provider,
        company_id, bank_account_id, expected_settlement_date, settlement_rule_version,
        provider_name, provider_id, provider_order_id, confirmed_at, paid_at, uat_marker)
-    VALUES ($1, $2, 'confirmed', 'QRIS', $3::sport_center.payment_type,
+     VALUES ($1, $2, 'pending', 'QRIS', $3::sport_center.payment_type,
             'mandiri_direct', $4, '1640006707220', CURRENT_DATE::text,
-            'PROD-MANDIRI-SC-20260810-v1', 'mandiri_direct', $5, $6, $7, $7, $8)
+             'PROD-MANDIRI-SC-20260810-v1', 'mandiri_direct', $5, $6, NULL, NULL, $7)
     RETURNING id
-  `, [booking.rows[0].id, AMOUNT, type, COMPANY_ID, `${PREFIX}_${suffix}_PROVIDER`, `${PREFIX}_${suffix}_ORDER`, new Date(), PREFIX]);
+   `, [booking.rows[0].id, AMOUNT, type, COMPANY_ID, `${PREFIX}_${suffix}_PROVIDER`, `${PREFIX}_${suffix}_ORDER`, PREFIX]);
   const fixture = { bookingId: Number(booking.rows[0].id), paymentId: Number(payment.rows[0].id) };
   ownership.bookings.add(fixture.bookingId);
   ownership.payments.add(fixture.paymentId);
@@ -160,6 +178,13 @@ async function allocateSafeSportCenterFixturePayment(db, suffix, type, ownership
         await db.query("ROLLBACK");
         continue;
       }
+      await db.query(
+        `UPDATE sport_center.sport_payments
+            SET status = 'confirmed', confirmed_at = NOW(), paid_at = NOW()
+          WHERE id = $1`,
+        [fixture.paymentId],
+      );
+      await registerGeneratedIdentityRows(db, fixture.paymentId, candidateOwnership);
       await db.query("COMMIT");
       for (const [key, values] of Object.entries(candidateOwnership)) {
         for (const value of values) ownership[key].add(value);
@@ -172,6 +197,49 @@ async function allocateSafeSportCenterFixturePayment(db, suffix, type, ownership
     }
   }
   throw new Error(`CF_SC_14A_ALLOCATION_EXHAUSTED: ${MAX_ALLOCATION_ATTEMPTS}`);
+}
+
+async function registerGeneratedIdentityRows(db, paymentId, ownership) {
+  const surfaces = await discoverPaymentIdentitySurfaces(db);
+  for (const surface of surfaces) {
+    const table = `${quoteIdent(surface.table_schema)}.${quoteIdent(surface.table_name)}`;
+    const column = quoteIdent(surface.column_name);
+    let predicate;
+    let value = paymentId;
+    if (surface.column_name === "mutation_key") {
+      predicate = `${column} = $1`;
+      value = `SC-PAY-${paymentId}`;
+    } else if (surface.column_name === "canonical_key") {
+      predicate = `${column} = $1`;
+      value = `sport_center:payment:${paymentId}`;
+    } else if (surface.column_name === "source_doc_id" && surface.has_source_type) {
+      predicate = `${column} = $1 AND source_type = 'sport_center'`;
+    } else if (surface.column_name === "source_id" && surface.has_source) {
+      predicate = `${column} = $1 AND source::text = 'sport_center_payment'`;
+    } else {
+      predicate = `${column} = $1`;
+    }
+    const rows = await db.query(
+      `SELECT ${quoteIdent("id")} AS row_id FROM ${table} WHERE ${predicate}`,
+      [value],
+    );
+    for (const row of rows.rows) {
+      const id = Number(row.row_id);
+      if (!Number.isFinite(id)) continue;
+      const key = surface.table_name;
+      if (key.includes("outbox")) ownership.outbox.add(id);
+      else if (key === "accounting_payments") ownership.accountingPayments.add(id);
+      else if (key === "accounting_entries") ownership.accountingEntries.add(id);
+      else if (key.includes("journal_lines") || key === "accounting_entry_lines") ownership.lines.add(id);
+      else if (key.includes("journal")) ownership.journals.add(id);
+      else if (key.includes("settlement_items")) ownership.settlementItems.add(id);
+      else if (key.includes("settlement")) ownership.settlements.add(id);
+      else if (key.includes("reconciliation")) ownership.reconciliations.add(id);
+      else if (key.includes("bank_mutations")) ownership.mutations.add(id);
+      else if (key.includes("processing")) ownership.processing.add(id);
+      else if (key.includes("shadow_observer_comparisons")) ownership.comparisons.add(id);
+    }
+  }
 }
 
 async function legacyPost(db, paymentId) {
