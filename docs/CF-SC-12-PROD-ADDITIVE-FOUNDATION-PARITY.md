@@ -630,3 +630,30 @@ database credential and canonical migration connection parameters. Do not
 derive the direct host, reuse the stale password, or rotate the password until
 all production consumers and an approved rotation path are verified. After the
 bundle is repaired, rerun the official CF-SC-12C startup recovery.
+
+## CF-SC-12C-3 retry after migration secret update
+
+The newly configured `SUPABASE_MIGRATION_URL` was checked directly and through
+the official production loader. It is present, but resolves to the same
+non-authoritative direct host recorded above; DNS still returns `ENOTFOUND`.
+The loader also shows the GCP bundle overriding that key during production
+startup (`overridden: 1`), so the runner would not use a different value unless
+the managed bundle/source precedence is corrected.
+
+```text
+MIGRATION SECRET PRESENT = YES
+MIGRATION HOST DNS = FAIL (ENOTFOUND)
+MIGRATION DB AUTH = NOT REACHED
+RUNTIME DB AUTH = FAIL (28P01)
+OFFICIAL CF-SC-12C RETRY = NOT_REACHED
+SPORT_CENTER MARKER = FAILED / UNCHANGED
+MANUAL MARKER UPDATE = NO
+PROD MODE = LEGACY
+BUSINESS EFFECTS = 0
+CF-SC-12C-3 = BLOCKED
+```
+
+No secret value, URL with credentials, marker, or production business data was
+changed by this retry. The required action remains to place the current
+authoritative runtime and migration connection values in the source consumed by
+the official production loader, then rerun both read-only authentication checks.
