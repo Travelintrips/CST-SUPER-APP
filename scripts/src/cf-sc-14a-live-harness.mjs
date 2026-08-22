@@ -321,7 +321,7 @@ async function financeSnapshot(db, ids) {
        WHERE mutation_key = ANY(SELECT 'SC-PAY-' || x::text FROM unnest($1::int[]) x)) AS public_mutations,
       (SELECT COUNT(*)::int FROM sport_center.bank_mutations
        WHERE canonical_key = ANY(SELECT 'sport_center:payment:' || x::text FROM unnest($1::int[]) x)) AS sport_mutations,
-      (SELECT COUNT(*)::int FROM sport_center.reconciliation_matches
+       (SELECT COUNT(*)::int FROM public.bank_reconciliation_matches
        WHERE source_id::text = ANY(SELECT x::text FROM unnest($1::int[]) x)) AS reconciliations
   `, [ids]);
   return Object.fromEntries(Object.entries(result.rows[0]).map(([key, value]) => [key, Number(value)]));
@@ -341,7 +341,10 @@ async function main() {
   const ownership = emptyOwnership();
   try {
     const activation = new Date(Date.now() - 1000).toISOString();
-    for (const [suffix, type] of [["FULL", "full_payment"], ["DP", "dp"], ["PELUNASAN", "pelunasan"], ["GROUP", "group_payment"]]) {
+    // DEV's canonical payment_type enum models the group-payment business
+    // case as a full payment; the GROUP suffix keeps its fixture identity
+    // distinct without inventing an enum value that runtime does not accept.
+    for (const [suffix, type] of [["FULL", "full_payment"], ["DP", "dp"], ["PELUNASAN", "pelunasan"], ["GROUP", "full_payment"]]) {
       const fixture = await allocateSafeSportCenterFixturePayment(setupDb, suffix, type, ownership);
       fixtures.push(fixture);
       const refs = await findPaymentReferences(setupDb, fixture.paymentId, ownership);

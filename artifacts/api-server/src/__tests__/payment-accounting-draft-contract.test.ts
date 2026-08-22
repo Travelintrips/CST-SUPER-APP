@@ -85,7 +85,7 @@ describe("Sport Center payment accounting draft contract", () => {
     expect(draftFunction).toContain("'CASH'");
     expect(draftFunction).toContain("'BANK_RECEIPT'");
     expect(draftFunction).toContain(
-      "sport_center.resolve_internal_bank_account_id(v_company_id, v_payment.bank_account_id::text)",
+      "sport_center.resolve_internal_bank_account_id(\n                    v_company_id,\n                    v_payment.bank_account_id::text",
     );
     expect(draftFunction).toContain("INSERT INTO sport_center.accounting_journals");
     expect(draftFunction).toContain("INSERT INTO sport_center.accounting_journal_lines");
@@ -94,6 +94,24 @@ describe("Sport Center payment accounting draft contract", () => {
     expect(draftFunction).toContain("IF v_tax > 0 THEN");
     expect(draftFunction).toContain("sport_center.validate_accounting_journal");
     expect(draftFunction).toContain("RETURN v_journal_id");
+  });
+
+  it("derives company context before canonical bank resolution and fails closed", () => {
+    const companyContext = draftFunction.indexOf(
+      "v_company_id :=\n            COALESCE(",
+    );
+    const bankResolution = draftFunction.indexOf(
+      "sport_center.resolve_internal_bank_account_id(",
+    );
+
+    expect(companyContext).toBeGreaterThan(-1);
+    expect(companyContext).toBeLessThan(bankResolution);
+    expect(draftFunction).toContain("v_payment.company_id");
+    expect(draftFunction).toContain("v_booking_company_id");
+    expect(draftFunction).toContain("SPORT_PAYMENT_COMPANY_NOT_FOUND");
+    expect(draftFunction).toContain(
+      "sport_center.resolve_internal_bank_account_id(\n                    v_company_id,\n                    v_payment.bank_account_id::text",
+    );
   });
 
   it("preserves fail-closed prerequisite errors", () => {

@@ -1682,6 +1682,21 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
                 v_payment.amount;
         END IF;
 
+        -- The payment is the authoritative owner context for the legacy
+        -- accounting path. Resolve it before either finance-mode branch so
+        -- canonical bank lookup can never receive an unassigned company.
+        v_company_id :=
+            COALESCE(
+                v_payment.company_id,
+                v_booking_company_id
+            );
+
+        IF v_company_id IS NULL THEN
+            RAISE EXCEPTION
+                'SPORT_PAYMENT_COMPANY_NOT_FOUND: payment=%',
+                p_payment_id;
+        END IF;
+
         v_finance_mode := lower(COALESCE(current_setting('sport_center.finance_mode', true), 'legacy'));
         IF v_finance_mode = 'central' THEN
             SELECT *
@@ -1752,19 +1767,6 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
             COALESCE(
                 NULLIF(v_payment.payment_type::text, ''),
                 'full_payment'
-            );
-
-
-        -- --------------------------------------------------------
-        -- Company ID — optional for individual bookings.
-        -- Company bookings (payer_type = 'company') carry company_id;
-        -- individual consumer bookings leave it NULL, which is valid.
-        -- --------------------------------------------------------
-
-        v_company_id :=
-            COALESCE(
-                v_payment.company_id,
-                v_booking_company_id
             );
 
 
@@ -4360,7 +4362,7 @@ export async function verifyCanonicalSettlementOwnerRoutines(): Promise<void> {
   }
 }
 
-const SPORT_CENTER_BOOTSTRAP_VERSION = "schema-bootstrap-v2";
+const SPORT_CENTER_BOOTSTRAP_VERSION = "schema-bootstrap-v3";
 
 export async function runSportCenterMigration(): Promise<void> {
   if (await isStartupMigrationComplete("sport_center_bootstrap", SPORT_CENTER_BOOTSTRAP_VERSION)) {
