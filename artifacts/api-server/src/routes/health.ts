@@ -6,6 +6,8 @@ import { getE2ESafetyStatus, isProductionMode } from "../lib/e2eSafetyGuard.js";
 import { checkSequenceDesync } from "../lib/accountingMigration.js";
 import { checkSmtpConnection } from "../lib/mailer.js";
 import { getApiRevision } from "../lib/buildMetadata.js";
+import { getSportCenterFinanceMode, shouldRunLegacyFinanceWrites } from "../lib/financeBoundary.js";
+import { isCentralFinancePostingEnabled } from "../lib/centralFinance.js";
 
 const router: IRouter = Router();
 const startedAt = Date.now();
@@ -155,6 +157,10 @@ router.get("/healthz", async (_req, res) => {
       aggregate: workerAggregate,
       endpoint: "/api/health/workers",
     },
+    sport_center_finance_mode: getSportCenterFinanceMode(),
+    sport_center_shadow_observer: getSportCenterFinanceMode() === "shadow" ? "enabled" : "disabled",
+    sport_center_legacy_financial_owner: shouldRunLegacyFinanceWrites(),
+    sport_center_central_posting_enabled: isCentralFinancePostingEnabled(),
     dependencies: runtimeState
       ? {
           status: runtimeState.status,

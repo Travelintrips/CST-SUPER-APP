@@ -270,7 +270,7 @@ export async function processCentralFinance(options: { client?: pg.PoolClient; f
   manualReview: number;
 }> {
   const db = options.client ?? getPool();
-  if (!db || !isCentralFinanceMode() || process.env.NODE_ENV === "production") {
+  if (!db || !isCentralFinancePostingEnabled()) {
     return { claimed: 0, posted: 0, retried: 0, manualReview: 0 };
   }
 
@@ -318,8 +318,12 @@ export function centralFinanceModeForDiagnostics(): string {
   return getSportCenterFinanceMode();
 }
 
+export function isCentralFinancePostingEnabled(): boolean {
+  return isCentralFinanceMode() && process.env.NODE_ENV !== "production";
+}
+
 export function startCentralFinanceProcessor(): void {
-  if (!isCentralFinanceMode() || process.env.NODE_ENV === "production") return;
+  if (!isCentralFinancePostingEnabled()) return;
   const tick = () => {
     void processCentralFinance().catch(() => {});
   };
