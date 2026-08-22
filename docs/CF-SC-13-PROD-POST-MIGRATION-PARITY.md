@@ -11,18 +11,22 @@ CF-SC-13 = BLOCKED
 READY FOR SHADOW ASSESSMENT = NO
 ```
 
-The certification could not be completed in this workspace session because the
-official production Secret Manager loader failed before database access:
+The official loader is now available through the legacy bundle selectors, and
+the development audit completed. Production certification is still blocked
+because the authoritative production Supabase runtime connection fails
+authentication:
 
 ```text
-GCP_SECRET_MANAGER_BOOTSTRAP_JSON is not set
+password authentication failed for user "postgres" (28P01)
 ```
 
-The only exposed database variable in this session was `DATABASE_URL`. It was
-not used as a substitute for the authoritative Supabase development or
-production targets. No production query, migration, marker update, processor
-run, payment write, accounting write, settlement effect, or mutation effect was
-performed.
+The official production runner was invoked through `load-secrets.mjs` with
+`APP_ENV=production`, `NODE_ENV=production`,
+`SECRET_MANAGER_LEGACY_MODE=1`, and
+`SPORT_CENTER_FINANCE_MODE=legacy`. Secret loading succeeded, but the runner
+stopped before the startup stage when the database pool could not authenticate.
+No production query, migration, marker update, processor run, payment write,
+accounting write, settlement effect, or mutation effect was performed.
 
 This is an infrastructure/access blocker, not a parity failure. The prior
 CF-SC-12C-3 evidence remains the last authoritative live-production evidence:
@@ -49,18 +53,51 @@ CF-SC-12C-3 established these production identities and invariants:
 | Production processor runs | `0` |
 
 The attached CF-SC-13 runbook requires exact current DEV and PROD catalog
-comparison. Because the official loader could not initialize, no claim is made
-here about current live PROD table/function/index/data parity.
+comparison. PROD catalog/function/index/data parity remains unverified because
+authentication failed. `DATABASE_URL` was never used as a substitute for the
+authoritative Supabase DEV or PROD targets.
+
+## Current DEV live audit
+
+The legacy bundle loaded successfully for development and the read-only audit
+connected to PostgreSQL 17.6. The expected foundation tables and processing
+table were present, with the following catalog shape:
+
+```text
+finance_project_configs              = 13 columns
+finance_project_payment_configs     = 25 columns
+finance_project_tax_mappings        = 15 columns
+finance_project_coa_mappings        = 16 columns
+central_finance_processing          = 15 columns
+constraints                         = 30
+indexes                             = 61
+invalid processing states            = 0
+duplicate source groups              = 0
+duplicate correlation groups        = 0
+startup marker                       = sport_center / version 1 / completed
+```
+
+The DEV effective configuration resolved uniquely for
+`sport_center / company 1 / QRIS / mandiri_direct`, with MDR `0.003`, fixed
+fee `0.00`, fee tax `0`, settlement delay `1`, and tax rule `8`.
+
+However, the live DEV mapping must not be certified as a clean baseline yet:
+the observed role rows associate `RECEIVING_BANK` with COA `75594`
+(`1-1023-CST`) and `MDR_EXPENSE` with COA `75590` (`5-3050-CST`), which is
+opposite the certified business identities. The DEV payment config also
+resolves to bank account `17`, not the production identity `2`. This is
+recorded as deterministic drift requiring owner-approved semantic correction;
+no COA or configuration mutation was attempted.
 
 ## Gate results
 
 | Gate | Result | Evidence |
 |---|---|---|
-| DEV certified baseline | BLOCKED | Official loader could not initialize in this session |
+| DEV certified baseline | BLOCKED | Live DEV read succeeded, but role-to-COA semantic drift was observed |
 | PROD foundation table parity | BLOCKED | No authoritative PROD connection available |
 | Processing state parity | BLOCKED | No live PROD catalog/data query performed |
-| Config parity | BLOCKED | CF-SC-12C-3 identities retained as historical baseline only |
-| Function signature parity | BLOCKED | No live PROD `pg_proc` comparison performed |
+| Config parity | BLOCKED | DEV drift observed; PROD not reachable |
+| Function signature parity | BLOCKED | DEV signatures read; no live PROD comparison |
 | Function behavior contract | BLOCKED | No production function execution permitted or attempted |
 | Settlement FK parity | BLOCKED | No live PROD catalog query performed |
 | Index/unique parity | BLOCKED | No live PROD catalog query performed |
@@ -68,13 +105,13 @@ here about current live PROD table/function/index/data parity.
 | Accounting contract parity | BLOCKED | No live PROD function body query performed |
 | Settlement economics | BLOCKED | No live PROD config query performed |
 | Historical compatibility | BLOCKED | No live PROD data query performed |
-| Startup marker | PASS (prior evidence) | CF-SC-12C-3 reported official marker `completed` |
+| Startup marker | PASS (DEV live and prior PROD evidence) | DEV marker completed; prior CF-SC-12C-3 reported PROD marker completed |
 | Pooler connection regression | PASS | Static regression test added and passed |
 | Workspace/API typecheck | PASS | `pnpm typecheck` |
 | API build | PASS | `pnpm build` |
 | Focused Central Finance tests | PASS | 84/84 tests passed |
 | Git diff check | PASS | `git diff --check` |
-| Production readiness | BLOCKED | No production runtime or `/api/health/ready` access |
+| Production readiness | BLOCKED | PROD authentication failed; no production runtime or `/api/health/ready` access |
 
 ## Pooler regression
 
@@ -122,9 +159,10 @@ SETTLEMENT FIXTURE = NO
 
 ## Required next step
 
-Run the same official read-only audit from a session where the approved
-`GCP_SECRET_MANAGER_BOOTSTRAP_JSON` is available to the workspace secret
-loader. The audit must:
+Repair or republish the authoritative production database credentials in the
+legacy bundle consumed by the official loader, then rerun the audit. The
+canonical bundle migration should be completed separately after both bundles
+exist. The audit must:
 
 1. load the authoritative DEV and PROD bundles through `load-secrets.mjs`;
 2. verify both target references and both read-only connections;
