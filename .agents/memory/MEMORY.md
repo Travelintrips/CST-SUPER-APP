@@ -135,3 +135,4 @@
 - [Managed workflow secret refresh](workflow-secret-refresh.md) — restart artifact workflows after secret availability changes before diagnosing loader or database failures.
 - [Shadow observer test import](shadow-observer-test-import.md) — keep the DB-backed finance resolver lazy so mode and zero-effect tests run without a test database.
 - [CF-SC-14A DEV proof guard](cf-sc-14a-dev-proof-guard.md) — separate named DEV certification from generic isolated-test guards; transaction-pooled mode settings must share the proof transaction.
+- [CF-SC-14A fixture isolation](cf-sc-14a-fixture-isolation.md) — missing source rows do not prove payment IDs are safe; inspect all finance identity surfaces and clean only owned IDs.

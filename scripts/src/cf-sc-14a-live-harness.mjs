@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import pg from "pg";
 import { assertAuthorizedDevRuntimeProof } from "../runtime-db-guard.mjs";
+import { isSafeFixturePayment, MAX_ALLOCATION_ATTEMPTS } from "./cf-sc-14a-fixture-isolation.mjs";
 
 const { Client } = pg;
 const PREFIX = `CFSC14A_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -13,6 +14,92 @@ function assert(value, message) {
 
 function makeClient() {
   return new Client({ connectionString: process.env.SUPABASE_DATABASE_URL_DEV, ssl: { rejectUnauthorized: false } });
+}
+
+function quoteIdent(value) {
+  return `"${String(value).replaceAll('"', '""')}"`;
+}
+
+function emptyOwnership() {
+  return {
+    bookings: new Set(),
+    payments: new Set(),
+    outbox: new Set(),
+    accountingPayments: new Set(),
+    accountingEntries: new Set(),
+    journals: new Set(),
+    lines: new Set(),
+    comparisons: new Set(),
+    processing: new Set(),
+    mutations: new Set(),
+    settlements: new Set(),
+    settlementItems: new Set(),
+    reconciliations: new Set(),
+  };
+}
+
+async function discoverPaymentIdentitySurfaces(db) {
+  const result = await db.query(`
+    SELECT c.table_schema, c.table_name, c.column_name,
+           EXISTS (
+             SELECT 1 FROM information_schema.columns t
+              WHERE t.table_schema = c.table_schema
+                AND t.table_name = c.table_name
+                AND t.column_name IN ('source_type', 'source', 'source_schema')
+           ) AS has_source_discriminator
+      FROM information_schema.columns c
+     WHERE c.table_schema IN ('public', 'sport_center')
+       AND c.column_name IN
+         ('payment_id', 'source_payment_id', 'source_doc_id', 'sc_payment_id',
+          'source_id', 'mutation_key', 'canonical_key')
+       AND c.table_name NOT IN ('sport_payments')
+     ORDER BY c.table_schema, c.table_name, c.column_name
+  `);
+  return result.rows;
+}
+
+async function findPaymentReferences(db, paymentId, ownership) {
+  const surfaces = await discoverPaymentIdentitySurfaces(db);
+  const references = [];
+  const owned = new Set([
+    ...ownership.outbox, ...ownership.accountingPayments, ...ownership.accountingEntries,
+    ...ownership.journals, ...ownership.lines, ...ownership.comparisons, ...ownership.processing,
+    ...ownership.mutations, ...ownership.settlements, ...ownership.settlementItems,
+    ...ownership.reconciliations,
+  ]);
+  for (const surface of surfaces) {
+    const table = `${quoteIdent(surface.table_schema)}.${quoteIdent(surface.table_name)}`;
+    const column = quoteIdent(surface.column_name);
+    let predicate;
+    let value = paymentId;
+    if (surface.column_name === "mutation_key") {
+      predicate = `${column} = $1`;
+      value = `SC-PAY-${paymentId}`;
+    } else if (surface.column_name === "canonical_key") {
+      predicate = `${column} = $1`;
+      value = `sport_center:payment:${paymentId}`;
+    } else if (surface.column_name === "source_doc_id" && surface.has_source_discriminator) {
+      predicate = `${column} = $1 AND source_type = 'sport_center'`;
+    } else if (surface.column_name === "source_id" && surface.has_source_discriminator) {
+      predicate = `${column} = $1 AND source::text = 'sport_center_payment'`;
+    } else {
+      predicate = `${column} = $1`;
+    }
+    const rows = await db.query(
+      `SELECT ${quoteIdent("id")} AS row_id FROM ${table} WHERE ${predicate}`,
+      [value],
+    ).catch(() => ({ rows: [] }));
+    for (const row of rows.rows) {
+      const rowId = row.row_id == null ? null : Number(row.row_id);
+      if (!owned.has(rowId)) references.push({
+        schema: surface.table_schema,
+        table: surface.table_name,
+        column: surface.column_name,
+        rowId,
+      });
+    }
+  }
+  return references;
 }
 
 function guard() {
@@ -29,7 +116,7 @@ function guard() {
   return proof.devProjectRef;
 }
 
-async function setup(db, suffix, type) {
+async function setupCandidate(db, suffix, type, ownership) {
   const facility = await db.query("SELECT id FROM sport_center.sport_facilities ORDER BY id LIMIT 1");
   assert(facility.rows[0], "DEV facility unavailable");
   const booking = await db.query(`
@@ -51,25 +138,40 @@ async function setup(db, suffix, type) {
             'PROD-MANDIRI-SC-20260810-v1', 'mandiri_direct', $5, $6, $7, $7, $8)
     RETURNING id
   `, [booking.rows[0].id, AMOUNT, type, COMPANY_ID, `${PREFIX}_${suffix}_PROVIDER`, `${PREFIX}_${suffix}_ORDER`, new Date(), PREFIX]);
-  return { bookingId: Number(booking.rows[0].id), paymentId: Number(payment.rows[0].id) };
+  const fixture = { bookingId: Number(booking.rows[0].id), paymentId: Number(payment.rows[0].id) };
+  ownership.bookings.add(fixture.bookingId);
+  ownership.payments.add(fixture.paymentId);
+  const outbox = await db.query(
+    "SELECT id FROM sport_center.payment_accounting_outbox WHERE payment_id = $1",
+    [fixture.paymentId],
+  );
+  for (const row of outbox.rows) ownership.outbox.add(Number(row.id));
+  return fixture;
 }
 
-async function syncFixtureSequences(db) {
-  // Earlier failed DEV proofs can remove source rows while leaving sequences
-  // behind. Advance only the two fixture-owned source sequences; never touch
-  // accounting or public business rows.
-  await db.query(`
-    SELECT setval(
-      pg_get_serial_sequence('sport_center.sport_bookings', 'id'),
-      COALESCE((SELECT MAX(id) FROM sport_center.sport_bookings), 1),
-      true
-    ),
-    setval(
-      pg_get_serial_sequence('sport_center.sport_payments', 'id'),
-      COALESCE((SELECT MAX(id) FROM sport_center.sport_payments), 1),
-      true
-    )
-  `);
+async function allocateSafeSportCenterFixturePayment(db, suffix, type, ownership) {
+  for (let attempt = 1; attempt <= MAX_ALLOCATION_ATTEMPTS; attempt++) {
+    const candidateOwnership = emptyOwnership();
+    try {
+      await db.query("BEGIN");
+      const fixture = await setupCandidate(db, suffix, type, candidateOwnership);
+      const references = await findPaymentReferences(db, fixture.paymentId, candidateOwnership);
+      if (!isSafeFixturePayment(references)) {
+        await db.query("ROLLBACK");
+        continue;
+      }
+      await db.query("COMMIT");
+      for (const [key, values] of Object.entries(candidateOwnership)) {
+        for (const value of values) ownership[key].add(value);
+      }
+      return fixture;
+    } catch (error) {
+      await db.query("ROLLBACK").catch(() => {});
+      if (attempt === MAX_ALLOCATION_ATTEMPTS) throw error;
+      if (!["23505", "23503"].includes(error?.code)) throw error;
+    }
+  }
+  throw new Error(`CF_SC_14A_ALLOCATION_EXHAUSTED: ${MAX_ALLOCATION_ATTEMPTS}`);
 }
 
 async function legacyPost(db, paymentId) {
@@ -81,6 +183,32 @@ async function legacyPost(db, paymentId) {
   } catch (error) {
     await db.query("ROLLBACK").catch(() => {});
     throw error;
+  }
+}
+
+async function registerAccountingOwnership(db, paymentId, ownership) {
+  const rows = await db.query(`
+    SELECT ap.id AS accounting_payment_id, ae.id AS accounting_entry_id,
+           j.id AS journal_id
+      FROM public.accounting_payments ap
+      FULL JOIN public.accounting_entries ae ON ae.id = ap.entry_id
+      LEFT JOIN sport_center.accounting_journals j ON j.payment_id = $1
+     WHERE (ap.source_type = 'sport_center' AND ap.source_doc_id = $1)
+        OR ae.source_payment_id = $1
+        OR (ae.source::text = 'sport_center_payment' AND ae.source_id = $1)
+  `, [paymentId]);
+  for (const row of rows.rows) {
+    if (row.accounting_payment_id != null) ownership.accountingPayments.add(Number(row.accounting_payment_id));
+    if (row.accounting_entry_id != null) ownership.accountingEntries.add(Number(row.accounting_entry_id));
+    if (row.journal_id != null) ownership.journals.add(Number(row.journal_id));
+  }
+  const journalIds = [...ownership.journals];
+  if (journalIds.length) {
+    const lines = await db.query(
+      "SELECT id FROM sport_center.accounting_journal_lines WHERE journal_id = ANY($1::int[])",
+      [journalIds],
+    );
+    for (const row of lines.rows) ownership.lines.add(Number(row.id));
   }
 }
 
@@ -115,13 +243,16 @@ async function main() {
   const setupDb = makeClient();
   await setupDb.connect();
   const fixtures = [];
+  const ownership = emptyOwnership();
   try {
-    await syncFixtureSequences(setupDb);
     const activation = new Date(Date.now() - 1000).toISOString();
     for (const [suffix, type] of [["FULL", "full_payment"], ["DP", "dp"], ["PELUNASAN", "pelunasan"], ["GROUP", "group_payment"]]) {
-      const fixture = await setup(setupDb, suffix, type);
+      const fixture = await allocateSafeSportCenterFixturePayment(setupDb, suffix, type, ownership);
       fixtures.push(fixture);
+      const refs = await findPaymentReferences(setupDb, fixture.paymentId, ownership);
+      assert(isSafeFixturePayment(refs), `pre-processing collision for ${fixture.paymentId}: ${JSON.stringify(refs)}`);
       await legacyPost(setupDb, fixture.paymentId);
+      await registerAccountingOwnership(setupDb, fixture.paymentId, ownership);
     }
     const ids = fixtures.map((fixture) => fixture.paymentId);
     const before = await financeSnapshot(setupDb, ids);
@@ -149,6 +280,7 @@ async function main() {
     assert(comparisons.rows.length === ids.length, "one comparison per payment");
     assert(comparisons.rows.every((row) => ["MATCH", "ALLOWED_DIFFERENCE"].includes(row.comparison_status)),
       `legacy comparisons not accepted: ${JSON.stringify(comparisons.rows)}`);
+    for (const row of comparisons.rows) ownership.comparisons.add(Number(row.id));
     assert(raceResults.filter((result) => result.claimed > 0).length === 1, "exactly one race claimant");
 
     const repeat = await observeSportCenterShadow({ client: setupDb, fixturePaymentIds: ids, shadowStartedAt: activation });
@@ -160,7 +292,7 @@ async function main() {
     `, [ids]);
     assert(Number(duplicateCount.rows[0].count) === ids.length, "comparison duplicates");
 
-    const old = await setup(setupDb, "BACKLOG", "full_payment");
+    const old = await allocateSafeSportCenterFixturePayment(setupDb, "BACKLOG", "full_payment", ownership);
     fixtures.push(old);
     await setupDb.query("UPDATE sport_center.sport_payments SET confirmed_at = NOW() - INTERVAL '2 days' WHERE id = $1", [old.paymentId]);
     const cutoff = await observeSportCenterShadow({ client: setupDb, fixturePaymentIds: [old.paymentId], shadowStartedAt: activation });
@@ -199,12 +331,20 @@ async function main() {
       const ids = fixtures.map((fixture) => fixture.paymentId);
       if (ids.length) {
         await setupDb.query("SET LOCAL session_replication_role = 'replica'");
-        await setupDb.query("DELETE FROM sport_center.shadow_observer_comparisons WHERE source_payment_id = ANY($1::int[])", [ids]);
-        await setupDb.query("DELETE FROM sport_center.payment_accounting_outbox WHERE payment_id = ANY($1::int[])", [ids]);
-        await setupDb.query("DELETE FROM sport_center.accounting_journal_lines WHERE journal_id IN (SELECT id FROM sport_center.accounting_journals WHERE payment_id = ANY($1::int[]))", [ids]);
-        await setupDb.query("DELETE FROM sport_center.accounting_journals WHERE payment_id = ANY($1::int[])", [ids]);
-        await setupDb.query("DELETE FROM sport_center.sport_payments WHERE id = ANY($1::int[])", [ids]);
-        await setupDb.query("DELETE FROM sport_center.sport_bookings WHERE id = ANY($1::int[])", [fixtures.map((fixture) => fixture.bookingId)]);
+         const deleteOwned = async (table, column, values) => {
+           if (values.size) await setupDb.query(
+             `DELETE FROM ${table} WHERE ${column} = ANY($1::int[])`,
+             [[...values]],
+           );
+         };
+         await deleteOwned("sport_center.shadow_observer_comparisons", "id", ownership.comparisons);
+         await deleteOwned("sport_center.payment_accounting_outbox", "id", ownership.outbox);
+         await deleteOwned("sport_center.accounting_journal_lines", "id", ownership.lines);
+         await deleteOwned("sport_center.accounting_journals", "id", ownership.journals);
+         await deleteOwned("public.accounting_payments", "id", ownership.accountingPayments);
+         await deleteOwned("public.accounting_entries", "id", ownership.accountingEntries);
+         await deleteOwned("sport_center.sport_payments", "id", ownership.payments);
+         await deleteOwned("sport_center.sport_bookings", "id", ownership.bookings);
       }
       await setupDb.query("COMMIT");
     } catch (error) {

@@ -7,7 +7,7 @@
 ## Final verdict
 
 ```text
-CF-SC-14A = BLOCKED — DEV GUARD PASS, LIVE LEGACY RUNTIME INCOMPATIBLE
+CF-SC-14A = BLOCKED — DEV LIVE PROOF ENVIRONMENT CREDENTIAL UNAVAILABLE
 SHADOW ACTIVATED = NO
 READY FOR CONTROLLED CENTRAL CUTOVER = NO
 ```
@@ -110,18 +110,25 @@ Supabase target, different DEV/PROD fingerprints, no selected PROD target, and
 the `CF-SC-14A` harness identity.
 
 The focused guard matrix passed 5/5 cases (canonical DEV allowed; safe mode,
-PROD target, unknown target, and missing environment rejected). The live run
-reached the managed DEV secret loader and database, but the legacy prerequisite
-was blocked by the existing runtime function contract:
+PROD target, unknown target, and missing environment rejected). The previous
+live attempt reached the managed DEV database and exposed a pre-existing
+legacy accounting identity collision. The posted row was preserved; the
+legacy idempotency guard was not weakened. The hardened harness now allocates
+a payment only after runtime-discovering and checking
+all payment identity surfaces. It retries a candidate up to 200 times and
+never resets shared sequences. The check covers numeric payment/source
+references, source-qualified legacy accounting references, and key-based bank
+mutation references. A candidate with any pre-existing reference is rolled
+back before legacy accounting is called.
 
-```text
-ACCOUNTING_IDEMPOTENCY_MISMATCH: payment=<fixture> accounting_payment=0 accounting_entry=<existing>
-```
+Every created row is recorded in an exact ownership registry (source,
+outbox, accounting, journal, line, comparison, settlement, mutation, and
+reconciliation IDs). Cleanup deletes only registry-owned IDs; it does not
+infer ownership from a payment ID and does not modify historical posted rows.
 
-The existing posted row was preserved. The harness now advances only the
-Sport Center booking/payment fixture sequences to avoid ID reuse after failed
-runs. Cleanup verification reported zero `CFSC14A_` payments, bookings, outbox
-rows, and shadow comparisons. No PROD configuration or data was changed.
+The live rerun could not reach the DEV database because the managed secret
+loader reported that `GCP_SECRET_MANAGER_BOOTSTRAP_JSON` is unavailable in
+this workspace. No PROD configuration or data was changed.
 
 ## Quality gates
 
@@ -134,7 +141,8 @@ rows, and shadow comparisons. No PROD configuration or data was changed.
 | Shadow boundary regression | PASS after adding the guard |
 | Git diff check | PASS |
 | Authorized DEV runtime guard | PASS — 5/5 focused cases |
-| DEV live shadow certification | BLOCKED — legacy runtime idempotency mismatch |
+| Fixture allocator regression | PASS — reused identity rejected; fresh identity allowed |
+| DEV live shadow certification | BLOCKED — DEV Secret Manager bootstrap unavailable |
 | Production readiness in legacy mode | PASS |
 
 ## Required next step
