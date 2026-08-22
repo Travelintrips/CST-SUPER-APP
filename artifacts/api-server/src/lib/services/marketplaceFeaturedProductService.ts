@@ -579,6 +579,11 @@ export async function approveFeaturedRequest(
   const approvedStartAt = opts.approvedStartAt ?? existing.requestedStartAt;
   const approvedEndAt = opts.approvedEndAt ?? existing.requestedEndAt;
   if (approvedEndAt <= approvedStartAt) throw new FeaturedProductError("Periode approved tidak valid");
+  const [pkg] = await db
+    .select({ price: mktFeaturedPackagesTable.price })
+    .from(mktFeaturedPackagesTable)
+    .where(eq(mktFeaturedPackagesTable.id, existing.packageId));
+  const isFreePackage = Number(pkg?.price ?? existing.price) === 0;
 
   const [row] = await db
     .update(mktFeaturedProductRequestsTable)
@@ -589,7 +594,9 @@ export async function approveFeaturedRequest(
       approvedBy: adminId,
       approvedAt: new Date(),
       adminNotes: opts.adminNotes ?? existing.adminNotes,
-      paymentStatus: opts.waivePayment ? "verified" : existing.paymentStatus,
+      // A free vendor package still requires the admin approval, but does not
+      // create a meaningless payment-proof step.
+      paymentStatus: opts.waivePayment || isFreePackage ? "verified" : existing.paymentStatus,
       updatedAt: new Date(),
     })
     .where(eq(mktFeaturedProductRequestsTable.id, id))
@@ -605,12 +612,19 @@ export async function approveFeaturedRequest(
   });
 
   await enqueueNotification({
-    eventType: opts.waivePayment ? "mkt_featured_approved_waived" : "mkt_featured_approved_awaiting_payment",
+    eventType: opts.waivePayment || isFreePackage ? "mkt_featured_approved_waived" : "mkt_featured_approved_awaiting_payment",
     recipientType: "vendor",
     recipientId: existing.vendorId,
     recipientPhone: await _vendorPhone(existing.vendorId),
     payloadJson: { requestId: id },
   });
+
+  // For the default free vendor package, approval is the only activation gate:
+  // before this point catalog.isFeatured remains false. Paid packages retain
+  // the existing payment verification + explicit activation flow.
+  if (isFreePackage || opts.waivePayment) {
+    return activateFeaturedProduct(id, adminId);
+  }
 
   return row;
 }

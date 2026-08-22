@@ -77,6 +77,29 @@ export async function runFeaturedProductMigration(): Promise<void> {
       )
       ON CONFLICT (code) DO NOTHING
     `);
+    // Keep one vendor-facing package available out of the box. Without a
+    // non-internal package the vendor UI has nothing to select and therefore
+    // cannot render the submit action. Admins can edit/deactivate this package
+    // or create additional paid packages from the admin screen.
+    await db.execute(sql`
+      INSERT INTO mkt_featured_packages (
+        code, name, description, duration_days, price, currency,
+        placement_type, priority_weight, internal_only, is_active
+      )
+      VALUES (
+        'VENDOR-30D',
+        'Produk Unggulan · 30 Hari',
+        'Paket default pengajuan Produk Unggulan vendor. Persetujuan admin diperlukan sebelum aktif.',
+        30,
+        0,
+        'IDR',
+        'homepage_top',
+        10,
+        FALSE,
+        TRUE
+      )
+      ON CONFLICT (code) DO NOTHING
+    `);
 
     // ── mkt_featured_product_requests ─────────────────────────────────────────
     await db.execute(sql`
