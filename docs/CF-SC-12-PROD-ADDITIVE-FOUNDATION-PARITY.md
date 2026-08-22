@@ -533,3 +533,44 @@ The remaining action is to repair or republish the managed
 flow, then rerun the official CF-SC-12C stage and its idempotent retry. The
 recovery runner must not be changed to parse around or bypass that loader
 failure.
+
+## CF-SC-12C-1 — managed production secret repair retry
+
+On 2026-08-22 the production bundle was audited through the approved
+Secret Manager client. The active version was `16`, with a 9,955-byte payload.
+The sanitized parser diagnostic found 72 raw CR/LF control characters inside
+JSON strings and one stray quote at raw offset `2625`; the root cause is
+`RAW_CONTROL_CHARACTER_IN_STRING` with adjacent structural corruption. No
+secret values were printed or persisted in the repository.
+
+The payload was repaired in memory only by removing that confirmed stray quote
+and JSON-escaping the raw control characters. The result was a single JSON
+object with 39 keys, no `_DEV` keys, no placeholder values, no duplicate
+top-level keys, and the production database project reference
+`nzdweipzckfszczzqtuw`. A new Secret Manager version was created through the
+official `addSecretVersion` path:
+
+```text
+secret = cst-super-app-production
+old version = 16
+new version = 17
+JSON parse = PASS
+official production loader = PASS
+```
+
+The direct validation and loader checks passed. The official CF-SC-12C runner
+was then invoked with `APP_ENV=production` and
+`SPORT_CENTER_FINANCE_MODE=legacy`. It failed closed before the startup stage
+because `SUPABASE_MIGRATION_URL` is absent from the repaired bundle and no
+approved existing source for that direct production URL was available. The
+runner's target-separation guard therefore rejected the pooler-only database
+URL; no migration stage, advisory lock, marker update, or business-finance
+write was performed by the runner.
+
+Historical Secret Manager versions could not be used for recovery: versions
+1–15 are unavailable, and the service account does not have
+`secretmanager.versions.list`. No older secret value was reconstructed or
+copied. The production marker consequently remains `FAILED`, production
+mode remains `legacy`, and readiness/CF-SC-12C certification are still
+`BLOCKED` pending an owner-approved direct migration URL in the production
+bundle followed by another official runner attempt.
