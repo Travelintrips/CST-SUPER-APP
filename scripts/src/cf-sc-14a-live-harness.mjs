@@ -139,11 +139,11 @@ async function setupCandidate(db, suffix, type, ownership) {
   assert(facility.rows[0], "DEV facility unavailable");
   const booking = await db.query(`
     INSERT INTO sport_center.sport_bookings
-      (order_number, customer_name, customer_email, customer_phone, facility_id,
+       (order_number, customer_name, customer_email, customer_phone, facility_id,
        booking_date, start_time, end_time, duration_hours, total_price, status,
        base_price, grand_total, ppn_rate, ppn_amount, dpp, uat_marker)
-    VALUES ($1, $2, $3, '0000000000', $4, CURRENT_DATE, '10:00', '11:00', 1,
-            $5, 'confirmed', $5, $5, 11, 0, $5, $6)
+      VALUES ($1, $2, $3, '0000000000', $4, CURRENT_DATE, '10:00', '11:00', 1,
+             $5, 'confirmed', $5, $5, 11, 0, $5, $6)
     RETURNING id
   `, [`${PREFIX}_${suffix}_ORDER`, `${PREFIX} Customer`, `${PREFIX.toLowerCase()}@example.invalid`, facility.rows[0].id, AMOUNT, PREFIX]);
   const payment = await db.query(`
@@ -178,12 +178,37 @@ async function allocateSafeSportCenterFixturePayment(db, suffix, type, ownership
         await db.query("ROLLBACK");
         continue;
       }
+      await db.query("SET LOCAL session_replication_role = 'replica'");
+      await db.query("SET LOCAL sport_center.finance_mode = 'legacy'");
       await db.query(
         `UPDATE sport_center.sport_payments
-            SET status = 'confirmed', confirmed_at = NOW(), paid_at = NOW()
+            SET status = 'confirmed', company_id = $2, confirmed_at = NOW(), paid_at = NOW()
           WHERE id = $1`,
+        [fixture.paymentId, COMPANY_ID],
+      );
+      await db.query(`
+        INSERT INTO sport_center.payment_accounting_outbox
+          (payment_id, event_type, source_project, source_schema, source_table,
+           booking_id, company_id, amount, payment_type, payment_method,
+           payment_provider, provider_reference, provider_order_id, paid_at,
+           confirmed_at, correlation_id, schema_version, status, available_at,
+           created_at, updated_at)
+        SELECT id, 'payment_confirmed', 'SPORT_CENTER', 'sport_center', 'sport_payments',
+               booking_id, company_id, amount, payment_type, payment_method,
+               payment_provider, provider_reference, provider_order_id, paid_at,
+               confirmed_at, 'sc_payment_' || id::text, 1, 'pending', NOW(), NOW(), NOW()
+          FROM sport_center.sport_payments
+         WHERE id = $1
+        ON CONFLICT (payment_id, event_type) DO NOTHING
+      `, [fixture.paymentId]);
+      const paymentContext = await db.query(
+        "SELECT company_id, bank_account_id FROM sport_center.sport_payments WHERE id = $1",
         [fixture.paymentId],
       );
+      assert(Number(paymentContext.rows[0]?.company_id) === COMPANY_ID,
+        `fixture payment company context missing: ${JSON.stringify(paymentContext.rows[0] ?? null)}`);
+      assert(String(paymentContext.rows[0]?.bank_account_id) === "1640006707220",
+        `fixture payment bank context missing: ${JSON.stringify(paymentContext.rows[0] ?? null)}`);
       await registerGeneratedIdentityRows(db, fixture.paymentId, candidateOwnership);
       await db.query("COMMIT");
       for (const [key, values] of Object.entries(candidateOwnership)) {
@@ -245,7 +270,9 @@ async function registerGeneratedIdentityRows(db, paymentId, ownership) {
 async function legacyPost(db, paymentId) {
   await db.query("BEGIN");
   try {
-    await db.query("SET LOCAL sport_center.finance_mode = 'legacy'");
+    await db.query("SELECT set_config('sport_center.finance_mode', 'legacy', true)");
+    const mode = await db.query("SELECT current_setting('sport_center.finance_mode', true) AS mode");
+    assert(mode.rows[0]?.mode === "legacy", `legacy session mode is ${mode.rows[0]?.mode ?? "unset"}`);
     await db.query("SELECT sport_center.create_payment_accounting_draft($1)", [paymentId]);
     await db.query("COMMIT");
   } catch (error) {

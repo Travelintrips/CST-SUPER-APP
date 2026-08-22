@@ -1496,6 +1496,7 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
         v_payment_method text;
         v_payment_provider text;
         v_payment_type text;
+        v_selected_bank_account_id integer;
 
         v_journal_date text;
     BEGIN
@@ -1697,6 +1698,13 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
             v_revenue_account_name := v_shared.revenue_coa_name;
             v_tax_account_code := v_shared.tax_output_coa_code;
             v_tax_account_name := v_shared.tax_output_coa_name;
+            v_selected_bank_account_id := v_shared.bank_account_id;
+        ELSE
+            v_selected_bank_account_id :=
+                sport_center.resolve_internal_bank_account_id(
+                    v_company_id,
+                    v_payment.bank_account_id::text
+                );
         END IF;
 
 
@@ -1891,10 +1899,7 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
             v_payment_method,
             v_payment_provider,
             v_payment_type,
-            CASE
-              WHEN v_finance_mode = 'central' THEN v_shared.bank_account_id
-              ELSE sport_center.resolve_internal_bank_account_id(v_company_id, v_payment.bank_account_id::text)
-            END,
+            v_selected_bank_account_id,
 
             v_gross,
             v_dpp,

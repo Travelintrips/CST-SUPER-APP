@@ -7,7 +7,7 @@
 ## Final verdict
 
 ```text
-CF-SC-14A = BLOCKED — DEV LIVE PROOF ENVIRONMENT CREDENTIAL UNAVAILABLE
+CF-SC-14A = BLOCKED — DEV RUNTIME FUNCTION REQUIRES MIGRATION APPLICATION
 SHADOW ACTIVATED = NO
 READY FOR CONTROLLED CENTRAL CUTOVER = NO
 ```
@@ -126,9 +126,14 @@ outbox, accounting, journal, line, comparison, settlement, mutation, and
 reconciliation IDs). Cleanup deletes only registry-owned IDs; it does not
 infer ownership from a payment ID and does not modify historical posted rows.
 
-The live rerun could not reach the DEV database because the managed secret
-loader reported that `GCP_SECRET_MANAGER_BOOTSTRAP_JSON` is unavailable in
-this workspace. No PROD configuration or data was changed.
+The live rerun reached DEV after the managed secret became available. Fixture
+allocation passed the collision checks, but the live legacy function failed
+with `record "v_shared" is not assigned yet` even though the same transaction
+verified `sport_center.finance_mode = 'legacy'`. The source migration now
+selects the bank-account scalar in the mode branch before the INSERT, avoiding
+the central-only record reference in the legacy path. The DEV runtime must
+apply that migration and then the full live matrix must be rerun. No PROD
+configuration or data was changed.
 
 ## Quality gates
 
@@ -142,7 +147,7 @@ this workspace. No PROD configuration or data was changed.
 | Git diff check | PASS |
 | Authorized DEV runtime guard | PASS — 5/5 focused cases |
 | Fixture allocator regression | PASS — reused identity rejected; fresh identity allowed |
-| DEV live shadow certification | BLOCKED — DEV Secret Manager bootstrap unavailable |
+| DEV live shadow certification | BLOCKED — DEV runtime needs updated migration |
 | Production readiness in legacy mode | PASS |
 
 ## Required next step
