@@ -657,3 +657,30 @@ No secret value, URL with credentials, marker, or production business data was
 changed by this retry. The required action remains to place the current
 authoritative runtime and migration connection values in the source consumed by
 the official production loader, then rerun both read-only authentication checks.
+
+## CF-SC-12C-3 retry after Supabase IPv4 enablement
+
+After the production Supabase IPv4 add-on was enabled, the same sanitized
+read-only checks were repeated through the official loader. The direct
+production host now exposes an IPv4 address, confirming that the network path
+is available from the workspace.
+
+```text
+RUNTIME HOST DNS = PASS (IPv4)
+RUNTIME DB AUTH = FAIL (28P01)
+MIGRATION HOST DNS = PASS (IPv4)
+MIGRATION DB AUTH = FAIL (28P01)
+OFFICIAL CF-SC-12C RETRY = NOT_REACHED
+SPORT_CENTER MARKER = FAILED / UNCHANGED
+MANUAL MARKER UPDATE = NO
+PROD MODE = LEGACY
+BUSINESS EFFECTS = 0
+CF-SC-12C-3 = BLOCKED
+```
+
+The remaining blocker is therefore an invalid or stale production database
+password in the connection values being supplied to the loader. Runtime and
+migration URLs must be copied from the current Supabase connection-string
+controls, using the exact pooler/runtime and direct/migration formats; the
+password must not be guessed or manually transformed. Both paths must pass
+read-only authentication before the official startup recovery can be retried.
