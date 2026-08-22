@@ -1,6 +1,6 @@
 # CF-SC-12 — PROD Additive Central Finance Foundation Parity
 
-**Date:** 2026-08-21  
+**Date:** 2026-08-22
 **Input gate:** CF-SC-11 PROD read-only parity = `BLOCKED`  
 **Scope:** additive foundation only; production must remain legacy
 
@@ -23,15 +23,14 @@ business identities, and performs a resolver proof in the same transaction.
 It does not process payments, settlements, reconciliation, provider calls, or
 notifications.
 
-The runner has been added to the codebase but has **not** been executed by this
-workspace session. Therefore the result below remains the historical
-pre-migration result until an explicitly authorized PROD run produces a
-read-only parity report and idempotency proof.
+The runner was executed only after the explicit CF-SC-12B APPLY brief authorized
+the production write. The historical discovery below is retained as audit
+context, but it is superseded by the execution evidence in the final section.
 
-## Final result
+## Historical pre-apply result
 
 ```text
-CF-SC-12 = BLOCKED
+CF-SC-12 = HISTORICAL BLOCKED
 PROD MODE BEFORE = LEGACY
 PROD MODE AFTER  = LEGACY
 CENTRAL PROCESSOR RUNS = 0
@@ -41,11 +40,10 @@ PROD WHATSAPP SENDS = 0
 PROD CUTOVER = NO
 PROD SHADOW ENABLED = NO
 LEGACY CLEANUP = NO
-READY FOR POST-MIGRATION PROD PARITY AUDIT = NO
+READY FOR POST-MIGRATION PROD PARITY AUDIT = SUPERSEDED
 ```
 
-The phase stopped before any production migration, schema change, function
-replacement, shared-config seed, or startup-marker update.
+That was the state before the later authorized CF-SC-12B APPLY run.
 
 ## Why the phase stopped
 
@@ -385,3 +383,87 @@ PROD WHATSAPP = 0
 PROD CUTOVER = NO
 LEGACY CLEANUP = NO
 ```
+
+## CF-SC-12B — authorized PROD execution evidence
+
+The guarded runner was executed twice on 2026-08-22 through the official
+production Secret Manager loader. Before both runs, the runner verified
+`APP_ENV=production`, `CF_SC_12B_APPLY=true`, the verified PROD Supabase project
+reference, a distinct pinned DEV project reference, and
+`SPORT_CENTER_FINANCE_MODE=legacy`.
+
+Both runs returned `status = PASS`. The second run is the idempotency proof.
+The generic DEV→PROD reconciler was not used.
+
+| Item | PROD result |
+|---|---|
+| Database | `postgres` |
+| PostgreSQL | `17.6` |
+| Finance mode | `legacy` |
+| Finance project config | ID `2`, `sport_center`, company `1` |
+| Tax rule | ID `8`, PPN Sport Center 11% output |
+| Revenue COA | ID `72354`, `4-1017-CST` |
+| Tax output COA | ID `49109`, `2-1020-CST` |
+| Receiving bank COA | ID `75590`, `1-1023-CST` |
+| MDR expense COA | ID `75594`, `5-3050-CST` |
+| QRIS payment config | ID `2`, `mandiri_direct`, IDR, MDR `0.003`, T+1 |
+| Resolver identity | `sport_center:2:2:1:1:1` |
+
+The five shared-finance foundation relations, processing constraints, canonical
+settlement FK/indexes, and required owner routine signatures passed read-only
+post-apply inspection. The official read-only canonical settlement preflight
+also returned `PREFLIGHT: PASS`. Current processing rows remain `0`.
+
+The migration reported and enforced:
+
+```text
+CENTRAL PROCESSOR RUNS = 0
+PAYMENT WRITES = 0
+ACCOUNTING WRITES = 0
+SETTLEMENT PROCESSING = 0
+PAYLABS CALLS = 0
+WHATSAPP SENDS = 0
+PROD CUTOVER = NO
+LEGACY CLEANUP = NO
+```
+
+### Startup and readiness boundary
+
+The restarted development API passed its readiness check:
+
+```text
+GET /api/health/ready = HTTP 200
+ready = true
+customer_portal_ready = true
+sport_center_ready = true
+failed_stage = null
+```
+
+The PROD `startup_migration_state` still contains a pre-existing failed
+`sport_center` marker whose error names the old missing
+`sport_center.coa_accounts` identity. It was not manually advanced, because this
+targeted runner is intentionally outside normal startup and must not claim a
+general startup-stage completion. The current PROD foundation and canonical
+preflight are PASS, while the separate PROD startup-marker gate remains
+`BLOCKED` pending an approved normal-startup validation.
+
+### Final CF-SC-12B report
+
+```text
+CF-SC-12B TARGETED FOUNDATION = PASS
+PROD/DEV SEPARATION = PASS
+PROD MODE = LEGACY
+IDEMPOTENCY (SECOND RUN) = PASS
+READ-ONLY PARITY = PASS
+CANONICAL PREFLIGHT = PASS
+STARTUP MARKER GATE = BLOCKED (not manually advanced)
+DEV API READINESS = PASS
+PROD PAYMENT/SETTLEMENT PROCESSING = 0
+PROD CUTOVER = NO
+READY FOR CENTRAL FINANCE PROCESSING = NO
+```
+
+The last line is intentional: CF-SC-12B provisions the shared foundation only;
+it does not authorize central-mode cutover or payment processing. The separate
+startup-marker gate must be resolved before claiming end-to-end startup
+certification.

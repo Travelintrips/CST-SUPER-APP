@@ -19,6 +19,24 @@ credentials. If the shell cannot see the bootstrap credential, do not work
 around the loader or copy DEV objects to PROD; report the live proof as blocked
 until the managed credential is available.
 
+The targeted PROD runner must commit its own additive DDL before invoking the
+bundled owner routine, because the owner uses a separate Drizzle connection.
+Otherwise the owner can self-block on locks held by the runner's uncommitted
+transaction. PROD snapshots may also retain an empty legacy
+`sport_center.coa_accounts` table while the verified canonical identity lives in
+`public.chart_of_accounts`; the owner repair must accept that exact public
+identity without creating a legacy duplicate.
+
+**Why:** PostgreSQL transactions and pooled application connections are
+session-scoped; an outer runner transaction cannot safely wrap a routine that
+opens another connection. Historical PROD schema variants also make legacy
+table presence insufficient evidence of the canonical COA.
+
+**How to apply:** Keep additive DDL and owner installation in separate phases,
+then seed/prove shared configuration in a new transaction. Resolve the public
+COA only by exact ID, code, name, company, active, postable, and non-header
+checks.
+
 The environment-specific bundles can supply the DEV and PROD database targets
 without exposing direct URLs in the shell. The canonical preflight reports the
 six routines as structural PASS in both environments, but exits with status 2
