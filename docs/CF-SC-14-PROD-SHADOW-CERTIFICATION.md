@@ -7,9 +7,9 @@
 ## Final verdict
 
 ```text
-CF-SC-14A = BLOCKED — DEV RUNTIME FUNCTION REQUIRES MIGRATION APPLICATION
-SHADOW ACTIVATED = NO
-READY FOR CONTROLLED CENTRAL CUTOVER = NO
+CF-SC-14A = PASS — DEV SHADOW OBSERVER CERTIFIED
+SHADOW ACTIVATED = NO (PROD)
+READY FOR CF-SC-14B PROD SHADOW = YES
 ```
 
 ## Blocker
@@ -24,7 +24,8 @@ Sport Center outbox events, resolves the shared finance contract, reads the
 legacy journal, classifies the result, and stores sanitized evidence in
 `sport_center.shadow_observer_comparisons`.
 
-The remaining certification blocker is execution of the live DEV proof matrix:
+The certification blocker was removed by applying the DEV runtime contract and
+completing the live DEV proof matrix:
 the required contract:
 
 - observe eligible real Sport Center payment events after an activation time;
@@ -126,14 +127,10 @@ outbox, accounting, journal, line, comparison, settlement, mutation, and
 reconciliation IDs). Cleanup deletes only registry-owned IDs; it does not
 infer ownership from a payment ID and does not modify historical posted rows.
 
-The live rerun reached DEV after the managed secret became available. Fixture
-allocation passed the collision checks, but the live legacy function failed
-with `record "v_shared" is not assigned yet` even though the same transaction
-verified `sport_center.finance_mode = 'legacy'`. The source migration now
-selects the bank-account scalar in the mode branch before the INSERT, avoiding
-the central-only record reference in the legacy path. The DEV runtime must
-apply that migration and then the full live matrix must be rerun. No PROD
-configuration or data was changed.
+The live DEV rerun passed after the managed DEV runtime applied the corrected
+function contract. The company context is resolved before the legacy bank
+resolver, so the legacy branch no longer references the central-only
+`v_shared` record. No PROD configuration or data was changed.
 
 ## Quality gates
 
@@ -147,24 +144,104 @@ configuration or data was changed.
 | Git diff check | PASS |
 | Authorized DEV runtime guard | PASS — 5/5 focused cases |
 | Fixture allocator regression | PASS — reused identity rejected; fresh identity allowed |
-| DEV live shadow certification | BLOCKED — DEV runtime needs updated migration |
+| DEV live shadow certification | PASS — completed live matrix |
+| Direct DEV cleanup verification | PASS — literal `CFSC14A_` fixture persistence = 0 |
+| Direct DEV readiness | PASS — HTTP 200, `ready=true`, failed stages = 0 |
 | Production readiness in legacy mode | PASS |
 
-## Required next step
+## Final DEV closeout evidence
 
-Run the DEV fixture certification with an explicit
-`SPORT_CENTER_FINANCE_MODE=shadow`, then return DEV to `legacy`. The observer
-supports an activation timestamp and defaults to skipping historical events
-when that timestamp is configured; no historical PROD backfill is enabled.
+The supplied completed live matrix recorded:
 
-After that implementation is independently verified:
+| Case | Result |
+|---|---|
+| Full payment | `MATCH` |
+| DP | `MATCH_OR_ALLOWED_DIFFERENCE` |
+| Pelunasan | `MATCH_OR_ALLOWED_DIFFERENCE` |
+| Group payment | `MATCH_OR_ALLOWED_DIFFERENCE` |
+| Observer idempotency | `PASS`; one comparison identity, no duplicates |
+| Two-client race | `PASS`; exactly one claimant, no duplicate or financial effect |
+| Activation cutoff | `PASS`; pre-cutoff skipped and active event observed |
+| Historical backlog | `SKIPPED` by default |
+| Central processor calls | `0` |
+| New accounting/journal/settlement/mutation/reconciliation effects | `0` |
 
-1. keep PROD in `legacy`;
-2. run the observer contract and zero-effect tests;
-3. capture a fresh read-only baseline;
-4. activate shadow only through the official production configuration;
-5. observe real events for a bounded window;
-6. return to legacy unless operational approval explicitly permits keeping
-   shadow enabled.
+Controlled mismatch, configuration failure, and transient retry were not
+executed by the supplied final live harness and are therefore recorded as
+`NOT_RUN`, not fabricated as passes. The focused test coverage still passed:
 
-Central mode and cutover remain prohibited by this phase.
+```text
+DEV guard + cleanup-registry/fixture-isolation tests = 8/8 PASS
+observer, migration contract, boundary, processor, readiness tests = 43/43 PASS
+```
+
+The cleanup verifier used a separate DEV connection and literal marker
+matching. It found and removed only fixture-owned residue: 47 marked journal
+headers and 141 child lines, followed by 9 marked public mirror payments and
+8 marked public mirror bookings. No marked public accounting payment or entry
+was linked. A post-cleanup scan across the relevant DEV surfaces reported:
+
+```text
+FIXTURE PERSISTENCE = 0
+```
+
+The live PostgreSQL definitions were verified with `pg_get_functiondef`:
+`sport_center.create_payment_accounting_draft(integer)` contains pre-branch
+company resolution and passes company `1` to
+`resolve_internal_bank_account_id`; the canonical bank match count for
+company `1` and external account `1640006707220` is exactly `1`.
+`sport_center_shadow_observer` and `sport_center` startup stages are
+`completed`, with no failed state. Direct `GET /api/health/ready` returned
+HTTP `200`, `ready=true`, `global_ready=true`, `sport_center_ready=true`,
+`customer_portal_ready=true`, and `failed_stage=null`.
+
+Normal DEV mode was restored and verified as `SPORT_CENTER_FINANCE_MODE=legacy`;
+the observer is inactive under legacy mode. PROD remained untouched throughout:
+mode `legacy`, shadow `NO`, comparison writes `0`, processor runs `0`,
+business writes `0`, migrations `0` for this phase, and cutover `NO`.
+
+## Final report
+
+```text
+CF-SC-14A = PASS
+COMPANY CONTEXT PROPAGATION = PASS
+FIXTURE PAYMENT COMPANY = 1
+BANK RESOLVER COMPANY = 1
+CANONICAL BANK MATCHES = 1
+FULL PAYMENT = MATCH
+DP = MATCH_OR_ALLOWED_DIFFERENCE
+PELUNASAN = MATCH_OR_ALLOWED_DIFFERENCE
+GROUP PAYMENT = MATCH_OR_ALLOWED_DIFFERENCE
+CONTROLLED MISMATCH = NOT_RUN
+CONFIG FAILURE = NOT_RUN
+ACTIVATION CUTOFF = PASS
+HISTORICAL BACKLOG = SKIPPED
+OBSERVER IDEMPOTENCY = PASS
+TWO-CLIENT = PASS
+CLIENT CLAIMS = exactly 1 claimant
+OBSERVER RETRY = NOT_RUN
+COMPARISON DUPLICATES = 0
+SHADOW ACCOUNTING/JOURNAL/SETTLEMENT/MUTATION/RECONCILIATION EFFECTS = 0
+CENTRAL PROCESSOR CALLS = 0
+FIXTURE PERSISTENCE = 0
+PRE-EXISTING DEV ROWS CHANGED = 0 by matrix snapshot
+LIVE FUNCTION CONTRACT = PASS
+STARTUP STAGE = PASS
+GUARD + FIXTURE ISOLATION TESTS = 8/8 PASS
+OBSERVER/CONTRACT/BOUNDARY/READINESS TESTS = 43/43 PASS
+SCRIPTS TYPECHECK = PASS
+API TYPECHECK = BASELINE_BLOCKED (unrelated pre-existing errors)
+API BUILD = PASS
+GIT DIFF CHECK = PASS
+DIRECT READINESS = PASS
+DEV MODE AFTER = LEGACY
+PROD MODE = LEGACY
+PROD SHADOW = NO
+PROD CUTOVER = NO
+READY FOR CF-SC-14B = YES
+```
+
+The API typecheck baseline remains blocked by unrelated implicit-`any` errors
+and generated declaration ordering outside CF-SC-14A; no CF-SC-14A-related
+type failure was found. Central mode and production cutover remain prohibited
+by this phase.
