@@ -393,6 +393,10 @@ export async function requireActiveVendor(req: Request, res: Response, next: Nex
     res.status(401).json({ message: "Unauthorized" });
     return;
   }
+  if ((req as PortalAuthReq).portalRole !== "vendor") {
+    res.status(403).json({ message: "Akses vendor diperlukan" });
+    return;
+  }
   try {
     const [up] = await db
       .select({ status: userProfilesTable.status })
