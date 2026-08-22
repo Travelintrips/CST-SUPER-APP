@@ -903,12 +903,68 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
     `));
   } catch { /* already exists */ }
 
-  // Dedup taxes: keep min(id) per (kind, company_id)
+  // Dedup taxes: keep min(id) per (kind, company_id), preserving the
+  // transaction_taxes foreign key.  A legacy duplicate can already be used by
+  // transaction history, so deleting it directly violates the FK.  If both
+  // rows are attached to the same transaction, retain the canonical assignment
+  // once; otherwise move the reference before deleting the duplicate tax row.
   await db.execute(sql`
-    DELETE FROM accounting_taxes
-    WHERE id NOT IN (
-      SELECT MIN(id) FROM accounting_taxes GROUP BY kind, COALESCE(company_id, 0)
+    WITH duplicate_taxes AS (
+      SELECT
+        id AS loser_id,
+        MIN(id) OVER (
+          PARTITION BY kind, COALESCE(company_id, 0)
+        ) AS keep_id
+      FROM accounting_taxes
+    ),
+    conflicting_transactions AS (
+      SELECT DISTINCT
+        tt.transaction_type,
+        tt.transaction_id,
+        d.loser_id,
+        d.keep_id
+      FROM transaction_taxes tt
+      JOIN duplicate_taxes d ON d.loser_id = tt.tax_id
+      WHERE d.loser_id <> d.keep_id
+        AND EXISTS (
+          SELECT 1
+          FROM transaction_taxes existing
+          WHERE existing.transaction_type = tt.transaction_type
+            AND existing.transaction_id = tt.transaction_id
+            AND existing.tax_id = d.keep_id
+        )
     )
+    DELETE FROM transaction_taxes tt
+    USING conflicting_transactions c
+    WHERE tt.transaction_type = c.transaction_type
+      AND tt.transaction_id = c.transaction_id
+      AND tt.tax_id = c.loser_id;
+
+    WITH duplicate_taxes AS (
+      SELECT
+        id AS loser_id,
+        MIN(id) OVER (
+          PARTITION BY kind, COALESCE(company_id, 0)
+        ) AS keep_id
+      FROM accounting_taxes
+    )
+    UPDATE transaction_taxes tt
+    SET tax_id = d.keep_id
+    FROM duplicate_taxes d
+    WHERE tt.tax_id = d.loser_id
+      AND d.loser_id <> d.keep_id;
+
+    DELETE FROM accounting_taxes tax
+    USING (
+      SELECT
+        id AS loser_id,
+        MIN(id) OVER (
+          PARTITION BY kind, COALESCE(company_id, 0)
+        ) AS keep_id
+      FROM accounting_taxes
+    ) d
+    WHERE tax.id = d.loser_id
+      AND d.loser_id <> d.keep_id;
   `);
 
   // Assign existing taxes with null company_id to company 1
