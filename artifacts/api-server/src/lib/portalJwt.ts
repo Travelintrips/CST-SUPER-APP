@@ -3,10 +3,14 @@ import { SignJWT, jwtVerify } from "jose";
 // Lazy — only throws when the JWT is actually used, NOT at module load.
 // Prevents API server crash-loop when PORTAL_JWT_SECRET is not set in dev.
 function getSecret(): Uint8Array {
-  const raw = process.env.PORTAL_JWT_SECRET;
+  // Production bundles historically provide SESSION_SECRET (the required
+  // canonical signing secret) but may not contain a separate
+  // PORTAL_JWT_SECRET. Keep the dedicated key preferred while allowing the
+  // canonical secret to keep portal login functional across old bundles.
+  const raw = process.env.PORTAL_JWT_SECRET ?? process.env.SESSION_SECRET;
   if (!raw) {
     throw new Error(
-      "Portal JWT secret not configured. Set PORTAL_JWT_SECRET environment variable."
+      "Portal JWT secret not configured. Set PORTAL_JWT_SECRET or SESSION_SECRET environment variable."
     );
   }
   return new TextEncoder().encode(raw);
