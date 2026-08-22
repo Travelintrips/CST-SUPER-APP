@@ -52,4 +52,9 @@ describe("Sport Center shadow observer contract", () => {
     expect(observer).toContain("expected_net_settlement");
     expect(observer).toContain("actual_net_settlement");
   });
+
+  it("reads the canonical payment_provider column", () => {
+    expect(observer).toContain("payment_provider::text");
+    expect(observer).not.toContain("provider_code::text");
+  });
 });

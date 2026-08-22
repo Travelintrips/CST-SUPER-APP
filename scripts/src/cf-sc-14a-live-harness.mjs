@@ -2,6 +2,7 @@
 import pg from "pg";
 import { assertAuthorizedDevRuntimeProof } from "../runtime-db-guard.mjs";
 import { isSafeFixturePayment, MAX_ALLOCATION_ATTEMPTS } from "./cf-sc-14a-fixture-isolation.mjs";
+import { observeSportCenterShadow } from "../../artifacts/api-server/src/lib/sportCenterShadowObserver.ts";
 
 const { Client } = pg;
 const PREFIX = `CFSC14A_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -62,8 +63,8 @@ async function discoverPaymentIdentitySurfaces(db) {
       FROM information_schema.columns c
      WHERE c.table_schema IN ('public', 'sport_center')
        AND c.column_name IN
-         ('payment_id', 'source_payment_id', 'source_doc_id', 'sc_payment_id',
-          'source_id', 'mutation_key', 'canonical_key')
+          ('payment_id', 'source_payment_id', 'source_doc_id', 'sc_payment_id',
+           'source_id', 'candidate_id', 'mutation_key', 'canonical_key')
        AND EXISTS (
          SELECT 1 FROM information_schema.columns i
           WHERE i.table_schema = c.table_schema
@@ -322,7 +323,8 @@ async function financeSnapshot(db, ids) {
       (SELECT COUNT(*)::int FROM sport_center.bank_mutations
        WHERE canonical_key = ANY(SELECT 'sport_center:payment:' || x::text FROM unnest($1::int[]) x)) AS sport_mutations,
        (SELECT COUNT(*)::int FROM public.bank_reconciliation_matches
-       WHERE source_id::text = ANY(SELECT x::text FROM unnest($1::int[]) x)) AS reconciliations
+        WHERE candidate_type = 'sport_payment'
+          AND candidate_id = ANY($1::int[])) AS reconciliations
   `, [ids]);
   return Object.fromEntries(Object.entries(result.rows[0]).map(([key, value]) => [key, Number(value)]));
 }
@@ -360,7 +362,6 @@ async function main() {
     let raceResults;
     try {
       raceResults = await Promise.all(clients.map(async (client) => {
-        const { observeSportCenterShadow } = await import("../../artifacts/api-server/src/lib/sportCenterShadowObserver.ts");
         return observeSportCenterShadow({ client, fixturePaymentIds: ids, shadowStartedAt: activation });
       }));
     } finally {
@@ -370,7 +371,12 @@ async function main() {
     const after = await financeSnapshot(setupDb, ids);
     assertUnchanged(before, after, "observer zero-effect");
     const comparisons = await setupDb.query(`
-      SELECT source_payment_id, comparison_status, comparison_evidence
+       SELECT id, source_payment_id, comparison_status, comparison_evidence, last_error,
+              expected_revenue_coa, actual_revenue_coa,
+              expected_tax_output_coa, actual_tax_output_coa,
+              expected_bank_coa, actual_bank_coa,
+              expected_mdr, actual_mdr,
+              expected_net_settlement, actual_net_settlement
         FROM sport_center.shadow_observer_comparisons
        WHERE project_code = 'sport_center' AND source_payment_id = ANY($1::int[])
        ORDER BY source_payment_id

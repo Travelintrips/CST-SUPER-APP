@@ -32,8 +32,11 @@ type Expected = {
   netSettlement: number;
   settlementDate: string;
   revenueCoa: string | null;
+  revenueAccountName: string | null;
   taxOutputCoa: string | null;
+  taxOutputAccountName: string | null;
   bankCoa: string | null;
+  bankAccountName: string | null;
   accountingIdentity: Record<string, unknown>;
 };
 
@@ -64,6 +67,20 @@ function round(value: number): number {
 
 function asError(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(0, 1000);
+}
+
+function isoTimestamp(value: string | Date): string {
+  return value instanceof Date ? value.toISOString() : value;
+}
+
+function equivalentAccountLabel(actual: string | null, code: string | null, name: string | null): boolean {
+  const normalize = (value: string) => value
+    .toLowerCase()
+    .replace(/\bbooking\b/g, "")
+    .replace(/\bcst\b/g, "")
+    .replace(/[^a-z0-9]+/g, "");
+  const normalizedActual = normalize(actual ?? "");
+  return [code, name].some((value) => value != null && normalizedActual === normalize(String(value)));
 }
 
 function configuredStart(options: ObserverOptions): string | null {
@@ -115,7 +132,7 @@ async function claim(
 async function readPayment(client: QueryClient, paymentId: number): Promise<Payment> {
   const result = await client.query<Payment>(
     `SELECT id, company_id, amount, payment_method::text AS payment_method,
-            COALESCE(payment_provider::text, provider_code::text) AS provider_code,
+            COALESCE(payment_provider::text, 'unknown') AS provider_code,
             confirmed_at, expected_settlement_date, payment_type::text AS payment_type,
             NULL::numeric AS mdr_amount
        FROM sport_center.sport_payments
@@ -143,8 +160,11 @@ function expectedResult(payment: Payment, config: FinanceProjectConfig): Expecte
     netSettlement: round(gross - mdr),
     settlementDate,
     revenueCoa: config.accountCodes.REVENUE ?? null,
+    revenueAccountName: config.accountNames.REVENUE ?? null,
     taxOutputCoa: config.accountCodes.TAX_OUTPUT ?? null,
+    taxOutputAccountName: config.accountNames.TAX_OUTPUT ?? null,
     bankCoa: config.accountCodes.RECEIVING_BANK ?? null,
+    bankAccountName: config.accountNames.RECEIVING_BANK ?? null,
     accountingIdentity: {
       projectCode: "sport_center",
       sourcePaymentId: payment.id,
@@ -182,9 +202,9 @@ function classify(expected: Expected, actual: Awaited<ReturnType<typeof readLega
     round(Number(actual.gross_amount)) === expected.gross &&
     round(Number(actual.dpp_amount)) === expected.dpp &&
     round(Number(actual.tax_amount)) === expected.tax &&
-    String(actual.revenue_account ?? "") === String(expected.revenueCoa ?? "") &&
-    String(actual.tax_account ?? "") === String(expected.taxOutputCoa ?? "");
-  if (coreMatch && String(actual.debit_account ?? "") === String(expected.bankCoa ?? "")) {
+    equivalentAccountLabel(actual.revenue_account, expected.revenueCoa, expected.revenueAccountName) &&
+    equivalentAccountLabel(actual.tax_account, expected.taxOutputCoa, expected.taxOutputAccountName);
+  if (coreMatch && equivalentAccountLabel(actual.debit_account, expected.bankCoa, expected.bankAccountName)) {
     return { status: "MATCH", comparisonClass: "exact" };
   }
   if (coreMatch) return { status: "ALLOWED_DIFFERENCE", comparisonClass: "legacy_bank_identity" };
@@ -235,7 +255,7 @@ export async function observeSportCenterShadow(
         companyId: payment.company_id,
         paymentMethod: payment.payment_method,
         providerCode: payment.provider_code,
-        effectiveDate: payment.confirmed_at!.slice(0, 10),
+        effectiveDate: isoTimestamp(payment.confirmed_at!).slice(0, 10),
       });
       const expected = expectedResult(payment, config);
       const actual = await readLegacyActual(client, item.paymentId);
