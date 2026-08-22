@@ -10,6 +10,7 @@
 CF-SC-14A = PASS — DEV SHADOW OBSERVER CERTIFIED
 SHADOW ACTIVATED = NO (PROD)
 READY FOR CF-SC-14B PROD SHADOW = YES
+CF-SC-14B DEPLOYMENT GATE = BLOCKED — PRODUCTION READINESS FAILED
 ```
 
 ## Blocker
@@ -147,7 +148,8 @@ resolver, so the legacy branch no longer references the central-only
 | DEV live shadow certification | PASS — completed live matrix |
 | Direct DEV cleanup verification | PASS — literal `CFSC14A_` fixture persistence = 0 |
 | Direct DEV readiness | PASS — HTTP 200, `ready=true`, failed stages = 0 |
-| Production readiness in legacy mode | PASS |
+| Production deployment | PRESENT, but startup gate failed |
+| Production readiness in legacy mode | BLOCKED — `ready=false` |
 
 ## Final DEV closeout evidence
 
@@ -200,6 +202,38 @@ the observer is inactive under legacy mode. PROD remained untouched throughout:
 mode `legacy`, shadow `NO`, comparison writes `0`, processor runs `0`,
 business writes `0`, migrations `0` for this phase, and cutover `NO`.
 
+## CF-SC-14B deployment-gate attempt
+
+The official publish path produced a deployed public URL and a successful
+deployment build, but the production runtime did not become ready. The new
+instance started at `2026-08-22T15:31:52Z` and failed at the critical
+`accounting_defaults_seed` startup stage while waiting for the
+`startup-migration:accounting_defaults_seed` advisory lock. The live readiness
+contract remained:
+
+```text
+HTTP 200
+ready = false
+global_ready = false
+sport_center_ready = true
+customer_portal_ready = true
+failed_stage = Accounting defaults seed
+startup completed stages = 119 / 126
+```
+
+Read-only production database inspection confirmed the production loader passed
+and the PROD target was reached without a DEV fallback. An older idle backend
+session, started at `2026-08-22T15:15:08Z`, held the stage advisory lock; the
+new deployment made 79 unsuccessful lock attempts. No backend was terminated,
+no registry marker was manually advanced, and no production business data was
+written by this verification.
+
+The deployed `/api/healthz` revision was
+`47b97963ff9623644a4507591c36d49a23470ea6`, while the frozen workspace HEAD
+was `a26e91634cdd1e95a41ce0570fc28a8ddf44b52b`; therefore the certified-revision
+match was not proven. Shadow activation was not reached, and Central mode and
+cutover remained disabled.
+
 ## Final report
 
 ```text
@@ -239,6 +273,26 @@ PROD MODE = LEGACY
 PROD SHADOW = NO
 PROD CUTOVER = NO
 READY FOR CF-SC-14B = YES
+CF-SC-14B DEPLOYMENT GATE = BLOCKED
+DEPLOYED REVISION MATCH = NOT_PROVEN
+PRODUCTION URL = AVAILABLE
+PROD LOADER = PASS
+PROD DB TARGET = PASS
+STARTUP = FAIL — accounting defaults seed advisory-lock timeout
+STARTUP FAILED STAGES = 1
+SHADOW COMPARISON STORAGE = NOT_VERIFIED
+READINESS = FAIL
+SPORT CENTER READY = YES
+CUSTOMER PORTAL READY = YES
+PROD MODE BEFORE SHADOW = NOT_VERIFIED
+DEPLOYMENT CENTRAL PROCESSOR RUNS = 0 observed
+DEPLOYMENT BUSINESS EFFECTS = 0 observed
+SHADOW ACTIVATION = NOT_REACHED
+OBSERVED REAL PAYMENTS = NOT_REACHED
+CENTRAL CUTOVER = NO
+CF-SC-14B = BLOCKED
+READY FOR CF-SC-15 = NO
+BLOCKERS = production startup migration lock holder; readiness false; deployed revision does not match certified workspace SHA
 ```
 
 The API typecheck baseline remains blocked by unrelated implicit-`any` errors
