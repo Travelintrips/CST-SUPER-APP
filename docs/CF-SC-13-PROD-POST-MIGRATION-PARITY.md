@@ -11,6 +11,25 @@ CF-SC-13 = BLOCKED
 READY FOR SHADOW ASSESSMENT = NO
 ```
 
+### Latest recheck
+
+On the latest read-only retry, both DEV and PROD stopped in the official
+Secret Manager loader before database access:
+
+```text
+bundle mode = legacy
+secret resource = sport-center
+result = PERMISSION_DENIED
+permission = secretmanager.versions.access
+```
+
+This replaces the previous PROD `28P01` observation as the current blocker.
+No database connection or business-finance operation was reached in this
+retry. The required repair is to grant the bootstrap service account
+`Secret Manager Secret Accessor` access to the selected legacy secret, or
+complete the canonical per-environment bundle setup and remove the legacy
+selectors only after validation succeeds.
+
 The official loader is now available through the legacy bundle selectors, and
 the development audit completed. Production certification is still blocked
 because the authoritative production Supabase runtime connection fails
