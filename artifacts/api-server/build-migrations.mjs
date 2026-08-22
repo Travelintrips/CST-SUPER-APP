@@ -18,6 +18,7 @@ await esbuild({
     path.resolve(artifactDir, "src/run-dev-migrations.ts"),
     path.resolve(artifactDir, "src/run-canonical-contract-migration.ts"),
     path.resolve(artifactDir, "src/run-cf-sc-12b-owner.ts"),
+    path.resolve(artifactDir, "src/run-cf-sc-12c-startup.ts"),
   ],
   platform: "node",
   target: "node20",

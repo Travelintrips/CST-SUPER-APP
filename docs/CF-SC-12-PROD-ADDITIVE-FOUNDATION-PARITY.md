@@ -467,3 +467,69 @@ The last line is intentional: CF-SC-12B provisions the shared foundation only;
 it does not authorize central-mode cutover or payment processing. The separate
 startup-marker gate must be resolved before claiming end-to-end startup
 certification.
+
+## CF-SC-12C — official startup marker recovery
+
+CF-SC-12C was authorized to retry the actual `Sport Center migration` startup
+stage while preserving legacy mode and without manually updating
+`startup_migration_state`. The current source version is stage version `1`;
+the failed PROD marker is therefore not being bypassed by a version bump.
+
+The recovery entry delegates marker ownership to the repository's
+`runStartupMigrationStage` mechanism and invokes `runSportCenterMigration`.
+Because the nested Sport Center bootstrap is already complete, the normal
+startup contract can skip broad legacy replay and only validate the stage.
+No direct `UPDATE startup_migration_state` was added or executed.
+
+The first and second build attempts exposed only source import mistakes and
+stopped before PROD access; those were corrected. The recovery build then
+succeeded, but both authorized execution attempts stopped in the official
+production Secret Manager loader:
+
+```text
+Secret payload is not a valid JSON object:
+Bad control character in string literal in JSON at position 250
+```
+
+This is a managed production-secret payload failure, not a startup-stage or
+database failure. The loader had succeeded earlier for CF-SC-12B, but the
+current retry returned the same error twice. No production connection was
+opened by CF-SC-12C, no advisory lock was acquired, and no marker or business
+data was changed. The existing PROD marker remains:
+
+```text
+stage_name = sport_center
+status = failed
+last_error = historical missing sport_center.coa_accounts identity
+```
+
+```text
+CF-SC-12C = BLOCKED
+PROD MODE BEFORE = LEGACY
+PROD MODE AFTER = NOT REACHED; remains LEGACY
+HISTORICAL FAILURE CONDITION = RESOLVED by CF-SC-12B foundation/COA proof
+SPORT_CENTER MARKER BEFORE = FAILED
+SPORT_CENTER MARKER AFTER = UNCHANGED FAILED
+CANONICAL FINANCE MARKER = NOT REQUIRED
+MARKER SOURCE = OFFICIAL STARTUP PATH NOT REACHED
+MANUAL MARKER UPDATE = NO
+ADVISORY LOCK = NOT ACQUIRED
+STARTUP IDEMPOTENT = NOT REACHED
+CONFIG RESOLUTION = PASS from CF-SC-12B
+RESOLVER = PASS
+SETTLEMENT PREFLIGHT = PASS
+PROCESSING ROWS CREATED = 0
+PROD PAYMENT WRITES = 0
+PROD ACCOUNTING WRITES = 0
+PROD SETTLEMENT PROCESSING = 0
+PROD MUTATION BUSINESS EFFECTS = 0
+PAYLABS CALLS = 0
+WHATSAPP SENDS = 0
+CF-SC-12 COMPLETE = NO
+```
+
+The remaining action is to repair or republish the managed
+`cst-super-app-production` Secret Manager JSON through the approved secrets
+flow, then rerun the official CF-SC-12C stage and its idempotent retry. The
+recovery runner must not be changed to parse around or bypass that loader
+failure.
