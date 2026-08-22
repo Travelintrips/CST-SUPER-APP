@@ -302,12 +302,20 @@ export function shadowObserverZeroEffectContract(): readonly string[] {
 
 export function startSportCenterShadowObserver(): void {
   if (getSportCenterFinanceMode() !== "shadow") return;
+  // A shadow window must always have a real activation cutoff. Without an
+  // explicit timestamp, treating the cutoff as null would replay every
+  // historical payment on the first tick. Capture the process activation
+  // time once and reuse it for every retry in this window.
+  const activationTimestamp = configuredStart({}) ?? new Date().toISOString();
   const tick = async () => {
     const db = getPool();
     if (!db) return;
     const client = await db.connect();
     try {
-      await observeSportCenterShadow({ client });
+      await observeSportCenterShadow({
+        client,
+        shadowStartedAt: activationTimestamp,
+      });
     } catch {
       // Pending/failed comparison metadata is retried on the next tick.
     } finally {
