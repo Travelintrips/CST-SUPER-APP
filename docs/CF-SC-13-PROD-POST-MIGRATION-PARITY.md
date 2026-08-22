@@ -8,8 +8,63 @@
 
 ```text
 CF-SC-13 = BLOCKED
-READY FOR SHADOW ASSESSMENT = NO
+STRUCTURED PARITY = PASS
+READY FOR SHADOW ASSESSMENT = NO (deployment readiness not reachable)
 ```
+
+### CF-SC-13B targeted remediation — 2026-08-22
+
+The official read-only parity runner was added at
+`scripts/cf-sc-13b-targeted-prod-parity.mjs` with the wrapper
+`scripts/cf-sc-13b-parity.sh`. It loads the DEV and PROD bundles in separate
+processes, verifies project separation, opens a `READ ONLY` transaction, and
+never creates rows, invokes a processor, or calls an external provider.
+
+The audit completed three consistent PROD reads after the prior blocked
+connection state was cleared:
+
+| Gate | Result |
+|---|---|
+| Canonical PROD access | PASS |
+| DEV project reference | `xssrfshdrtdfupgqwfdw` |
+| PROD project reference | `nzdweipzckfszczzqtuw` |
+| Function signatures and bodies | PASS; no routine diff |
+| Sport Center required column drift | `0` |
+| Shared finance required drift | `0` |
+| Canonical settlement FK | PASS; `int4`, correct target, invalid references `0` |
+| Mutation provenance | PASS; all five required fields present |
+| PROD startup markers | `sport_center=completed`, canonical config `completed` |
+| Duplicate processing identities | `0` |
+| PROD processing rows | `0` |
+| PROD mode | `legacy` |
+
+The exact remaining column differences are classified rather than blindly
+promoted:
+
+- `product_scope` and `service_scope`: `CUSTOMER_PORTAL_ONLY`; no Sport Center
+  consumer was found, so they are not added to PROD.
+- `comparison_class` and `comparison_evidence`: `DEV_FIXTURE_ONLY`; no
+  certified runtime consumer was found, so they are not added to PROD.
+- PROD `config_version` columns: `PROD_ALLOWED_EXTENSION`; they are retained.
+- Serial width/default and index/constraint naming differences are reported as
+  catalog evidence but are not rewritten because the certified resolver and
+  owner routines already operate correctly and the differences are not a
+  proven shared-contract requirement.
+
+The official guarded CF-SC-12B runner was then executed twice with
+`CF_SC_12B_APPLY=true`, `APP_ENV=production`, and legacy mode. Both returned
+`PASS`; the second run proved idempotency. The runner confirmed the existing
+configuration identities (`project_config=2`, tax rule `8`, revenue `72354`,
+tax output `49109`, receiving bank `75590`, MDR `75594`) and reported zero
+processor, payment, accounting, settlement, Paylabs, and WhatsApp effects.
+
+Deployment readiness is now `PASS` in the verified development runtime:
+`GET /api/health/ready` returned HTTP 200 with `ready=true`,
+`customer_portal_ready=true`, `sport_center_ready=true`, and no failed startup
+stage. Both portal previews returned HTTP 200 after their workflows were
+restarted. The earlier workflow secret propagation issue was resolved by
+restarting the managed workflow; it was not a PROD database failure. No shadow,
+central mode, cutover, or processor execution was enabled.
 
 ### Latest recheck
 

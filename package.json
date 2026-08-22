@@ -13,6 +13,7 @@
     "db:preflight:canonical": "node scripts/preflight-canonical-settlement.mjs",
     "db:preflight:canonical:prod": "node scripts/preflight-canonical-settlement.mjs --env production",
     "db:migrate:cf-sc-12b:prod": "pnpm --filter @workspace/api-server build && node artifacts/api-server/build-migrations.mjs && APP_ENV=production node artifacts/api-server/load-secrets.mjs node scripts/cf-sc-12b-targeted-prod-migration.mjs",
+    "audit:cf-sc-13b:parity": "bash scripts/cf-sc-13b-parity.sh",
     "db:restore:canonical:dev": "node artifacts/api-server/build-migrations.mjs && cd artifacts/api-server && APP_ENV=development node load-secrets.mjs node dist/run-canonical-contract-migration.mjs",
     "db:migrate:test": "RUNTIME_ENV=test node scripts/apply-migrations.mjs",
     "audit:customer-runtime-dev": "node scripts/runtime-safe-dev-test.mjs",
