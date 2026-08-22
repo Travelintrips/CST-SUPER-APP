@@ -975,7 +975,9 @@ router.get("/vendor/profile", requirePortalAuth, requireActiveVendor, async (req
 });
 
 // POST /api/portal/vendor/quotes — submit or update a quote for an open RFQ
-router.post("/vendor/quotes", requirePortalAuth, async (req, res) => {
+// Keep this aligned with the vendor dashboard routes: a logged-in portal
+// customer is not automatically an active vendor.
+router.post("/vendor/quotes", requirePortalAuth, requireActiveVendor, async (req, res) => {
   const customerId = (req as PortalAuthReq).portalCustomerId;
   const { rfqId, vendorPrice, estimatedPickup, estimatedDelivery, estimatedDays, vendorNotes } = req.body as {
     rfqId: number; vendorPrice: number; estimatedPickup?: string; estimatedDelivery?: string;
