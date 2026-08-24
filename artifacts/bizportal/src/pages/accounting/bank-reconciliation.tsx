@@ -2601,24 +2601,15 @@ function CoaReferenceDialog({
         <DialogFooter className="flex-col gap-2 sm:flex-row">
           <Button variant="outline" onClick={onClose}>Batal</Button>
           <Button
-            variant="outline"
-            className="gap-1.5 border-indigo-300 text-indigo-700 hover:bg-indigo-50"
-            onClick={() => save(false)}
+            className="gap-1.5 bg-indigo-600 text-white hover:bg-indigo-700"
+            onClick={() => save(canApplyCurrent)}
             disabled={saving !== null || !selectedAccount}
           >
-            {saving === "rule" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            Simpan untuk Berikutnya
+            {(saving === "rule" || saving === "current") && (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            )}
+            {canApplyCurrent ? "Simpan Referensi & Buat Draft" : "Simpan Referensi COA"}
           </Button>
-          {canApplyCurrent && (
-            <Button
-              className="gap-1.5 bg-indigo-600 text-white hover:bg-indigo-700"
-              onClick={() => save(true)}
-              disabled={saving !== null || !selectedAccount}
-            >
-              {saving === "current" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              Simpan & Buat Draft
-            </Button>
-          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
