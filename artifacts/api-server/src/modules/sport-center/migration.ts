@@ -4052,9 +4052,10 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
 
   /*
    * The canonical settlement link must point at the Sport Center canonical
-   * mutation table.  An older runtime installed this FK with an unqualified
-   * reference while public.bank_mutations was first in search_path, which
-   * made every handoff fail as soon as it supplied a canonical ID.
+   * mutation table. An older runtime could retain a link to a mutation that
+   * no longer exists in either identity surface. Clear only those invalid
+   * legacy links before adding the FK; eligible posted settlements are
+   * rebuilt through the canonical owner below after its definition is live.
    */
   await db.execute(sql.raw(`
     DO $migration$
@@ -4068,6 +4069,16 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
         ALTER TABLE sport_center.payment_settlement_batches
           DROP CONSTRAINT payment_settlement_batches_canonical_bank_mutation_fk;
       END IF;
+
+      UPDATE sport_center.payment_settlement_batches AS batch
+         SET canonical_bank_mutation_id = NULL,
+             updated_at = NOW()
+       WHERE batch.canonical_bank_mutation_id IS NOT NULL
+         AND NOT EXISTS (
+           SELECT 1
+             FROM sport_center.bank_mutations AS mutation
+            WHERE mutation.id = batch.canonical_bank_mutation_id
+         );
 
       ALTER TABLE sport_center.payment_settlement_batches
         ADD CONSTRAINT payment_settlement_batches_canonical_bank_mutation_fk
@@ -4299,6 +4310,44 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
     END;
     $function$;
   `));
+
+  /*
+   * Recover only posted settlements whose payment identity is unambiguous.
+   * Batches without exactly one active payment stay unlinked rather than
+   * inventing a bank mutation or altering their posted journal.
+   */
+  const canonicalRepairCandidates = await db.execute(sql`
+    SELECT batch.id
+      FROM sport_center.payment_settlement_batches AS batch
+      JOIN sport_center.payment_settlement_items AS item
+        ON item.settlement_id = batch.id
+       AND item.item_status = 'active'
+     WHERE batch.status = 'posted'
+       AND batch.bank_mutation_id IS NULL
+       AND batch.canonical_bank_mutation_id IS NULL
+     GROUP BY batch.id
+    HAVING COUNT(*) = 1
+  `);
+  for (const row of canonicalRepairCandidates.rows) {
+    const settlementId = Number(row.id);
+    if (!Number.isSafeInteger(settlementId) || settlementId <= 0) continue;
+    try {
+      await db.execute(sql`
+        SELECT sport_center.ensure_canonical_bank_mutation_for_settlement(
+          ${settlementId}::bigint,
+          'startup-canonical-link-repair'
+        )
+      `);
+    } catch (error) {
+      // A legacy posted journal with incomplete historical evidence must not
+      // block all portal traffic. Its invalid link was already removed before
+      // the FK was installed, and a later governed repair can supply evidence.
+      logger.warn(
+        { settlementId, error },
+        "Skipped canonical mutation recovery for legacy settlement without resolvable evidence",
+      );
+    }
+  }
 
   logger.info(
     "Canonical Sport Center contracts: settlement owner, deterministic grouping, 4C-7N bridge, and CF-SC-10B mutation handoff aktif",
