@@ -17,6 +17,7 @@ import {
 } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../logger.js";
+import { recordCandidateSourceAvailability } from "../monitoring/reconciliationMonitor.js";
 import { captureFailedJob } from "../financial/failedJobSystem.js";
 import { classifyMutationDescription, persistClassification } from "../expenseClassificationService.js";
 import { postEntryWithClient, type DbClient, type PostingLine } from "../accounting.js";
@@ -112,7 +113,19 @@ async function getOptionalSourceAvailability(): Promise<Set<OptionalCandidateSou
       );
       if (missing.length === 0) {
         available.add(source);
+        recordCandidateSourceAvailability({
+          source,
+          optional: true,
+          available: true,
+        });
       } else {
+        recordCandidateSourceAvailability({
+          source,
+          optional: true,
+          available: false,
+          failureKind: "schema_preflight",
+          failureCode: "missing_schema_requirements",
+        });
         logger.warn(
           { source, missing },
           "[unifiedMatchingEngine] optional candidate source skipped by schema preflight",
@@ -130,6 +143,15 @@ async function getOptionalSourceAvailability(): Promise<Set<OptionalCandidateSou
       "[unifiedMatchingEngine] candidate source schema preflight failed; optional sources skipped",
     );
     const available = new Set<OptionalCandidateSource>();
+    for (const source of Object.keys(OPTIONAL_SOURCE_REQUIREMENTS) as OptionalCandidateSource[]) {
+      recordCandidateSourceAvailability({
+        source,
+        optional: true,
+        available: false,
+        failureKind: "schema_preflight",
+        failureCode: "schema_preflight_query_failed",
+      });
+    }
     optionalSourceAvailability = { available, expiresAt: now + 60_000 };
     return available;
   }
@@ -759,8 +781,31 @@ export async function fetchCandidates(
         SELECT to_regclass('public.qris_settlements') AS settlements,
                to_regclass('public.qris_settlement_items') AS items
       `))
-        .then(({ rows }) => Boolean((rows[0] as any)?.settlements && (rows[0] as any)?.items))
-        .catch(() => false)
+        .then(({ rows }) => {
+          const available = Boolean((rows[0] as any)?.settlements && (rows[0] as any)?.items);
+          recordCandidateSourceAvailability({
+            source: "qris_settlement",
+            optional: true,
+            available,
+            ...(available
+              ? {}
+              : {
+                  failureKind: "schema_preflight" as const,
+                  failureCode: "missing_schema_requirements",
+                }),
+          });
+          return available;
+        })
+        .catch(() => {
+          recordCandidateSourceAvailability({
+            source: "qris_settlement",
+            optional: true,
+            available: false,
+            failureKind: "schema_preflight",
+            failureCode: "schema_preflight_query_failed",
+          });
+          return false;
+        })
     : Promise.resolve(false);
   const canonicalCandidatesPromise = direction === "IN"
     ? Promise.all([canonicalTolerance(), canonicalBankAccountNumber]).then(
@@ -777,13 +822,29 @@ export async function fetchCandidates(
           from: transaction_date ? dateOffset(transaction_date, -3) : null,
           to: transaction_date ? dateOffset(transaction_date, 3) : null,
         }),
-    ).catch((e: any) => {
-      logger.warn(
-        { err: e.message },
-        "[unifiedMatchingEngine] canonical settlement source skipped",
-      );
-      return [] as Awaited<ReturnType<typeof findCanonicalSettlementCandidates>>;
-    })
+    )
+      .then((candidates) => {
+        recordCandidateSourceAvailability({
+          source: CANONICAL_SETTLEMENT_SOURCE,
+          optional: false,
+          available: true,
+        });
+        return candidates;
+      })
+      .catch((e: any) => {
+        recordCandidateSourceAvailability({
+          source: CANONICAL_SETTLEMENT_SOURCE,
+          optional: false,
+          available: false,
+          failureKind: "query",
+          failureCode: "candidate_query_failed",
+        });
+        logger.warn(
+          { err: e.message },
+          "[unifiedMatchingEngine] canonical settlement source skipped",
+        );
+        return [] as Awaited<ReturnType<typeof findCanonicalSettlementCandidates>>;
+      })
     : Promise.resolve([] as Awaited<ReturnType<typeof findCanonicalSettlementCandidates>>);
   const [qrisSettlementTablesAvailable, canonicalCandidates] = await Promise.all([
     qrisTablesPromise,
@@ -1064,12 +1125,24 @@ export async function fetchCandidates(
       .map(async (src) => {
       try {
         const { rows } = await db.execute(sql.raw(src.q));
+        recordCandidateSourceAvailability({
+          source: src.type,
+          optional: Object.prototype.hasOwnProperty.call(OPTIONAL_SOURCE_REQUIREMENTS, src.type),
+          available: true,
+        });
         return { src, rows: rows as any[] };
       } catch (e: any) {
         const isOptionalSource = Object.prototype.hasOwnProperty.call(
           OPTIONAL_SOURCE_REQUIREMENTS,
           src.type,
         );
+        recordCandidateSourceAvailability({
+          source: src.type,
+          optional: isOptionalSource,
+          available: false,
+          failureKind: "query",
+          failureCode: "candidate_query_failed",
+        });
         logger.warn(
           {
             err: e.message,

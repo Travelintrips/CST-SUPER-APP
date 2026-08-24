@@ -8,6 +8,202 @@
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../logger.js";
+import { saveAndBroadcast } from "../notificationStore.js";
+
+export type CandidateSourceFailureKind = "schema_preflight" | "query";
+export type CandidateSourceAvailability = "available" | "unavailable";
+
+export interface CandidateSourceHealth {
+  source: string;
+  environment: string;
+  optional: boolean;
+  required: boolean;
+  availability: CandidateSourceAvailability;
+  preflight_failure_count: number;
+  query_failure_count: number;
+  failure_count: number;
+  last_failure_kind: CandidateSourceFailureKind | null;
+  last_failure_code: string | null;
+  last_failure_at: string | null;
+  last_available_at: string | null;
+  checked_at: string;
+}
+
+export interface CandidateSourceHealthSummary {
+  status: "healthy" | "degraded" | "critical";
+  environment: string;
+  sources: CandidateSourceHealth[];
+  unavailable_optional_sources: string[];
+  unavailable_required_sources: string[];
+  alert: {
+    severity: "warning" | "critical";
+    code: "OPTIONAL_CANDIDATE_SOURCE_UNAVAILABLE" | "REQUIRED_CANDIDATE_SOURCE_UNAVAILABLE";
+    source_count: number;
+  } | null;
+}
+
+type CandidateSourceState = CandidateSourceHealth;
+
+const candidateSourceStates = new Map<string, CandidateSourceState>();
+
+function currentEnvironment(): string {
+  return process.env.APP_ENV?.trim() || process.env.NODE_ENV?.trim() || "unknown";
+}
+
+function sourceStateKey(source: string, environment: string): string {
+  return `${environment}:${source}`;
+}
+
+function notifyCandidateSourceTransition(
+  state: CandidateSourceHealth,
+  transition: "unavailable" | "recovered",
+): void {
+  const isUnavailable = transition === "unavailable";
+  const severity = state.required ? "critical" : "warning";
+  const sourceLabel = state.source.replace(/^public\./, "");
+
+  void saveAndBroadcast("admin_notification", {
+    type: isUnavailable
+      ? "reconciliation_candidate_source_unavailable"
+      : "reconciliation_candidate_source_recovered",
+    orderNumber: sourceLabel,
+    customerName: "AI Matching",
+    companyName: state.environment,
+    title: isUnavailable
+      ? `Sumber ${state.required ? "wajib" : "opsional"} AI Matching tidak tersedia`
+      : "Sumber AI Matching kembali tersedia",
+    body: isUnavailable
+      ? `Source ${sourceLabel} tidak tersedia di environment ${state.environment}.`
+      : `Source ${sourceLabel} kembali tersedia di environment ${state.environment}.`,
+    targetRole: "admin",
+    source: state.source,
+    environment: state.environment,
+    optional: state.optional,
+    required: state.required,
+    availability: state.availability,
+    severity,
+    failureKind: isUnavailable ? state.last_failure_kind : null,
+    failureCode: isUnavailable ? state.last_failure_code : null,
+  });
+}
+
+/**
+ * Record the result of source discovery or a source query without retaining
+ * transaction data or provider/database error text.
+ */
+export function recordCandidateSourceAvailability(opts: {
+  source: string;
+  optional: boolean;
+  available: boolean;
+  failureKind?: CandidateSourceFailureKind;
+  failureCode?: string;
+}): void {
+  const environment = currentEnvironment();
+  const now = new Date().toISOString();
+  const key = sourceStateKey(opts.source, environment);
+  const existing = candidateSourceStates.get(key);
+  const wasUnavailable = existing?.availability === "unavailable";
+  const state: CandidateSourceState = existing ?? {
+    source: opts.source,
+    environment,
+    optional: opts.optional,
+    required: !opts.optional,
+    availability: "available",
+    preflight_failure_count: 0,
+    query_failure_count: 0,
+    failure_count: 0,
+    last_failure_kind: null,
+    last_failure_code: null,
+    last_failure_at: null,
+    last_available_at: null,
+    checked_at: now,
+  };
+
+  state.optional = opts.optional;
+  state.required = !opts.optional;
+  state.availability = opts.available ? "available" : "unavailable";
+  state.checked_at = now;
+
+  if (opts.available) {
+    state.last_available_at = now;
+  } else {
+    state.failure_count += 1;
+    if (opts.failureKind === "schema_preflight") state.preflight_failure_count += 1;
+    if (opts.failureKind === "query") state.query_failure_count += 1;
+    state.last_failure_kind = opts.failureKind ?? null;
+    state.last_failure_code = opts.failureCode ?? "candidate_source_unavailable";
+    state.last_failure_at = now;
+  }
+
+  candidateSourceStates.set(key, state);
+
+  if (!opts.available) {
+    logger.warn(
+      {
+        source: state.source,
+        environment: state.environment,
+        optional: state.optional,
+        required: state.required,
+        availability: state.availability,
+        failureKind: state.last_failure_kind,
+        failureCode: state.last_failure_code,
+      },
+      "[reconciliationMonitor] candidate source unavailable",
+    );
+    if (!wasUnavailable) {
+      notifyCandidateSourceTransition(state, "unavailable");
+    }
+  } else if (wasUnavailable) {
+    notifyCandidateSourceTransition(state, "recovered");
+  }
+}
+
+export function getCandidateSourceHealth(): CandidateSourceHealth[] {
+  return [...candidateSourceStates.values()]
+    .map((state) => ({ ...state }))
+    .sort((a, b) => a.source.localeCompare(b.source));
+}
+
+export function getCandidateSourceHealthSummary(): CandidateSourceHealthSummary {
+  const sources = getCandidateSourceHealth();
+  const unavailableOptional = sources
+    .filter((source) => source.optional && source.availability === "unavailable")
+    .map((source) => source.source);
+  const unavailableRequired = sources
+    .filter((source) => source.required && source.availability === "unavailable")
+    .map((source) => source.source);
+  const status = unavailableRequired.length > 0
+    ? "critical"
+    : unavailableOptional.length > 0
+      ? "degraded"
+      : "healthy";
+
+  return {
+    status,
+    environment: currentEnvironment(),
+    sources,
+    unavailable_optional_sources: unavailableOptional,
+    unavailable_required_sources: unavailableRequired,
+    alert: unavailableRequired.length > 0
+      ? {
+          severity: "critical",
+          code: "REQUIRED_CANDIDATE_SOURCE_UNAVAILABLE",
+          source_count: unavailableRequired.length,
+        }
+      : unavailableOptional.length > 0
+        ? {
+            severity: "warning",
+            code: "OPTIONAL_CANDIDATE_SOURCE_UNAVAILABLE",
+            source_count: unavailableOptional.length,
+          }
+        : null,
+  };
+}
+
+/** Allows isolated tests to start with a clean in-process health registry. */
+export function resetCandidateSourceHealthForTests(): void {
+  candidateSourceStates.clear();
+}
 
 export interface ReconciliationMetrics {
   total_mutations: number;
@@ -20,6 +216,7 @@ export interface ReconciliationMetrics {
   sync_lag_seconds: number | null;
   last_sync_time: string | null;
   last_sheet_sync_time: string | null;
+  candidate_source_health: CandidateSourceHealthSummary;
 }
 
 export interface HealthStatus {
@@ -29,6 +226,7 @@ export interface HealthStatus {
   drift_detected: boolean;
   alerts_last_hour: number;
   checked_at: string;
+  candidate_sources: CandidateSourceHealthSummary;
 }
 
 export interface ThroughputStats {
@@ -54,6 +252,7 @@ export interface DashboardMetrics {
     records_failed: number;
     execution_time_ms: number | null;
   };
+  candidate_sources: CandidateSourceHealthSummary;
 }
 
 // ── Core metrics query ────────────────────────────────────────────────────────
@@ -112,6 +311,7 @@ export async function getReconciliationMetrics(): Promise<ReconciliationMetrics>
     sync_lag_seconds: syncLagSeconds,
     last_sync_time: lastSyncTime,
     last_sheet_sync_time: lastSheetSync,
+    candidate_source_health: getCandidateSourceHealthSummary(),
   };
 }
 
@@ -119,6 +319,7 @@ export async function getReconciliationMetrics(): Promise<ReconciliationMetrics>
 
 export async function getHealthStatus(): Promise<HealthStatus> {
   const metrics = await getReconciliationMetrics();
+  const candidateSources = getCandidateSourceHealthSummary();
 
   // Count alerts in last hour
   let alertsLastHour = 0;
@@ -140,12 +341,14 @@ export async function getHealthStatus(): Promise<HealthStatus> {
 
   if (
     (metrics.sync_lag_seconds !== null && metrics.sync_lag_seconds > SYNC_LAG_CRITICAL) ||
-    alertsLastHour >= 5
+    alertsLastHour >= 5 ||
+    candidateSources.status === "critical"
   ) {
     status = "critical";
   } else if (
     (metrics.sync_lag_seconds !== null && metrics.sync_lag_seconds > SYNC_LAG_DEGRADED) ||
-    alertsLastHour >= 2
+    alertsLastHour >= 2 ||
+    candidateSources.status === "degraded"
   ) {
     status = "degraded";
   }
@@ -157,6 +360,7 @@ export async function getHealthStatus(): Promise<HealthStatus> {
     drift_detected: driftDetected,
     alerts_last_hour: alertsLastHour,
     checked_at: new Date().toISOString(),
+    candidate_sources: candidateSources,
   };
 }
 
@@ -235,6 +439,9 @@ export async function getDashboardMetrics(): Promise<DashboardMetrics> {
     if (Number(hr.high_count ?? 0) > 0) driftStatus = "critical";
     else if (Number(hr.med_count ?? 0) > 0) driftStatus = "warning";
   } catch { /* table may not exist yet */ }
+  const candidateSources = getCandidateSourceHealthSummary();
+  if (candidateSources.status === "critical") driftStatus = "critical";
+  else if (candidateSources.status === "degraded" && driftStatus === "clean") driftStatus = "warning";
 
   return {
     throughput: {
@@ -251,6 +458,7 @@ export async function getDashboardMetrics(): Promise<DashboardMetrics> {
       approved: Number(dr.approved ?? 0),
     },
     last_sync: lastSync,
+    candidate_sources: candidateSources,
   };
 }
 
