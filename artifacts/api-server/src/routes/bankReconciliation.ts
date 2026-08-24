@@ -4367,6 +4367,27 @@ router.post("/run-matching", async (req, res) => {
         rule_matched++;
         processed++;
 
+        // A Referensi COA is an explicit user-authored rule. When it matches
+        // with full confidence and points to an active COA, it is safe to
+        // complete the same bank mutation without another manual click.
+        // Ambiguous/missing COA rules remain manual-review only.
+        const { rows: matchedRuleRows } = await db.execute(sql.raw(`
+          SELECT target_coa_code, confidence_score
+          FROM recon_rules
+          WHERE id = ${Number(decision.matchedRuleId)}
+            AND company_id = ${mutationCompanyId}
+            AND is_active = TRUE
+          LIMIT 1
+        `)).catch(() => ({ rows: [] as any[] }));
+        const matchedRule = matchedRuleRows[0] as any;
+        const autoCoaCode = matchedRule?.target_coa_code
+          ? String(matchedRule.target_coa_code).trim()
+          : "";
+        const canAutoPostByRule =
+          Boolean(autoCoaCode) &&
+          Number(matchedRule?.confidence_score ?? decision.confidence) >= 100 &&
+          decision.confidence >= 100;
+
         // Persist rule match as candidate in bank_reconciliation_matches
         const breakdownJson = JSON.stringify({
           confidence: decision.confidence,
@@ -4399,7 +4420,34 @@ router.post("/run-matching", async (req, res) => {
           VALUES (${m.id}, 'RULE_ENGINE_MATCH', '${actor.replace(/'/g,"''")}', '${auditMeta}')
         `)).catch(() => {});
 
-        // Set mutation to manual_review (rule matched but not auto-approved)
+        if (canAutoPostByRule) {
+          const approval = await approveAndCreateJournal(
+            Number(m.id),
+            null,
+            null,
+            null,
+            actor,
+            `Auto-post berdasarkan Referensi COA #${decision.matchedRuleId}`,
+            autoCoaCode,
+            null,
+            true,
+          );
+          if (approval.ok) {
+            auto_matched++;
+            logger.info(
+              { mutationId: m.id, ruleId: decision.matchedRuleId, journalEntryId: approval.journalEntryId },
+              "[run-matching] reference rule auto-approved and posted",
+            );
+            return;
+          }
+          logger.warn(
+            { mutationId: m.id, ruleId: decision.matchedRuleId, error: approval.error },
+            "[run-matching] reference rule auto-post blocked; leaving for manual review",
+          );
+        }
+
+        // A rule can match without a usable COA or can fail its accounting
+        // safeguards; preserve the explicit review state in that case.
         await db.execute(sql.raw(`
           UPDATE bank_mutations SET status = 'manual_review', updated_at = NOW()
           WHERE id = ${m.id} AND status IN ('unmatched','matched','duplicate_need_review')

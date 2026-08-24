@@ -1336,13 +1336,14 @@ export async function runUnifiedMatching(
  *   3. Resolve bank COA + contra account (AR/AP) + bank journal
  *   4. postEntryWithClient — handles: period lock (BLOCKING throw), balance validation,
  *      sequence number (RECON/YYYY/NNNNNN), header+lines INSERT, idempotency, checksum
- *   5. UPDATE bank_mutations: status='approved' + journal_entry_id (ATOMIC — no .catch)
+ *   5. UPDATE bank_mutations: status='approved_pending_posting' + journal_entry_id (ATOMIC — no .catch)
  *   6. UPDATE / INSERT bank_reconciliation_matches (approved)
  *   7. INSERT bank_reconciliation_audit (inside tx — no .catch: must succeed or rollback)
  *   → COMMIT or full ROLLBACK if any step throws
  *
  * Period lock: enforced by _postEntryCore — throws PERIOD_CLOSED for closed periods.
- * Auto-post intentionally disabled — admin must post the draft journal.
+ * Auto-post is opt-in for a fully matched, explicit COA reference rule. Normal
+ * human approval still creates a draft and requires the separate post action.
  */
 
 /**
@@ -1403,6 +1404,7 @@ export async function approveAndCreateJournal(
    *  When provided, bypasses resolveContraAccount and uses this account directly. */
   manualCoaCode?: string | null,
   candidateSource: ReconciliationCandidateSource | null = null,
+  autoPost = false,
 ): Promise<{ ok: boolean; journalEntryId: number | null; error?: string; manual_review_required?: true; code?: string }> {
 
   let journalEntryId: number | null = null;
@@ -1777,8 +1779,9 @@ export async function approveAndCreateJournal(
       );
 
       // ── Step 5: Update mutation ATOMICALLY (inside tx, no .catch) ─────────
-      // Status = approved_pending_posting (NOT 'approved') — journal is still
-      // a draft. Admin must call POST /:id/post to promote to final posted state.
+       // Normal approval stops at approved_pending_posting. Explicit reference
+       // rules may request autoPost; in that case promote the same balanced
+       // journal atomically before committing.
       await tx.execute(sql.raw(`
         UPDATE bank_mutations
         SET status           = 'approved_pending_posting',
@@ -1788,6 +1791,22 @@ export async function approveAndCreateJournal(
             updated_at       = NOW()
         WHERE id = ${mutationId}
       `));
+
+       if (autoPost) {
+         await tx.execute(sql.raw(`
+           UPDATE accounting_entries
+           SET status = 'posted'
+           WHERE id = ${entry.id} AND status = 'draft'
+         `));
+         await tx.execute(sql.raw(`
+           UPDATE bank_mutations
+           SET status = 'posted',
+               posted_by = '${actor.replace(/'/g, "''")}',
+               posted_at = NOW(),
+               updated_at = NOW()
+           WHERE id = ${mutationId} AND status = 'approved_pending_posting'
+         `));
+       }
 
       // ── Step 6: Update/insert approved match record ────────────────────────
       if (matchId) {
@@ -1826,10 +1845,11 @@ export async function approveAndCreateJournal(
         amount,
         direction,
         note:             note ?? null,
+         auto_post:        autoPost,
       }).replace(/'/g, "''");
       await tx.execute(sql.raw(`
         INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
-        VALUES (${mutationId}, 'MATCH_APPROVED', '${actor.replace(/'/g, "''")}', '${auditMeta}')
+       VALUES (${mutationId}, '${autoPost ? "MATCH_APPROVED_AUTO_POSTED" : "MATCH_APPROVED"}', '${actor.replace(/'/g, "''")}', '${auditMeta}')
       `));
 
       return { txJournalEntryId: entry.id, entryNumber: entry.entryNumber };
