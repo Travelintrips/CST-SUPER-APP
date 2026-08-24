@@ -8,3 +8,5 @@ Public Customer Portal Google login must use the API's Google OAuth flow and fin
 **Why:** The production Supabase project returned `unexpected_failure` while exchanging Google's external authorization code, while the API already had a verified Google OAuth client and a registered callback path.
 
 **How to apply:** Keep the customer-facing flow on the backend Google callback and create/update `portal_customers` there. For public requests from `cstlogistic.co.id`, use that verified host for the callback instead of a stale `.replit.app` override. Treat Supabase OAuth as a separate flow for components that explicitly need a Supabase session, not as the public portal login dependency.
+
+**Operational note:** After changing callback-origin routing, the public deployment must be republished; a running preview can generate the correct URI while the live custom domain continues serving the previous deployment.

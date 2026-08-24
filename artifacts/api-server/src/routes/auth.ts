@@ -122,8 +122,20 @@ function getGoogleOrigin(req: Request, preferCustomerPortalHost = false): string
   // that the customer actually used, otherwise Google rejects the request with
   // redirect_uri_mismatch.
   const requestHost = getRequestHost(req);
-  if (preferCustomerPortalHost && CUSTOMER_PORTAL_GOOGLE_HOSTS.has(requestHost)) {
-    return `https://${requestHost}`;
+  if (preferCustomerPortalHost) {
+    // The OAuth request and callback must use one canonical origin. In
+    // production the API may receive the request through the Replit deployment
+    // hostname even when the browser entered via the custom domain, so using
+    // req.host here can produce a redirect URI that is not registered in
+    // Google Cloud. Keep www support, but never fall back to a Replit host for
+    // the public portal flow.
+    if (requestHost === "www.cstlogistic.co.id") {
+      return "https://www.cstlogistic.co.id";
+    }
+    if (requestHost === "cstlogistic.co.id" || !requestHost) {
+      return "https://cstlogistic.co.id";
+    }
+    return "https://cstlogistic.co.id";
   }
 
   // In Replit dev (NOT deployed), always prefer the stable dev domain.
