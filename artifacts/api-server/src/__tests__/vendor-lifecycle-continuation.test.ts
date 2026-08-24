@@ -74,4 +74,22 @@ describe("vendor lifecycle continuation", () => {
       expect(lifecycleSource).toContain("existingLink.token");
     });
   });
+
+  describe("inactive vendor route guards", () => {
+    it("protects every vendor self-service mutation with the active-vendor guard", () => {
+      const guardedRoutes = [
+        'router.get("/vendor/catalog", requirePortalAuth, requireActiveVendor',
+        'router.post("/vendor/catalog", requirePortalAuth, requireActiveVendor',
+        'router.put("/vendor/catalog/:id", requirePortalAuth, requireActiveVendor',
+        'router.patch("/vendor/catalog/:id/media-assets", requirePortalAuth, requireActiveVendor',
+        'router.post("/vendor/catalog/:id/publish", requirePortalAuth, requireActiveVendor',
+        'router.post("/vendor/catalog/:id/unpublish", requirePortalAuth, requireActiveVendor',
+        'router.post("/vendor/catalog/:id/archive", requirePortalAuth, requireActiveVendor',
+        'router.delete("/vendor/catalog/media/:mediaId", requirePortalAuth, requireActiveVendor',
+      ];
+      for (const route of guardedRoutes) expect(routeSource).toContain(route);
+      expect(routeSource).toContain('"/vendor/catalog/:itemId/media/upload",\n  requirePortalAuth,\n  requireActiveVendor');
+      expect(routeSource).toContain('"/vendor/catalog/:id/media-assets/upload",\n  requirePortalAuth,\n  requireActiveVendor');
+    });
+  });
 });

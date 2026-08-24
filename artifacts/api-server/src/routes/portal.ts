@@ -2828,7 +2828,7 @@ async function resubmitCatalogItemForReview(itemId: number, supplierId: number) 
 }
 
 // GET /api/portal/vendor/catalog — list vendor's own catalog items with media
-router.get("/vendor/catalog", requirePortalAuth, async (req, res) => {
+router.get("/vendor/catalog", requirePortalAuth, requireActiveVendor, async (req, res) => {
   const customerId = (req as PortalAuthReq).portalCustomerId;
   const supplier = await getLinkedSupplier(customerId);
   if (!supplier) return res.status(403).json({ message: "Akun belum terhubung ke data vendor" });
@@ -2843,6 +2843,7 @@ router.get("/vendor/catalog", requirePortalAuth, async (req, res) => {
 router.post(
   "/vendor/catalog/:itemId/media/upload",
   requirePortalAuth,
+  requireActiveVendor,
   (req: any, res: any, next: any) =>
     (_vendorImgUpload.single("file") as any)(req, res, (err: any) => {
       if (err?.code === "LIMIT_FILE_SIZE") {
@@ -2884,7 +2885,7 @@ router.post(
 );
 
 // DELETE /api/portal/vendor/catalog/media/:mediaId
-router.delete("/vendor/catalog/media/:mediaId", requirePortalAuth, async (req, res) => {
+router.delete("/vendor/catalog/media/:mediaId", requirePortalAuth, requireActiveVendor, async (req, res) => {
   const customerId = (req as PortalAuthReq).portalCustomerId;
   const mediaId = parseInt(String(req.params.mediaId));
   if (isNaN(mediaId)) return res.status(400).json({ error: "ID media tidak valid" });
@@ -2907,7 +2908,7 @@ router.delete("/vendor/catalog/media/:mediaId", requirePortalAuth, async (req, r
 // ── Vendor: direct catalog CRUD ───────────────────────────────────────────────
 
 // POST /api/portal/vendor/catalog — Create new catalog item (pending review)
-router.post("/vendor/catalog", requirePortalAuth, async (req, res) => {
+router.post("/vendor/catalog", requirePortalAuth, requireActiveVendor, async (req, res) => {
   const customerId = (req as PortalAuthReq).portalCustomerId;
   const supplier = await getLinkedSupplier(customerId);
   if (!supplier) return res.status(403).json({ message: "Akun belum terhubung ke data vendor" });
@@ -2999,7 +3000,7 @@ router.post("/vendor/catalog", requirePortalAuth, async (req, res) => {
 });
 
 // PUT /api/portal/vendor/catalog/:id — Edit own catalog item details
-router.put("/vendor/catalog/:id", requirePortalAuth, async (req, res) => {
+router.put("/vendor/catalog/:id", requirePortalAuth, requireActiveVendor, async (req, res) => {
   const customerId = (req as PortalAuthReq).portalCustomerId;
   const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
@@ -3053,6 +3054,7 @@ router.put("/vendor/catalog/:id", requirePortalAuth, async (req, res) => {
 router.post(
   "/vendor/catalog/:id/media-assets/upload",
   requirePortalAuth,
+  requireActiveVendor,
   (req: any, res: any, next: any) =>
     (_portalUpload.single("file") as any)(req, res, (err: any) => {
       if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE")
@@ -3103,7 +3105,7 @@ router.post(
 );
 
 // PATCH /api/portal/vendor/catalog/:id/media-assets — Replace media_assets JSONB
-router.patch("/vendor/catalog/:id/media-assets", requirePortalAuth, async (req, res) => {
+router.patch("/vendor/catalog/:id/media-assets", requirePortalAuth, requireActiveVendor, async (req, res) => {
   const customerId = (req as PortalAuthReq).portalCustomerId;
   const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
@@ -3138,7 +3140,7 @@ router.patch("/vendor/catalog/:id/media-assets", requirePortalAuth, async (req, 
 });
 
 // POST /api/portal/vendor/catalog/:id/publish
-router.post("/vendor/catalog/:id/publish", requirePortalAuth, async (req, res) => {
+router.post("/vendor/catalog/:id/publish", requirePortalAuth, requireActiveVendor, async (req, res) => {
   const customerId = (req as PortalAuthReq).portalCustomerId;
   const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
@@ -3175,7 +3177,7 @@ router.post("/vendor/catalog/:id/publish", requirePortalAuth, async (req, res) =
 });
 
 // POST /api/portal/vendor/catalog/:id/unpublish
-router.post("/vendor/catalog/:id/unpublish", requirePortalAuth, async (req, res) => {
+router.post("/vendor/catalog/:id/unpublish", requirePortalAuth, requireActiveVendor, async (req, res) => {
   const customerId = (req as PortalAuthReq).portalCustomerId;
   const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
@@ -3196,7 +3198,7 @@ router.post("/vendor/catalog/:id/unpublish", requirePortalAuth, async (req, res)
 });
 
 // POST /api/portal/vendor/catalog/:id/archive — Soft delete (no hard DELETE)
-router.post("/vendor/catalog/:id/archive", requirePortalAuth, async (req, res) => {
+router.post("/vendor/catalog/:id/archive", requirePortalAuth, requireActiveVendor, async (req, res) => {
   const customerId = (req as PortalAuthReq).portalCustomerId;
   const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) return res.status(400).json({ message: "ID tidak valid" });
