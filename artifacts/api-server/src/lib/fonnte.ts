@@ -2,6 +2,7 @@ import { logger } from "./logger.js";
 import { logNotification, wasRecentlyNotified } from "./notificationLog.js";
 import { getFonnteToken } from "./appSecrets.js";
 import { isSafeDevTestMode } from "./safeDev.js";
+import { isValidIndonesianPhone } from "./phoneUtils.js";
 
 const FONNTE_URL = "https://api.fonnte.com/send";
 
@@ -19,6 +20,10 @@ function normalizePhoneID(raw: string): string {
   if (digits.startsWith("62")) return digits;
   if (digits.startsWith("0")) return "62" + digits.slice(1);
   return "62" + digits;
+}
+
+function isValidFonnteTarget(phone: string): boolean {
+  return phone.includes("@") || isValidIndonesianPhone(phone);
 }
 
 /** Ambil wa_message_id dari respons Fonnte jika ada */
@@ -81,8 +86,8 @@ export async function sendWhatsAppMedia(
   }
 
   const phone = normalizePhoneID(target);
-  if (!phone.includes("@") && phone.length < 10) {
-    logger.warn({ raw: target, normalized: phone }, "sendWhatsAppMedia: phone too short — skipping");
+  if (!isValidFonnteTarget(phone)) {
+    logger.warn({ raw: target, normalized: phone }, "sendWhatsAppMedia: invalid phone — skipping");
     await logNotification({
       channel: "wa", recipient: target, message,
       status: "failed", errorMsg: "Phone number too short",
@@ -196,8 +201,8 @@ export async function sendWhatsApp(
   }
 
   const phone = normalizePhoneID(target);
-  if (!phone.includes("@") && phone.length < 10) {
-    logger.warn({ raw: target, normalized: phone }, "sendWhatsApp: phone too short — skipping");
+  if (!isValidFonnteTarget(phone)) {
+    logger.warn({ raw: target, normalized: phone }, "sendWhatsApp: invalid phone — skipping");
     await logNotification({
       channel: "wa", recipient: target, message,
       status: "failed", errorMsg: "Phone number too short",

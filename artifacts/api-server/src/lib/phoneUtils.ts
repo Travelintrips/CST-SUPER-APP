@@ -16,6 +16,10 @@ export function normalizePhone(raw: string): string {
   return "62" + digits;
 }
 
+export function isValidIndonesianPhone(phone: string): boolean {
+  return /^62\d{8,13}$/.test(phone);
+}
+
 /**
  * Parses a comma-separated list of phone numbers and normalizes each one.
  */
