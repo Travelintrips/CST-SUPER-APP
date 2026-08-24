@@ -132,6 +132,24 @@ function escStr(s: string | null | undefined): string {
   return `'${String(s).replace(/'/g, "''")}'`;
 }
 
+/**
+ * Build a stable, database-safe config code from a bank reference.
+ *
+ * The operational recon_rules table can contain multiple versions of a rule,
+ * but the configuration workspace should show one reusable configuration for
+ * the same company/direction/reference. A small deterministic hash avoids
+ * truncation collisions while keeping the code within the config contract.
+ */
+function bankReferenceConfigCode(direction: string | null | undefined, conditionValue: string): string {
+  const input = `${String(direction ?? "").toUpperCase()}:${conditionValue.trim().toLowerCase()}`;
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `BANK_REFERENCE_${String(direction ?? "UNKNOWN").toUpperCase()}_${(hash >>> 0).toString(36).toUpperCase()}`;
+}
+
 /** Load all active rules for conflict detection (excluding a given id if updating) */
 async function loadActiveRulesForCompany(companyId: number): Promise<ReconRule[]> {
   const rows = await db.execute(sql.raw(`
@@ -251,15 +269,16 @@ router.post("/", async (req, res) => {
 
     // Keep the configuration workspace in sync with the operational
     // reconciliation rule created from the Bank Reconciliation screen.
-    // `recon_rules` remains the authoritative auto-approval source; this
-    // companion row makes the description metadata visible in the Rule AI tab.
-    // Use an exact active-row check so repeated saves do not create duplicates.
+    // `recon_rules` remains the authoritative matching/auto-approval source;
+    // the classification config is the reusable reference shown in the
+    // configuration screen, and the AI rule links back to that config.
     try {
       await runReconClassificationMigration();
       const aiFlow = body.direction === "IN"
         ? "INCOME_ALLOCATION"
         : "ROUTINE_EXPENSE_ALLOCATION";
       const conditionValue = String(body.condition_value ?? "").replace(/'/g, "''");
+      const rawConditionValue = String(body.condition_value ?? "").trim();
       const ruleName = String(body.name ?? `Referensi COA ${body.direction ?? ""}`).replace(/'/g, "''");
       const ruleDescription = String(
         body.description ?? `Sinkron dari Referensi COA rule #${rule.id}`,
@@ -267,16 +286,59 @@ router.post("/", async (req, res) => {
       const actionCoaCode = body.target_coa_code
         ? `'${String(body.target_coa_code).replace(/'/g, "''")}'`
         : "NULL";
+      const configCode = bankReferenceConfigCode(body.direction, rawConditionValue);
+      const configName = `Referensi Bank — ${rawConditionValue}`.slice(0, 120);
+      const configCategory = body.direction === "IN"
+        ? "INCOME_ALLOCATION"
+        : "ROUTINE_EXPENSE";
+      const configType = body.direction === "IN" ? "income" : "expense";
+      const configNameSql = escStr(configName);
+      const configCodeSql = escStr(configCode);
+      const configKeywordsSql = escStr(JSON.stringify([rawConditionValue]));
+
+      // One company/direction/reference maps to one visible configuration.
+      // Updating the same reference should refresh its default COA rather
+      // than create duplicate entries in the configuration workspace.
+      await db.execute(sql.raw(`
+        INSERT INTO recon_classification_configs
+          (company_id, category, name, code, type, flow, default_coa_code,
+           keywords, priority, is_active, is_seed, updated_at)
+        VALUES
+          (${companyId}, '${configCategory}', ${configNameSql}, ${configCodeSql},
+           '${configType}', '${aiFlow}', ${actionCoaCode},
+           ${configKeywordsSql}::jsonb, ${Number(body.priority ?? 120)},
+           TRUE, FALSE, NOW())
+        ON CONFLICT (code, COALESCE(company_id, 0)) DO UPDATE SET
+          name = EXCLUDED.name,
+          type = EXCLUDED.type,
+          flow = EXCLUDED.flow,
+          default_coa_code = EXCLUDED.default_coa_code,
+          keywords = EXCLUDED.keywords,
+          priority = EXCLUDED.priority,
+          is_active = TRUE,
+          updated_at = NOW()
+      `));
+
+      const configRows = await db.execute(sql.raw(`
+        SELECT id
+        FROM recon_classification_configs
+        WHERE company_id = ${companyId} AND code = ${configCodeSql}
+        LIMIT 1
+      `));
+      const configId = Number(((configRows as any).rows ?? [])[0]?.id ?? 0);
+
       await db.execute(sql.raw(`
         INSERT INTO recon_ai_classification_rules
           (company_id, name, description, condition_field, condition_operator,
-           condition_value, action_flow, action_coa_code, confidence, priority,
+           condition_value, action_flow, action_coa_code, action_config_code,
+           config_id, confidence, priority,
            source, created_by)
         SELECT
           ${companyId}, '${ruleName}', '${ruleDescription}',
           '${String(body.condition_field).replace(/'/g, "''")}',
           '${String(body.condition_operator).replace(/'/g, "''")}',
-          '${conditionValue}', '${aiFlow}', ${actionCoaCode}, 1.00, ${Number(body.priority ?? 120)},
+          '${conditionValue}', '${aiFlow}', ${actionCoaCode}, ${configCodeSql},
+          ${configId > 0 ? configId : "NULL"}, 1.00, ${Number(body.priority ?? 120)},
           'manual', ${escStr((req as any).user?.email ?? null)}
         WHERE NOT EXISTS (
           SELECT 1
