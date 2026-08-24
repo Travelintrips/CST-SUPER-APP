@@ -3466,7 +3466,7 @@ function MutationCard({
                   : <Eye className="w-3.5 h-3.5" />}
                 {cands.length > 0 && !isQrisMutation(m)
                   ? "Pilih Kandidat & Approve"
-                  : "Periksa Transaksi"}
+                  : "Lengkapi & Approve Manual"}
               </Button>
             )}
             {/* Post ke Accounting — only for approved_pending_posting; disabled when mapping-required */}
@@ -4228,10 +4228,21 @@ function MutationDetailPanel({
             <Button
               variant="outline"
               className="flex-1 gap-1.5 border-amber-300 text-amber-800 hover:bg-amber-50 dark:text-amber-300 min-w-[150px]"
-              onClick={onClose}
+              onClick={() => {
+                if (canApprove(m) && cands.length === 0 && !isQrisMutation(m)) {
+                  onClose();
+                  onApprove(m);
+                  return;
+                }
+                onClose();
+              }}
             >
-              <Search className="w-4 h-4" />
-              Periksa Transaksi
+              {canApprove(m) && cands.length === 0 && !isQrisMutation(m)
+                ? <CheckCircle2 className="w-4 h-4" />
+                : <Search className="w-4 h-4" />}
+              {canApprove(m) && cands.length === 0 && !isQrisMutation(m)
+                ? "Lengkapi & Approve Manual"
+                : "Periksa Transaksi"}
             </Button>
           )}
           {canPost(m) && (
