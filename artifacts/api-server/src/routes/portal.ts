@@ -7,7 +7,7 @@ import { db, productsTable, productCategoryMapTable, productCategoriesTable, por
 import { evaluateReviewEligibility } from "../lib/services/vendorReviewGuard.js";
 import { deleteFromSupabase, uploadToSupabase } from "../lib/supabaseStorage.js";
 import { invalidateTokenCache, SERVICE_SCHEMAS } from "./vendorMiniForm";
-import { eq, inArray, and, ne, isNull, sql, desc, gte, lte, ilike, or, asc } from "drizzle-orm";
+import { eq, inArray, and, ne, isNull, sql, desc, gte, lt, lte, ilike, or, asc } from "drizzle-orm";
 import { productMediaTable } from "@workspace/db";
 import { ObjectStorageService } from "../lib/objectStorage.js";
 import { validateUploadFile, validateMagicBytes, validateSvgImageAsset } from "../lib/uploadValidation.js";
@@ -144,6 +144,10 @@ import {
   getVendorDashboard,
   getVendorFullProfile,
 } from "../lib/services/portalVendorProfileService.js";
+import {
+  getVendorProfileVersionBounds,
+  isCurrentVendorProfileVersion,
+} from "../lib/services/vendorProfileVersion.js";
 import { validateBody } from "../lib/middleware/validateBody.js";
 import {
   VendorSelfProfileSchema,
@@ -3348,10 +3352,11 @@ router.patch(
 
       // Optimistic locking uses the row actually being edited. suppliers.updatedAt
       // is unrelated to ordinary vendor profile changes.
+      const versionBounds = expectedUpdatedAt
+        ? getVendorProfileVersionBounds(expectedUpdatedAt)
+        : null;
       if (expectedUpdatedAt) {
-        const expected = new Date(expectedUpdatedAt).getTime();
-        const actual = vp.updatedAt?.getTime();
-        if (!actual || expected !== actual) {
+        if (!isCurrentVendorProfileVersion(vp.updatedAt, versionBounds)) {
           res.status(409).json({
             message: "Conflict: data telah diubah. Refresh dan coba lagi.",
             currentUpdatedAt: vp.updatedAt ?? null,
@@ -3376,10 +3381,14 @@ router.patch(
 
       if (Object.keys(vpUpdates).length > 0) {
         const now = new Date();
-        const updateWhere = expectedUpdatedAt
+        // PostgreSQL may retain microseconds while browser JSON carries only
+        // milliseconds. The half-open range still matches the current row and
+        // rejects a row changed into any later millisecond.
+        const updateWhere = versionBounds
           ? and(
               eq(vendorProfilesTable.customerId, customerId),
-              eq(vendorProfilesTable.updatedAt, vp.updatedAt),
+              gte(vendorProfilesTable.updatedAt, versionBounds.start),
+              lt(vendorProfilesTable.updatedAt, versionBounds.end),
             )
           : eq(vendorProfilesTable.customerId, customerId);
         const [updatedProfile] = await db

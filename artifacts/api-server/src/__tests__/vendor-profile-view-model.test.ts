@@ -3,6 +3,10 @@ import {
   maskVendorBankAccountNumber,
   toVendorProfileViewModel,
 } from "../lib/services/vendorProfileViewModel.js";
+import {
+  getVendorProfileVersionBounds,
+  isCurrentVendorProfileVersion,
+} from "../lib/services/vendorProfileVersion.js";
 
 describe("vendor profile view model", () => {
   it("maps canonical profile columns to the Customer Portal contract", () => {
@@ -97,5 +101,25 @@ describe("getVendorFullProfile", () => {
       bankAccountNumber: "••••••1234",
     });
     expect(JSON.stringify(result)).not.toContain("12345678901234");
+  });
+});
+
+describe("vendor profile optimistic-lock version", () => {
+  it("matches a PostgreSQL microsecond timestamp returned to the browser as milliseconds", () => {
+    const bounds = getVendorProfileVersionBounds("2026-08-24T09:46:38.123Z");
+    const databaseVersion = new Date("2026-08-24T09:46:38.123456Z");
+
+    expect(bounds).toEqual({
+      start: new Date("2026-08-24T09:46:38.123Z"),
+      end: new Date("2026-08-24T09:46:38.124Z"),
+    });
+    expect(isCurrentVendorProfileVersion(databaseVersion, bounds)).toBe(true);
+  });
+
+  it("rejects a stale version after the profile timestamp advances", () => {
+    const staleBounds = getVendorProfileVersionBounds("2026-08-24T09:46:38.123Z");
+    const updatedVersion = new Date("2026-08-24T09:46:38.124000Z");
+
+    expect(isCurrentVendorProfileVersion(updatedVersion, staleBounds)).toBe(false);
   });
 });
