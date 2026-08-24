@@ -16,6 +16,10 @@ import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { readSheet, batchUpdateSheet, ensureSheets, clearAndWriteSheet, formatRowsColor, type RowColor } from "./googleSheets.js";
 import { runUnifiedMatching } from "./reconciliation/unifiedMatchingEngine.js";
+import {
+  runReconDecisionStack,
+  type MutationForDecisionStack,
+} from "./reconciliation/reconDecisionStack.js";
 import { logger } from "./logger.js";
 import { canonicalMutationKey, canonicalNormalizeDesc } from "./reconciliation/canonicalMutationKey.js";
 import { isQrisSettlementDescription } from "./reconciliation/qrisSettlement.js";
@@ -549,6 +553,47 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
       if (!item) return;
       const { id, parsed: p } = item;
       try {
+        // Apply company-scoped manual reconciliation rules before the broader
+        // matcher. Previously Sheet sync jumped straight to runUnifiedMatching,
+        // so rules created from "Referensi COA" were stored but never read for
+        // newly imported mutations.
+        const decisionInput: MutationForDecisionStack = {
+          id,
+          companyId: Number(company_id),
+          amount: Number(p.amount),
+          direction: String(p.direction ?? "IN").toUpperCase(),
+          transactionDate: String(p.transaction_date).slice(0, 10),
+          description: String(p.description ?? ""),
+          normalizedDescription: p.normalized_description ?? null,
+          reference: null,
+          providerOrderId: null,
+          bankAccountId: p.bank_account_id ?? null,
+          counterpartyName: null,
+          counterpartyAccount: null,
+          status: "unmatched",
+        };
+        const decision = await runReconDecisionStack(decisionInput);
+        if (decision.decisionSource === "MANUAL_RULE" && decision.matchedRuleId) {
+          const reason = decision.confidenceBreakdown[0]?.label
+            ?.slice(0, 100)
+            .replace(/'/g, "''") ?? "manual reconciliation rule";
+          await db.execute(sql.raw(`
+            INSERT INTO bank_reconciliation_matches
+              (mutation_id, candidate_type, candidate_id, match_score, match_reason,
+               amount_match, date_match, status)
+            VALUES
+              (${id}, 'recon_rule', ${decision.matchedRuleId},
+               ${decision.confidence}, 'MANUAL_RULE:${reason}',
+               FALSE, FALSE, 'candidate')
+            ON CONFLICT DO NOTHING
+          `));
+          await db.execute(sql`
+            UPDATE bank_mutations
+               SET status = 'manual_review', updated_at = NOW()
+             WHERE id = ${id} AND status = 'unmatched'
+          `);
+          continue;
+        }
         await runUnifiedMatching({
           id, amount: p.amount, transaction_date: p.transaction_date,
           mutation_key: p.mutation_key, normalized_description: p.normalized_description,
