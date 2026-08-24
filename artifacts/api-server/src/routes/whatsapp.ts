@@ -121,6 +121,8 @@ const DEFAULT_QUOTATION_ADMIN_TPL = [
   "_Dikirim via Mini Form BizPortal_",
 ].join("\n");
 
+const WA_DELIVERY_RANK: Record<string, number> = { sent: 1, delivered: 2, read: 3 };
+
 // POST /api/whatsapp/send-quotation
 whatsappRouter.post("/send-quotation", async (req: Request, res: Response) => {
   if (!(await requireAdmin(req, res))) return;
@@ -291,7 +293,18 @@ whatsappRouter.post("/webhook", async (req: Request, res: Response) => {
             ...(normalizedStatus === "delivered" ? { deliveredAt: now } : {}),
             ...(normalizedStatus === "read"      ? { readAt: now }      : {}),
           })
-          .where(eq(notificationLogsTable.waMessageId, deliveryId))
+          .where(and(
+            eq(notificationLogsTable.waMessageId, deliveryId),
+            sql`COALESCE(
+              CASE ${notificationLogsTable.waDeliveryStatus}
+                WHEN 'sent' THEN 1
+                WHEN 'delivered' THEN 2
+                WHEN 'read' THEN 3
+                ELSE 0
+              END,
+              0
+            ) <= ${WA_DELIVERY_RANK[normalizedStatus]}`,
+          ))
           .returning({ id: notificationLogsTable.id });
 
         logger.info({ deliveryId, normalizedStatus, updated: updated.length }, "WA delivery status updated");
