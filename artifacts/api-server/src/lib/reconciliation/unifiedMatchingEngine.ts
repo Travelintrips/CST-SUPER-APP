@@ -56,14 +56,19 @@ const OPTIONAL_SOURCE_REQUIREMENTS: Record<OptionalCandidateSource, Record<strin
     customers: ["id", "name"],
   },
   tenant_invoice: {
-    tenant_invoices: ["id", "total_amount", "created_at", "tenant_id", "tenant_name", "invoice_number", "company_id", "status"],
-    tenants: ["id", "name"],
+    tenant_invoices: ["id", "total_amount", "created_at", "tenant_id", "invoice_number", "company_id", "status"],
+    tenants: ["id", "business_name"],
   },
 };
 
 let optionalSourceAvailability:
   | { expiresAt: number; available: Set<OptionalCandidateSource> }
   | null = null;
+
+/** Allows isolated tests to exercise schema preflight without a five-minute cache. */
+export function resetOptionalCandidateSourceAvailabilityForTests(): void {
+  optionalSourceAvailability = null;
+}
 
 /**
  * Runtime databases can lag the checked-in Drizzle schema. Check optional
@@ -884,7 +889,7 @@ export async function fetchCandidates(
                COALESCE(lo.sender_name, '') AS name,
                lo.order_number AS ref
         FROM logistic_orders lo
-        WHERE ${amtFilter.replace("##AMT##", "lo.total_price")}
+        WHERE ${amtFilter.replace("##AMT##", "lo.grand_total")}
           AND '${direction}' = 'OUT'
           AND lo.created_at::date BETWEEN ${dateFrom} AND ${dateTo}
           ${coFilter.replace("##TBL##", "lo")}
@@ -1001,7 +1006,7 @@ export async function fetchCandidates(
       q: `
         SELECT ti.id, ti.total_amount AS amount,
                ti.created_at::date::text AS date,
-               COALESCE(t.name, ti.tenant_name, '') AS name,
+               COALESCE(t.business_name, '') AS name,
                ti.invoice_number AS ref
         FROM tenant_invoices ti
         LEFT JOIN tenants t ON t.id = ti.tenant_id
@@ -1061,7 +1066,19 @@ export async function fetchCandidates(
         const { rows } = await db.execute(sql.raw(src.q));
         return { src, rows: rows as any[] };
       } catch (e: any) {
-        logger.warn({ err: e.message, type: src.type }, "[unifiedMatchingEngine] fetchCandidates: source skipped");
+        const isOptionalSource = Object.prototype.hasOwnProperty.call(
+          OPTIONAL_SOURCE_REQUIREMENTS,
+          src.type,
+        );
+        logger.warn(
+          {
+            err: e.message,
+            source: src.type,
+            optional: isOptionalSource,
+            required: !isOptionalSource,
+          },
+          "[unifiedMatchingEngine] candidate source query failed; continuing with remaining sources",
+        );
         return { src, rows: [] as any[] };
       }
       }),

@@ -734,7 +734,10 @@ describe("Evidence priority hierarchy", () => {
 // ─── runErpDocumentMatching: direct integration tests (DB mocked) ─────────────
 
 import { runErpDocumentMatching } from "../lib/reconciliation/erpDocumentMatcher.js";
-import { fetchCandidates } from "../lib/reconciliation/unifiedMatchingEngine.js";
+import {
+  fetchCandidates,
+  resetOptionalCandidateSourceAvailabilityForTests,
+} from "../lib/reconciliation/unifiedMatchingEngine.js";
 
 /**
  * Mengkonversi drizzle SQL object (sql.raw(...)) ke string yang bisa dicari.
@@ -941,6 +944,78 @@ describe("fetchCandidates — Sport Center payment rails", () => {
     expect(query).toContain("settlement_date");
     expect(query).not.toContain("= 'paylabs'");
     expect(query).not.toContain("= 'bank_transfer'");
+  });
+});
+
+describe("fetchCandidates — optional source schema compatibility", () => {
+  const compatibleOptionalSchemaRows = [
+    ...["id", "grand_total", "created_at", "sender_name", "order_number", "company_id"]
+      .map((column_name) => ({ table_name: "logistic_orders", column_name })),
+    ...["id", "total_amount", "created_at", "tenant_id", "invoice_number", "company_id", "status"]
+      .map((column_name) => ({ table_name: "tenant_invoices", column_name })),
+    ...["id", "business_name"]
+      .map((column_name) => ({ table_name: "tenants", column_name })),
+  ];
+
+  const queryFor = (sourceTable: string): string | undefined =>
+    mockExecute.mock.calls
+      .map((call: any[]) => sqlObjToString(call[0]))
+      .find((query: string) => query.includes(`FROM ${sourceTable}`));
+
+  beforeEach(() => {
+    resetOptionalCandidateSourceAvailabilityForTests();
+    mockExecute.mockReset();
+    mockExecute.mockImplementation((query: unknown) => {
+      const serialized = sqlObjToString(query);
+      if (serialized.includes("information_schema.columns")) {
+        return Promise.resolve({ rows: compatibleOptionalSchemaRows });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+  });
+
+  afterEach(() => {
+    resetOptionalCandidateSourceAvailabilityForTests();
+    mockExecute.mockReset();
+    mockExecute.mockResolvedValue({ rows: [] });
+  });
+
+  it("uses logistic_orders.grand_total consistently for amount selection and filtering", async () => {
+    await fetchCandidates({
+      amount: 500_000,
+      transaction_date: "2026-07-15",
+      company_id: 10,
+      direction: "OUT",
+      bank_account_id: null,
+      provider_order_id: null,
+      provider_name: null,
+      normalized_description: null,
+    });
+
+    const query = queryFor("logistic_orders");
+    expect(query).toBeDefined();
+    expect(query).toContain("lo.grand_total AS amount");
+    expect(query).toContain("ABS(lo.grand_total::numeric - 500000) < 0.01");
+    expect(query).not.toContain("lo.total_price");
+  });
+
+  it("uses the canonical tenant business name without requiring removed legacy columns", async () => {
+    await fetchCandidates({
+      amount: 500_000,
+      transaction_date: "2026-07-15",
+      company_id: 10,
+      direction: "IN",
+      bank_account_id: null,
+      provider_order_id: null,
+      provider_name: null,
+      normalized_description: null,
+    });
+
+    const query = queryFor("tenant_invoices");
+    expect(query).toBeDefined();
+    expect(query).toContain("COALESCE(t.business_name, '') AS name");
+    expect(query).not.toContain("t.name");
+    expect(query).not.toContain("ti.tenant_name");
   });
 });
 
