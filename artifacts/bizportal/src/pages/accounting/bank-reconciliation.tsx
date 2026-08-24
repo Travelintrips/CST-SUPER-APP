@@ -1026,22 +1026,24 @@ function candidateBusinessPriority(candidate: Candidate): number {
   }
 }
 
-/** Candidates shown to reviewers and used for approval must obey the
- * same-day rule for generic bank transfers. QRIS candidates keep their
- * separate settlement-date contract. `sport_payment` is not automatically
- * QRIS: its payment method decides which contract applies. */
+/** Candidates shown to reviewers and used for approval.
+ *
+ * QRIS is the only flow whose candidate visibility is gated by settlement
+ * date. For non-QRIS/manual-rule candidates, amount and date are evidence
+ * shown to the reviewer, not hard requirements that hide the candidate.
+ * `sport_payment` is not automatically QRIS: its payment method decides
+ * which contract applies.
+ */
 function visibleCandidates(m: BankMutation): Candidate[] {
   const seen = new Set<string>();
   const eligible = (m.candidates ?? [])
     .filter(candidate => {
-      const isBankTransfer = isBankTransferCandidate(candidate, m);
-      // For bank-transfer Sport Center payments use the payment date. The
-      // settlement date belongs to QRIS and is commonly H+1, which previously
-      // hid valid bank-transfer candidates from the reviewer.
-      const candidateDate = isBankTransfer
-        ? candidate.details?.date
-        : candidate.details?.settlementDate ?? candidate.details?.date;
-      const dateEligible = !isBankTransfer
+      const requiresQrisEvidence = isQrisCandidate(candidate, m);
+      const candidateDate = candidate.details?.settlementDate ?? candidate.details?.date;
+      // Only QRIS keeps the settlement-date visibility gate. Generic bank
+      // transfers and manual-rule candidates remain reviewable even when
+      // amount/date flags are false.
+      const dateEligible = !requiresQrisEvidence
         || isSameCalendarDate(m.transaction_date, candidateDate);
       const identity = [
         candidate.candidate_type,
@@ -3191,7 +3193,14 @@ function MutationCard({
   const cands  = visibleCandidates(m);
   const qrisAudits = qrisAuditsForMutation(m);
   const best   = cands[0];
-  const matchingCandidates = cands.filter(candidate => candidate.amount_match && candidate.date_match);
+  // Amount/date are hard visibility requirements only for QRIS. For other
+  // candidates (including manual recon rules), they remain reviewer evidence
+  // and must not prevent the candidate from being selected.
+  const matchingCandidates = cands.filter(candidate =>
+    isQrisCandidate(candidate, m)
+      ? candidate.amount_match && candidate.date_match
+      : true,
+  );
   const amount = Number(m.amount) || 0;
   const isIN   = m.direction === "IN";
   const isQris = isQrisMutation(m);
