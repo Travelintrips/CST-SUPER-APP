@@ -579,6 +579,8 @@ interface CoaAccountReference {
   name: string;
   type: string;
   isActive: boolean;
+  isPostable?: boolean;
+  isHeader?: boolean;
   parentId?: number | null;
   normalBalance?: "DEBIT" | "CREDIT" | string;
   companyId?: number | null;
@@ -2014,9 +2016,10 @@ function CoaReferenceDialog({
   open: boolean;
   activeCompanyId: number | null;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: () => void | Promise<void>;
 }) {
   const { toast } = useToast();
+  const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const [selectedCode, setSelectedCode] = useState("");
   const [conditionValue, setConditionValue] = useState("");
@@ -2043,6 +2046,7 @@ function CoaReferenceDialog({
       const params = new URLSearchParams({
         companyId: String(companyId),
         normalBalance: contraNormalBalance,
+        postableOnly: "true",
       });
       const response = await fetch(`/api/accounting/accounts?${params.toString()}`, { credentials: "include" });
       if (!response.ok) throw new Error("Daftar COA tidak dapat dimuat");
@@ -2059,6 +2063,7 @@ function CoaReferenceDialog({
     queryKey: ["coa-reference-parent-accounts", companyId],
     queryFn: async () => {
       const params = new URLSearchParams({ companyId: String(companyId) });
+      params.set("includeHeaders", "true");
       const response = await fetch(`/api/accounting/accounts?${params.toString()}`, { credentials: "include" });
       if (!response.ok) throw new Error("Daftar parent COA tidak dapat dimuat");
       return response.json() as Promise<CoaAccountReference[]>;
@@ -2086,7 +2091,9 @@ function CoaReferenceDialog({
   }, [open, mutation]);
 
   const accounts = (accountData ?? [])
-    .filter(account => account.isActive !== false)
+    // The API already excludes headers. Keep this guard for older API
+    // responses/cached data so parent COAs never become selectable references.
+    .filter(account => account.isActive !== false && account.isPostable !== false)
     .sort((a, b) => a.code.localeCompare(b.code));
   const visibleAccounts = accounts.filter(account => {
     const query = search.trim().toLowerCase();
@@ -2294,7 +2301,13 @@ function CoaReferenceDialog({
           description: `Mutasi berikutnya dengan referensi ini akan diarahkan ke ${selectedAccount.code}.`,
         });
       }
-      onSaved();
+      // A saved rule changes the server-side candidate recommendation. The
+      // mutation list and QRIS candidate audit use different React Query keys,
+      // so invalidating only bank-reconciliation leaves the candidate/approval
+      // view stale until its polling interval or a hard refresh.
+      qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] });
+      qc.invalidateQueries({ queryKey: ["coa-proposals-by-source"] });
+      await onSaved();
       onClose();
     } catch (error) {
       toast({
@@ -5017,9 +5030,13 @@ export default function BankReconciliationPage() {
   ) ? latestSourceProposal.proposedCode : null;
 
   // ── Invalidate helper ────────────────────────────────────────────────────
-  const invalidate = () => {
-    qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
-    qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] });
+  const invalidate = async () => {
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation"] }),
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] }),
+      qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] }),
+      qc.invalidateQueries({ queryKey: ["coa-proposals-by-source"] }),
+    ]);
   };
 
   const refreshMutationDetail = async (mutationId: number) => {

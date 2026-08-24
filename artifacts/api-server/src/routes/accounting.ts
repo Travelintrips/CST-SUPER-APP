@@ -244,6 +244,12 @@ router.get("/accounts/check-code", async (req, res) => {
 
 router.get("/accounts", async (req, res) => {
   const scope = resolveCompanyScope(req);
+  // COA selectors used for posting/reconciliation must never offer header
+  // accounts. Header accounts are valid parents in the chart, but cannot
+  // receive journal lines. Callers that build a new child account may opt in
+  // to seeing them explicitly.
+  const includeHeaders = String(req.query.includeHeaders ?? "").toLowerCase() === "true";
+  const postableOnly = String(req.query.postableOnly ?? "").toLowerCase() === "true";
   const requestedNormalBalance = String(req.query.normalBalance ?? "").trim().toUpperCase();
   const normalBalance =
     requestedNormalBalance === "DEBIT" || requestedNormalBalance === "CREDIT"
@@ -255,6 +261,7 @@ router.get("/accounts", async (req, res) => {
   const accountConditions = [
     condition,
     normalBalance ? eq(chartOfAccountsTable.normalBalance, normalBalance as "DEBIT" | "CREDIT") : undefined,
+    postableOnly && !includeHeaders ? eq(chartOfAccountsTable.isPostable, true) : undefined,
   ].filter((value): value is SQL => value !== undefined);
 
   const rows = await db
@@ -267,6 +274,8 @@ router.get("/accounts", async (req, res) => {
       subtype: chartOfAccountsTable.subtype,
       parentId: chartOfAccountsTable.parentId,
       isActive: chartOfAccountsTable.isActive,
+      isPostable: chartOfAccountsTable.isPostable,
+      isHeader: chartOfAccountsTable.isHeader,
       createdAt: chartOfAccountsTable.createdAt,
       companyCode: companiesTable.companyCode,
       companyName: companiesTable.companyName,
