@@ -104,6 +104,8 @@ type MarketplaceResult = {
   templateKind: string;
   serviceType: string | null;
   categoryKey: string | null;
+  isActive?: boolean | null;
+  isPublished?: boolean | null;
 };
 
 const AUTOCOMPLETE_MAP: AutocompleteEntry[] = [
@@ -235,6 +237,8 @@ function getAutocompleteSuggestions(
 ): AutocompleteEntry[] {
   const liveResults: AutocompleteEntry[] = liveItems
     .filter((item) =>
+      item.isActive !== false &&
+      item.isPublished !== false &&
       item.name.trim().length > 0 &&
       (q.length < 2 ||
         item.name.toLowerCase().includes(q) ||
