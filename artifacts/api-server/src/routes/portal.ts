@@ -3301,8 +3301,8 @@ router.get("/vendor/vendor-profile", requirePortalAuth, requireActiveVendor, asy
 });
 
 // PATCH /api/portal/vendor/profile — vendor self-edit profil sendiri (P1 — G9 fix)
-// Vendor hanya dapat mengubah field profil miliknya: picName, phone, email, fullAddress,
-// companyDescription, logoUrl. Tidak dapat mengubah status, marketplace status, atau dokumen.
+// Vendor hanya dapat mengubah field profil miliknya. Tidak dapat mengubah status,
+// marketplace status, supplier ownership, atau dokumen.
 router.patch(
   "/vendor/profile",
   requirePortalAuth,
@@ -3314,10 +3314,14 @@ router.patch(
       if (!customerId) { res.status(401).json({ error: "Unauthorized" }); return; }
 
       const {
-        picName, phone, email, fullAddress, companyDescription, logoUrl, expectedUpdatedAt,
+        picName, phone, email, fullAddress, province, city, postalCode,
+        bankName, bankAccountName, bankAccountNumber,
+        companyDescription, logoUrl, expectedUpdatedAt,
       } = req.body as {
         picName?: string | null; phone?: string | null; email?: string | null;
         fullAddress?: string | null;
+        province?: string | null; city?: string | null; postalCode?: string | null;
+        bankName?: string | null; bankAccountName?: string | null; bankAccountNumber?: string | null;
         companyDescription?: string | null; logoUrl?: string | null;
         expectedUpdatedAt?: string;
       };
@@ -3367,6 +3371,12 @@ router.patch(
       if (phone !== undefined) vpUpdates.phone = phone;
       if (email !== undefined) vpUpdates.email = email;
       if (fullAddress !== undefined) vpUpdates.fullAddress = fullAddress;
+      if (province !== undefined) vpUpdates.province = province;
+      if (city !== undefined) vpUpdates.city = city;
+      if (postalCode !== undefined) vpUpdates.postalCode = postalCode;
+      if (bankName !== undefined) vpUpdates.bankName = bankName;
+      if (bankAccountName !== undefined) vpUpdates.bankAccountName = bankAccountName;
+      if (bankAccountNumber !== undefined) vpUpdates.bankAccountNumber = bankAccountNumber;
       if (companyDescription !== undefined) vpUpdates.companyDescription = companyDescription;
 
       if (Object.keys(vpUpdates).length > 0) {

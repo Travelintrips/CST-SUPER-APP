@@ -184,5 +184,18 @@ export async function getVendorFullProfile(customerId: number) {
     }
   }
 
-  return { vendorProfile: vp ?? null, submissionLink };
+  if (!vp) return { vendorProfile: null, submissionLink };
+
+  // Keep the API contract explicit. Some UI labels use business-friendly
+  // names, while vendor_profiles stores the canonical columns below.
+  return {
+    vendorProfile: {
+      ...vp,
+      legalName: null,
+      address: vp.fullAddress,
+      picPhone: vp.phone,
+      picEmail: vp.email,
+    },
+    submissionLink,
+  };
 }

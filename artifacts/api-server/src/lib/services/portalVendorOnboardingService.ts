@@ -308,6 +308,15 @@ export async function completeOnboarding(
       nib: vendor.nib ?? null,
       npwp: vendor.npwp ?? null,
       serviceType: vendor.serviceType ?? null,
+      // These values come from the required basic onboarding fields/account.
+      // Do not fabricate province, city, postal code, or bank details here.
+      picName: fullName,
+      phone: phone,
+      email: (await db.select({ email: portalCustomersTable.email })
+        .from(portalCustomersTable)
+        .where(eq(portalCustomersTable.id, customerId))
+        .limit(1))[0]?.email ?? null,
+      fullAddress: address,
       legalityDocUrl: vendor.legalityDocUrl ?? null,
       updatedAt: now,
     }).onConflictDoUpdate({
@@ -317,6 +326,13 @@ export async function completeOnboarding(
         nib: vendor.nib ?? null,
         npwp: vendor.npwp ?? null,
         serviceType: vendor.serviceType ?? null,
+        picName: fullName,
+        phone: phone,
+        email: (await db.select({ email: portalCustomersTable.email })
+          .from(portalCustomersTable)
+          .where(eq(portalCustomersTable.id, customerId))
+          .limit(1))[0]?.email ?? null,
+        fullAddress: address,
         legalityDocUrl: vendor.legalityDocUrl ?? null,
         updatedAt: now,
       },

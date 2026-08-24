@@ -74,6 +74,12 @@ export const VendorSelfProfileSchema = z.object({
   phone: z.string().max(30).optional().nullable(),
   email: z.string().email().max(200).optional().nullable(),
   fullAddress: z.string().max(500).optional().nullable(),
+  province: z.string().max(100).optional().nullable(),
+  city: z.string().max(100).optional().nullable(),
+  postalCode: z.string().max(20).optional().nullable(),
+  bankName: z.string().max(100).optional().nullable(),
+  bankAccountName: z.string().max(200).optional().nullable(),
+  bankAccountNumber: z.string().max(50).optional().nullable(),
   companyDescription: z.string().max(2000).optional().nullable(),
   logoUrl: z.string().max(1000).optional().nullable(),
   /** Optimistic locking — opsional, backward compat */
