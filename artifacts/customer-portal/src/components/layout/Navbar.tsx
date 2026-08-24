@@ -106,6 +106,7 @@ type MarketplaceResult = {
   categoryKey: string | null;
   isActive?: boolean | null;
   isPublished?: boolean | null;
+  href?: string;
 };
 
 const AUTOCOMPLETE_MAP: AutocompleteEntry[] = [
@@ -253,7 +254,7 @@ function getAutocompleteSuggestions(
         label: item.name,
         description: item.description ?? (isSvc ? "Layanan" : "Produk"),
         kind: isSvc ? ("Layanan" as const) : ("Produk" as const),
-        href: `/marketplace?type=${isSvc ? "service" : "product"}${cat ? `&category=${cat}` : ""}&q=${encodeURIComponent(item.name)}`,
+        href: item.href ?? `/marketplace?type=${isSvc ? "service" : "product"}${cat ? `&category=${cat}` : ""}&q=${encodeURIComponent(item.name)}`,
         terms: [],
       };
     });
@@ -440,20 +441,51 @@ export function Navbar() {
     setLocation(href);
   }
 
-  // Pre-fetch live marketplace items for real search autocomplete
+  // Search the complete set of active portal offerings. The marketplace
+  // endpoints contain only published vendor catalog rows; the legacy portal
+  // endpoints contain the active services/products shown on /jasa and /products.
   const { data: liveItems = [] } = useQuery<MarketplaceResult[]>({
-    queryKey: ["navbar-marketplace-all"],
+    queryKey: ["navbar-portal-offerings-all"],
     queryFn: async () => {
-      const [svc, prod] = await Promise.all([
+      const [services, products, marketplaceServices, marketplaceProducts] = await Promise.all([
+        fetch("/api/portal/services").then((r) => r.ok ? r.json() : []),
+        fetch("/api/portal/products").then((r) => r.ok ? r.json() : []),
         fetch("/api/portal/marketplace?kind=service").then((r) => r.ok ? r.json() : []),
         fetch("/api/portal/marketplace?kind=product").then((r) => r.ok ? r.json() : []),
       ]);
-      return [...(svc as MarketplaceResult[]), ...(prod as MarketplaceResult[])];
+      const legacyServices = (Array.isArray(services) ? services : []).map((item) => ({
+        id: Number(item.id),
+        name: String(item.name ?? ""),
+        description: item.description ?? null,
+        templateKind: "service",
+        serviceType: Array.isArray(item.categories) ? item.categories[0] ?? null : null,
+        categoryKey: Array.isArray(item.categories) ? item.categories[0] ?? null : null,
+        isActive: true,
+        isPublished: true,
+        href: `/jasa/${item.id}`,
+      }));
+      const legacyProducts = (Array.isArray(products) ? products : []).map((item) => ({
+        id: Number(item.id),
+        name: String(item.name ?? ""),
+        description: item.description ?? null,
+        templateKind: "product",
+        serviceType: null,
+        categoryKey: Array.isArray(item.categories) ? item.categories[0] ?? null : null,
+        isActive: true,
+        isPublished: true,
+        href: `/products?q=${encodeURIComponent(String(item.name ?? ""))}`,
+      }));
+      return [
+        ...legacyServices,
+        ...legacyProducts,
+        ...(Array.isArray(marketplaceServices) ? marketplaceServices : []),
+        ...(Array.isArray(marketplaceProducts) ? marketplaceProducts : []),
+      ] as MarketplaceResult[];
     },
-    staleTime: 5 * 60 * 1000,
+    staleTime: 30_000,
   });
 
-  // Smart autocomplete is sourced only from currently published marketplace items.
+  // Smart autocomplete is sourced from all currently active portal offerings.
   const autocompleteSuggestions = getAutocompleteSuggestions(
     searchQuery.trim().toLowerCase(),
     liveItems,
