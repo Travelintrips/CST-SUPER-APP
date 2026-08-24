@@ -33,6 +33,7 @@ import { snapshotRuleVersion } from "../lib/reconciliation/reconRuleVersioning.j
 import { detectRuleConflicts } from "../lib/reconciliation/reconRuleConflictDetection.js";
 import { invalidateRulesCache } from "../lib/reconciliation/reconCache.js";
 import { runReconBatch2Migration } from "../lib/reconciliation/reconBatch2Migration.js";
+import { runReconClassificationMigration } from "../lib/reconClassificationMigration.js";
 
 const router = Router();
 
@@ -247,6 +248,56 @@ router.post("/", async (req, res) => {
       return res.status(500).json({ error: "Gagal membuat rule" });
     }
     const rule = rowToRule(created);
+
+    // Keep the configuration workspace in sync with the operational
+    // reconciliation rule created from the Bank Reconciliation screen.
+    // `recon_rules` remains the authoritative auto-approval source; this
+    // companion row makes the description metadata visible in the Rule AI tab.
+    // Use an exact active-row check so repeated saves do not create duplicates.
+    try {
+      await runReconClassificationMigration();
+      const aiFlow = body.direction === "IN"
+        ? "INCOME_ALLOCATION"
+        : "ROUTINE_EXPENSE_ALLOCATION";
+      const conditionValue = String(body.condition_value ?? "").replace(/'/g, "''");
+      const ruleName = String(body.name ?? `Referensi COA ${body.direction ?? ""}`).replace(/'/g, "''");
+      const ruleDescription = String(
+        body.description ?? `Sinkron dari Referensi COA rule #${rule.id}`,
+      ).replace(/'/g, "''");
+      const actionCoaCode = body.target_coa_code
+        ? `'${String(body.target_coa_code).replace(/'/g, "''")}'`
+        : "NULL";
+      await db.execute(sql.raw(`
+        INSERT INTO recon_ai_classification_rules
+          (company_id, name, description, condition_field, condition_operator,
+           condition_value, action_flow, action_coa_code, confidence, priority,
+           source, created_by)
+        SELECT
+          ${companyId}, '${ruleName}', '${ruleDescription}',
+          '${String(body.condition_field).replace(/'/g, "''")}',
+          '${String(body.condition_operator).replace(/'/g, "''")}',
+          '${conditionValue}', '${aiFlow}', ${actionCoaCode}, 1.00, ${Number(body.priority ?? 120)},
+          'manual', ${escStr((req as any).user?.email ?? null)}
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM recon_ai_classification_rules
+          WHERE company_id = ${companyId}
+            AND is_active = TRUE
+            AND condition_field = '${String(body.condition_field).replace(/'/g, "''")}'
+            AND condition_operator = '${String(body.condition_operator).replace(/'/g, "''")}'
+            AND condition_value = '${conditionValue}'
+            AND COALESCE(action_coa_code, '') = COALESCE(${actionCoaCode}, '')
+        )
+      `));
+    } catch (syncError: any) {
+      // The operational rule is already saved and remains usable for
+      // auto-approval. Do not turn a configuration mirror issue into a
+      // failed COA reference save.
+      logger.warn(
+        { err: syncError?.message ?? String(syncError), ruleId: rule.id },
+        "[recon_rules] configuration Rule AI mirror failed",
+      );
+    }
 
     // Snapshot version (async — non-blocking to response)
     snapshotRuleVersion(rule, "CREATE", (req as any).user?.email ?? null, body.change_reason ?? null)
