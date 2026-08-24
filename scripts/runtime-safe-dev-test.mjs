@@ -662,15 +662,18 @@ async function queueSseAndFinanceProof() {
 
   const journal = await query(
     client,
-    `SELECT id FROM accounting_journals WHERE id=54 LIMIT 1`,
+    `SELECT id FROM accounting_journals ORDER BY id LIMIT 1`,
   );
   const accounts = await query(
     client,
-    `SELECT id FROM chart_of_accounts WHERE id IN (1, 2) ORDER BY id`,
+    `SELECT id FROM chart_of_accounts ORDER BY id LIMIT 2`,
   );
   if (journal.rowCount !== 1 || accounts.rowCount !== 2) {
-    throw new Error("Required development journal/account fixture is unavailable");
+    throw new Error("Required development journal/account data is unavailable");
   }
+  const journalId = journal.rows[0].id;
+  const debitAccountId = accounts.rows[0].id;
+  const creditAccountId = accounts.rows[1].id;
   const entryNumber = `${runId}:JOURNAL`;
   const entry = await query(
     client,
@@ -678,18 +681,32 @@ async function queueSseAndFinanceProof() {
      (company_id, entry_number, journal_id, date, ref, description, status,
       source, total_debit, total_credit, created_by_id, entry_status,
       correlation_id, source_module, source_table)
-     VALUES ($1, $2, 54, CURRENT_DATE, $3, $4, 'draft', 'manual', 100, 100,
-             $5, 'DRAFT', $6, 'runtime-test', 'runtime_test')
+     VALUES ($1, $2, $3, CURRENT_DATE, $4, $5, 'draft', 'manual', 100, 100,
+              $6, 'DRAFT', $7, 'runtime-test', 'runtime_test')
      RETURNING id`,
-    [fixture.companyA, entryNumber, `${runId}:FINANCE`, `${runId} balanced journal`, runId, runId],
+    [
+      fixture.companyA,
+      entryNumber,
+      journalId,
+      `${runId}:FINANCE`,
+      `${runId} balanced journal`,
+      runId,
+      runId,
+    ],
   );
   await query(
     client,
     `INSERT INTO accounting_entry_lines
      (entry_id, account_id, description, debit, credit, company_id, source_module, source_table)
-     VALUES ($1, 1, $2, 100, 0, $3, 'runtime-test', 'runtime_test'),
-            ($1, 2, $2, 0, 100, $3, 'runtime-test', 'runtime_test')`,
-    [entry.rows[0].id, `${runId} balanced line`, fixture.companyA],
+     VALUES ($1, $2, $3, 100, 0, $4, 'runtime-test', 'runtime_test'),
+            ($1, $5, $3, 0, 100, $4, 'runtime-test', 'runtime_test')`,
+    [
+      entry.rows[0].id,
+      debitAccountId,
+      `${runId} balanced line`,
+      fixture.companyA,
+      creditAccountId,
+    ],
   );
   await query(
     client,
@@ -742,13 +759,14 @@ async function queueSseAndFinanceProof() {
      (company_id, payment_number, payment_type, status, amount, journal_id,
       partner_name, date, ref, memo, source_type, source_doc_id, payment_method,
       currency, description, correlation_id, source_module, source_table)
-     VALUES ($1, $2, 'inbound', 'posted', 100, 54, $3, CURRENT_DATE, $4, $5,
-             'runtime_test', $6, 'manual', 'IDR', $7, $8, 'runtime-test',
+      VALUES ($1, $2, 'inbound', 'posted', 100, $3, $4, CURRENT_DATE, $5, $6,
+              'runtime_test', $7, 'manual', 'IDR', $8, $9, 'runtime-test',
              'portal_product_orders')
      RETURNING id, amount, status`,
     [
       fixture.companyA,
       `${runId}:PAYMENT`,
+      journalId,
       `${runId} Customer A`,
       orderA,
       `${runId} invoice payment`,
