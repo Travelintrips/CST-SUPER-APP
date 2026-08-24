@@ -82,6 +82,7 @@ interface MappingRequiredError {
 // Real statuses from bank_mutations.status (backend contract):
 //   unmatched             → mutation synced but no candidate found
 //   matched               → candidate(s) found by matching engine
+//   manual_review         → match found but journal safeguard requires a reviewer
 //   duplicate_need_review → derived from bmi.status=NEED_REVIEW (import flow)
 //   approved_pending_posting → approve done, draft journal created, awaiting POST /post
 //   posted                → journal promoted to posted by POST /post
@@ -458,6 +459,7 @@ function SheetConfigManager() {
 type MutationStatus =
   | "unmatched"
   | "matched"
+  | "manual_review"
   | "duplicate_need_review"
   | "approved_pending_posting"
   | "approved"
@@ -715,6 +717,7 @@ function sportPaymentTypeLabel(type: SportPaymentType | null | undefined): strin
 const STATUS_LABELS: Record<string, string> = {
   unmatched:               "Transaksi Belum Lengkap",
   matched:                 "Cocok",
+  manual_review:           "Review Manual",
   duplicate_need_review:   "Perlu Diperiksa",
   approved_pending_posting:"Sudah Dicocokkan",
   approved:                "Sudah Dicocokkan",
@@ -726,6 +729,7 @@ const STATUS_LABELS: Record<string, string> = {
 const STATUS_COLORS: Record<string, string> = {
   unmatched:               "bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950 dark:text-amber-300",
   matched:                 "bg-green-50 text-green-700 border-green-200 dark:bg-green-950 dark:text-green-400",
+  manual_review:            "bg-orange-50 text-orange-800 border-orange-300 dark:bg-orange-950 dark:text-orange-300",
   duplicate_need_review:   "bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950 dark:text-amber-300",
   approved_pending_posting:"bg-yellow-50 text-yellow-700 border-yellow-200 dark:bg-yellow-950 dark:text-yellow-400",
   approved:                "bg-green-50 text-green-700 border-green-200 dark:bg-green-950 dark:text-green-400",
@@ -743,6 +747,7 @@ const QRIS_AUDIT_STATUS_LABELS: Record<string, string> = {
 const CARD_BORDER: Record<string, string> = {
   unmatched:               "border-l-4 border-l-amber-400",
   matched:                 "border-l-4 border-l-blue-400",
+  manual_review:            "border-l-4 border-l-orange-500",
   duplicate_need_review:   "border-l-4 border-l-orange-400",
   approved_pending_posting:"border-l-4 border-l-yellow-400",
   approved:                "border-l-4 border-l-green-400",
@@ -757,7 +762,8 @@ const CARD_BORDER: Record<string, string> = {
 
 /** Approve → draft journal. Only valid before posting. */
 const canApprove = (m: BankMutation) =>
-  m.status === "unmatched" || m.status === "matched" || m.status === "duplicate_need_review";
+  m.status === "unmatched" || m.status === "matched" ||
+  m.status === "manual_review" || m.status === "duplicate_need_review";
 
 /** Post ke Accounting → promotes draft journal to posted. */
 const canPost = (m: BankMutation) =>
@@ -767,7 +773,8 @@ const canPost = (m: BankMutation) =>
 /** Reject → hanya sebelum posted. */
 const canReject = (m: BankMutation) =>
   m.status === "unmatched" || m.status === "matched" ||
-  m.status === "duplicate_need_review" || m.status === "approved_pending_posting";
+  m.status === "manual_review" || m.status === "duplicate_need_review" ||
+  m.status === "approved_pending_posting";
 
 /** Reverse/Void → hanya setelah posted. */
 const canReverse = (m: BankMutation) =>
@@ -805,6 +812,7 @@ function statusLabel(m: BankMutation): string {
   if (m.status === "rejected") return STATUS_LABELS.rejected;
   if (m.status === "void") return STATUS_LABELS.void;
   if (m.status === "approved_pending_posting") return STATUS_LABELS.approved_pending_posting;
+  if (m.status === "manual_review") return STATUS_LABELS.manual_review;
   if (m.status === "duplicate_need_review" || hasUnresolvedVariance(m)) return "Perlu Diperiksa";
   if (m.status === "unmatched" && visibleCandidates(m).length > 0) return "Perlu Diperiksa";
   if (m.status === "unmatched" || !m.candidates?.length) return "Transaksi Belum Lengkap";
@@ -815,6 +823,7 @@ function statusColor(m: BankMutation): string {
   if (m.status === "rejected" || m.status === "void") return STATUS_COLORS[m.status] ?? "";
   if (m.status === "approved_pending_posting") return STATUS_COLORS.approved_pending_posting;
   if (m.status === "approved" || m.status === "posted") return STATUS_COLORS.approved;
+  if (m.status === "manual_review") return STATUS_COLORS.manual_review;
   if (m.status === "duplicate_need_review" || hasUnresolvedVariance(m)) return STATUS_COLORS.duplicate_need_review;
   if (m.status === "unmatched" && visibleCandidates(m).length > 0) return STATUS_COLORS.duplicate_need_review;
   if (m.status === "unmatched" || !m.candidates?.length) return STATUS_COLORS.unmatched;
@@ -883,6 +892,17 @@ function isUiApprovalEligible(m: BankMutation): boolean {
   // This is deliberately stricter than the backend action guard. The server
   // remains the final authority; the UI only avoids offering an unsafe action.
   return canApprove(m) && isExactMatch(m);
+}
+
+/**
+ * Manual-review mutations use the generic journal endpoint, but must never
+ * enter the QRIS/canonical settlement flow. The COA dialog is the explicit
+ * reviewer action for this state.
+ */
+function isManualReviewActionable(m: BankMutation): boolean {
+  return m.status === "manual_review"
+    && !isQrisMutation(m)
+    && !isCanonicalSettlementMutation(m);
 }
 
 function mutationHeading(m: BankMutation): string {
@@ -1504,6 +1524,7 @@ function StepProgressBar({
   const totalMutations =
     (summaryMap.unmatched?.count ?? 0) +
     (summaryMap.matched?.count ?? 0) +
+    (summaryMap.manual_review?.count ?? 0) +
     (summaryMap.duplicate_need_review?.count ?? 0) +
     (summaryMap.approved_pending_posting?.count ?? 0) +
     (summaryMap.posted?.count ?? 0) +
@@ -1518,6 +1539,7 @@ function StepProgressBar({
   const allProcessed    = hasAny &&
     (summaryMap.unmatched?.count ?? 0) === 0 &&
     (summaryMap.matched?.count ?? 0) === 0 &&
+    (summaryMap.manual_review?.count ?? 0) === 0 &&
     (summaryMap.duplicate_need_review?.count ?? 0) === 0 &&
     (summaryMap.approved_pending_posting?.count ?? 0) === 0;
 
@@ -1601,6 +1623,14 @@ function SummaryCards({
       bg: "hover:bg-green-50 dark:hover:bg-green-950/20",
     },
     {
+      key: "manual_review",
+      icon: ShieldAlert,
+      label: "Review Manual",
+      count: summaryMap.manual_review?.count ?? 0,
+      iconClass: "text-orange-500",
+      bg: "hover:bg-orange-50 dark:hover:bg-orange-950/20",
+    },
+    {
       key: "duplicate_need_review",
       icon: AlertTriangle,
       label: "Perlu Diperiksa",
@@ -1632,6 +1662,7 @@ function SummaryCards({
       amount:
         (summaryMap.unmatched?.amount ?? 0) +
         (summaryMap.matched?.amount ?? 0) +
+        (summaryMap.manual_review?.amount ?? 0) +
         (summaryMap.duplicate_need_review?.amount ?? 0) +
         (summaryMap.approved_pending_posting?.amount ?? 0) +
         (summaryMap.posted?.amount ?? 0) +
@@ -1642,7 +1673,7 @@ function SummaryCards({
   ];
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
       {cards.map(({ key, icon: Icon, label, count, amount, iconClass, bg }) => (
         <Card
           key={key}
@@ -1707,7 +1738,8 @@ function AIActionCenter({
 }) {
   const unmatched     = summaryMap.unmatched?.count ?? 0;
   const matched       = summaryMap.matched?.count ?? 0;
-  const needReview    = summaryMap.duplicate_need_review?.count ?? 0;
+  const manualReview  = summaryMap.manual_review?.count ?? 0;
+  const needReview    = (summaryMap.duplicate_need_review?.count ?? 0) + manualReview;
   const pendingPost   = summaryMap.approved_pending_posting?.count ?? 0;
 
   if (unmatched === 0 && matched === 0 && needReview === 0 && pendingPost === 0 && !onGenerateQrisCandidates) {
@@ -1846,7 +1878,9 @@ function AIActionCenter({
               <div className="flex items-start gap-2">
                 <AlertTriangle className="w-4 h-4 text-orange-500 mt-0.5 shrink-0" />
                 <div>
-                  <p className="text-sm font-semibold text-orange-800 dark:text-orange-300">{needReview} Duplikat Perlu Diperiksa</p>
+                  <p className="text-sm font-semibold text-orange-800 dark:text-orange-300">
+                    {needReview} Transaksi Perlu Review
+                  </p>
                   <p className="text-xs text-orange-600 dark:text-orange-400">Transaksi ini perlu review manual</p>
                 </div>
               </div>
@@ -1886,6 +1920,7 @@ type QuickFilter = {
 const QUICK_FILTERS: QuickFilter[] = [
   { label: "Belum Dicocokkan",   status: "unmatched" },
   { label: "Siap Disetujui",     status: "matched" },
+  { label: "Review Manual",      status: "manual_review" },
   { label: "Perlu Diperiksa",    status: "duplicate_need_review" },
   { label: "Menunggu Posting",   status: "approved_pending_posting" },
   { label: "Selesai",            status: "posted" },
@@ -2125,7 +2160,8 @@ function CoaReferenceDialog({
     !!mutation &&
     canApprove(mutation) &&
     !isQrisMutation(mutation) &&
-    visibleCandidates(mutation).length === 0;
+    !isCanonicalSettlementMutation(mutation) &&
+    (mutation.status === "manual_review" || visibleCandidates(mutation).length === 0);
 
   const startCreateCoa = () => {
     setCreatingCoa(true);
@@ -3429,6 +3465,17 @@ function MutationCard({
               Referensi COA
             </Button>
             {/* One clear primary action per mutation. Backend remains the final guard. */}
+            {isManualReviewActionable(m) && (
+              <Button
+                size="sm"
+                className="h-7 text-xs gap-1 bg-orange-600 hover:bg-orange-700 disabled:opacity-50"
+                onClick={() => onMapCoa(m)}
+                title="Pilih atau ganti COA lalu buat draft jurnal"
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                Pilih COA &amp; Buat Draft
+              </Button>
+            )}
             {!mappingError && isUiApprovalEligible(m) && (
               <Button
                 size="sm"
@@ -3448,7 +3495,7 @@ function MutationCard({
                 Setujui
               </Button>
             )}
-            {!isUiApprovalEligible(m) && matchingCandidates.length === 0 && (m.status === "unmatched" || m.status === "matched" || m.status === "duplicate_need_review") && (
+            {!isManualReviewActionable(m) && !isUiApprovalEligible(m) && matchingCandidates.length === 0 && (m.status === "unmatched" || m.status === "matched" || m.status === "duplicate_need_review") && (
               <Button
                 size="sm"
                 variant="outline"
@@ -3727,6 +3774,7 @@ function MutationDetailPanel({
   mutation,
   open,
   onClose,
+  onMapCoa,
   onApprove,
   onPost,
   onReject,
@@ -3745,6 +3793,7 @@ function MutationDetailPanel({
   mutation: BankMutation | null;
   open: boolean;
   onClose: () => void;
+  onMapCoa: (m: BankMutation) => void;
   onApprove: (m: BankMutation) => void;
   onPost:    (m: BankMutation) => void;
   onReject:  (m: BankMutation) => void;
@@ -4202,6 +4251,16 @@ function MutationDetailPanel({
 
         {/* Footer actions — explicit per-status */}
         <div className="px-4 py-3 border-t shrink-0 flex gap-2 flex-wrap">
+          {isManualReviewActionable(m) && (
+            <Button
+              className="flex-1 gap-1.5 bg-orange-600 hover:bg-orange-700 min-w-[180px]"
+              onClick={() => { onClose(); onMapCoa(m); }}
+              title="Pilih atau ganti COA lalu buat draft jurnal"
+            >
+              <BookOpen className="w-4 h-4" />
+              Pilih COA &amp; Buat Draft
+            </Button>
+          )}
           {!mappingError && isUiApprovalEligible(m) && (
             <Button
               className="flex-1 gap-1.5 bg-green-600 hover:bg-green-700 min-w-[120px] disabled:opacity-50"
@@ -4212,6 +4271,7 @@ function MutationDetailPanel({
           )}
           {!mappingError
             && !isUiApprovalEligible(m)
+            && m.status !== "manual_review"
             && canApprove(m)
             && cands.length > 0
             && !isQrisMutation(m)
@@ -4224,7 +4284,9 @@ function MutationDetailPanel({
                 Pilih Kandidat &amp; Approve
               </Button>
             )}
-          {!isUiApprovalEligible(m) && (m.status === "unmatched" || m.status === "matched" || m.status === "duplicate_need_review") && (
+          {!isUiApprovalEligible(m)
+            && m.status !== "manual_review"
+            && (m.status === "unmatched" || m.status === "matched" || m.status === "duplicate_need_review") && (
             <Button
               variant="outline"
               className="flex-1 gap-1.5 border-amber-300 text-amber-800 hover:bg-amber-50 dark:text-amber-300 min-w-[150px]"
@@ -5994,6 +6056,7 @@ export default function BankReconciliationPage() {
         mutation={detailMutation}
         open={!!detailMutation}
         onClose={() => setDetailMutation(null)}
+        onMapCoa={setCoaReferenceTarget}
         onApprove={handleOpenApprove}
         onPost={handleOpenPost}
         onReject={handleOpenReject}
