@@ -38,3 +38,14 @@ checkout or an isolated package check.
 
 **How to apply:** Treat the declaration build as part of the validation
 preflight, and report its command order when documenting typecheck evidence.
+
+Unit tests for admin guards also need the runtime admin configuration loaded
+when they assert invalid-token behavior. Without it, the intentional
+fail-closed response is 503 rather than the configured 401/403.
+
+**Why:** The live development API returned 401 for the same invalid token
+while isolated Vitest processes lacked the admin configuration.
+
+**How to apply:** Distinguish missing-config unit setup from live authorization
+evidence; do not weaken the fail-closed guard merely to satisfy the isolated
+test.
