@@ -9,6 +9,7 @@ import {
   vendorCatalogSubmissionLinksTable,
 } from "@workspace/db";
 import { eq, desc, inArray, and } from "drizzle-orm";
+import { toVendorProfileViewModel } from "./vendorProfileViewModel.js";
 
 // ── resolveVendorSupplierId ─────────────────────────────────────────────────
 // P0-FIX: menggunakan FK lookup via vendor_profiles.supplier_id
@@ -186,22 +187,8 @@ export async function getVendorFullProfile(customerId: number) {
 
   if (!vp) return { vendorProfile: null, submissionLink };
 
-  // Keep the API contract explicit. Some UI labels use business-friendly
-  // names, while vendor_profiles stores the canonical columns below.
-  const rawBankAccountNumber = vp.bankAccountNumber;
-  const maskedBankAccountNumber = rawBankAccountNumber
-    ? `••••••${rawBankAccountNumber.slice(-4)}`
-    : null;
   return {
-    vendorProfile: {
-      ...vp,
-      legalName: null,
-      address: vp.fullAddress,
-      picPhone: vp.phone,
-      picEmail: vp.email,
-      bankAccountNumber: maskedBankAccountNumber,
-      bankAccountNumberMasked: maskedBankAccountNumber,
-    },
+    vendorProfile: toVendorProfileViewModel(vp),
     submissionLink,
   };
 }

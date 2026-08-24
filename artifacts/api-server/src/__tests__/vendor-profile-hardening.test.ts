@@ -246,6 +246,20 @@ describe("Vendor Zod schemas", () => {
       expect(r.success).toBe(true);
     });
 
+    it("rejects vendor onboarding without a vendor payload", async () => {
+      const { CompleteOnboardingSchema } = await importSchemas();
+      const r = CompleteOnboardingSchema.safeParse({
+        fullName: "Budi Santoso",
+        phone: "08123456789",
+        address: "Jl. Sudirman No.1",
+        accountType: "vendor",
+      });
+      expect(r.success).toBe(false);
+      if (!r.success) {
+        expect(r.error.issues.some((issue) => issue.path.join(".") === "vendor")).toBe(true);
+      }
+    });
+
     it("rejects missing required fields", async () => {
       const { CompleteOnboardingSchema } = await importSchemas();
       expect(CompleteOnboardingSchema.safeParse({ phone: "081", address: "X" }).success).toBe(false);

@@ -3335,6 +3335,7 @@ router.patch(
           email: vendorProfilesTable.email,
           fullAddress: vendorProfilesTable.fullAddress,
           companyDescription: vendorProfilesTable.companyDescription,
+          updatedAt: vendorProfilesTable.updatedAt,
         })
         .from(vendorProfilesTable)
         .where(eq(vendorProfilesTable.customerId, customerId))
@@ -3345,23 +3346,17 @@ router.patch(
         return;
       }
 
-      // Optimistic locking via suppliers.updated_at (opsional, backward compat)
-      if (expectedUpdatedAt && vp.supplierId) {
-        const [sup] = await db
-          .select({ updatedAt: suppliersTable.updatedAt })
-          .from(suppliersTable)
-          .where(eq(suppliersTable.id, vp.supplierId))
-          .limit(1);
-        if (sup?.updatedAt) {
-          const expected = new Date(expectedUpdatedAt).getTime();
-          const actual = new Date(sup.updatedAt).getTime();
-          if (Math.abs(expected - actual) > 1000) {
-            res.status(409).json({
-              message: "Conflict: data telah diubah. Refresh dan coba lagi.",
-              currentUpdatedAt: sup.updatedAt,
-            });
-            return;
-          }
+      // Optimistic locking uses the row actually being edited. suppliers.updatedAt
+      // is unrelated to ordinary vendor profile changes.
+      if (expectedUpdatedAt) {
+        const expected = new Date(expectedUpdatedAt).getTime();
+        const actual = vp.updatedAt?.getTime();
+        if (!actual || expected !== actual) {
+          res.status(409).json({
+            message: "Conflict: data telah diubah. Refresh dan coba lagi.",
+            currentUpdatedAt: vp.updatedAt ?? null,
+          });
+          return;
         }
       }
 
@@ -3380,7 +3375,26 @@ router.patch(
       if (companyDescription !== undefined) vpUpdates.companyDescription = companyDescription;
 
       if (Object.keys(vpUpdates).length > 0) {
-        await db.update(vendorProfilesTable).set(vpUpdates).where(eq(vendorProfilesTable.customerId, customerId));
+        const now = new Date();
+        const updateWhere = expectedUpdatedAt
+          ? and(
+              eq(vendorProfilesTable.customerId, customerId),
+              eq(vendorProfilesTable.updatedAt, vp.updatedAt),
+            )
+          : eq(vendorProfilesTable.customerId, customerId);
+        const [updatedProfile] = await db
+          .update(vendorProfilesTable)
+          .set({ ...vpUpdates, updatedAt: now })
+          .where(updateWhere)
+          .returning({ updatedAt: vendorProfilesTable.updatedAt });
+
+        if (!updatedProfile) {
+          res.status(409).json({
+            message: "Conflict: data telah diubah. Refresh dan coba lagi.",
+          });
+          return;
+        }
+        vp.updatedAt = updatedProfile.updatedAt;
       }
 
       // Update suppliers (logoUrl — jika disertakan dan ada supplierId)
@@ -3410,7 +3424,7 @@ router.patch(
         });
       }
 
-      res.json({ ok: true });
+      res.json({ ok: true, updatedAt: vp.updatedAt });
     } catch (e: unknown) {
       res.status(500).json({ error: (e as Error)?.message ?? "Server error" });
     }

@@ -122,6 +122,14 @@ export const CompleteOnboardingSchema = z.object({
     division: z.string().max(100).optional(),
     position: z.string().max(100).optional(),
   }).optional(),
+}).superRefine((data, ctx) => {
+  if (data.accountType === "vendor" && !data.vendor) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["vendor"],
+      message: "Data perusahaan vendor wajib diisi",
+    });
+  }
 });
 export type CompleteOnboardingInput = z.infer<typeof CompleteOnboardingSchema>;
 

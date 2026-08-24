@@ -297,10 +297,17 @@ export async function completeOnboarding(
 
   // Upsert vendor profile
   if (accountType === "vendor" && vendor) {
-    const [existingVendorProfile] = await db
-      .select({ legalityDocUrl: vendorProfilesTable.legalityDocUrl })
-      .from(vendorProfilesTable)
-      .where(eq(vendorProfilesTable.customerId, customerId));
+    const [[existingVendorProfile], [portalCustomer]] = await Promise.all([
+      db
+        .select({ legalityDocUrl: vendorProfilesTable.legalityDocUrl })
+        .from(vendorProfilesTable)
+        .where(eq(vendorProfilesTable.customerId, customerId)),
+      db
+        .select({ email: portalCustomersTable.email })
+        .from(portalCustomersTable)
+        .where(eq(portalCustomersTable.id, customerId))
+        .limit(1),
+    ]);
 
     await db.insert(vendorProfilesTable).values({
       customerId,
@@ -312,10 +319,7 @@ export async function completeOnboarding(
       // Do not fabricate province, city, postal code, or bank details here.
       picName: fullName,
       phone: phone,
-      email: (await db.select({ email: portalCustomersTable.email })
-        .from(portalCustomersTable)
-        .where(eq(portalCustomersTable.id, customerId))
-        .limit(1))[0]?.email ?? null,
+      email: portalCustomer?.email ?? null,
       fullAddress: address,
       legalityDocUrl: vendor.legalityDocUrl ?? null,
       updatedAt: now,
@@ -328,10 +332,7 @@ export async function completeOnboarding(
         serviceType: vendor.serviceType ?? null,
         picName: fullName,
         phone: phone,
-        email: (await db.select({ email: portalCustomersTable.email })
-          .from(portalCustomersTable)
-          .where(eq(portalCustomersTable.id, customerId))
-          .limit(1))[0]?.email ?? null,
+        email: portalCustomer?.email ?? null,
         fullAddress: address,
         legalityDocUrl: vendor.legalityDocUrl ?? null,
         updatedAt: now,

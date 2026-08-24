@@ -77,7 +77,7 @@ interface VendorProfileDetail {
   city: string | null; province: string | null; postalCode: string | null;
   bankName: string | null; bankAccountNumber: string | null; bankAccountName: string | null;
   bankAccountNumberMasked?: string | null;
-  verificationStatus: string | null; supplierId: number | null; approvedAt: string | null;
+  verificationStatus: string | null; supplierId: number | null; approvedAt: string | null; updatedAt: string | null;
 }
 
 type VendorProfileForm = {
@@ -1427,15 +1427,19 @@ export default function VendorDashboard() {
     setSavingVendorProfile(true);
     setVendorProfileFormError("");
     try {
+      const payload = Object.fromEntries(
+        Object.entries(vendorProfileForm)
+          .filter(([key, value]) => key !== "bankAccountNumber" || value.trim() !== "")
+          .map(([key, value]) => [key, value.trim() === "" ? null : value.trim()])
+      ) as Record<string, string | null>;
+      const currentUpdatedAt = vendorProfileDetail?.vendorProfile?.updatedAt;
+      if (currentUpdatedAt) payload.expectedUpdatedAt = new Date(currentUpdatedAt).toISOString();
+
       const response = await fetch("/api/portal/vendor/profile", {
         method: "PATCH",
         headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify(Object.fromEntries(
-          Object.entries(vendorProfileForm)
-            .filter(([key, value]) => key !== "bankAccountNumber" || value.trim() !== "")
-            .map(([key, value]) => [key, value.trim() === "" ? null : value.trim()])
-        )),
+        body: JSON.stringify(payload),
       });
       const body = await response.json().catch(() => ({})) as { error?: string; message?: string };
       if (!response.ok) throw new Error(body.error ?? body.message ?? "Gagal menyimpan profil");
