@@ -3813,13 +3813,15 @@ router.post("/:mutationId/post", async (req, res) => {
       }
 
       // Resolve the approved source-qualified match before loading or changing
-      // any generic accounting journal. Canonical Sport Center settlements
-      // already own a posted settlement journal and must never enter /post.
+      // any generic accounting journal. Only approved rows participate here:
+      // a stale candidate is review evidence, not a second approved identity.
+      // Canonical Sport Center settlements already own a posted settlement
+      // journal and must never enter /post.
       const { rows: approvedMatchRows } = await tx.execute(sql.raw(`
         SELECT candidate_type, candidate_id, candidate_source
         FROM bank_reconciliation_matches
         WHERE mutation_id = ${mutId}
-          AND status IN ('candidate', 'approved')
+          AND status = 'approved'
         ORDER BY id
         LIMIT 2
         FOR UPDATE

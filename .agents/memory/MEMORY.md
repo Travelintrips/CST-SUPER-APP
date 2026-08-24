@@ -127,6 +127,7 @@
 - [CF-SC-10B processor boundary](cf-sc10b-processor-boundary.md) — central processor orchestrates outbox state and delegates accounting ownership to the DB function; keep legacy mode until smoke passes.
 - [Customer order WhatsApp ownership](customer-order-whatsapp-ownership.md) — customer lifecycle WA must originate from the canonical logistic transition service; driver/vendor routes keep only internal notifications.
 - [Project resolver ownership](project-resolver-ownership.md) — project-aware finance resolution must fail closed for unknown projects and reuse the caller transaction when processing.
+- [Generic post approved-match guard](generic-post-approved-match-guard.md) — count only approved reconciliation matches; stale candidates must not create a false ambiguity.
 - [CF-SC-10B harness baseline](cf-sc-10b-harness-baseline.md) — compare dynamic existing-row snapshots; never assume a fixed DEV outbox/processing count.
 - [CF-CP-6 harness packaging](cf-cp-6-harness-packaging.md) — bundle workspace TS packages in API workspace; keep pg/pino external and always remove generated proof bundles.
 - [CF-CP-6B migration](cf-cp-6b-migration.md) — Jasa mapping identity must include service scope; proof harnesses must load development secrets.
