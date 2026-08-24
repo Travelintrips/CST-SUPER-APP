@@ -16,6 +16,7 @@ const pool = new Pool({
 
 const steps = [];
 const orderIds = [];
+const membershipCustomerIds = [];
 const jars = { a: new Map(), b: new Map(), vendor: new Map(), admin: new Map() };
 let resetToken;
 
@@ -119,6 +120,10 @@ async function cleanup() {
     );
     const ids = customerRows.rows.map((row) => Number(row.id));
     if (ids.length) {
+      await client.query(
+        "DELETE FROM portal_company_members WHERE portal_customer_id = ANY($1::int[])",
+        [ids],
+      ).catch((e) => errors.push(e.message));
       for (const table of [
         "portal_customer_services",
         "trusted_devices",
@@ -220,6 +225,25 @@ async function run() {
 
     await otpLogin(emailA, jars.a);
     await otpLogin(emailB, jars.b);
+    const lifecycleCustomers = await query(
+      "SELECT id FROM portal_customers WHERE email = ANY($1::text[])",
+      [[emailA, emailB]],
+    );
+    membershipCustomerIds.push(...lifecycleCustomers.map((row) => Number(row.id)));
+    if (membershipCustomerIds.length !== 2) {
+      throw new Error("customer lifecycle membership fixtures were not created");
+    }
+    await query(
+      `INSERT INTO portal_company_members
+         (portal_customer_id, company_id, buyer_role, is_active, joined_at)
+       SELECT id, 1, 'requester', true, NOW()
+       FROM portal_customers
+       WHERE id = ANY($1::int[])
+       ON CONFLICT (portal_customer_id, company_id)
+       DO UPDATE SET is_active = true, updated_at = NOW()`,
+      [membershipCustomerIds],
+    );
+    record("customer company membership fixtures", true, "company 1 membership established");
     await roleLogin("vendor", jars.vendor);
     await roleLogin("admin", jars.admin);
 
