@@ -1,603 +1,510 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { Search, Download, Copy, AlertCircle, CheckCircle2, History, Star, GitFork, Clock, BookOpen, TerminalSquare, Github, ChevronRight, XCircle, ArrowRight, FolderTree, SearchCode, Eye, Loader2, Lock } from "lucide-react";
-import { parseGitHubUrl, getZipDownloadUrl, ParsedGitHubUrl, GitHubContentItem, CodeSearchItem, checkIsStarred, starRepo, unstarRepo } from "@/lib/github";
-import { useGitHubRepo, useGitHubBranches } from "@/hooks/use-github";
-import { useHistory } from "@/hooks/use-history";
-import { useGitHubToken } from "@/hooks/use-github-token";
-import { FileBrowser } from "@/components/file-browser";
-import { FilePreview } from "@/components/file-preview";
-import { CodeSearch } from "@/components/code-search";
-import { TokenDialog } from "@/components/token-dialog";
-import { formatDistanceToNow } from "date-fns";
+import { useMemo, useState } from "react";
+import {
+  Barcode,
+  Calculator,
+  Check,
+  Minus,
+  Plus,
+  Printer,
+  ReceiptText,
+  Search,
+  ShoppingCart,
+  Sparkles,
+  Trash2,
+  WalletCards,
+} from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useToast } from "@/hooks/use-toast";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
+import { useToast } from "@/hooks/use-toast";
+
+type Product = {
+  id: string;
+  sku: string;
+  name: string;
+  category: string;
+  price: number;
+  stock: number;
+  color: string;
+};
+
+type CartItem = Product & {
+  quantity: number;
+};
+
+const products: Product[] = [
+  {
+    id: "kopi-susu",
+    sku: "8991001",
+    name: "Kopi Susu Aren",
+    category: "Minuman",
+    price: 18000,
+    stock: 42,
+    color: "from-amber-500 to-orange-600",
+  },
+  {
+    id: "teh-lemon",
+    sku: "8991002",
+    name: "Lemon Tea Segar",
+    category: "Minuman",
+    price: 14000,
+    stock: 31,
+    color: "from-lime-500 to-emerald-600",
+  },
+  {
+    id: "nasi-goreng",
+    sku: "8992001",
+    name: "Nasi Goreng Spesial",
+    category: "Makanan",
+    price: 32000,
+    stock: 18,
+    color: "from-rose-500 to-red-600",
+  },
+  {
+    id: "mie-ayam",
+    sku: "8992002",
+    name: "Mie Ayam Bakso",
+    category: "Makanan",
+    price: 28000,
+    stock: 22,
+    color: "from-yellow-500 to-amber-600",
+  },
+  {
+    id: "croissant",
+    sku: "8993001",
+    name: "Butter Croissant",
+    category: "Snack",
+    price: 22000,
+    stock: 16,
+    color: "from-orange-400 to-yellow-600",
+  },
+  {
+    id: "air-mineral",
+    sku: "8994001",
+    name: "Air Mineral 600ml",
+    category: "Retail",
+    price: 6000,
+    stock: 80,
+    color: "from-sky-500 to-cyan-600",
+  },
+  {
+    id: "roti-bakar",
+    sku: "8993002",
+    name: "Roti Bakar Coklat",
+    category: "Snack",
+    price: 24000,
+    stock: 25,
+    color: "from-stone-500 to-neutral-700",
+  },
+  {
+    id: "paket-hemat",
+    sku: "8995001",
+    name: "Paket Hemat Kasir",
+    category: "Bundle",
+    price: 45000,
+    stock: 12,
+    color: "from-violet-500 to-indigo-600",
+  },
+];
+
+const quickTender = [50000, 100000, 150000, 200000];
+
+function formatRupiah(value: number) {
+  return new Intl.NumberFormat("id-ID", {
+    style: "currency",
+    currency: "IDR",
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+function currentReceiptCode() {
+  return `POS-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${Math.floor(Math.random() * 900 + 100)}`;
+}
 
 export default function Home() {
-  const [inputValue, setInputValue] = useState("");
-  const [parsedUrl, setParsedUrl] = useState<ParsedGitHubUrl | null>(null);
-  const [selectedBranch, setSelectedBranch] = useState<string>("");
-  const [isCopied, setIsCopied] = useState(false);
-  const [showFileBrowser, setShowFileBrowser] = useState(false);
-  const [showCodeSearch, setShowCodeSearch] = useState(false);
-  const [selectedFile, setSelectedFile] = useState<GitHubContentItem | null>(null);
   const { toast } = useToast();
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState("");
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [discount, setDiscount] = useState(5);
+  const [cashReceived, setCashReceived] = useState(100000);
+  const [lastReceipt, setLastReceipt] = useState(currentReceiptCode());
 
-  const { token, setToken, clearToken, isAuthenticated } = useGitHubToken();
-  const { history, addToHistory, clearHistory } = useHistory();
+  const filteredProducts = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
 
-  // Star state — null = unknown, true/false = known
-  const [isStarred, setIsStarred] = useState<boolean | null>(null);
-  const [isStarring, setIsStarring] = useState(false);
-  const [localStarCount, setLocalStarCount] = useState<number | null>(null);
-
-  const { 
-    data: repoData, 
-    isLoading: isLoadingRepo, 
-    error: repoError,
-    isError: isRepoError
-  } = useGitHubRepo(parsedUrl?.owner || "", parsedUrl?.repo || "", !!parsedUrl?.isValid, token || undefined);
-
-  const {
-    data: branchesData,
-    isLoading: isLoadingBranches
-  } = useGitHubBranches(parsedUrl?.owner || "", parsedUrl?.repo || "", !!parsedUrl?.isValid && !!repoData, token || undefined);
-
-  // Check star status when repo + token become available
-  useEffect(() => {
-    if (!repoData || !token) {
-      setIsStarred(null);
-      return;
+    if (!normalizedQuery) {
+      return products;
     }
-    let cancelled = false;
-    checkIsStarred(repoData.owner.login, repoData.name, token)
-      .then((starred) => { if (!cancelled) setIsStarred(starred); })
-      .catch(() => { if (!cancelled) setIsStarred(null); });
-    return () => { cancelled = true; };
-  }, [repoData, token]);
 
-  // Sync local star count with fresh repo data
-  useEffect(() => {
-    if (repoData) setLocalStarCount(repoData.stargazers_count);
-  }, [repoData]);
+    return products.filter((product) => {
+      const searchable = `${product.name} ${product.category} ${product.sku}`.toLowerCase();
+      return searchable.includes(normalizedQuery);
+    });
+  }, [query]);
 
-  const handleToggleStar = useCallback(async () => {
-    if (!repoData || !token || isStarring) return;
-    setIsStarring(true);
-    const wasStarred = isStarred;
-    // Optimistic update
-    setIsStarred(!wasStarred);
-    setLocalStarCount((c) => (c ?? repoData.stargazers_count) + (wasStarred ? -1 : 1));
-    try {
-      if (wasStarred) {
-        await unstarRepo(repoData.owner.login, repoData.name, token);
-        toast({ title: "Unstarred", description: `${repoData.full_name} removed from your stars.` });
-      } else {
-        await starRepo(repoData.owner.login, repoData.name, token);
-        toast({ title: "Starred!", description: `${repoData.full_name} added to your stars.`, className: "bg-primary text-primary-foreground border-primary" });
+  const subtotal = cart.reduce((total, item) => total + item.price * item.quantity, 0);
+  const discountAmount = Math.round((subtotal * discount) / 100);
+  const tax = Math.round((subtotal - discountAmount) * 0.11);
+  const total = subtotal - discountAmount + tax;
+  const change = Math.max(cashReceived - total, 0);
+  const itemCount = cart.reduce((totalItems, item) => totalItems + item.quantity, 0);
+
+  const addToCart = (product: Product) => {
+    setCart((currentCart) => {
+      const existingItem = currentCart.find((item) => item.id === product.id);
+
+      if (existingItem) {
+        return currentCart.map((item) =>
+          item.id === product.id ? { ...item, quantity: Math.min(item.quantity + 1, product.stock) } : item,
+        );
       }
-    } catch (err) {
-      // Revert on failure
-      setIsStarred(wasStarred);
-      setLocalStarCount((c) => (c ?? repoData.stargazers_count) + (wasStarred ? 1 : -1));
-      toast({ title: "Action failed", description: (err as Error).message, variant: "destructive" });
-    } finally {
-      setIsStarring(false);
-    }
-  }, [repoData, token, isStarred, isStarring, toast]);
 
-  // Set default branch when repo data loads
-  useEffect(() => {
-    if (repoData && !selectedBranch) {
-      setSelectedBranch(parsedUrl?.branch || repoData.default_branch);
-      // Only add to history once we successfully loaded the repo
-      addToHistory(repoData.owner.login, repoData.name);
-    }
-  }, [repoData, parsedUrl, selectedBranch, addToHistory]);
+      return [...currentCart, { ...product, quantity: 1 }];
+    });
+  };
 
-  const handleProcessUrl = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!inputValue.trim()) return;
+  const updateQuantity = (productId: string, quantity: number) => {
+    setCart((currentCart) =>
+      currentCart
+        .map((item) => (item.id === productId ? { ...item, quantity: Math.max(0, Math.min(quantity, item.stock)) } : item))
+        .filter((item) => item.quantity > 0),
+    );
+  };
 
-    const parsed = parseGitHubUrl(inputValue);
-    if (!parsed.isValid) {
+  const clearCart = () => {
+    setCart([]);
+    setCashReceived(100000);
+  };
+
+  const completePayment = () => {
+    if (cart.length === 0) {
       toast({
-        title: "Invalid URL",
-        description: "Please enter a valid GitHub repository URL or owner/repo format.",
-        variant: "destructive"
+        title: "Keranjang masih kosong",
+        description: "Tambahkan produk sebelum memproses pembayaran.",
+        variant: "destructive",
       });
       return;
     }
 
-    setParsedUrl(parsed);
-    setSelectedBranch("");
-    setIsCopied(false);
-    setShowFileBrowser(false);
-    setShowCodeSearch(false);
-    setSelectedFile(null);
-    setIsStarred(null);
-    setLocalStarCount(null);
-  };
+    if (cashReceived < total) {
+      toast({
+        title: "Nominal pembayaran kurang",
+        description: `Kurang ${formatRupiah(total - cashReceived)} dari total belanja.`,
+        variant: "destructive",
+      });
+      return;
+    }
 
-  const handleDownload = () => {
-    if (!repoData || !selectedBranch) return;
-    
-    const url = getZipDownloadUrl(repoData.owner.login, repoData.name, selectedBranch);
-    window.open(url, '_blank');
-    
+    const receiptCode = currentReceiptCode();
+    setLastReceipt(receiptCode);
+    setCart([]);
+    setCashReceived(100000);
     toast({
-      title: "Download Started",
-      description: `Downloading ${repoData.name} (${selectedBranch})`,
+      title: "Transaksi berhasil",
+      description: `${receiptCode} selesai. Kembalian ${formatRupiah(change)}.`,
       className: "bg-primary text-primary-foreground border-primary",
     });
   };
 
-  const handleCopyLink = async () => {
-    if (!repoData || !selectedBranch) return;
-    
-    const url = getZipDownloadUrl(repoData.owner.login, repoData.name, selectedBranch);
-    try {
-      await navigator.clipboard.writeText(url);
-      setIsCopied(true);
-      setTimeout(() => setIsCopied(false), 2000);
-      toast({
-        title: "Copied to clipboard",
-        description: "ZIP download URL has been copied.",
-      });
-    } catch (err) {
-      toast({
-        title: "Failed to copy",
-        description: "Could not copy to clipboard.",
-        variant: "destructive"
-      });
-    }
-  };
-
-  const loadFromHistory = (owner: string, repo: string) => {
-    const url = `https://github.com/${owner}/${repo}`;
-    setInputValue(url);
-    const parsed = parseGitHubUrl(url);
-    setParsedUrl(parsed);
-    setSelectedBranch("");
-    setIsCopied(false);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  const resetState = () => {
-    setInputValue("");
-    setParsedUrl(null);
-    setSelectedBranch("");
-    setIsCopied(false);
-    inputRef.current?.focus();
-  };
-
   return (
-    <div className="min-h-[100dvh] w-full flex flex-col items-center py-12 px-4 sm:px-6 md:py-24 relative overflow-hidden">
-      {/* Background decoration */}
-      <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden">
-        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-primary/5 blur-[120px]" />
-        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full bg-primary/5 blur-[120px]" />
-        <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0IiBoZWlnaHQ9IjQiPjxyZWN0IHdpZHRoPSI0IiBoZWlnaHQ9IjQiIGZpbGw9IiNmZmYiIGZpbGwtb3BhY2l0eT0iMC4wMiIvPjwvc3ZnPg==')] opacity-30 mix-blend-overlay" />
-      </div>
-
-      <div className="w-full max-w-2xl z-10 flex flex-col gap-8">
-        
-        {/* Header */}
-        <div className="flex flex-col items-center text-center gap-4 animate-in fade-in slide-in-from-bottom-4 duration-700">
-          <div className="p-3 bg-card border border-border rounded-xl shadow-lg shadow-black/50 glow-cyan">
-            <Github className="w-8 h-8 text-primary" />
-          </div>
-          <h1 className="text-4xl font-bold tracking-tight text-foreground font-mono">
-            dl<span className="text-primary">.</span>repo
-          </h1>
-          <p className="text-muted-foreground text-lg max-w-lg">
-            Download any GitHub repository as a ZIP archive instantly. Fast, precise, and native.
-          </p>
-          <TokenDialog
-            token={token}
-            isAuthenticated={isAuthenticated}
-            onSave={setToken}
-            onClear={clearToken}
-          />
-        </div>
-
-        {/* Search Input */}
-        <Card className="border-border/50 bg-card/50 backdrop-blur-xl shadow-xl animate-in fade-in slide-in-from-bottom-6 duration-700 delay-100 overflow-hidden">
-          <CardContent className="p-2 sm:p-3">
-            <form onSubmit={handleProcessUrl} className="flex gap-2">
-              <div className="relative flex-1 group">
-                <TerminalSquare className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground group-focus-within:text-primary transition-colors" />
-                <Input 
-                  ref={inputRef}
-                  value={inputValue}
-                  onChange={(e) => setInputValue(e.target.value)}
-                  placeholder="owner/repo or https://github.com/..."
-                  className="pl-10 py-6 text-lg bg-background/50 border-transparent focus-visible:ring-primary font-mono placeholder:text-muted-foreground/50 transition-all rounded-lg"
-                  autoFocus
-                />
-                {inputValue && (
-                  <button 
-                    type="button" 
-                    onClick={resetState}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    <XCircle className="w-5 h-5" />
-                  </button>
-                )}
-              </div>
-              <Button 
-                type="submit" 
-                size="lg" 
-                className="h-auto py-4 px-6 md:px-8 font-semibold text-primary-foreground bg-primary hover:bg-primary/90 hover-elevate transition-all shadow-[0_0_15px_rgba(var(--primary)_/_0.3)]"
-                disabled={!inputValue.trim()}
-              >
-                <span className="hidden sm:inline">Resolve</span>
-                <ArrowRight className="w-5 h-5 sm:ml-2" />
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
-
-        {/* Results Area */}
-        <div className="min-h-[300px]">
-          
-          {/* Loading State */}
-          {parsedUrl?.isValid && isLoadingRepo && (
-            <Card className="animate-in fade-in zoom-in-95 duration-300 border-primary/20 shadow-lg shadow-primary/5">
-              <CardHeader className="pb-4">
-                <Skeleton className="h-8 w-3/4 mb-2" />
-                <Skeleton className="h-4 w-full" />
-                <Skeleton className="h-4 w-2/3" />
-              </CardHeader>
-              <CardContent className="pb-6">
-                <div className="flex gap-4">
-                  <Skeleton className="h-6 w-20" />
-                  <Skeleton className="h-6 w-20" />
-                  <Skeleton className="h-6 w-20" />
-                </div>
-              </CardContent>
-              <CardFooter className="bg-muted/20 border-t border-border/50 gap-4 pt-6">
-                <Skeleton className="h-12 flex-1" />
-                <Skeleton className="h-12 w-12" />
-              </CardFooter>
-            </Card>
-          )}
-
-          {/* Error State */}
-          {parsedUrl?.isValid && isRepoError && (
-            <Card className="border-destructive/30 bg-destructive/5 animate-in fade-in zoom-in-95 duration-300">
-              <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-                <div className="p-3 bg-destructive/10 rounded-full mb-4">
-                  <AlertCircle className="w-8 h-8 text-destructive" />
-                </div>
-                <h3 className="text-xl font-semibold mb-2 text-foreground">Repository Not Found</h3>
-                <p className="text-muted-foreground mb-6 max-w-md">
-                  {(repoError as Error)?.message || "Make sure the URL is correct and the repository is public."}
-                </p>
-                <Button variant="outline" onClick={resetState} className="font-mono">
-                  Try another URL
-                </Button>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Success State - Repo Info */}
-          {parsedUrl?.isValid && repoData && !isRepoError && (
-            <Card className="animate-in fade-in slide-in-from-bottom-4 duration-500 border-primary/20 shadow-lg shadow-primary/5 overflow-hidden group">
-              
-              <CardHeader className="pb-4 relative">
-                <div className="absolute top-0 right-0 p-6 opacity-5 group-hover:opacity-10 transition-opacity pointer-events-none">
-                  <Github className="w-32 h-32" />
-                </div>
-                
-                <div className="flex justify-between items-start gap-4 relative z-10">
-                  <div className="flex-1 min-w-0">
-                    <CardTitle className="text-2xl font-bold flex items-center gap-2 flex-wrap mb-2">
-                      <a 
-                        href={repoData.html_url} 
-                        target="_blank" 
-                        rel="noreferrer"
-                        className="hover:text-primary transition-colors font-mono"
-                      >
-                        {repoData.full_name}
-                      </a>
-                      {repoData.private && (
-                        <Badge variant="outline" className="text-xs font-mono border-amber-500/40 text-amber-400 gap-1">
-                          <Lock className="w-2.5 h-2.5" /> Private
-                        </Badge>
-                      )}
-                    </CardTitle>
-                    <CardDescription className="text-base text-foreground/80 leading-relaxed max-w-xl">
-                      {repoData.description || "No description provided."}
-                    </CardDescription>
-                  </div>
-
-                  {/* Action buttons: Star / Watch / Fork */}
-                  <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
-                    {/* Star */}
-                    <button
-                      onClick={isAuthenticated ? handleToggleStar : undefined}
-                      disabled={isStarring}
-                      title={!isAuthenticated ? "Add a GitHub token to star repos" : isStarred ? "Unstar this repo" : "Star this repo"}
-                      className={`group/star flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-mono transition-all select-none ${
-                        !isAuthenticated
-                          ? "border-border/30 text-muted-foreground/40 cursor-not-allowed"
-                          : isStarred
-                          ? "border-yellow-500/50 bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20 cursor-pointer"
-                          : "border-border/40 text-muted-foreground hover:border-yellow-500/40 hover:text-yellow-400 cursor-pointer"
-                      }`}
-                    >
-                      {isStarring ? (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      ) : (
-                        <Star className={`w-3.5 h-3.5 transition-all ${isStarred ? "fill-yellow-400 text-yellow-400" : ""}`} />
-                      )}
-                      <span className="tabular-nums">
-                        {(localStarCount ?? repoData.stargazers_count).toLocaleString()}
-                      </span>
-                    </button>
-
-                    {/* Watch */}
-                    <a
-                      href={`${repoData.html_url}/subscription`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title="Manage watch settings on GitHub"
-                      className="flex items-center gap-1.5 rounded-lg border border-border/40 px-3 py-1.5 text-sm font-mono text-muted-foreground hover:border-sky-500/40 hover:text-sky-400 transition-all"
-                    >
-                      <Eye className="w-3.5 h-3.5" />
-                      <span>Watch</span>
-                    </a>
-
-                    {/* Fork */}
-                    <a
-                      href={`${repoData.html_url}/fork`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title="Fork this repo on GitHub"
-                      className="flex items-center gap-1.5 rounded-lg border border-border/40 px-3 py-1.5 text-sm font-mono text-muted-foreground hover:border-violet-500/40 hover:text-violet-400 transition-all"
-                    >
-                      <GitFork className="w-3.5 h-3.5" />
-                      <span>{repoData.forks_count.toLocaleString()}</span>
-                    </a>
-                  </div>
-                </div>
-              </CardHeader>
-              
-              <CardContent className="pb-6 relative z-10">
-                <div className="flex flex-wrap gap-3 mb-6">
-                  {repoData.language && (
-                    <Badge variant="secondary" className="font-mono px-3 py-1 bg-secondary/80">
-                      <div className="w-2 h-2 rounded-full bg-primary mr-2" />
-                      {repoData.language}
-                    </Badge>
-                  )}
-                  <Badge variant="secondary" className="font-mono px-3 py-1 bg-secondary/80">
-                    <Star className="w-3 h-3 mr-2 text-yellow-500" />
-                    {(localStarCount ?? repoData.stargazers_count).toLocaleString()}
-                  </Badge>
-                  <Badge variant="secondary" className="font-mono px-3 py-1 bg-secondary/80">
-                    <GitFork className="w-3 h-3 mr-2" />
-                    {repoData.forks_count.toLocaleString()}
-                  </Badge>
-                  <Badge variant="secondary" className="font-mono px-3 py-1 bg-secondary/80">
-                    <Clock className="w-3 h-3 mr-2" />
-                    {formatDistanceToNow(new Date(repoData.updated_at), { addSuffix: true })}
-                  </Badge>
-                  {repoData.license && (
-                    <Badge variant="secondary" className="font-mono px-3 py-1 bg-secondary/80">
-                      <BookOpen className="w-3 h-3 mr-2" />
-                      {repoData.license.spdx_id}
-                    </Badge>
-                  )}
-                </div>
-
-                <div className="space-y-3">
-                  <label className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Target Branch</label>
-                  {isLoadingBranches ? (
-                    <Skeleton className="h-12 w-full" />
-                  ) : (
-                    <Select 
-                      value={selectedBranch} 
-                      onValueChange={setSelectedBranch}
-                    >
-                      <SelectTrigger className="w-full h-12 bg-background font-mono text-base border-border/50">
-                        <SelectValue placeholder="Select a branch" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <ScrollArea className="h-64">
-                          {branchesData?.map((branch) => (
-                            <SelectItem key={branch.name} value={branch.name} className="font-mono">
-                              {branch.name}
-                              {branch.name === repoData.default_branch && (
-                                <span className="ml-2 text-xs text-primary uppercase bg-primary/10 px-2 py-0.5 rounded">Default</span>
-                              )}
-                            </SelectItem>
-                          ))}
-                        </ScrollArea>
-                      </SelectContent>
-                    </Select>
-                  )}
-                </div>
-              </CardContent>
-
-              <CardFooter className="bg-muted/10 border-t border-border/30 pt-6 gap-3 flex flex-col sm:flex-row relative z-10">
-                <Button 
-                  onClick={handleDownload}
-                  disabled={!selectedBranch}
-                  size="lg"
-                  className="w-full sm:flex-1 h-14 text-lg font-semibold shadow-lg hover-elevate transition-all"
-                >
-                  <Download className="w-5 h-5 mr-2" />
-                  Download ZIP
-                </Button>
-                <Button 
-                  onClick={handleCopyLink}
-                  disabled={!selectedBranch}
-                  variant="outline"
-                  size="lg"
-                  className="w-full sm:w-auto h-14 px-6 bg-background hover:bg-muted"
-                >
-                  {isCopied ? (
-                    <>
-                      <CheckCircle2 className="w-5 h-5 mr-2 text-primary" />
-                      <span className="text-primary">Copied</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-5 h-5 mr-2" />
-                      Copy Link
-                    </>
-                  )}
-                </Button>
-                <Button
-                  onClick={() => setShowFileBrowser((v) => !v)}
-                  disabled={!selectedBranch}
-                  variant="outline"
-                  size="lg"
-                  className={`w-full sm:w-auto h-14 px-6 bg-background hover:bg-muted transition-colors ${showFileBrowser ? "border-primary/50 text-primary" : ""}`}
-                  title="Browse files"
-                >
-                  <FolderTree className="w-5 h-5 sm:mr-2" />
-                  <span className="hidden sm:inline">Browse Files</span>
-                </Button>
-                <Button
-                  onClick={() => setShowCodeSearch((v) => !v)}
-                  disabled={!selectedBranch}
-                  variant="outline"
-                  size="lg"
-                  className={`w-full sm:w-auto h-14 px-6 bg-background hover:bg-muted transition-colors ${showCodeSearch ? "border-primary/50 text-primary" : ""}`}
-                  title="Search code"
-                >
-                  <SearchCode className="w-5 h-5 sm:mr-2" />
-                  <span className="hidden sm:inline">Search Code</span>
-                </Button>
-              </CardFooter>
-            </Card>
-          )}
-
-          {/* File Browser Panel */}
-          {parsedUrl?.isValid && repoData && selectedBranch && showFileBrowser && (
-            <div className="animate-in fade-in slide-in-from-top-2 duration-300">
-              <FileBrowser
-                owner={repoData.owner.login}
-                repo={repoData.name}
-                branch={selectedBranch}
-                onFileClick={(item) => {
-                  setSelectedFile(item);
-                }}
-                selectedPath={selectedFile?.path}
-                token={token || undefined}
-              />
+    <main className="min-h-[100dvh] overflow-hidden bg-[radial-gradient(circle_at_top_left,hsl(var(--primary)/0.16),transparent_32%),linear-gradient(135deg,#020617_0%,#07111f_46%,#111827_100%)] px-4 py-6 text-foreground sm:px-6 lg:px-8">
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
+        <header className="flex flex-col gap-5 rounded-[2rem] border border-white/10 bg-white/[0.06] p-5 shadow-2xl shadow-black/30 backdrop-blur md:flex-row md:items-center md:justify-between">
+          <div className="flex items-center gap-4">
+            <div className="grid h-14 w-14 place-items-center rounded-2xl bg-primary text-primary-foreground shadow-lg shadow-primary/30">
+              <ShoppingCart className="h-7 w-7" />
             </div>
-          )}
-
-          {/* File Preview Panel — shown for both browser and search selections */}
-          {parsedUrl?.isValid && repoData && selectedBranch && selectedFile && (showFileBrowser || showCodeSearch) && (
-            <FilePreview
-              key={selectedFile.path}
-              owner={repoData.owner.login}
-              repo={repoData.name}
-              branch={selectedBranch}
-              path={selectedFile.path}
-              size={selectedFile.size}
-              downloadUrl={selectedFile.download_url}
-              htmlUrl={selectedFile.html_url}
-              onClose={() => setSelectedFile(null)}
-              token={token || undefined}
-            />
-          )}
-
-          {/* Code Search Panel */}
-          {parsedUrl?.isValid && repoData && selectedBranch && showCodeSearch && (
-            <div className="animate-in fade-in slide-in-from-top-2 duration-300">
-              <CodeSearch
-                owner={repoData.owner.login}
-                repo={repoData.name}
-                branch={selectedBranch}
-                selectedPath={selectedFile?.path}
-                token={token || undefined}
-                onFileSelect={(item: CodeSearchItem) => {
-                  const rawUrl = `https://raw.githubusercontent.com/${repoData.owner.login}/${repoData.name}/${selectedBranch}/${item.path}`;
-                  setSelectedFile({
-                    name: item.name,
-                    path: item.path,
-                    type: "file",
-                    size: 0,
-                    sha: item.sha,
-                    download_url: rawUrl,
-                    html_url: item.html_url,
-                  });
-                }}
-              />
-            </div>
-          )}
-
-          {/* History State */}
-          {!parsedUrl?.isValid && history.length > 0 && (
-            <div className="animate-in fade-in duration-700 delay-200 pt-8">
-              <div className="flex items-center justify-between mb-4 px-1">
-                <h3 className="text-sm font-medium text-muted-foreground uppercase tracking-widest flex items-center gap-2">
-                  <History className="w-4 h-4" /> Recent Downloads
-                </h3>
-                <Button variant="ghost" size="sm" onClick={clearHistory} className="h-8 text-xs text-muted-foreground hover:text-destructive">
-                  Clear
-                </Button>
+            <div>
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <Badge className="border-primary/40 bg-primary/15 text-primary hover:bg-primary/20">Aplikasi POS Kasir</Badge>
+                <Badge variant="secondary" className="bg-white/10 text-white hover:bg-white/15">
+                  Shift Pagi
+                </Badge>
               </div>
-              <div className="grid gap-3">
-                {history.map((item, i) => (
-                  <div 
-                    key={`${item.id}-${item.timestamp}`}
-                    className="group flex items-center justify-between p-4 rounded-xl border border-border/40 bg-card/40 hover:bg-card hover:border-primary/30 transition-all cursor-pointer animate-in slide-in-from-bottom-2 fade-in"
-                    style={{ animationDelay: `${i * 50 + 300}ms`, animationFillMode: 'both' }}
-                    onClick={() => loadFromHistory(item.owner, item.repo)}
-                  >
-                    <div className="flex items-center gap-3 overflow-hidden">
-                      <div className="p-2 rounded-md bg-muted group-hover:bg-primary/10 transition-colors shrink-0">
-                        <Github className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
-                      </div>
-                      <div className="truncate">
-                        <p className="font-mono text-sm font-medium text-foreground truncate">
-                          <span className="text-muted-foreground">{item.owner}/</span>{item.repo}
-                        </p>
-                        <p className="text-xs text-muted-foreground mt-1">
-                          {formatDistanceToNow(item.timestamp, { addSuffix: true })}
-                        </p>
-                      </div>
-                    </div>
-                    <ChevronRight className="w-5 h-5 text-muted-foreground opacity-0 group-hover:opacity-100 group-hover:text-primary transform translate-x-[-10px] group-hover:translate-x-0 transition-all" />
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Empty State / Instructions */}
-          {!parsedUrl?.isValid && history.length === 0 && (
-            <div className="text-center pt-16 pb-8 animate-in fade-in duration-1000 delay-300">
-              <div className="inline-flex items-center justify-center p-4 rounded-full bg-muted/30 mb-6">
-                <Search className="w-8 h-8 text-muted-foreground/50" />
-              </div>
-              <h3 className="text-xl font-medium text-foreground mb-3">Ready to extract</h3>
-              <p className="text-muted-foreground max-w-sm mx-auto">
-                Paste any GitHub repository URL above. We'll fetch the details and prepare a direct ZIP download link.
+              <h1 className="text-3xl font-bold tracking-tight md:text-4xl">KasirPro Retail Checkout</h1>
+              <p className="mt-1 max-w-2xl text-sm text-slate-300 md:text-base">
+                Sistem kasir modern untuk input produk cepat, penghitungan pajak, diskon, pembayaran tunai,
+                dan ringkasan struk real-time.
               </p>
             </div>
-          )}
-        </div>
+          </div>
+          <div className="grid grid-cols-3 gap-3 text-center">
+            <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3">
+              <p className="text-xs text-slate-400">Produk</p>
+              <p className="text-xl font-bold">{products.length}</p>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3">
+              <p className="text-xs text-slate-400">Item</p>
+              <p className="text-xl font-bold">{itemCount}</p>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3">
+              <p className="text-xs text-slate-400">Struk</p>
+              <p className="text-sm font-semibold">{lastReceipt.slice(-7)}</p>
+            </div>
+          </div>
+        </header>
+
+        <section className="grid gap-6 xl:grid-cols-[1.45fr_0.95fr]">
+          <div className="flex flex-col gap-6">
+            <Card className="border-white/10 bg-white/[0.07] shadow-xl shadow-black/20 backdrop-blur">
+              <CardHeader className="pb-3">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2 text-2xl">
+                      <Barcode className="h-6 w-6 text-primary" />
+                      Katalog Produk
+                    </CardTitle>
+                    <CardDescription className="text-slate-300">
+                      Cari nama, kategori, atau SKU lalu klik kartu produk untuk masuk keranjang.
+                    </CardDescription>
+                  </div>
+                  <div className="relative w-full md:w-80">
+                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                    <Input
+                      value={query}
+                      onChange={(event) => setQuery(event.target.value)}
+                      placeholder="Cari produk / SKU..."
+                      className="border-white/10 bg-black/25 pl-9 text-white placeholder:text-slate-500"
+                    />
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {filteredProducts.map((product) => (
+                    <button
+                      key={product.id}
+                      type="button"
+                      onClick={() => addToCart(product)}
+                      className="group overflow-hidden rounded-3xl border border-white/10 bg-black/20 p-4 text-left transition duration-300 hover:-translate-y-1 hover:border-primary/50 hover:bg-white/10 hover:shadow-xl hover:shadow-primary/10"
+                    >
+                      <div className={`mb-4 h-24 rounded-2xl bg-gradient-to-br ${product.color} p-4 shadow-lg`}>
+                        <div className="flex h-full items-end justify-between text-white">
+                          <Sparkles className="h-6 w-6 opacity-80" />
+                          <span className="rounded-full bg-white/20 px-3 py-1 text-xs font-semibold backdrop-blur">
+                            {product.category}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-semibold text-white">{product.name}</p>
+                          <p className="mt-1 text-xs text-slate-400">SKU {product.sku}</p>
+                        </div>
+                        <Badge variant="outline" className="border-emerald-400/30 bg-emerald-400/10 text-emerald-200">
+                          {product.stock}
+                        </Badge>
+                      </div>
+                      <div className="mt-4 flex items-center justify-between">
+                        <p className="text-lg font-bold text-primary">{formatRupiah(product.price)}</p>
+                        <span className="rounded-full bg-primary/15 px-3 py-1 text-xs font-semibold text-primary group-hover:bg-primary group-hover:text-primary-foreground">
+                          Tambah
+                        </span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+
+            <div className="grid gap-4 md:grid-cols-3">
+              <Card className="border-white/10 bg-white/[0.07] backdrop-blur">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Penjualan Hari Ini</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-2xl font-bold text-primary">{formatRupiah(8240000)}</p>
+                  <p className="text-sm text-slate-400">+18% dari kemarin</p>
+                </CardContent>
+              </Card>
+              <Card className="border-white/10 bg-white/[0.07] backdrop-blur">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Transaksi</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-2xl font-bold">128</p>
+                  <p className="text-sm text-slate-400">Rata-rata 64 ribu</p>
+                </CardContent>
+              </Card>
+              <Card className="border-white/10 bg-white/[0.07] backdrop-blur">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Metode Favorit</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-2xl font-bold">Tunai</p>
+                  <p className="text-sm text-slate-400">Siap integrasi QRIS</p>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+
+          <aside className="xl:sticky xl:top-6 xl:self-start">
+            <Card className="overflow-hidden border-white/10 bg-slate-950/85 shadow-2xl shadow-black/40 backdrop-blur-xl">
+              <CardHeader className="border-b border-white/10 bg-white/[0.04]">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2 text-2xl">
+                      <ReceiptText className="h-6 w-6 text-primary" />
+                      Keranjang
+                    </CardTitle>
+                    <CardDescription className="text-slate-300">Struk #{lastReceipt}</CardDescription>
+                  </div>
+                  <Button variant="ghost" size="icon" onClick={clearCart} className="text-slate-300 hover:text-white">
+                    <Trash2 className="h-5 w-5" />
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="p-0">
+                <ScrollArea className="h-[330px] p-5">
+                  {cart.length === 0 ? (
+                    <div className="grid h-[280px] place-items-center rounded-3xl border border-dashed border-white/10 bg-white/[0.03] text-center">
+                      <div>
+                        <ShoppingCart className="mx-auto mb-3 h-10 w-10 text-slate-500" />
+                        <p className="font-semibold text-slate-200">Belum ada item</p>
+                        <p className="mt-1 text-sm text-slate-500">Klik produk untuk mulai transaksi.</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {cart.map((item) => (
+                        <div key={item.id} className="rounded-2xl border border-white/10 bg-white/[0.05] p-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="font-semibold text-white">{item.name}</p>
+                              <p className="text-sm text-slate-400">{formatRupiah(item.price)} / item</p>
+                            </div>
+                            <p className="font-bold text-primary">{formatRupiah(item.price * item.quantity)}</p>
+                          </div>
+                          <div className="mt-3 flex items-center justify-between">
+                            <div className="flex items-center gap-2 rounded-full border border-white/10 bg-black/20 p-1">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 rounded-full"
+                                onClick={() => updateQuantity(item.id, item.quantity - 1)}
+                              >
+                                <Minus className="h-4 w-4" />
+                              </Button>
+                              <span className="min-w-8 text-center font-semibold">{item.quantity}</span>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 rounded-full"
+                                onClick={() => updateQuantity(item.id, item.quantity + 1)}
+                              >
+                                <Plus className="h-4 w-4" />
+                              </Button>
+                            </div>
+                            <Badge variant="secondary" className="bg-white/10 text-slate-200">
+                              Stok {item.stock}
+                            </Badge>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </ScrollArea>
+
+                <div className="space-y-4 border-t border-white/10 p-5">
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className="space-y-2 text-sm text-slate-300">
+                      Diskon (%)
+                      <Input
+                        type="number"
+                        min="0"
+                        max="100"
+                        value={discount}
+                        onChange={(event) => setDiscount(Number(event.target.value))}
+                        className="border-white/10 bg-black/25 text-white"
+                      />
+                    </label>
+                    <label className="space-y-2 text-sm text-slate-300">
+                      Tunai Diterima
+                      <Input
+                        type="number"
+                        min="0"
+                        value={cashReceived}
+                        onChange={(event) => setCashReceived(Number(event.target.value))}
+                        className="border-white/10 bg-black/25 text-white"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="grid grid-cols-4 gap-2">
+                    {quickTender.map((amount) => (
+                      <Button
+                        key={amount}
+                        type="button"
+                        variant="secondary"
+                        className="bg-white/10 text-xs hover:bg-white/15"
+                        onClick={() => setCashReceived(amount)}
+                      >
+                        {amount / 1000}rb
+                      </Button>
+                    ))}
+                  </div>
+
+                  <Separator className="bg-white/10" />
+
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between text-slate-300">
+                      <span>Subtotal</span>
+                      <span>{formatRupiah(subtotal)}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-300">
+                      <span>Diskon</span>
+                      <span>-{formatRupiah(discountAmount)}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-300">
+                      <span>PPN 11%</span>
+                      <span>{formatRupiah(tax)}</span>
+                    </div>
+                    <div className="flex items-center justify-between rounded-2xl bg-primary/15 p-4 text-lg font-bold text-primary">
+                      <span>Total</span>
+                      <span>{formatRupiah(total)}</span>
+                    </div>
+                    <div className="flex justify-between font-semibold text-emerald-300">
+                      <span>Kembalian</span>
+                      <span>{formatRupiah(change)}</span>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Button variant="secondary" className="bg-white/10 hover:bg-white/15">
+                      <Printer className="mr-2 h-4 w-4" />
+                      Cetak Struk
+                    </Button>
+                    <Button onClick={completePayment} className="font-bold text-primary-foreground shadow-lg shadow-primary/25">
+                      <WalletCards className="mr-2 h-4 w-4" />
+                      Bayar
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="mt-6 border-emerald-400/20 bg-emerald-400/10 backdrop-blur">
+              <CardContent className="flex items-center gap-3 p-4 text-sm text-emerald-100">
+                <div className="grid h-9 w-9 place-items-center rounded-full bg-emerald-400/20">
+                  <Check className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="font-semibold">Mode kasir siap dipakai</p>
+                  <p className="text-emerald-100/75">UI responsif, kalkulasi otomatis, dan alur checkout lengkap.</p>
+                </div>
+              </CardContent>
+            </Card>
+          </aside>
+        </section>
       </div>
-      
-      {/* Footer */}
-      <footer className="mt-auto pt-16 pb-8 text-center text-sm text-muted-foreground/50 font-mono w-full">
-        Powered by GitHub Public API • No authentication required
-      </footer>
-    </div>
+
+      <div className="pointer-events-none fixed bottom-8 left-8 hidden rounded-full border border-white/10 bg-white/10 p-4 shadow-2xl backdrop-blur lg:block">
+        <Calculator className="h-7 w-7 text-primary" />
+      </div>
+    </main>
   );
 }
