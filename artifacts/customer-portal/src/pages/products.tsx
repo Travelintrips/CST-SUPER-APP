@@ -513,7 +513,10 @@ const PRODUCT_HERO_BG = "/api/storage/public-objects/portal-assets/static/custom
 
 // ── Main page ──────────────────────────────────────────────────────────────
 export default function Products() {
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return new URLSearchParams(window.location.search).get("q") ?? "";
+  });
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>("");
   const [realtimeConnected, setRealtimeConnected] = useState(false);

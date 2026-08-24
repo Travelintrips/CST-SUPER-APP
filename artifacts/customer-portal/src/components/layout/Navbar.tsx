@@ -107,6 +107,7 @@ type MarketplaceResult = {
   isActive?: boolean | null;
   isPublished?: boolean | null;
   href?: string;
+  keywords?: string[];
 };
 
 const AUTOCOMPLETE_MAP: AutocompleteEntry[] = [
@@ -236,17 +237,37 @@ function getAutocompleteSuggestions(
   q: string,
   liveItems: MarketplaceResult[],
 ): AutocompleteEntry[] {
-  const liveResults: AutocompleteEntry[] = liveItems
+  const normalized = (value: string) =>
+    value.toLowerCase().trim().replace(/[^\p{L}\p{N}]+/gu, " ");
+
+  const rankedItems = liveItems
     .filter((item) =>
       item.isActive !== false &&
       item.isPublished !== false &&
-      item.name.trim().length > 0 &&
-      (q.length < 2 ||
-        item.name.toLowerCase().includes(q) ||
-        (item.description ?? "").toLowerCase().includes(q)),
+      item.name.trim().length > 0,
     )
-    .slice(0, q.length < 2 ? 6 : 8)
     .map((item) => {
+      const name = normalized(item.name);
+      const description = normalized(item.description ?? "");
+      const category = normalized(item.serviceType ?? item.categoryKey ?? "");
+      const keywords = (item.keywords ?? []).map(normalized);
+      const haystack = [name, description, category, ...keywords];
+      let score = 0;
+      if (!q || q.length < 2) score = 1;
+      else if (name === q) score = 100;
+      else if (keywords.some((term) => term === q)) score = 95;
+      else if (name.startsWith(q)) score = 80;
+      else if (name.includes(q)) score = 70;
+      else if (keywords.some((term) => term.includes(q))) score = 60;
+      else if (haystack.some((value) => value.includes(q))) score = 40;
+      return { item, score };
+    })
+    .filter(({ score }) => q.length < 2 || score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  const liveResults: AutocompleteEntry[] = rankedItems
+    .slice(0, q.length < 2 ? 6 : 8)
+    .map(({ item }) => {
       const isSvc = item.templateKind === "service";
       const cat = isSvc ? item.serviceType : item.categoryKey;
       return {
@@ -255,7 +276,7 @@ function getAutocompleteSuggestions(
         description: item.description ?? (isSvc ? "Layanan" : "Produk"),
         kind: isSvc ? ("Layanan" as const) : ("Produk" as const),
         href: item.href ?? `/marketplace?type=${isSvc ? "service" : "product"}${cat ? `&category=${cat}` : ""}&q=${encodeURIComponent(item.name)}`,
-        terms: [],
+        terms: item.keywords ?? [],
       };
     });
 
@@ -463,6 +484,12 @@ export function Navbar() {
         isActive: true,
         isPublished: true,
         href: `/jasa/${item.id}`,
+        keywords: [
+          ...(Array.isArray(item.categories) ? item.categories : []),
+          ...(String(item.name ?? "").match(/ppjk|pabean|custom|kepabeanan/i)
+            ? ["ppjk", "pabean", "kepabeanan", "customs", "custom clearance"]
+            : []),
+        ],
       }));
       const legacyProducts = (Array.isArray(products) ? products : []).map((item) => ({
         id: Number(item.id),
@@ -474,6 +501,7 @@ export function Navbar() {
         isActive: true,
         isPublished: true,
         href: `/products?q=${encodeURIComponent(String(item.name ?? ""))}`,
+        keywords: Array.isArray(item.categories) ? item.categories : [],
       }));
       return [
         ...legacyServices,
@@ -974,9 +1002,9 @@ export function Navbar() {
                   >
                     <div className="px-4 py-2.5 border-b border-slate-100 flex items-center justify-between">
                       <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-widest">
-                        {searchQuery.trim().length >= 2 ? t("nav.searchSuggestions") : t("nav.searchPopular")}
+                        {searchQuery.trim().length >= 2 ? t("navbar.searchSuggestions") : t("navbar.searchPopular")}
                       </span>
-                      <span className="text-[10px] text-slate-300">{t("nav.searchEnterHint")}</span>
+                      <span className="text-[10px] text-slate-300">{t("navbar.searchEnterHint")}</span>
                     </div>
 
                     {autocompleteSuggestions.length > 0 ? (
@@ -1004,7 +1032,7 @@ export function Navbar() {
                                   <span className={`shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
                                     isService ? "bg-sky-100 text-sky-600" : "bg-emerald-100 text-emerald-600"
                                   }`}>
-                                    {isService ? t("nav.kindService") : t("nav.kindProduct")}
+                                    {isService ? t("navbar.kindService") : t("navbar.kindProduct")}
                                   </span>
                                 </div>
                                 <p className="text-[11px] text-slate-400 leading-tight truncate mt-0.5">
@@ -1018,8 +1046,8 @@ export function Navbar() {
                     ) : (
                       <div className="px-4 py-6 text-center">
                         <Search className="h-5 w-5 text-slate-300 mx-auto mb-1.5" />
-                        <p className="text-[13px] text-slate-400 font-medium">{t("nav.searchNoSuggestions")}</p>
-                        <p className="text-[11px] text-slate-300 mt-0.5">{t("nav.searchPressEnter").replace("{query}", searchQuery)}</p>
+                        <p className="text-[13px] text-slate-400 font-medium">{t("navbar.searchNoSuggestions")}</p>
+                        <p className="text-[11px] text-slate-300 mt-0.5">{t("navbar.searchPressEnter").replace("{query}", searchQuery)}</p>
                       </div>
                     )}
                   </div>
@@ -1153,7 +1181,7 @@ export function Navbar() {
               <div className="mt-2 rounded-2xl border border-slate-100 overflow-hidden bg-white shadow-lg">
                 <div className="px-3 py-2 border-b border-slate-50">
                   <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">
-                    {searchQuery.trim().length >= 2 ? t("nav.searchSuggestions") : t("nav.searchPopular")}
+                    {searchQuery.trim().length >= 2 ? t("navbar.searchSuggestions") : t("navbar.searchPopular")}
                   </span>
                 </div>
                 {autocompleteSuggestions.map((s) => {
@@ -1173,7 +1201,7 @@ export function Navbar() {
                         <div className="flex items-center gap-1.5">
                           <span className="text-[13px] font-semibold text-slate-800 truncate">{s.label}</span>
                           <span className={`shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full ${isService ? "bg-sky-100 text-sky-600" : "bg-emerald-100 text-emerald-600"}`}>
-                            {isService ? t("nav.kindService") : t("nav.kindProduct")}
+                            {isService ? t("navbar.kindService") : t("navbar.kindProduct")}
                           </span>
                         </div>
                         <p className="text-[11px] text-slate-400 truncate mt-0.5">{s.description}</p>
