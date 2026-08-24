@@ -142,3 +142,4 @@
 - [Accounting seed posted-ledger safety](accounting-seed-posted-ledger.md) — COA deduplication must preserve posted journal line identities and reroute only mutable references.
 - [Accounting tax deduplication FK safety](accounting-tax-dedup-fk.md) — reconcile transaction tax references before removing duplicate accounting tax rows.
 - [PROD read-only proof runner](prod-readonly-proof-runner.md) — run temporary Node proofs from the workspace and bind parameters only when SQL contains placeholders.
+- [Server-side search pagination](server-side-search-pagination.md) — paginated lists must filter and count on the server before LIMIT/OFFSET.

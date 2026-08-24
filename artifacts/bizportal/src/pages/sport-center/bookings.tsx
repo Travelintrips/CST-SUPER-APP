@@ -88,13 +88,14 @@ export default function SportCenterBookings() {
   });
 
   const { data, isLoading } = useQuery<{ data: Booking[]; total: number }>({
-    queryKey: ["sport-center-bookings", activeCompanyId, statusFilter, paymentFilter, dateFilter, page, pageSize],
+    queryKey: ["sport-center-bookings", activeCompanyId, statusFilter, paymentFilter, dateFilter, searchText, page, pageSize],
     queryFn: async () => {
       const qs = new URLSearchParams();
       if (activeCompanyId) qs.set("companyId", String(activeCompanyId));
       if (statusFilter !== "all") qs.set("status", statusFilter);
       if (paymentFilter !== "all") qs.set("payment_status", paymentFilter);
       if (dateFilter) qs.set("date", dateFilter);
+      if (searchText.trim()) qs.set("search", searchText.trim());
       qs.set("page", String(page));
       qs.set("limit", String(pageSize));
       try {

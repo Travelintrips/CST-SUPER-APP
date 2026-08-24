@@ -776,13 +776,14 @@ router.get("/bookings", async (req, res) => {
     const status = (req.query.status as string) ?? null;
     const paymentStatus = (req.query.payment_status as string) ?? null;
     const date = (req.query.date as string) ?? null;
+    const search = ((req.query.search as string) ?? "").trim() || null;
     const page = Math.max(1, Number(req.query.page ?? 1));
     const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 10)));
     const offset = (page - 1) * limit;
 
     // SOURCE OF TRUTH: sport_center.sport_bookings + sport_center.sport_payments (cross-schema, same Supabase instance).
     // payment_status dihitung dari actual payment records — bukan dari billing_status saja.
-    console.log(`[SportCenter→Supabase] GET /bookings page=${page} limit=${limit} status=${status} payment_status=${paymentStatus} date=${date}`);
+    console.log(`[SportCenter→Supabase] GET /bookings page=${page} limit=${limit} status=${status} payment_status=${paymentStatus} date=${date} search=${search}`);
     try {
       const [dataRes, countRes] = await Promise.all([
         db.execute(sql`
@@ -834,6 +835,7 @@ router.get("/bookings", async (req, res) => {
           WHERE (${status}::text IS NULL OR status = ${status})
             AND (${paymentStatus}::text IS NULL OR payment_status = ${paymentStatus})
             AND (${date}::date IS NULL OR booking_date = ${date}::date)
+            AND (${search}::text IS NULL OR customer_name ILIKE '%' || ${search} || '%' OR booking_number ILIKE '%' || ${search} || '%')
           ORDER BY booking_date DESC, start_time DESC
           LIMIT ${limit} OFFSET ${offset}
         `),
@@ -864,6 +866,7 @@ router.get("/bookings", async (req, res) => {
           WHERE (${status}::text IS NULL OR status = ${status})
             AND (${paymentStatus}::text IS NULL OR payment_status = ${paymentStatus})
             AND (${date}::date IS NULL OR booking_date = ${date}::date)
+            AND (${search}::text IS NULL OR customer_name ILIKE '%' || ${search} || '%' OR order_number ILIKE '%' || ${search} || '%')
         `),
       ]);
       const rows = dataRes.rows;
@@ -899,6 +902,7 @@ router.get("/bookings", async (req, res) => {
               AND (${status}::text IS NULL OR pub.status = ${status})
               AND (${paymentStatus}::text IS NULL OR pub.payment_status = ${paymentStatus})
               AND (${date}::date IS NULL OR pub.booking_date = ${date}::date)
+              AND (${search}::text IS NULL OR pub.customer_name ILIKE '%' || ${search} || '%' OR pub.booking_number ILIKE '%' || ${search} || '%')
             ORDER BY pub.booking_date DESC, pub.start_time DESC
             LIMIT ${limit} OFFSET ${offset}
           `),
@@ -909,6 +913,7 @@ router.get("/bookings", async (req, res) => {
               AND (${status}::text IS NULL OR pub.status = ${status})
               AND (${paymentStatus}::text IS NULL OR pub.payment_status = ${paymentStatus})
               AND (${date}::date IS NULL OR pub.booking_date = ${date}::date)
+              AND (${search}::text IS NULL OR pub.customer_name ILIKE '%' || ${search} || '%' OR pub.booking_number ILIKE '%' || ${search} || '%')
           `),
         ]);
         console.log(`[sport-center] GET /bookings fallback local → ${fbData.rows.length} rows`);
