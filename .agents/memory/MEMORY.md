@@ -1,4 +1,5 @@
 - [Production secret bundle JSON](production-secret-json-loader.md) — malformed managed PROD JSON blocks recovery before DB access; never bypass the official loader.
+- [Customer Portal harness fixtures](customer-portal-harness-fixtures.md) — order fixtures need one active company membership; reset capture stays loopback-only and DEV-harness gated.
 - [DB Pool lock_timeout fix](lock-timeout-db-pool.md) — set lock_timeout via on('connect') handler (not pool options) to prevent DDL hang after kill-restart cycles.
 - [Startup pooler latency](startup-pooler-latency.md) — cold pooler checkout can dominate registry startup; measure phases and reuse one client for adjacent checks.
 - [Asset storage rule](asset-storage-rule.md) — gambar/biner wajib ke Supabase Storage, bukan git; history sudah di-rewrite Jul 2026 (475 MB → 139 MB).
