@@ -110,6 +110,27 @@ type MarketplaceResult = {
   keywords?: string[];
 };
 
+function legacyServiceSearchHref(item: { id: unknown; name?: unknown; categories?: unknown }): string {
+  const id = Number(item.id);
+  const name = String(item.name ?? "").toLowerCase();
+  const category = Array.isArray(item.categories)
+    ? String(item.categories[0] ?? "").toLowerCase()
+    : "";
+
+  // These are the current public service destinations. Keep the generic
+  // detail route only for legacy services without a dedicated page.
+  if (name.includes("custom") || name.includes("ppjk") || category.includes("pabean")) {
+    return "/custom-clearance";
+  }
+  if (name.includes("freight") || name.includes("emkl") || category.includes("freight")) {
+    return "/freight-forwarding";
+  }
+  if (name.includes("handling")) {
+    return "/custom-clearance?service=handling_clearance";
+  }
+  return `/jasa/${id}`;
+}
+
 const AUTOCOMPLETE_MAP: AutocompleteEntry[] = [
   // ── Jasa / Services ───────────────────────────────────────────────────────
   {
@@ -483,7 +504,7 @@ export function Navbar() {
         categoryKey: Array.isArray(item.categories) ? item.categories[0] ?? null : null,
         isActive: true,
         isPublished: true,
-        href: `/jasa/${item.id}`,
+        href: legacyServiceSearchHref(item),
         keywords: [
           ...(Array.isArray(item.categories) ? item.categories : []),
           ...(String(item.name ?? "").match(/ppjk|pabean|custom|kepabeanan/i)
@@ -500,7 +521,7 @@ export function Navbar() {
         categoryKey: Array.isArray(item.categories) ? item.categories[0] ?? null : null,
         isActive: true,
         isPublished: true,
-        href: `/products?q=${encodeURIComponent(String(item.name ?? ""))}`,
+        href: `/marketplace?type=product&q=${encodeURIComponent(String(item.name ?? ""))}`,
         keywords: Array.isArray(item.categories) ? item.categories : [],
       }));
       return [

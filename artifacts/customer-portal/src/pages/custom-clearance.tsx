@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { getAuthHeaders, isAuthenticated } from "@/lib/auth";
+import { getAuthHeaders, getPortalRole, isAuthenticated } from "@/lib/auth";
 import { useGetPortalMe, useCreateLogisticOrder } from "@workspace/api-client-react";
 import {
   FileCheck, ArrowLeft, ChevronRight, Upload,
@@ -316,6 +316,7 @@ export default function CustomClearance() {
   const search = useSearch();
   const { t } = useLanguage();
   const SERVICE_OPTIONS = getServiceOptions(t);
+  const isVendor = getPortalRole() === "vendor";
 
   const [selectedServices, setSelectedServices] = useState<ServiceType[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -495,6 +496,17 @@ export default function CustomClearance() {
 
   /* ── Submit ───────────────────────────────────────────────────── */
   async function handleSubmit() {
+    if (isVendor) {
+      toast({
+        title: t("customClearance.vendorInfoOnly", "Halaman informasi layanan"),
+        description: t(
+          "customClearance.vendorInfoOnlyDesc",
+          "Pengajuan Custom Clearance hanya tersedia untuk akun Customer.",
+        ),
+        variant: "destructive",
+      });
+      return;
+    }
     const missing = missingFields();
     if (missing.length > 0) {
       toast({ title: `Lengkapi: ${missing.join(", ")}`, variant: "destructive" });
@@ -1505,9 +1517,11 @@ export default function CustomClearance() {
               className="w-full gap-2"
               size="lg"
               onClick={handleSubmit}
-              disabled={submitting}
+              disabled={submitting || isVendor}
             >
-              {submitting ? (
+              {isVendor ? (
+                <><Info className="h-4 w-4" /> {t("customClearance.vendorInfoOnly", "Informasi untuk Vendor")}</>
+              ) : submitting ? (
                 <><Loader2 className="h-4 w-4 animate-spin" /> {t("customClearance.submitting", "Mengirim Permohonan...")}</>
               ) : (
                 <><ChevronRight className="h-4 w-4" /> {t("customClearance.submitBtn", "Kirim Permohonan Custom Clearance")}</>
