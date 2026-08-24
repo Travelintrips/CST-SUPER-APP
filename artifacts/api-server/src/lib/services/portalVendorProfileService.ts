@@ -188,6 +188,10 @@ export async function getVendorFullProfile(customerId: number) {
 
   // Keep the API contract explicit. Some UI labels use business-friendly
   // names, while vendor_profiles stores the canonical columns below.
+  const rawBankAccountNumber = vp.bankAccountNumber;
+  const maskedBankAccountNumber = rawBankAccountNumber
+    ? `••••••${rawBankAccountNumber.slice(-4)}`
+    : null;
   return {
     vendorProfile: {
       ...vp,
@@ -195,6 +199,8 @@ export async function getVendorFullProfile(customerId: number) {
       address: vp.fullAddress,
       picPhone: vp.phone,
       picEmail: vp.email,
+      bankAccountNumber: maskedBankAccountNumber,
+      bankAccountNumberMasked: maskedBankAccountNumber,
     },
     submissionLink,
   };

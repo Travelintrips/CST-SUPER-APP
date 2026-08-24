@@ -71,12 +71,12 @@ export type VendorReviewModerationInput = z.infer<typeof VendorReviewModerationS
 // Tambahkan setelah kolom ditambahkan via migration.
 export const VendorSelfProfileSchema = z.object({
   picName: z.string().min(1).max(200).optional().nullable(),
-  phone: z.string().max(30).optional().nullable(),
+  phone: z.string().min(5).max(30).regex(/^[0-9+().\-\s]+$/, "Format nomor telepon tidak valid").optional().nullable(),
   email: z.string().email().max(200).optional().nullable(),
   fullAddress: z.string().max(500).optional().nullable(),
   province: z.string().max(100).optional().nullable(),
   city: z.string().max(100).optional().nullable(),
-  postalCode: z.string().max(20).optional().nullable(),
+  postalCode: z.string().regex(/^[0-9A-Za-z\s-]{3,20}$/, "Format kode pos tidak valid").optional().nullable(),
   bankName: z.string().max(100).optional().nullable(),
   bankAccountName: z.string().max(200).optional().nullable(),
   bankAccountNumber: z.string().max(50).optional().nullable(),

@@ -71,13 +71,20 @@ const QUOTE_STATUS: Record<string, { label: string; cls: string }> = {
 // ── New types for added sections ───────────────────────────────────────────────
 interface VendorProfileDetail {
   id: number; customerId: number; companyName: string | null; legalName: string | null;
-  email: string | null; phone: string | null; npwp: string | null;
+  email: string | null; phone: string | null; nib: string | null; npwp: string | null;
   picName: string | null; picPhone: string | null; picEmail: string | null;
   serviceType: string | null; address: string | null; fullAddress: string | null;
   city: string | null; province: string | null; postalCode: string | null;
   bankName: string | null; bankAccountNumber: string | null; bankAccountName: string | null;
+  bankAccountNumberMasked?: string | null;
   verificationStatus: string | null; supplierId: number | null; approvedAt: string | null;
 }
+
+type VendorProfileForm = {
+  picName: string; phone: string; email: string; fullAddress: string;
+  province: string; city: string; postalCode: string;
+  bankName: string; bankAccountName: string; bankAccountNumber: string;
+};
 
 interface SubmissionLink {
   token: string; url: string; expiresAt: string | null; isActive: boolean;
@@ -1354,6 +1361,13 @@ export default function VendorDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<DashTab>("dashboard");
+  const [editingVendorProfile, setEditingVendorProfile] = useState(false);
+  const [savingVendorProfile, setSavingVendorProfile] = useState(false);
+  const [vendorProfileFormError, setVendorProfileFormError] = useState("");
+  const [vendorProfileForm, setVendorProfileForm] = useState<VendorProfileForm>({
+    picName: "", phone: "", email: "", fullAddress: "", province: "", city: "",
+    postalCode: "", bankName: "", bankAccountName: "", bankAccountNumber: "",
+  });
 
   // Per-RFQ form state: rfqId → form values
   const [openForms, setOpenForms] = useState<Record<number, QuoteFormState>>({});
@@ -1391,6 +1405,48 @@ export default function VendorDashboard() {
     enabled: authed,
     staleTime: 60_000,
   });
+
+  useEffect(() => {
+    const vp = vendorProfileDetail?.vendorProfile;
+    if (!vp || editingVendorProfile) return;
+    setVendorProfileForm({
+      picName: vp.picName ?? "",
+      phone: vp.picPhone ?? vp.phone ?? "",
+      email: vp.picEmail ?? vp.email ?? "",
+      fullAddress: vp.fullAddress ?? vp.address ?? "",
+      province: vp.province ?? "",
+      city: vp.city ?? "",
+      postalCode: vp.postalCode ?? "",
+      bankName: vp.bankName ?? "",
+      bankAccountName: vp.bankAccountName ?? "",
+      bankAccountNumber: "",
+    });
+  }, [vendorProfileDetail, editingVendorProfile]);
+
+  async function saveVendorProfile() {
+    setSavingVendorProfile(true);
+    setVendorProfileFormError("");
+    try {
+      const response = await fetch("/api/portal/vendor/profile", {
+        method: "PATCH",
+        headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(Object.fromEntries(
+          Object.entries(vendorProfileForm)
+            .filter(([key, value]) => key !== "bankAccountNumber" || value.trim() !== "")
+            .map(([key, value]) => [key, value.trim() === "" ? null : value.trim()])
+        )),
+      });
+      const body = await response.json().catch(() => ({})) as { error?: string; message?: string };
+      if (!response.ok) throw new Error(body.error ?? body.message ?? "Gagal menyimpan profil");
+      setEditingVendorProfile(false);
+      await refetchVendorProfile();
+    } catch (error) {
+      setVendorProfileFormError(error instanceof Error ? error.message : "Gagal menyimpan profil");
+    } finally {
+      setSavingVendorProfile(false);
+    }
+  }
 
   const { data: catalogSubmissionsData } = useQuery<{ submissions: CatalogSubmission[] }>({
     queryKey: ["vendor-catalog-submissions"],
@@ -2170,6 +2226,7 @@ export default function VendorDashboard() {
             );
             const fields: [string, string | null | undefined][] = [
               [t("vendorDashboard.fieldCompanyName"), vp.companyName],
+              ["NIB", vp.nib],
               [t("vendorDashboard.fieldLegalName"), vp.legalName],
               [t("vendorDashboard.fieldNpwp"), vp.npwp],
               [t("vendorDashboard.fieldServiceType"), vp.serviceType],
@@ -2189,7 +2246,7 @@ export default function VendorDashboard() {
             ];
             const bankFields: [string, string | null | undefined][] = [
               [t("vendorDashboard.fieldBank"), vp.bankName],
-              [t("vendorDashboard.fieldBankAccount"), vp.bankAccountNumber],
+              [t("vendorDashboard.fieldBankAccount"), vp.bankAccountNumberMasked ?? vp.bankAccountNumber],
               [t("vendorDashboard.fieldBankName"), vp.bankAccountName],
             ];
             const Section = ({ title, rows }: { title: string; rows: [string, string | null | undefined][] }) => (
@@ -2200,12 +2257,10 @@ export default function VendorDashboard() {
                 <CardContent className="pt-4">
                   <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
                     {rows.map(([label, val]) => (
-                      val ? (
-                        <div key={label}>
-                          <dt className="text-xs text-muted-foreground mb-0.5">{label}</dt>
-                          <dd className="text-sm font-medium">{val}</dd>
-                        </div>
-                      ) : null
+                      <div key={label}>
+                        <dt className="text-xs text-muted-foreground mb-0.5">{label}</dt>
+                        <dd className={`text-sm font-medium ${!val ? "text-muted-foreground italic" : ""}`}>{val || "Belum diisi"}</dd>
+                      </div>
                     ))}
                   </dl>
                 </CardContent>
@@ -2213,6 +2268,52 @@ export default function VendorDashboard() {
             );
             return (
               <div className="space-y-4">
+                <div className="flex justify-end">
+                  {!editingVendorProfile ? (
+                    <Button size="sm" variant="outline" onClick={() => { setVendorProfileFormError(""); setEditingVendorProfile(true); }}>
+                      <Pencil className="h-3.5 w-3.5 mr-1.5" /> Edit profil
+                    </Button>
+                  ) : (
+                    <div className="flex gap-2">
+                      <Button size="sm" variant="ghost" onClick={() => setEditingVendorProfile(false)} disabled={savingVendorProfile}>
+                        <X className="h-3.5 w-3.5 mr-1.5" /> Batal
+                      </Button>
+                      <Button size="sm" onClick={() => void saveVendorProfile()} disabled={savingVendorProfile}>
+                        {savingVendorProfile ? <RefreshCw className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : null}
+                        Simpan
+                      </Button>
+                    </div>
+                  )}
+                </div>
+                {editingVendorProfile && (
+                  <Card className="border-none shadow-sm">
+                    <CardHeader className="border-b border-border/40 pb-3">
+                      <CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Edit data profil</CardTitle>
+                    </CardHeader>
+                    <CardContent className="pt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {([
+                        ["picName", "Nama PIC"], ["phone", "Nomor telepon/WhatsApp"], ["email", "Email PIC"],
+                        ["fullAddress", "Alamat lengkap"], ["province", "Provinsi"], ["city", "Kota"],
+                        ["postalCode", "Kode pos"], ["bankName", "Nama bank"], ["bankAccountName", "Nama pemilik rekening"],
+                      ] as [keyof VendorProfileForm, string][]).map(([key, label]) => (
+                        <label key={key} className={key === "fullAddress" ? "sm:col-span-2 text-xs font-medium" : "text-xs font-medium"}>
+                          {label}
+                          {key === "fullAddress" ? (
+                            <Textarea className="mt-1" value={vendorProfileForm[key]} onChange={e => setVendorProfileForm(f => ({ ...f, [key]: e.target.value }))} />
+                          ) : (
+                            <Input className="mt-1" value={vendorProfileForm[key]} onChange={e => setVendorProfileForm(f => ({ ...f, [key]: e.target.value }))} />
+                          )}
+                        </label>
+                      ))}
+                      <label className="text-xs font-medium">
+                        Nomor rekening
+                        <Input className="mt-1" value={vendorProfileForm.bankAccountNumber} placeholder="Isi nomor rekening baru (opsional)" onChange={e => setVendorProfileForm(f => ({ ...f, bankAccountNumber: e.target.value }))} />
+                      </label>
+                      <p className="sm:col-span-2 text-xs text-muted-foreground">Nomor rekening yang tersimpan ditampilkan dengan masking. Kosongkan jika tidak ingin mengubahnya.</p>
+                      {vendorProfileFormError && <p className="sm:col-span-2 text-sm text-red-600">{vendorProfileFormError}</p>}
+                    </CardContent>
+                  </Card>
+                )}
                 <Section title={t("vendorDashboard.companyInfoSection")} rows={fields} />
                 <Section title={t("vendorDashboard.picContactSection")} rows={picFields} />
                 <Section title={t("vendorDashboard.addressSection")} rows={addrFields} />
