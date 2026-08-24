@@ -2934,6 +2934,17 @@ router.get("/mutations", async (req, res) => {
   else if (status === "duplicate_need_review") bmiFilters.push(`bmi.status = 'NEED_REVIEW'`);
   if (direction === "IN")  bmiFilters.push(`COALESCE(bmi.credit, 0) > 0`);
   if (direction === "OUT") bmiFilters.push(`COALESCE(bmi.debit, 0) > 0 AND COALESCE(bmi.credit, 0) = 0`);
+  if (payment_type && payment_type !== "all") {
+    const importedPaymentTypeSql = `CASE
+      WHEN LOWER(CONCAT_WS(' ', COALESCE(bmi.payment_method, ''), COALESCE(bmi.description, ''), COALESCE(bmi.erp_category, ''), COALESCE(bmi.tax_type, ''))) LIKE '%paylabs%'
+        THEN 'paylabs'
+      WHEN LOWER(CONCAT_WS(' ', COALESCE(bmi.payment_method, ''), COALESCE(bmi.description, ''), COALESCE(bmi.erp_category, ''), COALESCE(bmi.tax_type, ''))) LIKE '%qris%'
+        OR LOWER(CONCAT_WS(' ', COALESCE(bmi.payment_method, ''), COALESCE(bmi.description, ''), COALESCE(bmi.erp_category, ''), COALESCE(bmi.tax_type, ''))) LIKE '%qr%'
+        THEN 'qris'
+      ELSE 'bank_transfer'
+    END`;
+    bmiFilters.push(`${importedPaymentTypeSql} = '${esc(payment_type)}'`);
+  }
   // Deduplikasi: exclude bmi baris yang sudah ada di bank_mutations (via mutation_key)
   bmiFilters.push(`NOT EXISTS (SELECT 1 FROM bank_mutations bm2 WHERE bm2.mutation_key = COALESCE(bmi.unique_key, bmi.id::text))`);
   const bmiWhere = `WHERE ${bmiFilters.join(" AND ")}`;
@@ -3406,7 +3417,14 @@ router.get("/mutations", async (req, res) => {
       NULL::integer AS company_id,
       NULL::text AS uploaded_proof_url,
       'bank_import' AS source,
-       NULL::text AS sport_payment_type,
+       CASE
+         WHEN LOWER(CONCAT_WS(' ', COALESCE(bmi.payment_method, ''), COALESCE(bmi.description, ''), COALESCE(bmi.erp_category, ''), COALESCE(bmi.tax_type, ''))) LIKE '%paylabs%'
+           THEN 'paylabs'
+         WHEN LOWER(CONCAT_WS(' ', COALESCE(bmi.payment_method, ''), COALESCE(bmi.description, ''), COALESCE(bmi.erp_category, ''), COALESCE(bmi.tax_type, ''))) LIKE '%qris%'
+           OR LOWER(CONCAT_WS(' ', COALESCE(bmi.payment_method, ''), COALESCE(bmi.description, ''), COALESCE(bmi.erp_category, ''), COALESCE(bmi.tax_type, ''))) LIKE '%qr%'
+           THEN 'qris'
+         ELSE 'bank_transfer'
+       END AS sport_payment_type,
       'bank_import' AS _source_table,
        NULL::json AS candidates,
         NULL::jsonb AS qris_candidate_audit,
