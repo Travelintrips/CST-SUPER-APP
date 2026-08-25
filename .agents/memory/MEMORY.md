@@ -151,3 +151,4 @@
 - [Rule AI multi-condition safety](rule-ai-multi-condition-safety.md) — evaluate structured conditions by priority/specificity and fail closed on equal-precedence conflicting outputs.
 - [GL expense module semantics](gl-expense-module-semantics.md) — module filter follows journal origin; bank-admin fees from reconciliation stay under bank reconciliation, not expense.
 - [QRIS unmatched audit visibility](qris-unmatched-audit-visibility.md) — retain unmatched bank evidence as non-approvable audit; distinguish audit rows from reviewable candidates.
+- [QRIS H-1 candidate cohort](qris-h-minus-one-candidate.md) — production candidates require exact expected settlement date = bank mutation date; legacy review windows remain isolated.

@@ -2962,13 +2962,13 @@ function QrisMutationCard({
                       const paymentId = item.paymentId ?? item.payment_id;
                       const booking = item.bookingNumber ?? item.booking_number ?? (item.booking_id != null ? `SC-${String(item.booking_id).padStart(4, "0")}` : "—");
                       const payment = item.paymentNumber ?? item.payment_number ?? (paymentId != null ? `#${paymentId}` : "—");
-                      const paidAt = item.paymentDate ?? item.paid_at;
+                      const bookingDate = item.bookingDate ?? item.booking_date;
                        const gross = liveGrossForItem(item);
                       return (
                         <div key={`${paymentId ?? index}-${booking}`} className="grid grid-cols-[1.1fr_1.4fr_1fr_1fr_1fr_44px] items-center gap-2 border-b px-2.5 py-2 last:border-b-0">
                           <span className="truncate text-xs font-medium">{booking}</span>
                           <span className="min-w-0 truncate text-xs text-muted-foreground">{payment}</span>
-                          <span className="truncate text-xs text-muted-foreground">{paidAt ? fmtDate(String(paidAt)) : "—"}</span>
+                           <span className="truncate text-xs text-muted-foreground">{bookingDate ? fmtDate(String(bookingDate)) : "—"}</span>
                            <span className="truncate text-xs text-muted-foreground">QRIS</span>
                           <span className="text-right text-xs font-medium tabular-nums">{idr(gross)}</span>
                           <span className="flex justify-center">

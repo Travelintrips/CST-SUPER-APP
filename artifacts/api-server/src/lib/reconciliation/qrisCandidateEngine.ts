@@ -197,6 +197,7 @@ function sameNaturalBatch(
   providerCode: QrisProviderCode,
   holidays: Iterable<string>,
   matchWindowBusinessDays: number,
+  enforceHMinusOne: boolean,
 ): boolean {
   const providerCompatible = areQrisProvidersCompatible(
     payment.providerName,
@@ -207,11 +208,16 @@ function sameNaturalBatch(
     && mutation.bankAccountId != null
     && payment.bankAccountId === mutation.bankAccountId
     && payment.expectedSettlementDate != null
-    && businessDayDistance(
-      payment.expectedSettlementDate,
-      mutation.transactionDate,
-      holidays,
-    ) <= Math.max(0, Math.trunc(matchWindowBusinessDays))
+    // The strict production path uses QRIS H-1: expected settlement must be
+    // the bank mutation date exactly. Legacy review-only callers retain their
+    // configured business-day window for historical partial settlements.
+    && (enforceHMinusOne
+      ? payment.expectedSettlementDate === mutation.transactionDate
+      : businessDayDistance(
+        payment.expectedSettlementDate,
+        mutation.transactionDate,
+        holidays,
+      ) <= Math.max(0, Math.trunc(matchWindowBusinessDays)))
     && providerCompatible;
 }
 
@@ -292,11 +298,8 @@ export function generateQrisMutationBatchCandidates(input: {
           && payment.expectedSettlementDate != null
           && (!requireExplicitSettlementMetadata
             || Boolean(String(payment.settlementRuleVersion ?? "").trim()))
-          && businessDayDistance(
-            payment.expectedSettlementDate,
-            mutation.transactionDate,
-            input.holidays ?? [],
-          ) <= Math.max(0, Math.trunc(rule?.matchWindowBusinessDays ?? 0)),
+          && (!requireExplicitSettlementMetadata
+            || payment.expectedSettlementDate === mutation.transactionDate),
       );
     const providerDimensionPayments = dimensionPayments.filter((payment) =>
       evidence.providerCode !== "unknown"
@@ -306,6 +309,7 @@ export function generateQrisMutationBatchCandidates(input: {
           evidence.providerCode,
           input.holidays ?? [],
           rule?.matchWindowBusinessDays ?? 0,
+          requireExplicitSettlementMetadata,
         ),
     );
     const nearestExpectedSettlementDistance = providerDimensionPayments.length > 0
@@ -322,11 +326,13 @@ export function generateQrisMutationBatchCandidates(input: {
     const naturalPayments = evidence.providerCode === "unknown"
       ? dimensionPayments
       : providerDimensionPayments.filter((payment) =>
-        businessDayDistance(
-          payment.expectedSettlementDate!,
-          mutation.transactionDate,
-          input.holidays ?? [],
-        ) === nearestExpectedSettlementDistance,
+        requireExplicitSettlementMetadata
+          ? payment.expectedSettlementDate === mutation.transactionDate
+          : businessDayDistance(
+            payment.expectedSettlementDate!,
+            mutation.transactionDate,
+            input.holidays ?? [],
+          ) === nearestExpectedSettlementDistance
       );
     const sameDimensionMutations = openMutations.filter((other) => {
       if (other.id === mutation.id || other.companyId !== mutation.companyId

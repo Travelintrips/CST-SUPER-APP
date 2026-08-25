@@ -90,6 +90,46 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     });
   });
 
+  it("enforces the H-1 settlement cohort and excludes the next-day payment", () => {
+    const result = generateQrisMutationBatchCandidates({
+      requireExplicitSettlementMetadata: true,
+      providerRules: {
+        paylabs: {
+          providerCode: "paylabs",
+          ruleVersion: "H-MINUS-1",
+          settlementDelayBusinessDays: 1,
+          matchWindowBusinessDays: 1,
+          maxEffectiveDeductionRate: 0.1,
+        },
+      },
+      payments: [
+        {
+          id: 111, companyId: 1, bankAccountId: 17, amount: 100_000,
+          method: "QRIS", status: "paid", paidAt: "2026-06-26",
+          expectedSettlementDate: "2026-06-27", providerName: "paylabs",
+          settlementRuleVersion: "H-MINUS-1",
+          bookingDate: "2026-06-26",
+        },
+        {
+          id: 112, companyId: 1, bankAccountId: 17, amount: 200_000,
+          method: "QRIS", status: "paid", paidAt: "2026-06-27",
+          expectedSettlementDate: "2026-06-28", providerName: "paylabs",
+          settlementRuleVersion: "H-MINUS-1",
+          bookingDate: "2026-06-27",
+        },
+      ],
+      mutations: [{
+        id: 113, companyId: 1, bankAccountId: 17, amount: 99_300,
+        transactionDate: "2026-06-27", direction: "IN",
+        source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "paylabs", description: "PAYLABS SETTLEMENT",
+      }],
+    });
+
+    expect(result[0]?.paymentItems.map((item) => item.paymentId)).toEqual([111]);
+    expect(result[0]?.status).toBe("MATCHED");
+  });
+
   it("does not match a payment from another company even when amount/provider/date fit", () => {
     const result = generateQrisMutationBatchCandidates({
       payments: [{
