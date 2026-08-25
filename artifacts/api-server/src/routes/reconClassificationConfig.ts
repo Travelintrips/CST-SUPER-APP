@@ -116,7 +116,6 @@ const ConfigUpsertSchema = z.object({
   code:                 z.string().min(1).max(60).regex(/^[A-Z0-9_]+$/, "code must be UPPER_SNAKE_CASE"),
   type:                 z.string().optional().nullable(),
   flow:                 z.enum(["BUSINESS_MATCHING", "ROUTINE_EXPENSE_ALLOCATION", "INCOME_ALLOCATION", "MANUAL_REVIEW", "BLOCKED"]),
-  default_coa_code:     z.string().optional().nullable(),
   default_vendor_id:    z.number().int().optional().nullable(),
   default_department:   z.string().optional().nullable(),
   default_cost_center:  z.string().optional().nullable(),
@@ -273,7 +272,7 @@ reconClassificationRouter.post("/configs", async (req, res) => {
     const result = await db.execute(sql.raw(`
       INSERT INTO recon_classification_configs
         (company_id, category, name, code, type, flow,
-         default_coa_code, default_vendor_id, default_department, default_cost_center,
+         default_vendor_id, default_department, default_cost_center,
          need_upload, upload_file_types, upload_max_files, upload_max_size_mb,
          need_approval, need_invoice_number, need_reference_number,
          ai_learning_enabled, confidence_threshold,
@@ -285,7 +284,6 @@ reconClassificationRouter.post("/configs", async (req, res) => {
         '${d.code}',
         ${d.type ? `'${d.type.replace(/'/g, "''")}'` : "NULL"},
         '${d.flow}',
-        ${d.default_coa_code ? `'${d.default_coa_code.replace(/'/g, "''")}'` : "NULL"},
         ${d.default_vendor_id ?? "NULL"},
         ${d.default_department ? `'${d.default_department.replace(/'/g, "''")}'` : "NULL"},
         ${d.default_cost_center ? `'${d.default_cost_center.replace(/'/g, "''")}'` : "NULL"},
@@ -336,7 +334,6 @@ reconClassificationRouter.patch("/configs/:id", async (req, res) => {
     if (d.name !== undefined)                setClauses.push(`name = '${d.name.replace(/'/g, "''")}'`);
     if (d.flow !== undefined)                setClauses.push(`flow = '${d.flow}'`);
     if (d.type !== undefined)                setClauses.push(`type = ${d.type ? `'${d.type.replace(/'/g, "''")}'` : "NULL"}`);
-    if (d.default_coa_code !== undefined)    setClauses.push(`default_coa_code = ${d.default_coa_code ? `'${d.default_coa_code.replace(/'/g, "''")}'` : "NULL"}`);
     if (d.default_vendor_id !== undefined)   setClauses.push(`default_vendor_id = ${d.default_vendor_id ?? "NULL"}`);
     if (d.default_department !== undefined)  setClauses.push(`default_department = ${d.default_department ? `'${d.default_department.replace(/'/g, "''")}'` : "NULL"}`);
     if (d.default_cost_center !== undefined) setClauses.push(`default_cost_center = ${d.default_cost_center ? `'${d.default_cost_center.replace(/'/g, "''")}'` : "NULL"}`);

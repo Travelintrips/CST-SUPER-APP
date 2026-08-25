@@ -326,8 +326,6 @@ function buildReasonCode(field: ConditionField, operator: ConditionOperator): st
     starts_with: "STARTS_WITH",
     ends_with: "ENDS_WITH",
     not_equals: "NOT_EQUALS",
-    eq: "EQ",
-    neq: "NEQ",
     eq: "EQUALS",
     neq: "NOT_EQUALS",
     regex: "REGEX",

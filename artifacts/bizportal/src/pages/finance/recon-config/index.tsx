@@ -160,7 +160,6 @@ function ConfigTab({ category }: { category: "BUSINESS_TRANSACTION" | "ROUTINE_E
   const [form, setForm]       = useState<any>({});
 
   // ── Dropdown options ─────────────────────────────────────────────────────
-  const [coaOptions,  setCoaOptions]  = useState<ComboboxOption[]>([]);
   const [deptOptions, setDeptOptions] = useState<ComboboxOption[]>([]);
   const [ccOptions,   setCcOptions]   = useState<ComboboxOption[]>([]);
   const [loadingOpts, setLoadingOpts] = useState(false);
@@ -180,23 +179,15 @@ function ConfigTab({ category }: { category: "BUSINESS_TRANSACTION" | "ROUTINE_E
     setLoadingOpts(true);
     try {
       const qp = activeCompanyId ? `?company_id=${activeCompanyId}` : "";
-      const [coaR, deptR, ccR] = await Promise.all([
-        fetch(`${API}/accounting/coa${qp}`, { credentials: "include" }),
+      const [deptR, ccR] = await Promise.all([
         fetch(`${API}/org/departments${qp}`,  { credentials: "include" }),
         fetch(`${API}/accounting/cost-centers${qp}`, { credentials: "include" }),
       ]);
-      const [coaJ, deptJ, ccJ] = await Promise.all([coaR.json(), deptR.json(), ccR.json()]);
+      const [deptJ, ccJ] = await Promise.all([deptR.json(), ccR.json()]);
 
-      const coas  = Array.isArray(coaJ)  ? coaJ  : (coaJ.data  ?? []);
       const depts = Array.isArray(deptJ) ? deptJ : (deptJ.data ?? []);
       const ccs   = Array.isArray(ccJ)   ? ccJ   : (ccJ.data   ?? []);
 
-      setCoaOptions(coas
-        .filter((c: any) => c?.code != null && String(c.code).trim())
-        .map((c: any) => ({
-          value: String(c.code),
-          label: `${String(c.code)} — ${String(c.name ?? "Tanpa nama")}`,
-        })));
       setDeptOptions(depts
         .filter((d: any) => d?.name != null && String(d.name).trim())
         .map((d: any) => ({
@@ -386,7 +377,6 @@ function ConfigTab({ category }: { category: "BUSINESS_TRANSACTION" | "ROUTINE_E
                 <th className="pb-2 pr-3 font-medium">Kode</th>
                 <th className="pb-2 pr-3 font-medium">Tipe</th>
                 <th className="pb-2 pr-3 font-medium">Flow</th>
-                <th className="pb-2 pr-3 font-medium">Default COA</th>
                 <th className="pb-2 pr-3 font-medium">Upload</th>
                 <th className="pb-2 pr-3 font-medium">Prioritas</th>
                 <th className="pb-2 pr-3 font-medium">Status</th>
@@ -395,7 +385,7 @@ function ConfigTab({ category }: { category: "BUSINESS_TRANSACTION" | "ROUTINE_E
             </thead>
             <tbody>
               {rows.length === 0 && (
-                <tr><td colSpan={9} className="py-8 text-center text-slate-500">Belum ada data.</td></tr>
+                <tr><td colSpan={8} className="py-8 text-center text-slate-500">Belum ada data.</td></tr>
               )}
               {rows.map(row => (
                 <tr key={row.id} className="border-b border-slate-800 hover:bg-slate-800/40">
@@ -406,7 +396,6 @@ function ConfigTab({ category }: { category: "BUSINESS_TRANSACTION" | "ROUTINE_E
                   <td className="py-2 pr-3 font-mono text-xs text-slate-400">{row.code}</td>
                   <td className="py-2 pr-3 text-slate-300">{row.type ?? "—"}</td>
                   <td className="py-2 pr-3">{flowBadge(row.flow)}</td>
-                  <td className="py-2 pr-3 font-mono text-xs text-slate-400">{row.default_coa_code ?? "—"}</td>
                   <td className="py-2 pr-3 text-slate-300">{UPLOAD_OPTS.find(u => u.value === row.need_upload)?.label ?? row.need_upload}</td>
                   <td className="py-2 pr-3 text-slate-400">{row.priority}</td>
                   <td className="py-2 pr-3">
@@ -552,21 +541,7 @@ function ConfigTab({ category }: { category: "BUSINESS_TRANSACTION" | "ROUTINE_E
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <Label className="text-slate-300">Default COA Code</Label>
-                <div className="mt-1">
-                  <CreatableCombobox
-                    value={form.default_coa_code ?? ""}
-                    onChange={v => setForm((f: any) => ({ ...f, default_coa_code: v || null }))}
-                    options={coaOptions}
-                    placeholder="Pilih COA…"
-                    searchPlaceholder="Cari kode / nama…"
-                    loading={loadingOpts}
-                    emptyText="COA tidak ditemukan."
-                  />
-                </div>
-              </div>
+            <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label className="text-slate-300">Department</Label>
                 <div className="mt-1">
