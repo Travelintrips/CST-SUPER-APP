@@ -1520,10 +1520,10 @@ export async function approveAndCreateJournal(
     const txResult = await db.transaction(async (tx) => {
 
        // ── Step 1: Lock mutation row (FOR UPDATE inside tx = real row lock) ──
-      const { rows: locked } = await tx.execute(sql.raw(`
-        SELECT bm.id, bm.status, bm.amount, bm.direction,
+       const { rows: locked } = await tx.execute(sql.raw(`
+         SELECT bm.id, bm.status, bm.amount, bm.direction,
                bm.transaction_date, bm.description, bm.mutation_key,
-                bm.company_id, bm.bank_account_id,
+                 bm.company_id, bm.bank_account_id, bm.journal_entry_id,
                 bm.expense_category, bm.expense_suggested_account_subtype
         FROM bank_mutations bm
         WHERE bm.id = ${mutationId}
@@ -1545,6 +1545,94 @@ export async function approveAndCreateJournal(
           { code: "COMPANY_SCOPE_REQUIRED" },
         );
       }
+
+       // A previous auto-post can successfully create the source journal but
+       // fail before the mutation status is promoted. The next run must adopt
+       // that *same* journal, not create a duplicate and then route a fully
+       // configured Rule AI back to manual review. This narrow recovery is only
+       // available to the explicit auto-post path and proves the entry belongs
+       // to this mutation, company, and amount before changing any status.
+       if (autoPost) {
+         const linkedJournalId = mut["journal_entry_id"] != null
+           ? Number(mut["journal_entry_id"])
+           : null;
+         const { rows: existingEntries } = await tx.execute(sql.raw(`
+           SELECT
+             ae.id,
+             ae.entry_number,
+             ae.status,
+             ae.total_debit,
+             ae.total_credit,
+             COALESCE(ae.is_voided, FALSE) AS is_voided,
+             COALESCE(ae.is_reversed, FALSE) AS is_reversed
+           FROM accounting_entries ae
+           WHERE ae.company_id = ${companyId}
+             AND (
+               ${linkedJournalId == null ? "FALSE" : `ae.id = ${linkedJournalId}`}
+               OR (ae.source = 'bank_reconciliation' AND ae.source_id = ${mutationId})
+             )
+             AND NOT EXISTS (
+               SELECT 1
+               FROM bank_mutations claimed
+               WHERE claimed.journal_entry_id = ae.id
+                 AND claimed.id <> ${mutationId}
+                 AND claimed.status IN ('approved_pending_posting', 'approved', 'posted')
+             )
+           ORDER BY CASE WHEN ae.id = ${linkedJournalId ?? -1} THEN 0 ELSE 1 END
+           LIMIT 2
+           FOR UPDATE
+         `));
+         const existingEntry = existingEntries.length === 1
+           ? existingEntries[0] as Record<string, unknown>
+           : null;
+         const existingAmount = Number(existingEntry?.["total_debit"] ?? NaN);
+         const amountTolerance = Math.max(1, amount * 0.0001);
+         const canRecoverExistingJournal = existingEntry != null
+           && ["draft", "posted"].includes(String(existingEntry["status"] ?? ""))
+           && !Boolean(existingEntry["is_voided"])
+           && !Boolean(existingEntry["is_reversed"])
+           && Math.abs(existingAmount - amount) <= amountTolerance;
+
+         if (canRecoverExistingJournal) {
+           const entryId = Number(existingEntry["id"]);
+           const entryNumber = String(existingEntry["entry_number"] ?? "");
+           if (existingEntry["status"] === "draft") {
+             await tx.execute(sql.raw(`
+               UPDATE accounting_entries
+               SET status = 'posted', posted_at = NOW()
+               WHERE id = ${entryId} AND status = 'draft'
+             `));
+           }
+           await tx.execute(sql.raw(`
+             UPDATE bank_mutations
+             SET status = 'posted',
+                 journal_entry_id = ${entryId},
+                 approved_by = '${escapeSql(actor)}',
+                 approved_at = NOW(),
+                 posted_by = '${escapeSql(actor)}',
+                 posted_at = NOW(),
+                 review_reason = NULL,
+                 review_code = NULL,
+                 updated_at = NOW()
+             WHERE id = ${mutationId}
+           `));
+           const recoveryMeta = JSON.stringify({
+             journal_entry_id: entryId,
+             entry_number: entryNumber,
+             recovered_existing_auto_post: true,
+             direction,
+             amount,
+           }).replace(/'/g, "''");
+           await tx.execute(sql.raw(`
+             INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
+             VALUES (${mutationId}, 'MATCH_APPROVED_AUTO_POSTED', '${escapeSql(actor)}', '${recoveryMeta}')
+           `));
+           return {
+             txJournalEntryId: entryId,
+             entryNumber,
+           };
+         }
+       }
 
        // A match row is the source of truth. Do not let a stale or tampered
        // browser payload change the candidate selected by the reviewer.

@@ -3366,7 +3366,14 @@ function MutationCard({
   const isIN   = m.direction === "IN";
   const isQris = isQrisMutation(m);
   const canRematchHistoricalReview = m.status === "manual_review"
-    && (m.review_code === "MANUAL_REVIEW_REASON_NOT_RECORDED" || !m.review_code);
+    && (
+      m.review_code === "MANUAL_REVIEW_REASON_NOT_RECORDED"
+      || (
+        m.review_code === "AUTO_POST_GUARD"
+        && m.review_reason === "Jurnal untuk mutasi ini sudah ada. Silakan refresh halaman."
+      )
+      || !m.review_code
+    );
 
   if (qrisAudits.length > 0) {
     return (

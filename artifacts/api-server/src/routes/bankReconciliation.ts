@@ -4579,14 +4579,19 @@ router.post("/run-matching", async (req, res) => {
     `;
   } else if (matching_mode === "rematch_non_final") {
     // A historical manual-review row with no recorded reason has never been
-    // evaluated against the current rules. Include only that recoverable state;
-    // real AUTO_POST_BLOCKED / journal safeguards remain human-review only.
+    // evaluated against the current rules. Also recover the narrow legacy state
+    // where auto-post already created the journal but failed before promoting
+    // the mutation status. Real journal safeguards remain human-review only.
     whereClause = `
       status IN ('unmatched','matched','duplicate_need_review')
       OR (
         status = 'manual_review'
         AND (
           review_code = 'MANUAL_REVIEW_REASON_NOT_RECORDED'
+         OR (
+           review_code = 'AUTO_POST_GUARD'
+           AND review_reason = 'Jurnal untuk mutasi ini sudah ada. Silakan refresh halaman.'
+         )
           OR (
             NULLIF(review_code, '') IS NULL
             AND NOT EXISTS (
