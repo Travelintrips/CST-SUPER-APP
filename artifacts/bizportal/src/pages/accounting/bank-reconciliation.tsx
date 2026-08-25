@@ -1904,15 +1904,21 @@ function AIActionCenter({
           </p>
         </div>
         <div className="flex flex-col sm:flex-row gap-3">
-          {/* Step 2: belum match */}
-          {unmatched > 0 && (
+          {/* Step 2: belum match / review historis yang aman dievaluasi ulang */}
+          {(unmatched > 0 || manualReview > 0) && (
             <div className="flex-1 rounded-lg border bg-background p-3 space-y-2">
               <div className="flex items-start gap-2">
                 <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
                 <div>
-                  <p className="text-sm font-semibold">{unmatched} Mutasi Belum Dicocokkan</p>
+                  <p className="text-sm font-semibold">
+                    {unmatched > 0
+                      ? `${unmatched} Mutasi Belum Dicocokkan`
+                      : `${manualReview} Review Manual Perlu Dievaluasi Ulang`}
+                  </p>
                   <p className="text-xs text-muted-foreground">
-                    {workflowStage === "sync"
+                    {unmatched === 0
+                      ? "Jalankan ulang matching untuk mengevaluasi rule terbaru. Safeguard jurnal tetap berlaku."
+                      : workflowStage === "sync"
                       ? "Sync mutasi bank terlebih dahulu"
                       : matchingBackgroundPending
                         ? "Matching sedang berjalan di background"
@@ -1923,7 +1929,7 @@ function AIActionCenter({
               <Button
                 size="sm"
                 className="w-full gap-1.5"
-                onClick={() => onRunMatching("new")}
+                onClick={() => onRunMatching(unmatched > 0 ? "new" : "rematch_non_final")}
                 disabled={matchingPending || matchingBackgroundPending || workflowStage !== "matching"}
               >
                 {matchingPending || matchingBackgroundPending
@@ -1933,18 +1939,22 @@ function AIActionCenter({
                   ? "Menunggu matching selesai..."
                   : workflowStage === "sync"
                     ? "Sync mutasi terlebih dahulu"
-                    : "Jalankan AI Matching"}
+                    : unmatched > 0
+                      ? "Jalankan AI Matching"
+                      : "Jalankan Ulang Matching"}
               </Button>
               <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="flex-1 text-xs"
-                  onClick={() => onRunMatching("retry_unmatched")}
-                  disabled={matchingPending || matchingBackgroundPending || workflowStage !== "matching"}
-                >
-                  Coba Lagi Unmatched
-                </Button>
+                {unmatched > 0 && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="flex-1 text-xs"
+                    onClick={() => onRunMatching("retry_unmatched")}
+                    disabled={matchingPending || matchingBackgroundPending || workflowStage !== "matching"}
+                  >
+                    Coba Lagi Unmatched
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="ghost"
@@ -1952,7 +1962,7 @@ function AIActionCenter({
                   onClick={() => onRunMatching("rematch_non_final")}
                   disabled={matchingPending || matchingBackgroundPending || workflowStage !== "matching"}
                 >
-                  Re-match Belum Final
+                  {unmatched > 0 ? "Re-match Belum Final" : "Evaluasi Rule Terbaru"}
                 </Button>
               </div>
             </div>
@@ -3355,6 +3365,8 @@ function MutationCard({
   const amount = Number(m.amount) || 0;
   const isIN   = m.direction === "IN";
   const isQris = isQrisMutation(m);
+  const canRematchHistoricalReview = m.status === "manual_review"
+    && (m.review_code === "MANUAL_REVIEW_REASON_NOT_RECORDED" || !m.review_code);
 
   if (qrisAudits.length > 0) {
     return (
@@ -3632,6 +3644,18 @@ function MutationCard({
               <BookOpen className="h-3.5 w-3.5" />
               Referensi COA
             </Button>
+            {canRematchHistoricalReview && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1 border-amber-300 text-xs text-amber-900 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-200"
+                onClick={() => onRunMatching("rematch_non_final")}
+                title="Evaluasi ulang transaksi ini dengan Rule AI dan Referensi COA terbaru."
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                Jalankan Ulang Matching
+              </Button>
+            )}
             {isLegacyReferenceCoaRetryable(m) && onRetryReferenceCoa && (
               <Button
                 size="sm"
