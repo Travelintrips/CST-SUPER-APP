@@ -679,10 +679,10 @@ function AiRulesTab() {
       const j = await r.json();
       const coas = Array.isArray(j) ? j : (j.data ?? []);
       setCoaOptions(coas
-        .filter((c: any) => c.code)
+        .filter((c: any) => c.code ?? c.coa_code)
         .map((c: any) => ({
-          value: String(c.code),
-          label: `${c.code} — ${c.name ?? "Tanpa nama"}`,
+          value: String(c.code ?? c.coa_code),
+          label: `${c.code ?? c.coa_code} — ${c.name ?? c.coa_name ?? "Tanpa nama"}`,
         })));
     } catch {
       // The field remains usable as free text if the COA master cannot be loaded.
