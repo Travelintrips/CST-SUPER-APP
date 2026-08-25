@@ -35,6 +35,7 @@ import { invalidateRulesCache } from "../lib/reconciliation/reconCache.js";
 import { runReconBatch2Migration } from "../lib/reconciliation/reconBatch2Migration.js";
 import {
   runReconClassificationMigration,
+  syncAiClassificationRulesToOperational,
   syncOperationalReconRulesToClassification,
 } from "../lib/reconClassificationMigration.js";
 
@@ -105,58 +106,7 @@ export async function runReconRulesMigration(): Promise<void> {
     logger.warn({ err: e.message }, "[recon_rules] classification migration warning")
   );
   await syncOperationalReconRulesToClassification();
-  await db.execute(sql.raw(`
-    INSERT INTO recon_rules
-      (company_id, name, description, priority, is_active, direction,
-       bank_account_id, condition_type, condition_field, condition_operator,
-       condition_value, conditions_json, logic, specificity,
-       target_type, target_id, target_coa_code,
-       confidence_score, stop_processing, created_by)
-    SELECT
-      r.company_id,
-      r.name,
-      r.description,
-      COALESCE(r.priority, 100),
-      COALESCE(r.is_active, TRUE),
-      CASE
-        WHEN UPPER(COALESCE(r.action_flow, '')) LIKE '%INCOME%' THEN 'IN'
-        ELSE 'OUT'
-      END,
-      NULL,
-      'SIMPLE',
-      r.condition_field,
-      r.condition_operator,
-      COALESCE(r.condition_value, ''),
-       r.conditions_json,
-       COALESCE(r.logic, 'AND'),
-       COALESCE(r.specificity, 1),
-      CASE
-        WHEN UPPER(COALESCE(r.action_flow, '')) LIKE '%INCOME%' THEN 'income'
-        ELSE 'expense'
-      END,
-      NULL,
-      r.action_coa_code,
-      LEAST(100, GREATEST(0, ROUND(COALESCE(r.confidence, 1.0) * 100))),
-      TRUE,
-      r.created_by
-    FROM recon_ai_classification_rules r
-    WHERE COALESCE(r.is_active, TRUE) = TRUE
-      AND NOT EXISTS (
-        SELECT 1
-        FROM recon_rules o
-        WHERE o.company_id = r.company_id
-          AND COALESCE(o.direction, '') = CASE
-            WHEN UPPER(COALESCE(r.action_flow, '')) LIKE '%INCOME%' THEN 'IN'
-            ELSE 'OUT'
-          END
-          AND o.condition_field = r.condition_field
-          AND o.condition_operator = r.condition_operator
-          AND o.condition_value = COALESCE(r.condition_value, '')
-          AND COALESCE(o.target_coa_code, '') = COALESCE(r.action_coa_code, '')
-      )
-  `)).catch(e =>
-    logger.warn({ err: e.message }, "[recon_rules] AI rule bridge warning")
-  );
+  await syncAiClassificationRulesToOperational();
 
   logger.info("[recon_rules] migration complete (batch 1+2)");
 }

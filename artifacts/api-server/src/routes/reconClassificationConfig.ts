@@ -47,9 +47,11 @@ import { logger } from "../lib/logger.js";
 import { evaluateReconRules, type ReconRule, type ReconRuleMutationInput } from "../lib/reconciliation/reconRuleEngine.js";
 import {
   runReconClassificationMigration,
+  syncAiClassificationRulesToOperational,
   syncOperationalReconRulesToClassification,
   resetMigrationFlag,
 } from "../lib/reconClassificationMigration.js";
+import { invalidateRulesCache } from "../lib/reconciliation/reconCache.js";
 import { trackAiRuleFeedback } from "../lib/usageTrackingService.js";
 
 export const reconClassificationRouter = Router();
@@ -456,7 +458,13 @@ reconClassificationRouter.post("/ai-rules", async (req, res) => {
       )
       RETURNING *
     `));
-    res.status(201).json({ data: result.rows[0] });
+    const created = result.rows[0] as any;
+    const companyId = created?.company_id != null ? Number(created.company_id) : null;
+    if (companyId && Number.isSafeInteger(companyId)) {
+      await syncAiClassificationRulesToOperational(companyId);
+      invalidateRulesCache(companyId);
+    }
+    res.status(201).json({ data: created });
   } catch (err) {
     logger.error({ err }, "[ReconClassification] POST /ai-rules error:");
     res.status(500).json({ error: "Gagal membuat AI rule." });
@@ -578,7 +586,13 @@ reconClassificationRouter.patch("/ai-rules/:id", async (req, res) => {
       `UPDATE recon_ai_classification_rules SET ${setClauses.join(", ")} WHERE id = ${id} RETURNING *`
     ));
     if (!result.rows[0]) return res.status(404).json({ error: "Rule tidak ditemukan." });
-    res.json({ data: result.rows[0] });
+    const updated = result.rows[0] as any;
+    const companyId = updated.company_id != null ? Number(updated.company_id) : null;
+    if (companyId && Number.isSafeInteger(companyId)) {
+      await syncAiClassificationRulesToOperational(companyId);
+      invalidateRulesCache(companyId);
+    }
+    res.json({ data: updated });
   } catch (err) {
     logger.error({ err }, "[ReconClassification] PATCH /ai-rules/:id error:");
     res.status(500).json({ error: "Gagal memperbarui AI rule." });
@@ -590,7 +604,20 @@ reconClassificationRouter.delete("/ai-rules/:id", async (req, res) => {
     await ensureTables();
     const id = parseInt(req.params["id"] ?? "", 10);
     if (isNaN(id)) return res.status(400).json({ error: "ID tidak valid." });
-    await db.execute(sql.raw(`UPDATE recon_ai_classification_rules SET is_active = FALSE WHERE id = ${id}`));
+    const result = await db.execute(sql.raw(`
+      UPDATE recon_ai_classification_rules
+      SET is_active = FALSE, updated_at = NOW()
+      WHERE id = ${id}
+      RETURNING company_id
+    `));
+    if (!result.rows[0]) return res.status(404).json({ error: "Rule tidak ditemukan." });
+    const companyId = (result.rows[0] as any).company_id != null
+      ? Number((result.rows[0] as any).company_id)
+      : null;
+    if (companyId && Number.isSafeInteger(companyId)) {
+      await syncAiClassificationRulesToOperational(companyId);
+      invalidateRulesCache(companyId);
+    }
     res.json({ ok: true });
   } catch (err) {
     logger.error({ err }, "[ReconClassification] DELETE /ai-rules/:id error:");

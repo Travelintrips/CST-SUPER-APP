@@ -20,6 +20,7 @@ import { sql } from "drizzle-orm";
 import {
   runReconClassificationMigration,
   resetMigrationFlag,
+  syncAiClassificationRulesToOperational,
 } from "../lib/reconClassificationMigration.js";
 
 // ─── Setup / Teardown ──────────────────────────────────────────────────────────
@@ -27,6 +28,12 @@ import {
 const TEST_CODE_PREFIX = "TEST_RCC_";
 
 async function cleanupTestRows() {
+  await db.execute(sql.raw(`
+    DELETE FROM recon_rules
+    WHERE ai_classification_rule_id IN (
+      SELECT id FROM recon_ai_classification_rules WHERE name LIKE 'TEST_%'
+    )
+  `)).catch(() => null);
   // Remove any leftover test rows (does not touch is_seed=TRUE rows)
   await db.execute(sql.raw(`
     DELETE FROM recon_approval_rules_config WHERE name LIKE 'TEST_%'
@@ -243,6 +250,68 @@ describe("AI Classification Rules", () => {
     await db.execute(sql.raw(`UPDATE recon_ai_classification_rules SET is_active = FALSE WHERE id = ${ruleId}`));
     const r = await db.execute(sql.raw(`SELECT is_active FROM recon_ai_classification_rules WHERE id = ${ruleId}`));
     expect((r.rows[0] as any).is_active).toBe(false);
+  });
+});
+
+describe("AI rule operational sync", () => {
+  const companyId = 990_001;
+  let aiRuleId: number;
+
+  it("creates, updates, and deactivates only its managed operational mirror", async () => {
+    const created = await db.execute(sql.raw(`
+      INSERT INTO recon_ai_classification_rules
+        (company_id, name, condition_field, condition_operator, condition_value,
+         action_flow, action_coa_code, confidence, priority, source)
+      VALUES
+        (${companyId}, 'TEST_AI_Operational_Sync', 'description', 'contains', 'bluid',
+         'ROUTINE_EXPENSE_ALLOCATION', '5-1010', 1.00, 220, 'manual')
+      RETURNING id
+    `));
+    aiRuleId = Number((created.rows[0] as any).id);
+
+    await syncAiClassificationRulesToOperational(companyId);
+
+    let mirror = await db.execute(sql.raw(`
+      SELECT condition_type, condition_value, target_coa_code, confidence_score, is_active
+      FROM recon_rules
+      WHERE ai_classification_rule_id = ${aiRuleId}
+    `));
+    expect((mirror.rows[0] as any)).toMatchObject({
+      condition_type: "AI_CLASSIFICATION",
+      condition_value: "bluid",
+      target_coa_code: "5-1010",
+      confidence_score: 100,
+      is_active: true,
+    });
+
+    await db.execute(sql.raw(`
+      UPDATE recon_ai_classification_rules
+      SET condition_value = 'bluid updated', action_coa_code = '5-1020'
+      WHERE id = ${aiRuleId}
+    `));
+    await syncAiClassificationRulesToOperational(companyId);
+
+    mirror = await db.execute(sql.raw(`
+      SELECT condition_value, target_coa_code
+      FROM recon_rules
+      WHERE ai_classification_rule_id = ${aiRuleId}
+    `));
+    expect((mirror.rows[0] as any)).toMatchObject({
+      condition_value: "bluid updated",
+      target_coa_code: "5-1020",
+    });
+
+    await db.execute(sql.raw(`
+      UPDATE recon_ai_classification_rules SET is_active = FALSE WHERE id = ${aiRuleId}
+    `));
+    await syncAiClassificationRulesToOperational(companyId);
+
+    mirror = await db.execute(sql.raw(`
+      SELECT is_active
+      FROM recon_rules
+      WHERE ai_classification_rule_id = ${aiRuleId}
+    `));
+    expect((mirror.rows[0] as any).is_active).toBe(false);
   });
 });
 

@@ -170,7 +170,8 @@ export async function runReconClassificationMigration(): Promise<void> {
     ALTER TABLE recon_ai_classification_rules
       ADD COLUMN IF NOT EXISTS conditions_json JSONB,
       ADD COLUMN IF NOT EXISTS logic TEXT NOT NULL DEFAULT 'AND',
-      ADD COLUMN IF NOT EXISTS specificity INTEGER NOT NULL DEFAULT 1
+      ADD COLUMN IF NOT EXISTS specificity INTEGER NOT NULL DEFAULT 1,
+      ADD COLUMN IF NOT EXISTS operational_rule_id INTEGER
   `));
 
   await db.execute(sql.raw(`
@@ -376,6 +377,161 @@ export async function syncOperationalReconRulesToClassification(): Promise<void>
     // recon_rules may not exist yet when this migration is reached first.
     // The bank-reconciliation migration calls this again after creating it.
     logger.warn({ err }, "[ReconClassificationMigration] operational rule backfill skipped");
+  }
+}
+
+/**
+ * Materialize Rule AI rows as managed operational reconciliation rules.
+ *
+ * `recon_rules` remains the matching source of truth. A Rule AI row is linked
+ * to its own operational mirror so create/edit/deactivate operations in the
+ * configuration UI are reflected by the runtime matcher without changing
+ * independent Referensi COA rules created from Bank Reconciliation.
+ */
+export async function syncAiClassificationRulesToOperational(
+  companyId?: number,
+): Promise<void> {
+  const normalizedCompanyId = companyId != null && Number.isSafeInteger(companyId) && companyId > 0
+    ? companyId
+    : null;
+
+  try {
+    const tableCheck = await db.execute(sql.raw(`
+      SELECT to_regclass('public.recon_rules') AS recon_rules_table
+    `));
+    if (!((tableCheck as any).rows ?? [])[0]?.recon_rules_table) return;
+
+    await db.execute(sql.raw(`
+      ALTER TABLE recon_rules
+        ADD COLUMN IF NOT EXISTS ai_classification_rule_id INTEGER
+    `));
+    await db.execute(sql.raw(`
+      CREATE UNIQUE INDEX IF NOT EXISTS rr_ai_classification_rule_uniq
+        ON recon_rules (ai_classification_rule_id)
+        WHERE ai_classification_rule_id IS NOT NULL
+    `));
+
+    const companyFilter = normalizedCompanyId == null
+      ? ""
+      : `AND r.company_id = ${normalizedCompanyId}`;
+
+    // Deactivation is intentionally limited to rows explicitly created as an
+    // AI-rule mirror. A display mirror of an independently authored Referensi
+    // COA must not be allowed to disable the authoritative operational rule.
+    await db.execute(sql.raw(`
+      UPDATE recon_rules o
+      SET is_active = FALSE, updated_at = NOW()
+      FROM recon_ai_classification_rules r
+      WHERE o.ai_classification_rule_id = r.id
+        AND COALESCE(r.is_active, TRUE) = FALSE
+        ${companyFilter}
+    `));
+
+    // Keep already-linked mirrors in lockstep when an administrator edits a
+    // Rule AI. The runtime consumes the same condition, precedence, and COA.
+    await db.execute(sql.raw(`
+      UPDATE recon_rules o
+      SET
+        name = r.name,
+        description = r.description,
+        priority = COALESCE(r.priority, 100),
+        is_active = COALESCE(r.is_active, TRUE),
+        direction = CASE
+          WHEN UPPER(COALESCE(r.action_flow, '')) LIKE '%INCOME%' THEN 'IN'
+          ELSE 'OUT'
+        END,
+        condition_type = 'AI_CLASSIFICATION',
+        condition_field = r.condition_field,
+        condition_operator = r.condition_operator,
+        condition_value = COALESCE(r.condition_value, ''),
+        conditions_json = r.conditions_json,
+        logic = COALESCE(r.logic, 'AND'),
+        specificity = COALESCE(r.specificity, 1),
+        target_type = CASE
+          WHEN UPPER(COALESCE(r.action_flow, '')) LIKE '%INCOME%' THEN 'income'
+          ELSE 'expense'
+        END,
+        target_coa_code = r.action_coa_code,
+        confidence_score = LEAST(100, GREATEST(0, ROUND(COALESCE(r.confidence, 1.0) * 100))),
+        stop_processing = TRUE,
+        updated_at = NOW()
+      FROM recon_ai_classification_rules r
+      WHERE o.ai_classification_rule_id = r.id
+        AND COALESCE(r.is_active, TRUE) = TRUE
+        ${companyFilter}
+    `));
+
+    // Existing independent operational rules win: if the exact rule already
+    // exists, it is already usable by matching and is deliberately not claimed
+    // by the configuration screen.
+    await db.execute(sql.raw(`
+      INSERT INTO recon_rules
+        (company_id, name, description, priority, is_active, direction,
+         bank_account_id, condition_type, condition_field, condition_operator,
+         condition_value, conditions_json, logic, specificity,
+         target_type, target_id, target_coa_code,
+         confidence_score, stop_processing, created_by, ai_classification_rule_id)
+      SELECT
+        r.company_id,
+        r.name,
+        r.description,
+        COALESCE(r.priority, 100),
+        TRUE,
+        CASE
+          WHEN UPPER(COALESCE(r.action_flow, '')) LIKE '%INCOME%' THEN 'IN'
+          ELSE 'OUT'
+        END,
+        NULL,
+        'AI_CLASSIFICATION',
+        r.condition_field,
+        r.condition_operator,
+        COALESCE(r.condition_value, ''),
+        r.conditions_json,
+        COALESCE(r.logic, 'AND'),
+        COALESCE(r.specificity, 1),
+        CASE
+          WHEN UPPER(COALESCE(r.action_flow, '')) LIKE '%INCOME%' THEN 'income'
+          ELSE 'expense'
+        END,
+        NULL,
+        r.action_coa_code,
+        LEAST(100, GREATEST(0, ROUND(COALESCE(r.confidence, 1.0) * 100))),
+        TRUE,
+        r.created_by,
+        r.id
+      FROM recon_ai_classification_rules r
+      WHERE COALESCE(r.is_active, TRUE) = TRUE
+        AND r.company_id IS NOT NULL
+        AND r.operational_rule_id IS NULL
+        ${companyFilter}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM recon_rules o
+          WHERE o.company_id = r.company_id
+            AND COALESCE(o.direction, '') = CASE
+              WHEN UPPER(COALESCE(r.action_flow, '')) LIKE '%INCOME%' THEN 'IN'
+              ELSE 'OUT'
+            END
+            AND o.condition_field = r.condition_field
+            AND o.condition_operator = r.condition_operator
+            AND o.condition_value = COALESCE(r.condition_value, '')
+            AND COALESCE(o.target_coa_code, '') = COALESCE(r.action_coa_code, '')
+        )
+      ON CONFLICT (ai_classification_rule_id)
+      WHERE ai_classification_rule_id IS NOT NULL
+      DO NOTHING
+    `));
+
+    await db.execute(sql.raw(`
+      UPDATE recon_ai_classification_rules r
+      SET operational_rule_id = o.id, updated_at = NOW()
+      FROM recon_rules o
+      WHERE o.ai_classification_rule_id = r.id
+        AND r.operational_rule_id IS NULL
+        ${companyFilter}
+    `));
+  } catch (err) {
+    logger.warn({ err, companyId: normalizedCompanyId }, "[ReconClassificationMigration] AI rule operational sync skipped");
   }
 }
 

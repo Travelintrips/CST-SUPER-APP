@@ -4578,7 +4578,27 @@ router.post("/run-matching", async (req, res) => {
       )
     `;
   } else if (matching_mode === "rematch_non_final") {
-    whereClause = "status IN ('unmatched','matched','duplicate_need_review')";
+    // A historical manual-review row with no recorded reason has never been
+    // evaluated against the current rules. Include only that recoverable state;
+    // real AUTO_POST_BLOCKED / journal safeguards remain human-review only.
+    whereClause = `
+      status IN ('unmatched','matched','duplicate_need_review')
+      OR (
+        status = 'manual_review'
+        AND (
+          review_code = 'MANUAL_REVIEW_REASON_NOT_RECORDED'
+          OR (
+            NULLIF(review_code, '') IS NULL
+            AND NOT EXISTS (
+              SELECT 1
+              FROM bank_reconciliation_audit blocked_audit
+              WHERE blocked_audit.mutation_id = bank_mutations.id
+                AND blocked_audit.action IN ('AUTO_POST_BLOCKED', 'JOURNAL_MAPPING_REQUIRED')
+            )
+          )
+        )
+      )
+    `;
   }
   if (legacy_reference_coa_retry) {
     // This retry is deliberately limited to the legacy fallback: a rule was
