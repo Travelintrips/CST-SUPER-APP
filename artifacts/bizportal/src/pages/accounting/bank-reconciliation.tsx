@@ -599,7 +599,7 @@ interface QrisCandidateAudit {
   provider_code: string;
   mutation_source_classification: string;
   source_date: string;
-  estimated_settlement_date: string;
+  estimated_settlement_date: string | null;
   gross_amount: number | string;
   net_amount: number | string;
   observed_deduction: number | string;
@@ -4117,7 +4117,11 @@ function MutationDetailPanel({
                       <span className="min-w-0 text-slate-600 dark:text-slate-400">Provider</span>
                       <span className="min-w-0 font-medium break-all sm:text-right">{qrisAudit.provider_code || "Belum dikenali"}</span>
                       <span className="text-slate-600 dark:text-slate-400">Perkiraan settlement</span>
-                      <span className="min-w-0 font-medium break-words sm:text-right">{fmtDate(qrisAudit.estimated_settlement_date)}</span>
+                      <span className="min-w-0 font-medium break-words sm:text-right">
+                        {qrisAudit.estimated_settlement_date
+                          ? fmtDate(qrisAudit.estimated_settlement_date)
+                          : "Belum tersedia"}
+                      </span>
                       <span className="text-slate-600 dark:text-slate-400">Total bruto</span>
                       <span className="min-w-0 font-medium break-words sm:text-right">{idr(qrisAudit.gross_amount)}</span>
                       <span className="text-slate-600 dark:text-slate-400">Dana masuk (netto)</span>
@@ -4853,12 +4857,22 @@ export default function BankReconciliationPage() {
         body: JSON.stringify({ dryRun: false, companyId: qrisCompanyId }),
       });
       if (!r.ok) throw new Error(await r.text());
-      return r.json() as Promise<{ generated: number; candidates: QrisCandidateAudit[] }>;
+      return r.json() as Promise<{
+        generated: number;
+        persisted: number;
+        reviewable: number;
+        candidates: QrisCandidateAudit[];
+      }>;
     },
-      onSuccess: async (result) => {
-      toast({ title: `Kandidat QRIS dibuat: ${result.generated} kandidat` });
-        setWorkflowStage("review");
-        await refetchQrisAudit();
+    onSuccess: async (result) => {
+      toast({
+        title: `${result.persisted} pemeriksaan QRIS ditampilkan`,
+        description: result.reviewable > 0
+          ? `${result.reviewable} kandidat memiliki pasangan payment untuk direview.`
+          : "Belum ada pasangan payment yang dapat diverifikasi; hasil ditampilkan sebagai UNMATCHED dan tidak dapat disetujui.",
+      });
+      setWorkflowStage("review");
+      await Promise.all([refetchQrisAudit(), refetch()]);
       qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
     },
     onError: (e: Error) => toast({ title: "Gagal membuat kandidat QRIS", description: e.message, variant: "destructive" }),
@@ -5883,7 +5897,7 @@ export default function BankReconciliationPage() {
                               {candidate.review_reason ?? candidate.description ?? "Belum ada alasan tambahan."}
                             </p>
                             <p className="text-slate-600 dark:text-slate-400 mt-0.5">
-                               Settlement {fmtDate(candidate.estimated_settlement_date)} · {getAvailableQrisPaymentIds(candidate).length} payment · Netto {idr(candidate.current_expected_amount ?? candidate.net_amount)}
+                               Settlement {candidate.estimated_settlement_date ? fmtDate(candidate.estimated_settlement_date) : "belum tersedia"} · {getAvailableQrisPaymentIds(candidate).length} payment · Netto {idr(candidate.current_expected_amount ?? candidate.net_amount)}
                             </p>
                              {(candidate.payment_items?.length ?? 0) > 0 && (
                                <div className="mt-2 rounded border bg-slate-50/80 px-2 py-1.5 text-[10px] dark:bg-slate-900/60">

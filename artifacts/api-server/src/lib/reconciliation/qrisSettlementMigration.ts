@@ -160,7 +160,7 @@ async function runQrisSettlementMigrationOnce(): Promise<void> {
       company_id INTEGER,
       bank_account_id INTEGER,
       source_date DATE NOT NULL,
-      estimated_settlement_date DATE NOT NULL,
+      estimated_settlement_date DATE,
       provider_code TEXT NOT NULL DEFAULT 'unknown',
       provider_detection_source TEXT NOT NULL DEFAULT 'unknown',
       settlement_rule_version TEXT NOT NULL DEFAULT 'legacy-v1',
@@ -198,6 +198,13 @@ async function runQrisSettlementMigrationOnce(): Promise<void> {
       ADD COLUMN IF NOT EXISTS effective_deduction_rate NUMERIC(9,8),
       ADD COLUMN IF NOT EXISTS review_reason TEXT,
       ADD COLUMN IF NOT EXISTS generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  `).catch(() => {});
+  // An UNMATCHED QRIS audit is still valuable reviewer evidence, even when no
+  // canonical payment date is available. It must remain non-approvable through
+  // the empty payment_items and UNMATCHED guards, rather than being hidden.
+  await db.execute(sql`
+    ALTER TABLE qris_mutation_batch_candidates
+      ALTER COLUMN estimated_settlement_date DROP NOT NULL
   `).catch(() => {});
 
   // A mutation may legitimately have multiple historical candidate snapshots.
