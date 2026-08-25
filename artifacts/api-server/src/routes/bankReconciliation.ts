@@ -1419,8 +1419,21 @@ router.post("/qris-candidates/generate", async (req, res) => {
       ...result,
     });
   } catch (e: any) {
-    logger.error({ err: e?.cause?.message ?? e?.message }, "[bankRecon] POST /qris-candidates/generate failed");
-    return res.status(500).json({ error: e?.message ?? "Gagal membuat kandidat QRIS" });
+    const postgresError = findPostgresError(e);
+    logger.error(
+      { err: postgresError?.message ?? e?.cause?.message ?? e?.message },
+      "[bankRecon] POST /qris-candidates/generate failed",
+    );
+    if (postgresError?.code === "23505") {
+      return res.status(409).json({
+        error: "Data audit QRIS berubah saat diproses. Muat ulang halaman lalu coba buat pemeriksaan QRIS lagi.",
+        code: "QRIS_CANDIDATE_CONFLICT",
+      });
+    }
+    return res.status(500).json({
+      error: "Gagal menyimpan pemeriksaan QRIS. Coba lagi, atau hubungi admin bila masalah berulang.",
+      code: "QRIS_CANDIDATE_GENERATION_FAILED",
+    });
   }
 });
 

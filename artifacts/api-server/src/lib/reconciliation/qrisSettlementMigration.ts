@@ -214,6 +214,13 @@ async function runQrisSettlementMigrationOnce(): Promise<void> {
     ALTER TABLE qris_mutation_batch_candidates
       DROP CONSTRAINT IF EXISTS qris_mutation_batch_candidates_mutation_id_key
   `).catch(() => {});
+  // Earlier installations created the same uniqueness rule as a bare index
+  // rather than a table constraint. DROP CONSTRAINT does not remove that form,
+  // so remove it explicitly after the constraint attempt. Historical
+  // superseded snapshots must be allowed to coexist with the current audit.
+  await db.execute(sql`
+    DROP INDEX IF EXISTS qris_mutation_batch_candidates_mutation_id_key
+  `).catch(() => {});
   await db.execute(sql`
     CREATE INDEX IF NOT EXISTS idx_qris_candidates_mutation
       ON qris_mutation_batch_candidates(mutation_id, id DESC)
