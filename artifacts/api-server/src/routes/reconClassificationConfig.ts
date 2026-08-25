@@ -393,7 +393,6 @@ reconClassificationRouter.post("/ai-rules", async (req, res) => {
     const d = parsed.data;
     const normalized = normalizeRuleConditions(d);
     const userId = (req as any).user?.id ?? null;
-    const normalized = normalizeRuleConditions(d);
 
     const result = await db.execute(sql.raw(`
       INSERT INTO recon_ai_classification_rules
