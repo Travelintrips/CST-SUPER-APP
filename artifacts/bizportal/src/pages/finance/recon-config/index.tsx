@@ -72,11 +72,23 @@ const COND_OPS = [
   { value: "lte",         label: "≤" },
 ];
 
+function jsonArray(value: unknown): any[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string" || !value.trim()) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 function ruleConditions(row: any): any[] {
   if (Array.isArray(row?.conditions)) return row.conditions;
   if (Array.isArray(row?.conditions_json)) return row.conditions_json;
   if (typeof row?.conditions_json === "string") {
-    try { const parsed = JSON.parse(row.conditions_json); if (Array.isArray(parsed)) return parsed; } catch { /* legacy row */ }
+    const parsed = jsonArray(row.conditions_json);
+    if (parsed.length) return parsed;
   }
   return row?.condition_value
     ? [{ field: row.condition_field ?? "description", operator: row.condition_operator ?? "contains", value: row.condition_value }]
@@ -86,7 +98,7 @@ function ruleConditions(row: any): any[] {
 function conditionSummary(row: any): string {
   const conditions = ruleConditions(row);
   const logic = row?.logic === "OR" ? " OR " : " AND ";
-  return conditions.map((c: any) => `${c.negate ? "NOT " : ""}${c.value ?? ""}`).join(logic) || "—";
+  return conditions.map((c: any) => `${c?.negate ? "NOT " : ""}${c?.value ?? ""}`).join(logic) || "—";
 }
 
 function flowBadge(flow: string) {
@@ -148,9 +160,24 @@ function ConfigTab({ category }: { category: "BUSINESS_TRANSACTION" | "ROUTINE_E
       const depts = Array.isArray(deptJ) ? deptJ : (deptJ.data ?? []);
       const ccs   = Array.isArray(ccJ)   ? ccJ   : (ccJ.data   ?? []);
 
-      setCoaOptions(coas.map((c: any) => ({ value: c.code, label: `${c.code} — ${c.name}` })));
-      setDeptOptions(depts.map((d: any) => ({ value: d.name, label: d.code ? `${d.code} — ${d.name}` : d.name })));
-      setCcOptions(ccs.map((c: any)    => ({ value: c.code, label: `${c.code} — ${c.name}` })));
+      setCoaOptions(coas
+        .filter((c: any) => c?.code != null && String(c.code).trim())
+        .map((c: any) => ({
+          value: String(c.code),
+          label: `${String(c.code)} — ${String(c.name ?? "Tanpa nama")}`,
+        })));
+      setDeptOptions(depts
+        .filter((d: any) => d?.name != null && String(d.name).trim())
+        .map((d: any) => ({
+          value: String(d.name),
+          label: d.code ? `${String(d.code)} — ${String(d.name)}` : String(d.name),
+        })));
+      setCcOptions(ccs
+        .filter((c: any) => c?.code != null && String(c.code).trim())
+        .map((c: any) => ({
+          value: String(c.code),
+          label: `${String(c.code)} — ${String(c.name ?? "Tanpa nama")}`,
+        })));
     } catch {
       // silently ignore — fields still work as free-text fallback
     } finally {
@@ -241,8 +268,8 @@ function ConfigTab({ category }: { category: "BUSINESS_TRANSACTION" | "ROUTINE_E
     setEditRow(row);
     setForm({
       ...row,
-      keywords: Array.isArray(row.keywords) ? row.keywords : JSON.parse(row.keywords ?? "[]"),
-      upload_file_types: Array.isArray(row.upload_file_types) ? row.upload_file_types : JSON.parse(row.upload_file_types ?? "[]"),
+      keywords: jsonArray(row.keywords),
+      upload_file_types: jsonArray(row.upload_file_types),
       // NUMERIC columns come back as strings from pg; coerce to number
       confidence_threshold: Number(row.confidence_threshold ?? 0.75),
       upload_max_files: Number(row.upload_max_files ?? 5),
@@ -1266,7 +1293,7 @@ function UploadRequirementsTab() {
                     </Badge>
                   </td>
                   <td className="py-2 pr-3 text-slate-400 text-xs font-mono">
-                    {(Array.isArray(row.upload_file_types) ? row.upload_file_types : JSON.parse(row.upload_file_types ?? "[]")).join(", ") || "—"}
+                    {jsonArray(row.upload_file_types).join(", ") || "—"}
                   </td>
                   <td className="py-2 pr-3 text-slate-400">{row.upload_max_files}</td>
                   <td className="py-2 text-slate-400">{row.upload_max_size_mb} MB</td>
