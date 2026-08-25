@@ -4408,10 +4408,17 @@ router.post("/run-matching", async (req, res) => {
   const {
     ids,
     legacy_reference_coa_retry = false,
+    matching_mode = "new",
   } = req.body as {
     ids?: number[];
     legacy_reference_coa_retry?: boolean;
+    matching_mode?: "new" | "retry_unmatched" | "rematch_non_final";
   };
+  if (!["new", "retry_unmatched", "rematch_non_final"].includes(matching_mode)) {
+    return res.status(400).json({
+      error: "Mode matching tidak valid. Gunakan new, retry_unmatched, atau rematch_non_final.",
+    });
+  }
   const requestedIds = Array.isArray(ids)
     ? ids.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0)
     : [];
@@ -4426,8 +4433,31 @@ router.post("/run-matching", async (req, res) => {
   // Promise.all would exhaust the database pool during a large re-run.
   const MATCHING_CONCURRENCY = 4;
 
-  // Allow matching unmatched + matched + duplicate_need_review (spec §Phase3)
-  let whereClause = "status IN ('unmatched','matched','duplicate_need_review')";
+  // Default matching is incremental: a mutation that already produced a
+  // MATCH_CREATED audit event is not automatically reprocessed. In particular,
+  // `matched` must not cause old data to be rechecked every day.
+  let whereClause = `
+    status IN ('unmatched','matched','duplicate_need_review')
+    AND NOT EXISTS (
+      SELECT 1
+      FROM bank_reconciliation_audit matching_audit
+      WHERE matching_audit.mutation_id = bank_mutations.id
+        AND matching_audit.action = 'MATCH_CREATED'
+    )
+  `;
+  if (matching_mode === "retry_unmatched") {
+    whereClause = `
+      status = 'unmatched'
+      AND EXISTS (
+        SELECT 1
+        FROM bank_reconciliation_audit matching_audit
+        WHERE matching_audit.mutation_id = bank_mutations.id
+          AND matching_audit.action = 'MATCH_CREATED'
+      )
+    `;
+  } else if (matching_mode === "rematch_non_final") {
+    whereClause = "status IN ('unmatched','matched','duplicate_need_review')";
+  }
   if (legacy_reference_coa_retry) {
     // This retry is deliberately limited to the legacy fallback: a rule was
     // matched but no auto-post attempt was ever recorded. Do not retry a row

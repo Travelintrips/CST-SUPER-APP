@@ -1738,7 +1738,7 @@ function AIActionCenter({
   workflowStage,
 }: {
   summaryMap: Record<string, { count: number; amount: number }>;
-  onRunMatching: () => void;
+  onRunMatching: (mode?: "new" | "retry_unmatched" | "rematch_non_final") => void;
   onGenerateQrisCandidates?: () => void;
   onApproveAll: () => void;
   onPostAll: () => void;
@@ -1807,7 +1807,7 @@ function AIActionCenter({
               <Button
                 size="sm"
                 className="w-full gap-1.5"
-                onClick={onRunMatching}
+                onClick={() => onRunMatching("new")}
                 disabled={matchingPending || matchingBackgroundPending || workflowStage !== "matching"}
               >
                 {matchingPending || matchingBackgroundPending
@@ -1819,6 +1819,26 @@ function AIActionCenter({
                     ? "Sync mutasi terlebih dahulu"
                     : "Jalankan AI Matching"}
               </Button>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="flex-1 text-xs"
+                  onClick={() => onRunMatching("retry_unmatched")}
+                  disabled={matchingPending || matchingBackgroundPending || workflowStage !== "matching"}
+                >
+                  Coba Lagi Unmatched
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="flex-1 text-xs"
+                  onClick={() => onRunMatching("rematch_non_final")}
+                  disabled={matchingPending || matchingBackgroundPending || workflowStage !== "matching"}
+                >
+                  Re-match Belum Final
+                </Button>
+              </div>
             </div>
           )}
 
@@ -2697,7 +2717,7 @@ function QrisMutationCard({
   selectedQrisPaymentIds: number[];
   onToggleQrisPayment?: (candidateId: number, paymentId: number, checked: boolean) => void;
   onToggleAllQrisPayments?: (candidate: QrisCandidateAudit, checked: boolean) => void;
-  onRunMatching: () => void;
+  onRunMatching: (mode?: "new" | "retry_unmatched" | "rematch_non_final") => void;
   onGenerateQrisCandidates?: () => void;
   qrisGenerationPending?: boolean;
   mappingError?: MappingRequiredError;
@@ -3048,7 +3068,7 @@ function QrisMutationCard({
                   size="sm"
                   variant="outline"
                   className="h-8 gap-1.5 text-xs border-blue-300 text-blue-700 hover:bg-blue-50 dark:border-blue-800 dark:text-blue-300"
-                  onClick={onRunMatching}
+                  onClick={() => onRunMatching("retry_unmatched")}
                 >
                   <Zap className="h-3.5 w-3.5" />
                   Jalankan AI Matching
@@ -3199,7 +3219,7 @@ function MutationCard({
   selectedQrisPaymentIds: Record<number, number[]>;
   onToggleQrisPayment?: (candidateId: number, paymentId: number, checked: boolean) => void;
   onToggleAllQrisPayments?: (candidate: QrisCandidateAudit, checked: boolean) => void;
-  onRunMatching: () => void;
+  onRunMatching: (mode?: "new" | "retry_unmatched" | "rematch_non_final") => void;
   onGenerateQrisCandidates?: () => void;
   qrisGenerationPending?: boolean;
   retryReferenceCoaPending?: boolean;
@@ -5186,9 +5206,12 @@ export default function BankReconciliationPage() {
   });
 
   const matchMut = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (mode: "new" | "retry_unmatched" | "rematch_non_final" = "new") => {
       const r = await fetch("/api/bank-reconciliation/run-matching", {
-        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: "{}",
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ matching_mode: mode }),
       });
       if (!r.ok) throw new Error(await r.text());
       return r.json();
@@ -5712,12 +5735,12 @@ export default function BankReconciliationPage() {
         {/* ── AI Action Center ──────────────────────────────── */}
         <AIActionCenter
           summaryMap={summaryMap}
-          onRunMatching={() => {
+           onRunMatching={(mode = "new") => {
             if (workflowStage !== "matching") {
               toast({ title: "Sync mutasi bank terlebih dahulu", description: "Urutan aman dimulai dari sync mutasi bank." });
               return;
             }
-            matchMut.mutate();
+             matchMut.mutate(mode);
           }}
           onGenerateQrisCandidates={qrisCompanyId != null ? () => qrisDryRunMut.mutate() : undefined}
           onApproveAll={handleApproveAllMatched}
@@ -6118,12 +6141,12 @@ export default function BankReconciliationPage() {
                   selectedQrisPaymentIds={selectedPaymentIdsByMutation(m)}
                   onToggleQrisPayment={toggleQrisPayment}
                   onToggleAllQrisPayments={toggleAllQrisPayments}
-                    onRunMatching={() => {
+                     onRunMatching={(mode = "new") => {
                       if (workflowStage !== "matching") {
                         toast({ title: "Sync mutasi bank terlebih dahulu", description: "Urutan aman dimulai dari sync mutasi bank." });
                         return;
                       }
-                      matchMut.mutate();
+                       matchMut.mutate(mode);
                     }}
                     onGenerateQrisCandidates={qrisCompanyId != null && workflowStage === "candidates"
                       ? () => qrisDryRunMut.mutate()
@@ -6169,12 +6192,12 @@ export default function BankReconciliationPage() {
         onReverse={handleOpenReverse}
         onReopen={handleOpenReopen}
         onApproveQris={handleApproveQris}
-        onFindMissing={() => {
+         onFindMissing={() => {
           if (workflowStage !== "matching") {
             toast({ title: "Sync mutasi bank terlebih dahulu", description: "Urutan aman dimulai dari sync mutasi bank." });
             return;
           }
-          matchMut.mutate();
+           matchMut.mutate("retry_unmatched");
         }}
         matchingPending={matchMut.isPending || matchingBackgroundPending}
         mappingError={detailMutation ? mappingRequiredErrors.get(detailMutation.id) : undefined}
