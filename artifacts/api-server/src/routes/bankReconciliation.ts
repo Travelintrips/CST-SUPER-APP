@@ -47,6 +47,10 @@ import {
   BLOCKED_STATUSES,
   type MutationForDecisionStack,
 } from "../lib/reconciliation/reconDecisionStack.js";
+import {
+  legacyReferenceCoaReviewReason,
+  planReferenceCoaAutoPost,
+} from "../lib/reconciliation/referenceCoaAutoPost.js";
 import { runReconRulesMigration } from "./bankReconRules.js";
 import { runExpectedCashFlowMigration } from "../lib/reconciliation/expectedCashFlowService.js";
 import { getHealthStatus, getDashboardMetrics } from "../lib/monitoring/reconciliationMonitor.js";
@@ -210,6 +214,8 @@ export async function runBankReconciliationCoreMigration() {
       provider_order_id TEXT,
       raw_payload   JSONB,
       status        TEXT NOT NULL DEFAULT 'unmatched',
+       review_reason TEXT,
+       review_code   TEXT,
       matched_payment_id INTEGER,
       matched_order_id   INTEGER,
       uploaded_proof_url TEXT,
@@ -383,6 +389,8 @@ export async function runBankReconciliationCoreMigration() {
 
   // Add journal_entry_id column if missing (schema upgrade)
   await db.execute(sql.raw(`ALTER TABLE bank_mutations ADD COLUMN IF NOT EXISTS journal_entry_id INTEGER`)).catch(() => {});
+  await db.execute(sql.raw(`ALTER TABLE bank_mutations ADD COLUMN IF NOT EXISTS review_reason TEXT`)).catch(() => {});
+  await db.execute(sql.raw(`ALTER TABLE bank_mutations ADD COLUMN IF NOT EXISTS review_code TEXT`)).catch(() => {});
   await db.execute(sql.raw(`ALTER TABLE bank_mutations ADD COLUMN IF NOT EXISTS company_id INTEGER`)).catch(() => {});
   await db.execute(sql.raw(`ALTER TABLE bank_mutations ADD COLUMN IF NOT EXISTS import_batch_id INTEGER`)).catch(() => {});
   await db.execute(sql.raw(`ALTER TABLE bank_mutations ADD COLUMN IF NOT EXISTS import_row_id INTEGER`)).catch(() => {});
@@ -769,6 +777,59 @@ async function auditLog(mutationId: number | null, action: string, actor: string
   } catch (e) {
     logger.warn({ err: e }, "[bankRecon] auditLog failed");
   }
+}
+
+/**
+ * Keep the reviewer-facing reason and its audit evidence together. This path is
+ * intentionally fail-closed: an accounting safeguard never leaves a mutation
+ * with only a bare `manual_review` status.
+ */
+async function recordReferenceCoaManualReview(args: {
+  mutationId: number;
+  actor: string;
+  ruleId: number;
+  targetCoaCode: string | null;
+  confidence: number;
+  reason: string;
+  code: string | null;
+}) {
+  const escapedReason = args.reason.replace(/'/g, "''");
+  const escapedActor = args.actor.replace(/'/g, "''");
+  const escapedCoa = args.targetCoaCode?.replace(/'/g, "''") ?? null;
+  const escapedCode = args.code?.replace(/'/g, "''") ?? null;
+  const meta = JSON.stringify({
+    rule_id: args.ruleId,
+    target_coa_code: args.targetCoaCode,
+    confidence: args.confidence,
+    error: args.reason,
+    code: args.code,
+  }).replace(/'/g, "''");
+
+  await db.transaction(async (tx) => {
+    await tx.execute(sql.raw(`
+      UPDATE bank_mutations
+      SET status = 'manual_review',
+          review_reason = '${escapedReason}',
+          review_code = ${escapedCode ? `'${escapedCode}'` : "NULL"},
+          updated_at = NOW()
+      WHERE id = ${args.mutationId}
+        AND status IN ('unmatched', 'matched', 'duplicate_need_review', 'manual_review')
+    `));
+    await tx.execute(sql.raw(`
+      INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
+      VALUES (
+        ${args.mutationId},
+        'AUTO_POST_BLOCKED',
+        '${escapedActor}',
+        '${meta}'
+      )
+    `));
+  }).catch((error: any) => {
+    logger.error(
+      { err: error?.cause?.message ?? error?.message, mutationId: args.mutationId, targetCoaCode: escapedCoa },
+      "[bankRecon] failed to persist reference COA manual-review outcome",
+    );
+  });
 }
 
 // ─── Multer setup ─────────────────────────────────────────────────────────────
@@ -3106,14 +3167,48 @@ router.get("/mutations", async (req, res) => {
       bm.provider_name, bm.provider_order_id,
       bm.status::text, bm.journal_entry_id, bm.company_id,
       bm.uploaded_proof_url, bm.source,
-      (
+      COALESCE(
+        NULLIF(bm.review_reason, ''),
+        (
         SELECT COALESCE(ba.meta->>'error', ba.meta->>'reason')
         FROM bank_reconciliation_audit ba
         WHERE ba.mutation_id = bm.id
           AND ba.action IN ('AUTO_POST_BLOCKED', 'JOURNAL_MAPPING_REQUIRED')
         ORDER BY ba.id DESC
         LIMIT 1
+        ),
+        CASE
+          WHEN bm.status = 'manual_review'
+            AND EXISTS (
+              SELECT 1 FROM bank_reconciliation_audit rule_audit
+              WHERE rule_audit.mutation_id = bm.id
+                AND rule_audit.action = 'RULE_ENGINE_MATCH'
+            )
+            THEN '${legacyReferenceCoaReviewReason().replace(/'/g, "''")}'
+          ELSE NULL
+        END
       ) AS review_reason,
+      COALESCE(
+        NULLIF(bm.review_code, ''),
+        (
+          SELECT ba.meta->>'code'
+          FROM bank_reconciliation_audit ba
+          WHERE ba.mutation_id = bm.id
+            AND ba.action IN ('AUTO_POST_BLOCKED', 'JOURNAL_MAPPING_REQUIRED')
+          ORDER BY ba.id DESC
+          LIMIT 1
+        ),
+        CASE
+          WHEN bm.status = 'manual_review'
+            AND EXISTS (
+              SELECT 1 FROM bank_reconciliation_audit rule_audit
+              WHERE rule_audit.mutation_id = bm.id
+                AND rule_audit.action = 'RULE_ENGINE_MATCH'
+            )
+            THEN 'REFERENCE_COA_ATTEMPT_NOT_RECORDED'
+          ELSE NULL
+        END
+      ) AS review_code,
        COALESCE(
          (
            SELECT ${sportPaymentTypeSql("sp_type")}
@@ -3426,6 +3521,7 @@ router.get("/mutations", async (req, res) => {
       NULL::text AS uploaded_proof_url,
       'bank_import' AS source,
       NULL::text AS review_reason,
+      NULL::text AS review_code,
        CASE
          WHEN LOWER(CONCAT_WS(' ', COALESCE(bmi.payment_method, ''), COALESCE(bmi.description, ''), COALESCE(bmi.erp_category, ''), COALESCE(bmi.tax_type, ''))) LIKE '%paylabs%'
            THEN 'paylabs'
@@ -4392,10 +4488,11 @@ router.post("/run-matching", async (req, res) => {
         const autoCoaCode = matchedRule?.target_coa_code
           ? String(matchedRule.target_coa_code).trim()
           : "";
-        const canAutoPostByRule =
-          Boolean(autoCoaCode) &&
-          Number(matchedRule?.confidence_score ?? decision.confidence) >= 100 &&
-          decision.confidence >= 100;
+        const autoPostPlan = planReferenceCoaAutoPost({
+          targetCoaCode: autoCoaCode,
+          ruleConfidence: matchedRule?.confidence_score ?? null,
+          decisionConfidence: decision.confidence,
+        });
 
         // Persist rule match as candidate in bank_reconciliation_matches
         const breakdownJson = JSON.stringify({
@@ -4429,7 +4526,12 @@ router.post("/run-matching", async (req, res) => {
           VALUES (${m.id}, 'RULE_ENGINE_MATCH', '${actor.replace(/'/g,"''")}', '${auditMeta}')
         `)).catch(() => {});
 
-        if (canAutoPostByRule) {
+        if (autoPostPlan.shouldAttempt) {
+          await auditLog(Number(m.id), "AUTO_POST_ATTEMPTED", actor, {
+            rule_id: decision.matchedRuleId,
+            target_coa_code: autoCoaCode,
+            confidence: decision.confidence,
+          });
           const approval = await approveAndCreateJournal(
             Number(m.id),
             null,
@@ -4453,32 +4555,26 @@ router.post("/run-matching", async (req, res) => {
             { mutationId: m.id, ruleId: decision.matchedRuleId, error: approval.error },
             "[run-matching] reference rule auto-post blocked; leaving for manual review",
           );
-          await auditLog(Number(m.id), "AUTO_POST_BLOCKED", actor, {
-            rule_id: decision.matchedRuleId,
-            target_coa_code: autoCoaCode || null,
+          await recordReferenceCoaManualReview({
+            mutationId: Number(m.id),
+            actor,
+            ruleId: decision.matchedRuleId,
+            targetCoaCode: autoCoaCode || null,
             confidence: decision.confidence,
-            error: approval.error ?? "Auto-post ditahan oleh guard jurnal.",
-            code: approval.code ?? null,
+            reason: approval.error ?? "Auto-post ditahan oleh safeguard jurnal.",
+            code: approval.code ?? "AUTO_POST_GUARD",
           });
         } else {
-          await auditLog(Number(m.id), "AUTO_POST_BLOCKED", actor, {
-            rule_id: decision.matchedRuleId,
-            target_coa_code: autoCoaCode || null,
+          await recordReferenceCoaManualReview({
+            mutationId: Number(m.id),
+            actor,
+            ruleId: decision.matchedRuleId,
+            targetCoaCode: autoCoaCode || null,
             confidence: decision.confidence,
-            rule_confidence: matchedRule?.confidence_score ?? null,
-            error: !autoCoaCode
-              ? "Referensi COA belum memiliki target COA."
-              : "Confidence rule belum mencapai 100.",
-            code: "AUTO_POST_GUARD",
+            reason: autoPostPlan.reason,
+            code: autoPostPlan.code,
           });
         }
-
-        // A rule can match without a usable COA or can fail its accounting
-        // safeguards; preserve the explicit review state in that case.
-        await db.execute(sql.raw(`
-          UPDATE bank_mutations SET status = 'manual_review', updated_at = NOW()
-          WHERE id = ${m.id} AND status IN ('unmatched','matched','duplicate_need_review')
-        `)).catch(() => {});
 
         manual_review++;
         return;

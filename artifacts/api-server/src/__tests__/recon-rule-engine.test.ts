@@ -26,6 +26,10 @@ import {
   ALLOWED_STATUSES,
   ENGINE_VERSION,
 } from "../lib/reconciliation/reconDecisionStack.js";
+import {
+  legacyReferenceCoaReviewReason,
+  planReferenceCoaAutoPost,
+} from "../lib/reconciliation/referenceCoaAutoPost.js";
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -463,5 +467,44 @@ describe("Integration — Test 30: greater_than and less_than operators", () => 
     const rules = [makeRule({ conditionField: "amount", conditionOperator: "less_than", conditionValue: "20000" })];
     expect(evaluateReconRules(rules, makeMutation({ amount: 15000 })).matched).toBe(true);
     expect(evaluateReconRules(rules, makeMutation({ amount: 25000 })).matched).toBe(false);
+  });
+});
+
+describe("Reference COA auto-post safeguards", () => {
+  it("attempts a draft only for an explicit COA at full confidence", () => {
+    expect(planReferenceCoaAutoPost({
+      targetCoaCode: "5-3010-CST",
+      ruleConfidence: 100,
+      decisionConfidence: 100,
+    })).toEqual({ shouldAttempt: true, code: null, reason: null });
+  });
+
+  it("keeps the mutation reviewable when a matched rule has no COA", () => {
+    const plan = planReferenceCoaAutoPost({
+      targetCoaCode: null,
+      ruleConfidence: 100,
+      decisionConfidence: 100,
+    });
+    expect(plan.shouldAttempt).toBe(false);
+    if (!plan.shouldAttempt) {
+      expect(plan.code).toBe("REFERENCE_COA_MISSING");
+      expect(plan.reason).toContain("belum memiliki akun COA");
+    }
+  });
+
+  it("keeps the mutation reviewable when confidence is below 100", () => {
+    const plan = planReferenceCoaAutoPost({
+      targetCoaCode: "5-3010-CST",
+      ruleConfidence: 100,
+      decisionConfidence: 99,
+    });
+    expect(plan.shouldAttempt).toBe(false);
+    if (!plan.shouldAttempt) {
+      expect(plan.code).toBe("REFERENCE_COA_CONFIDENCE_INSUFFICIENT");
+    }
+  });
+
+  it("gives historical rule-only matches an actionable reviewer message", () => {
+    expect(legacyReferenceCoaReviewReason()).toContain("Pilih COA & Buat Draft");
   });
 });

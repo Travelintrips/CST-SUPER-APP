@@ -574,6 +574,7 @@ interface BankMutation {
   posted_at?: string | null;
   posted_by?: string | null;
   review_reason?: string | null;
+  review_code?: string | null;
 }
 
 interface CoaAccountReference {
@@ -3311,6 +3312,7 @@ function MutationCard({
               <div className="mt-2 rounded-md border border-orange-200 bg-orange-50 px-3 py-2 text-xs text-orange-900 dark:border-orange-800 dark:bg-orange-950 dark:text-orange-200">
                 <p className="font-semibold">Alasan review manual</p>
                 <p className="mt-0.5">{m.review_reason}</p>
+                {m.review_code && <p className="mt-1 font-mono text-[10px] opacity-75">Kode: {m.review_code}</p>}
               </div>
             )}
 
@@ -3878,6 +3880,19 @@ function MutationDetailPanel({
               return (
                 <>
                   <section aria-labelledby="review-summary-title" className="space-y-3">
+                    {m.status === "manual_review" && m.review_reason && (
+                      <Alert className="border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
+                        <ShieldAlert className="h-4 w-4" />
+                        <AlertDescription className="space-y-1">
+                          <p className="font-semibold">Review Manual Diperlukan</p>
+                          <p>{m.review_reason}</p>
+                          {m.review_code && <p className="font-mono text-[11px] opacity-80">Kode: {m.review_code}</p>}
+                          <p className="text-xs">
+                            Periksa COA dan gunakan “Referensi COA” atau “Pilih COA & Buat Draft” setelah transaksi dipastikan benar.
+                          </p>
+                        </AlertDescription>
+                      </Alert>
+                    )}
                     <div className="rounded-xl border bg-muted/20 p-4">
                       <p id="review-summary-title" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Ringkasan</p>
                       <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
