@@ -2,8 +2,8 @@
  * QRIS Batch Approval Eligibility — pure logic tests.
  *
  * These tests prove that the server-side eligibility guard:
- *  1. Accepts only MATCHED candidates.
- *  2. Rejects REVIEW candidates (unknown provider / ambiguous partition / bad MDR).
+ *  1. Accepts MATCHED candidates and REVIEW candidates for explicit override.
+ *  2. Rejects REVIEW candidates only when their net is negative.
  *  3. Rejects UNMATCHED and any other non-MATCHED status.
  *  4. Rejects candidates with negative net amounts (mis-detected direction).
  *  5. Rejects already-approved candidates.
@@ -41,19 +41,18 @@ describe("checkQrisBatchApprovalEligibility", () => {
     expect(checkQrisBatchApprovalEligibility(candidate({}))).toBeNull();
   });
 
-  it("returns NOT_MATCHED error for REVIEW status (unknown provider)", () => {
+  it("allows REVIEW status for explicit manual override (unknown provider)", () => {
     const result = checkQrisBatchApprovalEligibility(
       candidate({ reconciliation_status: "REVIEW" }),
     );
-    expect(result?.code).toBe("NOT_MATCHED");
-    expect(result?.message).toMatch(/verifikasi manual/i);
+    expect(result).toBeNull();
   });
 
-  it("returns NOT_MATCHED error for REVIEW status (ambiguous payment partition)", () => {
+  it("allows REVIEW status for explicit manual override (ambiguous partition)", () => {
     const result = checkQrisBatchApprovalEligibility(
       candidate({ reconciliation_status: "REVIEW", confidence: 0 }),
     );
-    expect(result?.code).toBe("NOT_MATCHED");
+    expect(result).toBeNull();
   });
 
   it("returns NOT_MATCHED error for UNMATCHED status", () => {
@@ -94,10 +93,10 @@ describe("checkQrisBatchApprovalEligibility", () => {
     expect(checkQrisBatchApprovalEligibility(candidate({ net_amount: 0 }))).toBeNull();
   });
 
-  it("case-insensitively rejects 'review' and accepts 'matched'", () => {
+  it("case-insensitively accepts 'review' and 'matched'", () => {
     expect(
       checkQrisBatchApprovalEligibility(candidate({ reconciliation_status: "review" }))?.code,
-    ).toBe("NOT_MATCHED");
+    ).toBeUndefined();
     expect(
       checkQrisBatchApprovalEligibility(candidate({ reconciliation_status: "matched" })),
     ).toBeNull();
@@ -123,17 +122,10 @@ describe("assertQrisBatchApprovalEligible", () => {
     expect(() => assertQrisBatchApprovalEligible(candidate({}))).not.toThrow();
   });
 
-  it("throws with eligibilityError=true for REVIEW candidate", () => {
+  it("allows REVIEW candidate through the explicit manual-override path", () => {
     expect(() =>
       assertQrisBatchApprovalEligible(candidate({ reconciliation_status: "REVIEW" })),
-    ).toThrow();
-
-    try {
-      assertQrisBatchApprovalEligible(candidate({ reconciliation_status: "REVIEW" }));
-    } catch (e: any) {
-      expect(e.eligibilityError).toBe(true);
-      expect(e.code).toBe("NOT_MATCHED");
-    }
+    ).not.toThrow();
   });
 
   it("throws with eligibilityError=true for UNMATCHED candidate", () => {

@@ -4905,7 +4905,7 @@ export default function BankReconciliationPage() {
     getAvailableQrisPaymentIdsFromCandidate(candidate);
   const isQrisCandidateEligible = (candidate: QrisCandidateAudit): boolean =>
     candidate.id != null
-    && String(candidate.reconciliation_status ?? "").toUpperCase() === "MATCHED"
+    && ["MATCHED", "REVIEW"].includes(String(candidate.reconciliation_status ?? "").toUpperCase())
     && String(candidate.status ?? "").toLowerCase() !== "approved"
     && candidate.current_evidence_valid !== false
     && getAvailableQrisPaymentIds(candidate).length > 0;
@@ -4975,7 +4975,7 @@ export default function BankReconciliationPage() {
   ) => {
     const eligibleCandidates = candidates.filter((candidate) =>
       candidate.id != null
-      && String(candidate.reconciliation_status ?? "").toUpperCase() === "MATCHED"
+      && ["MATCHED", "REVIEW"].includes(String(candidate.reconciliation_status ?? "").toUpperCase())
       && candidate.status !== "approved"
       && candidate.current_evidence_valid !== false
       && getAvailableQrisPaymentIds(candidate).length > 0

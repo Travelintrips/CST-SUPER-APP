@@ -4,12 +4,11 @@
  * The matching engine marks candidates with one of three reconciliation statuses:
  *
  *  MATCHED  — provider is identified, payment partitions fit the bank amount
- *             deterministically, and deduction rate is within tolerance. This is
- *             the only status that can be promoted to a qris_settlement.
+ *             deterministically, and deduction rate is within tolerance.
  *
  *  REVIEW   — provider unknown, payment partition ambiguous, deduction rate
  *             out-of-tolerance, or partial bank dimension. Review candidates
- *             remain visible but cannot enter the one-click approval path.
+ *             may enter approval only through an explicit manual override.
  *
  *  UNMATCHED — no eligible payments found for this bank mutation on this date.
  *
@@ -66,7 +65,7 @@ export function checkQrisBatchApprovalEligibility(
 
   const reconStatus = String(candidate.reconciliation_status ?? "").toUpperCase();
 
-  if (reconStatus !== "MATCHED") {
+  if (!["MATCHED", "REVIEW"].includes(reconStatus)) {
     // Covers UNMATCHED, empty string, unknown values — hard block
     return {
       code: "NOT_MATCHED",
