@@ -43,6 +43,7 @@ import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { requireAdmin } from "../lib/requireAdmin.js";
 import { logger } from "../lib/logger.js";
+import { evaluateReconRules, type ReconRule, type ReconRuleMutationInput } from "../lib/reconciliation/reconRuleEngine.js";
 import {
   runReconClassificationMigration,
   syncOperationalReconRulesToClassification,
@@ -127,6 +128,26 @@ function normalizeRuleConditions(d: any) {
     logic: d.logic ?? "AND",
     specificity: d.specificity ?? conditions.length,
     condition: conditions[0],
+  };
+}
+
+function aiRowToReconRule(row: any, fallbackCompanyId: number): ReconRule {
+  const conditions = Array.isArray(row.conditions_json) && row.conditions_json.length
+    ? row.conditions_json
+    : [{ field: row.condition_field, operator: row.condition_operator, value: row.condition_value }];
+  return {
+    id: Number(row.id), companyId: row.company_id == null ? fallbackCompanyId : Number(row.company_id),
+    name: String(row.name ?? ""), description: row.description ?? null,
+    priority: Number(row.priority ?? 50), isActive: row.is_active !== false,
+    direction: null, bankAccountId: null, conditionType: "AI",
+    conditionField: conditions[0].field, conditionOperator: conditions[0].operator,
+    conditionValue: String(conditions[0].value ?? ""), conditions,
+    logic: row.logic === "OR" ? "OR" : "AND", specificity: Number(row.specificity ?? conditions.length),
+    targetType: row.action_flow === "INCOME_ALLOCATION" ? "income" : "expense",
+    targetId: null, targetCoaCode: row.action_coa_code ?? null,
+    confidenceScore: Math.round(Number(row.confidence ?? 0) * 100), stopProcessing: true,
+    matchCount: 0, lastMatchedAt: null, createdBy: row.created_by ?? null,
+    createdAt: String(row.created_at ?? ""), updatedAt: String(row.updated_at ?? ""),
   };
 }
 
@@ -371,6 +392,7 @@ reconClassificationRouter.post("/ai-rules", async (req, res) => {
     if (!parsed.success) return res.status(400).json({ error: "Validasi gagal.", details: parsed.error.issues });
     const d = parsed.data;
     const userId = (req as any).user?.id ?? null;
+    const normalized = normalizeRuleConditions(d);
 
     const result = await db.execute(sql.raw(`
       INSERT INTO recon_ai_classification_rules
@@ -384,7 +406,7 @@ reconClassificationRouter.post("/ai-rules", async (req, res) => {
         ${d.description ? `'${d.description.replace(/'/g, "''")}'` : "NULL"},
         '${d.condition_field}',
         '${d.condition_operator}',
-         '${normalized.condition.value.replace(/'/g, "''")}',
+         '${String(normalized.condition.value).replace(/'/g, "''")}',
          '${JSON.stringify(normalized.conditions).replace(/'/g, "''")}'::jsonb,
          '${normalized.logic}', ${normalized.specificity},
         ${d.action_flow ? `'${d.action_flow}'` : "NULL"},
@@ -401,6 +423,59 @@ reconClassificationRouter.post("/ai-rules", async (req, res) => {
   } catch (err) {
     logger.error({ err }, "[ReconClassification] POST /ai-rules error:");
     res.status(500).json({ error: "Gagal membuat AI rule." });
+  }
+});
+
+// Read-only matcher preview. This deliberately returns classification data only;
+// it never creates a reconciliation candidate, journal, settlement, or posting.
+reconClassificationRouter.post("/ai-rules/preview", async (req, res) => {
+  try {
+    await ensureTables();
+    const description = String(req.body?.description ?? "").trim();
+    const companyId = parseCompanyId(req.body?.company_id);
+    if (!description) return res.status(400).json({ error: "description wajib diisi." });
+
+    const companyFilter = companyId == null
+      ? "company_id IS NULL"
+      : `(company_id = ${companyId} OR company_id IS NULL)`;
+    const rows = await db.execute(sql.raw(`
+      SELECT * FROM recon_ai_classification_rules
+      WHERE is_active = TRUE AND ${companyFilter}
+      ORDER BY priority DESC, specificity DESC, id ASC
+    `));
+    const mutation: ReconRuleMutationInput = {
+      description,
+      reference: req.body?.reference ? String(req.body.reference) : null,
+      amount: Number(req.body?.amount ?? 0),
+      direction: req.body?.direction === "OUT" ? "OUT" : "IN",
+      bankAccountId: req.body?.bank_account_id != null ? Number(req.body.bank_account_id) : null,
+      bank: req.body?.bank ? String(req.body.bank) : null,
+      transactionCode: req.body?.transaction_code ? String(req.body.transaction_code) : null,
+      counterpartyName: req.body?.counterparty_name ? String(req.body.counterparty_name) : null,
+      counterpartyAccount: req.body?.counterparty_account ? String(req.body.counterparty_account) : null,
+      companyId: companyId ?? 0,
+    };
+    const savedRules = (rows.rows as any[]).map((row: any) => aiRowToReconRule(row, companyId ?? 0));
+    const draftConditions = Array.isArray(req.body?.conditions) ? req.body.conditions : null;
+    const draftRule = draftConditions?.length ? aiRowToReconRule({
+      id: -1, company_id: companyId ?? 0, name: "Draft rule",
+      conditions_json: draftConditions, logic: req.body?.logic,
+      specificity: req.body?.specificity ?? draftConditions.length,
+      action_flow: req.body?.action_flow, action_coa_code: req.body?.action_coa_code,
+      confidence: req.body?.confidence ?? 0.8,
+    }, companyId ?? 0) : null;
+    const result = evaluateReconRules(draftRule ? [draftRule, ...savedRules] : savedRules, mutation);
+    return res.json({
+      description, matched: result.matched, ambiguityCode: result.ambiguityCode ?? null,
+      ambiguityReason: result.ambiguityReason ?? null, rule: result.matched ? {
+        id: result.ruleId, name: result.ruleName, targetType: result.targetType,
+        targetCoaCode: result.targetCoaCode, confidence: result.confidence,
+      } : null,
+      matchedConditions: result.reasons ?? [], evaluated: result.evaluated,
+    });
+  } catch (err) {
+    logger.error({ err }, "[ReconClassification] AI rule preview failed");
+    return res.status(500).json({ error: "Gagal menjalankan preview rule." });
   }
 });
 

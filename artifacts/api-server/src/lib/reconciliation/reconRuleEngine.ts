@@ -174,16 +174,17 @@ export function validateReconRule(rule: Partial<ReconRule>): string[] {
   }
 
   const validFields: ConditionField[] = [
-    "description", "reference", "amount", "direction",
-    "bank_account", "counterparty_name", "counterparty_account",
+    "description", "reference", "amount", "direction", "bank_account", "bank",
+    "transaction_code", "normalized", "counterparty_name", "counterparty_account",
   ];
   if (rule.conditionField && !validFields.includes(rule.conditionField as ConditionField)) {
     errors.push(`conditionField tidak valid: ${rule.conditionField}`);
   }
 
   const validOperators: ConditionOperator[] = [
-    "equals", "contains", "starts_with", "ends_with",
-    "regex", "greater_than", "less_than", "between",
+    "equals", "contains", "not_contains", "starts_with", "ends_with",
+    "not_equals", "eq", "neq", "regex", "greater_than", "less_than",
+    "gte", "lte", "between",
   ];
   if (rule.conditionOperator && !validOperators.includes(rule.conditionOperator as ConditionOperator)) {
     errors.push(`conditionOperator tidak valid: ${rule.conditionOperator}`);
@@ -318,11 +319,17 @@ function buildReasonCode(field: ConditionField, operator: ConditionOperator): st
   const opLabel: Record<ConditionOperator, string> = {
     equals: "EQUALS",
     contains: "CONTAINS",
+    not_contains: "NOT_CONTAINS",
     starts_with: "STARTS_WITH",
     ends_with: "ENDS_WITH",
+    not_equals: "NOT_EQUALS",
+    eq: "EQUALS",
+    neq: "NOT_EQUALS",
     regex: "REGEX",
     greater_than: "GT",
     less_than: "LT",
+    gte: "GTE",
+    lte: "LTE",
     between: "BETWEEN",
   };
   return `RULE_${fieldLabel[field]}_${opLabel[operator]}`;
@@ -341,11 +348,17 @@ function buildReasonLabel(field: ConditionField, operator: ConditionOperator, va
   const opDesc: Record<ConditionOperator, string> = {
     equals: "sama dengan",
     contains: "mengandung",
+    not_contains: "tidak mengandung",
     starts_with: "dimulai dengan",
     ends_with: "diakhiri dengan",
+    not_equals: "tidak sama dengan",
+    eq: "sama dengan",
+    neq: "tidak sama dengan",
     regex: "cocok pola",
     greater_than: "lebih besar dari",
     less_than: "lebih kecil dari",
+    gte: "lebih besar atau sama dengan",
+    lte: "lebih kecil atau sama dengan",
     between: "antara",
   };
   return `${fieldName[field]} ${opDesc[operator]} "${value}"`;
@@ -377,7 +390,9 @@ export function evaluateReconRules(
   });
 
   const matching: Array<{ rule: ReconRule; reasons: ReconRuleMatchReason[] }> = [];
+  let stopAfterPriority: number | null = null;
   for (const rule of sorted) {
+    if (stopAfterPriority !== null && rule.priority < stopAfterPriority) break;
     if (!rule.isActive) {
       evaluated.push({ ruleId: rule.id, ruleName: rule.name, matched: false });
       continue;
@@ -422,6 +437,9 @@ export function evaluateReconRules(
           score: Math.round(rule.confidenceScore / Math.max(1, conditions.length)),
         })),
       });
+      // Still inspect rules tied on precedence so conflicting actions fail closed.
+      // Once the tie group is complete, lower-priority rules cannot override it.
+      if (rule.stopProcessing) stopAfterPriority = rule.priority;
     }
   }
 
