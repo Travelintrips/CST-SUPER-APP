@@ -312,17 +312,26 @@ function buildReasonCode(field: ConditionField, operator: ConditionOperator): st
     amount: "AMOUNT",
     direction: "DIRECTION",
     bank_account: "BANK_ACCOUNT",
+    bank: "BANK",
+    transaction_code: "TRANSACTION_CODE",
+    normalized: "NORMALIZED",
     counterparty_name: "COUNTERPARTY_NAME",
     counterparty_account: "COUNTERPARTY_ACCOUNT",
   };
   const opLabel: Record<ConditionOperator, string> = {
     equals: "EQUALS",
     contains: "CONTAINS",
+    not_contains: "NOT_CONTAINS",
     starts_with: "STARTS_WITH",
     ends_with: "ENDS_WITH",
+    not_equals: "NOT_EQUALS",
+    eq: "EQ",
+    neq: "NEQ",
     regex: "REGEX",
     greater_than: "GT",
     less_than: "LT",
+    gte: "GTE",
+    lte: "LTE",
     between: "BETWEEN",
   };
   return `RULE_${fieldLabel[field]}_${opLabel[operator]}`;
@@ -335,17 +344,26 @@ function buildReasonLabel(field: ConditionField, operator: ConditionOperator, va
     amount: "Nominal",
     direction: "Arah",
     bank_account: "Rekening bank",
+    bank: "Bank",
+    transaction_code: "Kode transaksi",
+    normalized: "Deskripsi ternormalisasi",
     counterparty_name: "Nama pihak lawan",
     counterparty_account: "Rekening pihak lawan",
   };
   const opDesc: Record<ConditionOperator, string> = {
     equals: "sama dengan",
     contains: "mengandung",
+    not_contains: "tidak mengandung",
     starts_with: "dimulai dengan",
     ends_with: "diakhiri dengan",
+    not_equals: "tidak sama dengan",
+    eq: "sama dengan",
+    neq: "tidak sama dengan",
     regex: "cocok pola",
     greater_than: "lebih besar dari",
     less_than: "lebih kecil dari",
+    gte: "lebih besar atau sama dengan",
+    lte: "lebih kecil atau sama dengan",
     between: "antara",
   };
   return `${fieldName[field]} ${opDesc[operator]} "${value}"`;

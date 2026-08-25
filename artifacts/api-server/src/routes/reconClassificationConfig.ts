@@ -207,7 +207,6 @@ reconClassificationRouter.post("/configs", async (req, res) => {
       return res.status(400).json({ error: "Validasi gagal.", details: parsed.error.issues });
     }
     const d = parsed.data;
-    const normalized = normalizeRuleConditions(d);
     const userId = (req as any).user?.id ?? null;
 
     const result = await db.execute(sql.raw(`
@@ -269,6 +268,7 @@ reconClassificationRouter.patch("/configs/:id", async (req, res) => {
       return res.status(400).json({ error: "Validasi gagal.", details: parsed.error.issues });
     }
     const d = parsed.data;
+    const normalized = normalizeRuleConditions(d);
     const userId = (req as any).user?.id ?? null;
 
     const setClauses: string[] = [`updated_at = NOW()`, `updated_by = ${userId ? `'${userId}'` : "NULL"}`];
@@ -370,6 +370,7 @@ reconClassificationRouter.post("/ai-rules", async (req, res) => {
     const parsed = AiRuleSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Validasi gagal.", details: parsed.error.issues });
     const d = parsed.data;
+    const normalized = normalizeRuleConditions(d);
     const userId = (req as any).user?.id ?? null;
 
     const result = await db.execute(sql.raw(`
