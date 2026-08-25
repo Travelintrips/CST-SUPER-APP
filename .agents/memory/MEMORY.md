@@ -148,3 +148,4 @@
 - [Recon config scoped index](recon-config-scoped-index.md) — legacy global config-code index blocks COA-reference mirroring that uses company-scoped conflict targets.
 - [Legacy Referensi COA retry](legacy-reference-coa-retry.md) — retry only legacy no-attempt rows; preserve genuine journal safeguard blocks for review.
 - [Rule AI multi-condition safety](rule-ai-multi-condition-safety.md) — evaluate structured conditions by priority/specificity and fail closed on equal-precedence conflicting outputs.
+- [GL expense module semantics](gl-expense-module-semantics.md) — module filter follows journal origin; bank-admin fees from reconciliation stay under bank reconciliation, not expense.
