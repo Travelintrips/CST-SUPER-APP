@@ -40,7 +40,8 @@
 import { Router } from "express";
 import { z } from "zod/v4";
 import { db } from "@workspace/db";
-import { sql } from "drizzle-orm";
+import { and, eq, isNull, or, sql } from "drizzle-orm";
+import { chartOfAccountsTable } from "@workspace/db/schema/accounting";
 import { requireAdmin } from "../lib/requireAdmin.js";
 import { logger } from "../lib/logger.js";
 import { evaluateReconRules, type ReconRule, type ReconRuleMutationInput } from "../lib/reconciliation/reconRuleEngine.js";
@@ -52,6 +53,45 @@ import {
 import { trackAiRuleFeedback } from "../lib/usageTrackingService.js";
 
 export const reconClassificationRouter = Router();
+
+// Read-only COA lookup for the rule editor. The rest of this router is admin-only,
+// but an authenticated internal user may need to see account names while editing
+// a rule. The company filter is still applied so this does not expose public data.
+reconClassificationRouter.get("/coa-options", async (req, res) => {
+  if (!req.isAuthenticated() || !req.isInternalSession) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+
+  const requestedCompanyId = Number(req.query["company_id"]);
+  const sessionCompanyId = Number((req.user as any)?.companyId);
+  const companyId = Number.isInteger(requestedCompanyId) && requestedCompanyId > 0
+    ? requestedCompanyId
+    : Number.isInteger(sessionCompanyId) && sessionCompanyId > 0
+      ? sessionCompanyId
+      : null;
+
+  try {
+    const condition = companyId == null
+      ? isNull(chartOfAccountsTable.companyId)
+      : or(isNull(chartOfAccountsTable.companyId), eq(chartOfAccountsTable.companyId, companyId));
+    const rows = await db
+      .select({
+        id: chartOfAccountsTable.id,
+        code: chartOfAccountsTable.code,
+        name: chartOfAccountsTable.name,
+        type: chartOfAccountsTable.type,
+        isActive: chartOfAccountsTable.isActive,
+      })
+      .from(chartOfAccountsTable)
+      .where(and(condition, eq(chartOfAccountsTable.isActive, true)))
+      .orderBy(chartOfAccountsTable.code);
+
+    return res.json({ data: rows });
+  } catch (err) {
+    logger.error({ err }, "[ReconClassification] GET /coa-options error:");
+    return res.status(500).json({ error: "Gagal mengambil akun COA." });
+  }
+});
 
 // ─── Auth guard ────────────────────────────────────────────────────────────────
 reconClassificationRouter.use(async (req, res, next) => {

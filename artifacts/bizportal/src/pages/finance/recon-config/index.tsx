@@ -674,7 +674,7 @@ function AiRulesTab() {
     setLoadingCoaOptions(true);
     try {
       const qp = activeCompanyId ? `?company_id=${activeCompanyId}` : "";
-      const r = await fetch(`${API}/accounting/coa${qp}`, { credentials: "include" });
+      const r = await fetch(`${API}/recon-classification/coa-options${qp}`, { credentials: "include" });
       if (!r.ok) throw new Error("Gagal mengambil akun COA");
       const j = await r.json();
       const coas = Array.isArray(j) ? j : (j.data ?? []);
