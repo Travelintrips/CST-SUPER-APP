@@ -605,7 +605,10 @@ function ConfigTab({ category }: { category: "BUSINESS_TRANSACTION" | "ROUTINE_E
               <Label className="text-slate-300">Keywords (pisah koma)</Label>
               <Input
                 value={Array.isArray(form.keywords) ? form.keywords.join(", ") : (form.keywords ?? "")}
-                onChange={e => setForm((f: any) => ({ ...f, keywords: e.target.value.split(",").map((k: string) => k.trim()).filter(Boolean) }))}
+                // Keep raw text while editing so a trailing comma is not
+                // removed before the user can type the next keyword.
+                // Normalization into an array happens in save().
+                onChange={e => setForm((f: any) => ({ ...f, keywords: e.target.value }))}
                 className="bg-slate-800 border-slate-600 text-white mt-1"
                 placeholder="cth. pembayaran, invoice, tagihan" />
             </div>
