@@ -4081,16 +4081,31 @@ router.post("/:mutationId/post", async (req, res) => {
     return res.json({ ok: true });
 
   } catch (e: any) {
+    // Drizzle wraps PostgreSQL errors as "Failed query". Prefer the nested
+    // database error so the reviewer sees the actual reason (for example
+    // PERIOD_LOCKED) instead of an opaque posting failure.
+    const dbError = e?.cause ?? e;
+    const dbMessage = String(dbError?.message ?? e?.message ?? "Gagal memposting jurnal");
+    const dbCode = String(dbError?.code ?? e?.code ?? "");
+    const isPeriodLocked = dbCode === "P0001" || dbMessage.includes("PERIOD_LOCKED");
+    const isImmutabilityViolation =
+      dbMessage.includes("IMMUTABILITY_VIOLATION") ||
+      dbMessage.includes("LEDGER IMMUTABILITY VIOLATION");
     const code = (
       e.code === "NOT_FOUND"      ? 404 :
-      e.code === "PERIOD_LOCKED"  ? 422 :
+      e.code === "PERIOD_LOCKED" || isPeriodLocked ? 422 :
       e.code === "CONFLICT" || e.code === "INVALID_STATUS" ||
       e.code === "CANONICAL_SETTLEMENT_ALREADY_ACCOUNTED" ||
-      e.code === "AMBIGUOUS_QRIS_SETTLEMENT_SOURCE" ? 409 : 500
+      e.code === "AMBIGUOUS_QRIS_SETTLEMENT_SOURCE" || isImmutabilityViolation ? 409 : 500
     );
+    const errorMessage = isPeriodLocked
+      ? "Posting diblokir karena periode keuangan jurnal sudah ditutup. Buka periode atau gunakan mekanisme reversal/adjustment di periode terbuka."
+      : isImmutabilityViolation
+        ? "Posting diblokir oleh pengamanan ledger. Jurnal yang sudah terkunci tidak dapat diubah secara langsung."
+        : dbMessage;
     return res.status(code).json({
-      error: e.message,
-      ...(e.code ? { code: e.code } : {}),
+      error: errorMessage,
+      ...(e.code || dbCode ? { code: e.code ?? dbCode } : {}),
     });
   }
 });
