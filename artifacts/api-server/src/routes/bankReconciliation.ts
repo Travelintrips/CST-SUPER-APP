@@ -3199,6 +3199,8 @@ router.get("/mutations", async (req, res) => {
                 AND rule_audit.action = 'RULE_ENGINE_MATCH'
             )
             THEN '${legacyReferenceCoaReviewReason().replace(/'/g, "''")}'
+           WHEN bm.status = 'manual_review'
+             THEN 'Mutasi ini memerlukan review manual, tetapi alasan historisnya belum tercatat. Jalankan ulang matching untuk mengevaluasi rule terbaru.'
           ELSE NULL
         END
       ) AS review_reason,
@@ -3220,7 +3222,9 @@ router.get("/mutations", async (req, res) => {
                 AND rule_audit.action = 'RULE_ENGINE_MATCH'
             )
             THEN 'REFERENCE_COA_ATTEMPT_NOT_RECORDED'
-          ELSE NULL
+           WHEN bm.status = 'manual_review'
+             THEN 'MANUAL_REVIEW_REASON_NOT_RECORDED'
+           ELSE NULL
         END
       ) AS review_code,
        COALESCE(
