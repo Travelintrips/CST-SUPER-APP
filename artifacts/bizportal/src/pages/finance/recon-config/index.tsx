@@ -83,15 +83,46 @@ function jsonArray(value: unknown): any[] {
   }
 }
 
+function normalizeCondition(value: unknown) {
+  const condition = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+
+  return {
+    field: typeof condition.field === "string" && condition.field
+      ? condition.field
+      : "description",
+    operator: typeof condition.operator === "string" && condition.operator
+      ? condition.operator
+      : "contains",
+    value: condition.value == null ? "" : String(condition.value),
+    negate: Boolean(condition.negate),
+  };
+}
+
+function normalizeConditions(value: unknown): any[] {
+  return jsonArray(value)
+    .filter((condition) => condition && typeof condition === "object" && !Array.isArray(condition))
+    .map(normalizeCondition);
+}
+
 function ruleConditions(row: any): any[] {
-  if (Array.isArray(row?.conditions)) return row.conditions;
-  if (Array.isArray(row?.conditions_json)) return row.conditions_json;
-  if (typeof row?.conditions_json === "string") {
-    const parsed = jsonArray(row.conditions_json);
-    if (parsed.length) return parsed;
+  const embedded = normalizeConditions(row?.conditions);
+  if (embedded.length) return embedded;
+
+  const stored = normalizeConditions(row?.conditions_json);
+  if (stored.length) return stored;
+
+  if (typeof row?.conditions_json === "string" && jsonArray(row.conditions_json).length) {
+    return stored;
   }
+
   return row?.condition_value
-    ? [{ field: row.condition_field ?? "description", operator: row.condition_operator ?? "contains", value: row.condition_value }]
+    ? [normalizeCondition({
+      field: row.condition_field,
+      operator: row.condition_operator,
+      value: row.condition_value,
+    })]
     : [];
 }
 
@@ -706,7 +737,7 @@ function AiRulesTab() {
       const j = await r.json();
       const coas = Array.isArray(j) ? j : (j.data ?? []);
       setCoaOptions(coas
-        .filter((c: any) => c.code ?? c.coa_code)
+        .filter((c: any) => c && (c.code ?? c.coa_code))
         .map((c: any) => ({
           value: String(c.code ?? c.coa_code),
           label: `${c.code ?? c.coa_code} — ${c.name ?? c.coa_name ?? "Tanpa nama"}`,

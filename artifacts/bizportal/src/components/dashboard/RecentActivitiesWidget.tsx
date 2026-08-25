@@ -6,6 +6,7 @@ import { Link } from "wouter";
 import { Activity, AlertCircle, ArrowRight, User } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { id as localeId } from "date-fns/locale";
+import { useCompany } from "@/contexts/CompanyContext";
 
 interface AuditLogEntry {
   id: number;
@@ -41,10 +42,18 @@ function formatAction(action: string): string {
 }
 
 export function RecentActivitiesWidget() {
+  const { activeCompanyId } = useCompany();
+  const hasCompanyContext = typeof activeCompanyId === "number" && activeCompanyId > 0;
+
   const { data, isLoading, error } = useQuery<{ rows: AuditLogEntry[]; total: number }>({
-    queryKey: ["dashboard-audit-log"],
+    queryKey: ["dashboard-audit-log", activeCompanyId],
+    enabled: hasCompanyContext,
     queryFn: async () => {
-      const res = await fetch("/api/audit-logs?limit=10", { credentials: "include" });
+      const params = new URLSearchParams({
+        limit: "10",
+        companyId: String(activeCompanyId),
+      });
+      const res = await fetch(`/api/audit-logs?${params}`, { credentials: "include" });
       if (!res.ok) throw new Error("Gagal memuat aktivitas");
       return res.json() as Promise<{ rows: AuditLogEntry[]; total: number }>;
     },
@@ -68,7 +77,11 @@ export function RecentActivitiesWidget() {
         </div>
       </CardHeader>
       <CardContent>
-        {error ? (
+        {!hasCompanyContext ? (
+          <p className="py-4 text-center text-xs text-muted-foreground">
+            Pilih perusahaan untuk melihat aktivitas terbaru
+          </p>
+        ) : error ? (
           <div className="flex items-center gap-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
             <AlertCircle className="h-3.5 w-3.5 shrink-0" />
             Gagal memuat aktivitas
