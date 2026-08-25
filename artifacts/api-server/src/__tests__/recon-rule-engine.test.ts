@@ -27,6 +27,8 @@ import {
   ENGINE_VERSION,
 } from "../lib/reconciliation/reconDecisionStack.js";
 import {
+  LEGACY_REFERENCE_COA_ATTEMPT_NOT_RECORDED,
+  isLegacyReferenceCoaRetryable,
   legacyReferenceCoaReviewReason,
   planReferenceCoaAutoPost,
 } from "../lib/reconciliation/referenceCoaAutoPost.js";
@@ -506,5 +508,20 @@ describe("Reference COA auto-post safeguards", () => {
 
   it("gives historical rule-only matches an actionable reviewer message", () => {
     expect(legacyReferenceCoaReviewReason()).toContain("Pilih COA & Buat Draft");
+  });
+
+  it("allows retry only for the legacy no-attempt fallback", () => {
+    expect(isLegacyReferenceCoaRetryable({
+      status: "manual_review",
+      reviewCode: LEGACY_REFERENCE_COA_ATTEMPT_NOT_RECORDED,
+    })).toBe(true);
+    expect(isLegacyReferenceCoaRetryable({
+      status: "manual_review",
+      reviewCode: "JOURNAL_MAPPING_REQUIRED",
+    })).toBe(false);
+    expect(isLegacyReferenceCoaRetryable({
+      status: "posted",
+      reviewCode: LEGACY_REFERENCE_COA_ATTEMPT_NOT_RECORDED,
+    })).toBe(false);
   });
 });

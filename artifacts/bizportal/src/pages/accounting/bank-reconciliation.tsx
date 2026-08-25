@@ -907,6 +907,15 @@ function isManualReviewActionable(m: BankMutation): boolean {
     && !isCanonicalSettlementMutation(m);
 }
 
+const LEGACY_REFERENCE_COA_ATTEMPT_NOT_RECORDED = "REFERENCE_COA_ATTEMPT_NOT_RECORDED";
+
+function isLegacyReferenceCoaRetryable(m: BankMutation): boolean {
+  return m.status === "manual_review"
+    && m.review_code === LEGACY_REFERENCE_COA_ATTEMPT_NOT_RECORDED
+    && !isQrisMutation(m)
+    && !isCanonicalSettlementMutation(m);
+}
+
 function mutationHeading(m: BankMutation): string {
   return `${m.direction === "IN" ? "Uang Masuk" : "Uang Keluar"} ${idr(m.amount)}`;
 }
@@ -3148,6 +3157,7 @@ function QrisMutationCard({
 function MutationCard({
   m,
   onMapCoa,
+  onRetryReferenceCoa,
   onApprove,
   onPost,
   onReject,
@@ -3167,10 +3177,12 @@ function MutationCard({
   onRunMatching,
   onGenerateQrisCandidates,
   qrisGenerationPending,
+  retryReferenceCoaPending,
   mappingError,
 }: {
   m: BankMutation;
   onMapCoa: (m: BankMutation) => void;
+  onRetryReferenceCoa?: (m: BankMutation) => void;
   onApprove: (m: BankMutation) => void;
   onPost:    (m: BankMutation) => void;
   onReject:  (m: BankMutation) => void;
@@ -3190,6 +3202,7 @@ function MutationCard({
   onRunMatching: () => void;
   onGenerateQrisCandidates?: () => void;
   qrisGenerationPending?: boolean;
+  retryReferenceCoaPending?: boolean;
   mappingError?: MappingRequiredError;
 }) {
   const cands  = visibleCandidates(m);
@@ -3483,6 +3496,21 @@ function MutationCard({
               <BookOpen className="h-3.5 w-3.5" />
               Referensi COA
             </Button>
+            {isLegacyReferenceCoaRetryable(m) && onRetryReferenceCoa && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1 border-indigo-300 text-xs text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:text-indigo-300"
+                disabled={retryReferenceCoaPending}
+                onClick={() => onRetryReferenceCoa(m)}
+                title="Menjalankan ulang Referensi COA. Jurnal hanya dibuat bila semua safeguard lulus."
+              >
+                {retryReferenceCoaPending
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <RotateCcw className="h-3.5 w-3.5" />}
+                {retryReferenceCoaPending ? "Memproses..." : "Proses Ulang COA"}
+              </Button>
+            )}
             {/* One clear primary action per mutation. Backend remains the final guard. */}
             {isManualReviewActionable(m) && (
               <Button
@@ -5198,6 +5226,53 @@ export default function BankReconciliationPage() {
     onError: (e: Error) => toast({ title: "Gagal matching", description: e.message, variant: "destructive" }),
   });
 
+  const retryReferenceCoaMut = useMutation({
+    mutationFn: async (mutationId: number) => {
+      const r = await fetch("/api/bank-reconciliation/run-matching", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ids: [mutationId],
+          legacy_reference_coa_retry: true,
+        }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      return r.json() as Promise<{
+        processed: number;
+        auto_matched: number;
+        manual_review: number;
+      }>;
+    },
+    onSuccess: async (result, mutationId) => {
+      await invalidate();
+      await refreshMutationDetail(mutationId);
+      if (result.auto_matched > 0) {
+        toast({
+          title: "Referensi COA berhasil diproses",
+          description: "Jurnal dibuat otomatis setelah seluruh safeguard lulus.",
+        });
+      } else if (result.manual_review > 0) {
+        toast({
+          title: "Masih perlu review manual",
+          description: "Safeguard jurnal menahan transaksi. Alasan terbaru sudah ditampilkan.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Tidak dapat diproses ulang",
+          description: "Transaksi ini bukan kasus Referensi COA legacy yang dapat dicoba ulang.",
+          variant: "destructive",
+        });
+      }
+    },
+    onError: (e: Error) => toast({
+      title: "Gagal memproses ulang Referensi COA",
+      description: e.message,
+      variant: "destructive",
+    }),
+  });
+
   const approveQrisBatchMut = useMutation({
     mutationFn: async ({
       candidateId,
@@ -6029,6 +6104,7 @@ export default function BankReconciliationPage() {
                   key={m.id}
                   m={m}
                   onMapCoa={setCoaReferenceTarget}
+                  onRetryReferenceCoa={mutation => retryReferenceCoaMut.mutate(mutation.id)}
                   onApprove={handleOpenApprove}
                   onPost={handleOpenPost}
                   onReject={handleOpenReject}
@@ -6056,6 +6132,7 @@ export default function BankReconciliationPage() {
                       ? () => qrisDryRunMut.mutate()
                       : undefined}
                    qrisGenerationPending={qrisDryRunMut.isPending}
+                  retryReferenceCoaPending={retryReferenceCoaMut.isPending}
                   mappingError={mappingRequiredErrors.get(m.id)}
                 />
               ))}

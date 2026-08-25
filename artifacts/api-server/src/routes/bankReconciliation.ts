@@ -48,6 +48,7 @@ import {
   type MutationForDecisionStack,
 } from "../lib/reconciliation/reconDecisionStack.js";
 import {
+  LEGACY_REFERENCE_COA_ATTEMPT_NOT_RECORDED,
   legacyReferenceCoaReviewReason,
   planReferenceCoaAutoPost,
 } from "../lib/reconciliation/referenceCoaAutoPost.js";
@@ -4404,7 +4405,22 @@ router.post("/run-matching", async (req, res) => {
   await runExpectedCashFlowMigration();
 
   const actor = (req as any).user?.email ?? "system";
-  const { ids } = req.body as { ids?: number[] };
+  const {
+    ids,
+    legacy_reference_coa_retry = false,
+  } = req.body as {
+    ids?: number[];
+    legacy_reference_coa_retry?: boolean;
+  };
+  const requestedIds = Array.isArray(ids)
+    ? ids.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0)
+    : [];
+  if (Array.isArray(ids) && requestedIds.length !== ids.length) {
+    return res.status(400).json({ error: "Daftar ID mutasi tidak valid." });
+  }
+  if (legacy_reference_coa_retry && requestedIds.length === 0) {
+    return res.status(400).json({ error: "Pilih satu atau lebih mutasi untuk diproses ulang." });
+  }
   // Keep a small worker pool: matching performs several independent reads per
   // mutation, so serial processing is unnecessarily slow, while unbounded
   // Promise.all would exhaust the database pool during a large re-run.
@@ -4412,7 +4428,33 @@ router.post("/run-matching", async (req, res) => {
 
   // Allow matching unmatched + matched + duplicate_need_review (spec §Phase3)
   let whereClause = "status IN ('unmatched','matched','duplicate_need_review')";
-  if (ids?.length) whereClause = `id = ANY(ARRAY[${ids.map(Number).join(",")}])`;
+  if (legacy_reference_coa_retry) {
+    // This retry is deliberately limited to the legacy fallback: a rule was
+    // matched but no auto-post attempt was ever recorded. Do not retry a row
+    // whose journal safeguard already returned a concrete blocking reason.
+    whereClause = `
+      id = ANY(ARRAY[${requestedIds.join(",")}])
+      AND status = 'manual_review'
+      AND (
+        review_code = '${LEGACY_REFERENCE_COA_ATTEMPT_NOT_RECORDED}'
+        OR NULLIF(review_code, '') IS NULL
+      )
+      AND EXISTS (
+        SELECT 1
+        FROM bank_reconciliation_audit rule_audit
+        WHERE rule_audit.mutation_id = bank_mutations.id
+          AND rule_audit.action = 'RULE_ENGINE_MATCH'
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM bank_reconciliation_audit attempt_audit
+        WHERE attempt_audit.mutation_id = bank_mutations.id
+          AND attempt_audit.action IN ('AUTO_POST_ATTEMPTED', 'AUTO_POST_BLOCKED')
+      )
+    `;
+  } else if (requestedIds.length) {
+    whereClause = `id = ANY(ARRAY[${requestedIds.join(",")}])`;
+  }
 
   const { rows: mutations } = await db.execute(sql.raw(
     `SELECT * FROM bank_mutations WHERE ${whereClause} ORDER BY transaction_date DESC LIMIT 500`
@@ -4427,6 +4469,13 @@ router.post("/run-matching", async (req, res) => {
 
   const processMutation = async (m: any) => {
     try {
+      if (legacy_reference_coa_retry) {
+        await auditLog(Number(m.id), "REFERENCE_COA_RETRY_REQUESTED", actor, {
+          previous_status: m.status,
+          retry_mode: "legacy_reference_coa",
+        });
+      }
+
       // Company scope is a hard prerequisite for every matching layer. Do not
       // pass NULL through as company 0: rule/ECF layers could otherwise run
       // before the unified engine's fail-closed guard.
