@@ -660,6 +660,8 @@ function AiRulesTab() {
   const { activeCompanyId } = useCompany();
   const [rows, setRows]       = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [coaOptions, setCoaOptions] = useState<ComboboxOption[]>([]);
+  const [loadingCoaOptions, setLoadingCoaOptions] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [editRow, setEditRow] = useState<any>(null);
   const [saving, setSaving]   = useState(false);
@@ -667,6 +669,28 @@ function AiRulesTab() {
   const [previewText, setPreviewText] = useState("");
   const [preview, setPreview] = useState<any>(null);
   const [previewing, setPreviewing] = useState(false);
+
+  const loadCoaOptions = useCallback(async () => {
+    setLoadingCoaOptions(true);
+    try {
+      const qp = activeCompanyId ? `?company_id=${activeCompanyId}` : "";
+      const r = await fetch(`${API}/accounting/coa${qp}`, { credentials: "include" });
+      if (!r.ok) throw new Error("Gagal mengambil akun COA");
+      const j = await r.json();
+      const coas = Array.isArray(j) ? j : (j.data ?? []);
+      setCoaOptions(coas
+        .filter((c: any) => c.code)
+        .map((c: any) => ({
+          value: String(c.code),
+          label: `${c.code} — ${c.name ?? "Tanpa nama"}`,
+        })));
+    } catch {
+      // The field remains usable as free text if the COA master cannot be loaded.
+      setCoaOptions([]);
+    } finally {
+      setLoadingCoaOptions(false);
+    }
+  }, [activeCompanyId]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -679,6 +703,7 @@ function AiRulesTab() {
   }, [activeCompanyId]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadCoaOptions(); }, [loadCoaOptions]);
 
   const openAdd = () => {
     setEditRow(null);
@@ -870,9 +895,23 @@ function AiRulesTab() {
                 </Select>
               </div>
               <div>
-                <Label className="text-slate-300">Action COA Code</Label>
-                <Input value={form.action_coa_code ?? ""} onChange={e => setForm((f: any) => ({ ...f, action_coa_code: e.target.value || null }))}
-                  className="bg-slate-800 border-slate-600 text-white mt-1 font-mono" placeholder="cth. 6-2010" />
+                <Label className="text-slate-300">Akun COA</Label>
+                <div className="mt-1">
+                  <CreatableCombobox
+                    value={form.action_coa_code ?? ""}
+                    onChange={value => setForm((f: any) => ({ ...f, action_coa_code: value || null }))}
+                    options={coaOptions}
+                    loading={loadingCoaOptions}
+                    placeholder="Pilih akun COA — kode dan nama"
+                    searchPlaceholder="Cari kode atau nama COA…"
+                    emptyText="Akun COA tidak ditemukan."
+                    onAddNew={value => setForm((f: any) => ({ ...f, action_coa_code: value }))}
+                    addNewLabel="Gunakan kode COA"
+                  />
+                </div>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Nilai yang disimpan tetap kode COA; nama ditampilkan dari master akun.
+                </p>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
