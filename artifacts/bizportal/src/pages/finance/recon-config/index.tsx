@@ -56,19 +56,38 @@ const COND_FIELDS = [
   { value: "description", label: "Deskripsi" },
   { value: "amount",      label: "Jumlah" },
   { value: "direction",   label: "Arah (IN/OUT)" },
-  { value: "intent",      label: "Intent" },
+  { value: "bank",        label: "Bank" },
+  { value: "transaction_code", label: "Kode Transaksi" },
   { value: "normalized",  label: "Normalized" },
 ];
 
 const COND_OPS = [
   { value: "contains",    label: "Contains" },
+  { value: "not_contains", label: "Tidak mengandung" },
   { value: "starts_with", label: "Starts With" },
-  { value: "regex",       label: "Regex" },
-  { value: "eq",          label: "=" },
-  { value: "neq",         label: "≠" },
+  { value: "ends_with",   label: "Ends With" },
+  { value: "equals",      label: "=" },
+  { value: "not_equals",  label: "≠" },
   { value: "gte",         label: "≥" },
   { value: "lte",         label: "≤" },
 ];
+
+function ruleConditions(row: any): any[] {
+  if (Array.isArray(row?.conditions)) return row.conditions;
+  if (Array.isArray(row?.conditions_json)) return row.conditions_json;
+  if (typeof row?.conditions_json === "string") {
+    try { const parsed = JSON.parse(row.conditions_json); if (Array.isArray(parsed)) return parsed; } catch { /* legacy row */ }
+  }
+  return row?.condition_value
+    ? [{ field: row.condition_field ?? "description", operator: row.condition_operator ?? "contains", value: row.condition_value }]
+    : [];
+}
+
+function conditionSummary(row: any): string {
+  const conditions = ruleConditions(row);
+  const logic = row?.logic === "OR" ? " OR " : " AND ";
+  return conditions.map((c: any) => `${c.negate ? "NOT " : ""}${c.value ?? ""}`).join(logic) || "—";
+}
 
 function flowBadge(flow: string) {
   const colors: Record<string, string> = {
@@ -645,6 +664,9 @@ function AiRulesTab() {
   const [editRow, setEditRow] = useState<any>(null);
   const [saving, setSaving]   = useState(false);
   const [form, setForm]       = useState<any>({});
+  const [previewText, setPreviewText] = useState("");
+  const [preview, setPreview] = useState<any>(null);
+  const [previewing, setPreviewing] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -660,9 +682,33 @@ function AiRulesTab() {
 
   const openAdd = () => {
     setEditRow(null);
-    setForm({ condition_field: "description", condition_operator: "contains", confidence: 0.8, priority: 50, source: "manual" });
+    setForm({ condition_field: "description", condition_operator: "contains", condition_value: "",
+      conditions: [{ field: "description", operator: "contains", value: "" }], logic: "AND",
+      specificity: 1, confidence: 0.8, priority: 50, source: "manual" });
+    setPreview(null);
     setShowModal(true);
   };
+
+  const openEdit = (row: any) => {
+    const conditions = ruleConditions(row);
+    setEditRow(row);
+    setForm({ ...row, conditions: conditions.length ? conditions : [{ field: "description", operator: "contains", value: "" }],
+      logic: row.logic === "OR" ? "OR" : "AND", confidence: Number(row.confidence ?? 0.8),
+      priority: Number(row.priority ?? 50), specificity: Number(row.specificity ?? Math.max(1, conditions.length)) });
+    setPreview(null);
+    setShowModal(true);
+  };
+
+  const updateCondition = (index: number, patch: any) => {
+    setForm((f: any) => ({ ...f, conditions: (f.conditions ?? []).map((c: any, i: number) => i === index ? { ...c, ...patch } : c) }));
+  };
+  const addCondition = () => setForm((f: any) => ({ ...f,
+    conditions: [...(f.conditions ?? []), { field: "description", operator: "contains", value: "" }],
+    specificity: (f.conditions?.length ?? 0) + 1 }));
+  const removeCondition = (index: number) => setForm((f: any) => {
+    const conditions = (f.conditions ?? []).filter((_: any, i: number) => i !== index);
+    return { ...f, conditions, specificity: Math.max(1, conditions.length) };
+  });
 
   const save = async () => {
     setSaving(true);
@@ -672,12 +718,29 @@ function AiRulesTab() {
       const r = await fetch(url, {
         method, credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, company_id: activeCompanyId ?? null }),
+        body: JSON.stringify({ ...form, conditions: form.conditions,
+          condition_field: form.conditions?.[0]?.field ?? form.condition_field,
+          condition_operator: form.conditions?.[0]?.operator ?? form.condition_operator,
+          condition_value: form.conditions?.[0]?.value ?? form.condition_value,
+          company_id: activeCompanyId ?? null }),
       });
       if (!r.ok) { const e = await r.json(); alert(e.error ?? "Gagal."); return; }
       setShowModal(false);
       load();
     } finally { setSaving(false); }
+  };
+
+  const runPreview = async () => {
+    if (!previewText.trim()) return;
+    setPreviewing(true);
+    try {
+      const r = await fetch(`${API}/recon-classification/ai-rules/preview`, { method: "POST",
+        credentials: "include", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description: previewText, company_id: activeCompanyId ?? null,
+          conditions: form.conditions, logic: form.logic, specificity: form.specificity,
+          action_flow: form.action_flow, action_coa_code: form.action_coa_code, confidence: form.confidence }) });
+      setPreview(await r.json());
+    } finally { setPreviewing(false); }
   };
 
   const deactivate = async (row: any) => {
@@ -718,7 +781,7 @@ function AiRulesTab() {
                 <tr key={row.id} className="border-b border-slate-800 hover:bg-slate-800/40">
                   <td className="py-2 pr-3 text-white">{row.name}</td>
                   <td className="py-2 pr-3 font-mono text-xs text-slate-400">
-                    {row.condition_field} {row.condition_operator} "{row.condition_value}"
+                    {conditionSummary(row)}
                   </td>
                   <td className="py-2 pr-3">{row.action_flow ? flowBadge(row.action_flow) : "—"}</td>
                   <td className="py-2 pr-3 text-slate-400">{Number(row.confidence).toFixed(2)}</td>
@@ -730,7 +793,7 @@ function AiRulesTab() {
                   </td>
                   <td className="py-2">
                     <div className="flex gap-1">
-                      <button onClick={() => { setEditRow(row); setForm(row); setShowModal(true); }}
+                      <button onClick={() => openEdit(row)}
                         className="p-1.5 rounded hover:bg-slate-700 text-slate-400 hover:text-white"><Pencil size={13} /></button>
                       <button onClick={() => deactivate(row)}
                         className="p-1.5 rounded hover:bg-red-900 text-slate-400 hover:text-red-300"><PowerOff size={13} /></button>
@@ -757,30 +820,43 @@ function AiRulesTab() {
               <Input value={form.description ?? ""} onChange={e => setForm((f: any) => ({ ...f, description: e.target.value || null }))}
                 className="bg-slate-800 border-slate-600 text-white mt-1" />
             </div>
-            <div className="grid grid-cols-3 gap-2">
-              <div>
-                <Label className="text-slate-300 text-xs">Field</Label>
-                <Select value={form.condition_field ?? "description"} onValueChange={v => setForm((f: any) => ({ ...f, condition_field: v }))}>
-                  <SelectTrigger className="bg-slate-800 border-slate-600 text-white mt-1 text-xs"><SelectValue /></SelectTrigger>
+            <div className="border border-slate-700 rounded-lg p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-slate-300">Kondisi Rule</Label>
+                <Select value={form.logic ?? "AND"} onValueChange={v => setForm((f: any) => ({ ...f, logic: v }))}>
+                  <SelectTrigger className="bg-slate-800 border-slate-600 text-white w-44 text-xs"><SelectValue /></SelectTrigger>
                   <SelectContent className="bg-slate-800 border-slate-600 text-white">
-                    {COND_FIELDS.map(cf => <SelectItem key={cf.value} value={cf.value}>{cf.label}</SelectItem>)}
+                    <SelectItem value="AND">SEMUA KONDISI (AND)</SelectItem>
+                    <SelectItem value="OR">SALAH SATU KONDISI (OR)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
-              <div>
-                <Label className="text-slate-300 text-xs">Operator</Label>
-                <Select value={form.condition_operator ?? "contains"} onValueChange={v => setForm((f: any) => ({ ...f, condition_operator: v }))}>
-                  <SelectTrigger className="bg-slate-800 border-slate-600 text-white mt-1 text-xs"><SelectValue /></SelectTrigger>
-                  <SelectContent className="bg-slate-800 border-slate-600 text-white">
-                    {COND_OPS.map(co => <SelectItem key={co.value} value={co.value}>{co.label}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label className="text-slate-300 text-xs">Nilai *</Label>
-                <Input value={form.condition_value ?? ""} onChange={e => setForm((f: any) => ({ ...f, condition_value: e.target.value }))}
-                  className="bg-slate-800 border-slate-600 text-white mt-1 text-xs" />
-              </div>
+              {(form.conditions ?? []).map((condition: any, index: number) => (
+                <div key={index} className="grid grid-cols-[1fr_1fr_1.2fr_auto] gap-2 items-end">
+                  <div><Label className="text-slate-500 text-[11px]">Field</Label>
+                    <Select value={condition.field} onValueChange={v => updateCondition(index, { field: v })}>
+                      <SelectTrigger className="bg-slate-800 border-slate-600 text-white mt-1 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent className="bg-slate-800 border-slate-600 text-white">{COND_FIELDS.map(cf => <SelectItem key={cf.value} value={cf.value}>{cf.label}</SelectItem>)}</SelectContent>
+                    </Select>
+                  </div>
+                  <div><Label className="text-slate-500 text-[11px]">Operator</Label>
+                    <Select value={condition.operator} onValueChange={v => updateCondition(index, { operator: v })}>
+                      <SelectTrigger className="bg-slate-800 border-slate-600 text-white mt-1 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent className="bg-slate-800 border-slate-600 text-white">{COND_OPS.map(co => <SelectItem key={co.value} value={co.value}>{co.label}</SelectItem>)}</SelectContent>
+                    </Select>
+                  </div>
+                  <div><Label className="text-slate-500 text-[11px]">Nilai *</Label>
+                    <Input value={condition.value ?? ""} onChange={e => updateCondition(index, { value: e.target.value })}
+                      className="bg-slate-800 border-slate-600 text-white mt-1 text-xs" />
+                  </div>
+                  <Button type="button" variant="ghost" onClick={() => removeCondition(index)} disabled={(form.conditions ?? []).length <= 1}
+                    className="text-slate-500 hover:text-red-300 px-2">×</Button>
+                </div>
+              ))}
+              <Button type="button" variant="outline" size="sm" onClick={addCondition} className="border-slate-600 text-slate-300">
+                <Plus size={13} className="mr-1" /> Tambah Kondisi
+              </Button>
+              <p className="text-[11px] text-slate-500">NOT tersedia melalui operator “Tidak mengandung” atau “≠”.</p>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -812,6 +888,21 @@ function AiRulesTab() {
                   onChange={e => setForm((f: any) => ({ ...f, priority: parseInt(e.target.value) || 50 }))}
                   className="bg-slate-800 border-slate-600 text-white mt-1" />
               </div>
+            </div>
+            <div className="border border-slate-700 rounded-lg p-3 space-y-2">
+              <Label className="text-slate-300">Test / Preview Matcher (read-only)</Label>
+              <div className="flex gap-2">
+                <Input value={previewText} onChange={e => setPreviewText(e.target.value)}
+                  className="bg-slate-800 border-slate-600 text-white" placeholder="Contoh deskripsi transaksi…" />
+                <Button type="button" variant="outline" onClick={runPreview} disabled={previewing || !previewText.trim()}
+                  className="border-slate-600 text-slate-300">{previewing ? "…" : "Preview"}</Button>
+              </div>
+              {preview && <div className={`text-xs rounded p-2 ${preview.ambiguityCode ? "bg-red-950 text-red-300" : "bg-slate-800 text-slate-300"}`}>
+                {preview.ambiguityCode ? <><b>AMBIGUOUS_RULE_MATCH</b><div>{preview.ambiguityReason}</div></> :
+                  preview.rule ? <><b>Matched rule:</b> {preview.rule.name} <span className="ml-2">COA: {preview.rule.targetCoaCode ?? "—"}</span>
+                    <div className="mt-1">Matched conditions: {(preview.matchedConditions ?? []).map((c: any) => `✓ ${c.label}`).join(" · ") || "—"}</div></> :
+                    <span>Tidak ada rule yang cocok — manual review.</span>}
+              </div>}
             </div>
           </div>
           <DialogFooter>

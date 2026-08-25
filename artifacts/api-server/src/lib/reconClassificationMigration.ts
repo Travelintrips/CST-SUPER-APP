@@ -151,6 +151,9 @@ export async function runReconClassificationMigration(): Promise<void> {
       condition_field     TEXT NOT NULL,
       condition_operator  TEXT NOT NULL,
       condition_value     TEXT NOT NULL,
+      conditions_json     JSONB,
+      logic               TEXT NOT NULL DEFAULT 'AND',
+      specificity         INTEGER NOT NULL DEFAULT 1,
       action_flow         TEXT,
       action_coa_code     TEXT,
       action_config_code  TEXT,
@@ -162,6 +165,12 @@ export async function runReconClassificationMigration(): Promise<void> {
       created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
+  `));
+  await db.execute(sql.raw(`
+    ALTER TABLE recon_ai_classification_rules
+      ADD COLUMN IF NOT EXISTS conditions_json JSONB,
+      ADD COLUMN IF NOT EXISTS logic TEXT NOT NULL DEFAULT 'AND',
+      ADD COLUMN IF NOT EXISTS specificity INTEGER NOT NULL DEFAULT 1
   `));
 
   await db.execute(sql.raw(`
