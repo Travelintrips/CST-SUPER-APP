@@ -573,6 +573,7 @@ interface BankMutation {
   journal_entry_id?: number | null;
   posted_at?: string | null;
   posted_by?: string | null;
+  review_reason?: string | null;
 }
 
 interface CoaAccountReference {
@@ -3303,6 +3304,13 @@ function MutationCard({
               <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
                 <p className="font-semibold">Perlu Diperiksa</p>
                 <p className="mt-0.5">Sistem menemukan transaksi, tetapi nominal atau bukti belum sepenuhnya cocok.</p>
+              </div>
+            )}
+
+            {m.status === "manual_review" && m.review_reason && (
+              <div className="mt-2 rounded-md border border-orange-200 bg-orange-50 px-3 py-2 text-xs text-orange-900 dark:border-orange-800 dark:bg-orange-950 dark:text-orange-200">
+                <p className="font-semibold">Alasan review manual</p>
+                <p className="mt-0.5">{m.review_reason}</p>
               </div>
             )}
 

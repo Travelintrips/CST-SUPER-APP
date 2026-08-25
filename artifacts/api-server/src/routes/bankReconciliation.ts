@@ -3106,6 +3106,14 @@ router.get("/mutations", async (req, res) => {
       bm.provider_name, bm.provider_order_id,
       bm.status::text, bm.journal_entry_id, bm.company_id,
       bm.uploaded_proof_url, bm.source,
+      (
+        SELECT COALESCE(ba.meta->>'error', ba.meta->>'reason')
+        FROM bank_reconciliation_audit ba
+        WHERE ba.mutation_id = bm.id
+          AND ba.action IN ('AUTO_POST_BLOCKED', 'JOURNAL_MAPPING_REQUIRED')
+        ORDER BY ba.id DESC
+        LIMIT 1
+      ) AS review_reason,
        COALESCE(
          (
            SELECT ${sportPaymentTypeSql("sp_type")}
@@ -3417,6 +3425,7 @@ router.get("/mutations", async (req, res) => {
       NULL::integer AS company_id,
       NULL::text AS uploaded_proof_url,
       'bank_import' AS source,
+      NULL::text AS review_reason,
        CASE
          WHEN LOWER(CONCAT_WS(' ', COALESCE(bmi.payment_method, ''), COALESCE(bmi.description, ''), COALESCE(bmi.erp_category, ''), COALESCE(bmi.tax_type, ''))) LIKE '%paylabs%'
            THEN 'paylabs'
@@ -4444,6 +4453,24 @@ router.post("/run-matching", async (req, res) => {
             { mutationId: m.id, ruleId: decision.matchedRuleId, error: approval.error },
             "[run-matching] reference rule auto-post blocked; leaving for manual review",
           );
+          await auditLog(Number(m.id), "AUTO_POST_BLOCKED", actor, {
+            rule_id: decision.matchedRuleId,
+            target_coa_code: autoCoaCode || null,
+            confidence: decision.confidence,
+            error: approval.error ?? "Auto-post ditahan oleh guard jurnal.",
+            code: approval.code ?? null,
+          });
+        } else {
+          await auditLog(Number(m.id), "AUTO_POST_BLOCKED", actor, {
+            rule_id: decision.matchedRuleId,
+            target_coa_code: autoCoaCode || null,
+            confidence: decision.confidence,
+            rule_confidence: matchedRule?.confidence_score ?? null,
+            error: !autoCoaCode
+              ? "Referensi COA belum memiliki target COA."
+              : "Confidence rule belum mencapai 100.",
+            code: "AUTO_POST_GUARD",
+          });
         }
 
         // A rule can match without a usable COA or can fail its accounting
