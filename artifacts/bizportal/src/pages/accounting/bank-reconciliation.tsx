@@ -3282,17 +3282,14 @@ function MutationCard({
                      </Badge>
                    ) : null;
                  })()}
-                <Collapsible className="mt-1" onClick={e => e.stopPropagation()}>
-                  <CollapsibleTrigger asChild>
-                    <button type="button" className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
-                      <ChevronDown className="w-3 h-3" /> Lihat keterangan bank
-                    </button>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent className="text-[11px] text-muted-foreground pt-1 break-words">
-                    {m.description}
-                    {m.provider_order_id && <span className="ml-1">· Ref: {m.provider_order_id}</span>}
-                  </CollapsibleContent>
-                </Collapsible>
+                <div
+                  className="mt-1 text-[11px] text-muted-foreground break-words"
+                  onClick={e => e.stopPropagation()}
+                >
+                  <span className="font-medium text-foreground/80">Keterangan bank:</span>{" "}
+                  {m.description}
+                  {m.provider_order_id && <span className="ml-1">· Ref: {m.provider_order_id}</span>}
+                </div>
               </div>
               <div className="text-right shrink-0">
                 <span className={`text-[10px] px-1.5 py-0.5 rounded-full border font-medium ${statusColor(m)}`}>
