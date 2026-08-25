@@ -101,6 +101,14 @@ const AiRuleSchema = z.object({
   condition_field:     z.enum(["description", "amount", "direction", "intent", "normalized"]),
   condition_operator:  z.enum(["contains", "starts_with", "regex", "eq", "neq", "gte", "lte"]),
   condition_value:     z.string().min(1),
+  conditions: z.array(z.object({
+    field: z.enum(["description", "amount", "direction", "bank", "transaction_code", "normalized", "reference", "counterparty_name", "counterparty_account"]),
+    operator: z.enum(["contains", "not_contains", "equals", "not_equals", "starts_with", "ends_with", "eq", "neq", "regex", "greater_than", "less_than", "gte", "lte", "between"]),
+    value: z.string().min(1),
+    negate: z.boolean().optional(),
+  })).min(1).optional(),
+  logic: z.enum(["AND", "OR"]).default("AND"),
+  specificity: z.coerce.number().int().min(1).max(999).optional(),
   action_flow:         z.enum(["BUSINESS_MATCHING", "ROUTINE_EXPENSE_ALLOCATION", "INCOME_ALLOCATION", "MANUAL_REVIEW", "BLOCKED"]).optional().nullable(),
   action_coa_code:     z.string().optional().nullable(),
   action_config_code:  z.string().optional().nullable(),
@@ -109,6 +117,18 @@ const AiRuleSchema = z.object({
   source:              z.enum(["manual", "ai_generated"]).default("manual"),
   company_id:          z.number().int().optional().nullable(),
 });
+
+function normalizeRuleConditions(d: any) {
+  const conditions = d.conditions?.length
+    ? d.conditions
+    : [{ field: d.condition_field, operator: d.condition_operator, value: d.condition_value }];
+  return {
+    conditions,
+    logic: d.logic ?? "AND",
+    specificity: d.specificity ?? conditions.length,
+    condition: conditions[0],
+  };
+}
 
 const KeywordSchema = z.object({
   term:       z.string().min(1).max(200),
@@ -187,6 +207,7 @@ reconClassificationRouter.post("/configs", async (req, res) => {
       return res.status(400).json({ error: "Validasi gagal.", details: parsed.error.issues });
     }
     const d = parsed.data;
+    const normalized = normalizeRuleConditions(d);
     const userId = (req as any).user?.id ?? null;
 
     const result = await db.execute(sql.raw(`
@@ -354,6 +375,7 @@ reconClassificationRouter.post("/ai-rules", async (req, res) => {
     const result = await db.execute(sql.raw(`
       INSERT INTO recon_ai_classification_rules
         (company_id, config_id, name, description, condition_field, condition_operator, condition_value,
+         conditions_json, logic, specificity,
          action_flow, action_coa_code, action_config_code, confidence, priority, source, created_by)
       VALUES (
         ${d.company_id ?? "NULL"},
@@ -362,7 +384,9 @@ reconClassificationRouter.post("/ai-rules", async (req, res) => {
         ${d.description ? `'${d.description.replace(/'/g, "''")}'` : "NULL"},
         '${d.condition_field}',
         '${d.condition_operator}',
-        '${d.condition_value.replace(/'/g, "''")}',
+         '${normalized.condition.value.replace(/'/g, "''")}',
+         '${JSON.stringify(normalized.conditions).replace(/'/g, "''")}'::jsonb,
+         '${normalized.logic}', ${normalized.specificity},
         ${d.action_flow ? `'${d.action_flow}'` : "NULL"},
         ${d.action_coa_code ? `'${d.action_coa_code.replace(/'/g, "''")}'` : "NULL"},
         ${d.action_config_code ? `'${d.action_config_code.replace(/'/g, "''")}'` : "NULL"},
@@ -421,6 +445,7 @@ reconClassificationRouter.patch("/ai-rules/:id", async (req, res) => {
     const parsed = AiRuleSchema.partial().safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Validasi gagal.", details: parsed.error.issues });
     const d = parsed.data;
+    const normalized = normalizeRuleConditions({ ...d, condition_field: d.condition_field ?? "description", condition_operator: d.condition_operator ?? "contains", condition_value: d.condition_value ?? " " });
 
     const setClauses: string[] = [`updated_at = NOW()`];
     if (d.name !== undefined)               setClauses.push(`name = '${d.name.replace(/'/g, "''")}'`);
@@ -428,6 +453,9 @@ reconClassificationRouter.patch("/ai-rules/:id", async (req, res) => {
     if (d.condition_field !== undefined)    setClauses.push(`condition_field = '${d.condition_field}'`);
     if (d.condition_operator !== undefined) setClauses.push(`condition_operator = '${d.condition_operator}'`);
     if (d.condition_value !== undefined)    setClauses.push(`condition_value = '${d.condition_value.replace(/'/g, "''")}'`);
+    if (d.conditions !== undefined)         setClauses.push(`conditions_json = '${JSON.stringify(normalized.conditions).replace(/'/g, "''")}'::jsonb`);
+    if (d.logic !== undefined)              setClauses.push(`logic = '${d.logic}'`);
+    if (d.specificity !== undefined)        setClauses.push(`specificity = ${d.specificity}`);
     if (d.action_flow !== undefined)        setClauses.push(`action_flow = ${d.action_flow ? `'${d.action_flow}'` : "NULL"}`);
     if (d.action_coa_code !== undefined)    setClauses.push(`action_coa_code = ${d.action_coa_code ? `'${d.action_coa_code.replace(/'/g, "''")}'` : "NULL"}`);
     if (d.action_config_code !== undefined) setClauses.push(`action_config_code = ${d.action_config_code ? `'${d.action_config_code.replace(/'/g, "''")}'` : "NULL"}`);

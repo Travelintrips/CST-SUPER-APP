@@ -79,6 +79,12 @@ export async function runReconRulesMigration(): Promise<void> {
       updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `)).catch(() => {});
+  await db.execute(sql.raw(`
+    ALTER TABLE recon_rules
+      ADD COLUMN IF NOT EXISTS conditions_json JSONB,
+      ADD COLUMN IF NOT EXISTS logic TEXT NOT NULL DEFAULT 'AND',
+      ADD COLUMN IF NOT EXISTS specificity INTEGER NOT NULL DEFAULT 1
+  `)).catch(e => logger.warn({ err: e.message }, "[recon_rules] multi-condition columns warning"));
 
   await db.execute(sql.raw(`CREATE INDEX IF NOT EXISTS rr_company_idx   ON recon_rules(company_id)`)).catch(() => {});
   await db.execute(sql.raw(`CREATE INDEX IF NOT EXISTS rr_priority_idx  ON recon_rules(company_id, priority DESC, id ASC)`)).catch(() => {});
@@ -103,7 +109,8 @@ export async function runReconRulesMigration(): Promise<void> {
     INSERT INTO recon_rules
       (company_id, name, description, priority, is_active, direction,
        bank_account_id, condition_type, condition_field, condition_operator,
-       condition_value, target_type, target_id, target_coa_code,
+       condition_value, conditions_json, logic, specificity,
+       target_type, target_id, target_coa_code,
        confidence_score, stop_processing, created_by)
     SELECT
       r.company_id,
@@ -120,6 +127,9 @@ export async function runReconRulesMigration(): Promise<void> {
       r.condition_field,
       r.condition_operator,
       COALESCE(r.condition_value, ''),
+       r.conditions_json,
+       COALESCE(r.logic, 'AND'),
+       COALESCE(r.specificity, 1),
       CASE
         WHEN UPPER(COALESCE(r.action_flow, '')) LIKE '%INCOME%' THEN 'income'
         ELSE 'expense'
@@ -163,6 +173,9 @@ function requireCompanyId(req: any, res: any): number | null {
 }
 
 function rowToRule(r: Record<string, unknown>): ReconRule {
+  const parsedConditions = Array.isArray(r.conditions_json)
+    ? r.conditions_json
+    : (typeof r.conditions_json === "string" ? (() => { try { return JSON.parse(r.conditions_json as string); } catch { return undefined; } })() : undefined);
   return {
     id:               Number(r.id),
     companyId:        Number(r.company_id),
@@ -176,6 +189,9 @@ function rowToRule(r: Record<string, unknown>): ReconRule {
     conditionField:   String(r.condition_field) as ReconRule["conditionField"],
     conditionOperator: String(r.condition_operator) as ReconRule["conditionOperator"],
     conditionValue:   String(r.condition_value),
+    conditions:       parsedConditions as ReconRule["conditions"],
+    logic:            r.logic === "OR" ? "OR" : "AND",
+    specificity:      Number(r.specificity ?? 1),
     targetType:       String(r.target_type) as ReconRule["targetType"],
     targetId:         r.target_id != null ? Number(r.target_id) : null,
     targetCoaCode:    r.target_coa_code ? String(r.target_coa_code) : null,

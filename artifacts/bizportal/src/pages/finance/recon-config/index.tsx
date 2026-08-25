@@ -56,16 +56,18 @@ const COND_FIELDS = [
   { value: "description", label: "Deskripsi" },
   { value: "amount",      label: "Jumlah" },
   { value: "direction",   label: "Arah (IN/OUT)" },
-  { value: "intent",      label: "Intent" },
+  { value: "bank",        label: "Bank" },
+  { value: "transaction_code", label: "Kode Transaksi" },
   { value: "normalized",  label: "Normalized" },
 ];
 
 const COND_OPS = [
   { value: "contains",    label: "Contains" },
+  { value: "not_contains", label: "Tidak mengandung" },
   { value: "starts_with", label: "Starts With" },
-  { value: "regex",       label: "Regex" },
-  { value: "eq",          label: "=" },
-  { value: "neq",         label: "≠" },
+  { value: "ends_with",   label: "Ends With" },
+  { value: "equals",      label: "=" },
+  { value: "not_equals",  label: "≠" },
   { value: "gte",         label: "≥" },
   { value: "lte",         label: "≤" },
 ];

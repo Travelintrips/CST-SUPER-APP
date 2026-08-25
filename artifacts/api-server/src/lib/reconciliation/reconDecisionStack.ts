@@ -160,6 +160,7 @@ export async function loadReconRulesForCompany(companyId: number): Promise<Recon
         direction, bank_account_id, condition_type, condition_field,
         condition_operator, condition_value, target_type, target_id,
         target_coa_code, confidence_score, stop_processing,
+        conditions_json, logic, specificity,
         match_count, last_matched_at, created_by, created_at, updated_at
       FROM recon_rules
       WHERE company_id = ${companyId} AND is_active = TRUE
@@ -188,7 +189,10 @@ export async function loadReconRulesForCompany(companyId: number): Promise<Recon
       lastMatchedAt:    r.last_matched_at ? String(r.last_matched_at) : null,
       createdBy:        r.created_by ? String(r.created_by) : null,
       createdAt:        String(r.created_at ?? ""),
-      updatedAt:        String(r.updated_at ?? ""),
+       updatedAt:        String(r.updated_at ?? ""),
+       conditions:       Array.isArray(r.conditions_json) ? r.conditions_json : undefined,
+       logic:            r.logic === "OR" ? "OR" : "AND",
+       specificity:      Number(r.specificity ?? 1),
     })) as ReconRule[];
 
     // Populate cache
