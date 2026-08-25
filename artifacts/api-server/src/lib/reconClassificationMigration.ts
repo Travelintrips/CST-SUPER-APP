@@ -226,6 +226,106 @@ export async function runReconClassificationMigration(): Promise<void> {
   logger.info("[ReconClassificationMigration] Done — tables created, seeds inserted.");
 }
 
+/**
+ * Backfill the configuration workspace from operational bank-reconciliation
+ * rules. Older references were written only to recon_rules, before the
+ * configuration mirror was introduced. Keep this idempotent so it is safe to
+ * run from either route on every environment.
+ */
+export async function syncOperationalReconRulesToClassification(): Promise<void> {
+  try {
+    await db.execute(sql.raw(`
+      INSERT INTO recon_classification_configs
+        (company_id, category, name, code, type, flow, default_coa_code,
+         keywords, priority, is_active, is_seed, updated_at)
+      SELECT
+        r.company_id,
+        CASE WHEN r.direction = 'IN' THEN 'INCOME_ALLOCATION' ELSE 'ROUTINE_EXPENSE' END,
+        LEFT(COALESCE(r.name, 'Referensi Bank — ' || r.condition_value), 120),
+        'BANK_REFERENCE_' || UPPER(COALESCE(r.direction, 'UNKNOWN')) || '_' ||
+          UPPER(SUBSTRING(md5(UPPER(COALESCE(r.direction, '')) || ':' ||
+            LOWER(TRIM(COALESCE(r.condition_value, ''))) || ':' ||
+            COALESCE(r.target_coa_code, '')) FROM 1 FOR 10)),
+        CASE WHEN r.direction = 'IN' THEN 'income' ELSE 'expense' END,
+        CASE WHEN r.direction = 'IN' THEN 'INCOME_ALLOCATION' ELSE 'ROUTINE_EXPENSE_ALLOCATION' END,
+        NULLIF(TRIM(r.target_coa_code), ''),
+        jsonb_build_array(TRIM(COALESCE(r.condition_value, ''))),
+        COALESCE(r.priority, 120),
+        TRUE,
+        FALSE,
+        NOW()
+      FROM recon_rules r
+      WHERE COALESCE(r.is_active, TRUE) = TRUE
+        AND r.company_id IS NOT NULL
+        AND NULLIF(TRIM(COALESCE(r.condition_value, '')), '') IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM recon_classification_configs c
+          WHERE c.company_id = r.company_id
+            AND c.category = CASE
+              WHEN r.direction = 'IN' THEN 'INCOME_ALLOCATION'
+              ELSE 'ROUTINE_EXPENSE'
+            END
+            AND LOWER(COALESCE(c.keywords->>0, '')) =
+              LOWER(TRIM(COALESCE(r.condition_value, '')))
+            AND COALESCE(c.default_coa_code, '') = COALESCE(r.target_coa_code, '')
+        )
+      ON CONFLICT (code, COALESCE(company_id, 0)) DO UPDATE SET
+        default_coa_code = EXCLUDED.default_coa_code,
+        keywords = EXCLUDED.keywords,
+        priority = EXCLUDED.priority,
+        is_active = TRUE,
+        updated_at = NOW()
+    `));
+
+    await db.execute(sql.raw(`
+      INSERT INTO recon_ai_classification_rules
+        (company_id, name, description, condition_field, condition_operator,
+         condition_value, action_flow, action_coa_code, action_config_code,
+         config_id, confidence, priority, source)
+      SELECT
+        r.company_id,
+        LEFT(COALESCE(r.name, 'Referensi Bank — ' || r.condition_value), 120),
+        r.description,
+        r.condition_field,
+        r.condition_operator,
+        r.condition_value,
+        CASE WHEN r.direction = 'IN' THEN 'INCOME_ALLOCATION' ELSE 'ROUTINE_EXPENSE_ALLOCATION' END,
+        NULLIF(TRIM(r.target_coa_code), ''),
+        c.code,
+        c.id,
+        1.00,
+        COALESCE(r.priority, 120),
+        'manual'
+      FROM recon_rules r
+      JOIN recon_classification_configs c
+        ON c.company_id = r.company_id
+       AND c.category = CASE
+         WHEN r.direction = 'IN' THEN 'INCOME_ALLOCATION'
+         ELSE 'ROUTINE_EXPENSE'
+       END
+       AND LOWER(COALESCE(c.keywords->>0, '')) =
+         LOWER(TRIM(COALESCE(r.condition_value, '')))
+       AND COALESCE(c.default_coa_code, '') = COALESCE(r.target_coa_code, '')
+       AND c.is_active = TRUE
+      WHERE COALESCE(r.is_active, TRUE) = TRUE
+        AND NOT EXISTS (
+          SELECT 1
+          FROM recon_ai_classification_rules a
+          WHERE a.company_id = r.company_id
+            AND a.condition_field = r.condition_field
+            AND a.condition_operator = r.condition_operator
+            AND a.condition_value = r.condition_value
+            AND COALESCE(a.action_coa_code, '') = COALESCE(r.target_coa_code, '')
+        )
+    `));
+  } catch (err) {
+    // recon_rules may not exist yet when this migration is reached first.
+    // The bank-reconciliation migration calls this again after creating it.
+    logger.warn({ err }, "[ReconClassificationMigration] operational rule backfill skipped");
+  }
+}
+
 /** Force re-run (used by admin seed endpoint). */
 export function resetMigrationFlag(): void {
   migrated = false;

@@ -45,6 +45,7 @@ import { requireAdmin } from "../lib/requireAdmin.js";
 import { logger } from "../lib/logger.js";
 import {
   runReconClassificationMigration,
+  syncOperationalReconRulesToClassification,
   resetMigrationFlag,
 } from "../lib/reconClassificationMigration.js";
 import { trackAiRuleFeedback } from "../lib/usageTrackingService.js";
@@ -62,6 +63,7 @@ let ensureMigrated = false;
 async function ensureTables() {
   if (ensureMigrated) return;
   await runReconClassificationMigration();
+  await syncOperationalReconRulesToClassification();
   ensureMigrated = true;
 }
 

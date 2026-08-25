@@ -33,7 +33,10 @@ import { snapshotRuleVersion } from "../lib/reconciliation/reconRuleVersioning.j
 import { detectRuleConflicts } from "../lib/reconciliation/reconRuleConflictDetection.js";
 import { invalidateRulesCache } from "../lib/reconciliation/reconCache.js";
 import { runReconBatch2Migration } from "../lib/reconciliation/reconBatch2Migration.js";
-import { runReconClassificationMigration } from "../lib/reconClassificationMigration.js";
+import {
+  runReconClassificationMigration,
+  syncOperationalReconRulesToClassification,
+} from "../lib/reconClassificationMigration.js";
 
 const router = Router();
 
@@ -95,6 +98,7 @@ export async function runReconRulesMigration(): Promise<void> {
   await runReconClassificationMigration().catch(e =>
     logger.warn({ err: e.message }, "[recon_rules] classification migration warning")
   );
+  await syncOperationalReconRulesToClassification();
   await db.execute(sql.raw(`
     INSERT INTO recon_rules
       (company_id, name, description, priority, is_active, direction,
