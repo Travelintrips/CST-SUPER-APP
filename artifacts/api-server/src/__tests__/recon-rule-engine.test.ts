@@ -27,6 +27,8 @@ import {
   ENGINE_VERSION,
 } from "../lib/reconciliation/reconDecisionStack.js";
 import {
+  LEGACY_REFERENCE_COA_ATTEMPT_NOT_RECORDED,
+  isLegacyReferenceCoaRetryable,
   legacyReferenceCoaReviewReason,
   planReferenceCoaAutoPost,
 } from "../lib/reconciliation/referenceCoaAutoPost.js";
@@ -284,15 +286,46 @@ describe("Rule Engine — Test 9: amount between operator", () => {
 // ─── Test 10: deterministic tie-breaker ───────────────────────────────────────
 
 describe("Rule Engine — Test 10: deterministic tie-breaker (id ASC)", () => {
-  it("when same priority, lower id wins", () => {
+  it("fails closed when equal-precedence rules produce different COAs", () => {
     const rules: ReconRule[] = [
       makeRule({ id: 50, priority: 100, conditionValue: "admin", targetCoaCode: "5-ID50" }),
       makeRule({ id: 10, priority: 100, conditionValue: "admin", targetCoaCode: "5-ID10" }),
     ];
     const result = evaluateReconRules(rules, makeMutation());
-    expect(result.matched).toBe(true);
-    expect(result.ruleId).toBe(10);
-    expect(result.targetCoaCode).toBe("5-ID10");
+    expect(result.matched).toBe(false);
+    expect(result.ambiguityCode).toBe("AMBIGUOUS_RULE_MATCH");
+  });
+});
+
+describe("Rule Engine — structured multi-condition rules", () => {
+  it("requires all AND conditions and supports NOT", () => {
+    const rules = [makeRule({
+      conditions: [
+        { field: "description", operator: "contains", value: "felicia" },
+        { field: "description", operator: "contains", value: "kas besar" },
+        { field: "description", operator: "not_contains", value: "kasbon" },
+      ],
+      logic: "AND",
+      specificity: 3,
+    })];
+    expect(evaluateReconRules(rules, makeMutation({
+      description: "BBLUI FELICIA JUSTIANI KAS BESAR 99102",
+    })).matched).toBe(true);
+    expect(evaluateReconRules(rules, makeMutation({
+      description: "BBLUI FELICIA JUSTIANI KAS BESAR KASBON 99102",
+    })).matched).toBe(false);
+  });
+
+  it("supports OR conditions", () => {
+    const rules = [makeRule({
+      conditions: [
+        { field: "description", operator: "contains", value: "reimb" },
+        { field: "description", operator: "contains", value: "kasbon" },
+      ],
+      logic: "OR",
+    })];
+    expect(evaluateReconRules(rules, makeMutation({ description: "REIMB KARYAWAN" })).matched).toBe(true);
+    expect(evaluateReconRules(rules, makeMutation({ description: "TRANSFER BIASA" })).matched).toBe(false);
   });
 });
 
@@ -506,5 +539,20 @@ describe("Reference COA auto-post safeguards", () => {
 
   it("gives historical rule-only matches an actionable reviewer message", () => {
     expect(legacyReferenceCoaReviewReason()).toContain("Pilih COA & Buat Draft");
+  });
+
+  it("allows retry only for the legacy no-attempt fallback", () => {
+    expect(isLegacyReferenceCoaRetryable({
+      status: "manual_review",
+      reviewCode: LEGACY_REFERENCE_COA_ATTEMPT_NOT_RECORDED,
+    })).toBe(true);
+    expect(isLegacyReferenceCoaRetryable({
+      status: "manual_review",
+      reviewCode: "JOURNAL_MAPPING_REQUIRED",
+    })).toBe(false);
+    expect(isLegacyReferenceCoaRetryable({
+      status: "posted",
+      reviewCode: LEGACY_REFERENCE_COA_ATTEMPT_NOT_RECORDED,
+    })).toBe(false);
   });
 });

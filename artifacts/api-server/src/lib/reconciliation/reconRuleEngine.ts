@@ -174,16 +174,17 @@ export function validateReconRule(rule: Partial<ReconRule>): string[] {
   }
 
   const validFields: ConditionField[] = [
-    "description", "reference", "amount", "direction",
-    "bank_account", "counterparty_name", "counterparty_account",
+    "description", "reference", "amount", "direction", "bank_account", "bank",
+    "transaction_code", "normalized", "counterparty_name", "counterparty_account",
   ];
   if (rule.conditionField && !validFields.includes(rule.conditionField as ConditionField)) {
     errors.push(`conditionField tidak valid: ${rule.conditionField}`);
   }
 
   const validOperators: ConditionOperator[] = [
-    "equals", "contains", "starts_with", "ends_with",
-    "regex", "greater_than", "less_than", "between",
+    "equals", "contains", "not_contains", "starts_with", "ends_with",
+    "not_equals", "eq", "neq", "regex", "greater_than", "less_than",
+    "gte", "lte", "between",
   ];
   if (rule.conditionOperator && !validOperators.includes(rule.conditionOperator as ConditionOperator)) {
     errors.push(`conditionOperator tidak valid: ${rule.conditionOperator}`);
@@ -327,6 +328,8 @@ function buildReasonCode(field: ConditionField, operator: ConditionOperator): st
     not_equals: "NOT_EQUALS",
     eq: "EQ",
     neq: "NEQ",
+    eq: "EQUALS",
+    neq: "NOT_EQUALS",
     regex: "REGEX",
     greater_than: "GT",
     less_than: "LT",
@@ -395,7 +398,9 @@ export function evaluateReconRules(
   });
 
   const matching: Array<{ rule: ReconRule; reasons: ReconRuleMatchReason[] }> = [];
+  let stopAfterPriority: number | null = null;
   for (const rule of sorted) {
+    if (stopAfterPriority !== null && rule.priority < stopAfterPriority) break;
     if (!rule.isActive) {
       evaluated.push({ ruleId: rule.id, ruleName: rule.name, matched: false });
       continue;
@@ -440,6 +445,9 @@ export function evaluateReconRules(
           score: Math.round(rule.confidenceScore / Math.max(1, conditions.length)),
         })),
       });
+      // Still inspect rules tied on precedence so conflicting actions fail closed.
+      // Once the tie group is complete, lower-priority rules cannot override it.
+      if (rule.stopProcessing) stopAfterPriority = rule.priority;
     }
   }
 

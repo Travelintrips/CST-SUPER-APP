@@ -125,9 +125,19 @@ export async function runReconClassificationMigration(): Promise<void> {
       ON recon_classification_configs (category, is_active, priority)
   `));
 
+  // Older production databases already have an index with the legacy name
+  // `rcc_code_company_uniq`, but that index is only on `(code)`. PostgreSQL
+  // cannot use it for the scoped `ON CONFLICT (code, COALESCE(company_id, 0))`
+  // statements below, so the seed aborts before operational rules are mirrored.
+  // Create the corrected index under a new name first, then remove the legacy
+  // index. Creating first keeps the replacement fail-closed if duplicate
+  // scoped codes ever exist.
   await db.execute(sql.raw(`
-    CREATE UNIQUE INDEX IF NOT EXISTS rcc_code_company_uniq
+    CREATE UNIQUE INDEX IF NOT EXISTS rcc_code_company_scope_uniq
       ON recon_classification_configs (code, COALESCE(company_id, 0))
+  `));
+  await db.execute(sql.raw(`
+    DROP INDEX IF EXISTS rcc_code_company_uniq
   `));
 
   // ── Table 2: recon_ai_classification_rules ─────────────────────────────────
@@ -244,6 +254,25 @@ export async function runReconClassificationMigration(): Promise<void> {
 export async function syncOperationalReconRulesToClassification(): Promise<void> {
   try {
     await db.execute(sql.raw(`
+      WITH normalized_rules AS (
+        SELECT DISTINCT ON (
+          company_id,
+          direction,
+          LOWER(TRIM(COALESCE(condition_value, ''))),
+          COALESCE(NULLIF(TRIM(target_coa_code), ''), '')
+        ) *
+        FROM recon_rules
+        WHERE COALESCE(is_active, TRUE) = TRUE
+          AND company_id IS NOT NULL
+          AND NULLIF(TRIM(COALESCE(condition_value, '')), '') IS NOT NULL
+        ORDER BY
+          company_id,
+          direction,
+          LOWER(TRIM(COALESCE(condition_value, ''))),
+          COALESCE(NULLIF(TRIM(target_coa_code), ''), ''),
+          priority DESC,
+          id DESC
+      )
       INSERT INTO recon_classification_configs
         (company_id, category, name, code, type, flow, default_coa_code,
          keywords, priority, is_active, is_seed, updated_at)
@@ -263,11 +292,8 @@ export async function syncOperationalReconRulesToClassification(): Promise<void>
         TRUE,
         FALSE,
         NOW()
-      FROM recon_rules r
-      WHERE COALESCE(r.is_active, TRUE) = TRUE
-        AND r.company_id IS NOT NULL
-        AND NULLIF(TRIM(COALESCE(r.condition_value, '')), '') IS NOT NULL
-        AND NOT EXISTS (
+      FROM normalized_rules r
+      WHERE NOT EXISTS (
           SELECT 1
           FROM recon_classification_configs c
           WHERE c.company_id = r.company_id
@@ -288,6 +314,25 @@ export async function syncOperationalReconRulesToClassification(): Promise<void>
     `));
 
     await db.execute(sql.raw(`
+      WITH normalized_rules AS (
+        SELECT DISTINCT ON (
+          company_id,
+          direction,
+          LOWER(TRIM(COALESCE(condition_value, ''))),
+          COALESCE(NULLIF(TRIM(target_coa_code), ''), '')
+        ) *
+        FROM recon_rules
+        WHERE COALESCE(is_active, TRUE) = TRUE
+          AND company_id IS NOT NULL
+          AND NULLIF(TRIM(COALESCE(condition_value, '')), '') IS NOT NULL
+        ORDER BY
+          company_id,
+          direction,
+          LOWER(TRIM(COALESCE(condition_value, ''))),
+          COALESCE(NULLIF(TRIM(target_coa_code), ''), ''),
+          priority DESC,
+          id DESC
+      )
       INSERT INTO recon_ai_classification_rules
         (company_id, name, description, condition_field, condition_operator,
          condition_value, action_flow, action_coa_code, action_config_code,
@@ -306,7 +351,7 @@ export async function syncOperationalReconRulesToClassification(): Promise<void>
         1.00,
         COALESCE(r.priority, 120),
         'manual'
-      FROM recon_rules r
+      FROM normalized_rules r
       JOIN recon_classification_configs c
         ON c.company_id = r.company_id
        AND c.category = CASE
@@ -317,8 +362,7 @@ export async function syncOperationalReconRulesToClassification(): Promise<void>
          LOWER(TRIM(COALESCE(r.condition_value, '')))
        AND COALESCE(c.default_coa_code, '') = COALESCE(r.target_coa_code, '')
        AND c.is_active = TRUE
-      WHERE COALESCE(r.is_active, TRUE) = TRUE
-        AND NOT EXISTS (
+      WHERE NOT EXISTS (
           SELECT 1
           FROM recon_ai_classification_rules a
           WHERE a.company_id = r.company_id

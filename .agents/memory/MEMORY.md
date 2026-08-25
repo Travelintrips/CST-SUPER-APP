@@ -145,3 +145,6 @@
 - [Accounting tax deduplication FK safety](accounting-tax-dedup-fk.md) — reconcile transaction tax references before removing duplicate accounting tax rows.
 - [PROD read-only proof runner](prod-readonly-proof-runner.md) — run temporary Node proofs from the workspace and bind parameters only when SQL contains placeholders.
 - [Server-side search pagination](server-side-search-pagination.md) — paginated lists must filter and count on the server before LIMIT/OFFSET.
+- [Recon config scoped index](recon-config-scoped-index.md) — legacy global config-code index blocks COA-reference mirroring that uses company-scoped conflict targets.
+- [Legacy Referensi COA retry](legacy-reference-coa-retry.md) — retry only legacy no-attempt rows; preserve genuine journal safeguard blocks for review.
+- [Rule AI multi-condition safety](rule-ai-multi-condition-safety.md) — evaluate structured conditions by priority/specificity and fail closed on equal-precedence conflicting outputs.

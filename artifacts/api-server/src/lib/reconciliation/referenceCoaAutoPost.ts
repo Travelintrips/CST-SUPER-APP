@@ -40,6 +40,21 @@ export function planReferenceCoaAutoPost(input: {
   return { shouldAttempt: true, code: null, reason: null };
 }
 
+export const LEGACY_REFERENCE_COA_ATTEMPT_NOT_RECORDED =
+  "REFERENCE_COA_ATTEMPT_NOT_RECORDED";
+
+/**
+ * Only the historical fallback state may be retried automatically. A mutation
+ * with a real AUTO_POST_BLOCKED result must keep its human-review safeguard.
+ */
+export function isLegacyReferenceCoaRetryable(input: {
+  status: string | null | undefined;
+  reviewCode: string | null | undefined;
+}): boolean {
+  return input.status === "manual_review"
+    && input.reviewCode === LEGACY_REFERENCE_COA_ATTEMPT_NOT_RECORDED;
+}
+
 export function legacyReferenceCoaReviewReason(): string {
   return "Referensi COA ditemukan, tetapi belum ada percobaan draft jurnal yang tercatat. Pilih COA & Buat Draft untuk meninjau transaksi ini.";
 }
