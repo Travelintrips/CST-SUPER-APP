@@ -77,7 +77,7 @@ export interface ReconRule {
   conditionValue: string;               // for "between": "min,max"
   /** Optional stable AND/OR condition set. Legacy fields remain the first condition. */
   conditionsJson?: ReconRuleCondition[] | null;
-  logic?: RuleLogic;
+  logic?: "AND" | "OR";
   specificity?: number;
   /** Maximum absolute difference from referenceAmount, in the mutation currency. */
   amountTolerance?: number | null;
@@ -434,6 +434,7 @@ export function evaluateReconRules(
   mutation: ReconRuleMutationInput,
 ): ReconRuleMatchResult {
   const evaluated: Array<{ ruleId: number; ruleName: string; matched: boolean }> = [];
+  const matching: Array<{ rule: ReconRule; reasons: ReconRuleMatchReason[] }> = [];
 
   // Priority first; specificity makes business-context rules win over broad
   // signals without relying on creation order.
@@ -446,7 +447,6 @@ export function evaluateReconRules(
     return a.id - b.id;
   });
 
-  const matching: Array<{ rule: ReconRule; reasons: ReconRuleMatchReason[] }> = [];
   let stopAfterPriority: number | null = null;
   for (const rule of sorted) {
     if (stopAfterPriority !== null && rule.priority < stopAfterPriority) break;
@@ -496,14 +496,39 @@ export function evaluateReconRules(
     const conditionsPassed = rule.logic === "OR"
       ? conditionResults.some(Boolean)
       : conditionResults.every(Boolean);
-    const amountToleranceConfigured = rule.amountTolerance !== null
-      && rule.amountTolerance !== undefined;
-    const amountPassed = !amountToleranceConfigured
-      ? true
-      : rule.referenceAmount !== null
-        && rule.referenceAmount !== undefined
-        && Math.abs(Number(mutation.amount) - Number(rule.referenceAmount))
-          <= Number(rule.amountTolerance);
+    // `referenceAmount` is the nominal criterion. A missing tolerance means
+    // exact equality; tolerance is only an optional compatibility extension
+    // for rules that explicitly need a range around that reference.
+    const hasStoredReferenceAmount = rule.referenceAmount !== null
+      && rule.referenceAmount !== undefined
+      && Number.isFinite(Number(rule.referenceAmount));
+    const hasPositiveTolerance = rule.amountTolerance !== null
+      && rule.amountTolerance !== undefined
+      && Number(rule.amountTolerance) > 0;
+    // The first version of the Rule AI form wrote its nominal input to
+    // amount_tolerance. Only linked AI mirrors may use that value as a
+    // legacy exact reference; an independent operational rule with a
+    // tolerance but no reference remains invalid and fails closed.
+    const isLegacyAiReference = !hasStoredReferenceAmount
+      && rule.aiClassificationRuleId != null
+      && hasPositiveTolerance
+      && Number.isFinite(Number(rule.amountTolerance));
+    const referenceAmount = hasStoredReferenceAmount
+      ? Number(rule.referenceAmount)
+      : isLegacyAiReference
+        ? Number(rule.amountTolerance)
+        : null;
+    const hasReferenceAmount = referenceAmount !== null;
+    // A positive tolerance without a reference is invalid and must fail
+    // closed. A zero/default tolerance without a reference is treated as
+    // "no nominal criterion", which keeps ordinary description rules usable.
+    const amountPassed = hasPositiveTolerance && !hasReferenceAmount
+      ? false
+      : !hasReferenceAmount
+        ? true
+        : Number.isFinite(Number(mutation.amount))
+          && Math.abs(Number(mutation.amount) - referenceAmount)
+            <= (isLegacyAiReference ? 0 : hasPositiveTolerance ? Number(rule.amountTolerance) : 0);
     const conditionPassed = conditionsPassed && amountPassed;
     evaluated.push({ ruleId: rule.id, ruleName: rule.name, matched: conditionPassed });
     if (conditionPassed) {
@@ -516,30 +541,21 @@ export function evaluateReconRules(
         )}`,
         score: rule.confidenceScore,
       }));
-      if (amountToleranceConfigured) {
+      if (hasReferenceAmount) {
         reasons.push({
-          code: "RULE_AMOUNT_WITHIN_TOLERANCE",
-          label: `Nominal ${mutation.amount} berada dalam toleransi ±${rule.amountTolerance} dari referensi ${rule.referenceAmount}`,
+          code: isLegacyAiReference
+            ? "RULE_AMOUNT_REFERENCE"
+            : hasPositiveTolerance
+              ? "RULE_AMOUNT_WITHIN_TOLERANCE"
+              : "RULE_AMOUNT_REFERENCE",
+          label: isLegacyAiReference || !hasPositiveTolerance
+            ? `Nominal ${mutation.amount} sama dengan nominal referensi ${referenceAmount}`
+            : `Nominal ${mutation.amount} berada dalam toleransi ±${rule.amountTolerance} dari referensi ${referenceAmount}`,
           score: rule.confidenceScore,
         });
       }
 
-      const result: ReconRuleMatchResult = {
-        matched: true,
-        ruleId: rule.id,
-        ruleName: rule.name,
-        targetType: rule.targetType,
-        targetCoaCode: rule.targetCoaCode,
-        confidence: rule.confidenceScore,
-        reasons,
-        stopProcessing: rule.stopProcessing,
-        evaluated,
-      };
-
-      matching.push({
-        rule,
-        reasons,
-      });
+      matching.push({ rule, reasons });
       // Still inspect rules tied on precedence so conflicting actions fail closed.
       // Once the tie group is complete, lower-priority rules cannot override it.
       if (rule.stopProcessing) stopAfterPriority = rule.priority;
@@ -548,12 +564,14 @@ export function evaluateReconRules(
 
   if (matching.length === 0) return { matched: false, evaluated };
   const top = matching[0];
-  const contenders = matching.filter(x =>
-    x.rule.priority === top.rule.priority &&
-    (x.rule.specificity ?? 0) === (top.rule.specificity ?? 0) &&
-    x.rule.confidenceScore === top.rule.confidenceScore
+  const contenders = matching.filter(candidate =>
+    candidate.rule.priority === top.rule.priority &&
+    (candidate.rule.specificity ?? 0) === (top.rule.specificity ?? 0) &&
+    candidate.rule.confidenceScore === top.rule.confidenceScore
   );
-  const outputs = new Set(contenders.map(x => `${x.rule.targetType}:${x.rule.targetCoaCode ?? ""}`));
+  const outputs = new Set(contenders.map(candidate =>
+    `${candidate.rule.targetType}:${candidate.rule.targetCoaCode ?? ""}`,
+  ));
   if (outputs.size > 1) {
     return {
       matched: false,

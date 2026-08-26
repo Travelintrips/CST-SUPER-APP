@@ -703,6 +703,7 @@ function AiRulesTab() {
   const [saving, setSaving]   = useState(false);
   const [form, setForm]       = useState<any>({});
   const [previewText, setPreviewText] = useState("");
+  const [previewAmount, setPreviewAmount] = useState("");
   const [preview, setPreview] = useState<any>(null);
   const [previewing, setPreviewing] = useState(false);
 
@@ -745,8 +746,10 @@ function AiRulesTab() {
     setEditRow(null);
     setForm({ condition_field: "description", condition_operator: "contains", condition_value: "",
       conditions: [{ field: "description", operator: "contains", value: "" }], logic: "AND",
-      specificity: 1, amount_tolerance: 0, confidence: 0.8, priority: 50, source: "manual" });
+      specificity: 1, amount_tolerance: 0, reference_amount: null,
+      confidence: 0.8, priority: 50, source: "manual" });
     setPreview(null);
+    setPreviewAmount("");
     setShowModal(true);
   };
 
@@ -756,8 +759,19 @@ function AiRulesTab() {
     setForm({ ...row, conditions: conditions.length ? conditions : [{ field: "description", operator: "contains", value: "" }],
       logic: row.logic === "OR" ? "OR" : "AND", confidence: Number(row.confidence ?? 0.8),
       priority: Number(row.priority ?? 50), specificity: Number(row.specificity ?? Math.max(1, conditions.length)),
-      amount_tolerance: row.amount_tolerance == null ? 0 : Number(row.amount_tolerance) });
+      // Before the reference-amount field existed, this screen incorrectly
+      // stored its nominal input as amount_tolerance. Treat that legacy value
+      // as the reference when opening it so saving repairs the rule.
+      reference_amount: row.reference_amount != null
+        ? Number(row.reference_amount)
+        : row.amount_tolerance != null
+          ? Number(row.amount_tolerance)
+          : null,
+      amount_tolerance: row.reference_amount != null && row.amount_tolerance != null
+        ? Number(row.amount_tolerance)
+        : 0 });
     setPreview(null);
+    setPreviewAmount("");
     setShowModal(true);
   };
 
@@ -784,6 +798,9 @@ function AiRulesTab() {
           condition_field: form.conditions?.[0]?.field ?? form.condition_field,
           condition_operator: form.conditions?.[0]?.operator ?? form.condition_operator,
           condition_value: form.conditions?.[0]?.value ?? form.condition_value,
+           reference_amount: form.reference_amount === "" || form.reference_amount == null
+             ? null
+             : Number(form.reference_amount),
           company_id: activeCompanyId ?? null }),
       });
       if (!r.ok) { const e = await r.json(); alert(e.error ?? "Gagal."); return; }
@@ -799,8 +816,12 @@ function AiRulesTab() {
       const r = await fetch(`${API}/recon-classification/ai-rules/preview`, { method: "POST",
         credentials: "include", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ description: previewText, company_id: activeCompanyId ?? null,
+           amount: previewAmount === "" ? 0 : Number(previewAmount),
           conditions: form.conditions, logic: form.logic, specificity: form.specificity,
-          action_flow: form.action_flow, action_coa_code: form.action_coa_code, confidence: form.confidence }) });
+           action_flow: form.action_flow, action_coa_code: form.action_coa_code,
+           amount_tolerance: form.amount_tolerance,
+           reference_amount: form.reference_amount,
+           confidence: form.confidence }) });
       setPreview(await r.json());
     } finally { setPreviewing(false); }
   };
@@ -829,7 +850,7 @@ function AiRulesTab() {
                 <th className="pb-2 pr-3">Nama</th>
                 <th className="pb-2 pr-3">Kondisi</th>
                 <th className="pb-2 pr-3">Action Flow</th>
-                 <th className="pb-2 pr-3">Tol. nominal</th>
+                  <th className="pb-2 pr-3">Nominal referensi</th>
                  <th className="pb-2 pr-3">Conf.</th>
                 <th className="pb-2 pr-3">Prioritas</th>
                 <th className="pb-2 pr-3">Sumber</th>
@@ -848,9 +869,11 @@ function AiRulesTab() {
                   </td>
                   <td className="py-2 pr-3">{row.action_flow ? flowBadge(row.action_flow) : "—"}</td>
                    <td className="py-2 pr-3 text-slate-400">
-                     {row.amount_tolerance == null
-                       ? "Default"
-                       : `Rp${Number(row.amount_tolerance).toLocaleString("id-ID")}`}
+                     {row.reference_amount != null
+                       ? `Rp${Number(row.reference_amount).toLocaleString("id-ID")}`
+                       : row.amount_tolerance != null
+                         ? `Rp${Number(row.amount_tolerance).toLocaleString("id-ID")}`
+                         : "Tidak dibatasi"}
                    </td>
                   <td className="py-2 pr-3 text-slate-400">{Number(row.confidence).toFixed(2)}</td>
                   <td className="py-2 pr-3 text-slate-400">{row.priority}</td>
@@ -927,20 +950,26 @@ function AiRulesTab() {
               <p className="text-[11px] text-slate-500">NOT tersedia melalui operator “Tidak mengandung” atau “≠”.</p>
             </div>
             <div className="rounded-lg border border-orange-500/30 bg-orange-500/5 p-3 space-y-1.5">
-              <Label className="text-slate-300">Toleransi nominal matching (Rp)</Label>
+              <Label className="text-slate-300">Nominal referensi (Rp)</Label>
               <Input
                 type="number"
                 min={0}
                 max={1_000_000_000}
                 step={1}
                 inputMode="numeric"
-                value={form.amount_tolerance ?? 0}
-                onChange={e => setForm((f: any) => ({ ...f, amount_tolerance: e.target.value === "" ? 0 : Number(e.target.value) }))}
+                value={form.reference_amount ?? ""}
+                onChange={e => setForm((f: any) => ({
+                  ...f,
+                  reference_amount: e.target.value === "" ? null : Number(e.target.value),
+                  // A nominal entered in this field is an exact reference,
+                  // never an amount tolerance.
+                  amount_tolerance: 0,
+                }))}
                 className="bg-slate-800 border-slate-600 text-white mt-1"
               />
               <p className="text-[11px] text-slate-500">
-                Berlaku hanya untuk mutasi yang memenuhi kondisi rule ini. Rp0 berarti nominal harus sama.
-                QRIS tetap memakai toleransi provider.
+                Jika diisi, mutasi harus memiliki nominal yang sama persis dan
+                tetap memenuhi semua kondisi di atas (AND). Kosong berarti nominal tidak menjadi syarat.
               </p>
             </div>
             <div className="grid grid-cols-2 gap-3">
@@ -990,9 +1019,11 @@ function AiRulesTab() {
             </div>
             <div className="border border-slate-700 rounded-lg p-3 space-y-2">
               <Label className="text-slate-300">Test / Preview Matcher (read-only)</Label>
-              <div className="flex gap-2">
+              <div className="grid grid-cols-[1fr_10rem_auto] gap-2">
                 <Input value={previewText} onChange={e => setPreviewText(e.target.value)}
                   className="bg-slate-800 border-slate-600 text-white" placeholder="Contoh deskripsi transaksi…" />
+                <Input type="number" min={0} value={previewAmount} onChange={e => setPreviewAmount(e.target.value)}
+                  className="bg-slate-800 border-slate-600 text-white" placeholder="Nominal (opsional)" />
                 <Button type="button" variant="outline" onClick={runPreview} disabled={previewing || !previewText.trim()}
                   className="border-slate-600 text-slate-300">{previewing ? "…" : "Preview"}</Button>
               </div>
@@ -1006,7 +1037,8 @@ function AiRulesTab() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowModal(false)} className="border-slate-600 text-slate-300">Batal</Button>
-            <Button onClick={save} disabled={saving || !form.name || !form.condition_value}
+            <Button onClick={save} disabled={saving || !form.name ||
+              !(form.conditions ?? []).every((condition: any) => String(condition?.value ?? "").trim())}
               className="bg-orange-500 hover:bg-orange-600 text-white">
               {saving && <RefreshCw size={14} className="animate-spin mr-1" />}Simpan
             </Button>
