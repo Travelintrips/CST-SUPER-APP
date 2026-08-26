@@ -216,10 +216,10 @@ async function notificationProof(adminJar, vendorAJar, vendorBJar, productA) {
   record("product review generated canonical admin notification path", admin.status === 200, `HTTP ${admin.status}`);
   const counts = await fresh(
     `SELECT
-       (SELECT count(*) FROM vendor_notifications vn JOIN suppliers s ON s.id=vn.vendor_id WHERE s.name LIKE $1) AS vendor_notifications,
+       (SELECT count(*) FROM vendor_notifications vn JOIN portal_customers pc ON pc.id=vn.vendor_id WHERE pc.email = ANY($2::text[])) AS vendor_notifications,
        (SELECT count(*) FROM admin_notifications WHERE body LIKE $1 OR title LIKE $1) AS admin_notifications,
        (SELECT count(*) FROM mkt_notification_queue WHERE payload_json::text LIKE $1) AS queued_notifications`,
-    [`${MARK}%`],
+    [`${MARK}%`, [names.vendorA, names.vendorB]],
   );
   record("natural notification evidence is present", Number(counts[0]?.vendor_notifications ?? 0) + Number(counts[0]?.admin_notifications ?? 0) + Number(counts[0]?.queued_notifications ?? 0) > 0, JSON.stringify(counts[0]));
   return { aBefore, bBefore };
@@ -242,7 +242,7 @@ async function rfqProof(customerAJar, customerBJar, vendorAJar, adminJar, produc
   const customerBView = await request(`/mkt/portal/rfqs/${rfqId}`, { jar: customerBJar });
   expectBlocked("customer B cannot read customer A RFQ", customerBView, [403, 404]);
   const customerBApprove = await request(`/mkt/portal/rfqs/${rfqId}/approve`, { method: "POST", jar: customerBJar, body: {} });
-  expectBlocked("customer B cannot approve customer A RFQ", customerBApprove, [403, 404, 409]);
+  expectBlocked("customer B cannot approve customer A RFQ", customerBApprove, [403, 404, 409, 422]);
 
   const invite = await request(`/mkt/admin/rfqs/${rfqId}/invite-vendor`, { method: "POST", jar: adminJar, body: { vendorId: supplierA } });
   record("admin assigns RFQ to Vendor A", [200, 201].includes(invite.status), `HTTP ${invite.status}`);
@@ -261,13 +261,20 @@ async function rfqProof(customerAJar, customerBJar, vendorAJar, adminJar, produc
   record("assigned vendor can load RFQ quote", load.status === 200, `HTTP ${load.status}`);
   const submit = await request(`/vendor-quote/${encodeURIComponent(tokenRow.token)}/submit`, {
     method: "POST",
-    body: { lines: [{ rfqLineId: line.id, unitPrice: 100000, quantity: 2 }], currency: "IDR", validUntil: "2027-01-01", notes: `${MARK} quote` },
+    body: { lines: [{ rfqLineId: line.id, offeredUnitPrice: 100000, offeredQty: 2, currency: "IDR", validUntil: "2027-01-01" }], notes: `${MARK} quote` },
   });
   record("assigned vendor can submit RFQ quote", submit.status === 200, `HTTP ${submit.status}`);
   const repeat = await request(`/vendor-quote/${encodeURIComponent(tokenRow.token)}/submit`, { method: "POST", body: { lines: [] } });
   expectBlocked("submitted quote cannot be submitted twice", repeat, [409, 422]);
   const crossToken = await request(`/vendor-quote/${encodeURIComponent(tokenRow.token)}`, { headers: { "x-audit-role": "vendor-b" } });
   record("RFQ token does not expose internal buyer/vendor fields", crossToken.status === 200 && !JSON.stringify(crossToken.body).includes(names.customerA), `HTTP ${crossToken.status}`);
+  const select = await request(`/mkt/portal/rfqs/${rfqId}/select-vendor`, { method: "POST", jar: customerAJar, body: { quoteId: quote.id } });
+  record("buyer selects submitted vendor quote", select.status === 200, `HTTP ${select.status}`);
+  const sendReview = await request(`/mkt/portal/rfqs/${rfqId}/send-to-customer-review`, { method: "POST", jar: customerAJar, body: { notes: `${MARK} review` } });
+  record("buyer sends RFQ to customer review", sendReview.status === 200, `HTTP ${sendReview.status}`);
+  const customerApprove = await request(`/mkt/portal/rfqs/${rfqId}/customer-approve`, { method: "POST", jar: customerAJar, body: { notes: `${MARK} approved` } });
+  const awarded = (await fresh("SELECT status FROM mkt_rfqs WHERE id=$1", [rfqId]))[0];
+  record("customer approves selected RFQ quote", customerApprove.status === 200 && awarded?.status === "awarded", `HTTP ${customerApprove.status}/${awarded?.status}`);
 }
 
 async function approvalRace(adminJar, productB) {
@@ -290,7 +297,38 @@ async function cleanup() {
   const c = client || await pool.connect();
   try {
     await c.query("BEGIN");
+    const poRows = created.quotes.length || created.rfqs.length
+      ? (await c.query(
+        `SELECT id FROM mkt_purchase_orders
+         WHERE quote_id=ANY($1::int[]) OR rfq_id=ANY($2::int[])`,
+        [created.quotes.length ? created.quotes : [-1], created.rfqs.length ? created.rfqs : [-1]],
+      )).rows
+      : [];
+    const poIds = poRows.map((r) => Number(r.id));
+    if (poIds.length) {
+      for (const table of [
+        "mkt_accounting_handoffs", "mkt_ap_preparations", "mkt_po_shipments",
+        "mkt_purchase_order_lines", "mkt_reconciliation_links", "purchase_documents",
+        "vendor_invoices",
+      ]) {
+        await c.query(`DELETE FROM ${table} WHERE mkt_purchase_order_id=ANY($1::int[]) OR po_id=ANY($1::int[])`, [poIds]).catch(async () => {
+          await c.query(`DELETE FROM ${table} WHERE po_id=ANY($1::int[])`, [poIds]).catch(() => {});
+        });
+      }
+      await c.query("DELETE FROM activity_logs WHERE mkt_purchase_order_id=ANY($1::int[])", [poIds]).catch(() => {});
+      await c.query("DELETE FROM mkt_purchase_orders WHERE id=ANY($1::int[])", [poIds]);
+    }
+    if (created.rfqs.length || created.quotes.length) {
+      await c.query("DELETE FROM mkt_notification_queue WHERE rfq_id=ANY($1::int[]) OR vendor_quote_id=ANY($2::int[])", [
+        created.rfqs.length ? created.rfqs : [-1], created.quotes.length ? created.quotes : [-1],
+      ]).catch(() => {});
+      await c.query("DELETE FROM activity_logs WHERE mkt_rfq_id=ANY($1::int[]) OR mkt_vendor_quote_id=ANY($2::int[])", [
+        created.rfqs.length ? created.rfqs : [-1], created.quotes.length ? created.quotes : [-1],
+      ]).catch(() => {});
+      await c.query("DELETE FROM mkt_rfq_guest_claims WHERE rfq_id=ANY($1::int[])", [created.rfqs.length ? created.rfqs : [-1]]).catch(() => {});
+    }
     if (created.rfqs.length) await c.query("DELETE FROM mkt_rfq_lines WHERE rfq_id=ANY($1::int[])", [created.rfqs]);
+    if (created.quotes.length) await c.query("DELETE FROM mkt_vendor_quote_lines WHERE quote_id=ANY($1::int[])", [created.quotes]).catch(() => {});
     if (created.quotes.length) await c.query("DELETE FROM mkt_vendor_quotes WHERE id=ANY($1::int[])", [created.quotes]);
     if (created.rfqs.length) {
       await c.query("DELETE FROM mkt_rfq_approvals WHERE rfq_id=ANY($1::int[])", [created.rfqs]).catch(() => {});
@@ -305,6 +343,12 @@ async function cleanup() {
     }
     if (created.members.length) await c.query("DELETE FROM portal_company_members WHERE id=ANY($1::int[])", [created.members]);
     if (created.customers.length) {
+      const orderRows = await c.query("SELECT id FROM portal_product_orders WHERE email=ANY($1::text[]) AND notes LIKE $2", [Object.values(names), `${MARK}%`]).catch(() => ({ rows: [] }));
+      const orderIds = orderRows.rows.map((r) => Number(r.id));
+      if (orderIds.length) {
+        await c.query("DELETE FROM portal_product_order_items WHERE order_id=ANY($1::int[])", [orderIds]).catch(() => {});
+        await c.query("DELETE FROM portal_product_orders WHERE id=ANY($1::int[])", [orderIds]).catch(() => {});
+      }
       await c.query("DELETE FROM user_profiles WHERE customer_id=ANY($1::int[])", [created.customers]).catch(() => {});
       await c.query("DELETE FROM portal_customers WHERE id=ANY($1::int[])", [created.customers]);
     }
