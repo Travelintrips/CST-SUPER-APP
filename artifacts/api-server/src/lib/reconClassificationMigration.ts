@@ -155,6 +155,16 @@ export async function runReconClassificationMigration(): Promise<void> {
   `));
 
   await db.execute(sql.raw(`
+    ALTER TABLE recon_ai_classification_rules
+      ADD COLUMN IF NOT EXISTS conditions_json JSONB,
+      ADD COLUMN IF NOT EXISTS logic TEXT NOT NULL DEFAULT 'AND',
+      ADD COLUMN IF NOT EXISTS specificity INTEGER NOT NULL DEFAULT 1,
+      ADD COLUMN IF NOT EXISTS amount_tolerance NUMERIC(15,2),
+      ADD COLUMN IF NOT EXISTS reference_amount NUMERIC(15,2),
+      ADD COLUMN IF NOT EXISTS operational_rule_id INTEGER
+  `));
+
+  await db.execute(sql.raw(`
     CREATE INDEX IF NOT EXISTS racr_company_active_idx
       ON recon_ai_classification_rules (company_id, is_active, priority)
   `));

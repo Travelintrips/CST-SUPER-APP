@@ -159,7 +159,9 @@ export async function loadReconRulesForCompany(companyId: number): Promise<Recon
         id, company_id, name, description, priority, is_active,
         direction, bank_account_id, condition_type, condition_field,
         condition_operator, condition_value, target_type, target_id,
-        target_coa_code, confidence_score, stop_processing,
+         target_coa_code, confidence_score, stop_processing,
+         conditions_json, logic, specificity, amount_tolerance, reference_amount,
+         ai_classification_rule_id,
         match_count, last_matched_at, created_by, created_at, updated_at
       FROM recon_rules
       WHERE company_id = ${companyId} AND is_active = TRUE
@@ -179,6 +181,17 @@ export async function loadReconRulesForCompany(companyId: number): Promise<Recon
       conditionField:   String(r.condition_field) as ReconRule["conditionField"],
       conditionOperator: String(r.condition_operator) as ReconRule["conditionOperator"],
       conditionValue:   String(r.condition_value ?? ""),
+       conditionsJson:   (() => {
+         try {
+           const value = typeof r.conditions_json === "string" ? JSON.parse(r.conditions_json) : r.conditions_json;
+           return Array.isArray(value) ? value : null;
+         } catch { return null; }
+       })(),
+       logic:            String(r.logic ?? "AND").toUpperCase() === "OR" ? "OR" : "AND",
+       specificity:      Number(r.specificity ?? 1),
+       amountTolerance:  r.amount_tolerance != null ? Number(r.amount_tolerance) : null,
+       referenceAmount:  r.reference_amount != null ? Number(r.reference_amount) : null,
+       aiClassificationRuleId: r.ai_classification_rule_id != null ? Number(r.ai_classification_rule_id) : null,
       targetType:       String(r.target_type) as ReconRule["targetType"],
       targetId:         r.target_id != null ? Number(r.target_id) : null,
       targetCoaCode:    r.target_coa_code ? String(r.target_coa_code) : null,

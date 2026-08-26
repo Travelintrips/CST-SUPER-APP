@@ -27,6 +27,7 @@ import {
   validateRegexPattern,
   evaluateReconRules,
   type ReconRule,
+  type ReconRuleCondition,
   type ReconRuleMutationInput,
 } from "../lib/reconciliation/reconRuleEngine.js";
 import { snapshotRuleVersion } from "../lib/reconciliation/reconRuleVersioning.js";
@@ -432,6 +433,11 @@ router.patch("/:id", async (req, res) => {
   if (body.condition_field   !== undefined) sets.push(`condition_field = ${escStr(body.condition_field)}`);
   if (body.condition_operator !== undefined) sets.push(`condition_operator = ${escStr(body.condition_operator)}`);
   if (body.condition_value   !== undefined) sets.push(`condition_value = ${escStr(body.condition_value)}`);
+  if (body.conditions_json   !== undefined) sets.push(`conditions_json = ${body.conditions_json == null ? "NULL" : `${escStr(JSON.stringify(body.conditions_json))}::jsonb`}`);
+  if (body.logic              !== undefined) sets.push(`logic = ${escStr(String(body.logic).toUpperCase() === "OR" ? "OR" : "AND")}`);
+  if (body.specificity        !== undefined) sets.push(`specificity = ${Number(body.specificity)}`);
+  if (body.amount_tolerance   !== undefined) sets.push(`amount_tolerance = ${body.amount_tolerance == null ? "NULL" : Number(body.amount_tolerance)}`);
+  if (body.reference_amount   !== undefined) sets.push(`reference_amount = ${body.reference_amount == null ? "NULL" : Number(body.reference_amount)}`);
   if (body.target_type       !== undefined) sets.push(`target_type = ${escStr(body.target_type)}`);
   if (body.target_id         !== undefined) sets.push(`target_id = ${body.target_id != null ? Number(body.target_id) : "NULL"}`);
   if (body.target_coa_code   !== undefined) sets.push(`target_coa_code = ${escStr(body.target_coa_code)}`);

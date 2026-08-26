@@ -35,6 +35,13 @@ export type ConditionOperator =
   | "less_than"
   | "between";
 
+export interface ReconRuleCondition {
+  field: ConditionField;
+  operator: ConditionOperator;
+  value: string;
+  negate?: boolean;
+}
+
 export type TargetType =
   | "expense"
   | "customer_payment"
@@ -59,6 +66,15 @@ export interface ReconRule {
   conditionField: ConditionField;
   conditionOperator: ConditionOperator;
   conditionValue: string;               // for "between": "min,max"
+  /** Optional stable AND/OR condition set. Legacy fields remain the first condition. */
+  conditionsJson: ReconRuleCondition[] | null;
+  logic: "AND" | "OR";
+  specificity: number;
+  /** Maximum absolute difference from referenceAmount, in the mutation currency. */
+  amountTolerance: number | null;
+  /** Amount captured when a reference rule was created. */
+  referenceAmount: number | null;
+  aiClassificationRuleId: number | null;
   targetType: TargetType;
   targetId: number | null;
   targetCoaCode: string | null;
@@ -144,6 +160,27 @@ export function validateReconRule(rule: Partial<ReconRule>): string[] {
     const parts = rule.conditionValue.split(",");
     if (parts.length !== 2 || isNaN(Number(parts[0])) || isNaN(Number(parts[1]))) {
       errors.push("Untuk operator 'between', conditionValue harus berformat 'min,max' (angka)");
+    }
+  }
+
+  if (rule.amountTolerance !== undefined && rule.amountTolerance !== null) {
+    if (!Number.isFinite(Number(rule.amountTolerance)) || Number(rule.amountTolerance) < 0) {
+      errors.push("amountTolerance harus berupa angka nol atau lebih");
+    }
+    if (Number(rule.amountTolerance) > 0 && rule.referenceAmount == null) {
+      errors.push("referenceAmount wajib diisi jika amountTolerance digunakan");
+    }
+  }
+
+  if (rule.conditionsJson !== undefined && rule.conditionsJson !== null) {
+    if (!Array.isArray(rule.conditionsJson) || rule.conditionsJson.length === 0) {
+      errors.push("conditionsJson harus berisi minimal satu kondisi");
+    } else {
+      for (const condition of rule.conditionsJson) {
+        if (!condition?.field || !condition?.operator || condition.value === undefined) {
+          errors.push("Setiap kondisi harus memiliki field, operator, dan value");
+        }
+      }
     }
   }
 
@@ -300,6 +337,17 @@ function buildReasonLabel(field: ConditionField, operator: ConditionOperator, va
   return `${fieldName[field]} ${opDesc[operator]} "${value}"`;
 }
 
+function getRuleConditions(rule: ReconRule): ReconRuleCondition[] {
+  if (Array.isArray(rule.conditionsJson) && rule.conditionsJson.length > 0) {
+    return rule.conditionsJson;
+  }
+  return [{
+    field: rule.conditionField,
+    operator: rule.conditionOperator,
+    value: rule.conditionValue,
+  }];
+}
+
 // ─── Core Rule Evaluation ──────────────────────────────────────────────────────
 
 /**
@@ -346,19 +394,51 @@ export function evaluateReconRules(
       continue;
     }
 
-    // Evaluate the condition
-    const conditionPassed = evaluateCondition(
-      mutation,
-      rule.conditionField,
-      rule.conditionOperator,
-      rule.conditionValue,
-    );
+    // Evaluate every configured condition. A multi-condition rule is
+    // deliberately fail-closed: AND requires all conditions, and a negated
+    // condition must not pass merely because its source field is missing.
+    const conditions = getRuleConditions(rule);
+    const conditionResults = conditions.map(condition => {
+      const passed = evaluateCondition(
+        mutation,
+        condition.field,
+        condition.operator,
+        String(condition.value ?? ""),
+      );
+      return condition.negate ? !passed : passed;
+    });
+    const conditionsPassed = rule.logic === "OR"
+      ? conditionResults.some(Boolean)
+      : conditionResults.every(Boolean);
+    const amountToleranceConfigured = rule.amountTolerance !== null
+      && rule.amountTolerance !== undefined;
+    const amountPassed = !amountToleranceConfigured
+      ? true
+      : rule.referenceAmount !== null
+        && rule.referenceAmount !== undefined
+        && Math.abs(Number(mutation.amount) - Number(rule.referenceAmount))
+          <= Number(rule.amountTolerance);
+    const conditionPassed = conditionsPassed && amountPassed;
 
     evaluated.push({ ruleId: rule.id, ruleName: rule.name, matched: conditionPassed });
 
     if (conditionPassed) {
-      const reasonCode = buildReasonCode(rule.conditionField, rule.conditionOperator);
-      const reasonLabel = buildReasonLabel(rule.conditionField, rule.conditionOperator, rule.conditionValue);
+      const reasons: ReconRuleMatchReason[] = conditions.map((condition, index) => ({
+        code: `${buildReasonCode(condition.field, condition.operator)}_${index + 1}`,
+        label: `${condition.negate ? "Bukan " : ""}${buildReasonLabel(
+          condition.field,
+          condition.operator,
+          String(condition.value ?? ""),
+        )}`,
+        score: rule.confidenceScore,
+      }));
+      if (amountToleranceConfigured) {
+        reasons.push({
+          code: "RULE_AMOUNT_WITHIN_TOLERANCE",
+          label: `Nominal ${mutation.amount} berada dalam toleransi ±${rule.amountTolerance} dari referensi ${rule.referenceAmount}`,
+          score: rule.confidenceScore,
+        });
+      }
 
       const result: ReconRuleMatchResult = {
         matched: true,
@@ -367,13 +447,7 @@ export function evaluateReconRules(
         targetType: rule.targetType,
         targetCoaCode: rule.targetCoaCode,
         confidence: rule.confidenceScore,
-        reasons: [
-          {
-            code: reasonCode,
-            label: reasonLabel,
-            score: rule.confidenceScore,
-          },
-        ],
+        reasons,
         stopProcessing: rule.stopProcessing,
         evaluated,
       };
