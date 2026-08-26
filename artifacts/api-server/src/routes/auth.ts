@@ -36,6 +36,7 @@ import {
   encodeGoogleOAuthContext,
   getGoogleOAuthCallbackContext,
   getGoogleOAuthFailureRedirect,
+  type GoogleOAuthFlow,
 } from "../lib/googleOAuthRouting.js";
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
@@ -71,17 +72,56 @@ type GoogleOAuthFailureCategory =
   | "COOKIE_FAILED"
   | "FINAL_REDIRECT_FAILED";
 
+type GoogleOAuthStage =
+  | "STATE_VALIDATION"
+  | "TOKEN_EXCHANGE"
+  | "ID_TOKEN_VERIFICATION"
+  | "GOOGLE_PROFILE"
+  | "ACCOUNT_LOOKUP"
+  | "ACCOUNT_CREATE"
+  | "ACCOUNT_LINK"
+  | "SESSION_JWT"
+  | "COOKIE_SET"
+  | "FINAL_REDIRECT";
+
+type GoogleOAuthStageOutcome = "started" | "passed" | "failed";
+
+type GoogleOAuthStageDetails = {
+  result?: string;
+  providerStatus?: number;
+  providerCode?: string;
+};
+
+function safeProviderCode(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  return /^[a-z][a-z0-9_]{0,63}$/.test(value) ? value : undefined;
+}
+
+function logGoogleOAuthStage(
+  req: Request,
+  flow: GoogleOAuthFlow | "unknown",
+  stage: GoogleOAuthStage,
+  outcome: GoogleOAuthStageOutcome,
+  details: GoogleOAuthStageDetails = {},
+): void {
+  const payload = { flow, stage, outcome, ...details };
+  if (outcome === "failed") {
+    req.log.warn(payload, `[Google OAuth] ${stage} failed`);
+  } else {
+    req.log.info(payload, `[Google OAuth] ${stage} ${outcome}`);
+  }
+}
+
 function logGoogleOAuthFailure(
   req: Request,
   category: GoogleOAuthFailureCategory,
-  error?: unknown,
+  _error?: unknown,
 ): void {
   // Never include authorization codes, OAuth state, tokens, JWTs, session IDs,
   // cookie values, or client secrets in callback diagnostics.
   req.log.error(
     {
       category,
-      error: error instanceof Error ? error.message : undefined,
     },
     "[Google OAuth] callback failed",
   );
@@ -255,7 +295,16 @@ async function upsertUser(claims: Record<string, unknown>) {
  * not the internal `sid` session used by BizPortal. This keeps the portal
  * account model independent from Supabase Auth's external-provider exchange.
  */
-async function upsertPortalGoogleCustomer(claims: Record<string, unknown>) {
+type PortalGoogleAccountStageObserver = (
+  stage: Extract<GoogleOAuthStage, "ACCOUNT_LOOKUP" | "ACCOUNT_CREATE" | "ACCOUNT_LINK">,
+  outcome: GoogleOAuthStageOutcome,
+  details?: GoogleOAuthStageDetails,
+) => void;
+
+async function upsertPortalGoogleCustomer(
+  claims: Record<string, unknown>,
+  observeStage?: PortalGoogleAccountStageObserver,
+) {
   const email = String(claims.email ?? "").trim().toLowerCase();
   if (!email) throw new Error("Google account did not provide an email");
 
@@ -271,13 +320,22 @@ async function upsertPortalGoogleCustomer(claims: Record<string, unknown>) {
   ].map((value) => value.trim().toLowerCase()).filter(Boolean);
   const role = portalAdminEmails.includes(email) ? "admin" : "customer";
 
-  let [customer] = await db
-    .select()
-    .from(portalCustomersTable)
-    .where(eq(portalCustomersTable.email, email))
-    .limit(1);
+  observeStage?.("ACCOUNT_LOOKUP", "started");
+  let customer;
+  try {
+    [customer] = await db
+      .select()
+      .from(portalCustomersTable)
+      .where(eq(portalCustomersTable.email, email))
+      .limit(1);
+  } catch (error) {
+    observeStage?.("ACCOUNT_LOOKUP", "failed", { result: "database_error" });
+    throw error;
+  }
 
   if (!customer) {
+    observeStage?.("ACCOUNT_LOOKUP", "passed", { result: "not_found" });
+    observeStage?.("ACCOUNT_CREATE", "started");
     try {
       [customer] = await db
         .insert(portalCustomersTable)
@@ -291,15 +349,28 @@ async function upsertPortalGoogleCustomer(claims: Record<string, unknown>) {
           avatarUrl,
         })
         .returning();
-    } catch {
+      observeStage?.("ACCOUNT_CREATE", "passed", {
+        result: customer ? "created" : "empty_result",
+      });
+    } catch (error) {
       // Concurrent first login: the other request may have inserted the row.
-      [customer] = await db
-        .select()
-        .from(portalCustomersTable)
-        .where(eq(portalCustomersTable.email, email))
-        .limit(1);
+      try {
+        [customer] = await db
+          .select()
+          .from(portalCustomersTable)
+          .where(eq(portalCustomersTable.email, email))
+          .limit(1);
+      } catch {
+        observeStage?.("ACCOUNT_CREATE", "failed", { result: "recovery_failed" });
+        throw error;
+      }
+      observeStage?.("ACCOUNT_CREATE", customer ? "passed" : "failed", {
+        result: customer ? "concurrent_existing" : "insert_failed",
+      });
     }
   } else {
+    observeStage?.("ACCOUNT_LOOKUP", "passed", { result: "existing" });
+    observeStage?.("ACCOUNT_LINK", "started");
     const [updated] = await db
       .update(portalCustomersTable)
       .set({
@@ -311,6 +382,9 @@ async function upsertPortalGoogleCustomer(claims: Record<string, unknown>) {
       .where(eq(portalCustomersTable.id, customer.id))
       .returning();
     customer = updated ?? customer;
+    observeStage?.("ACCOUNT_LINK", "passed", {
+      result: updated ? "linked" : "unchanged",
+    });
   }
 
   if (!customer) throw new Error("Unable to create portal customer");
@@ -704,9 +778,17 @@ router.get("/callback/google", async (req: Request, res: Response) => {
   const { code, state, error } = req.query as Record<string, string>;
 
   req.log.info(
-    { hasCode: !!code, hasState: !!state, error: error ?? null },
+    {
+      hasCode: !!code,
+      hasState: !!state,
+      providerCode: safeProviderCode(error),
+    },
     "[Google OAuth] callback received"
   );
+
+  logGoogleOAuthStage(req, "unknown", "STATE_VALIDATION", "started", {
+    providerCode: safeProviderCode(error),
+  });
 
   // Look up state from DB (domain-agnostic, no cookie dependency)
   const storedReturnTo = state ? await consumeOauthState(state) : null;
@@ -716,34 +798,61 @@ router.get("/callback/google", async (req: Request, res: Response) => {
   const returnTo = callbackContext.returnTo;
   const failureRedirect = getGoogleOAuthFailureRedirect(storedContext?.flow ?? null);
 
-  if (error || !code || !state) {
-    logGoogleOAuthFailure(req, !state ? "STATE_MISSING" : "CODE_MISSING");
-    req.log.warn({ error, hasCode: !!code, hasState: !!state }, "[Google OAuth] callback error from Google — redirecting to login");
-    res.redirect(failureRedirect);
-    return;
-  }
-
-  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
-    logGoogleOAuthFailure(req, "GOOGLE_PROFILE_FAILED", new Error("Google OAuth credentials are not configured"));
+  if (!state) {
+    logGoogleOAuthStage(req, "customer_portal", "STATE_VALIDATION", "failed", {
+      result: "missing",
+    });
+    logGoogleOAuthFailure(req, "STATE_MISSING");
     res.redirect(failureRedirect);
     return;
   }
 
   if (!storedReturnTo) {
+    logGoogleOAuthStage(req, "customer_portal", "STATE_VALIDATION", "failed", {
+      result: "invalid_or_expired",
+    });
     logGoogleOAuthFailure(req, "STATE_INVALID");
     req.log.warn("[Google OAuth] state not found or expired — redirecting to safe flow fallback");
     res.redirect(returnTo);
     return;
   }
 
+  logGoogleOAuthStage(req, callbackContext.flow, "STATE_VALIDATION", "passed", {
+    result: "validated",
+  });
+
+  if (error || !code) {
+    logGoogleOAuthStage(req, callbackContext.flow, "TOKEN_EXCHANGE", "failed", {
+      result: error ? "provider_rejected" : "code_missing",
+      providerCode: safeProviderCode(error),
+    });
+    logGoogleOAuthFailure(req, "CODE_MISSING");
+    req.log.warn(
+      { providerCode: safeProviderCode(error), hasCode: !!code },
+      "[Google OAuth] callback error from Google — redirecting to login",
+    );
+    res.redirect(failureRedirect);
+    return;
+  }
+
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+    logGoogleOAuthStage(req, callbackContext.flow, "TOKEN_EXCHANGE", "failed", {
+      result: "credentials_not_configured",
+    });
+    logGoogleOAuthFailure(req, "TOKEN_EXCHANGE_FAILED");
+    res.redirect(failureRedirect);
+    return;
+  }
+
   const redirectUri = `${getGoogleOrigin(req, isPortalFlow)}/api/callback/google`;
   const client = getGoogleOAuthClient(redirectUri);
+  let tokenRes: { ok: boolean; status: number; json(): Promise<unknown> };
 
   try {
+    logGoogleOAuthStage(req, callbackContext.flow, "TOKEN_EXCHANGE", "started");
     // Manual token exchange — menggunakan fetch + URLSearchParams untuk memastikan
     // code di-encode dengan benar di request body (menghindari bug gaxios v7).
-    type FetchRes = { ok: boolean; status: number; json(): Promise<unknown> };
-    const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+    tokenRes = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -753,14 +862,23 @@ router.get("/callback/google", async (req: Request, res: Response) => {
         redirect_uri: redirectUri,
         grant_type: "authorization_code",
       }).toString(),
-    }) as unknown as FetchRes;
+    }) as unknown as typeof tokenRes;
 
     if (!tokenRes.ok) {
       const errBody = await tokenRes.json().catch(() => ({})) as Record<string, unknown>;
-      const providerError = String(errBody.error ?? tokenRes.status);
-      logGoogleOAuthFailure(req, "TOKEN_EXCHANGE_FAILED", new Error(providerError));
-      throw new Error(`Token exchange failed: ${providerError}`);
+      const providerError = safeProviderCode(errBody.error);
+      logGoogleOAuthStage(req, callbackContext.flow, "TOKEN_EXCHANGE", "failed", {
+        result: "provider_rejected",
+        providerStatus: tokenRes.status,
+        providerCode: providerError,
+      });
+      logGoogleOAuthFailure(req, "TOKEN_EXCHANGE_FAILED");
+      throw new Error("Token exchange failed");
     }
+    logGoogleOAuthStage(req, callbackContext.flow, "TOKEN_EXCHANGE", "passed", {
+      result: "provider_accepted",
+      providerStatus: tokenRes.status,
+    });
 
     const tokenData = await tokenRes.json() as {
       id_token?: string;
@@ -770,23 +888,48 @@ router.get("/callback/google", async (req: Request, res: Response) => {
     };
 
     if (!tokenData.id_token) {
-      logGoogleOAuthFailure(req, "GOOGLE_PROFILE_FAILED", new Error("No id_token in token response"));
-      throw new Error("No id_token in token response");
+      logGoogleOAuthStage(req, callbackContext.flow, "ID_TOKEN_VERIFICATION", "failed", {
+        result: "id_token_missing",
+      });
+      logGoogleOAuthFailure(req, "GOOGLE_PROFILE_FAILED");
+      throw new Error("Google ID token missing");
     }
 
-    const ticket = await client.verifyIdToken({
-      idToken: tokenData.id_token,
-      audience: GOOGLE_CLIENT_ID,
-    });
+    logGoogleOAuthStage(req, callbackContext.flow, "ID_TOKEN_VERIFICATION", "started");
+    let ticket;
+    try {
+      ticket = await client.verifyIdToken({
+        idToken: tokenData.id_token,
+        audience: GOOGLE_CLIENT_ID,
+      });
+    } catch (verificationError) {
+      logGoogleOAuthStage(req, callbackContext.flow, "ID_TOKEN_VERIFICATION", "failed", {
+        result: "verification_failed",
+      });
+      throw verificationError;
+    }
     const payload = ticket.getPayload();
     if (!payload || !payload.sub) {
-      logGoogleOAuthFailure(req, "GOOGLE_PROFILE_FAILED", new Error("Invalid token payload"));
+      logGoogleOAuthStage(req, callbackContext.flow, "ID_TOKEN_VERIFICATION", "failed", {
+        result: "invalid_claims",
+      });
       throw new Error("Invalid token payload");
     }
+    logGoogleOAuthStage(req, callbackContext.flow, "ID_TOKEN_VERIFICATION", "passed", {
+      result: "verified",
+    });
+
+    logGoogleOAuthStage(req, callbackContext.flow, "GOOGLE_PROFILE", "started");
     if (!payload.email) {
+      logGoogleOAuthStage(req, callbackContext.flow, "GOOGLE_PROFILE", "failed", {
+        result: "email_missing",
+      });
       logGoogleOAuthFailure(req, "EMAIL_MISSING");
       throw new Error("Google account did not provide an email");
     }
+    logGoogleOAuthStage(req, callbackContext.flow, "GOOGLE_PROFILE", "passed", {
+      result: "claims_accepted",
+    });
 
     const claims: Record<string, unknown> = {
       sub: `google_${payload.sub}`,
@@ -799,7 +942,9 @@ router.get("/callback/google", async (req: Request, res: Response) => {
     if (isPortalFlow) {
       let portalCustomer;
       try {
-        portalCustomer = await upsertPortalGoogleCustomer(claims);
+        portalCustomer = await upsertPortalGoogleCustomer(claims, (stage, outcome, details) => {
+          logGoogleOAuthStage(req, "customer_portal", stage, outcome, details);
+        });
       } catch (accountError) {
         const category = accountError instanceof Error && accountError.message.includes("not active")
           ? "ACCOUNT_NOT_ALLOWED"
@@ -810,20 +955,34 @@ router.get("/callback/google", async (req: Request, res: Response) => {
 
       let portalToken: string;
       try {
+        logGoogleOAuthStage(req, "customer_portal", "SESSION_JWT", "started");
         portalToken = await signPortalJwt({
           sub: String(portalCustomer.id),
           email: portalCustomer.email,
           customerId: portalCustomer.id,
           role: portalCustomer.role,
         });
+        logGoogleOAuthStage(req, "customer_portal", "SESSION_JWT", "passed", {
+          result: "created",
+        });
       } catch (sessionError) {
+        logGoogleOAuthStage(req, "customer_portal", "SESSION_JWT", "failed", {
+          result: "creation_failed",
+        });
         logGoogleOAuthFailure(req, "SESSION_CREATION_FAILED", sessionError);
         throw sessionError;
       }
 
       try {
+        logGoogleOAuthStage(req, "customer_portal", "COOKIE_SET", "started");
         setPortalSessionCookie(res, portalToken);
+        logGoogleOAuthStage(req, "customer_portal", "COOKIE_SET", "passed", {
+          result: "portal_session_and_hint_set",
+        });
       } catch (cookieError) {
+        logGoogleOAuthStage(req, "customer_portal", "COOKIE_SET", "failed", {
+          result: "set_cookie_failed",
+        });
         logGoogleOAuthFailure(req, "COOKIE_FAILED", cookieError);
         throw cookieError;
       }
@@ -840,9 +999,18 @@ router.get("/callback/google", async (req: Request, res: Response) => {
         userAgent: portalMeta.userAgent,
       });
       try {
+        logGoogleOAuthStage(req, "customer_portal", "FINAL_REDIRECT", "started", {
+          result: "customer_portal",
+        });
         req.log.info("[Google OAuth] callback succeeded");
         res.redirect(returnTo);
+        logGoogleOAuthStage(req, "customer_portal", "FINAL_REDIRECT", "passed", {
+          result: "customer_portal",
+        });
       } catch (redirectError) {
+        logGoogleOAuthStage(req, "customer_portal", "FINAL_REDIRECT", "failed", {
+          result: "redirect_failed",
+        });
         logGoogleOAuthFailure(req, "FINAL_REDIRECT_FAILED", redirectError);
       }
       return;

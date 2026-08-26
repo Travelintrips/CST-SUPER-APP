@@ -33,6 +33,27 @@ function GoogleIcon() {
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 type LoginMode = "password" | "otp" | "wa";
 
+const CUSTOMER_RETURN_PREFIXES = [
+  "/login", "/register", "/dashboard", "/vendor-dashboard", "/orders", "/admin",
+  "/services", "/marketplace", "/jasa", "/vendor", "/freight-forwarding", "/pabean",
+  "/custom-clearance", "/book", "/logistic-order-success", "/track", "/calculator",
+  "/kalkulator-biaya-logistik", "/kalkulator-impor", "/order-produk", "/onboarding",
+  "/pending-approval", "/account-security", "/portal-dokumen", "/portal-invoice",
+  "/company-profile", "/profile", "/air-freight-booking", "/ocean-freight-booking",
+  "/ocean-freight", "/service-cart",
+];
+
+function safeCustomerReturnTo(value: string | null): string {
+  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/";
+  const pathname = value.split(/[?#]/, 1)[0];
+  if (pathname === "/" || CUSTOMER_RETURN_PREFIXES.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+  )) {
+    return value;
+  }
+  return "/";
+}
+
 export default function Login() {
   const [, setLocation] = useLocation();
   const [errorMsg, setErrorMsg] = useState("");
@@ -322,8 +343,8 @@ export default function Login() {
     setErrorMsg("");
     // Preserve returnTo so the portal callback can redirect correctly after OAuth.
     const rt = new URLSearchParams(window.location.search).get("returnTo");
-    if (rt) sessionStorage.setItem("oauth_return_to", rt);
-    const returnTo = rt && rt.startsWith("/") && !rt.startsWith("//") ? rt : "/login";
+    const returnTo = safeCustomerReturnTo(rt);
+    if (returnTo !== "/") sessionStorage.setItem("oauth_return_to", returnTo);
     const query = new URLSearchParams({ returnTo, portal: "1" });
     // Use the API's Google OAuth flow for the public portal. Supabase's
     // external-provider exchange is unreliable for this production project.

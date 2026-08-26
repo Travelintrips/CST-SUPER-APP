@@ -50,6 +50,14 @@ describe("Google OAuth flow routing", () => {
     });
   });
 
+  it("rejects BizPortal destinations for Customer Portal flow", () => {
+    expect(encodeGoogleOAuthContext("customer_portal", "/bizportal/")).toBe("portal:/");
+    expect(decodeGoogleOAuthContext("portal:/bizportal/")).toEqual({
+      flow: "customer_portal",
+      returnTo: "/",
+    });
+  });
+
   it("does not treat malformed state as a BizPortal flow", () => {
     expect(decodeGoogleOAuthContext("not-a-valid-context")).toBeNull();
     expect(getGoogleOAuthCallbackContext("not-a-valid-context")).toEqual({
