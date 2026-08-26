@@ -160,7 +160,7 @@ async function runQrisSettlementMigrationOnce(): Promise<void> {
       company_id INTEGER,
       bank_account_id INTEGER,
       source_date DATE NOT NULL,
-      estimated_settlement_date DATE NOT NULL,
+      estimated_settlement_date DATE,
       provider_code TEXT NOT NULL DEFAULT 'unknown',
       provider_detection_source TEXT NOT NULL DEFAULT 'unknown',
       settlement_rule_version TEXT NOT NULL DEFAULT 'legacy-v1',
@@ -199,6 +199,13 @@ async function runQrisSettlementMigrationOnce(): Promise<void> {
       ADD COLUMN IF NOT EXISTS review_reason TEXT,
       ADD COLUMN IF NOT EXISTS generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   `).catch(() => {});
+  // An UNMATCHED QRIS audit is still valuable reviewer evidence, even when no
+  // canonical payment date is available. It must remain non-approvable through
+  // the empty payment_items and UNMATCHED guards, rather than being hidden.
+  await db.execute(sql`
+    ALTER TABLE qris_mutation_batch_candidates
+      ALTER COLUMN estimated_settlement_date DROP NOT NULL
+  `).catch(() => {});
 
   // A mutation may legitimately have multiple historical candidate snapshots.
   // Keep superseded rows for audit instead of forcing the new snapshot to
@@ -206,6 +213,13 @@ async function runQrisSettlementMigrationOnce(): Promise<void> {
   await db.execute(sql`
     ALTER TABLE qris_mutation_batch_candidates
       DROP CONSTRAINT IF EXISTS qris_mutation_batch_candidates_mutation_id_key
+  `).catch(() => {});
+  // Earlier installations created the same uniqueness rule as a bare index
+  // rather than a table constraint. DROP CONSTRAINT does not remove that form,
+  // so remove it explicitly after the constraint attempt. Historical
+  // superseded snapshots must be allowed to coexist with the current audit.
+  await db.execute(sql`
+    DROP INDEX IF EXISTS qris_mutation_batch_candidates_mutation_id_key
   `).catch(() => {});
   await db.execute(sql`
     CREATE INDEX IF NOT EXISTS idx_qris_candidates_mutation

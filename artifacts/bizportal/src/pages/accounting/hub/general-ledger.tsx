@@ -49,7 +49,7 @@ const fmtBalance = (v: number) => {
   return v < 0 ? `-Rp ${abs}` : `Rp ${abs}`;
 };
 
-const MODULES = ["manual","sales","purchase","tenant","sport_center","pos","logistics","expense","hrd","ecommerce"];
+const MODULES = ["manual","sales","purchase","tenant","sport_center","pos","logistics","expense","hrd","ecommerce","bank_reconciliation"];
 
 const PAYMENT_METHODS: { value: string; label: string }[] = [
   { value: "cash",        label: "Cash / Tunai" },

@@ -22,17 +22,26 @@ export type ConditionField =
   | "amount"
   | "direction"
   | "bank_account"
+  | "bank"
+  | "transaction_code"
+  | "normalized"
   | "counterparty_name"
   | "counterparty_account";
 
 export type ConditionOperator =
   | "equals"
   | "contains"
+  | "not_contains"
   | "starts_with"
   | "ends_with"
+  | "not_equals"
+  | "eq"
+  | "neq"
   | "regex"
   | "greater_than"
   | "less_than"
+  | "gte"
+  | "lte"
   | "between";
 
 export interface ReconRuleCondition {
@@ -62,7 +71,7 @@ export interface ReconRule {
   isActive: boolean;
   direction: "IN" | "OUT" | null;       // null = any direction
   bankAccountId: number | null;
-  conditionType: string;                // always "SIMPLE" for now
+  conditionType: string;
   conditionField: ConditionField;
   conditionOperator: ConditionOperator;
   conditionValue: string;               // for "between": "min,max"
@@ -75,9 +84,13 @@ export interface ReconRule {
   /** Amount captured when a reference rule was created. */
   referenceAmount: number | null;
   aiClassificationRuleId: number | null;
+  conditions?: RuleCondition[];
+  logic?: RuleLogic;
+  specificity?: number;
   targetType: TargetType;
   targetId: number | null;
   targetCoaCode: string | null;
+  amountTolerance?: number | null; // absolute IDR tolerance; null = legacy company fallback
   confidenceScore: number;              // 0–100 for this rule
   stopProcessing: boolean;
   matchCount: number;
@@ -85,6 +98,15 @@ export interface ReconRule {
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export type RuleLogic = "AND" | "OR";
+
+export interface RuleCondition {
+  field: ConditionField;
+  operator: ConditionOperator;
+  value: string;
+  negate?: boolean;
 }
 
 export interface ReconRuleMutationInput {
@@ -95,6 +117,9 @@ export interface ReconRuleMutationInput {
   bankAccountId?: number | null;
   counterpartyName?: string | null;
   counterpartyAccount?: string | null;
+  bank?: string | null;
+  transactionCode?: string | null;
+  normalizedDescription?: string | null;
   companyId: number;
 }
 
@@ -113,6 +138,8 @@ export interface ReconRuleMatchResult {
   confidence?: number;
   reasons?: ReconRuleMatchReason[];
   stopProcessing?: boolean;
+  ambiguityCode?: "AMBIGUOUS_RULE_MATCH";
+  ambiguityReason?: string;
   evaluated: Array<{ ruleId: number; ruleName: string; matched: boolean }>;
 }
 
@@ -185,16 +212,17 @@ export function validateReconRule(rule: Partial<ReconRule>): string[] {
   }
 
   const validFields: ConditionField[] = [
-    "description", "reference", "amount", "direction",
-    "bank_account", "counterparty_name", "counterparty_account",
+    "description", "reference", "amount", "direction", "bank_account", "bank",
+    "transaction_code", "normalized", "counterparty_name", "counterparty_account",
   ];
   if (rule.conditionField && !validFields.includes(rule.conditionField as ConditionField)) {
     errors.push(`conditionField tidak valid: ${rule.conditionField}`);
   }
 
   const validOperators: ConditionOperator[] = [
-    "equals", "contains", "starts_with", "ends_with",
-    "regex", "greater_than", "less_than", "between",
+    "equals", "contains", "not_contains", "starts_with", "ends_with",
+    "not_equals", "eq", "neq", "regex", "greater_than", "less_than",
+    "gte", "lte", "between",
   ];
   if (rule.conditionOperator && !validOperators.includes(rule.conditionOperator as ConditionOperator)) {
     errors.push(`conditionOperator tidak valid: ${rule.conditionOperator}`);
@@ -226,6 +254,9 @@ function extractFieldValue(
     case "bank_account":       return mutation.bankAccountId != null ? String(mutation.bankAccountId) : null;
     case "counterparty_name":  return (mutation.counterpartyName ?? "").toLowerCase();
     case "counterparty_account": return (mutation.counterpartyAccount ?? "").toLowerCase();
+    case "bank":                return (mutation.bank ?? "").toLowerCase();
+    case "transaction_code":    return (mutation.transactionCode ?? "").toLowerCase();
+    case "normalized":          return (mutation.normalizedDescription ?? mutation.description ?? "").toLowerCase();
     default:                   return null;
   }
 }
@@ -250,6 +281,16 @@ export function evaluateCondition(
     case "contains":
       return strValue.includes(condLower);
 
+    case "not_contains":
+      return !strValue.includes(condLower);
+
+    case "not_equals":
+    case "neq":
+      return strValue !== condLower;
+
+    case "eq":
+      return strValue === condLower;
+
     case "starts_with":
       return strValue.startsWith(condLower);
 
@@ -270,10 +311,22 @@ export function evaluateCondition(
       return !isNaN(num) && !isNaN(threshold) && num > threshold;
     }
 
+    case "gte": {
+      const num = Number(rawValue);
+      const threshold = Number(conditionValue);
+      return !isNaN(num) && !isNaN(threshold) && num >= threshold;
+    }
+
     case "less_than": {
       const num = Number(rawValue);
       const threshold = Number(conditionValue);
       return !isNaN(num) && !isNaN(threshold) && num < threshold;
+    }
+
+    case "lte": {
+      const num = Number(rawValue);
+      const threshold = Number(conditionValue);
+      return !isNaN(num) && !isNaN(threshold) && num <= threshold;
     }
 
     case "between": {
@@ -298,17 +351,26 @@ function buildReasonCode(field: ConditionField, operator: ConditionOperator): st
     amount: "AMOUNT",
     direction: "DIRECTION",
     bank_account: "BANK_ACCOUNT",
+    bank: "BANK",
+    transaction_code: "TRANSACTION_CODE",
+    normalized: "NORMALIZED",
     counterparty_name: "COUNTERPARTY_NAME",
     counterparty_account: "COUNTERPARTY_ACCOUNT",
   };
   const opLabel: Record<ConditionOperator, string> = {
     equals: "EQUALS",
     contains: "CONTAINS",
+    not_contains: "NOT_CONTAINS",
     starts_with: "STARTS_WITH",
     ends_with: "ENDS_WITH",
+    not_equals: "NOT_EQUALS",
+    eq: "EQUALS",
+    neq: "NOT_EQUALS",
     regex: "REGEX",
     greater_than: "GT",
     less_than: "LT",
+    gte: "GTE",
+    lte: "LTE",
     between: "BETWEEN",
   };
   return `RULE_${fieldLabel[field]}_${opLabel[operator]}`;
@@ -321,17 +383,26 @@ function buildReasonLabel(field: ConditionField, operator: ConditionOperator, va
     amount: "Nominal",
     direction: "Arah",
     bank_account: "Rekening bank",
+    bank: "Bank",
+    transaction_code: "Kode transaksi",
+    normalized: "Deskripsi ternormalisasi",
     counterparty_name: "Nama pihak lawan",
     counterparty_account: "Rekening pihak lawan",
   };
   const opDesc: Record<ConditionOperator, string> = {
     equals: "sama dengan",
     contains: "mengandung",
+    not_contains: "tidak mengandung",
     starts_with: "dimulai dengan",
     ends_with: "diakhiri dengan",
+    not_equals: "tidak sama dengan",
+    eq: "sama dengan",
+    neq: "tidak sama dengan",
     regex: "cocok pola",
     greater_than: "lebih besar dari",
     less_than: "lebih kecil dari",
+    gte: "lebih besar atau sama dengan",
+    lte: "lebih kecil atau sama dengan",
     between: "antara",
   };
   return `${fieldName[field]} ${opDesc[operator]} "${value}"`;
@@ -362,19 +433,26 @@ export function evaluateReconRules(
 ): ReconRuleMatchResult {
   const evaluated: Array<{ ruleId: number; ruleName: string; matched: boolean }> = [];
 
-  // Sort: priority DESC, id ASC as deterministic tie-breaker
+  // Priority first; specificity makes business-context rules win over broad
+  // signals without relying on creation order.
   const sorted = [...rules].sort((a, b) => {
     if (b.priority !== a.priority) return b.priority - a.priority;
+    if ((b.specificity ?? 0) !== (a.specificity ?? 0)) {
+      return (b.specificity ?? 0) - (a.specificity ?? 0);
+    }
+    if (b.confidenceScore !== a.confidenceScore) return b.confidenceScore - a.confidenceScore;
     return a.id - b.id;
   });
 
+  const matching: Array<{ rule: ReconRule; reasons: ReconRuleMatchReason[] }> = [];
+  let stopAfterPriority: number | null = null;
   for (const rule of sorted) {
+    if (stopAfterPriority !== null && rule.priority < stopAfterPriority) break;
     if (!rule.isActive) {
       evaluated.push({ ruleId: rule.id, ruleName: rule.name, matched: false });
       continue;
     }
 
-    // Direction filter: if rule specifies a direction, mutation must match
     if (rule.direction && rule.direction !== mutation.direction) {
       evaluated.push({ ruleId: rule.id, ruleName: rule.name, matched: false });
       continue;
@@ -420,8 +498,17 @@ export function evaluateReconRules(
           <= Number(rule.amountTolerance);
     const conditionPassed = conditionsPassed && amountPassed;
 
+    const conditions = rule.conditions?.length
+      ? rule.conditions
+      : [{ field: rule.conditionField, operator: rule.conditionOperator, value: rule.conditionValue }];
+    const passed = conditions.map(c => {
+      const result = evaluateCondition(mutation, c.field, c.operator, c.value);
+      return c.negate ? !result : result;
+    });
+    const conditionPassed = (rule.logic ?? "AND") === "OR"
+      ? passed.some(Boolean)
+      : passed.every(Boolean);
     evaluated.push({ ruleId: rule.id, ruleName: rule.name, matched: conditionPassed });
-
     if (conditionPassed) {
       const reasons: ReconRuleMatchReason[] = conditions.map((condition, index) => ({
         code: `${buildReasonCode(condition.field, condition.operator)}_${index + 1}`,
@@ -453,10 +540,45 @@ export function evaluateReconRules(
       };
 
       return result;
+      matching.push({
+        rule,
+        reasons: conditions.filter((_, i) => passed[i]).map(c => ({
+          code: buildReasonCode(c.field, c.operator),
+          label: buildReasonLabel(c.field, c.operator, c.value),
+          score: Math.round(rule.confidenceScore / Math.max(1, conditions.length)),
+        })),
+      });
+      // Still inspect rules tied on precedence so conflicting actions fail closed.
+      // Once the tie group is complete, lower-priority rules cannot override it.
+      if (rule.stopProcessing) stopAfterPriority = rule.priority;
     }
-
-    // stop_processing on a non-matching rule does NOT stop — only a match stops further rules
   }
 
-  return { matched: false, evaluated };
+  if (matching.length === 0) return { matched: false, evaluated };
+  const top = matching[0];
+  const contenders = matching.filter(x =>
+    x.rule.priority === top.rule.priority &&
+    (x.rule.specificity ?? 0) === (top.rule.specificity ?? 0) &&
+    x.rule.confidenceScore === top.rule.confidenceScore
+  );
+  const outputs = new Set(contenders.map(x => `${x.rule.targetType}:${x.rule.targetCoaCode ?? ""}`));
+  if (outputs.size > 1) {
+    return {
+      matched: false,
+      ambiguityCode: "AMBIGUOUS_RULE_MATCH",
+      ambiguityReason: "Beberapa rule dengan prioritas, spesifisitas, dan confidence setara menghasilkan action berbeda.",
+      evaluated,
+    };
+  }
+  return {
+    matched: true,
+    ruleId: top.rule.id,
+    ruleName: top.rule.name,
+    targetType: top.rule.targetType,
+    targetCoaCode: top.rule.targetCoaCode,
+    confidence: top.rule.confidenceScore,
+    reasons: top.reasons,
+    stopProcessing: top.rule.stopProcessing,
+    evaluated,
+  };
 }

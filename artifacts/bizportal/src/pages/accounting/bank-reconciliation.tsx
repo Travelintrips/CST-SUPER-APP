@@ -573,6 +573,8 @@ interface BankMutation {
   journal_entry_id?: number | null;
   posted_at?: string | null;
   posted_by?: string | null;
+  review_reason?: string | null;
+  review_code?: string | null;
 }
 
 interface CoaAccountReference {
@@ -597,7 +599,7 @@ interface QrisCandidateAudit {
   provider_code: string;
   mutation_source_classification: string;
   source_date: string;
-  estimated_settlement_date: string;
+  estimated_settlement_date: string | null;
   gross_amount: number | string;
   net_amount: number | string;
   observed_deduction: number | string;
@@ -905,6 +907,15 @@ function isManualReviewActionable(m: BankMutation): boolean {
     && !isCanonicalSettlementMutation(m);
 }
 
+const LEGACY_REFERENCE_COA_ATTEMPT_NOT_RECORDED = "REFERENCE_COA_ATTEMPT_NOT_RECORDED";
+
+function isLegacyReferenceCoaRetryable(m: BankMutation): boolean {
+  return m.status === "manual_review"
+    && m.review_code === LEGACY_REFERENCE_COA_ATTEMPT_NOT_RECORDED
+    && !isQrisMutation(m)
+    && !isCanonicalSettlementMutation(m);
+}
+
 function mutationHeading(m: BankMutation): string {
   return `${m.direction === "IN" ? "Uang Masuk" : "Uang Keluar"} ${idr(m.amount)}`;
 }
@@ -1026,22 +1037,24 @@ function candidateBusinessPriority(candidate: Candidate): number {
   }
 }
 
-/** Candidates shown to reviewers and used for approval must obey the
- * same-day rule for generic bank transfers. QRIS candidates keep their
- * separate settlement-date contract. `sport_payment` is not automatically
- * QRIS: its payment method decides which contract applies. */
+/** Candidates shown to reviewers and used for approval.
+ *
+ * QRIS is the only flow whose candidate visibility is gated by settlement
+ * date. For non-QRIS/manual-rule candidates, amount and date are evidence
+ * shown to the reviewer, not hard requirements that hide the candidate.
+ * `sport_payment` is not automatically QRIS: its payment method decides
+ * which contract applies.
+ */
 function visibleCandidates(m: BankMutation): Candidate[] {
   const seen = new Set<string>();
   const eligible = (m.candidates ?? [])
     .filter(candidate => {
-      const isBankTransfer = isBankTransferCandidate(candidate, m);
-      // For bank-transfer Sport Center payments use the payment date. The
-      // settlement date belongs to QRIS and is commonly H+1, which previously
-      // hid valid bank-transfer candidates from the reviewer.
-      const candidateDate = isBankTransfer
-        ? candidate.details?.date
-        : candidate.details?.settlementDate ?? candidate.details?.date;
-      const dateEligible = !isBankTransfer
+      const requiresQrisEvidence = isQrisCandidate(candidate, m);
+      const candidateDate = candidate.details?.settlementDate ?? candidate.details?.date;
+      // Only QRIS keeps the settlement-date visibility gate. Generic bank
+      // transfers and manual-rule candidates remain reviewable even when
+      // amount/date flags are false.
+      const dateEligible = !requiresQrisEvidence
         || isSameCalendarDate(m.transaction_date, candidateDate);
       const identity = [
         candidate.candidate_type,
@@ -1725,7 +1738,7 @@ function AIActionCenter({
   workflowStage,
 }: {
   summaryMap: Record<string, { count: number; amount: number }>;
-  onRunMatching: () => void;
+  onRunMatching: (mode?: "new" | "retry_unmatched" | "rematch_non_final") => void;
   onGenerateQrisCandidates?: () => void;
   onApproveAll: () => void;
   onPostAll: () => void;
@@ -1775,15 +1788,21 @@ function AIActionCenter({
           </p>
         </div>
         <div className="flex flex-col sm:flex-row gap-3">
-          {/* Step 2: belum match */}
-          {unmatched > 0 && (
+          {/* Step 2: belum match / review historis yang aman dievaluasi ulang */}
+          {(unmatched > 0 || manualReview > 0) && (
             <div className="flex-1 rounded-lg border bg-background p-3 space-y-2">
               <div className="flex items-start gap-2">
                 <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
                 <div>
-                  <p className="text-sm font-semibold">{unmatched} Mutasi Belum Dicocokkan</p>
+                  <p className="text-sm font-semibold">
+                    {unmatched > 0
+                      ? `${unmatched} Mutasi Belum Dicocokkan`
+                      : `${manualReview} Review Manual Perlu Dievaluasi Ulang`}
+                  </p>
                   <p className="text-xs text-muted-foreground">
-                    {workflowStage === "sync"
+                    {unmatched === 0
+                      ? "Jalankan ulang matching untuk mengevaluasi rule terbaru. Safeguard jurnal tetap berlaku."
+                      : workflowStage === "sync"
                       ? "Sync mutasi bank terlebih dahulu"
                       : matchingBackgroundPending
                         ? "Matching sedang berjalan di background"
@@ -1794,7 +1813,7 @@ function AIActionCenter({
               <Button
                 size="sm"
                 className="w-full gap-1.5"
-                onClick={onRunMatching}
+                onClick={() => onRunMatching(unmatched > 0 ? "new" : "rematch_non_final")}
                 disabled={matchingPending || matchingBackgroundPending || workflowStage !== "matching"}
               >
                 {matchingPending || matchingBackgroundPending
@@ -1804,8 +1823,32 @@ function AIActionCenter({
                   ? "Menunggu matching selesai..."
                   : workflowStage === "sync"
                     ? "Sync mutasi terlebih dahulu"
-                    : "Jalankan AI Matching"}
+                    : unmatched > 0
+                      ? "Jalankan AI Matching"
+                      : "Jalankan Ulang Matching"}
               </Button>
+              <div className="flex gap-2">
+                {unmatched > 0 && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="flex-1 text-xs"
+                    onClick={() => onRunMatching("retry_unmatched")}
+                    disabled={matchingPending || matchingBackgroundPending || workflowStage !== "matching"}
+                  >
+                    Coba Lagi Unmatched
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="flex-1 text-xs"
+                  onClick={() => onRunMatching("rematch_non_final")}
+                  disabled={matchingPending || matchingBackgroundPending || workflowStage !== "matching"}
+                >
+                  {unmatched > 0 ? "Re-match Belum Final" : "Evaluasi Rule Terbaru"}
+                </Button>
+              </div>
             </div>
           )}
 
@@ -2684,7 +2727,7 @@ function QrisMutationCard({
   selectedQrisPaymentIds: number[];
   onToggleQrisPayment?: (candidateId: number, paymentId: number, checked: boolean) => void;
   onToggleAllQrisPayments?: (candidate: QrisCandidateAudit, checked: boolean) => void;
-  onRunMatching: () => void;
+  onRunMatching: (mode?: "new" | "retry_unmatched" | "rematch_non_final") => void;
   onGenerateQrisCandidates?: () => void;
   qrisGenerationPending?: boolean;
   mappingError?: MappingRequiredError;
@@ -2929,13 +2972,13 @@ function QrisMutationCard({
                       const paymentId = item.paymentId ?? item.payment_id;
                       const booking = item.bookingNumber ?? item.booking_number ?? (item.booking_id != null ? `SC-${String(item.booking_id).padStart(4, "0")}` : "—");
                       const payment = item.paymentNumber ?? item.payment_number ?? (paymentId != null ? `#${paymentId}` : "—");
-                      const paidAt = item.paymentDate ?? item.paid_at;
+                      const bookingDate = item.bookingDate ?? item.booking_date;
                        const gross = liveGrossForItem(item);
                       return (
                         <div key={`${paymentId ?? index}-${booking}`} className="grid grid-cols-[1.1fr_1.4fr_1fr_1fr_1fr_44px] items-center gap-2 border-b px-2.5 py-2 last:border-b-0">
                           <span className="truncate text-xs font-medium">{booking}</span>
                           <span className="min-w-0 truncate text-xs text-muted-foreground">{payment}</span>
-                          <span className="truncate text-xs text-muted-foreground">{paidAt ? fmtDate(String(paidAt)) : "—"}</span>
+                           <span className="truncate text-xs text-muted-foreground">{bookingDate ? fmtDate(String(bookingDate)) : "—"}</span>
                            <span className="truncate text-xs text-muted-foreground">QRIS</span>
                           <span className="text-right text-xs font-medium tabular-nums">{idr(gross)}</span>
                           <span className="flex justify-center">
@@ -3035,7 +3078,7 @@ function QrisMutationCard({
                   size="sm"
                   variant="outline"
                   className="h-8 gap-1.5 text-xs border-blue-300 text-blue-700 hover:bg-blue-50 dark:border-blue-800 dark:text-blue-300"
-                  onClick={onRunMatching}
+                  onClick={() => onRunMatching("retry_unmatched")}
                 >
                   <Zap className="h-3.5 w-3.5" />
                   Jalankan AI Matching
@@ -3144,6 +3187,7 @@ function QrisMutationCard({
 function MutationCard({
   m,
   onMapCoa,
+  onRetryReferenceCoa,
   onApprove,
   onPost,
   onReject,
@@ -3163,10 +3207,12 @@ function MutationCard({
   onRunMatching,
   onGenerateQrisCandidates,
   qrisGenerationPending,
+  retryReferenceCoaPending,
   mappingError,
 }: {
   m: BankMutation;
   onMapCoa: (m: BankMutation) => void;
+  onRetryReferenceCoa?: (m: BankMutation) => void;
   onApprove: (m: BankMutation) => void;
   onPost:    (m: BankMutation) => void;
   onReject:  (m: BankMutation) => void;
@@ -3183,18 +3229,35 @@ function MutationCard({
   selectedQrisPaymentIds: Record<number, number[]>;
   onToggleQrisPayment?: (candidateId: number, paymentId: number, checked: boolean) => void;
   onToggleAllQrisPayments?: (candidate: QrisCandidateAudit, checked: boolean) => void;
-  onRunMatching: () => void;
+  onRunMatching: (mode?: "new" | "retry_unmatched" | "rematch_non_final") => void;
   onGenerateQrisCandidates?: () => void;
   qrisGenerationPending?: boolean;
+  retryReferenceCoaPending?: boolean;
   mappingError?: MappingRequiredError;
 }) {
   const cands  = visibleCandidates(m);
   const qrisAudits = qrisAuditsForMutation(m);
   const best   = cands[0];
-  const matchingCandidates = cands.filter(candidate => candidate.amount_match && candidate.date_match);
+  // Amount/date are hard visibility requirements only for QRIS. For other
+  // candidates (including manual recon rules), they remain reviewer evidence
+  // and must not prevent the candidate from being selected.
+  const matchingCandidates = cands.filter(candidate =>
+    isQrisCandidate(candidate, m)
+      ? candidate.amount_match && candidate.date_match
+      : true,
+  );
   const amount = Number(m.amount) || 0;
   const isIN   = m.direction === "IN";
   const isQris = isQrisMutation(m);
+  const canRematchHistoricalReview = m.status === "manual_review"
+    && (
+      m.review_code === "MANUAL_REVIEW_REASON_NOT_RECORDED"
+      || (
+        m.review_code === "AUTO_POST_GUARD"
+        && m.review_reason === "Jurnal untuk mutasi ini sudah ada. Silakan refresh halaman."
+      )
+      || !m.review_code
+    );
 
   if (qrisAudits.length > 0) {
     return (
@@ -3258,17 +3321,14 @@ function MutationCard({
                      </Badge>
                    ) : null;
                  })()}
-                <Collapsible className="mt-1" onClick={e => e.stopPropagation()}>
-                  <CollapsibleTrigger asChild>
-                    <button type="button" className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
-                      <ChevronDown className="w-3 h-3" /> Lihat keterangan bank
-                    </button>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent className="text-[11px] text-muted-foreground pt-1 break-words">
-                    {m.description}
-                    {m.provider_order_id && <span className="ml-1">· Ref: {m.provider_order_id}</span>}
-                  </CollapsibleContent>
-                </Collapsible>
+                <div
+                  className="mt-1 text-[11px] text-muted-foreground break-words"
+                  onClick={e => e.stopPropagation()}
+                >
+                  <span className="font-medium text-foreground/80">Keterangan bank:</span>{" "}
+                  {m.description}
+                  {m.provider_order_id && <span className="ml-1">· Ref: {m.provider_order_id}</span>}
+                </div>
               </div>
               <div className="text-right shrink-0">
                 <span className={`text-[10px] px-1.5 py-0.5 rounded-full border font-medium ${statusColor(m)}`}>
@@ -3294,6 +3354,17 @@ function MutationCard({
               <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
                 <p className="font-semibold">Perlu Diperiksa</p>
                 <p className="mt-0.5">Sistem menemukan transaksi, tetapi nominal atau bukti belum sepenuhnya cocok.</p>
+              </div>
+            )}
+
+            {m.status === "manual_review" && (
+              <div className="mt-2 rounded-md border border-orange-200 bg-orange-50 px-3 py-2 text-xs text-orange-900 dark:border-orange-800 dark:bg-orange-950 dark:text-orange-200">
+                <p className="font-semibold">Alasan review manual</p>
+                <p className="mt-0.5">
+                  {m.review_reason ??
+                    "Mutasi ini memerlukan review manual, tetapi alasan historisnya belum tercatat. Jalankan ulang matching untuk mengevaluasi rule terbaru."}
+                </p>
+                {m.review_code && <p className="mt-1 font-mono text-[10px] opacity-75">Kode: {m.review_code}</p>}
               </div>
             )}
 
@@ -3464,6 +3535,33 @@ function MutationCard({
               <BookOpen className="h-3.5 w-3.5" />
               Referensi COA
             </Button>
+            {canRematchHistoricalReview && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1 border-amber-300 text-xs text-amber-900 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-200"
+                onClick={() => onRunMatching("rematch_non_final")}
+                title="Evaluasi ulang transaksi ini dengan Rule AI dan Referensi COA terbaru."
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                Jalankan Ulang Matching
+              </Button>
+            )}
+            {isLegacyReferenceCoaRetryable(m) && onRetryReferenceCoa && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1 border-indigo-300 text-xs text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:text-indigo-300"
+                disabled={retryReferenceCoaPending}
+                onClick={() => onRetryReferenceCoa(m)}
+                title="Menjalankan ulang Referensi COA. Jurnal hanya dibuat bila semua safeguard lulus."
+              >
+                {retryReferenceCoaPending
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <RotateCcw className="h-3.5 w-3.5" />}
+                {retryReferenceCoaPending ? "Memproses..." : "Proses Ulang COA"}
+              </Button>
+            )}
             {/* One clear primary action per mutation. Backend remains the final guard. */}
             {isManualReviewActionable(m) && (
               <Button
@@ -3861,6 +3959,22 @@ function MutationDetailPanel({
               return (
                 <>
                   <section aria-labelledby="review-summary-title" className="space-y-3">
+                    {m.status === "manual_review" && (
+                      <Alert className="border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
+                        <ShieldAlert className="h-4 w-4" />
+                        <AlertDescription className="space-y-1">
+                          <p className="font-semibold">Review Manual Diperlukan</p>
+                          <p>
+                            {m.review_reason ??
+                              "Mutasi ini memerlukan review manual, tetapi alasan historisnya belum tercatat. Jalankan ulang matching untuk mengevaluasi rule terbaru."}
+                          </p>
+                          {m.review_code && <p className="font-mono text-[11px] opacity-80">Kode: {m.review_code}</p>}
+                          <p className="text-xs">
+                            Periksa COA dan gunakan “Referensi COA” atau “Pilih COA & Buat Draft” setelah transaksi dipastikan benar.
+                          </p>
+                        </AlertDescription>
+                      </Alert>
+                    )}
                     <div className="rounded-xl border bg-muted/20 p-4">
                       <p id="review-summary-title" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Ringkasan</p>
                       <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
@@ -4040,7 +4154,11 @@ function MutationDetailPanel({
                       <span className="min-w-0 text-slate-600 dark:text-slate-400">Provider</span>
                       <span className="min-w-0 font-medium break-all sm:text-right">{qrisAudit.provider_code || "Belum dikenali"}</span>
                       <span className="text-slate-600 dark:text-slate-400">Perkiraan settlement</span>
-                      <span className="min-w-0 font-medium break-words sm:text-right">{fmtDate(qrisAudit.estimated_settlement_date)}</span>
+                      <span className="min-w-0 font-medium break-words sm:text-right">
+                        {qrisAudit.estimated_settlement_date
+                          ? fmtDate(qrisAudit.estimated_settlement_date)
+                          : "Belum tersedia"}
+                      </span>
                       <span className="text-slate-600 dark:text-slate-400">Total bruto</span>
                       <span className="min-w-0 font-medium break-words sm:text-right">{idr(qrisAudit.gross_amount)}</span>
                       <span className="text-slate-600 dark:text-slate-400">Dana masuk (netto)</span>
@@ -4776,12 +4894,22 @@ export default function BankReconciliationPage() {
         body: JSON.stringify({ dryRun: false, companyId: qrisCompanyId }),
       });
       if (!r.ok) throw new Error(await r.text());
-      return r.json() as Promise<{ generated: number; candidates: QrisCandidateAudit[] }>;
+      return r.json() as Promise<{
+        generated: number;
+        persisted: number;
+        reviewable: number;
+        candidates: QrisCandidateAudit[];
+      }>;
     },
-      onSuccess: async (result) => {
-      toast({ title: `Kandidat QRIS dibuat: ${result.generated} kandidat` });
-        setWorkflowStage("review");
-        await refetchQrisAudit();
+    onSuccess: async (result) => {
+      toast({
+        title: `${result.persisted} pemeriksaan QRIS ditampilkan`,
+        description: result.reviewable > 0
+          ? `${result.reviewable} kandidat memiliki pasangan payment untuk direview.`
+          : "Belum ada pasangan payment yang dapat diverifikasi; hasil ditampilkan sebagai UNMATCHED dan tidak dapat disetujui.",
+      });
+      setWorkflowStage("review");
+      await Promise.all([refetchQrisAudit(), refetch()]);
       qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
     },
     onError: (e: Error) => toast({ title: "Gagal membuat kandidat QRIS", description: e.message, variant: "destructive" }),
@@ -4814,7 +4942,7 @@ export default function BankReconciliationPage() {
     getAvailableQrisPaymentIdsFromCandidate(candidate);
   const isQrisCandidateEligible = (candidate: QrisCandidateAudit): boolean =>
     candidate.id != null
-    && String(candidate.reconciliation_status ?? "").toUpperCase() === "MATCHED"
+    && ["MATCHED", "REVIEW"].includes(String(candidate.reconciliation_status ?? "").toUpperCase())
     && String(candidate.status ?? "").toLowerCase() !== "approved"
     && candidate.current_evidence_valid !== false
     && getAvailableQrisPaymentIds(candidate).length > 0;
@@ -4884,7 +5012,7 @@ export default function BankReconciliationPage() {
   ) => {
     const eligibleCandidates = candidates.filter((candidate) =>
       candidate.id != null
-      && String(candidate.reconciliation_status ?? "").toUpperCase() === "MATCHED"
+      && ["MATCHED", "REVIEW"].includes(String(candidate.reconciliation_status ?? "").toUpperCase())
       && candidate.status !== "approved"
       && candidate.current_evidence_valid !== false
       && getAvailableQrisPaymentIds(candidate).length > 0
@@ -5129,9 +5257,12 @@ export default function BankReconciliationPage() {
   });
 
   const matchMut = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (mode: "new" | "retry_unmatched" | "rematch_non_final" = "new") => {
       const r = await fetch("/api/bank-reconciliation/run-matching", {
-        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: "{}",
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ matching_mode: mode }),
       });
       if (!r.ok) throw new Error(await r.text());
       return r.json();
@@ -5164,6 +5295,53 @@ export default function BankReconciliationPage() {
       }
     },
     onError: (e: Error) => toast({ title: "Gagal matching", description: e.message, variant: "destructive" }),
+  });
+
+  const retryReferenceCoaMut = useMutation({
+    mutationFn: async (mutationId: number) => {
+      const r = await fetch("/api/bank-reconciliation/run-matching", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ids: [mutationId],
+          legacy_reference_coa_retry: true,
+        }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      return r.json() as Promise<{
+        processed: number;
+        auto_matched: number;
+        manual_review: number;
+      }>;
+    },
+    onSuccess: async (result, mutationId) => {
+      await invalidate();
+      await refreshMutationDetail(mutationId);
+      if (result.auto_matched > 0) {
+        toast({
+          title: "Referensi COA berhasil diproses",
+          description: "Jurnal dibuat otomatis setelah seluruh safeguard lulus.",
+        });
+      } else if (result.manual_review > 0) {
+        toast({
+          title: "Masih perlu review manual",
+          description: "Safeguard jurnal menahan transaksi. Alasan terbaru sudah ditampilkan.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Tidak dapat diproses ulang",
+          description: "Transaksi ini bukan kasus Referensi COA legacy yang dapat dicoba ulang.",
+          variant: "destructive",
+        });
+      }
+    },
+    onError: (e: Error) => toast({
+      title: "Gagal memproses ulang Referensi COA",
+      description: e.message,
+      variant: "destructive",
+    }),
   });
 
   const approveQrisBatchMut = useMutation({
@@ -5608,12 +5786,12 @@ export default function BankReconciliationPage() {
         {/* ── AI Action Center ──────────────────────────────── */}
         <AIActionCenter
           summaryMap={summaryMap}
-          onRunMatching={() => {
+           onRunMatching={(mode = "new") => {
             if (workflowStage !== "matching") {
               toast({ title: "Sync mutasi bank terlebih dahulu", description: "Urutan aman dimulai dari sync mutasi bank." });
               return;
             }
-            matchMut.mutate();
+             matchMut.mutate(mode);
           }}
           onGenerateQrisCandidates={qrisCompanyId != null ? () => qrisDryRunMut.mutate() : undefined}
           onApproveAll={handleApproveAllMatched}
@@ -5756,7 +5934,7 @@ export default function BankReconciliationPage() {
                               {candidate.review_reason ?? candidate.description ?? "Belum ada alasan tambahan."}
                             </p>
                             <p className="text-slate-600 dark:text-slate-400 mt-0.5">
-                               Settlement {fmtDate(candidate.estimated_settlement_date)} · {getAvailableQrisPaymentIds(candidate).length} payment · Netto {idr(candidate.current_expected_amount ?? candidate.net_amount)}
+                               Settlement {candidate.estimated_settlement_date ? fmtDate(candidate.estimated_settlement_date) : "belum tersedia"} · {getAvailableQrisPaymentIds(candidate).length} payment · Netto {idr(candidate.current_expected_amount ?? candidate.net_amount)}
                             </p>
                              {(candidate.payment_items?.length ?? 0) > 0 && (
                                <div className="mt-2 rounded border bg-slate-50/80 px-2 py-1.5 text-[10px] dark:bg-slate-900/60">
@@ -5997,6 +6175,7 @@ export default function BankReconciliationPage() {
                   key={m.id}
                   m={m}
                   onMapCoa={setCoaReferenceTarget}
+                  onRetryReferenceCoa={mutation => retryReferenceCoaMut.mutate(mutation.id)}
                   onApprove={handleOpenApprove}
                   onPost={handleOpenPost}
                   onReject={handleOpenReject}
@@ -6013,17 +6192,18 @@ export default function BankReconciliationPage() {
                   selectedQrisPaymentIds={selectedPaymentIdsByMutation(m)}
                   onToggleQrisPayment={toggleQrisPayment}
                   onToggleAllQrisPayments={toggleAllQrisPayments}
-                    onRunMatching={() => {
+                     onRunMatching={(mode = "new") => {
                       if (workflowStage !== "matching") {
                         toast({ title: "Sync mutasi bank terlebih dahulu", description: "Urutan aman dimulai dari sync mutasi bank." });
                         return;
                       }
-                      matchMut.mutate();
+                       matchMut.mutate(mode);
                     }}
                     onGenerateQrisCandidates={qrisCompanyId != null && workflowStage === "candidates"
                       ? () => qrisDryRunMut.mutate()
                       : undefined}
                    qrisGenerationPending={qrisDryRunMut.isPending}
+                  retryReferenceCoaPending={retryReferenceCoaMut.isPending}
                   mappingError={mappingRequiredErrors.get(m.id)}
                 />
               ))}
@@ -6063,12 +6243,12 @@ export default function BankReconciliationPage() {
         onReverse={handleOpenReverse}
         onReopen={handleOpenReopen}
         onApproveQris={handleApproveQris}
-        onFindMissing={() => {
+         onFindMissing={() => {
           if (workflowStage !== "matching") {
             toast({ title: "Sync mutasi bank terlebih dahulu", description: "Urutan aman dimulai dari sync mutasi bank." });
             return;
           }
-          matchMut.mutate();
+           matchMut.mutate("retry_unmatched");
         }}
         matchingPending={matchMut.isPending || matchingBackgroundPending}
         mappingError={detailMutation ? mappingRequiredErrors.get(detailMutation.id) : undefined}

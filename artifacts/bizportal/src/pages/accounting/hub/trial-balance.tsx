@@ -25,11 +25,11 @@ const fmt = (v: string | number) =>
   new Intl.NumberFormat("id-ID", { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(Number(v));
 
 const typeColor: Record<string, string> = {
-  asset:     "text-blue-700",
-  liability: "text-red-700",
-  equity:    "text-purple-700",
-  revenue:   "text-green-700",
-  expense:   "text-orange-700",
+  asset:     "text-blue-300",
+  liability: "text-red-300",
+  equity:    "text-purple-300",
+  revenue:   "text-green-300",
+  expense:   "text-orange-300",
 };
 
 export default function AccountingHubTrialBalancePage() {
@@ -165,9 +165,9 @@ export default function AccountingHubTrialBalancePage() {
       </Card>
 
       {/* Table */}
-      <div className="rounded-md border overflow-x-auto">
+      <div className="rounded-md border bg-black overflow-x-auto">
         <table className="w-full text-sm">
-          <thead className="bg-muted text-muted-foreground text-xs">
+          <thead className="bg-black text-muted-foreground text-xs">
             <tr>
               <th className="px-3 py-2 text-left">Kode</th>
               <th className="px-3 py-2 text-left">Nama Akun</th>
@@ -181,13 +181,13 @@ export default function AccountingHubTrialBalancePage() {
           <tbody>
             {Object.entries(grouped).map(([type, rws]) => (
               <>
-                <tr key={`hdr-${type}`} className="bg-muted/60">
+                <tr key={`hdr-${type}`} className="bg-black">
                   <td colSpan={7} className={`px-3 py-1.5 font-semibold text-xs uppercase tracking-wide ${typeColor[type]}`}>{type}</td>
                 </tr>
                 {rws.map(r => (
                   <tr
                     key={`${r.account_id}-${r.company_id ?? "global"}-${r.branch_id ?? "all"}-${r.division_id ?? "all"}`}
-                    className={`border-t group ${r.is_header ? "bg-emerald-50/50" : "hover:bg-primary/5 cursor-pointer"}`}
+                    className={`border-t bg-black group ${r.is_header ? "" : "hover:bg-white/5 cursor-pointer"}`}
                     onClick={() => drillDown(r)}
                     title={r.is_header
                       ? `Saldo akumulasi akun child ${r.code} – ${r.name}`
@@ -206,7 +206,7 @@ export default function AccountingHubTrialBalancePage() {
                           Saat filter company aktif, semua baris sudah milik company yang sama — badge tidak relevan. */}
                       {!filters.company_id && codeCounts[r.code] > 1 && r.company_name && (
                         <span className="ml-2 text-xs font-normal text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
-                          {r.company_name}
+                           {r.company_name}
                         </span>
                       )}
                       {r.counterparty_companies && (
@@ -230,7 +230,7 @@ export default function AccountingHubTrialBalancePage() {
               </>
             ))}
           </tbody>
-          <tfoot className="bg-muted font-semibold text-xs">
+          <tfoot className="bg-black font-semibold text-xs">
             <tr>
               <td colSpan={3} className="px-3 py-2">TOTAL</td>
               <td className="px-3 py-2 text-right font-mono">{fmt(totDebit)}</td>

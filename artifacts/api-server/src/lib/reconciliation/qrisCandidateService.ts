@@ -204,6 +204,8 @@ function asDate(value: unknown): string | null {
 export interface QrisCandidateGenerationResult {
   dryRun: boolean;
   generated: number;
+  persisted: number;
+  reviewable: number;
   candidates: QrisMutationBatchCandidate[];
 }
 
@@ -410,30 +412,25 @@ export async function generateQrisCandidates(options: {
     accountProviderRules: accountRules,
     requireExplicitSettlementMetadata: true,
   });
-  const persistableCandidates = candidates.filter((candidate) =>
+  const reviewableCandidates = candidates.filter((candidate) =>
     candidate.paymentItems.length > 0
       && Boolean(candidate.estimatedSettlementDate)
       && Boolean(candidate.settlementRuleVersion),
   );
-  const persistableMutationIds = new Set(
-    persistableCandidates.map((candidate) => candidate.mutationId),
+  const auditedMutationIds = new Set(
+    candidates.map((candidate) => candidate.mutationId),
   );
 
   if (!options.dryRun) {
     for (const candidate of candidates) {
-      // qris_mutation_batch_candidates has a non-null estimated date for
-      // historical schema compatibility. Do not satisfy that constraint with
-      // the bank mutation date when canonical payment metadata is absent.
-      // Such an empty candidate is visible in dry-run output but is never
-      // persisted or made approvable.
-      if (
-        candidate.paymentItems.length === 0
-        || !candidate.estimatedSettlementDate
-        || !candidate.settlementRuleVersion
-      ) {
-        continue;
-      }
       const itemJson = JSON.stringify(candidate.paymentItems);
+      const estimatedSettlementDateSql = candidate.estimatedSettlementDate
+        ? `'${esc(candidate.estimatedSettlementDate)}'`
+        : "NULL";
+      const candidateStatus = candidate.paymentItems.length > 0
+        ? "candidate_review"
+        : "audit_unmatched";
+      const settlementRuleVersion = candidate.settlementRuleVersion || "unavailable-v1";
       const existing = (existingRows.rows as Array<Record<string, unknown>>).find((row) =>
         Number(row.mutation_id) === candidate.mutationId
         && !["approved", "completed", "superseded", "stale", "ineligible"]
@@ -479,8 +476,14 @@ export async function generateQrisCandidates(options: {
           SET candidate_source = 'sport_center.sport_payments',
               mutation_key = (SELECT mutation_key FROM bank_mutations WHERE id = ${candidate.mutationId}),
               payment_items = '${esc(itemJson)}'::jsonb,
-              status = 'candidate_review',
+              status = '${candidateStatus}',
               reconciliation_status = '${esc(candidate.status)}',
+              estimated_settlement_date = ${estimatedSettlementDateSql},
+              bank_account_id = ${candidate.bankAccountId == null ? "NULL" : candidate.bankAccountId},
+              provider_code = '${esc(candidate.providerCode)}',
+              provider_detection_source = '${esc(candidate.providerDetectionSource)}',
+              settlement_rule_version = '${esc(settlementRuleVersion)}',
+              mutation_source_classification = '${esc(candidate.mutationSourceClassification)}',
               gross_amount = ${candidate.grossAmount},
               mdr_amount = ${candidate.observedDeduction},
               net_amount = ${candidate.netAmount},
@@ -508,18 +511,18 @@ export async function generateQrisCandidates(options: {
           'sport_center.sport_payments',
           (SELECT mutation_key FROM bank_mutations WHERE id = ${candidate.mutationId}),
           '${esc(candidate.sourceDate)}',
-          '${esc(candidate.estimatedSettlementDate)}',
+          ${estimatedSettlementDateSql},
           ${candidate.bankAccountId == null ? "NULL" : candidate.bankAccountId},
           '${esc(candidate.providerCode)}',
           '${esc(candidate.providerDetectionSource)}',
-          '${esc(candidate.settlementRuleVersion)}',
+          '${esc(settlementRuleVersion)}',
           '${esc(candidate.mutationSourceClassification)}',
           ${candidate.grossAmount},
           ${candidate.observedDeduction},
           0,
           ${candidate.netAmount},
           '${esc(itemJson)}'::jsonb,
-          'candidate_review',
+          '${candidateStatus}',
           '${candidate.status}',
           ${candidate.confidence},
           ${candidate.observedDeduction},
@@ -541,7 +544,7 @@ export async function generateQrisCandidates(options: {
       const existingStatus = String(existing.status ?? "").toLowerCase();
       if (
         !currentMutationIds.has(mutationId)
-        || persistableMutationIds.has(mutationId)
+        || auditedMutationIds.has(mutationId)
         || ["approved", "completed", "superseded", "stale", "ineligible"].includes(existingStatus)
       ) {
         continue;
@@ -558,7 +561,13 @@ export async function generateQrisCandidates(options: {
     }
   }
 
-  return { dryRun: options.dryRun !== false, generated: candidates.length, candidates };
+  return {
+    dryRun: options.dryRun !== false,
+    generated: candidates.length,
+    persisted: options.dryRun === false ? candidates.length : 0,
+    reviewable: reviewableCandidates.length,
+    candidates,
+  };
 }
 
 export async function listQrisCandidates(options: {

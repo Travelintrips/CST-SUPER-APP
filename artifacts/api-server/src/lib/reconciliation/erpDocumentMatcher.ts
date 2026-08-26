@@ -36,6 +36,10 @@ import {
 import { sql } from "drizzle-orm";
 import { logger } from "../logger.js";
 import { sportPaymentCanonicalSettlementExclusionSql } from "./sportPaymentCanonicalSettlement.js";
+import {
+  getBankReconciliationSettings,
+  sanitizeBankAmountTolerance,
+} from "./bankReconciliationSettings.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -169,6 +173,8 @@ export interface ErpMatchInput {
   providerOrderId: string | null;
   bankAccountId: number | null;
   dateTolerance?: number;
+  /** Generic bank matching tolerance in IDR; QRIS remains provider-specific. */
+  amountTolerance?: number;
 }
 
 // ─── Safe SQL helper ──────────────────────────────────────────────────────────
@@ -252,11 +258,12 @@ async function fetchActiveCandidates(
   transactionDate: string,
   dateTolerance: number,
   mutationIsQris: boolean,
+  amountTolerance: number,
 ): Promise<ErpCandidateRaw[]> {
   const txDate   = isoDate(transactionDate);
   const dateFrom = `'${txDate}'::date - ${dateTolerance}`;
   const dateTo   = `'${txDate}'::date + ${dateTolerance}`;
-  const amtCond  = (col: string) => `ABS(${col}::numeric - ${Number(amount)}) < 0.01`;
+  const amtCond  = (col: string) => `ABS(${col}::numeric - ${Number(amount)}) <= ${amountTolerance + 0.01}`;
   const qrisSettlementTablesAvailable = mutationIsQris
     ? await db.execute(sql.raw(`
         SELECT to_regclass('public.qris_settlements') AS settlements,
@@ -532,7 +539,9 @@ function scoreCandidate(
   const reasonCodes: ErpReasonCode[] = [];
 
   // ── Amount — wajib ada untuk level apapun selain SIMILARITY_CANDIDATE ──
-  const amountMatch = Math.abs(candidate.amount - mutation.amount) < 0.01;
+  const configuredTolerance = sanitizeBankAmountTolerance(mutation.amountTolerance) ?? 0;
+  const amountTolerance = mutation.providerName === "QRIS" ? 0 : configuredTolerance;
+  const amountMatch = Math.abs(candidate.amount - mutation.amount) <= amountTolerance + 0.01;
   if (!amountMatch) {
     return {
       level:       "SIMILARITY_CANDIDATE",
@@ -657,6 +666,12 @@ export async function runErpDocumentMatching(
 ): Promise<ErpMatchResult> {
   const { companyId, amount, direction, transactionDate } = mutation;
   const dateTolerance = mutation.dateTolerance ?? DEFAULT_DATE_TOLERANCE_DAYS;
+  const mutationIsQris = mutation.providerName === "QRIS" ||
+    (mutation.normalizedDescription ?? "").toLowerCase().includes("qris");
+  const amountTolerance = mutationIsQris
+    ? 0
+    : sanitizeBankAmountTolerance(mutation.amountTolerance) ??
+      (await getBankReconciliationSettings(companyId)).amountTolerance;
 
   const empty: ErpMatchResult = {
     matched:              false,
@@ -683,8 +698,8 @@ export async function runErpDocumentMatching(
     direction,
     transactionDate,
     dateTolerance,
-    mutation.providerName === "QRIS" ||
-      (mutation.normalizedDescription ?? "").toLowerCase().includes("qris"),
+    mutationIsQris,
+    amountTolerance,
   );
 
   if (!allRaw.length) return empty;

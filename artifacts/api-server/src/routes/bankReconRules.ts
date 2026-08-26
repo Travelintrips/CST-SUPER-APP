@@ -34,7 +34,11 @@ import { snapshotRuleVersion } from "../lib/reconciliation/reconRuleVersioning.j
 import { detectRuleConflicts } from "../lib/reconciliation/reconRuleConflictDetection.js";
 import { invalidateRulesCache } from "../lib/reconciliation/reconCache.js";
 import { runReconBatch2Migration } from "../lib/reconciliation/reconBatch2Migration.js";
-import { runReconClassificationMigration } from "../lib/reconClassificationMigration.js";
+import {
+  runReconClassificationMigration,
+  syncAiClassificationRulesToOperational,
+  syncOperationalReconRulesToClassification,
+} from "../lib/reconClassificationMigration.js";
 
 const router = Router();
 
@@ -68,6 +72,7 @@ export async function runReconRulesMigration(): Promise<void> {
       target_type         TEXT NOT NULL,
       target_id           INTEGER,
       target_coa_code     TEXT,
+      amount_tolerance    NUMERIC(16,2),
       confidence_score    INTEGER NOT NULL DEFAULT 100 CHECK (confidence_score BETWEEN 0 AND 100),
       stop_processing     BOOLEAN NOT NULL DEFAULT TRUE,
       match_count         INTEGER NOT NULL DEFAULT 0,
@@ -77,6 +82,13 @@ export async function runReconRulesMigration(): Promise<void> {
       updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `)).catch(() => {});
+  await db.execute(sql.raw(`
+    ALTER TABLE recon_rules
+      ADD COLUMN IF NOT EXISTS conditions_json JSONB,
+      ADD COLUMN IF NOT EXISTS logic TEXT NOT NULL DEFAULT 'AND',
+      ADD COLUMN IF NOT EXISTS specificity INTEGER NOT NULL DEFAULT 1,
+      ADD COLUMN IF NOT EXISTS amount_tolerance NUMERIC(16,2)
+  `)).catch(e => logger.warn({ err: e.message }, "[recon_rules] multi-condition columns warning"));
 
   await db.execute(sql.raw(`CREATE INDEX IF NOT EXISTS rr_company_idx   ON recon_rules(company_id)`)).catch(() => {});
   await db.execute(sql.raw(`CREATE INDEX IF NOT EXISTS rr_priority_idx  ON recon_rules(company_id, priority DESC, id ASC)`)).catch(() => {});
@@ -86,6 +98,18 @@ export async function runReconRulesMigration(): Promise<void> {
   await runReconBatch2Migration().catch(e =>
     logger.warn({ err: e.message }, "[recon_rules] batch2 migration warning")
   );
+
+  // The configuration screen historically wrote AI rules to
+  // `recon_ai_classification_rules`, while the bank reconciliation decision
+  // stack reads `recon_rules`. Keep the two contracts connected so a rule
+  // configured in Rule AI can actually produce a reconciliation candidate.
+  // Operational recon_rules remain authoritative: an existing rule with the
+  // same company/condition/COA is never duplicated or overwritten.
+  await runReconClassificationMigration().catch(e =>
+    logger.warn({ err: e.message }, "[recon_rules] classification migration warning")
+  );
+  await syncOperationalReconRulesToClassification();
+  await syncAiClassificationRulesToOperational();
 
   logger.info("[recon_rules] migration complete (batch 1+2)");
 }
@@ -102,6 +126,9 @@ function requireCompanyId(req: any, res: any): number | null {
 }
 
 function rowToRule(r: Record<string, unknown>): ReconRule {
+  const parsedConditions = Array.isArray(r.conditions_json)
+    ? r.conditions_json
+    : (typeof r.conditions_json === "string" ? (() => { try { return JSON.parse(r.conditions_json as string); } catch { return undefined; } })() : undefined);
   return {
     id:               Number(r.id),
     companyId:        Number(r.company_id),
@@ -115,9 +142,13 @@ function rowToRule(r: Record<string, unknown>): ReconRule {
     conditionField:   String(r.condition_field) as ReconRule["conditionField"],
     conditionOperator: String(r.condition_operator) as ReconRule["conditionOperator"],
     conditionValue:   String(r.condition_value),
+    conditions:       parsedConditions as ReconRule["conditions"],
+    logic:            r.logic === "OR" ? "OR" : "AND",
+    specificity:      Number(r.specificity ?? 1),
     targetType:       String(r.target_type) as ReconRule["targetType"],
     targetId:         r.target_id != null ? Number(r.target_id) : null,
     targetCoaCode:    r.target_coa_code ? String(r.target_coa_code) : null,
+    amountTolerance:  r.amount_tolerance == null ? null : Number(r.amount_tolerance),
     confidenceScore:  Number(r.confidence_score ?? 100),
     stopProcessing:   Boolean(r.stop_processing),
     matchCount:       Number(r.match_count ?? 0),
@@ -131,6 +162,24 @@ function rowToRule(r: Record<string, unknown>): ReconRule {
 function escStr(s: string | null | undefined): string {
   if (s == null) return "NULL";
   return `'${String(s).replace(/'/g, "''")}'`;
+}
+
+/**
+ * Build a stable, database-safe config code from a bank reference.
+ *
+ * The operational recon_rules table can contain multiple versions of a rule,
+ * but the configuration workspace should show one reusable configuration for
+ * the same company/direction/reference. A small deterministic hash avoids
+ * truncation collisions while keeping the code within the config contract.
+ */
+function bankReferenceConfigCode(direction: string | null | undefined, conditionValue: string): string {
+  const input = `${String(direction ?? "").toUpperCase()}:${conditionValue.trim().toLowerCase()}`;
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `BANK_REFERENCE_${String(direction ?? "UNKNOWN").toUpperCase()}_${(hash >>> 0).toString(36).toUpperCase()}`;
 }
 
 /** Load all active rules for conflict detection (excluding a given id if updating) */
@@ -228,7 +277,7 @@ router.post("/", async (req, res) => {
       INSERT INTO recon_rules
         (company_id, name, description, priority, is_active, direction, bank_account_id,
          condition_type, condition_field, condition_operator, condition_value,
-         target_type, target_id, target_coa_code, confidence_score, stop_processing, created_by)
+         target_type, target_id, target_coa_code, amount_tolerance, confidence_score, stop_processing, created_by)
       VALUES
         (${companyId}, ${escStr(body.name)}, ${escStr(body.description)},
          ${Number(body.priority ?? 100)}, ${body.is_active !== false},
@@ -239,6 +288,7 @@ router.post("/", async (req, res) => {
          ${escStr(body.target_type)},
          ${body.target_id != null ? Number(body.target_id) : "NULL"},
          ${escStr(body.target_coa_code)},
+         ${body.amount_tolerance == null ? "NULL" : Number(body.amount_tolerance)},
          ${Number(body.confidence_score ?? 100)},
          ${body.stop_processing !== false},
          ${escStr((req as any).user?.email ?? null)})
@@ -252,15 +302,16 @@ router.post("/", async (req, res) => {
 
     // Keep the configuration workspace in sync with the operational
     // reconciliation rule created from the Bank Reconciliation screen.
-    // `recon_rules` remains the authoritative auto-approval source; this
-    // companion row makes the description metadata visible in the Rule AI tab.
-    // Use an exact active-row check so repeated saves do not create duplicates.
+    // `recon_rules` remains the authoritative matching/auto-approval source;
+    // the classification config is the reusable reference shown in the
+    // configuration screen, and the AI rule links back to that config.
     try {
       await runReconClassificationMigration();
       const aiFlow = body.direction === "IN"
         ? "INCOME_ALLOCATION"
         : "ROUTINE_EXPENSE_ALLOCATION";
       const conditionValue = String(body.condition_value ?? "").replace(/'/g, "''");
+      const rawConditionValue = String(body.condition_value ?? "").trim();
       const ruleName = String(body.name ?? `Referensi COA ${body.direction ?? ""}`).replace(/'/g, "''");
       const ruleDescription = String(
         body.description ?? `Sinkron dari Referensi COA rule #${rule.id}`,
@@ -268,16 +319,59 @@ router.post("/", async (req, res) => {
       const actionCoaCode = body.target_coa_code
         ? `'${String(body.target_coa_code).replace(/'/g, "''")}'`
         : "NULL";
+      const configCode = bankReferenceConfigCode(body.direction, rawConditionValue);
+      const configName = `Referensi Bank — ${rawConditionValue}`.slice(0, 120);
+      const configCategory = body.direction === "IN"
+        ? "INCOME_ALLOCATION"
+        : "ROUTINE_EXPENSE";
+      const configType = body.direction === "IN" ? "income" : "expense";
+      const configNameSql = escStr(configName);
+      const configCodeSql = escStr(configCode);
+      const configKeywordsSql = escStr(JSON.stringify([rawConditionValue]));
+
+      // One company/direction/reference maps to one visible configuration.
+      // Updating the same reference should refresh its default COA rather
+      // than create duplicate entries in the configuration workspace.
+      await db.execute(sql.raw(`
+        INSERT INTO recon_classification_configs
+          (company_id, category, name, code, type, flow, default_coa_code,
+           keywords, priority, is_active, is_seed, updated_at)
+        VALUES
+          (${companyId}, '${configCategory}', ${configNameSql}, ${configCodeSql},
+           '${configType}', '${aiFlow}', ${actionCoaCode},
+           ${configKeywordsSql}::jsonb, ${Number(body.priority ?? 120)},
+           TRUE, FALSE, NOW())
+        ON CONFLICT (code, COALESCE(company_id, 0)) DO UPDATE SET
+          name = EXCLUDED.name,
+          type = EXCLUDED.type,
+          flow = EXCLUDED.flow,
+          default_coa_code = EXCLUDED.default_coa_code,
+          keywords = EXCLUDED.keywords,
+          priority = EXCLUDED.priority,
+          is_active = TRUE,
+          updated_at = NOW()
+      `));
+
+      const configRows = await db.execute(sql.raw(`
+        SELECT id
+        FROM recon_classification_configs
+        WHERE company_id = ${companyId} AND code = ${configCodeSql}
+        LIMIT 1
+      `));
+      const configId = Number(((configRows as any).rows ?? [])[0]?.id ?? 0);
+
       await db.execute(sql.raw(`
         INSERT INTO recon_ai_classification_rules
           (company_id, name, description, condition_field, condition_operator,
-           condition_value, action_flow, action_coa_code, confidence, priority,
+           condition_value, action_flow, action_coa_code, action_config_code,
+           config_id, confidence, priority,
            source, created_by)
         SELECT
           ${companyId}, '${ruleName}', '${ruleDescription}',
           '${String(body.condition_field).replace(/'/g, "''")}',
           '${String(body.condition_operator).replace(/'/g, "''")}',
-          '${conditionValue}', '${aiFlow}', ${actionCoaCode}, 1.00, ${Number(body.priority ?? 120)},
+          '${conditionValue}', '${aiFlow}', ${actionCoaCode}, ${configCodeSql},
+          ${configId > 0 ? configId : "NULL"}, 1.00, ${Number(body.priority ?? 120)},
           'manual', ${escStr((req as any).user?.email ?? null)}
         WHERE NOT EXISTS (
           SELECT 1
@@ -441,6 +535,7 @@ router.patch("/:id", async (req, res) => {
   if (body.target_type       !== undefined) sets.push(`target_type = ${escStr(body.target_type)}`);
   if (body.target_id         !== undefined) sets.push(`target_id = ${body.target_id != null ? Number(body.target_id) : "NULL"}`);
   if (body.target_coa_code   !== undefined) sets.push(`target_coa_code = ${escStr(body.target_coa_code)}`);
+  if (body.amount_tolerance !== undefined) sets.push(`amount_tolerance = ${body.amount_tolerance == null ? "NULL" : Number(body.amount_tolerance)}`);
   if (body.confidence_score  !== undefined) sets.push(`confidence_score = ${Number(body.confidence_score)}`);
   if (body.stop_processing   !== undefined) sets.push(`stop_processing = ${Boolean(body.stop_processing)}`);
   sets.push(`updated_at = NOW()`);

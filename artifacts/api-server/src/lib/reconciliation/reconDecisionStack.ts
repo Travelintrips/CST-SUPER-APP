@@ -162,6 +162,8 @@ export async function loadReconRulesForCompany(companyId: number): Promise<Recon
          target_coa_code, confidence_score, stop_processing,
          conditions_json, logic, specificity, amount_tolerance, reference_amount,
          ai_classification_rule_id,
+        target_coa_code, amount_tolerance, confidence_score, stop_processing,
+        conditions_json, logic, specificity,
         match_count, last_matched_at, created_by, created_at, updated_at
       FROM recon_rules
       WHERE company_id = ${companyId} AND is_active = TRUE
@@ -195,13 +197,17 @@ export async function loadReconRulesForCompany(companyId: number): Promise<Recon
       targetType:       String(r.target_type) as ReconRule["targetType"],
       targetId:         r.target_id != null ? Number(r.target_id) : null,
       targetCoaCode:    r.target_coa_code ? String(r.target_coa_code) : null,
+      amountTolerance:  r.amount_tolerance == null ? null : Number(r.amount_tolerance),
       confidenceScore:  Number(r.confidence_score ?? 100),
       stopProcessing:   Boolean(r.stop_processing),
       matchCount:       Number(r.match_count ?? 0),
       lastMatchedAt:    r.last_matched_at ? String(r.last_matched_at) : null,
       createdBy:        r.created_by ? String(r.created_by) : null,
       createdAt:        String(r.created_at ?? ""),
-      updatedAt:        String(r.updated_at ?? ""),
+       updatedAt:        String(r.updated_at ?? ""),
+       conditions:       Array.isArray(r.conditions_json) ? r.conditions_json : undefined,
+       logic:            r.logic === "OR" ? "OR" : "AND",
+       specificity:      Number(r.specificity ?? 1),
     })) as ReconRule[];
 
     // Populate cache

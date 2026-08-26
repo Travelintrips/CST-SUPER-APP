@@ -43,6 +43,15 @@ import {
   CANONICAL_SETTLEMENT_SOURCE,
   findCanonicalSettlementCandidates,
 } from "./canonicalSettlementAdapter.js";
+import {
+  getBankReconciliationSettings,
+  sanitizeBankAmountTolerance,
+} from "./bankReconciliationSettings.js";
+import {
+  evaluateReconRules,
+  type ReconRule,
+  type ReconRuleMutationInput,
+} from "./reconRuleEngine.js";
 export { dedupeCandidatesByBusinessIdentity } from "./candidateBusinessIdentity.js";
 import { dedupeCandidatesByBusinessIdentity } from "./candidateBusinessIdentity.js";
 
@@ -236,6 +245,91 @@ export interface MutationInput {
   company_id?: number | null;
   bank_account_id?: number | null;
   direction?: string;
+  /** Generic bank matching tolerance in IDR; QRIS uses provider rules instead. */
+  amount_tolerance?: number;
+}
+
+/**
+ * Resolve the tolerance belonging to the highest-priority rule that matches
+ * this mutation. A null rule value is intentionally treated as legacy data and
+ * falls back to the old company setting; newly edited rules send an explicit
+ * zero when exact matching is desired.
+ */
+export async function getMatchingAmountTolerance(
+  mutation: Pick<MutationInput, "amount" | "company_id" | "bank_account_id" | "direction" | "normalized_description" | "provider_order_id">,
+): Promise<number> {
+  const companyId = normalizeCompanyId(mutation.company_id);
+  if (companyId == null) return 0;
+
+  try {
+    const { rows } = await db.execute(sql`
+      SELECT id, company_id, name, description, priority, is_active,
+             direction, bank_account_id, condition_type, condition_field,
+             condition_operator, condition_value, target_type, target_id,
+             target_coa_code, amount_tolerance, confidence_score,
+             stop_processing, conditions_json, logic, specificity,
+             match_count, last_matched_at, created_by, created_at, updated_at
+      FROM recon_rules
+      WHERE company_id = ${companyId} AND is_active = TRUE
+      ORDER BY priority DESC, id ASC
+    `);
+    const rawRules = rows as Array<Record<string, any>>;
+    const rules = rawRules.map((row): ReconRule => {
+      let conditions = row.conditions_json;
+      if (typeof conditions === "string") {
+        try { conditions = JSON.parse(conditions); } catch { conditions = undefined; }
+      }
+      return {
+        id: Number(row.id),
+        companyId,
+        name: String(row.name ?? ""),
+        description: row.description == null ? null : String(row.description),
+        priority: Number(row.priority ?? 100),
+        isActive: row.is_active !== false,
+        direction: row.direction === "IN" || row.direction === "OUT" ? row.direction : null,
+        bankAccountId: row.bank_account_id == null ? null : Number(row.bank_account_id),
+        conditionType: String(row.condition_type ?? "SIMPLE"),
+        conditionField: String(row.condition_field) as ReconRule["conditionField"],
+        conditionOperator: String(row.condition_operator) as ReconRule["conditionOperator"],
+        conditionValue: String(row.condition_value ?? ""),
+        conditions: Array.isArray(conditions) ? conditions : undefined,
+        logic: row.logic === "OR" ? "OR" : "AND",
+        specificity: Number(row.specificity ?? 1),
+        targetType: String(row.target_type ?? "unknown") as ReconRule["targetType"],
+        targetId: row.target_id == null ? null : Number(row.target_id),
+        targetCoaCode: row.target_coa_code == null ? null : String(row.target_coa_code),
+        amountTolerance: row.amount_tolerance == null ? null : Number(row.amount_tolerance),
+        confidenceScore: Number(row.confidence_score ?? 100),
+        stopProcessing: row.stop_processing !== false,
+        matchCount: Number(row.match_count ?? 0),
+        lastMatchedAt: row.last_matched_at == null ? null : String(row.last_matched_at),
+        createdBy: row.created_by == null ? null : String(row.created_by),
+        createdAt: String(row.created_at ?? ""),
+        updatedAt: String(row.updated_at ?? ""),
+      };
+    });
+    const mutationInput: ReconRuleMutationInput = {
+      description: String(mutation.normalized_description ?? ""),
+      reference: mutation.provider_order_id ?? null,
+      amount: Number(mutation.amount),
+      direction: String(mutation.direction ?? "IN").toUpperCase() === "OUT" ? "OUT" : "IN",
+      bankAccountId: mutation.bank_account_id ?? null,
+      companyId,
+    };
+    const result = evaluateReconRules(rules, mutationInput);
+    if (result.ruleId != null) {
+      const matched = rules.find(rule => rule.id === result.ruleId);
+      const configured = sanitizeBankAmountTolerance(matched?.amountTolerance);
+      if (configured != null) return configured;
+    }
+  } catch (error: any) {
+    logger.debug(
+      { err: error?.message ?? String(error), companyId },
+      "[unifiedMatchingEngine] per-rule tolerance unavailable; using company fallback",
+    );
+  }
+
+  return (await getBankReconciliationSettings(companyId)).amountTolerance;
 }
 
 /**
@@ -498,7 +592,7 @@ export async function resolveContraAccount(
 
 export function scoreUnified(
   mutation: Pick<MutationInput, "amount" | "transaction_date" | "provider_order_id" | "uploaded_proof_url" | "normalized_description">
-    & Partial<Pick<MutationInput, "company_id" | "bank_account_id" | "provider_name">>,
+    & Partial<Pick<MutationInput, "company_id" | "bank_account_id" | "provider_name" | "amount_tolerance">>,
   cand: MatchCandidate,
 ): UnifiedScoredMatch {
   let score = 0;
@@ -536,13 +630,19 @@ export function scoreUnified(
       !areQrisProvidersCompatible(candidateProvider, mutationProvider)
     );
 
-  // 1. Amount — MANDATORY for auto-approve (+50)
+  // 1. Amount — MANDATORY for auto-approve (+50). QRIS keeps the
+  // provider-specific variance contract and is exact in this generic scorer.
+  const configuredTolerance = sanitizeBankAmountTolerance(mutation.amount_tolerance) ?? 0;
+  const amountTolerance = requiresQrisIdentity ? 0 : configuredTolerance;
   const amountMatch =
     !companyMismatch &&
     !bankAccountMismatch &&
     !providerMismatch &&
-    Math.abs(Number(cand.amount) - Number(mutation.amount)) < 0.01;
+    Math.abs(Number(cand.amount) - Number(mutation.amount)) <= amountTolerance + 0.01;
   if (amountMatch) { score += 50; reason.push("nominal cocok (+50)"); }
+  else if (amountTolerance > 0 && !companyMismatch && !bankAccountMismatch && !providerMismatch) {
+    reason.push(`nominal di luar toleransi ±${amountTolerance.toLocaleString("id-ID")}`);
+  }
   if (companyMismatch) reason.push("company tidak cocok");
   if (bankAccountMismatch) reason.push("rekening bank tidak cocok");
   if (providerMismatch) reason.push("provider tidak cocok atau tidak tersedia");
@@ -674,7 +774,7 @@ export function confidenceLabel(score: number): "high" | "medium" | "low" | "non
 // ─── Fetch candidates (amount-first filter) ───────────────────────────────────
 
 export async function fetchCandidates(
-  mutation: Pick<MutationInput, "amount" | "transaction_date" | "company_id" | "direction" | "bank_account_id" | "provider_order_id" | "provider_name" | "normalized_description">,
+  mutation: Pick<MutationInput, "amount" | "transaction_date" | "company_id" | "direction" | "bank_account_id" | "provider_order_id" | "provider_name" | "normalized_description" | "amount_tolerance">,
 ): Promise<MatchCandidate[]> {
   const candidates: MatchCandidate[] = [];
   const { amount, transaction_date } = mutation;
@@ -698,6 +798,9 @@ export async function fetchCandidates(
     !mutationLooksPaylabs &&
     (String(mutation.provider_name ?? "").toUpperCase() === "QRIS" ||
       isQrisSettlementDescription(mutation.normalized_description));
+  const configuredTolerance = sanitizeBankAmountTolerance(mutation.amount_tolerance) ??
+    (await getMatchingAmountTolerance(mutation));
+  const amountTolerance = mutationLooksQris ? 0 : configuredTolerance;
   const dateFrom = mutationLooksQris ? `'${transaction_date}'::date - 3` : `'${transaction_date}'::date`;
   const dateTo   = mutationLooksQris ? `'${transaction_date}'::date + 3` : `'${transaction_date}'::date`;
   const dateOffset = (value: string, days: number): string => {
@@ -769,7 +872,7 @@ export async function fetchCandidates(
           return accountNumber == null ? null : String(accountNumber);
         })
         .catch(() => null);
-  const amtFilter = `ABS(##AMT##::numeric - ${Number(amount)}) < 0.01`;
+  const amtFilter = `ABS(##AMT##::numeric - ${Number(amount)}) <= ${amountTolerance + 0.01}`;
   // The aggregate tables may not exist yet on older runtime databases. Keep
   // the source query fail-safe and only add the aggregate candidate when both
   // tables are present.
@@ -1223,10 +1326,11 @@ export async function runUnifiedMatching(
 ): Promise<UnifiedMatchResult> {
   const explicitProvider = normalizeQrisProvider(mutation.provider_name);
   const descriptionProvider = normalizeQrisProvider(mutation.normalized_description);
+  const amountTolerance = await getMatchingAmountTolerance(mutation);
   const matchingMutation =
     explicitProvider === "unknown" && descriptionProvider !== "unknown"
-      ? { ...mutation, provider_name: descriptionProvider }
-      : mutation;
+      ? { ...mutation, provider_name: descriptionProvider, amount_tolerance: amountTolerance }
+      : { ...mutation, amount_tolerance: amountTolerance };
   const candidates = await fetchCandidates(matchingMutation); // company_id sudah diteruskan via mutation
 
   if (!candidates.length) {
@@ -1504,10 +1608,10 @@ export async function approveAndCreateJournal(
     const txResult = await db.transaction(async (tx) => {
 
        // ── Step 1: Lock mutation row (FOR UPDATE inside tx = real row lock) ──
-      const { rows: locked } = await tx.execute(sql.raw(`
-        SELECT bm.id, bm.status, bm.amount, bm.direction,
+       const { rows: locked } = await tx.execute(sql.raw(`
+         SELECT bm.id, bm.status, bm.amount, bm.direction,
                bm.transaction_date, bm.description, bm.mutation_key,
-                bm.company_id, bm.bank_account_id,
+                 bm.company_id, bm.bank_account_id, bm.journal_entry_id,
                 bm.expense_category, bm.expense_suggested_account_subtype
         FROM bank_mutations bm
         WHERE bm.id = ${mutationId}
@@ -1529,6 +1633,94 @@ export async function approveAndCreateJournal(
           { code: "COMPANY_SCOPE_REQUIRED" },
         );
       }
+
+       // A previous auto-post can successfully create the source journal but
+       // fail before the mutation status is promoted. The next run must adopt
+       // that *same* journal, not create a duplicate and then route a fully
+       // configured Rule AI back to manual review. This narrow recovery is only
+       // available to the explicit auto-post path and proves the entry belongs
+       // to this mutation, company, and amount before changing any status.
+       if (autoPost) {
+         const linkedJournalId = mut["journal_entry_id"] != null
+           ? Number(mut["journal_entry_id"])
+           : null;
+         const { rows: existingEntries } = await tx.execute(sql.raw(`
+           SELECT
+             ae.id,
+             ae.entry_number,
+             ae.status,
+             ae.total_debit,
+             ae.total_credit,
+             COALESCE(ae.is_voided, FALSE) AS is_voided,
+             COALESCE(ae.is_reversed, FALSE) AS is_reversed
+           FROM accounting_entries ae
+           WHERE ae.company_id = ${companyId}
+             AND (
+               ${linkedJournalId == null ? "FALSE" : `ae.id = ${linkedJournalId}`}
+               OR (ae.source = 'bank_reconciliation' AND ae.source_id = ${mutationId})
+             )
+             AND NOT EXISTS (
+               SELECT 1
+               FROM bank_mutations claimed
+               WHERE claimed.journal_entry_id = ae.id
+                 AND claimed.id <> ${mutationId}
+                 AND claimed.status IN ('approved_pending_posting', 'approved', 'posted')
+             )
+           ORDER BY CASE WHEN ae.id = ${linkedJournalId ?? -1} THEN 0 ELSE 1 END
+           LIMIT 2
+           FOR UPDATE
+         `));
+         const existingEntry = existingEntries.length === 1
+           ? existingEntries[0] as Record<string, unknown>
+           : null;
+         const existingAmount = Number(existingEntry?.["total_debit"] ?? NaN);
+         const amountTolerance = Math.max(1, amount * 0.0001);
+         const canRecoverExistingJournal = existingEntry != null
+           && ["draft", "posted"].includes(String(existingEntry["status"] ?? ""))
+           && !Boolean(existingEntry["is_voided"])
+           && !Boolean(existingEntry["is_reversed"])
+           && Math.abs(existingAmount - amount) <= amountTolerance;
+
+         if (canRecoverExistingJournal) {
+           const entryId = Number(existingEntry["id"]);
+           const entryNumber = String(existingEntry["entry_number"] ?? "");
+           if (existingEntry["status"] === "draft") {
+             await tx.execute(sql.raw(`
+               UPDATE accounting_entries
+               SET status = 'posted', posted_at = NOW()
+               WHERE id = ${entryId} AND status = 'draft'
+             `));
+           }
+           await tx.execute(sql.raw(`
+             UPDATE bank_mutations
+             SET status = 'posted',
+                 journal_entry_id = ${entryId},
+                 approved_by = '${escapeSql(actor)}',
+                 approved_at = NOW(),
+                 posted_by = '${escapeSql(actor)}',
+                 posted_at = NOW(),
+                 review_reason = NULL,
+                 review_code = NULL,
+                 updated_at = NOW()
+             WHERE id = ${mutationId}
+           `));
+           const recoveryMeta = JSON.stringify({
+             journal_entry_id: entryId,
+             entry_number: entryNumber,
+             recovered_existing_auto_post: true,
+             direction,
+             amount,
+           }).replace(/'/g, "''");
+           await tx.execute(sql.raw(`
+             INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
+             VALUES (${mutationId}, 'MATCH_APPROVED_AUTO_POSTED', '${escapeSql(actor)}', '${recoveryMeta}')
+           `));
+           return {
+             txJournalEntryId: entryId,
+             entryNumber,
+           };
+         }
+       }
 
        // A match row is the source of truth. Do not let a stale or tampered
        // browser payload change the candidate selected by the reviewer.

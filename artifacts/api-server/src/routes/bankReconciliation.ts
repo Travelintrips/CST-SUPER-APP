@@ -29,6 +29,7 @@ import {
   fetchCandidates,
   scoreUnified,
   classifyMatch,
+  getMatchingAmountTolerance,
 } from "../lib/reconciliation/unifiedMatchingEngine.js";
 import {
   RECONCILIATION_CANDIDATE_SOURCES,
@@ -47,6 +48,11 @@ import {
   BLOCKED_STATUSES,
   type MutationForDecisionStack,
 } from "../lib/reconciliation/reconDecisionStack.js";
+import {
+  LEGACY_REFERENCE_COA_ATTEMPT_NOT_RECORDED,
+  legacyReferenceCoaReviewReason,
+  planReferenceCoaAutoPost,
+} from "../lib/reconciliation/referenceCoaAutoPost.js";
 import { runReconRulesMigration } from "./bankReconRules.js";
 import { runExpectedCashFlowMigration } from "../lib/reconciliation/expectedCashFlowService.js";
 import { getHealthStatus, getDashboardMetrics } from "../lib/monitoring/reconciliationMonitor.js";
@@ -72,6 +78,11 @@ import { findBestMultiInvoiceMatch } from "../lib/reconciliation/multiInvoiceMat
 import { buildAllocationPlan, getCompanyAllocationStrategy, applyAllocationPlan } from "../lib/reconciliation/paymentAllocationEngine.js";
 import { resolveCompanyId } from "../lib/resolveCompany.js";
 import { normalizeCompanyId } from "../lib/services/portalCompanyScopeUtils.js";
+import {
+  getBankReconciliationSettings,
+  sanitizeBankAmountTolerance,
+  MAX_BANK_AMOUNT_TOLERANCE,
+} from "../lib/reconciliation/bankReconciliationSettings.js";
 import { runQrisSettlementMigration } from "../lib/reconciliation/qrisSettlementMigration.js";
 import { isQrisSettlementDescription } from "../lib/reconciliation/qrisSettlement.js";
 import {
@@ -187,6 +198,67 @@ router.use(async (req, res, next) => {
   next();
 });
 
+// ─── GET/PUT /api/bank-reconciliation/settings ───────────────────────────────
+// Settings are company-scoped. The active company is supplied by the portal as
+// ?companyId=... and is resolved through the same isolation helper as the
+// accounting routes.
+router.get("/settings", async (req, res) => {
+  try {
+    await runBankReconciliationCoreMigration();
+    const companyId = resolveCompanyId(req);
+    const settings = await getBankReconciliationSettings(companyId);
+    return res.json({
+      company_id: companyId,
+      amount_tolerance: settings.amountTolerance,
+      max_amount_tolerance: MAX_BANK_AMOUNT_TOLERANCE,
+    });
+  } catch (error: any) {
+    const status = error?.statusCode ?? 500;
+    return res.status(status).json({ error: error?.message ?? "Gagal membaca pengaturan rekonsiliasi" });
+  }
+});
+
+router.put("/settings", async (req, res) => {
+  try {
+    await runBankReconciliationCoreMigration();
+    const companyId = resolveCompanyId(req);
+    const amountTolerance = sanitizeBankAmountTolerance(req.body?.amount_tolerance);
+    if (amountTolerance === null) {
+      return res.status(400).json({
+        error: `Toleransi nominal harus berupa angka antara Rp0 dan Rp${MAX_BANK_AMOUNT_TOLERANCE.toLocaleString("id-ID")}.`,
+      });
+    }
+
+    const actor = (req as any).user?.email ?? "system";
+    await db.execute(sql`
+      INSERT INTO bank_reconciliation_settings
+        (company_id, amount_tolerance, updated_by, updated_at)
+      VALUES
+        (${companyId}, ${amountTolerance}, ${actor}, NOW())
+      ON CONFLICT (company_id)
+      DO UPDATE SET
+        amount_tolerance = EXCLUDED.amount_tolerance,
+        updated_by = EXCLUDED.updated_by,
+        updated_at = NOW()
+    `);
+    audit(req, {
+      action: "update-bank-reconciliation-settings",
+      module: "bank-reconciliation",
+      resourceId: `company-${companyId}`,
+      after: { company_id: companyId, amount_tolerance: amountTolerance },
+    });
+    return res.json({
+      ok: true,
+      company_id: companyId,
+      amount_tolerance: amountTolerance,
+      max_amount_tolerance: MAX_BANK_AMOUNT_TOLERANCE,
+    });
+  } catch (error: any) {
+    const status = error?.statusCode ?? 500;
+    return res.status(status).json({ error: error?.message ?? "Gagal menyimpan pengaturan rekonsiliasi" });
+  }
+});
+
 // ─── Inline migration ─────────────────────────────────────────────────────────
 let migrated = false;
 export async function runBankReconciliationCoreMigration() {
@@ -210,6 +282,8 @@ export async function runBankReconciliationCoreMigration() {
       provider_order_id TEXT,
       raw_payload   JSONB,
       status        TEXT NOT NULL DEFAULT 'unmatched',
+       review_reason TEXT,
+       review_code   TEXT,
       matched_payment_id INTEGER,
       matched_order_id   INTEGER,
       uploaded_proof_url TEXT,
@@ -383,6 +457,8 @@ export async function runBankReconciliationCoreMigration() {
 
   // Add journal_entry_id column if missing (schema upgrade)
   await db.execute(sql.raw(`ALTER TABLE bank_mutations ADD COLUMN IF NOT EXISTS journal_entry_id INTEGER`)).catch(() => {});
+  await db.execute(sql.raw(`ALTER TABLE bank_mutations ADD COLUMN IF NOT EXISTS review_reason TEXT`)).catch(() => {});
+  await db.execute(sql.raw(`ALTER TABLE bank_mutations ADD COLUMN IF NOT EXISTS review_code TEXT`)).catch(() => {});
   await db.execute(sql.raw(`ALTER TABLE bank_mutations ADD COLUMN IF NOT EXISTS company_id INTEGER`)).catch(() => {});
   await db.execute(sql.raw(`ALTER TABLE bank_mutations ADD COLUMN IF NOT EXISTS import_batch_id INTEGER`)).catch(() => {});
   await db.execute(sql.raw(`ALTER TABLE bank_mutations ADD COLUMN IF NOT EXISTS import_row_id INTEGER`)).catch(() => {});
@@ -473,6 +549,30 @@ export async function runBankReconciliationCoreMigration() {
   await db.execute(sql.raw(`ALTER TABLE bank_sheet_configs ADD COLUMN IF NOT EXISTS bank_name TEXT`)).catch(() => {});
   await db.execute(sql.raw(`
     CREATE INDEX IF NOT EXISTS bsc_company_idx ON bank_sheet_configs(company_id)
+  `)).catch(() => {});
+
+  // ── Per-company matching settings ───────────────────────────────────────────
+  // Zero keeps the existing exact-nominal behavior. A positive value allows
+  // small bank/ERP rounding or fee differences for generic bank matching.
+  // QRIS settlement matching deliberately keeps its provider-specific rules.
+  await db.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS bank_reconciliation_settings (
+      company_id       INTEGER PRIMARY KEY,
+      amount_tolerance NUMERIC(16,2) NOT NULL DEFAULT 0,
+      updated_by       TEXT,
+      created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT bank_recon_settings_amount_tolerance_ck
+        CHECK (amount_tolerance >= 0 AND amount_tolerance <= 1000000000)
+    )
+  `)).catch(() => {});
+  await db.execute(sql.raw(`
+    ALTER TABLE bank_reconciliation_settings
+      ADD COLUMN IF NOT EXISTS amount_tolerance NUMERIC(16,2) NOT NULL DEFAULT 0
+  `)).catch(() => {});
+  await db.execute(sql.raw(`
+    ALTER TABLE bank_reconciliation_settings
+      ADD COLUMN IF NOT EXISTS updated_by TEXT
   `)).catch(() => {});
 
   // Tag bank_mutations dengan sheet_config_id
@@ -769,6 +869,59 @@ async function auditLog(mutationId: number | null, action: string, actor: string
   } catch (e) {
     logger.warn({ err: e }, "[bankRecon] auditLog failed");
   }
+}
+
+/**
+ * Keep the reviewer-facing reason and its audit evidence together. This path is
+ * intentionally fail-closed: an accounting safeguard never leaves a mutation
+ * with only a bare `manual_review` status.
+ */
+async function recordReferenceCoaManualReview(args: {
+  mutationId: number;
+  actor: string;
+  ruleId: number;
+  targetCoaCode: string | null;
+  confidence: number;
+  reason: string;
+  code: string | null;
+}) {
+  const escapedReason = args.reason.replace(/'/g, "''");
+  const escapedActor = args.actor.replace(/'/g, "''");
+  const escapedCoa = args.targetCoaCode?.replace(/'/g, "''") ?? null;
+  const escapedCode = args.code?.replace(/'/g, "''") ?? null;
+  const meta = JSON.stringify({
+    rule_id: args.ruleId,
+    target_coa_code: args.targetCoaCode,
+    confidence: args.confidence,
+    error: args.reason,
+    code: args.code,
+  }).replace(/'/g, "''");
+
+  await db.transaction(async (tx) => {
+    await tx.execute(sql.raw(`
+      UPDATE bank_mutations
+      SET status = 'manual_review',
+          review_reason = '${escapedReason}',
+          review_code = ${escapedCode ? `'${escapedCode}'` : "NULL"},
+          updated_at = NOW()
+      WHERE id = ${args.mutationId}
+        AND status IN ('unmatched', 'matched', 'duplicate_need_review', 'manual_review')
+    `));
+    await tx.execute(sql.raw(`
+      INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
+      VALUES (
+        ${args.mutationId},
+        'AUTO_POST_BLOCKED',
+        '${escapedActor}',
+        '${meta}'
+      )
+    `));
+  }).catch((error: any) => {
+    logger.error(
+      { err: error?.cause?.message ?? error?.message, mutationId: args.mutationId, targetCoaCode: escapedCoa },
+      "[bankRecon] failed to persist reference COA manual-review outcome",
+    );
+  });
 }
 
 // ─── Multer setup ─────────────────────────────────────────────────────────────
@@ -1357,8 +1510,21 @@ router.post("/qris-candidates/generate", async (req, res) => {
       ...result,
     });
   } catch (e: any) {
-    logger.error({ err: e?.cause?.message ?? e?.message }, "[bankRecon] POST /qris-candidates/generate failed");
-    return res.status(500).json({ error: e?.message ?? "Gagal membuat kandidat QRIS" });
+    const postgresError = findPostgresError(e);
+    logger.error(
+      { err: postgresError?.message ?? e?.cause?.message ?? e?.message },
+      "[bankRecon] POST /qris-candidates/generate failed",
+    );
+    if (postgresError?.code === "23505") {
+      return res.status(409).json({
+        error: "Data audit QRIS berubah saat diproses. Muat ulang halaman lalu coba buat pemeriksaan QRIS lagi.",
+        code: "QRIS_CANDIDATE_CONFLICT",
+      });
+    }
+    return res.status(500).json({
+      error: "Gagal menyimpan pemeriksaan QRIS. Coba lagi, atau hubungi admin bila masalah berulang.",
+      code: "QRIS_CANDIDATE_GENERATION_FAILED",
+    });
   }
 });
 
@@ -3106,6 +3272,52 @@ router.get("/mutations", async (req, res) => {
       bm.provider_name, bm.provider_order_id,
       bm.status::text, bm.journal_entry_id, bm.company_id,
       bm.uploaded_proof_url, bm.source,
+      COALESCE(
+        NULLIF(bm.review_reason, ''),
+        (
+        SELECT COALESCE(ba.meta->>'error', ba.meta->>'reason')
+        FROM bank_reconciliation_audit ba
+        WHERE ba.mutation_id = bm.id
+          AND ba.action IN ('AUTO_POST_BLOCKED', 'JOURNAL_MAPPING_REQUIRED')
+        ORDER BY ba.id DESC
+        LIMIT 1
+        ),
+        CASE
+          WHEN bm.status = 'manual_review'
+            AND EXISTS (
+              SELECT 1 FROM bank_reconciliation_audit rule_audit
+              WHERE rule_audit.mutation_id = bm.id
+                AND rule_audit.action = 'RULE_ENGINE_MATCH'
+            )
+            THEN '${legacyReferenceCoaReviewReason().replace(/'/g, "''")}'
+           WHEN bm.status = 'manual_review'
+             THEN 'Mutasi ini memerlukan review manual, tetapi alasan historisnya belum tercatat. Jalankan ulang matching untuk mengevaluasi rule terbaru.'
+          ELSE NULL
+        END
+      ) AS review_reason,
+      COALESCE(
+        NULLIF(bm.review_code, ''),
+        (
+          SELECT ba.meta->>'code'
+          FROM bank_reconciliation_audit ba
+          WHERE ba.mutation_id = bm.id
+            AND ba.action IN ('AUTO_POST_BLOCKED', 'JOURNAL_MAPPING_REQUIRED')
+          ORDER BY ba.id DESC
+          LIMIT 1
+        ),
+        CASE
+          WHEN bm.status = 'manual_review'
+            AND EXISTS (
+              SELECT 1 FROM bank_reconciliation_audit rule_audit
+              WHERE rule_audit.mutation_id = bm.id
+                AND rule_audit.action = 'RULE_ENGINE_MATCH'
+            )
+            THEN 'REFERENCE_COA_ATTEMPT_NOT_RECORDED'
+           WHEN bm.status = 'manual_review'
+             THEN 'MANUAL_REVIEW_REASON_NOT_RECORDED'
+           ELSE NULL
+        END
+      ) AS review_code,
        COALESCE(
          (
            SELECT ${sportPaymentTypeSql("sp_type")}
@@ -3417,6 +3629,8 @@ router.get("/mutations", async (req, res) => {
       NULL::integer AS company_id,
       NULL::text AS uploaded_proof_url,
       'bank_import' AS source,
+      NULL::text AS review_reason,
+      NULL::text AS review_code,
        CASE
          WHEN LOWER(CONCAT_WS(' ', COALESCE(bmi.payment_method, ''), COALESCE(bmi.description, ''), COALESCE(bmi.erp_category, ''), COALESCE(bmi.tax_type, ''))) LIKE '%paylabs%'
            THEN 'paylabs'
@@ -3958,16 +4172,31 @@ router.post("/:mutationId/post", async (req, res) => {
     return res.json({ ok: true });
 
   } catch (e: any) {
+    // Drizzle wraps PostgreSQL errors as "Failed query". Prefer the nested
+    // database error so the reviewer sees the actual reason (for example
+    // PERIOD_LOCKED) instead of an opaque posting failure.
+    const dbError = e?.cause ?? e;
+    const dbMessage = String(dbError?.message ?? e?.message ?? "Gagal memposting jurnal");
+    const dbCode = String(dbError?.code ?? e?.code ?? "");
+    const isPeriodLocked = dbCode === "P0001" || dbMessage.includes("PERIOD_LOCKED");
+    const isImmutabilityViolation =
+      dbMessage.includes("IMMUTABILITY_VIOLATION") ||
+      dbMessage.includes("LEDGER IMMUTABILITY VIOLATION");
     const code = (
       e.code === "NOT_FOUND"      ? 404 :
-      e.code === "PERIOD_LOCKED"  ? 422 :
+      e.code === "PERIOD_LOCKED" || isPeriodLocked ? 422 :
       e.code === "CONFLICT" || e.code === "INVALID_STATUS" ||
       e.code === "CANONICAL_SETTLEMENT_ALREADY_ACCOUNTED" ||
-      e.code === "AMBIGUOUS_QRIS_SETTLEMENT_SOURCE" ? 409 : 500
+      e.code === "AMBIGUOUS_QRIS_SETTLEMENT_SOURCE" || isImmutabilityViolation ? 409 : 500
     );
+    const errorMessage = isPeriodLocked
+      ? "Posting diblokir karena periode keuangan jurnal sudah ditutup. Buka periode atau gunakan mekanisme reversal/adjustment di periode terbuka."
+      : isImmutabilityViolation
+        ? "Posting diblokir oleh pengamanan ledger. Jurnal yang sudah terkunci tidak dapat diubah secara langsung."
+        : dbMessage;
     return res.status(code).json({
-      error: e.message,
-      ...(e.code ? { code: e.code } : {}),
+      error: errorMessage,
+      ...(e.code || dbCode ? { code: e.code ?? dbCode } : {}),
     });
   }
 });
@@ -4299,15 +4528,111 @@ router.post("/run-matching", async (req, res) => {
   await runExpectedCashFlowMigration();
 
   const actor = (req as any).user?.email ?? "system";
-  const { ids } = req.body as { ids?: number[] };
+  const {
+    ids,
+    legacy_reference_coa_retry = false,
+    matching_mode = "new",
+  } = req.body as {
+    ids?: number[];
+    legacy_reference_coa_retry?: boolean;
+    matching_mode?: "new" | "retry_unmatched" | "rematch_non_final";
+  };
+  if (!["new", "retry_unmatched", "rematch_non_final"].includes(matching_mode)) {
+    return res.status(400).json({
+      error: "Mode matching tidak valid. Gunakan new, retry_unmatched, atau rematch_non_final.",
+    });
+  }
+  const requestedIds = Array.isArray(ids)
+    ? ids.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0)
+    : [];
+  if (Array.isArray(ids) && requestedIds.length !== ids.length) {
+    return res.status(400).json({ error: "Daftar ID mutasi tidak valid." });
+  }
+  if (legacy_reference_coa_retry && requestedIds.length === 0) {
+    return res.status(400).json({ error: "Pilih satu atau lebih mutasi untuk diproses ulang." });
+  }
   // Keep a small worker pool: matching performs several independent reads per
   // mutation, so serial processing is unnecessarily slow, while unbounded
   // Promise.all would exhaust the database pool during a large re-run.
   const MATCHING_CONCURRENCY = 4;
 
-  // Allow matching unmatched + matched + duplicate_need_review (spec §Phase3)
-  let whereClause = "status IN ('unmatched','matched','duplicate_need_review')";
-  if (ids?.length) whereClause = `id = ANY(ARRAY[${ids.map(Number).join(",")}])`;
+  // Default matching is incremental: a mutation that already produced a
+  // MATCH_CREATED audit event is not automatically reprocessed. In particular,
+  // `matched` must not cause old data to be rechecked every day.
+  let whereClause = `
+    status IN ('unmatched','matched','duplicate_need_review')
+    AND NOT EXISTS (
+      SELECT 1
+      FROM bank_reconciliation_audit matching_audit
+      WHERE matching_audit.mutation_id = bank_mutations.id
+        AND matching_audit.action = 'MATCH_CREATED'
+    )
+  `;
+  if (matching_mode === "retry_unmatched") {
+    whereClause = `
+      status = 'unmatched'
+      AND EXISTS (
+        SELECT 1
+        FROM bank_reconciliation_audit matching_audit
+        WHERE matching_audit.mutation_id = bank_mutations.id
+          AND matching_audit.action = 'MATCH_CREATED'
+      )
+    `;
+  } else if (matching_mode === "rematch_non_final") {
+    // A historical manual-review row with no recorded reason has never been
+    // evaluated against the current rules. Also recover the narrow legacy state
+    // where auto-post already created the journal but failed before promoting
+    // the mutation status. Real journal safeguards remain human-review only.
+    whereClause = `
+      status IN ('unmatched','matched','duplicate_need_review')
+      OR (
+        status = 'manual_review'
+        AND (
+          review_code = 'MANUAL_REVIEW_REASON_NOT_RECORDED'
+         OR (
+           review_code = 'AUTO_POST_GUARD'
+           AND review_reason = 'Jurnal untuk mutasi ini sudah ada. Silakan refresh halaman.'
+         )
+          OR (
+            NULLIF(review_code, '') IS NULL
+            AND NOT EXISTS (
+              SELECT 1
+              FROM bank_reconciliation_audit blocked_audit
+              WHERE blocked_audit.mutation_id = bank_mutations.id
+                AND blocked_audit.action IN ('AUTO_POST_BLOCKED', 'JOURNAL_MAPPING_REQUIRED')
+            )
+          )
+        )
+      )
+    `;
+  }
+  if (legacy_reference_coa_retry) {
+    // This retry is deliberately limited to the legacy fallback: a rule was
+    // matched but no auto-post attempt was ever recorded. Do not retry a row
+    // whose journal safeguard already returned a concrete blocking reason.
+    whereClause = `
+      id = ANY(ARRAY[${requestedIds.join(",")}])
+      AND status = 'manual_review'
+      AND (
+        review_code = '${LEGACY_REFERENCE_COA_ATTEMPT_NOT_RECORDED}'
+        OR NULLIF(review_code, '') IS NULL
+      )
+      AND EXISTS (
+        SELECT 1
+        FROM bank_reconciliation_audit rule_audit
+        WHERE rule_audit.mutation_id = bank_mutations.id
+          AND rule_audit.action = 'RULE_ENGINE_MATCH'
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM bank_reconciliation_audit attempt_audit
+        WHERE attempt_audit.mutation_id = bank_mutations.id
+          AND attempt_audit.action IN ('AUTO_POST_ATTEMPTED', 'AUTO_POST_BLOCKED')
+      )
+    `;
+  } else if (requestedIds.length) {
+    whereClause = `id = ANY(ARRAY[${requestedIds.join(",")}])`;
+  }
 
   const { rows: mutations } = await db.execute(sql.raw(
     `SELECT * FROM bank_mutations WHERE ${whereClause} ORDER BY transaction_date DESC LIMIT 500`
@@ -4322,6 +4647,13 @@ router.post("/run-matching", async (req, res) => {
 
   const processMutation = async (m: any) => {
     try {
+      if (legacy_reference_coa_retry) {
+        await auditLog(Number(m.id), "REFERENCE_COA_RETRY_REQUESTED", actor, {
+          previous_status: m.status,
+          retry_mode: "legacy_reference_coa",
+        });
+      }
+
       // Company scope is a hard prerequisite for every matching layer. Do not
       // pass NULL through as company 0: rule/ECF layers could otherwise run
       // before the unified engine's fail-closed guard.
@@ -4383,10 +4715,11 @@ router.post("/run-matching", async (req, res) => {
         const autoCoaCode = matchedRule?.target_coa_code
           ? String(matchedRule.target_coa_code).trim()
           : "";
-        const canAutoPostByRule =
-          Boolean(autoCoaCode) &&
-          Number(matchedRule?.confidence_score ?? decision.confidence) >= 100 &&
-          decision.confidence >= 100;
+        const autoPostPlan = planReferenceCoaAutoPost({
+          targetCoaCode: autoCoaCode,
+          ruleConfidence: matchedRule?.confidence_score ?? null,
+          decisionConfidence: decision.confidence,
+        });
 
         // Persist rule match as candidate in bank_reconciliation_matches
         const breakdownJson = JSON.stringify({
@@ -4420,7 +4753,12 @@ router.post("/run-matching", async (req, res) => {
           VALUES (${m.id}, 'RULE_ENGINE_MATCH', '${actor.replace(/'/g,"''")}', '${auditMeta}')
         `)).catch(() => {});
 
-        if (canAutoPostByRule) {
+        if (autoPostPlan.shouldAttempt) {
+          await auditLog(Number(m.id), "AUTO_POST_ATTEMPTED", actor, {
+            rule_id: decision.matchedRuleId,
+            target_coa_code: autoCoaCode,
+            confidence: decision.confidence,
+          });
           const approval = await approveAndCreateJournal(
             Number(m.id),
             null,
@@ -4444,14 +4782,26 @@ router.post("/run-matching", async (req, res) => {
             { mutationId: m.id, ruleId: decision.matchedRuleId, error: approval.error },
             "[run-matching] reference rule auto-post blocked; leaving for manual review",
           );
+          await recordReferenceCoaManualReview({
+            mutationId: Number(m.id),
+            actor,
+            ruleId: decision.matchedRuleId,
+            targetCoaCode: autoCoaCode || null,
+            confidence: decision.confidence,
+            reason: approval.error ?? "Auto-post ditahan oleh safeguard jurnal.",
+            code: approval.code ?? "AUTO_POST_GUARD",
+          });
+        } else {
+          await recordReferenceCoaManualReview({
+            mutationId: Number(m.id),
+            actor,
+            ruleId: decision.matchedRuleId,
+            targetCoaCode: autoCoaCode || null,
+            confidence: decision.confidence,
+            reason: autoPostPlan.reason,
+            code: autoPostPlan.code,
+          });
         }
-
-        // A rule can match without a usable COA or can fail its accounting
-        // safeguards; preserve the explicit review state in that case.
-        await db.execute(sql.raw(`
-          UPDATE bank_mutations SET status = 'manual_review', updated_at = NOW()
-          WHERE id = ${m.id} AND status IN ('unmatched','matched','duplicate_need_review')
-        `)).catch(() => {});
 
         manual_review++;
         return;
@@ -5110,12 +5460,21 @@ router.post("/smart-import", upload.single("file"), async (req, res) => {
 
       // Run matching engine synchronously for smart-import response
       try {
+        const amountTolerance = await getMatchingAmountTolerance({
+          amount: pr.amount,
+          provider_order_id: providerOrderId,
+          normalized_description: normalizedDesc,
+          company_id: companyId,
+          bank_account_id: null,
+          direction: pr.direction,
+        });
         const candidates = await fetchCandidates({
           amount: pr.amount,
           transaction_date: pr.date,
           direction: pr.direction,
           company_id: companyId,
           provider_name: detectProvider(pr.description),
+          amount_tolerance: amountTolerance,
         });
         const scored = candidates.map(c => scoreUnified({
           amount: pr.amount,
@@ -5126,6 +5485,7 @@ router.post("/smart-import", upload.single("file"), async (req, res) => {
           company_id: companyId,
           bank_account_id: null,
           provider_name: detectProvider(pr.description),
+          amount_tolerance: amountTolerance,
         }, c));
         scored.sort((a, b) => b.score - a.score);
         const best = scored[0];

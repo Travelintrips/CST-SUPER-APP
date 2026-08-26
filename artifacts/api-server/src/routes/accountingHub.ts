@@ -94,6 +94,13 @@ function parseFilters(query: Record<string, any>) {
 function normModuleExpr(alias = "e") {
   const p = alias ? `${alias}.` : "";   // column prefix — empty when no alias
   return sql.raw(`CASE
+    -- Expense postings have existed under several module labels over time.
+    -- Keep the UI filter on the canonical "expense" value so legacy rows
+    -- (including rows tagged by older approval flows) are not stranded.
+    WHEN LOWER(${p}source_module) IN (
+      'expense', 'expenses', 'general_expense', 'operational_expense',
+      'expense_payment', 'cash_expense'
+    ) THEN 'expense'
     WHEN ${p}source_module IS NOT NULL THEN ${p}source_module
     WHEN ${p}source::text IN ('tenant_rent_payment','tenant_sc_payment','tenant_rent_reversal') THEN 'tenant'
     WHEN ${p}source::text IN ('sport_center_booking','sport_center_refund','sport_center_membership',

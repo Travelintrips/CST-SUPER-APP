@@ -93,6 +93,7 @@
 - [Password reset safe-mode capture](password-reset-safe-mode.md) — safe mode menonaktifkan SMTP; harness reset password perlu capture khusus tanpa mengembalikan token ke API normal.
 - [QRIS bank-account identity](qris-bank-account-identity.md) — payment QRIS dapat menyimpan nomor rekening eksternal, sedangkan mutasi menyimpan ID internal; normalisasi wajib sebelum matching.
 - [QRIS approval response](qris-approval-response.md) — migration runtime jangan diulang setiap approval; tampilkan pending state dan pesan error server.
+- [QRIS legacy unique index](qris-legacy-unique-index.md) — migration harus menghapus unique constraint dan standalone index lama agar snapshot superseded dapat diregenerasi.
 - [Marketplace catalog kind contract](marketplace-catalog-kind-contract.md) — `type` dan `template_kind` wajib sinkron; mismatch legacy dapat menyembunyikan produk dari tab Marketplace.
 - [Production OpenAI credential validation](production-openai-credential-validation.md) — secret bundle bisa termuat tetapi provider tetap 401; presence bukan bukti autentikasi.
 - [Schema canonicalization bundle gate](schema-canonicalization-bundle-gate.md) — strict DEV/PROD schema reconciliation requires APP_ENV metadata in each GCP bundle.
@@ -145,3 +146,13 @@
 - [Accounting tax deduplication FK safety](accounting-tax-dedup-fk.md) — reconcile transaction tax references before removing duplicate accounting tax rows.
 - [PROD read-only proof runner](prod-readonly-proof-runner.md) — run temporary Node proofs from the workspace and bind parameters only when SQL contains placeholders.
 - [Server-side search pagination](server-side-search-pagination.md) — paginated lists must filter and count on the server before LIMIT/OFFSET.
+- [Recon config scoped index](recon-config-scoped-index.md) — legacy global config-code index blocks COA-reference mirroring that uses company-scoped conflict targets.
+- [Legacy Referensi COA retry](legacy-reference-coa-retry.md) — retry only legacy no-attempt rows; preserve genuine journal safeguard blocks for review.
+- [Rule AI multi-condition safety](rule-ai-multi-condition-safety.md) — evaluate structured conditions by priority/specificity and fail closed on equal-precedence conflicting outputs.
+- [GL expense module semantics](gl-expense-module-semantics.md) — module filter follows journal origin; bank-admin fees from reconciliation stay under bank reconciliation, not expense.
+- [QRIS unmatched audit visibility](qris-unmatched-audit-visibility.md) — retain unmatched bank evidence as non-approvable audit; distinguish audit rows from reviewable candidates.
+- [QRIS H-1 candidate cohort](qris-h-minus-one-candidate.md) — production candidates require exact expected settlement date = bank mutation date; legacy review windows remain isolated.
+- [QRIS partial settlement contract](qris-partial-settlement-contract.md) — selected payments may settle independently; bank mutation remains pending until full reconciliation.
+- [Historical QRIS settlement config](historical-qris-settlement-config.md) — owner-approved rules must cover legacy settlement dates with contiguous effective windows.
+- [Rule AI operational mirror](rule-ai-operational-mirror.md) — Rule AI must sync to a managed operational matcher rule without altering independent COA references.
+- [Runtime fixture FK cleanup](runtime-fixture-fk-cleanup.md) — cleanup proofs must discover marker-linked descendants and isolate each delete with savepoints.

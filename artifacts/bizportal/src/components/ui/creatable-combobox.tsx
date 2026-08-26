@@ -54,17 +54,20 @@ export function CreatableCombobox({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
 
-  const selectedLabel = options.find((o) => o.value === value)?.label ?? value ?? "";
+  const normalizedValue = String(value ?? "");
+  const selectedLabel =
+    options.find((o) => String(o.value ?? "") === normalizedValue)?.label ??
+    normalizedValue;
 
   const filtered = options.filter((o) =>
-    o.label.toLowerCase().includes(query.toLowerCase()) ||
-    o.value.toLowerCase().includes(query.toLowerCase())
+    String(o.label ?? "").toLowerCase().includes(query.toLowerCase()) ||
+    String(o.value ?? "").toLowerCase().includes(query.toLowerCase())
   );
 
   const exactMatch = options.some(
     (o) =>
-      o.value.toLowerCase() === query.toLowerCase() ||
-      o.label.toLowerCase() === query.toLowerCase()
+      String(o.value ?? "").toLowerCase() === query.toLowerCase() ||
+      String(o.label ?? "").toLowerCase() === query.toLowerCase()
   );
 
   const showAddNew = onAddNew && query.trim().length > 0 && !exactMatch;
