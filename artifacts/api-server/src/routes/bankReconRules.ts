@@ -385,14 +385,25 @@ router.post("/", async (req, res) => {
         INSERT INTO recon_ai_classification_rules
           (company_id, name, description, condition_field, condition_operator,
            condition_value, action_flow, action_coa_code, action_config_code,
-           config_id, confidence, priority,
+            config_id, conditions_json, logic, specificity, amount_tolerance, reference_amount,
+            confidence, priority,
            source, created_by)
         SELECT
           ${companyId}, '${ruleName}', '${ruleDescription}',
           '${String(body.condition_field).replace(/'/g, "''")}',
           '${String(body.condition_operator).replace(/'/g, "''")}',
           '${conditionValue}', '${aiFlow}', ${actionCoaCode}, ${configCodeSql},
-          ${configId > 0 ? configId : "NULL"}, 1.00, ${Number(body.priority ?? 120)},
+          ${configId > 0 ? configId : "NULL"},
+          ${body.conditions_json == null && body.conditions == null
+            ? "NULL"
+            : `${escStr(JSON.stringify(body.conditions_json ?? body.conditions))}::jsonb`},
+          ${escStr(String(body.logic ?? "AND").toUpperCase() === "OR" ? "OR" : "AND")},
+          ${Number(body.specificity ?? (Array.isArray(body.conditions_json ?? body.conditions)
+            ? (body.conditions_json ?? body.conditions).length
+            : 1))},
+          ${body.amount_tolerance == null ? "NULL" : Number(body.amount_tolerance)},
+          ${body.reference_amount == null ? "NULL" : Number(body.reference_amount)},
+          1.00, ${Number(body.priority ?? 120)},
           'manual', ${escStr((req as any).user?.email ?? null)}
         WHERE NOT EXISTS (
           SELECT 1
@@ -403,8 +414,15 @@ router.post("/", async (req, res) => {
             AND condition_operator = '${String(body.condition_operator).replace(/'/g, "''")}'
             AND condition_value = '${conditionValue}'
             AND COALESCE(action_coa_code, '') = COALESCE(${actionCoaCode}, '')
-        )
+         )
+         RETURNING id
       `));
+      // The operational rule is authoritative, but the two rows must still
+      // point at each other immediately. Otherwise the first request after a
+      // write leaves Rule AI and runtime editing on different identities.
+      // Run even when NOT EXISTS found an older mirror: that older row may
+      // still be unlinked from the operational rule.
+      await syncAiClassificationRulesToOperational(companyId);
     } catch (syncError: any) {
       // The operational rule is already saved and remains usable for
       // auto-approval. Do not turn a configuration mirror issue into a

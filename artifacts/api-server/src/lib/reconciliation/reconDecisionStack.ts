@@ -136,6 +136,9 @@ export interface MutationForDecisionStack {
   reference?: string | null;
   providerOrderId?: string | null;
   bankAccountId?: number | null;
+  /** Bank/source identity used by structured Rule AI conditions. */
+  bank?: string | null;
+  transactionCode?: string | null;
   counterpartyName?: string | null;
   counterpartyAccount?: string | null;
   status: string;
@@ -258,6 +261,8 @@ export async function runReconDecisionStack(
       amount:            mutation.amount,
       direction:         mutation.direction.toUpperCase() as "IN" | "OUT",
       bankAccountId:     mutation.bankAccountId ?? null,
+      bank:              mutation.bank ?? null,
+      transactionCode:   mutation.transactionCode ?? null,
       counterpartyName:  mutation.counterpartyName ?? null,
       counterpartyAccount: mutation.counterpartyAccount ?? null,
       companyId:         mutation.companyId,

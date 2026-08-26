@@ -18,7 +18,7 @@ import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../logger.js";
 import {
-  evaluateCondition,
+  evaluateReconRules,
   type ReconRule,
   type ReconRuleMutationInput,
 } from "./reconRuleEngine.js";
@@ -78,8 +78,9 @@ export async function simulateRule(input: SimulationInput): Promise<SimulationRe
   const ruleRes = await db.execute(sql.raw(`
     SELECT id, company_id, name, description, priority, is_active,
            direction, bank_account_id, condition_type, condition_field,
-           condition_operator, condition_value, target_type, target_id,
-           target_coa_code, confidence_score, stop_processing,
+           condition_operator, condition_value, conditions_json, logic, specificity,
+           target_type, target_id, target_coa_code, amount_tolerance, reference_amount,
+           confidence_score, stop_processing,
            match_count, last_matched_at, created_by, created_at, updated_at
     FROM recon_rules
     WHERE id = ${input.ruleId} AND company_id = ${input.companyId}
@@ -96,7 +97,7 @@ export async function simulateRule(input: SimulationInput): Promise<SimulationRe
     const ids = input.mutationIds.map(Number).filter(n => n > 0).join(",");
     mutationsSql = `
       SELECT id, company_id, description, reference, amount, direction,
-             transaction_date, status, bank_account_id,
+              transaction_date, status, bank_account_id, source_account,
              COALESCE(counterparty_name,'') AS counterparty_name,
              COALESCE(counterparty_account,'') AS counterparty_account
       FROM bank_mutations
@@ -110,7 +111,7 @@ export async function simulateRule(input: SimulationInput): Promise<SimulationRe
     const dateTo   = input.dateTo.replace(/'/g, "");
     mutationsSql = `
       SELECT id, company_id, description, reference, amount, direction,
-             transaction_date, status, bank_account_id,
+              transaction_date, status, bank_account_id, source_account,
              COALESCE(counterparty_name,'') AS counterparty_name,
              COALESCE(counterparty_account,'') AS counterparty_account
       FROM bank_mutations
@@ -138,17 +139,13 @@ export async function simulateRule(input: SimulationInput): Promise<SimulationRe
       amount:            Number(m.amount ?? 0),
       direction:         (String(m.direction ?? "IN")).toUpperCase() as "IN" | "OUT",
       bankAccountId:     m.bank_account_id ? Number(m.bank_account_id) : null,
+      bank:              m.source_account ? String(m.source_account) : null,
       counterpartyName:  m.counterparty_name ? String(m.counterparty_name) : null,
       counterpartyAccount: m.counterparty_account ? String(m.counterparty_account) : null,
       companyId:         Number(m.company_id),
     };
 
-    const conditionPassed = evaluateCondition(
-      mutInput,
-      rule.conditionField,
-      rule.conditionOperator,
-      rule.conditionValue,
-    );
+    const conditionPassed = evaluateReconRules([rule], mutInput).matched;
 
     if (conditionPassed) {
       matched++;
@@ -239,9 +236,21 @@ function rowToRule(r: Record<string, unknown>): ReconRule {
     conditionField:   String(r.condition_field) as any,
     conditionOperator: String(r.condition_operator) as any,
     conditionValue:   String(r.condition_value ?? ""),
+    conditionsJson: (() => {
+      try {
+        const value = typeof r.conditions_json === "string"
+          ? JSON.parse(r.conditions_json)
+          : r.conditions_json;
+        return Array.isArray(value) ? value : null;
+      } catch { return null; }
+    })(),
+    logic:            String(r.logic ?? "AND").toUpperCase() === "OR" ? "OR" : "AND",
+    specificity:      Number(r.specificity ?? 1),
     targetType:       String(r.target_type) as any,
     targetId:         r.target_id != null ? Number(r.target_id) : null,
     targetCoaCode:    r.target_coa_code ? String(r.target_coa_code) : null,
+    amountTolerance:  r.amount_tolerance == null ? null : Number(r.amount_tolerance),
+    referenceAmount:  r.reference_amount == null ? null : Number(r.reference_amount),
     confidenceScore:  Number(r.confidence_score ?? 100),
     stopProcessing:   Boolean(r.stop_processing),
     matchCount:       Number(r.match_count ?? 0),

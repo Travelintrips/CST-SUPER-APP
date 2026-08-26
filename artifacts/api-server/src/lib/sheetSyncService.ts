@@ -568,6 +568,8 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
           reference: null,
           providerOrderId: null,
           bankAccountId: p.bank_account_id ?? null,
+          bank: p.bank ?? null,
+          transactionCode: null,
           counterpartyName: null,
           counterpartyAccount: null,
           status: "unmatched",

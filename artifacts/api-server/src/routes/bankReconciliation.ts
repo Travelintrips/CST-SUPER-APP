@@ -802,6 +802,7 @@ interface ParsedRow {
   normalized_description: string;
   provider_name: string | null;
   provider_order_id: string | null;
+  bank: string | null;
 }
 
 function parseRows(rows: Record<string, unknown>[]): ParsedRow[] {
@@ -820,6 +821,7 @@ function parseRows(rows: Record<string, unknown>[]): ParsedRow[] {
     const rawCredit = get(["kredit", "credit", "masuk", "cr", "in"]);
     const rawDebit  = get(["debit", "keluar", "db", "out"]);
     const rawAmt    = get(["nominal", "amount", "jumlah"]);
+    const rawBank   = get(["source account", "bank name", "bank", "rekening", "account"]);
 
     let parsedDate = rawDate;
     try {
@@ -857,6 +859,7 @@ function parseRows(rows: Record<string, unknown>[]): ParsedRow[] {
       normalized_description: normalizeForMatching(rawDesc),
       provider_name: detectProvider(rawDesc),
       provider_order_id: extractProviderOrderId(rawDesc),
+      bank: rawBank || null,
     };
   }).filter((r) => r.transaction_date && r.amount > 0);
 }
@@ -999,7 +1002,7 @@ router.post("/import", upload.single("file"), async (req, res) => {
         INSERT INTO bank_mutations
           (transaction_date, description, credit_amount, debit_amount, amount, direction,
            mutation_key, canonical_key, normalized_description, provider_name, provider_order_id,
-           status, source, raw_payload)
+           status, source, source_account, raw_payload)
         VALUES (
           '${p.transaction_date}', '${p.description.replace(/'/g, "''")}',
           ${p.credit_amount}, ${p.debit_amount}, ${p.amount}, '${p.direction}',
@@ -1010,6 +1013,7 @@ router.post("/import", upload.single("file"), async (req, res) => {
           ${p.provider_order_id ? `'${p.provider_order_id}'` : "NULL"},
           'unmatched',
           'csv_excel',
+           ${p.bank ? `'${p.bank.replace(/'/g, "''")}'` : "NULL"},
           '${JSON.stringify(p).replace(/'/g, "''")}'
         )
         ON CONFLICT DO NOTHING
@@ -4681,6 +4685,8 @@ router.post("/run-matching", async (req, res) => {
         reference:            m.provider_order_id ?? null,
         providerOrderId:      m.provider_order_id ?? null,
         bankAccountId:        m.bank_account_id != null ? Number(m.bank_account_id) : null,
+        bank:                 m.source_account ?? m.provider_name ?? null,
+        transactionCode:      m.transaction_code ?? null,
         counterpartyName:     null,
         counterpartyAccount:  null,
         status:               String(m.status ?? "unmatched"),
