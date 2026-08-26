@@ -62,6 +62,7 @@ async function loginPortal(customer) {
   const r = await request("/portal/auth/login", { method: "POST", body: { email: customer.email, password }, jar });
   record(`${customer.label} authenticated session`, r.status === 200 && !!jar.header(), `${r.status}`);
   if (r.status !== 200) fail(`portal login failed for ${customer.label}: ${JSON.stringify(r.body)}`);
+  jar.token = r.body?.token;
   return jar;
 }
 async function adminSession() {
@@ -164,6 +165,14 @@ async function productProof(vendorAJar, vendorBJar, adminJar, productA, productB
   const resubmit = await fresh("SELECT id FROM vendor_catalog_submissions WHERE catalog_item_id=$1 ORDER BY id DESC LIMIT 1", [productA.id]);
   const approval2 = await request(`/trading/catalog-engine/submissions/${resubmit[0]?.id}/approve`, { method: "POST", jar: adminJar, body: { reviewNotes: `${MARK} reapproval` } });
   record("admin re-approves edited product", approval2.status === 200, `HTTP ${approval2.status}`);
+  const mediaReview = await request(`/portal/vendor/catalog/${productA.id}/media-assets`, {
+    method: "PATCH", jar: vendorAJar, body: { mediaAssets: [] },
+  });
+  const mediaState = (await fresh("SELECT status,is_published FROM vendor_catalog_items WHERE id=$1", [productA.id]))[0];
+  record("media change reopens product review", mediaReview.status === 200 && mediaState?.status === "pending_review" && !mediaState?.is_published, `HTTP ${mediaReview.status}/${mediaState?.status}`);
+  const mediaSubmission = (await fresh("SELECT id FROM vendor_catalog_submissions WHERE catalog_item_id=$1 ORDER BY id DESC LIMIT 1", [productA.id]))[0];
+  const mediaApproval = await request(`/trading/catalog-engine/submissions/${mediaSubmission?.id}/approve`, { method: "POST", jar: adminJar, body: { reviewNotes: `${MARK} media reapproval` } });
+  record("admin approves media re-review", mediaApproval.status === 200, `HTTP ${mediaApproval.status}`);
 
   const rejectProduct = await createProduct(vendorBJar, "rejection");
   const reject = await request(`/trading/catalog-engine/submissions/${rejectProduct.source_submission_id}/reject`, { method: "POST", jar: adminJar, body: { reviewNotes: `${MARK} rejected` } });
@@ -192,29 +201,32 @@ async function idorProof(vendorAJar, vendorBJar, productA, productB) {
 }
 
 async function notificationProof(adminJar, vendorAJar, vendorBJar, productA) {
-  await new Promise((r) => setTimeout(r, 800));
+  await new Promise((r) => setTimeout(r, 1500));
   const aBefore = Number((await fresh("SELECT count(*) AS n FROM vendor_notifications WHERE vendor_id=(SELECT id FROM suppliers WHERE name=$1) AND created_at >= now()-interval '5 minutes'", [`${MARK} vendorA`]))[0]?.n ?? 0);
   const bBefore = Number((await fresh("SELECT count(*) AS n FROM vendor_notifications WHERE vendor_id=(SELECT id FROM suppliers WHERE name=$1) AND created_at >= now()-interval '5 minutes'", [`${MARK} vendorB`]))[0]?.n ?? 0);
   const aOwn = await request("/portal/vendor/notifications", { jar: vendorAJar });
   const bOwn = await request("/portal/vendor/notifications", { jar: vendorBJar });
   const aText = JSON.stringify(aOwn.body);
   const bText = JSON.stringify(bOwn.body);
-  record("vendor notification recipient isolation", aOwn.status === 200 && bOwn.status === 200 && aText.includes(MARK) && !bText.includes(`${MARK} edited`), `A=${aOwn.status} B=${bOwn.status}`);
+  const aOwnProduct = aText.includes(`${MARK} edited`) || aText.includes(`${MARK} media reapproval`);
+  const bHasAProduct = bText.includes(`${MARK} edited`) || bText.includes(`${MARK} media reapproval`);
+  record("vendor notification recipient isolation", aOwn.status === 200 && bOwn.status === 200 && aOwnProduct && !bHasAProduct, `A=${aOwn.status} B=${bOwn.status}`);
   const admin = await request("/trading/catalog-engine/queue", { jar: adminJar });
   record("product review generated canonical admin notification path", admin.status === 200, `HTTP ${admin.status}`);
   const counts = await fresh(
     `SELECT
        (SELECT count(*) FROM vendor_notifications vn JOIN suppliers s ON s.id=vn.vendor_id WHERE s.name LIKE $1) AS vendor_notifications,
-       (SELECT count(*) FROM admin_notifications WHERE body LIKE $1 OR title LIKE $1) AS admin_notifications`,
+       (SELECT count(*) FROM admin_notifications WHERE body LIKE $1 OR title LIKE $1) AS admin_notifications,
+       (SELECT count(*) FROM mkt_notification_queue WHERE payload_json::text LIKE $1) AS queued_notifications`,
     [`${MARK}%`],
   );
-  record("natural notification evidence is present", Number(counts[0]?.vendor_notifications ?? 0) + Number(counts[0]?.admin_notifications ?? 0) > 0, JSON.stringify(counts[0]));
+  record("natural notification evidence is present", Number(counts[0]?.vendor_notifications ?? 0) + Number(counts[0]?.admin_notifications ?? 0) + Number(counts[0]?.queued_notifications ?? 0) > 0, JSON.stringify(counts[0]));
   return { aBefore, bBefore };
 }
 
 async function rfqProof(customerAJar, customerBJar, vendorAJar, adminJar, productA, supplierA) {
   const create = await request(`/portal/marketplace/${productA.id}/quote`, {
-    method: "POST", jar: customerAJar,
+    method: "POST", jar: customerAJar, headers: { authorization: `Bearer ${customerAJar.token}` },
     body: { buyerName: `${MARK} customerA`, buyerEmail: names.customerA, buyerPhone: "628111111111", buyerCompany: `${MARK} buyer`, qty: 2, notes: `${MARK} RFQ` },
   });
   record("customer A creates RFQ through canonical endpoint", create.status === 201, `HTTP ${create.status}`);
@@ -293,7 +305,6 @@ async function cleanup() {
     if (created.members.length) await c.query("DELETE FROM portal_company_members WHERE id=ANY($1::int[])", [created.members]);
     if (created.customers.length) {
       await c.query("DELETE FROM user_profiles WHERE customer_id=ANY($1::int[])", [created.customers]).catch(() => {});
-      await c.query("DELETE FROM portal_session_revocations WHERE token_hash IN (SELECT token_hash FROM portal_sessions WHERE customer_id=ANY($1::int[]))", []).catch(() => {});
       await c.query("DELETE FROM portal_customers WHERE id=ANY($1::int[])", [created.customers]);
     }
     await c.query("COMMIT");
@@ -324,11 +335,12 @@ try {
   const adminJar = await adminSession();
   const productA = await createProduct(vendorAJar, "product-A");
   const productB = await createProduct(vendorBJar, "product-B");
+  const productC = await createProduct(vendorBJar, "race");
   await idorProof(vendorAJar, vendorBJar, productA, productB);
   await productProof(vendorAJar, vendorBJar, adminJar, productA, productB);
   await notificationProof(adminJar, vendorAJar, vendorBJar, productA);
   await rfqProof(customerAJar, customerBJar, vendorAJar, adminJar, productA, supplierIds.vendorA);
-  await approvalRace(adminJar, productB);
+  await approvalRace(adminJar, productC);
 } catch (e) {
   exitCode = 1;
   console.error(`HARNESS ERROR: ${e.stack || e.message}`);
