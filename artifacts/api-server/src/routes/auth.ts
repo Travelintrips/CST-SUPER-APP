@@ -96,6 +96,10 @@ type GoogleOAuthStageDetails = {
   providerCode?: string;
 };
 
+// A callback can classify its failure before throwing to the common redirect
+// handler. Preserve that category so diagnostics keep the actual failed stage.
+const classifiedGoogleOAuthFailures = new WeakSet<Request>();
+
 function safeProviderCode(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   return /^[a-z][a-z0-9_]{0,63}$/.test(value) ? value : undefined;
@@ -123,6 +127,7 @@ function logGoogleOAuthFailure(
 ): void {
   // Never include authorization codes, OAuth state, tokens, JWTs, session IDs,
   // cookie values, or client secrets in callback diagnostics.
+  classifiedGoogleOAuthFailures.add(req);
   req.log.error(
     {
       category,
@@ -1115,7 +1120,7 @@ router.get("/callback/google", async (req: Request, res: Response) => {
     }
     res.redirect(returnTo);
   } catch (err) {
-    if (!(err instanceof Error && err.message.startsWith("Token exchange failed:"))) {
+    if (!classifiedGoogleOAuthFailures.has(req)) {
       logGoogleOAuthFailure(req, "GOOGLE_PROFILE_FAILED", err);
     }
     if (returnTo === "popup") {
