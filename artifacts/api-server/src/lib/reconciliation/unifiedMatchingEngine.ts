@@ -47,6 +47,11 @@ import {
   getBankReconciliationSettings,
   sanitizeBankAmountTolerance,
 } from "./bankReconciliationSettings.js";
+import {
+  evaluateReconRules,
+  type ReconRule,
+  type ReconRuleMutationInput,
+} from "./reconRuleEngine.js";
 export { dedupeCandidatesByBusinessIdentity } from "./candidateBusinessIdentity.js";
 import { dedupeCandidatesByBusinessIdentity } from "./candidateBusinessIdentity.js";
 
@@ -242,6 +247,89 @@ export interface MutationInput {
   direction?: string;
   /** Generic bank matching tolerance in IDR; QRIS uses provider rules instead. */
   amount_tolerance?: number;
+}
+
+/**
+ * Resolve the tolerance belonging to the highest-priority rule that matches
+ * this mutation. A null rule value is intentionally treated as legacy data and
+ * falls back to the old company setting; newly edited rules send an explicit
+ * zero when exact matching is desired.
+ */
+export async function getMatchingAmountTolerance(
+  mutation: Pick<MutationInput, "amount" | "company_id" | "bank_account_id" | "direction" | "normalized_description" | "provider_order_id">,
+): Promise<number> {
+  const companyId = normalizeCompanyId(mutation.company_id);
+  if (companyId == null) return 0;
+
+  try {
+    const { rows } = await db.execute(sql`
+      SELECT id, company_id, name, description, priority, is_active,
+             direction, bank_account_id, condition_type, condition_field,
+             condition_operator, condition_value, target_type, target_id,
+             target_coa_code, amount_tolerance, confidence_score,
+             stop_processing, conditions_json, logic, specificity,
+             match_count, last_matched_at, created_by, created_at, updated_at
+      FROM recon_rules
+      WHERE company_id = ${companyId} AND is_active = TRUE
+      ORDER BY priority DESC, id ASC
+    `);
+    const rawRules = rows as Array<Record<string, any>>;
+    const rules = rawRules.map((row): ReconRule => {
+      let conditions = row.conditions_json;
+      if (typeof conditions === "string") {
+        try { conditions = JSON.parse(conditions); } catch { conditions = undefined; }
+      }
+      return {
+        id: Number(row.id),
+        companyId,
+        name: String(row.name ?? ""),
+        description: row.description == null ? null : String(row.description),
+        priority: Number(row.priority ?? 100),
+        isActive: row.is_active !== false,
+        direction: row.direction === "IN" || row.direction === "OUT" ? row.direction : null,
+        bankAccountId: row.bank_account_id == null ? null : Number(row.bank_account_id),
+        conditionType: String(row.condition_type ?? "SIMPLE"),
+        conditionField: String(row.condition_field) as ReconRule["conditionField"],
+        conditionOperator: String(row.condition_operator) as ReconRule["conditionOperator"],
+        conditionValue: String(row.condition_value ?? ""),
+        conditions: Array.isArray(conditions) ? conditions : undefined,
+        logic: row.logic === "OR" ? "OR" : "AND",
+        specificity: Number(row.specificity ?? 1),
+        targetType: String(row.target_type ?? "unknown") as ReconRule["targetType"],
+        targetId: row.target_id == null ? null : Number(row.target_id),
+        targetCoaCode: row.target_coa_code == null ? null : String(row.target_coa_code),
+        amountTolerance: row.amount_tolerance == null ? null : Number(row.amount_tolerance),
+        confidenceScore: Number(row.confidence_score ?? 100),
+        stopProcessing: row.stop_processing !== false,
+        matchCount: Number(row.match_count ?? 0),
+        lastMatchedAt: row.last_matched_at == null ? null : String(row.last_matched_at),
+        createdBy: row.created_by == null ? null : String(row.created_by),
+        createdAt: String(row.created_at ?? ""),
+        updatedAt: String(row.updated_at ?? ""),
+      };
+    });
+    const mutationInput: ReconRuleMutationInput = {
+      description: String(mutation.normalized_description ?? ""),
+      reference: mutation.provider_order_id ?? null,
+      amount: Number(mutation.amount),
+      direction: String(mutation.direction ?? "IN").toUpperCase() === "OUT" ? "OUT" : "IN",
+      bankAccountId: mutation.bank_account_id ?? null,
+      companyId,
+    };
+    const result = evaluateReconRules(rules, mutationInput);
+    if (result.ruleId != null) {
+      const matched = rules.find(rule => rule.id === result.ruleId);
+      const configured = sanitizeBankAmountTolerance(matched?.amountTolerance);
+      if (configured != null) return configured;
+    }
+  } catch (error: any) {
+    logger.debug(
+      { err: error?.message ?? String(error), companyId },
+      "[unifiedMatchingEngine] per-rule tolerance unavailable; using company fallback",
+    );
+  }
+
+  return (await getBankReconciliationSettings(companyId)).amountTolerance;
 }
 
 /**
@@ -711,7 +799,7 @@ export async function fetchCandidates(
     (String(mutation.provider_name ?? "").toUpperCase() === "QRIS" ||
       isQrisSettlementDescription(mutation.normalized_description));
   const configuredTolerance = sanitizeBankAmountTolerance(mutation.amount_tolerance) ??
-    (await getBankReconciliationSettings(company_id)).amountTolerance;
+    (await getMatchingAmountTolerance(mutation));
   const amountTolerance = mutationLooksQris ? 0 : configuredTolerance;
   const dateFrom = mutationLooksQris ? `'${transaction_date}'::date - 3` : `'${transaction_date}'::date`;
   const dateTo   = mutationLooksQris ? `'${transaction_date}'::date + 3` : `'${transaction_date}'::date`;
@@ -1238,11 +1326,11 @@ export async function runUnifiedMatching(
 ): Promise<UnifiedMatchResult> {
   const explicitProvider = normalizeQrisProvider(mutation.provider_name);
   const descriptionProvider = normalizeQrisProvider(mutation.normalized_description);
-  const settings = await getBankReconciliationSettings(mutation.company_id ?? null);
+  const amountTolerance = await getMatchingAmountTolerance(mutation);
   const matchingMutation =
     explicitProvider === "unknown" && descriptionProvider !== "unknown"
-      ? { ...mutation, provider_name: descriptionProvider, amount_tolerance: settings.amountTolerance }
-      : { ...mutation, amount_tolerance: settings.amountTolerance };
+      ? { ...mutation, provider_name: descriptionProvider, amount_tolerance: amountTolerance }
+      : { ...mutation, amount_tolerance: amountTolerance };
   const candidates = await fetchCandidates(matchingMutation); // company_id sudah diteruskan via mutation
 
   if (!candidates.length) {

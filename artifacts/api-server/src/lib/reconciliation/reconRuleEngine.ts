@@ -74,6 +74,7 @@ export interface ReconRule {
   targetType: TargetType;
   targetId: number | null;
   targetCoaCode: string | null;
+  amountTolerance?: number | null; // absolute IDR tolerance; null = legacy company fallback
   confidenceScore: number;              // 0–100 for this rule
   stopProcessing: boolean;
   matchCount: number;

@@ -29,6 +29,7 @@ import {
   fetchCandidates,
   scoreUnified,
   classifyMatch,
+  getMatchingAmountTolerance,
 } from "../lib/reconciliation/unifiedMatchingEngine.js";
 import {
   RECONCILIATION_CANDIDATE_SOURCES,
@@ -5459,12 +5460,21 @@ router.post("/smart-import", upload.single("file"), async (req, res) => {
 
       // Run matching engine synchronously for smart-import response
       try {
+        const amountTolerance = await getMatchingAmountTolerance({
+          amount: pr.amount,
+          provider_order_id: providerOrderId,
+          normalized_description: normalizedDesc,
+          company_id: companyId,
+          bank_account_id: null,
+          direction: pr.direction,
+        });
         const candidates = await fetchCandidates({
           amount: pr.amount,
           transaction_date: pr.date,
           direction: pr.direction,
           company_id: companyId,
           provider_name: detectProvider(pr.description),
+          amount_tolerance: amountTolerance,
         });
         const scored = candidates.map(c => scoreUnified({
           amount: pr.amount,
@@ -5475,6 +5485,7 @@ router.post("/smart-import", upload.single("file"), async (req, res) => {
           company_id: companyId,
           bank_account_id: null,
           provider_name: detectProvider(pr.description),
+          amount_tolerance: amountTolerance,
         }, c));
         scored.sort((a, b) => b.score - a.score);
         const best = scored[0];

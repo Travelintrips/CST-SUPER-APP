@@ -745,7 +745,7 @@ function AiRulesTab() {
     setEditRow(null);
     setForm({ condition_field: "description", condition_operator: "contains", condition_value: "",
       conditions: [{ field: "description", operator: "contains", value: "" }], logic: "AND",
-      specificity: 1, confidence: 0.8, priority: 50, source: "manual" });
+      specificity: 1, amount_tolerance: 0, confidence: 0.8, priority: 50, source: "manual" });
     setPreview(null);
     setShowModal(true);
   };
@@ -755,7 +755,8 @@ function AiRulesTab() {
     setEditRow(row);
     setForm({ ...row, conditions: conditions.length ? conditions : [{ field: "description", operator: "contains", value: "" }],
       logic: row.logic === "OR" ? "OR" : "AND", confidence: Number(row.confidence ?? 0.8),
-      priority: Number(row.priority ?? 50), specificity: Number(row.specificity ?? Math.max(1, conditions.length)) });
+      priority: Number(row.priority ?? 50), specificity: Number(row.specificity ?? Math.max(1, conditions.length)),
+      amount_tolerance: row.amount_tolerance == null ? 0 : Number(row.amount_tolerance) });
     setPreview(null);
     setShowModal(true);
   };
@@ -828,7 +829,8 @@ function AiRulesTab() {
                 <th className="pb-2 pr-3">Nama</th>
                 <th className="pb-2 pr-3">Kondisi</th>
                 <th className="pb-2 pr-3">Action Flow</th>
-                <th className="pb-2 pr-3">Conf.</th>
+                 <th className="pb-2 pr-3">Tol. nominal</th>
+                 <th className="pb-2 pr-3">Conf.</th>
                 <th className="pb-2 pr-3">Prioritas</th>
                 <th className="pb-2 pr-3">Sumber</th>
                 <th className="pb-2">Aksi</th>
@@ -836,7 +838,7 @@ function AiRulesTab() {
             </thead>
             <tbody>
               {rows.length === 0 && (
-                <tr><td colSpan={7} className="py-8 text-center text-slate-500">Belum ada AI rule.</td></tr>
+                 <tr><td colSpan={8} className="py-8 text-center text-slate-500">Belum ada AI rule.</td></tr>
               )}
               {rows.map(row => (
                 <tr key={row.id} className="border-b border-slate-800 hover:bg-slate-800/40">
@@ -845,6 +847,11 @@ function AiRulesTab() {
                     {conditionSummary(row)}
                   </td>
                   <td className="py-2 pr-3">{row.action_flow ? flowBadge(row.action_flow) : "—"}</td>
+                   <td className="py-2 pr-3 text-slate-400">
+                     {row.amount_tolerance == null
+                       ? "Default"
+                       : `Rp${Number(row.amount_tolerance).toLocaleString("id-ID")}`}
+                   </td>
                   <td className="py-2 pr-3 text-slate-400">{Number(row.confidence).toFixed(2)}</td>
                   <td className="py-2 pr-3 text-slate-400">{row.priority}</td>
                   <td className="py-2 pr-3">
@@ -918,6 +925,23 @@ function AiRulesTab() {
                 <Plus size={13} className="mr-1" /> Tambah Kondisi
               </Button>
               <p className="text-[11px] text-slate-500">NOT tersedia melalui operator “Tidak mengandung” atau “≠”.</p>
+            </div>
+            <div className="rounded-lg border border-orange-500/30 bg-orange-500/5 p-3 space-y-1.5">
+              <Label className="text-slate-300">Toleransi nominal matching (Rp)</Label>
+              <Input
+                type="number"
+                min={0}
+                max={1_000_000_000}
+                step={1}
+                inputMode="numeric"
+                value={form.amount_tolerance ?? 0}
+                onChange={e => setForm((f: any) => ({ ...f, amount_tolerance: e.target.value === "" ? 0 : Number(e.target.value) }))}
+                className="bg-slate-800 border-slate-600 text-white mt-1"
+              />
+              <p className="text-[11px] text-slate-500">
+                Berlaku hanya untuk mutasi yang memenuhi kondisi rule ini. Rp0 berarti nominal harus sama.
+                QRIS tetap memakai toleransi provider.
+              </p>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>

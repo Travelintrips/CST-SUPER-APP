@@ -71,6 +71,7 @@ export async function runReconRulesMigration(): Promise<void> {
       target_type         TEXT NOT NULL,
       target_id           INTEGER,
       target_coa_code     TEXT,
+      amount_tolerance    NUMERIC(16,2),
       confidence_score    INTEGER NOT NULL DEFAULT 100 CHECK (confidence_score BETWEEN 0 AND 100),
       stop_processing     BOOLEAN NOT NULL DEFAULT TRUE,
       match_count         INTEGER NOT NULL DEFAULT 0,
@@ -84,7 +85,8 @@ export async function runReconRulesMigration(): Promise<void> {
     ALTER TABLE recon_rules
       ADD COLUMN IF NOT EXISTS conditions_json JSONB,
       ADD COLUMN IF NOT EXISTS logic TEXT NOT NULL DEFAULT 'AND',
-      ADD COLUMN IF NOT EXISTS specificity INTEGER NOT NULL DEFAULT 1
+      ADD COLUMN IF NOT EXISTS specificity INTEGER NOT NULL DEFAULT 1,
+      ADD COLUMN IF NOT EXISTS amount_tolerance NUMERIC(16,2)
   `)).catch(e => logger.warn({ err: e.message }, "[recon_rules] multi-condition columns warning"));
 
   await db.execute(sql.raw(`CREATE INDEX IF NOT EXISTS rr_company_idx   ON recon_rules(company_id)`)).catch(() => {});
@@ -145,6 +147,7 @@ function rowToRule(r: Record<string, unknown>): ReconRule {
     targetType:       String(r.target_type) as ReconRule["targetType"],
     targetId:         r.target_id != null ? Number(r.target_id) : null,
     targetCoaCode:    r.target_coa_code ? String(r.target_coa_code) : null,
+    amountTolerance:  r.amount_tolerance == null ? null : Number(r.amount_tolerance),
     confidenceScore:  Number(r.confidence_score ?? 100),
     stopProcessing:   Boolean(r.stop_processing),
     matchCount:       Number(r.match_count ?? 0),
@@ -273,7 +276,7 @@ router.post("/", async (req, res) => {
       INSERT INTO recon_rules
         (company_id, name, description, priority, is_active, direction, bank_account_id,
          condition_type, condition_field, condition_operator, condition_value,
-         target_type, target_id, target_coa_code, confidence_score, stop_processing, created_by)
+         target_type, target_id, target_coa_code, amount_tolerance, confidence_score, stop_processing, created_by)
       VALUES
         (${companyId}, ${escStr(body.name)}, ${escStr(body.description)},
          ${Number(body.priority ?? 100)}, ${body.is_active !== false},
@@ -284,6 +287,7 @@ router.post("/", async (req, res) => {
          ${escStr(body.target_type)},
          ${body.target_id != null ? Number(body.target_id) : "NULL"},
          ${escStr(body.target_coa_code)},
+         ${body.amount_tolerance == null ? "NULL" : Number(body.amount_tolerance)},
          ${Number(body.confidence_score ?? 100)},
          ${body.stop_processing !== false},
          ${escStr((req as any).user?.email ?? null)})
@@ -525,6 +529,7 @@ router.patch("/:id", async (req, res) => {
   if (body.target_type       !== undefined) sets.push(`target_type = ${escStr(body.target_type)}`);
   if (body.target_id         !== undefined) sets.push(`target_id = ${body.target_id != null ? Number(body.target_id) : "NULL"}`);
   if (body.target_coa_code   !== undefined) sets.push(`target_coa_code = ${escStr(body.target_coa_code)}`);
+  if (body.amount_tolerance !== undefined) sets.push(`amount_tolerance = ${body.amount_tolerance == null ? "NULL" : Number(body.amount_tolerance)}`);
   if (body.confidence_score  !== undefined) sets.push(`confidence_score = ${Number(body.confidence_score)}`);
   if (body.stop_processing   !== undefined) sets.push(`stop_processing = ${Boolean(body.stop_processing)}`);
   sets.push(`updated_at = NOW()`);

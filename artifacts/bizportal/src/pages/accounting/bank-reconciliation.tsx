@@ -456,122 +456,6 @@ function SheetConfigManager() {
   );
 }
 
-// ── Bank reconciliation matching settings ────────────────────────────────────
-
-function BankReconciliationSettings({ companyId }: { companyId: number | null }) {
-  const { toast } = useToast();
-  const qc = useQueryClient();
-  const [amountTolerance, setAmountTolerance] = useState("0");
-
-  const settingsQuery = useQuery({
-    queryKey: ["bank-reconciliation-settings", companyId],
-    enabled: companyId != null,
-    queryFn: async () => {
-      const response = await fetch(`/api/bank-reconciliation/settings?companyId=${companyId}`, {
-        credentials: "include",
-      });
-      if (!response.ok) throw new Error(await response.text());
-      return response.json() as Promise<{
-        amount_tolerance: number;
-        max_amount_tolerance: number;
-      }>;
-    },
-  });
-
-  useEffect(() => {
-    if (settingsQuery.data) {
-      setAmountTolerance(String(settingsQuery.data.amount_tolerance ?? 0));
-    }
-  }, [settingsQuery.data]);
-
-  const saveSettings = useMutation({
-    mutationFn: async () => {
-      if (companyId == null) throw new Error("Pilih perusahaan aktif terlebih dahulu.");
-      const value = Number(amountTolerance);
-      if (!Number.isFinite(value) || value < 0 || value > 1_000_000_000) {
-        throw new Error("Toleransi harus berupa angka antara Rp0 dan Rp1.000.000.000.");
-      }
-      const response = await fetch(`/api/bank-reconciliation/settings?companyId=${companyId}`, {
-        method: "PUT",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ amount_tolerance: value }),
-      });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body.error ?? "Gagal menyimpan pengaturan.");
-      return body;
-    },
-    onSuccess: (body) => {
-      setAmountTolerance(String(body.amount_tolerance ?? 0));
-      qc.invalidateQueries({ queryKey: ["bank-reconciliation-settings", companyId] });
-      toast({
-        title: "Pengaturan tersimpan",
-        description: "Toleransi nominal akan digunakan pada matching berikutnya.",
-      });
-    },
-    onError: (error) => {
-      toast({
-        title: "Gagal menyimpan pengaturan",
-        description: error instanceof Error ? error.message : "Terjadi kesalahan.",
-        variant: "destructive",
-      });
-    },
-  });
-
-  return (
-    <Card className="border-primary/20">
-      <CardHeader className="pb-3">
-        <div className="flex items-center gap-2">
-          <Settings2 className="w-4 h-4 text-primary" />
-          <CardTitle className="text-base">Pengaturan Matching</CardTitle>
-          {companyId != null && <Badge variant="secondary">Per perusahaan</Badge>}
-        </div>
-        <p className="text-xs text-muted-foreground mt-1">
-          Atur selisih nominal maksimum saat mencari kandidat transaksi ERP.
-          QRIS tetap mengikuti toleransi provider yang sudah ditetapkan.
-        </p>
-      </CardHeader>
-      <CardContent className="pt-0">
-        {companyId == null ? (
-          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-            Pilih satu perusahaan aktif untuk mengatur toleransi nominal.
-          </div>
-        ) : (
-          <div className="flex flex-col sm:flex-row sm:items-end gap-3">
-            <div className="space-y-1.5 max-w-sm flex-1">
-              <label htmlFor="bank-amount-tolerance" className="text-sm font-medium">
-                Toleransi nominal (Rp)
-              </label>
-              <Input
-                id="bank-amount-tolerance"
-                type="number"
-                min="0"
-                max="1000000000"
-                step="1"
-                inputMode="numeric"
-                value={amountTolerance}
-                onChange={(event) => setAmountTolerance(event.target.value)}
-                disabled={settingsQuery.isLoading || saveSettings.isPending}
-              />
-              <p className="text-xs text-muted-foreground">
-                Rp0 = nominal harus sama. Contoh Rp100 menerima selisih sampai Rp100.
-              </p>
-            </div>
-            <Button
-              onClick={() => saveSettings.mutate()}
-              disabled={settingsQuery.isLoading || saveSettings.isPending}
-              className="sm:mb-0.5"
-            >
-              {saveSettings.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : null}
-              Simpan Pengaturan
-            </Button>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
 type MutationStatus =
   | "unmatched"
   | "matched"
@@ -5898,9 +5782,6 @@ export default function BankReconciliationPage() {
 
         {/* ── Step Progress ─────────────────────────────────── */}
         <StepProgressBar summaryMap={summaryMap} workflowStage={workflowStage} />
-
-        {/* ── Matching Settings ─────────────────────────────── */}
-        <BankReconciliationSettings companyId={qrisCompanyId} />
 
         {/* ── AI Action Center ──────────────────────────────── */}
         <AIActionCenter
