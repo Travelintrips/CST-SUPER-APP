@@ -173,9 +173,13 @@ const AiRuleSchema = z.object({
 });
 
 function normalizeRuleConditions(d: any) {
-  const conditions = d.conditions?.length
+  const rawConditions = d.conditions?.length
     ? d.conditions
     : [{ field: d.condition_field, operator: d.condition_operator, value: d.condition_value }];
+  const conditions = rawConditions.map((condition: any) => ({
+    ...condition,
+    negate: Boolean(condition.negate),
+  }));
   return {
     conditions,
     logic: d.logic ?? "AND",
@@ -452,42 +456,115 @@ reconClassificationRouter.post("/ai-rules", async (req, res) => {
     }
     const normalized = normalizeRuleConditions(d);
     const userId = (req as any).user?.id ?? null;
+    const companyWhere = d.company_id == null
+      ? "company_id IS NULL"
+      : `company_id = ${d.company_id}`;
+    const conditionsSql = `'${JSON.stringify(normalized.conditions).replace(/'/g, "''")}'::jsonb`;
+    const actionFlowSql = d.action_flow == null
+      ? "''"
+      : `'${d.action_flow.replace(/'/g, "''")}'`;
+    const actionCoaSql = d.action_coa_code
+      ? `'${d.action_coa_code.replace(/'/g, "''")}'`
+      : "NULL";
+    const actionConfigSql = d.action_config_code
+      ? `'${d.action_config_code.replace(/'/g, "''")}'`
+      : "NULL";
+    const descriptionSql = d.description
+      ? `'${d.description.replace(/'/g, "''")}'`
+      : "NULL";
+    const conditionValueSql = `'${String(normalized.condition.value).replace(/'/g, "''")}'`;
+    const logicSql = `'${normalized.logic}'`;
+    const amountToleranceSql = d.amount_tolerance == null ? "NULL" : `${d.amount_tolerance}`;
+    const referenceAmountSql = d.reference_amount == null ? "NULL" : `${d.reference_amount}`;
 
-    const result = await db.execute(sql.raw(`
-      INSERT INTO recon_ai_classification_rules
-        (company_id, config_id, name, description, condition_field, condition_operator, condition_value,
-         conditions_json, logic, specificity,
-         action_flow, action_coa_code, action_config_code, amount_tolerance, reference_amount,
-         confidence, priority, source, created_by)
-      VALUES (
-        ${d.company_id ?? "NULL"},
-        ${d.config_id ?? "NULL"},
-        '${d.name.replace(/'/g, "''")}',
-        ${d.description ? `'${d.description.replace(/'/g, "''")}'` : "NULL"},
-        '${d.condition_field}',
-        '${d.condition_operator}',
-         '${String(normalized.condition.value).replace(/'/g, "''")}',
-         '${JSON.stringify(normalized.conditions).replace(/'/g, "''")}'::jsonb,
-         '${normalized.logic}', ${normalized.specificity},
-        ${d.action_flow ? `'${d.action_flow}'` : "NULL"},
-        ${d.action_coa_code ? `'${d.action_coa_code.replace(/'/g, "''")}'` : "NULL"},
-        ${d.action_config_code ? `'${d.action_config_code.replace(/'/g, "''")}'` : "NULL"},
-         ${d.amount_tolerance == null ? "NULL" : d.amount_tolerance},
-         ${d.reference_amount == null ? "NULL" : d.reference_amount},
-        ${d.confidence},
-        ${d.priority},
-        '${d.source}',
-        ${userId ? `'${userId}'` : "NULL"}
-      )
-      RETURNING *
+    // Creating the same logical rule again should revise the existing Rule AI
+    // instead of creating a second active rule. The identity deliberately
+    // excludes the name, COA, and nominal so an administrator can correct the
+    // action or nominal of an existing condition in-place.
+    const existing = await db.execute(sql.raw(`
+      SELECT id
+      FROM recon_ai_classification_rules
+      WHERE ${companyWhere}
+        AND condition_field = '${d.condition_field}'
+        AND condition_operator = '${d.condition_operator}'
+        AND condition_value = ${conditionValueSql}
+        AND COALESCE(
+          conditions_json,
+          jsonb_build_array(jsonb_build_object(
+            'field', condition_field,
+            'operator', condition_operator,
+            'value', condition_value,
+            'negate', false
+          ))
+        ) = ${conditionsSql}
+        AND COALESCE(logic, 'AND') = ${logicSql}
+        AND COALESCE(action_flow, '') = ${actionFlowSql}
+      ORDER BY is_active DESC, updated_at DESC NULLS LAST, id DESC
+      LIMIT 1
     `));
+    const existingId = Number((existing.rows[0] as any)?.id ?? 0);
+
+    const result = await db.execute(sql.raw(existingId > 0
+      ? `
+        UPDATE recon_ai_classification_rules
+        SET
+          config_id = ${d.config_id ?? "NULL"},
+          name = '${d.name.replace(/'/g, "''")}',
+          description = ${descriptionSql},
+          condition_field = '${d.condition_field}',
+          condition_operator = '${d.condition_operator}',
+          condition_value = ${conditionValueSql},
+          conditions_json = ${conditionsSql},
+          logic = ${logicSql},
+          specificity = ${normalized.specificity},
+          action_flow = ${actionFlowSql === "''" ? "NULL" : actionFlowSql},
+          action_coa_code = ${actionCoaSql},
+          action_config_code = ${actionConfigSql},
+          amount_tolerance = ${amountToleranceSql},
+          reference_amount = ${referenceAmountSql},
+          confidence = ${d.confidence},
+          priority = ${d.priority},
+          source = '${d.source}',
+          is_active = TRUE,
+          updated_at = NOW()
+        WHERE id = ${existingId}
+        RETURNING *
+      `
+      : `
+        INSERT INTO recon_ai_classification_rules
+          (company_id, config_id, name, description, condition_field, condition_operator, condition_value,
+           conditions_json, logic, specificity,
+           action_flow, action_coa_code, action_config_code, amount_tolerance, reference_amount,
+           confidence, priority, source, created_by)
+        VALUES (
+          ${d.company_id ?? "NULL"},
+          ${d.config_id ?? "NULL"},
+          '${d.name.replace(/'/g, "''")}',
+          ${descriptionSql},
+          '${d.condition_field}',
+          '${d.condition_operator}',
+           ${conditionValueSql},
+           ${conditionsSql},
+           ${logicSql}, ${normalized.specificity},
+          ${actionFlowSql === "''" ? "NULL" : actionFlowSql},
+          ${actionCoaSql},
+          ${actionConfigSql},
+           ${amountToleranceSql},
+           ${referenceAmountSql},
+          ${d.confidence},
+          ${d.priority},
+          '${d.source}',
+          ${userId ? `'${userId}'` : "NULL"}
+        )
+        RETURNING *
+      `));
     const created = result.rows[0] as any;
     const companyId = created?.company_id != null ? Number(created.company_id) : null;
     if (companyId && Number.isSafeInteger(companyId)) {
       await syncAiClassificationRulesToOperational(companyId);
       invalidateRulesCache(companyId);
     }
-    res.status(201).json({ data: created });
+    res.status(existingId > 0 ? 200 : 201).json({ data: created, updated_existing: existingId > 0 });
   } catch (err) {
     logger.error({ err }, "[ReconClassification] POST /ai-rules error:");
     res.status(500).json({ error: "Gagal membuat AI rule." });
