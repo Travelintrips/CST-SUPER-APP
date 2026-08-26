@@ -548,6 +548,8 @@ export function Navbar() {
     location === "/trucking" ||
     (location.startsWith("/marketplace") && location.includes("type=service"));
 
+  const desktopDropdownOpen = servicesOpen || moreOpen || mktOpen;
+
   const brandName = company?.name
     ? company.name.length > COMPANY_CONFIG.brandNameMaxLength ? COMPANY_CONFIG.brandName : company.name
     : COMPANY_CONFIG.brandName;
@@ -607,7 +609,13 @@ export function Navbar() {
           {/* Desktop navigation remains visible on laptops/PCs. Lower-priority
               items collapse into "Lainnya" at narrower desktop widths so the
               header stays desktop without allowing labels to overlap. */}
-          <div className="hidden lg:flex items-center gap-0 xl:gap-0.5 flex-1 min-w-0 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div
+            className={`hidden lg:flex items-center gap-0 xl:gap-0.5 flex-1 min-w-0 ${
+              desktopDropdownOpen
+                ? "overflow-visible"
+                : "overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            }`}
+          >
 
             {isAuth ? (
               /* ── Portal Nav (logged-in customer) ──────── */
@@ -777,7 +785,7 @@ export function Navbar() {
                 </Link>
 
                 {/* Services dropdown */}
-                <div className="relative" ref={servicesRef}>
+                <div className="relative shrink-0" ref={servicesRef}>
                   <button
                     className={navItemCls(isServicesActive)}
                     onClick={() => setServicesOpen((v) => !v)}
@@ -871,7 +879,7 @@ export function Navbar() {
                 </div>
 
                 {/* Kalkulator — CSS-hover dropdown, no click state */}
-                <div className="relative group">
+                  <div className="relative group shrink-0">
                   <button
                     className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-[13px] font-semibold transition-all duration-150 whitespace-nowrap ${
                       location === "/kalkulator-impor" || location === "/kalkulator-biaya-logistik"
