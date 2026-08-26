@@ -159,6 +159,7 @@ const AiRuleSchema = z.object({
   action_coa_code:     z.string().optional().nullable(),
   action_config_code:  z.string().optional().nullable(),
   amount_tolerance:    z.coerce.number().min(0).max(1_000_000_000).optional().nullable(),
+  reference_amount:    z.coerce.number().finite().optional().nullable(),
   confidence:          z.coerce.number().min(0).max(1).default(0.8),
   priority:            z.coerce.number().int().min(1).max(999).default(50),
   source:              z.enum(["manual", "ai_generated"]).default("manual"),
@@ -192,6 +193,8 @@ function aiRowToReconRule(row: any, fallbackCompanyId: number): ReconRule {
     targetType: row.action_flow === "INCOME_ALLOCATION" ? "income" : "expense",
     targetId: null, targetCoaCode: row.action_coa_code ?? null,
     amountTolerance: row.amount_tolerance == null ? null : Number(row.amount_tolerance),
+    referenceAmount: row.reference_amount == null ? null : Number(row.reference_amount),
+    aiClassificationRuleId: row.id == null ? null : Number(row.id),
     confidenceScore: Math.round(Number(row.confidence ?? 0) * 100), stopProcessing: true,
     matchCount: 0, lastMatchedAt: null, createdBy: row.created_by ?? null,
     createdAt: String(row.created_at ?? ""), updatedAt: String(row.updated_at ?? ""),
@@ -436,6 +439,11 @@ reconClassificationRouter.post("/ai-rules", async (req, res) => {
     const parsed = AiRuleSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Validasi gagal.", details: parsed.error.issues });
     const d = parsed.data;
+    if (d.amount_tolerance != null && d.amount_tolerance > 0 && d.reference_amount == null) {
+      return res.status(400).json({
+        error: "reference_amount wajib diisi jika amount_tolerance lebih besar dari nol.",
+      });
+    }
     const normalized = normalizeRuleConditions(d);
     const userId = (req as any).user?.id ?? null;
 
@@ -443,7 +451,8 @@ reconClassificationRouter.post("/ai-rules", async (req, res) => {
       INSERT INTO recon_ai_classification_rules
         (company_id, config_id, name, description, condition_field, condition_operator, condition_value,
          conditions_json, logic, specificity,
-         action_flow, action_coa_code, action_config_code, amount_tolerance, confidence, priority, source, created_by)
+         action_flow, action_coa_code, action_config_code, amount_tolerance, reference_amount,
+         confidence, priority, source, created_by)
       VALUES (
         ${d.company_id ?? "NULL"},
         ${d.config_id ?? "NULL"},
@@ -458,6 +467,7 @@ reconClassificationRouter.post("/ai-rules", async (req, res) => {
         ${d.action_coa_code ? `'${d.action_coa_code.replace(/'/g, "''")}'` : "NULL"},
         ${d.action_config_code ? `'${d.action_config_code.replace(/'/g, "''")}'` : "NULL"},
          ${d.amount_tolerance == null ? "NULL" : d.amount_tolerance},
+         ${d.reference_amount == null ? "NULL" : d.reference_amount},
         ${d.confidence},
         ${d.priority},
         '${d.source}',
@@ -572,6 +582,11 @@ reconClassificationRouter.patch("/ai-rules/:id", async (req, res) => {
     const parsed = AiRuleSchema.partial().safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Validasi gagal.", details: parsed.error.issues });
     const d = parsed.data;
+    if (d.amount_tolerance != null && d.amount_tolerance > 0 && d.reference_amount == null) {
+      return res.status(400).json({
+        error: "reference_amount wajib diisi jika amount_tolerance lebih besar dari nol.",
+      });
+    }
     const normalized = normalizeRuleConditions({ ...d, condition_field: d.condition_field ?? "description", condition_operator: d.condition_operator ?? "contains", condition_value: d.condition_value ?? " " });
 
     const setClauses: string[] = [`updated_at = NOW()`];
@@ -587,6 +602,7 @@ reconClassificationRouter.patch("/ai-rules/:id", async (req, res) => {
     if (d.action_coa_code !== undefined)    setClauses.push(`action_coa_code = ${d.action_coa_code ? `'${d.action_coa_code.replace(/'/g, "''")}'` : "NULL"}`);
     if (d.action_config_code !== undefined) setClauses.push(`action_config_code = ${d.action_config_code ? `'${d.action_config_code.replace(/'/g, "''")}'` : "NULL"}`);
     if (d.amount_tolerance !== undefined)   setClauses.push(`amount_tolerance = ${d.amount_tolerance == null ? "NULL" : d.amount_tolerance}`);
+    if (d.reference_amount !== undefined)   setClauses.push(`reference_amount = ${d.reference_amount == null ? "NULL" : d.reference_amount}`);
     if (d.confidence !== undefined)         setClauses.push(`confidence = ${d.confidence}`);
     if (d.priority !== undefined)           setClauses.push(`priority = ${d.priority}`);
 

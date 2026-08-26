@@ -244,6 +244,11 @@ router.post("/", async (req, res) => {
     conditionField:     body.condition_field,
     conditionOperator:  body.condition_operator,
     conditionValue:     body.condition_value,
+    conditionsJson:     body.conditions_json ?? body.conditions,
+    logic:              body.logic,
+    specificity:        body.specificity,
+    amountTolerance:    body.amount_tolerance,
+    referenceAmount:    body.reference_amount,
     targetType:         body.target_type,
     targetId:           body.target_id,
     targetCoaCode:      body.target_coa_code,
@@ -283,7 +288,9 @@ router.post("/", async (req, res) => {
       INSERT INTO recon_rules
         (company_id, name, description, priority, is_active, direction, bank_account_id,
          condition_type, condition_field, condition_operator, condition_value,
-         target_type, target_id, target_coa_code, amount_tolerance, confidence_score, stop_processing, created_by)
+         conditions_json, logic, specificity,
+         target_type, target_id, target_coa_code, amount_tolerance, reference_amount,
+         confidence_score, stop_processing, created_by)
       VALUES
         (${companyId}, ${escStr(body.name)}, ${escStr(body.description)},
          ${Number(body.priority ?? 100)}, ${body.is_active !== false},
@@ -291,10 +298,18 @@ router.post("/", async (req, res) => {
          ${body.bank_account_id != null ? Number(body.bank_account_id) : "NULL"},
          'SIMPLE', ${escStr(body.condition_field)}, ${escStr(body.condition_operator)},
          ${escStr(body.condition_value ?? "")},
+          ${body.conditions_json == null && body.conditions == null
+            ? "NULL"
+            : `${escStr(JSON.stringify(body.conditions_json ?? body.conditions))}::jsonb`},
+          ${escStr(String(body.logic ?? "AND").toUpperCase() === "OR" ? "OR" : "AND")},
+          ${Number(body.specificity ?? (Array.isArray(body.conditions_json ?? body.conditions)
+            ? (body.conditions_json ?? body.conditions).length
+            : 1))},
          ${escStr(body.target_type)},
          ${body.target_id != null ? Number(body.target_id) : "NULL"},
          ${escStr(body.target_coa_code)},
          ${body.amount_tolerance == null ? "NULL" : Number(body.amount_tolerance)},
+          ${body.reference_amount == null ? "NULL" : Number(body.reference_amount)},
          ${Number(body.confidence_score ?? 100)},
          ${body.stop_processing !== false},
          ${escStr((req as any).user?.email ?? null)})
@@ -536,12 +551,11 @@ router.patch("/:id", async (req, res) => {
   if (body.conditions_json   !== undefined) sets.push(`conditions_json = ${body.conditions_json == null ? "NULL" : `${escStr(JSON.stringify(body.conditions_json))}::jsonb`}`);
   if (body.logic              !== undefined) sets.push(`logic = ${escStr(String(body.logic).toUpperCase() === "OR" ? "OR" : "AND")}`);
   if (body.specificity        !== undefined) sets.push(`specificity = ${Number(body.specificity)}`);
-  if (body.amount_tolerance   !== undefined) sets.push(`amount_tolerance = ${body.amount_tolerance == null ? "NULL" : Number(body.amount_tolerance)}`);
+   if (body.amount_tolerance   !== undefined) sets.push(`amount_tolerance = ${body.amount_tolerance == null ? "NULL" : Number(body.amount_tolerance)}`);
   if (body.reference_amount   !== undefined) sets.push(`reference_amount = ${body.reference_amount == null ? "NULL" : Number(body.reference_amount)}`);
   if (body.target_type       !== undefined) sets.push(`target_type = ${escStr(body.target_type)}`);
   if (body.target_id         !== undefined) sets.push(`target_id = ${body.target_id != null ? Number(body.target_id) : "NULL"}`);
   if (body.target_coa_code   !== undefined) sets.push(`target_coa_code = ${escStr(body.target_coa_code)}`);
-  if (body.amount_tolerance !== undefined) sets.push(`amount_tolerance = ${body.amount_tolerance == null ? "NULL" : Number(body.amount_tolerance)}`);
   if (body.confidence_score  !== undefined) sets.push(`confidence_score = ${Number(body.confidence_score)}`);
   if (body.stop_processing   !== undefined) sets.push(`stop_processing = ${Boolean(body.stop_processing)}`);
   sets.push(`updated_at = NOW()`);

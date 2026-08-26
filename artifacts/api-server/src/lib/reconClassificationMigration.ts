@@ -157,7 +157,8 @@ export async function runReconClassificationMigration(): Promise<void> {
       action_flow         TEXT,
       action_coa_code     TEXT,
       action_config_code  TEXT,
-       amount_tolerance    NUMERIC(16,2),
+      amount_tolerance    NUMERIC(16,2),
+      reference_amount    NUMERIC(16,2),
       confidence          NUMERIC(4,2) DEFAULT 0.80,
       priority            INTEGER NOT NULL DEFAULT 50,
       is_active           BOOLEAN NOT NULL DEFAULT TRUE,
@@ -172,18 +173,9 @@ export async function runReconClassificationMigration(): Promise<void> {
       ADD COLUMN IF NOT EXISTS conditions_json JSONB,
       ADD COLUMN IF NOT EXISTS logic TEXT NOT NULL DEFAULT 'AND',
       ADD COLUMN IF NOT EXISTS specificity INTEGER NOT NULL DEFAULT 1,
-       ADD COLUMN IF NOT EXISTS operational_rule_id INTEGER,
-       ADD COLUMN IF NOT EXISTS amount_tolerance NUMERIC(16,2)
-  `));
-
-  await db.execute(sql.raw(`
-    ALTER TABLE recon_ai_classification_rules
-      ADD COLUMN IF NOT EXISTS conditions_json JSONB,
-      ADD COLUMN IF NOT EXISTS logic TEXT NOT NULL DEFAULT 'AND',
-      ADD COLUMN IF NOT EXISTS specificity INTEGER NOT NULL DEFAULT 1,
-      ADD COLUMN IF NOT EXISTS amount_tolerance NUMERIC(15,2),
-      ADD COLUMN IF NOT EXISTS reference_amount NUMERIC(15,2),
-      ADD COLUMN IF NOT EXISTS operational_rule_id INTEGER
+      ADD COLUMN IF NOT EXISTS operational_rule_id INTEGER,
+      ADD COLUMN IF NOT EXISTS amount_tolerance NUMERIC(16,2),
+      ADD COLUMN IF NOT EXISTS reference_amount NUMERIC(16,2)
   `));
 
   await db.execute(sql.raw(`
@@ -349,7 +341,8 @@ export async function syncOperationalReconRulesToClassification(): Promise<void>
       INSERT INTO recon_ai_classification_rules
         (company_id, name, description, condition_field, condition_operator,
          condition_value, action_flow, action_coa_code, action_config_code,
-          config_id, amount_tolerance, confidence, priority, source)
+         conditions_json, logic, specificity, config_id, amount_tolerance,
+         reference_amount, confidence, priority, source)
       SELECT
         r.company_id,
         LEFT(COALESCE(r.name, 'Referensi Bank — ' || r.condition_value), 120),
@@ -360,8 +353,12 @@ export async function syncOperationalReconRulesToClassification(): Promise<void>
         CASE WHEN r.direction = 'IN' THEN 'INCOME_ALLOCATION' ELSE 'ROUTINE_EXPENSE_ALLOCATION' END,
         NULLIF(TRIM(r.target_coa_code), ''),
         c.code,
+         r.conditions_json,
+         COALESCE(r.logic, 'AND'),
+         COALESCE(r.specificity, 1),
         c.id,
          r.amount_tolerance,
+         r.reference_amount,
         1.00,
         COALESCE(r.priority, 120),
         'manual'
@@ -428,6 +425,66 @@ export async function syncAiClassificationRulesToOperational(
       ? ""
       : `AND r.company_id = ${normalizedCompanyId}`;
 
+    // Older deployments may already contain the corresponding operational
+    // rule, but without the link. Claim only an active, unclaimed rule with
+    // the same company, direction, first condition, and COA. This repairs the
+    // historical split without attaching an unrelated rule.
+    await db.execute(sql.raw(`
+      UPDATE recon_rules o
+      SET ai_classification_rule_id = r.id, updated_at = NOW()
+      FROM recon_ai_classification_rules r
+      WHERE r.operational_rule_id IS NULL
+        AND COALESCE(r.is_active, TRUE) = TRUE
+        AND o.ai_classification_rule_id IS NULL
+        AND COALESCE(o.is_active, TRUE) = TRUE
+        AND o.company_id = r.company_id
+        AND COALESCE(o.direction, '') = CASE
+          WHEN UPPER(COALESCE(r.action_flow, '')) LIKE '%INCOME%' THEN 'IN'
+          ELSE 'OUT'
+        END
+        AND o.condition_field = r.condition_field
+        AND o.condition_operator = r.condition_operator
+        AND o.condition_value = COALESCE(r.condition_value, '')
+        AND COALESCE(o.target_coa_code, '') = COALESCE(r.action_coa_code, '')
+        AND o.id = (
+          SELECT MIN(o2.id)
+          FROM recon_rules o2
+          WHERE o2.ai_classification_rule_id IS NULL
+            AND COALESCE(o2.is_active, TRUE) = TRUE
+            AND o2.company_id = r.company_id
+            AND COALESCE(o2.direction, '') = CASE
+              WHEN UPPER(COALESCE(r.action_flow, '')) LIKE '%INCOME%' THEN 'IN'
+              ELSE 'OUT'
+            END
+            AND o2.condition_field = r.condition_field
+            AND o2.condition_operator = r.condition_operator
+            AND o2.condition_value = COALESCE(r.condition_value, '')
+            AND COALESCE(o2.target_coa_code, '') = COALESCE(r.action_coa_code, '')
+        )
+        ${companyFilter}
+    `));
+
+    await db.execute(sql.raw(`
+      UPDATE recon_ai_classification_rules r
+      SET operational_rule_id = o.id, updated_at = NOW()
+      FROM recon_rules o
+      WHERE o.ai_classification_rule_id = r.id
+        AND r.operational_rule_id IS NULL
+        ${companyFilter}
+    `));
+
+    // Complete the reverse side for rows created by an earlier version of the
+    // synchronizer, which stored operational_rule_id but not the operational
+    // row's ai_classification_rule_id.
+    await db.execute(sql.raw(`
+      UPDATE recon_rules o
+      SET ai_classification_rule_id = r.id, updated_at = NOW()
+      FROM recon_ai_classification_rules r
+      WHERE r.operational_rule_id = o.id
+        AND o.ai_classification_rule_id IS NULL
+        ${companyFilter}
+    `));
+
     // Deactivation is intentionally limited to rows explicitly created as an
     // AI-rule mirror. A display mirror of an independently authored Referensi
     // COA must not be allowed to disable the authoritative operational rule.
@@ -460,7 +517,8 @@ export async function syncAiClassificationRulesToOperational(
         conditions_json = r.conditions_json,
         logic = COALESCE(r.logic, 'AND'),
         specificity = COALESCE(r.specificity, 1),
-         amount_tolerance = r.amount_tolerance,
+        amount_tolerance = r.amount_tolerance,
+        reference_amount = r.reference_amount,
         target_type = CASE
           WHEN UPPER(COALESCE(r.action_flow, '')) LIKE '%INCOME%' THEN 'income'
           ELSE 'expense'
@@ -484,7 +542,8 @@ export async function syncAiClassificationRulesToOperational(
          bank_account_id, condition_type, condition_field, condition_operator,
          condition_value, conditions_json, logic, specificity,
          target_type, target_id, target_coa_code,
-          amount_tolerance, confidence_score, stop_processing, created_by, ai_classification_rule_id)
+         amount_tolerance, reference_amount, confidence_score, stop_processing,
+         created_by, ai_classification_rule_id)
       SELECT
         r.company_id,
         r.name,
@@ -510,6 +569,7 @@ export async function syncAiClassificationRulesToOperational(
         NULL,
         r.action_coa_code,
          r.amount_tolerance,
+         r.reference_amount,
         LEAST(100, GREATEST(0, ROUND(COALESCE(r.confidence, 1.0) * 100))),
         TRUE,
         r.created_by,

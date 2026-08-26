@@ -329,6 +329,54 @@ describe("Rule Engine — structured multi-condition rules", () => {
   });
 });
 
+describe("Rule Engine — amount tolerance guard", () => {
+  it("does not match a tolerance rule when its reference amount is missing", () => {
+    const rules = [makeRule({
+      conditions: [
+        { field: "description", operator: "contains", value: "99102" },
+        { field: "bank", operator: "equals", value: "BMRIIDJA" },
+      ],
+      logic: "AND",
+      amountTolerance: 2500,
+      referenceAmount: null,
+    })];
+
+    expect(evaluateReconRules(rules, makeMutation({
+      description: "BBLUI FELICIA 99102",
+      bank: "BMRIIDJA",
+      amount: 100000,
+    })).matched).toBe(false);
+  });
+
+  it("requires all conditions and the configured amount window", () => {
+    const rules = [makeRule({
+      conditions: [
+        { field: "description", operator: "contains", value: "99102" },
+        { field: "bank", operator: "equals", value: "BMRIIDJA" },
+      ],
+      logic: "AND",
+      amountTolerance: 2500,
+      referenceAmount: 100000,
+    })];
+
+    expect(evaluateReconRules(rules, makeMutation({
+      description: "BBLUI FELICIA 99102",
+      bank: "BMRIIDJA",
+      amount: 102500,
+    })).matched).toBe(true);
+    expect(evaluateReconRules(rules, makeMutation({
+      description: "BBLUI FELICIA 99102",
+      bank: "BCA",
+      amount: 100000,
+    })).matched).toBe(false);
+    expect(evaluateReconRules(rules, makeMutation({
+      description: "BBLUI FELICIA 99102",
+      bank: "BMRIIDJA",
+      amount: 103000,
+    })).matched).toBe(false);
+  });
+});
+
 // ─── Test 11-20: Expected Cash Flow ───────────────────────────────────────────
 
 describe("Expected Cash Flow — Test 11-14: source_key and structure", () => {
