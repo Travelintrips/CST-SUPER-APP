@@ -77,7 +77,6 @@ export interface ReconRule {
   conditionValue: string;               // for "between": "min,max"
   /** Optional stable AND/OR condition set. Legacy fields remain the first condition. */
   conditionsJson?: ReconRuleCondition[] | null;
-  logic?: "AND" | "OR";
   logic?: RuleLogic;
   specificity?: number;
   /** Maximum absolute difference from referenceAmount, in the mutation currency. */
@@ -447,6 +446,7 @@ export function evaluateReconRules(
     return a.id - b.id;
   });
 
+  const matching: Array<{ rule: ReconRule; reasons: ReconRuleMatchReason[] }> = [];
   let stopAfterPriority: number | null = null;
   for (const rule of sorted) {
     if (stopAfterPriority !== null && rule.priority < stopAfterPriority) break;
@@ -507,6 +507,23 @@ export function evaluateReconRules(
     const conditionPassed = conditionsPassed && amountPassed;
     evaluated.push({ ruleId: rule.id, ruleName: rule.name, matched: conditionPassed });
     if (conditionPassed) {
+      const reasons: ReconRuleMatchReason[] = conditions.map((condition, index) => ({
+        code: `${buildReasonCode(condition.field, condition.operator)}_${index + 1}`,
+        label: `${condition.negate ? "Bukan " : ""}${buildReasonLabel(
+          condition.field,
+          condition.operator,
+          String(condition.value ?? ""),
+        )}`,
+        score: rule.confidenceScore,
+      }));
+      if (amountToleranceConfigured) {
+        reasons.push({
+          code: "RULE_AMOUNT_WITHIN_TOLERANCE",
+          label: `Nominal ${mutation.amount} berada dalam toleransi ±${rule.amountTolerance} dari referensi ${rule.referenceAmount}`,
+          score: rule.confidenceScore,
+        });
+      }
+
       const result: ReconRuleMatchResult = {
         matched: true,
         ruleId: rule.id,
@@ -519,7 +536,6 @@ export function evaluateReconRules(
         evaluated,
       };
 
-      return result;
       matching.push({
         rule,
         reasons,
@@ -530,5 +546,31 @@ export function evaluateReconRules(
     }
   }
 
-  return { matched: false, evaluated };
+  if (matching.length === 0) return { matched: false, evaluated };
+  const top = matching[0];
+  const contenders = matching.filter(x =>
+    x.rule.priority === top.rule.priority &&
+    (x.rule.specificity ?? 0) === (top.rule.specificity ?? 0) &&
+    x.rule.confidenceScore === top.rule.confidenceScore
+  );
+  const outputs = new Set(contenders.map(x => `${x.rule.targetType}:${x.rule.targetCoaCode ?? ""}`));
+  if (outputs.size > 1) {
+    return {
+      matched: false,
+      ambiguityCode: "AMBIGUOUS_RULE_MATCH",
+      ambiguityReason: "Beberapa rule dengan prioritas, spesifisitas, dan confidence setara menghasilkan action berbeda.",
+      evaluated,
+    };
+  }
+  return {
+    matched: true,
+    ruleId: top.rule.id,
+    ruleName: top.rule.name,
+    targetType: top.rule.targetType,
+    targetCoaCode: top.rule.targetCoaCode,
+    confidence: top.rule.confidenceScore,
+    reasons: top.reasons,
+    stopProcessing: top.rule.stopProcessing,
+    evaluated,
+  };
 }

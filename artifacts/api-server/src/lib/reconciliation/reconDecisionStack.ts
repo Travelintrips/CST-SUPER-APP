@@ -162,9 +162,6 @@ export async function loadReconRulesForCompany(companyId: number): Promise<Recon
         id, company_id, name, description, priority, is_active,
         direction, bank_account_id, condition_type, condition_field,
         condition_operator, condition_value, target_type, target_id,
-         target_coa_code, confidence_score, stop_processing,
-         conditions_json, logic, specificity, amount_tolerance, reference_amount,
-         ai_classification_rule_id,
         target_coa_code, confidence_score, stop_processing,
         conditions_json, logic, specificity, amount_tolerance, reference_amount,
         ai_classification_rule_id,
@@ -207,7 +204,6 @@ export async function loadReconRulesForCompany(companyId: number): Promise<Recon
       lastMatchedAt:    r.last_matched_at ? String(r.last_matched_at) : null,
       createdBy:        r.created_by ? String(r.created_by) : null,
       createdAt:        String(r.created_at ?? ""),
-       updatedAt:        String(r.updated_at ?? ""),
       updatedAt:        String(r.updated_at ?? ""),
     })) as ReconRule[];
 
