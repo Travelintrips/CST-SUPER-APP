@@ -11,6 +11,10 @@ Public Customer Portal Google login must use the API's Google OAuth flow and fin
 
 **Operational note:** After changing callback-origin routing, the public deployment must be republished; a running preview can generate the correct URI while the live custom domain continues serving the previous deployment.
 
+**Production credential diagnosis:** When the callback reaches `STATE_VALIDATION passed` but Google's token endpoint returns HTTP 401 `invalid_client`, the production `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` pair is stale, mismatched, or belongs to a disabled OAuth client. The portal cookie is never reached; a later retry with the consumed state may appear as `STATE_INVALID`.
+
+**How to apply:** Verify the same OAuth client pair in the production secret bundle and Google Cloud, keeping the registered callback URI `https://cstlogistic.co.id/api/callback/google`. Reload the live deployment after changing the bundle; never paste client secrets into chat.
+
 **Production state rule:** OAuth state storage must fail closed when the shared DB is unavailable; never rely on an in-memory fallback in a production deployment that may route authorization and callback requests to different instances.
 
 **Why:** An in-memory state fallback can make the authorization request succeed but cause the callback to report `STATE_INVALID` when it lands on another autoscaled instance, hiding the underlying storage outage.
