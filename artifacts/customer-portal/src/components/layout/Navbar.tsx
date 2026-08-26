@@ -325,7 +325,7 @@ const NAV_SCROLLED: React.CSSProperties = {
 
 function navItemCls(active: boolean) {
   return [
-    "flex items-center gap-1 px-1.5 xl:px-2 2xl:px-3.5 py-2 text-[13px] 2xl:text-[14px] font-medium rounded-xl",
+    "flex shrink-0 items-center gap-1 px-1.5 xl:px-2 2xl:px-3.5 py-2 text-[13px] 2xl:text-[14px] font-medium rounded-xl",
     "transition-all duration-200 whitespace-nowrap cursor-pointer select-none tracking-[-0.01em]",
     active
       ? "bg-sky-50 text-sky-700"
@@ -607,7 +607,7 @@ export function Navbar() {
           {/* Desktop navigation remains visible on laptops/PCs. Lower-priority
               items collapse into "Lainnya" at narrower desktop widths so the
               header stays desktop without allowing labels to overlap. */}
-          <div className="hidden lg:flex items-center gap-0 xl:gap-0.5 flex-1 min-w-0">
+          <div className="hidden lg:flex items-center gap-0 xl:gap-0.5 flex-1 min-w-0 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
 
             {isAuth ? (
               /* ── Portal Nav (logged-in customer) ──────── */
@@ -620,7 +620,7 @@ export function Navbar() {
                     Dashboard
                   </Link>
                   {/* Marketplace dropdown (buyer portal) */}
-                  <div className="relative" ref={mktRef}>
+                  <div className="relative shrink-0" ref={mktRef}>
                     <button
                       className={navItemCls(location.startsWith("/marketplace"))}
                       onClick={() => setMktOpen((v) => !v)}
@@ -671,7 +671,7 @@ export function Navbar() {
                     )}
                   </div>
                   {/* Calculators remain available after login */}
-                  <div className="relative group">
+                  <div className="relative group shrink-0">
                     <button
                       className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-[13px] font-semibold transition-all duration-150 whitespace-nowrap ${
                         location === "/kalkulator-impor" || location === "/kalkulator-biaya-logistik"
@@ -727,7 +727,7 @@ export function Navbar() {
                     <span className="hidden 2xl:inline">{t("nav.invoicePayment")}</span>
                     <span className="2xl:hidden">{t("nav.invoice")}</span>
                   </Link>
-                  <div className="relative group 2xl:hidden">
+                  <div className="relative group 2xl:hidden shrink-0">
                     <button
                       className={navItemCls(location === "/portal-dokumen" || location === "/portal-invoice")}
                       aria-haspopup="menu"
@@ -918,7 +918,7 @@ export function Navbar() {
                 </div>
 
                 {/* More dropdown */}
-                <div className="relative hidden xl:block" ref={moreRef}>
+                <div className="relative hidden xl:block shrink-0" ref={moreRef}>
                   <button
                     className={navItemCls(location === "/calculator")}
                     onClick={() => setMoreOpen((v) => !v)}
