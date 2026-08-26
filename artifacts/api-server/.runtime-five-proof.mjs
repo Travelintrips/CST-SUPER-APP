@@ -59,7 +59,8 @@ async function request(path, { method = "GET", body, jar, headers = {} } = {}) {
 }
 async function loginPortal(customer) {
   const jar = new Jar();
-  const r = await request("/portal/auth/login", { method: "POST", body: { email: customer.email, password }, jar });
+  const loginIp = `10.77.0.${Math.floor(Math.random() * 240) + 1}`;
+  const r = await request("/portal/auth/login", { method: "POST", body: { email: customer.email, password }, jar, headers: { "x-forwarded-for": loginIp } });
   record(`${customer.label} authenticated session`, r.status === 200 && !!jar.header(), `${r.status}`);
   if (r.status !== 200) fail(`portal login failed for ${customer.label}: ${JSON.stringify(r.body)}`);
   jar.token = r.body?.token;
@@ -110,8 +111,8 @@ async function setup() {
   for (const label of ["vendorA", "vendorB"]) {
     const c = await client.query("SELECT id FROM portal_customers WHERE email=$1", [names[label]]);
     const s = (await client.query(
-      `INSERT INTO suppliers (name,company_id,contact_email,portal_phone,is_active,status,is_verified,marketplace_status,marketplace_published_at)
-       VALUES ($1,$2,$3,$4,true,'active',true,'published',now()) RETURNING id`,
+      `INSERT INTO suppliers (name,company_id,contact_email,phone,portal_phone,is_active,status,is_verified,marketplace_status,marketplace_published_at)
+       VALUES ($1,$2,$3,$4,$4,true,'active',true,'published',now()) RETURNING id`,
       [`${MARK} ${label}`, company.id, names[label], `628${String(Math.floor(Math.random() * 1e9)).padStart(9, "0")}`],
     )).rows[0];
     supplierIds[label] = s.id; created.suppliers.push(s.id);
@@ -227,7 +228,7 @@ async function notificationProof(adminJar, vendorAJar, vendorBJar, productA) {
 async function rfqProof(customerAJar, customerBJar, vendorAJar, adminJar, productA, supplierA) {
   const create = await request(`/portal/marketplace/${productA.id}/quote`, {
     method: "POST", jar: customerAJar, headers: { authorization: `Bearer ${customerAJar.token}` },
-    body: { buyerName: `${MARK} customerA`, buyerEmail: names.customerA, buyerPhone: "628111111111", buyerCompany: `${MARK} buyer`, qty: 2, notes: `${MARK} RFQ` },
+    body: { customerName: `${MARK} customerA`, email: names.customerA, phone: "628111111111", buyerCompany: `${MARK} buyer`, qty: 2, notes: `${MARK} RFQ` },
   });
   record("customer A creates RFQ through canonical endpoint", create.status === 201, `HTTP ${create.status}`);
   const rfqId = Number(create.body.rfqId);
