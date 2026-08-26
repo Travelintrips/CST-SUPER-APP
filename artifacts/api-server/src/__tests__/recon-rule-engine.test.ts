@@ -348,6 +348,17 @@ describe("Rule Engine — amount tolerance guard", () => {
     })).matched).toBe(false);
   });
 
+  it("repairs the legacy AI mirror nominal as an exact reference amount", () => {
+    const rules = [makeRule({
+      amountTolerance: 2500,
+      referenceAmount: null,
+      aiClassificationRuleId: 1,
+    })];
+
+    expect(evaluateReconRules(rules, makeMutation({ amount: 2500 })).matched).toBe(true);
+    expect(evaluateReconRules(rules, makeMutation({ amount: 2501 })).matched).toBe(false);
+  });
+
   it("requires all conditions and the configured amount window", () => {
     const rules = [makeRule({
       conditions: [
@@ -373,6 +384,30 @@ describe("Rule Engine — amount tolerance guard", () => {
       description: "BBLUI FELICIA 99102",
       bank: "BMRIIDJA",
       amount: 103000,
+    })).matched).toBe(false);
+  });
+
+  it("uses reference amount as an exact AND criterion when no tolerance is set", () => {
+    const rules = [makeRule({
+      conditions: [
+        { field: "description", operator: "contains", value: "felicia" },
+      ],
+      logic: "AND",
+      amountTolerance: null,
+      referenceAmount: 2500,
+    })];
+
+    expect(evaluateReconRules(rules, makeMutation({
+      description: "TRANSFER FELICIA",
+      amount: 2500,
+    })).matched).toBe(true);
+    expect(evaluateReconRules(rules, makeMutation({
+      description: "TRANSFER FELICIA",
+      amount: 2501,
+    })).matched).toBe(false);
+    expect(evaluateReconRules(rules, makeMutation({
+      description: "TRANSFER LAIN",
+      amount: 2500,
     })).matched).toBe(false);
   });
 });

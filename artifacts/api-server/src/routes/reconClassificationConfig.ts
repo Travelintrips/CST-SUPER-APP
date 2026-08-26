@@ -144,8 +144,14 @@ const AiRuleSchema = z.object({
   name:                z.string().min(1).max(120),
   description:         z.string().optional().nullable(),
   config_id:           z.number().int().optional().nullable(),
-  condition_field:     z.enum(["description", "amount", "direction", "intent", "normalized"]),
-  condition_operator:  z.enum(["contains", "starts_with", "regex", "eq", "neq", "gte", "lte"]),
+  condition_field:     z.enum([
+    "description", "reference", "amount", "direction", "bank_account", "bank",
+    "transaction_code", "normalized", "counterparty_name", "counterparty_account",
+  ]),
+  condition_operator:  z.enum([
+    "equals", "contains", "not_contains", "starts_with", "ends_with", "not_equals",
+    "eq", "neq", "regex", "greater_than", "less_than", "gte", "lte", "between",
+  ]),
   condition_value:     z.string().min(1),
   conditions: z.array(z.object({
     field: z.enum(["description", "amount", "direction", "bank", "transaction_code", "normalized", "reference", "counterparty_name", "counterparty_account"]),
@@ -159,7 +165,7 @@ const AiRuleSchema = z.object({
   action_coa_code:     z.string().optional().nullable(),
   action_config_code:  z.string().optional().nullable(),
   amount_tolerance:    z.coerce.number().min(0).max(1_000_000_000).optional().nullable(),
-  reference_amount:    z.coerce.number().finite().optional().nullable(),
+  reference_amount:    z.coerce.number().finite().min(0).optional().nullable(),
   confidence:          z.coerce.number().min(0).max(1).default(0.8),
   priority:            z.coerce.number().int().min(1).max(999).default(50),
   source:              z.enum(["manual", "ai_generated"]).default("manual"),
@@ -524,6 +530,8 @@ reconClassificationRouter.post("/ai-rules/preview", async (req, res) => {
       conditions_json: draftConditions, logic: req.body?.logic,
       specificity: req.body?.specificity ?? draftConditions.length,
       action_flow: req.body?.action_flow, action_coa_code: req.body?.action_coa_code,
+      amount_tolerance: req.body?.amount_tolerance ?? null,
+      reference_amount: req.body?.reference_amount ?? null,
       confidence: req.body?.confidence ?? 0.8,
     }, companyId ?? 0) : null;
     const result = evaluateReconRules(draftRule ? [draftRule, ...savedRules] : savedRules, mutation);
