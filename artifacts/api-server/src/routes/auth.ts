@@ -12,7 +12,11 @@ import {
 import { db } from "@workspace/db";
 import { usersTable, waOtpCodesTable, portalCustomersTable } from "@workspace/db";
 import { and, desc, eq, gte, ne, sql } from "drizzle-orm";
-import { saveOauthState, consumeOauthState } from "../lib/oauthStateMigration";
+import {
+  saveOauthState,
+  consumeOauthState,
+  OAuthStateStorageError,
+} from "../lib/oauthStateMigration";
 import { sendViaService as sendWhatsApp } from "../lib/waTransport.js";
 import {
   clearSession,
@@ -371,24 +375,33 @@ async function upsertPortalGoogleCustomer(
   } else {
     observeStage?.("ACCOUNT_LOOKUP", "passed", { result: "existing" });
     observeStage?.("ACCOUNT_LINK", "started");
-    const [updated] = await db
-      .update(portalCustomersTable)
-      .set({
-        oauthProvider: "google",
-        oauthId: googleId || customer.oauthId,
-        ...(avatarUrl ? { avatarUrl } : {}),
-        ...(role === "admin" && customer.role !== "admin" ? { role } : {}),
-      })
-      .where(eq(portalCustomersTable.id, customer.id))
-      .returning();
-    customer = updated ?? customer;
-    observeStage?.("ACCOUNT_LINK", "passed", {
-      result: updated ? "linked" : "unchanged",
-    });
+    try {
+      const [updated] = await db
+        .update(portalCustomersTable)
+        .set({
+          oauthProvider: "google",
+          oauthId: googleId || customer.oauthId,
+          ...(avatarUrl ? { avatarUrl } : {}),
+          ...(role === "admin" && customer.role !== "admin" ? { role } : {}),
+        })
+        .where(eq(portalCustomersTable.id, customer.id))
+        .returning();
+      customer = updated ?? customer;
+      observeStage?.("ACCOUNT_LINK", "passed", {
+        result: updated ? "linked" : "unchanged",
+      });
+    } catch (error) {
+      observeStage?.("ACCOUNT_LINK", "failed", { result: "database_error" });
+      throw error;
+    }
   }
 
-  if (!customer) throw new Error("Unable to create portal customer");
+  if (!customer) {
+    observeStage?.("ACCOUNT_CREATE", "failed", { result: "empty_result" });
+    throw new Error("Unable to create portal customer");
+  }
   if ((customer.accountStatus ?? "active") !== "active") {
+    observeStage?.("ACCOUNT_LOOKUP", "failed", { result: "account_not_active" });
     throw new Error("Portal account is not active");
   }
   return customer;
@@ -758,10 +771,16 @@ router.get("/login/google", async (req: Request, res: Response) => {
   req.log.info({ redirectUri }, "[Google OAuth] initiating login, redirect_uri");
 
   // Store state in DB (domain-agnostic — avoids cross-subdomain cookie issues)
-  await saveOauthState(
-    state,
-    encodeGoogleOAuthContext(isPortalFlow ? "customer_portal" : "bizportal", returnTo),
-  );
+  try {
+    await saveOauthState(
+      state,
+      encodeGoogleOAuthContext(isPortalFlow ? "customer_portal" : "bizportal", returnTo),
+    );
+  } catch (error) {
+    req.log.error({ err: error }, "[Google OAuth] state storage failed during login start");
+    res.status(503).send("Login Google sedang tidak tersedia. Coba lagi sebentar.");
+    return;
+  }
 
   const client = getGoogleOAuthClient(redirectUri);
   const authUrl = client.generateAuthUrl({
@@ -790,8 +809,22 @@ router.get("/callback/google", async (req: Request, res: Response) => {
     providerCode: safeProviderCode(error),
   });
 
-  // Look up state from DB (domain-agnostic, no cookie dependency)
-  const storedReturnTo = state ? await consumeOauthState(state) : null;
+  // Look up state from DB (domain-agnostic, no cookie dependency). Production
+  // storage errors are distinct from an invalid/expired state and must not be
+  // hidden as a normal state validation failure.
+  let storedReturnTo: string | null = null;
+  try {
+    storedReturnTo = state ? await consumeOauthState(state) : null;
+  } catch (storageError) {
+    logGoogleOAuthStage(req, "unknown", "STATE_VALIDATION", "failed", {
+      result: storageError instanceof OAuthStateStorageError
+        ? "storage_unavailable"
+        : "storage_error",
+    });
+    logGoogleOAuthFailure(req, "STATE_STORAGE_FAILURE", storageError);
+    res.redirect(getGoogleOAuthFailureRedirect(null));
+    return;
+  }
   const storedContext = decodeGoogleOAuthContext(storedReturnTo);
   const callbackContext = getGoogleOAuthCallbackContext(storedReturnTo);
   const isPortalFlow = callbackContext.flow === "customer_portal";
