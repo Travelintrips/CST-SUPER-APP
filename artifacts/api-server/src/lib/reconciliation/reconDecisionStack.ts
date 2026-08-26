@@ -136,6 +136,9 @@ export interface MutationForDecisionStack {
   reference?: string | null;
   providerOrderId?: string | null;
   bankAccountId?: number | null;
+  /** Bank/source identity used by structured Rule AI conditions. */
+  bank?: string | null;
+  transactionCode?: string | null;
   counterpartyName?: string | null;
   counterpartyAccount?: string | null;
   status: string;
@@ -162,6 +165,9 @@ export async function loadReconRulesForCompany(companyId: number): Promise<Recon
          target_coa_code, confidence_score, stop_processing,
          conditions_json, logic, specificity, amount_tolerance, reference_amount,
          ai_classification_rule_id,
+        target_coa_code, confidence_score, stop_processing,
+        conditions_json, logic, specificity, amount_tolerance, reference_amount,
+        ai_classification_rule_id,
         match_count, last_matched_at, created_by, created_at, updated_at
       FROM recon_rules
       WHERE company_id = ${companyId} AND is_active = TRUE
@@ -181,17 +187,17 @@ export async function loadReconRulesForCompany(companyId: number): Promise<Recon
       conditionField:   String(r.condition_field) as ReconRule["conditionField"],
       conditionOperator: String(r.condition_operator) as ReconRule["conditionOperator"],
       conditionValue:   String(r.condition_value ?? ""),
-       conditionsJson:   (() => {
-         try {
-           const value = typeof r.conditions_json === "string" ? JSON.parse(r.conditions_json) : r.conditions_json;
-           return Array.isArray(value) ? value : null;
-         } catch { return null; }
-       })(),
-       logic:            String(r.logic ?? "AND").toUpperCase() === "OR" ? "OR" : "AND",
-       specificity:      Number(r.specificity ?? 1),
-       amountTolerance:  r.amount_tolerance != null ? Number(r.amount_tolerance) : null,
-       referenceAmount:  r.reference_amount != null ? Number(r.reference_amount) : null,
-       aiClassificationRuleId: r.ai_classification_rule_id != null ? Number(r.ai_classification_rule_id) : null,
+      conditionsJson:   (() => {
+        try {
+          const value = typeof r.conditions_json === "string" ? JSON.parse(r.conditions_json) : r.conditions_json;
+          return Array.isArray(value) ? value : null;
+        } catch { return null; }
+      })(),
+      logic:            String(r.logic ?? "AND").toUpperCase() === "OR" ? "OR" : "AND",
+      specificity:      Number(r.specificity ?? 1),
+      amountTolerance:  r.amount_tolerance != null ? Number(r.amount_tolerance) : null,
+      referenceAmount:  r.reference_amount != null ? Number(r.reference_amount) : null,
+      aiClassificationRuleId: r.ai_classification_rule_id != null ? Number(r.ai_classification_rule_id) : null,
       targetType:       String(r.target_type) as ReconRule["targetType"],
       targetId:         r.target_id != null ? Number(r.target_id) : null,
       targetCoaCode:    r.target_coa_code ? String(r.target_coa_code) : null,
@@ -202,6 +208,7 @@ export async function loadReconRulesForCompany(companyId: number): Promise<Recon
       createdBy:        r.created_by ? String(r.created_by) : null,
       createdAt:        String(r.created_at ?? ""),
        updatedAt:        String(r.updated_at ?? ""),
+      updatedAt:        String(r.updated_at ?? ""),
     })) as ReconRule[];
 
     // Populate cache
@@ -258,6 +265,8 @@ export async function runReconDecisionStack(
       amount:            mutation.amount,
       direction:         mutation.direction.toUpperCase() as "IN" | "OUT",
       bankAccountId:     mutation.bankAccountId ?? null,
+      bank:              mutation.bank ?? null,
+      transactionCode:   mutation.transactionCode ?? null,
       counterpartyName:  mutation.counterpartyName ?? null,
       counterpartyAccount: mutation.counterpartyAccount ?? null,
       companyId:         mutation.companyId,

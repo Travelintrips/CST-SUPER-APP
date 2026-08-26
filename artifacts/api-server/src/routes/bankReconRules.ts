@@ -53,7 +53,6 @@ let migrated = false;
 
 export async function runReconRulesMigration(): Promise<void> {
   if (migrated) return;
-  migrated = true;
 
   await db.execute(sql.raw(`
     CREATE TABLE IF NOT EXISTS recon_rules (
@@ -73,6 +72,7 @@ export async function runReconRulesMigration(): Promise<void> {
       target_id           INTEGER,
       target_coa_code     TEXT,
       amount_tolerance    NUMERIC(16,2),
+      reference_amount    NUMERIC(16,2),
       confidence_score    INTEGER NOT NULL DEFAULT 100 CHECK (confidence_score BETWEEN 0 AND 100),
       stop_processing     BOOLEAN NOT NULL DEFAULT TRUE,
       match_count         INTEGER NOT NULL DEFAULT 0,
@@ -87,7 +87,9 @@ export async function runReconRulesMigration(): Promise<void> {
       ADD COLUMN IF NOT EXISTS conditions_json JSONB,
       ADD COLUMN IF NOT EXISTS logic TEXT NOT NULL DEFAULT 'AND',
       ADD COLUMN IF NOT EXISTS specificity INTEGER NOT NULL DEFAULT 1,
-      ADD COLUMN IF NOT EXISTS amount_tolerance NUMERIC(16,2)
+      ADD COLUMN IF NOT EXISTS amount_tolerance NUMERIC(16,2),
+      ADD COLUMN IF NOT EXISTS reference_amount NUMERIC(16,2),
+      ADD COLUMN IF NOT EXISTS ai_classification_rule_id INTEGER
   `)).catch(e => logger.warn({ err: e.message }, "[recon_rules] multi-condition columns warning"));
 
   await db.execute(sql.raw(`CREATE INDEX IF NOT EXISTS rr_company_idx   ON recon_rules(company_id)`)).catch(() => {});
@@ -111,6 +113,7 @@ export async function runReconRulesMigration(): Promise<void> {
   await syncOperationalReconRulesToClassification();
   await syncAiClassificationRulesToOperational();
 
+  migrated = true;
   logger.info("[recon_rules] migration complete (batch 1+2)");
 }
 
@@ -142,6 +145,7 @@ function rowToRule(r: Record<string, unknown>): ReconRule {
     conditionField:   String(r.condition_field) as ReconRule["conditionField"],
     conditionOperator: String(r.condition_operator) as ReconRule["conditionOperator"],
     conditionValue:   String(r.condition_value),
+    conditionsJson:   parsedConditions as ReconRule["conditionsJson"],
     conditions:       parsedConditions as ReconRule["conditions"],
     logic:            r.logic === "OR" ? "OR" : "AND",
     specificity:      Number(r.specificity ?? 1),
@@ -149,6 +153,8 @@ function rowToRule(r: Record<string, unknown>): ReconRule {
     targetId:         r.target_id != null ? Number(r.target_id) : null,
     targetCoaCode:    r.target_coa_code ? String(r.target_coa_code) : null,
     amountTolerance:  r.amount_tolerance == null ? null : Number(r.amount_tolerance),
+    referenceAmount:  r.reference_amount == null ? null : Number(r.reference_amount),
+    aiClassificationRuleId: r.ai_classification_rule_id == null ? null : Number(r.ai_classification_rule_id),
     confidenceScore:  Number(r.confidence_score ?? 100),
     stopProcessing:   Boolean(r.stop_processing),
     matchCount:       Number(r.match_count ?? 0),
@@ -238,6 +244,11 @@ router.post("/", async (req, res) => {
     conditionField:     body.condition_field,
     conditionOperator:  body.condition_operator,
     conditionValue:     body.condition_value,
+    conditionsJson:     body.conditions_json ?? body.conditions,
+    logic:              body.logic,
+    specificity:        body.specificity,
+    amountTolerance:    body.amount_tolerance,
+    referenceAmount:    body.reference_amount,
     targetType:         body.target_type,
     targetId:           body.target_id,
     targetCoaCode:      body.target_coa_code,
@@ -277,7 +288,9 @@ router.post("/", async (req, res) => {
       INSERT INTO recon_rules
         (company_id, name, description, priority, is_active, direction, bank_account_id,
          condition_type, condition_field, condition_operator, condition_value,
-         target_type, target_id, target_coa_code, amount_tolerance, confidence_score, stop_processing, created_by)
+         conditions_json, logic, specificity,
+         target_type, target_id, target_coa_code, amount_tolerance, reference_amount,
+         confidence_score, stop_processing, created_by)
       VALUES
         (${companyId}, ${escStr(body.name)}, ${escStr(body.description)},
          ${Number(body.priority ?? 100)}, ${body.is_active !== false},
@@ -285,10 +298,18 @@ router.post("/", async (req, res) => {
          ${body.bank_account_id != null ? Number(body.bank_account_id) : "NULL"},
          'SIMPLE', ${escStr(body.condition_field)}, ${escStr(body.condition_operator)},
          ${escStr(body.condition_value ?? "")},
+          ${body.conditions_json == null && body.conditions == null
+            ? "NULL"
+            : `${escStr(JSON.stringify(body.conditions_json ?? body.conditions))}::jsonb`},
+          ${escStr(String(body.logic ?? "AND").toUpperCase() === "OR" ? "OR" : "AND")},
+          ${Number(body.specificity ?? (Array.isArray(body.conditions_json ?? body.conditions)
+            ? (body.conditions_json ?? body.conditions).length
+            : 1))},
          ${escStr(body.target_type)},
          ${body.target_id != null ? Number(body.target_id) : "NULL"},
          ${escStr(body.target_coa_code)},
          ${body.amount_tolerance == null ? "NULL" : Number(body.amount_tolerance)},
+          ${body.reference_amount == null ? "NULL" : Number(body.reference_amount)},
          ${Number(body.confidence_score ?? 100)},
          ${body.stop_processing !== false},
          ${escStr((req as any).user?.email ?? null)})
@@ -364,14 +385,25 @@ router.post("/", async (req, res) => {
         INSERT INTO recon_ai_classification_rules
           (company_id, name, description, condition_field, condition_operator,
            condition_value, action_flow, action_coa_code, action_config_code,
-           config_id, confidence, priority,
+            config_id, conditions_json, logic, specificity, amount_tolerance, reference_amount,
+            confidence, priority,
            source, created_by)
         SELECT
           ${companyId}, '${ruleName}', '${ruleDescription}',
           '${String(body.condition_field).replace(/'/g, "''")}',
           '${String(body.condition_operator).replace(/'/g, "''")}',
           '${conditionValue}', '${aiFlow}', ${actionCoaCode}, ${configCodeSql},
-          ${configId > 0 ? configId : "NULL"}, 1.00, ${Number(body.priority ?? 120)},
+          ${configId > 0 ? configId : "NULL"},
+          ${body.conditions_json == null && body.conditions == null
+            ? "NULL"
+            : `${escStr(JSON.stringify(body.conditions_json ?? body.conditions))}::jsonb`},
+          ${escStr(String(body.logic ?? "AND").toUpperCase() === "OR" ? "OR" : "AND")},
+          ${Number(body.specificity ?? (Array.isArray(body.conditions_json ?? body.conditions)
+            ? (body.conditions_json ?? body.conditions).length
+            : 1))},
+          ${body.amount_tolerance == null ? "NULL" : Number(body.amount_tolerance)},
+          ${body.reference_amount == null ? "NULL" : Number(body.reference_amount)},
+          1.00, ${Number(body.priority ?? 120)},
           'manual', ${escStr((req as any).user?.email ?? null)}
         WHERE NOT EXISTS (
           SELECT 1
@@ -382,8 +414,15 @@ router.post("/", async (req, res) => {
             AND condition_operator = '${String(body.condition_operator).replace(/'/g, "''")}'
             AND condition_value = '${conditionValue}'
             AND COALESCE(action_coa_code, '') = COALESCE(${actionCoaCode}, '')
-        )
+         )
+         RETURNING id
       `));
+      // The operational rule is authoritative, but the two rows must still
+      // point at each other immediately. Otherwise the first request after a
+      // write leaves Rule AI and runtime editing on different identities.
+      // Run even when NOT EXISTS found an older mirror: that older row may
+      // still be unlinked from the operational rule.
+      await syncAiClassificationRulesToOperational(companyId);
     } catch (syncError: any) {
       // The operational rule is already saved and remains usable for
       // auto-approval. Do not turn a configuration mirror issue into a
@@ -530,12 +569,11 @@ router.patch("/:id", async (req, res) => {
   if (body.conditions_json   !== undefined) sets.push(`conditions_json = ${body.conditions_json == null ? "NULL" : `${escStr(JSON.stringify(body.conditions_json))}::jsonb`}`);
   if (body.logic              !== undefined) sets.push(`logic = ${escStr(String(body.logic).toUpperCase() === "OR" ? "OR" : "AND")}`);
   if (body.specificity        !== undefined) sets.push(`specificity = ${Number(body.specificity)}`);
-  if (body.amount_tolerance   !== undefined) sets.push(`amount_tolerance = ${body.amount_tolerance == null ? "NULL" : Number(body.amount_tolerance)}`);
+   if (body.amount_tolerance   !== undefined) sets.push(`amount_tolerance = ${body.amount_tolerance == null ? "NULL" : Number(body.amount_tolerance)}`);
   if (body.reference_amount   !== undefined) sets.push(`reference_amount = ${body.reference_amount == null ? "NULL" : Number(body.reference_amount)}`);
   if (body.target_type       !== undefined) sets.push(`target_type = ${escStr(body.target_type)}`);
   if (body.target_id         !== undefined) sets.push(`target_id = ${body.target_id != null ? Number(body.target_id) : "NULL"}`);
   if (body.target_coa_code   !== undefined) sets.push(`target_coa_code = ${escStr(body.target_coa_code)}`);
-  if (body.amount_tolerance !== undefined) sets.push(`amount_tolerance = ${body.amount_tolerance == null ? "NULL" : Number(body.amount_tolerance)}`);
   if (body.confidence_score  !== undefined) sets.push(`confidence_score = ${Number(body.confidence_score)}`);
   if (body.stop_processing   !== undefined) sets.push(`stop_processing = ${Boolean(body.stop_processing)}`);
   sets.push(`updated_at = NOW()`);

@@ -267,7 +267,8 @@ export async function getMatchingAmountTolerance(
              direction, bank_account_id, condition_type, condition_field,
              condition_operator, condition_value, target_type, target_id,
              target_coa_code, amount_tolerance, confidence_score,
-             stop_processing, conditions_json, logic, specificity,
+             stop_processing, conditions_json, logic, specificity, reference_amount,
+             ai_classification_rule_id,
              match_count, last_matched_at, created_by, created_at, updated_at
       FROM recon_rules
       WHERE company_id = ${companyId} AND is_active = TRUE
@@ -292,6 +293,7 @@ export async function getMatchingAmountTolerance(
         conditionField: String(row.condition_field) as ReconRule["conditionField"],
         conditionOperator: String(row.condition_operator) as ReconRule["conditionOperator"],
         conditionValue: String(row.condition_value ?? ""),
+        conditionsJson: Array.isArray(conditions) ? conditions : null,
         conditions: Array.isArray(conditions) ? conditions : undefined,
         logic: row.logic === "OR" ? "OR" : "AND",
         specificity: Number(row.specificity ?? 1),
@@ -299,6 +301,8 @@ export async function getMatchingAmountTolerance(
         targetId: row.target_id == null ? null : Number(row.target_id),
         targetCoaCode: row.target_coa_code == null ? null : String(row.target_coa_code),
         amountTolerance: row.amount_tolerance == null ? null : Number(row.amount_tolerance),
+        referenceAmount: row.reference_amount == null ? null : Number(row.reference_amount),
+        aiClassificationRuleId: row.ai_classification_rule_id == null ? null : Number(row.ai_classification_rule_id),
         confidenceScore: Number(row.confidence_score ?? 100),
         stopProcessing: row.stop_processing !== false,
         matchCount: Number(row.match_count ?? 0),
