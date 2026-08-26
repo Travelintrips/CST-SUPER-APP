@@ -96,6 +96,11 @@ type GoogleOAuthStageDetails = {
   providerCode?: string;
 };
 
+type GoogleOAuthFailureDetails = Pick<
+  GoogleOAuthStageDetails,
+  "providerStatus" | "providerCode"
+>;
+
 const googleOAuthFailureStages: Record<GoogleOAuthFailureCategory, GoogleOAuthStage> = {
   STATE_MISSING: "STATE_VALIDATION",
   STATE_INVALID: "STATE_VALIDATION",
@@ -166,6 +171,7 @@ function logGoogleOAuthFailure(
   req: Request,
   category: GoogleOAuthFailureCategory,
   _error?: unknown,
+  details: GoogleOAuthFailureDetails = {},
 ): void {
   // Never include authorization codes, OAuth state, tokens, JWTs, session IDs,
   // cookie values, or client secrets in callback diagnostics.
@@ -175,6 +181,7 @@ function logGoogleOAuthFailure(
     {
       category,
       failingStage: googleOAuthFailureStages[category],
+      ...details,
       ...errorDetails,
     },
     "[Google OAuth] callback failed",
@@ -960,7 +967,10 @@ router.get("/callback/google", async (req: Request, res: Response) => {
           ? "Google token endpoint rejected the OAuth client credentials"
           : "Google token endpoint rejected authorization-code exchange",
       );
-      logGoogleOAuthFailure(req, "TOKEN_EXCHANGE_FAILED", tokenExchangeError);
+      logGoogleOAuthFailure(req, "TOKEN_EXCHANGE_FAILED", tokenExchangeError, {
+        providerStatus: tokenRes.status,
+        providerCode: providerError,
+      });
       throw tokenExchangeError;
     }
     logGoogleOAuthStage(req, callbackContext.flow, "TOKEN_EXCHANGE", "passed", {
