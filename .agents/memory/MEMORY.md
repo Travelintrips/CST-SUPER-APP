@@ -154,3 +154,4 @@
 - [Runtime fixture FK cleanup](runtime-fixture-fk-cleanup.md) — cleanup proofs must discover marker-linked descendants and isolate each delete with savepoints.
 - [Production hard-delete guard](production-hard-delete-guard.md) — posted bank-recon cleanup must cover journal/line and fleet-ledger guards in one locked transaction, then restore them.
 - [Temporary runtime bundle location](temporary-runtime-bundle-location.md) — ESM proof bundles with external workspace dependencies must live under the workspace, not `/tmp`.
+- [Supabase pooler startup parameters](supabase-pooler-startup-parameter.md) — set statement_timeout after connect; passing it as a startup option can be rejected by the pooler.
