@@ -43,6 +43,10 @@ import {
   CANONICAL_SETTLEMENT_SOURCE,
   findCanonicalSettlementCandidates,
 } from "./canonicalSettlementAdapter.js";
+import {
+  getBankReconciliationSettings,
+  sanitizeBankAmountTolerance,
+} from "./bankReconciliationSettings.js";
 export { dedupeCandidatesByBusinessIdentity } from "./candidateBusinessIdentity.js";
 import { dedupeCandidatesByBusinessIdentity } from "./candidateBusinessIdentity.js";
 
@@ -236,6 +240,8 @@ export interface MutationInput {
   company_id?: number | null;
   bank_account_id?: number | null;
   direction?: string;
+  /** Generic bank matching tolerance in IDR; QRIS uses provider rules instead. */
+  amount_tolerance?: number;
 }
 
 /**
@@ -498,7 +504,7 @@ export async function resolveContraAccount(
 
 export function scoreUnified(
   mutation: Pick<MutationInput, "amount" | "transaction_date" | "provider_order_id" | "uploaded_proof_url" | "normalized_description">
-    & Partial<Pick<MutationInput, "company_id" | "bank_account_id" | "provider_name">>,
+    & Partial<Pick<MutationInput, "company_id" | "bank_account_id" | "provider_name" | "amount_tolerance">>,
   cand: MatchCandidate,
 ): UnifiedScoredMatch {
   let score = 0;
@@ -536,13 +542,19 @@ export function scoreUnified(
       !areQrisProvidersCompatible(candidateProvider, mutationProvider)
     );
 
-  // 1. Amount — MANDATORY for auto-approve (+50)
+  // 1. Amount — MANDATORY for auto-approve (+50). QRIS keeps the
+  // provider-specific variance contract and is exact in this generic scorer.
+  const configuredTolerance = sanitizeBankAmountTolerance(mutation.amount_tolerance) ?? 0;
+  const amountTolerance = requiresQrisIdentity ? 0 : configuredTolerance;
   const amountMatch =
     !companyMismatch &&
     !bankAccountMismatch &&
     !providerMismatch &&
-    Math.abs(Number(cand.amount) - Number(mutation.amount)) < 0.01;
+    Math.abs(Number(cand.amount) - Number(mutation.amount)) <= amountTolerance + 0.01;
   if (amountMatch) { score += 50; reason.push("nominal cocok (+50)"); }
+  else if (amountTolerance > 0 && !companyMismatch && !bankAccountMismatch && !providerMismatch) {
+    reason.push(`nominal di luar toleransi ±${amountTolerance.toLocaleString("id-ID")}`);
+  }
   if (companyMismatch) reason.push("company tidak cocok");
   if (bankAccountMismatch) reason.push("rekening bank tidak cocok");
   if (providerMismatch) reason.push("provider tidak cocok atau tidak tersedia");
@@ -674,7 +686,7 @@ export function confidenceLabel(score: number): "high" | "medium" | "low" | "non
 // ─── Fetch candidates (amount-first filter) ───────────────────────────────────
 
 export async function fetchCandidates(
-  mutation: Pick<MutationInput, "amount" | "transaction_date" | "company_id" | "direction" | "bank_account_id" | "provider_order_id" | "provider_name" | "normalized_description">,
+  mutation: Pick<MutationInput, "amount" | "transaction_date" | "company_id" | "direction" | "bank_account_id" | "provider_order_id" | "provider_name" | "normalized_description" | "amount_tolerance">,
 ): Promise<MatchCandidate[]> {
   const candidates: MatchCandidate[] = [];
   const { amount, transaction_date } = mutation;
@@ -698,6 +710,9 @@ export async function fetchCandidates(
     !mutationLooksPaylabs &&
     (String(mutation.provider_name ?? "").toUpperCase() === "QRIS" ||
       isQrisSettlementDescription(mutation.normalized_description));
+  const configuredTolerance = sanitizeBankAmountTolerance(mutation.amount_tolerance) ??
+    (await getBankReconciliationSettings(company_id)).amountTolerance;
+  const amountTolerance = mutationLooksQris ? 0 : configuredTolerance;
   const dateFrom = mutationLooksQris ? `'${transaction_date}'::date - 3` : `'${transaction_date}'::date`;
   const dateTo   = mutationLooksQris ? `'${transaction_date}'::date + 3` : `'${transaction_date}'::date`;
   const dateOffset = (value: string, days: number): string => {
@@ -769,7 +784,7 @@ export async function fetchCandidates(
           return accountNumber == null ? null : String(accountNumber);
         })
         .catch(() => null);
-  const amtFilter = `ABS(##AMT##::numeric - ${Number(amount)}) < 0.01`;
+  const amtFilter = `ABS(##AMT##::numeric - ${Number(amount)}) <= ${amountTolerance + 0.01}`;
   // The aggregate tables may not exist yet on older runtime databases. Keep
   // the source query fail-safe and only add the aggregate candidate when both
   // tables are present.
@@ -1223,10 +1238,11 @@ export async function runUnifiedMatching(
 ): Promise<UnifiedMatchResult> {
   const explicitProvider = normalizeQrisProvider(mutation.provider_name);
   const descriptionProvider = normalizeQrisProvider(mutation.normalized_description);
+  const settings = await getBankReconciliationSettings(mutation.company_id ?? null);
   const matchingMutation =
     explicitProvider === "unknown" && descriptionProvider !== "unknown"
-      ? { ...mutation, provider_name: descriptionProvider }
-      : mutation;
+      ? { ...mutation, provider_name: descriptionProvider, amount_tolerance: settings.amountTolerance }
+      : { ...mutation, amount_tolerance: settings.amountTolerance };
   const candidates = await fetchCandidates(matchingMutation); // company_id sudah diteruskan via mutation
 
   if (!candidates.length) {

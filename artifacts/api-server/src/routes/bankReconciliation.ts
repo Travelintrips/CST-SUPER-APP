@@ -77,6 +77,11 @@ import { findBestMultiInvoiceMatch } from "../lib/reconciliation/multiInvoiceMat
 import { buildAllocationPlan, getCompanyAllocationStrategy, applyAllocationPlan } from "../lib/reconciliation/paymentAllocationEngine.js";
 import { resolveCompanyId } from "../lib/resolveCompany.js";
 import { normalizeCompanyId } from "../lib/services/portalCompanyScopeUtils.js";
+import {
+  getBankReconciliationSettings,
+  sanitizeBankAmountTolerance,
+  MAX_BANK_AMOUNT_TOLERANCE,
+} from "../lib/reconciliation/bankReconciliationSettings.js";
 import { runQrisSettlementMigration } from "../lib/reconciliation/qrisSettlementMigration.js";
 import { isQrisSettlementDescription } from "../lib/reconciliation/qrisSettlement.js";
 import {
@@ -190,6 +195,67 @@ let unifiedMatchingJobActive = false;
 router.use(async (req, res, next) => {
   if (!(await requireAdmin(req, res))) return;
   next();
+});
+
+// ─── GET/PUT /api/bank-reconciliation/settings ───────────────────────────────
+// Settings are company-scoped. The active company is supplied by the portal as
+// ?companyId=... and is resolved through the same isolation helper as the
+// accounting routes.
+router.get("/settings", async (req, res) => {
+  try {
+    await runBankReconciliationCoreMigration();
+    const companyId = resolveCompanyId(req);
+    const settings = await getBankReconciliationSettings(companyId);
+    return res.json({
+      company_id: companyId,
+      amount_tolerance: settings.amountTolerance,
+      max_amount_tolerance: MAX_BANK_AMOUNT_TOLERANCE,
+    });
+  } catch (error: any) {
+    const status = error?.statusCode ?? 500;
+    return res.status(status).json({ error: error?.message ?? "Gagal membaca pengaturan rekonsiliasi" });
+  }
+});
+
+router.put("/settings", async (req, res) => {
+  try {
+    await runBankReconciliationCoreMigration();
+    const companyId = resolveCompanyId(req);
+    const amountTolerance = sanitizeBankAmountTolerance(req.body?.amount_tolerance);
+    if (amountTolerance === null) {
+      return res.status(400).json({
+        error: `Toleransi nominal harus berupa angka antara Rp0 dan Rp${MAX_BANK_AMOUNT_TOLERANCE.toLocaleString("id-ID")}.`,
+      });
+    }
+
+    const actor = (req as any).user?.email ?? "system";
+    await db.execute(sql`
+      INSERT INTO bank_reconciliation_settings
+        (company_id, amount_tolerance, updated_by, updated_at)
+      VALUES
+        (${companyId}, ${amountTolerance}, ${actor}, NOW())
+      ON CONFLICT (company_id)
+      DO UPDATE SET
+        amount_tolerance = EXCLUDED.amount_tolerance,
+        updated_by = EXCLUDED.updated_by,
+        updated_at = NOW()
+    `);
+    audit(req, {
+      action: "update-bank-reconciliation-settings",
+      module: "bank-reconciliation",
+      resourceId: `company-${companyId}`,
+      after: { company_id: companyId, amount_tolerance: amountTolerance },
+    });
+    return res.json({
+      ok: true,
+      company_id: companyId,
+      amount_tolerance: amountTolerance,
+      max_amount_tolerance: MAX_BANK_AMOUNT_TOLERANCE,
+    });
+  } catch (error: any) {
+    const status = error?.statusCode ?? 500;
+    return res.status(status).json({ error: error?.message ?? "Gagal menyimpan pengaturan rekonsiliasi" });
+  }
 });
 
 // ─── Inline migration ─────────────────────────────────────────────────────────
@@ -482,6 +548,30 @@ export async function runBankReconciliationCoreMigration() {
   await db.execute(sql.raw(`ALTER TABLE bank_sheet_configs ADD COLUMN IF NOT EXISTS bank_name TEXT`)).catch(() => {});
   await db.execute(sql.raw(`
     CREATE INDEX IF NOT EXISTS bsc_company_idx ON bank_sheet_configs(company_id)
+  `)).catch(() => {});
+
+  // ── Per-company matching settings ───────────────────────────────────────────
+  // Zero keeps the existing exact-nominal behavior. A positive value allows
+  // small bank/ERP rounding or fee differences for generic bank matching.
+  // QRIS settlement matching deliberately keeps its provider-specific rules.
+  await db.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS bank_reconciliation_settings (
+      company_id       INTEGER PRIMARY KEY,
+      amount_tolerance NUMERIC(16,2) NOT NULL DEFAULT 0,
+      updated_by       TEXT,
+      created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT bank_recon_settings_amount_tolerance_ck
+        CHECK (amount_tolerance >= 0 AND amount_tolerance <= 1000000000)
+    )
+  `)).catch(() => {});
+  await db.execute(sql.raw(`
+    ALTER TABLE bank_reconciliation_settings
+      ADD COLUMN IF NOT EXISTS amount_tolerance NUMERIC(16,2) NOT NULL DEFAULT 0
+  `)).catch(() => {});
+  await db.execute(sql.raw(`
+    ALTER TABLE bank_reconciliation_settings
+      ADD COLUMN IF NOT EXISTS updated_by TEXT
   `)).catch(() => {});
 
   // Tag bank_mutations dengan sheet_config_id
