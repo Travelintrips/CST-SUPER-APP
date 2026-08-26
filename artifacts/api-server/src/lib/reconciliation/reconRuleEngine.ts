@@ -76,21 +76,18 @@ export interface ReconRule {
   conditionOperator: ConditionOperator;
   conditionValue: string;               // for "between": "min,max"
   /** Optional stable AND/OR condition set. Legacy fields remain the first condition. */
-  conditionsJson: ReconRuleCondition[] | null;
-  logic: "AND" | "OR";
-  specificity: number;
-  /** Maximum absolute difference from referenceAmount, in the mutation currency. */
-  amountTolerance: number | null;
-  /** Amount captured when a reference rule was created. */
-  referenceAmount: number | null;
-  aiClassificationRuleId: number | null;
-  conditions?: RuleCondition[];
-  logic?: RuleLogic;
+  conditionsJson?: ReconRuleCondition[] | null;
+  logic?: "AND" | "OR";
   specificity?: number;
+  /** Maximum absolute difference from referenceAmount, in the mutation currency. */
+  amountTolerance?: number | null;
+  /** Amount captured when a reference rule was created. */
+  referenceAmount?: number | null;
+  aiClassificationRuleId?: number | null;
+  conditions?: RuleCondition[];
   targetType: TargetType;
   targetId: number | null;
   targetCoaCode: string | null;
-  amountTolerance?: number | null; // absolute IDR tolerance; null = legacy company fallback
   confidenceScore: number;              // 0–100 for this rule
   stopProcessing: boolean;
   matchCount: number;
@@ -444,7 +441,6 @@ export function evaluateReconRules(
     return a.id - b.id;
   });
 
-  const matching: Array<{ rule: ReconRule; reasons: ReconRuleMatchReason[] }> = [];
   let stopAfterPriority: number | null = null;
   for (const rule of sorted) {
     if (stopAfterPriority !== null && rule.priority < stopAfterPriority) break;
@@ -498,35 +494,8 @@ export function evaluateReconRules(
           <= Number(rule.amountTolerance);
     const conditionPassed = conditionsPassed && amountPassed;
 
-    const conditions = rule.conditions?.length
-      ? rule.conditions
-      : [{ field: rule.conditionField, operator: rule.conditionOperator, value: rule.conditionValue }];
-    const passed = conditions.map(c => {
-      const result = evaluateCondition(mutation, c.field, c.operator, c.value);
-      return c.negate ? !result : result;
-    });
-    const conditionPassed = (rule.logic ?? "AND") === "OR"
-      ? passed.some(Boolean)
-      : passed.every(Boolean);
     evaluated.push({ ruleId: rule.id, ruleName: rule.name, matched: conditionPassed });
     if (conditionPassed) {
-      const reasons: ReconRuleMatchReason[] = conditions.map((condition, index) => ({
-        code: `${buildReasonCode(condition.field, condition.operator)}_${index + 1}`,
-        label: `${condition.negate ? "Bukan " : ""}${buildReasonLabel(
-          condition.field,
-          condition.operator,
-          String(condition.value ?? ""),
-        )}`,
-        score: rule.confidenceScore,
-      }));
-      if (amountToleranceConfigured) {
-        reasons.push({
-          code: "RULE_AMOUNT_WITHIN_TOLERANCE",
-          label: `Nominal ${mutation.amount} berada dalam toleransi ±${rule.amountTolerance} dari referensi ${rule.referenceAmount}`,
-          score: rule.confidenceScore,
-        });
-      }
-
       const result: ReconRuleMatchResult = {
         matched: true,
         ruleId: rule.id,
@@ -540,45 +509,8 @@ export function evaluateReconRules(
       };
 
       return result;
-      matching.push({
-        rule,
-        reasons: conditions.filter((_, i) => passed[i]).map(c => ({
-          code: buildReasonCode(c.field, c.operator),
-          label: buildReasonLabel(c.field, c.operator, c.value),
-          score: Math.round(rule.confidenceScore / Math.max(1, conditions.length)),
-        })),
-      });
-      // Still inspect rules tied on precedence so conflicting actions fail closed.
-      // Once the tie group is complete, lower-priority rules cannot override it.
-      if (rule.stopProcessing) stopAfterPriority = rule.priority;
     }
   }
 
-  if (matching.length === 0) return { matched: false, evaluated };
-  const top = matching[0];
-  const contenders = matching.filter(x =>
-    x.rule.priority === top.rule.priority &&
-    (x.rule.specificity ?? 0) === (top.rule.specificity ?? 0) &&
-    x.rule.confidenceScore === top.rule.confidenceScore
-  );
-  const outputs = new Set(contenders.map(x => `${x.rule.targetType}:${x.rule.targetCoaCode ?? ""}`));
-  if (outputs.size > 1) {
-    return {
-      matched: false,
-      ambiguityCode: "AMBIGUOUS_RULE_MATCH",
-      ambiguityReason: "Beberapa rule dengan prioritas, spesifisitas, dan confidence setara menghasilkan action berbeda.",
-      evaluated,
-    };
-  }
-  return {
-    matched: true,
-    ruleId: top.rule.id,
-    ruleName: top.rule.name,
-    targetType: top.rule.targetType,
-    targetCoaCode: top.rule.targetCoaCode,
-    confidence: top.rule.confidenceScore,
-    reasons: top.reasons,
-    stopProcessing: top.rule.stopProcessing,
-    evaluated,
-  };
+  return { matched: false, evaluated };
 }
