@@ -53,7 +53,6 @@ let migrated = false;
 
 export async function runReconRulesMigration(): Promise<void> {
   if (migrated) return;
-  migrated = true;
 
   await db.execute(sql.raw(`
     CREATE TABLE IF NOT EXISTS recon_rules (
@@ -73,6 +72,7 @@ export async function runReconRulesMigration(): Promise<void> {
       target_id           INTEGER,
       target_coa_code     TEXT,
       amount_tolerance    NUMERIC(16,2),
+      reference_amount    NUMERIC(16,2),
       confidence_score    INTEGER NOT NULL DEFAULT 100 CHECK (confidence_score BETWEEN 0 AND 100),
       stop_processing     BOOLEAN NOT NULL DEFAULT TRUE,
       match_count         INTEGER NOT NULL DEFAULT 0,
@@ -87,7 +87,9 @@ export async function runReconRulesMigration(): Promise<void> {
       ADD COLUMN IF NOT EXISTS conditions_json JSONB,
       ADD COLUMN IF NOT EXISTS logic TEXT NOT NULL DEFAULT 'AND',
       ADD COLUMN IF NOT EXISTS specificity INTEGER NOT NULL DEFAULT 1,
-      ADD COLUMN IF NOT EXISTS amount_tolerance NUMERIC(16,2)
+      ADD COLUMN IF NOT EXISTS amount_tolerance NUMERIC(16,2),
+      ADD COLUMN IF NOT EXISTS reference_amount NUMERIC(16,2),
+      ADD COLUMN IF NOT EXISTS ai_classification_rule_id INTEGER
   `)).catch(e => logger.warn({ err: e.message }, "[recon_rules] multi-condition columns warning"));
 
   await db.execute(sql.raw(`CREATE INDEX IF NOT EXISTS rr_company_idx   ON recon_rules(company_id)`)).catch(() => {});
@@ -111,6 +113,7 @@ export async function runReconRulesMigration(): Promise<void> {
   await syncOperationalReconRulesToClassification();
   await syncAiClassificationRulesToOperational();
 
+  migrated = true;
   logger.info("[recon_rules] migration complete (batch 1+2)");
 }
 
@@ -142,6 +145,7 @@ function rowToRule(r: Record<string, unknown>): ReconRule {
     conditionField:   String(r.condition_field) as ReconRule["conditionField"],
     conditionOperator: String(r.condition_operator) as ReconRule["conditionOperator"],
     conditionValue:   String(r.condition_value),
+    conditionsJson:   parsedConditions as ReconRule["conditionsJson"],
     conditions:       parsedConditions as ReconRule["conditions"],
     logic:            r.logic === "OR" ? "OR" : "AND",
     specificity:      Number(r.specificity ?? 1),
@@ -149,6 +153,8 @@ function rowToRule(r: Record<string, unknown>): ReconRule {
     targetId:         r.target_id != null ? Number(r.target_id) : null,
     targetCoaCode:    r.target_coa_code ? String(r.target_coa_code) : null,
     amountTolerance:  r.amount_tolerance == null ? null : Number(r.amount_tolerance),
+    referenceAmount:  r.reference_amount == null ? null : Number(r.reference_amount),
+    aiClassificationRuleId: r.ai_classification_rule_id == null ? null : Number(r.ai_classification_rule_id),
     confidenceScore:  Number(r.confidence_score ?? 100),
     stopProcessing:   Boolean(r.stop_processing),
     matchCount:       Number(r.match_count ?? 0),

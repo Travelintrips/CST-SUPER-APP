@@ -76,21 +76,18 @@ export interface ReconRule {
   conditionOperator: ConditionOperator;
   conditionValue: string;               // for "between": "min,max"
   /** Optional stable AND/OR condition set. Legacy fields remain the first condition. */
-  conditionsJson: ReconRuleCondition[] | null;
-  logic: "AND" | "OR";
-  specificity: number;
-  /** Maximum absolute difference from referenceAmount, in the mutation currency. */
-  amountTolerance: number | null;
-  /** Amount captured when a reference rule was created. */
-  referenceAmount: number | null;
-  aiClassificationRuleId: number | null;
-  conditions?: RuleCondition[];
+  conditionsJson?: ReconRuleCondition[] | null;
   logic?: RuleLogic;
   specificity?: number;
+  /** Maximum absolute difference from referenceAmount, in the mutation currency. */
+  amountTolerance?: number | null;
+  /** Amount captured when a reference rule was created. */
+  referenceAmount?: number | null;
+  aiClassificationRuleId?: number | null;
+  conditions?: RuleCondition[];
   targetType: TargetType;
   targetId: number | null;
   targetCoaCode: string | null;
-  amountTolerance?: number | null; // absolute IDR tolerance; null = legacy company fallback
   confidenceScore: number;              // 0–100 for this rule
   stopProcessing: boolean;
   matchCount: number;
@@ -248,15 +245,17 @@ function extractFieldValue(
 ): string | number | null {
   switch (field) {
     case "description":        return (mutation.description ?? "").toLowerCase();
-    case "reference":          return (mutation.reference ?? "").toLowerCase();
+    case "reference":          return mutation.reference == null ? null : mutation.reference.toLowerCase();
     case "amount":             return Number(mutation.amount);
     case "direction":          return mutation.direction;
     case "bank_account":       return mutation.bankAccountId != null ? String(mutation.bankAccountId) : null;
-    case "counterparty_name":  return (mutation.counterpartyName ?? "").toLowerCase();
-    case "counterparty_account": return (mutation.counterpartyAccount ?? "").toLowerCase();
-    case "bank":                return (mutation.bank ?? "").toLowerCase();
-    case "transaction_code":    return (mutation.transactionCode ?? "").toLowerCase();
-    case "normalized":          return (mutation.normalizedDescription ?? mutation.description ?? "").toLowerCase();
+    case "counterparty_name":  return mutation.counterpartyName == null ? null : mutation.counterpartyName.toLowerCase();
+    case "counterparty_account": return mutation.counterpartyAccount == null ? null : mutation.counterpartyAccount.toLowerCase();
+    case "bank":                return mutation.bank == null ? null : mutation.bank.toLowerCase();
+    case "transaction_code":    return mutation.transactionCode == null ? null : mutation.transactionCode.toLowerCase();
+    case "normalized":          return mutation.normalizedDescription == null
+      ? null
+      : mutation.normalizedDescription.toLowerCase();
     default:                   return null;
   }
 }
@@ -412,6 +411,9 @@ function getRuleConditions(rule: ReconRule): ReconRuleCondition[] {
   if (Array.isArray(rule.conditionsJson) && rule.conditionsJson.length > 0) {
     return rule.conditionsJson;
   }
+  if (Array.isArray(rule.conditions) && rule.conditions.length > 0) {
+    return rule.conditions;
+  }
   return [{
     field: rule.conditionField,
     operator: rule.conditionOperator,
@@ -477,6 +479,12 @@ export function evaluateReconRules(
     // condition must not pass merely because its source field is missing.
     const conditions = getRuleConditions(rule);
     const conditionResults = conditions.map(condition => {
+      // A negated predicate must not turn missing evidence into a match.
+      // This is especially important for rules such as "not_contains X":
+      // an absent reference/bank field is not proof of the negative.
+      if (condition.negate && extractFieldValue(mutation, condition.field) == null) {
+        return false;
+      }
       const passed = evaluateCondition(
         mutation,
         condition.field,
@@ -497,17 +505,6 @@ export function evaluateReconRules(
         && Math.abs(Number(mutation.amount) - Number(rule.referenceAmount))
           <= Number(rule.amountTolerance);
     const conditionPassed = conditionsPassed && amountPassed;
-
-    const conditions = rule.conditions?.length
-      ? rule.conditions
-      : [{ field: rule.conditionField, operator: rule.conditionOperator, value: rule.conditionValue }];
-    const passed = conditions.map(c => {
-      const result = evaluateCondition(mutation, c.field, c.operator, c.value);
-      return c.negate ? !result : result;
-    });
-    const conditionPassed = (rule.logic ?? "AND") === "OR"
-      ? passed.some(Boolean)
-      : passed.every(Boolean);
     evaluated.push({ ruleId: rule.id, ruleName: rule.name, matched: conditionPassed });
     if (conditionPassed) {
       const reasons: ReconRuleMatchReason[] = conditions.map((condition, index) => ({
@@ -539,14 +536,9 @@ export function evaluateReconRules(
         evaluated,
       };
 
-      return result;
       matching.push({
         rule,
-        reasons: conditions.filter((_, i) => passed[i]).map(c => ({
-          code: buildReasonCode(c.field, c.operator),
-          label: buildReasonLabel(c.field, c.operator, c.value),
-          score: Math.round(rule.confidenceScore / Math.max(1, conditions.length)),
-        })),
+        reasons,
       });
       // Still inspect rules tied on precedence so conflicting actions fail closed.
       // Once the tie group is complete, lower-priority rules cannot override it.
