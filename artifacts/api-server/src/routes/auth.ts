@@ -96,9 +96,51 @@ type GoogleOAuthStageDetails = {
   providerCode?: string;
 };
 
+const googleOAuthFailureStages: Record<GoogleOAuthFailureCategory, GoogleOAuthStage> = {
+  STATE_MISSING: "STATE_VALIDATION",
+  STATE_INVALID: "STATE_VALIDATION",
+  STATE_EXPIRED: "STATE_VALIDATION",
+  STATE_STORAGE_FAILURE: "STATE_VALIDATION",
+  CODE_MISSING: "TOKEN_EXCHANGE",
+  TOKEN_EXCHANGE_FAILED: "TOKEN_EXCHANGE",
+  GOOGLE_PROFILE_FAILED: "GOOGLE_PROFILE",
+  EMAIL_MISSING: "GOOGLE_PROFILE",
+  ACCOUNT_RESOLUTION_FAILED: "ACCOUNT_LOOKUP",
+  ACCOUNT_NOT_ALLOWED: "ACCOUNT_LOOKUP",
+  SESSION_CREATION_FAILED: "SESSION_JWT",
+  COOKIE_FAILED: "COOKIE_SET",
+  FINAL_REDIRECT_FAILED: "FINAL_REDIRECT",
+};
+
 // A callback can classify its failure before throwing to the common redirect
 // handler. Preserve that category so diagnostics keep the actual failed stage.
 const classifiedGoogleOAuthFailures = new WeakSet<Request>();
+
+const sensitiveOAuthErrorValue = /\b(authorization[_-]?code|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|session[_-]?secret|portal_session|sid|state)\s*([=:])\s*([^\s,;]+)/gi;
+const jwtLikeValue = /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g;
+
+function getSanitizedOAuthErrorDetails(error: unknown): {
+  errorName: string;
+  errorMessage: string;
+} | undefined {
+  if (!(error instanceof Error)) return undefined;
+
+  const errorName = /^[A-Za-z][A-Za-z0-9_.:-]{0,80}$/.test(error.name)
+    ? error.name
+    : "Error";
+  const errorMessage = error.message
+    .replace(sensitiveOAuthErrorValue, "$1$2[redacted]")
+    .replace(/\bBearer\s+[A-Za-z0-9._~-]+/gi, "Bearer [redacted]")
+    .replace(jwtLikeValue, "[redacted-jwt]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 300);
+
+  return {
+    errorName,
+    errorMessage: errorMessage || "No error message",
+  };
+}
 
 function safeProviderCode(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
@@ -128,9 +170,12 @@ function logGoogleOAuthFailure(
   // Never include authorization codes, OAuth state, tokens, JWTs, session IDs,
   // cookie values, or client secrets in callback diagnostics.
   classifiedGoogleOAuthFailures.add(req);
+  const errorDetails = getSanitizedOAuthErrorDetails(_error);
   req.log.error(
     {
       category,
+      failingStage: googleOAuthFailureStages[category],
+      ...errorDetails,
     },
     "[Google OAuth] callback failed",
   );
@@ -910,8 +955,13 @@ router.get("/callback/google", async (req: Request, res: Response) => {
         providerStatus: tokenRes.status,
         providerCode: providerError,
       });
-      logGoogleOAuthFailure(req, "TOKEN_EXCHANGE_FAILED");
-      throw new Error("Token exchange failed");
+      const tokenExchangeError = new Error(
+        providerError === "invalid_client"
+          ? "Google token endpoint rejected the OAuth client credentials"
+          : "Google token endpoint rejected authorization-code exchange",
+      );
+      logGoogleOAuthFailure(req, "TOKEN_EXCHANGE_FAILED", tokenExchangeError);
+      throw tokenExchangeError;
     }
     logGoogleOAuthStage(req, callbackContext.flow, "TOKEN_EXCHANGE", "passed", {
       result: "provider_accepted",
