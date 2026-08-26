@@ -8,8 +8,6 @@
 - [CMS upload object keys](cms-upload-object-key.md) — public CMS upload wajib memakai key ber-ekstensi sesuai bytes hasil kompresi; bare UUID ditolak resolver frontend.
 - [Supabase Node 20 WebSocket](supabase-node20-websocket.md) — one-off Supabase client scripts di Node 20 memerlukan transport `ws` eksplisit.
 - [Production static asset promotion](production-static-assets.md) — asset dev tidak otomatis ada di bucket production; cek secret runtime live dan verifikasi bucket production sebelum publish.
-- [Production audit loader label](prod-audit-loader-label.md) — production bundle dapat benar walau log pool menulis env=development saat one-off process tidak mengatur NODE_ENV.
-- [Recon Batch 2 audit](recon-batch2.md) — 82/82 tests, build bersih, type fix deskripsi ECF, 7 endpoint governance; verdiksi LULUS semua fitur.
 - [Git repo cleanup](git-repo-cleanup.md) — strip dist/+attached_assets/+.agents/outputs/ via git-filter-repo; re-add origin after; resolve subrepl conflicts with --ours; gateway workflow = "Start application".
 - [Artifact workflow CWD](artifact-workflow-cwd.md) — artifact workflows start at workspace root; use workspace-relative script paths or explicitly `cd` into the artifact.
 - [Accounting settings seed bug](accounting-settings-seed-bug.md) — null journal IDs in accounting_settings blocks sport center accounting; fix + enum 'draft' + bizportal Supabase key mismatch solution.
@@ -55,11 +53,8 @@
 - [Sprint 7 runtime evidence](sprint7-runtime-evidence.md) — invoice lifecycle runtime E2E passes on dev DB; legacy quote harness imports unavailable declaration-only lib/db output.
 - [Sprint 9 cancellation policy](sprint9-cancellation-policy.md) — AP cancellation is allowed only before Treasury starts execution; later correction uses failure or reversal/refund workflows.
 - [Recon validation environment](recon-validation-environment.md) — restore with frozen pnpm lockfile and build shared declarations before API typecheck; two isolation tests require missing dev tables.
-- [Sprint 8 release decision evidence](sprint8-release-decision.md) — classify legacy cross-project regressions separately; only AP handoff-stage failures block Sprint 8.
 - [Sprint 09A runtime migration](sprint9a-runtime-migration.md) — legacy runtime snapshots may miss PK constraints required by new handoff foreign keys.
 - [Sprint 09A live harness](sprint9a-live-harness.md) — live proof needs ESM bundling with pino externalized and runtime invoice status `ready_for_ap`.
-- [Sprint 09D verification evidence](sprint-09d-verification-evidence.md) — build shared declarations first; separate additive handoff schema proof from global API readiness.
-- [Sprint 09E runtime proof](sprint-09e-runtime-proof.md) — 09D handoff proof does not prove 09E reconciliation links; wait for sequential startup readiness before runtime writes.
 - [Sport Center audit contract](sport-center-audit-contract.md) — mirror trigger tetap owner; payment hanya posted setelah entry_id valid; jangan menambah relasi jurnal paralel.
 - [Sport Center payment method backfill](sport-center-payment-method-backfill.md) — legacy sync mengisi accounting_payments tetapi journal header bisa tetap NULL; backfill keduanya dari mirror source.
 - [Sport Center mirror duplicate booking](sport-center-mirror-duplicate-booking.md) — duplicate public booking dengan sc_booking_id sama dapat membuat trigger mirror memilih booking terbaru yang salah.
@@ -157,3 +152,4 @@
 - [Rule AI operational mirror](rule-ai-operational-mirror.md) — Rule AI must sync to a managed operational matcher rule without altering independent COA references.
 - [Runtime fixture FK cleanup](runtime-fixture-fk-cleanup.md) — cleanup proofs must discover marker-linked descendants and isolate each delete with savepoints.
 - [Production hard-delete guard](production-hard-delete-guard.md) — posted bank-recon cleanup must cover journal/line and fleet-ledger guards in one locked transaction, then restore them.
+- [Temporary runtime bundle location](temporary-runtime-bundle-location.md) — ESM proof bundles with external workspace dependencies must live under the workspace, not `/tmp`.
