@@ -809,6 +809,12 @@ export function ensureSportPaymentMirrorTrigger(): Promise<void> {
 
   // Fungsi cross-schema untuk worker: temukan confirmed payments yang belum punya mirror.
   // SECURITY DEFINER agar bisa membaca sport_center.sport_payments tanpa service role key.
+  // PostgreSQL tidak mengizinkan CREATE OR REPLACE mengubah RETURNS TABLE.
+  // Helper ini bukan trigger owner dan tidak menyimpan state, jadi drop/recreate
+  // eksplisit adalah satu-satunya cara aman untuk menambahkan paid_at.
+  await db.execute(sql`
+    DROP FUNCTION IF EXISTS sport_center.get_unmirrored_confirmed_payments()
+  `);
   await db.execute(sql`
     CREATE OR REPLACE FUNCTION sport_center.get_unmirrored_confirmed_payments()
     RETURNS TABLE (

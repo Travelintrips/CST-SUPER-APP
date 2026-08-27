@@ -14,6 +14,7 @@ describe("Sport payment mirror startup installer", () => {
     expect(migration).toContain("t.tgname = 'trg_mirror_confirmed_payment_to_public'");
     expect(migration).not.toContain("DROP TRIGGER IF EXISTS trg_mirror_confirmed_payment_to_public");
     expect(migration).not.toContain("DROP TRIGGER IF EXISTS trg_sync_sport_payment_to_accounting");
+    expect(migration).toContain("DROP FUNCTION IF EXISTS sport_center.get_unmirrored_confirmed_payments()");
   });
 
   it("checks the complete canonical object contract before returning", () => {
