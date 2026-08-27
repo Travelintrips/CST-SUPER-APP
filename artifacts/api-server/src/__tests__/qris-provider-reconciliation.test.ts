@@ -90,6 +90,29 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     });
   });
 
+  it("retains an out-of-tolerance deduction rate as review-only audit evidence", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 110, companyId: 1, bankAccountId: 17, amount: 100,
+        method: "QRIS", status: "paid", paidAt: "2026-08-12",
+        expectedSettlementDate: "2026-08-13", providerName: "paylabs",
+      }],
+      mutations: [{
+        id: 111, companyId: 1, bankAccountId: 17, amount: 2_000,
+        transactionDate: "2026-08-13", direction: "IN",
+        source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "paylabs", description: "PAYLABS SETTLEMENT",
+      }],
+    });
+
+    expect(result[0]).toMatchObject({
+      status: "REVIEW",
+      observedDeduction: -1_900,
+      effectiveDeductionRate: -19,
+      paymentItems: [{ paymentId: 110 }],
+    });
+  });
+
   it("enforces the H-1 settlement cohort and excludes the next-day payment", () => {
     const result = generateQrisMutationBatchCandidates({
       requireExplicitSettlementMetadata: true,

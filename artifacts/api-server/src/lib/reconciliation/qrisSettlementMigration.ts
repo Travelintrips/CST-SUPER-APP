@@ -174,7 +174,10 @@ async function runQrisSettlementMigrationOnce(): Promise<void> {
       reconciliation_status TEXT NOT NULL DEFAULT 'UNMATCHED',
       confidence NUMERIC(5,4) NOT NULL DEFAULT 0,
       observed_deduction NUMERIC(16,2) NOT NULL DEFAULT 0,
-      effective_deduction_rate NUMERIC(9,8),
+       -- This is audit evidence, not a provider percentage input. An
+       -- unmatched bank credit can be many multiples of a small natural batch,
+       -- so a constrained rate would prevent the audit row from being saved.
+       effective_deduction_rate NUMERIC,
       review_reason TEXT,
       generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -195,9 +198,18 @@ async function runQrisSettlementMigrationOnce(): Promise<void> {
       ADD COLUMN IF NOT EXISTS reconciliation_status TEXT NOT NULL DEFAULT 'UNMATCHED',
       ADD COLUMN IF NOT EXISTS confidence NUMERIC(5,4) NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS observed_deduction NUMERIC(16,2) NOT NULL DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS effective_deduction_rate NUMERIC(9,8),
+       ADD COLUMN IF NOT EXISTS effective_deduction_rate NUMERIC,
       ADD COLUMN IF NOT EXISTS review_reason TEXT,
       ADD COLUMN IF NOT EXISTS generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  `).catch(() => {});
+  // Existing databases may have the former NUMERIC(9,8) column. The generated
+  // rate is retained as audit evidence even when it is far outside the provider
+  // tolerance, therefore widen the existing type as an additive-compatible
+  // repair instead of dropping the candidate row.
+  await db.execute(sql`
+    ALTER TABLE qris_mutation_batch_candidates
+      ALTER COLUMN effective_deduction_rate TYPE NUMERIC
+      USING effective_deduction_rate::NUMERIC
   `).catch(() => {});
   // An UNMATCHED QRIS audit is still valuable reviewer evidence, even when no
   // canonical payment date is available. It must remain non-approvable through
