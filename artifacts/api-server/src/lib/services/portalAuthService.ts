@@ -26,6 +26,7 @@ import {
   configureCustomerOrganization,
   resolveSelectableCustomerPortalCompany,
 } from "./portalCustomerOrganizationService.js";
+import { getPortalCustomerContext } from "./portalCustomerContextService.js";
 
 function assertAccountUsable(customer: {
   accountStatus?: string | null;
@@ -1207,6 +1208,7 @@ export async function getMe(customerId: number) {
     .from(portalCustomersTable)
     .where(eq(portalCustomersTable.id, customerId));
   if (!customer) throw new AuthServiceError(401, "Customer not found");
+  const context = await getPortalCustomerContext(customerId);
 
   const [profile] = await db
     .select({ companyAddress: portalCustomerProfilesTable.companyAddress })
@@ -1222,7 +1224,14 @@ export async function getMe(customerId: number) {
     phone: customer.phone,
     company: customer.company,
     role: customer.role,
-    customerType: customer.customerType,
+    customerType: context.customerType,
+    customerContext: {
+      status: context.status,
+      companyId: context.companyId,
+      company: context.company,
+      activeMemberships: context.activeMemberships,
+      pendingRequest: context.pendingRequest,
+    },
     address: profile?.companyAddress ?? null,
     avatarUrl: (customer as Record<string, unknown>).avatarUrl as string ?? null,
     serviceIds,

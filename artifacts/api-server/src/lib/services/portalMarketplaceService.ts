@@ -9,17 +9,12 @@
 
 import {
   db,
-  portalCustomersTable,
-  portalCompanyMembersTable,
   portalProductOrdersTable,
   portalProductOrderItemsTable,
 } from "@workspace/db";
 import { eq, and, asc, sql } from "drizzle-orm";
 import { getCatalogItemPublic } from "./portalVendorCatalogService.js";
-import {
-  resolvePortalCustomerCompanyId,
-  resolvePortalCustomerCompanyIdByEmail,
-} from "./portalCompanyScope.js";
+import { getPortalCustomerContext } from "./portalCustomerContextService.js";
 import {
   isMarketplaceNewPipelineEnabled,
   createMktRfqEntry,
@@ -78,24 +73,24 @@ export interface SubmitQuoteResult {
  * Submit a marketplace quote (RFQ). Performs:
  *  1. Catalog item validation (exists, not expired)
  *  2. Buyer field validation
- *  3. Phase 2B: resolve full portal customer from portalEmailFromToken
- *  4. Phase 2B.1: resolve company membership
+ *  3. Resolve the canonical customer context from the authenticated session id
+ *  4. Resolve company membership from that context
  *  5. createMktRfqEntry (new pipeline, non-fatal)
  *  6. Insert portal_product_orders + portal_product_order_items (legacy write)
  *  7. linkMktRfqToLegacy (fire-and-forget)
  *  8. Increment quote_count (fire-and-forget)
  *
- * @param portalEmailFromToken  already-verified email from JWT/Supabase/devportal token
- *                              (null = anonymous / no auth header)
+ * @param portalCustomerId      customer id established by portal auth middleware
+ *                              (null = explicit guest flow)
  * @param ip                    client IP for rate-limit audit in mkt pipeline
  */
 export async function submitMarketplaceQuote(params: {
   catalogItemId:        number;
-  portalEmailFromToken: string | null;
+  portalCustomerId:     number | null;
   ip:                   string | null;
   body:                 SubmitQuoteBody;
 }): Promise<SubmitQuoteResult> {
-  const { catalogItemId, portalEmailFromToken, ip, body } = params;
+  const { catalogItemId, portalCustomerId, ip, body } = params;
 
   // ── 1. Item validation ────────────────────────────────────────────────────
   const item = await getCatalogItemPublic(catalogItemId);
@@ -114,14 +109,20 @@ export async function submitMarketplaceQuote(params: {
     item_type,
   } = body;
 
-  // Every portal order that can later become an invoice/payment must have an
-  // Company scope is resolved from the canonical customer record. Individual
-  // customers intentionally resolve to NULL; company customers still require
-  // exactly one active membership. Never trust company_name from the browser.
-  const portalCompanyId = await resolvePortalCustomerCompanyIdByEmail(
-    portalEmailFromToken ?? email?.trim() ?? "",
-    { required: true },
-  );
+  // Authenticated ownership is resolved only from the session customer id.
+  // Individual customers intentionally resolve to NULL. Company customers
+  // need an active canonical membership; pending/unresolved contexts fail
+  // closed instead of falling back to browser-supplied company data.
+  const customerContext = portalCustomerId
+    ? await getPortalCustomerContext(portalCustomerId)
+    : null;
+  if (customerContext && customerContext.status === "company_pending") {
+    throw makeServiceError(422, "Permintaan perusahaan Anda masih menunggu persetujuan admin.");
+  }
+  if (customerContext && customerContext.status !== "individual" && customerContext.status !== "company_mapped") {
+    throw makeServiceError(422, "Lengkapi atau tunggu verifikasi organisasi Customer Portal sebelum membuat RFQ.");
+  }
+  const portalCompanyId = customerContext?.companyId ?? null;
 
   const resolvedName  = (buyer_name  ?? customerName ?? "").trim();
   const resolvedPhone = (guest_contact ?? phone       ?? "").trim();
@@ -177,77 +178,23 @@ export async function submitMarketplaceQuote(params: {
   const newPipelineEnabled = await isMarketplaceNewPipelineEnabled();
 
   if (newPipelineEnabled) {
-    // Phase 2B: resolve full portal customer record (non-fatal)
-    type ResolvedPortalCustomer = {
-      id: number;
-      email: string;
-      name: string;
-      phone: string | null;
-      company: string | null;
-      customerType: string | null;
-    };
-    let portalCustomer: ResolvedPortalCustomer | null = null;
-    if (portalEmailFromToken) {
-      try {
-        const [c] = await db.select({
-          id:      portalCustomersTable.id,
-          email:   portalCustomersTable.email,
-          name:    portalCustomersTable.name,
-          phone:   portalCustomersTable.phone,
-          company: portalCustomersTable.company,
-          customerType: portalCustomersTable.customerType,
-        }).from(portalCustomersTable)
-          .where(eq(portalCustomersTable.email, portalEmailFromToken.trim().toLowerCase()));
-        if (c) portalCustomer = c;
-      } catch { /* non-fatal — treat as guest */ }
-    }
-
-    // Phase 2B.1: resolve company membership. An authenticated customer must
-    // have exactly one active company; never choose one arbitrarily.
-    type MembershipCtx = {
-      companyId:     number;
-      buyerRole:     string;
-      department:    string | null;
-      costCenter:    string | null;
-      approvalLevel: number | null;
-    };
-    let membershipCtx: MembershipCtx | null = null;
-    if (portalCustomer && portalCustomer.customerType !== "individual") {
-      const companyId = await resolvePortalCustomerCompanyId(portalCustomer.id, { required: true }) as number;
-      const [m] = await db.select({
-        companyId:     portalCompanyMembersTable.companyId,
-        buyerRole:     portalCompanyMembersTable.buyerRole,
-        department:    portalCompanyMembersTable.department,
-        costCenter:    portalCompanyMembersTable.costCenter,
-        approvalLevel: portalCompanyMembersTable.approvalLevel,
-      })
-      .from(portalCompanyMembersTable)
-      .where(and(
-        eq(portalCompanyMembersTable.portalCustomerId, portalCustomer.id),
-        eq(portalCompanyMembersTable.companyId, companyId),
-        eq(portalCompanyMembersTable.isActive, true),
-      ))
-      .orderBy(asc(portalCompanyMembersTable.createdAt))
-      .limit(1);
-      if (!m) throw new Error("Portal company membership disappeared during order creation");
-      membershipCtx = m;
-    }
-
+    /*
+     * The canonical context was resolved above from the authenticated session.
+     * Do not resolve a customer again from the email submitted by the browser.
+     */
     try {
       mktRfqResult = await createMktRfqEntry({
         catalogItem:        item,
         buyerName:          resolvedName,
-        buyerEmail:         portalCustomer?.email ?? portalEmailFromToken ?? email?.trim() ?? "",
+        buyerEmail:         customerContext?.customer.email ?? email?.trim() ?? "",
         buyerPhone:         resolvedPhone,
-        buyerCompany:       portalCustomer?.customerType === "individual"
-          ? null
-          : (company_name?.trim() ?? portalCustomer?.company ?? null),
+        buyerCompany:       customerContext?.company?.name ?? (portalCustomerId ? null : company_name?.trim() ?? null),
         companyId:          portalCompanyId,
-        portalCustomerId:   portalCustomer?.id ?? null,
-        buyerRole:          membershipCtx?.buyerRole ?? null,
-        buyerDepartment:    membershipCtx?.department ?? null,
-        buyerCostCenter:    membershipCtx?.costCenter ?? null,
-        buyerApprovalLevel: membershipCtx?.approvalLevel ?? null,
+        portalCustomerId,
+        buyerRole:          customerContext?.company?.buyerRole ?? null,
+        buyerDepartment:    customerContext?.company?.department ?? null,
+        buyerCostCenter:    customerContext?.company?.costCenter ?? null,
+        buyerApprovalLevel: customerContext?.company?.approvalLevel ?? null,
         qty:                qtyNum,
         unit:               unitStr,
         notes:              combinedNotes,
@@ -268,7 +215,7 @@ export async function submitMarketplaceQuote(params: {
     const [hdr] = await tx.insert(portalProductOrdersTable).values({
       orderNumber,
       customerName:       resolvedName,
-      email:              portalEmailFromToken ?? email?.trim() ?? "",
+      email:              customerContext?.customer.email ?? email?.trim() ?? "",
       companyId:          portalCompanyId,
       phone:              resolvedPhone,
       shippingAddress:    shippingAddress?.trim() || "TBD — Quote Request",
@@ -347,9 +294,10 @@ export interface CreateOrderResult {
  */
 export async function createMarketplaceOrder(params: {
   catalogItemId: number;
+  portalCustomerId?: number | null;
   body:          CreateOrderBody;
 }): Promise<CreateOrderResult> {
-  const { catalogItemId, body } = params;
+  const { catalogItemId, portalCustomerId = null, body } = params;
 
   // ── 1. Item validation ────────────────────────────────────────────────────
   const item = await getCatalogItemPublic(catalogItemId);
@@ -366,10 +314,16 @@ export async function createMarketplaceOrder(params: {
   if (!phone?.trim())           throw makeServiceError(400, "No. WhatsApp wajib diisi");
   if (!shippingAddress?.trim()) throw makeServiceError(400, "Alamat pengiriman wajib diisi");
 
-  const portalCompanyId = await resolvePortalCustomerCompanyIdByEmail(
-    email?.trim() ?? "",
-    { required: true },
-  );
+  const customerContext = portalCustomerId
+    ? await getPortalCustomerContext(portalCustomerId)
+    : null;
+  if (customerContext && customerContext.status === "company_pending") {
+    throw makeServiceError(422, "Permintaan perusahaan Anda masih menunggu persetujuan admin.");
+  }
+  if (customerContext && customerContext.status !== "individual" && customerContext.status !== "company_mapped") {
+    throw makeServiceError(422, "Lengkapi atau tunggu verifikasi organisasi Customer Portal sebelum membuat order.");
+  }
+  const portalCompanyId = customerContext?.companyId ?? null;
 
   // ── 3. Price calculations ─────────────────────────────────────────────────
   const qtyNum     = Math.max(1, Number(qty) || 1);
@@ -422,7 +376,7 @@ export async function createMarketplaceOrder(params: {
       orderNumber,
       companyId:        portalCompanyId,
       customerName:      customerName.trim(),
-      email:             email?.trim() ?? "",
+      email:             customerContext?.customer.email ?? email?.trim() ?? "",
       phone:             phone.trim(),
       shippingAddress:   shippingAddress.trim(),
       notes:             notes?.trim() ?? null,

@@ -67,12 +67,17 @@ import {
   PortalCompanyMembershipError,
 } from "../lib/services/portalCompanyMembershipService.js";
 import {
+  configureCustomerOrganization,
   getPortalCustomerOrganizationState,
   listCustomerPortalCompanies,
   listPendingPortalCompanyRequests,
   reviewPortalCompanyRequest,
   PortalCustomerOrganizationError,
 } from "../lib/services/portalCustomerOrganizationService.js";
+import {
+  getPortalCustomerContext,
+  PortalCustomerContextError,
+} from "../lib/services/portalCustomerContextService.js";
 import { getErpStats } from "../lib/services/portalStatsService.js";
 import { getContent, updateContent } from "../lib/services/portalContentService.js";
 import {
@@ -215,6 +220,19 @@ import {
 } from "../lib/services/portalLogisticOrderService.js";
 
 const router = Router();
+
+// Marketplace endpoints remain usable for an explicit guest submission, but
+// an auth token is never ignored. If one is present it must resolve through
+// the same middleware that establishes req.portalCustomerId for all protected
+// portal operations.
+function optionalPortalAuth(req: Request, res: Response, next: NextFunction) {
+  const cookieToken = (req.cookies as Record<string, string> | undefined)?.[PORTAL_SESSION_COOKIE];
+  const bearerToken = req.headers.authorization?.startsWith("Bearer ")
+    ? req.headers.authorization.slice(7)
+    : undefined;
+  if (!cookieToken && !bearerToken) return next();
+  return requirePortalAuth(req, res, next);
+}
 
 
 async function getProductCategories(productIds: number[]): Promise<Record<number, string[]>> {
@@ -421,7 +439,7 @@ router.get("/marketplace/:id", async (req, res) => {
 });
 
 // POST /api/portal/marketplace/:id/quote — buat Quote Request dari catalog item
-router.post("/marketplace/:id/quote", marketplaceSubmitLimiter, async (req, res) => {
+router.post("/marketplace/:id/quote", marketplaceSubmitLimiter, optionalPortalAuth, async (req, res) => {
   const id = parseInt(String(req.params.id));
   if (isNaN(id)) return res.status(400).json({ error: "id tidak valid" });
 
@@ -430,39 +448,10 @@ router.post("/marketplace/:id/quote", marketplaceSubmitLimiter, async (req, res)
     return res.status(400).json({ error: "Permintaan tidak valid" });
   }
 
-  // Optional auth: resolve logged-in customer email to link quote to account.
-  // Priority: devportal token (HMAC-verified, dev-only) → portal JWT → Supabase token.
-  // SECURITY: devportal tokens MUST go through verifyDevPortalEmail() which enforces
-  // HMAC-SHA256 signature check and IS_PROD guard. Never decode devportal.* tokens
-  // inline — that allows forgery of any email without a valid signature.
-  let portalEmailFromToken: string | null = null;
-  const authHdr = req.headers.authorization;
-  const cookieToken = (req.cookies as Record<string, string> | undefined)?.[PORTAL_SESSION_COOKIE];
-  const authToken = cookieToken ?? (authHdr?.startsWith("Bearer ") ? authHdr.slice(7) : null);
-  if (authToken) {
-    try {
-      const tok = authToken;
-      if (tok.startsWith("devportal.")) {
-        portalEmailFromToken = verifyDevPortalEmail(tok);
-      }
-      if (!portalEmailFromToken) {
-        const pp = await verifyPortalJwt(tok);
-        if (pp) {
-          const [c] = await db.select({ email: portalCustomersTable.email }).from(portalCustomersTable).where(eq(portalCustomersTable.id, pp.customerId));
-          if (c) portalEmailFromToken = c.email;
-        }
-      }
-      if (!portalEmailFromToken) {
-        const su = await verifySupabaseToken(tok);
-        if (su?.email) portalEmailFromToken = su.email;
-      }
-    } catch { /* treat as anonymous */ }
-  }
-
   try {
     const result = await submitMarketplaceQuote({
       catalogItemId:        id,
-      portalEmailFromToken,
+      portalCustomerId:     (req as PortalAuthReq).portalCustomerId ?? null,
       ip:                   (req as Request & { ip?: string }).ip ?? null,
       body:                 req.body,
     });
@@ -479,7 +468,7 @@ router.post("/marketplace/:id/quote", marketplaceSubmitLimiter, async (req, res)
 
 // POST /api/portal/marketplace/:id/order — buat Order Now dari catalog item
 // DEPRECATED: Marketplace frontend no longer uses direct order flow. Use /api/portal/marketplace/:id/quote for RFQ.
-router.post("/marketplace/:id/order", marketplaceSubmitLimiter, async (req, res) => {
+router.post("/marketplace/:id/order", marketplaceSubmitLimiter, optionalPortalAuth, async (req, res) => {
   const id = parseInt(String(req.params.id));
   if (isNaN(id)) return res.status(400).json({ error: "id tidak valid" });
 
@@ -489,7 +478,11 @@ router.post("/marketplace/:id/order", marketplaceSubmitLimiter, async (req, res)
   }
 
   try {
-    const result = await createMarketplaceOrder({ catalogItemId: id, body: req.body });
+    const result = await createMarketplaceOrder({
+      catalogItemId: id,
+      portalCustomerId: (req as PortalAuthReq).portalCustomerId ?? null,
+      body: req.body,
+    });
     return res.status(201).json(result);
   } catch (e: any) {
     const code = (e as any)?.statusCode;
@@ -915,6 +908,54 @@ router.get("/auth/me", requirePortalAuth, async (req, res) => {
     return res.json(await getMe(customerId));
   } catch (err) {
     if (err instanceof AuthServiceError) return res.status(err.statusCode).json({ message: err.message });
+    throw err;
+  }
+});
+
+// GET /api/portal/organization — canonical customer/company context
+router.get("/organization", requireCustomerPortalAuth, async (req, res): Promise<void> => {
+  try {
+    const context = await getPortalCustomerContext((req as PortalAuthReq).portalCustomerId);
+    res.json(context);
+  } catch (err) {
+    if (err instanceof PortalCustomerContextError) {
+      res.status(err.statusCode).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
+});
+
+// GET /api/portal/organization/companies — canonical company directory for
+// the authenticated customer onboarding/organization selector.
+router.get("/organization/companies", requireCustomerPortalAuth, async (req, res): Promise<void> => {
+  res.json(await listCustomerPortalCompanies(String(req.query.search ?? "")));
+});
+
+// PUT /api/portal/organization — configure organization for the session owner.
+// customerId/companyId from the browser are never used as ownership identity.
+router.put("/organization", requireCustomerPortalAuth, async (req, res): Promise<void> => {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const customerType = body.customerType;
+  if (customerType !== "individual" && customerType !== "company") {
+    res.status(400).json({ error: "Tipe customer tidak valid." });
+    return;
+  }
+  try {
+    const organization = await configureCustomerOrganization({
+      customerId: (req as PortalAuthReq).portalCustomerId,
+      customerType,
+      companyId: body.companyId,
+      requestedCompanyName: body.requestedCompanyName,
+      requestedRegistrationNumber: body.requestedRegistrationNumber,
+    });
+    const context = await getPortalCustomerContext((req as PortalAuthReq).portalCustomerId);
+    res.json({ organization, context });
+  } catch (err) {
+    if (err instanceof PortalCustomerOrganizationError || err instanceof PortalCustomerContextError) {
+      res.status(err.statusCode).json({ error: err.message });
+      return;
+    }
     throw err;
   }
 });
@@ -1587,7 +1628,18 @@ const onboardingUpload = multer({ storage: multer.memoryStorage(), limits: { fil
 router.get("/onboarding/status", requirePortalAuth, async (req, res): Promise<void> => {
   const customerId = (req as PortalAuthReq).portalCustomerId;
   const result = await getOnboardingStatus(customerId);
-  res.json(result);
+  const context = await getPortalCustomerContext(customerId);
+  res.json({
+    ...result,
+    customerType: context.customerType,
+    customerContext: {
+      status: context.status,
+      companyId: context.companyId,
+      company: context.company,
+      activeMemberships: context.activeMemberships,
+      pendingRequest: context.pendingRequest,
+    },
+  });
 });
 
 // Rate limit KTP OCR: max 5 calls per customer per hour (gpt-4o is expensive)
@@ -1983,7 +2035,16 @@ router.get("/admin/customers/:id", requirePortalAdmin, async (req, res): Promise
       .limit(1);
 
     const memberships = await listPortalCustomerMemberships(id);
-    res.json({ ...cust, profile: prof ?? null, memberships });
+    const customerContext = await getPortalCustomerContext(id);
+    const requests = await getPortalCustomerOrganizationState(id);
+    res.json({
+      ...cust,
+      customerType: customerContext.customerType,
+      profile: prof ?? null,
+      memberships,
+      customerContext,
+      pendingRequests: requests.requests,
+    });
   } catch (err) {
     console.error("[portal] GET /admin/customers/:id error", err);
     res.status(500).json({ error: "Gagal memuat data customer" });
@@ -2001,6 +2062,37 @@ router.get("/admin/customers/:id/memberships", requirePortalAdmin, async (req, r
     res.json({ items: await listPortalCustomerMemberships(customerId) });
   } catch (err: any) {
     if (err instanceof PortalCompanyMembershipError) {
+      res.status(err.statusCode).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
+});
+
+// GET /api/portal/admin/company-requests — pending company mappings
+router.get("/admin/company-requests", requirePortalAdmin, async (_req, res): Promise<void> => {
+  res.json({ items: await listPendingPortalCompanyRequests() });
+});
+
+// PATCH /api/portal/admin/company-requests/:id — approve/reject a request
+router.patch("/admin/company-requests/:id", requirePortalAdmin, async (req, res): Promise<void> => {
+  const requestId = Number(req.params["id"]);
+  const action = req.body?.action;
+  if (!Number.isInteger(requestId) || requestId <= 0 || (action !== "approve" && action !== "reject")) {
+    res.status(400).json({ error: "Request ID atau aksi tidak valid." });
+    return;
+  }
+  try {
+    const result = await reviewPortalCompanyRequest({
+      requestId,
+      adminCustomerId: (req as PortalAuthReq).portalCustomerId,
+      action,
+      companyId: req.body?.companyId,
+      reviewNote: req.body?.reviewNote,
+    });
+    res.json(result);
+  } catch (err) {
+    if (err instanceof PortalCustomerOrganizationError) {
       res.status(err.statusCode).json({ error: err.message });
       return;
     }
