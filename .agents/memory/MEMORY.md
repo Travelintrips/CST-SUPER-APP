@@ -149,6 +149,7 @@
 - [QRIS unmatched audit visibility](qris-unmatched-audit-visibility.md) — retain unmatched bank evidence as non-approvable audit; distinguish audit rows from reviewable candidates.
 - [QRIS H-1 candidate cohort](qris-h-minus-one-candidate.md) — production candidates require exact expected settlement date = bank mutation date; legacy review windows remain isolated.
 - [QRIS partial settlement contract](qris-partial-settlement-contract.md) — selected payments may settle independently; bank mutation remains pending until full reconciliation.
+- [QRIS audit rate precision](qris-audit-rate-precision.md) — unmatched QRIS evidence can have a rate beyond ±10; persist it as audit-only instead of overflowing.
 - [Historical QRIS settlement config](historical-qris-settlement-config.md) — owner-approved rules must cover legacy settlement dates with contiguous effective windows.
 - [Rule AI operational mirror](rule-ai-operational-mirror.md) — Rule AI must sync to a managed operational matcher rule without altering independent COA references.
 - [Runtime fixture FK cleanup](runtime-fixture-fk-cleanup.md) — cleanup proofs must discover marker-linked descendants and isolate each delete with savepoints.
