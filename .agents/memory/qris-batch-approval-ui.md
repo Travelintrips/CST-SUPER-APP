@@ -38,3 +38,9 @@ Partial-settlement `review_reason` is historical text and must not be used as th
 **Why:** A batch can be settled again through the canonical path or another approved flow, while the original partial-settlement message remains unchanged. The live `current_payment_ids` scope is authoritative.
 
 **How to apply:** Render the remaining count and candidate rows from the same live settlement membership. Treat `review_reason` as an audit note, or regenerate it whenever settlement state changes.
+
+When a bank mutation is identified as QRIS but has no QRIS audit candidate, never expose the generic bank-approval action, even if a legacy `sport_payment` candidate looks like an exact match. Offer candidate generation or an explicit blocked state instead.
+
+**Why:** Generic approval creates a normal bank journal and bypasses the canonical Sport Center settlement bridge, leaving the QRIS mutation unable to complete through the governed PROD flow.
+
+**How to apply:** Keep QRIS detection as an exclusion in every generic approval predicate, and make the per-mutation candidate-generation action available in every safe review stage, not only the initial candidates stage.

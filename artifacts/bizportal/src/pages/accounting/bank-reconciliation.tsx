@@ -907,7 +907,11 @@ function isExactMatch(m: BankMutation): boolean {
 function isUiApprovalEligible(m: BankMutation): boolean {
   // This is deliberately stricter than the backend action guard. The server
   // remains the final authority; the UI only avoids offering an unsafe action.
-  return canApprove(m) && isExactMatch(m);
+  // QRIS must use the canonical batch settlement flow. The generic bank
+  // mutation approval creates a normal draft journal and must never be shown
+  // for a QRIS mutation, even when its legacy sport_payment candidate happens
+  // to look like an exact match.
+  return canApprove(m) && isExactMatch(m) && !isQrisMutation(m);
 }
 
 /**
@@ -3402,6 +3406,32 @@ function MutationCard({
                   <span>Uang masuk bank {idr(amount)}</span>
                   <span>Seharusnya diterima {idr(reconciliationEvidence(m).expectedAmount || amount)}</span>
                 </div>
+              </div>
+            )}
+
+            {isQris && qrisAudits.length === 0 && (
+              <div className="mt-2 rounded-md border border-indigo-300 bg-indigo-50 px-3 py-2.5 text-xs text-indigo-950 dark:border-indigo-800 dark:bg-indigo-950 dark:text-indigo-100">
+                <p className="font-semibold">QRIS perlu kandidat settlement canonical</p>
+                <p className="mt-0.5 leading-relaxed">
+                  Pencocokan umum tidak dapat menyelesaikan payment QRIS. Buat kandidat QRIS terlebih dahulu agar approval memproses batch dan jurnal canonical yang benar.
+                </p>
+                {onGenerateQrisCandidates && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="mt-2 h-7 gap-1 border-indigo-400 text-[11px] text-indigo-800 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-200 dark:hover:bg-indigo-900"
+                    disabled={qrisGenerationPending}
+                    onClick={event => {
+                      event.stopPropagation();
+                      onGenerateQrisCandidates();
+                    }}
+                  >
+                    {qrisGenerationPending
+                      ? <Loader2 className="h-3 w-3 animate-spin" />
+                      : <CreditCard className="h-3 w-3" />}
+                    {qrisGenerationPending ? "Membuat kandidat..." : "Cari Kandidat QRIS"}
+                  </Button>
+                )}
               </div>
             )}
 
@@ -6247,7 +6277,7 @@ export default function BankReconciliationPage() {
                       }
                        matchMut.mutate(mode);
                     }}
-                    onGenerateQrisCandidates={qrisCompanyId != null && workflowStage === "candidates"
+                    onGenerateQrisCandidates={qrisCompanyId != null && workflowStage !== "matching"
                       ? () => qrisDryRunMut.mutate()
                       : undefined}
                    qrisGenerationPending={qrisDryRunMut.isPending}
