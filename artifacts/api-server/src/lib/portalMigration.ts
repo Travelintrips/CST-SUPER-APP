@@ -255,6 +255,37 @@ export async function runPortalMigration(): Promise<void> {
  * have the portal stage marker while missing this newer table.
  */
 export async function runPortalCustomerOrganizationMigration(): Promise<void> {
+  // The legacy portal marker may already be complete on databases created
+  // before customer organization support was introduced. Keep the canonical
+  // customer type contract in this independent stage as well, so organization
+  // reads/writes do not depend on replaying that older marker.
+  await db.execute(sql`
+    ALTER TABLE IF EXISTS portal_customers
+      ADD COLUMN IF NOT EXISTS customer_type TEXT
+  `);
+  await db.execute(sql`
+    DO $$ BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'portal_customers'
+          AND column_name = 'customer_type'
+      ) AND NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'portal_customers_customer_type_check'
+      ) THEN
+        ALTER TABLE portal_customers
+          ADD CONSTRAINT portal_customers_customer_type_check
+          CHECK (customer_type IS NULL OR customer_type IN ('individual', 'company'));
+      END IF;
+    END $$;
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS portal_customers_customer_type_idx
+      ON portal_customers (customer_type)
+  `);
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS portal_company_requests (
       id SERIAL PRIMARY KEY,
@@ -290,4 +321,40 @@ export async function runPortalCustomerOrganizationMigration(): Promise<void> {
       WHERE status = 'pending'
   `);
   logger.info("Portal customer organization migration: selesai");
+}
+
+/**
+ * Additive repair for databases whose portal/customer-organization markers
+ * predate the customer_type contract. This has its own startup marker so a
+ * completed legacy stage cannot skip the repair.
+ */
+export async function runPortalCustomerOrganizationContractMigration(): Promise<void> {
+  await db.execute(sql`
+    ALTER TABLE IF EXISTS portal_customers
+      ADD COLUMN IF NOT EXISTS customer_type TEXT
+  `);
+  await db.execute(sql`
+    DO $$ BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'portal_customers'
+          AND column_name = 'customer_type'
+      ) AND NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'portal_customers_customer_type_check'
+      ) THEN
+        ALTER TABLE portal_customers
+          ADD CONSTRAINT portal_customers_customer_type_check
+          CHECK (customer_type IS NULL OR customer_type IN ('individual', 'company'));
+      END IF;
+    END $$;
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS portal_customers_customer_type_idx
+      ON portal_customers (customer_type)
+  `);
+  logger.info("Portal customer organization contract migration: selesai");
 }
