@@ -27,6 +27,11 @@ describe("QRIS settlement contract", () => {
     expect(resolveSettlementDate("2026-08-06T10:00:00.000Z", null)).toBe("2026-08-07");
   });
 
+  it("keeps QRIS H+1 on weekends and uses the Jakarta payment date", () => {
+    expect(resolveSettlementDate("2026-08-07T17:30:00.000Z", null)).toBe("2026-08-09");
+    expect(resolveSettlementDate("2026-08-08T17:30:00.000Z", null)).toBe("2026-08-10");
+  });
+
   it("reports bank-to-net variance", () => {
     expect(settlementVariance(109_250, 109_000)).toBe(250);
   });

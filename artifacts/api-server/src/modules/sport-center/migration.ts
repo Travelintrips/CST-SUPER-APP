@@ -342,29 +342,26 @@ export function ensureSportPaymentMirrorTrigger(): Promise<void> {
           v_company_id, v_provider_code, v_external_bank_account_id, v_company_count;
       END IF;
 
-      v_expected_settlement_date := v_payment_date;
-      v_remaining := GREATEST(v_settlement_delay, 0);
-      WHILE v_remaining > 0 LOOP
-        v_expected_settlement_date := v_expected_settlement_date + 1;
-        SELECT COALESCE(pbc.is_business_day, TRUE)
-          INTO v_business_day
-          FROM sport_center.payment_business_calendar pbc
-         WHERE pbc.calendar_date = v_expected_settlement_date;
-        IF EXTRACT(ISODOW FROM v_expected_settlement_date) < 6
-           AND COALESCE(v_business_day, TRUE) THEN
-          v_remaining := v_remaining - 1;
-        END IF;
-      END LOOP;
-
-      LOOP
-        SELECT COALESCE(pbc.is_business_day, TRUE)
-          INTO v_business_day
-          FROM sport_center.payment_business_calendar pbc
-         WHERE pbc.calendar_date = v_expected_settlement_date;
-        EXIT WHEN EXTRACT(ISODOW FROM v_expected_settlement_date) < 6
-          AND COALESCE(v_business_day, TRUE);
-        v_expected_settlement_date := v_expected_settlement_date + 1;
-      END LOOP;
+      IF LOWER(COALESCE(v_payment.payment_method::text, '')) LIKE '%qris%' THEN
+        -- QRIS settles on H+1 calendar day, including weekends and holidays.
+        v_expected_settlement_date := v_payment_date + 1;
+      ELSE
+        -- Bank transfers settle on the next business day (H+1). This is
+        -- intentionally fixed at one day for all transfer payments.
+        v_expected_settlement_date := v_payment_date;
+        v_remaining := 1;
+        WHILE v_remaining > 0 LOOP
+          v_expected_settlement_date := v_expected_settlement_date + 1;
+          SELECT COALESCE(pbc.is_business_day, TRUE)
+            INTO v_business_day
+            FROM sport_center.payment_business_calendar pbc
+           WHERE pbc.calendar_date = v_expected_settlement_date;
+          IF EXTRACT(ISODOW FROM v_expected_settlement_date) < 6
+             AND COALESCE(v_business_day, TRUE) THEN
+            v_remaining := v_remaining - 1;
+          END IF;
+        END LOOP;
+      END IF;
 
       UPDATE sport_center.sport_payments
          SET company_id = v_company_id,

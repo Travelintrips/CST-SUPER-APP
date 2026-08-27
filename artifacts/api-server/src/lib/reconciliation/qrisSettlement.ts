@@ -1,3 +1,5 @@
+import { addCalendarDays, jakartaDateFromTimestamp } from "./businessCalendar.js";
+
 /**
  * QRIS settlement contract shared by bank reconciliation paths.
  *
@@ -117,8 +119,8 @@ export function isQrisSettlementDescription(
 
 /**
  * Settlement date is authoritative when supplied. Otherwise QRIS uses the
- * provider's default next-day settlement window, while non-QRIS payments use
- * their payment date.
+ * provider's next-calendar-day settlement window. Weekends and holidays do
+ * not postpone QRIS settlement.
  */
 export function resolveSettlementDate(
   paidAt: string | Date | null | undefined,
@@ -128,10 +130,9 @@ export function resolveSettlementDate(
   if (settlementDate) return String(settlementDate).slice(0, 10);
   if (!paidAt) return null;
 
-  const date = paidAt instanceof Date ? new Date(paidAt.getTime()) : new Date(paidAt);
-  if (Number.isNaN(date.getTime())) return null;
-  date.setUTCDate(date.getUTCDate() + Math.max(0, Math.trunc(defaultDelayDays)));
-  return date.toISOString().slice(0, 10);
+  const paymentDate = jakartaDateFromTimestamp(paidAt);
+  if (!paymentDate) return null;
+  return addCalendarDays(paymentDate, Math.max(0, Math.trunc(defaultDelayDays)));
 }
 
 export function settlementVariance(bankAmount: number, expectedNet: number): number {

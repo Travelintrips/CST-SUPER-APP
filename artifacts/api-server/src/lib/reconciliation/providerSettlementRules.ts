@@ -1,4 +1,4 @@
-import { addBusinessDays, jakartaDateFromTimestamp } from "./businessCalendar.js";
+import { addCalendarDays, addBusinessDays, jakartaDateFromTimestamp } from "./businessCalendar.js";
 
 export type QrisProviderCode = "mandiri_direct" | "paylabs" | "gpn_qris" | "unknown";
 
@@ -150,7 +150,11 @@ export function expectedQrisSettlementDate(
     ...DEFAULT_QRIS_PROVIDER_RULES[provider],
     ...ruleOverrides,
   };
-  return addBusinessDays(paymentDate, rule.settlementDelayBusinessDays, holidays);
+  // QRIS settles on the next calendar day. Weekends and holidays do not
+  // postpone QRIS settlement; keep the legacy holidays argument for API
+  // compatibility with callers that also calculate transfer dates.
+  void holidays;
+  return addCalendarDays(paymentDate, Math.max(0, Math.trunc(rule.settlementDelayBusinessDays)));
 }
 
 export function providerRulesFromRows(

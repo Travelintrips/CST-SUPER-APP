@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { addBusinessDays, jakartaDateFromTimestamp } from "../lib/reconciliation/businessCalendar.js";
 import {
+  expectedQrisSettlementDate,
   normalizeQrisProvider,
   providerRulesByBankAccountFromRows,
   resolveQrisProviderFromEvidence,
@@ -19,6 +20,12 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
   it("skips consecutive holidays and preserves Jakarta date", () => {
     expect(addBusinessDays("2026-08-14", 1, ["2026-08-17", "2026-08-18"])).toBe("2026-08-19");
     expect(jakartaDateFromTimestamp("2026-08-06T17:30:00.000Z")).toBe("2026-08-07");
+  });
+
+  it("settles QRIS on the next calendar day, including weekends and holidays", () => {
+    expect(expectedQrisSettlementDate("2026-08-07T03:00:00.000Z", "mandiri_direct", ["2026-08-08"])).toBe("2026-08-08");
+    expect(expectedQrisSettlementDate("2026-08-08T03:00:00.000Z", "mandiri_direct")).toBe("2026-08-09");
+    expect(expectedQrisSettlementDate("2026-08-09T03:00:00.000Z", "gpn_qris")).toBe("2026-08-10");
   });
 
   it("keeps Mandiri and Paylabs separated and never guesses from QRIS alone", () => {

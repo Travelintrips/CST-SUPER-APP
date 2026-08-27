@@ -19,7 +19,7 @@ function assertDateOnly(value: string): string {
   return value;
 }
 
-function addCalendarDays(date: string, days: number): string {
+export function addCalendarDays(date: string, days: number): string {
   const parsed = new Date(`${assertDateOnly(date)}T12:00:00.000Z`);
   parsed.setUTCDate(parsed.getUTCDate() + days);
   return parsed.toISOString().slice(0, 10);
