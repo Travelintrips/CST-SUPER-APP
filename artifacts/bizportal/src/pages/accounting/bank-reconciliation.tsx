@@ -614,6 +614,8 @@ interface QrisCandidateAudit {
   current_gross_amount?: number | string | null;
   current_expected_amount?: number | string | null;
   current_evidence_valid?: boolean | null;
+  /** Exact posted canonical batch left unlinked by an interrupted approval. */
+  recoverable_settlement_id?: number | string | null;
   candidate_source?: string | null;
   description?: string | null;
   status?: string | null;
@@ -2717,7 +2719,9 @@ function QrisMutationCard({
   onDetail,
   onDelete,
   onApproveQrisBatch,
+  onRecoverQrisSettlement,
   approveQrisPending,
+  recoverQrisPending,
   selectedQrisPaymentIds,
   onToggleQrisPayment,
   onToggleAllQrisPayments,
@@ -2733,7 +2737,9 @@ function QrisMutationCard({
   onDetail: (m: BankMutation) => void;
   onDelete: (id: number) => void;
   onApproveQrisBatch?: (candidateId: number, mutationId: number, candidate: QrisCandidateAudit, paymentIds?: number[]) => void;
+  onRecoverQrisSettlement?: (mutationId: number, settlementId: number) => void;
   approveQrisPending?: boolean;
+  recoverQrisPending?: boolean;
   selectedQrisPaymentIds: number[];
   onToggleQrisPayment?: (candidateId: number, paymentId: number, checked: boolean) => void;
   onToggleAllQrisPayments?: (candidate: QrisCandidateAudit, checked: boolean) => void;
@@ -2774,6 +2780,10 @@ function QrisMutationCard({
   const isDepleted = qrisPresentationState === "depleted";
   const isEmptyMatchedCandidate = qrisPresentationState === "empty";
   const isStaleMatchedCandidate = qrisPresentationState === "stale";
+  const recoverableSettlementId = numericValue(audit.recoverable_settlement_id);
+  const canRecoverSettlement = isDepleted
+    && recoverableSettlementId != null
+    && onRecoverQrisSettlement != null;
   const isCanonicalReconciled = isCanonicalSettlementMutation(m)
     && ["approved", "posted"].includes(String(m.status ?? "").toLowerCase());
   const isApproved = isCanonicalReconciled
@@ -3033,8 +3043,27 @@ function QrisMutationCard({
               <div className="mt-3 rounded-md border border-green-300 bg-green-50 px-3 py-3 text-xs text-green-900 dark:border-green-800 dark:bg-green-950 dark:text-green-100">
                 <p className="font-semibold">Semua payment pada batch ini sudah diproses.</p>
                 <p className="mt-1 leading-relaxed">
-                  Kandidat MATCHED tidak memiliki payment tersisa. Tidak perlu approval atau matching ulang.
+                  {canRecoverSettlement
+                    ? "Settlement sudah terbentuk, tetapi link ke mutasi bank belum selesai."
+                    : "Kandidat MATCHED tidak memiliki payment tersisa. Tidak perlu approval atau matching ulang."}
                 </p>
+                {canRecoverSettlement && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="mt-3 gap-1.5 border-indigo-300 bg-white text-xs text-indigo-700 hover:bg-indigo-50 dark:border-indigo-700 dark:bg-slate-950 dark:text-indigo-300"
+                    disabled={recoverQrisPending}
+                    onClick={event => {
+                      event.stopPropagation();
+                      onRecoverQrisSettlement?.(m.id, recoverableSettlementId);
+                    }}
+                  >
+                    {recoverQrisPending
+                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      : <CheckCircle2 className="h-3.5 w-3.5" />}
+                    {recoverQrisPending ? "Menyelesaikan link..." : "Selesaikan Settlement Tertunda"}
+                  </Button>
+                )}
               </div>
             ) : isEmptyMatchedCandidate ? (
               <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-3 text-xs text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">

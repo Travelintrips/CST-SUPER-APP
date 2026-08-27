@@ -169,6 +169,50 @@ function makeCanonicalFragments(available: boolean) {
             ), bm.amount) - bm.amount) <= 0.01`
     : "TRUE";
 
+  // A failed approval can leave an exact payment batch posted without its
+  // bank link. Expose that state separately so the UI can offer the guarded
+  // owner-recovery path instead of treating it as a normal empty candidate.
+  const recoverableSettlementIdSql = available
+    ? `(
+        SELECT CASE WHEN COUNT(*) = 1 THEN MAX(recoverable.settlement_id) END
+        FROM (
+          SELECT psb.id AS settlement_id
+          FROM sport_center.payment_settlement_batches psb
+          WHERE psb.company_id = c.company_id
+            AND psb.status = 'posted'
+            AND psb.bank_mutation_id IS NULL
+            AND (
+              SELECT COUNT(*)
+              FROM sport_center.payment_settlement_items psi_count
+              WHERE psi_count.settlement_id = psb.id
+                AND psi_count.item_status = 'active'
+            ) = jsonb_array_length(COALESCE(c.payment_items, '[]'::jsonb))
+            AND NOT EXISTS (
+              SELECT 1
+              FROM sport_center.payment_settlement_items psi_extra
+              WHERE psi_extra.settlement_id = psb.id
+                AND psi_extra.item_status = 'active'
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM jsonb_array_elements(COALESCE(c.payment_items, '[]'::jsonb)) item
+                  WHERE (item->>'paymentId')::int = psi_extra.payment_id
+                )
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements(COALESCE(c.payment_items, '[]'::jsonb)) item
+              WHERE NOT EXISTS (
+                SELECT 1
+                FROM sport_center.payment_settlement_items psi_missing
+                WHERE psi_missing.settlement_id = psb.id
+                  AND psi_missing.item_status = 'active'
+                  AND psi_missing.payment_id = (item->>'paymentId')::int
+              )
+            )
+        ) recoverable
+      )`
+    : "NULL::bigint";
+
   // UNION with canonical settlement items in settled_payment_ids
   const canonicalSettledUnionSql = available
     ? `UNION
@@ -192,6 +236,7 @@ function makeCanonicalFragments(available: boolean) {
     canonicalSettledExcludeSql,
     canonicalSettledExcludeByIdSql,
     currentEvidenceValidSql,
+    recoverableSettlementIdSql,
     canonicalSettledUnionSql,
   };
 }
@@ -593,6 +638,7 @@ export async function listQrisCandidates(options: {
     canonicalSettledExcludeSql,
     canonicalSettledExcludeByIdSql,
     currentEvidenceValidSql,
+    recoverableSettlementIdSql,
     canonicalSettledUnionSql,
   } = makeCanonicalFragments(canonicalAvailable);
 
@@ -645,7 +691,8 @@ export async function listQrisCandidates(options: {
                 )
                 ${canonicalSettledUnionSql}
               ) settled
-            ), '[]'::jsonb) AS settled_payment_ids
+             ), '[]'::jsonb) AS settled_payment_ids,
+             ${recoverableSettlementIdSql} AS recoverable_settlement_id
     FROM qris_mutation_batch_candidates c
     LEFT JOIN bank_mutations bm ON bm.id = c.mutation_id
      WHERE c.estimated_settlement_date::text = bm.transaction_date::text
