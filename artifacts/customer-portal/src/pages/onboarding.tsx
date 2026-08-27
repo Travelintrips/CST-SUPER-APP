@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 
 type AccountType = "customer" | "vendor" | "driver" | "employee";
+type CustomerType = "individual" | "company";
 type Step = "basic" | "account-type" | "type-specific" | "review";
 
 const STEPS: Step[] = ["basic", "account-type", "type-specific", "review"];
@@ -118,6 +119,15 @@ export default function OnboardingPage() {
 
   const [step, setStep]             = useState<Step>("basic");
   const [accountType, setAccountType] = useState<AccountType>("customer");
+  const [customerType, setCustomerType] = useState<CustomerType | null>(null);
+  const [companySearch, setCompanySearch] = useState("");
+  const [companyOptions, setCompanyOptions] = useState<Array<{ id: number; name: string; code: string | null }>>([]);
+  const [companiesLoading, setCompaniesLoading] = useState(false);
+  const [selectedCompanyId, setSelectedCompanyId] = useState<number | null>(null);
+  const [companyRequestMode, setCompanyRequestMode] = useState(false);
+  const [requestedCompanyName, setRequestedCompanyName] = useState("");
+  const [requestedRegistrationNumber, setRequestedRegistrationNumber] = useState("");
+  const [companyError, setCompanyError] = useState<string | null>(null);
   const [baseData, setBaseData]     = useState<BaseForm | null>(null);
   const [vendorData, setVendorData] = useState<VendorForm | null>(null);
   const [driverData, setDriverData] = useState<DriverForm | null>(null);
@@ -162,6 +172,29 @@ export default function OnboardingPage() {
       .catch(() => {/* ignore */});
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed, setLocation]);
+
+  useEffect(() => {
+    if (accountType !== "customer" || customerType !== "company") {
+      setCompanyOptions([]);
+      return;
+    }
+    const timer = window.setTimeout(async () => {
+      setCompaniesLoading(true);
+      try {
+        const params = new URLSearchParams();
+        if (companySearch.trim()) params.set("search", companySearch.trim());
+        const response = await fetch(`/api/portal/organization/companies?${params}`, { credentials: "include" });
+        if (!response.ok) throw new Error("Gagal memuat perusahaan");
+        const data = await response.json() as Array<{ id: number; name: string; code: string | null }>;
+        setCompanyOptions(Array.isArray(data) ? data : []);
+      } catch {
+        setCompanyOptions([]);
+      } finally {
+        setCompaniesLoading(false);
+      }
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [accountType, customerType, companySearch]);
 
   // ── Base form ───────────────────────────────────────────────────────────────
   const baseForm = useForm<BaseForm>({
@@ -255,14 +288,29 @@ export default function OnboardingPage() {
 
   function handleAccountTypeNext() {
     if (accountType === "customer") {
-      setStep("review");
+      if (!customerType) {
+        setCompanyError("Pilih tipe customer: Perorangan atau Perusahaan.");
+        return;
+      }
+      setCompanyError(null);
+      setStep(customerType === "company" ? "type-specific" : "review");
     } else {
       setStep("type-specific");
     }
   }
 
   async function handleTypeSpecificNext() {
-    if (accountType === "vendor") {
+    if (accountType === "customer") {
+      if (customerType !== "company") {
+        setStep("review");
+        return;
+      }
+      if (!selectedCompanyId && (!companyRequestMode || !requestedCompanyName.trim())) {
+        setCompanyError("Pilih perusahaan canonical atau ajukan perusahaan yang belum terdaftar.");
+        return;
+      }
+      setCompanyError(null);
+    } else if (accountType === "vendor") {
       const valid = await vendorForm.trigger();
       if (!valid) return;
       setVendorData(vendorForm.getValues());
@@ -318,6 +366,10 @@ export default function OnboardingPage() {
       const payload = {
         ...baseData,
         accountType,
+         customerType: accountType === "customer" ? customerType ?? undefined : undefined,
+         companyId: accountType === "customer" && selectedCompanyId ? selectedCompanyId : undefined,
+         requestedCompanyName: accountType === "customer" && companyRequestMode ? requestedCompanyName.trim() || undefined : undefined,
+         requestedRegistrationNumber: accountType === "customer" && companyRequestMode ? requestedRegistrationNumber.trim() || undefined : undefined,
         ktpUrl: finalKtpUrl,
         ocrData,
         vendor:   accountType === "vendor"   ? { ...vendorData, legalityDocUrl: finalLegalityUrl } : undefined,
@@ -331,12 +383,12 @@ export default function OnboardingPage() {
         credentials: "include",
         body: JSON.stringify(payload),
       });
-      const json = await res.json() as { ok?: boolean; status?: string; error?: string };
+       const json = await res.json() as { ok?: boolean; status?: string; error?: string };
       if (!res.ok || !json.ok) {
         setSubmitError(json.error ?? t("onboarding.submit.saveFailed", "Gagal menyimpan profil."));
         return;
       }
-      if (json.status === "pending") {
+       if (json.status === "pending" || json.status === "company_pending") {
         setLocation("/pending-approval");
       } else {
         setLocation("/dashboard");
@@ -504,6 +556,48 @@ export default function OnboardingPage() {
                 ))}
               </div>
 
+               {accountType === "customer" && (
+                 <div className="space-y-3 rounded-xl border border-emerald-200 bg-emerald-50/50 p-4">
+                   <div>
+                     <p className="font-semibold text-sm">Tipe Customer</p>
+                     <p className="text-xs text-muted-foreground mt-1">
+                       Pilihan ini menentukan apakah akun Anda memakai konteks perusahaan.
+                     </p>
+                   </div>
+                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                     {([
+                       { value: "individual" as const, label: "Perorangan", desc: "Tidak memerlukan membership perusahaan.", icon: User },
+                       { value: "company" as const, label: "Perusahaan", desc: "Terhubung ke perusahaan canonical atau ajukan perusahaan baru.", icon: Building2 },
+                     ]).map(({ value, label, desc, icon: Icon }) => (
+                       <button
+                         key={value}
+                         type="button"
+                         onClick={() => {
+                           setCustomerType(value);
+                           setCompanyError(null);
+                           if (value === "individual") {
+                             setSelectedCompanyId(null);
+                             setCompanyRequestMode(false);
+                           }
+                         }}
+                         className={`flex items-start gap-3 rounded-lg border-2 p-3 text-left transition-all ${
+                           customerType === value
+                             ? "border-emerald-500 bg-white shadow-sm"
+                             : "border-white bg-white hover:border-emerald-200"
+                         }`}
+                       >
+                         <Icon className={`mt-0.5 h-5 w-5 ${customerType === value ? "text-emerald-600" : "text-gray-400"}`} />
+                         <span>
+                           <span className="block font-semibold text-sm">{label}</span>
+                           <span className="block text-xs text-muted-foreground mt-0.5">{desc}</span>
+                         </span>
+                       </button>
+                     ))}
+                   </div>
+                   {companyError && <p className="text-sm text-red-600">{companyError}</p>}
+                 </div>
+               )}
+
               <div className="flex gap-3 pt-2">
                 <Button variant="outline" className="flex-1 gap-2" onClick={goBack}>
                   <ArrowLeft className="h-4 w-4" /> {t("onboarding.back", "Kembali")}
@@ -519,10 +613,120 @@ export default function OnboardingPage() {
           {step === "type-specific" && (
             <div className="space-y-5">
               <h2 className="text-lg font-semibold mb-4">
+                 {accountType === "customer" && "Pilih Perusahaan"}
                 {accountType === "vendor"   && t("onboarding.vendorDetail.title", "Detail Vendor")}
                 {accountType === "driver"   && t("onboarding.driverDetail.title", "Detail Driver")}
                 {accountType === "employee" && t("onboarding.employeeDetail.title", "Detail Karyawan")}
               </h2>
+
+               {/* CUSTOMER COMPANY */}
+               {accountType === "customer" && customerType === "company" && (
+                 <div className="space-y-4">
+                   <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
+                     Pilih perusahaan yang sudah terdaftar agar membership Anda dibuat otomatis. Jika belum ada, ajukan untuk diverifikasi admin.
+                   </div>
+                   {!companyRequestMode && (
+                     <>
+                       <div className="space-y-2">
+                         <Label htmlFor="customer-company-search">Cari perusahaan canonical</Label>
+                         <Input
+                           id="customer-company-search"
+                           value={companySearch}
+                           onChange={(event) => {
+                             setCompanySearch(event.target.value);
+                             setSelectedCompanyId(null);
+                           }}
+                           placeholder="Ketik nama atau kode perusahaan"
+                         />
+                       </div>
+                       <div className="rounded-lg border bg-white divide-y max-h-56 overflow-y-auto">
+                         {companiesLoading ? (
+                           <div className="p-4 text-sm text-muted-foreground flex items-center gap-2">
+                             <Loader2 className="h-4 w-4 animate-spin" /> Memuat perusahaan…
+                           </div>
+                         ) : companyOptions.length > 0 ? (
+                           companyOptions.map((company) => (
+                             <button
+                               key={company.id}
+                               type="button"
+                               onClick={() => {
+                                 setSelectedCompanyId(company.id);
+                                 setCompanyError(null);
+                               }}
+                               className={`w-full flex items-center justify-between gap-3 p-3 text-left hover:bg-emerald-50 ${
+                                 selectedCompanyId === company.id ? "bg-emerald-50 ring-1 ring-inset ring-emerald-400" : ""
+                               }`}
+                             >
+                               <span>
+                                 <span className="block font-medium text-sm">{company.name}</span>
+                                 <span className="block text-xs text-muted-foreground">{company.code ?? "Tanpa kode"}</span>
+                               </span>
+                               {selectedCompanyId === company.id && <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />}
+                             </button>
+                           ))
+                         ) : (
+                           <p className="p-4 text-sm text-muted-foreground">Perusahaan tidak ditemukan.</p>
+                         )}
+                       </div>
+                       <button
+                         type="button"
+                         className="text-sm font-medium text-emerald-700 hover:underline"
+                         onClick={() => {
+                           setCompanyRequestMode(true);
+                           setSelectedCompanyId(null);
+                           setCompanyError(null);
+                         }}
+                       >
+                         Perusahaan saya belum terdaftar
+                       </button>
+                       {selectedCompanyId && (
+                         <p className="text-sm text-emerald-700 flex items-center gap-2">
+                           <CheckCircle2 className="h-4 w-4" /> Perusahaan canonical dipilih. Membership akan dibuat otomatis.
+                         </p>
+                       )}
+                     </>
+                   )}
+                   {companyRequestMode && (
+                     <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-4">
+                       <div className="flex items-start justify-between gap-3">
+                         <div>
+                           <p className="font-semibold text-sm text-amber-900">Perusahaan saya belum terdaftar</p>
+                           <p className="text-xs text-amber-800 mt-1">Admin akan memeriksa dan memetakan perusahaan Anda ke data canonical.</p>
+                         </div>
+                         <button
+                           type="button"
+                           className="text-xs text-amber-800 underline"
+                           onClick={() => {
+                             setCompanyRequestMode(false);
+                             setCompanyError(null);
+                           }}
+                         >
+                           Pilih dari daftar
+                         </button>
+                       </div>
+                       <div className="space-y-2">
+                         <Label htmlFor="requested-company-name">Nama perusahaan</Label>
+                         <Input
+                           id="requested-company-name"
+                           value={requestedCompanyName}
+                           onChange={(event) => setRequestedCompanyName(event.target.value)}
+                           placeholder="PT Nama Perusahaan"
+                         />
+                       </div>
+                       <div className="space-y-2">
+                         <Label htmlFor="requested-company-registration">Nomor registrasi (opsional)</Label>
+                         <Input
+                           id="requested-company-registration"
+                           value={requestedRegistrationNumber}
+                           onChange={(event) => setRequestedRegistrationNumber(event.target.value)}
+                           placeholder="NIB / NPWP"
+                         />
+                       </div>
+                     </div>
+                   )}
+                   {companyError && <p className="text-sm text-red-600">{companyError}</p>}
+                 </div>
+               )}
 
               {/* VENDOR */}
               {accountType === "vendor" && (
@@ -674,6 +878,24 @@ export default function OnboardingPage() {
 
                 <div className="px-4 py-3 font-semibold text-xs uppercase text-muted-foreground tracking-wide">{t("onboarding.review.accountType", "Tipe Akun")}</div>
                 <Row label={t("onboarding.review.type", "Tipe")} value={ACCOUNT_TYPES.find(a => a.value === accountType)?.label ?? accountType} />
+                 {accountType === "customer" && customerType && (
+                   <>
+                     <Row label="Tipe Customer" value={customerType === "individual" ? "Perorangan" : "Perusahaan"} />
+                     {customerType === "individual" ? (
+                       <div className="px-4 py-3 text-sm text-emerald-700 bg-emerald-50">
+                         Customer perorangan — membership perusahaan tidak diperlukan.
+                       </div>
+                     ) : selectedCompanyId ? (
+                       <div className="px-4 py-3 text-sm text-emerald-700 bg-emerald-50">
+                         Perusahaan canonical dipilih — membership akan dibuat otomatis.
+                       </div>
+                     ) : (
+                       <div className="px-4 py-3 text-sm text-amber-800 bg-amber-50">
+                         Perusahaan belum terdaftar — permintaan akan dikirim untuk verifikasi admin.
+                       </div>
+                     )}
+                   </>
+                 )}
 
                 {accountType === "vendor" && vendorData && <>
                   <div className="px-4 py-3 font-semibold text-xs uppercase text-muted-foreground tracking-wide">{t("onboarding.review.vendorData", "Data Vendor")}</div>
@@ -703,7 +925,16 @@ export default function OnboardingPage() {
                 </>}
               </div>
 
-              {accountType !== "customer" && (
+               {accountType === "customer" && customerType === "company" && !selectedCompanyId && companyRequestMode && (
+                 <Alert className="border-amber-200 bg-amber-50">
+                   <Eye className="h-4 w-4 text-amber-500" />
+                   <AlertDescription className="text-amber-800">
+                     Status setelah disimpan: <strong>Menunggu verifikasi perusahaan</strong>. Anda tidak dapat membuat RFQ perusahaan sampai admin memetakan perusahaan canonical.
+                   </AlertDescription>
+                 </Alert>
+               )}
+
+               {accountType !== "customer" && (
                 <Alert className="border-amber-200 bg-amber-50">
                   <Eye className="h-4 w-4 text-amber-500" />
                   <AlertDescription className="text-amber-800">

@@ -36,6 +36,7 @@ type PortalCustomer = {
   profileAccountType: string | null;
   profileFullName: string | null;
   profileAddress: string | null;
+  customerType: "individual" | "company" | null;
 };
 
 type CustomerDetail = PortalCustomer & {
@@ -57,6 +58,30 @@ type CustomerDetail = PortalCustomer & {
     updatedAt: string | null;
   } | null;
   memberships: PortalCustomerMembership[];
+  customerContext: {
+    status: string;
+    companyId: number | null;
+    pendingRequest: {
+      id: number;
+      requestedCompanyName: string;
+      requestedRegistrationNumber: string | null;
+      status: string;
+      matchedCompanyId: number | null;
+      reviewNote: string | null;
+      createdAt: string;
+      updatedAt: string;
+    } | null;
+  };
+  pendingRequests: Array<{
+    id: number;
+    requestedCompanyName: string;
+    requestedRegistrationNumber: string | null;
+    status: string;
+    matchedCompanyId: number | null;
+    reviewNote: string | null;
+    createdAt: string;
+    updatedAt: string;
+  }>;
 };
 
 type PortalCustomerMembership = {
@@ -115,6 +140,8 @@ export default function PortalCustomersPage() {
   const [editing, setEditing] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [membershipMessage, setMembershipMessage] = useState<string | null>(null);
+  const [pendingCompanyId, setPendingCompanyId] = useState("");
+  const [pendingReviewNote, setPendingReviewNote] = useState("");
   const [form, setForm] = useState({
     name: "", email: "", phone: "", company: "", role: "customer",
     accountStatus: "active" as PortalCustomer["accountStatus"],
@@ -249,6 +276,37 @@ export default function PortalCustomersPage() {
     },
     onSuccess: () => {
       setMembershipMessage("Membership dinonaktifkan.");
+      queryClient.invalidateQueries({ queryKey: ["portal-customer-detail", selectedId] });
+    },
+    onError: (error: Error) => setMembershipMessage(error.message),
+  });
+
+  const reviewCompanyRequestMutation = useMutation({
+    mutationFn: async ({ requestId, action }: { requestId: number; action: "approve" | "reject" }) => {
+      const companyId = Number(pendingCompanyId);
+      if (action === "approve" && (!Number.isInteger(companyId) || companyId <= 0)) {
+        throw new Error("Pilih company canonical terlebih dahulu.");
+      }
+      const response = await fetch(`/api/portal/admin/company-requests/${requestId}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action,
+          companyId: action === "approve" ? companyId : undefined,
+          reviewNote: pendingReviewNote.trim() || undefined,
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "Gagal memproses request perusahaan");
+      return body;
+    },
+    onSuccess: (_data, variables) => {
+      setMembershipMessage(variables.action === "approve"
+        ? "Perusahaan berhasil dipetakan dan membership diaktifkan."
+        : "Request perusahaan ditolak.");
+      setPendingCompanyId("");
+      setPendingReviewNote("");
       queryClient.invalidateQueries({ queryKey: ["portal-customer-detail", selectedId] });
     },
     onError: (error: Error) => setMembershipMessage(error.message),
@@ -456,6 +514,8 @@ export default function PortalCustomersPage() {
           setEditing(false);
           setSaveMessage(null);
           setMembershipMessage(null);
+           setPendingCompanyId("");
+           setPendingReviewNote("");
         }
       }}>
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
@@ -481,12 +541,101 @@ export default function PortalCustomersPage() {
                   {detail.company && <p className="text-sm text-slate-600 flex items-center gap-1"><Building2 className="w-3.5 h-3.5" />{detail.company}</p>}
                   <div className="flex flex-wrap gap-2 mt-2">
                     <Badge variant="outline" className="capitalize">{detail.role}</Badge>
+                   <Badge className={detail.customerType === "individual"
+                     ? "bg-sky-100 text-sky-700 hover:bg-sky-100"
+                     : detail.customerType === "company"
+                       ? "bg-indigo-100 text-indigo-700 hover:bg-indigo-100"
+                       : "bg-slate-100 text-slate-600 hover:bg-slate-100"}>
+                     {detail.customerType === "individual" ? "Perorangan"
+                       : detail.customerType === "company" ? "Perusahaan" : "Tipe belum dipilih"}
+                   </Badge>
                     {sourceBadge(detail.source)}
                     {profileBadge(detail.profileStatus)}
                     {accountBadge(detail.accountStatus)}
                   </div>
                 </div>
               </div>
+
+               {/* Canonical customer type and company review state */}
+               <div className={`rounded-lg border p-4 ${
+                 detail.customerType === "individual"
+                   ? "border-sky-200 bg-sky-50/60"
+                   : "border-indigo-200 bg-indigo-50/40"
+               }`}>
+                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">Tipe Customer</p>
+                 {detail.customerType === "individual" ? (
+                   <p className="text-sm text-sky-800">
+                     <strong>Perorangan</strong> — membership perusahaan tidak diperlukan.
+                   </p>
+                 ) : (
+                   <div className="space-y-3">
+                     <p className="text-sm text-indigo-800">
+                       <strong>{detail.customerType === "company" ? "Perusahaan" : "Belum ditentukan"}</strong>
+                       {detail.customerType === "company" && " — akses RFQ menggunakan membership perusahaan canonical yang aktif."}
+                     </p>
+                     {(detail.pendingRequests ?? []).filter((request) => request.status === "pending").map((request) => (
+                       <div key={request.id} className="rounded-md border border-amber-200 bg-amber-50 p-3 space-y-3">
+                         <div>
+                           <p className="text-sm font-semibold text-amber-900">Menunggu verifikasi perusahaan</p>
+                           <p className="text-sm text-amber-800">{request.requestedCompanyName}</p>
+                           {request.requestedRegistrationNumber && (
+                             <p className="text-xs text-amber-700 mt-1">Nomor registrasi: {request.requestedRegistrationNumber}</p>
+                           )}
+                         </div>
+                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                           <div className="grid gap-1.5 sm:col-span-2">
+                             <Label>Map ke company canonical</Label>
+                             <Select
+                               value={pendingCompanyId}
+                               onValueChange={setPendingCompanyId}
+                               disabled={reviewCompanyRequestMutation.isPending}
+                             >
+                               <SelectTrigger><SelectValue placeholder={companiesLoading ? "Memuat company…" : "Pilih company"} /></SelectTrigger>
+                               <SelectContent>
+                                 {companies.map((company) => (
+                                   <SelectItem key={company.id} value={String(company.id)}>
+                                     {company.code} — {company.name}
+                                   </SelectItem>
+                                 ))}
+                               </SelectContent>
+                             </Select>
+                           </div>
+                           <div className="grid gap-1.5 sm:col-span-2">
+                             <Label>Catatan review (opsional)</Label>
+                             <Textarea
+                               value={pendingReviewNote}
+                               onChange={(event) => setPendingReviewNote(event.target.value)}
+                               placeholder="Catatan untuk request perusahaan"
+                               rows={2}
+                               disabled={reviewCompanyRequestMutation.isPending}
+                             />
+                           </div>
+                         </div>
+                         <div className="flex flex-wrap gap-2">
+                           <Button
+                             size="sm"
+                             className="gap-1.5 bg-emerald-600 hover:bg-emerald-700"
+                             onClick={() => reviewCompanyRequestMutation.mutate({ requestId: request.id, action: "approve" })}
+                             disabled={reviewCompanyRequestMutation.isPending}
+                           >
+                             <ShieldCheck className="w-3.5 h-3.5" />
+                             {reviewCompanyRequestMutation.isPending ? "Memproses…" : "Map & Approve"}
+                           </Button>
+                           <Button
+                             size="sm"
+                             variant="outline"
+                             className="gap-1.5 text-rose-700 border-rose-200 hover:bg-rose-50"
+                             onClick={() => reviewCompanyRequestMutation.mutate({ requestId: request.id, action: "reject" })}
+                             disabled={reviewCompanyRequestMutation.isPending}
+                           >
+                             Tolak Request
+                           </Button>
+                         </div>
+                       </div>
+                     ))}
+                   </div>
+                 )}
+               </div>
 
               {editing && (
                 <div className="rounded-lg border p-4 space-y-4">
@@ -564,7 +713,9 @@ export default function PortalCustomersPage() {
               {/* Profile */}
               {detail.profile && (
                 <div>
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Profil Perusahaan (Onboarding)</p>
+                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                     {detail.customerType === "individual" ? "Profil Customer (Onboarding)" : "Profil Perusahaan (Onboarding)"}
+                   </p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <InfoRow icon={<Building2 className="w-4 h-4" />} label="Nama Perusahaan" value={detail.profile.companyName} />
                     <InfoRow icon={<FileText className="w-4 h-4" />} label="NPWP" value={detail.profile.npwp} />
@@ -610,8 +761,8 @@ export default function PortalCustomersPage() {
                 <p className="text-sm text-muted-foreground text-center py-4 border rounded-lg">Belum ada data onboarding untuk pelanggan ini.</p>
               )}
 
-              {/* Canonical company membership */}
-              <div className="rounded-lg border border-indigo-200 bg-indigo-50/40 p-4 space-y-4">
+               {/* Canonical company membership — not required for individuals */}
+               {detail.customerType === "company" && <div className="rounded-lg border border-indigo-200 bg-indigo-50/40 p-4 space-y-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-xs font-semibold text-indigo-700 uppercase tracking-wide flex items-center gap-1.5">
@@ -620,7 +771,7 @@ export default function PortalCustomersPage() {
                     <p className="text-xs text-slate-600 mt-1">
                       Company authority berasal dari mapping aktif ini, bukan dari teks perusahaan pada profil customer.
                     </p>
-                  </div>
+                   </div>
                   <Badge variant="outline" className="shrink-0 border-indigo-300 text-indigo-700">
                     {detail.memberships?.filter((membership) => membership.isActive).length ?? 0} aktif
                   </Badge>
@@ -751,8 +902,8 @@ export default function PortalCustomersPage() {
                         value={membershipForm.costCenter}
                         onChange={(event) => setMembershipForm({ ...membershipForm, costCenter: event.target.value })}
                         disabled={membershipMutation.isPending}
-                      />
-                    </div>
+                       />
+                     </div>
                   </div>
                   {membershipMessage && (
                     <p className={`text-sm ${membershipMessage.includes("berhasil") || membershipMessage.includes("diaktifkan")
@@ -770,8 +921,8 @@ export default function PortalCustomersPage() {
                     <UserRoundPlus className="w-4 h-4" />
                     {membershipMutation.isPending ? "Menyimpan…" : "Assign Membership"}
                   </Button>
-                </div>
-              </div>
+                 </div>
+               </div>}
             </div>
           )}
 

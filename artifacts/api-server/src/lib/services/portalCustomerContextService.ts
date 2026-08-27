@@ -145,7 +145,10 @@ export async function getPortalCustomerContext(customerId: number): Promise<Port
   else status = "legacy_unresolved";
 
   return {
-    customer,
+    customer: {
+      ...customer,
+      customerType,
+    },
     customerType: effectiveType,
     status,
     companyId: company?.companyId ?? null,

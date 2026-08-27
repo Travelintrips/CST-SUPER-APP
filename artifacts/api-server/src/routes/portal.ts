@@ -1631,6 +1631,7 @@ router.get("/onboarding/status", requirePortalAuth, async (req, res): Promise<vo
   const context = await getPortalCustomerContext(customerId);
   res.json({
     ...result,
+    status: context.status === "company_pending" ? "company_pending" : result.status,
     customerType: context.customerType,
     customerContext: {
       status: context.status,
@@ -1723,13 +1724,21 @@ router.post(
   validateBody(CompleteOnboardingSchema),
   async (req, res): Promise<void> => {
     const customerId = (req as PortalAuthReq).portalCustomerId;
-    const { fullName, phone, address, accountType, customerType, ktpUrl, ocrData, vendor, driver, employee } = req.body ?? {};
+    const {
+      fullName, phone, address, accountType, customerType, companyId,
+      requestedCompanyName, requestedRegistrationNumber,
+      ktpUrl, ocrData, vendor, driver, employee,
+    } = req.body ?? {};
 
     try {
-      const result = await completeOnboarding(customerId, { fullName, phone, address, accountType, customerType, ktpUrl, ocrData, vendor, driver, employee });
+      const result = await completeOnboarding(customerId, {
+        fullName, phone, address, accountType, customerType, companyId,
+        requestedCompanyName, requestedRegistrationNumber,
+        ktpUrl, ocrData, vendor, driver, employee,
+      });
       res.json(result);
     } catch (err: any) {
-      if (err instanceof OnboardingServiceError && err.statusCode === 409) {
+      if (err instanceof OnboardingServiceError) {
         res.status(409).json({ ok: false, error: err.message }); return;
       }
       throw err;

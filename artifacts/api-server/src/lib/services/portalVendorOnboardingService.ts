@@ -229,7 +229,11 @@ export interface CompleteOnboardingInput {
 export async function completeOnboarding(
   customerId: number,
   input: CompleteOnboardingInput,
-): Promise<{ ok: boolean; status: string }> {
+): Promise<{
+  ok: boolean;
+  status: string;
+  organization: Awaited<ReturnType<typeof configureCustomerOrganization>> | null;
+}> {
   const {
     fullName, phone, address, accountType, customerType, companyId,
     requestedCompanyName, requestedRegistrationNumber,
@@ -310,6 +314,7 @@ export async function completeOnboarding(
         requestedRegistrationNumber,
       })
     : null;
+  const responseStatus = organization?.pendingRequest ? "company_pending" : status;
 
   // Update OCR result name if provided
   if (ocrData?.nik) {
@@ -485,5 +490,5 @@ export async function completeOnboarding(
     })();
   }
 
-  return { ok: true, status, organization };
+  return { ok: true, status: responseStatus, organization };
 }

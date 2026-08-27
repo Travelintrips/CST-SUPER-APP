@@ -7,7 +7,14 @@ import { Clock, CheckCircle2, XCircle, LogOut, RefreshCw } from "lucide-react";
 interface OnboardingStatus {
   status: string;
   accountType: string;
+  customerType?: "individual" | "company" | null;
   rejectionReason?: string;
+  customerContext?: {
+    pendingRequest?: {
+      requestedCompanyName: string;
+      requestedRegistrationNumber: string | null;
+    } | null;
+  };
 }
 
 const ACCOUNT_TYPE_LABEL: Record<string, string> = {
@@ -32,7 +39,7 @@ export default function PendingApprovalPage() {
 
   // Auto-poll every 30s while still pending (stops when approved/rejected)
   useEffect(() => {
-    if (!status || status.status !== "pending") return;
+    if (!status || (status.status !== "pending" && status.status !== "company_pending")) return;
     const id = setInterval(loadStatus, 30_000);
     return () => clearInterval(id);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -75,23 +82,30 @@ export default function PendingApprovalPage() {
   }
 
   const isRejected = status.status === "rejected";
+  const isCompanyPending = status.status === "company_pending";
 
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
       <div className="max-w-md w-full bg-white rounded-2xl shadow-lg overflow-hidden">
         <div className={`px-8 py-10 text-center ${isRejected ? "bg-red-50" : "bg-amber-50"}`}>
           <div className="flex justify-center mb-4">
-            {isRejected
+             {isRejected
               ? <XCircle className="h-16 w-16 text-red-500" />
               : <Clock className="h-16 w-16 text-amber-500 animate-pulse" />
             }
           </div>
           <h1 className="text-2xl font-bold text-gray-900 mb-2">
-            {isRejected ? "Akun Ditolak" : "Menunggu Persetujuan"}
+             {isRejected
+               ? "Akun Ditolak"
+               : isCompanyPending
+                 ? "Menunggu Verifikasi Perusahaan"
+                 : "Menunggu Persetujuan"}
           </h1>
           <p className="text-gray-600 text-sm">
-            {isRejected
+             {isRejected
               ? "Pendaftaran akun Anda tidak dapat disetujui"
+               : isCompanyPending
+                 ? "Akun Anda sudah aktif, tetapi perusahaan harus dipetakan oleh admin sebelum fitur perusahaan dapat digunakan"
               : `Pendaftaran akun ${ACCOUNT_TYPE_LABEL[status.accountType] ?? status.accountType} Anda sedang ditinjau oleh admin`
             }
           </p>
@@ -101,14 +115,27 @@ export default function PendingApprovalPage() {
           <div className="rounded-xl border border-gray-100 bg-gray-50 p-4 space-y-2">
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Tipe Akun</span>
-              <span className="font-medium">{ACCOUNT_TYPE_LABEL[status.accountType] ?? status.accountType}</span>
+               <span className="font-medium">
+                 {isCompanyPending ? "Perusahaan" : ACCOUNT_TYPE_LABEL[status.accountType] ?? status.accountType}
+               </span>
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Status</span>
               <span className={`font-semibold ${isRejected ? "text-red-600" : "text-amber-600"}`}>
-                {isRejected ? "Ditolak" : "Pending Review"}
+                 {isRejected ? "Ditolak" : isCompanyPending ? "Menunggu verifikasi perusahaan" : "Pending Review"}
               </span>
             </div>
+             {isCompanyPending && status.customerContext?.pendingRequest && (
+               <div className="pt-2 border-t border-gray-200">
+                 <p className="text-sm text-muted-foreground mb-1">Perusahaan yang diajukan:</p>
+                 <p className="text-sm text-amber-800 font-medium">{status.customerContext.pendingRequest.requestedCompanyName}</p>
+                 {status.customerContext.pendingRequest.requestedRegistrationNumber && (
+                   <p className="text-xs text-muted-foreground mt-1">
+                     Nomor registrasi: {status.customerContext.pendingRequest.requestedRegistrationNumber}
+                   </p>
+                 )}
+               </div>
+             )}
             {isRejected && status.rejectionReason && (
               <div className="pt-2 border-t border-gray-200">
                 <p className="text-sm text-muted-foreground mb-1">Alasan:</p>
@@ -117,16 +144,26 @@ export default function PendingApprovalPage() {
             )}
           </div>
 
-          {!isRejected && (
+           {!isRejected && (
             <div className="rounded-xl bg-blue-50 border border-blue-100 p-4">
               <div className="flex gap-3">
                 <CheckCircle2 className="h-5 w-5 text-blue-500 flex-shrink-0 mt-0.5" />
                 <div className="text-sm text-blue-800">
                   <p className="font-medium mb-1">Apa yang terjadi selanjutnya?</p>
-                  <ul className="space-y-1 text-blue-700 list-disc list-inside">
-                    <li>Admin akan meninjau data profil Anda</li>
-                    <li>Proses persetujuan biasanya 1–2 hari kerja</li>
-                    <li>Anda akan mendapat notifikasi setelah disetujui</li>
+                   <ul className="space-y-1 text-blue-700 list-disc list-inside">
+                     {isCompanyPending ? (
+                       <>
+                         <li>Admin akan memetakan perusahaan ke data canonical</li>
+                         <li>Membership perusahaan dibuat otomatis setelah disetujui</li>
+                         <li>Setelah itu Anda dapat melanjutkan RFQ perusahaan</li>
+                       </>
+                     ) : (
+                       <>
+                         <li>Admin akan meninjau data profil Anda</li>
+                         <li>Proses persetujuan biasanya 1–2 hari kerja</li>
+                         <li>Anda akan mendapat notifikasi setelah disetujui</li>
+                       </>
+                     )}
                   </ul>
                 </div>
               </div>
