@@ -2952,6 +2952,63 @@ router.get("/mutations", async (req, res) => {
     ? canonicalSettlementDetailsSql("m.candidate_id")
     : "NULL::jsonb";
 
+  // QRIS settlement evidence is only reviewable in the exact H-1 cohort:
+  // the payment's expected settlement date must equal the bank mutation date.
+  // Keep this gate in the API query as well as the UI so historical candidate
+  // snapshots cannot leak outside the operating review window.
+  const canonicalQrisHMinusOneSql = hasCanonicalSettlementView
+    ? `EXISTS (
+         SELECT 1
+         FROM sport_center.expected_bank_settlements ebs_h1
+         WHERE ebs_h1.settlement_id = m.candidate_id
+           AND ebs_h1.settlement_date::text = bm.transaction_date::text
+       )`
+    : "FALSE";
+  const qrisCandidateHMinusOneSql = `(
+    m.candidate_type NOT IN ('qris_settlement', 'sport_payment')
+    OR (
+      m.candidate_type = 'sport_payment'
+      AND EXISTS (
+        SELECT 1
+        FROM sport_payments sp_h1
+        WHERE sp_h1.id = m.candidate_id
+          AND ${sportPaymentTypeSql("sp_h1")} = 'qris'
+          AND COALESCE(
+            sp_h1.settlement_date::text,
+            (COALESCE(sp_h1.paid_at::date, sp_h1.created_at::date) + 1)::text
+          ) = bm.transaction_date::text
+      )
+    )
+    OR (
+      m.candidate_type = 'qris_settlement'
+      AND (
+        (
+          m.candidate_source = '${RECONCILIATION_CANDIDATE_SOURCES.LEGACY_QRIS}'
+          AND EXISTS (
+            SELECT 1
+            FROM qris_settlements qs_h1
+            WHERE qs_h1.id = m.candidate_id
+              AND qs_h1.settlement_date::text = bm.transaction_date::text
+          )
+        )
+        OR (
+          m.candidate_source = '${RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER}'
+          AND ${canonicalQrisHMinusOneSql}
+        )
+      )
+    )
+  )`;
+  const qrisSnapshotHMinusOneSql = `
+    NOT EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(COALESCE(qc.payment_items, '[]'::jsonb)) item_h1
+      WHERE COALESCE(
+        item_h1->>'expectedSettlementDate',
+        item_h1->>'expected_settlement_date'
+      ) IS DISTINCT FROM bm.transaction_date::text
+    )
+  `;
+
   // SQL fragments conditionally included when canonical settlement tables exist.
   // Each fragment is either the real SQL or an empty string so it can be
   // dropped into template literals without changing surrounding SQL structure.
@@ -3348,10 +3405,14 @@ router.get("/mutations", async (req, res) => {
        WHERE m.mutation_id = bm.id
           AND m.status IN ('candidate', 'approved')
            -- Generic bank-transfer candidates must be same-day. QRIS and
-           -- Sport Center candidates use their own settlement-date contract.
+           -- Sport Center candidates use the exact QRIS H-1 settlement-date
+           -- contract; non-QRIS sport payments stay reviewable.
            AND (
-             m.candidate_type IN ('qris_settlement', 'sport_payment')
-              OR ${genericCandidateSameDaySql("m", "bm")}
+             ${qrisCandidateHMinusOneSql}
+              OR (
+                m.candidate_type NOT IN ('qris_settlement', 'sport_payment')
+                AND ${genericCandidateSameDaySql("m", "bm")}
+              )
            )
             -- Hanya tampilkan dokumen yang sudah benar-benar dibayar.
             -- Invoice/tenant invoice yang belum paid bukan bukti penerimaan bank.
@@ -3461,6 +3522,8 @@ router.get("/mutations", async (req, res) => {
           )
            FROM qris_mutation_batch_candidates qc
             WHERE qc.mutation_id = bm.id
+              AND qc.estimated_settlement_date::text = bm.transaction_date::text
+              AND ${qrisSnapshotHMinusOneSql}
                 AND (
                 -- Only active candidates belong in the main mutation queue.
                  UPPER(COALESCE(qc.status, '')) NOT IN (
@@ -3581,6 +3644,8 @@ router.get("/mutations", async (req, res) => {
           ), '[]'::jsonb)
           FROM qris_mutation_batch_candidates qc
            WHERE qc.mutation_id = bm.id
+                AND qc.estimated_settlement_date::text = bm.transaction_date::text
+             AND ${qrisSnapshotHMinusOneSql}
              AND (
                UPPER(COALESCE(qc.status, '')) NOT IN (
                  'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'

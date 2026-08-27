@@ -648,7 +648,16 @@ export async function listQrisCandidates(options: {
             ), '[]'::jsonb) AS settled_payment_ids
     FROM qris_mutation_batch_candidates c
     LEFT JOIN bank_mutations bm ON bm.id = c.mutation_id
-     WHERE TRUE ${companyFilter} ${statusFilter} ${completedFilter}
+     WHERE c.estimated_settlement_date::text = bm.transaction_date::text
+       AND NOT EXISTS (
+         SELECT 1
+         FROM jsonb_array_elements(COALESCE(c.payment_items, '[]'::jsonb)) item_h1
+         WHERE COALESCE(
+           item_h1->>'expectedSettlementDate',
+           item_h1->>'expected_settlement_date'
+         ) IS DISTINCT FROM bm.transaction_date::text
+       )
+       ${companyFilter} ${statusFilter} ${completedFilter}
     ORDER BY c.source_date DESC, c.id DESC
     LIMIT ${limit}
   `));

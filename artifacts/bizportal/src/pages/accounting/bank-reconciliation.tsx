@@ -638,6 +638,7 @@ interface QrisPaymentItem {
   facility_name?: string | null;
   bookingDate?: string | null;
   booking_date?: string | null;
+  expected_settlement_date?: string | null;
   startTime?: string | null;
   start_time?: string | null;
   endTime?: string | null;
@@ -804,7 +805,16 @@ function qrisAuditsForMutation(m: BankMutation): QrisCandidateAudit[] {
       ? [m.qris_candidate_audit]
       : [];
   return audits.filter((audit) =>
-    !["stale", "superseded", "ineligible"].includes(String(audit.status ?? "").toLowerCase()),
+    !["stale", "superseded", "ineligible"].includes(String(audit.status ?? "").toLowerCase())
+    // H-1 is an exact settlement cohort: candidate expected settlement date
+    // must be the same calendar date as the bank mutation.
+    && isSameCalendarDate(m.transaction_date, audit.estimated_settlement_date)
+    && (audit.payment_items ?? []).every((item) =>
+      isSameCalendarDate(
+        m.transaction_date,
+        item.expectedSettlementDate ?? item.expected_settlement_date,
+      ),
+    ),
   );
 }
 
