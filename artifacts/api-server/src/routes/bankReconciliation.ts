@@ -1490,9 +1490,20 @@ router.post("/qris-candidates/generate", async (req, res) => {
       });
     }
     const companyId = req.body?.companyId ?? req.body?.company_id ?? resolveCompanyId(req);
+    const requestedMutationId = req.body?.mutationId ?? req.body?.mutation_id ?? null;
+    const mutationId = requestedMutationId == null || requestedMutationId === ""
+      ? null
+      : Number(requestedMutationId);
+    if (mutationId != null && (!Number.isInteger(mutationId) || mutationId <= 0)) {
+      return res.status(400).json({
+        error: "mutationId kandidat QRIS tidak valid",
+        code: "INVALID_QRIS_MUTATION_ID",
+      });
+    }
     const dryRun = req.body?.dryRun !== false && req.body?.dry_run !== false;
     const result = await generateQrisCandidates({
       companyId: companyId == null ? null : Number(companyId),
+      mutationId,
       from: req.body?.from ?? null,
       to: req.body?.to ?? null,
       dryRun,
@@ -1503,6 +1514,7 @@ router.post("/qris-candidates/generate", async (req, res) => {
       resourceId: `qris-candidates-${Date.now()}`,
       after: {
         dryRun: result.dryRun,
+        mutationId,
         generated: result.generated,
         automaticFinalReconciliation: false,
       },

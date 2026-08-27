@@ -256,16 +256,26 @@ export interface QrisCandidateGenerationResult {
 
 export async function generateQrisCandidates(options: {
   companyId?: number | null;
+  mutationId?: number | null;
   from?: string | null;
   to?: string | null;
   dryRun?: boolean;
 } = {}): Promise<QrisCandidateGenerationResult> {
+  if (
+    options.mutationId != null
+    && (!Number.isInteger(options.mutationId) || Number(options.mutationId) <= 0)
+  ) {
+    throw new Error("mutationId kandidat QRIS tidak valid");
+  }
+  const mutationId = options.mutationId == null ? null : Number(options.mutationId);
   const companyFilter = options.companyId && Number.isInteger(options.companyId)
     ? `AND sp.company_id = ${Number(options.companyId)}`
     : "";
   const mutationCompanyFilter = options.companyId && Number.isInteger(options.companyId)
     ? `AND bm.company_id = ${Number(options.companyId)}`
     : "";
+  const mutationFilter = mutationId == null ? "" : `AND bm.id = ${mutationId}`;
+  const existingMutationFilter = mutationId == null ? "" : `WHERE mutation_id = ${mutationId}`;
   const dateFilter = options.from ? `AND bm.transaction_date >= '${esc(options.from)}'` : "";
   const toFilter = options.to ? `AND bm.transaction_date <= '${esc(options.to)}'` : "";
 
@@ -331,6 +341,7 @@ export async function generateQrisCandidates(options: {
         AND LOWER(COALESCE(bm.status, 'unmatched')) NOT IN
           ('posted', 'approved', 'approved_pending_posting', 'void')
         ${mutationCompanyFilter}
+        ${mutationFilter}
         ${dateFilter}
         ${toFilter}
       ORDER BY bm.transaction_date, bm.id
@@ -350,8 +361,10 @@ export async function generateQrisCandidates(options: {
         AND (company_id IS NULL OR company_id = ${options.companyId ? Number(options.companyId) : "0"})
     `)).catch(() => ({ rows: [] as unknown[] })),
     db.execute(sql.raw(`
-       SELECT id, mutation_id, status, gross_amount, net_amount, payment_items
+       SELECT id, mutation_id, status, gross_amount, net_amount, payment_items,
+              estimated_settlement_date, settlement_rule_version
       FROM qris_mutation_batch_candidates
+      ${existingMutationFilter}
        ORDER BY id DESC
     `)).catch(() => ({ rows: [] as unknown[] })),
     db.execute(sql.raw(`
@@ -444,6 +457,15 @@ export async function generateQrisCandidates(options: {
     };
   }).filter((row) => row.transactionDate);
 
+  // Approval and completion are final audit states. Keep their historical
+  // snapshots intact and do not generate a new provisional candidate for the
+  // same bank mutation, even if the mutation header was not yet transitioned.
+  const finalMutationIds = new Set(
+    (existingRows.rows as Array<Record<string, unknown>>)
+      .filter((row) => ["approved", "completed"].includes(String(row.status ?? "").toLowerCase()))
+      .map((row) => Number(row.mutation_id))
+      .filter((id) => Number.isInteger(id) && id > 0),
+  );
   // Recompute existing provisional rows as well. A bank mutation can be
   // imported before the Sport Center payment sync finishes; skipping an
   // existing mutation would permanently preserve an empty/stale candidate.
@@ -455,6 +477,7 @@ export async function generateQrisCandidates(options: {
     holidays,
     providerRules: rules,
     accountProviderRules: accountRules,
+    existingMutationIds: finalMutationIds,
     requireExplicitSettlementMetadata: true,
   });
   const reviewableCandidates = candidates.filter((candidate) =>
@@ -491,6 +514,12 @@ export async function generateQrisCandidates(options: {
           ? items.map((item: Record<string, unknown>) => ({
             paymentId: Number(item.paymentId ?? item.payment_id),
             grossAmount: Number(item.grossAmount ?? item.gross_amount ?? 0),
+            expectedSettlementDate: asDate(
+              item.expectedSettlementDate ?? item.expected_settlement_date,
+            ),
+            settlementRuleVersion: String(
+              item.settlementRuleVersion ?? item.settlement_rule_version ?? "",
+            ).trim() || null,
             canonicalSettlementId: item.canonicalSettlementId == null
               ? item.canonical_settlement_id == null
                 ? null
@@ -502,10 +531,13 @@ export async function generateQrisCandidates(options: {
       const evidenceChanged = existing != null && (
         Math.abs(Number(existing.gross_amount ?? 0) - candidate.grossAmount) > 0.01
         || Math.abs(Number(existing.net_amount ?? 0) - candidate.netAmount) > 0.01
+        || asDate(existing.estimated_settlement_date) !== candidate.estimatedSettlementDate
+        || (String(existing.settlement_rule_version ?? "").trim() || null)
+          !== (candidate.settlementRuleVersion || null)
         || normalizeItems(existingItems) !== normalizeItems(candidate.paymentItems)
       );
       if (evidenceChanged) {
-        await db.execute(sql.raw(`
+        const supersedeResult = await db.execute(sql.raw(`
           UPDATE qris_mutation_batch_candidates
           SET status = 'superseded',
               reconciliation_status = 'UNMATCHED',
@@ -514,9 +546,15 @@ export async function generateQrisCandidates(options: {
           WHERE id = ${Number(existing!.id)}
             AND status NOT IN ('approved', 'completed', 'superseded', 'stale', 'ineligible')
         `));
+        // A reviewer may have approved the snapshot after the initial read.
+        // Do not insert a replacement when that conditional transition loses:
+        // the approved/completed audit record is the authoritative final state.
+        if ((supersedeResult.rowCount ?? 0) !== 1) {
+          continue;
+        }
       }
       if (existing && !evidenceChanged) {
-        await db.execute(sql.raw(`
+        const refreshResult = await db.execute(sql.raw(`
           UPDATE qris_mutation_batch_candidates
           SET candidate_source = 'sport_center.sport_payments',
               mutation_key = (SELECT mutation_key FROM bank_mutations WHERE id = ${candidate.mutationId}),
@@ -538,7 +576,13 @@ export async function generateQrisCandidates(options: {
               generated_at = NOW(),
               updated_at = NOW()
           WHERE id = ${Number(existing.id)}
+            AND status NOT IN ('approved', 'completed', 'superseded', 'stale', 'ineligible')
         `));
+        // A zero-row refresh means a concurrent finalization (or another
+        // regeneration) won. Never reopen or replace its snapshot.
+        if ((refreshResult.rowCount ?? 0) !== 1) {
+          continue;
+        }
         continue;
       }
       await db.execute(sql.raw(`

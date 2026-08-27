@@ -38,3 +38,15 @@ the nullable side of an outer join, turning a valid QRIS approval into a 500.
 **How to apply:** Lock the canonical payment rows only; read journal-provider
 fallback data through the lateral join without trying to lock its nullable
 side.
+
+Candidate regeneration must also condition every provisional snapshot update
+on a non-final status. If an update affects zero rows, stop and do not insert
+a replacement snapshot.
+
+**Why:** A reviewer can finalize a snapshot between regeneration's initial
+read and its write. An unconditional refresh would reopen its audit state, and
+a failed supersede followed by an insert would create a parallel candidate.
+
+**How to apply:** Treat the status predicate and one-row result as the
+authoritative concurrent-finalization guard for both evidence-changing and
+evidence-preserving refreshes.
