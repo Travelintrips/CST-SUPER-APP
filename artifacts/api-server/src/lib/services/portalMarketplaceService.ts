@@ -19,6 +19,7 @@ import {
   isMarketplaceNewPipelineEnabled,
   createMktRfqEntry,
   linkMktRfqToLegacy,
+  validateMarketplaceDestinationMetadata,
 } from "./marketplaceRfqService.js";
 
 // ─── private helpers ──────────────────────────────────────────────────────────
@@ -53,6 +54,9 @@ export interface SubmitQuoteBody {
   buyer_name?:          string;
   company_name?:        string;
   guest_contact?:       string;
+  destination_place_id?: string;
+  destination_lat?:      number | string;
+  destination_lng?:      number | string;
   marketplace_source?:  string;
   commission_ready?:    boolean;
   estimated_price?:     number;
@@ -105,6 +109,7 @@ export async function submitMarketplaceQuote(params: {
     customerName, email, phone, qty = 1, unit, notes, includePpn = false,
     urgency, shippingAddress,
     destination, required_date, buyer_name, company_name, guest_contact,
+    destination_place_id, destination_lat, destination_lng,
     marketplace_source, commission_ready, estimated_price: clientEstimatedPrice,
     item_type,
   } = body;
@@ -128,6 +133,15 @@ export async function submitMarketplaceQuote(params: {
   const resolvedPhone = (guest_contact ?? phone       ?? "").trim();
   if (!resolvedName)  throw makeServiceError(400, "Nama buyer wajib diisi");
   if (!resolvedPhone) throw makeServiceError(400, "No. WhatsApp wajib diisi");
+  // Marketplace RFQ's current frontend field is `destination`; keep the
+  // service contract canonical by accepting both legacy names.
+  const effectiveShippingAddress = (shippingAddress ?? destination)?.trim() || null;
+
+  const destinationMetadata = await validateMarketplaceDestinationMetadata({
+    destinationPlaceId: destination_place_id,
+    destinationLat: destination_lat,
+    destinationLng: destination_lng,
+  });
 
   // ── 3. Price / order calculations ────────────────────────────────────────
   const qtyNum     = Math.max(1, Number(qty) || 1);
@@ -160,6 +174,9 @@ export async function submitMarketplaceQuote(params: {
     item_type:           item.templateKind ?? item_type ?? "product",
     estimated_price:     clientEstimatedPrice ?? grandTotal,
     destination:         destination ?? null,
+    destination_place_id: destinationMetadata.placeId,
+    destination_lat:      destinationMetadata.lat,
+    destination_lng:      destinationMetadata.lng,
     required_date:       required_date ?? null,
     buyer_name:          resolvedName,
     company_name:        company_name ?? null,
@@ -170,7 +187,7 @@ export async function submitMarketplaceQuote(params: {
   const combinedNotes  = [
     urgencyLabel || null,
     notes?.trim() || null,
-    shippingAddress?.trim() ? `Alamat: ${shippingAddress.trim()}` : null,
+    effectiveShippingAddress ? `Alamat: ${effectiveShippingAddress}` : null,
   ].filter(Boolean).join("\n") || null;
 
   // ── 4. Phase 2A/2B/2B.1: New Marketplace Pipeline (feature-flagged) ──────
@@ -198,7 +215,10 @@ export async function submitMarketplaceQuote(params: {
         qty:                qtyNum,
         unit:               unitStr,
         notes:              combinedNotes,
-        shippingAddress:    shippingAddress?.trim() ?? null,
+        shippingAddress:    effectiveShippingAddress,
+        destinationPlaceId: destinationMetadata.placeId,
+        destinationLat: destinationMetadata.lat,
+        destinationLng: destinationMetadata.lng,
         requiredDeliveryDate: required_date?.trim() ?? null,
         ipAddress:          ip,
       });
@@ -218,7 +238,7 @@ export async function submitMarketplaceQuote(params: {
       email:              customerContext?.customer.email ?? email?.trim() ?? "",
       companyId:          portalCompanyId,
       phone:              resolvedPhone,
-      shippingAddress:    shippingAddress?.trim() || "TBD — Quote Request",
+      shippingAddress:    effectiveShippingAddress || "TBD — Quote Request",
       notes:              combinedNotes,
       subtotal:           String(subtotal),
       grandTotal:         String(grandTotal),

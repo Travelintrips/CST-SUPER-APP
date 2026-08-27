@@ -11,6 +11,14 @@ interface Prediction {
   };
 }
 
+export interface SelectedGooglePlace {
+  displayName: string;
+  formattedAddress: string;
+  placeId: string;
+  latitude: number;
+  longitude: number;
+}
+
 interface Props {
   value: string;
   onChange: (value: string) => void;
@@ -18,6 +26,7 @@ interface Props {
   className?: string;
   disabled?: boolean;
   country?: string;
+  onPlaceSelected?: (place: SelectedGooglePlace | null) => void;
 }
 
 export function GooglePlacesAutocomplete({
@@ -27,6 +36,7 @@ export function GooglePlacesAutocomplete({
   className,
   disabled,
   country = "id",
+  onPlaceSelected,
 }: Props) {
   const [inputVal, setInputVal] = useState(value);
   const [predictions, setPredictions] = useState<Prediction[]>([]);
@@ -64,6 +74,7 @@ export function GooglePlacesAutocomplete({
     const val = e.target.value;
     setInputVal(val);
     onChange(val); // keep parent in sync while typing
+    onPlaceSelected?.(null); // typing after a selection returns to manual fallback
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => fetchPredictions(val), 350);
   };
@@ -73,6 +84,36 @@ export function GooglePlacesAutocomplete({
     setPredictions([]);
     setInputVal(p.description);
     onChange(p.description);
+    try {
+      const res = await fetch(`/api/places/detail?place_id=${encodeURIComponent(p.place_id)}`);
+      if (!res.ok) return;
+      const data = await res.json() as {
+        name?: string;
+        address?: string;
+        placeId?: string;
+        lat?: number;
+        lng?: number;
+      };
+      if (
+        data.placeId === p.place_id &&
+        typeof data.name === "string" &&
+        typeof data.address === "string" &&
+        Number.isFinite(data.lat) &&
+        Number.isFinite(data.lng)
+      ) {
+        onChange(data.address);
+        setInputVal(data.address);
+        onPlaceSelected?.({
+          displayName: data.name,
+          formattedAddress: data.address,
+          placeId: data.placeId,
+          latitude: data.lat as number,
+          longitude: data.lng as number,
+        });
+      }
+    } catch {
+      // The typed address remains usable as a manual fallback.
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {

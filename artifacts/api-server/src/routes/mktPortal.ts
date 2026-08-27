@@ -38,10 +38,14 @@ import {
 import { enqueueNotification } from "../lib/services/marketplaceNotificationQueueService.js";
 import { NotificationService } from "../lib/services/notificationService.js";
 import { logger } from "../lib/logger.js";
+import { deferStartupTask } from "../lib/deferredStartupTasks.js";
+import { runMarketplaceDestinationMigration } from "../lib/marketplaceDestinationMigration.js";
 import { validateBody } from "../lib/middleware/validateBody.js";
 import { logActivity } from "../lib/activityLog.js";
 
 const router = Router();
+
+deferStartupTask("marketplace-rfq-destination-metadata", runMarketplaceDestinationMigration);
 
 // ── Rate limiters ─────────────────────────────────────────────────────────────
 // Read operations — 60 req / 15 menit per buyer
@@ -676,6 +680,7 @@ router.get("/rfqs/:id", async (req: Request, res: Response) => {
              approval_requested_at, approval_resolved_at,
              buyer_name, buyer_email, buyer_company, buyer_approval_level,
              notes, required_delivery_date, delivery_address,
+             destination_place_id, destination_lat, destination_lng,
              created_at, updated_at, winner_selected_at,
              winning_quote_id, proposed_quote_id
       FROM mkt_rfqs

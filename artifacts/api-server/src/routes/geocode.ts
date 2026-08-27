@@ -3,7 +3,7 @@ import { rateLimit, ipKeyGenerator } from "express-rate-limit";
 
 const router = Router();
 
-const GMAPS_API_KEY = process.env.GMAPS_API_KEY;
+const GMAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
 const USER_AGENT = "CSTLogistics/1.0 (cstlogistic.co.id; contact@cstlogistic.co.id)";
 
@@ -150,14 +150,14 @@ router.get("/places/distance", placesRateLimit, async (req, res) => {
 // Place Detail — resolve place_id to formatted_address
 router.get("/places/detail", placesRateLimit, async (req, res) => {
   const { place_id } = req.query as Record<string, string>;
-  if (!place_id) return res.status(400).json({ error: "place_id required" });
+  if (!place_id || place_id.trim().length > 512) return res.status(400).json({ error: "place_id required" });
   const gmapsKey = process.env.GOOGLE_MAPS_API_KEY ?? "";
   if (!gmapsKey) return res.status(503).json({ error: "Google Maps API key not configured" });
 
   const params = new URLSearchParams({
-    place_id,
+    place_id: place_id.trim(),
     key: gmapsKey,
-    fields: "formatted_address,name",
+    fields: "place_id,formatted_address,name,geometry",
     language: "id",
   });
 
@@ -167,10 +167,29 @@ router.get("/places/detail", placesRateLimit, async (req, res) => {
       { signal: AbortSignal.timeout(6000) }
     );
     if (!upstream.ok) return res.status(502).json({ error: "upstream error" });
-    const data = await upstream.json() as { result?: { formatted_address?: string; name?: string } };
+    const data = await upstream.json() as {
+      status?: string;
+      result?: {
+        place_id?: string;
+        formatted_address?: string;
+        name?: string;
+        geometry?: { location?: { lat?: number; lng?: number } };
+      };
+    };
     const address = data.result?.formatted_address || data.result?.name || "";
+    const lat = data.result?.geometry?.location?.lat;
+    const lng = data.result?.geometry?.location?.lng;
+    if (data.status !== "OK" || data.result?.place_id !== place_id.trim() || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return res.status(404).json({ error: "Place tidak ditemukan" });
+    }
     res.setHeader("Cache-Control", "public, max-age=300");
-    return res.json({ address });
+    return res.json({
+      address,
+      name: data.result?.name ?? address,
+      placeId: data.result.place_id,
+      lat,
+      lng,
+    });
   } catch {
     return res.status(502).json({ error: "request failed" });
   }

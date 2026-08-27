@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import type { ProductMediaItem, MarketplaceItem } from "@/lib/catalogFilters";
 import { resolveImageUrl } from "@/lib/utils";
+import { GooglePlacesAutocomplete, type SelectedGooglePlace } from "@/components/ui/google-places-autocomplete";
 // C1: auth via cookie (credentials: "include")
 
 // ── Extended types for new sections ──────────────────────────────────────────
@@ -751,6 +752,7 @@ interface RfqForm {
   email: string;
   guestContact: string;
   destination: string;
+  destinationPlace: SelectedGooglePlace | null;
   requiredDate: string;
   notes: string;
 }
@@ -765,7 +767,7 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
   const { t } = useLanguage();
   const [form, setForm] = useState<RfqForm>({
     buyerName: "", companyName: "", email: "", guestContact: "",
-    destination: "", requiredDate: "", notes: "",
+    destination: "", destinationPlace: null, requiredDate: "", notes: "",
   });
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
@@ -807,6 +809,9 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
         company_name: form.companyName.trim() || undefined,
         guest_contact: form.guestContact.trim(),
         destination: form.destination.trim() || undefined,
+        destination_place_id: form.destinationPlace?.placeId,
+        destination_lat: form.destinationPlace?.latitude,
+        destination_lng: form.destinationPlace?.longitude,
         required_date: form.requiredDate || undefined,
         marketplace_item_id: item.id,
         item_type: item.templateKind ?? "product",
@@ -953,12 +958,20 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
 
           <div className="space-y-1">
             <Label className="text-[12px]">{t("marketplaceDetail.rfqFieldDest")}</Label>
-            <Input
+            <GooglePlacesAutocomplete
               value={form.destination}
-              onChange={(e) => setForm({ ...form, destination: e.target.value })}
-              placeholder={t("marketplaceDetail.rfqFieldDestPlaceholder")}
+              onChange={(value) => setForm((prev) => ({ ...prev, destination: value }))}
+              onPlaceSelected={(destinationPlace) => setForm((prev) => ({ ...prev, destinationPlace }))}
+              placeholder="Cari kota, alamat, pelabuhan, bandara..."
               className="h-9 text-sm"
             />
+            {form.destinationPlace ? (
+              <p className="text-[11px] text-emerald-600">
+                Lokasi terverifikasi: {form.destinationPlace.displayName}
+              </p>
+            ) : form.destination.trim() ? (
+              <p className="text-[11px] text-slate-400">Lokasi belum diverifikasi — Anda tetap dapat mengirim alamat ini.</p>
+            ) : null}
           </div>
 
           <div className="space-y-1">

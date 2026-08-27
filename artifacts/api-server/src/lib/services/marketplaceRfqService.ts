@@ -116,6 +116,9 @@ export interface CreateMktRfqOptions {
   unit?: string | null;             // override catalog unit
   notes?: string | null;
   shippingAddress?: string | null;
+  destinationPlaceId?: string | null;
+  destinationLat?: number | null;
+  destinationLng?: number | null;
   requiredDeliveryDate?: string | null; // ISO date string YYYY-MM-DD
 
   // Audit
@@ -142,6 +145,82 @@ function buildRfqNumber(id: number): string {
 function generateGuestToken(): string {
   // 32-char hex token, URL-safe
   return randomUUID().replace(/-/g, "");
+}
+
+function parseCoordinate(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : NaN;
+}
+
+/**
+ * Selected Places are verified server-side so a browser cannot persist
+ * arbitrary place metadata. A text-only destination intentionally skips this
+ * check and remains the supported manual fallback.
+ */
+export async function validateMarketplaceDestinationMetadata(opts: {
+  destinationPlaceId?: unknown;
+  destinationLat?: unknown;
+  destinationLng?: unknown;
+}): Promise<{ placeId: string | null; lat: number | null; lng: number | null }> {
+  const placeId = typeof opts.destinationPlaceId === "string" ? opts.destinationPlaceId.trim() : "";
+  const lat = parseCoordinate(opts.destinationLat);
+  const lng = parseCoordinate(opts.destinationLng);
+
+  if (!placeId && lat === null && lng === null) {
+    return { placeId: null, lat: null, lng: null };
+  }
+  if (!placeId || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+    throw Object.assign(new Error("Metadata lokasi tidak lengkap atau koordinat tidak valid"), { statusCode: 400 });
+  }
+  if ((lat as number) < -90 || (lat as number) > 90 || (lng as number) < -180 || (lng as number) > 180) {
+    throw Object.assign(new Error("Koordinat tujuan berada di luar jangkauan yang valid"), { statusCode: 400 });
+  }
+  if (placeId.length > 512) {
+    throw Object.assign(new Error("Place ID tujuan tidak valid"), { statusCode: 400 });
+  }
+
+  const apiKey = process.env["GOOGLE_MAPS_API_KEY"] ?? "";
+  if (!apiKey) {
+    throw Object.assign(new Error("Lokasi terpilih tidak dapat diverifikasi saat ini"), { statusCode: 400 });
+  }
+
+  const params = new URLSearchParams({
+    place_id: placeId,
+    fields: "place_id,geometry",
+    key: apiKey,
+  });
+  let upstream: Response;
+  try {
+    upstream = await fetch(`https://maps.googleapis.com/maps/api/place/details/json?${params.toString()}`, {
+      signal: AbortSignal.timeout(6000),
+    });
+  } catch {
+    throw Object.assign(new Error("Lokasi terpilih tidak dapat diverifikasi saat ini"), { statusCode: 400 });
+  }
+  if (!upstream.ok) {
+    throw Object.assign(new Error("Lokasi terpilih tidak dapat diverifikasi saat ini"), { statusCode: 400 });
+  }
+
+  const data = await upstream.json() as {
+    status?: string;
+    result?: { place_id?: string; geometry?: { location?: { lat?: number; lng?: number } } };
+  };
+  const verifiedLat = data.result?.geometry?.location?.lat;
+  const verifiedLng = data.result?.geometry?.location?.lng;
+  const verifiedPlaceId = data.result?.place_id;
+  const matchesCoordinates =
+    data.status === "OK" &&
+    verifiedPlaceId === placeId &&
+    Number.isFinite(verifiedLat) &&
+    Number.isFinite(verifiedLng) &&
+    Math.abs((verifiedLat as number) - (lat as number)) <= 0.00001 &&
+    Math.abs((verifiedLng as number) - (lng as number)) <= 0.00001;
+  if (!matchesCoordinates) {
+    throw Object.assign(new Error("Data lokasi tujuan tidak cocok dengan Google Places"), { statusCode: 400 });
+  }
+
+  return { placeId, lat: lat as number, lng: lng as number };
 }
 
 // ── Core service: create mkt_rfqs + mkt_rfq_lines (in one transaction) ────────
@@ -234,6 +313,9 @@ export async function createMktRfqEntry(opts: CreateMktRfqOptions): Promise<Crea
           priority: "normal",
           requiredDeliveryDate: opts.requiredDeliveryDate ?? null,
           deliveryAddress: opts.shippingAddress?.trim() ?? null,
+          destinationPlaceId: opts.destinationPlaceId ?? null,
+          destinationLat: opts.destinationLat != null ? String(opts.destinationLat) : null,
+          destinationLng: opts.destinationLng != null ? String(opts.destinationLng) : null,
           notes: opts.notes?.trim() ?? null,
           emailVerified: false,
           lineCount: 1,

@@ -63,6 +63,9 @@ interface VendorQuoteData {
     buyerCompany: string | null;
     notes: string | null;
     deliveryAddress: string | null;
+    destinationPlaceId: string | null;
+    destinationLat: string | number | null;
+    destinationLng: string | number | null;
     requiredDeliveryDate: string | null;
     createdAt: string;
   };
@@ -72,6 +75,13 @@ interface VendorQuoteData {
 }
 
 type LineEdits = Record<number, { price: string; qty: string; notes: string; leadTime: string }>;
+
+function mapsLink(placeId: string | null, lat: string | number | null, lng: string | number | null): string | null {
+  if (placeId && lat != null && lng != null) {
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${lat},${lng}`)}&query_place_id=${encodeURIComponent(placeId)}`;
+  }
+  return null;
+}
 
 const QUOTE_STATUS: Record<string, { label: string; color: string }> = {
   invited:           { label: "Undangan Terkirim",      color: "bg-blue-100 text-blue-700" },
@@ -325,6 +335,16 @@ export default function MktVendorQuotePage() {
                 <div>
                   <p className="text-xs text-gray-500">{t("mktVendorQuote.deliveryAddress", "Alamat Pengiriman")}</p>
                   <p className="text-gray-700">{rfq.deliveryAddress}</p>
+                  {mapsLink(rfq.destinationPlaceId, rfq.destinationLat, rfq.destinationLng) && (
+                    <a
+                      className="inline-block text-xs text-blue-600 hover:underline mt-1"
+                      href={mapsLink(rfq.destinationPlaceId, rfq.destinationLat, rfq.destinationLng)!}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Buka di Google Maps
+                    </a>
+                  )}
                 </div>
               )}
             </div>

@@ -85,6 +85,9 @@ export interface VendorQuoteView {
     buyerCompany: string | null;
     notes: string | null;
     deliveryAddress: string | null;
+    destinationPlaceId: string | null;
+    destinationLat: string | null;
+    destinationLng: string | null;
     requiredDeliveryDate: string | null;   // DATE string YYYY-MM-DD
     createdAt: Date;
   };
@@ -271,6 +274,9 @@ export async function loadQuoteByToken(
         buyerCompany:    mktRfqsTable.buyerCompany,
         notes:           mktRfqsTable.notes,
         deliveryAddress:     mktRfqsTable.deliveryAddress,
+         destinationPlaceId:  mktRfqsTable.destinationPlaceId,
+         destinationLat:      mktRfqsTable.destinationLat,
+         destinationLng:      mktRfqsTable.destinationLng,
         requiredDeliveryDate: mktRfqsTable.requiredDeliveryDate,
         createdAt:           mktRfqsTable.createdAt,
         // INTERNAL NOT SELECTED: companyId, approvalData, dll
@@ -374,6 +380,9 @@ export async function loadQuoteByToken(
         buyerCompany:        rfq.buyerCompany,
         notes:               rfq.notes,
         deliveryAddress:     rfq.deliveryAddress,
+        destinationPlaceId:  rfq.destinationPlaceId,
+        destinationLat:      rfq.destinationLat,
+        destinationLng:      rfq.destinationLng,
         requiredDeliveryDate: rfq.requiredDeliveryDate,
         createdAt:           rfq.createdAt,
       },

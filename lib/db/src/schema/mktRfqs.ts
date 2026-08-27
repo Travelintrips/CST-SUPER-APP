@@ -62,6 +62,10 @@ export const mktRfqsTable = pgTable("mkt_rfqs", {
 
   requiredDeliveryDate: date("required_delivery_date"),
   deliveryAddress: text("delivery_address"),
+  // Optional Google Places metadata. NULL means the buyer used the manual fallback.
+  destinationPlaceId: text("destination_place_id"),
+  destinationLat: numeric("destination_lat", { precision: 10, scale: 7 }),
+  destinationLng: numeric("destination_lng", { precision: 10, scale: 7 }),
   notes: text("notes"),
 
   emailVerified: boolean("email_verified").notNull().default(false), // KEPUTUSAN #11

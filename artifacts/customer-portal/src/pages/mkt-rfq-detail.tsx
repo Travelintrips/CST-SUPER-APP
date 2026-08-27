@@ -26,6 +26,9 @@ interface RfqDetail {
   notes: string | null;
   required_delivery_date: string | null;
   delivery_address: string | null;
+  destination_place_id: string | null;
+  destination_lat: string | number | null;
+  destination_lng: string | number | null;
   created_at: string;
   winner_selected_at: string | null;
   proposed_quote_id: number | null;
@@ -92,6 +95,13 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
 
 const idr = (n: number) =>
   new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
+
+function mapsLink(placeId: string | null, lat: string | number | null, lng: string | number | null): string | null {
+  if (placeId && lat != null && lng != null) {
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${lat},${lng}`)}&query_place_id=${encodeURIComponent(placeId)}`;
+  }
+  return null;
+}
 
 function fmtDate(s: string | null | undefined) {
   if (!s) return "—";
@@ -524,9 +534,21 @@ export default function MktRfqDetailPage() {
               </div>
             )}
             {rfq.delivery_address && (
-              <div className="flex justify-between gap-4">
+              <div className="flex items-start justify-between gap-4">
                 <span className="text-muted-foreground shrink-0">Alamat Pengiriman</span>
-                <span className="text-right">{rfq.delivery_address}</span>
+                <span className="text-right">
+                  {rfq.delivery_address}
+                  {mapsLink(rfq.destination_place_id, rfq.destination_lat, rfq.destination_lng) && (
+                    <a
+                      className="block text-xs text-blue-600 hover:underline mt-1"
+                      href={mapsLink(rfq.destination_place_id, rfq.destination_lat, rfq.destination_lng)!}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Buka di Google Maps
+                    </a>
+                  )}
+                </span>
               </div>
             )}
             {rfq.notes && (

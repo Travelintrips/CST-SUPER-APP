@@ -49,6 +49,9 @@ interface RfqDetail {
   notes: string | null;
   requiredDeliveryDate: string | null;
   deliveryAddress: string | null;
+  destinationPlaceId: string | null;
+  destinationLat: string | number | null;
+  destinationLng: string | number | null;
   createdAt: string;
   pendingApproval: {
     id: number;
@@ -57,6 +60,13 @@ interface RfqDetail {
     requestedAt: string;
     responseNotes: string | null;
   } | null;
+}
+
+function mapsLink(placeId: string | null, lat: string | number | null, lng: string | number | null): string | null {
+  if (placeId && lat != null && lng != null) {
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${lat},${lng}`)}&query_place_id=${encodeURIComponent(placeId)}`;
+  }
+  return null;
 }
 
 const idr = (n: number) =>
@@ -88,6 +98,16 @@ export default function MktRfqDetailPage() {
 
   const [requoteTarget, setRequoteTarget] = useState<VendorQuote | null>(null);
   const [inviteForm, setInviteForm] = useState({ open: false, vendorId: "", notes: "" });
+
+  const { data: rfqData } = useQuery<{ ok: boolean; data: RfqDetail }>({
+    queryKey: ["mkt-rfq-detail", rfqIdNum],
+    queryFn: async () => {
+      const res = await fetch(`/api/mkt/admin/rfqs/${rfqIdNum}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Gagal memuat detail RFQ");
+      return res.json();
+    },
+    enabled: !!rfqIdNum,
+  });
 
   const { data: quotesData, isLoading: quotesLoading } = useQuery<{ ok: boolean; data: VendorQuote[]; count: number }>({
     queryKey: ["mkt-vendor-quotes", rfqIdNum],
@@ -156,6 +176,34 @@ export default function MktRfqDetailPage() {
             </Button>
           </div>
         </div>
+
+        {rfqData?.data && (
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Informasi RFQ</CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-3 sm:grid-cols-2 text-sm">
+              <div>
+                <p className="text-xs text-muted-foreground">Buyer</p>
+                <p className="font-medium">{rfqData.data.buyerName}{rfqData.data.buyerCompany ? ` — ${rfqData.data.buyerCompany}` : ""}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Tujuan Pengiriman</p>
+                <p className="font-medium">{rfqData.data.deliveryAddress ?? "—"}</p>
+                {mapsLink(rfqData.data.destinationPlaceId, rfqData.data.destinationLat, rfqData.data.destinationLng) && (
+                  <a
+                    className="inline-block text-xs text-blue-600 hover:underline mt-1"
+                    href={mapsLink(rfqData.data.destinationPlaceId, rfqData.data.destinationLat, rfqData.data.destinationLng)!}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Buka di Google Maps
+                  </a>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         <Tabs defaultValue="quotes">
           <TabsList>

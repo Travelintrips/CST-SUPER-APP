@@ -340,6 +340,43 @@ router.get("/rfqs", async (req, res) => {
   }
 });
 
+// ── GET /api/mkt/admin/rfqs/:rfqId ───────────────────────────────────────────
+// Admin RFQ detail — destination metadata is buyer-safe operational context.
+router.get("/rfqs/:rfqId", async (req, res) => {
+  const ok = await requireAdmin(req, res);
+  if (!ok) return;
+
+  const rfqId = Number(req.params["rfqId"]);
+  if (!Number.isInteger(rfqId) || rfqId <= 0) {
+    return res.status(400).json({ ok: false, error: "rfqId harus berupa integer positif" });
+  }
+
+  try {
+    const { db, mktRfqsTable } = await import("@workspace/db");
+    const { eq } = await import("drizzle-orm");
+    const [rfq] = await db.select({
+      rfqId: mktRfqsTable.id,
+      rfqNumber: mktRfqsTable.rfqNumber,
+      rfqStatus: mktRfqsTable.status,
+      buyerName: mktRfqsTable.buyerName,
+      buyerCompany: mktRfqsTable.buyerCompany,
+      deliveryAddress: mktRfqsTable.deliveryAddress,
+      destinationPlaceId: mktRfqsTable.destinationPlaceId,
+      destinationLat: mktRfqsTable.destinationLat,
+      destinationLng: mktRfqsTable.destinationLng,
+      requiredDeliveryDate: mktRfqsTable.requiredDeliveryDate,
+      notes: mktRfqsTable.notes,
+      createdAt: mktRfqsTable.createdAt,
+    }).from(mktRfqsTable).where(eq(mktRfqsTable.id, rfqId)).limit(1);
+
+    if (!rfq) return res.status(404).json({ ok: false, error: "RFQ tidak ditemukan" });
+    return res.json({ ok: true, data: rfq });
+  } catch (err: unknown) {
+    logger.warn({ err, rfqId }, "[mktAdmin] GET /rfqs/:rfqId error");
+    return res.status(500).json({ ok: false, error: "Gagal mengambil detail RFQ" });
+  }
+});
+
 // ── POST /api/mkt/admin/rfqs/:rfqId/invite-vendor ─────────────────────────────
 // Phase 2C: Undang vendor ke RFQ — membuat satu mkt_vendor_quotes row (status: invited).
 //
