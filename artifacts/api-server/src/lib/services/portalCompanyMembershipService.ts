@@ -113,6 +113,7 @@ export async function assignPortalCustomerMembership(input: PortalCompanyMembers
         companyName: companiesTable.companyName,
         companyCode: companiesTable.companyCode,
         isActive: companiesTable.isActive,
+          isHolding: companiesTable.isHolding,
       })
       .from(companiesTable)
       .where(eq(companiesTable.id, input.companyId))
@@ -121,6 +122,9 @@ export async function assignPortalCustomerMembership(input: PortalCompanyMembers
     if (!company.isActive) {
       throw new PortalCompanyMembershipError(409, "Company tidak aktif.");
     }
+      if (company.isHolding) {
+        throw new PortalCompanyMembershipError(409, "Company internal/holding tidak tersedia untuk Customer Portal.");
+      }
 
     const [membership] = await tx
       .insert(portalCompanyMembersTable)
