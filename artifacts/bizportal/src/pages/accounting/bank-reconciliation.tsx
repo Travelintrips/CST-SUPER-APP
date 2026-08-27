@@ -641,6 +641,7 @@ interface QrisPaymentItem {
   facility_name?: string | null;
   bookingDate?: string | null;
   booking_date?: string | null;
+  date?: string | null;
   expected_settlement_date?: string | null;
   startTime?: string | null;
   start_time?: string | null;
@@ -2998,7 +2999,7 @@ function QrisMutationCard({
                       const paymentId = item.paymentId ?? item.payment_id;
                       const booking = item.bookingNumber ?? item.booking_number ?? (item.booking_id != null ? `SC-${String(item.booking_id).padStart(4, "0")}` : "—");
                       const payment = item.paymentNumber ?? item.payment_number ?? (paymentId != null ? `#${paymentId}` : "—");
-                      const paymentDate = item.paidAt ?? item.paid_at;
+                       const paymentDate = item.paymentDate ?? item.paidAt ?? item.paid_at ?? item.date;
                       const expectedSettlementDate =
                         item.expectedSettlementDate ?? item.expected_settlement_date;
                        const gross = liveGrossForItem(item);
@@ -6006,7 +6007,7 @@ export default function BankReconciliationPage() {
                                      const grossAmount = item.gross_amount ?? item.grossAmount;
                                     const customer = item.customer_name ?? item.customerName;
                                     const facility = item.facility_name ?? item.facilityName;
-                                    const paymentDate = item.paidAt ?? item.paid_at;
+                                     const paymentDate = item.paymentDate ?? item.paidAt ?? item.paid_at ?? item.date;
                                      return (
                                       <div key={`${candidate.id}-${paymentId ?? index}`} className="rounded border border-slate-200/80 bg-white/70 px-2 py-1.5 dark:border-slate-700 dark:bg-slate-950/30">
                                         <div className="flex min-w-0 items-center justify-between gap-2">
