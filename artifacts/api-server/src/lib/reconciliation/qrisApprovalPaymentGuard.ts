@@ -26,6 +26,60 @@ export interface QrisApprovalPaymentSelection {
   activePostedPaymentIds: number[];
 }
 
+export interface QrisCanonicalGroupPayment {
+  id: number;
+  companyId: number | null;
+  providerCode: string | null;
+  bankAccountId: string | null;
+  expectedSettlementDate: string | null;
+  settlementRuleVersion: string | null;
+}
+
+export interface QrisCanonicalGroupSelection {
+  eligiblePaymentIds: number[];
+  conflictingPaymentIds: number[];
+}
+
+function canonicalGroupKey(payment: QrisCanonicalGroupPayment): string {
+  return [
+    payment.companyId ?? "",
+    String(payment.providerCode ?? "").trim().toLowerCase(),
+    String(payment.bankAccountId ?? "").trim(),
+    String(payment.expectedSettlementDate ?? "").slice(0, 10),
+    String(payment.settlementRuleVersion ?? "").trim(),
+  ].join("|");
+}
+
+/**
+ * A canonical settlement builder call may consume only one exact payment
+ * group. Provider aliases can match the same bank evidence, but they remain
+ * separate canonical groups and must be approved in separate partial steps.
+ */
+export function partitionQrisCanonicalGroup(
+  selectedPaymentIds: number[],
+  payments: QrisCanonicalGroupPayment[],
+): QrisCanonicalGroupSelection {
+  const selectedIds = [...new Set(selectedPaymentIds)];
+  const paymentById = new Map(payments.map((payment) => [payment.id, payment]));
+  const source = paymentById.get(selectedIds[0] ?? -1);
+  if (!source) {
+    return {
+      eligiblePaymentIds: [],
+      conflictingPaymentIds: selectedIds,
+    };
+  }
+
+  const sourceKey = canonicalGroupKey(source);
+  const eligiblePaymentIds = selectedIds.filter((id) => {
+    const payment = paymentById.get(id);
+    return payment != null && canonicalGroupKey(payment) === sourceKey;
+  });
+  return {
+    eligiblePaymentIds,
+    conflictingPaymentIds: selectedIds.filter((id) => !eligiblePaymentIds.includes(id)),
+  };
+}
+
 /**
  * Keep canonical payment IDs out of a supplemental approval when they are
  * already active in a posted/reconciled canonical batch.

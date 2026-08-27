@@ -661,6 +661,7 @@ const QRIS_SELECTION_CONFLICT_MESSAGE =
 type QrisSelectionConflictError = Error & {
   code?: string;
   alreadySettledPaymentIds?: number[];
+  conflictingPaymentIds?: number[];
   eligiblePaymentIds?: number[];
   staleCandidateId?: number;
   currentPaymentIds?: number[];
@@ -5175,6 +5176,7 @@ export default function BankReconciliationPage() {
         if (conflict.code === "CANONICAL_SETTLEMENT_SELECTION_CONFLICT") {
           conflictCount += 1;
           conflictedCandidateIds.push(candidate.id!);
+          if (!firstError) firstError = conflict.message;
           const refreshed = await refetchQrisAudit();
           latestQrisCandidates = refreshed.data?.candidates ?? [];
           const refreshedCandidate = refreshed.data?.candidates.find(
@@ -5183,10 +5185,14 @@ export default function BankReconciliationPage() {
           const settled = new Set(
             (refreshedCandidate?.settled_payment_ids ?? []).map(Number),
           );
+          const eligible = Array.isArray(conflict.eligiblePaymentIds)
+            ? new Set(conflict.eligiblePaymentIds.map(Number))
+            : null;
           setSelectedQrisPaymentIds((current) => ({
             ...current,
             [candidate.id!]: (current[candidate.id!] ?? []).filter(
-              (paymentId) => !settled.has(paymentId),
+              (paymentId) => !settled.has(paymentId)
+                && (eligible == null || eligible.has(paymentId)),
             ),
           }));
           continue;
@@ -5249,7 +5255,7 @@ export default function BankReconciliationPage() {
         title: "Daftar kandidat QRIS diperbarui",
         description: staleCount > 0
           ? "Data kandidat sudah berubah. Kandidat lama disembunyikan dan daftar terbaru dimuat."
-          : QRIS_SELECTION_CONFLICT_MESSAGE,
+          : firstError || QRIS_SELECTION_CONFLICT_MESSAGE,
         variant: "destructive",
       });
     }
@@ -5462,10 +5468,15 @@ export default function BankReconciliationPage() {
       if (!r.ok) {
         if (body.code === "CANONICAL_SETTLEMENT_SELECTION_CONFLICT") {
           throw Object.assign(
-            new Error(QRIS_SELECTION_CONFLICT_MESSAGE),
+            new Error(
+              typeof body.error === "string" && body.error.trim()
+                ? body.error
+                : QRIS_SELECTION_CONFLICT_MESSAGE,
+            ),
             {
               code: body.code,
               alreadySettledPaymentIds: body.already_settled_payment_ids,
+              conflictingPaymentIds: body.conflicting_payment_ids,
               eligiblePaymentIds: body.eligible_payment_ids,
             },
           ) as QrisSelectionConflictError;

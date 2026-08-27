@@ -433,6 +433,10 @@ export function generateQrisMutationBatchCandidates(input: {
             input.holidays ?? [],
           ) === nearestExpectedSettlementDistance
       );
+    const canonicalProviderGroups = new Set(
+      naturalPayments.map((payment) => normalizeQrisProvider(payment.providerName)),
+    );
+    const mixedCanonicalProviderGroups = canonicalProviderGroups.size > 1;
     const sameDimensionMutations = openMutations.filter((other) => {
       if (other.id === mutation.id || other.companyId !== mutation.companyId
         || other.bankAccountId == null || mutation.bankAccountId == null
@@ -529,11 +533,14 @@ export function generateQrisMutationBatchCandidates(input: {
       && (!requireExplicitSettlementMetadata || rule != null)
       && hasNaturalBatch
       && expectedDatesPresent
+      && !mixedCanonicalProviderGroups
       && !partitionBlocked
       && !splitSettlementReconcilesTotal
       && validDeduction;
     const reviewReason = ambiguousEffectiveRule
       ? "AMBIGUOUS_EFFECTIVE_WINDOW: lebih dari satu aturan provider/rekening aktif pada tanggal settlement; kandidat wajib direview."
+      : mixedCanonicalProviderGroups
+        ? "MULTIPLE_CANONICAL_PROVIDER_GROUPS: payment kompatibel dengan bukti bank tetapi berasal dari kelompok provider canonical berbeda; approve per kelompok."
       : !completeBankDimension
       ? "Dimensi company dan bank account wajib tersedia; rekening null bukan wildcard."
       : !actualEvidence
@@ -589,6 +596,8 @@ export function generateQrisMutationBatchCandidates(input: {
       })),
       status: matched ? "MATCHED" : ambiguousEffectiveRule
         ? "REVIEW"
+        : mixedCanonicalProviderGroups
+          ? "REVIEW"
         : evidence.providerCode === "unknown"
         ? "REVIEW"
         : completeBankDimension && dimensionPayments.length > 0 && !hasNaturalBatch

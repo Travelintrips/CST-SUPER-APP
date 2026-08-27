@@ -95,6 +95,7 @@ import {
   listQrisCandidates,
 } from "../lib/reconciliation/qrisCandidateService.js";
 import {
+  partitionQrisCanonicalGroup,
   QrisApprovalPaymentGuardError,
   selectQrisApprovalPaymentIds,
 } from "../lib/reconciliation/qrisApprovalPaymentGuard.js";
@@ -2550,6 +2551,9 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
           sp.company_id,
           sp.payment_provider,
           sp.payment_method,
+          sp.bank_account_id::text AS bank_account_id,
+          sp.expected_settlement_date::text AS expected_settlement_date,
+          sp.settlement_rule_version,
           journal_provider.payment_provider AS journal_payment_provider
         FROM sport_center.sport_payments
         sp
@@ -2670,6 +2674,39 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
             { code: "INVALID_CANDIDATE" },
           );
         }
+      }
+
+      const canonicalGroupSelection = partitionQrisCanonicalGroup(
+        selectedIds,
+        selectedLivePayments.map((payment) => ({
+          id: Number(payment.id),
+          companyId: payment.company_id == null ? null : Number(payment.company_id),
+          providerCode: normalizeQrisProvider(
+            payment.payment_provider == null ? null : String(payment.payment_provider),
+          ),
+          bankAccountId: payment.bank_account_id == null
+            ? null
+            : String(payment.bank_account_id),
+          expectedSettlementDate: payment.expected_settlement_date == null
+            ? null
+            : String(payment.expected_settlement_date).slice(0, 10),
+          settlementRuleVersion: payment.settlement_rule_version == null
+            ? null
+            : String(payment.settlement_rule_version),
+        })),
+      );
+      if (canonicalGroupSelection.conflictingPaymentIds.length > 0) {
+        throw Object.assign(
+          new Error(
+            `Payment ${canonicalGroupSelection.conflictingPaymentIds.join(", ")} berada di canonical group berbeda. ` +
+            "Selesaikan payment per kelompok settlement.",
+          ),
+          {
+            code: "CANONICAL_SETTLEMENT_SELECTION_CONFLICT",
+            conflictingPaymentIds: canonicalGroupSelection.conflictingPaymentIds,
+            eligiblePaymentIds: canonicalGroupSelection.eligiblePaymentIds,
+          },
+        );
       }
 
       const freshness = checkQrisCandidateFreshness({
@@ -2905,6 +2942,14 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
         code: error.code,
         already_settled_payment_ids: error.alreadySettledPaymentIds,
         eligible_payment_ids: error.eligiblePaymentIds,
+      });
+    }
+    if (code === "CANONICAL_SETTLEMENT_SELECTION_CONFLICT") {
+      return res.status(409).json({
+        error: error?.message ?? "Payment yang dipilih berasal dari canonical group berbeda.",
+        code,
+        conflicting_payment_ids: error?.conflictingPaymentIds ?? [],
+        eligible_payment_ids: error?.eligiblePaymentIds ?? [],
       });
     }
     const clientErrorCodes = new Set([

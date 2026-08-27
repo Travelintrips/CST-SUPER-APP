@@ -612,6 +612,32 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     expect(result[0]?.status).toBe("REVIEW");
   });
 
+  it("does not auto-match compatible aliases that span canonical provider groups", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [
+        {
+          id: 361, companyId: 1, bankAccountId: 17, amount: 300_000,
+          method: "QRIS", status: "paid", paidAt: "2026-08-15",
+          expectedSettlementDate: "2026-08-16", providerName: "mandiri_direct",
+        },
+        {
+          id: 364, companyId: 1, bankAccountId: 17, amount: 200_000,
+          method: "QRIS", status: "paid", paidAt: "2026-08-15",
+          expectedSettlementDate: "2026-08-16", providerName: "gpn_qris",
+        },
+      ],
+      mutations: [{
+        id: 365, companyId: 1, bankAccountId: 17, amount: 496_500,
+        transactionDate: "2026-08-16", direction: "IN",
+        source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: "gpn_qris", description: "QRTRAVELI SETTLEMENT",
+      }],
+    });
+
+    expect(result[0]?.status).toBe("REVIEW");
+    expect(result[0]?.reason).toContain("MULTIPLE_CANONICAL_PROVIDER_GROUPS");
+  });
+
   it("inherits provider defaults when an account rule omits optional tolerances", () => {
     const rules = providerRulesByBankAccountFromRows([
       {
