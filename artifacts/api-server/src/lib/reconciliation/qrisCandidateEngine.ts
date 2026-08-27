@@ -6,6 +6,7 @@ import {
 } from "./qrisSettlement.js";
 import {
   DEFAULT_QRIS_PROVIDER_RULES,
+  expectedQrisSettlementDate,
   normalizeQrisProvider,
   areQrisProvidersCompatible,
   type QrisProviderCode,
@@ -111,6 +112,55 @@ function isEligiblePayment(payment: QrisPaymentCandidateInput): boolean {
   return isQrisPayment(payment)
     && String(payment.status ?? "").toLowerCase() === "paid"
     && !payment.alreadyReconciled;
+}
+
+function calendarDate(value: string | Date | null | undefined): string | null {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString().slice(0, 10);
+  }
+  const date = String(value ?? "").trim().slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null;
+}
+
+function isPaymentChronologicallyValid(
+  payment: QrisPaymentCandidateInput,
+  mutationDate: string,
+): boolean {
+  // Booking date is intentionally not checked here: customers may pay for a
+  // future booking. The settlement cohort is based on the payment/settlement
+  // timeline, so only a payment recorded after the bank settlement is invalid.
+  const paymentDate = calendarDate(payment.paymentDate ?? payment.paidAt);
+  return paymentDate == null || paymentDate <= mutationDate;
+}
+
+/**
+ * Older mirrors may retain a settlement date that was calculated before the
+ * canonical QRIS H+1 rule existed. Recompute from the payment timestamp for
+ * matching so a stale value cannot pull an earlier payment into a later bank
+ * mutation. The stored value remains the only fallback when the source has no
+ * usable payment timestamp.
+ */
+function settlementDateForMatching(
+  payment: QrisPaymentCandidateInput,
+  rules: Partial<Record<QrisProviderCode, QrisProviderRule>>,
+  accountProviderRules: Record<string, Partial<Record<QrisProviderCode, QrisProviderRule>>> | undefined,
+): string | null {
+  const paymentTimestamp = payment.paymentDate ?? payment.paidAt;
+  if (!paymentTimestamp) return calendarDate(payment.expectedSettlementDate);
+
+  const providerCode = normalizeQrisProvider(payment.providerName);
+  const accountRule = payment.bankAccountId == null
+    ? undefined
+    : accountProviderRules?.[String(payment.bankAccountId)]?.[providerCode];
+  const rule = accountRule ?? rules[providerCode];
+  if (!rule) return calendarDate(payment.expectedSettlementDate);
+
+  return calendarDate(expectedQrisSettlementDate(
+    paymentTimestamp,
+    providerCode,
+    [],
+    { settlementDelayBusinessDays: rule.settlementDelayBusinessDays },
+  )) ?? calendarDate(payment.expectedSettlementDate);
 }
 
 function providerEvidence(
@@ -292,14 +342,23 @@ export function generateQrisMutationBatchCandidates(input: {
     const ruleVersion = rule?.ruleVersion ?? (requireExplicitSettlementMetadata ? "" : "legacy-v1");
     const dimensionPayments = rule == null && requireExplicitSettlementMetadata
       ? []
-      : eligiblePayments.filter((payment) =>
+      : eligiblePayments.map((payment) => ({
+        ...payment,
+        expectedSettlementDate: settlementDateForMatching(
+          payment,
+          rules,
+          input.accountProviderRules,
+        ),
+      })).filter((payment) =>
         payment.companyId === mutation.companyId
           && payment.bankAccountId === mutation.bankAccountId
           && payment.expectedSettlementDate != null
           && (!requireExplicitSettlementMetadata
             || Boolean(String(payment.settlementRuleVersion ?? "").trim()))
           && (!requireExplicitSettlementMetadata
-            || payment.expectedSettlementDate === mutation.transactionDate),
+             || payment.expectedSettlementDate === mutation.transactionDate)
+          && (!requireExplicitSettlementMetadata
+             || isPaymentChronologicallyValid(payment, mutation.transactionDate)),
       );
     const providerDimensionPayments = dimensionPayments.filter((payment) =>
       evidence.providerCode !== "unknown"

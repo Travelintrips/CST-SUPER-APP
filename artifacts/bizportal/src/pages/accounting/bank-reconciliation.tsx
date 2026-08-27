@@ -2979,11 +2979,11 @@ function QrisMutationCard({
                   )}
                 </div>
                 <div className="overflow-x-auto">
-                  <div className="min-w-[650px]">
+                   <div className="min-w-[650px]">
                     <div className="grid grid-cols-[1.1fr_1.4fr_1fr_1fr_1fr_44px] gap-2 border-b bg-muted/15 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                       <span>Booking</span>
                       <span>Pelanggan / Payment</span>
-                      <span>Tanggal Booking</span>
+                       <span>Booking / Settlement</span>
                       <span>Metode Bayar</span>
                       <span className="text-right">Nominal (Gross)</span>
                       <span className="text-center">Pilih</span>
@@ -2993,12 +2993,18 @@ function QrisMutationCard({
                       const booking = item.bookingNumber ?? item.booking_number ?? (item.booking_id != null ? `SC-${String(item.booking_id).padStart(4, "0")}` : "—");
                       const payment = item.paymentNumber ?? item.payment_number ?? (paymentId != null ? `#${paymentId}` : "—");
                       const bookingDate = item.bookingDate ?? item.booking_date;
+                       const settlementDate = item.expectedSettlementDate ?? item.expected_settlement_date;
                        const gross = liveGrossForItem(item);
                       return (
                         <div key={`${paymentId ?? index}-${booking}`} className="grid grid-cols-[1.1fr_1.4fr_1fr_1fr_1fr_44px] items-center gap-2 border-b px-2.5 py-2 last:border-b-0">
                           <span className="truncate text-xs font-medium">{booking}</span>
                           <span className="min-w-0 truncate text-xs text-muted-foreground">{payment}</span>
-                           <span className="truncate text-xs text-muted-foreground">{bookingDate ? fmtDate(String(bookingDate)) : "—"}</span>
+                            <span className="min-w-0 text-xs text-muted-foreground">
+                              <span className="block truncate">{bookingDate ? fmtDate(String(bookingDate)) : "Booking —"}</span>
+                              <span className="block truncate text-[10px] text-indigo-600 dark:text-indigo-300">
+                                H-1: {settlementDate ? fmtDate(String(settlementDate)) : "—"}
+                              </span>
+                            </span>
                            <span className="truncate text-xs text-muted-foreground">QRIS</span>
                           <span className="text-right text-xs font-medium tabular-nums">{idr(gross)}</span>
                           <span className="flex justify-center">
