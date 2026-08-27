@@ -24,7 +24,7 @@ import { startDriverJobWorker } from "./lib/driverJobWorker.js";
 import { startWaRetryWorker } from "./lib/waRetryWorker";
 import { remediateOrphanProducts } from "./lib/remediateOrphanProducts";
 import { seedProductTemplates } from "./routes/productTemplates.js";
-import { runPortalMigration } from "./lib/portalMigration";
+import { runPortalCustomerOrganizationMigration, runPortalMigration } from "./lib/portalMigration";
 import { runPortalPaymentCompanyMigration } from "./lib/portalPaymentCompanyMigration.js";
 import { runCustomerPortalPaymentBoundaryMigration } from "./lib/customerPortalPaymentBoundaryMigration.js";
 import { runCustomerPortalProductTaxMigration } from "./lib/customerPortalProductTaxMigration.js";
@@ -2012,6 +2012,7 @@ async function startServer() {
     .then(() => runWithRetry("Companies migration", runCompaniesMigration))
     .then(() => runWithRetry("Holding migration", runHoldingMigration))
     .then(() => runWithRetry("Portal migration", runPortalMigration))
+    .then(() => runWithRetry("Portal customer organization migration", runPortalCustomerOrganizationMigration))
     .then(() => runWithRetry("Customer Portal payment boundary migration", runCustomerPortalPaymentBoundaryMigration))
     .then(() => runWithRetry("Customer Portal finance processing migration", runCustomerPortalFinanceProcessingMigration))
     .then(() => runWithRetry("Customer Portal settlement migration", runCustomerPortalSettlementMigration))

@@ -11,6 +11,7 @@ const REGISTRY_ROWS: readonly RegistryRow[] = [
   ["companies", "Companies migration", "schema"],
   ["holding", "Holding migration", "schema"],
   ["portal", "Portal migration", "schema"],
+  ["portal_customer_organization", "Portal customer organization migration", "schema"],
   ["customer_portal_payment_boundary", "Customer Portal payment boundary migration", "schema"],
   ["customer_portal_finance_processing", "Customer Portal finance processing migration", "schema"],
   ["customer_portal_product_tax", "Customer Portal product tax scope migration", "schema"],

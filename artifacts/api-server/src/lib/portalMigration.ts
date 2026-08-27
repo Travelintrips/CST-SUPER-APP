@@ -247,3 +247,47 @@ export async function runPortalMigration(): Promise<void> {
     logger.error({ err }, "Portal migration gagal");
   }
 }
+
+/**
+ * Additive repair for the canonical customer-organization contract.
+ *
+ * Keep this separate from runPortalMigration: older environments may already
+ * have the portal stage marker while missing this newer table.
+ */
+export async function runPortalCustomerOrganizationMigration(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS portal_company_requests (
+      id SERIAL PRIMARY KEY,
+      portal_customer_id INTEGER NOT NULL REFERENCES portal_customers(id) ON DELETE CASCADE,
+      requested_company_name TEXT NOT NULL,
+      requested_registration_number TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      matched_company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL,
+      review_note TEXT,
+      reviewed_by INTEGER REFERENCES portal_customers(id) ON DELETE SET NULL,
+      reviewed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT portal_company_requests_status_check
+        CHECK (status IN ('pending', 'approved', 'rejected'))
+    )
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS pcr_customer_idx
+      ON portal_company_requests (portal_customer_id)
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS pcr_status_idx
+      ON portal_company_requests (status)
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS pcr_company_idx
+      ON portal_company_requests (matched_company_id)
+  `);
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS pcr_customer_pending_name_unique
+      ON portal_company_requests (portal_customer_id, lower(requested_company_name))
+      WHERE status = 'pending'
+  `);
+  logger.info("Portal customer organization migration: selesai");
+}
