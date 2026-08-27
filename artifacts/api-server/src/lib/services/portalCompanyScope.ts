@@ -24,31 +24,29 @@ type ResolveOptions = {
   required?: boolean;
 };
 
+export type PortalCompanyMembershipResolutionRow = {
+  portalCustomerId: number;
+  companyId: number;
+  isActive: boolean;
+};
+
 /**
- * Resolve the only company an authenticated portal customer may act for.
+ * Resolve a company from already-fetched membership rows.
  *
- * A portal customer can have more than one active membership. We intentionally
- * do not choose one arbitrarily: payment and accounting records must have an
- * unambiguous company owner.
+ * Keeping the ownership and active-state checks in a small pure function makes
+ * the fail-closed contract testable without weakening the DB query below.
  */
-export async function resolvePortalCustomerCompanyId(
+export function resolveOwnedActiveCompanyId(
+  rows: readonly PortalCompanyMembershipResolutionRow[],
   portalCustomerId: number,
   { required = false }: ResolveOptions = {},
-): Promise<number | null> {
-  const memberships = await db
-    .select({ companyId: portalCompanyMembersTable.companyId })
-    .from(portalCompanyMembersTable)
-    .where(and(
-      eq(portalCompanyMembersTable.portalCustomerId, portalCustomerId),
-      eq(portalCompanyMembersTable.isActive, true),
-    ))
-    .orderBy(portalCompanyMembersTable.companyId);
-
+): number | null {
   const companyIds = [...new Set(
-    memberships
+    rows
+      .filter((row) => row.portalCustomerId === portalCustomerId && row.isActive)
       .map((row) => row.companyId)
-      .filter((companyId): companyId is number => companyId != null),
-  )];
+      .filter((companyId): companyId is number => Number.isInteger(companyId) && companyId > 0),
+  )].sort((a, b) => a - b);
 
   if (companyIds.length === 1) return companyIds[0];
   if (companyIds.length === 0) {
@@ -68,6 +66,32 @@ export async function resolvePortalCustomerCompanyId(
     );
   }
   return null;
+}
+
+/**
+ * Resolve the only company an authenticated portal customer may act for.
+ *
+ * A portal customer can have more than one active membership. We intentionally
+ * do not choose one arbitrarily: payment and accounting records must have an
+ * unambiguous company owner.
+ */
+export async function resolvePortalCustomerCompanyId(
+  portalCustomerId: number,
+  { required = false }: ResolveOptions = {},
+): Promise<number | null> {
+  const memberships = await db
+    .select({
+      portalCustomerId: portalCompanyMembersTable.portalCustomerId,
+      companyId: portalCompanyMembersTable.companyId,
+      isActive: portalCompanyMembersTable.isActive,
+    })
+    .from(portalCompanyMembersTable)
+    .where(and(
+      eq(portalCompanyMembersTable.portalCustomerId, portalCustomerId),
+    ))
+    .orderBy(portalCompanyMembersTable.companyId);
+
+  return resolveOwnedActiveCompanyId(memberships, portalCustomerId, { required });
 }
 
 export async function resolvePortalCustomerCompanyIdByEmail(

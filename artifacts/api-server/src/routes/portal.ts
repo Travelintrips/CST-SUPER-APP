@@ -60,6 +60,12 @@ import {
   getApprovalIdentityDocs,
 } from "../lib/services/portalApprovalService.js";
 import { listCustomers, getCustomerStats, updatePortalCustomer, type PortalAccountStatus } from "../lib/services/portalCustomerService.js";
+import {
+  assignPortalCustomerMembership,
+  deactivatePortalCustomerMembership,
+  listPortalCustomerMemberships,
+  PortalCompanyMembershipError,
+} from "../lib/services/portalCompanyMembershipService.js";
 import { getErpStats } from "../lib/services/portalStatsService.js";
 import { getContent, updateContent } from "../lib/services/portalContentService.js";
 import {
@@ -1952,10 +1958,109 @@ router.get("/admin/customers/:id", requirePortalAdmin, async (req, res): Promise
       .where(eq(portalCustomerProfilesTable.customerId, id))
       .limit(1);
 
-    res.json({ ...cust, profile: prof ?? null });
+    const memberships = await listPortalCustomerMemberships(id);
+    res.json({ ...cust, profile: prof ?? null, memberships });
   } catch (err) {
     console.error("[portal] GET /admin/customers/:id error", err);
     res.status(500).json({ error: "Gagal memuat data customer" });
+  }
+});
+
+// GET /api/portal/admin/customers/:id/memberships — explicit company mappings
+router.get("/admin/customers/:id/memberships", requirePortalAdmin, async (req, res): Promise<void> => {
+  const customerId = Number(req.params["id"]);
+  if (!Number.isInteger(customerId) || customerId <= 0) {
+    res.status(400).json({ error: "ID tidak valid" });
+    return;
+  }
+  try {
+    res.json({ items: await listPortalCustomerMemberships(customerId) });
+  } catch (err: any) {
+    if (err instanceof PortalCompanyMembershipError) {
+      res.status(err.statusCode).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
+});
+
+// PUT /api/portal/admin/customers/:id/memberships — assign/reactivate one mapping
+router.put("/admin/customers/:id/memberships", requirePortalAdmin, async (req, res): Promise<void> => {
+  const customerId = Number(req.params["id"]);
+  const companyId = Number(req.body?.companyId);
+  const actorId = (req as PortalAuthReq).portalCustomerId;
+  if (!Number.isInteger(customerId) || customerId <= 0 || !Number.isInteger(companyId) || companyId <= 0) {
+    res.status(400).json({ error: "Customer ID dan Company ID wajib valid." });
+    return;
+  }
+
+  try {
+    const membership = await assignPortalCustomerMembership({
+      customerId,
+      companyId,
+      buyerRole: req.body?.buyerRole === undefined ? undefined : String(req.body.buyerRole),
+      department: req.body?.department,
+      costCenter: req.body?.costCenter,
+      approvalLevel: req.body?.approvalLevel === undefined ? undefined : Number(req.body.approvalLevel),
+      spendingLimit: req.body?.spendingLimit,
+      invitedBy: actorId > 0 ? actorId : null,
+    });
+
+    writeAuditLog({
+      userId: actorId > 0 ? String(actorId) : null,
+      userEmail: (req.user as { email?: string } | undefined)?.email ?? null,
+      action: "ASSIGN",
+      module: "portal_company_membership",
+      referenceId: String(membership.id),
+      entityType: "portal_company_member",
+      entityId: String(membership.id),
+      oldData: null,
+      newData: {
+        portalCustomerId: customerId,
+        companyId,
+        buyerRole: membership.buyerRole,
+        isActive: membership.isActive,
+      },
+      ipAddress: req.ip ?? null,
+      userAgent: req.get("user-agent") ?? null,
+    });
+    res.json(membership);
+  } catch (err: any) {
+    if (err instanceof PortalCompanyMembershipError) {
+      res.status(err.statusCode).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
+});
+
+// DELETE /api/portal/admin/customers/:id/memberships/:companyId — deactivate mapping
+router.delete("/admin/customers/:id/memberships/:companyId", requirePortalAdmin, async (req, res): Promise<void> => {
+  const customerId = Number(req.params["id"]);
+  const companyId = Number(req.params["companyId"]);
+  const actorId = (req as PortalAuthReq).portalCustomerId;
+  try {
+    const result = await deactivatePortalCustomerMembership(customerId, companyId);
+    writeAuditLog({
+      userId: actorId > 0 ? String(actorId) : null,
+      userEmail: (req.user as { email?: string } | undefined)?.email ?? null,
+      action: "DEACTIVATE",
+      module: "portal_company_membership",
+      referenceId: String(result.id),
+      entityType: "portal_company_member",
+      entityId: String(result.id),
+      oldData: { portalCustomerId: customerId, companyId, isActive: true },
+      newData: { portalCustomerId: customerId, companyId, isActive: false },
+      ipAddress: req.ip ?? null,
+      userAgent: req.get("user-agent") ?? null,
+    });
+    res.json({ ok: true });
+  } catch (err: any) {
+    if (err instanceof PortalCompanyMembershipError) {
+      res.status(err.statusCode).json({ error: err.message });
+      return;
+    }
+    throw err;
   }
 });
 
