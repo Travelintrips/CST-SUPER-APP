@@ -141,6 +141,7 @@ export async function submitMarketplaceQuote(params: {
     destinationPlaceId: destination_place_id,
     destinationLat: destination_lat,
     destinationLng: destination_lng,
+    destinationAddress: effectiveShippingAddress,
   });
 
   // ── 3. Price / order calculations ────────────────────────────────────────

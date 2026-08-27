@@ -162,15 +162,18 @@ export async function validateMarketplaceDestinationMetadata(opts: {
   destinationPlaceId?: unknown;
   destinationLat?: unknown;
   destinationLng?: unknown;
+  destinationAddress?: unknown;
 }): Promise<{ placeId: string | null; lat: number | null; lng: number | null }> {
   const placeId = typeof opts.destinationPlaceId === "string" ? opts.destinationPlaceId.trim() : "";
   const lat = parseCoordinate(opts.destinationLat);
   const lng = parseCoordinate(opts.destinationLng);
+  const destinationAddress =
+    typeof opts.destinationAddress === "string" ? opts.destinationAddress.trim() : "";
 
   if (!placeId && lat === null && lng === null) {
     return { placeId: null, lat: null, lng: null };
   }
-  if (!placeId || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+  if (!placeId || !Number.isFinite(lat) || !Number.isFinite(lng) || !destinationAddress) {
     throw Object.assign(new Error("Metadata lokasi tidak lengkap atau koordinat tidak valid"), { statusCode: 400 });
   }
   if ((lat as number) < -90 || (lat as number) > 90 || (lng as number) < -180 || (lng as number) > 180) {
@@ -187,8 +190,9 @@ export async function validateMarketplaceDestinationMetadata(opts: {
 
   const params = new URLSearchParams({
     place_id: placeId,
-    fields: "place_id,geometry",
+    fields: "place_id,formatted_address,geometry",
     key: apiKey,
+    language: "id",
   });
   let upstream: Response;
   try {
@@ -204,14 +208,23 @@ export async function validateMarketplaceDestinationMetadata(opts: {
 
   const data = await upstream.json() as {
     status?: string;
-    result?: { place_id?: string; geometry?: { location?: { lat?: number; lng?: number } } };
+    result?: {
+      place_id?: string;
+      formatted_address?: string;
+      geometry?: { location?: { lat?: number; lng?: number } };
+    };
   };
   const verifiedLat = data.result?.geometry?.location?.lat;
   const verifiedLng = data.result?.geometry?.location?.lng;
   const verifiedPlaceId = data.result?.place_id;
+  const verifiedAddress = data.result?.formatted_address?.trim();
+  const addressesMatch =
+    !!verifiedAddress &&
+    verifiedAddress.localeCompare(destinationAddress, undefined, { sensitivity: "accent" }) === 0;
   const matchesCoordinates =
     data.status === "OK" &&
     verifiedPlaceId === placeId &&
+    addressesMatch &&
     Number.isFinite(verifiedLat) &&
     Number.isFinite(verifiedLng) &&
     Math.abs((verifiedLat as number) - (lat as number)) <= 0.00001 &&
