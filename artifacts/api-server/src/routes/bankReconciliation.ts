@@ -1490,9 +1490,20 @@ router.post("/qris-candidates/generate", async (req, res) => {
       });
     }
     const companyId = req.body?.companyId ?? req.body?.company_id ?? resolveCompanyId(req);
+    const requestedMutationId = req.body?.mutationId ?? req.body?.mutation_id ?? null;
+    const mutationId = requestedMutationId == null || requestedMutationId === ""
+      ? null
+      : Number(requestedMutationId);
+    if (mutationId != null && (!Number.isInteger(mutationId) || mutationId <= 0)) {
+      return res.status(400).json({
+        error: "mutationId kandidat QRIS tidak valid",
+        code: "INVALID_QRIS_MUTATION_ID",
+      });
+    }
     const dryRun = req.body?.dryRun !== false && req.body?.dry_run !== false;
     const result = await generateQrisCandidates({
       companyId: companyId == null ? null : Number(companyId),
+      mutationId,
       from: req.body?.from ?? null,
       to: req.body?.to ?? null,
       dryRun,
@@ -1503,6 +1514,7 @@ router.post("/qris-candidates/generate", async (req, res) => {
       resourceId: `qris-candidates-${Date.now()}`,
       after: {
         dryRun: result.dryRun,
+        mutationId,
         generated: result.generated,
         automaticFinalReconciliation: false,
       },
@@ -3042,6 +3054,50 @@ router.get("/mutations", async (req, res) => {
                     )`
     : "";
 
+  // A prior approval may have created an exact posted settlement before the
+  // bank-link step failed. Keep this recovery identity strict: one posted,
+  // unlinked batch must contain exactly the candidate's payment set.
+  const canonicalRecoverySettlementSql = hasCanonicalSettlementSchema
+    ? `(
+        SELECT CASE WHEN COUNT(*) = 1 THEN MAX(recoverable.settlement_id) END
+        FROM (
+          SELECT psb.id AS settlement_id
+          FROM sport_center.payment_settlement_batches psb
+          WHERE psb.company_id = qc.company_id
+            AND psb.status = 'posted'
+            AND psb.bank_mutation_id IS NULL
+            AND (
+              SELECT COUNT(*)
+              FROM sport_center.payment_settlement_items psi_count
+              WHERE psi_count.settlement_id = psb.id
+                AND psi_count.item_status = 'active'
+            ) = jsonb_array_length(COALESCE(qc.payment_items, '[]'::jsonb))
+            AND NOT EXISTS (
+              SELECT 1
+              FROM sport_center.payment_settlement_items psi_extra
+              WHERE psi_extra.settlement_id = psb.id
+                AND psi_extra.item_status = 'active'
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM jsonb_array_elements(COALESCE(qc.payment_items, '[]'::jsonb)) item
+                  WHERE (item->>'paymentId')::int = psi_extra.payment_id
+                )
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements(COALESCE(qc.payment_items, '[]'::jsonb)) item
+              WHERE NOT EXISTS (
+                SELECT 1
+                FROM sport_center.payment_settlement_items psi_missing
+                WHERE psi_missing.settlement_id = psb.id
+                  AND psi_missing.item_status = 'active'
+                  AND psi_missing.payment_id = (item->>'paymentId')::int
+              )
+            )
+        ) recoverable
+      )`
+    : "NULL::bigint";
+
   const {
     status, from, to, direction, provider, search,
     limit = "100", offset = "0",
@@ -3452,7 +3508,8 @@ router.get("/mutations", async (req, res) => {
                 )
                 ${canonicalSettledUnionSql}
               ) settled
-            ), '[]'::jsonb),
+              ), '[]'::jsonb),
+              'recoverable_settlement_id', ${canonicalRecoverySettlementSql},
             'current_payment_ids', COALESCE((
               SELECT jsonb_agg(current_payment.payment_id ORDER BY current_payment.payment_id)
               FROM (
@@ -3572,6 +3629,7 @@ router.get("/mutations", async (req, res) => {
                  ${canonicalSettledUnionSql}
                ) settled
              ), '[]'::jsonb),
+              'recoverable_settlement_id', ${canonicalRecoverySettlementSql},
              'current_payment_ids', COALESCE((
                SELECT jsonb_agg(current_payment.payment_id ORDER BY current_payment.payment_id)
                FROM (

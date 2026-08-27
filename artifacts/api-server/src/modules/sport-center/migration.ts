@@ -3382,9 +3382,15 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
             v_batch.bank_mutation_id;
         END IF;
 
-        IF v_public.status <> 'unmatched' THEN
+        -- Matching may already have created a provisional candidate before
+        -- the original approval was interrupted. Recovery is still safe for
+        -- non-final reconciliation states because the function locks the
+        -- mutation and rejects generic journals/final links above.
+        IF LOWER(COALESCE(v_public.status, '')) NOT IN
+           ('unmatched', 'matched', 'manual_review', 'duplicate_need_review')
+        THEN
           RAISE EXCEPTION
-            'CANONICAL_SETTLEMENT_RECOVERY_PUBLIC_MUTATION_NOT_UNMATCHED: mutation=% status=%',
+            'CANONICAL_SETTLEMENT_RECOVERY_PUBLIC_MUTATION_NOT_RECOVERABLE: mutation=% status=%',
             p_public_mutation_id,
             v_public.status;
         END IF;

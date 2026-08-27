@@ -614,6 +614,8 @@ interface QrisCandidateAudit {
   current_gross_amount?: number | string | null;
   current_expected_amount?: number | string | null;
   current_evidence_valid?: boolean | null;
+  /** Exact posted canonical batch left unlinked by an interrupted approval. */
+  recoverable_settlement_id?: number | string | null;
   candidate_source?: string | null;
   description?: string | null;
   status?: string | null;
@@ -2722,7 +2724,9 @@ function QrisMutationCard({
   onDetail,
   onDelete,
   onApproveQrisBatch,
+  onRecoverQrisSettlement,
   approveQrisPending,
+  recoverQrisPending,
   selectedQrisPaymentIds,
   onToggleQrisPayment,
   onToggleAllQrisPayments,
@@ -2738,7 +2742,9 @@ function QrisMutationCard({
   onDetail: (m: BankMutation) => void;
   onDelete: (id: number) => void;
   onApproveQrisBatch?: (candidateId: number, mutationId: number, candidate: QrisCandidateAudit, paymentIds?: number[]) => void;
+  onRecoverQrisSettlement?: (mutationId: number, settlementId: number) => void;
   approveQrisPending?: boolean;
+  recoverQrisPending?: boolean;
   selectedQrisPaymentIds: number[];
   onToggleQrisPayment?: (candidateId: number, paymentId: number, checked: boolean) => void;
   onToggleAllQrisPayments?: (candidate: QrisCandidateAudit, checked: boolean) => void;
@@ -2779,6 +2785,10 @@ function QrisMutationCard({
   const isDepleted = qrisPresentationState === "depleted";
   const isEmptyMatchedCandidate = qrisPresentationState === "empty";
   const isStaleMatchedCandidate = qrisPresentationState === "stale";
+  const recoverableSettlementId = numericValue(audit.recoverable_settlement_id);
+  const canRecoverSettlement = isDepleted
+    && recoverableSettlementId != null
+    && onRecoverQrisSettlement != null;
   const isCanonicalReconciled = isCanonicalSettlementMutation(m)
     && ["approved", "posted"].includes(String(m.status ?? "").toLowerCase());
   const isApproved = isCanonicalReconciled
@@ -2974,11 +2984,12 @@ function QrisMutationCard({
                   )}
                 </div>
                 <div className="overflow-x-auto">
-                  <div className="min-w-[650px]">
+                   <div className="min-w-[650px]">
                     <div className="grid grid-cols-[1.1fr_1.4fr_1fr_1fr_1fr_44px] gap-2 border-b bg-muted/15 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                       <span>Booking</span>
                       <span>Pelanggan / Payment</span>
                       <span>Payment / Settlement</span>
+                       <span>Booking / Settlement</span>
                       <span>Metode Bayar</span>
                       <span className="text-right">Nominal (Gross)</span>
                       <span className="text-center">Pilih</span>
@@ -2990,6 +3001,8 @@ function QrisMutationCard({
                       const paymentDate = item.paymentDate ?? item.paid_at;
                       const expectedSettlementDate =
                         item.expectedSettlementDate ?? item.expected_settlement_date;
+                      const bookingDate = item.bookingDate ?? item.booking_date;
+                       const settlementDate = item.expectedSettlementDate ?? item.expected_settlement_date;
                        const gross = liveGrossForItem(item);
                       return (
                         <div key={`${paymentId ?? index}-${booking}`} className="grid grid-cols-[1.1fr_1.4fr_1fr_1fr_1fr_44px] items-center gap-2 border-b px-2.5 py-2 last:border-b-0">
@@ -3003,6 +3016,12 @@ function QrisMutationCard({
                                Settlement H-1: {expectedSettlementDate ? fmtDate(String(expectedSettlementDate)) : "—"}
                              </span>
                            </span>
+                            <span className="min-w-0 text-xs text-muted-foreground">
+                              <span className="block truncate">{bookingDate ? fmtDate(String(bookingDate)) : "Booking —"}</span>
+                              <span className="block truncate text-[10px] text-indigo-600 dark:text-indigo-300">
+                                H-1: {settlementDate ? fmtDate(String(settlementDate)) : "—"}
+                              </span>
+                            </span>
                            <span className="truncate text-xs text-muted-foreground">QRIS</span>
                           <span className="text-right text-xs font-medium tabular-nums">{idr(gross)}</span>
                           <span className="flex justify-center">
@@ -3047,8 +3066,27 @@ function QrisMutationCard({
               <div className="mt-3 rounded-md border border-green-300 bg-green-50 px-3 py-3 text-xs text-green-900 dark:border-green-800 dark:bg-green-950 dark:text-green-100">
                 <p className="font-semibold">Semua payment pada batch ini sudah diproses.</p>
                 <p className="mt-1 leading-relaxed">
-                  Kandidat MATCHED tidak memiliki payment tersisa. Tidak perlu approval atau matching ulang.
+                  {canRecoverSettlement
+                    ? "Settlement sudah terbentuk, tetapi link ke mutasi bank belum selesai."
+                    : "Kandidat MATCHED tidak memiliki payment tersisa. Tidak perlu approval atau matching ulang."}
                 </p>
+                {canRecoverSettlement && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="mt-3 gap-1.5 border-indigo-300 bg-white text-xs text-indigo-700 hover:bg-indigo-50 dark:border-indigo-700 dark:bg-slate-950 dark:text-indigo-300"
+                    disabled={recoverQrisPending}
+                    onClick={event => {
+                      event.stopPropagation();
+                      onRecoverQrisSettlement?.(m.id, recoverableSettlementId);
+                    }}
+                  >
+                    {recoverQrisPending
+                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      : <CheckCircle2 className="h-3.5 w-3.5" />}
+                    {recoverQrisPending ? "Menyelesaikan link..." : "Selesaikan Settlement Tertunda"}
+                  </Button>
+                )}
               </div>
             ) : isEmptyMatchedCandidate ? (
               <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-3 text-xs text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">

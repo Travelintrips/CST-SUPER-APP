@@ -7,7 +7,9 @@ import {
   type QrisPaymentCandidateInput,
 } from "./qrisCandidateEngine.js";
 import {
+  accountProviderRuleCatalogFromRows,
   normalizeQrisProvider,
+  providerRuleCatalogFromRows,
   providerRulesByBankAccountFromRows,
   providerRulesFromRows,
 } from "./providerSettlementRules.js";
@@ -169,6 +171,50 @@ function makeCanonicalFragments(available: boolean) {
             ), bm.amount) - bm.amount) <= 0.01`
     : "TRUE";
 
+  // A failed approval can leave an exact payment batch posted without its
+  // bank link. Expose that state separately so the UI can offer the guarded
+  // owner-recovery path instead of treating it as a normal empty candidate.
+  const recoverableSettlementIdSql = available
+    ? `(
+        SELECT CASE WHEN COUNT(*) = 1 THEN MAX(recoverable.settlement_id) END
+        FROM (
+          SELECT psb.id AS settlement_id
+          FROM sport_center.payment_settlement_batches psb
+          WHERE psb.company_id = c.company_id
+            AND psb.status = 'posted'
+            AND psb.bank_mutation_id IS NULL
+            AND (
+              SELECT COUNT(*)
+              FROM sport_center.payment_settlement_items psi_count
+              WHERE psi_count.settlement_id = psb.id
+                AND psi_count.item_status = 'active'
+            ) = jsonb_array_length(COALESCE(c.payment_items, '[]'::jsonb))
+            AND NOT EXISTS (
+              SELECT 1
+              FROM sport_center.payment_settlement_items psi_extra
+              WHERE psi_extra.settlement_id = psb.id
+                AND psi_extra.item_status = 'active'
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM jsonb_array_elements(COALESCE(c.payment_items, '[]'::jsonb)) item
+                  WHERE (item->>'paymentId')::int = psi_extra.payment_id
+                )
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements(COALESCE(c.payment_items, '[]'::jsonb)) item
+              WHERE NOT EXISTS (
+                SELECT 1
+                FROM sport_center.payment_settlement_items psi_missing
+                WHERE psi_missing.settlement_id = psb.id
+                  AND psi_missing.item_status = 'active'
+                  AND psi_missing.payment_id = (item->>'paymentId')::int
+              )
+            )
+        ) recoverable
+      )`
+    : "NULL::bigint";
+
   // UNION with canonical settlement items in settled_payment_ids
   const canonicalSettledUnionSql = available
     ? `UNION
@@ -192,6 +238,7 @@ function makeCanonicalFragments(available: boolean) {
     canonicalSettledExcludeSql,
     canonicalSettledExcludeByIdSql,
     currentEvidenceValidSql,
+    recoverableSettlementIdSql,
     canonicalSettledUnionSql,
   };
 }
@@ -211,18 +258,34 @@ export interface QrisCandidateGenerationResult {
 
 export async function generateQrisCandidates(options: {
   companyId?: number | null;
+  mutationId?: number | null;
   from?: string | null;
   to?: string | null;
   dryRun?: boolean;
 } = {}): Promise<QrisCandidateGenerationResult> {
+  if (
+    options.mutationId != null
+    && (!Number.isInteger(options.mutationId) || Number(options.mutationId) <= 0)
+  ) {
+    throw new Error("mutationId kandidat QRIS tidak valid");
+  }
+  const mutationId = options.mutationId == null ? null : Number(options.mutationId);
   const companyFilter = options.companyId && Number.isInteger(options.companyId)
     ? `AND sp.company_id = ${Number(options.companyId)}`
     : "";
   const mutationCompanyFilter = options.companyId && Number.isInteger(options.companyId)
     ? `AND bm.company_id = ${Number(options.companyId)}`
     : "";
+  const mutationFilter = mutationId == null ? "" : `AND bm.id = ${mutationId}`;
+  const existingMutationFilter = mutationId == null ? "" : `WHERE mutation_id = ${mutationId}`;
   const dateFilter = options.from ? `AND bm.transaction_date >= '${esc(options.from)}'` : "";
   const toFilter = options.to ? `AND bm.transaction_date <= '${esc(options.to)}'` : "";
+  const ruleCompanyFilter = options.companyId && Number.isInteger(options.companyId)
+    ? `AND (company_id IS NULL OR company_id = ${Number(options.companyId)})`
+    // Account IDs are globally unique, so unscoped generation can safely load
+    // every account-specific rule. Company-specific rules without an account
+    // are excluded here to prevent them leaking into another company.
+    : "AND (company_id IS NULL OR bank_account_id IS NOT NULL)";
 
   const [canonicalAvailable, phase4Available] = await Promise.all([
     hasCanonicalSettlementSchema(),
@@ -288,6 +351,7 @@ export async function generateQrisCandidates(options: {
         AND LOWER(COALESCE(bm.status, 'unmatched')) NOT IN
           ('posted', 'approved', 'approved_pending_posting', 'void')
         ${mutationCompanyFilter}
+        ${mutationFilter}
         ${dateFilter}
         ${toFilter}
       ORDER BY bm.transaction_date, bm.id
@@ -300,15 +364,20 @@ export async function generateQrisCandidates(options: {
     `)).catch(() => ({ rows: [] as unknown[] })),
     db.execute(sql.raw(`
       SELECT company_id, bank_account_id, provider_code, rule_version,
+             effective_from, effective_until,
              settlement_delay_business_days, match_window_business_days,
-             max_effective_deduction_rate
+             max_effective_deduction_rate, absolute_variance_tolerance,
+             percentage_variance_tolerance
       FROM qris_provider_settlement_rules
       WHERE is_active = TRUE
-        AND (company_id IS NULL OR company_id = ${options.companyId ? Number(options.companyId) : "0"})
+        ${ruleCompanyFilter}
+      ORDER BY effective_from, id
     `)).catch(() => ({ rows: [] as unknown[] })),
     db.execute(sql.raw(`
-       SELECT id, mutation_id, status, gross_amount, net_amount, payment_items
+       SELECT id, mutation_id, status, gross_amount, net_amount, payment_items,
+              estimated_settlement_date, settlement_rule_version
       FROM qris_mutation_batch_candidates
+      ${existingMutationFilter}
        ORDER BY id DESC
     `)).catch(() => ({ rows: [] as unknown[] })),
     db.execute(sql.raw(`
@@ -329,6 +398,12 @@ export async function generateQrisCandidates(options: {
     { includeDefaults: true },
   );
   const accountRules = providerRulesByBankAccountFromRows(
+    ruleRows.rows as Array<Record<string, unknown>>,
+  );
+  const providerRuleCatalog = providerRuleCatalogFromRows(
+    ruleRows.rows as Array<Record<string, unknown>>,
+  );
+  const accountProviderRuleCatalog = accountProviderRuleCatalogFromRows(
     ruleRows.rows as Array<Record<string, unknown>>,
   );
 
@@ -401,6 +476,15 @@ export async function generateQrisCandidates(options: {
     };
   }).filter((row) => row.transactionDate);
 
+  // Approval and completion are final audit states. Keep their historical
+  // snapshots intact and do not generate a new provisional candidate for the
+  // same bank mutation, even if the mutation header was not yet transitioned.
+  const finalMutationIds = new Set(
+    (existingRows.rows as Array<Record<string, unknown>>)
+      .filter((row) => ["approved", "completed"].includes(String(row.status ?? "").toLowerCase()))
+      .map((row) => Number(row.mutation_id))
+      .filter((id) => Number.isInteger(id) && id > 0),
+  );
   // Recompute existing provisional rows as well. A bank mutation can be
   // imported before the Sport Center payment sync finishes; skipping an
   // existing mutation would permanently preserve an empty/stale candidate.
@@ -412,6 +496,9 @@ export async function generateQrisCandidates(options: {
     holidays,
     providerRules: rules,
     accountProviderRules: accountRules,
+    providerRuleCatalog,
+    accountProviderRuleCatalog,
+    existingMutationIds: finalMutationIds,
     requireExplicitSettlementMetadata: true,
   });
   const reviewableCandidates = candidates.filter((candidate) =>
@@ -448,6 +535,12 @@ export async function generateQrisCandidates(options: {
           ? items.map((item: Record<string, unknown>) => ({
             paymentId: Number(item.paymentId ?? item.payment_id),
             grossAmount: Number(item.grossAmount ?? item.gross_amount ?? 0),
+            expectedSettlementDate: asDate(
+              item.expectedSettlementDate ?? item.expected_settlement_date,
+            ),
+            settlementRuleVersion: String(
+              item.settlementRuleVersion ?? item.settlement_rule_version ?? "",
+            ).trim() || null,
             canonicalSettlementId: item.canonicalSettlementId == null
               ? item.canonical_settlement_id == null
                 ? null
@@ -459,10 +552,13 @@ export async function generateQrisCandidates(options: {
       const evidenceChanged = existing != null && (
         Math.abs(Number(existing.gross_amount ?? 0) - candidate.grossAmount) > 0.01
         || Math.abs(Number(existing.net_amount ?? 0) - candidate.netAmount) > 0.01
+        || asDate(existing.estimated_settlement_date) !== candidate.estimatedSettlementDate
+        || (String(existing.settlement_rule_version ?? "").trim() || null)
+          !== (candidate.settlementRuleVersion || null)
         || normalizeItems(existingItems) !== normalizeItems(candidate.paymentItems)
       );
       if (evidenceChanged) {
-        await db.execute(sql.raw(`
+        const supersedeResult = await db.execute(sql.raw(`
           UPDATE qris_mutation_batch_candidates
           SET status = 'superseded',
               reconciliation_status = 'UNMATCHED',
@@ -471,9 +567,15 @@ export async function generateQrisCandidates(options: {
           WHERE id = ${Number(existing!.id)}
             AND status NOT IN ('approved', 'completed', 'superseded', 'stale', 'ineligible')
         `));
+        // A reviewer may have approved the snapshot after the initial read.
+        // Do not insert a replacement when that conditional transition loses:
+        // the approved/completed audit record is the authoritative final state.
+        if ((supersedeResult.rowCount ?? 0) !== 1) {
+          continue;
+        }
       }
       if (existing && !evidenceChanged) {
-        await db.execute(sql.raw(`
+        const refreshResult = await db.execute(sql.raw(`
           UPDATE qris_mutation_batch_candidates
           SET candidate_source = 'sport_center.sport_payments',
               mutation_key = (SELECT mutation_key FROM bank_mutations WHERE id = ${candidate.mutationId}),
@@ -495,7 +597,13 @@ export async function generateQrisCandidates(options: {
               generated_at = NOW(),
               updated_at = NOW()
           WHERE id = ${Number(existing.id)}
+            AND status NOT IN ('approved', 'completed', 'superseded', 'stale', 'ineligible')
         `));
+        // A zero-row refresh means a concurrent finalization (or another
+        // regeneration) won. Never reopen or replace its snapshot.
+        if ((refreshResult.rowCount ?? 0) !== 1) {
+          continue;
+        }
         continue;
       }
       await db.execute(sql.raw(`
@@ -595,6 +703,7 @@ export async function listQrisCandidates(options: {
     canonicalSettledExcludeSql,
     canonicalSettledExcludeByIdSql,
     currentEvidenceValidSql,
+    recoverableSettlementIdSql,
     canonicalSettledUnionSql,
   } = makeCanonicalFragments(canonicalAvailable);
 
@@ -647,7 +756,8 @@ export async function listQrisCandidates(options: {
                 )
                 ${canonicalSettledUnionSql}
               ) settled
-            ), '[]'::jsonb) AS settled_payment_ids
+             ), '[]'::jsonb) AS settled_payment_ids,
+             ${recoverableSettlementIdSql} AS recoverable_settlement_id
     FROM qris_mutation_batch_candidates c
     LEFT JOIN bank_mutations bm ON bm.id = c.mutation_id
      WHERE c.estimated_settlement_date::text = bm.transaction_date::text

@@ -6,12 +6,21 @@ export interface QrisProviderRule {
   providerCode: QrisProviderCode;
   bankAccountId?: number | null;
   ruleVersion?: string | null;
+  effectiveFrom?: string | null;
+  effectiveUntil?: string | null;
+  resolutionError?: "AMBIGUOUS_EFFECTIVE_WINDOW";
   settlementDelayBusinessDays: number;
   matchWindowBusinessDays: number;
   maxEffectiveDeductionRate: number;
   absoluteVarianceTolerance?: number;
   percentageVarianceTolerance?: number;
 }
+
+export type QrisProviderRuleCatalog =
+  Partial<Record<QrisProviderCode, QrisProviderRule[]>>;
+
+export type QrisAccountProviderRuleCatalog =
+  Record<string, Partial<Record<QrisProviderCode, QrisProviderRule[]>>>;
 
 export const DEFAULT_QRIS_PROVIDER_RULES: Record<QrisProviderCode, QrisProviderRule> = {
   mandiri_direct: {
@@ -157,98 +166,174 @@ export function expectedQrisSettlementDate(
   return addCalendarDays(paymentDate, Math.max(0, Math.trunc(rule.settlementDelayBusinessDays)));
 }
 
+type QrisProviderRuleRow = Partial<QrisProviderRule> & {
+  provider_code?: string;
+  bank_account_id?: number | null;
+  rule_version?: string | null;
+  effective_from?: string | Date | null;
+  effective_until?: string | Date | null;
+  settlement_delay_business_days?: number;
+  match_window_business_days?: number;
+  max_effective_deduction_rate?: number;
+  absolute_variance_tolerance?: number;
+  percentage_variance_tolerance?: number;
+};
+
+function dateOnly(value: string | Date | null | undefined): string | null {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString().slice(0, 10);
+  }
+  const result = String(value ?? "").slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(result) ? result : null;
+}
+
+function ruleFromRow(row: QrisProviderRuleRow): QrisProviderRule | null {
+  const provider = normalizeQrisProvider(row.providerCode ?? row.provider_code);
+  if (provider === "unknown") return null;
+  const baseRule = DEFAULT_QRIS_PROVIDER_RULES[provider];
+  const accountId = row.bankAccountId ?? row.bank_account_id;
+  return {
+    ...baseRule,
+    providerCode: provider,
+    bankAccountId: accountId == null ? null : Number(accountId),
+    ruleVersion: row.ruleVersion ?? row.rule_version ?? baseRule.ruleVersion ?? "legacy-v1",
+    effectiveFrom: dateOnly(row.effectiveFrom ?? row.effective_from),
+    effectiveUntil: dateOnly(row.effectiveUntil ?? row.effective_until),
+    settlementDelayBusinessDays: Number(row.settlementDelayBusinessDays
+      ?? row.settlement_delay_business_days
+      ?? baseRule.settlementDelayBusinessDays),
+    matchWindowBusinessDays: Number(row.matchWindowBusinessDays
+      ?? row.match_window_business_days
+      ?? baseRule.matchWindowBusinessDays),
+    maxEffectiveDeductionRate: Number(row.maxEffectiveDeductionRate
+      ?? row.max_effective_deduction_rate
+      ?? baseRule.maxEffectiveDeductionRate),
+    absoluteVarianceTolerance: Number(row.absoluteVarianceTolerance
+      ?? row.absolute_variance_tolerance
+      ?? baseRule.absoluteVarianceTolerance
+      ?? 0),
+    percentageVarianceTolerance: Number(row.percentageVarianceTolerance
+      ?? row.percentage_variance_tolerance
+      ?? baseRule.percentageVarianceTolerance
+      ?? 0),
+  };
+}
+
+function isEffectiveOn(rule: QrisProviderRule, effectiveDate: string): boolean {
+  const date = dateOnly(effectiveDate);
+  if (!date) return false;
+  return (!rule.effectiveFrom || rule.effectiveFrom <= date)
+    && (!rule.effectiveUntil || date < rule.effectiveUntil);
+}
+
+function latestEffectiveRule(
+  rules: readonly QrisProviderRule[] | undefined,
+  effectiveDate: string,
+): QrisProviderRule | undefined {
+  const matches = (rules ?? []).filter((rule) => isEffectiveOn(rule, effectiveDate));
+  if (matches.length === 0) return undefined;
+  if (matches.length > 1) {
+    return {
+      ...matches[0],
+      ruleVersion: "AMBIGUOUS_EFFECTIVE_WINDOW",
+      resolutionError: "AMBIGUOUS_EFFECTIVE_WINDOW",
+    };
+  }
+  return matches[0];
+}
+
+export function providerRuleCatalogFromRows(
+  rows: QrisProviderRuleRow[],
+): QrisProviderRuleCatalog {
+  const result: QrisProviderRuleCatalog = {};
+  for (const row of rows) {
+    if (row.bankAccountId != null || row.bank_account_id != null) continue;
+    const rule = ruleFromRow(row);
+    if (!rule) continue;
+    (result[rule.providerCode] ??= []).push(rule);
+  }
+  return result;
+}
+
+export function accountProviderRuleCatalogFromRows(
+  rows: QrisProviderRuleRow[],
+): QrisAccountProviderRuleCatalog {
+  const result: QrisAccountProviderRuleCatalog = {};
+  for (const row of rows) {
+    const accountId = row.bankAccountId ?? row.bank_account_id;
+    if (accountId == null) continue;
+    const rule = ruleFromRow(row);
+    if (!rule) continue;
+    const accountRules = result[String(accountId)] ?? {};
+    (accountRules[rule.providerCode] ??= []).push(rule);
+    result[String(accountId)] = accountRules;
+  }
+  return result;
+}
+
+export function providerRulesForDate(
+  catalog: QrisProviderRuleCatalog | undefined,
+  effectiveDate: string,
+  options: { includeDefaults?: boolean } = {},
+): Partial<Record<QrisProviderCode, QrisProviderRule>> {
+  const result: Partial<Record<QrisProviderCode, QrisProviderRule>> =
+    options.includeDefaults === false ? {} : { ...DEFAULT_QRIS_PROVIDER_RULES };
+  for (const provider of Object.keys(catalog ?? {}) as QrisProviderCode[]) {
+    const rule = latestEffectiveRule(catalog?.[provider], effectiveDate);
+    if (rule) result[provider] = rule;
+  }
+  return result;
+}
+
+export function accountProviderRulesForDate(
+  catalog: QrisAccountProviderRuleCatalog | undefined,
+  effectiveDate: string,
+): Record<string, Partial<Record<QrisProviderCode, QrisProviderRule>>> {
+  const result: Record<string, Partial<Record<QrisProviderCode, QrisProviderRule>>> = {};
+  for (const [accountId, providerCatalog] of Object.entries(catalog ?? {})) {
+    const accountRules: Partial<Record<QrisProviderCode, QrisProviderRule>> = {};
+    for (const provider of Object.keys(providerCatalog) as QrisProviderCode[]) {
+      const rule = latestEffectiveRule(providerCatalog[provider], effectiveDate);
+      if (rule) accountRules[provider] = rule;
+    }
+    if (Object.keys(accountRules).length) result[accountId] = accountRules;
+  }
+  return result;
+}
+
 export function providerRulesFromRows(
-  rows: Array<Partial<QrisProviderRule> & {
-    provider_code?: string;
-    rule_version?: string | null;
-    settlement_delay_business_days?: number;
-    match_window_business_days?: number;
-    max_effective_deduction_rate?: number;
-    absolute_variance_tolerance?: number;
-    percentage_variance_tolerance?: number;
-  }>,
+  rows: QrisProviderRuleRow[],
   options: { includeDefaults?: boolean } = {},
 ): Partial<Record<QrisProviderCode, QrisProviderRule>> {
   const result: Partial<Record<QrisProviderCode, QrisProviderRule>> =
     options.includeDefaults === false ? {} : { ...DEFAULT_QRIS_PROVIDER_RULES };
   for (const row of rows) {
-    if (row.bankAccountId != null || (row as { bank_account_id?: number | null }).bank_account_id != null) {
+    if (row.bankAccountId != null || row.bank_account_id != null) {
       continue;
     }
-    const provider = normalizeQrisProvider(row.providerCode ?? row.provider_code);
-    if (provider === "unknown") continue;
-    const baseRule = result[provider] ?? DEFAULT_QRIS_PROVIDER_RULES[provider];
-    result[provider] = {
-      ...baseRule,
-      providerCode: provider,
-      ruleVersion: row.ruleVersion ?? row.rule_version ?? baseRule.ruleVersion ?? "legacy-v1",
-      settlementDelayBusinessDays: Number(row.settlementDelayBusinessDays
-        ?? row.settlement_delay_business_days
-        ?? baseRule.settlementDelayBusinessDays),
-      matchWindowBusinessDays: Number(row.matchWindowBusinessDays
-        ?? row.match_window_business_days
-        ?? baseRule.matchWindowBusinessDays),
-      maxEffectiveDeductionRate: Number(row.maxEffectiveDeductionRate
-        ?? row.max_effective_deduction_rate
-        ?? baseRule.maxEffectiveDeductionRate),
-      absoluteVarianceTolerance: Number(row.absoluteVarianceTolerance
-        ?? row.absolute_variance_tolerance
-        ?? baseRule.absoluteVarianceTolerance
-        ?? 0),
-      percentageVarianceTolerance: Number(row.percentageVarianceTolerance
-        ?? row.percentage_variance_tolerance
-        ?? baseRule.percentageVarianceTolerance
-        ?? 0),
-    };
+    const rule = ruleFromRow(row);
+    if (rule) result[rule.providerCode] = rule;
   }
   return result;
 }
 
 export function providerRulesByBankAccountFromRows(
-  rows: Array<Partial<QrisProviderRule> & {
-    provider_code?: string;
-    bank_account_id?: number | null;
-    rule_version?: string | null;
-    settlement_delay_business_days?: number;
-    match_window_business_days?: number;
-    max_effective_deduction_rate?: number;
-    absolute_variance_tolerance?: number;
-    percentage_variance_tolerance?: number;
-  }>,
+  rows: QrisProviderRuleRow[],
 ): Record<string, Record<QrisProviderCode, QrisProviderRule>> {
   const result: Record<string, Record<QrisProviderCode, QrisProviderRule>> = {};
   for (const row of rows) {
     const accountId = row.bankAccountId ?? row.bank_account_id;
     if (accountId == null) continue;
-    const provider = normalizeQrisProvider(row.providerCode ?? row.provider_code);
-    if (provider === "unknown") continue;
+    const rule = ruleFromRow(row);
+    if (!rule) continue;
+    const provider = rule.providerCode;
     // Keep this map limited to explicit account configuration. Global
     // defaults are resolved by the caller after account-specific rules have
     // had a chance to select a compatible payment-side provider.
     const accountRules = result[String(accountId)] ?? {};
-    const baseRule = accountRules[provider] ?? DEFAULT_QRIS_PROVIDER_RULES[provider];
     accountRules[provider] = {
-      ...baseRule,
-      providerCode: provider,
+      ...rule,
       bankAccountId: Number(accountId),
-      ruleVersion: row.ruleVersion ?? row.rule_version ?? "legacy-v1",
-      settlementDelayBusinessDays: Number(row.settlementDelayBusinessDays
-        ?? row.settlement_delay_business_days
-        ?? baseRule.settlementDelayBusinessDays),
-      matchWindowBusinessDays: Number(row.matchWindowBusinessDays
-        ?? row.match_window_business_days
-        ?? baseRule.matchWindowBusinessDays),
-      maxEffectiveDeductionRate: Number(row.maxEffectiveDeductionRate
-        ?? row.max_effective_deduction_rate
-        ?? baseRule.maxEffectiveDeductionRate),
-      absoluteVarianceTolerance: Number(row.absoluteVarianceTolerance
-        ?? row.absolute_variance_tolerance
-        ?? baseRule.absoluteVarianceTolerance
-        ?? 0),
-      percentageVarianceTolerance: Number(row.percentageVarianceTolerance
-        ?? row.percentage_variance_tolerance
-        ?? baseRule.percentageVarianceTolerance
-        ?? 0),
     };
     result[String(accountId)] = accountRules;
   }
