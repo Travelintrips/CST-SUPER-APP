@@ -115,13 +115,13 @@ export async function submitMarketplaceQuote(params: {
   } = body;
 
   // Every portal order that can later become an invoice/payment must have an
-  // unambiguous company owner. Guests are still allowed to submit the public
-  // form, but only when their email maps to exactly one active membership.
-  // Never persist a payment-capable order with a NULL company_id.
+  // Company scope is resolved from the canonical customer record. Individual
+  // customers intentionally resolve to NULL; company customers still require
+  // exactly one active membership. Never trust company_name from the browser.
   const portalCompanyId = await resolvePortalCustomerCompanyIdByEmail(
     portalEmailFromToken ?? email?.trim() ?? "",
     { required: true },
-  ) as number;
+  );
 
   const resolvedName  = (buyer_name  ?? customerName ?? "").trim();
   const resolvedPhone = (guest_contact ?? phone       ?? "").trim();
@@ -178,7 +178,14 @@ export async function submitMarketplaceQuote(params: {
 
   if (newPipelineEnabled) {
     // Phase 2B: resolve full portal customer record (non-fatal)
-    type ResolvedPortalCustomer = { id: number; email: string; name: string; phone: string | null; company: string | null };
+    type ResolvedPortalCustomer = {
+      id: number;
+      email: string;
+      name: string;
+      phone: string | null;
+      company: string | null;
+      customerType: string | null;
+    };
     let portalCustomer: ResolvedPortalCustomer | null = null;
     if (portalEmailFromToken) {
       try {
@@ -188,6 +195,7 @@ export async function submitMarketplaceQuote(params: {
           name:    portalCustomersTable.name,
           phone:   portalCustomersTable.phone,
           company: portalCustomersTable.company,
+          customerType: portalCustomersTable.customerType,
         }).from(portalCustomersTable)
           .where(eq(portalCustomersTable.email, portalEmailFromToken.trim().toLowerCase()));
         if (c) portalCustomer = c;
@@ -204,7 +212,7 @@ export async function submitMarketplaceQuote(params: {
       approvalLevel: number | null;
     };
     let membershipCtx: MembershipCtx | null = null;
-    if (portalCustomer) {
+    if (portalCustomer && portalCustomer.customerType !== "individual") {
       const companyId = await resolvePortalCustomerCompanyId(portalCustomer.id, { required: true }) as number;
       const [m] = await db.select({
         companyId:     portalCompanyMembersTable.companyId,
@@ -231,7 +239,9 @@ export async function submitMarketplaceQuote(params: {
         buyerName:          resolvedName,
         buyerEmail:         portalCustomer?.email ?? portalEmailFromToken ?? email?.trim() ?? "",
         buyerPhone:         resolvedPhone,
-        buyerCompany:       company_name?.trim() ?? portalCustomer?.company ?? null,
+        buyerCompany:       portalCustomer?.customerType === "individual"
+          ? null
+          : (company_name?.trim() ?? portalCustomer?.company ?? null),
         companyId:          portalCompanyId,
         portalCustomerId:   portalCustomer?.id ?? null,
         buyerRole:          membershipCtx?.buyerRole ?? null,

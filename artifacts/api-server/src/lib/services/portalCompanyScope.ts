@@ -79,6 +79,16 @@ export async function resolvePortalCustomerCompanyId(
   portalCustomerId: number,
   { required = false }: ResolveOptions = {},
 ): Promise<number | null> {
+  const [customer] = await db
+    .select({ customerType: portalCustomersTable.customerType })
+    .from(portalCustomersTable)
+    .where(eq(portalCustomersTable.id, portalCustomerId))
+    .limit(1);
+
+  // Individual customers are intentionally not tenant members. Never infer
+  // the portal owner's, supplier's, or any other company for them.
+  if (customer?.customerType === "individual") return null;
+
   const memberships = await db
     .select({
       portalCustomerId: portalCompanyMembersTable.portalCustomerId,

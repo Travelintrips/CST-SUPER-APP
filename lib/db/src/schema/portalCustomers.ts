@@ -10,6 +10,9 @@ export const portalCustomersTable = pgTable("portal_customers", {
   passwordHash: text("password_hash"),
   phone: text("phone"),
   company: text("company"),
+  // Canonical buyer identity. NULL is retained for legacy rows that have not
+  // completed the new customer onboarding flow yet.
+  customerType: text("customer_type"),
   role: text("role").notNull().default("customer"),
   accountStatus: text("account_status").notNull().default("active"),
   sanctionReason: text("sanction_reason"),

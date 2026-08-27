@@ -15,6 +15,7 @@ export async function runPortalMigration(): Promise<void> {
     await db.execute(sql`
       ALTER TABLE portal_customers
         ADD COLUMN IF NOT EXISTS account_status TEXT NOT NULL DEFAULT 'active',
+        ADD COLUMN IF NOT EXISTS customer_type TEXT,
         ADD COLUMN IF NOT EXISTS sanction_reason TEXT,
         ADD COLUMN IF NOT EXISTS sanction_until TIMESTAMPTZ,
         ADD COLUMN IF NOT EXISTS status_changed_at TIMESTAMPTZ,
@@ -42,6 +43,26 @@ export async function runPortalMigration(): Promise<void> {
     await db.execute(sql`
       CREATE INDEX IF NOT EXISTS portal_customers_account_status_idx
         ON portal_customers (account_status)
+    `);
+    await db.execute(sql`
+      DO $$ BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'portal_customers' AND column_name = 'customer_type'
+        ) THEN
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint WHERE conname = 'portal_customers_customer_type_check'
+          ) THEN
+            ALTER TABLE portal_customers
+              ADD CONSTRAINT portal_customers_customer_type_check
+              CHECK (customer_type IS NULL OR customer_type IN ('individual', 'company'));
+          END IF;
+        END IF;
+      END $$;
+    `);
+    await db.execute(sql`
+      CREATE INDEX IF NOT EXISTS portal_customers_customer_type_idx
+        ON portal_customers (customer_type)
     `);
 
     await db.execute(sql`

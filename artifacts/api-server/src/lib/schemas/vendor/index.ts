@@ -96,6 +96,7 @@ export const CompleteOnboardingSchema = z.object({
   phone: z.string().min(5).max(30),
   address: z.string().min(1).max(500),
   accountType: z.enum(["vendor", "driver", "employee", "customer"]),
+  customerType: z.enum(["individual", "company"]).optional(),
   ktpUrl: z.string().max(1000).optional(),
   ocrData: z.object({
     nik: z.string().max(20).optional(),
@@ -123,6 +124,13 @@ export const CompleteOnboardingSchema = z.object({
     position: z.string().max(100).optional(),
   }).optional(),
 }).superRefine((data, ctx) => {
+  if (data.accountType === "customer" && !data.customerType) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["customerType"],
+      message: "Tipe customer wajib dipilih",
+    });
+  }
   if (data.accountType === "vendor" && !data.vendor) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,

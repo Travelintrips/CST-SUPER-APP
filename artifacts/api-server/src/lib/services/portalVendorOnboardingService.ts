@@ -196,6 +196,7 @@ export interface CompleteOnboardingInput {
   phone: string;
   address: string;
   accountType: string;
+  customerType?: "individual" | "company";
   ktpUrl?: string;
   ocrData?: { nik?: string; name?: string };
   vendor?: {
@@ -225,9 +226,12 @@ export async function completeOnboarding(
   customerId: number,
   input: CompleteOnboardingInput,
 ): Promise<{ ok: boolean; status: string }> {
-  const { fullName, phone, address, accountType, ktpUrl, ocrData, vendor, driver, employee } = input;
+  const { fullName, phone, address, accountType, customerType, ktpUrl, ocrData, vendor, driver, employee } = input;
 
   const isCustomer = accountType === "customer";
+  if (isCustomer && customerType !== "individual" && customerType !== "company") {
+    throw new OnboardingServiceError(400, "Tipe customer wajib dipilih.");
+  }
   const status = isCustomer ? "active" : "pending";
   const now = new Date();
 
@@ -273,6 +277,7 @@ export async function completeOnboarding(
     await db.update(portalCustomersTable).set({
       name: String(fullName),
       phone: String(phone),
+    ...(isCustomer ? { customerType } : {}),
       role: accountType === "vendor"
         ? "vendor"
         : accountType === "driver"

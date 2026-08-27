@@ -430,9 +430,11 @@ router.post("/marketplace/:id/quote", marketplaceSubmitLimiter, async (req, res)
   // inline — that allows forgery of any email without a valid signature.
   let portalEmailFromToken: string | null = null;
   const authHdr = req.headers.authorization;
-  if (authHdr?.startsWith("Bearer ")) {
+  const cookieToken = (req.cookies as Record<string, string> | undefined)?.[PORTAL_SESSION_COOKIE];
+  const authToken = cookieToken ?? (authHdr?.startsWith("Bearer ") ? authHdr.slice(7) : null);
+  if (authToken) {
     try {
-      const tok = authHdr.slice(7);
+      const tok = authToken;
       if (tok.startsWith("devportal.")) {
         portalEmailFromToken = verifyDevPortalEmail(tok);
       }
@@ -670,10 +672,10 @@ router.post("/auth/wa-otp/verify", async (req, res) => {
 
 // POST /api/portal/auth/wa-register — lengkapi profil & buat akun
 router.post("/auth/wa-register", async (req, res) => {
-  const { verifyToken, name, role, company, serviceIds, email, rememberDays } = req.body ?? {};
+  const { verifyToken, name, role, customerType, company, serviceIds, email, rememberDays } = req.body ?? {};
   if (!verifyToken || !name) return res.status(400).json({ message: "Token verifikasi dan nama diperlukan." });
   try {
-    const result = await waRegister({ verifyToken: String(verifyToken), name: String(name), role, company, serviceIds, email, rememberDays });
+    const result = await waRegister({ verifyToken: String(verifyToken), name: String(name), role, customerType, company, serviceIds, email, rememberDays });
     // C1-REMEDIATION: set HttpOnly session cookie on registration
     if ("token" in result && typeof result.token === "string") {
       setPortalSessionCookie(res, result.token);
@@ -755,12 +757,12 @@ router.delete("/auth/trusted-devices", requirePortalAuth, async (req, res) => {
 
 // POST /api/portal/auth/signup — standalone register (non-Supabase)
 router.post("/auth/signup", signupLimiter, async (req, res) => {
-  const { name, email, password, phone, company, role, serviceIds } = req.body ?? {};
+  const { name, email, password, phone, company, customerType, role, serviceIds } = req.body ?? {};
   if (!name || !email || !password) {
     return res.status(400).json({ message: "Nama, email, dan password diperlukan." });
   }
   try {
-    const result = await signup({ name: String(name), email: String(email), password: String(password), phone, company, role, serviceIds });
+    const result = await signup({ name: String(name), email: String(email), password: String(password), phone, company, customerType, role, serviceIds });
     // C1-REMEDIATION: set HttpOnly session cookie on registration
     if ("token" in result && typeof result.token === "string") {
       setPortalSessionCookie(res, result.token);
@@ -791,8 +793,8 @@ router.post("/auth/dev-login", async (req, res) => {
 // POST /api/portal/auth/register — sync profil ke DB setelah supabase.auth.signUp
 router.post("/auth/register", requirePortalAuth, async (req, res) => {
   const customerId = (req as PortalAuthReq).portalCustomerId;
-  const { name, phone, company, role, serviceIds } = req.body ?? {};
-  return res.json(await syncProfile(customerId, { name, phone, company, role, serviceIds }));
+  const { name, phone, company, customerType, role, serviceIds } = req.body ?? {};
+  return res.json(await syncProfile(customerId, { name, phone, company, customerType, role, serviceIds }));
 });
 
 // POST /api/portal/auth/otp/request — kirim kode OTP ke email (passwordless login)
@@ -1647,10 +1649,10 @@ router.post(
   validateBody(CompleteOnboardingSchema),
   async (req, res): Promise<void> => {
     const customerId = (req as PortalAuthReq).portalCustomerId;
-    const { fullName, phone, address, accountType, ktpUrl, ocrData, vendor, driver, employee } = req.body ?? {};
+    const { fullName, phone, address, accountType, customerType, ktpUrl, ocrData, vendor, driver, employee } = req.body ?? {};
 
     try {
-      const result = await completeOnboarding(customerId, { fullName, phone, address, accountType, ktpUrl, ocrData, vendor, driver, employee });
+      const result = await completeOnboarding(customerId, { fullName, phone, address, accountType, customerType, ktpUrl, ocrData, vendor, driver, employee });
       res.json(result);
     } catch (err: any) {
       if (err instanceof OnboardingServiceError && err.statusCode === 409) {

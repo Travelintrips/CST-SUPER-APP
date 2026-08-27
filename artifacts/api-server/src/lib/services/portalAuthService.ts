@@ -288,12 +288,13 @@ export async function waRegister(params: {
   verifyToken: string;
   name: string;
   role?: string;
+  customerType?: "individual" | "company";
   company?: string;
   serviceIds?: number[];
   email?: string;
   rememberDays?: number;
 }) {
-  const { verifyToken, name, role: requestedRole, company, serviceIds, email, rememberDays } = params;
+  const { verifyToken, name, role: requestedRole, customerType, company, serviceIds, email, rememberDays } = params;
 
   const [otp] = await db
     .select()
@@ -314,6 +315,9 @@ export async function waRegister(params: {
   const phone = otp.phone;
   const ALLOWED_ROLES = ["customer", "vendor"];
   const role = ALLOWED_ROLES.includes(String(requestedRole)) ? String(requestedRole) : "customer";
+  if (role === "customer" && customerType !== "individual" && customerType !== "company") {
+    throw new AuthServiceError(400, "Tipe customer wajib dipilih.");
+  }
 
   // Cek apakah phone sudah terdaftar
   const [existingByPhone] = await findPortalCustomersByPhone(phone);
@@ -341,6 +345,7 @@ export async function waRegister(params: {
       passwordHash: "",
       phone,
       company: company ? String(company) : null,
+      customerType: role === "customer" ? customerType : null,
       role,
     })
     .returning();
@@ -592,10 +597,11 @@ export async function signup(params: {
   password: string;
   phone?: string;
   company?: string;
+  customerType?: "individual" | "company";
   role?: string;
   serviceIds?: number[];
 }) {
-  const { name, email, password, phone, company, role: requestedRole, serviceIds } = params;
+  const { name, email, password, phone, company, customerType, role: requestedRole, serviceIds } = params;
 
   const emailLower = String(email).toLowerCase().trim();
   const [existing] = await db
@@ -615,6 +621,9 @@ export async function signup(params: {
 
   const ALLOWED_ROLES = ["customer", "vendor"];
   const role = ALLOWED_ROLES.includes(String(requestedRole)) ? String(requestedRole) : "customer";
+  if (role === "customer" && customerType !== undefined && customerType !== "individual" && customerType !== "company") {
+    throw new AuthServiceError(400, "Tipe customer tidak valid.");
+  }
   const passwordHash = await bcrypt.hash(String(password), 12);
 
   const [created] = await db
@@ -625,6 +634,7 @@ export async function signup(params: {
       passwordHash,
       phone: normalizedPhone,
       company: company ? String(company) : null,
+      customerType: role === "customer" ? customerType ?? null : null,
       role,
     })
     .returning();
@@ -749,16 +759,23 @@ export async function syncProfile(
     name?: string;
     phone?: unknown;
     company?: unknown;
+    customerType?: unknown;
     role?: string;
     serviceIds?: unknown;
   }
 ) {
-  const { name, phone, company, role: requestedRole, serviceIds } = params;
+  const { name, phone, company, customerType, role: requestedRole, serviceIds } = params;
 
   const patch: Record<string, unknown> = {};
   if (name) patch.name = String(name);
   if (phone !== undefined) patch.phone = phone ? String(phone) : null;
   if (company !== undefined) patch.company = company ? String(company) : null;
+  if (customerType !== undefined) {
+    if (customerType !== "individual" && customerType !== "company") {
+      throw new AuthServiceError(400, "Tipe customer tidak valid.");
+    }
+    patch.customerType = customerType;
+  }
   const ALLOWED_ROLES = ["customer", "vendor"];
   if (requestedRole && ALLOWED_ROLES.includes(String(requestedRole))) patch.role = String(requestedRole);
 
