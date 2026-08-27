@@ -190,10 +190,13 @@ export function requireLedgerRole(allowedRoles: string[]) {
 // Paths that are POST/PATCH but not financial writes — exempt from governance chain.
 // - OCR/AI endpoints: read-only analysis, no journal entries created
 // - /settings (exact): accounting configuration — not tied to a fiscal period
+// - /accounts and /accounts/:id: chart-of-accounts master data — not a journal
+//   entry and therefore not tied to a fiscal period
 //   Use exact match to prevent unintended exemption of other routes that happen
 //   to end with "/settings".
 const GOVERNANCE_EXEMPT_SUFFIXES = ["/ocr-extract", "/ocr-preview"];
-const GOVERNANCE_EXEMPT_EXACT   = ["/settings"];
+const GOVERNANCE_EXEMPT_EXACT   = ["/settings", "/accounts"];
+const GOVERNANCE_EXEMPT_PREFIXES = ["/accounts/"];
 
 export function writeMethodGovernanceGuard(req: Request, res: Response, next: NextFunction): void {
   if (!["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
@@ -204,7 +207,8 @@ export function writeMethodGovernanceGuard(req: Request, res: Response, next: Ne
   // Exempt OCR/AI endpoints (suffix match) and exact-path entries (e.g. /settings)
   if (
     GOVERNANCE_EXEMPT_SUFFIXES.some((s) => req.path.endsWith(s)) ||
-    GOVERNANCE_EXEMPT_EXACT.some((s) => req.path === s)
+    GOVERNANCE_EXEMPT_EXACT.some((s) => req.path === s) ||
+    GOVERNANCE_EXEMPT_PREFIXES.some((s) => req.path.startsWith(s))
   ) {
     next();
     return;
