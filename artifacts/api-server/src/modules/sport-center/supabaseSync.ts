@@ -1379,7 +1379,7 @@ export async function pullPaymentsFromSupabase(companyId = 1): Promise<{ pulled:
 
   const [paymentsRes, bookingsRes] = await Promise.all([
     (client as any).schema("sport_center").from("sport_payments")
-      .select("id, booking_id, amount, payment_method, status, confirmed_at, created_at"),
+      .select("id, booking_id, amount, payment_method, status, paid_at, confirmed_at, created_at"),
     (client as any).schema("sport_center").from("sport_bookings")
       .select("id, order_number, grand_total, total_price, booking_date"),
   ]);
@@ -1392,6 +1392,7 @@ export async function pullPaymentsFromSupabase(companyId = 1): Promise<{ pulled:
   const allPayments = (paymentsRes.data ?? []) as Array<{
     id: number; booking_id: number; amount: number;
     payment_method: string | null; status: string | null;
+    paid_at: string | null;
     confirmed_at: string | null; created_at: string | null;
   }>;
 

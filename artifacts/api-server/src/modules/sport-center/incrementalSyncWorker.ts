@@ -16,7 +16,7 @@ async function syncUnmirroredViaDbFunction(): Promise<number> {
   let synced = 0;
   try {
     const unmirroredRes = await db.execute(sql`
-      SELECT sc_payment_id, sc_booking_id, amount, payment_method, confirmed_at, created_at
+      SELECT sc_payment_id, sc_booking_id, amount, payment_method, paid_at, confirmed_at, created_at
       FROM sport_center.get_unmirrored_confirmed_payments()
     `).catch(() => ({ rows: [] as unknown[] }));
 
@@ -25,6 +25,7 @@ async function syncUnmirroredViaDbFunction(): Promise<number> {
       sc_booking_id: number | null;
       amount: string | number;
       payment_method: string | null;
+      paid_at: string | null;
       confirmed_at: string | null;
       created_at: string | null;
     }>;
@@ -205,7 +206,7 @@ async function syncNewPayments(client: any, sinceAt: Date): Promise<number> {
   const { data, error } = await client
     .schema("sport_center")
     .from("sport_payments")
-    .select("id, booking_id, amount, payment_method, status, confirmed_at, created_at, updated_at")
+    .select("id, booking_id, amount, payment_method, status, paid_at, confirmed_at, created_at, updated_at")
     .gte("updated_at", sinceIso)
     .order("updated_at", { ascending: true });
 

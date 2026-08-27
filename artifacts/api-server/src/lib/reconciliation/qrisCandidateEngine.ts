@@ -46,6 +46,11 @@ export interface QrisPaymentCandidateInput {
   bookingDate?: string | null;
   startTime?: string | null;
   endTime?: string | null;
+  /**
+   * Deprecated compatibility alias. The candidate engine intentionally does
+   * not use this field for matching or snapshots; callers must provide the
+   * canonical payment timestamp through paidAt.
+   */
   paymentDate?: string | null;
   taxAmount?: number | null;
   alreadyReconciled?: boolean;
@@ -97,6 +102,8 @@ export interface QrisMutationBatchCandidate {
     bookingDate?: string | null;
     startTime?: string | null;
     endTime?: string | null;
+    paidAt?: string | null;
+    /** @deprecated Use paidAt. Kept only for old snapshot readers. */
     paymentDate?: string | null;
   }>;
   status: QrisReconciliationStatus;
@@ -126,6 +133,14 @@ function calendarDate(value: string | Date | null | undefined): string | null {
   return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null;
 }
 
+function canonicalPaymentDate(payment: QrisPaymentCandidateInput): string | null {
+  // paymentDate was historically overloaded by callers and could contain a
+  // booking date. paidAt is the only payment timeline source accepted here;
+  // SQL loaders are responsible for applying the legacy confirmed_at/created_at
+  // fallback before constructing this input.
+  return calendarDate(payment.paidAt);
+}
+
 function isPaymentChronologicallyValid(
   payment: QrisPaymentCandidateInput,
   mutationDate: string,
@@ -133,7 +148,7 @@ function isPaymentChronologicallyValid(
   // Booking date is intentionally not checked here: customers may pay for a
   // future booking. The settlement cohort is based on the payment/settlement
   // timeline, so only a payment recorded after the bank settlement is invalid.
-  const paymentDate = calendarDate(payment.paymentDate ?? payment.paidAt);
+  const paymentDate = canonicalPaymentDate(payment);
   return paymentDate == null || paymentDate <= mutationDate;
 }
 
@@ -149,7 +164,7 @@ function settlementDateForMatching(
   rules: Partial<Record<QrisProviderCode, QrisProviderRule>>,
   accountProviderRules: Record<string, Partial<Record<QrisProviderCode, QrisProviderRule>>> | undefined,
 ): string | null {
-  const paymentTimestamp = payment.paymentDate ?? payment.paidAt;
+  const paymentTimestamp = payment.paidAt;
   if (!paymentTimestamp) return calendarDate(payment.expectedSettlementDate);
 
   const providerCode = normalizeQrisProvider(payment.providerName);
@@ -569,9 +584,8 @@ export function generateQrisMutationBatchCandidates(input: {
         bookingDate: payment.bookingDate ?? null,
         startTime: payment.startTime ?? null,
         endTime: payment.endTime ?? null,
-        paymentDate: payment.paymentDate ?? (
-          payment.paidAt == null ? null : String(payment.paidAt)
-        ),
+        paidAt: payment.paidAt == null ? null : String(payment.paidAt),
+        paymentDate: canonicalPaymentDate(payment),
       })),
       status: matched ? "MATCHED" : ambiguousEffectiveRule
         ? "REVIEW"

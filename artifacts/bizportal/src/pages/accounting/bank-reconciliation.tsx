@@ -631,6 +631,7 @@ interface QrisPaymentItem {
   bookingNumber?: string | null;
   paymentNumber?: string | null;
   paymentDate?: string | null;
+  paidAt?: string | null;
   payment_number?: string | null;
   booking_id?: number | null;
   booking_number?: string | null;
@@ -1131,7 +1132,7 @@ function reconciliationEvidence(m: BankMutation): ReconciliationEvidence {
     : auditItems.map((item, index) => ({
         label: item.bookingNumber ?? item.booking_number ?? item.paymentNumber ?? item.payment_number ?? `Transaksi #${index + 1}`,
         amount: numericValue(item.grossAmount ?? item.gross_amount) ?? 0,
-        date: item.paymentDate ?? item.paid_at,
+        date: item.paidAt ?? item.paid_at,
         customer: null,
         facility: "Sport Center",
       }));
@@ -1302,7 +1303,7 @@ function QrisPaymentItemsSummary({
   const hasPaymentDetails = items.some(item =>
     item.bookingNumber
     || item.paymentNumber
-    || item.paymentDate
+    || item.paidAt
     || item.paid_at,
   );
 
@@ -1339,9 +1340,9 @@ function QrisPaymentItemsSummary({
                   Payment: {item.paymentNumber ?? item.payment_number ?? `#${item.paymentId ?? item.payment_id ?? "—"}`}
                 </span>
               </div>
-              {(item.paymentDate ?? item.paid_at) && (
+              {(item.paidAt ?? item.paid_at) && (
                 <span className="text-muted-foreground">
-                  Dibayar {fmtDate(String(item.paymentDate ?? item.paid_at))}
+                  Dibayar {fmtDate(String(item.paidAt ?? item.paid_at))}
                 </span>
               )}
             </div>
@@ -2984,12 +2985,11 @@ function QrisMutationCard({
                   )}
                 </div>
                 <div className="overflow-x-auto">
-                   <div className="min-w-[650px]">
-                    <div className="grid grid-cols-[1.1fr_1.4fr_1fr_1fr_1fr_44px] gap-2 border-b bg-muted/15 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    <div className="min-w-[600px]">
+                     <div className="grid grid-cols-[1.1fr_1.4fr_1.2fr_1fr_1fr_44px] gap-2 border-b bg-muted/15 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                       <span>Booking</span>
                       <span>Pelanggan / Payment</span>
                       <span>Payment / Settlement</span>
-                       <span>Booking / Settlement</span>
                       <span>Metode Bayar</span>
                       <span className="text-right">Nominal (Gross)</span>
                       <span className="text-center">Pilih</span>
@@ -2998,14 +2998,12 @@ function QrisMutationCard({
                       const paymentId = item.paymentId ?? item.payment_id;
                       const booking = item.bookingNumber ?? item.booking_number ?? (item.booking_id != null ? `SC-${String(item.booking_id).padStart(4, "0")}` : "—");
                       const payment = item.paymentNumber ?? item.payment_number ?? (paymentId != null ? `#${paymentId}` : "—");
-                      const paymentDate = item.paymentDate ?? item.paid_at;
+                      const paymentDate = item.paidAt ?? item.paid_at;
                       const expectedSettlementDate =
                         item.expectedSettlementDate ?? item.expected_settlement_date;
-                      const bookingDate = item.bookingDate ?? item.booking_date;
-                       const settlementDate = item.expectedSettlementDate ?? item.expected_settlement_date;
                        const gross = liveGrossForItem(item);
                       return (
-                        <div key={`${paymentId ?? index}-${booking}`} className="grid grid-cols-[1.1fr_1.4fr_1fr_1fr_1fr_44px] items-center gap-2 border-b px-2.5 py-2 last:border-b-0">
+                         <div key={`${paymentId ?? index}-${booking}`} className="grid grid-cols-[1.1fr_1.4fr_1.2fr_1fr_1fr_44px] items-center gap-2 border-b px-2.5 py-2 last:border-b-0">
                           <span className="truncate text-xs font-medium">{booking}</span>
                           <span className="min-w-0 truncate text-xs text-muted-foreground">{payment}</span>
                            <span className="min-w-0 text-xs text-muted-foreground">
@@ -3016,12 +3014,6 @@ function QrisMutationCard({
                                Settlement H-1: {expectedSettlementDate ? fmtDate(String(expectedSettlementDate)) : "—"}
                              </span>
                            </span>
-                            <span className="min-w-0 text-xs text-muted-foreground">
-                              <span className="block truncate">{bookingDate ? fmtDate(String(bookingDate)) : "Booking —"}</span>
-                              <span className="block truncate text-[10px] text-indigo-600 dark:text-indigo-300">
-                                H-1: {settlementDate ? fmtDate(String(settlementDate)) : "—"}
-                              </span>
-                            </span>
                            <span className="truncate text-xs text-muted-foreground">QRIS</span>
                           <span className="text-right text-xs font-medium tabular-nums">{idr(gross)}</span>
                           <span className="flex justify-center">
@@ -4242,7 +4234,7 @@ function MutationDetailPanel({
                              const gross = paymentAmount ?? item.grossAmount ?? item.gross_amount ?? 0;
                             const paymentNo = item.payment_number;
                             const bookingNo = item.booking_number;
-                            const paidAt = item.paid_at ?? item.paymentDate;
+                            const paidAt = item.paidAt ?? item.paid_at;
                             return (
                               <div key={idx} className="flex items-start gap-2 px-2 py-1.5 space-y-0.5">
                                 {qrisAudit.id != null && onToggleQrisPayment && (
@@ -6014,7 +6006,7 @@ export default function BankReconciliationPage() {
                                      const grossAmount = item.gross_amount ?? item.grossAmount;
                                     const customer = item.customer_name ?? item.customerName;
                                     const facility = item.facility_name ?? item.facilityName;
-                                    const paymentDate = item.paid_at ?? item.paymentDate;
+                                    const paymentDate = item.paidAt ?? item.paid_at;
                                      return (
                                       <div key={`${candidate.id}-${paymentId ?? index}`} className="rounded border border-slate-200/80 bg-white/70 px-2 py-1.5 dark:border-slate-700 dark:bg-slate-950/30">
                                         <div className="flex min-w-0 items-center justify-between gap-2">

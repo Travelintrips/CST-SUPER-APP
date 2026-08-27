@@ -383,6 +383,53 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     expect(result[0]?.paymentItems[0]?.bookingDate).toBe("2026-08-26");
   });
 
+  it("uses paidAt for the payment timeline even when legacy aliases disagree", () => {
+    const result = generateQrisMutationBatchCandidates({
+      requireExplicitSettlementMetadata: true,
+      providerRules: {
+        paylabs: {
+          providerCode: "paylabs",
+          ruleVersion: "PAID-AT-CANONICAL",
+          settlementDelayBusinessDays: 1,
+          matchWindowBusinessDays: 1,
+          maxEffectiveDeductionRate: 0.1,
+        },
+      },
+      payments: [{
+        id: 117,
+        companyId: 1,
+        bankAccountId: 17,
+        amount: 100_000,
+        method: "QRIS",
+        status: "paid",
+        paidAt: "2026-08-23",
+        paymentDate: "2026-08-20",
+        bookingDate: "2026-08-26",
+        expectedSettlementDate: "2026-08-24",
+        providerName: "paylabs",
+        settlementRuleVersion: "PAID-AT-CANONICAL",
+      }],
+      mutations: [{
+        id: 118,
+        companyId: 1,
+        bankAccountId: 17,
+        amount: 99_300,
+        transactionDate: "2026-08-24",
+        direction: "IN",
+        source: "bank_import",
+        sourceClassification: "actual_bank_mutation",
+        providerName: "paylabs",
+        description: "PAYLABS SETTLEMENT",
+      }],
+    });
+
+    expect(result[0]?.status).toBe("MATCHED");
+    expect(result[0]?.paymentItems[0]).toMatchObject({
+      paymentId: 117,
+      paymentDate: "2026-08-23",
+    });
+  });
+
   it("does not match a payment from another company even when amount/provider/date fit", () => {
     const result = generateQrisMutationBatchCandidates({
       payments: [{

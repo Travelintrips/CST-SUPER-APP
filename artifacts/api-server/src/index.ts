@@ -502,7 +502,9 @@ async function runCriticalPreStartMigrations() {
   // settlement records.
   try {
     logger.info("Pre-start migration: Sport Center mirror trigger starting");
-    await runPreStartSubstep("sport_payment_mirror_trigger_v2", ensureSportPaymentMirrorTrigger);
+    // v3 refreshes the live trigger definition so QRIS uses calendar H+1 and
+    // legacy source rows are normalized from paid_at/confirmed_at/created_at.
+    await runPreStartSubstep("sport_payment_mirror_trigger_v3", ensureSportPaymentMirrorTrigger);
     logger.info("Sport Center canonical payment metadata resolver ready");
   } catch (err) {
     logger.error({ err }, "Sport Center canonical payment resolver installation failed");

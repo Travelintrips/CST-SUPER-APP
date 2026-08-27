@@ -5337,7 +5337,7 @@ router.get("/sync/accounting-debug", async (req, res) => {
       const m = await import("../../lib/supabaseAdminSportCenter.js" as any);
       const client = m.getSportCenterSupabaseClient?.();
       if (client) {
-        const { data, error } = await (client as any).schema("sport_center").from("payments").select("id, booking_id, amount, payment_method, status, confirmed_at, created_at");
+        const { data, error } = await (client as any).schema("sport_center").from("payments").select("id, booking_id, amount, payment_method, status, paid_at, confirmed_at, created_at");
         if (error) scSupabaseError = error.message;
         else scSupabasePayments = data ?? [];
       } else {

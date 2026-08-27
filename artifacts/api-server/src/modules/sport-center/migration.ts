@@ -365,6 +365,11 @@ export function ensureSportPaymentMirrorTrigger(): Promise<void> {
 
       UPDATE sport_center.sport_payments
          SET company_id = v_company_id,
+             -- paid_at is the canonical payment timestamp.  Older source rows
+             -- may only have confirmation/creation metadata; persist that
+             -- legacy fallback so later readers do not re-infer a date from a
+             -- booking row.
+             paid_at = COALESCE(v_payment.paid_at, v_payment.confirmed_at, v_payment.created_at),
              expected_settlement_date = v_expected_settlement_date,
              settlement_rule_version = v_rule_version
        WHERE id = p_payment_id
@@ -439,6 +444,7 @@ export function ensureSportPaymentMirrorTrigger(): Promise<void> {
                paid_at = COALESCE(
                  NULLIF(v_source->>'paid_at', '')::timestamptz,
                  NULLIF(v_source->>'confirmed_at', '')::timestamptz,
+                  NULLIF(v_source->>'created_at', '')::timestamptz,
                  paid_at
                ),
                payment_type = COALESCE(NULLIF(v_source->>'payment_type', ''), payment_type),
@@ -555,29 +561,25 @@ export function ensureSportPaymentMirrorTrigger(): Promise<void> {
           USING ERRCODE = 'P0001';
       END IF;
 
-      v_expected_settlement_date := v_payment_date;
-      v_remaining := GREATEST(v_settlement_delay, 0);
-      WHILE v_remaining > 0 LOOP
-        v_expected_settlement_date := v_expected_settlement_date + 1;
-        SELECT COALESCE(pbc.is_business_day, TRUE)
-          INTO v_business_day
-          FROM sport_center.payment_business_calendar pbc
-         WHERE pbc.calendar_date = v_expected_settlement_date;
-        IF EXTRACT(ISODOW FROM v_expected_settlement_date) < 6
-           AND COALESCE(v_business_day, TRUE) THEN
-          v_remaining := v_remaining - 1;
-        END IF;
-      END LOOP;
-
-      LOOP
-        SELECT COALESCE(pbc.is_business_day, TRUE)
-          INTO v_business_day
-          FROM sport_center.payment_business_calendar pbc
-         WHERE pbc.calendar_date = v_expected_settlement_date;
-        EXIT WHEN EXTRACT(ISODOW FROM v_expected_settlement_date) < 6
-          AND COALESCE(v_business_day, TRUE);
-        v_expected_settlement_date := v_expected_settlement_date + 1;
-      END LOOP;
+      IF LOWER(COALESCE(NEW.payment_method::text, '')) LIKE '%qris%' THEN
+        -- QRIS settles on H+1 calendar day, including weekends and holidays.
+        v_expected_settlement_date := v_payment_date + 1;
+      ELSE
+        -- Bank transfers settle on the next business day.
+        v_expected_settlement_date := v_payment_date;
+        v_remaining := GREATEST(v_settlement_delay, 0);
+        WHILE v_remaining > 0 LOOP
+          v_expected_settlement_date := v_expected_settlement_date + 1;
+          SELECT COALESCE(pbc.is_business_day, TRUE)
+            INTO v_business_day
+            FROM sport_center.payment_business_calendar pbc
+           WHERE pbc.calendar_date = v_expected_settlement_date;
+          IF EXTRACT(ISODOW FROM v_expected_settlement_date) < 6
+             AND COALESCE(v_business_day, TRUE) THEN
+            v_remaining := v_remaining - 1;
+          END IF;
+        END LOOP;
+      END IF;
 
       INSERT INTO public.sport_payments
         (booking_id, payment_number, amount, method, status, paid_at,
@@ -814,6 +816,7 @@ export function ensureSportPaymentMirrorTrigger(): Promise<void> {
       sc_booking_id  INTEGER,
       amount         NUMERIC,
       payment_method TEXT,
+      paid_at        TIMESTAMPTZ,
       confirmed_at   TIMESTAMPTZ,
       created_at     TIMESTAMPTZ
     )
@@ -828,6 +831,7 @@ export function ensureSportPaymentMirrorTrigger(): Promise<void> {
         sp.booking_id      AS sc_booking_id,
         sp.amount          AS amount,
         sp.payment_method  AS payment_method,
+        sp.paid_at         AS paid_at,
         sp.confirmed_at    AS confirmed_at,
         sp.created_at      AS created_at
       FROM sport_center.sport_payments sp
@@ -5337,14 +5341,16 @@ export async function runSportCenterMigration(): Promise<void> {
           AND m.posting_status IN ('unposted', 'failed')
       `));
 
-      // 4. Set expected_settlement_date from the payment date (T+1 settlement rule).
+      // 4. Set expected_settlement_date from the canonical payment date.
+      // QRIS is H+1 calendar day; paid_at is preferred and confirmed_at/
+      // created_at are only legacy fallbacks.
       await db.execute(sql.raw(`
         UPDATE sport_center.sport_payments
         SET expected_settlement_date = (
-          COALESCE(paid_at, confirmed_at, updated_at) AT TIME ZONE 'Asia/Jakarta'
+          COALESCE(paid_at, confirmed_at, created_at) AT TIME ZONE 'Asia/Jakarta'
         )::date + 1
         WHERE expected_settlement_date IS NULL
-          AND COALESCE(paid_at, confirmed_at, updated_at) IS NOT NULL
+          AND COALESCE(paid_at, confirmed_at, created_at) IS NOT NULL
           AND ${PAID_STATUS}
       `));
 
