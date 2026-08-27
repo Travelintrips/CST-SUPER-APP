@@ -114,6 +114,7 @@ export default function PortalCustomersPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [editing, setEditing] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [membershipMessage, setMembershipMessage] = useState<string | null>(null);
   const [form, setForm] = useState({
     name: "", email: "", phone: "", company: "", role: "customer",
     accountStatus: "active" as PortalCustomer["accountStatus"],
@@ -228,11 +229,11 @@ export default function PortalCustomersPage() {
       return body;
     },
     onSuccess: () => {
-      setSaveMessage("Membership berhasil diaktifkan.");
+      setMembershipMessage("Membership berhasil diaktifkan.");
       setMembershipForm({ companyId: "", buyerRole: "requester", department: "", costCenter: "", approvalLevel: "" });
       queryClient.invalidateQueries({ queryKey: ["portal-customer-detail", selectedId] });
     },
-    onError: (error: Error) => setSaveMessage(error.message),
+    onError: (error: Error) => setMembershipMessage(error.message),
   });
 
   const deactivateMembershipMutation = useMutation({
@@ -247,23 +248,23 @@ export default function PortalCustomersPage() {
       return body;
     },
     onSuccess: () => {
-      setSaveMessage("Membership dinonaktifkan.");
+      setMembershipMessage("Membership dinonaktifkan.");
       queryClient.invalidateQueries({ queryKey: ["portal-customer-detail", selectedId] });
     },
-    onError: (error: Error) => setSaveMessage(error.message),
+    onError: (error: Error) => setMembershipMessage(error.message),
   });
 
   const submitMembership = () => {
     const companyId = Number(membershipForm.companyId);
     if (!Number.isInteger(companyId) || companyId <= 0) {
-      setSaveMessage("Pilih company canonical terlebih dahulu.");
+      setMembershipMessage("Pilih company canonical terlebih dahulu.");
       return;
     }
     const approvalLevel = membershipForm.approvalLevel.trim()
       ? Number(membershipForm.approvalLevel)
       : null;
     if (approvalLevel !== null && (!Number.isInteger(approvalLevel) || approvalLevel < 1)) {
-      setSaveMessage("Approval level harus berupa bilangan bulat minimal 1.");
+      setMembershipMessage("Approval level harus berupa bilangan bulat minimal 1.");
       return;
     }
     membershipMutation.mutate({
@@ -454,6 +455,7 @@ export default function PortalCustomersPage() {
           setSelectedId(null);
           setEditing(false);
           setSaveMessage(null);
+          setMembershipMessage(null);
         }
       }}>
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
@@ -626,7 +628,8 @@ export default function PortalCustomersPage() {
 
                 {(!detail.memberships || detail.memberships.length === 0) && (
                   <div className="rounded-md border border-dashed border-indigo-300 bg-white px-3 py-3 text-sm text-slate-600">
-                    Customer ini belum memiliki company membership. Assign company canonical untuk mengizinkan RFQ.
+                    <strong className="text-slate-800">Belum terhubung ke perusahaan.</strong>{" "}
+                    Assign company canonical untuk mengizinkan RFQ.
                   </div>
                 )}
 
@@ -751,6 +754,13 @@ export default function PortalCustomersPage() {
                       />
                     </div>
                   </div>
+                  {membershipMessage && (
+                    <p className={`text-sm ${membershipMessage.includes("berhasil") || membershipMessage.includes("diaktifkan")
+                      ? "text-emerald-600"
+                      : "text-red-600"}`}>
+                      {membershipMessage}
+                    </p>
+                  )}
                   <Button
                     type="button"
                     className="gap-2"
