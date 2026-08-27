@@ -1297,7 +1297,12 @@ function QrisPaymentItemsSummary({
 
   const visibleItems = open ? items : items.slice(0, 4);
   const remainingCount = items.length - visibleItems.length;
-  const hasBookingDetails = items.some(item => item.bookingNumber || item.paymentNumber || item.paymentDate);
+  const hasPaymentDetails = items.some(item =>
+    item.bookingNumber
+    || item.paymentNumber
+    || item.paymentDate
+    || item.paid_at,
+  );
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className={compact ? "mt-1.5" : "mt-2"}>
@@ -1317,9 +1322,9 @@ function QrisPaymentItemsSummary({
       </CollapsibleTrigger>
       <CollapsibleContent onClick={event => event.stopPropagation()}>
         <div className="mt-1 space-y-1 rounded border border-amber-200/80 bg-background/70 p-1.5 dark:border-amber-800/70">
-          {!hasBookingDetails && (
+          {!hasPaymentDetails && (
             <p className="px-1 text-[10px] text-muted-foreground">
-              Metadata booking belum tersedia
+              Metadata payment belum tersedia
             </p>
           )}
           {visibleItems.map((item, index) => (
@@ -2973,7 +2978,7 @@ function QrisMutationCard({
                     <div className="grid grid-cols-[1.1fr_1.4fr_1fr_1fr_1fr_44px] gap-2 border-b bg-muted/15 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                       <span>Booking</span>
                       <span>Pelanggan / Payment</span>
-                      <span>Tanggal Booking</span>
+                      <span>Payment / Settlement</span>
                       <span>Metode Bayar</span>
                       <span className="text-right">Nominal (Gross)</span>
                       <span className="text-center">Pilih</span>
@@ -2982,13 +2987,22 @@ function QrisMutationCard({
                       const paymentId = item.paymentId ?? item.payment_id;
                       const booking = item.bookingNumber ?? item.booking_number ?? (item.booking_id != null ? `SC-${String(item.booking_id).padStart(4, "0")}` : "—");
                       const payment = item.paymentNumber ?? item.payment_number ?? (paymentId != null ? `#${paymentId}` : "—");
-                      const bookingDate = item.bookingDate ?? item.booking_date;
+                      const paymentDate = item.paymentDate ?? item.paid_at;
+                      const expectedSettlementDate =
+                        item.expectedSettlementDate ?? item.expected_settlement_date;
                        const gross = liveGrossForItem(item);
                       return (
                         <div key={`${paymentId ?? index}-${booking}`} className="grid grid-cols-[1.1fr_1.4fr_1fr_1fr_1fr_44px] items-center gap-2 border-b px-2.5 py-2 last:border-b-0">
                           <span className="truncate text-xs font-medium">{booking}</span>
                           <span className="min-w-0 truncate text-xs text-muted-foreground">{payment}</span>
-                           <span className="truncate text-xs text-muted-foreground">{bookingDate ? fmtDate(String(bookingDate)) : "—"}</span>
+                           <span className="min-w-0 text-xs text-muted-foreground">
+                             <span className="block truncate">
+                               Payment: {paymentDate ? fmtDate(String(paymentDate)) : "—"}
+                             </span>
+                             <span className="block truncate font-medium text-indigo-600 dark:text-indigo-400">
+                               Settlement H-1: {expectedSettlementDate ? fmtDate(String(expectedSettlementDate)) : "—"}
+                             </span>
+                           </span>
                            <span className="truncate text-xs text-muted-foreground">QRIS</span>
                           <span className="text-right text-xs font-medium tabular-nums">{idr(gross)}</span>
                           <span className="flex justify-center">
@@ -4190,7 +4204,7 @@ function MutationDetailPanel({
                              const gross = paymentAmount ?? item.grossAmount ?? item.gross_amount ?? 0;
                             const paymentNo = item.payment_number;
                             const bookingNo = item.booking_number;
-                            const paidAt = item.paid_at;
+                            const paidAt = item.paid_at ?? item.paymentDate;
                             return (
                               <div key={idx} className="flex items-start gap-2 px-2 py-1.5 space-y-0.5">
                                 {qrisAudit.id != null && onToggleQrisPayment && (
@@ -5962,12 +5976,6 @@ export default function BankReconciliationPage() {
                                      const grossAmount = item.gross_amount ?? item.grossAmount;
                                     const customer = item.customer_name ?? item.customerName;
                                     const facility = item.facility_name ?? item.facilityName;
-                                    const bookingDate = item.booking_date ?? item.bookingDate;
-                                    const startTime = item.start_time ?? item.startTime;
-                                    const endTime = item.end_time ?? item.endTime;
-                                    const bookingDateTime = bookingDate
-                                      ? `${fmtDate(String(bookingDate))}${startTime ? ` · ${startTime.slice(0, 5)}${endTime ? `–${endTime.slice(0, 5)}` : ""}` : ""}`
-                                      : "Jadwal —";
                                     const paymentDate = item.paid_at ?? item.paymentDate;
                                      return (
                                       <div key={`${candidate.id}-${paymentId ?? index}`} className="rounded border border-slate-200/80 bg-white/70 px-2 py-1.5 dark:border-slate-700 dark:bg-slate-950/30">
@@ -5982,8 +5990,7 @@ export default function BankReconciliationPage() {
                                         <div className="mt-0.5 grid gap-x-3 gap-y-0.5 text-[10px] text-slate-500 dark:text-slate-400 sm:grid-cols-2">
                                           <span>Customer: {customer || "—"}</span>
                                           <span>Fasilitas: {facility || "—"}</span>
-                                          <span>Booking: {bookingDateTime}</span>
-                                          <span>Bayar: {paymentDate ? fmtDate(String(paymentDate)) : "—"}</span>
+                                          <span>Payment: {paymentDate ? fmtDate(String(paymentDate)) : "—"}</span>
                                           <span className="sm:col-span-2">Payment: {paymentNumber || `SCPAY-SC-${paymentId ?? "—"}`}</span>
                                         </div>
                                        </div>

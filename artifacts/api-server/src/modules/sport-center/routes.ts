@@ -1933,7 +1933,7 @@ router.get("/payments", async (req, res) => {
               ELSE 'pending'
             END::text                                      AS status,
             p.status::text                                 AS raw_status,
-            COALESCE(p.confirmed_at, p.created_at)::timestamptz AS paid_at,
+            COALESCE(p.paid_at, p.confirmed_at, p.created_at)::timestamptz AS paid_at,
             p.created_at::timestamptz                      AS created_at,
             'canonical'::text                              AS source,
             NULL::integer                                  AS bank_account_id,
@@ -2006,7 +2006,7 @@ router.get("/payments", async (req, res) => {
           SELECT
             CASE WHEN lower(p.status::text) IN ('confirmed','paid','settlement','capture') THEN 'paid' ELSE 'pending' END::text AS status,
             p.payment_method::text AS method,
-            COALESCE(p.confirmed_at, p.created_at)::timestamptz AS paid_at,
+            COALESCE(p.paid_at, p.confirmed_at, p.created_at)::timestamptz AS paid_at,
             b.order_number::text AS booking_number,
             b.customer_name::text AS customer_name,
             COALESCE(f.name,'')::text AS facility_name
@@ -2041,7 +2041,7 @@ router.get("/payments", async (req, res) => {
             CASE WHEN lower(p.status::text) IN ('confirmed','paid','settlement','capture') THEN 'paid' ELSE 'pending' END::text AS status,
             p.payment_method::text AS method,
             p.amount::numeric AS amount,
-            COALESCE(p.confirmed_at, p.created_at)::timestamptz AS paid_at,
+            COALESCE(p.paid_at, p.confirmed_at, p.created_at)::timestamptz AS paid_at,
             b.order_number::text AS booking_number,
             b.customer_name::text AS customer_name,
             COALESCE(f.name,'')::text AS facility_name

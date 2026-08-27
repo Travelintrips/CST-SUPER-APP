@@ -250,7 +250,9 @@ export async function generateQrisCandidates(options: {
         -- Both are treated as "paid" by the matching engine.
         CASE WHEN LOWER(COALESCE(sp.status::text, '')) IN ('confirmed', 'pending')
           THEN 'paid' ELSE sp.status::text END AS status,
-        COALESCE(sp.confirmed_at, sp.created_at) AS paid_at,
+        -- Payment date is paid_at. confirmed_at/created_at are legacy fallbacks
+        -- only when the source payment date was not recorded.
+        COALESCE(sp.paid_at, sp.confirmed_at, sp.created_at) AS paid_at,
         'SCPAY-SC-' || sp.id::text AS payment_number,
         sp.booking_id, sb.order_number AS booking_number,
         sb.customer_name,

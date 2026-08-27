@@ -76,13 +76,13 @@ export function ensureSportPaymentMirrorTrigger(): Promise<void> {
           AND table_name = 'sport_bookings'
       ) AS public_bookings_exists,
       (
-        SELECT COUNT(*) = 8
+        SELECT COUNT(*) = 9
         FROM information_schema.columns
         WHERE table_schema = 'sport_center'
           AND table_name = 'sport_payments'
           AND column_name IN (
             'id', 'booking_id', 'amount', 'status',
-            'payment_method', 'payment_type', 'confirmed_at', 'created_at'
+            'payment_method', 'payment_type', 'paid_at', 'confirmed_at', 'created_at'
           )
       ) AS source_payment_columns_complete,
       (
@@ -437,8 +437,8 @@ export function ensureSportPaymentMirrorTrigger(): Promise<void> {
                  ELSE status
                END,
                paid_at = COALESCE(
-                 NULLIF(v_source->>'confirmed_at', '')::timestamptz,
                  NULLIF(v_source->>'paid_at', '')::timestamptz,
+                 NULLIF(v_source->>'confirmed_at', '')::timestamptz,
                  paid_at
                ),
                payment_type = COALESCE(NULLIF(v_source->>'payment_type', ''), payment_type),
@@ -593,7 +593,7 @@ export function ensureSportPaymentMirrorTrigger(): Promise<void> {
          NEW.amount,
          COALESCE(NEW.payment_method, 'Transfer Bank'),
          'paid',
-         COALESCE(NEW.confirmed_at, NEW.created_at),
+         COALESCE(NEW.paid_at, NEW.confirmed_at, NEW.created_at),
          COALESCE(NEW.payment_type::text, 'full_payment'),
          COALESCE(v_booking_tax_rate, 0),
          0,
@@ -1701,7 +1701,7 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
                 COALESCE(v_payment.company_id, v_booking_company_id),
                 v_payment.payment_method::text,
                 v_payment.payment_provider::text,
-                COALESCE(v_payment.confirmed_at, v_payment.created_at, now())::date
+                COALESCE(v_payment.paid_at, v_payment.confirmed_at, v_payment.created_at, now())::date
               );
             v_booking_ppn_rate := v_shared.tax_rate;
             v_revenue_account_code := v_shared.revenue_coa_code;
@@ -1807,11 +1807,12 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
 
         -- --------------------------------------------------------
         -- Journal date.
-        -- Prefer confirmation date.
+        -- Prefer the payment date; confirmation/creation are legacy fallbacks.
         -- --------------------------------------------------------
 
         v_journal_date :=
             COALESCE(
+                v_payment.paid_at,
                 v_payment.confirmed_at,
                 v_payment.created_at,
                 now()
@@ -5330,14 +5331,14 @@ export async function runSportCenterMigration(): Promise<void> {
           AND m.posting_status IN ('unposted', 'failed')
       `));
 
-      // 4. Set expected_settlement_date = paid_at/confirmed_at::date + 1 (T+1 settlement rule).
+      // 4. Set expected_settlement_date from the payment date (T+1 settlement rule).
       await db.execute(sql.raw(`
         UPDATE sport_center.sport_payments
         SET expected_settlement_date = (
-          COALESCE(confirmed_at, paid_at, updated_at) AT TIME ZONE 'Asia/Jakarta'
+          COALESCE(paid_at, confirmed_at, updated_at) AT TIME ZONE 'Asia/Jakarta'
         )::date + 1
         WHERE expected_settlement_date IS NULL
-          AND COALESCE(confirmed_at, paid_at, updated_at) IS NOT NULL
+          AND COALESCE(paid_at, confirmed_at, updated_at) IS NOT NULL
           AND ${PAID_STATUS}
       `));
 
