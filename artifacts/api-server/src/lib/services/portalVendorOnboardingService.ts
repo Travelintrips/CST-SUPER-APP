@@ -18,6 +18,7 @@ import { getWaTemplateConfig, renderTemplate } from "../orderNotification.js";
 import { NotificationService } from "./notificationService.js";
 import OpenAI from "openai";
 import { KtpOcrError, classifyKtpOcrError } from "./ktpOcrErrors.js";
+import { configureCustomerOrganization } from "./portalCustomerOrganizationService.js";
 
 // ── OpenAI client ─────────────────────────────────────────────────────────────
 
@@ -197,6 +198,9 @@ export interface CompleteOnboardingInput {
   address: string;
   accountType: string;
   customerType?: "individual" | "company";
+  companyId?: number;
+  requestedCompanyName?: string;
+  requestedRegistrationNumber?: string;
   ktpUrl?: string;
   ocrData?: { nik?: string; name?: string };
   vendor?: {
@@ -226,7 +230,11 @@ export async function completeOnboarding(
   customerId: number,
   input: CompleteOnboardingInput,
 ): Promise<{ ok: boolean; status: string }> {
-  const { fullName, phone, address, accountType, customerType, ktpUrl, ocrData, vendor, driver, employee } = input;
+  const {
+    fullName, phone, address, accountType, customerType, companyId,
+    requestedCompanyName, requestedRegistrationNumber,
+    ktpUrl, ocrData, vendor, driver, employee,
+  } = input;
 
   const isCustomer = accountType === "customer";
   if (isCustomer && customerType !== "individual" && customerType !== "company") {
@@ -292,6 +300,16 @@ export async function completeOnboarding(
     }
     throw err;
   }
+
+  const organization = isCustomer
+    ? await configureCustomerOrganization({
+        customerId,
+        customerType: customerType!,
+        companyId,
+        requestedCompanyName,
+        requestedRegistrationNumber,
+      })
+    : null;
 
   // Update OCR result name if provided
   if (ocrData?.nik) {
@@ -467,5 +485,5 @@ export async function completeOnboarding(
     })();
   }
 
-  return { ok: true, status };
+  return { ok: true, status, organization };
 }

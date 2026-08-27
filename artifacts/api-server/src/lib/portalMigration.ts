@@ -96,6 +96,11 @@ export async function runPortalMigration(): Promise<void> {
       CREATE INDEX IF NOT EXISTS pcr_company_idx
         ON portal_company_requests (matched_company_id)
     `);
+    await db.execute(sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS pcr_customer_pending_name_unique
+        ON portal_company_requests (portal_customer_id, lower(requested_company_name))
+        WHERE status = 'pending'
+    `);
 
     await db.execute(sql`
       CREATE TABLE IF NOT EXISTS portal_session_revocations (

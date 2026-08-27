@@ -66,6 +66,13 @@ import {
   listPortalCustomerMemberships,
   PortalCompanyMembershipError,
 } from "../lib/services/portalCompanyMembershipService.js";
+import {
+  getPortalCustomerOrganizationState,
+  listCustomerPortalCompanies,
+  listPendingPortalCompanyRequests,
+  reviewPortalCompanyRequest,
+  PortalCustomerOrganizationError,
+} from "../lib/services/portalCustomerOrganizationService.js";
 import { getErpStats } from "../lib/services/portalStatsService.js";
 import { getContent, updateContent } from "../lib/services/portalContentService.js";
 import {
@@ -672,10 +679,17 @@ router.post("/auth/wa-otp/verify", async (req, res) => {
 
 // POST /api/portal/auth/wa-register — lengkapi profil & buat akun
 router.post("/auth/wa-register", async (req, res) => {
-  const { verifyToken, name, role, customerType, company, serviceIds, email, rememberDays } = req.body ?? {};
+  const {
+    verifyToken, name, role, customerType, company, companyId,
+    requestedCompanyName, requestedRegistrationNumber, serviceIds, email, rememberDays,
+  } = req.body ?? {};
   if (!verifyToken || !name) return res.status(400).json({ message: "Token verifikasi dan nama diperlukan." });
   try {
-    const result = await waRegister({ verifyToken: String(verifyToken), name: String(name), role, customerType, company, serviceIds, email, rememberDays });
+    const result = await waRegister({
+      verifyToken: String(verifyToken), name: String(name), role, customerType, company,
+      companyId: companyId === undefined || companyId === null ? undefined : Number(companyId),
+      requestedCompanyName, requestedRegistrationNumber, serviceIds, email, rememberDays,
+    });
     // C1-REMEDIATION: set HttpOnly session cookie on registration
     if ("token" in result && typeof result.token === "string") {
       setPortalSessionCookie(res, result.token);
@@ -757,12 +771,20 @@ router.delete("/auth/trusted-devices", requirePortalAuth, async (req, res) => {
 
 // POST /api/portal/auth/signup — standalone register (non-Supabase)
 router.post("/auth/signup", signupLimiter, async (req, res) => {
-  const { name, email, password, phone, company, customerType, role, serviceIds } = req.body ?? {};
+  const {
+    name, email, password, phone, company, customerType, companyId,
+    requestedCompanyName, requestedRegistrationNumber, role, serviceIds,
+  } = req.body ?? {};
   if (!name || !email || !password) {
     return res.status(400).json({ message: "Nama, email, dan password diperlukan." });
   }
   try {
-    const result = await signup({ name: String(name), email: String(email), password: String(password), phone, company, customerType, role, serviceIds });
+    const result = await signup({
+      name: String(name), email: String(email), password: String(password), phone, company,
+      customerType,
+      companyId: companyId === undefined || companyId === null ? undefined : Number(companyId),
+      requestedCompanyName, requestedRegistrationNumber, role, serviceIds,
+    });
     // C1-REMEDIATION: set HttpOnly session cookie on registration
     if ("token" in result && typeof result.token === "string") {
       setPortalSessionCookie(res, result.token);

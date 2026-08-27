@@ -22,6 +22,10 @@ import { sendViaService as sendWhatsApp } from "../waTransport.js";
 import { sendMail, isSmtpConfigured } from "../mailer.js";
 import { normalizePhone } from "../phoneUtils.js";
 import { captureSafeDevResetArtifact } from "../safeDevResetCapture.js";
+import {
+  configureCustomerOrganization,
+  resolveSelectableCustomerPortalCompany,
+} from "./portalCustomerOrganizationService.js";
 
 function assertAccountUsable(customer: {
   accountStatus?: string | null;
@@ -179,6 +183,7 @@ export async function emailPasswordLogin(email: string, password: string) {
       phone: customer.phone,
       company: customer.company,
       role: customer.role,
+      customerType: customer.customerType,
     },
   };
 }
@@ -290,11 +295,18 @@ export async function waRegister(params: {
   role?: string;
   customerType?: "individual" | "company";
   company?: string;
+  companyId?: number;
+  requestedCompanyName?: string;
+  requestedRegistrationNumber?: string;
   serviceIds?: number[];
   email?: string;
   rememberDays?: number;
 }) {
-  const { verifyToken, name, role: requestedRole, customerType, company, serviceIds, email, rememberDays } = params;
+  const {
+    verifyToken, name, role: requestedRole, customerType, company,
+    companyId, requestedCompanyName, requestedRegistrationNumber,
+    serviceIds, email, rememberDays,
+  } = params;
 
   const [otp] = await db
     .select()
@@ -317,6 +329,20 @@ export async function waRegister(params: {
   const role = ALLOWED_ROLES.includes(String(requestedRole)) ? String(requestedRole) : "customer";
   if (role === "customer" && customerType !== "individual" && customerType !== "company") {
     throw new AuthServiceError(400, "Tipe customer wajib dipilih.");
+  }
+  if (role === "customer" && customerType === "company") {
+    if (companyId !== undefined) {
+      try {
+        await resolveSelectableCustomerPortalCompany(companyId);
+      } catch (error) {
+        throw new AuthServiceError(
+          (error as { statusCode?: number }).statusCode ?? 422,
+          error instanceof Error ? error.message : "Company tidak tersedia untuk Customer Portal.",
+        );
+      }
+    } else if (!(requestedCompanyName ?? company)?.trim()) {
+      throw new AuthServiceError(400, "Pilih company canonical atau isi nama perusahaan untuk review admin.");
+    }
   }
 
   // Cek apakah phone sudah terdaftar
@@ -344,11 +370,22 @@ export async function waRegister(params: {
       email: finalEmail,
       passwordHash: "",
       phone,
-      company: company ? String(company) : null,
+      company: role === "vendor" && company ? String(company) : null,
       customerType: role === "customer" ? customerType : null,
       role,
     })
     .returning();
+
+  let organization: Awaited<ReturnType<typeof configureCustomerOrganization>> | null = null;
+  if (role === "customer") {
+    organization = await configureCustomerOrganization({
+      customerId: created.id,
+      customerType: customerType!,
+      companyId,
+      requestedCompanyName: requestedCompanyName ?? company,
+      requestedRegistrationNumber,
+    });
+  }
 
   if (Array.isArray(serviceIds) && serviceIds.length > 0) {
     await db
@@ -389,7 +426,9 @@ export async function waRegister(params: {
       phone: created.phone,
       company: created.company,
       role: created.role,
+      customerType: created.customerType,
     },
+    organization,
   };
 }
 
@@ -465,6 +504,7 @@ export async function waLogin(
       phone: user.phone,
       company: user.company,
       role: user.role,
+      customerType: user.customerType,
     },
   };
 }
@@ -527,6 +567,7 @@ export async function waTrustedLogin(rawPhone: string, deviceToken: string) {
       phone: user.phone,
       company: user.company,
       role: user.role,
+      customerType: user.customerType,
     },
   };
 }
@@ -598,10 +639,17 @@ export async function signup(params: {
   phone?: string;
   company?: string;
   customerType?: "individual" | "company";
+  companyId?: number;
+  requestedCompanyName?: string;
+  requestedRegistrationNumber?: string;
   role?: string;
   serviceIds?: number[];
 }) {
-  const { name, email, password, phone, company, customerType, role: requestedRole, serviceIds } = params;
+  const {
+    name, email, password, phone, company, customerType, companyId,
+    requestedCompanyName, requestedRegistrationNumber,
+    role: requestedRole, serviceIds,
+  } = params;
 
   const emailLower = String(email).toLowerCase().trim();
   const [existing] = await db
@@ -624,6 +672,20 @@ export async function signup(params: {
   if (role === "customer" && customerType !== undefined && customerType !== "individual" && customerType !== "company") {
     throw new AuthServiceError(400, "Tipe customer tidak valid.");
   }
+  if (role === "customer" && customerType === "company") {
+    if (companyId !== undefined) {
+      try {
+        await resolveSelectableCustomerPortalCompany(companyId);
+      } catch (error) {
+        throw new AuthServiceError(
+          (error as { statusCode?: number }).statusCode ?? 422,
+          error instanceof Error ? error.message : "Company tidak tersedia untuk Customer Portal.",
+        );
+      }
+    } else if (!(requestedCompanyName ?? company)?.trim()) {
+      throw new AuthServiceError(400, "Pilih company canonical atau isi nama perusahaan untuk review admin.");
+    }
+  }
   const passwordHash = await bcrypt.hash(String(password), 12);
 
   const [created] = await db
@@ -633,11 +695,22 @@ export async function signup(params: {
       email: emailLower,
       passwordHash,
       phone: normalizedPhone,
-      company: company ? String(company) : null,
+      company: role === "vendor" && company ? String(company) : null,
       customerType: role === "customer" ? customerType ?? null : null,
       role,
     })
     .returning();
+
+  let organization: Awaited<ReturnType<typeof configureCustomerOrganization>> | null = null;
+  if (role === "customer" && customerType) {
+    organization = await configureCustomerOrganization({
+      customerId: created.id,
+      customerType,
+      companyId,
+      requestedCompanyName: requestedCompanyName ?? company,
+      requestedRegistrationNumber,
+    });
+  }
 
   if (Array.isArray(serviceIds) && serviceIds.length > 0) {
     await db
@@ -662,7 +735,9 @@ export async function signup(params: {
       phone: created.phone,
       company: created.company,
       role: created.role,
+      customerType: created.customerType,
     },
+    organization,
   };
 }
 
@@ -760,16 +835,21 @@ export async function syncProfile(
     phone?: unknown;
     company?: unknown;
     customerType?: unknown;
+    companyId?: unknown;
+    requestedCompanyName?: unknown;
+    requestedRegistrationNumber?: unknown;
     role?: string;
     serviceIds?: unknown;
   }
 ) {
-  const { name, phone, company, customerType, role: requestedRole, serviceIds } = params;
+  const {
+    name, phone, company, customerType, companyId, requestedCompanyName,
+    requestedRegistrationNumber, role: requestedRole, serviceIds,
+  } = params;
 
   const patch: Record<string, unknown> = {};
   if (name) patch.name = String(name);
   if (phone !== undefined) patch.phone = phone ? String(phone) : null;
-  if (company !== undefined) patch.company = company ? String(company) : null;
   if (customerType !== undefined) {
     if (customerType !== "individual" && customerType !== "company") {
       throw new AuthServiceError(400, "Tipe customer tidak valid.");
@@ -777,7 +857,13 @@ export async function syncProfile(
     patch.customerType = customerType;
   }
   const ALLOWED_ROLES = ["customer", "vendor"];
-  if (requestedRole && ALLOWED_ROLES.includes(String(requestedRole))) patch.role = String(requestedRole);
+  const effectiveRole = requestedRole && ALLOWED_ROLES.includes(String(requestedRole))
+    ? String(requestedRole)
+    : undefined;
+  if (effectiveRole) patch.role = effectiveRole;
+  if (effectiveRole !== "customer" && company !== undefined) {
+    patch.company = company ? String(company) : null;
+  }
 
   if (Object.keys(patch).length > 0) {
     await db.update(portalCustomersTable).set(patch).where(eq(portalCustomersTable.id, customerId));
@@ -793,6 +879,20 @@ export async function syncProfile(
     }
   }
 
+  let organization: Awaited<ReturnType<typeof configureCustomerOrganization>> | null = null;
+  if (customerType !== undefined && (effectiveRole === "customer" || !effectiveRole)) {
+    if (customerType !== "individual" && customerType !== "company") {
+      throw new AuthServiceError(400, "Tipe customer tidak valid.");
+    }
+    organization = await configureCustomerOrganization({
+      customerId,
+      customerType,
+      companyId,
+      requestedCompanyName: requestedCompanyName ?? company,
+      requestedRegistrationNumber,
+    });
+  }
+
   const [customer] = await db
     .select()
     .from(portalCustomersTable)
@@ -806,7 +906,9 @@ export async function syncProfile(
     phone: customer!.phone,
     company: customer!.company,
     role: customer!.role,
+    customerType: customer!.customerType,
     serviceIds: finalServiceIds,
+    organization,
   };
 }
 
@@ -1120,6 +1222,7 @@ export async function getMe(customerId: number) {
     phone: customer.phone,
     company: customer.company,
     role: customer.role,
+    customerType: customer.customerType,
     address: profile?.companyAddress ?? null,
     avatarUrl: (customer as Record<string, unknown>).avatarUrl as string ?? null,
     serviceIds,

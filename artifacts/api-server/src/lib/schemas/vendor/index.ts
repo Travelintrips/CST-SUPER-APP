@@ -97,6 +97,9 @@ export const CompleteOnboardingSchema = z.object({
   address: z.string().min(1).max(500),
   accountType: z.enum(["vendor", "driver", "employee", "customer"]),
   customerType: z.enum(["individual", "company"]).optional(),
+  companyId: z.number().int().positive().optional(),
+  requestedCompanyName: z.string().max(200).optional(),
+  requestedRegistrationNumber: z.string().max(100).optional(),
   ktpUrl: z.string().max(1000).optional(),
   ocrData: z.object({
     nik: z.string().max(20).optional(),
