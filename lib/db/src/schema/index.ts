@@ -121,6 +121,7 @@ export * from "./portalQuickQuotes";
 // ── Buyer Organization Layer — Phase 2B.1 ─────────────────────────────────────
 // Bridge: portal_customers ←→ companies (ERP). Migrated via 0016.
 export * from "./portalCompanyMembers";
+export * from "./portalCompanyRequests";
 
 // ── Enterprise Marketplace (Blueprint v1.1.1) — Phase 1A DRAFT SCHEMA ────────
 // NOT YET MIGRATED. No DB push executed. See docs/enterprise-marketplace-blueprint-v1.1.1.md
