@@ -481,13 +481,32 @@ async function runPreStartSubstep<T>(
   }
 }
 
+async function runPreStartSubstepWithRetry<T>(
+  substep: string,
+  fn: () => Promise<T>,
+  maxAttempts = 10,
+): Promise<T> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await runPreStartSubstep(substep, fn);
+    } catch (err: unknown) {
+      if (!isTransientDbError(err) || attempt >= maxAttempts) {
+        throw err;
+      }
+      const backoff = Math.min(attempt * 15_000, 120_000);
+      logger.warn(
+        { attempt, maxAttempts, backoff },
+        `Pre-start migration: transient DB error for ${substep}, retrying after ${backoff}ms...`,
+      );
+      await sleep(backoff);
+    }
+  }
+  throw new Error(`Pre-start migration substep exhausted: ${substep}`);
+}
+
 async function runCriticalPreStartMigrations() {
   // Accounting posting emits a non-fatal audit event. Upgrade legacy
   // ledger_events before any authenticated posting can be accepted.
-  // The Sport Center installer is intentionally outside the completion gate:
-  // existing environments may already have the bootstrap marker while still
-  // needing a newly-added trigger/function. Its DDL is idempotent and guarded
-  // by schema readiness, so running it on every startup is safe.
   const preStartAlreadyComplete = await runPreStartSubstep(
     "marker_check",
     () => isStartupMigrationComplete(
@@ -495,21 +514,6 @@ async function runCriticalPreStartMigrations() {
       PRE_START_SCHEMA_BOOTSTRAP_VERSION,
     ),
   );
-
-  // Install the canonical Sport Center payment resolver before the long
-  // startup migration chain. This is the same idempotent runtime installer
-  // used by runSportCenterMigration; it does not post accounting or create
-  // settlement records.
-  try {
-    logger.info("Pre-start migration: Sport Center mirror trigger starting");
-    // v3 refreshes the live trigger definition so QRIS uses calendar H+1 and
-    // legacy source rows are normalized from paid_at/confirmed_at/created_at.
-    await runPreStartSubstep("sport_payment_mirror_trigger_v3", ensureSportPaymentMirrorTrigger);
-    logger.info("Sport Center canonical payment metadata resolver ready");
-  } catch (err) {
-    logger.error({ err }, "Sport Center canonical payment resolver installation failed");
-    throw err;
-  }
 
   if (preStartAlreadyComplete) {
     logger.info("Pre-start schema bootstrap already provisioned; repeated DDL/backfill skipped");
@@ -1984,6 +1988,17 @@ async function startServer() {
         },
         "[startup] Database ready and migration registry initialized; fixed startup delay bypassed",
       );
+      // Keep the Sport Center mirror installer outside the persistent
+      // pre_start_schema completion gate. Existing environments may already
+      // have that marker while still needing a newly-added trigger/function.
+      // Its DDL is idempotent and guarded by schema readiness, so refreshing
+      // it on every startup is safe and does not rerun the migration chain.
+      logger.info("Pre-start migration: Sport Center mirror trigger starting");
+      await runPreStartSubstepWithRetry(
+        "sport_payment_mirror_trigger_v3",
+        ensureSportPaymentMirrorTrigger,
+      );
+      logger.info("Sport Center canonical payment metadata resolver ready");
       return timeStartupStage("Pre-start schema migrations", async () => {
       console.log("[startup] Migration registry initialization complete");
       for (let attempt = 1; attempt <= 10; attempt++) {

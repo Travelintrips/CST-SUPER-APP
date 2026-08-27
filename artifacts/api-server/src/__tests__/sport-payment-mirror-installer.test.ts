@@ -9,7 +9,7 @@ const migration = readFileSync(
 
 describe("Sport payment mirror startup installer", () => {
   it("does not destructively replace a runtime-owned trigger", () => {
-    expect(migration).toContain("existing canonical contract verified; destructive refresh skipped");
+    expect(migration).toContain("existing canonical contract verified; refreshing non-destructive function definitions");
     expect(migration).toContain("contractComplete");
     expect(migration).toContain("t.tgname = 'trg_mirror_confirmed_payment_to_public'");
     expect(migration).not.toContain("DROP TRIGGER IF EXISTS trg_mirror_confirmed_payment_to_public");

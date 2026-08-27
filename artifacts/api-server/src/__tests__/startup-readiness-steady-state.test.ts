@@ -28,7 +28,7 @@ const bankMasters = readFileSync(resolve(process.cwd(), "src/routes/bankMutation
 const sportMigration = readFileSync(resolve(process.cwd(), "src/modules/sport-center/migration.ts"), "utf8");
 
 describe("startup readiness steady-state contract", () => {
-  it("installs additive Sport Center repair DDL before skipping the legacy pre-start pass", () => {
+  it("installs additive Sport Center repair DDL outside the legacy pre-start gate", () => {
     const preStartBlockStart = apiIndex.indexOf(
       "async function runCriticalPreStartMigrations()",
     );
@@ -37,7 +37,7 @@ describe("startup readiness steady-state contract", () => {
     );
     const preStartBlock = apiIndex.slice(preStartBlockStart, preStartBlockEnd);
     const mirrorInstaller = preStartBlock.indexOf(
-      'runPreStartSubstep("sport_payment_mirror_trigger", ensureSportPaymentMirrorTrigger)',
+      'runPreStartSubstep("sport_payment_mirror_trigger_v3", ensureSportPaymentMirrorTrigger)',
     );
     const guard = preStartBlock.indexOf(
       'isStartupMigrationComplete(\n      "api_pre_start_schema",\n      PRE_START_SCHEMA_BOOTSTRAP_VERSION,\n    )',
@@ -47,11 +47,20 @@ describe("startup readiness steady-state contract", () => {
     );
     const marker = preStartBlock.indexOf('markStartupMigrationComplete(');
 
-    expect(mirrorInstaller).toBeGreaterThan(-1);
+    expect(mirrorInstaller).toBe(-1);
     expect(guard).toBeGreaterThan(-1);
-    expect(guard).toBeLessThan(mirrorInstaller);
-    expect(mirrorInstaller).toBeLessThan(earlyReturn);
     expect(marker).toBeGreaterThan(guard);
+    const registryReady = apiIndex.indexOf("markCoreDatabaseReady();");
+    const gatedPreStart = apiIndex.indexOf(
+      'return timeStartupStage("Pre-start schema migrations"',
+    );
+    const externalMirrorInstaller = apiIndex.indexOf(
+      'runPreStartSubstepWithRetry(\n        "sport_payment_mirror_trigger_v3"',
+    );
+    expect(registryReady).toBeGreaterThan(-1);
+    expect(externalMirrorInstaller).toBeGreaterThan(registryReady);
+    expect(externalMirrorInstaller).toBeLessThan(gatedPreStart);
+    expect(earlyReturn).toBeGreaterThan(guard);
     expect(apiIndex).toContain("repeated DDL/backfill skipped");
     expect(apiIndex).toContain("Critical API pre-start schema bootstrap and legacy compatibility columns");
     expect(apiIndex).toContain("startup.pre_start_schema.substep");
