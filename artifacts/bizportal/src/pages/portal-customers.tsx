@@ -15,6 +15,7 @@ import {
 import {
   Users, MessageCircle, Mail, KeyRound, Phone, Building2, RefreshCw,
   MapPin, User, Calendar, ShieldCheck, FileText, Pencil, Ban,
+  UserRoundPlus, Power, RotateCcw,
 } from "lucide-react";
 import { BackButton } from "@/components/ui/back-button";
 
@@ -55,6 +56,30 @@ type CustomerDetail = PortalCustomer & {
     createdAt: string;
     updatedAt: string | null;
   } | null;
+  memberships: PortalCustomerMembership[];
+};
+
+type PortalCustomerMembership = {
+  id: number;
+  portalCustomerId: number;
+  companyId: number;
+  companyName: string;
+  companyCode: string;
+  companyActive: boolean;
+  buyerRole: string;
+  department: string | null;
+  costCenter: string | null;
+  approvalLevel: number | null;
+  spendingLimit: string | null;
+  isActive: boolean;
+  joinedAt: string | null;
+  updatedAt: string | null;
+};
+
+type CompanyOption = {
+  id: number;
+  name: string;
+  code: string;
 };
 
 type Stats = {
@@ -94,6 +119,13 @@ export default function PortalCustomersPage() {
     accountStatus: "active" as PortalCustomer["accountStatus"],
     sanctionReason: "", sanctionUntil: "",
   });
+  const [membershipForm, setMembershipForm] = useState({
+    companyId: "",
+    buyerRole: "requester",
+    department: "",
+    costCenter: "",
+    approvalLevel: "",
+  });
   const queryClient = useQueryClient();
 
   const params = new URLSearchParams();
@@ -115,6 +147,12 @@ export default function PortalCustomersPage() {
     queryKey: ["portal-customer-detail", selectedId],
     queryFn: () => fetchJSON<CustomerDetail>(`/api/portal/admin/customers/${selectedId}`),
     enabled: selectedId !== null,
+  });
+
+  const { data: companies = [], isLoading: companiesLoading } = useQuery({
+    queryKey: ["portal-membership-companies"],
+    queryFn: () => fetchJSON<CompanyOption[]>("/api/companies/list"),
+    staleTime: 60_000,
   });
 
   useEffect(() => {
@@ -169,6 +207,73 @@ export default function PortalCustomersPage() {
   });
 
   const items = (data?.items ?? []).filter((it) => sourceFilter === "all" || it.source === sourceFilter);
+
+  const membershipMutation = useMutation({
+    mutationFn: async (input: {
+      companyId: number;
+      buyerRole: string;
+      department?: string | null;
+      costCenter?: string | null;
+      approvalLevel?: number | null;
+    }) => {
+      if (selectedId === null) throw new Error("Akun belum dipilih");
+      const response = await fetch(`/api/portal/admin/customers/${selectedId}/memberships`, {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || body.message || "Gagal menyimpan membership");
+      return body;
+    },
+    onSuccess: () => {
+      setSaveMessage("Membership berhasil diaktifkan.");
+      setMembershipForm({ companyId: "", buyerRole: "requester", department: "", costCenter: "", approvalLevel: "" });
+      queryClient.invalidateQueries({ queryKey: ["portal-customer-detail", selectedId] });
+    },
+    onError: (error: Error) => setSaveMessage(error.message),
+  });
+
+  const deactivateMembershipMutation = useMutation({
+    mutationFn: async (companyId: number) => {
+      if (selectedId === null) throw new Error("Akun belum dipilih");
+      const response = await fetch(`/api/portal/admin/customers/${selectedId}/memberships/${companyId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || body.message || "Gagal menonaktifkan membership");
+      return body;
+    },
+    onSuccess: () => {
+      setSaveMessage("Membership dinonaktifkan.");
+      queryClient.invalidateQueries({ queryKey: ["portal-customer-detail", selectedId] });
+    },
+    onError: (error: Error) => setSaveMessage(error.message),
+  });
+
+  const submitMembership = () => {
+    const companyId = Number(membershipForm.companyId);
+    if (!Number.isInteger(companyId) || companyId <= 0) {
+      setSaveMessage("Pilih company canonical terlebih dahulu.");
+      return;
+    }
+    const approvalLevel = membershipForm.approvalLevel.trim()
+      ? Number(membershipForm.approvalLevel)
+      : null;
+    if (approvalLevel !== null && (!Number.isInteger(approvalLevel) || approvalLevel < 1)) {
+      setSaveMessage("Approval level harus berupa bilangan bulat minimal 1.");
+      return;
+    }
+    membershipMutation.mutate({
+      companyId,
+      buyerRole: membershipForm.buyerRole,
+      department: membershipForm.department.trim() || null,
+      costCenter: membershipForm.costCenter.trim() || null,
+      approvalLevel,
+    });
+  };
 
   const sourceBadge = (source: PortalCustomer["source"]) => {
     if (source === "wa") return <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100"><MessageCircle className="w-3 h-3 mr-1" />WhatsApp</Badge>;
@@ -502,6 +607,161 @@ export default function PortalCustomersPage() {
               {!detail.profile && (
                 <p className="text-sm text-muted-foreground text-center py-4 border rounded-lg">Belum ada data onboarding untuk pelanggan ini.</p>
               )}
+
+              {/* Canonical company membership */}
+              <div className="rounded-lg border border-indigo-200 bg-indigo-50/40 p-4 space-y-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold text-indigo-700 uppercase tracking-wide flex items-center gap-1.5">
+                      <Building2 className="w-3.5 h-3.5" /> Company Membership
+                    </p>
+                    <p className="text-xs text-slate-600 mt-1">
+                      Company authority berasal dari mapping aktif ini, bukan dari teks perusahaan pada profil customer.
+                    </p>
+                  </div>
+                  <Badge variant="outline" className="shrink-0 border-indigo-300 text-indigo-700">
+                    {detail.memberships?.filter((membership) => membership.isActive).length ?? 0} aktif
+                  </Badge>
+                </div>
+
+                {(!detail.memberships || detail.memberships.length === 0) && (
+                  <div className="rounded-md border border-dashed border-indigo-300 bg-white px-3 py-3 text-sm text-slate-600">
+                    Customer ini belum memiliki company membership. Assign company canonical untuk mengizinkan RFQ.
+                  </div>
+                )}
+
+                {(detail.memberships ?? []).map((membership) => (
+                  <div key={membership.id} className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-white p-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium text-sm">{membership.companyName}</span>
+                        <Badge variant="outline" className="text-[10px]">{membership.companyCode}</Badge>
+                        <Badge className={membership.isActive
+                          ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-100"
+                          : "bg-slate-100 text-slate-600 hover:bg-slate-100"}>
+                          {membership.isActive ? "Aktif" : "Nonaktif"}
+                        </Badge>
+                      </div>
+                      <p className="text-xs text-slate-500 mt-1">
+                        {membership.buyerRole}
+                        {membership.department ? ` · ${membership.department}` : ""}
+                        {membership.costCenter ? ` · ${membership.costCenter}` : ""}
+                        {membership.approvalLevel ? ` · Approval L${membership.approvalLevel}` : ""}
+                      </p>
+                    </div>
+                    {membership.isActive ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="gap-1.5 text-rose-700 border-rose-200 hover:bg-rose-50"
+                        disabled={deactivateMembershipMutation.isPending}
+                        onClick={() => deactivateMembershipMutation.mutate(membership.companyId)}
+                      >
+                        <Power className="w-3.5 h-3.5" /> Nonaktifkan
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="gap-1.5 text-emerald-700 border-emerald-200 hover:bg-emerald-50"
+                        disabled={membershipMutation.isPending}
+                        onClick={() => membershipMutation.mutate({
+                          companyId: membership.companyId,
+                          buyerRole: membership.buyerRole,
+                          department: membership.department,
+                          costCenter: membership.costCenter,
+                          approvalLevel: membership.approvalLevel,
+                        })}
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" /> Aktifkan Kembali
+                      </Button>
+                    )}
+                  </div>
+                ))}
+
+                <div className="border-t border-indigo-200 pt-4 space-y-3">
+                  <p className="text-sm font-semibold text-slate-800 flex items-center gap-2">
+                    <UserRoundPlus className="w-4 h-4 text-indigo-600" /> Assign / Reactivate Membership
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="grid gap-1.5 sm:col-span-2">
+                      <Label>Company canonical</Label>
+                      <Select
+                        value={membershipForm.companyId}
+                        onValueChange={(companyId) => setMembershipForm({ ...membershipForm, companyId })}
+                        disabled={companiesLoading || membershipMutation.isPending}
+                      >
+                        <SelectTrigger><SelectValue placeholder={companiesLoading ? "Memuat company…" : "Pilih company"} /></SelectTrigger>
+                        <SelectContent>
+                          {companies.map((company) => (
+                            <SelectItem key={company.id} value={String(company.id)}>
+                              {company.code} — {company.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="grid gap-1.5">
+                      <Label>Buyer role</Label>
+                      <Select
+                        value={membershipForm.buyerRole}
+                        onValueChange={(buyerRole) => setMembershipForm({ ...membershipForm, buyerRole })}
+                        disabled={membershipMutation.isPending}
+                      >
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="requester">Requester</SelectItem>
+                          <SelectItem value="procurement">Procurement</SelectItem>
+                          <SelectItem value="finance">Finance</SelectItem>
+                          <SelectItem value="admin">Admin</SelectItem>
+                          <SelectItem value="viewer">Viewer</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="grid gap-1.5">
+                      <Label>Approval level</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        step={1}
+                        placeholder="Opsional"
+                        value={membershipForm.approvalLevel}
+                        onChange={(event) => setMembershipForm({ ...membershipForm, approvalLevel: event.target.value })}
+                        disabled={membershipMutation.isPending}
+                      />
+                    </div>
+                    <div className="grid gap-1.5">
+                      <Label>Department</Label>
+                      <Input
+                        placeholder="Opsional"
+                        value={membershipForm.department}
+                        onChange={(event) => setMembershipForm({ ...membershipForm, department: event.target.value })}
+                        disabled={membershipMutation.isPending}
+                      />
+                    </div>
+                    <div className="grid gap-1.5">
+                      <Label>Cost center</Label>
+                      <Input
+                        placeholder="Opsional"
+                        value={membershipForm.costCenter}
+                        onChange={(event) => setMembershipForm({ ...membershipForm, costCenter: event.target.value })}
+                        disabled={membershipMutation.isPending}
+                      />
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    className="gap-2"
+                    onClick={submitMembership}
+                    disabled={membershipMutation.isPending}
+                  >
+                    <UserRoundPlus className="w-4 h-4" />
+                    {membershipMutation.isPending ? "Menyimpan…" : "Assign Membership"}
+                  </Button>
+                </div>
+              </div>
             </div>
           )}
 
