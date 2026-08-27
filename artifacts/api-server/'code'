@@ -1,0 +1,20 @@
+[load-secrets] Environment: production
+[load-secrets] GCP project: secret-504012 (from bootstrap JSON)
+[load-secrets] Bundle: cst-super-app-production
+[load-secrets] Fetching: projects/secret-504012/secrets/cst-super-app-production/versions/latest
+[load-secrets] Secrets loaded — new: 37, overridden: 1
+[load-secrets] Injected keys: FONNTE_TOKEN, GCP_PROJECT_ID, GCP_SECRET_ID, GITHUB_TOKEN_PERSONAL_ACCESS_TOKEN, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, OPENAI_API_KEY, PAYLABS_PRIVATE_KEY, SUPABASE_DATABASE_URL, VITE_SUPABASE_ANON_KEY, VITE_SUPABASE_URL, ADMIN_EMAIL, ADMIN_EMAILS, ADMIN_WA_PHONES, DEFAULT_OBJECT_STORAGE_BUCKET_ID, DRIVER_JWT_SECRET, FONNTE_ADMIN_WA, GOOGLE_SHEET_ID_BANK_MUTATIONS, PAYLABS_MERCHANT_ID, PAYLABS_MERCHANT_ID_SANDBOX, PAYLABS_PRIVATE_KEY_SANDBOX, PAYLABS_PUBLIC_KEY, PAYLABS_PUBLIC_KEY_SANDBOX, PORTAL_ADMIN_EMAILS, PORTAL_ADMIN_KEY, PORTAL_JWT_SECRET, PRIVATE_OBJECT_DIR, PUBLIC_OBJECT_SEARCH_PATHS, SMTP_FROM, SMTP_PASS, SMTP_USER, GOOGLE_REDIRECT_BASE_URL, SUPABASE_MIGRATION_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_STORAGE_BUCKET, SUPABASE_URL, ADMIN_EMAIL_DOMAINS
+[load-secrets] Required secrets: OK ✓
+[load-secrets] Starting: node --input-type=module --eval 
+import pg from "pg";
+const pool = new pg.Pool({ connectionString: process.env.SUPABASE_DATABASE_URL, ssl: { rejectUnauthorized: false }, max: 1 });
+try {
+  const { rows } = await pool.query(`
+    SELECT id, company_id, transaction_date, direction, amount, status, review_code, review_reason, source, source_account
+    FROM bank_mutations
+    WHERE (transaction_date::date = $1::date AND direction = $2 AND amount = $3)
+       OR (transaction_date::date = $4::date AND direction = $5 AND amount = $6)
+    ORDER BY transaction_date, id
+  `, ["2026-07-31", "OUT", 2500, "2026-07-20", "IN", 500000]);
+  const audits = rows.length ? await pool.query(`
+    SELECT mutation_id, action, meta->>\error' AS error, meta- AS code, created_at
