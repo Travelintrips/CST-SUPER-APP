@@ -7,7 +7,9 @@ import {
   type QrisPaymentCandidateInput,
 } from "./qrisCandidateEngine.js";
 import {
+  accountProviderRuleCatalogFromRows,
   normalizeQrisProvider,
+  providerRuleCatalogFromRows,
   providerRulesByBankAccountFromRows,
   providerRulesFromRows,
 } from "./providerSettlementRules.js";
@@ -278,6 +280,12 @@ export async function generateQrisCandidates(options: {
   const existingMutationFilter = mutationId == null ? "" : `WHERE mutation_id = ${mutationId}`;
   const dateFilter = options.from ? `AND bm.transaction_date >= '${esc(options.from)}'` : "";
   const toFilter = options.to ? `AND bm.transaction_date <= '${esc(options.to)}'` : "";
+  const ruleCompanyFilter = options.companyId && Number.isInteger(options.companyId)
+    ? `AND (company_id IS NULL OR company_id = ${Number(options.companyId)})`
+    // Account IDs are globally unique, so unscoped generation can safely load
+    // every account-specific rule. Company-specific rules without an account
+    // are excluded here to prevent them leaking into another company.
+    : "AND (company_id IS NULL OR bank_account_id IS NOT NULL)";
 
   const [canonicalAvailable, phase4Available] = await Promise.all([
     hasCanonicalSettlementSchema(),
@@ -354,11 +362,14 @@ export async function generateQrisCandidates(options: {
     `)).catch(() => ({ rows: [] as unknown[] })),
     db.execute(sql.raw(`
       SELECT company_id, bank_account_id, provider_code, rule_version,
+             effective_from, effective_until,
              settlement_delay_business_days, match_window_business_days,
-             max_effective_deduction_rate
+             max_effective_deduction_rate, absolute_variance_tolerance,
+             percentage_variance_tolerance
       FROM qris_provider_settlement_rules
       WHERE is_active = TRUE
-        AND (company_id IS NULL OR company_id = ${options.companyId ? Number(options.companyId) : "0"})
+        ${ruleCompanyFilter}
+      ORDER BY effective_from, id
     `)).catch(() => ({ rows: [] as unknown[] })),
     db.execute(sql.raw(`
        SELECT id, mutation_id, status, gross_amount, net_amount, payment_items,
@@ -385,6 +396,12 @@ export async function generateQrisCandidates(options: {
     { includeDefaults: true },
   );
   const accountRules = providerRulesByBankAccountFromRows(
+    ruleRows.rows as Array<Record<string, unknown>>,
+  );
+  const providerRuleCatalog = providerRuleCatalogFromRows(
+    ruleRows.rows as Array<Record<string, unknown>>,
+  );
+  const accountProviderRuleCatalog = accountProviderRuleCatalogFromRows(
     ruleRows.rows as Array<Record<string, unknown>>,
   );
 
@@ -477,6 +494,8 @@ export async function generateQrisCandidates(options: {
     holidays,
     providerRules: rules,
     accountProviderRules: accountRules,
+    providerRuleCatalog,
+    accountProviderRuleCatalog,
     existingMutationIds: finalMutationIds,
     requireExplicitSettlementMetadata: true,
   });

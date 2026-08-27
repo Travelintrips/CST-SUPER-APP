@@ -90,6 +90,8 @@ describe("QRIS candidate final-state race protection", () => {
       .find((text) => text.includes("SET candidate_source"));
     expect(refresh).toContain("status NOT IN ('approved', 'completed', 'superseded', 'stale', 'ineligible')");
     expect(dbMock.execute.mock.calls.map(([query]) => queryText(query)).join("\n"))
+      .toContain("company_id IS NULL OR bank_account_id IS NOT NULL");
+    expect(dbMock.execute.mock.calls.map(([query]) => queryText(query)).join("\n"))
       .not.toContain("INSERT INTO qris_mutation_batch_candidates");
   });
 });
