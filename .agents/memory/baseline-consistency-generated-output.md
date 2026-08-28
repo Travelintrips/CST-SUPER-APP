@@ -39,6 +39,18 @@ checkout or an isolated package check.
 **How to apply:** Treat the declaration build as part of the validation
 preflight, and report its command order when documenting typecheck evidence.
 
+Because declaration directories are ignored, a stale `tsconfig.tsbuildinfo`
+can make `tsc --build` report success while the referenced output files are
+missing. A missing-output check must use a forced rebuild rather than relying
+on incremental state alone.
+
+**Why:** Removing generated `dist` files does not necessarily invalidate
+TypeScript's incremental project state, which can recreate the misleading
+`TS6305` cascade in an isolated package check.
+
+**How to apply:** Keep root declaration preflight forced, and make direct API
+typecheck invoke the same forced preflight before checking `src`.
+
 Unit tests for admin guards also need the runtime admin configuration loaded
 when they assert invalid-token behavior. Without it, the intentional
 fail-closed response is 503 rather than the configured 401/403.
