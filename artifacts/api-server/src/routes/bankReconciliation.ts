@@ -1824,27 +1824,6 @@ router.patch("/qris-candidates/payments/:paymentId/date", async (req, res) => {
       };
     });
 
-    let candidateRefresh: { generated: number; persisted: number; reviewable: number } | null = null;
-    try {
-      const refreshed = await generateQrisCandidates({
-        companyId,
-        dryRun: false,
-      });
-      candidateRefresh = {
-        generated: refreshed.generated,
-        persisted: refreshed.persisted,
-        reviewable: refreshed.reviewable,
-      };
-    } catch (refreshError: any) {
-      // The source and mirror transaction has already committed. Candidate
-      // generation is provisional and can be retried from the UI without
-      // rolling back a valid source correction.
-      logger.warn(
-        { err: refreshError?.cause?.message ?? refreshError?.message, paymentId },
-        "[bankRecon] QRIS candidate refresh after payment date update failed",
-      );
-    }
-
     audit(req, {
       action: "update-sport-center-payment-date",
       module: "accounting",
@@ -1857,11 +1836,40 @@ router.patch("/qris-candidates/payments/:paymentId/date", async (req, res) => {
       },
     });
 
+    // Candidate generation is provisional and can scan every payment and bank
+    // mutation for the company. Do not make the reviewer wait for that work:
+    // the canonical source transaction above is already committed and the
+    // candidate refresh can safely run after the response has been flushed.
+    setImmediate(() => {
+      void generateQrisCandidates({
+        companyId,
+        dryRun: false,
+      }).then((refreshed) => {
+        logger.info(
+          {
+            paymentId,
+            generated: refreshed.generated,
+            persisted: refreshed.persisted,
+            reviewable: refreshed.reviewable,
+          },
+          "[bankRecon] QRIS candidate refresh after payment date update completed",
+        );
+      }).catch((refreshError: any) => {
+        // The source and mirror transaction has already committed. Candidate
+        // generation is provisional and can be retried from the UI without
+        // rolling back a valid source correction.
+        logger.warn(
+          { err: refreshError?.cause?.message ?? refreshError?.message, paymentId },
+          "[bankRecon] QRIS candidate refresh after payment date update failed",
+        );
+      });
+    });
+
     return res.json({
       ok: true,
       source: "sport_center.sport_payments",
       ...result,
-      candidateRefresh,
+      candidateRefreshPending: true,
       message: result.accounting.requiresCorrectionWorkflow
         ? "Tanggal sumber dan mirror diperbarui. Jurnal posted tetap immutable; gunakan workflow reversal/correction untuk mengubah tanggal jurnal."
         : "Tanggal payment dan data akunting yang masih mutable berhasil disinkronkan.",

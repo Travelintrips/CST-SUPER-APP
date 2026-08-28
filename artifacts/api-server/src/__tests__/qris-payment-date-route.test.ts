@@ -21,4 +21,19 @@ describe("QRIS payment date update route", () => {
     expect(route).toContain("FOR UPDATE OF sp");
     expect(route).not.toContain("\n        FOR UPDATE\n");
   });
+
+  it("does not wait for full-company candidate regeneration before responding", () => {
+    const routeStart = routeSource.indexOf(
+      'router.patch("/qris-candidates/payments/:paymentId/date"',
+    );
+    const routeEnd = routeSource.indexOf(
+      '// ─── POST /api/bank-reconciliation/qris-candidates/:id/approve',
+      routeStart,
+    );
+    const route = routeSource.slice(routeStart, routeEnd);
+
+    expect(route).toContain("setImmediate(() =>");
+    expect(route).toContain("candidateRefreshPending: true");
+    expect(route).not.toContain("const refreshed = await generateQrisCandidates");
+  });
 });

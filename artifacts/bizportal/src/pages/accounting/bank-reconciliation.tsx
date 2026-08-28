@@ -5238,16 +5238,20 @@ export default function BankReconciliationPage() {
         message?: string;
       };
     },
-    onSuccess: async (result) => {
+    onSuccess: (result) => {
       setQrisDateTarget(null);
       toast({
         title: "Tanggal payment berhasil disimpan",
         description: result.accounting?.requiresCorrectionWorkflow
           ? "Mirror sudah diperbarui. Jurnal posted tetap immutable dan memerlukan workflow koreksi."
-          : "Data payment dan akunting yang masih mutable sudah disinkronkan.",
+          : "Data payment dan akunting yang masih mutable sudah disinkronkan. Kandidat QRIS diperbarui di latar belakang.",
       });
-      await Promise.all([refetchQrisAudit(), refetch()]);
-      qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
+      // The date mutation has already committed successfully. Refresh the
+      // visible lists without keeping the save mutation in a pending state;
+      // candidate regeneration on the API is also intentionally asynchronous.
+      void Promise.allSettled([refetchQrisAudit(), refetch()]).then(() => {
+        void qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
+      });
     },
     onError: (error: Error) => {
       toast({ title: "Gagal menyimpan tanggal payment", description: error.message, variant: "destructive" });
