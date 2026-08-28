@@ -50,3 +50,17 @@ a failed supersede followed by an insert would create a parallel candidate.
 **How to apply:** Treat the status predicate and one-row result as the
 authoritative concurrent-finalization guard for both evidence-changing and
 evidence-preserving refreshes.
+
+Candidate generation must also exclude a public mutation when its
+`mutation_key` is already bridged to a reconciled canonical Sport Center
+settlement. A stale public header status is not sufficient evidence that the
+settlement is still open.
+
+**Why:** Older approval attempts can commit the canonical settlement without
+successfully transitioning the legacy/public mutation row, allowing a later
+refresh to recreate the same QRIS candidate.
+
+**How to apply:** Join the canonical bank-mutation bridge by `mutation_key`
+and use the reconciled settlement state as an additional fail-closed
+completion guard; keep posted canonical settlements without a bank link
+recoverable.

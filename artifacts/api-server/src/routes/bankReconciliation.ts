@@ -2997,7 +2997,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       settlementId,
       selectedPaymentIds,
       matching: {
-        status: matching.status,
+        status: approval.match_status,
         candidateSource: CANONICAL_SETTLEMENT_SOURCE,
       },
       approval,

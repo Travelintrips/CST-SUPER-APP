@@ -295,6 +295,23 @@ export async function generateQrisCandidates(options: {
     canonicalSettlementIdSql,
     alreadyReconciledSql,
   } = makeCanonicalFragments(canonicalAvailable);
+  // A canonical batch can be reconciled even when a legacy/public mutation
+  // header was not transitioned by an older approval attempt. Do not let that
+  // stale header re-enter candidate generation: the canonical bank mutation
+  // bridge is the authoritative completion signal.
+  const canonicalCompletedMutationFilter = canonicalAvailable
+    ? `
+        AND NOT EXISTS (
+          SELECT 1
+          FROM sport_center.payment_settlement_batches psb
+          JOIN sport_center.bank_mutations sbm
+            ON sbm.id = psb.bank_mutation_id
+          WHERE psb.status = 'reconciled'
+            AND psb.bank_mutation_id IS NOT NULL
+            AND sbm.mutation_key = bm.mutation_key
+        )
+      `
+    : "";
   const {
     providerCodeSql,
     settlementDateSql,
@@ -350,6 +367,7 @@ export async function generateQrisCandidates(options: {
         AND COALESCE(bm.source_classification, 'unknown') <> 'synthetic'
         AND LOWER(COALESCE(bm.status, 'unmatched')) NOT IN
           ('posted', 'approved', 'approved_pending_posting', 'void')
+         ${canonicalCompletedMutationFilter}
         ${mutationCompanyFilter}
         ${mutationFilter}
         ${dateFilter}
@@ -694,7 +712,11 @@ export async function listQrisCandidates(options: {
     : "";
   const completedFilter = options.includeCompleted
     ? ""
-    : "AND c.status NOT IN ('approved', 'completed', 'superseded', 'stale', 'ineligible')";
+    : `
+        AND c.status NOT IN ('approved', 'completed', 'superseded', 'stale', 'ineligible')
+        AND LOWER(COALESCE(bm.status, 'unmatched')) NOT IN
+          ('posted', 'approved', 'approved_pending_posting', 'void')
+      `;
   const limit = Math.min(Math.max(Number(options.limit ?? 100), 1), 500);
 
   const canonicalAvailable = await hasCanonicalSettlementSchema();
