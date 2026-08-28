@@ -120,7 +120,7 @@ describe("submitMarketplaceQuote authenticated ownership boundary", () => {
 
   it("uses session customer identity for RFQ and legacy dual-write despite forged body email", async () => {
     const { tx, insertedValues } = makeTx();
-    mockDb.transaction.mockImplementation(async (callback: (tx: typeof tx) => unknown) => callback(tx));
+    mockDb.transaction.mockImplementation(async (callback: (transaction: ReturnType<typeof makeTx>["tx"]) => unknown) => callback(tx));
     mockCreateMktRfqEntry.mockResolvedValue({ rfqId: 202, rfqNumber: "MKT-RFQ-202608-0202" });
 
     const { submitMarketplaceQuote } = await import("../portalMarketplaceService.js");
