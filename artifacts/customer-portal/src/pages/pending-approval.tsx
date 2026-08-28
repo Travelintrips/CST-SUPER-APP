@@ -10,6 +10,7 @@ interface OnboardingStatus {
   customerType?: "individual" | "company" | null;
   rejectionReason?: string;
   customerContext?: {
+    status?: string;
     pendingRequest?: {
       requestedCompanyName: string;
       requestedRegistrationNumber: string | null;
@@ -55,6 +56,13 @@ export default function PendingApprovalPage() {
       const data = await res.json() as OnboardingStatus;
       setStatus(data);
       if (data.status === "active") {
+        if (
+          data.customerContext?.status === "legacy_unresolved"
+          || data.customerContext?.status === "company_unresolved"
+        ) {
+          setLocation("/onboarding");
+          return;
+        }
         const role = data.accountType;
         if (role === "vendor") setLocation("/vendor-dashboard");
         else setLocation("/dashboard");

@@ -21,6 +21,7 @@ import {
 type AccountType = "customer" | "vendor" | "driver" | "employee";
 type CustomerType = "individual" | "company";
 type Step = "basic" | "account-type" | "type-specific" | "review";
+type OrganizationCompletionStatus = "legacy_unresolved" | "company_unresolved";
 
 const STEPS: Step[] = ["basic", "account-type", "type-specific", "review"];
 
@@ -117,6 +118,8 @@ export default function OnboardingPage() {
   const { t } = useLanguage();
   const authed = isAuthenticated();
 
+  const [organizationCompletion, setOrganizationCompletion] = useState<OrganizationCompletionStatus | null>(null);
+  const [statusLoading, setStatusLoading] = useState(true);
   const [step, setStep]             = useState<Step>("basic");
   const [accountType, setAccountType] = useState<AccountType>("customer");
   const [customerType, setCustomerType] = useState<CustomerType | null>(null);
@@ -160,16 +163,31 @@ export default function OnboardingPage() {
     // Check if already completed
     fetch("/api/portal/onboarding/status", { credentials: "include" })
       .then(r => r.json())
-      .then((d: { status: string; accountType?: string }) => {
-        if (d.status === "active") {
+      .then((d: {
+        status: string;
+        accountType?: string;
+        hasProfile?: boolean;
+        customerType?: CustomerType | null;
+        customerContext?: { status?: string };
+      }) => {
+        const contextStatus = d.customerContext?.status;
+        const isExistingCustomerWithUnresolvedOrganization =
+          d.status === "active"
+          && d.hasProfile === true
+          && (contextStatus === "legacy_unresolved" || contextStatus === "company_unresolved");
+
+        if (isExistingCustomerWithUnresolvedOrganization) {
+          setOrganizationCompletion(contextStatus as OrganizationCompletionStatus);
+          setCustomerType(d.customerType ?? (contextStatus === "company_unresolved" ? "company" : null));
+        } else if (d.status === "active") {
           if (d.accountType === "vendor") setLocation("/vendor-dashboard");
           else setLocation("/dashboard");
         } else if (d.status === "pending") {
           setLocation("/pending-approval");
         }
-        // If existing profile data, pre-fill
+        setStatusLoading(false);
       })
-      .catch(() => {/* ignore */});
+      .catch(() => setStatusLoading(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed, setLocation]);
 
@@ -401,6 +419,21 @@ export default function OnboardingPage() {
   }
 
   if (!authed) return null;
+  if (statusLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+  if (organizationCompletion) {
+    return (
+      <LegacyOrganizationCompletion
+        initialCustomerType={customerType}
+        onLogout={() => { removeAuthToken(); setLocation("/login"); }}
+      />
+    );
+  }
 
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
@@ -972,6 +1005,290 @@ function Row({ label, value }: { label: string; value?: string | null }) {
     <div className="px-4 py-2.5 flex justify-between gap-4">
       <span className="text-muted-foreground flex-shrink-0">{label}</span>
       <span className="font-medium text-right">{value || "-"}</span>
+    </div>
+  );
+}
+
+function LegacyOrganizationCompletion({
+  initialCustomerType,
+  onLogout,
+}: {
+  initialCustomerType: CustomerType | null;
+  onLogout: () => void;
+}) {
+  const [, setLocation] = useLocation();
+  const [customerType, setCustomerType] = useState<CustomerType | null>(initialCustomerType);
+  const [companySearch, setCompanySearch] = useState("");
+  const [companyOptions, setCompanyOptions] = useState<Array<{ id: number; name: string; code: string | null }>>([]);
+  const [selectedCompanyId, setSelectedCompanyId] = useState<number | null>(null);
+  const [companyRequestMode, setCompanyRequestMode] = useState(false);
+  const [requestedCompanyName, setRequestedCompanyName] = useState("");
+  const [requestedRegistrationNumber, setRequestedRegistrationNumber] = useState("");
+  const [loadingCompanies, setLoadingCompanies] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (customerType !== "company") {
+      setCompanyOptions([]);
+      return;
+    }
+    const timer = window.setTimeout(async () => {
+      setLoadingCompanies(true);
+      try {
+        const params = new URLSearchParams();
+        if (companySearch.trim()) params.set("search", companySearch.trim());
+        const response = await fetch(`/api/portal/organization/companies?${params}`, {
+          credentials: "include",
+        });
+        if (!response.ok) throw new Error("Gagal memuat daftar perusahaan.");
+        const data = await response.json() as Array<{ id: number; name: string; code: string | null }>;
+        setCompanyOptions(Array.isArray(data) ? data : []);
+      } catch {
+        setCompanyOptions([]);
+      } finally {
+        setLoadingCompanies(false);
+      }
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [customerType, companySearch]);
+
+  async function submit() {
+    setError(null);
+    if (!customerType) {
+      setError("Pilih Perorangan atau Perusahaan terlebih dahulu.");
+      return;
+    }
+    if (
+      customerType === "company"
+      && !selectedCompanyId
+      && (!companyRequestMode || !requestedCompanyName.trim())
+    ) {
+      setError("Pilih perusahaan yang sudah terdaftar atau ajukan perusahaan baru.");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const response = await fetch("/api/portal/organization", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          customerType,
+          companyId: customerType === "company" && selectedCompanyId ? selectedCompanyId : undefined,
+          requestedCompanyName: customerType === "company" && companyRequestMode
+            ? requestedCompanyName.trim()
+            : undefined,
+          requestedRegistrationNumber: customerType === "company" && companyRequestMode
+            ? requestedRegistrationNumber.trim() || undefined
+            : undefined,
+        }),
+      });
+      const data = await response.json() as {
+        error?: string;
+        context?: { status?: string };
+      };
+      if (!response.ok) {
+        setError(data.error ?? "Gagal menyimpan pilihan organisasi.");
+        return;
+      }
+      if (data.context?.status === "company_pending") {
+        setLocation("/pending-approval");
+      } else {
+        setLocation("/dashboard");
+      }
+    } catch {
+      setError("Gagal menghubungi server. Silakan coba lagi.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+      <div className="max-w-lg w-full bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden">
+        <div className="px-6 py-7 bg-emerald-50 border-b border-emerald-100">
+          <div className="flex items-start gap-3">
+            <div className="rounded-xl bg-emerald-100 p-2.5 text-emerald-700">
+              <User className="h-6 w-6" />
+            </div>
+            <div>
+              <h1 className="text-xl font-bold text-gray-900">Lengkapi jenis akun Customer Portal</h1>
+              <p className="text-sm text-gray-600 mt-1">
+                Gunakan Customer Portal sebagai
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-6 space-y-5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {([
+              {
+                value: "individual" as const,
+                label: "Perorangan",
+                description: "Tidak memerlukan membership perusahaan dan dapat membuat RFQ langsung.",
+                icon: User,
+              },
+              {
+                value: "company" as const,
+                label: "Perusahaan",
+                description: "Pilih perusahaan canonical atau ajukan perusahaan baru untuk diverifikasi admin.",
+                icon: Building2,
+              },
+            ]).map(({ value, label, description, icon: Icon }) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => {
+                  setCustomerType(value);
+                  setError(null);
+                  if (value === "individual") {
+                    setSelectedCompanyId(null);
+                    setCompanyRequestMode(false);
+                  }
+                }}
+                className={`rounded-xl border-2 p-4 text-left transition-all ${
+                  customerType === value
+                    ? "border-emerald-500 bg-emerald-50 shadow-sm"
+                    : "border-gray-100 hover:border-emerald-200"
+                }`}
+              >
+                <Icon className={`h-5 w-5 mb-2 ${customerType === value ? "text-emerald-600" : "text-gray-400"}`} />
+                <span className="block font-semibold text-sm">{label}</span>
+                <span className="block text-xs text-muted-foreground mt-1">{description}</span>
+              </button>
+            ))}
+          </div>
+
+          {customerType === "company" && (
+            <div className="space-y-4 rounded-xl border border-blue-200 bg-blue-50/50 p-4">
+              {!companyRequestMode ? (
+                <>
+                  <div className="space-y-2">
+                    <Label htmlFor="legacy-company-search">Cari perusahaan yang sudah terdaftar</Label>
+                    <Input
+                      id="legacy-company-search"
+                      value={companySearch}
+                      onChange={(event) => {
+                        setCompanySearch(event.target.value);
+                        setSelectedCompanyId(null);
+                      }}
+                      placeholder="Ketik nama atau kode perusahaan"
+                    />
+                  </div>
+                  <div className="rounded-lg border bg-white divide-y max-h-52 overflow-y-auto">
+                    {loadingCompanies ? (
+                      <div className="p-4 text-sm text-muted-foreground flex items-center gap-2">
+                        <Loader2 className="h-4 w-4 animate-spin" /> Memuat perusahaan…
+                      </div>
+                    ) : companyOptions.length > 0 ? (
+                      companyOptions.map((company) => (
+                        <button
+                          key={company.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedCompanyId(company.id);
+                            setError(null);
+                          }}
+                          className={`w-full flex items-center justify-between gap-3 p-3 text-left hover:bg-emerald-50 ${
+                            selectedCompanyId === company.id ? "bg-emerald-50 ring-1 ring-inset ring-emerald-400" : ""
+                          }`}
+                        >
+                          <span>
+                            <span className="block font-medium text-sm">{company.name}</span>
+                            <span className="block text-xs text-muted-foreground">{company.code ?? "Tanpa kode"}</span>
+                          </span>
+                          {selectedCompanyId === company.id && <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />}
+                        </button>
+                      ))
+                    ) : (
+                      <p className="p-4 text-sm text-muted-foreground">Perusahaan tidak ditemukan.</p>
+                    )}
+                  </div>
+                  {selectedCompanyId && (
+                    <p className="text-sm text-emerald-700 flex items-center gap-2">
+                      <CheckCircle2 className="h-4 w-4" /> Membership akan dibuat atau diaktifkan untuk perusahaan ini.
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    className="text-sm font-medium text-emerald-700 hover:underline"
+                    onClick={() => {
+                      setCompanyRequestMode(true);
+                      setSelectedCompanyId(null);
+                      setError(null);
+                    }}
+                  >
+                    Perusahaan saya belum terdaftar
+                  </button>
+                </>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-semibold text-sm text-gray-900">Ajukan perusahaan baru</p>
+                      <p className="text-xs text-gray-600 mt-1">Admin akan memeriksa dan memetakan perusahaan Anda ke data canonical.</p>
+                    </div>
+                    <button
+                      type="button"
+                      className="text-xs text-emerald-700 underline"
+                      onClick={() => setCompanyRequestMode(false)}
+                    >
+                      Pilih dari daftar
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="legacy-requested-company-name">Nama perusahaan</Label>
+                    <Input
+                      id="legacy-requested-company-name"
+                      value={requestedCompanyName}
+                      onChange={(event) => setRequestedCompanyName(event.target.value)}
+                      placeholder="PT Nama Perusahaan"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="legacy-requested-registration">Nomor registrasi (opsional)</Label>
+                    <Input
+                      id="legacy-requested-registration"
+                      value={requestedRegistrationNumber}
+                      onChange={(event) => setRequestedRegistrationNumber(event.target.value)}
+                      placeholder="NIB / NPWP"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {error && (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+
+          {customerType === "company" && (selectedCompanyId || (companyRequestMode && requestedCompanyName.trim())) && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+              {selectedCompanyId
+                ? "Setelah disimpan, Anda dapat membuat RFQ dengan konteks perusahaan yang dipilih."
+                : "Perusahaan akan berstatus menunggu verifikasi admin. RFQ perusahaan baru tersedia setelah pemetaan selesai."}
+            </div>
+          )}
+
+          <div className="flex gap-3 pt-1">
+            <Button variant="outline" className="flex-1 gap-2" onClick={onLogout} disabled={submitting}>
+              <LogOut className="h-4 w-4" /> Keluar
+            </Button>
+            <Button className="flex-1 gap-2" onClick={submit} disabled={submitting}>
+              {submitting
+                ? <><Loader2 className="h-4 w-4 animate-spin" /> Menyimpan…</>
+                : <><CheckCircle2 className="h-4 w-4" /> Simpan pilihan</>}
+            </Button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

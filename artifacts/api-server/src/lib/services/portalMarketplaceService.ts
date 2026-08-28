@@ -124,8 +124,14 @@ export async function submitMarketplaceQuote(params: {
   if (customerContext && customerContext.status === "company_pending") {
     throw makeServiceError(422, "Permintaan perusahaan Anda masih menunggu persetujuan admin.");
   }
+  if (customerContext?.status === "legacy_unresolved") {
+    throw makeServiceError(422, "Pilih jenis akun Perorangan atau Perusahaan terlebih dahulu sebelum membuat permintaan penawaran.");
+  }
+  if (customerContext?.status === "company_unresolved") {
+    throw makeServiceError(422, "Lengkapi informasi perusahaan terlebih dahulu sebelum membuat permintaan penawaran.");
+  }
   if (customerContext && customerContext.status !== "individual" && customerContext.status !== "company_mapped") {
-    throw makeServiceError(422, "Lengkapi atau tunggu verifikasi organisasi Customer Portal sebelum membuat RFQ.");
+    throw makeServiceError(422, "Lengkapi informasi organisasi Customer Portal sebelum membuat permintaan penawaran.");
   }
   const portalCompanyId = customerContext?.companyId ?? null;
 

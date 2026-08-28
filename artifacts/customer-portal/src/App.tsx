@@ -223,7 +223,23 @@ async function checkOnboardingAndRedirect(
       credentials: "include",
     });
     if (res.ok) {
-      const d = await res.json() as { status: string; accountType?: string };
+      const d = await res.json() as {
+        status: string;
+        accountType?: string;
+        customerContext?: { status?: string };
+      };
+      const organizationStatus = d.customerContext?.status;
+      if (
+        d.status === "active"
+        && (organizationStatus === "legacy_unresolved" || organizationStatus === "company_unresolved")
+      ) {
+        setLocation("/onboarding");
+        return;
+      }
+      if (organizationStatus === "company_pending") {
+        setLocation("/pending-approval");
+        return;
+      }
       if (d.status === "incomplete") { setLocation("/onboarding"); return; }
       if (d.status === "pending" || d.status === "rejected") { setLocation("/pending-approval"); return; }
     }
