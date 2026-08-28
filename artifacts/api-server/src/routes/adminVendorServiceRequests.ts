@@ -20,6 +20,7 @@ const SOURCE_TYPES = new Set([
   "logistic_rfq",
   "air_freight_rfq",
   "ocean_freight_rfq",
+  "ppjk_order",
   "marketplace_quote",
 ]);
 
@@ -83,6 +84,9 @@ const unifiedCte = sql`
           OR lower(COALESCE(p.service_type, '') || ' ' || COALESCE(p.category, '')) LIKE '%ocean%'
           OR lower(COALESCE(p.service_type, '') || ' ' || COALESCE(p.category, '')) LIKE '%laut%' THEN 'sea_freight'
         WHEN lower(COALESCE(p.service_type, '') || ' ' || COALESCE(p.category, '')) LIKE '%air%' THEN 'air_freight'
+        WHEN lower(COALESCE(p.service_type, '') || ' ' || COALESCE(p.category, '')) LIKE '%clearance%' THEN 'custom_clearance'
+        WHEN lower(COALESCE(p.service_type, '') || ' ' || COALESCE(p.category, '')) LIKE '%domestic%'
+          OR lower(COALESCE(p.service_type, '') || ' ' || COALESCE(p.category, '')) LIKE '%domestik%' THEN 'domestic'
         WHEN lower(COALESCE(p.service_type, '') || ' ' || COALESCE(p.category, '')) LIKE '%custom%'
           OR lower(COALESCE(p.service_type, '') || ' ' || COALESCE(p.category, '')) LIKE '%pabean%'
           OR lower(COALESCE(p.service_type, '') || ' ' || COALESCE(p.category, '')) LIKE '%ppjk%' THEN 'customs'
@@ -123,6 +127,7 @@ const unifiedCte = sql`
         WHEN lower(COALESCE(o.service_category, '') || ' ' || COALESCE(o.transport_mode, '') || ' ' || COALESCE(o.shipment_type, '') || ' ' || COALESCE(o.shipment_mode, '') || ' ' || COALESCE(r.rfq_type, '') || ' ' || COALESCE(l.rfq_type, '')) LIKE '%sea%'
           OR lower(COALESCE(o.service_category, '') || ' ' || COALESCE(o.transport_mode, '') || ' ' || COALESCE(o.shipment_type, '') || ' ' || COALESCE(o.shipment_mode, '') || ' ' || COALESCE(r.rfq_type, '') || ' ' || COALESCE(l.rfq_type, '')) LIKE '%ocean%'
           OR lower(COALESCE(o.service_category, '') || ' ' || COALESCE(o.transport_mode, '') || ' ' || COALESCE(o.shipment_type, '') || ' ' || COALESCE(o.shipment_mode, '') || ' ' || COALESCE(r.rfq_type, '') || ' ' || COALESCE(l.rfq_type, '')) LIKE '%laut%' THEN 'sea_freight'
+        WHEN lower(COALESCE(o.service_category, '') || ' ' || COALESCE(o.transport_mode, '') || ' ' || COALESCE(o.shipment_type, '') || ' ' || COALESCE(o.shipment_mode, '') || ' ' || COALESCE(r.rfq_type, '') || ' ' || COALESCE(l.rfq_type, '')) LIKE '%clearance%' THEN 'custom_clearance'
         WHEN lower(COALESCE(o.service_category, '') || ' ' || COALESCE(o.transport_mode, '') || ' ' || COALESCE(o.shipment_type, '') || ' ' || COALESCE(o.shipment_mode, '') || ' ' || COALESCE(r.rfq_type, '') || ' ' || COALESCE(l.rfq_type, '')) LIKE '%custom%'
           OR lower(COALESCE(o.service_category, '') || ' ' || COALESCE(o.transport_mode, '') || ' ' || COALESCE(o.shipment_type, '') || ' ' || COALESCE(o.shipment_mode, '') || ' ' || COALESCE(r.rfq_type, '') || ' ' || COALESCE(l.rfq_type, '')) LIKE '%pabean%'
           OR lower(COALESCE(o.service_category, '') || ' ' || COALESCE(o.transport_mode, '') || ' ' || COALESCE(o.shipment_type, '') || ' ' || COALESCE(o.shipment_mode, '') || ' ' || COALESCE(r.rfq_type, '') || ' ' || COALESCE(l.rfq_type, '')) LIKE '%ppjk%' THEN 'customs'
@@ -198,8 +203,14 @@ const unifiedCte = sql`
       COALESCE(v.name, s.vendor_name)::text,
       v.phone::text,
       v.contact_email::text,
-      'Sea Freight / Ocean Freight'::text,
-      'sea_freight'::text,
+       CASE
+         WHEN lower(COALESCE(o.trade_type, '')) IN ('domestic', 'domestik') THEN 'Domestic'
+         ELSE 'Sea Freight / Ocean Freight'
+       END::text,
+       CASE
+         WHEN lower(COALESCE(o.trade_type, '')) IN ('domestic', 'domestik') THEN 'domestic'
+         ELSE 'sea_freight'
+       END::text,
       COALESCE(r.status, 'unknown')::text,
       s.status::text,
       s.status::text,
@@ -219,6 +230,48 @@ const unifiedCte = sql`
     LEFT JOIN suppliers v ON v.id = s.vendor_id
 
     UNION ALL
+
+     SELECT
+       'ppjk_order'::text,
+       pk.id::text,
+       pk.id::text,
+       pk.order_number::text,
+       pk.customer_name::text,
+       pk.customer_email::text,
+       pk.customer_company::text,
+       COALESCE(v.id, pk.vendor_id)::int,
+       COALESCE(v.name, pk.vendor_name)::text,
+       v.phone::text,
+       v.contact_email::text,
+       CASE lower(COALESCE(pk.jenis_pelayanan, ''))
+         WHEN 'customs_clearance' THEN 'Custom Clearance'
+         WHEN 'customs_import' THEN 'Kepabeanan / PIB Impor'
+         WHEN 'customs_export' THEN 'Kepabeanan / PEB Ekspor'
+         WHEN 'customs_transit' THEN 'Kepabeanan / Transit'
+         WHEN 'full_service' THEN 'PPJK / Full Service'
+         ELSE 'PPJK / Customs Clearance'
+       END::text,
+       CASE
+         WHEN lower(COALESCE(pk.jenis_pelayanan, '')) = 'customs_clearance' THEN 'custom_clearance'
+         ELSE 'customs'
+       END::text,
+       pk.status::text,
+       NULL::text,
+       COALESCE(pk.customs_status, pk.status)::text,
+       NULL::text,
+       pk.total_service_fee::numeric,
+       NULL::text,
+       COALESCE(pk.notes, pk.admin_notes)::text,
+       pk.created_at::timestamptz,
+       NULL::timestamptz,
+       NULL::timestamptz,
+       NULL::timestamptz,
+       NULL::timestamptz,
+       false::boolean
+     FROM ppjk_orders pk
+     LEFT JOIN suppliers v ON v.id = pk.vendor_id
+
+     UNION ALL
 
     SELECT
       'marketplace_quote'::text,
@@ -246,6 +299,7 @@ const unifiedCte = sql`
           OR lower(COALESCE(catalog.service_type, '') || ' ' || COALESCE(catalog.category_key, '') || ' ' || COALESCE(line.item_name, '')) LIKE '%ocean%'
           OR lower(COALESCE(catalog.service_type, '') || ' ' || COALESCE(catalog.category_key, '') || ' ' || COALESCE(line.item_name, '')) LIKE '%laut%' THEN 'sea_freight'
         WHEN lower(COALESCE(catalog.service_type, '') || ' ' || COALESCE(catalog.category_key, '') || ' ' || COALESCE(line.item_name, '')) LIKE '%air%' THEN 'air_freight'
+        WHEN lower(COALESCE(catalog.service_type, '') || ' ' || COALESCE(catalog.category_key, '') || ' ' || COALESCE(line.item_name, '')) LIKE '%clearance%' THEN 'custom_clearance'
         WHEN lower(COALESCE(catalog.service_type, '') || ' ' || COALESCE(catalog.category_key, '') || ' ' || COALESCE(line.item_name, '')) LIKE '%custom%'
           OR lower(COALESCE(catalog.service_type, '') || ' ' || COALESCE(catalog.category_key, '') || ' ' || COALESCE(line.item_name, '')) LIKE '%pabean%'
           OR lower(COALESCE(catalog.service_type, '') || ' ' || COALESCE(catalog.category_key, '') || ' ' || COALESCE(line.item_name, '')) LIKE '%ppjk%' THEN 'customs'
@@ -400,6 +454,10 @@ async function readToken(sourceType: string, id: number): Promise<{ token: strin
       const row = r.rows[0] as any;
       return { token: row?.token ?? null, expiresAt: row?.expires_at ?? null, status: row?.status ?? null };
     }
+    case "ppjk_order":
+      // PPJK is a direct internal assignment lifecycle; it has no vendor
+      // invitation token or vendor quotation endpoint.
+      return { token: null, expiresAt: null, status: null };
     case "marketplace_quote": {
       const r = await db.execute(sql`SELECT token, valid_until AS expires_at, status FROM mkt_vendor_quotes WHERE id = ${id} LIMIT 1`);
       const row = r.rows[0] as any;
@@ -415,6 +473,12 @@ adminVendorServiceRequestsRouter.post("/:sourceType/:id/access-link", requirePor
   const sourceType = routeParam(req.params.sourceType);
   if (!id || !SOURCE_TYPES.has(sourceType)) return res.status(400).json({ error: "Identitas request tidak valid" });
   try {
+    if (sourceType === "ppjk_order") {
+      return res.status(409).json({
+        code: "TOKEN_NOT_SUPPORTED",
+        error: "PPJK menggunakan assignment internal, bukan link vendor.",
+      });
+    }
     const current = await readToken(sourceType, id);
     if (!current.token) {
       return res.status(409).json({ code: "TOKEN_UNAVAILABLE", error: "Link tidak tersedia — buat ulang" });
@@ -438,6 +502,12 @@ adminVendorServiceRequestsRouter.post("/:sourceType/:id/regenerate", requirePort
   const sourceType = routeParam(req.params.sourceType);
   if (!id || !SOURCE_TYPES.has(sourceType)) return res.status(400).json({ error: "Identitas request tidak valid" });
   try {
+    if (sourceType === "ppjk_order") {
+      return res.status(409).json({
+        code: "TOKEN_NOT_SUPPORTED",
+        error: "PPJK menggunakan assignment internal, bukan link vendor.",
+      });
+    }
     const current = await readToken(sourceType, id);
     if (current.status === "accepted" || current.status === "selected" || current.status === "submitted") {
       return res.status(409).json({ error: "Link tidak dapat dibuat ulang setelah vendor mengirim atau dipilih" });

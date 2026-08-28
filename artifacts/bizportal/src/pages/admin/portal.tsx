@@ -139,7 +139,8 @@ const SERVICE_LABELS: Record<string, string> = {
   domestic: "Domestik",
   sea_freight: "Sea Freight / Ocean",
   air_freight: "Air Freight",
-  customs: "Kepabeanan / Custom Clearance",
+  custom_clearance: "Custom Clearance",
+  customs: "Kepabeanan",
   marketplace: "Marketplace / Produk",
   other: "Layanan lain",
 };
@@ -149,6 +150,7 @@ const SOURCE_LABELS: Record<string, string> = {
   logistic_rfq: "Logistik RFQ",
   air_freight_rfq: "Air Freight RFQ",
   ocean_freight_rfq: "Ocean Freight RFQ",
+  ppjk_order: "PPJK assignment",
   marketplace_quote: "Marketplace quotation",
 };
 
@@ -166,7 +168,21 @@ const STATUS_LABELS: Record<string, string> = {
   quote_received: "Quotation masuk",
   open: "Terbuka",
   sent: "Terkirim",
+  draft: "Draft",
+  waiting_documents: "Menunggu dokumen",
+  document_review: "Review dokumen",
+  submitted_ceisa: "Terkirim ke CEISA",
+  completed: "Selesai",
+  cancelled: "Dibatalkan",
 };
+
+const TOKEN_LINK_SOURCES = new Set([
+  "portal_invitation",
+  "logistic_rfq",
+  "air_freight_rfq",
+  "ocean_freight_rfq",
+  "marketplace_quote",
+]);
 
 function requestStatusBadge(status: string | null | undefined, expired: boolean) {
   const value = expired ? "expired" : status || "unknown";
@@ -374,17 +390,19 @@ function VendorRequestsTab() {
                               <Button variant="outline" size="sm" className="h-8 px-2 text-xs" onClick={() => handleOpen(item)}><ExternalLink className="h-3.5 w-3.5" /></Button>
                             </>
                           ) : null}
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-8 px-2 text-xs"
-                            disabled={regenerating === key}
-                            onClick={() => handleRegenerate(item)}
-                            title="Invalidate link lama dan buat link baru"
-                          >
-                            {regenerating === key ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5 mr-1" />}
-                            <span className="hidden xl:inline">Regenerate</span>
-                          </Button>
+                          {TOKEN_LINK_SOURCES.has(item.source_type) && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-8 px-2 text-xs"
+                              disabled={regenerating === key}
+                              onClick={() => handleRegenerate(item)}
+                              title="Invalidate link lama dan buat link baru"
+                            >
+                              {regenerating === key ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5 mr-1" />}
+                              <span className="hidden xl:inline">Regenerate</span>
+                            </Button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -408,13 +426,17 @@ function VendorRequestsTab() {
                 <div className="rounded-md border p-3"><div className="text-xs text-muted-foreground">Customer</div><div className="font-medium">{selected.customer_name || "—"}</div><div className="text-xs text-muted-foreground">{selected.customer_company || selected.customer_email || "—"}</div></div>
                 <div className="rounded-md border p-3"><div className="text-xs text-muted-foreground">Vendor</div><div className="font-medium">{selected.vendor_name || "Open RFQ"}</div><div className="text-xs text-muted-foreground">{selected.vendor_phone || selected.vendor_email || "—"}</div></div>
                 <div className="rounded-md border p-3"><div className="text-xs text-muted-foreground">Layanan</div><div className="font-medium">{SERVICE_LABELS[selected.service_key] ?? selected.raw_service_type ?? "Layanan lain"}</div><div className="text-xs text-muted-foreground">raw: {selected.raw_service_type || "—"}</div></div>
-                <div className="rounded-md border p-3"><div className="text-xs text-muted-foreground">Status sumber</div><div className="mt-1">{requestStatusBadge(selected.raw_status, selected.is_expired)}</div><div className="text-xs text-muted-foreground mt-1">sourceType: {selected.source_type}</div></div>
+                <div className="rounded-md border p-3"><div className="text-xs text-muted-foreground">Status sumber</div><div className="mt-1">{requestStatusBadge(selected.raw_status, selected.is_expired)}</div><div className="text-xs text-muted-foreground mt-1">sourceType: {selected.source_type}</div>{selected.source_type === "ppjk_order" && <div className="text-xs text-amber-700 mt-1">Assignment internal; tidak memakai link vendor.</div>}</div>
                 <div className="rounded-md border p-3 sm:col-span-2"><div className="text-xs text-muted-foreground">Quotation</div><div className="font-medium">{selected.quotation_number || "Belum ada nomor quotation"}</div><div className="text-xs text-muted-foreground">{selected.quote_notes || "Belum ada catatan quotation."}</div></div>
                 <div className="rounded-md border p-3 sm:col-span-2"><div className="text-xs text-muted-foreground">Catatan request</div><div>{selected.request_notes || "Tidak ada catatan request."}</div></div>
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setSelected(null)}>Tutup</Button>
-                <Button onClick={() => handleCopy(selected)} disabled={!selected.token_available}><Copy className="h-4 w-4 mr-2" />Salin link</Button>
+                {TOKEN_LINK_SOURCES.has(selected.source_type) ? (
+                  <Button onClick={() => handleCopy(selected)} disabled={!selected.token_available}><Copy className="h-4 w-4 mr-2" />Salin link</Button>
+                ) : (
+                  <span className="text-xs text-muted-foreground self-center">Tidak ada link vendor pada lifecycle ini</span>
+                )}
               </DialogFooter>
             </>
           )}
