@@ -53,6 +53,10 @@ function sourceId(value: unknown): number | null {
   return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
 
+function routeParam(value: string | string[] | undefined): string {
+  return Array.isArray(value) ? String(value[0] ?? "") : String(value ?? "");
+}
+
 /**
  * All branches expose the same columns. `token_available` is only a boolean;
  * a raw token must never cross this read-model boundary.
@@ -313,11 +317,12 @@ adminVendorServiceRequestsRouter.get("/", requirePortalAdmin, async (req, res) =
 
 adminVendorServiceRequestsRouter.get("/:sourceType/:id", requirePortalAdmin, async (req, res) => {
   const id = sourceId(req.params.id);
-  if (!id || !SOURCE_TYPES.has(req.params.sourceType)) {
+  const sourceType = routeParam(req.params.sourceType);
+  if (!id || !SOURCE_TYPES.has(sourceType)) {
     return res.status(400).json({ error: "Identitas request tidak valid" });
   }
   try {
-    const where = sql`WHERE source_type = ${req.params.sourceType} AND source_id = ${String(id)}`;
+    const where = sql`WHERE source_type = ${sourceType} AND source_id = ${String(id)}`;
     const result = await db.execute(sql`${unifiedCte}
       SELECT source_type, source_id, invitation_id, request_number,
              customer_name, customer_email, customer_company,
@@ -382,7 +387,7 @@ async function readToken(sourceType: string, id: number): Promise<{ token: strin
 
 adminVendorServiceRequestsRouter.post("/:sourceType/:id/access-link", requirePortalAdmin, async (req: Request, res: Response) => {
   const id = sourceId(req.params.id);
-  const sourceType = req.params.sourceType;
+  const sourceType = routeParam(req.params.sourceType);
   if (!id || !SOURCE_TYPES.has(sourceType)) return res.status(400).json({ error: "Identitas request tidak valid" });
   try {
     const current = await readToken(sourceType, id);
@@ -405,7 +410,7 @@ adminVendorServiceRequestsRouter.post("/:sourceType/:id/access-link", requirePor
 
 adminVendorServiceRequestsRouter.post("/:sourceType/:id/regenerate", requirePortalAdmin, async (req: Request, res: Response) => {
   const id = sourceId(req.params.id);
-  const sourceType = req.params.sourceType;
+  const sourceType = routeParam(req.params.sourceType);
   if (!id || !SOURCE_TYPES.has(sourceType)) return res.status(400).json({ error: "Identitas request tidak valid" });
   try {
     const current = await readToken(sourceType, id);
