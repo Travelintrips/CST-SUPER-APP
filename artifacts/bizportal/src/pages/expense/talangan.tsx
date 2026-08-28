@@ -687,16 +687,92 @@ export default function TalanganPage() {
   const [settleAmtRaw, setSettleAmtRaw] = useState("");
   const [settleDate, setSettleDate] = useState(today);
   const [settleNotes, setSettleNotes] = useState("");
+  const [settleReceiptFile, setSettleReceiptFile] = useState<File | null>(null);
+  const [settleReceiptOcr, setSettleReceiptOcr] = useState<{
+    amount: number | null;
+    date: string | null;
+    partyName: string | null;
+    description: string | null;
+    confidence: string;
+  } | null>(null);
+  const [settleReceiptOcrLoading, setSettleReceiptOcrLoading] = useState(false);
+  const [settleReceiptUploading, setSettleReceiptUploading] = useState(false);
+
+  const handleSettleReceiptChange = async (file: File | null) => {
+    setSettleReceiptFile(file);
+    setSettleReceiptOcr(null);
+    if (!file) return;
+    if (file.size > 15 * 1024 * 1024) {
+      toast({ title: "File terlalu besar", description: "Ukuran maksimum bon/struk adalah 15 MB.", variant: "destructive" });
+      setSettleReceiptFile(null);
+      return;
+    }
+    const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+    if (!["jpg", "jpeg", "png", "webp", "pdf"].includes(ext)) {
+      toast({ title: "Format tidak didukung", description: "Gunakan JPG, PNG, WEBP, atau PDF.", variant: "destructive" });
+      setSettleReceiptFile(null);
+      return;
+    }
+    if (ext === "pdf") return;
+
+    setSettleReceiptOcrLoading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const response = await fetch("/api/advances/ocr-preview", {
+        method: "POST",
+        credentials: "include",
+        body: fd,
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message ?? "OCR gagal");
+      const result = {
+        amount: data.amount ?? null,
+        date: data.date ?? null,
+        partyName: data.partyName ?? null,
+        description: data.description ?? null,
+        confidence: data.confidence ?? "low",
+      };
+      setSettleReceiptOcr(result);
+      if (result.amount && !settleAmtRaw) setSettleAmtRaw(fmtIDR(String(result.amount)));
+      if (result.date) setSettleDate(result.date);
+      if (result.description && !settleNotes) setSettleNotes(result.description);
+    } catch (err: any) {
+      toast({ title: "OCR tidak berhasil", description: err?.message ?? "Isi nominal dan tanggal secara manual.", variant: "destructive" });
+    } finally {
+      setSettleReceiptOcrLoading(false);
+    }
+  };
 
   const settleExpenseMut = useMutation({
-    mutationFn: ({ id, body }: { id: number; body: object }) =>
-      apiFetch(`/api/advances/${id}/settle-expense${cq}`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      }),
+    mutationFn: async ({ id, body }: { id: number; body: object }) => {
+      let finalBody = body;
+      if (settleReceiptFile) {
+        setSettleReceiptUploading(true);
+        try {
+          const fd = new FormData();
+          fd.append("receipt", settleReceiptFile);
+          const uploadResponse = await fetch(`/api/advances/${id}/upload-receipt`, {
+            method: "POST",
+            credentials: "include",
+            body: fd,
+          });
+          const uploadBody = await uploadResponse.json().catch(() => ({}));
+          if (!uploadResponse.ok) throw new Error(uploadBody.message ?? "Gagal menyimpan bon/struk.");
+          finalBody = { ...body, receipt_url: uploadBody.receiptUrl ?? undefined };
+        } finally {
+          setSettleReceiptUploading(false);
+        }
+      }
+      return apiFetch(`/api/advances/${id}/settle-expense${cq}`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(finalBody),
+      });
+    },
     onSuccess: async () => {
       toast({ title: "✓ Talangan ditutup sebagai beban.", description: "Jurnal reklasifikasi telah diposting." });
       qc.invalidateQueries({ queryKey: ["advances", "talangan"] });
       setSettleAmtRaw(""); setSettleNotes(""); setSettleDate(today); setSettleExpenseAccountId("");
+      setSettleReceiptFile(null); setSettleReceiptOcr(null);
       if (selected) await fetchDetail(selected.id);
     },
     onError: (e: Error) => toast({ title: e.message, variant: "destructive" }),
@@ -707,10 +783,7 @@ export default function TalanganPage() {
     const amount = parseIDR(settleAmtRaw);
     if (amount <= 0) { toast({ title: "Nominal harus lebih dari 0.", variant: "destructive" }); return; }
     if (!settleExpenseAccountId) { toast({ title: "Pilih akun beban terlebih dahulu.", variant: "destructive" }); return; }
-    settleExpenseMut.mutate({
-      id: selected.id,
-      body: { amount, date: settleDate, notes: settleNotes, expense_account_id: Number(settleExpenseAccountId) },
-    });
+    settleExpenseMut.mutate({ id: selected.id, body: { amount, date: settleDate, notes: settleNotes, expense_account_id: Number(settleExpenseAccountId) } });
   };
 
   // ── Delete (hanya draft/pending_approval/rejected — belum ada jurnal) ───────

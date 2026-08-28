@@ -604,9 +604,10 @@ Ekstrak informasi berikut dalam format JSON:
 - date: tanggal transaksi dalam format YYYY-MM-DD. Bulan Indonesia: Januari=01, Februari=02, Maret=03, April=04, Mei=05, Juni=06, Juli=07, Agustus=08, September=09, Oktober=10, November=11, Desember=12.
 - partyName: nama pengirim atau penerima (jika ada).
 - bankInfo: nama bank dan/atau nomor rekening (jika terlihat).
+- description: ringkasan barang atau jasa yang dibayar (jika terlihat).
 - confidence: "high" jika data jelas terbaca, "medium" jika ada ketidakpastian, "low" jika tidak bisa dibaca.
 
-Kembalikan HANYA JSON valid tanpa markdown, contoh: {"amount":300000,"date":"2026-07-05","partyName":"John Doe","bankInfo":"BCA 1234567","confidence":"high"}`,
+Kembalikan HANYA JSON valid tanpa markdown, contoh: {"amount":300000,"date":"2026-07-05","partyName":"John Doe","bankInfo":"BCA 1234567","description":"Pembelian alat tulis","confidence":"high"}`,
         },
         { type: "image_url", image_url: { url: `data:${mime};base64,${b64}`, detail: "high" } },
       ];
@@ -627,6 +628,7 @@ Kembalikan HANYA JSON valid tanpa markdown, contoh: {"amount":300000,"date":"202
       date: typeof parsed.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date) ? parsed.date : null,
       partyName: parsed.partyName ?? null,
       bankInfo: parsed.bankInfo ?? null,
+      description: parsed.description ?? null,
       confidence: parsed.confidence ?? "medium",
     });
   } catch (e) {

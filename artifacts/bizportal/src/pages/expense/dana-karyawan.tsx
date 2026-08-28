@@ -16,7 +16,7 @@ import { useCompany } from "@/contexts/CompanyContext";
 import {
   ArrowLeft, Wallet, HandCoins, ArrowRight, Clock, CheckCircle,
   XCircle, Banknote, Users, TrendingUp, RefreshCw, ExternalLink,
-  AlertCircle, Receipt, Loader2,
+  AlertCircle, Receipt, Loader2, FileText, Sparkles,
 } from "lucide-react";
 
 const idr = (n: number) =>
@@ -435,6 +435,16 @@ function SettleExpenseDialog({
   const [amountRaw, setAmountRaw] = useState("");
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [notes, setNotes] = useState("");
+  const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  const [receiptOcr, setReceiptOcr] = useState<{
+    amount: number | null;
+    date: string | null;
+    partyName: string | null;
+    description: string | null;
+    confidence: string;
+  } | null>(null);
+  const [receiptOcrLoading, setReceiptOcrLoading] = useState(false);
+  const [receiptUploading, setReceiptUploading] = useState(false);
 
   const { data: expenseAccounts = [] } = useQuery<ExpenseAccount[]>({
     queryKey: ["advance-expense-accounts"],
@@ -451,11 +461,79 @@ function SettleExpenseDialog({
     setAmountRaw("");
     setDate(new Date().toISOString().slice(0, 10));
     setNotes("");
+    setReceiptFile(null);
+    setReceiptOcr(null);
+    setReceiptOcrLoading(false);
+    setReceiptUploading(false);
+  };
+
+  const handleReceiptChange = async (file: File | null) => {
+    setReceiptFile(file);
+    setReceiptOcr(null);
+    if (!file) return;
+    if (file.size > 15 * 1024 * 1024) {
+      toast({ title: "File terlalu besar", description: "Ukuran maksimum bon/struk adalah 15 MB.", variant: "destructive" });
+      setReceiptFile(null);
+      return;
+    }
+
+    const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+    if (!["jpg", "jpeg", "png", "webp", "pdf"].includes(ext)) {
+      toast({ title: "Format tidak didukung", description: "Gunakan JPG, PNG, WEBP, atau PDF.", variant: "destructive" });
+      setReceiptFile(null);
+      return;
+    }
+    if (ext === "pdf") return;
+
+    setReceiptOcrLoading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const response = await fetch("/api/advances/ocr-preview", {
+        method: "POST",
+        credentials: "include",
+        body: fd,
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message ?? "OCR gagal");
+      const result = {
+        amount: data.amount ?? null,
+        date: data.date ?? null,
+        partyName: data.partyName ?? null,
+        description: data.description ?? null,
+        confidence: data.confidence ?? "low",
+      };
+      setReceiptOcr(result);
+      if (result.amount && !amountRaw) setAmountRaw(fmtIDR(String(result.amount)));
+      if (result.date) setDate(result.date);
+    } catch (err: any) {
+      toast({ title: "OCR tidak berhasil", description: err?.message ?? "Isi nominal dan tanggal secara manual.", variant: "destructive" });
+    } finally {
+      setReceiptOcrLoading(false);
+    }
   };
 
   const settleMut = useMutation({
     mutationFn: async () => {
       if (!advance) throw new Error("Tidak ada advance yang dipilih");
+      let receiptUrl: string | null = null;
+      if (receiptFile) {
+        setReceiptUploading(true);
+        try {
+          const fd = new FormData();
+          fd.append("receipt", receiptFile);
+          const uploadResponse = await fetch(`/api/advances/${advance.id}/upload-receipt`, {
+            method: "POST",
+            credentials: "include",
+            body: fd,
+          });
+          const uploadBody = await uploadResponse.json().catch(() => ({}));
+          if (!uploadResponse.ok) throw new Error(uploadBody.message ?? "Gagal menyimpan bon/struk.");
+          receiptUrl = uploadBody.receiptUrl ?? null;
+        } finally {
+          setReceiptUploading(false);
+        }
+      }
       const r = await fetch(`/api/advances/${advance.id}/settle-expense`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -465,6 +543,7 @@ function SettleExpenseDialog({
           expense_account_id: Number(expenseAccountId),
           amount: parseIDR(amountRaw),
           notes: notes || undefined,
+          receipt_url: receiptUrl || undefined,
         }),
       });
       const body = await r.json().catch(() => ({}));
@@ -535,6 +614,56 @@ function SettleExpenseDialog({
               onChange={(e) => setNotes(e.target.value)}
             />
           </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs flex items-center gap-1.5">
+              <FileText size={13} className="text-teal-600" />
+              Bon / Struk Pengeluaran
+              <span className="text-[10px] font-normal text-slate-400">(opsional, OCR)</span>
+            </Label>
+            {receiptFile ? (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 rounded border border-teal-200 bg-teal-50 px-3 py-2 text-xs">
+                  <FileText size={13} className="shrink-0 text-teal-600" />
+                  <span className="min-w-0 flex-1 truncate">{receiptFile.name}</span>
+                  <button
+                    type="button"
+                    className="text-slate-400 hover:text-red-600"
+                    onClick={() => { setReceiptFile(null); setReceiptOcr(null); }}
+                    aria-label="Hapus file bon"
+                  >
+                    ×
+                  </button>
+                </div>
+                {receiptOcrLoading && (
+                  <p className="flex items-center gap-1 text-[10px] text-violet-600">
+                    <Loader2 size={10} className="animate-spin" /> Membaca bon dengan OCR…
+                  </p>
+                )}
+                {receiptOcr && !receiptOcrLoading && (
+                  <div className="rounded border border-violet-200 bg-violet-50 px-2.5 py-2 text-[10px] text-violet-800 space-y-0.5">
+                    <p className="flex items-center gap-1 font-medium">
+                      <Sparkles size={10} /> Hasil OCR ({receiptOcr.confidence})
+                    </p>
+                    {receiptOcr.amount && <p>Nominal: <strong>{idr(receiptOcr.amount)}</strong></p>}
+                    {receiptOcr.date && <p>Tanggal: <strong>{receiptOcr.date}</strong></p>}
+                    {receiptOcr.partyName && <p>Toko/vendor: {receiptOcr.partyName}</p>}
+                    {receiptOcr.description && <p>Deskripsi: {receiptOcr.description}</p>}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <label className="flex cursor-pointer items-center gap-2 rounded border border-dashed border-slate-300 px-3 py-2 text-xs text-slate-500 hover:border-teal-400 hover:text-teal-700">
+                <Sparkles size={12} />
+                Upload bon/struk — OCR isi nominal & tanggal otomatis
+                <input
+                  type="file"
+                  className="hidden"
+                  accept=".jpg,.jpeg,.png,.webp,.pdf"
+                  onChange={(e) => handleReceiptChange(e.target.files?.[0] ?? null)}
+                />
+              </label>
+            )}
+          </div>
           {parseIDR(amountRaw) > 0 && (
             <div className="text-xs text-muted-foreground rounded bg-muted/30 px-3 py-1.5">
               Jurnal: <strong>DR Beban</strong> · <strong>CR Piutang Karyawan</strong> {idr(parseIDR(amountRaw))}
@@ -545,9 +674,9 @@ function SettleExpenseDialog({
           <Button variant="ghost" onClick={() => { resetForm(); onClose(); }}>Batal</Button>
           <Button
             onClick={() => settleMut.mutate()}
-            disabled={!expenseAccountId || !amountValid || settleMut.isPending}
+            disabled={!expenseAccountId || !amountValid || settleMut.isPending || receiptUploading || receiptOcrLoading}
           >
-            {settleMut.isPending ? <><Loader2 size={13} className="mr-1 animate-spin" />Memproses...</> : "Tutup sebagai Beban"}
+            {settleMut.isPending || receiptUploading ? <><Loader2 size={13} className="mr-1 animate-spin" />{receiptUploading ? "Menyimpan bon..." : "Memproses..."}</> : "Tutup sebagai Beban"}
           </Button>
         </DialogFooter>
       </DialogContent>
