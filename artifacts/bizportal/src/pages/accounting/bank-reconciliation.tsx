@@ -24,7 +24,7 @@ import {
   ChevronDown, ChevronUp, ArrowUpRight, ArrowDownLeft, Zap, Eye,
   BookOpen, TrendingUp, Clock, FileText, CreditCard, Users,
   CircleCheck, CircleDot, ReceiptText, X, Undo2, RotateCcw,
-  Paperclip, ImageIcon, ExternalLink,
+  Paperclip, ImageIcon, ExternalLink, Pencil,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { AIReviewSourcePanel } from "@/components/ai-review";
@@ -5039,6 +5039,12 @@ export default function BankReconciliationPage() {
   // Task #6: mapping-required errors per mutation ID — set when backend returns 422 + manual_review_required
   const [mappingRequiredErrors, setMappingRequiredErrors] = useState<Map<number, MappingRequiredError>>(new Map());
   const [postDialogJournalStatus, setPostDialogJournalStatus] = useState<string | null>(null);
+  const [qrisDateTarget, setQrisDateTarget] = useState<{
+    paymentId: number;
+    paymentNumber: string;
+    paymentDate: string;
+  } | null>(null);
+  const [qrisPaymentDate, setQrisPaymentDate] = useState("");
 
   // ── Queries ──────────────────────────────────────────────────────────────
   const queryKey = ["bank-reconciliation", filterStatus, filterDir, filterProvider, filterPaymentType, filterFrom, filterTo, filterSearch, page];
@@ -5127,6 +5133,37 @@ export default function BankReconciliationPage() {
       qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
     },
     onError: (e: Error) => toast({ title: "Gagal membuat kandidat QRIS", description: e.message, variant: "destructive" }),
+  });
+
+  const qrisPaymentDateMut = useMutation({
+    mutationFn: async ({ paymentId, paymentDate }: { paymentId: number; paymentDate: string }) => {
+      const response = await fetch(`/api/bank-reconciliation/qris-candidates/payments/${paymentId}/date`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paymentDate, companyId: qrisCompanyId }),
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(body?.error ?? "Gagal memperbarui tanggal payment");
+      return body as {
+        accounting?: { requiresCorrectionWorkflow?: boolean };
+        message?: string;
+      };
+    },
+    onSuccess: async (result) => {
+      setQrisDateTarget(null);
+      toast({
+        title: "Tanggal payment berhasil disimpan",
+        description: result.accounting?.requiresCorrectionWorkflow
+          ? "Mirror sudah diperbarui. Jurnal posted tetap immutable dan memerlukan workflow koreksi."
+          : "Data payment dan akunting yang masih mutable sudah disinkronkan.",
+      });
+      await Promise.all([refetchQrisAudit(), refetch()]);
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Gagal menyimpan tanggal payment", description: error.message, variant: "destructive" });
+    },
   });
 
   const [qrisBatchConfirm, setQrisBatchConfirm] = useState<{
@@ -6177,6 +6214,8 @@ export default function BankReconciliationPage() {
                                     const customer = item.customer_name ?? item.customerName;
                                     const facility = item.facility_name ?? item.facilityName;
                                      const paymentDate = item.paymentDate ?? item.paidAt ?? item.paid_at ?? item.date;
+                                      const paymentDateIso = paymentDate ? String(paymentDate).slice(0, 10) : "";
+                                      const canEditPaymentDate = Number.isInteger(Number(paymentId)) && Number(paymentId) > 0;
                                      return (
                                       <div key={`${candidate.id}-${paymentId ?? index}`} className="rounded border border-slate-200/80 bg-white/70 px-2 py-1.5 dark:border-slate-700 dark:bg-slate-950/30">
                                         <div className="flex min-w-0 items-center justify-between gap-2">
@@ -6190,7 +6229,28 @@ export default function BankReconciliationPage() {
                                         <div className="mt-0.5 grid gap-x-3 gap-y-0.5 text-[10px] text-slate-500 dark:text-slate-400 sm:grid-cols-2">
                                           <span>Customer: {customer || "—"}</span>
                                           <span>Fasilitas: {facility || "—"}</span>
-                                          <span>Payment: {paymentDate ? fmtDate(String(paymentDate)) : "—"}</span>
+                                           <span className="flex items-center gap-1">
+                                             <span>Payment: {paymentDate ? fmtDate(paymentDateIso) : "—"}</span>
+                                             {canEditPaymentDate && (
+                                               <button
+                                                 type="button"
+                                                 className="inline-flex items-center rounded p-0.5 text-indigo-600 hover:bg-indigo-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-indigo-300 dark:hover:bg-indigo-950"
+                                                 aria-label={`Edit tanggal payment ${paymentNumber || paymentId}`}
+                                                 title="Edit tanggal payment"
+                                                 onClick={(event) => {
+                                                   event.stopPropagation();
+                                                   setQrisDateTarget({
+                                                     paymentId: Number(paymentId),
+                                                     paymentNumber: paymentNumber || `SCPAY-SC-${paymentId}`,
+                                                     paymentDate: paymentDateIso,
+                                                   });
+                                                   setQrisPaymentDate(paymentDateIso);
+                                                 }}
+                                               >
+                                                 <Pencil className="h-3 w-3" />
+                                               </button>
+                                             )}
+                                           </span>
                                           <span className="sm:col-span-2">Payment: {paymentNumber || `SCPAY-SC-${paymentId ?? "—"}`}</span>
                                         </div>
                                        </div>
@@ -6439,6 +6499,75 @@ export default function BankReconciliationPage() {
           )}
         </div>
       </div>
+
+      <Dialog
+        open={qrisDateTarget != null}
+        onOpenChange={(open) => {
+          if (!open && !qrisPaymentDateMut.isPending) setQrisDateTarget(null);
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit tanggal payment Sport Center</DialogTitle>
+            <DialogDescription>
+              Perubahan disimpan ke sumber canonical Sport Center. Settlement QRIS akan dihitung ulang sebagai H+1.
+            </DialogDescription>
+          </DialogHeader>
+          {qrisDateTarget && (
+            <div className="space-y-4">
+              <div className="rounded-md bg-muted/40 px-3 py-2 text-sm">
+                <p className="font-medium">{qrisDateTarget.paymentNumber}</p>
+                <p className="text-xs text-muted-foreground">
+                  Mirror publik dan data akunting yang masih mutable akan ikut disinkronkan.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <label htmlFor="qris-payment-date" className="text-sm font-medium">
+                  Tanggal pembayaran
+                </label>
+                <Input
+                  id="qris-payment-date"
+                  type="date"
+                  value={qrisPaymentDate}
+                  onChange={(event) => setQrisPaymentDate(event.target.value)}
+                  disabled={qrisPaymentDateMut.isPending}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Jika jurnal sudah posted, tanggal jurnal tidak diubah langsung. Sistem akan menandai payment untuk workflow reversal/correction.
+              </p>
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setQrisDateTarget(null)}
+              disabled={qrisPaymentDateMut.isPending}
+            >
+              Batal
+            </Button>
+            <Button
+              className="gap-1.5"
+              onClick={() => {
+                if (qrisDateTarget && qrisPaymentDate) {
+                  qrisPaymentDateMut.mutate({
+                    paymentId: qrisDateTarget.paymentId,
+                    paymentDate: qrisPaymentDate,
+                  });
+                }
+              }}
+              disabled={
+                !qrisDateTarget
+                || !/^\d{4}-\d{2}-\d{2}$/.test(qrisPaymentDate)
+                || qrisPaymentDateMut.isPending
+              }
+            >
+              {qrisPaymentDateMut.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
+              {qrisPaymentDateMut.isPending ? "Menyimpan..." : "Simpan tanggal"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <CoaReferenceDialog
         mutation={coaReferenceTarget}

@@ -1657,6 +1657,202 @@ router.post("/qris-candidates/generate", async (req, res) => {
   }
 });
 
+// ─── PATCH /api/bank-reconciliation/qris-candidates/payments/:paymentId/date ──
+// The Sport Center source row is authoritative. Updating it lets the existing
+// PostgreSQL mirror trigger project the change to public.sport_payments and,
+// when still mutable, to the linked accounting payment/journal metadata.
+// Posted journal dates are intentionally not rewritten.
+router.patch("/qris-candidates/payments/:paymentId/date", async (req, res) => {
+  const paymentId = Number.parseInt(String(req.params.paymentId ?? ""), 10);
+  const requestedDate = String(req.body?.paymentDate ?? req.body?.payment_date ?? "").trim();
+  const companyFromBody = req.body?.companyId ?? req.body?.company_id;
+
+  if (!Number.isInteger(paymentId) || paymentId <= 0) {
+    return res.status(400).json({ error: "ID payment Sport Center tidak valid", code: "INVALID_PAYMENT_ID" });
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(requestedDate)) {
+    return res.status(400).json({
+      error: "Tanggal payment harus berformat YYYY-MM-DD",
+      code: "INVALID_PAYMENT_DATE",
+    });
+  }
+  const parsedDate = new Date(`${requestedDate}T00:00:00Z`);
+  if (Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== requestedDate) {
+    return res.status(400).json({
+      error: "Tanggal payment tidak valid",
+      code: "INVALID_PAYMENT_DATE",
+    });
+  }
+
+  try {
+    const companyId = resolveCompanyId(req);
+    if (
+      companyFromBody != null
+      && companyFromBody !== ""
+      && Number(companyFromBody) !== companyId
+    ) {
+      return res.status(403).json({
+        error: "Company payment tidak sesuai dengan perusahaan aktif",
+        code: "COMPANY_CONTEXT_MISMATCH",
+      });
+    }
+
+    const result = await db.transaction(async (tx) => {
+      const sourceResult = await tx.execute(sql`
+        SELECT
+          sp.id,
+          sp.status::text AS status,
+          sp.payment_method::text AS payment_method,
+          sp.paid_at,
+          sp.expected_settlement_date,
+          COALESCE(
+            sp.company_id,
+            CASE WHEN mapping.company_count = 1 THEN mapping.company_id END
+          ) AS company_id
+        FROM sport_center.sport_payments sp
+        LEFT JOIN sport_center.sport_bookings sb ON sb.id = sp.booking_id
+        LEFT JOIN LATERAL (
+          SELECT COUNT(*)::integer AS company_count, MIN(fcm.company_id)::integer AS company_id
+          FROM sport_center.facility_company_mappings fcm
+          WHERE fcm.facility_id = sb.facility_id
+            AND fcm.is_active = TRUE
+            AND fcm.approval_status = 'OWNER_APPROVED'
+        ) mapping ON TRUE
+        WHERE sp.id = ${paymentId}
+        FOR UPDATE
+      `);
+      const source = sourceResult.rows[0] as Record<string, unknown> | undefined;
+      if (!source) {
+        throw Object.assign(new Error("Payment Sport Center tidak ditemukan"), { statusCode: 404, code: "PAYMENT_NOT_FOUND" });
+      }
+      if (Number(source.company_id) !== companyId) {
+        throw Object.assign(new Error("Payment bukan milik perusahaan aktif"), { statusCode: 403, code: "COMPANY_ACCESS_DENIED" });
+      }
+      if (!String(source.payment_method ?? "").toLowerCase().includes("qris")) {
+        throw Object.assign(new Error("Payment ini bukan payment QRIS"), { statusCode: 409, code: "PAYMENT_NOT_QRIS" });
+      }
+      const sourceStatus = String(source.status ?? "").toLowerCase();
+      if (!["confirmed", "pending"].includes(sourceStatus)) {
+        throw Object.assign(
+          new Error(`Tanggal hanya dapat diubah untuk payment berstatus confirmed/pending (status: ${sourceStatus || "unknown"})`),
+          { statusCode: 409, code: "PAYMENT_STATUS_NOT_EDITABLE" },
+        );
+      }
+
+      // Use Jakarta midnight so the canonical resolver's Asia/Jakarta date is
+      // exactly the date selected by the reviewer.
+      const updated = await tx.execute(sql`
+        UPDATE sport_center.sport_payments
+        SET paid_at = (${requestedDate} || ' 00:00:00+07:00')::timestamptz,
+            updated_at = NOW()
+        WHERE id = ${paymentId}
+        RETURNING id, paid_at, expected_settlement_date, status::text AS status
+      `);
+      const canonical = updated.rows[0] as Record<string, unknown> | undefined;
+      if (!canonical) {
+        throw Object.assign(new Error("Payment gagal diperbarui"), { statusCode: 409, code: "PAYMENT_UPDATE_FAILED" });
+      }
+
+      const accounting = await tx.execute(sql`
+        SELECT
+          ap.status::text AS accounting_payment_status,
+          ap.date::text AS accounting_payment_date,
+          ae.status::text AS journal_status,
+          ae.date::text AS journal_date
+        FROM public.accounting_payments ap
+        LEFT JOIN public.accounting_entries ae ON ae.id = ap.entry_id
+        WHERE ap.source_type = 'sport_center'
+          AND ap.source_doc_id = ${paymentId}
+        ORDER BY ap.id DESC
+        LIMIT 1
+      `).catch(() => ({ rows: [] as unknown[] }));
+      const accountingRow = accounting.rows[0] as Record<string, unknown> | undefined;
+      const journalPosted = String(accountingRow?.journal_status ?? "").toLowerCase() === "posted"
+        || String(accountingRow?.accounting_payment_status ?? "").toLowerCase() === "posted";
+
+      const mirror = await tx.execute(sql`
+        SELECT id, payment_number, paid_at, expected_settlement_date, posting_status, posting_error
+        FROM public.sport_payments
+        WHERE source_schema = 'sport_center'
+          AND source_table = 'sport_payments'
+          AND source_payment_id = ${paymentId}
+        LIMIT 1
+      `).catch(() => ({ rows: [] as unknown[] }));
+      const mirrorRow = mirror.rows[0] as Record<string, unknown> | undefined;
+
+      return {
+        previousPaymentDate: source.paid_at ?? null,
+        payment: canonical,
+        mirror: mirrorRow ?? null,
+        accounting: {
+          linked: Boolean(accountingRow),
+          paymentDateUpdated: Boolean(
+            accountingRow
+            && String(accountingRow.accounting_payment_date ?? "").slice(0, 10) === requestedDate
+            && !journalPosted,
+          ),
+          journalPosted,
+          requiresCorrectionWorkflow: journalPosted,
+          journalDate: accountingRow?.journal_date ?? null,
+        },
+      };
+    });
+
+    let candidateRefresh: { generated: number; persisted: number; reviewable: number } | null = null;
+    try {
+      const refreshed = await generateQrisCandidates({
+        companyId,
+        dryRun: false,
+      });
+      candidateRefresh = {
+        generated: refreshed.generated,
+        persisted: refreshed.persisted,
+        reviewable: refreshed.reviewable,
+      };
+    } catch (refreshError: any) {
+      // The source and mirror transaction has already committed. Candidate
+      // generation is provisional and can be retried from the UI without
+      // rolling back a valid source correction.
+      logger.warn(
+        { err: refreshError?.cause?.message ?? refreshError?.message, paymentId },
+        "[bankRecon] QRIS candidate refresh after payment date update failed",
+      );
+    }
+
+    audit(req, {
+      action: "update-sport-center-payment-date",
+      module: "accounting",
+      resourceId: `sport-payment-${paymentId}`,
+      before: { paid_at: result.previousPaymentDate },
+      after: {
+        paid_at: result.payment.paid_at,
+        expected_settlement_date: result.payment.expected_settlement_date,
+        accounting: result.accounting,
+      },
+    });
+
+    return res.json({
+      ok: true,
+      source: "sport_center.sport_payments",
+      ...result,
+      candidateRefresh,
+      message: result.accounting.requiresCorrectionWorkflow
+        ? "Tanggal sumber dan mirror diperbarui. Jurnal posted tetap immutable; gunakan workflow reversal/correction untuk mengubah tanggal jurnal."
+        : "Tanggal payment dan data akunting yang masih mutable berhasil disinkronkan.",
+    });
+  } catch (e: any) {
+    const status = Number(e?.statusCode) || 500;
+    logger.error(
+      { err: e?.cause?.message ?? e?.message, paymentId },
+      "[bankRecon] PATCH QRIS payment date failed",
+    );
+    return res.status(status).json({
+      error: e?.message ?? "Gagal memperbarui tanggal payment Sport Center",
+      code: e?.code ?? "PAYMENT_DATE_UPDATE_FAILED",
+    });
+  }
+});
+
 // ─── POST /api/bank-reconciliation/qris-candidates/:id/approve ───────────────
 // Approval is deliberately separate from candidate generation. The payment
 // rows are locked in a stable order before the already-settled check, so two
