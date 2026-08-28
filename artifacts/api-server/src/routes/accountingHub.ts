@@ -73,6 +73,7 @@ function parseFilters(query: Record<string, any>) {
     sourceModule: query.source_module as string | undefined,
     accountId: query.account_id ? Number(query.account_id) : undefined,
     paymentMethod: query.payment_method as string | undefined,
+    postedOnly: query.posted_only === "1" || query.posted_only === "true",
     page:  Math.max(1, Number(query.page  ?? 1)),
     limit: Math.min(500, Number(query.limit ?? 50)),
     sortBy,
@@ -237,6 +238,7 @@ router.get("/hub/general-ledger", async (req, res) => {
     // display: balance + source_module — the final row filter
     const displayConds = [...balanceConds];
     if (f.sourceModule) displayConds.push(sql`${normModuleExpr()} = ${f.sourceModule}`);
+    if (f.postedOnly) displayConds.push(sql`e.status = 'posted'`);
 
     // SQL fragments for WHERE injection in CTEs and outer query
     const baseAnd    = baseConds.length    ? sql` AND ${sql.join(baseConds,    sql` AND `)}` : sql``;
