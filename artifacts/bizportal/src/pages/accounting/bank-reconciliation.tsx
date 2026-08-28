@@ -2847,6 +2847,7 @@ function QrisMutationCard({
   onReject,
   onDetail,
   onDelete,
+  onEditPaymentDate,
   onApproveQrisBatch,
   onRecoverQrisSettlement,
   approveQrisPending,
@@ -2865,6 +2866,11 @@ function QrisMutationCard({
   onReject: (m: BankMutation) => void;
   onDetail: (m: BankMutation) => void;
   onDelete: (id: number) => void;
+  onEditPaymentDate?: (target: {
+    paymentId: number;
+    paymentNumber: string;
+    paymentDate: string;
+  }) => void;
   onApproveQrisBatch?: (candidateId: number, mutationId: number, candidate: QrisCandidateAudit, paymentIds?: number[]) => void;
   onRecoverQrisSettlement?: (mutationId: number, settlementId: number) => void;
   approveQrisPending?: boolean;
@@ -3121,7 +3127,11 @@ function QrisMutationCard({
                       const paymentId = item.paymentId ?? item.payment_id;
                       const booking = item.bookingNumber ?? item.booking_number ?? (item.booking_id != null ? `SC-${String(item.booking_id).padStart(4, "0")}` : "—");
                       const payment = item.paymentNumber ?? item.payment_number ?? (paymentId != null ? `#${paymentId}` : "—");
-                       const paymentDate = item.paymentDate ?? item.paidAt ?? item.paid_at ?? item.date;
+                      const paymentDate = item.paymentDate ?? item.paidAt ?? item.paid_at ?? item.date;
+                      const paymentDateIso = paymentDate ? String(paymentDate).slice(0, 10) : "";
+                      const canEditPaymentDate = Number.isInteger(Number(paymentId))
+                        && Number(paymentId) > 0
+                        && onEditPaymentDate != null;
                       const expectedSettlementDate =
                         item.expectedSettlementDate ?? item.expected_settlement_date;
                        const gross = liveGrossForItem(item);
@@ -3130,8 +3140,28 @@ function QrisMutationCard({
                           <span className="truncate text-xs font-medium">{booking}</span>
                           <span className="min-w-0 truncate text-xs text-muted-foreground">{payment}</span>
                            <span className="min-w-0 text-xs text-muted-foreground">
-                             <span className="block truncate">
-                               Payment: {paymentDate ? fmtDate(String(paymentDate)) : "—"}
+                             <span className="flex min-w-0 items-center gap-1">
+                               <span className="truncate">
+                                 Payment: {paymentDate ? fmtDate(paymentDateIso) : "—"}
+                               </span>
+                               {canEditPaymentDate && (
+                                 <button
+                                   type="button"
+                                   className="inline-flex shrink-0 items-center rounded p-0.5 text-indigo-600 hover:bg-indigo-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-indigo-300 dark:hover:bg-indigo-950"
+                                   aria-label={`Edit tanggal payment ${payment}`}
+                                   title="Edit tanggal payment"
+                                   onClick={(event) => {
+                                     event.stopPropagation();
+                                     onEditPaymentDate({
+                                       paymentId: Number(paymentId),
+                                       paymentNumber: payment,
+                                       paymentDate: paymentDateIso,
+                                     });
+                                   }}
+                                 >
+                                   <Pencil className="h-3 w-3" />
+                                 </button>
+                               )}
                              </span>
                              <span className="block truncate font-medium text-indigo-600 dark:text-indigo-400">
                                Settlement H-1: {expectedSettlementDate ? fmtDate(String(expectedSettlementDate)) : "—"}
@@ -3372,6 +3402,7 @@ function MutationCard({
   onReopen,
   onDelete,
   onDetail,
+  onEditQrisPaymentDate,
   onApproveQris,
   onApproveQrisBatch,
   selectedCandidateId,
@@ -3397,6 +3428,11 @@ function MutationCard({
   onReopen:  (m: BankMutation) => void;
   onDelete:  (id: number) => void;
   onDetail:  (m: BankMutation) => void;
+  onEditQrisPaymentDate?: (target: {
+    paymentId: number;
+    paymentNumber: string;
+    paymentDate: string;
+  }) => void;
   onApproveQris: (m: BankMutation) => void;
   onApproveQrisBatch?: (candidateId: number, mutationId: number, candidate: QrisCandidateAudit, paymentIds?: number[]) => void;
   selectedCandidateId?: number | null;
@@ -3448,6 +3484,7 @@ function MutationCard({
             onReject={onReject}
             onDetail={onDetail}
             onDelete={onDelete}
+            onEditPaymentDate={onEditQrisPaymentDate}
             onApproveQrisBatch={onApproveQrisBatch}
             approveQrisPending={approveQrisPending}
             selectedQrisPaymentIds={audit.id != null ? selectedQrisPaymentIds[audit.id] ?? [] : []}
@@ -6460,6 +6497,10 @@ export default function BankReconciliationPage() {
                   onReopen={handleOpenReopen}
                   onDelete={id => deleteMut.mutate(id)}
                   onDetail={setDetailMutation}
+                  onEditQrisPaymentDate={(target) => {
+                    setQrisDateTarget(target);
+                    setQrisPaymentDate(target.paymentDate);
+                  }}
                   onApproveQris={handleApproveQris}
                   onApproveQrisBatch={handleApproveQrisBatch}
                    selectedCandidateId={selectedCandidateByMutation[m.id] ?? null}
