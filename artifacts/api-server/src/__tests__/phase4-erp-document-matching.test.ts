@@ -736,7 +736,10 @@ describe("Evidence priority hierarchy", () => {
 import { runErpDocumentMatching } from "../lib/reconciliation/erpDocumentMatcher.js";
 import {
   fetchCandidates,
+  hasQrisBankEvidence,
+  isQrisCandidateAllowedForMutation,
   resetOptionalCandidateSourceAvailabilityForTests,
+  scoreUnified,
 } from "../lib/reconciliation/unifiedMatchingEngine.js";
 
 /**
@@ -945,6 +948,41 @@ describe("fetchCandidates — Sport Center payment rails", () => {
     expect(query).not.toContain("= 'paylabs'");
     expect(query).not.toContain("= 'bank_transfer'");
   });
+
+  it("blocks an InhouseTrf transfer from a QRIS candidate", () => {
+    const mutationInput = {
+      provider_name: null,
+      provider_order_id: null,
+      normalized_description:
+        "PEMBAYARAN SEWA LAPANGAN BASKET INHOUSETRF DARI INDRA SUKMONO",
+    };
+    const qrisPayment = {
+      id: 38330,
+      type: "sport_payment" as const,
+      amount: 700000,
+      date: "2026-08-12",
+      company_id: 10,
+      sport_payment_type: "qris" as const,
+    };
+
+    expect(hasQrisBankEvidence(mutationInput)).toBe(false);
+    expect(isQrisCandidateAllowedForMutation(mutationInput, qrisPayment)).toBe(false);
+
+    const scored = scoreUnified(
+      {
+        amount: 700000,
+        transaction_date: "2026-08-12",
+        provider_order_id: null,
+        uploaded_proof_url: null,
+        company_id: 10,
+        normalized_description: mutationInput.normalized_description,
+        provider_name: null,
+      },
+      qrisPayment,
+    );
+    expect(scored.amount_match).toBe(false);
+    expect(scored.reason).toContain("bukti QRIS pada mutasi bank tidak ditemukan");
+  });
 });
 
 describe("fetchCandidates — optional source schema compatibility", () => {
@@ -995,7 +1033,7 @@ describe("fetchCandidates — optional source schema compatibility", () => {
     const query = queryFor("logistic_orders");
     expect(query).toBeDefined();
     expect(query).toContain("lo.grand_total AS amount");
-    expect(query).toContain("ABS(lo.grand_total::numeric - 500000) < 0.01");
+    expect(query).toContain("ABS(lo.grand_total::numeric - 500000) <= 0.01");
     expect(query).not.toContain("lo.total_price");
   });
 

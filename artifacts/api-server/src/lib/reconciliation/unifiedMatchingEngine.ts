@@ -366,6 +366,32 @@ function isQrisCandidateForMatching(candidate: MatchCandidate): boolean {
     );
 }
 
+/**
+ * QRIS classification must be based on evidence carried by the bank mutation.
+ * A payment row marked QRIS is not evidence that an unrelated bank transfer
+ * is QRIS. Explicit provider fields are accepted here because they are
+ * bank-mutation metadata; ordinary payment-method fields are never passed in.
+ */
+export function hasQrisBankEvidence(
+  mutation: Pick<MutationInput, "provider_name" | "provider_order_id" | "normalized_description">,
+): boolean {
+  const explicitProvider = normalizeQrisProvider(mutation.provider_name);
+  if (explicitProvider !== "unknown") return true;
+
+  return [
+    mutation.provider_name,
+    mutation.provider_order_id,
+    mutation.normalized_description,
+  ].some((value) => isQrisSettlementDescription(value));
+}
+
+export function isQrisCandidateAllowedForMutation(
+  mutation: Pick<MutationInput, "provider_name" | "provider_order_id" | "normalized_description">,
+  candidate: MatchCandidate,
+): boolean {
+  return !isQrisCandidateForMatching(candidate) || hasQrisBankEvidence(mutation);
+}
+
 type ContraResolution = {
   accountId: number;
   label: string;
@@ -633,6 +659,9 @@ export function scoreUnified(
       mutationProvider === "unknown" ||
       !areQrisProvidersCompatible(candidateProvider, mutationProvider)
     );
+  const qrisEvidenceMissing =
+    requiresQrisIdentity &&
+    !hasQrisBankEvidence(mutation);
 
   // 1. Amount — MANDATORY for auto-approve (+50). QRIS keeps the
   // provider-specific variance contract and is exact in this generic scorer.
@@ -642,6 +671,7 @@ export function scoreUnified(
     !companyMismatch &&
     !bankAccountMismatch &&
     !providerMismatch &&
+    !qrisEvidenceMissing &&
     Math.abs(Number(cand.amount) - Number(mutation.amount)) <= amountTolerance + 0.01;
   if (amountMatch) { score += 50; reason.push("nominal cocok (+50)"); }
   else if (amountTolerance > 0 && !companyMismatch && !bankAccountMismatch && !providerMismatch) {
@@ -650,6 +680,7 @@ export function scoreUnified(
   if (companyMismatch) reason.push("company tidak cocok");
   if (bankAccountMismatch) reason.push("rekening bank tidak cocok");
   if (providerMismatch) reason.push("provider tidak cocok atau tidak tersedia");
+  if (qrisEvidenceMissing) reason.push("bukti QRIS pada mutasi bank tidak ditemukan");
 
   // 2. Date match.
   // Generic bank-transfer candidates must be on the same calendar date.
@@ -800,8 +831,7 @@ export async function fetchCandidates(
     /paylabs/i.test(String(mutation.normalized_description ?? ""));
   const mutationLooksQris =
     !mutationLooksPaylabs &&
-    (String(mutation.provider_name ?? "").toUpperCase() === "QRIS" ||
-      isQrisSettlementDescription(mutation.normalized_description));
+    hasQrisBankEvidence(mutation);
   const configuredTolerance = sanitizeBankAmountTolerance(mutation.amount_tolerance) ??
     (await getMatchingAmountTolerance(mutation));
   const amountTolerance = mutationLooksQris ? 0 : configuredTolerance;
@@ -1335,7 +1365,8 @@ export async function runUnifiedMatching(
     explicitProvider === "unknown" && descriptionProvider !== "unknown"
       ? { ...mutation, provider_name: descriptionProvider, amount_tolerance: amountTolerance }
       : { ...mutation, amount_tolerance: amountTolerance };
-  const candidates = await fetchCandidates(matchingMutation); // company_id sudah diteruskan via mutation
+  const candidates = (await fetchCandidates(matchingMutation))
+    .filter((candidate) => isQrisCandidateAllowedForMutation(matchingMutation, candidate));
 
   if (!candidates.length) {
     await db.execute(sql.raw(
@@ -1615,6 +1646,7 @@ export async function approveAndCreateJournal(
        const { rows: locked } = await tx.execute(sql.raw(`
          SELECT bm.id, bm.status, bm.amount, bm.direction,
                bm.transaction_date, bm.description, bm.mutation_key,
+                 bm.provider_name, bm.provider_order_id, bm.normalized_description,
                  bm.company_id, bm.bank_account_id, bm.journal_entry_id,
                 bm.expense_category, bm.expense_suggested_account_subtype
         FROM bank_mutations bm
@@ -1768,6 +1800,58 @@ export async function approveAndCreateJournal(
            candidate_id: selectedCandidateId,
            candidate_source: selectedCandidateSource,
          });
+       }
+
+       // Never approve a QRIS source against an ordinary bank mutation.
+       // This protects older/stale match rows that were created before the
+       // bank-evidence gate existed and prevents a browser payload from
+       // bypassing candidate-generation safeguards.
+       if (
+         selectedType === "qris_settlement" ||
+         selectedType === "sport_payment"
+       ) {
+         let sourceIsQris = selectedType === "qris_settlement";
+         if (selectedType === "sport_payment" && selectedCandidateId != null) {
+           const { rows: paymentRows } = await tx.execute(sql.raw(`
+             SELECT method, payment_type, payment_provider
+             FROM sport_payments
+             WHERE id = ${Number(selectedCandidateId)}
+               AND company_id = ${companyId}
+             LIMIT 1
+           `));
+           const payment = paymentRows[0] as Record<string, unknown> | undefined;
+           if (!payment) {
+             throw Object.assign(
+               new Error("Payment Sport Center tidak ditemukan untuk perusahaan ini"),
+               { code: "INVALID_MATCH" },
+             );
+           }
+           const paymentText = [
+             payment.payment_provider,
+             payment.payment_type,
+             payment.method,
+           ].map((value) => String(value ?? "").toLowerCase()).join(" ");
+           const isPaylabs = paymentText.includes("paylabs");
+           sourceIsQris = !isPaylabs && paymentText.includes("qris");
+         }
+
+         if (
+           sourceIsQris &&
+           !hasQrisBankEvidence({
+             provider_name: mut["provider_name"] == null ? null : String(mut["provider_name"]),
+             provider_order_id: mut["provider_order_id"] == null ? null : String(mut["provider_order_id"]),
+             normalized_description: mut["normalized_description"] == null
+               ? String(mut["description"] ?? "")
+               : String(mut["normalized_description"]),
+           })
+         ) {
+           throw Object.assign(
+             new Error(
+               "Approval diblokir: payment QRIS tidak memiliki bukti QRIS pada mutasi bank.",
+             ),
+             { code: "QRIS_BANK_EVIDENCE_REQUIRED" },
+           );
+         }
        }
 
        // ── Step 2: Guard — idempotency and conflicting approved match ────────

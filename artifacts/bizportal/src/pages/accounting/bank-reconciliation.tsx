@@ -1106,7 +1106,17 @@ function candidateSportPaymentType(candidate: Candidate | undefined, mutation: B
 
 function mutationSportPaymentType(mutation: BankMutation): SportPaymentType | null {
   const best = visibleCandidates(mutation)[0];
-  return candidateSportPaymentType(best, mutation) ?? mutation.sport_payment_type ?? null;
+  const paymentType = candidateSportPaymentType(best, mutation) ?? mutation.sport_payment_type ?? null;
+  // A stale/legacy match can point an ordinary bank mutation at a QRIS
+  // payment. Keep the reviewer-facing badge aligned with bank evidence.
+  return paymentType === "qris" && !isQrisMutation(mutation)
+    ? "bank_transfer"
+    : paymentType;
+}
+
+function hasQrisCandidateEvidenceMismatch(mutation: BankMutation): boolean {
+  const best = visibleCandidates(mutation)[0];
+  return candidateSportPaymentType(best, mutation) === "qris" && !isQrisMutation(mutation);
 }
 
 function isSameCalendarDate(left: string | null | undefined, right: string | null | undefined): boolean {
@@ -3535,6 +3545,14 @@ function MutationCard({
                      </Badge>
                    ) : null;
                  })()}
+                {hasQrisCandidateEvidenceMismatch(m) && (
+                  <Badge
+                    variant="outline"
+                    className="mt-1 ml-1 text-[10px] border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                  >
+                    Mismatch: sumber QRIS, mutasi Transfer Bank
+                  </Badge>
+                )}
                 <div
                   className="mt-1 text-[11px] text-muted-foreground break-words"
                   onClick={e => e.stopPropagation()}
