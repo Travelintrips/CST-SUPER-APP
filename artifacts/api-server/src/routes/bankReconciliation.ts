@@ -1125,6 +1125,118 @@ function findPostgresError(error: unknown): Record<string, unknown> | null {
   return null;
 }
 
+async function ensureCanonicalApprovalMatch(input: {
+  mutationId: number;
+  companyId: number;
+  settlementId: number;
+  mutationAmount: number;
+  mutationDate: string;
+}): Promise<Record<string, unknown>> {
+  const existingResult = await db.execute(sql.raw(`
+    SELECT id, mutation_id, candidate_type, candidate_id, candidate_source, status
+    FROM bank_reconciliation_matches
+    WHERE mutation_id = ${input.mutationId}
+      AND candidate_type = 'qris_settlement'
+      AND candidate_id = ${input.settlementId}
+      AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
+      AND status IN ('candidate', 'approved')
+    ORDER BY id
+    LIMIT 2
+  `));
+  const existingRows = existingResult.rows as Array<Record<string, unknown>>;
+  if (existingRows.length > 1) {
+    throw Object.assign(
+      new Error("Terdapat lebih dari satu match canonical untuk settlement QRIS ini."),
+      { code: "MATCHING_EVIDENCE_INVALID" },
+    );
+  }
+  if (existingRows.length === 1) return existingRows[0];
+
+  // The settlement ID came from the canonical owner in this same approval
+  // flow. Create its source-qualified match directly instead of asking the
+  // broad matcher to rediscover it among unrelated candidate sources.
+  const settlementResult = await db.execute(sql.raw(`
+    SELECT id, company_id, settlement_date, net_amount, status,
+           bank_mutation_id, settlement_journal_id
+    FROM sport_center.payment_settlement_batches
+    WHERE id = ${input.settlementId}
+  `));
+  const settlement = settlementResult.rows[0] as Record<string, unknown> | undefined;
+  if (
+    !settlement
+    || Number(settlement.company_id) !== input.companyId
+    || String(settlement.status ?? "").toLowerCase() !== "posted"
+    || settlement.bank_mutation_id != null
+    || settlement.settlement_journal_id == null
+  ) {
+    throw Object.assign(
+      new Error("Settlement canonical hasil builder tidak memenuhi state approval."),
+      { code: "MATCHING_EVIDENCE_INVALID" },
+    );
+  }
+
+  const amountMatch = Math.abs(Number(settlement.net_amount ?? 0) - input.mutationAmount) < 0.01;
+  const settlementDate = String(settlement.settlement_date ?? "").slice(0, 10);
+  const mutationDate = String(input.mutationDate).slice(0, 10);
+  const settlementTime = Date.parse(`${settlementDate}T00:00:00Z`);
+  const mutationTime = Date.parse(`${mutationDate}T00:00:00Z`);
+  const dateMatch = Number.isFinite(settlementTime)
+    && Number.isFinite(mutationTime)
+    && Math.abs(settlementTime - mutationTime) <= 86_400_000;
+  const matchScore = amountMatch && dateMatch ? 100 : amountMatch ? 70 : 0;
+  const matchReason = [
+    "canonical settlement dibuat dari payment terpilih",
+    amountMatch ? "net amount cocok" : "net amount perlu diverifikasi",
+    dateMatch ? "tanggal settlement berada dalam window canonical" : "tanggal settlement di luar window canonical",
+  ].join("; ");
+
+  await db.execute(sql.raw(`
+    INSERT INTO bank_reconciliation_matches (
+      mutation_id, candidate_type, candidate_id, match_score, match_reason,
+      amount_match, date_match, name_match, order_id_match, proof_match,
+      status, candidate_source
+    ) VALUES (
+      ${input.mutationId}, 'qris_settlement', ${input.settlementId},
+      ${matchScore}, '${matchReason.replace(/'/g, "''")}',
+      ${amountMatch}, ${dateMatch}, false, false, false,
+      'candidate', '${CANONICAL_SETTLEMENT_SOURCE}'
+    )
+    ON CONFLICT (
+      mutation_id, candidate_type, candidate_id, candidate_source
+    ) WHERE candidate_source IS NOT NULL
+      AND status IN ('candidate', 'approved')
+    DO UPDATE SET
+      match_score = EXCLUDED.match_score,
+      match_reason = EXCLUDED.match_reason,
+      amount_match = EXCLUDED.amount_match,
+      date_match = EXCLUDED.date_match,
+      status = CASE
+        WHEN bank_reconciliation_matches.status = 'approved' THEN 'approved'
+        ELSE 'candidate'
+      END
+  `));
+
+  const finalResult = await db.execute(sql.raw(`
+    SELECT id, mutation_id, candidate_type, candidate_id, candidate_source, status
+    FROM bank_reconciliation_matches
+    WHERE mutation_id = ${input.mutationId}
+      AND candidate_type = 'qris_settlement'
+      AND candidate_id = ${input.settlementId}
+      AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
+      AND status IN ('candidate', 'approved')
+    ORDER BY id
+    LIMIT 2
+  `));
+  const finalRows = finalResult.rows as Array<Record<string, unknown>>;
+  if (finalRows.length !== 1) {
+    throw Object.assign(
+      new Error("Match canonical tidak dapat dibuat secara unik untuk settlement QRIS."),
+      { code: "MATCHING_EVIDENCE_INVALID" },
+    );
+  }
+  return finalRows[0];
+}
+
 function isQrisSettlementPaymentConflict(error: unknown): boolean {
   const postgresError = findPostgresError(error);
   return postgresError?.code === "23505"
@@ -2802,51 +2914,17 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
     const mutation = mutationRows[0] as Record<string, unknown> | undefined;
     if (!mutation) throw Object.assign(new Error("Mutasi bank QRIS tidak ditemukan"), { code: "NOT_FOUND" });
 
-    const matching = await runUnifiedMatching({
-      id: Number(mutation.id),
-      amount: Number(mutation.amount),
-      transaction_date: String(mutation.transaction_date).slice(0, 10),
-      mutation_key: String(mutation.mutation_key ?? ""),
-      provider_order_id: mutation.provider_order_id == null
-        ? null
-        : String(mutation.provider_order_id),
-      provider_name: mutation.provider_name == null ? null : String(mutation.provider_name),
-      normalized_description: mutation.normalized_description == null
-        ? null
-        : String(mutation.normalized_description),
-      uploaded_proof_url: mutation.uploaded_proof_url == null
-        ? null
-        : String(mutation.uploaded_proof_url),
-      company_id: mutation.company_id == null ? companyId : Number(mutation.company_id),
-      bank_account_id: mutation.bank_account_id == null
-        ? null
-        : Number(mutation.bank_account_id),
-      direction: String(mutation.direction ?? "IN"),
-    }, actor);
-
-    const { rows: canonicalMatches } = await db.execute(sql.raw(`
-      SELECT id, mutation_id, candidate_type, candidate_id, candidate_source, status
-      FROM bank_reconciliation_matches
-      WHERE mutation_id = ${mutationId}
-        AND candidate_type = 'qris_settlement'
-        AND candidate_id = ${settlementId}
-        AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
-        AND status IN ('candidate', 'approved')
-      ORDER BY id
-      LIMIT 2
-    `));
-    if (canonicalMatches.length !== 1) {
-      throw Object.assign(
-        new Error(
-          "Settlement canonical sudah dibuat, tetapi matching source-aware tidak menghasilkan tepat satu match yang dapat disetujui.",
-        ),
-        { code: "MATCHING_EVIDENCE_INVALID" },
-      );
-    }
+    const canonicalMatch = await ensureCanonicalApprovalMatch({
+      mutationId,
+      companyId,
+      settlementId,
+      mutationAmount: Number(mutation.amount),
+      mutationDate: String(mutation.transaction_date).slice(0, 10),
+    });
 
     const approval = await approveCanonicalSettlementLink(db as any, {
       mutationId,
-      matchId: Number((canonicalMatches[0] as any).id),
+      matchId: Number(canonicalMatch.id),
       candidateType: "qris_settlement",
       candidateId: settlementId,
       candidateSource: CANONICAL_SETTLEMENT_SOURCE,
