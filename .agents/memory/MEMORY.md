@@ -135,3 +135,4 @@
 - [Supabase pooler startup parameters](supabase-pooler-startup-parameter.md) — set statement_timeout after connect; passing it as a startup option can be rejected by the pooler.
 - [Production legacy QRIS COA mirrors](production-legacy-qris-coa-mirrors.md) — legacy settlement owner requires exact internal bank/MDR mirrors in addition to public COA identities.
 - [QRIS canonical provider groups](qris-canonical-provider-groups.md) — compatible provider aliases may match bank evidence but must settle as separate exact canonical groups.
+- [QRIS UI evidence boundary](qris-ui-evidence.md) — generic cards can combine bank-source labeling with a QRIS badge inherited from a persisted candidate.
