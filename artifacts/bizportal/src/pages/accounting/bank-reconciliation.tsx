@@ -564,6 +564,8 @@ interface BankMutation {
   qris_candidate_audit?: QrisCandidateAudit | null;
   /** All provider-aware QRIS candidates for this mutation, ordered by live evidence. */
   qris_candidate_audits?: QrisCandidateAudit[] | null;
+  /** Latest QRIS candidate retained for diagnostics, even when it is outside the reviewable H-1 cohort. */
+  qris_candidate_diagnostic?: QrisCandidateAudit | null;
   uploaded_proof_url?: string | null;
   source?: string;
   import_batch_id?: number | null;
@@ -619,6 +621,11 @@ interface QrisCandidateAudit {
   candidate_source?: string | null;
   description?: string | null;
   status?: string | null;
+  diagnostic_bank_date?: string | null;
+  diagnostic_payment_count?: number | null;
+  diagnostic_has_expected_dates?: boolean | null;
+  diagnostic_date_match?: boolean | null;
+  diagnostic_amount_difference?: number | string | null;
 }
 
 interface QrisPaymentItem {
@@ -823,6 +830,114 @@ function qrisAuditsForMutation(m: BankMutation): QrisCandidateAudit[] {
   );
 }
 
+function QrisCandidateDiagnosticBlock({
+  mutation,
+  diagnostic,
+  compact = false,
+}: {
+  mutation: BankMutation;
+  diagnostic?: QrisCandidateAudit | null;
+  compact?: boolean;
+}) {
+  const bankDate = String(diagnostic?.diagnostic_bank_date ?? mutation.transaction_date ?? "").slice(0, 10);
+  const expectedDate = diagnostic?.estimated_settlement_date
+    ? String(diagnostic.estimated_settlement_date).slice(0, 10)
+    : null;
+  const items = diagnostic?.payment_items ?? [];
+  const itemCount = Number(diagnostic?.diagnostic_payment_count ?? items.length);
+  const hasProvider = Boolean(
+    diagnostic?.provider_code
+      && !["unknown", "unidentified"].includes(String(diagnostic.provider_code).toLowerCase()),
+  );
+  const hasExpectedDates = diagnostic?.diagnostic_has_expected_dates
+    ?? items.every(item => Boolean(item.expectedSettlementDate ?? item.expected_settlement_date));
+  const dateMatches = diagnostic?.diagnostic_date_match
+    ?? Boolean(expectedDate && bankDate && expectedDate === bankDate && items.every(item =>
+      isSameCalendarDate(bankDate, item.expectedSettlementDate ?? item.expected_settlement_date),
+    ));
+  const bankAmount = numericValue(mutation.amount) ?? 0;
+  const candidateNet = numericValue(diagnostic?.net_amount);
+  const amountDifference = diagnostic?.diagnostic_amount_difference != null
+    ? numericValue(diagnostic.diagnostic_amount_difference)
+    : candidateNet == null ? null : bankAmount - candidateNet;
+  const amountMatches = amountDifference == null || Math.abs(amountDifference) < 1;
+  const status = String(diagnostic?.reconciliation_status ?? "UNMATCHED").toUpperCase();
+
+  const checks = [
+    {
+      label: "Payment sumber",
+      ok: itemCount > 0,
+      detail: itemCount > 0 ? `${itemCount} payment QRIS ditemukan` : "Tidak ada payment QRIS yang ditemukan",
+    },
+    {
+      label: "Tanggal settlement",
+      ok: dateMatches && hasExpectedDates,
+      detail: !expectedDate
+        ? "Belum ada tanggal settlement"
+        : !hasExpectedDates
+          ? `Sebagian payment belum memiliki expected settlement date (mutasi ${fmtDate(bankDate)})`
+          : dateMatches
+            ? `Sesuai mutasi bank: ${fmtDate(expectedDate)}`
+            : `Kandidat ${fmtDate(expectedDate)} ≠ mutasi bank ${fmtDate(bankDate)}`,
+    },
+    {
+      label: "Provider",
+      ok: hasProvider,
+      detail: hasProvider ? String(diagnostic?.provider_code) : "Provider belum dikenali",
+    },
+    {
+      label: "Nominal netto",
+      ok: amountMatches,
+      detail: candidateNet == null
+        ? "Belum tersedia"
+        : `${idr(candidateNet)} vs mutasi ${idr(bankAmount)}`
+          + (!amountMatches ? ` (selisih ${idr(Math.abs(amountDifference ?? 0))})` : ""),
+    },
+  ];
+  const failedChecks = checks.filter(check => !check.ok);
+
+  return (
+    <div className={`mt-2 rounded-md border border-indigo-300 bg-indigo-950 px-3 py-2.5 text-xs text-indigo-50 dark:border-indigo-700 ${compact ? "space-y-1.5" : "space-y-2"}`}>
+      <div className="flex items-start gap-2">
+        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-indigo-200" />
+        <div className="min-w-0">
+          <p className="font-semibold text-indigo-50">
+            {diagnostic ? "Kenapa belum dapat diselesaikan?"
+              : "Detail kandidat QRIS belum tersedia"}
+          </p>
+          <p className="mt-0.5 leading-relaxed text-indigo-200">
+            {diagnostic
+              ? failedChecks.length > 0
+                ? `${failedChecks.length} syarat belum terpenuhi. Status pemeriksaan: ${status}.`
+                : "Kandidat ada, tetapi belum masuk cohort settlement yang dapat direview."
+              : "Sistem belum menyimpan hasil pemeriksaan untuk mutasi ini. Jalankan pencarian kandidat QRIS terlebih dahulu."}
+          </p>
+        </div>
+      </div>
+      {diagnostic && (
+        <div className="space-y-1 rounded border border-indigo-700/80 bg-slate-950/40 px-2 py-1.5">
+          {checks.map(check => (
+            <div key={check.label} className="flex items-start gap-1.5">
+              <span className={check.ok ? "text-emerald-300" : "text-amber-300"} aria-hidden="true">
+                {check.ok ? "✓" : "!"}
+              </span>
+              <span className="min-w-0">
+                <span className="font-medium text-indigo-100">{check.label}:</span>{" "}
+                <span className={check.ok ? "text-indigo-200" : "text-amber-200"}>{check.detail}</span>
+              </span>
+            </div>
+          ))}
+          {diagnostic.review_reason && (
+            <p className="border-t border-indigo-700/70 pt-1 text-indigo-200">
+              Alasan sistem: <span className="font-medium text-indigo-100">{diagnostic.review_reason}</span>
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function statusLabel(m: BankMutation): string {
   if (m.status === "approved") return STATUS_LABELS.approved;
   if (m.status === "posted") return STATUS_LABELS.posted;
@@ -830,6 +945,7 @@ function statusLabel(m: BankMutation): string {
   if (m.status === "void") return STATUS_LABELS.void;
   if (m.status === "approved_pending_posting") return STATUS_LABELS.approved_pending_posting;
   if (m.status === "manual_review") return STATUS_LABELS.manual_review;
+  if (isQrisMutation(m) && qrisAuditsForMutation(m).length === 0) return "Perlu Kandidat QRIS";
   if (m.status === "duplicate_need_review" || hasUnresolvedVariance(m)) return "Perlu Diperiksa";
   if (m.status === "unmatched" && visibleCandidates(m).length > 0) return "Perlu Diperiksa";
   if (m.status === "unmatched" || !m.candidates?.length) return "Transaksi Belum Lengkap";
@@ -841,6 +957,7 @@ function statusColor(m: BankMutation): string {
   if (m.status === "approved_pending_posting") return STATUS_COLORS.approved_pending_posting;
   if (m.status === "approved" || m.status === "posted") return STATUS_COLORS.approved;
   if (m.status === "manual_review") return STATUS_COLORS.manual_review;
+  if (isQrisMutation(m) && qrisAuditsForMutation(m).length === 0) return STATUS_COLORS.duplicate_need_review;
   if (m.status === "duplicate_need_review" || hasUnresolvedVariance(m)) return STATUS_COLORS.duplicate_need_review;
   if (m.status === "unmatched" && visibleCandidates(m).length > 0) return STATUS_COLORS.duplicate_need_review;
   if (m.status === "unmatched" || !m.candidates?.length) return STATUS_COLORS.unmatched;
@@ -3398,7 +3515,7 @@ function MutationCard({
             </div>
 
             {/* Friendly matching summary — scoring details live in the detail panel. */}
-            {best && isExactMatch(m) && (
+            {best && isExactMatch(m) && (!isQris || qrisAudits.length > 0) && (
               <div className="mt-2 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-xs dark:border-green-800 dark:bg-green-950">
                 <p className="font-semibold text-green-800 dark:text-green-300">
                   Cocok dengan transaksi {best.candidate_type === "sport_payment" || best.candidate_type === "qris_settlement" ? "Sport Center" : "di sistem"}
@@ -3411,16 +3528,17 @@ function MutationCard({
             )}
 
             {isQris && qrisAudits.length === 0 && (
-              <div className="mt-2 rounded-md border border-indigo-300 bg-indigo-50 px-3 py-2.5 text-xs text-indigo-950 dark:border-indigo-800 dark:bg-indigo-950 dark:text-indigo-100">
-                <p className="font-semibold">QRIS perlu kandidat settlement canonical</p>
-                <p className="mt-0.5 leading-relaxed">
-                  Pencocokan umum tidak dapat menyelesaikan payment QRIS. Buat kandidat QRIS terlebih dahulu agar approval memproses batch dan jurnal canonical yang benar.
-                </p>
+              <div>
+                <QrisCandidateDiagnosticBlock
+                  mutation={m}
+                  diagnostic={m.qris_candidate_diagnostic}
+                  compact
+                />
                 {onGenerateQrisCandidates && (
                   <Button
                     size="sm"
                     variant="outline"
-                    className="mt-2 h-7 gap-1 border-indigo-400 text-[11px] text-indigo-800 hover:bg-indigo-100 dark:border-indigo-700 dark:text-indigo-200 dark:hover:bg-indigo-900"
+                    className="mt-2 h-7 gap-1 border-indigo-300 bg-indigo-950 text-[11px] text-indigo-50 hover:bg-indigo-900 dark:border-indigo-700"
                     disabled={qrisGenerationPending}
                     onClick={event => {
                       event.stopPropagation();
@@ -3997,6 +4115,7 @@ function MutationDetailPanel({
   const m     = mutation;
   const cands = visibleCandidates(m);
   const qrisAudit = m.qris_candidate_audit ?? qrisAuditsForMutation(m)[0];
+  const qrisDiagnostic = m.qris_candidate_diagnostic ?? null;
   const settledQrisPaymentIds = new Set((qrisAudit?.settled_payment_ids ?? []).map(Number));
   const currentQrisPaymentIds = Array.isArray(qrisAudit?.current_payment_ids)
     ? new Set(qrisAudit.current_payment_ids.map(Number))
@@ -4380,6 +4499,15 @@ function MutationDetailPanel({
                     </p>
                   )}
                 </div>
+              </>
+            )}
+            {!qrisAudit && qrisDiagnostic && (
+              <>
+                <Separator />
+                <QrisCandidateDiagnosticBlock
+                  mutation={m}
+                  diagnostic={qrisDiagnostic}
+                />
               </>
             )}
 

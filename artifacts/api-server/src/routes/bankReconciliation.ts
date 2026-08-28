@@ -3854,6 +3854,38 @@ router.get("/mutations", async (req, res) => {
                OR UPPER(COALESCE(bm.description, '')) LIKE '%QRTRAVELI%'
              )
          ) AS qris_candidate_audits
+        ,
+        (
+          SELECT to_jsonb(qc) || jsonb_build_object(
+            'diagnostic_bank_date', bm.transaction_date::text,
+            'diagnostic_payment_count', jsonb_array_length(COALESCE(qc.payment_items, '[]'::jsonb)),
+            'diagnostic_has_expected_dates', NOT EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements(COALESCE(qc.payment_items, '[]'::jsonb)) item_diag
+              WHERE COALESCE(
+                item_diag->>'expectedSettlementDate',
+                item_diag->>'expected_settlement_date'
+              ) IS NULL
+            ),
+            'diagnostic_date_match',
+              qc.estimated_settlement_date::text = bm.transaction_date::text
+              AND NOT EXISTS (
+                SELECT 1
+                FROM jsonb_array_elements(COALESCE(qc.payment_items, '[]'::jsonb)) item_diag_date
+                WHERE COALESCE(
+                  item_diag_date->>'expectedSettlementDate',
+                  item_diag_date->>'expected_settlement_date'
+                ) IS DISTINCT FROM bm.transaction_date::text
+              ),
+            'diagnostic_amount_difference',
+              bm.amount - COALESCE(qc.net_amount, 0)
+          )
+          FROM qris_mutation_batch_candidates qc
+          WHERE qc.mutation_id = bm.id
+            AND UPPER(COALESCE(qc.status, '')) NOT IN ('APPROVED', 'COMPLETED')
+          ORDER BY qc.updated_at DESC, qc.id DESC
+          LIMIT 1
+        ) AS qris_candidate_diagnostic
     FROM bank_mutations bm
     ${bmWhere}
   `;
@@ -3892,7 +3924,8 @@ router.get("/mutations", async (req, res) => {
       'bank_import' AS _source_table,
        NULL::json AS candidates,
         NULL::jsonb AS qris_candidate_audit,
-        '[]'::jsonb AS qris_candidate_audits
+        '[]'::jsonb AS qris_candidate_audits,
+        NULL::jsonb AS qris_candidate_diagnostic
     FROM bank_mutation_imports bmi
     ${bmiWhere}
   ` : "";
