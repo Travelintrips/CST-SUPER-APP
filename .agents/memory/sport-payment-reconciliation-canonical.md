@@ -14,3 +14,16 @@ Untuk pencocokan bank, metode pembayaran menentukan kontrak tanggal: transfer ba
 **Why:** Memakai settlement date untuk semua `sport_payments` membuat transfer bank yang sah hilang dari kandidat ketika settlement date berbeda dari tanggal mutasi.
 
 **How to apply:** Pilih ekspresi tanggal berdasarkan `sp.method` di engine matching, dan gunakan `details.date` untuk filter kandidat transfer bank di UI; jangan gunakan `details.settlementDate` untuk kandidat non-QRIS.
+
+`accounting_entries.bank_account_id` pada legacy Sport Center adalah snapshot
+text dari identitas rekening eksternal, bukan foreign key ke
+`company_bank_accounts.id`. Nilainya dapat tertinggal walaupun source payment
+atau COA sudah diperbaiki.
+
+**Why:** Posted entries bersifat immutable dan repair canonical source tidak
+otomatis mengubah metadata mirror accounting.
+
+**How to apply:** Saat audit rekening, bandingkan source
+`sport_center.sport_payments`, `company_bank_accounts.account_number`, COA
+debit, dan metadata `accounting_entries` secara terpisah; jangan menganggap
+perubahan satu lapisan sudah memperbaiki semua lapisan.
