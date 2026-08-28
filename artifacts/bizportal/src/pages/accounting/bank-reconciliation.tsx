@@ -6251,7 +6251,7 @@ export default function BankReconciliationPage() {
                                                </button>
                                              )}
                                            </span>
-                                          <span className="sm:col-span-2">Payment: {paymentNumber || `SCPAY-SC-${paymentId ?? "—"}`}</span>
+                                          <span className="sm:col-span-2">No. Payment: {paymentNumber || `SCPAY-SC-${paymentId ?? "—"}`}</span>
                                         </div>
                                        </div>
                                      );
