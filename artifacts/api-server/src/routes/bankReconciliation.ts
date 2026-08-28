@@ -30,6 +30,8 @@ import {
   scoreUnified,
   classifyMatch,
   getMatchingAmountTolerance,
+  isQrisCandidateAllowedForMutation,
+  isQrisCandidateForMatching,
 } from "../lib/reconciliation/unifiedMatchingEngine.js";
 import {
   RECONCILIATION_CANDIDATE_SOURCES,
@@ -5949,14 +5951,24 @@ router.post("/smart-import", upload.single("file"), async (req, res) => {
           bank_account_id: null,
           direction: pr.direction,
         });
-        const candidates = await fetchCandidates({
+        const matchingMutation = {
           amount: pr.amount,
           transaction_date: pr.date,
           direction: pr.direction,
           company_id: companyId,
           provider_name: detectProvider(pr.description),
           amount_tolerance: amountTolerance,
-        });
+        };
+        const fetchedCandidates = await fetchCandidates(matchingMutation);
+        const blockedCandidates = fetchedCandidates.filter(
+          (candidate) => !isQrisCandidateAllowedForMutation(matchingMutation, candidate),
+        );
+        const candidates = fetchedCandidates.filter((candidate) =>
+          isQrisCandidateAllowedForMutation(matchingMutation, candidate),
+        );
+        const qrisTypeConflict = !candidates.length && blockedCandidates.some(
+          (candidate) => isQrisCandidateForMatching(candidate),
+        );
         const scored = candidates.map(c => scoreUnified({
           amount: pr.amount,
           transaction_date: pr.date,
@@ -5970,12 +5982,29 @@ router.post("/smart-import", upload.single("file"), async (req, res) => {
         }, c));
         scored.sort((a, b) => b.score - a.score);
         const best = scored[0];
-        const status = best?.candidate.candidateSource ===
+        const status = qrisTypeConflict
+          ? "manual_review"
+          : best?.candidate.candidateSource ===
           RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER
           ? "manual_review"
           : best
             ? classifyMatch(best)
             : "unmatched";
+        const reason = qrisTypeConflict
+          ? ["Perbedaan jenis transaksi: mutasi terindikasi Transfer Bank, sedangkan kandidat payment QRIS; wajib Review Manual."]
+          : best?.reason ?? [];
+
+        if (qrisTypeConflict) {
+          await db.execute(sql.raw(`
+            UPDATE bank_mutations
+            SET status = 'manual_review',
+                review_reason = '${reason[0].replace(/'/g, "''")}',
+                review_code = 'TRANSACTION_TYPE_MISMATCH',
+                updated_at = NOW()
+            WHERE id = ${mutId}
+              AND status NOT IN ('posted', 'approved', 'approved_pending_posting', 'void')
+          `)).catch(() => {});
+        }
 
         const rowResult = {
           id: mutId,
@@ -5987,7 +6016,7 @@ router.post("/smart-import", upload.single("file"), async (req, res) => {
           vendorName: pr.vendorName,
           confidence: best?.confidence ?? 0,
           score: best?.score ?? 0,
-          reason: best?.reason ?? [],
+          reason,
           match_status: status,
           candidate_type: best?.candidate.type,
           candidate_id: best?.candidate.id,

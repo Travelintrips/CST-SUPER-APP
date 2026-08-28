@@ -1,4 +1,5 @@
 import { addCalendarDays, jakartaDateFromTimestamp } from "./businessCalendar.js";
+import { normalizeQrisProvider } from "./providerSettlementRules.js";
 
 /**
  * QRIS settlement contract shared by bank reconciliation paths.
@@ -19,6 +20,8 @@ export type BankMutationSourceClassification =
   | "actual_bank_mutation"
   | "synthetic"
   | "unknown";
+
+export type BankMutationPaymentType = "bank_transfer" | "qris" | "paylabs";
 
 const ACTUAL_BANK_SOURCES = new Set([
   "actual_bank_mutation",
@@ -94,6 +97,38 @@ export function calculateQrisNetAmount(amounts: QrisSettlementAmounts): number {
 
 export function isQrisPaymentMethod(method: string | null | undefined): boolean {
   return String(method ?? "").trim().toLowerCase().includes("qris");
+}
+
+/**
+ * Classify the bank-side payment rail from bank evidence only.
+ *
+ * A QRIS payment in Sport Center is not evidence that an arbitrary bank row
+ * is QRIS. In particular, `InhouseTrf` is an ordinary bank transfer and must
+ * remain on the generic transfer rail unless the bank row itself carries
+ * provider/QRIS evidence.
+ */
+export function classifyBankMutationPaymentType(input: {
+  providerName?: string | null;
+  providerOrderId?: string | null;
+  description?: string | null;
+}): BankMutationPaymentType {
+  const values = [
+    input.providerName,
+    input.providerOrderId,
+    input.description,
+  ];
+  if (values.some((value) => /paylabs/i.test(String(value ?? "")))) {
+    return "paylabs";
+  }
+
+  if (
+    normalizeQrisProvider(input.providerName) !== "unknown"
+    || values.some((value) => isQrisSettlementDescription(value))
+  ) {
+    return "qris";
+  }
+
+  return "bank_transfer";
 }
 
 /**

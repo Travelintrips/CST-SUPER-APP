@@ -32,7 +32,10 @@ import {
   JournalReuseErrorCode,
 } from "./journalReuseEngine.js";
 import { assertGenericApprovalAllowed } from "./genericPostGuard.js";
-import { isQrisSettlementDescription } from "./qrisSettlement.js";
+import {
+  classifyBankMutationPaymentType,
+  isQrisSettlementDescription,
+} from "./qrisSettlement.js";
 import { normalizeCompanyId } from "../services/portalCompanyScopeUtils.js";
 import {
   isSportPaymentInActiveCanonicalSettlement,
@@ -358,7 +361,7 @@ export function dedupeCandidatesByIdentity(
   });
 }
 
-function isQrisCandidateForMatching(candidate: MatchCandidate): boolean {
+export function isQrisCandidateForMatching(candidate: MatchCandidate): boolean {
   return candidate.type === "qris_settlement"
     || (
       candidate.type === "sport_payment"
@@ -825,13 +828,13 @@ export async function fetchCandidates(
   }
   const mutationBankAccountId = mutation.bank_account_id != null ? Number(mutation.bank_account_id) : null;
   const direction = String(mutation.direction ?? "IN").toUpperCase() === "OUT" ? "OUT" : "IN";
-  const mutationLooksPaylabs =
-    /paylabs/i.test(String(mutation.provider_name ?? "")) ||
-    /paylabs/i.test(String(mutation.provider_order_id ?? "")) ||
-    /paylabs/i.test(String(mutation.normalized_description ?? ""));
-  const mutationLooksQris =
-    !mutationLooksPaylabs &&
-    hasQrisBankEvidence(mutation);
+  const mutationPaymentType = classifyBankMutationPaymentType({
+    providerName: mutation.provider_name,
+    providerOrderId: mutation.provider_order_id,
+    description: mutation.normalized_description,
+  });
+  const mutationLooksPaylabs = mutationPaymentType === "paylabs";
+  const mutationLooksQris = mutationPaymentType === "qris" && !mutationLooksPaylabs;
   const configuredTolerance = sanitizeBankAmountTolerance(mutation.amount_tolerance) ??
     (await getMatchingAmountTolerance(mutation));
   const amountTolerance = mutationLooksQris ? 0 : configuredTolerance;
@@ -1170,6 +1173,49 @@ export async function fetchCandidates(
           )
       `,
     }] : []),
+    ...(direction === "IN" && !mutationLooksQris && !mutationLooksPaylabs ? [{
+      // Keep a possible QRIS payment visible to the matching decision only as
+      // a type-conflict signal. runUnifiedMatching filters it from normal
+      // candidates and routes the mutation to manual review; it can never
+      // become an automatic QRIS match merely because amount/date agree.
+      type: "sport_payment" as CandidateType,
+      q: `
+        SELECT sp.id,
+               sp.amount AS amount,
+               ${sportPaymentDateExpr}::text AS date,
+               COALESCE(c.name, sb.customer_name, '') AS name,
+               COALESCE(sp.payment_number, CONCAT('SPORT-', sp.booking_id::text)) AS ref,
+               sp.company_id,
+               sp.bank_account_id,
+               LOWER(BTRIM(sp.payment_provider::text)) AS provider_code,
+               sp.payment_provider::text AS provider_name,
+               sp.amount AS gross_amount,
+               COALESCE(sp.mdr_amount, 0) AS mdr_amount,
+               COALESCE(sp.tax_withheld_amount, 0) AS tax_withheld_amount,
+               COALESCE(sp.other_fee_amount, 0) AS other_fee_amount,
+               ${settlementDateExpr}::text AS settlement_date,
+               sp.settlement_reference,
+               sp.method AS payment_method,
+               sp.payment_type,
+               'qris' AS sport_payment_type,
+               sp.settlement_status,
+               1 AS settlement_item_count,
+               (COALESCE(sp.settlement_status, 'unsettled') IN ('partial', 'partially_settled', 'partially-settled')) AS settlement_partial
+        FROM sport_payments sp
+        LEFT JOIN customers c ON c.id = sp.customer_id
+        LEFT JOIN sport_bookings sb ON sb.id = sp.booking_id
+        WHERE ABS(sp.amount::numeric - ${Number(amount)}) < 0.01
+          AND sp.company_id = ${Number(company_id)}
+          AND ${sportPaymentDateExpr} = '${transaction_date}'::date
+          AND sp.status = 'paid'
+          AND ${sportPaymentTypeExpr} = 'qris'
+          ${canonicalSportPaymentExclusion}
+          AND (
+            sp.bank_account_id IS NULL
+            OR ${mutationBankAccountId != null ? `sp.bank_account_id = ${mutationBankAccountId}` : "TRUE"}
+          )
+      `,
+    }] : []),
     ...(mutationLooksQris && qrisSettlementTablesAvailable ? [{
       type: "qris_settlement" as CandidateType,
       candidateSource: RECONCILIATION_CANDIDATE_SOURCES.LEGACY_QRIS,
@@ -1365,10 +1411,36 @@ export async function runUnifiedMatching(
     explicitProvider === "unknown" && descriptionProvider !== "unknown"
       ? { ...mutation, provider_name: descriptionProvider, amount_tolerance: amountTolerance }
       : { ...mutation, amount_tolerance: amountTolerance };
-  const candidates = (await fetchCandidates(matchingMutation))
-    .filter((candidate) => isQrisCandidateAllowedForMutation(matchingMutation, candidate));
+  const fetchedCandidates = await fetchCandidates(matchingMutation);
+  const blockedCandidates = fetchedCandidates.filter(
+    (candidate) => !isQrisCandidateAllowedForMutation(matchingMutation, candidate),
+  );
+  const candidates = fetchedCandidates.filter((candidate) =>
+    isQrisCandidateAllowedForMutation(matchingMutation, candidate),
+  );
 
   if (!candidates.length) {
+    if (blockedCandidates.some((candidate) => isQrisCandidateForMatching(candidate))) {
+      const reviewReason =
+        "Perbedaan jenis transaksi: mutasi terindikasi Transfer Bank, sedangkan kandidat payment QRIS; wajib Review Manual.";
+      await db.execute(sql.raw(`
+        UPDATE bank_mutations
+        SET status = 'manual_review',
+            review_reason = '${reviewReason.replace(/'/g, "''")}',
+            review_code = 'TRANSACTION_TYPE_MISMATCH',
+            updated_at = NOW()
+        WHERE id = ${mutation.id}
+          AND status NOT IN ('posted', 'approved', 'approved_pending_posting', 'void')
+      `)).catch(() => {});
+      await writeReconAudit(mutation.id, "MATCH_CREATED", actor, {
+        count: fetchedCandidates.length,
+        blocked_qris_candidates: blockedCandidates.length,
+        status: "manual_review",
+        review_code: "TRANSACTION_TYPE_MISMATCH",
+      });
+      return { status: "manual_review", all: [] };
+    }
+
     await db.execute(sql.raw(
       `UPDATE bank_mutations SET status = 'unmatched', updated_at = NOW() WHERE id = ${mutation.id}`,
     )).catch(() => {});

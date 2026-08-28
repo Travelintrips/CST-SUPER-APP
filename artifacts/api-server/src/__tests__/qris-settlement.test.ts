@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   calculateQrisNetAmount,
+  classifyBankMutationPaymentType,
   isQrisPaymentMethod,
   isQrisSettlementDescription,
   resolveSettlementDate,
@@ -47,6 +48,19 @@ describe("QRIS settlement contract", () => {
       "7177632488799999999111111111111QRTRAVELI DR 0000029511812 KR 1640006707220 99106",
     )).toBe(true);
     expect(isQrisSettlementDescription("TRANSFER BCA REGULER")).toBe(false);
+  });
+
+  it("classifies InhouseTrf as bank transfer without borrowing QRIS payment metadata", () => {
+    expect(classifyBankMutationPaymentType({
+      providerName: null,
+      providerOrderId: null,
+      description: "PEMBAYARAN SEWA INHOUSETRF DARI INDRA",
+    })).toBe("bank_transfer");
+    expect(classifyBankMutationPaymentType({
+      providerName: null,
+      providerOrderId: null,
+      description: "QRTRAVELI SETTLEMENT",
+    })).toBe("qris");
   });
 
   it("keeps partial settlement explicitly reviewable", () => {

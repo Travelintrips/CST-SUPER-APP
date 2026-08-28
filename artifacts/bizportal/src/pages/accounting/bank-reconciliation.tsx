@@ -1076,6 +1076,13 @@ function isPaylabsMutation(m: BankMutation): boolean {
   ].some(value => /PAYLABS/i.test(String(value ?? "")));
 }
 
+function isInhouseBankTransferMutation(m: BankMutation): boolean {
+  return [
+    m.description,
+    m.normalized_description,
+  ].some(value => /INHOUSE\s*TRF/i.test(String(value ?? "")));
+}
+
 function isQrisMutation(m: BankMutation): boolean {
   if (qrisAuditsForMutation(m).length > 0) return true;
   if (isPaylabsMutation(m)) return false;
@@ -1109,9 +1116,9 @@ function mutationSportPaymentType(mutation: BankMutation): SportPaymentType | nu
   const paymentType = candidateSportPaymentType(best, mutation) ?? mutation.sport_payment_type ?? null;
   // A stale/legacy match can point an ordinary bank mutation at a QRIS
   // payment. Keep the reviewer-facing badge aligned with bank evidence.
-  return paymentType === "qris" && !isQrisMutation(mutation)
-    ? "bank_transfer"
-    : paymentType;
+  if (paymentType === "qris" && !isQrisMutation(mutation)) return "bank_transfer";
+  if (paymentType) return paymentType;
+  return isInhouseBankTransferMutation(mutation) ? "bank_transfer" : null;
 }
 
 function hasQrisCandidateEvidenceMismatch(mutation: BankMutation): boolean {

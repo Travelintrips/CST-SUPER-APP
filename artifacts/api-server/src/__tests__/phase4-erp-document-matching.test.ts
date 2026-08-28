@@ -739,6 +739,7 @@ import {
   hasQrisBankEvidence,
   isQrisCandidateAllowedForMutation,
   resetOptionalCandidateSourceAvailabilityForTests,
+  runUnifiedMatching,
   scoreUnified,
 } from "../lib/reconciliation/unifiedMatchingEngine.js";
 
@@ -982,6 +983,50 @@ describe("fetchCandidates — Sport Center payment rails", () => {
     );
     expect(scored.amount_match).toBe(false);
     expect(scored.reason).toContain("bukti QRIS pada mutasi bank tidak ditemukan");
+  });
+
+  it("routes an amount/date QRIS type conflict to manual review", async () => {
+    mockExecute.mockImplementation((query: unknown) => {
+      const serialized = sqlObjToString(query);
+      if (serialized.includes("'qris' AS sport_payment_type")) {
+        return Promise.resolve({
+          rows: [{
+            id: 38330,
+            amount: 700000,
+            date: "2026-08-12",
+            name: "Indra Sukmono",
+            ref: "SCPAY-SC-38330",
+            company_id: 10,
+            bank_account_id: null,
+            provider_code: null,
+            provider_name: null,
+            payment_method: "QRIS",
+            payment_type: "qris",
+            sport_payment_type: "qris",
+            settlement_status: "paid",
+          }],
+        });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+
+    const result = await runUnifiedMatching({
+      id: 9001,
+      amount: 700000,
+      transaction_date: "2026-08-12",
+      mutation_key: "INHOUSE-9001",
+      provider_name: null,
+      provider_order_id: null,
+      normalized_description: "PEMBAYARAN SEWA INHOUSETRF DARI INDRA",
+      company_id: 10,
+      bank_account_id: null,
+      direction: "IN",
+    }, "test");
+
+    expect(result.status).toBe("manual_review");
+    expect(mockExecute.mock.calls.some((call: any[]) =>
+      sqlObjToString(call[0]).includes("TRANSACTION_TYPE_MISMATCH"),
+    )).toBe(true);
   });
 });
 
