@@ -1,10 +1,11 @@
 import { DatePicker } from "@/components/ui/date-picker";
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { RefreshCw, ArrowLeft, ExternalLink } from "lucide-react";
+import { RefreshCw, ArrowLeft, ExternalLink, ChevronDown, ChevronRight } from "lucide-react";
 
 interface TBRow {
   account_id: number; code: string; name: string; type: string;
@@ -38,6 +39,7 @@ export default function AccountingHubTrialBalancePage() {
   const [error, setError] = useState<string | null>(null);
   const [companies, setCompanies] = useState<CompanyOption[]>([]);
   const [filters, setFilters] = useState({ company_id: "", date_from: "", date_to: "" });
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [, navigate] = useLocation();
   const requestVersion = useRef(0);
 
@@ -54,6 +56,7 @@ export default function AccountingHubTrialBalancePage() {
     setLoading(true);
     setError(null);
     setRows([]);   // bersihkan data lama agar tidak tampil stale saat ganti filter
+    setExpandedRows(new Set());
     try {
       const params = new URLSearchParams();
       Object.entries(filters).forEach(([k, v]) => { if (v) params.set(k, v); });
@@ -90,11 +93,43 @@ export default function AccountingHubTrialBalancePage() {
   const codeCounts: Record<string, number> = {};
   for (const r of rows) codeCounts[r.code] = (codeCounts[r.code] ?? 0) + 1;
 
+  // The API returns rolled-up parent rows as well as their descendants. Keep
+  // the expansion key scoped to the same company/branch/division so that
+  // expanding one company's account does not expand its counterpart elsewhere.
+  const contextKey = (r: TBRow) =>
+    `${r.company_id ?? "global"}-${r.branch_id ?? "all"}-${r.division_id ?? "all"}`;
+  const rowKey = (r: TBRow) => `${contextKey(r)}-${r.account_id}`;
+
+  const rowKeys = new Set(rows.map(rowKey));
+  const childrenByParentKey = new Map<string, TBRow[]>();
+  for (const r of rows) {
+    if (r.parent_id == null) continue;
+    const parentKey = `${contextKey(r)}-${r.parent_id}`;
+    const children = childrenByParentKey.get(parentKey) ?? [];
+    children.push(r);
+    childrenByParentKey.set(parentKey, children);
+  }
+
+  // Only roots (parents, or accounts whose parent is not present in the
+  // filtered result) are rendered at first. Descendants are rendered
+  // recursively after their parent is expanded.
   const grouped: Record<string, TBRow[]> = {};
   for (const r of rows) {
+    const parentKey = r.parent_id == null ? null : `${contextKey(r)}-${r.parent_id}`;
+    if (parentKey && rowKeys.has(parentKey)) continue;
     if (!grouped[r.type]) grouped[r.type] = [];
     grouped[r.type].push(r);
   }
+
+  const toggleExpanded = (r: TBRow) => {
+    const key = rowKey(r);
+    setExpandedRows(current => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   function drillDown(r: TBRow) {
     if (r.is_header) return;
@@ -103,6 +138,91 @@ export default function AccountingHubTrialBalancePage() {
     if (filters.date_from)  params.set("date_from",  filters.date_from);
     if (filters.date_to)    params.set("date_to",    filters.date_to);
     navigate(`/accounting/hub/general-ledger?${params}`);
+  }
+
+  function renderAccountRows(r: TBRow, depth = 0): ReactNode[] {
+    const key = rowKey(r);
+    const children = childrenByParentKey.get(key) ?? [];
+    const canExpand = children.length > 0;
+    const isExpanded = expandedRows.has(key);
+
+    return [
+      <tr
+        key={key}
+        className={`border-t bg-black group ${canExpand || !r.is_header ? "cursor-pointer" : ""}`}
+        onClick={() => {
+          if (canExpand) toggleExpanded(r);
+          else drillDown(r);
+        }}
+        title={canExpand
+          ? `${isExpanded ? "Sembunyikan" : "Tampilkan"} akun child ${r.code} – ${r.name}`
+          : r.is_header
+            ? `Saldo akumulasi akun child ${r.code} – ${r.name}`
+            : `Klik untuk lihat detail transaksi akun ${r.code} – ${r.name}`}
+        aria-expanded={canExpand ? isExpanded : undefined}
+      >
+        <td className="px-3 py-2 font-mono text-xs group-hover:text-primary">
+          <div className="flex items-center" style={{ paddingLeft: `${depth * 20}px` }}>
+            {canExpand ? (
+              <button
+                type="button"
+                className="mr-1 inline-flex h-5 w-5 items-center justify-center rounded hover:bg-white/10"
+                aria-label={`${isExpanded ? "Sembunyikan" : "Tampilkan"} child ${r.code}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  toggleExpanded(r);
+                }}
+              >
+                {isExpanded
+                  ? <ChevronDown className="h-3.5 w-3.5" />
+                  : <ChevronRight className="h-3.5 w-3.5" />}
+              </button>
+            ) : (
+              <span className="mr-1 inline-block h-5 w-5" aria-hidden="true" />
+            )}
+            <span>{r.code}</span>
+          </div>
+        </td>
+        <td className={`px-3 py-2 group-hover:text-primary ${r.is_header ? "font-bold" : "font-medium"}`}>
+          <span>{r.name}</span>
+          {r.is_header && (
+            <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+              Total child
+            </span>
+          )}
+          {/* Tampilkan badge company hanya saat mode "Semua Perusahaan" (tidak ada filter company)
+              supaya parent account yang muncul untuk banyak company bisa dibedakan.
+              Saat filter company aktif, semua baris sudah milik company yang sama — badge tidak relevan. */}
+          {!filters.company_id && codeCounts[r.code] > 1 && r.company_name && (
+            <span className="ml-2 text-xs font-normal text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+              {r.company_name}
+            </span>
+          )}
+          {r.counterparty_companies && (
+            <span
+              className="ml-2 text-xs font-normal text-blue-600 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded"
+              title={r.code === '2-2098' ? `Pemberi dana (CST): ${r.counterparty_companies}` : `Counterparty intercompany: ${r.counterparty_companies}`}
+            >
+              {r.counterparty_companies}
+            </span>
+          )}
+        </td>
+        <td className={`px-3 py-2 text-xs font-medium ${typeColor[r.type]}`}>{r.type}</td>
+        <td className="px-3 py-2 text-right font-mono text-xs">{fmt(r.total_debit)}</td>
+        <td className="px-3 py-2 text-right font-mono text-xs">{fmt(r.total_credit)}</td>
+        <td className={`px-3 py-2 text-right font-mono text-xs font-semibold ${Number(r.balance) < 0 ? "text-red-600" : ""}`}>{fmt(r.balance)}</td>
+        <td className="px-3 py-2 text-center">
+          {canExpand
+            ? (isExpanded
+              ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground mx-auto" />
+              : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground mx-auto" />)
+            : <ExternalLink className="h-3.5 w-3.5 text-muted-foreground group-hover:text-primary mx-auto" />}
+        </td>
+      </tr>,
+      ...(canExpand && isExpanded
+        ? children.flatMap(child => renderAccountRows(child, depth + 1))
+        : []),
+    ];
   }
 
   return (
@@ -116,7 +236,7 @@ export default function AccountingHubTrialBalancePage() {
           </Link>
           <div>
             <h1 className="text-xl font-bold">Neraca Saldo (Trial Balance)</h1>
-            <p className="text-xs text-muted-foreground">{rows.length} akun · klik baris untuk lihat detail transaksi</p>
+            <p className="text-xs text-muted-foreground">{rows.length} akun · klik parent untuk tampilkan child, klik akun detail untuk lihat transaksi</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -184,49 +304,7 @@ export default function AccountingHubTrialBalancePage() {
                 <tr key={`hdr-${type}`} className="bg-black">
                   <td colSpan={7} className={`px-3 py-1.5 font-semibold text-xs uppercase tracking-wide ${typeColor[type]}`}>{type}</td>
                 </tr>
-                {rws.map(r => (
-                  <tr
-                    key={`${r.account_id}-${r.company_id ?? "global"}-${r.branch_id ?? "all"}-${r.division_id ?? "all"}`}
-                    className={`border-t bg-black group ${r.is_header ? "" : "hover:bg-white/5 cursor-pointer"}`}
-                    onClick={() => drillDown(r)}
-                    title={r.is_header
-                      ? `Saldo akumulasi akun child ${r.code} – ${r.name}`
-                      : `Klik untuk lihat detail transaksi akun ${r.code} – ${r.name}`}
-                  >
-                    <td className="px-3 py-2 font-mono text-xs group-hover:text-primary">{r.code}</td>
-                    <td className={`px-3 py-2 group-hover:text-primary ${r.is_header ? "font-bold" : "font-medium"}`}>
-                      <span>{r.name}</span>
-                      {r.is_header && (
-                        <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
-                          Total child
-                        </span>
-                      )}
-                      {/* Tampilkan badge company hanya saat mode "Semua Perusahaan" (tidak ada filter company)
-                          supaya parent account yang muncul untuk banyak company bisa dibedakan.
-                          Saat filter company aktif, semua baris sudah milik company yang sama — badge tidak relevan. */}
-                      {!filters.company_id && codeCounts[r.code] > 1 && r.company_name && (
-                        <span className="ml-2 text-xs font-normal text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
-                           {r.company_name}
-                        </span>
-                      )}
-                      {r.counterparty_companies && (
-                        <span
-                          className="ml-2 text-xs font-normal text-blue-600 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded"
-                          title={r.code === '2-2098' ? `Pemberi dana (CST): ${r.counterparty_companies}` : `Counterparty intercompany: ${r.counterparty_companies}`}
-                        >
-                          {r.counterparty_companies}
-                        </span>
-                      )}
-                    </td>
-                    <td className={`px-3 py-2 text-xs font-medium ${typeColor[r.type]}`}>{r.type}</td>
-                    <td className="px-3 py-2 text-right font-mono text-xs">{fmt(r.total_debit)}</td>
-                    <td className="px-3 py-2 text-right font-mono text-xs">{fmt(r.total_credit)}</td>
-                    <td className={`px-3 py-2 text-right font-mono text-xs font-semibold ${Number(r.balance) < 0 ? "text-red-600" : ""}`}>{fmt(r.balance)}</td>
-                    <td className="px-3 py-2 text-center">
-                      <ExternalLink className="h-3.5 w-3.5 text-muted-foreground group-hover:text-primary mx-auto" />
-                    </td>
-                  </tr>
-                ))}
+                {rws.flatMap(r => renderAccountRows(r))}
               </>
             ))}
           </tbody>
