@@ -1719,7 +1719,7 @@ router.patch("/qris-candidates/payments/:paymentId/date", async (req, res) => {
             AND fcm.approval_status = 'OWNER_APPROVED'
         ) mapping ON TRUE
         WHERE sp.id = ${paymentId}
-        FOR UPDATE
+        FOR UPDATE OF sp
       `);
       const source = sourceResult.rows[0] as Record<string, unknown> | undefined;
       if (!source) {
