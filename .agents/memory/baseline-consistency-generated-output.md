@@ -39,6 +39,15 @@ checkout or an isolated package check.
 **How to apply:** Treat the declaration build as part of the validation
 preflight, and report its command order when documenting typecheck evidence.
 
+The same declaration preflight applies to BizPortal package typecheck because it
+imports generated workspace client and storage declarations.
+
+**Why:** A direct BizPortal typecheck from the current checkout produced a large
+baseline cascade until the shared declarations were forced-built first.
+
+**How to apply:** Run `pnpm run typecheck:libs` before either API or BizPortal
+package typecheck when validating this monorepo.
+
 Because declaration directories are ignored, a stale `tsconfig.tsbuildinfo`
 can make `tsc --build` report success while the referenced output files are
 missing. A missing-output check must use a forced rebuild rather than relying

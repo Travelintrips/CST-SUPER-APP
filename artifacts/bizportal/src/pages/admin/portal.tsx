@@ -135,8 +135,8 @@ interface VendorRequestItem {
 }
 
 const SERVICE_LABELS: Record<string, string> = {
-  trucking: "Trucking",
-  domestic: "Domestik",
+  trucking: "Jasa Trucking",
+  domestic: "Domestic",
   sea_freight: "Sea Freight / Ocean",
   air_freight: "Air Freight",
   custom_clearance: "Custom Clearance",
@@ -152,6 +152,15 @@ const SOURCE_LABELS: Record<string, string> = {
   ocean_freight_rfq: "Ocean Freight RFQ",
   ppjk_order: "PPJK assignment",
   marketplace_quote: "Marketplace quotation",
+};
+
+const LIFECYCLE_LABELS: Record<string, string> = {
+  portal_invitation: "Vendor Assignment",
+  logistic_rfq: "RFQ Vendor",
+  air_freight_rfq: "RFQ Vendor",
+  ocean_freight_rfq: "RFQ Vendor",
+  ppjk_order: "Vendor Assignment",
+  marketplace_quote: "RFQ Vendor",
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -338,26 +347,32 @@ function VendorRequestsTab() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="text-xs">Request</TableHead>
+              <TableHead className="text-xs">Tanggal</TableHead>
+              <TableHead className="text-xs">Nomor Request</TableHead>
                   <TableHead className="text-xs">Customer</TableHead>
-                  <TableHead className="text-xs">Vendor / Kontak</TableHead>
+              <TableHead className="text-xs">Vendor</TableHead>
+              <TableHead className="text-xs">Kontak</TableHead>
                   <TableHead className="text-xs">Layanan</TableHead>
-                  <TableHead className="text-xs">Invitation / Quotation</TableHead>
+              <TableHead className="text-xs">Status</TableHead>
                   <TableHead className="text-xs">Masa berlaku</TableHead>
+              <TableHead className="text-xs">Lifecycle</TableHead>
                   <TableHead className="text-xs text-right">Aksi link</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {isLoading ? (
-                  <TableRow><TableCell colSpan={7} className="py-10 text-center"><Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" /></TableCell></TableRow>
+              <TableRow><TableCell colSpan={10} className="py-10 text-center"><Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" /></TableCell></TableRow>
                 ) : !data?.items.length ? (
-                  <TableRow><TableCell colSpan={7} className="py-10 text-center text-sm text-muted-foreground">Tidak ada request vendor yang cocok.</TableCell></TableRow>
+              <TableRow><TableCell colSpan={10} className="py-10 text-center text-sm text-muted-foreground">Tidak ada request vendor yang cocok.</TableCell></TableRow>
                 ) : data.items.map((item) => {
                   const key = `${item.source_type}:${item.source_id}`;
                   const expires = item.expires_at ? fmt(item.expires_at) : "Tanpa batas";
                   return (
                     <TableRow key={key} className="text-sm align-top">
                       <TableCell>
+                    <div className="text-xs">{fmt(item.created_at)}</div>
+                  </TableCell>
+                  <TableCell>
                         <div className="font-mono text-xs font-medium">{item.request_number}</div>
                         <div className="text-[11px] text-muted-foreground mt-1">{SOURCE_LABELS[item.source_type] ?? item.source_type}</div>
                       </TableCell>
@@ -367,7 +382,9 @@ function VendorRequestsTab() {
                       </TableCell>
                       <TableCell>
                         <div className="text-xs font-medium">{item.vendor_name || "Open RFQ"}</div>
-                        <div className="text-[11px] text-muted-foreground">{item.vendor_phone || item.vendor_email || "Kontak tidak diisi"}</div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="text-xs">{item.vendor_phone || item.vendor_email || "—"}</div>
                       </TableCell>
                       <TableCell>
                         <div className="text-xs font-medium">{SERVICE_LABELS[item.service_key] ?? item.raw_service_type ?? "Layanan lain"}</div>
@@ -381,6 +398,11 @@ function VendorRequestsTab() {
                         <div className={`text-xs ${item.is_expired ? "text-red-600 font-medium" : "text-muted-foreground"}`}>{item.is_expired ? "Expired" : expires}</div>
                         <div className="text-[11px] text-muted-foreground mt-1">{item.token_available ? "Token tersedia" : "Token tidak tersedia"}</div>
                       </TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className="text-xs whitespace-nowrap">
+                      {LIFECYCLE_LABELS[item.source_type] ?? item.source_type}
+                    </Badge>
+                  </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
                           <Button variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={() => setSelected(item)}><FileText className="h-3.5 w-3.5 mr-1" />Detail</Button>
