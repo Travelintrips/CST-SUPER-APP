@@ -129,6 +129,7 @@ import { serviceTemplatesRouter } from "./serviceTemplates.js";
 import { vendorTrackingAdminRouter, vendorTrackingPublicRouter } from "./vendorTracking.js";
 import { customerDataFormPublicRouter, customerDataFormAdminRouter } from "./customerDataForm.js";
 import { paymentProofRouter } from "./paymentProof.js";
+import adminVendorServiceRequestsRouter from "./adminVendorServiceRequests.js";
 import { publicTokenRateLimiter, aiRateLimiter, tokenGetRateLimiter, tokenPostRateLimiter } from "../middlewares/securityRateLimiter.js";
 
 import { settlementPatternsRouter } from "./settlementPatterns.js";
@@ -261,6 +262,9 @@ router.use("/scan-document", scanDocumentRouter);
 router.use("/invoice-ocr", invoiceOcrRouter);
 router.use("/expenses", expensesRouter);
 router.use("/portal", portalRouter);
+// Unified admin vendor invitation/read model. Mounted separately so it cannot
+// inherit any public portal handler and every endpoint keeps portal-admin RBAC.
+router.use("/portal/admin/vendor-service-requests", adminVendorServiceRequestsRouter);
 router.use("/portal/admin/master-price", masterPriceRouter);
 router.use("/vendor-status", makeRbacGuard("purchase"), vendorStatusRouter);
 // Vendor company profile & completion — document-types and catalog routes must come BEFORE /:id

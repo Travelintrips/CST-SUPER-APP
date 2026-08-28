@@ -264,6 +264,16 @@ export function AppShell({ children, noPadding }: AppShellProps) {
       activePaths: ["/portal/quick-quotes"],
     },
 
+    // ── 4c. UNIFIED VENDOR INVITES ───────────────────────────────────────
+    {
+      type: "flat",
+      titleKey: "Undang Vendor",
+      href: "/admin/portal?tab=vendors",
+      icon: Link2,
+      roles: ["admin", "owner", "super_admin"],
+      activePaths: ["/admin/portal"],
+    },
+
     // ── 5. PROCUREMENT ────────────────────────────────────────────────
     {
       type: "flat",

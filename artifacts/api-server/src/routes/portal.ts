@@ -4132,7 +4132,7 @@ router.get("/admin/vendor-invitations", requirePortalAdmin, async (_req, res) =>
   try {
     const rows = await db.execute(sql`
       SELECT id, vendor_name, phone, email, service_type, notes,
-             token, status, valid_until, sent_via_wa, created_at, documents,
+             status, valid_until, sent_via_wa, created_at, documents,
              rejection_reason, rejected_at, products, vendor_message, accepted_at,
              category, category_label, contact_name, company_name,
              supplier_id, approved_at, approved_by
