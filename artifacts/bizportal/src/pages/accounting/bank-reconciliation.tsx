@@ -33,6 +33,11 @@ import {
   getAvailableQrisPaymentIds as getAvailableQrisPaymentIdsFromCandidate,
   getQrisCandidatePresentationState,
 } from "@/lib/qrisCandidatePresentation";
+import {
+  classifyBankMutationPaymentType,
+  isInhouseBankTransferDescription,
+  isQrisBankApprovalAllowed,
+} from "@/lib/bankMutationPaymentType";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -1068,30 +1073,27 @@ function mutationSourceLabel(m: BankMutation): string {
 }
 
 function isPaylabsMutation(m: BankMutation): boolean {
-  return [
-    m.provider_name,
-    m.provider_order_id,
-    m.description,
-    m.normalized_description,
-  ].some(value => /PAYLABS/i.test(String(value ?? "")));
+  return classifyBankMutationPaymentType({
+    providerName: m.provider_name,
+    providerOrderId: m.provider_order_id,
+    description: m.description,
+    normalizedDescription: m.normalized_description,
+  }) === "paylabs";
 }
 
 function isInhouseBankTransferMutation(m: BankMutation): boolean {
-  return [
-    m.description,
-    m.normalized_description,
-  ].some(value => /INHOUSE\s*TRF/i.test(String(value ?? "")));
+  return [m.description, m.normalized_description]
+    .some(isInhouseBankTransferDescription);
 }
 
 function isQrisMutation(m: BankMutation): boolean {
   if (qrisAuditsForMutation(m).length > 0) return true;
-  if (isPaylabsMutation(m)) return false;
-  return [
-    m.provider_name,
-    m.provider_order_id,
-    m.description,
-    m.normalized_description,
-  ].some(value => /QRIS|QR[A-Z0-9]{4,}|QR\s*(?:CODE|PAY|PAYMENT)|PAYLABS/i.test(String(value ?? "")));
+  return classifyBankMutationPaymentType({
+    providerName: m.provider_name,
+    providerOrderId: m.provider_order_id,
+    description: m.description,
+    normalizedDescription: m.normalized_description,
+  }) === "qris";
 }
 
 function sportPaymentTypeFromDetails(details?: CandidateDetails | null): SportPaymentType | null {
@@ -1114,16 +1116,28 @@ function candidateSportPaymentType(candidate: Candidate | undefined, mutation: B
 function mutationSportPaymentType(mutation: BankMutation): SportPaymentType | null {
   const best = visibleCandidates(mutation)[0];
   const paymentType = candidateSportPaymentType(best, mutation) ?? mutation.sport_payment_type ?? null;
+  const bankEvidenceType = classifyBankMutationPaymentType({
+    providerName: mutation.provider_name,
+    providerOrderId: mutation.provider_order_id,
+    description: mutation.description,
+    normalizedDescription: mutation.normalized_description,
+  });
   // A stale/legacy match can point an ordinary bank mutation at a QRIS
   // payment. Keep the reviewer-facing badge aligned with bank evidence.
-  if (paymentType === "qris" && !isQrisMutation(mutation)) return "bank_transfer";
+  if (paymentType === "qris" && bankEvidenceType === "bank_transfer") return "bank_transfer";
   if (paymentType) return paymentType;
   return isInhouseBankTransferMutation(mutation) ? "bank_transfer" : null;
 }
 
 function hasQrisCandidateEvidenceMismatch(mutation: BankMutation): boolean {
   const best = visibleCandidates(mutation)[0];
-  return candidateSportPaymentType(best, mutation) === "qris" && !isQrisMutation(mutation);
+  return candidateSportPaymentType(best, mutation) === "qris"
+    && !isQrisBankApprovalAllowed({
+      providerName: mutation.provider_name,
+      providerOrderId: mutation.provider_order_id,
+      description: mutation.description,
+      normalizedDescription: mutation.normalized_description,
+    });
 }
 
 function isSameCalendarDate(left: string | null | undefined, right: string | null | undefined): boolean {
@@ -2928,6 +2942,12 @@ function QrisMutationCard({
   const isIN = m.direction === "IN";
   const isMatched = String(audit.reconciliation_status ?? "").toUpperCase() === "MATCHED";
   const isReview = String(audit.reconciliation_status ?? "").toUpperCase() === "REVIEW";
+  const bankEvidenceAllowsQrisApproval = isQrisBankApprovalAllowed({
+    providerName: m.provider_name,
+    providerOrderId: m.provider_order_id,
+    description: m.description,
+    normalizedDescription: m.normalized_description,
+  });
   const qrisPresentationState = getQrisCandidatePresentationState(audit);
   const isDepleted = qrisPresentationState === "depleted";
   const isEmptyMatchedCandidate = qrisPresentationState === "empty";
@@ -2943,7 +2963,11 @@ function QrisMutationCard({
     || String(audit.status ?? "").toLowerCase() === "approved";
   // REVIEW candidates are explicitly approvable through the existing override
   // flow, so they must be selectable in the card as well as in the batch toolbar.
-  const canSelect = audit.id != null && (isMatched || isReview) && !isApproved && availablePaymentIds.length > 0;
+  const canSelect = audit.id != null
+    && (isMatched || isReview)
+    && !isApproved
+    && availablePaymentIds.length > 0
+    && bankEvidenceAllowsQrisApproval;
   const bankAmount = numericValue(m.amount) ?? 0;
   const snapshotGross = numericValue(audit.gross_amount)
     ?? allItems.reduce(
@@ -3350,7 +3374,9 @@ function QrisMutationCard({
               {!isApproved && audit.id != null && !canSelect && (
                 <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
                   <span className="text-[11px] text-amber-700 dark:text-amber-300">
-                    {isReadOnlyEvidence
+                    {!bankEvidenceAllowsQrisApproval
+                      ? "Sumber mutasi terklasifikasi Transfer Bank; approval QRIS dikunci."
+                      : isReadOnlyEvidence
                       ? "Revisi sumber dan buat kandidat baru sebelum approve."
                       : isDepleted
                         ? "Semua payment sudah diproses; approval ulang dikunci."

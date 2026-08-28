@@ -155,6 +155,30 @@ function sportPaymentTypeSql(alias = "sp"): string {
   END`;
 }
 
+/**
+ * Classify the bank rail from bank-row evidence only. In particular, an
+ * InhouseTrf description must remain Transfer Bank even when a linked
+ * Sport Center payment happens to be marked QRIS.
+ */
+function bankMutationPaymentTypeSql(alias = "bm"): string {
+  const evidence = `UPPER(CONCAT_WS(' ',
+    COALESCE(${alias}.provider_name::text, ''),
+    COALESCE(${alias}.provider_order_id::text, ''),
+    COALESCE(${alias}.description::text, ''),
+    COALESCE(${alias}.normalized_description::text, '')
+  ))`;
+  const compact = `REGEXP_REPLACE(${evidence}, '[^A-Z0-9]', '', 'g')`;
+  return `CASE
+    WHEN ${compact} LIKE '%INHOUSETRF%' THEN 'bank_transfer'
+    WHEN ${evidence} LIKE '%PAYLABS%' THEN 'paylabs'
+    WHEN ${evidence} LIKE '%QRIS%'
+      OR ${evidence} ~ 'QR[A-Z0-9]{4,}'
+      OR ${evidence} ~ 'QR[[:space:]]*(CODE|PAY|PAYMENT)'
+      THEN 'qris'
+    ELSE 'bank_transfer'
+  END`;
+}
+
 function isSportPaymentType(value: string | undefined): value is SportPaymentType {
   return value === "bank_transfer" || value === "qris" || value === "paylabs";
 }
@@ -3487,39 +3511,8 @@ router.get("/mutations", async (req, res) => {
       return res.status(400).json({ error: "payment_type tidak valid" });
     }
     const requestedType = esc(payment_type);
-    const sportTypeFromCandidate = `(
-      SELECT ${sportPaymentTypeSql("sp_filter")}
-      FROM bank_reconciliation_matches m_filter_method
-      JOIN sport_payments sp_filter ON sp_filter.id = m_filter_method.candidate_id
-      WHERE m_filter_method.mutation_id = bm.id
-        AND m_filter_method.candidate_type = 'sport_payment'
-        AND m_filter_method.status IN ('candidate', 'approved')
-      ORDER BY m_filter_method.match_score DESC, m_filter_method.id DESC
-      LIMIT 1
-    )`;
-    const explicitBankTypeMarker = `(LOWER(CONCAT_WS(' ',
-      COALESCE(bm.provider_name, ''),
-      COALESCE(bm.provider_order_id, ''),
-      COALESCE(bm.description, ''),
-      COALESCE(bm.normalized_description, '')
-    )) LIKE '%paylabs%' OR LOWER(CONCAT_WS(' ',
-      COALESCE(bm.provider_name, ''),
-      COALESCE(bm.provider_order_id, ''),
-      COALESCE(bm.description, ''),
-      COALESCE(bm.normalized_description, '')
-    )) LIKE '%qris%')`;
-    bmFilters.push(`(
-      ${sportTypeFromCandidate} = '${requestedType}'
-      OR (
-        '${requestedType}' IN ('qris', 'paylabs')
-        AND ${explicitBankTypeMarker}
-        AND ${requestedType} = CASE
-          WHEN LOWER(CONCAT_WS(' ', COALESCE(bm.provider_name, ''), COALESCE(bm.provider_order_id, ''), COALESCE(bm.description, ''), COALESCE(bm.normalized_description, ''))) LIKE '%paylabs%'
-            THEN 'paylabs'
-          ELSE 'qris'
-        END
-      )
-    )`);
+    const bankPaymentTypeFromEvidence = bankMutationPaymentTypeSql("bm");
+    bmFilters.push(`${bankPaymentTypeFromEvidence} = '${requestedType}'`);
   }
   const bmWhere = bmFilters.length ? `WHERE ${bmFilters.join(" AND ")}` : "";
 
@@ -3539,11 +3532,21 @@ router.get("/mutations", async (req, res) => {
   if (direction === "IN")  bmiFilters.push(`COALESCE(bmi.credit, 0) > 0`);
   if (direction === "OUT") bmiFilters.push(`COALESCE(bmi.debit, 0) > 0 AND COALESCE(bmi.credit, 0) = 0`);
   if (payment_type && payment_type !== "all") {
+    const importedEvidence = `UPPER(CONCAT_WS(' ',
+      COALESCE(bmi.payment_method::text, ''),
+      COALESCE(bmi.description::text, ''),
+      COALESCE(bmi.erp_category::text, ''),
+      COALESCE(bmi.tax_type::text, '')
+    ))`;
+    const importedCompact = `REGEXP_REPLACE(${importedEvidence}, '[^A-Z0-9]', '', 'g')`;
     const importedPaymentTypeSql = `CASE
-      WHEN LOWER(CONCAT_WS(' ', COALESCE(bmi.payment_method, ''), COALESCE(bmi.description, ''), COALESCE(bmi.erp_category, ''), COALESCE(bmi.tax_type, ''))) LIKE '%paylabs%'
+      WHEN ${importedCompact} LIKE '%INHOUSETRF%'
+        THEN 'bank_transfer'
+      WHEN ${importedEvidence} LIKE '%PAYLABS%'
         THEN 'paylabs'
-      WHEN LOWER(CONCAT_WS(' ', COALESCE(bmi.payment_method, ''), COALESCE(bmi.description, ''), COALESCE(bmi.erp_category, ''), COALESCE(bmi.tax_type, ''))) LIKE '%qris%'
-        OR LOWER(CONCAT_WS(' ', COALESCE(bmi.payment_method, ''), COALESCE(bmi.description, ''), COALESCE(bmi.erp_category, ''), COALESCE(bmi.tax_type, ''))) LIKE '%qr%'
+      WHEN ${importedEvidence} LIKE '%QRIS%'
+        OR ${importedEvidence} ~ 'QR[A-Z0-9]{4,}'
+        OR ${importedEvidence} ~ 'QR[[:space:]]*(CODE|PAY|PAYMENT)'
         THEN 'qris'
       ELSE 'bank_transfer'
     END`;

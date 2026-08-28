@@ -3,6 +3,10 @@ import {
   getAvailableQrisPaymentIds,
   getQrisCandidatePresentationState,
 } from "../lib/qrisCandidatePresentation";
+import {
+  classifyBankMutationPaymentType,
+  isQrisBankApprovalAllowed,
+} from "../lib/bankMutationPaymentType";
 
 const item = (paymentId: number) => ({ paymentId });
 
@@ -59,5 +63,24 @@ describe("QRIS candidate presentation state", () => {
       payment_items: [item(11)],
       current_payment_ids: [11],
     })).toBe("ineligible");
+  });
+});
+
+describe("QRIS bank-evidence approval boundary", () => {
+  it("classifies InhouseTrf as Transfer Bank even with QRIS-looking candidate metadata", () => {
+    const bankEvidence = {
+      providerName: "QRIS",
+      description: "PEMBAYARAN INHOUSETRF ANTAR REKENING",
+    };
+
+    expect(classifyBankMutationPaymentType(bankEvidence)).toBe("bank_transfer");
+    expect(isQrisBankApprovalAllowed(bankEvidence)).toBe(false);
+  });
+
+  it("allows QRIS approval only when the bank row carries QRIS evidence", () => {
+    expect(isQrisBankApprovalAllowed({
+      providerName: null,
+      description: "QRTRAVELI SETTLEMENT",
+    })).toBe(true);
   });
 });

@@ -63,6 +63,14 @@ describe("QRIS settlement contract", () => {
     })).toBe("qris");
   });
 
+  it("lets the explicit InhouseTrf bank marker override conflicting provider text", () => {
+    expect(classifyBankMutationPaymentType({
+      providerName: "QRIS",
+      providerOrderId: "INHOUSETRF-001",
+      description: "INHOUSE TRF antar rekening",
+    })).toBe("bank_transfer");
+  });
+
   it("keeps partial settlement explicitly reviewable", () => {
     expect(isPartialQrisSettlement("PARTIAL")).toBe(true);
     expect(isPartialQrisSettlement("partially_settled")).toBe(true);

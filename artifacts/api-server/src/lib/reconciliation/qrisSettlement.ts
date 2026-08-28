@@ -99,6 +99,15 @@ export function isQrisPaymentMethod(method: string | null | undefined): boolean 
   return String(method ?? "").trim().toLowerCase().includes("qris");
 }
 
+export function isInhouseBankTransferDescription(
+  value: string | null | undefined,
+): boolean {
+  const compact = String(value ?? "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+  return compact.includes("INHOUSETRF");
+}
+
 /**
  * Classify the bank-side payment rail from bank evidence only.
  *
@@ -111,12 +120,17 @@ export function classifyBankMutationPaymentType(input: {
   providerName?: string | null;
   providerOrderId?: string | null;
   description?: string | null;
+  normalizedDescription?: string | null;
 }): BankMutationPaymentType {
   const values = [
     input.providerName,
     input.providerOrderId,
     input.description,
+    input.normalizedDescription,
   ];
+  if (values.some(isInhouseBankTransferDescription)) {
+    return "bank_transfer";
+  }
   if (values.some((value) => /paylabs/i.test(String(value ?? "")))) {
     return "paylabs";
   }
