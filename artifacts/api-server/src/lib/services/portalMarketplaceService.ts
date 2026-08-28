@@ -79,7 +79,7 @@ export interface SubmitQuoteResult {
  *  2. Buyer field validation
  *  3. Resolve the canonical customer context from the authenticated session id
  *  4. Resolve company membership from that context
- *  5. createMktRfqEntry (new pipeline, non-fatal)
+ *  5. createMktRfqEntry (new pipeline; authenticated failures are fail-closed)
  *  6. Insert portal_product_orders + portal_product_order_items (legacy write)
  *  7. linkMktRfqToLegacy (fire-and-forget)
  *  8. Increment quote_count (fire-and-forget)
@@ -230,7 +230,11 @@ export async function submitMarketplaceQuote(params: {
         ipAddress:          ip,
       });
     } catch (err) {
-      // Non-fatal: log and fall through. Legacy write below proceeds regardless.
+      // A guest has no canonical owner, so retain the explicit legacy fallback
+      // for backward-compatible guest RFQs. An authenticated request must never
+      // silently become a legacy/guest-shaped submission when the canonical
+      // ownership write fails.
+      if (portalCustomerId !== null) throw err;
       console.error("[marketplaceRfq] createMktRfqEntry failed — continuing with legacy path", { err, catalogItemId });
       mktRfqResult = null;
     }

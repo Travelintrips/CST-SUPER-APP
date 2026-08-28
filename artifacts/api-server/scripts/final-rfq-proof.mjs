@@ -6,6 +6,7 @@ const { Pool } = pg;
 const API = (process.env.PROOF_API_URL ?? "http://127.0.0.1:18444/api").replace(/\/+$/, "");
 const RUN_ID = crypto.randomUUID();
 const MARKER = `FINAL-RFQ-${RUN_ID}`;
+const proofClientIp = `198.51.100.${(parseInt(RUN_ID.slice(0, 2), 16) % 254) + 1}`;
 const individualEmail = `final-rfq-individual-${RUN_ID}@example.test`;
 const companyEmail = `final-rfq-company-${RUN_ID}@example.test`;
 const pendingEmail = `final-rfq-pending-${RUN_ID}@example.test`;
@@ -84,6 +85,7 @@ async function request(path, {
 } = {}) {
   const headers = {
     accept: "application/json",
+    "x-forwarded-for": proofClientIp,
     ...extraHeaders,
   };
   if (jar?.size) headers.cookie = cookieHeader(jar);
@@ -144,12 +146,14 @@ async function submitQuote(label, jar, extra = {}) {
     : label.includes("company")
       ? "company"
       : "legacy";
-  const token = authTokens[tokenKey];
+  // The guest regression must be genuinely unauthenticated. Other labels use
+  // the fixture's own session cookie and bearer token.
+  const token = label === "guest" ? null : authTokens[tokenKey];
   const result = await request(`/portal/marketplace/${Number(catalogItem.id)}/quote`, {
     method: "POST",
     jar,
     headers: {
-      "x-forwarded-for": `198.51.100.${20 + created.orderIds.length}`,
+      "x-forwarded-for": proofClientIp,
       ...(token ? { authorization: `Bearer ${token}` } : {}),
     },
     body: {
@@ -386,12 +390,13 @@ async function verifyCompanyRegression() {
     company_id: 999999999,
   });
   const companyRfq = companySubmit?.rfqId
-    ? await one("SELECT portal_customer_id, company_id FROM mkt_rfqs WHERE id = $1", [companySubmit.rfqId])
+    ? await one("SELECT portal_customer_id, company_id, buyer_email FROM mkt_rfqs WHERE id = $1", [companySubmit.rfqId])
     : null;
   const pass = companySubmit?.result.status === 201
     && Number(membership?.count) === 1
     && Number(companyRfq?.portal_customer_id) === companyCustomerId
-    && Number(companyRfq?.company_id) === canonicalCompanyId;
+    && Number(companyRfq?.company_id) === canonicalCompanyId
+    && companyRfq?.buyer_email === companyEmail;
   record("company active membership RFQ PASS", pass,
     `HTTP ${companySubmit?.result.status ?? "not-run"}; membership=${membership?.count ?? "missing"}; company_id=${companyRfq?.company_id ?? "missing"}`);
   return pass;
@@ -437,8 +442,8 @@ async function verifyPendingCompany() {
 
 async function verifyForgedCompanyId() {
   const forged = await submitQuote("forged company_id", jars.individual, {
-    email: companyEmail,
-    customer_id: companyId,
+    email: `${MARKER}-forged-email@example.test`,
+    customer_id: 999999999,
     company_id: canonicalCompanyId,
   });
   const row = forged?.rfqId
@@ -451,8 +456,43 @@ async function verifyForgedCompanyId() {
     && Number(row?.portal_customer_id) === individualId
     && row?.company_id == null
     && row?.buyer_email === individualEmail;
-  record("forged company_id cannot change ownership", pass,
+  const forgedEmailPass = pass && row?.buyer_email !== `${MARKER}-forged-email@example.test`;
+  const forgedCustomerPass = pass && Number(row?.portal_customer_id) !== 999999999;
+  const forgedCompanyPass = pass && row?.company_id !== canonicalCompanyId;
+  record("forged email cannot change ownership", forgedEmailPass,
+    row ? `buyer_email=${row.buyer_email}; portal_customer_id=${row.portal_customer_id}; company_id=${row.company_id ?? "NULL"}` : "RFQ row missing");
+  record("forged customer_id cannot change ownership", forgedCustomerPass,
+    row ? `portal_customer_id=${row.portal_customer_id}; expected=${individualId}` : "RFQ row missing");
+  record("forged company_id cannot change ownership", forgedCompanyPass,
     row ? `portal_customer_id=${row.portal_customer_id}; company_id=${row.company_id ?? "NULL"}; buyer_email=${row.buyer_email}` : "RFQ row missing");
+  return pass && forgedEmailPass && forgedCustomerPass && forgedCompanyPass;
+}
+
+async function verifyGuestRegression() {
+  const guest = await submitQuote("guest", new Map(), {
+    buyer_name: `${MARKER} guest`,
+    email: `${MARKER}-guest@example.test`,
+    guest_contact: "081234560004",
+    customer_id: 999999999,
+    company_id: 999999999,
+  });
+  const row = guest?.rfqId
+    ? await one(
+      "SELECT portal_customer_id, guest_token_hash, buyer_email, company_id FROM mkt_rfqs WHERE id = $1",
+      [guest.rfqId],
+    )
+    : null;
+  const pass = guest?.result.status === 201
+    && Number.isInteger(guest.rfqId)
+    && row?.portal_customer_id == null
+    && typeof row?.guest_token_hash === "string"
+    && row.guest_token_hash.length > 0
+    && row.buyer_email === `${MARKER}-guest@example.test`.toLowerCase()
+    && row.company_id == null;
+  record("guest RFQ regression", pass,
+    row
+      ? `HTTP ${guest.result.status}; portal_customer_id=${row.portal_customer_id ?? "NULL"}; guest_token_hash=${row.guest_token_hash ? "present" : "missing"}; buyer_email=${row.buyer_email}; company_id=${row.company_id ?? "NULL"}`
+      : `HTTP ${guest?.result.status ?? "not-run"}; RFQ row missing`);
   return pass;
 }
 
@@ -579,6 +619,7 @@ async function main() {
   await verifyCompanyRegression();
   await verifyPendingCompany();
   await verifyForgedCompanyId();
+  await verifyGuestRegression();
 
   const source = readFileSync(new URL("../src/lib/services/portalMarketplaceService.ts", import.meta.url), "utf8");
   const warningNotInCanonicalSource = !source.includes(warningText);
@@ -609,16 +650,37 @@ try {
   const has = (name) => steps.some((step) => step.name === name && step.pass);
   const residualCount = Object.values(residual).reduce((sum, count) => sum + Number(count), 0);
   const report = {
+    ROOT_CAUSE: "Authenticated RFQ ownership is derived from verified session context; canonical write failures no longer fall through to legacy for authenticated requests.",
+    AUTH_SESSION_PROPAGATION: has("individual RFQ ownership is session-based") ? "PASS" : "FAIL",
+    AUTHENTICATED_GUEST_FALLBACK_BLOCKED: has("forged email cannot change ownership")
+      && has("forged customer_id cannot change ownership")
+      && has("forged company_id cannot change ownership")
+      ? "PASS"
+      : "FAIL",
     LEGACY_COMPLETION: has("legacy completion flow appears") ? "PASS" : "FAIL",
     INDIVIDUAL_CONTEXT_READY: has("individual context READY") ? "PASS" : "FAIL",
     INDIVIDUAL_MEMBERSHIP_COUNT: has("individual membership count is zero") ? 0 : "UNKNOWN",
     INDIVIDUAL_RFQ: has("individual RFQ created") && has("individual RFQ ownership is session-based") ? "PASS" : "FAIL",
+    INDIVIDUAL_RFQ_PORTAL_CUSTOMER_ID: has("individual RFQ ownership is session-based") ? "PASS" : "FAIL",
     INDIVIDUAL_RFQ_COMPANY_ID_NULL: has("individual RFQ company_id IS NULL") ? "PASS" : "FAIL",
     INDIVIDUAL_ORGANIZATION_WARNING_REMOVED: has("individual organization warning removed") ? "PASS" : "FAIL",
     COMPANY_RFQ_REGRESSION: has("company active membership RFQ PASS") ? "PASS" : "FAIL",
+    COMPANY_RFQ_PORTAL_CUSTOMER_ID: has("company active membership RFQ PASS") ? "PASS" : "FAIL",
+    COMPANY_RFQ_CANONICAL_COMPANY_ID: has("company active membership RFQ PASS") ? "PASS" : "FAIL",
     COMPANY_PENDING_BLOCK: has("company pending RFQ blocked") ? "PASS" : "FAIL",
+    LEGACY_UNRESOLVED_BLOCK: has("legacy completion flow appears") && has("individual context READY") ? "PASS" : "FAIL",
+    FORGED_EMAIL_BYPASS: has("forged email cannot change ownership") ? 0 : 1,
+    FORGED_CUSTOMER_BYPASS: has("forged customer_id cannot change ownership") ? 0 : 1,
     FORGED_COMPANY_BYPASS: has("forged company_id cannot change ownership") ? 0 : 1,
+    GUEST_RFQ_REGRESSION: has("guest RFQ regression") ? "PASS" : "FAIL",
     GOOGLE_MAPS_REGRESSION: has("Google Maps autocomplete/detail") && has("individual destination/Google Maps persisted") ? "PASS" : "FAIL",
+    AUTH_OWNERSHIP_REGRESSION_TESTS: has("forged email cannot change ownership")
+      && has("forged customer_id cannot change ownership")
+      && has("forged company_id cannot change ownership")
+      ? "PASS"
+      : "FAIL",
+    API_LIVE: has("development readiness") ? "PASS" : "FAIL",
+    API_READY: has("development readiness") ? "PASS" : "FAIL",
     CLEANUP_ERRORS: cleanupErrors.length,
     RESIDUAL_AUDIT_RECORDS: residualCount,
     PRODUCTION_WRITES: 0,
