@@ -233,9 +233,10 @@ const unifiedCte = sql`
       v.phone::text,
       v.contact_email::text,
       COALESCE(
+        NULLIF(line.item_name, ''),
+        NULLIF(catalog.name, ''),
         NULLIF(catalog.service_type, ''),
         NULLIF(catalog.category_key, ''),
-        NULLIF(line.item_name, ''),
         'Marketplace / Produk'
       )::text,
       CASE
