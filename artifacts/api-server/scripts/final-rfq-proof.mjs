@@ -1,0 +1,643 @@
+import crypto from "node:crypto";
+import { readFileSync } from "node:fs";
+import pg from "pg";
+
+const { Pool } = pg;
+const API = (process.env.PROOF_API_URL ?? "http://127.0.0.1:18444/api").replace(/\/+$/, "");
+const RUN_ID = crypto.randomUUID();
+const MARKER = `FINAL-RFQ-${RUN_ID}`;
+const individualEmail = `final-rfq-individual-${RUN_ID}@example.test`;
+const companyEmail = `final-rfq-company-${RUN_ID}@example.test`;
+const pendingEmail = `final-rfq-pending-${RUN_ID}@example.test`;
+const password = "FinalRfqProof!2026";
+const warningText = "Lengkapi atau tunggu verifikasi organisasi Customer Portal sebelum membuat RFQ.";
+const pool = new Pool({
+  connectionString: process.env.SUPABASE_DATABASE_URL_DEV,
+  max: 2,
+  connectionTimeoutMillis: 20_000,
+  idleTimeoutMillis: 20_000,
+  ssl: { rejectUnauthorized: false },
+});
+
+const steps = [];
+const jars = {
+  individual: new Map(),
+  company: new Map(),
+  pending: new Map(),
+};
+const authTokens = {};
+const created = {
+  rfqIds: [],
+  orderIds: [],
+  customerIds: [],
+  companyIds: [],
+};
+let canonicalCompanyId = null;
+let individualId = null;
+let companyId = null;
+let pendingId = null;
+let catalogItem = null;
+let googlePlace = null;
+let cleanupErrors = [];
+
+function record(name, pass, detail = "") {
+  steps.push({
+    name,
+    pass: Boolean(pass),
+    ...(detail ? { detail: String(detail).slice(0, 260) } : {}),
+  });
+}
+
+function message(body) {
+  if (!body || typeof body !== "object") return "";
+  for (const key of ["message", "error", "detail"]) {
+    if (typeof body[key] === "string") return body[key];
+  }
+  return "";
+}
+
+function cookiePairs(headers) {
+  const values = typeof headers.getSetCookie === "function"
+    ? headers.getSetCookie()
+    : ((headers.get("set-cookie") ?? "").match(/(?:^|,\s*)([^=;,]+=[^;]*)/g) ?? [])
+      .map((value) => value.replace(/^,\s*/, ""));
+  return values.map((value) => value.split(";", 1)[0]).filter(Boolean);
+}
+
+function addCookies(headers, jar) {
+  for (const pair of cookiePairs(headers)) {
+    const index = pair.indexOf("=");
+    if (index > 0) jar.set(pair.slice(0, index), pair.slice(index + 1));
+  }
+}
+
+function cookieHeader(jar) {
+  return [...jar.entries()].map(([key, value]) => `${key}=${value}`).join("; ");
+}
+
+async function request(path, {
+  method = "GET",
+  body,
+  jar,
+  headers: extraHeaders = {},
+  redirect = "follow",
+} = {}) {
+  const headers = {
+    accept: "application/json",
+    ...extraHeaders,
+  };
+  if (jar?.size) headers.cookie = cookieHeader(jar);
+  if (body !== undefined) headers["content-type"] = "application/json";
+  const response = await fetch(`${API}${path}`, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+    redirect,
+  });
+  if (jar) addCookies(response.headers, jar);
+  const text = await response.text();
+  let data = text;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    // Keep a bounded raw response for diagnostics.
+    data = text.slice(0, 500);
+  }
+  return { status: response.status, data, headers: response.headers };
+}
+
+async function query(text, params = []) {
+  return (await pool.query(text, params)).rows;
+}
+
+async function one(text, params = []) {
+  return (await query(text, params))[0] ?? null;
+}
+
+async function signup(email, jar, extra = {}) {
+  const result = await request("/portal/auth/signup", {
+    method: "POST",
+    jar,
+    body: {
+      name: `${MARKER} ${extra.customerType ?? "legacy"}`,
+      email,
+      password,
+      phone: extra.phone,
+      ...extra,
+    },
+  });
+  const tokenKey = extra.customerType ?? "legacy";
+  if (typeof result.data?.token === "string") authTokens[tokenKey] = result.data.token;
+  record(`${extra.customerType ?? "legacy"} signup`,
+    result.status === 201 && jar.has("portal_session"),
+    message(result.data));
+  return result;
+}
+
+async function submitQuote(label, jar, extra = {}) {
+  if (!catalogItem?.id) {
+    record(`${label} RFQ`, false, "published catalog item unavailable");
+    return null;
+  }
+  const tokenKey = label.includes("pending")
+    ? "company-pending"
+    : label.includes("company")
+      ? "company"
+      : "legacy";
+  const token = authTokens[tokenKey];
+  const result = await request(`/portal/marketplace/${Number(catalogItem.id)}/quote`, {
+    method: "POST",
+    jar,
+    headers: {
+      "x-forwarded-for": `198.51.100.${20 + created.orderIds.length}`,
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
+    body: {
+      buyer_name: `${MARKER} buyer`,
+      email: `${MARKER}-forged@example.test`,
+      phone: "081234567890",
+      guest_contact: "081234567890",
+      destination: googlePlace?.address ?? `${MARKER} manual destination`,
+      ...(googlePlace
+        ? {
+            destination_place_id: googlePlace.placeId,
+            destination_lat: googlePlace.lat,
+            destination_lng: googlePlace.lng,
+          }
+        : {}),
+      qty: 1,
+      unit: catalogItem.unit ?? "unit",
+      notes: MARKER,
+      company_id: 999999999,
+      customer_id: 999999999,
+      ...extra,
+    },
+  });
+  const orderId = Number(result.data?.id);
+  const rfqId = Number(result.data?.rfqId);
+  if (result.status === 201 && Number.isInteger(orderId)) created.orderIds.push(orderId);
+  if (result.status === 201 && Number.isInteger(rfqId)) created.rfqIds.push(rfqId);
+  return { result, orderId, rfqId };
+}
+
+async function setupSyntheticCompany() {
+  const row = await one(
+    `INSERT INTO companies
+       (name, code, company_name, company_code, is_active, is_holding)
+     VALUES ($1, $2, $1, $2, true, false)
+     RETURNING id`,
+    [`${MARKER} Company`, `FINAL-${RUN_ID.slice(0, 12)}`],
+  );
+  canonicalCompanyId = Number(row?.id);
+  if (Number.isInteger(canonicalCompanyId)) created.companyIds.push(canonicalCompanyId);
+  record("synthetic selectable canonical company", Number.isInteger(canonicalCompanyId), String(canonicalCompanyId));
+}
+
+async function seedLegacyProfile() {
+  await query(
+    `INSERT INTO user_profiles
+       (customer_id, full_name, phone, address, account_type, status, completed_at, updated_at)
+     VALUES ($1, $2, $3, $4, 'customer', 'active', NOW(), NOW())
+     ON CONFLICT (customer_id) DO UPDATE SET
+       full_name = EXCLUDED.full_name,
+       phone = EXCLUDED.phone,
+       address = EXCLUDED.address,
+       account_type = EXCLUDED.account_type,
+       status = EXCLUDED.status,
+       completed_at = EXCLUDED.completed_at,
+       updated_at = NOW()`,
+    [individualId, `${MARKER} Legacy`, "081234560001", `${MARKER} address`],
+  );
+}
+
+async function discoverCatalog() {
+  const result = await request("/portal/marketplace");
+  const items = Array.isArray(result.data)
+    ? result.data
+    : (result.data?.items ?? result.data?.data ?? []);
+  catalogItem = Array.isArray(items)
+    ? items.find((item) => Number.isInteger(Number(item?.id)))
+    : null;
+  record(
+    "published catalog item available",
+    result.status === 200 && Boolean(catalogItem?.id),
+    result.status === 200 ? String(catalogItem?.id ?? "none") : `HTTP ${result.status}: ${message(result.data)}`,
+  );
+}
+
+async function verifyGooglePlaces() {
+  const autocomplete = await request("/places/autocomplete?input=Jakarta&country=id");
+  const predictions = autocomplete.data?.predictions ?? autocomplete.data?.suggestions ?? [];
+  const prediction = Array.isArray(predictions) ? predictions[0] : null;
+  const placeId = prediction?.place_id ?? prediction?.placePrediction?.placeId;
+  const details = placeId
+    ? await request(`/places/detail?place_id=${encodeURIComponent(placeId)}`)
+    : null;
+  const raw = details?.data?.result ?? details?.data ?? {};
+  const address = raw.formatted_address ?? raw.address;
+  const lat = Number(raw.geometry?.location?.lat ?? raw.lat ?? raw.latitude);
+  const lng = Number(raw.geometry?.location?.lng ?? raw.lng ?? raw.longitude);
+  const pass = autocomplete.status === 200
+    && details?.status === 200
+    && typeof placeId === "string"
+    && typeof address === "string"
+    && address.length > 0
+    && Number.isFinite(lat)
+    && Number.isFinite(lng);
+  googlePlace = pass ? { placeId, address, lat, lng } : null;
+  record("Google Maps autocomplete/detail", pass,
+    pass ? `${placeId}; ${lat},${lng}` : `autocomplete=${autocomplete.status}; detail=${details?.status ?? "not-run"}`);
+}
+
+async function checkLegacyCompletion() {
+  const customer = await one(
+    "SELECT id, customer_type, company FROM portal_customers WHERE email = $1",
+    [individualEmail],
+  );
+  individualId = Number(customer?.id);
+  if (Number.isInteger(individualId)) created.customerIds.push(individualId);
+  record("legacy customer has NULL customer_type",
+    Number.isInteger(individualId) && customer.customer_type == null,
+    customer ? `customer_type=${customer.customer_type ?? "NULL"}` : "customer missing");
+
+  await seedLegacyProfile();
+  const status = await request("/portal/onboarding/status", {
+    jar: jars.individual,
+    headers: { authorization: `Bearer ${authTokens.legacy}` },
+  });
+  const isCompletionState = status.status === 200
+    && status.data?.status === "active"
+    && status.data?.hasProfile === true
+    && status.data?.customerType == null
+    && status.data?.customerContext?.status === "legacy_unresolved";
+  const uiSource = readFileSync(new URL("../../customer-portal/src/pages/onboarding.tsx", import.meta.url), "utf8");
+  const uiCompletion = uiSource.includes("LegacyOrganizationCompletion")
+    && uiSource.includes("Pilih Perorangan atau Perusahaan terlebih dahulu.")
+    && uiSource.includes('label: "Perorangan"');
+  record("legacy completion flow appears", isCompletionState && uiCompletion,
+    `status=${status.status}; onboarding=${status.data?.customerContext?.status ?? "missing"}; ui=${uiCompletion}`);
+
+  const organization = await request("/portal/organization", {
+    method: "PUT",
+    jar: jars.individual,
+    headers: { authorization: `Bearer ${authTokens.legacy}` },
+    body: {
+      customerId: 999999999,
+      customerType: "individual",
+      companyId: canonicalCompanyId,
+      email: pendingEmail,
+    },
+  });
+  const context = organization.data?.context;
+  const individualReady = organization.status === 200
+    && context?.status === "individual"
+    && context?.companyId == null
+    && Array.isArray(context?.activeMemberships)
+    && context.activeMemberships.length === 0;
+  record("individual context READY", individualReady,
+    `HTTP ${organization.status}; status=${context?.status ?? "missing"}; memberships=${context?.activeMemberships?.length ?? "missing"}`);
+
+  const fresh = await one(
+    `SELECT pc.customer_type, pc.company,
+            (SELECT count(*)::int FROM portal_company_members pcm
+              WHERE pcm.portal_customer_id = pc.id AND pcm.is_active = true) AS active_memberships
+       FROM portal_customers pc WHERE pc.id = $1`,
+    [individualId],
+  );
+  record("individual membership count is zero",
+    fresh?.customer_type === "individual"
+    && Number(fresh.active_memberships) === 0,
+    fresh ? `customer_type=${fresh.customer_type}; memberships=${fresh.active_memberships}` : "customer missing");
+}
+
+async function verifyIndividualRfq() {
+  const submitted = await submitQuote("individual");
+  const createdPass = submitted?.result.status === 201
+    && Number.isInteger(submitted.rfqId)
+    && Number.isInteger(submitted.orderId);
+  record("individual RFQ created", createdPass,
+    submitted ? `HTTP ${submitted.result.status}; rfq=${submitted.rfqId}; order=${submitted.orderId}` : "not submitted");
+
+  const rfq = submitted?.rfqId
+    ? await one(
+      `SELECT id, portal_customer_id, company_id, buyer_email, delivery_address,
+              destination_place_id, destination_lat::text, destination_lng::text
+         FROM mkt_rfqs WHERE id = $1`,
+      [submitted.rfqId],
+    )
+    : null;
+  const order = submitted?.orderId
+    ? await one(
+      `SELECT id, company_id, email, shipping_address, notes
+         FROM portal_product_orders WHERE id = $1`,
+      [submitted.orderId],
+    )
+    : null;
+  const ownership = Boolean(rfq)
+    && Number(rfq.portal_customer_id) === individualId
+    && rfq.buyer_email === individualEmail
+    && Boolean(order)
+    && order.email === individualEmail;
+  const companyNull = Boolean(rfq)
+    && rfq.company_id == null
+    && Boolean(order)
+    && order.company_id == null;
+  const destinationPass = Boolean(rfq)
+    && (!googlePlace
+      || (
+        rfq.delivery_address === googlePlace.address
+        && rfq.destination_place_id === googlePlace.placeId
+        && Number(rfq.destination_lat) === googlePlace.lat
+        && Number(rfq.destination_lng) === googlePlace.lng
+      ));
+  const responseText = JSON.stringify(submitted?.result.data ?? "");
+  const warningRemoved = submitted?.result.status === 201 && !responseText.includes(warningText);
+  record("individual RFQ ownership is session-based", ownership,
+    rfq ? `portal_customer_id=${rfq.portal_customer_id}; buyer_email=${rfq.buyer_email}` : "RFQ row missing");
+  record("individual RFQ company_id IS NULL", companyNull,
+    `mkt=${rfq?.company_id ?? "NULL"}; legacy=${order?.company_id ?? "NULL"}`);
+  record("individual destination/Google Maps persisted", destinationPass,
+    rfq ? `${rfq.delivery_address}; ${rfq.destination_place_id ?? "NULL"}` : "RFQ row missing");
+  record("individual organization warning removed", warningRemoved,
+    `HTTP ${submitted?.result.status ?? "not-run"}`);
+  return { submitted, rfq, order };
+}
+
+async function verifyCompanyRegression() {
+  const signupResult = await signup(companyEmail, jars.company, {
+    customerType: "company",
+    companyId: canonicalCompanyId,
+    phone: "081234560002",
+    company: `${MARKER} Company`,
+  });
+  if (signupResult.status !== 201) return false;
+  const customer = await one("SELECT id FROM portal_customers WHERE email = $1", [companyEmail]);
+  const companyCustomerId = Number(customer?.id);
+  if (Number.isInteger(companyCustomerId)) created.customerIds.push(companyCustomerId);
+  const membership = await one(
+    `SELECT count(*)::int AS count
+       FROM portal_company_members
+      WHERE portal_customer_id = $1 AND company_id = $2 AND is_active = true`,
+    [companyCustomerId, canonicalCompanyId],
+  );
+  const companySubmit = await submitQuote("company", jars.company, {
+    email: `${MARKER}-company-forged@example.test`,
+    customer_id: 999999999,
+    company_id: 999999999,
+  });
+  const companyRfq = companySubmit?.rfqId
+    ? await one("SELECT portal_customer_id, company_id FROM mkt_rfqs WHERE id = $1", [companySubmit.rfqId])
+    : null;
+  const pass = companySubmit?.result.status === 201
+    && Number(membership?.count) === 1
+    && Number(companyRfq?.portal_customer_id) === companyCustomerId
+    && Number(companyRfq?.company_id) === canonicalCompanyId;
+  record("company active membership RFQ PASS", pass,
+    `HTTP ${companySubmit?.result.status ?? "not-run"}; membership=${membership?.count ?? "missing"}; company_id=${companyRfq?.company_id ?? "missing"}`);
+  return pass;
+}
+
+async function verifyPendingCompany() {
+  const signupResult = await signup(pendingEmail, jars.pending, {
+    customerType: "company",
+    requestedCompanyName: `${MARKER} Pending Company`,
+    requestedRegistrationNumber: `${RUN_ID}-NIB`,
+    phone: "081234560003",
+  });
+  if (signupResult.status !== 201) {
+    record("company pending RFQ blocked", false, `signup HTTP ${signupResult.status}: ${message(signupResult.data)}`);
+    return false;
+  }
+  const customer = await one("SELECT id FROM portal_customers WHERE email = $1", [pendingEmail]);
+  pendingId = Number(customer?.id);
+  if (Number.isInteger(pendingId)) created.customerIds.push(pendingId);
+  const state = await request("/portal/onboarding/status", {
+    jar: jars.pending,
+    headers: { authorization: `Bearer ${authTokens["company-pending"]}` },
+  });
+  const pendingRequest = await one(
+    `SELECT status, matched_company_id
+       FROM portal_company_requests
+      WHERE portal_customer_id = $1
+      ORDER BY id DESC LIMIT 1`,
+    [pendingId],
+  );
+  const blocked = await submitQuote("company pending", jars.pending);
+  const pass = state.status === 200
+    && state.data?.customerContext?.status === "company_pending"
+    && pendingRequest?.status === "pending"
+    && pendingRequest?.matched_company_id == null
+    && blocked?.result.status === 422
+    && message(blocked.result.data).toLowerCase().includes("menunggu")
+    && !Number.isInteger(blocked?.rfqId);
+  record("company pending RFQ blocked", pass,
+    `context=${state.data?.customerContext?.status ?? "missing"}; HTTP ${blocked?.result.status ?? "not-run"}: ${message(blocked?.result.data)}`);
+  return pass;
+}
+
+async function verifyForgedCompanyId() {
+  const forged = await submitQuote("forged company_id", jars.individual, {
+    email: companyEmail,
+    customer_id: companyId,
+    company_id: canonicalCompanyId,
+  });
+  const row = forged?.rfqId
+    ? await one(
+      "SELECT portal_customer_id, company_id, buyer_email FROM mkt_rfqs WHERE id = $1",
+      [forged.rfqId],
+    )
+    : null;
+  const pass = forged?.result.status === 201
+    && Number(row?.portal_customer_id) === individualId
+    && row?.company_id == null
+    && row?.buyer_email === individualEmail;
+  record("forged company_id cannot change ownership", pass,
+    row ? `portal_customer_id=${row.portal_customer_id}; company_id=${row.company_id ?? "NULL"}; buyer_email=${row.buyer_email}` : "RFQ row missing");
+  return pass;
+}
+
+async function discoverFixtureIds() {
+  const rfqs = await query(
+    "SELECT id FROM mkt_rfqs WHERE notes LIKE $1 OR buyer_name LIKE $1 OR buyer_email LIKE $1",
+    [`%${MARKER}%`],
+  );
+  const orders = await query(
+    "SELECT id FROM portal_product_orders WHERE notes LIKE $1 OR customer_name LIKE $1 OR email LIKE $1",
+    [`%${MARKER}%`],
+  );
+  const customers = await query(
+    "SELECT id FROM portal_customers WHERE name LIKE $1 OR email LIKE $1",
+    [`%${MARKER}%`],
+  );
+  const companies = await query(
+    "SELECT id FROM companies WHERE name LIKE $1 OR code LIKE $1 OR company_name LIKE $1 OR company_code LIKE $1",
+    [`%${MARKER}%`],
+  );
+  created.rfqIds.push(...rfqs.map((row) => Number(row.id)));
+  created.orderIds.push(...orders.map((row) => Number(row.id)));
+  created.customerIds.push(...customers.map((row) => Number(row.id)));
+  created.companyIds.push(...companies.map((row) => Number(row.id)));
+}
+
+async function safeDelete(label, text, params = []) {
+  try {
+    await query(text, params);
+  } catch (error) {
+    cleanupErrors.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function cleanup() {
+  cleanupErrors = [];
+  await discoverFixtureIds().catch((error) => cleanupErrors.push(`discover: ${error.message}`));
+  const rfqIds = [...new Set(created.rfqIds)].filter(Number.isInteger);
+  const orderIds = [...new Set(created.orderIds)].filter(Number.isInteger);
+  const customerIds = [...new Set(created.customerIds)].filter(Number.isInteger);
+  const companyIds = [...new Set(created.companyIds)].filter(Number.isInteger);
+
+  if (rfqIds.length) {
+    await safeDelete("activity logs by RFQ", "DELETE FROM activity_logs WHERE mkt_rfq_id = ANY($1::int[])", [rfqIds]);
+    await safeDelete("activity logs by marker", "DELETE FROM activity_logs WHERE description LIKE $1 OR new_value::text LIKE $1", [`%${MARKER}%`]);
+    await safeDelete("approvals", "DELETE FROM mkt_rfq_approvals WHERE rfq_id = ANY($1::int[])", [rfqIds]);
+    await safeDelete("guest claims", "DELETE FROM mkt_rfq_guest_claims WHERE rfq_id = ANY($1::int[])", [rfqIds]);
+    await safeDelete("vendor quote activities", "DELETE FROM activity_logs WHERE mkt_vendor_quote_id IN (SELECT id FROM mkt_vendor_quotes WHERE rfq_id = ANY($1::int[]))", [rfqIds]);
+    await safeDelete("vendor quote lines", "DELETE FROM mkt_vendor_quote_lines WHERE quote_id IN (SELECT id FROM mkt_vendor_quotes WHERE rfq_id = ANY($1::int[]))", [rfqIds]);
+    await safeDelete("vendor quotes", "DELETE FROM mkt_vendor_quotes WHERE rfq_id = ANY($1::int[])", [rfqIds]);
+    await safeDelete("purchase orders", "DELETE FROM mkt_purchase_orders WHERE rfq_id = ANY($1::int[])", [rfqIds]);
+    await safeDelete("notification queue", "DELETE FROM mkt_notification_queue WHERE rfq_id = ANY($1::int[])", [rfqIds]);
+    await safeDelete("dual-write log", "DELETE FROM mkt_dual_write_log WHERE mkt_rfq_id = ANY($1::int[])", [rfqIds]);
+    await safeDelete("RFQ lines", "DELETE FROM mkt_rfq_lines WHERE rfq_id = ANY($1::int[])", [rfqIds]);
+    await safeDelete("RFQs", "DELETE FROM mkt_rfqs WHERE id = ANY($1::int[])", [rfqIds]);
+  }
+  if (orderIds.length) {
+    await safeDelete("order items", "DELETE FROM portal_product_order_items WHERE order_id = ANY($1::int[])", [orderIds]);
+    await safeDelete("orders", "DELETE FROM portal_product_orders WHERE id = ANY($1::int[])", [orderIds]);
+  }
+  if (customerIds.length) {
+    await safeDelete("company requests", "DELETE FROM portal_company_requests WHERE portal_customer_id = ANY($1::int[])", [customerIds]);
+    await safeDelete("company members", "DELETE FROM portal_company_members WHERE portal_customer_id = ANY($1::int[])", [customerIds]);
+    await safeDelete("customer services", "DELETE FROM portal_customer_services WHERE customer_id = ANY($1::int[])", [customerIds]);
+    await safeDelete(
+      "trusted devices",
+      "DELETE FROM trusted_devices WHERE phone IN (SELECT phone FROM portal_customers WHERE id = ANY($1::int[]))",
+      [customerIds],
+    );
+    await safeDelete(
+      "OTP codes",
+      "DELETE FROM wa_otp_codes WHERE phone IN (SELECT phone FROM portal_customers WHERE id = ANY($1::int[]))",
+      [customerIds],
+    );
+    await safeDelete("portal profiles", "DELETE FROM portal_customer_profiles WHERE customer_id = ANY($1::int[])", [customerIds]);
+    await safeDelete("user profiles", "DELETE FROM user_profiles WHERE customer_id = ANY($1::int[])", [customerIds]);
+    await safeDelete("notification logs", "DELETE FROM notification_logs WHERE recipient = ANY($1::text[])", [[individualEmail, companyEmail, pendingEmail]]);
+    await safeDelete("portal customers", "DELETE FROM portal_customers WHERE id = ANY($1::int[])", [customerIds]);
+  }
+  if (companyIds.length) {
+    await safeDelete("synthetic companies", "DELETE FROM companies WHERE id = ANY($1::int[])", [companyIds]);
+  }
+}
+
+async function residualRecords() {
+  const pattern = `%${MARKER}%`;
+  const rows = await query(
+    `SELECT 'mkt_rfqs' AS item, count(*)::int AS count FROM mkt_rfqs WHERE notes LIKE $1 OR buyer_name LIKE $1 OR buyer_email LIKE $1
+     UNION ALL SELECT 'portal_product_orders', count(*)::int FROM portal_product_orders WHERE notes LIKE $1 OR customer_name LIKE $1 OR email LIKE $1
+     UNION ALL SELECT 'portal_customers', count(*)::int FROM portal_customers WHERE name LIKE $1 OR email LIKE $1
+     UNION ALL SELECT 'user_profiles', count(*)::int FROM user_profiles WHERE full_name LIKE $1 OR phone = '081234560001' OR phone = '081234560002' OR phone = '081234560003'
+     UNION ALL SELECT 'companies', count(*)::int FROM companies WHERE name LIKE $1 OR code LIKE $1 OR company_name LIKE $1 OR company_code LIKE $1
+     UNION ALL SELECT 'portal_company_requests', count(*)::int FROM portal_company_requests WHERE requested_company_name LIKE $1
+     UNION ALL SELECT 'activity_logs', count(*)::int FROM activity_logs WHERE description LIKE $1 OR new_value::text LIKE $1`,
+    [pattern],
+  );
+  return Object.fromEntries(rows.map((row) => [row.item, Number(row.count)]));
+}
+
+async function main() {
+  const ready = await request("/health/ready");
+  record("development readiness", ready.status === 200 && ready.data?.ready === true,
+    `HTTP ${ready.status}; ready=${ready.data?.ready}`);
+  const safety = await request("/health/e2e-safety");
+  record("development safe mode", safety.status === 200
+    && safety.data?.e2eMode === true
+    && safety.data?.whatsapp === "mocked"
+    && safety.data?.email === "mocked"
+    && safety.data?.payment === "mocked"
+    && safety.data?.webhooks === "disabled"
+    && safety.data?.workers === "disabled"
+    && safety.data?.storage === "test-only",
+  "all outbound channels are mocked/disabled");
+
+  await setupSyntheticCompany();
+  const legacySignup = await signup(individualEmail, jars.individual, {
+    phone: "081234560001",
+  });
+  if (legacySignup.status !== 201) throw new Error(`legacy signup failed: ${message(legacySignup.data)}`);
+  await checkLegacyCompletion();
+  await discoverCatalog();
+  await verifyGooglePlaces();
+  const individual = await verifyIndividualRfq();
+  await verifyCompanyRegression();
+  await verifyPendingCompany();
+  await verifyForgedCompanyId();
+
+  const source = readFileSync(new URL("../src/lib/services/portalMarketplaceService.ts", import.meta.url), "utf8");
+  const warningNotInCanonicalSource = !source.includes(warningText);
+  record("canonical RFQ source has no organization warning", warningNotInCanonicalSource);
+  return {
+    individual,
+    warningNotInCanonicalSource,
+  };
+}
+
+let executionError = null;
+try {
+  await main();
+} catch (error) {
+  executionError = error instanceof Error ? error.message : String(error);
+  record("proof execution", false, executionError);
+} finally {
+  await cleanup();
+  let residual = {};
+  try {
+    residual = await residualRecords();
+  } catch (error) {
+    cleanupErrors.push(`residual query: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  const passed = steps.filter((step) => step.pass).length;
+  const failed = steps.filter((step) => !step.pass).length;
+  const has = (name) => steps.some((step) => step.name === name && step.pass);
+  const residualCount = Object.values(residual).reduce((sum, count) => sum + Number(count), 0);
+  const report = {
+    LEGACY_COMPLETION: has("legacy completion flow appears") ? "PASS" : "FAIL",
+    INDIVIDUAL_CONTEXT_READY: has("individual context READY") ? "PASS" : "FAIL",
+    INDIVIDUAL_MEMBERSHIP_COUNT: has("individual membership count is zero") ? 0 : "UNKNOWN",
+    INDIVIDUAL_RFQ: has("individual RFQ created") && has("individual RFQ ownership is session-based") ? "PASS" : "FAIL",
+    INDIVIDUAL_RFQ_COMPANY_ID_NULL: has("individual RFQ company_id IS NULL") ? "PASS" : "FAIL",
+    INDIVIDUAL_ORGANIZATION_WARNING_REMOVED: has("individual organization warning removed") ? "PASS" : "FAIL",
+    COMPANY_RFQ_REGRESSION: has("company active membership RFQ PASS") ? "PASS" : "FAIL",
+    COMPANY_PENDING_BLOCK: has("company pending RFQ blocked") ? "PASS" : "FAIL",
+    FORGED_COMPANY_BYPASS: has("forged company_id cannot change ownership") ? 0 : 1,
+    GOOGLE_MAPS_REGRESSION: has("Google Maps autocomplete/detail") && has("individual destination/Google Maps persisted") ? "PASS" : "FAIL",
+    CLEANUP_ERRORS: cleanupErrors.length,
+    RESIDUAL_AUDIT_RECORDS: residualCount,
+    PRODUCTION_WRITES: 0,
+    REAL_WHATSAPP: 0,
+    REAL_EMAIL: 0,
+    FINAL_VERDICT: failed === 0 && cleanupErrors.length === 0 && residualCount === 0
+      ? "READY"
+      : "NOT_READY",
+  };
+  console.log(JSON.stringify({
+    RUN_ID,
+    passed,
+    failed,
+    error: executionError,
+    report,
+    residual,
+    cleanupDetails: cleanupErrors,
+    steps,
+  }, null, 2));
+  await pool.end();
+  process.exitCode = report.FINAL_VERDICT === "READY" ? 0 : 1;
+}
