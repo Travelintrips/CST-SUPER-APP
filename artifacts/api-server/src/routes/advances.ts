@@ -17,6 +17,7 @@
 import { Router, type Request } from "express";
 import { desc, eq, and, sql } from "drizzle-orm";
 import multer from "multer";
+import { createRequire } from "node:module";
 import { ObjectStorageService } from "../lib/objectStorage.js";
 const _objStoreSvc = new ObjectStorageService();
 import {
@@ -43,6 +44,10 @@ import {
   resolveIntercompanyAccounts,
 } from "../lib/advance/AdvanceJournalService.js";
 import { sendAdvanceError } from "../lib/advance/AdvanceErrors.js";
+
+const _require = createRequire(import.meta.url);
+type PdfParseFn = (buffer: Buffer) => Promise<{ text: string; numpages: number }>;
+const pdfParse = _require("pdf-parse/lib/pdf-parse.js") as PdfParseFn;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 export const ADVANCE_TYPES = [
@@ -108,6 +113,10 @@ export async function runAdvanceMigration(): Promise<void> {
     ["division_id",       "INTEGER"],
     ["settled_at",              "TIMESTAMP"],
     ["closed_at",               "TIMESTAMP"],
+    // Evidence for expense settlements. Keep these in the canonical migration
+    // too; the deprecated cashAdvances migration may not run in every runtime.
+    ["receipt_url",             "TEXT"],
+    ["ocr_raw_data",            "TEXT"],
     // Dana Talangan extended fields
     ["category",               "TEXT"],
     ["category_other",         "TEXT"],
@@ -377,6 +386,9 @@ function serializeAdv(r: Record<string, unknown>) {
   const vendorName = r.vendor_name as string | null | undefined;
   const cashBankName = r.cash_bank_account_name as string | null | undefined;
   const employeeName = (r.employee_name ?? r.party_name) as string | null | undefined;
+  const ocrRawData = typeof r.ocr_raw_data === "string"
+    ? (() => { try { return JSON.parse(r.ocr_raw_data as string); } catch { return null; } })()
+    : (r.ocr_raw_data ?? null);
   return {
     ...r,
     amount:          fmt(r.amount),
@@ -397,6 +409,7 @@ function serializeAdv(r: Record<string, unknown>) {
     status:          legacyStatus,
     entryId:         r.entry_id,
     receiptUrl:      r.receipt_url,
+    ocrRawData,
     vendor:          r.vendor_id ? { id: r.vendor_id, name: vendorName } : null,
     cashBankAccount: r.cash_bank_account_id ? { id: r.cash_bank_account_id, name: cashBankName } : null,
     employee:        r.user_id ? { id: r.user_id, name: employeeName, email: r.employee_email } : null,
@@ -612,7 +625,30 @@ Kembalikan HANYA JSON valid tanpa markdown, contoh: {"amount":300000,"date":"202
         { type: "image_url", image_url: { url: `data:${mime};base64,${b64}`, detail: "high" } },
       ];
     } else {
-      return res.json({ amount: null, date: null, partyName: null, bankInfo: null, confidence: "low", note: "PDF tidak didukung untuk OCR preview — upload gambar (JPG/PNG)." });
+      const pdf = await pdfParse(file.buffer);
+      const text = pdf.text?.trim() ?? "";
+      if (!text) {
+        return res.json({
+          amount: null, date: null, partyName: null, bankInfo: null,
+          description: null, confidence: "low",
+          note: "PDF tidak memiliki teks yang bisa dibaca. Upload gambar halaman bon untuk OCR.",
+        });
+      }
+      userContent = [{
+        type: "text",
+        text: `Ini adalah teks hasil ekstraksi dari bon/struk pengeluaran dalam PDF:
+---
+${text.slice(0, 12000)}
+---
+Ekstrak informasi berikut dalam format JSON:
+- amount: nominal pembayaran (angka bulat, tanpa titik/koma pemisah, pilih grand total jika tersedia)
+- date: tanggal transaksi dalam format YYYY-MM-DD
+- partyName: nama toko/vendor/pihak penerima
+- bankInfo: nama bank atau rekening jika ada
+- description: ringkasan barang atau jasa yang dibeli
+- confidence: "high", "medium", atau "low"
+Kembalikan HANYA JSON valid tanpa markdown.`,
+      }];
     }
     const completion = await openai.chat.completions.create({
       model: "gpt-4o",
@@ -690,9 +726,29 @@ Kembalikan HANYA JSON valid, tidak ada teks lain.`,
           { type: "image_url", image_url: { url: `data:${mime};base64,${b64}`, detail: "high" } },
         ];
       } else {
-        userContent = [{ type: "text", text: `Analisa file PDF berikut (base64): ${file.buffer.toString("base64").slice(0, 2000)}...
-Ini adalah struk/receipt pembayaran. Ekstrak dalam JSON: amount (angka), date (YYYY-MM-DD), partyName (nama toko), description (deskripsi pembelian), confidence (high/medium/low).
-Kembalikan HANYA JSON valid.` }];
+        const pdf = await pdfParse(file.buffer);
+        const text = pdf.text?.trim() ?? "";
+        if (text) {
+          userContent = [{
+            type: "text",
+            text: `Ini adalah teks hasil ekstraksi dari bon/struk pengeluaran dalam PDF:
+---
+${text.slice(0, 12000)}
+---
+Ekstrak dalam JSON:
+- amount: nominal pembayaran (angka bulat, tanpa pemisah ribuan)
+- date: tanggal transaksi (format YYYY-MM-DD)
+- partyName: nama toko/vendor/pihak penerima
+- description: ringkasan barang atau jasa yang dibeli
+- confidence: "high", "medium", atau "low"
+Kembalikan HANYA JSON valid tanpa markdown.`,
+          }];
+        } else {
+          userContent = [{
+            type: "text",
+            text: "PDF ini tidak memiliki teks yang bisa dibaca. Kembalikan JSON dengan amount, date, partyName, description bernilai null dan confidence bernilai low.",
+          }];
+        }
       }
       const completion = await openai.chat.completions.create({
         model: "gpt-4o",

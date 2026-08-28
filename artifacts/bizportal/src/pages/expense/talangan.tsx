@@ -737,6 +737,7 @@ export default function TalanganPage() {
       if (result.amount && !settleAmtRaw) setSettleAmtRaw(fmtIDR(String(result.amount)));
       if (result.date) setSettleDate(result.date);
       if (result.description && !settleNotes) setSettleNotes(result.description);
+      if (result.description && !settleNotes) setSettleNotes(result.description);
     } catch (err: any) {
       toast({ title: "OCR tidak berhasil", description: err?.message ?? "Isi nominal dan tanggal secara manual.", variant: "destructive" });
     } finally {
@@ -2137,13 +2138,96 @@ export default function TalanganPage() {
                       <Label className="text-xs">Keterangan</Label>
                       <Input placeholder="Opsional..." className="h-8 text-sm" value={settleNotes} onChange={(e) => setSettleNotes(e.target.value)} />
                     </div>
+                    {/* Upload bon/struk + OCR AI */}
+                    <div className="space-y-1.5">
+                      <Label className="text-xs flex items-center gap-1.5">
+                        <FileText size={13} className="text-teal-500" />
+                        Bon / Struk Pengeluaran
+                        <span className="flex items-center gap-0.5 text-[10px] text-violet-400 font-normal">
+                          <Sparkles size={9} /> OCR AI
+                        </span>
+                      </Label>
+                      {settleReceiptFile ? (
+                        <div className="space-y-1.5">
+                          <div className="flex items-center gap-2 rounded border border-emerald-600/40 bg-emerald-900/20 px-3 py-2 text-xs">
+                            {settleReceiptOcrLoading ? (
+                              <Loader2 size={11} className="animate-spin text-violet-400 shrink-0" />
+                            ) : settleReceiptOcr ? (
+                              <Sparkles size={11} className={cn(
+                                "shrink-0",
+                                settleReceiptOcr.confidence === "high" ? "text-emerald-400" :
+                                settleReceiptOcr.confidence === "medium" ? "text-amber-400" : "text-muted-foreground",
+                              )} />
+                            ) : <FileText size={11} className="text-emerald-400 shrink-0" />}
+                            <span className="truncate flex-1 text-emerald-300">{settleReceiptFile.name}</span>
+                            <button
+                              type="button"
+                              className="text-muted-foreground hover:text-foreground shrink-0"
+                              onClick={() => { setSettleReceiptFile(null); setSettleReceiptOcr(null); }}
+                              aria-label="Hapus file bon"
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
+                          {settleReceiptOcrLoading && (
+                            <p className="text-[10px] text-violet-400 flex items-center gap-1">
+                              <Loader2 size={9} className="animate-spin" />
+                              AI sedang membaca bon/struk…
+                            </p>
+                          )}
+                          {settleReceiptOcr && !settleReceiptOcrLoading && (
+                            <div className={cn(
+                              "rounded px-2.5 py-2 text-[10px] space-y-0.5 border",
+                              settleReceiptOcr.confidence === "high"
+                                ? "bg-emerald-900/20 border-emerald-600/30 text-emerald-300"
+                                : settleReceiptOcr.confidence === "medium"
+                                ? "bg-amber-900/20 border-amber-600/30 text-amber-300"
+                                : "bg-muted/30 border-border text-muted-foreground",
+                            )}>
+                              <p className="flex items-center gap-1 font-medium">
+                                <Sparkles size={9} /> Hasil OCR AI
+                                <span className="ml-1 opacity-70">
+                                  ({settleReceiptOcr.confidence === "high" ? "akurasi tinggi" :
+                                    settleReceiptOcr.confidence === "medium" ? "akurasi sedang" : "akurasi rendah"})
+                                </span>
+                              </p>
+                              {settleReceiptOcr.amount
+                                ? <p>Nominal terdeteksi: <strong className="font-mono">{idr(settleReceiptOcr.amount)}</strong></p>
+                                : <p className="flex items-center gap-1"><AlertCircle size={9} />Nominal tidak terdeteksi — isi manual.</p>}
+                              {settleReceiptOcr.date && <p>Tanggal: <strong>{settleReceiptOcr.date}</strong></p>}
+                              {settleReceiptOcr.partyName && <p>Vendor/toko: {settleReceiptOcr.partyName}</p>}
+                              {settleReceiptOcr.description && <p>Deskripsi: {settleReceiptOcr.description}</p>}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <label className="flex items-center gap-2 cursor-pointer rounded border border-dashed border-muted-foreground/40 px-3 py-2 text-xs text-muted-foreground hover:border-violet-400/50 hover:text-violet-400 transition-colors group">
+                          <Sparkles size={11} className="group-hover:text-violet-400" />
+                          Upload bon/struk — AI isi nominal & tanggal otomatis (JPG, PNG, PDF · maks 15 MB)
+                          <input
+                            type="file"
+                            className="hidden"
+                            accept=".jpg,.jpeg,.png,.pdf,.webp"
+                            onChange={(e) => handleSettleReceiptChange(e.target.files?.[0] ?? null)}
+                          />
+                        </label>
+                      )}
+                    </div>
                     {parseIDR(settleAmtRaw) > 0 && (
                       <div className="text-xs text-muted-foreground rounded bg-muted/30 px-3 py-1.5">
                         Jurnal: <strong>DR Beban</strong> · <strong>CR Piutang Dana Talangan</strong> {idr(parseIDR(settleAmtRaw))}
                       </div>
                     )}
-                    <Button size="sm" variant="secondary" className="w-full" onClick={handleSettleExpense} disabled={settleExpenseMut.isPending}>
-                      {settleExpenseMut.isPending ? <><Loader2 size={13} className="mr-1 animate-spin" />Menyimpan...</> : "Tutup sebagai Beban"}
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      className="w-full"
+                      onClick={handleSettleExpense}
+                      disabled={settleExpenseMut.isPending || settleReceiptOcrLoading || settleReceiptUploading}
+                    >
+                      {(settleExpenseMut.isPending || settleReceiptUploading || settleReceiptOcrLoading) ? (
+                        <><Loader2 size={13} className="mr-1 animate-spin" />{settleReceiptOcrLoading ? "Membaca bon..." : settleReceiptUploading ? "Menyimpan bon..." : "Menyimpan..."}</>
+                      ) : "Tutup sebagai Beban"}
                     </Button>
                   </div>
                 )}
