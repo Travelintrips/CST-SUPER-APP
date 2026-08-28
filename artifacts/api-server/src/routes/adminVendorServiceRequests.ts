@@ -232,8 +232,24 @@ const unifiedCte = sql`
       v.name::text,
       v.phone::text,
       v.contact_email::text,
-      'Marketplace / Produk'::text,
-      'marketplace'::text,
+      COALESCE(
+        NULLIF(catalog.service_type, ''),
+        NULLIF(catalog.category_key, ''),
+        NULLIF(line.item_name, ''),
+        'Marketplace / Produk'
+      )::text,
+      CASE
+        WHEN lower(COALESCE(catalog.service_type, '') || ' ' || COALESCE(catalog.category_key, '') || ' ' || COALESCE(line.item_name, '')) LIKE '%truck%'
+          OR lower(COALESCE(catalog.service_type, '') || ' ' || COALESCE(catalog.category_key, '') || ' ' || COALESCE(line.item_name, '')) LIKE '%darat%' THEN 'trucking'
+        WHEN lower(COALESCE(catalog.service_type, '') || ' ' || COALESCE(catalog.category_key, '') || ' ' || COALESCE(line.item_name, '')) LIKE '%sea%'
+          OR lower(COALESCE(catalog.service_type, '') || ' ' || COALESCE(catalog.category_key, '') || ' ' || COALESCE(line.item_name, '')) LIKE '%ocean%'
+          OR lower(COALESCE(catalog.service_type, '') || ' ' || COALESCE(catalog.category_key, '') || ' ' || COALESCE(line.item_name, '')) LIKE '%laut%' THEN 'sea_freight'
+        WHEN lower(COALESCE(catalog.service_type, '') || ' ' || COALESCE(catalog.category_key, '') || ' ' || COALESCE(line.item_name, '')) LIKE '%air%' THEN 'air_freight'
+        WHEN lower(COALESCE(catalog.service_type, '') || ' ' || COALESCE(catalog.category_key, '') || ' ' || COALESCE(line.item_name, '')) LIKE '%custom%'
+          OR lower(COALESCE(catalog.service_type, '') || ' ' || COALESCE(catalog.category_key, '') || ' ' || COALESCE(line.item_name, '')) LIKE '%pabean%'
+          OR lower(COALESCE(catalog.service_type, '') || ' ' || COALESCE(catalog.category_key, '') || ' ' || COALESCE(line.item_name, '')) LIKE '%ppjk%' THEN 'customs'
+        ELSE 'marketplace'
+      END::text,
       r.status::text,
       q.status::text,
       q.status::text,
@@ -250,6 +266,14 @@ const unifiedCte = sql`
     FROM mkt_vendor_quotes q
     JOIN mkt_rfqs r ON r.id = q.rfq_id
     JOIN suppliers v ON v.id = q.vendor_id
+    LEFT JOIN LATERAL (
+      SELECT item_name, vendor_catalog_item_id
+      FROM mkt_rfq_lines
+      WHERE rfq_id = r.id
+      ORDER BY sort_order ASC, id ASC
+      LIMIT 1
+    ) line ON TRUE
+    LEFT JOIN vendor_catalog_items catalog ON catalog.id = line.vendor_catalog_item_id
   )
 `;
 
