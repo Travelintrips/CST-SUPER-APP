@@ -889,15 +889,14 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
         ).trim() || null;
         const existing = await tx.execute(sql`
           SELECT ae.id AS entry_id, ae.company_id, ae.journal_id,
-                 ae.source_id, ae.source_event_id,
+                  ae.source_id, ae.source_event_id, ae.bank_account_id,
                   ap.id AS payment_id
           FROM accounting_entries ae
           LEFT JOIN accounting_payments ap
             ON ap.entry_id = ae.id
            AND ap.source_type = 'sport_center'
             AND ap.source_doc_id = ${mirrorPaymentId}
-          WHERE ae.company_id = ${companyId}
-            AND ae.source = 'sport_center_payment'
+           WHERE ae.source = 'sport_center_payment'
             AND (
               ae.source_id = ${paymentId}
               OR (
@@ -917,7 +916,8 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
           if (row.payment_id != null) {
             await tx.execute(sql`
               UPDATE accounting_payments
-              SET payment_method = ${normalizePaymentMethod(String(raw.payment_method ?? "")) ?? "qris"},
+              SET company_id = ${companyId},
+                  payment_method = ${normalizePaymentMethod(String(raw.payment_method ?? "")) ?? "qris"},
                   payment_provider = ${raw.payment_provider ?? null},
                   updated_at = NOW()
               WHERE id = ${Number(row.payment_id)}
@@ -926,8 +926,10 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
           if (row.entry_id != null) {
             await tx.execute(sql`
               UPDATE accounting_entries
-              SET payment_method = ${normalizePaymentMethod(String(raw.payment_method ?? "")) ?? "qris"},
-                  payment_provider = ${raw.payment_provider ?? null}
+              SET company_id = ${companyId},
+                  payment_method = ${normalizePaymentMethod(String(raw.payment_method ?? "")) ?? "qris"},
+                  payment_provider = ${raw.payment_provider ?? null},
+                  bank_account_id = ${raw.bank_account_id == null ? null : String(raw.bank_account_id)}
               WHERE id = ${Number(row.entry_id)}
             `);
           }
@@ -996,6 +998,9 @@ export async function syncPaymentsToAccounting(companyId = 1): Promise<{ synced:
             paymentProvider: raw.payment_provider == null
               ? null
               : String(raw.payment_provider),
+            bankAccountId: raw.bank_account_id == null
+              ? null
+              : String(raw.bank_account_id),
             source: "sport_center_payment",
             sourceId: paymentId,
             sourceEventId: canonicalEventId,

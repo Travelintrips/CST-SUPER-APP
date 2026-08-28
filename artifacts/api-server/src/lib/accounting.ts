@@ -97,6 +97,8 @@ export interface PostingInput {
   paymentMethod?: string | null;
    /** Provider pembayaran sumber, disalin ke metadata header jurnal. */
    paymentProvider?: string | null;
+  /** Nomor rekening eksternal sumber pembayaran, disalin ke metadata header jurnal. */
+  bankAccountId?: string | number | null;
   source?:
     | "manual"
     | "sales_invoice"
@@ -462,7 +464,8 @@ async function _postEntryCore(
     ref: input.ref ?? null,
     description: input.description ?? null,
     paymentMethod: input.paymentMethod ?? null,
-     paymentProvider: input.paymentProvider ?? null,
+    paymentProvider: input.paymentProvider ?? null,
+    bankAccountId: input.bankAccountId == null ? null : String(input.bankAccountId),
     // Always insert as 'draft' first so trg_block_lines_mutation allows line inserts.
     // After lines are inserted, we'll UPDATE to initialStatus (draft→posted is allowed).
     status: "draft" as "posted",

@@ -49,6 +49,37 @@ export function ensureSportPaymentMirrorTrigger(): Promise<void> {
   }
 
   const provisioning = (async () => {
+  // The mirror trigger is also refreshed by the standalone development
+  // migration runner, where Sport Center runs before Accounting Hub. Keep the
+  // metadata column available before PostgreSQL parses the trigger function.
+  await db.execute(sql`
+    ALTER TABLE accounting_entries
+      ADD COLUMN IF NOT EXISTS bank_account_id TEXT
+  `).catch((err) => {
+    logger.warn({ err }, "Sport Center payment mirror trigger: accounting bank metadata column unavailable");
+  });
+  await db.execute(sql.raw(`
+    DO $repair$
+    DECLARE
+      v_data_type text;
+    BEGIN
+      SELECT data_type
+        INTO v_data_type
+        FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'accounting_entries'
+         AND column_name = 'bank_account_id';
+      IF v_data_type IS NOT NULL AND v_data_type <> 'text' THEN
+        ALTER TABLE accounting_entries
+          ALTER COLUMN bank_account_id TYPE TEXT
+          USING bank_account_id::text;
+      END IF;
+    END
+    $repair$;
+  `)).catch((err) => {
+    logger.warn({ err }, "Sport Center payment mirror trigger: accounting bank metadata type repair unavailable");
+  });
+
   const requiredObjects = await db.execute(sql`
     SELECT
       EXISTS (
@@ -690,8 +721,9 @@ export function ensureSportPaymentMirrorTrigger(): Promise<void> {
       -- when the linked journal is posted. Amount/date stay write-once after
       -- posting to preserve the audit trail.
       UPDATE accounting_payments ap
-         SET payment_method = NULLIF(BTRIM(NEW.method::text), ''),
-             payment_provider = NULLIF(BTRIM(NEW.payment_provider::text), ''),
+         SET company_id = COALESCE(NEW.company_id, ap.company_id),
+             payment_method = COALESCE(NULLIF(BTRIM(NEW.method::text), ''), ap.payment_method),
+             payment_provider = COALESCE(NULLIF(BTRIM(NEW.payment_provider::text), ''), ap.payment_provider),
              amount = CASE
                WHEN ap.status::text NOT IN ('posted', 'voided')
                 AND NOT EXISTS (
@@ -717,8 +749,13 @@ export function ensureSportPaymentMirrorTrigger(): Promise<void> {
       -- Keep journal metadata aligned. The immutability trigger permits this
       -- update because payment_method is not a financial column.
       UPDATE accounting_entries ae
-         SET payment_method = NULLIF(BTRIM(NEW.method::text), ''),
-             payment_provider = NULLIF(BTRIM(NEW.payment_provider::text), ''),
+         SET company_id = COALESCE(NEW.company_id, ae.company_id),
+             payment_method = COALESCE(NULLIF(BTRIM(NEW.method::text), ''), ae.payment_method),
+             payment_provider = COALESCE(NULLIF(BTRIM(NEW.payment_provider::text), ''), ae.payment_provider),
+             bank_account_id = COALESCE(
+               NULLIF(BTRIM(NEW.external_bank_account_id::text), ''),
+               ae.bank_account_id
+             ),
              date = CASE
                WHEN ae.status::text <> 'posted'
                THEN COALESCE(NEW.paid_at::date, ae.date)

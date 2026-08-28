@@ -9,7 +9,7 @@ import { sql } from "drizzle-orm";
 
 // ── Accounting / Finance migrations ─────────────────────────────────────────
 import { runAccountingMigration, repairKasErSportCenterEntries, repairOrphanedEntryLines } from "./lib/accountingMigration.js";
-import { runAccountingHubMigration } from "./lib/accountingHubMigration.js";
+import { runAccountingHubMigration, runSportCenterPaymentAccountingMetadataBackfill } from "./lib/accountingHubMigration.js";
 import { runGuardMigration as runLedgerGuardMigration } from "./lib/accounting/ledgerGuard.js";
 import { runFreightAccountingMigration } from "./lib/freightAccountingMigration.js";
 import { runBankReconciliationCoreMigration } from "./routes/bankReconciliation.js";
@@ -267,6 +267,7 @@ async function main() {
   console.log("\n--- Accounting / Finance migrations ---");
   await runSafe("accounting (core)", runAccountingMigration);
   await runSafe("accountingHub", runAccountingHubMigration);
+  await runSafe("sportCenterPaymentAccountingMetadataBackfill", runSportCenterPaymentAccountingMetadataBackfill);
   await runSafe("ledgerGuard", runLedgerGuardMigration);
   await runSafe("freightAccounting", runFreightAccountingMigration);
   await runSafe("bankReconciliationCore", runBankReconciliationCoreMigration);

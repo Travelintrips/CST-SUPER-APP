@@ -40,7 +40,7 @@ import { runSupplierEnhancementMigration } from "./lib/supplierEnhancementMigrat
 import { runAccountingMigration, repairKasErSportCenterEntries, repairOrphanedEntryLines, syncAccountingSequences, checkSequenceDesync } from "./lib/accountingMigration";
 import { runCoaGovernanceMigration } from "./lib/coaGovernanceMigration";
 import { runCoaProposalMigration } from "./lib/coaProposalMigration.js";
-import { runAccountingHubMigration } from "./lib/accountingHubMigration";
+import { runAccountingHubMigration, runSportCenterPaymentAccountingMetadataBackfill } from "./lib/accountingHubMigration";
 import { runGuardMigration as runLedgerGuardMigration } from "./lib/accounting/ledgerGuard.js";
 import { runOauthStateMigration } from "./lib/oauthStateMigration";
 import { enableRealtimeTables } from "./lib/enableRealtimeTables";
@@ -2048,6 +2048,7 @@ async function startServer() {
     .then(() => runWithRetry("COA governance migration", runCoaGovernanceMigration))
     .then(() => runWithRetry("COA proposal migration", runCoaProposalMigration))
     .then(() => runWithRetry("Accounting Hub migration", runAccountingHubMigration))
+    .then(() => runWithRetry("Sport Center payment accounting metadata backfill", runSportCenterPaymentAccountingMetadataBackfill))
     .then(() => runWithRetry("Ledger Guard migration (P0 period-lock + immutability hardening)", runLedgerGuardMigration))
     .then(() => runWithRetry("OAuth state migration", runOauthStateMigration))
     .then(() => runWithRetry("Knowledge base migration", runKnowledgeBaseMigration))

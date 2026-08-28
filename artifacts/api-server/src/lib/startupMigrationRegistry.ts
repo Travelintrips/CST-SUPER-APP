@@ -25,6 +25,7 @@ const REGISTRY_ROWS: readonly RegistryRow[] = [
   ["coa_governance", "COA governance migration", "schema"],
   ["coa_proposal", "COA proposal migration", "schema"],
   ["accounting_hub", "Accounting Hub migration", "schema"],
+  ["sport_center_payment_accounting_metadata_backfill", "Sport Center payment accounting metadata backfill", "backfill"],
   ["ledger_guard", "Ledger Guard migration (P0 period-lock + immutability hardening)", "repair"],
   ["oauth_state", "OAuth state migration", "schema"],
   ["knowledge_base", "Knowledge base migration", "schema"],

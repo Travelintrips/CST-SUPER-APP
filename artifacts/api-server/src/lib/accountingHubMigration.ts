@@ -22,8 +22,28 @@ export async function runAccountingHubMigration(): Promise<void> {
         ADD COLUMN IF NOT EXISTS voided_at     TIMESTAMP,
         ADD COLUMN IF NOT EXISTS void_entry_id INTEGER,
          ADD COLUMN IF NOT EXISTS payment_method TEXT,
-         ADD COLUMN IF NOT EXISTS payment_provider TEXT
+         ADD COLUMN IF NOT EXISTS payment_provider TEXT,
+         ADD COLUMN IF NOT EXISTS bank_account_id TEXT
     `);
+    await db.execute(sql.raw(`
+      DO $repair$
+      DECLARE
+        v_data_type text;
+      BEGIN
+        SELECT data_type
+          INTO v_data_type
+          FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'accounting_entries'
+           AND column_name = 'bank_account_id';
+        IF v_data_type IS NOT NULL AND v_data_type <> 'text' THEN
+          ALTER TABLE accounting_entries
+            ALTER COLUMN bank_account_id TYPE TEXT
+            USING bank_account_id::text;
+        END IF;
+      END
+      $repair$;
+    `)).catch((err) => logger.warn({ err }, "[AccountingHub] Sport Center journal bank account type repair failed"));
 
     // ── 2. accounting_payments: tambah kolom hub ────────────────────────────
     await db.execute(sql`
@@ -44,15 +64,90 @@ export async function runAccountingHubMigration(): Promise<void> {
     await db.execute(sql`
       UPDATE accounting_payments ap
       SET payment_method = sp.method,
-          payment_provider = sp.payment_provider
+          payment_provider = sp.payment_provider,
+          company_id = COALESCE(sp.company_id, ap.company_id)
       FROM sport_payments sp
       WHERE ap.source_type = 'sport_center'
         AND ap.source_doc_id = sp.id
         AND (
           (sp.method IS NOT NULL AND ap.payment_method IS DISTINCT FROM sp.method)
           OR (sp.payment_provider IS NOT NULL AND ap.payment_provider IS DISTINCT FROM sp.payment_provider)
+          OR (sp.company_id IS NOT NULL AND ap.company_id IS DISTINCT FROM sp.company_id)
         )
     `).catch((err) => logger.warn({ err }, "[AccountingHub] Sport Center payment method backfill failed"));
+
+    // Existing linked journal headers receive the same non-financial metadata.
+    // The external bank number belongs on accounting_entries; accounting_payments
+    // intentionally has no bank_account_id column.
+    await db.execute(sql`
+      UPDATE accounting_entries ae
+      SET company_id = COALESCE(sp.company_id, ae.company_id),
+          payment_method = COALESCE(sp.method, ae.payment_method),
+          payment_provider = COALESCE(sp.payment_provider, ae.payment_provider)
+      FROM accounting_payments ap
+      JOIN sport_payments sp
+        ON ap.source_type = 'sport_center'
+       AND ap.source_doc_id = sp.id
+      WHERE ae.id = ap.entry_id
+        AND (
+          (sp.company_id IS NOT NULL AND ae.company_id IS DISTINCT FROM sp.company_id)
+          OR (sp.method IS NOT NULL AND ae.payment_method IS DISTINCT FROM sp.method)
+          OR (sp.payment_provider IS NOT NULL AND ae.payment_provider IS DISTINCT FROM sp.payment_provider)
+        )
+    `).catch((err) => logger.warn({ err }, "[AccountingHub] Sport Center journal company/provider backfill failed"));
+
+    // `external_bank_account_id` is the lossless source identity. Do not copy
+    // the mirror's internal company_bank_accounts.id into the journal header.
+    await db.execute(sql`
+      UPDATE accounting_entries ae
+      SET bank_account_id = NULLIF(BTRIM(sp.external_bank_account_id::text), '')
+      FROM accounting_payments ap
+      JOIN sport_payments sp
+        ON ap.source_type = 'sport_center'
+       AND ap.source_doc_id = sp.id
+      WHERE ae.id = ap.entry_id
+        AND NULLIF(BTRIM(sp.external_bank_account_id::text), '') IS NOT NULL
+        AND ae.bank_account_id IS DISTINCT FROM NULLIF(BTRIM(sp.external_bank_account_id::text), '')
+    `).catch((err) => logger.warn({ err }, "[AccountingHub] Sport Center journal bank account backfill failed"));
+
+    // Some legacy booking journals predate accounting_payments. Recover only
+    // an unambiguous booking→payment mapping; never pick one payment when a
+    // booking has multiple candidates.
+    await db.execute(sql`
+      UPDATE accounting_entries ae
+      SET company_id = COALESCE(source.company_id, ae.company_id),
+          payment_method = COALESCE(source.method, ae.payment_method),
+          payment_provider = COALESCE(source.payment_provider, ae.payment_provider),
+          bank_account_id = COALESCE(
+            NULLIF(BTRIM(source.external_bank_account_id::text), ''),
+            ae.bank_account_id
+          )
+      FROM (
+        SELECT
+          ae0.id AS entry_id,
+          MIN(sp.company_id) AS company_id,
+          MIN(sp.method) AS method,
+          MIN(sp.payment_provider) AS payment_provider,
+          MIN(sp.external_bank_account_id::text) AS external_bank_account_id,
+          COUNT(*) AS payment_count
+        FROM accounting_entries ae0
+        JOIN sport_payments sp
+          ON ae0.source = 'sport_center_booking'
+         AND ae0.source_id = sp.booking_id
+        GROUP BY ae0.id
+      ) source
+      WHERE ae.id = source.entry_id
+        AND source.payment_count = 1
+        AND (
+          (source.company_id IS NOT NULL AND ae.company_id IS DISTINCT FROM source.company_id)
+          OR (source.method IS NOT NULL AND ae.payment_method IS DISTINCT FROM source.method)
+          OR (source.payment_provider IS NOT NULL AND ae.payment_provider IS DISTINCT FROM source.payment_provider)
+          OR (
+            NULLIF(BTRIM(source.external_bank_account_id::text), '') IS NOT NULL
+            AND ae.bank_account_id IS DISTINCT FROM NULLIF(BTRIM(source.external_bank_account_id::text), '')
+          )
+        )
+    `).catch((err) => logger.warn({ err }, "[AccountingHub] Legacy Sport Center journal metadata backfill failed"));
 
     // ── 2b-pre. Patch fn_block_posted_entry_update SEBELUM backfill ────────────
     // accountingHubMigration runs before financeGovernanceMigration in the
@@ -238,7 +333,7 @@ export async function runAccountingHubMigration(): Promise<void> {
     // ── 5. View: accounting_general_ledger_v ──────────────────────────────────
     await db.execute(sql`
       CREATE OR REPLACE VIEW accounting_general_ledger_v AS
-      SELECT
+       SELECT
         el.id            AS line_id,
         e.id             AS entry_id,
         e.entry_number,
@@ -386,4 +481,174 @@ export async function runAccountingHubMigration(): Promise<void> {
     logger.error({ err }, "[AccountingHub] Migration error");
     throw err;
   }
+}
+
+/**
+ * Additive repair for environments where runAccountingHubMigration() was
+ * already marked complete before Sport Center payment metadata was added.
+ *
+ * This is deliberately separate from the broad Accounting Hub migration:
+ * startup migration markers can skip an older completed stage. The repair is
+ * idempotent and updates metadata only; it never creates accounting rows or
+ * changes financial values, dates, or statuses.
+ */
+export async function runSportCenterPaymentAccountingMetadataBackfill(): Promise<void> {
+  await db.execute(sql`
+    ALTER TABLE accounting_entries
+      ADD COLUMN IF NOT EXISTS bank_account_id TEXT
+  `);
+  await db.execute(sql.raw(`
+    DO $repair$
+    DECLARE
+      v_data_type text;
+    BEGIN
+      SELECT data_type
+        INTO v_data_type
+        FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'accounting_entries'
+         AND column_name = 'bank_account_id';
+      IF v_data_type IS NOT NULL AND v_data_type <> 'text' THEN
+        ALTER TABLE accounting_entries
+          ALTER COLUMN bank_account_id TYPE TEXT
+          USING bank_account_id::text;
+      END IF;
+    END
+    $repair$;
+  `));
+
+  // Posted entries are allowed to receive metadata-only corrections by the
+  // existing accounting immutability contract. Keep the repair fail-closed:
+  // if that contract is unavailable, the stage fails instead of pretending
+  // that the backfill completed.
+  await db.execute(sql.raw(`
+    CREATE OR REPLACE FUNCTION fn_block_posted_entry_update()
+    RETURNS TRIGGER LANGUAGE plpgsql AS $$
+    BEGIN
+      IF OLD.status = 'posted' THEN
+        IF NEW.status = 'draft' AND NEW.cancel_reason IS NOT NULL AND NEW.cancelled_at IS NOT NULL THEN
+          RETURN NEW;
+        END IF;
+        IF NEW.status IS NOT DISTINCT FROM OLD.status
+          AND NEW.total_debit  IS NOT DISTINCT FROM OLD.total_debit
+          AND NEW.total_credit IS NOT DISTINCT FROM OLD.total_credit
+          AND NEW.journal_id   IS NOT DISTINCT FROM OLD.journal_id
+          AND NEW.date         IS NOT DISTINCT FROM OLD.date
+          AND NEW.source       IS NOT DISTINCT FROM OLD.source
+          AND NEW.source_id    IS NOT DISTINCT FROM OLD.source_id
+        THEN
+          RETURN NEW;
+        END IF;
+        RAISE EXCEPTION 'IMMUTABILITY_VIOLATION: Cannot modify a posted journal entry (id=%). Posted entries are immutable. Use a reversal entry.', OLD.id;
+      END IF;
+      RETURN NEW;
+    END;
+    $$
+  `));
+
+  await db.execute(sql`
+    UPDATE accounting_payments ap
+    SET company_id = COALESCE(sp.company_id, ap.company_id),
+        payment_method = COALESCE(sp.method, ap.payment_method),
+        payment_provider = COALESCE(sp.payment_provider, ap.payment_provider)
+    FROM sport_payments sp
+    WHERE ap.source_type = 'sport_center'
+      AND ap.source_doc_id = sp.id
+      AND (
+        (sp.company_id IS NOT NULL AND ap.company_id IS DISTINCT FROM sp.company_id)
+        OR (sp.method IS NOT NULL AND ap.payment_method IS DISTINCT FROM sp.method)
+        OR (sp.payment_provider IS NOT NULL AND ap.payment_provider IS DISTINCT FROM sp.payment_provider)
+      )
+  `);
+
+  await db.execute(sql`
+    UPDATE accounting_entries ae
+    SET company_id = COALESCE(sp.company_id, ae.company_id),
+        payment_method = COALESCE(sp.method, ae.payment_method),
+        payment_provider = COALESCE(sp.payment_provider, ae.payment_provider),
+        bank_account_id = COALESCE(
+          NULLIF(BTRIM(sp.external_bank_account_id::text), ''),
+          ae.bank_account_id
+        )
+    FROM sport_payments sp
+    WHERE ae.source = 'sport_center_payment'
+      AND ae.source_id = sp.id
+      AND (
+        (sp.company_id IS NOT NULL AND ae.company_id IS DISTINCT FROM sp.company_id)
+        OR (sp.method IS NOT NULL AND ae.payment_method IS DISTINCT FROM sp.method)
+        OR (sp.payment_provider IS NOT NULL AND ae.payment_provider IS DISTINCT FROM sp.payment_provider)
+        OR (
+          NULLIF(BTRIM(sp.external_bank_account_id::text), '') IS NOT NULL
+          AND ae.bank_account_id IS DISTINCT FROM NULLIF(BTRIM(sp.external_bank_account_id::text), '')
+        )
+      )
+  `);
+
+  await db.execute(sql`
+    UPDATE accounting_entries ae
+    SET company_id = COALESCE(sp.company_id, ae.company_id),
+        payment_method = COALESCE(sp.method, ap.payment_method, ae.payment_method),
+        payment_provider = COALESCE(sp.payment_provider, ap.payment_provider, ae.payment_provider),
+        bank_account_id = COALESCE(
+          NULLIF(BTRIM(sp.external_bank_account_id::text), ''),
+          ae.bank_account_id
+        )
+    FROM accounting_payments ap
+    LEFT JOIN sport_payments sp
+      ON ap.source_type = 'sport_center'
+     AND ap.source_doc_id = sp.id
+    WHERE ae.id = ap.entry_id
+      AND ap.source_type = 'sport_center'
+      AND (
+        (sp.company_id IS NOT NULL AND ae.company_id IS DISTINCT FROM sp.company_id)
+        OR (COALESCE(sp.method, ap.payment_method) IS NOT NULL
+            AND ae.payment_method IS DISTINCT FROM COALESCE(sp.method, ap.payment_method))
+        OR (COALESCE(sp.payment_provider, ap.payment_provider) IS NOT NULL
+            AND ae.payment_provider IS DISTINCT FROM COALESCE(sp.payment_provider, ap.payment_provider))
+        OR (
+          NULLIF(BTRIM(sp.external_bank_account_id::text), '') IS NOT NULL
+          AND ae.bank_account_id IS DISTINCT FROM NULLIF(BTRIM(sp.external_bank_account_id::text), '')
+        )
+      )
+  `);
+
+  // Legacy booking journals can be recovered only when exactly one payment
+  // maps to the booking. Ambiguous bookings remain untouched for review.
+  await db.execute(sql`
+    UPDATE accounting_entries ae
+    SET company_id = COALESCE(source.company_id, ae.company_id),
+        payment_method = COALESCE(source.method, ae.payment_method),
+        payment_provider = COALESCE(source.payment_provider, ae.payment_provider),
+        bank_account_id = COALESCE(
+          NULLIF(BTRIM(source.external_bank_account_id::text), ''),
+          ae.bank_account_id
+        )
+    FROM (
+      SELECT
+        ae0.id AS entry_id,
+        MIN(sp.company_id) AS company_id,
+        MIN(sp.method) AS method,
+        MIN(sp.payment_provider) AS payment_provider,
+        MIN(sp.external_bank_account_id::text) AS external_bank_account_id,
+        COUNT(*) AS payment_count
+      FROM accounting_entries ae0
+      JOIN sport_payments sp
+        ON ae0.source = 'sport_center_booking'
+       AND ae0.source_id = sp.booking_id
+      GROUP BY ae0.id
+    ) source
+    WHERE ae.id = source.entry_id
+      AND source.payment_count = 1
+      AND (
+        (source.company_id IS NOT NULL AND ae.company_id IS DISTINCT FROM source.company_id)
+        OR (source.method IS NOT NULL AND ae.payment_method IS DISTINCT FROM source.method)
+        OR (source.payment_provider IS NOT NULL AND ae.payment_provider IS DISTINCT FROM source.payment_provider)
+        OR (
+          NULLIF(BTRIM(source.external_bank_account_id::text), '') IS NOT NULL
+          AND ae.bank_account_id IS DISTINCT FROM NULLIF(BTRIM(source.external_bank_account_id::text), '')
+        )
+      )
+  `);
+
+  logger.info("[AccountingHub] Sport Center payment accounting metadata backfill complete");
 }

@@ -293,8 +293,10 @@ export const accountingEntriesTable = pgTable("accounting_entries", {
   description: text("description"),
   /** Metode pembayaran sumber, mis. cash, transfer, qris. Metadata immutable jurnal. */
   paymentMethod: text("payment_method"),
-   /** Provider pembayaran sumber, mis. Paylabs, Mandiri Direct, GPN. */
-   paymentProvider: text("payment_provider"),
+  /** Provider pembayaran sumber, mis. Paylabs, Mandiri Direct, GPN. */
+  paymentProvider: text("payment_provider"),
+  /** Nomor rekening eksternal sumber pembayaran; bukan ID COA internal. */
+  bankAccountId: text("bank_account_id"),
   status: accountingEntryStatusEnum("status").notNull().default("posted"),
   source: accountingEntrySourceEnum("source").notNull().default("manual"),
   sourceId: integer("source_id"),
@@ -521,8 +523,8 @@ export const accountingPaymentsTable = pgTable("accounting_payments", {
   memo: text("memo"),
   /** Metode pembayaran sumber yang disalin dari modul transaksi. */
   paymentMethod: text("payment_method"),
-   /** Provider pembayaran sumber yang disalin dari modul transaksi. */
-   paymentProvider: text("payment_provider"),
+  /** Provider pembayaran sumber yang disalin dari modul transaksi. */
+  paymentProvider: text("payment_provider"),
   entryId: integer("entry_id").references(() => accountingEntriesTable.id, {
     onDelete: "set null",
   }),
