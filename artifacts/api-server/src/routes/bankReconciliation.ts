@@ -3405,10 +3405,12 @@ router.get("/mutations", async (req, res) => {
             ${sportPaymentTypeSql("sp_h1")} <> 'qris'
             OR (
               ${sportPaymentTypeSql("sp_h1")} = 'qris'
-              AND COALESCE(
-                sp_h1.settlement_date::text,
-                (COALESCE(sp_h1.paid_at::date, sp_h1.created_at::date) + 1)::text
-              ) = bm.transaction_date::text
+              AND (
+                (
+                  COALESCE(sp_h1.paid_at, sp_h1.created_at)
+                  AT TIME ZONE 'Asia/Jakarta'
+                )::date + 1
+              )::text = bm.transaction_date::text
             )
           )
       )
@@ -3676,8 +3678,16 @@ router.get("/mutations", async (req, res) => {
           'taxWithheldAmount', COALESCE(sp.tax_withheld_amount, 0),
           'otherFeeAmount', COALESCE(sp.other_fee_amount, 0),
           'netAmount', GREATEST(0, sp.amount - COALESCE(sp.mdr_amount, 0) - COALESCE(sp.tax_withheld_amount, 0) - COALESCE(sp.other_fee_amount, 0)),
-          'date', COALESCE(sp.paid_at::date, sp.created_at::date),
-          'settlementDate', COALESCE(sp.settlement_date, COALESCE(sp.paid_at::date, sp.created_at::date) + 1),
+          'date', (
+            COALESCE(sp.paid_at, sp.created_at)
+            AT TIME ZONE 'Asia/Jakarta'
+          )::date,
+          'settlementDate', (
+            (
+              COALESCE(sp.paid_at, sp.created_at)
+              AT TIME ZONE 'Asia/Jakarta'
+            )::date + 1
+          ),
           'settlementReference', sp.settlement_reference,
            'settlementStatus', sp.settlement_status,
            'settlementPartial', COALESCE(sp.settlement_status, 'unsettled') IN ('partial', 'partially_settled', 'partially-settled'),

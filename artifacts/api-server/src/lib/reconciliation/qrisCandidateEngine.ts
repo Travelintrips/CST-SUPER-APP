@@ -17,7 +17,10 @@ import {
   type QrisProviderRule,
   type QrisProviderRuleCatalog,
 } from "./providerSettlementRules.js";
-import { businessDayDistance } from "./businessCalendar.js";
+import {
+  businessDayDistance,
+  jakartaDateFromTimestamp,
+} from "./businessCalendar.js";
 
 export type QrisReconciliationStatus = "MATCHED" | "REVIEW" | "UNMATCHED";
 export type QrisProviderDetectionSource =
@@ -131,10 +134,10 @@ function isEligiblePayment(payment: QrisPaymentCandidateInput): boolean {
 }
 
 function calendarDate(value: string | Date | null | undefined): string | null {
-  if (value instanceof Date) {
-    return Number.isNaN(value.getTime()) ? null : value.toISOString().slice(0, 10);
-  }
-  const date = String(value ?? "").trim().slice(0, 10);
+  if (value == null) return null;
+  const raw = value instanceof Date ? null : String(value).trim();
+  if (raw && /^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const date = jakartaDateFromTimestamp(value);
   return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null;
 }
 

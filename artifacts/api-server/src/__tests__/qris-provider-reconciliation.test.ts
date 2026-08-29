@@ -135,6 +135,45 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     expect(result[0]?.reason).toContain("payment_method QRIS");
   });
 
+  it("uses the Jakarta calendar date for a UTC timestamp near midnight", () => {
+    const result = generateQrisMutationBatchCandidates({
+      candidateRule: "payment_method_h_minus_one",
+      payments: [{
+        id: 916,
+        companyId: 1,
+        bankAccountId: null,
+        amount: 200_000,
+        method: "QRIS",
+        status: "paid",
+        paidAt: "2026-08-20T17:30:00.000Z",
+        expectedSettlementDate: null,
+        settlementRuleVersion: null,
+        providerName: null,
+      }],
+      mutations: [{
+        id: 917,
+        companyId: 1,
+        bankAccountId: null,
+        amount: 200_000,
+        transactionDate: "2026-08-22",
+        direction: "IN",
+        source: "bank_import",
+        sourceClassification: "actual_bank_mutation",
+        providerName: null,
+        description: "QRTRAVELI",
+      }],
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.estimatedSettlementDate).toBe("2026-08-22");
+    expect(result[0]?.paymentItems[0]).toMatchObject({
+      paymentId: 916,
+      paidAt: "2026-08-20T17:30:00.000Z",
+      paymentDate: "2026-08-21",
+      expectedSettlementDate: "2026-08-22",
+    });
+  });
+
   it("selects the production account rule by effective settlement window", () => {
     const accountProviderRuleCatalog = accountProviderRuleCatalogFromRows([
       {

@@ -36,4 +36,11 @@ describe("QRIS payment date update route", () => {
     expect(route).toContain("candidateRefreshPending: true");
     expect(route).not.toContain("const refreshed = await generateQrisCandidates");
   });
+
+  it("uses the Jakarta payment date for the H-1 review cohort", () => {
+    expect(routeSource).toContain("AT TIME ZONE 'Asia/Jakarta'");
+    expect(routeSource).not.toContain(
+      "COALESCE(sp_h1.paid_at::date, sp_h1.created_at::date) + 1",
+    );
+  });
 });

@@ -690,9 +690,38 @@ const idr = (n: number | string) =>
 const idrWhole = (n: number | string) =>
   idr(Math.round(Number(n) || 0));
 
+const JAKARTA_TIMEZONE = "Asia/Jakarta";
+
+const calendarDateInJakarta = (value: string | Date | null | undefined): string => {
+  if (value == null) return "";
+  const raw = value instanceof Date ? "" : String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const parsed = value instanceof Date ? value : new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: JAKARTA_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(parsed);
+  const byType = new Map(parts.map(part => [part.type, part.value]));
+  return `${byType.get("year")}-${byType.get("month")}-${byType.get("day")}`;
+};
+
 const fmtDate = (d: string) => {
   if (!d) return "-";
-  try { return new Date(d).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" }); } catch { return d; }
+  const calendarDate = calendarDateInJakarta(d);
+  if (!calendarDate) return d;
+  try {
+    return new Date(`${calendarDate}T12:00:00.000Z`).toLocaleDateString("id-ID", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      timeZone: JAKARTA_TIMEZONE,
+    });
+  } catch {
+    return d;
+  }
 };
 
 const fmtDateTime = (d: string | null) => {
@@ -1153,7 +1182,7 @@ function hasQrisCandidateEvidenceMismatch(mutation: BankMutation): boolean {
 
 function isSameCalendarDate(left: string | null | undefined, right: string | null | undefined): boolean {
   if (!left || !right) return false;
-  return String(left).slice(0, 10) === String(right).slice(0, 10);
+  return calendarDateInJakarta(left) === calendarDateInJakarta(right);
 }
 
 function isQrisCandidate(candidate: Candidate, mutation: BankMutation): boolean {
@@ -3240,7 +3269,7 @@ function QrisMutationCard({
                       const booking = item.bookingNumber ?? item.booking_number ?? (item.booking_id != null ? `SC-${String(item.booking_id).padStart(4, "0")}` : "—");
                       const payment = item.paymentNumber ?? item.payment_number ?? (paymentId != null ? `#${paymentId}` : "—");
                       const paymentDate = item.paymentDate ?? item.paidAt ?? item.paid_at ?? item.date;
-                      const paymentDateIso = paymentDate ? String(paymentDate).slice(0, 10) : "";
+                      const paymentDateIso = calendarDateInJakarta(paymentDate);
                       const canEditPaymentDate = Number.isInteger(Number(paymentId))
                         && Number(paymentId) > 0
                         && onEditPaymentDate != null;
@@ -3367,7 +3396,7 @@ function QrisMutationCard({
             )}
 
             {audit.review_reason && !isMatched && (
-              <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+              <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-white dark:border-amber-800 dark:bg-amber-950">
                 {audit.review_reason}
               </p>
             )}
