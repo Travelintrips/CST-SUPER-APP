@@ -3566,6 +3566,8 @@ function MutationCard({
   const amount = Number(m.amount) || 0;
   const isIN   = m.direction === "IN";
   const isQris = isQrisMutation(m);
+  const bestPaymentType = candidateSportPaymentType(best, m);
+  const hasBankTransferCandidate = bestPaymentType === "bank_transfer";
   const canRematchHistoricalReview = m.status === "manual_review"
     && (
       m.review_code === "MANUAL_REVIEW_REASON_NOT_RECORDED"
@@ -3687,12 +3689,18 @@ function MutationCard({
                   <div className="mt-2 rounded-md border border-amber-800/60 bg-card px-3 py-2 text-xs">
                     <div className="flex items-center justify-between gap-2">
                       <p className="font-semibold text-amber-300">
-                        Transaksi ditemukan untuk review ({evidence.transactions.length})
+                        {hasBankTransferCandidate
+                          ? `Kandidat Transfer Bank ditemukan untuk review (${evidence.transactions.length})`
+                          : `Transaksi ditemukan untuk review (${evidence.transactions.length})`}
                       </p>
-                      <span className="text-[10px] text-amber-400">Belum kandidat QRIS valid</span>
+                      <span className="text-[10px] text-amber-400">
+                        {hasBankTransferCandidate ? "Bukan kandidat QRIS" : "Belum kandidat QRIS valid"}
+                      </span>
                     </div>
                     <p className="mt-1 text-[11px] text-muted-foreground">
-                      Transaksi tetap ditampilkan sebagai bukti pencocokan, tetapi belum dapat di-approve otomatis sebagai settlement QRIS.
+                      {hasBankTransferCandidate
+                        ? "Payment sumber ini tercatat Transfer Bank. Sistem menampilkannya hanya sebagai kandidat matching umum; kandidat ini tidak boleh dimasukkan atau di-approve sebagai settlement QRIS."
+                        : "Transaksi tetap ditampilkan sebagai bukti pencocokan, tetapi belum dapat di-approve otomatis sebagai settlement QRIS."}
                     </p>
                     <div className="mt-1.5 max-h-44 space-y-1 overflow-y-auto">
                       {evidence.transactions.map((transaction, index) => (
