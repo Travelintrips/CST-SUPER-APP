@@ -191,6 +191,54 @@ function bankMutationPaymentTypeSql(alias = "bm"): string {
   END`;
 }
 
+/**
+ * A bank mutation marked `matched` is not automatically ready for QRIS
+ * approval. QRIS uses its own settlement candidate contract, so the latest
+ * active candidate must also be a same-day H-1 `MATCHED` candidate. This
+ * keeps legacy/generic matching from promoting an unresolved QRIS mutation
+ * into the approval queue.
+ */
+function qrisMutationReadyForApprovalSql(alias = "bm"): string {
+  return `(
+    ${bankMutationPaymentTypeSql(alias)} <> 'qris'
+    OR EXISTS (
+      SELECT 1
+      FROM qris_mutation_batch_candidates qris_ready
+      WHERE qris_ready.mutation_id = ${alias}.id
+        AND qris_ready.status NOT IN (
+          'approved', 'completed', 'superseded', 'stale', 'ineligible'
+        )
+        AND UPPER(COALESCE(qris_ready.reconciliation_status, '')) = 'MATCHED'
+        AND qris_ready.estimated_settlement_date::text = ${alias}.transaction_date::text
+        AND NOT EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(COALESCE(qris_ready.payment_items, '[]'::jsonb)) qris_item
+          WHERE COALESCE(
+            qris_item->>'expectedSettlementDate',
+            qris_item->>'expected_settlement_date'
+          ) IS DISTINCT FROM ${alias}.transaction_date::text
+        )
+        AND qris_ready.id = (
+          SELECT qris_latest.id
+          FROM qris_mutation_batch_candidates qris_latest
+          WHERE qris_latest.mutation_id = ${alias}.id
+            AND qris_latest.status NOT IN (
+              'approved', 'completed', 'superseded', 'stale', 'ineligible'
+            )
+          ORDER BY qris_latest.updated_at DESC, qris_latest.id DESC
+          LIMIT 1
+        )
+    )
+  )`;
+}
+
+function qrisMutationNeedsMatchingSql(alias = "bm"): string {
+  return `(
+    ${bankMutationPaymentTypeSql(alias)} = 'qris'
+    AND NOT ${qrisMutationReadyForApprovalSql(alias)}
+  )`;
+}
+
 function isSportPaymentType(value: string | undefined): value is SportPaymentType {
   return value === "bank_transfer" || value === "qris" || value === "paylabs";
 }
@@ -3520,6 +3568,20 @@ router.get("/mutations", async (req, res) => {
           AND NOT ${validGeneric}
         )
       )`);
+    } else if (status === "unmatched") {
+      // A generic matching run can leave a QRIS bank row as `matched` even
+      // though its provider-aware QRIS candidate is still UNMATCHED/REVIEW or
+      // missing. Keep that row in the unresolved queue.
+      bmFilters.push(`(
+        bm.status = 'unmatched'
+        OR (bm.status = 'matched' AND ${qrisMutationNeedsMatchingSql("bm")})
+      )`);
+    } else if (status === "matched") {
+      // The approval queue must not contain unresolved QRIS rows.
+      bmFilters.push(`(
+        bm.status = 'matched'
+        AND ${qrisMutationReadyForApprovalSql("bm")}
+      )`);
     } else {
       bmFilters.push(`bm.status = '${esc(status)}'`);
     }
@@ -5448,9 +5510,15 @@ router.post("/run-matching", async (req, res) => {
 // ─── GET /api/bank-reconciliation/summary ────────────────────────────────────
 router.get("/summary", async (req, res) => {
   await runBankReconciliationCoreMigration();
+  // The effective status below depends on provider-aware QRIS candidates.
+  // Ensure their table exists before the summary is requested on a cold start.
+  await runQrisSettlementMigration();
   const { rows } = await db.execute(sql.raw(`
     SELECT
       CASE
+        WHEN bm.status = 'matched'
+          AND ${qrisMutationNeedsMatchingSql("bm")}
+        THEN 'unmatched'
         WHEN bm.status = 'matched'
           AND NOT EXISTS (
             SELECT 1
