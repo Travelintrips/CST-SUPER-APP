@@ -3127,7 +3127,7 @@ function QrisMutationCard({
               ))}
             </div>
             {hasCanonicalSettlementCandidate && canonicalSettlementDetails && (
-              <div className="mt-3 rounded-md border border-indigo-300 bg-indigo-50 px-3 py-2.5 text-xs text-indigo-950 dark:border-indigo-800 dark:bg-indigo-950 dark:text-indigo-100">
+              <div className="mt-3 rounded-md border border-indigo-300 bg-indigo-50 px-3 py-2.5 text-xs text-indigo-950 dark:border-indigo-800 dark:bg-indigo-950 dark:text-white">
                 <div className="flex items-start gap-2">
                   <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-indigo-600 dark:text-indigo-300" />
                   <div className="min-w-0 flex-1 space-y-1">
