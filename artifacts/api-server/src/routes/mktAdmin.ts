@@ -1,7 +1,8 @@
 /**
  * mktAdmin.ts — Phase 2A.2 + Phase 2C + Phase 2E.1: Admin API untuk Marketplace
  *
- * Semua endpoint dilindungi requireAdmin middleware (BizPortal session).
+ * Semua endpoint dilindungi explicit Customer Portal Marketplace Operator
+ * authority (internal BizPortal session + Company 1 + Marketplace permission).
  *
  * Endpoints (Phase 2A.2 — Dual Write Reliability):
  *   GET  /api/mkt/admin/dual-write/stats       — stats 24h + all-time
@@ -26,7 +27,7 @@
 import { Router } from "express";
 import { rateLimit } from "express-rate-limit";
 import { z } from "zod/v4";
-import { requireAdmin } from "../lib/requireAdmin.js";
+import { requireMarketplaceOperator as requireAdmin } from "../lib/marketplaceAuthorization.js";
 import { ObjectStorageService } from "../lib/objectStorage.js";
 import { imagePdfUpload } from "../lib/uploadMiddleware.js";
 import { validateMagicBytes } from "../lib/uploadValidation.js";

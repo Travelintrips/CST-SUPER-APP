@@ -169,6 +169,7 @@ interface GroupItem {
   basePath: string;
   icon: LucideIcon;
   roles: string[];
+  permissionKeys?: string[];
   children: { titleKey: string; href: string; icon: LucideIcon; roles?: string[]; companyCodes?: string[]; devOnly?: boolean }[];
   companyCodes?: string[];
   allowedCompanyIds?: number[];
@@ -287,10 +288,11 @@ export function AppShell({ children, noPadding }: AppShellProps) {
     // ── 5b. MARKETPLACE ───────────────────────────────────────────────
     {
       type: "group",
-      titleKey: "Marketplace",
+      titleKey: "Customer Portal Marketplace",
       basePath: "/marketplace",
       icon: ShoppingBag,
-      roles: ["admin", "owner", "super_admin"],
+      roles: ALL_ROLES,
+      permissionKeys: ["customer_portal.marketplace", "customer_portal.marketplace:view", "customer_portal.marketplace:manage"],
       children: [
         { titleKey: "RFQ", href: "/marketplace/rfqs", icon: List },
         { titleKey: "Purchase Orders", href: "/marketplace/purchase-orders", icon: Package },
@@ -488,6 +490,12 @@ export function AppShell({ children, noPadding }: AppShellProps) {
   const tenantOverdueCount = tenantDashboardNav?.invoices?.overdue ?? 0;
 
   const customRolePermissions = (dbUser as any)?.customRolePermissions as string[] | null | undefined;
+  const hasNavPermission = (keys?: string[]): boolean => {
+    if (!keys || keys.length === 0) return true;
+    if ((dbUser?.role as string | undefined) === "super_admin") return true;
+    if (!customRolePermissions) return false;
+    return keys.some((key) => customRolePermissions.includes(key));
+  };
 
   const { hiddenItems, itemOrder, childOrder, toggle: toggleHidden, reorder, reorderChildren, reset: resetHidden } = useNavPreferences();
   const [customizeMode, setCustomizeMode] = useState(false);
@@ -549,6 +557,16 @@ export function AppShell({ children, noPadding }: AppShellProps) {
   // Helper: apakah custom-role user punya akses ke path ini?
   const canAccessPath = (p: string): boolean => {
     if (!customRolePermissions) return true; // bukan custom-role, lolos
+    if (
+      (p.startsWith("/marketplace") || p === "/purchase/vendor-completion") &&
+      hasNavPermission([
+        "customer_portal.marketplace",
+        "customer_portal.marketplace:view",
+        "customer_portal.marketplace:manage",
+      ])
+    ) {
+      return true;
+    }
     const seg = p.replace(/^\//, "").split("/")[0] ?? "";
     const full = p.replace(/^\//, "");
     return (
@@ -561,6 +579,7 @@ export function AppShell({ children, noPadding }: AppShellProps) {
 
   const filteredNav = navItems.filter((item) => {
     if (!dbUser?.role) return false;
+    if (!hasNavPermission(item.type === "group" ? item.permissionKeys : undefined)) return false;
 
     // Filter berdasarkan company code
     if (item.companyCodes && item.companyCodes.length > 0) {

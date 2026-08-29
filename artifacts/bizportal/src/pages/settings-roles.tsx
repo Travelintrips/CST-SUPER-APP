@@ -38,6 +38,7 @@ const MODULES = [
   { key: "logistics",       label: "Logistik",            group: "Modul ERP" },
   { key: "trading",         label: "Trading",             group: "Modul ERP" },
   { key: "expense",         label: "Pengeluaran",         group: "Modul ERP" },
+  { key: "customer_portal.marketplace", label: "Customer Portal Marketplace", group: "Customer Portal" },
   { key: "correspondences", label: "Korespondensi",       group: "Lainnya" },
   { key: "media",           label: "Media Manager",       group: "Lainnya" },
   { key: "holding",         label: "Holding",             group: "Lainnya" },
