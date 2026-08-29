@@ -5133,6 +5133,7 @@ export default function BankReconciliationPage() {
     paymentDate: string;
   } | null>(null);
   const [qrisPaymentDate, setQrisPaymentDate] = useState("");
+  const [qrisCandidateRefreshPending, setQrisCandidateRefreshPending] = useState(false);
 
   // ── Queries ──────────────────────────────────────────────────────────────
   const queryKey = ["bank-reconciliation", filterStatus, filterDir, filterProvider, filterPaymentType, filterFrom, filterTo, filterSearch, page];
@@ -5238,7 +5239,7 @@ export default function BankReconciliationPage() {
         message?: string;
       };
     },
-    onSuccess: (result) => {
+    onSuccess: (result, variables) => {
       setQrisDateTarget(null);
       toast({
         title: "Tanggal payment berhasil disimpan",
@@ -5249,7 +5250,46 @@ export default function BankReconciliationPage() {
       // The date mutation has already committed successfully. Refresh the
       // visible lists without keeping the save mutation in a pending state;
       // candidate regeneration on the API is also intentionally asynchronous.
-      void Promise.allSettled([refetchQrisAudit(), refetch()]).then(() => {
+      setQrisCandidateRefreshPending(true);
+      void (async () => {
+        const retryDelays = [0, 750, 1500, 3000, 5000];
+        let candidateUpdated = false;
+
+        for (const delay of retryDelays) {
+          if (delay > 0) {
+            await new Promise(resolve => setTimeout(resolve, delay));
+          }
+          try {
+            const refreshed = await refetchQrisAudit();
+            candidateUpdated = (refreshed.data?.candidates ?? []).some(candidate =>
+              (candidate.payment_items ?? []).some(item => {
+                const itemPaymentId = Number(item.payment_id ?? item.paymentId);
+                const itemPaymentDate = String(
+                  item.paymentDate ?? item.paidAt ?? item.paid_at ?? item.date ?? "",
+                ).slice(0, 10);
+                return itemPaymentId === variables.paymentId
+                  && itemPaymentDate === variables.paymentDate;
+              }),
+            );
+            if (candidateUpdated) break;
+          } catch {
+            // The next poll can still observe the background regeneration.
+          }
+        }
+
+        await Promise.allSettled([refetch()]);
+        void qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
+        setQrisCandidateRefreshPending(false);
+        toast({
+          title: candidateUpdated
+            ? "Kandidat QRIS sudah diperbarui"
+            : "Kandidat QRIS masih diproses",
+          description: candidateUpdated
+            ? `Tanggal payment sudah menjadi ${variables.paymentDate}.`
+            : "Data sumber sudah tersimpan. Kandidat akan diperbarui otomatis pada refresh berikutnya.",
+        });
+      })().catch(() => {
+        setQrisCandidateRefreshPending(false);
         void qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
       });
     },
