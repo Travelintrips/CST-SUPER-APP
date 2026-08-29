@@ -18,6 +18,7 @@ export const logisticOrdersTable = pgTable("logistic_orders", {
   id: serial("id").primaryKey(),
   orderNumber: text("order_number").notNull().unique(),
   companyId: integer("company_id").references(() => companiesTable.id, { onDelete: "set null" }),
+  portalCustomerId: integer("portal_customer_id"),
   companyName: text("company_name").notNull(),
   customerName: text("customer_name").notNull(),
   email: text("email").notNull(),

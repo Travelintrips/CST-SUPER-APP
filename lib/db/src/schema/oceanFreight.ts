@@ -62,6 +62,7 @@ export const oceanFreightOrdersTable = pgTable("ocean_freight_orders", {
   id: serial("id").primaryKey(),
   orderNumber: text("order_number").notNull().unique(),
   companyId: integer("company_id").references(() => companiesTable.id, { onDelete: "set null" }),
+  portalCustomerId: integer("portal_customer_id"),
   customerId: integer("customer_id"),
   customerName: text("customer_name").notNull().default(""),
   customerPhone: text("customer_phone"),

@@ -32,6 +32,7 @@ import { sendMail, isSmtpConfigured } from "../mailer.js";
 import { saveAndBroadcast } from "../notificationStore.js";
 import { transitionLogisticOrderStatus } from "./logisticOrderStatusService.js";
 import { resolvePortalCustomerCompanyId } from "./portalCompanyScope.js";
+import { getPortalCustomerContext } from "./portalCustomerContextService.js";
 
 // ─── Typed Error ───────────────────────────────────────────────────────────────
 
@@ -294,12 +295,26 @@ export async function listLogisticOrders(portalCustomerId: number) {
   if (!customer) throw new LogisticOrderServiceError(401, "Customer not found");
 
   const baseQuery = db.select().from(logisticOrdersTable);
-  const orders =
-    customer.role === "admin"
-      ? await baseQuery.orderBy(sql`${logisticOrdersTable.createdAt} DESC`)
-      : await baseQuery
-          .where(eq(logisticOrdersTable.email, customer.email))
-          .orderBy(sql`${logisticOrdersTable.createdAt} DESC`);
+  let orders;
+  if (customer.role === "admin") {
+    orders = await baseQuery.orderBy(sql`${logisticOrdersTable.createdAt} DESC`);
+  } else {
+    const context = await getPortalCustomerContext(portalCustomerId);
+    if (!context.customerType) {
+      throw new LogisticOrderServiceError(422, "Profil customer belum menyelesaikan tipe akun.");
+    }
+    const ownership = context.customerType === "individual"
+      ? eq(logisticOrdersTable.portalCustomerId, portalCustomerId)
+      : context.companyId
+        ? eq(logisticOrdersTable.companyId, context.companyId)
+        : null;
+    if (!ownership) {
+      throw new LogisticOrderServiceError(422, "Customer Portal belum memiliki membership perusahaan aktif.");
+    }
+    orders = await baseQuery
+      .where(ownership)
+      .orderBy(sql`${logisticOrdersTable.createdAt} DESC`);
+  }
 
   return orders.map((o) => ({
     id: o.id,

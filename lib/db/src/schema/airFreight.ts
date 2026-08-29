@@ -18,6 +18,7 @@ export const airFreightOrdersTable = pgTable("air_freight_orders", {
   id: serial("id").primaryKey(),
   orderNumber: text("order_number").notNull().unique(),
   companyId: integer("company_id").references(() => companiesTable.id, { onDelete: "set null" }),
+  portalCustomerId: integer("portal_customer_id"),
   customerName: text("customer_name").notNull(),
   customerEmail: text("customer_email"),
   customerPhone: text("customer_phone"),

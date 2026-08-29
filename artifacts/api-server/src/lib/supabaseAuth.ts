@@ -270,6 +270,30 @@ export async function requireCustomerPortalAuth(
   });
 }
 
+/**
+ * Optional customer auth for public service forms.
+ *
+ * Anonymous submissions remain supported where the product explicitly allows
+ * guest checkout.  Once a browser sends either portal session mechanism, an
+ * invalid session is rejected and a valid non-customer role cannot be used to
+ * submit a customer order.
+ */
+export function optionalCustomerPortalAuth(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  const cookieToken = (req.cookies as Record<string, string> | undefined)?.[PORTAL_SESSION_COOKIE];
+  const bearerToken = req.headers.authorization?.startsWith("Bearer ")
+    ? req.headers.authorization.slice(7)
+    : undefined;
+  if (!cookieToken && !bearerToken) {
+    next();
+    return;
+  }
+  void requireCustomerPortalAuth(req, res, next);
+}
+
 // ── requirePortalAdmin ────────────────────────────────────────────────────────
 // C1-REMEDIATION: accepts HttpOnly cookie first, then Bearer fallback.
 export async function requirePortalAdmin(req: Request, res: Response, next: NextFunction) {

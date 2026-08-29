@@ -6,6 +6,11 @@ import { getAdminGroupWa, getAdminWa } from "../lib/adminWa.js";
 import { getPreferredDomain } from "../lib/domain.js";
 
 import { logTokenAccess } from "../lib/tokenGuard.js";
+import {
+  optionalCustomerPortalAuth,
+  type PortalAuthReq,
+} from "../lib/supabaseAuth.js";
+import { getPortalCustomerContext } from "../lib/services/portalCustomerContextService.js";
 
 const router = Router();
 
@@ -128,13 +133,41 @@ router.post("/public/estimate", async (req: Request, res: Response) => {
 });
 
 // ── POST /public/orders — create order from customer portal (no admin auth) ──
-router.post("/public/orders", async (req: Request, res: Response) => {
+router.post("/public/orders", optionalCustomerPortalAuth, async (req: Request, res: Response) => {
   try {
     const body = req.body ?? {};
+    const portalCustomerId = (req as Partial<PortalAuthReq>).portalCustomerId;
+    let context: Awaited<ReturnType<typeof getPortalCustomerContext>> | null = null;
+    if (portalCustomerId) {
+      try {
+        context = await getPortalCustomerContext(portalCustomerId);
+      } catch (error) {
+        if (error instanceof Error && "statusCode" in error) {
+          return res.status(Number((error as Error & { statusCode: number }).statusCode))
+            .json({ error: error.message });
+        }
+        throw error;
+      }
+    }
+    if (context?.customerType === null) {
+      return res.status(422).json({ error: "Profil customer belum menyelesaikan tipe akun." });
+    }
+    if (context?.customerType === "company" && !context.companyId) {
+      return res.status(422).json({ error: "Customer Portal belum memiliki membership perusahaan aktif." });
+    }
+    const customerName = context?.customer.name ?? String(body.customer_name ?? "");
+    const customerPhone = context?.customer.phone ?? String(body.customer_phone ?? "");
+    const customerEmail = context?.customer.email ?? (body.customer_email ? String(body.customer_email) : null);
+    const customerCompany = context
+      ? context.company?.name ?? "Individual"
+      : (body.company_name ? String(body.company_name) : null);
 
     const REQUIRED = ["customer_name","customer_phone","origin_airport","destination_airport","chargeable_weight"];
     for (const f of REQUIRED) {
-      if (!body[f] && body[f] !== 0) {
+      const value = f === "customer_name"
+        ? customerName
+        : f === "customer_phone" ? customerPhone : body[f];
+      if (!value && value !== 0) {
         return res.status(400).json({ error: `Field ${f} wajib diisi` });
       }
     }
@@ -150,7 +183,8 @@ router.post("/public/orders", async (req: Request, res: Response) => {
     const r = await db.execute(sql`
       INSERT INTO air_freight_orders (
         order_number,
-        customer_name, customer_phone, customer_email,
+        company_id, portal_customer_id,
+        customer_name, customer_phone, customer_email, customer_company,
         origin_city, origin_airport, destination_city, destination_airport,
         trade_type, service_mode, service_level, incoterm,
         commodity, cargo_type,
@@ -162,9 +196,11 @@ router.post("/public/orders", async (req: Request, res: Response) => {
         admin_notes, price_status, status, source
       ) VALUES (
         ${orderNumber},
-        ${String(body.customer_name ?? "")},
-        ${String(body.customer_phone ?? "")},
-        ${String(body.customer_email ?? "")},
+        ${context?.companyId ?? null}, ${context?.customer.id ?? null},
+        ${customerName},
+        ${customerPhone},
+        ${customerEmail},
+        ${customerCompany},
         ${String(body.origin_city ?? "")},
         ${String(body.origin_airport ?? "").toUpperCase()},
         ${String(body.destination_city ?? "")},

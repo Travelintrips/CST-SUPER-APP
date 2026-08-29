@@ -6,7 +6,14 @@ import { requireAdmin } from "../lib/requireAdmin.js";
 import { sendViaService as sendWhatsApp } from "../lib/waTransport.js";
 import { getAdminGroupWa, getAdminWa } from "../lib/adminWa.js";
 import { logger } from "../lib/logger.js";
-import { requirePortalAuth, type PortalAuthReq } from "../lib/supabaseAuth.js";
+import {
+  optionalCustomerPortalAuth,
+  type PortalAuthReq,
+} from "../lib/supabaseAuth.js";
+import {
+  getPortalCustomerContext,
+  PortalCustomerContextError,
+} from "../lib/services/portalCustomerContextService.js";
 
 const router = Router();
 
@@ -17,6 +24,8 @@ db.execute(sql`
     id                    SERIAL PRIMARY KEY,
     booking_number        TEXT NOT NULL UNIQUE,
     customer_id           INTEGER,
+    portal_customer_id    INTEGER,
+    company_id            INTEGER,
     vehicle_type          TEXT NOT NULL,
     vehicle_name          TEXT NOT NULL,
     area_pickup           TEXT NOT NULL,
@@ -54,6 +63,8 @@ db.execute(sql`
 // Migrate existing table — add new columns if missing
 Promise.all([
   db.execute(sql`ALTER TABLE trucking_booking_requests ADD COLUMN IF NOT EXISTS customer_id INTEGER`),
+  db.execute(sql`ALTER TABLE trucking_booking_requests ADD COLUMN IF NOT EXISTS portal_customer_id INTEGER`),
+  db.execute(sql`ALTER TABLE trucking_booking_requests ADD COLUMN IF NOT EXISTS company_id INTEGER`),
   db.execute(sql`ALTER TABLE trucking_booking_requests ADD COLUMN IF NOT EXISTS estimated_distance_km NUMERIC`),
   db.execute(sql`ALTER TABLE trucking_booking_requests ADD COLUMN IF NOT EXISTS estimated_price NUMERIC`),
   db.execute(sql`ALTER TABLE trucking_booking_requests ADD COLUMN IF NOT EXISTS pricing_breakdown JSONB`),
@@ -186,22 +197,8 @@ ${b.estimatedDistanceKm ? `Jarak Estimasi: ${b.estimatedDistanceKm} km` : ""}
 // ── POST /api/trucking/bookings ───────────────────────────────────────────────
 // Optional portal auth — if token present, capture customer_id; otherwise proceed as guest
 
-router.post("/", async (req: Request, res: Response) => {
-  // Try to get portal customer_id if token is present (optional auth)
-  let customerId: number | null = null;
-  const authHeader = req.headers.authorization;
-  if (authHeader?.startsWith("Bearer ")) {
-    try {
-      await requirePortalAuth(req as Parameters<typeof requirePortalAuth>[0], res, () => {
-        customerId = (req as PortalAuthReq).portalCustomerId ?? null;
-      });
-      // If requirePortalAuth sent a response (401), stop here
-      if (res.headersSent) return;
-    } catch {
-      // Ignore auth errors — allow guest booking
-    }
-  }
-
+router.post("/", optionalCustomerPortalAuth, async (req: Request, res: Response) => {
+  const customerId = (req as Partial<PortalAuthReq>).portalCustomerId ?? null;
   const parsed = BookingSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ message: "Data tidak valid", errors: parsed.error.flatten() });
@@ -209,12 +206,30 @@ router.post("/", async (req: Request, res: Response) => {
   }
 
   const b = parsed.data;
+  let context: Awaited<ReturnType<typeof getPortalCustomerContext>> | null = null;
+  if (customerId) {
+    try {
+      context = await getPortalCustomerContext(customerId);
+    } catch (error) {
+      if (error instanceof PortalCustomerContextError) {
+        return res.status(error.statusCode).json({ message: error.message });
+      }
+      throw error;
+    }
+    if (!context.customerType) {
+      return res.status(422).json({ message: "Profil customer belum menyelesaikan tipe akun." });
+    }
+    if (context.customerType === "company" && !context.companyId) {
+      return res.status(422).json({ message: "Customer Portal belum memiliki membership perusahaan aktif." });
+    }
+  }
   const bookingNumber = generateBookingNumber();
 
   try {
     await db.execute(sql`
       INSERT INTO trucking_booking_requests (
-        booking_number, customer_id, vehicle_type, vehicle_name,
+        booking_number, customer_id, portal_customer_id, company_id,
+        vehicle_type, vehicle_name,
         area_pickup, alamat_pickup, pic_pickup, hp_pickup,
         area_delivery, alamat_delivery, pic_penerima, hp_penerima,
         jadwal_type, tanggal_pickup, jam_pickup,
@@ -224,7 +239,8 @@ router.post("/", async (req: Request, res: Response) => {
         candidate_vendor_ids, selected_vendor_id, source,
         status
       ) VALUES (
-        ${bookingNumber}, ${customerId}, ${b.vehicleType}, ${b.vehicleName},
+        ${bookingNumber}, ${customerId}, ${context?.customer.id ?? null}, ${context?.companyId ?? null},
+        ${b.vehicleType}, ${b.vehicleName},
         ${b.areaPickup}, ${b.alamatPickup}, ${b.picPickup}, ${b.hpPickup},
         ${b.areaDelivery}, ${b.alamatDelivery}, ${b.picPenerima}, ${b.hpPenerima},
         ${b.jadwalType}, ${b.tanggalPickup ?? null}, ${b.jamPickup ?? null},

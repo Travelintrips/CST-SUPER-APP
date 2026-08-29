@@ -32,15 +32,15 @@ import { isPpjkOrder, autoCreatePpjkOrderInTx } from "../lib/ppjkAutoCreate.js";
 import { calcTax, calcGrandTotal } from "../lib/taxHelper.js";
 import { resolveCompanyId } from "../lib/resolveCompany.js";
 import { assertCompanyAccess } from "../lib/assertCompanyAccess.js";
-import { requirePortalAdmin } from "../lib/supabaseAuth.js";
+import { optionalCustomerPortalAuth, requirePortalAdmin, type PortalAuthReq } from "../lib/supabaseAuth.js";
 import { verifyPortalJwt } from "../lib/portalJwt.js";
 import { verifySupabaseToken } from "../lib/supabaseAdmin.js";
 import { externalIntegrationsDisabled } from "../lib/safeDev.js";
-import {
-  PortalCompanyScopeError,
-  resolvePortalCustomerCompanyIdByEmail,
-} from "../lib/services/portalCompanyScope.js";
 import { normalizeCompanyId } from "../lib/services/portalCompanyScopeUtils.js";
+import {
+  getPortalCustomerContext,
+  PortalCustomerContextError,
+} from "../lib/services/portalCustomerContextService.js";
 
 // Best-effort: resolve the authenticated portal customer's email from an
 // Authorization bearer token, if present and valid. Returns null on any
@@ -352,7 +352,7 @@ async function resolveTemplateForCategory(categoryKey: string | null | undefined
 // ─── PUBLIC ROUTES (no auth required) ────────────────────────────────────────
 
 // POST /api/logistic/orders — create order (public customer portal endpoint)
-logisticOrdersPublicRouter.post("/", async (req: Request, res: Response) => {
+logisticOrdersPublicRouter.post("/", optionalCustomerPortalAuth, async (req: Request, res: Response) => {
   // [C4-FIX] IP-based rate limit: prevent bot flooding
   const clientIp = ((req.ip ?? req.socket?.remoteAddress) || "unknown").replace(/^::ffff:/, "");
   if (!_checkPublicOrderRate(clientIp)) {
@@ -365,12 +365,43 @@ logisticOrdersPublicRouter.post("/", async (req: Request, res: Response) => {
   }
   const body = parsed.data as any;
 
+  // An authenticated request is always owned by the session customer.  The
+  // contact/company fields in the browser payload are display-only and cannot
+  // select another customer or tenant.
+  const authenticatedCustomerId = (req as Partial<PortalAuthReq>).portalCustomerId;
+  let ownerContext: Awaited<ReturnType<typeof getPortalCustomerContext>> | null = null;
+  if (authenticatedCustomerId) {
+    try {
+      ownerContext = await getPortalCustomerContext(authenticatedCustomerId);
+    } catch (error) {
+      if (error instanceof PortalCustomerContextError) {
+        return res.status(error.statusCode).json({ message: error.message });
+      }
+      throw error;
+    }
+    if (!ownerContext.customerType) {
+      return res.status(422).json({ message: "Profil customer belum menyelesaikan tipe akun." });
+    }
+    if (ownerContext.customerType === "company" && !ownerContext.companyId) {
+      return res.status(422).json({ message: "Customer Portal belum memiliki membership perusahaan aktif." });
+    }
+  }
+
+  const orderCustomerName = ownerContext?.customer.name ?? body.customerName;
+  const orderEmail = ownerContext?.customer.email ?? body.email;
+  const orderPhone = ownerContext?.customer.phone ?? body.phone;
+  const orderCompanyName = ownerContext
+    ? ownerContext.company?.name ?? "Individual"
+    : body.companyName;
+  const orderCompanyId = ownerContext?.companyId ?? null;
+  const orderPortalCustomerId = ownerContext?.customer.id ?? null;
+
   // ── Extra validation (beyond generated Zod schema) ───────────────────────
   const extraErrors: string[] = [];
-  if (!body.customerName.trim()) extraErrors.push("customerName tidak boleh kosong");
-  if (!body.email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email.trim()))
+  if (!String(orderCustomerName ?? "").trim()) extraErrors.push("customerName tidak boleh kosong");
+  if (!String(orderEmail ?? "").trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(orderEmail ?? "").trim()))
     extraErrors.push("Format email tidak valid");
-  if (!body.phone.trim()) extraErrors.push("phone tidak boleh kosong");
+  if (!String(orderPhone ?? "").trim()) extraErrors.push("phone tidak boleh kosong");
   if (body.subtotal < 0) extraErrors.push("subtotal tidak boleh negatif");
   if (body.tax < 0) extraErrors.push("tax tidak boleh negatif");
   if (body.grandTotal < 0) extraErrors.push("grandTotal tidak boleh negatif");
@@ -395,7 +426,7 @@ logisticOrdersPublicRouter.post("/", async (req: Request, res: Response) => {
     .select({ id: logisticOrdersTable.id, orderNumber: logisticOrdersTable.orderNumber })
     .from(logisticOrdersTable)
     .where(and(
-      eq(logisticOrdersTable.email, body.email),
+      eq(logisticOrdersTable.email, orderEmail),
       gte(logisticOrdersTable.createdAt, oneMinuteAgo),
     ))
     .limit(1);
@@ -408,16 +439,6 @@ logisticOrdersPublicRouter.post("/", async (req: Request, res: Response) => {
 
   const orderNumber = generateOrderNumber();
 
-  let portalCompanyId: number;
-  try {
-    portalCompanyId = await resolvePortalCustomerCompanyIdByEmail(body.email, { required: true }) as number;
-  } catch (error) {
-    if (error instanceof PortalCompanyScopeError) {
-      return res.status(error.statusCode).json({ message: error.message });
-    }
-    throw error;
-  }
-
   // Step 2: resolve Product Template jika categoryKey dikirim
   const templateInfo = await resolveTemplateForCategory(body.categoryKey ?? null);
 
@@ -425,11 +446,12 @@ logisticOrdersPublicRouter.post("/", async (req: Request, res: Response) => {
   // If PPJK insert fails, the logistic order is rolled back too. No fire-and-forget.
   const orderValues = {
     orderNumber,
-    companyId: portalCompanyId,
-    companyName: body.companyName,
-    customerName: body.customerName,
-    email: body.email,
-    phone: body.phone,
+    companyId: orderCompanyId,
+    portalCustomerId: orderPortalCustomerId,
+    companyName: orderCompanyName,
+    customerName: orderCustomerName,
+    email: orderEmail,
+    phone: orderPhone,
     orderType: body.orderType ?? "shipment",
     shipmentType: body.shipmentType ?? "",
     origin: body.origin ?? "",
@@ -484,10 +506,10 @@ logisticOrdersPublicRouter.post("/", async (req: Request, res: Response) => {
       await autoCreatePpjkOrderInTx(tx as any, {
         portalOrderId: o.id,
         companyId: (o as any).companyId ?? null,
-        customerName: body.customerName,
-        customerEmail: body.email,
-        customerPhone: body.phone,
-        customerCompany: body.companyName || null,
+         customerName: orderCustomerName,
+         customerEmail: orderEmail,
+         customerPhone: orderPhone,
+         customerCompany: orderCompanyName || null,
         shipmentType: body.shipmentType ?? "",
         commodity: body.commodity ?? null,
         grossWeight: body.grossWeight != null ? String(body.grossWeight) : null,
@@ -556,10 +578,10 @@ logisticOrdersPublicRouter.post("/", async (req: Request, res: Response) => {
 sendLogisticOrderNotification({
     id: order.id,
     orderNumber,
-    customerName: body.customerName,
-    companyName: body.companyName,
-    email: body.email,
-    phone: body.phone,
+    customerName: orderCustomerName,
+    companyName: orderCompanyName,
+    email: orderEmail,
+    phone: orderPhone,
     orderType: body.orderType ?? "shipment",
     shipmentType: body.shipmentType ?? "",
     origin: body.origin ?? "",

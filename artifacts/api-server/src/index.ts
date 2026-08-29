@@ -161,6 +161,7 @@ import { runCostCenterMigration } from "./lib/costCenterMigration.js";
 let runDriverPodMigration: () => Promise<void>;
 let runDriverAssignmentMigration: () => Promise<void>;
 import { runLogisticsRatesMigration } from "./lib/logisticsRatesMigration.js";
+import { runLogisticsOwnershipMigration } from "./lib/logisticsOwnershipMigration.js";
 import { runProductVolumeCbmMigration } from "./routes/ecommerce.js";
 import { db, getPoolConfig } from "@workspace/db";
 import { sql } from "drizzle-orm";
@@ -1003,6 +1004,8 @@ async function runCriticalPreStartMigrations() {
 
   // Create logistics rate tables (needed before first request, not deferrable)
   await runLogisticsRatesMigration();
+  // Keep authenticated customer ownership distinct from display contact fields.
+  await runLogisticsOwnershipMigration();
 
   // Buat tabel wa_otp_codes (diperlukan untuk WA OTP login BizPortal)
   await db.execute(sql`

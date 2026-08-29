@@ -6,6 +6,14 @@ import { randomBytes } from "crypto";
 import { sendViaService as sendWhatsApp } from "../lib/waTransport.js";
 import { getAdminGroupWa } from "../lib/adminWa.js";
 import { logger } from "../lib/logger.js";
+import {
+  optionalCustomerPortalAuth,
+  type PortalAuthReq,
+} from "../lib/supabaseAuth.js";
+import {
+  getPortalCustomerContext,
+  PortalCustomerContextError,
+} from "../lib/services/portalCustomerContextService.js";
 
 export const oceanFreightPublicRouter = Router();
 
@@ -441,14 +449,38 @@ oceanFreightPublicRouter.post("/estimate", estimateLimit, async (req: Request, r
 });
 
 // ── POST /api/ocean-freight-public/inquiry ────────────────────────────────────
-oceanFreightPublicRouter.post("/inquiry", submitLimit, async (req: Request, res: Response) => {
+oceanFreightPublicRouter.post("/inquiry", submitLimit, optionalCustomerPortalAuth, async (req: Request, res: Response) => {
   try {
     const b = req.body ?? {};
+    const portalCustomerId = (req as Partial<PortalAuthReq>).portalCustomerId;
+    let context: Awaited<ReturnType<typeof getPortalCustomerContext>> | null = null;
+    if (portalCustomerId) {
+      try {
+        context = await getPortalCustomerContext(portalCustomerId);
+      } catch (error) {
+        if (error instanceof PortalCustomerContextError) {
+          return res.status(error.statusCode).json({ error: error.message });
+        }
+        throw error;
+      }
+      if (!context.customerType) {
+        return res.status(422).json({ error: "Profil customer belum menyelesaikan tipe akun." });
+      }
+      if (context.customerType === "company" && !context.companyId) {
+        return res.status(422).json({ error: "Customer Portal belum memiliki membership perusahaan aktif." });
+      }
+    }
+    const customerName = context?.customer.name ?? String(b.customer_name ?? "");
+    const customerPhone = context?.customer.phone ?? b.customer_phone ?? null;
+    const customerEmail = context?.customer.email ?? b.customer_email ?? null;
+    const customerCompany = context
+      ? context.company?.name ?? "Individual"
+      : b.customer_company ?? null;
 
     // Validasi wajib
     if (!b.origin_port || !b.destination_port) return res.status(400).json({ error: "origin_port dan destination_port wajib" });
     if (!b.shipment_type) return res.status(400).json({ error: "shipment_type wajib" });
-    if (!b.customer_name || !String(b.customer_name).trim()) return res.status(400).json({ error: "customer_name wajib" });
+    if (!customerName.trim()) return res.status(400).json({ error: "customer_name wajib" });
     if (String(b.shipment_type) === "FCL" && !b.container_type) return res.status(400).json({ error: "container_type wajib untuk FCL" });
     if (String(b.shipment_type) === "FCL" && Number(b.container_qty ?? 0) < 1) return res.status(400).json({ error: "container_qty minimal 1" });
 
@@ -460,7 +492,8 @@ oceanFreightPublicRouter.post("/inquiry", submitLimit, async (req: Request, res:
 
     const { rows } = await db.execute(sql`
       INSERT INTO ocean_freight_orders (
-        order_number, customer_name, customer_phone, customer_email, customer_company,
+        order_number, company_id, portal_customer_id,
+        customer_name, customer_phone, customer_email, customer_company,
         origin_city, origin_port, destination_city, destination_port,
         trade_type, service_mode, shipment_type, container_type, container_qty,
         total_cbm, gross_weight, koli, commodity, hs_code, cargo_value,
@@ -471,8 +504,9 @@ oceanFreightPublicRouter.post("/inquiry", submitLimit, async (req: Request, res:
         status, source
       ) VALUES (
         ${orderNumber},
-        ${String(b.customer_name ?? "").trim()},
-        ${b.customer_phone ?? null}, ${b.customer_email ?? null}, ${b.customer_company ?? null},
+        ${context?.companyId ?? null}, ${context?.customer.id ?? null},
+        ${customerName.trim()},
+        ${customerPhone}, ${customerEmail}, ${customerCompany},
         ${b.origin_city ?? ""}, ${b.origin_port ?? ""}, ${b.destination_city ?? ""}, ${b.destination_port ?? ""},
         ${b.trade_type ?? "export"}, ${b.service_mode ?? "port_to_port"},
         ${b.shipment_type ?? "FCL"}, ${b.container_type ?? null},
@@ -502,7 +536,7 @@ oceanFreightPublicRouter.post("/inquiry", submitLimit, async (req: Request, res:
     try {
       const adminWa = await getAdminGroupWa();
       if (adminWa) {
-        const msg = `*Ocean Freight Inquiry Baru*\n• Order: ${order.order_number}\n• Customer: ${b.customer_name}\n• Rute: ${b.origin_port} → ${b.destination_port}\n• Jenis: ${b.shipment_type}${b.container_type ? ` / ${b.container_type}` : ""}\n• Status: Menunggu Rate\n\nCek di admin panel untuk blast RFQ.`;
+         const msg = `*Ocean Freight Inquiry Baru*\n• Order: ${order.order_number}\n• Customer: ${customerName}\n• Rute: ${b.origin_port} → ${b.destination_port}\n• Jenis: ${b.shipment_type}${b.container_type ? ` / ${b.container_type}` : ""}\n• Status: Menunggu Rate\n\nCek di admin panel untuk blast RFQ.`;
         await sendWhatsApp(adminWa, msg);
       }
     } catch {}
