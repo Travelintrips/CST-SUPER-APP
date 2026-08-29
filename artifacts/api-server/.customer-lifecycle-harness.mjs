@@ -234,6 +234,13 @@ async function run() {
       throw new Error("customer lifecycle membership fixtures were not created");
     }
     await query(
+      `UPDATE portal_customers
+       SET customer_type = 'company'
+       WHERE id = ANY($1::int[])`,
+      [membershipCustomerIds],
+    );
+    record("customer organization fixtures", true, "company customer type established");
+    await query(
       `INSERT INTO portal_company_members
          (portal_customer_id, company_id, buyer_role, is_active, joined_at)
        SELECT id, 1, 'requester', true, NOW()
