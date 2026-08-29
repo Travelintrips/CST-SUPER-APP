@@ -902,15 +902,15 @@ function QrisCandidateDiagnosticBlock({
   const failedChecks = checks.filter(check => !check.ok);
 
   return (
-    <div className={`mt-2 rounded-md border border-indigo-300 bg-indigo-950 px-3 py-2.5 text-xs text-indigo-50 dark:border-indigo-700 ${compact ? "space-y-1.5" : "space-y-2"}`}>
+    <div className={`mt-2 rounded-md border border-indigo-300 bg-indigo-950 px-3 py-2.5 text-xs text-white dark:border-indigo-700 ${compact ? "space-y-1.5" : "space-y-2"}`}>
       <div className="flex items-start gap-2">
         <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-indigo-200" />
         <div className="min-w-0">
-          <p className="font-semibold text-indigo-50">
+          <p className="font-semibold text-white">
             {diagnostic ? "Kenapa belum dapat diselesaikan?"
               : "Detail kandidat QRIS belum tersedia"}
           </p>
-          <p className="mt-0.5 leading-relaxed text-indigo-200">
+          <p className="mt-0.5 leading-relaxed text-white">
             {diagnostic
               ? failedChecks.length > 0
                 ? `${failedChecks.length} syarat belum terpenuhi. Status pemeriksaan: ${status}.`
@@ -927,14 +927,14 @@ function QrisCandidateDiagnosticBlock({
                 {check.ok ? "✓" : "!"}
               </span>
               <span className="min-w-0">
-                <span className="font-medium text-indigo-100">{check.label}:</span>{" "}
-                <span className={check.ok ? "text-indigo-200" : "text-amber-200"}>{check.detail}</span>
+                <span className="font-medium text-white">{check.label}:</span>{" "}
+                <span className="text-white">{check.detail}</span>
               </span>
             </div>
           ))}
           {diagnostic.review_reason && (
-            <p className="border-t border-indigo-700/70 pt-1 text-indigo-200">
-              Alasan sistem: <span className="font-medium text-indigo-100">{diagnostic.review_reason}</span>
+            <p className="border-t border-indigo-700/70 pt-1 text-white">
+              Alasan sistem: <span className="font-medium text-white">{diagnostic.review_reason}</span>
             </p>
           )}
         </div>
