@@ -3319,8 +3319,10 @@ router.get("/mutations", async (req, res) => {
 
   // QRIS settlement evidence is only reviewable in the exact H-1 cohort:
   // the payment's expected settlement date must equal the bank mutation date.
-  // Keep this gate in the API query as well as the UI so historical candidate
-  // snapshots cannot leak outside the operating review window.
+  // Ordinary Sport Center bank transfers are not QRIS settlements and must
+  // remain reviewable from the same candidate list. Keep this distinction in
+  // the API query as well as the UI so historical QRIS snapshots cannot leak
+  // outside the operating review window without hiding valid bank transfers.
   const canonicalQrisHMinusOneSql = hasCanonicalSettlementView
     ? `EXISTS (
          SELECT 1
@@ -3337,11 +3339,18 @@ router.get("/mutations", async (req, res) => {
         SELECT 1
         FROM sport_payments sp_h1
         WHERE sp_h1.id = m.candidate_id
-          AND ${sportPaymentTypeSql("sp_h1")} = 'qris'
-          AND COALESCE(
-            sp_h1.settlement_date::text,
-            (COALESCE(sp_h1.paid_at::date, sp_h1.created_at::date) + 1)::text
-          ) = bm.transaction_date::text
+          AND (
+            -- Non-QRIS Sport Center payments are ordinary bank-transfer
+            -- evidence and must not be hidden by the QRIS H-1 gate.
+            ${sportPaymentTypeSql("sp_h1")} <> 'qris'
+            OR (
+              ${sportPaymentTypeSql("sp_h1")} = 'qris'
+              AND COALESCE(
+                sp_h1.settlement_date::text,
+                (COALESCE(sp_h1.paid_at::date, sp_h1.created_at::date) + 1)::text
+              ) = bm.transaction_date::text
+            )
+          )
       )
     )
     OR (
@@ -3792,9 +3801,9 @@ router.get("/mutations", async (req, res) => {
        FROM bank_reconciliation_matches m
        WHERE m.mutation_id = bm.id
           AND m.status IN ('candidate', 'approved')
-           -- Generic bank-transfer candidates must be same-day. QRIS and
-           -- Sport Center candidates use the exact QRIS H-1 settlement-date
-           -- contract; non-QRIS sport payments stay reviewable.
+            -- Generic non-Sport candidates must be same-day. QRIS candidates
+            -- use the exact H-1 settlement-date contract; ordinary non-QRIS
+            -- Sport Center payments remain reviewable for manual confirmation.
            AND (
              ${qrisCandidateHMinusOneSql}
               OR (
