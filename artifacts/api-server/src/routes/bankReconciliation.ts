@@ -144,13 +144,25 @@ type SportPaymentType = "bank_transfer" | "qris" | "paylabs";
  */
 function sportPaymentTypeSql(alias = "sp"): string {
   return `CASE
-    WHEN LOWER(COALESCE(${alias}.payment_provider::text, '')) LIKE '%paylabs%'
-      OR LOWER(COALESCE(${alias}.payment_type::text, '')) LIKE '%paylabs%'
-      OR LOWER(COALESCE(${alias}.method::text, '')) LIKE '%paylabs%'
+    /* method is the payment rail; it wins over payment_type, which may contain
+       stale QRIS data from the payment/business flow. */
+    WHEN LOWER(COALESCE(${alias}.method::text, '')) LIKE '%transfer%'
+      OR LOWER(COALESCE(${alias}.method::text, '')) LIKE '%bank%'
+      THEN 'bank_transfer'
+    WHEN LOWER(COALESCE(${alias}.method::text, '')) LIKE '%qris%'
+      THEN CASE
+        WHEN LOWER(COALESCE(${alias}.payment_provider::text, '')) LIKE '%paylabs%'
+          OR LOWER(COALESCE(${alias}.payment_type::text, '')) LIKE '%paylabs%'
+          THEN 'paylabs'
+        ELSE 'qris'
+      END
+    WHEN LOWER(COALESCE(${alias}.method::text, '')) LIKE '%paylabs%'
+      OR LOWER(COALESCE(${alias}.payment_provider::text, '')) LIKE '%paylabs%'
       THEN 'paylabs'
     WHEN LOWER(COALESCE(${alias}.payment_type::text, '')) LIKE '%qris%'
-      OR LOWER(COALESCE(${alias}.method::text, '')) LIKE '%qris%'
       THEN 'qris'
+    WHEN LOWER(COALESCE(${alias}.payment_type::text, '')) LIKE '%paylabs%'
+      THEN 'paylabs'
     ELSE 'bank_transfer'
   END`;
 }

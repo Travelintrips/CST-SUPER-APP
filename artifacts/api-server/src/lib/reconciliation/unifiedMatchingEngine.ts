@@ -1025,13 +1025,23 @@ export async function fetchCandidates(
     `(sp.created_at AT TIME ZONE 'Asia/Jakarta')::date)`;
   const settlementDateExpr = `COALESCE(sp.settlement_date, ${sportPaymentDateExpr} + 1)`;
   const sportPaymentTypeExpr = `CASE
-    WHEN LOWER(COALESCE(sp.payment_provider::text, '')) LIKE '%paylabs%'
-      OR LOWER(COALESCE(sp.payment_type::text, '')) LIKE '%paylabs%'
-      OR LOWER(COALESCE(sp.method::text, '')) LIKE '%paylabs%'
+    WHEN LOWER(COALESCE(sp.method::text, '')) LIKE '%transfer%'
+      OR LOWER(COALESCE(sp.method::text, '')) LIKE '%bank%'
+      THEN 'bank_transfer'
+    WHEN LOWER(COALESCE(sp.method::text, '')) LIKE '%qris%'
+      THEN CASE
+        WHEN LOWER(COALESCE(sp.payment_provider::text, '')) LIKE '%paylabs%'
+          OR LOWER(COALESCE(sp.payment_type::text, '')) LIKE '%paylabs%'
+          THEN 'paylabs'
+        ELSE 'qris'
+      END
+    WHEN LOWER(COALESCE(sp.method::text, '')) LIKE '%paylabs%'
+      OR LOWER(COALESCE(sp.payment_provider::text, '')) LIKE '%paylabs%'
       THEN 'paylabs'
     WHEN LOWER(COALESCE(sp.payment_type::text, '')) LIKE '%qris%'
-      OR LOWER(COALESCE(sp.method::text, '')) LIKE '%qris%'
       THEN 'qris'
+    WHEN LOWER(COALESCE(sp.payment_type::text, '')) LIKE '%paylabs%'
+      THEN 'paylabs'
     ELSE 'bank_transfer'
   END`;
   // A Sport Center payment is not automatically QRIS. Bank-transfer payments

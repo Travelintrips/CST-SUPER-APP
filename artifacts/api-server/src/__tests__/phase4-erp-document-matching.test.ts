@@ -925,6 +925,17 @@ describe("fetchCandidates — Sport Center payment rails", () => {
     expect(query).toContain("AT TIME ZONE 'Asia/Jakarta'");
   });
 
+  it("lets Transfer Bank method win over stale QRIS payment_type", async () => {
+    const query = await sportPaymentQueryFor({
+      normalized_description: "SC-0458 TRANSFER BANK",
+    });
+
+    expect(query).toBeDefined();
+    expect(query).toContain("LIKE '%transfer%'");
+    expect(query).toContain("THEN 'bank_transfer'");
+    expect(query).toContain("payment_type::text");
+  });
+
   it("includes Paylabs Sport Center payments without routing them to direct QRIS", async () => {
     const query = await sportPaymentQueryFor({
       normalized_description: "PAYLABS SETTLEMENT",

@@ -1098,6 +1098,17 @@ function isQrisMutation(m: BankMutation): boolean {
 
 function sportPaymentTypeFromDetails(details?: CandidateDetails | null): SportPaymentType | null {
   if (!details) return null;
+  const paymentMethod = String(details.paymentMethod ?? details.method ?? "").toLowerCase();
+  // The payment method is the rail. Prefer it over a stale derived
+  // sportPaymentType/paymentType value from an older candidate snapshot.
+  if (paymentMethod.includes("transfer") || paymentMethod.includes("bank")) {
+    return "bank_transfer";
+  }
+  if (paymentMethod.includes("qris")) {
+    return /paylabs/i.test(String(details.paymentProvider ?? ""))
+      ? "paylabs"
+      : "qris";
+  }
   if (details.sportPaymentType) return details.sportPaymentType;
   if (/paylabs/i.test(String(details.paymentProvider ?? ""))) return "paylabs";
   if (/paylabs/i.test(String(details.paymentType ?? "")) || /paylabs/i.test(String(details.method ?? ""))) return "paylabs";
