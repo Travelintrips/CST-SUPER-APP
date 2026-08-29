@@ -7,4 +7,4 @@ On the generic bank-mutation card, `Rekening Bank` and `Jenis payment: QRIS` can
 
 **Why:** Reviewer-facing labels must not be interpreted as one unified classifier; diagnosing a false QRIS display requires checking both the mutation evidence and the source candidate/match state in the same runtime database.
 
-**How to apply:** First verify `provider_name`, description evidence, and active match rows for the exact mutation; then compare the candidate's persisted method/provider and environment before changing classification data.
+**How to apply:** First verify `provider_name`, description evidence, and active match rows for the exact mutation; then compare the candidate's current payment method/provider and environment before changing classification data. Never render or approve a QRIS snapshot unless the bank rail is QRIS and every live snapshot payment is still QRIS; retired snapshots are audit history only.

@@ -845,6 +845,16 @@ function isCanonicalSettlementMutation(m: BankMutation): boolean {
 }
 
 function qrisAuditsForMutation(m: BankMutation): QrisCandidateAudit[] {
+  // Candidate metadata is not bank-rail evidence. A legacy QRIS snapshot must
+  // not turn an InhouseTrf/ordinary transfer into a QRIS card.
+  if (!isQrisBankApprovalAllowed({
+    providerName: m.provider_name,
+    providerOrderId: m.provider_order_id,
+    description: m.description,
+    normalizedDescription: m.normalized_description,
+  })) {
+    return [];
+  }
   const audits = Array.isArray(m.qris_candidate_audits) && m.qris_candidate_audits.length > 0
     ? m.qris_candidate_audits
     : m.qris_candidate_audit
@@ -1094,10 +1104,20 @@ function mutationSourceLabel(m: BankMutation): string {
   const hasQrisCandidate = qrisAuditsForMutation(m).length > 0 || m.candidates?.some(c =>
     c.candidate_type === "qris_settlement" || c.candidate_type === "sport_payment"
   );
-  if (hasQrisCandidate && isQrisMutation(m)) {
+  const bankPaymentType = classifyBankMutationPaymentType({
+    providerName: m.provider_name,
+    providerOrderId: m.provider_order_id,
+    description: m.description,
+    normalizedDescription: m.normalized_description,
+  });
+  if (bankPaymentType === "bank_transfer") {
+    return m.direction === "IN" ? "Transfer Bank" : "Bank";
+  }
+  if (hasQrisCandidate && bankPaymentType === "qris") {
     return "QRIS Sport Center";
   }
-  if (isQrisMutation(m)) return m.provider_name || "QRIS";
+  if (bankPaymentType === "qris") return m.provider_name || "QRIS";
+  if (bankPaymentType === "paylabs") return m.provider_name || "Paylabs";
   return m.provider_name || (m.direction === "IN" ? "Rekening Bank" : "Bank");
 }
 

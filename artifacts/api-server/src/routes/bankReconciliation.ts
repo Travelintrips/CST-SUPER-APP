@@ -3010,6 +3010,20 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
           { code: "INVALID_CANDIDATE" },
         );
       }
+      const nonQrisPaymentIds = selectedLivePayments
+        .filter((payment) =>
+          !String(payment.payment_method ?? "").toLowerCase().includes("qris"),
+        )
+        .map((payment) => Number(payment.id));
+      if (nonQrisPaymentIds.length > 0) {
+        throw Object.assign(
+          new Error(
+            `Payment ${nonQrisPaymentIds.join(", ")} tercatat bukan QRIS pada sumber canonical. ` +
+            "Kandidat legacy tidak boleh diproses sebagai settlement QRIS; regenerasi kandidat setelah memperbaiki sumber.",
+          ),
+          { code: "INVALID_CANDIDATE" },
+        );
+      }
       const missingPaymentProviders = selectedLivePayments
         .map((payment) => {
           const paymentProvider = normalizeQrisProvider(
@@ -3442,6 +3456,26 @@ router.get("/mutations", async (req, res) => {
         item_h1->>'expectedSettlementDate',
         item_h1->>'expected_settlement_date'
       ) IS DISTINCT FROM bm.transaction_date::text
+    )
+  `;
+  // A QRIS snapshot is only valid when every live payment in it is still a
+  // direct QRIS payment. Historical snapshots can outlive a correction to the
+  // source payment method, so status/date checks alone are not sufficient.
+  // Invalid item IDs are treated as invalid evidence rather than making the
+  // queue query fail.
+  const qrisSnapshotPaymentMethodSql = `
+    COALESCE(jsonb_array_length(COALESCE(qc.payment_items, '[]'::jsonb)), 0) > 0
+    AND NOT EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(COALESCE(qc.payment_items, '[]'::jsonb)) item_method
+      LEFT JOIN sport_center.sport_payments sp_method
+        ON sp_method.id = CASE
+          WHEN COALESCE(item_method->>'paymentId', item_method->>'payment_id') ~ '^[0-9]+$'
+            THEN COALESCE(item_method->>'paymentId', item_method->>'payment_id')::int
+          ELSE NULL
+        END
+      WHERE sp_method.id IS NULL
+        OR LOWER(COALESCE(sp_method.payment_method::text, '')) NOT LIKE '%qris%'
     )
   `;
 
@@ -4006,33 +4040,11 @@ router.get("/mutations", async (req, res) => {
             WHERE qc.mutation_id = bm.id
               AND qc.estimated_settlement_date::text = bm.transaction_date::text
               AND ${qrisSnapshotHMinusOneSql}
-                AND (
-                -- Only active candidates belong in the main mutation queue.
-                 UPPER(COALESCE(qc.status, '')) NOT IN (
-                   'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
-                 )
-                 OR EXISTS (
-                   SELECT 1
-                   FROM jsonb_array_elements(COALESCE(qc.payment_items, '[]'::jsonb)) item
-                   WHERE item->>'paymentId' IS NOT NULL
-                     AND NOT EXISTS (
-                       SELECT 1
-                       FROM qris_settlement_items qsi
-                       WHERE qsi.sport_payment_id = (item->>'paymentId')::int
-                     )
-                     ${canonicalSettledExcludeSql}
-                 )
+               AND UPPER(COALESCE(qc.status, '')) NOT IN (
+                 'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
                )
-              AND (
-               UPPER(COALESCE(bm.provider_name, '')) LIKE '%QRIS%'
-               OR UPPER(COALESCE(bm.provider_name, '')) LIKE '%QRTRAVELI%'
-               OR UPPER(COALESCE(bm.provider_name, '')) LIKE '%PAYLABS%'
-               OR UPPER(COALESCE(bm.provider_name, '')) LIKE '%MANDIRI%'
-               OR UPPER(COALESCE(bm.provider_order_id, '')) LIKE '%QRIS%'
-               OR UPPER(COALESCE(bm.provider_order_id, '')) LIKE '%QRTRAVELI%'
-               OR UPPER(COALESCE(bm.description, '')) LIKE '%QRIS%'
-               OR UPPER(COALESCE(bm.description, '')) LIKE '%QRTRAVELI%'
-             )
+               AND ${qrisSnapshotPaymentMethodSql}
+               AND ${bankMutationPaymentTypeSql("bm")} = 'qris'
            ORDER BY
             qc.updated_at DESC,
             qc.id DESC
@@ -4129,32 +4141,11 @@ router.get("/mutations", async (req, res) => {
            WHERE qc.mutation_id = bm.id
                 AND qc.estimated_settlement_date::text = bm.transaction_date::text
              AND ${qrisSnapshotHMinusOneSql}
-             AND (
-               UPPER(COALESCE(qc.status, '')) NOT IN (
-                 'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
-               )
-               OR EXISTS (
-                 SELECT 1
-                 FROM jsonb_array_elements(COALESCE(qc.payment_items, '[]'::jsonb)) item
-                 WHERE item->>'paymentId' IS NOT NULL
-                   AND NOT EXISTS (
-                     SELECT 1
-                     FROM qris_settlement_items qsi
-                     WHERE qsi.sport_payment_id = (item->>'paymentId')::int
-                   )
-                   ${canonicalSettledExcludeSql}
-               )
-             )
-             AND (
-               UPPER(COALESCE(bm.provider_name, '')) LIKE '%QRIS%'
-               OR UPPER(COALESCE(bm.provider_name, '')) LIKE '%QRTRAVELI%'
-               OR UPPER(COALESCE(bm.provider_name, '')) LIKE '%PAYLABS%'
-               OR UPPER(COALESCE(bm.provider_name, '')) LIKE '%MANDIRI%'
-               OR UPPER(COALESCE(bm.provider_order_id, '')) LIKE '%QRIS%'
-               OR UPPER(COALESCE(bm.provider_order_id, '')) LIKE '%QRTRAVELI%'
-               OR UPPER(COALESCE(bm.description, '')) LIKE '%QRIS%'
-               OR UPPER(COALESCE(bm.description, '')) LIKE '%QRTRAVELI%'
-             )
+              AND UPPER(COALESCE(qc.status, '')) NOT IN (
+                'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
+              )
+              AND ${qrisSnapshotPaymentMethodSql}
+              AND ${bankMutationPaymentTypeSql("bm")} = 'qris'
          ) AS qris_candidate_audits
         ,
         (
@@ -4184,7 +4175,11 @@ router.get("/mutations", async (req, res) => {
           )
           FROM qris_mutation_batch_candidates qc
           WHERE qc.mutation_id = bm.id
-            AND UPPER(COALESCE(qc.status, '')) NOT IN ('APPROVED', 'COMPLETED')
+            AND UPPER(COALESCE(qc.status, '')) NOT IN (
+              'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
+            )
+            AND ${qrisSnapshotPaymentMethodSql}
+            AND ${bankMutationPaymentTypeSql("bm")} = 'qris'
           ORDER BY qc.updated_at DESC, qc.id DESC
           LIMIT 1
         ) AS qris_candidate_diagnostic
