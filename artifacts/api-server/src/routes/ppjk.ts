@@ -11,6 +11,7 @@ import {
   ppjkStatusLogsTable,
   ppjkDocumentChecklistTable,
   freightCustomsDocsTable,
+  suppliersTable,
   PPJK_DOC_LABELS,
   PPJK_DOC_TYPES,
 } from "@workspace/db";
@@ -32,6 +33,7 @@ import {
 import { getOpenAI } from "../lib/openaiClient.js";
 import { resolveRequiredDocuments, checkReadyForCeisa } from "../lib/ppjkDocumentResolver.js";
 import { calculatePpjkFinancials, PpjkFinancialError } from "../lib/ppjkFinancialService.js";
+import { filterSuppliersByCapability, VENDOR_CAPABILITY_KEYS } from "../lib/vendorCapabilityService.js";
 import {
   PPJK_CUSTOMS_STATUSES,
   isValidCustomsStatus,
@@ -43,6 +45,26 @@ const router = Router();
 
 const PPJK_ROLES = ["admin", "super_admin", "logistics", "operations"];
 const PPJK_AI_MODEL = process.env.PPJK_AI_MODEL ?? "gpt-4o-mini";
+
+// ── GET /api/ppjk/vendors — canonical customs-capability discovery ────────────
+router.get("/vendors", async (req, res) => {
+  if (!(await requireRole(req, res, PPJK_ROLES))) return;
+  const companyId = req.query.companyId == null ? null : Number(req.query.companyId);
+  const vendors = await db.select({
+    id: suppliersTable.id,
+    name: suppliersTable.name,
+    serviceType: suppliersTable.serviceType,
+    phone: suppliersTable.phone,
+    email: suppliersTable.contactEmail,
+  }).from(suppliersTable).where(eq(suppliersTable.isActive, true));
+  const eligible = await filterSuppliersByCapability(
+    vendors,
+    VENDOR_CAPABILITY_KEYS.CUSTOMS,
+    (st) => /custom|customs|clearance|kepabeanan|ppjk/.test(st),
+    Number.isSafeInteger(companyId) ? companyId : null,
+  );
+  return res.json({ vendors: eligible });
+});
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 async function generatePpjkNumber(): Promise<string> {

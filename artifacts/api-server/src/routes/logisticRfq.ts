@@ -34,6 +34,10 @@ import { logActivity } from "../lib/activityLog.js";
 import { logOrderAudit, logVendorQuoteEvent, logOrderStatusChange } from "../lib/auditTrail.js";
 import { updateOrderProgress } from "../lib/orderProgress.js";
 import { fetchVendorCatalogLines } from "../lib/podInvoiceAutoCreate.js";
+import {
+  capabilityForServiceRequest,
+  getVendorCapabilityStates,
+} from "../lib/vendorCapabilityService.js";
 
 function getConfirmFormUrl(token: string): string {
   const domain = getPreferredDomain();
@@ -96,9 +100,18 @@ export async function autoCreateRfqAndNotifyVendors(
   // Search active vendors matching ANY keyword (OR logic)
   const PRODUCT_VENDOR_KEYWORDS = ["trucking", "courier", "kurir", "pengiriman", "logistics", "logistik", "same day", "instant", "delivery"];
   const allActiveVendors = await db.select().from(suppliersTable).where(eq(suppliersTable.isActive, true));
+  const capabilityStates = await getVendorCapabilityStates(allActiveVendors.map((v) => v.id));
+  const requestedCapabilities = new Set(
+    [...keywords]
+      .map((keyword) => capabilityForServiceRequest(keyword))
+      .filter((key): key is NonNullable<ReturnType<typeof capabilityForServiceRequest>> => key != null),
+  );
   const matchingVendors = allActiveVendors.filter((v) => {
-    if (!v.serviceType?.trim()) return false;
-    const st = v.serviceType.toLowerCase();
+    const st = (v.serviceType ?? "").toLowerCase();
+    const state = capabilityStates.get(v.id);
+    if (state?.configured) {
+      return [...requestedCapabilities].some((key) => state.active.has(key));
+    }
     return [...keywords].some((kw) => {
       if (kw === "__PRODUCT__") return PRODUCT_VENDOR_KEYWORDS.some((p) => st.includes(p));
       return st.includes(kw.toLowerCase());

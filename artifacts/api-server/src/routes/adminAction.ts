@@ -23,6 +23,11 @@ import { runDbBackup } from "../lib/dbBackup.js";
 import { getPreferredDomain } from "../lib/domain.js";
 import { logger } from "../lib/logger.js";
 import { hashToken } from "../lib/tokenUtils.js";
+import {
+  capabilityForServiceRequest,
+  capabilityMatches,
+  getVendorCapabilityStates,
+} from "../lib/vendorCapabilityService.js";
 
 /**
  * Dual-token WHERE clause: try token_hash first (HMAC-SHA256, secure),
@@ -408,6 +413,11 @@ adminActionPublicRouter.get("/:token", async (req: Request, res: Response) => {
       // Normalize shipment type for matching (check all words, not just first)
       const shipType = (order.shipmentType ?? "").toLowerCase().trim();
       const shipKeywords = shipType.split(/[\s,]+/).filter((k: string) => k.length > 1);
+      const requestedCapability = capabilityForServiceRequest(shipType);
+      const capabilityStates = await getVendorCapabilityStates(
+        allVendors.map((vendor) => vendor.id),
+        order.companyId,
+      );
 
       // Semua vendor aktif (dengan/tanpa phone); marking hasPhone untuk blast WA
       const allWithPhone = allVendors;
@@ -476,10 +486,18 @@ adminActionPublicRouter.get("/:token", async (req: Request, res: Response) => {
       }
 
       // Service type matching: vendor's serviceType must contain at least one of the ship keywords
-      const isServiceMatch = (vendorServiceType: string | null): boolean => {
-        if (!vendorServiceType || shipKeywords.length === 0) return false;
-        const vst = vendorServiceType.toLowerCase();
-        return shipKeywords.some((kw: string) => vst.includes(kw));
+      const isServiceMatch = (vendorId: number, vendorServiceType: string | null): boolean => {
+        if (shipKeywords.length === 0) return false;
+        const legacyMatch = (normalised: string) =>
+          !!normalised && shipKeywords.some((kw: string) => normalised.includes(kw));
+        return requestedCapability
+          ? capabilityMatches(
+              capabilityStates.get(vendorId),
+              requestedCapability,
+              vendorServiceType,
+              legacyMatch,
+            )
+          : legacyMatch((vendorServiceType ?? "").toLowerCase());
       };
 
       const allWithFlag = allWithPhone.map((v) => {
@@ -495,7 +513,7 @@ adminActionPublicRouter.get("/:token", async (req: Request, res: Response) => {
         return {
           ...v,
           hasPhone: !!v.phone,
-          isMatching: isServiceMatch(v.serviceType),
+          isMatching: isServiceMatch(v.id, v.serviceType),
           hasCommodityMatch: vendorIdsWithCommodity.has(v.id),
           hasProductItem: vendorIdsWithProductItem.has(v.id),
           priceBase: pb,

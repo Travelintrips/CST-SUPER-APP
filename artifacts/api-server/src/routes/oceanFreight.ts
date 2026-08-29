@@ -11,6 +11,7 @@ import { sendMail, isSmtpConfigured } from "../lib/mailer.js";
 import { logger } from "../lib/logger.js";
 import { resolveCompanyId } from "../lib/resolveCompany.js";
 import { assertCompanyAccess } from "../lib/assertCompanyAccess.js";
+import { filterSuppliersByCapability, VENDOR_CAPABILITY_KEYS } from "../lib/vendorCapabilityService.js";
 
 export const oceanFreightRouter = Router();
 
@@ -386,15 +387,36 @@ oceanFreightRouter.put("/orders/:id/tracking", async (req: Request, res: Respons
 oceanFreightRouter.get("/orders/:id/vendors", async (req: Request, res: Response) => {
   if (!(await requireAdmin(req, res))) return;
   try {
-    const vendorRows = await db.execute(sql.raw(`
-      SELECT id, name, contact_phone, contact_email, service_type, is_active
-      FROM suppliers
-      WHERE is_active = true
-        AND (service_type ILIKE '%ocean%' OR service_type ILIKE '%sea%' OR service_type ILIKE '%freight%' OR service_type ILIKE '%forwarder%' OR service_type ILIKE '%shipping%' OR service_type IS NULL)
-      ORDER BY name ASC
-      LIMIT 100
-    `));
-    res.json({ data: vendorRows.rows });
+    const orderId = Number(String(req.params.id));
+    if (!Number.isSafeInteger(orderId) || orderId <= 0) {
+      return res.status(400).json({ error: "Invalid id" });
+    }
+    const orderRows = await db.execute(sql`
+      SELECT company_id
+      FROM ocean_freight_orders
+      WHERE id = ${orderId}
+      LIMIT 1
+    `);
+    const companyId = orderRows.rows[0]?.company_id == null
+      ? null
+      : Number(orderRows.rows[0].company_id);
+    if (!orderRows.rows.length) return res.status(404).json({ error: "Order tidak ditemukan" });
+
+    const allVendors = await db.select({
+      id: suppliersTable.id,
+      name: suppliersTable.name,
+      serviceType: suppliersTable.serviceType,
+      phone: suppliersTable.phone,
+      email: suppliersTable.contactEmail,
+      isActive: suppliersTable.isActive,
+    }).from(suppliersTable).where(eq(suppliersTable.isActive, true));
+    const eligible = await filterSuppliersByCapability(
+      allVendors,
+      VENDOR_CAPABILITY_KEYS.SEA_FREIGHT,
+      (st) => /sea|ocean|laut|freight|forwarder|shipping/.test(st),
+      companyId,
+    );
+    res.json({ data: eligible });
   } catch (err) {
     logger.error({ err }, "[ocean-freight] GET /orders/:id/vendors error");
     res.status(500).json({ error: "Gagal memuat vendor" });

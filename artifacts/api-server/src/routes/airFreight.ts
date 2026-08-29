@@ -15,6 +15,7 @@ import { assertCompanyAccess } from "../lib/assertCompanyAccess.js";
 import { sendViaService as sendWhatsApp } from "../lib/waTransport.js";
 import { sendMail, isSmtpConfigured } from "../lib/mailer.js";
 import { getAdminGroupWa } from "../lib/adminWa.js";
+import { filterSuppliersByCapability, VENDOR_CAPABILITY_KEYS } from "../lib/vendorCapabilityService.js";
 
 // ─── Tables dikelola oleh Drizzle schema (lib/db/src/schema/airFreight.ts) ────
 // CREATE TABLE dihapus dari sini — gunakan drizzle-kit push untuk migrasi.
@@ -318,6 +319,7 @@ airFreightRouter.get("/orders/:id/eligible-vendors", async (req: Request, res: R
   if (isNaN(id)) return res.status(400).json({ error: "Invalid id" });
 
   const [order] = await db.select({
+    companyId: airFreightOrdersTable.companyId,
     originAirport: airFreightOrdersTable.originAirport,
     destAirport: airFreightOrdersTable.destAirport,
     tradeType: airFreightOrdersTable.tradeType,
@@ -334,10 +336,12 @@ airFreightRouter.get("/orders/:id/eligible-vendors", async (req: Request, res: R
     isActive: suppliersTable.isActive,
   }).from(suppliersTable).where(eq(suppliersTable.isActive, true));
 
-  const eligible = allVendors.filter((v) => {
-    const st = (v.serviceType ?? "").toLowerCase();
-    return st.includes("air") || st.includes("air freight");
-  });
+  const eligible = await filterSuppliersByCapability(
+    allVendors,
+    VENDOR_CAPABILITY_KEYS.AIR_FREIGHT,
+    (st) => st.includes("air") || st.includes("udara"),
+    order.companyId,
+  );
 
   res.json({ vendors: eligible, order });
 });

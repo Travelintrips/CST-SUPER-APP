@@ -105,13 +105,23 @@ function emptyForm() {
     tradeType: "import",
     commodity: "", hsCode: "", origin: "", destination: "",
     portOfEntry: "", kantorPabean: "", jenisPelayanan: "",
-    vendorName: "", notes: "", adminNotes: "",
+    vendorId: "", vendorName: "", notes: "", adminNotes: "",
   };
 }
 
 function NewOrderDialog({ open, onOpenChange, onCreated }: { open: boolean; onOpenChange: (v: boolean) => void; onCreated: (id: number) => void }) {
   const [form, setForm] = useState(emptyForm);
   const f = (k: keyof ReturnType<typeof emptyForm>, v: string) => setForm((p) => ({ ...p, [k]: v }));
+  const { data: vendorData } = useQuery<{ vendors: Array<{ id: number; name: string }> }>({
+    queryKey: ["ppjk-vendors"],
+    queryFn: async () => {
+      const r = await fetch("/api/ppjk/vendors", { credentials: "include" });
+      if (!r.ok) throw new Error("Gagal memuat vendor PPJK");
+      return r.json();
+    },
+    enabled: open,
+    staleTime: 60_000,
+  });
 
   const mutation = useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
@@ -179,13 +189,36 @@ function NewOrderDialog({ open, onOpenChange, onCreated }: { open: boolean; onOp
           </div>
 
           <div className="border-t pt-4 grid grid-cols-2 gap-4">
-            <div className="space-y-1.5 col-span-2"><Label>Vendor PPJK (jika ada)</Label><Input value={form.vendorName} onChange={(e) => f("vendorName", e.target.value)} placeholder="Nama perusahaan PPJK yang menangani" /></div>
+            <div className="space-y-1.5 col-span-2"><Label>Vendor PPJK (opsional)</Label>
+              <Select
+                value={form.vendorId || "none"}
+                onValueChange={(value) => {
+                  const vendor = vendorData?.vendors.find((item) => String(item.id) === value);
+                  setForm((previous) => ({
+                    ...previous,
+                    vendorId: value === "none" ? "" : value,
+                    vendorName: vendor?.name ?? "",
+                  }));
+                }}
+              >
+                <SelectTrigger><SelectValue placeholder="Pilih vendor dengan capability customs..." /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Belum ditentukan</SelectItem>
+                  {(vendorData?.vendors ?? []).map((vendor) => (
+                    <SelectItem key={vendor.id} value={String(vendor.id)}>{vendor.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="space-y-1.5 col-span-2"><Label>Catatan</Label><Textarea value={form.notes} onChange={(e) => f("notes", e.target.value)} rows={2} className="resize-none" /></div>
           </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Batal</Button>
-          <Button onClick={() => mutation.mutate(form as any)} disabled={mutation.isPending || !form.customerName}>
+          <Button
+            onClick={() => mutation.mutate({ ...form, vendorId: form.vendorId ? Number(form.vendorId) : null })}
+            disabled={mutation.isPending || !form.customerName}
+          >
             {mutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Plus className="w-4 h-4 mr-2" />}
             Buat Order
           </Button>
