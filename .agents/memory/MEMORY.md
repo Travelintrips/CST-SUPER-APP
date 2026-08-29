@@ -45,6 +45,7 @@
 - [QRIS settlement matching](qris-settlement-matching.md) — QRIS reconciliation needs provider/reference, gross-net fee handling, and a matcher path that includes Sport Center payments.
 - [QRIS calendar settlement policy](qris-calendar-settlement-policy.md) — QRIS settles H+1 calendar day; bank transfers settle on the next business day.
 - [QRIS provider-aware rollout](qris-provider-aware-rollout.md) — provider must be explicit; unknown/synthetic evidence stays review-only until explicit final approval.
+- [QRIS payment-led detection](qris-payment-led-detection.md) — payment_method=QRIS can seed a candidate without bank QRIS text; provider mismatch remains review-only.
 - [Sport payment trigger provenance](sport-payment-trigger-provenance.md) — mirror trigger is verified in Supabase runtime but not defined in the current repository migration chain.
 - [Sport payment reconciliation](sport-payment-reconciliation-canonical.md) — sport_payments is the canonical candidate; accounting_payments only links the existing journal.
 - [Sport payment legacy cleanup](sport-payment-legacy-cleanup.md) — production SCPAY cleanup needs runtime Supabase schema introspection and a guarded delete that preserves posted rows.

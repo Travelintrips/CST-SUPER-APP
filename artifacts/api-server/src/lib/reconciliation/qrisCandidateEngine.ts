@@ -345,20 +345,46 @@ export function generateQrisMutationBatchCandidates(input: {
           && payment.expectedSettlementDate != null
           && (!requireExplicitSettlementMetadata
              || methodOnlyPath
-             || Boolean(String(payment.settlementRuleVersion ?? "").trim()))
-          && (!requireExplicitSettlementMetadata
-             || methodOnlyPath
              || !rule?.ruleVersion
+             || !String(payment.settlementRuleVersion ?? "").trim()
              || payment.settlementRuleVersion === rule.ruleVersion)
           && (!requireExplicitSettlementMetadata
              || payment.expectedSettlementDate === mutation.transactionDate)
           && (!requireExplicitSettlementMetadata
              || isPaymentChronologicallyValid(payment, mutation.transactionDate)),
       );
-    const naturalPayments = dimensionPayments;
-    // Do not create an empty QRIS candidate for every unrelated bank credit.
-    // The payment-method signal must still have a company/account/date match.
-    if (naturalPayments.length === 0) continue;
+    const cohortPayments = dimensionPayments.filter((payment) =>
+      requireExplicitSettlementMetadata
+        ? payment.expectedSettlementDate === mutation.transactionDate
+        : businessDayDistance(
+          payment.expectedSettlementDate!,
+          mutation.transactionDate,
+          input.holidays ?? [],
+        ) <= Math.max(0, Math.trunc(rule?.matchWindowBusinessDays ?? 0)),
+    );
+    const nearestExpectedSettlementDistance = cohortPayments.length > 0
+      ? Math.min(
+        ...cohortPayments.map((payment) =>
+          businessDayDistance(
+            payment.expectedSettlementDate!,
+            mutation.transactionDate,
+            input.holidays ?? [],
+          ),
+        ),
+      )
+      : null;
+    const naturalPayments = cohortPayments.filter((payment) =>
+      nearestExpectedSettlementDistance == null
+        || businessDayDistance(
+          payment.expectedSettlementDate!,
+          mutation.transactionDate,
+          input.holidays ?? [],
+        ) === nearestExpectedSettlementDistance,
+    );
+    // With no bank-side provider evidence, only a matching QRIS payment can
+    // classify the mutation. Known provider evidence retains an empty audit
+    // row for an unmatched mutation, which is useful to the reviewer.
+    if (naturalPayments.length === 0 && methodOnlyPath) continue;
     const paymentProviderMismatch = evidence.providerCode !== "unknown"
       && naturalPayments.some((payment) =>
         !areQrisProvidersCompatible(payment.providerName, evidence.providerCode));
@@ -423,9 +449,7 @@ export function generateQrisMutationBatchCandidates(input: {
     );
     const netAmount = roundMoney(Number(mutation.amount) || 0);
     const observed = calculateObservedDeduction(grossAmount, netAmount);
-    const hasNaturalBatch = evidence.providerCode === "unknown"
-      ? dimensionPayments.length > 0
-      : naturalPayments.length > 0;
+    const hasNaturalBatch = naturalPayments.length > 0;
     const splitSettlementNet = roundMoney(
       [mutation, ...splitSettlementMutations]
         .reduce((sum, item) => sum + (Number(item.amount) || 0), 0),
@@ -468,31 +492,31 @@ export function generateQrisMutationBatchCandidates(input: {
       ? "AMBIGUOUS_EFFECTIVE_WINDOW: lebih dari satu aturan provider/rekening aktif pada tanggal settlement; kandidat wajib direview."
       : mixedCanonicalProviderGroups
         ? "MULTIPLE_CANONICAL_PROVIDER_GROUPS: payment kompatibel dengan bukti bank tetapi berasal dari kelompok provider canonical berbeda; approve per kelompok."
-      : !completeBankDimension
-      ? "Dimensi company dan bank account wajib tersedia; rekening null bukan wildcard."
-      : !actualEvidence
-        ? "Bukti bukan mutasi bank aktual; hanya review."
-        : !knownProvider
-          ? "Provider unknown; tidak boleh automatic match."
-          : paymentProviderMismatch
-            ? "Provider pada payment tidak cocok dengan label mutasi; kandidat tetap ditampilkan untuk review."
-          : !settlementMetadataComplete
-            ? "Settlement metadata payment belum lengkap; tanggal H+1 dihitung dari paid_at dan kandidat wajib direview."
-          : !hasNaturalBatch
-             ? "Tidak ditemukan payment QRIS pada company, rekening, dan expected settlement date yang sama."
-            : !expectedDatesPresent
-              ? "Expected settlement date belum tersnapshot; hanya review."
-              : partitionBlocked
-                ? "AMBIGUOUS_PAYMENT_PARTITION: settlement provider/date/rekening ganda tanpa reference pembeda yang juga ada pada payment."
-                  : splitSettlementReconcilesTotal
-                    ? `SPLIT_SETTLEMENT_REVIEW: ${splitSettlementMutations.length + 1} mutasi dalam window settlement berjumlah Rp${splitSettlementNet}; alokasi payment ke setiap tanggal wajib dikonfirmasi sebelum approval.`
-                    : observed.observedDeduction < 0
-                  ? "NEGATIVE_OBSERVED_DEDUCTION: gross natural batch lebih kecil dari bank credit."
-                  : grossAmount > netAmount
-                    ? "AMBIGUOUS_PAYMENT_PARTITION: natural batch gross tidak cocok; subset arbitrer tidak boleh dipilih hanya dari nominal/rate."
-                    : !validDeduction
-                    ? "Observed deduction/rate di luar tolerance provider."
-                    : `${evidence.providerCode} natural batch cocok secara deterministic.`;
+        : !completeBankDimension
+          ? "Dimensi company dan bank account wajib tersedia; rekening null bukan wildcard."
+          : !actualEvidence
+            ? "Bukti bukan mutasi bank aktual; hanya review."
+            : !knownProvider
+              ? "Provider unknown; tidak boleh automatic match."
+              : paymentProviderMismatch
+                ? "Provider pada payment tidak cocok dengan label mutasi; kandidat tetap ditampilkan untuk review."
+                : !hasNaturalBatch
+                  ? "Tidak ditemukan payment QRIS pada company, rekening, dan expected settlement date yang sama."
+                  : !expectedDatesPresent
+                    ? "Expected settlement date belum tersnapshot; hanya review."
+                    : partitionBlocked
+                      ? "AMBIGUOUS_PAYMENT_PARTITION: settlement provider/date/rekening ganda tanpa reference pembeda yang juga ada pada payment."
+                      : splitSettlementReconcilesTotal
+                        ? `SPLIT_SETTLEMENT_REVIEW: ${splitSettlementMutations.length + 1} mutasi dalam window settlement berjumlah Rp${splitSettlementNet}; alokasi payment ke setiap tanggal wajib dikonfirmasi sebelum approval.`
+                        : observed.observedDeduction < 0
+                          ? "NEGATIVE_OBSERVED_DEDUCTION: gross natural batch lebih kecil dari bank credit."
+                          : grossAmount > netAmount
+                            ? "AMBIGUOUS_PAYMENT_PARTITION: natural batch gross tidak cocok; subset arbitrer tidak boleh dipilih hanya dari nominal/rate."
+                            : !validDeduction
+                              ? "Observed deduction/rate di luar tolerance provider."
+                              : !settlementMetadataComplete
+                                ? "Settlement metadata payment belum lengkap; tanggal H+1 dihitung dari paid_at dan kandidat wajib direview."
+                                : `${evidence.providerCode} natural batch cocok secara deterministic.`;
 
     output.push({
       mutationId: mutation.id,
@@ -525,7 +549,9 @@ export function generateQrisMutationBatchCandidates(input: {
         paidAt: payment.paidAt == null ? null : String(payment.paidAt),
         paymentDate: canonicalPaymentDate(payment),
       })),
-      status: matched ? "MATCHED" : ambiguousEffectiveRule
+      status: matched ? "MATCHED" : !completeBankDimension
+        ? "UNMATCHED"
+        : ambiguousEffectiveRule
         ? "REVIEW"
         : mixedCanonicalProviderGroups
           ? "REVIEW"

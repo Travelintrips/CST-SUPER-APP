@@ -491,7 +491,10 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     });
 
     expect(result[0]?.status).toBe("REVIEW");
-    expect(result[0]?.paymentItems).toEqual([]);
+    // Provider evidence is an enrichment/review signal, not a reason to hide
+    // an otherwise dimensionally matching QRIS payment.
+    expect(result[0]?.paymentItems.map((item) => item.paymentId)).toEqual([105]);
+    expect(result[0]?.reason).toContain("Provider pada payment tidak cocok");
   });
 
   it("fails closed when a bank account reference is missing or ambiguous", () => {
@@ -534,7 +537,7 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     const result = generateQrisMutationBatchCandidates({
       payments: [{
         id: 24, companyId: 10, bankAccountId: 77, amount: 150_000,
-        method: "QRIS", status: "paid", paidAt: "2026-08-06",
+        method: "BANK_TRANSFER", status: "paid", paidAt: "2026-08-06",
         expectedSettlementDate: "2026-08-07", providerName: "paylabs",
       }],
       mutations: [{
@@ -567,8 +570,8 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     });
     expect(result).toHaveLength(1);
     expect(result[0]?.status).toBe("REVIEW");
-    expect(result[0]?.paymentItems).toEqual([]);
-    expect(result[0]?.reason).toContain("Tidak ditemukan natural batch");
+    expect(result[0]?.paymentItems.map((item) => item.paymentId)).toEqual([26]);
+    expect(result[0]?.reason).toContain("Provider pada payment tidak cocok");
   });
 
   it("maps QRTRAVELI to the only configured account provider", () => {
