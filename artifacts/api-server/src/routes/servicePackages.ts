@@ -8,6 +8,11 @@ import {
 } from "@workspace/db";
 import { eq, and, asc, sql } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
+import { optionalCustomerPortalAuth } from "../lib/supabaseAuth.js";
+import {
+  hasCustomerServiceRequestAccess,
+} from "../lib/services/portalServiceRequestOwnership.js";
+import { PortalCustomerContextError } from "../lib/services/portalCustomerContextService.js";
 
 export const servicePackagesRouter = Router();
 
@@ -221,10 +226,13 @@ servicePackagesRouter.get("/:id", async (req: Request, res: Response) => {
 
 // ── POST /api/service-packages/:packageId/apply/:requestId ───────────────────
 // Apply a package to an existing draft CSR — auto-creates items
-servicePackagesRouter.post("/:packageId/apply/:requestId", async (req: Request, res: Response) => {
+servicePackagesRouter.post("/:packageId/apply/:requestId", optionalCustomerPortalAuth, async (req: Request, res: Response) => {
   try {
     const packageId = Number(req.params.packageId);
     const requestId = Number(req.params.requestId);
+    if (!(await hasCustomerServiceRequestAccess(req, requestId, { allowGuest: true }))) {
+      return res.status(404).json({ error: "Request tidak ditemukan" });
+    }
 
     const [pkg] = await db
       .select()
@@ -291,6 +299,9 @@ servicePackagesRouter.post("/:packageId/apply/:requestId", async (req: Request, 
     logger.info({ requestId, packageId, itemCount: createdItems.length }, "[servicePackages] package applied");
     return res.json({ ok: true, items: createdItems, package: pkg });
   } catch (err) {
+    if (err instanceof PortalCustomerContextError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
     logger.error({ err }, "[servicePackages] apply error");
     return res.status(500).json({ error: "Gagal menerapkan paket" });
   }

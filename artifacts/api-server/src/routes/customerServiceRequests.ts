@@ -9,7 +9,7 @@ import {
 import { eq, and, desc, sql } from "drizzle-orm";
 import {
   optionalCustomerPortalAuth,
-  requirePortalAuth,
+  requireCustomerPortalAuth,
   type PortalAuthReq,
 } from "../lib/supabaseAuth.js";
 import { logger } from "../lib/logger.js";
@@ -17,6 +17,10 @@ import {
   getPortalCustomerContext,
   PortalCustomerContextError,
 } from "../lib/services/portalCustomerContextService.js";
+import {
+  getCustomerServiceRequestOwnership,
+  hasCustomerServiceRequestAccess,
+} from "../lib/services/portalServiceRequestOwnership.js";
 
 export const customerServiceRequestsRouter = Router();
 
@@ -91,28 +95,6 @@ db.execute(sql`
     ADD COLUMN IF NOT EXISTS portal_customer_id INTEGER,
     ADD COLUMN IF NOT EXISTS company_id INTEGER
 `).catch(() => {});
-
-async function requireOwnedRequestId(req: Request, requestId: number): Promise<boolean> {
-  const portalCustomerId = (req as PortalAuthReq).portalCustomerId;
-  const context = await getPortalCustomerContext(portalCustomerId);
-  if (!context.customerType) {
-    throw new PortalCustomerContextError(422, "Profil customer belum menyelesaikan tipe akun.");
-  }
-  if (context.customerType === "company" && !context.companyId) {
-    throw new PortalCustomerContextError(422, "Customer Portal belum memiliki membership perusahaan aktif.");
-  }
-
-  const ownership = context.customerType === "individual"
-    ? sql`(portal_customer_id = ${portalCustomerId} OR customer_id = ${portalCustomerId}) AND company_id IS NULL`
-    : sql`company_id = ${context.companyId}`;
-  const result = await db.execute(sql`
-    SELECT id
-      FROM customer_service_requests
-     WHERE id = ${requestId} AND ${ownership}
-     LIMIT 1
-  `);
-  return result.rows.length === 1;
-}
 
 function contextErrorResponse(res: Response, error: unknown): boolean {
   if (error instanceof PortalCustomerContextError) {
@@ -198,10 +180,10 @@ customerServiceRequestsRouter.post("/", optionalCustomerPortalAuth, async (req: 
 });
 
 // ── GET /api/customer-service-requests/:id ───────────────────────────────────
-customerServiceRequestsRouter.get("/:id", requirePortalAuth, async (req: Request, res: Response) => {
+customerServiceRequestsRouter.get("/:id", requireCustomerPortalAuth, async (req: Request, res: Response) => {
   try {
     const id = Number(String(req.params.id));
-    if (!Number.isInteger(id) || !(await requireOwnedRequestId(req, id))) {
+    if (!Number.isInteger(id) || !(await hasCustomerServiceRequestAccess(req, id))) {
       return res.status(404).json({ error: "Request tidak ditemukan" });
     }
     const [request] = await db
@@ -231,7 +213,7 @@ customerServiceRequestsRouter.get("/:id", requirePortalAuth, async (req: Request
 });
 
 // ── GET /api/customer-service-requests/by-number/:number ─────────────────────
-customerServiceRequestsRouter.get("/by-number/:number", requirePortalAuth, async (req: Request, res: Response) => {
+customerServiceRequestsRouter.get("/by-number/:number", requireCustomerPortalAuth, async (req: Request, res: Response) => {
   try {
     const [request] = await db
       .select()
@@ -239,7 +221,7 @@ customerServiceRequestsRouter.get("/by-number/:number", requirePortalAuth, async
       .where(eq(customerServiceRequestsTable.requestNumber, String(req.params.number)))
       .limit(1);
     if (!request) return res.status(404).json({ error: "Request tidak ditemukan" });
-    if (!(await requireOwnedRequestId(req, request.id))) {
+    if (!(await hasCustomerServiceRequestAccess(req, request.id))) {
       return res.status(404).json({ error: "Request tidak ditemukan" });
     }
 
@@ -263,13 +245,13 @@ customerServiceRequestsRouter.get("/by-number/:number", requirePortalAuth, async
 });
 
 // ── GET /api/customer-service-requests (my requests, auth required) ──────────
-customerServiceRequestsRouter.get("/", requirePortalAuth, async (req: Request, res: Response) => {
+customerServiceRequestsRouter.get("/", requireCustomerPortalAuth, async (req: Request, res: Response) => {
   try {
-    const portalReq = req as PortalAuthReq;
+    const ownership = await getCustomerServiceRequestOwnership(req);
     const requests = await db
       .select()
       .from(customerServiceRequestsTable)
-      .where(eq(customerServiceRequestsTable.customerId, portalReq.portalCustomerId))
+      .where(ownership)
       .orderBy(desc(customerServiceRequestsTable.createdAt))
       .limit(50);
     return res.json(requests);
@@ -280,9 +262,12 @@ customerServiceRequestsRouter.get("/", requirePortalAuth, async (req: Request, r
 });
 
 // ── POST /api/customer-service-requests/:id/items ────────────────────────────
-customerServiceRequestsRouter.post("/:id/items", async (req: Request, res: Response) => {
+customerServiceRequestsRouter.post("/:id/items", optionalCustomerPortalAuth, async (req: Request, res: Response) => {
   try {
     const requestId = Number(String(req.params.id));
+    if (!(await hasCustomerServiceRequestAccess(req, requestId, { allowGuest: true }))) {
+      return res.status(404).json({ error: "Request tidak ditemukan" });
+    }
     const [request] = await db
       .select()
       .from(customerServiceRequestsTable)
@@ -329,10 +314,13 @@ customerServiceRequestsRouter.post("/:id/items", async (req: Request, res: Respo
 });
 
 // ── PUT /api/customer-service-requests/:id/items/:itemId ─────────────────────
-customerServiceRequestsRouter.put("/:id/items/:itemId", async (req: Request, res: Response) => {
+customerServiceRequestsRouter.put("/:id/items/:itemId", optionalCustomerPortalAuth, async (req: Request, res: Response) => {
   try {
     const requestId = Number(String(req.params.id));
     const itemId = Number(String(req.params.itemId));
+    if (!(await hasCustomerServiceRequestAccess(req, requestId, { allowGuest: true }))) {
+      return res.status(404).json({ error: "Request tidak ditemukan" });
+    }
 
     const [request] = await db
       .select()
@@ -373,10 +361,13 @@ customerServiceRequestsRouter.put("/:id/items/:itemId", async (req: Request, res
 });
 
 // ── DELETE /api/customer-service-requests/:id/items/:itemId ──────────────────
-customerServiceRequestsRouter.delete("/:id/items/:itemId", async (req: Request, res: Response) => {
+customerServiceRequestsRouter.delete("/:id/items/:itemId", optionalCustomerPortalAuth, async (req: Request, res: Response) => {
   try {
     const requestId = Number(String(req.params.id));
     const itemId = Number(String(req.params.itemId));
+    if (!(await hasCustomerServiceRequestAccess(req, requestId, { allowGuest: true }))) {
+      return res.status(404).json({ error: "Request tidak ditemukan" });
+    }
 
     const [request] = await db
       .select()
@@ -418,9 +409,12 @@ customerServiceRequestsRouter.delete("/:id/items/:itemId", async (req: Request, 
 });
 
 // ── POST /api/customer-service-requests/:id/submit ───────────────────────────
-customerServiceRequestsRouter.post("/:id/submit", async (req: Request, res: Response) => {
+customerServiceRequestsRouter.post("/:id/submit", optionalCustomerPortalAuth, async (req: Request, res: Response) => {
   try {
     const requestId = Number(String(req.params.id));
+    if (!(await hasCustomerServiceRequestAccess(req, requestId, { allowGuest: true }))) {
+      return res.status(404).json({ error: "Request tidak ditemukan" });
+    }
     const [request] = await db
       .select()
       .from(customerServiceRequestsTable)
