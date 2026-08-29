@@ -209,6 +209,7 @@ import {
   listSalesOrders,
   listLogisticOrders,
   listProductOrders,
+  listPortalServiceOrders,
   createSalesOrder,
   cancelSalesOrder,
   cancelLogisticOrder,
@@ -1371,6 +1372,19 @@ router.get("/product-orders", requireCustomerPortalAuth, async (req, res) => {
   const portalCustId = (req as PortalAuthReq).portalCustomerId;
   try {
     return res.json(await listProductOrders(portalCustId));
+  } catch (err) {
+    if (err instanceof LogisticOrderServiceError) return res.status(err.statusCode).json({ message: err.message });
+    throw err;
+  }
+});
+
+// GET /api/portal/service-orders — canonical cross-service feed for the
+// authenticated customer dashboard. The route never accepts owner IDs from
+// query/body; ownership is derived from the portal session context.
+router.get("/service-orders", requireCustomerPortalAuth, async (req, res) => {
+  const portalCustId = (req as PortalAuthReq).portalCustomerId;
+  try {
+    return res.json(await listPortalServiceOrders(portalCustId));
   } catch (err) {
     if (err instanceof LogisticOrderServiceError) return res.status(err.statusCode).json({ message: err.message });
     throw err;

@@ -1,6 +1,11 @@
 import { Router, Request, Response } from "express";
 import { randomBytes } from "crypto";
-import { requirePortalAuth, verifyDevPortalEmail, type PortalAuthReq } from "../lib/supabaseAuth.js";
+import {
+  optionalCustomerPortalAuth,
+  requirePortalAuth,
+  verifyDevPortalEmail,
+  type PortalAuthReq,
+} from "../lib/supabaseAuth.js";
 import { createIdempotencyMiddleware } from "../lib/financial/idempotency.js";
 import { db } from "@workspace/db";
 import {
@@ -45,8 +50,11 @@ import { getAdminGroupWa } from "../lib/adminWa.js";
 import {
   PortalCompanyScopeError,
   normalizeCompanyId,
-  resolvePortalCustomerCompanyIdByEmail,
 } from "../lib/services/portalCompanyScope.js";
+import {
+  getPortalCustomerContext,
+  PortalCustomerContextError,
+} from "../lib/services/portalCustomerContextService.js";
 
 async function resolveCustomerPortalTaxSnapshot(productScope: "goods" | "jasa") {
   const result = await db.execute(sql`
@@ -114,6 +122,13 @@ db.execute(sql`
     ADD COLUMN IF NOT EXISTS payment_status TEXT DEFAULT 'unpaid',
     ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()
+`).catch(() => {});
+
+// Authenticated portal orders need a session-owned identity. Legacy rows with
+// NULL remain available only through their explicit tracking token.
+db.execute(sql`
+  ALTER TABLE portal_product_orders
+    ADD COLUMN IF NOT EXISTS portal_customer_id INTEGER
 `).catch(() => {});
 
 // Add shipping spec columns to order items
@@ -629,36 +644,25 @@ portalProductOrdersRouter.get("/products", async (req: Request, res: Response) =
 // ── POST /api/portal-product/orders — buat order baru (public, optional auth) ──
 portalProductOrdersRouter.post("/orders",
   createIdempotencyMiddleware("portal:product-orders", { ttlHours: 48 }),
+  optionalCustomerPortalAuth,
   async (req: Request, res: Response) => {
-  // Optional auth: if Authorization header present, resolve portal customer email
-  let portalEmail: string | null = null;
-  const authHeader = req.headers.authorization;
-  if (authHeader?.startsWith("Bearer ")) {
+  const portalCustomerId = (req as Partial<PortalAuthReq>).portalCustomerId ?? null;
+  let context: Awaited<ReturnType<typeof getPortalCustomerContext>> | null = null;
+  if (portalCustomerId) {
     try {
-      const { verifyPortalJwt } = await import("../lib/portalJwt.js");
-      const { verifySupabaseToken } = await import("../lib/supabaseAdmin.js");
-      const { portalCustomersTable: pct } = await import("@workspace/db");
-      const { eq: eqFn } = await import("drizzle-orm");
-      const tok = authHeader.slice(7);
-
-      // 1) Dev token — HMAC-verified, IS_PROD-gated (returns null in production or on bad sig)
-      if (tok.startsWith("devportal.")) {
-        portalEmail = verifyDevPortalEmail(tok);
+      context = await getPortalCustomerContext(portalCustomerId);
+    } catch (error) {
+      if (error instanceof PortalCustomerContextError) {
+        return res.status(error.statusCode).json({ message: error.message });
       }
-      // 2) Portal JWT
-      if (!portalEmail) {
-        const pp = await verifyPortalJwt(tok);
-        if (pp) {
-          const [c] = await db.select({ email: pct.email }).from(pct).where(eqFn(pct.id, pp.customerId));
-          if (c) portalEmail = c.email;
-        }
-      }
-      // 3) Supabase token fallback
-      if (!portalEmail) {
-        const su = await verifySupabaseToken(tok);
-        if (su?.email) portalEmail = su.email;
-      }
-    } catch { /* ignore auth errors — treat as anonymous */ }
+      throw error;
+    }
+    if (!context.customerType) {
+      return res.status(422).json({ message: "Profil customer belum menyelesaikan tipe akun." });
+    }
+    if (context.customerType === "company" && !context.companyId) {
+      return res.status(422).json({ message: "Customer Portal belum memiliki membership perusahaan aktif." });
+    }
   }
 
   const {
@@ -687,21 +691,12 @@ portalProductOrdersRouter.post("/orders",
   if (!customerName?.trim() || !email?.trim() || !phone?.trim()) {
     return res.status(400).json({ message: "customerName, email, phone wajib diisi" });
   }
-  // Jika customer sedang login (portalEmail ada), gunakan email dari token sebagai canonical email
-  // agar order selalu muncul di dashboard customer yang sudah login.
-  const resolvedEmail = portalEmail ?? email!.trim();
-  let companyId: number | null = null;
-  try {
-    companyId = await resolvePortalCustomerCompanyIdByEmail(
-      resolvedEmail,
-      { required: true },
-    );
-  } catch (error) {
-    if (error instanceof PortalCompanyScopeError) {
-      return res.status(error.statusCode).json({ message: error.message });
-    }
-    throw error;
-  }
+  // An authenticated customer's email/name/phone/company are all canonical
+  // session values. Guest contact fields are not an authorization identity.
+  const resolvedEmail = context?.customer.email ?? email!.trim();
+  const resolvedCustomerName = context?.customer.name ?? customerName!.trim();
+  const resolvedPhone = context?.customer.phone ?? phone!.trim();
+  const companyId = context?.companyId ?? null;
   const isPickup = shippingMethod === "pickup" || !shippingAddress?.trim();
   if (!Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ message: "Minimal satu produk harus dipilih" });
@@ -790,9 +785,9 @@ portalProductOrdersRouter.post("/orders",
       .values({
         orderNumber,
         companyId,
-        customerName: customerName.trim(),
+         customerName: resolvedCustomerName,
         email: resolvedEmail,
-        phone: phone.trim(),
+         phone: resolvedPhone,
         shippingAddress: shippingAddress?.trim() ?? (isPickup ? "AMBIL SENDIRI" : ""),
         notes: notes?.trim() ?? null,
         subtotal: String(subtotal),
@@ -820,6 +815,9 @@ portalProductOrdersRouter.post("/orders",
     await tx.execute(sql`UPDATE portal_product_orders SET order_type = ${orderTypeVal} WHERE id = ${order.id}`);
     if (productApproveToken) {
       await tx.execute(sql`UPDATE portal_product_orders SET product_approve_token = ${productApproveToken} WHERE id = ${order.id}`);
+    }
+    if (portalCustomerId) {
+      await tx.execute(sql`UPDATE portal_product_orders SET portal_customer_id = ${portalCustomerId} WHERE id = ${order.id}`);
     }
 
     const itemRows = resolvedItems.map(({ item: i, productScope: itemScope, serviceScope }) => ({

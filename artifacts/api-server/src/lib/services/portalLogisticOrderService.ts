@@ -23,7 +23,7 @@ import {
   logisticOrdersTable,
   quoteRequestsTable,
 } from "@workspace/db";
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, and, desc, sql, or, isNull } from "drizzle-orm";
 import { ObjectStorageService } from "../objectStorage.js";
 import { sendViaService as sendWhatsApp } from "../waTransport.js";
 import { getAdminWa } from "../adminWa.js";
@@ -251,30 +251,29 @@ export async function listSalesOrders(portalCustomerId: number) {
     .where(eq(portalCustomersTable.id, portalCustomerId));
   if (!customer) throw new LogisticOrderServiceError(401, "Customer not found");
 
-  if (customer.role === "admin") {
-    const orders = await db
-      .select()
-      .from(salesDocumentsTable)
-      .orderBy(sql`${salesDocumentsTable.createdAt} DESC`);
-    return orders.map((o) => ({
-      id: o.id,
-      docNumber: o.docNumber,
-      status: o.status,
-      grandTotal: Number(o.grandTotal ?? 0),
-      createdAt: o.createdAt.toISOString(),
-    }));
+  const context = await getPortalCustomerContext(portalCustomerId);
+  if (!context.customerType) {
+    throw new LogisticOrderServiceError(422, "Profil customer belum menyelesaikan tipe akun.");
+  }
+  if (context.customerType === "company" && !context.companyId) {
+    throw new LogisticOrderServiceError(422, "Customer Portal belum memiliki membership perusahaan aktif.");
   }
 
-  const [crmCustomer] = await db
-    .select()
-    .from(customersTable)
-    .where(eq(customersTable.email, customer.email));
-  if (!crmCustomer) return [];
+  // Sales documents created by the portal carry the immutable session identity
+  // in created_by_id. Company members may also see documents owned by their
+  // active canonical company; no email lookup is an authorization step.
+  const ownership = context.customerType === "individual"
+    ? and(
+        eq(salesDocumentsTable.createdById, `portal:${portalCustomerId}`),
+        isNull(salesDocumentsTable.companyId),
+      )
+    : eq(salesDocumentsTable.companyId, context.companyId!);
 
   const orders = await db
     .select()
     .from(salesDocumentsTable)
-    .where(eq(salesDocumentsTable.customerId, crmCustomer.id));
+    .where(ownership)
+    .orderBy(sql`${salesDocumentsTable.createdAt} DESC`);
   return orders.map((o) => ({
     id: o.id,
     docNumber: o.docNumber,
@@ -340,10 +339,21 @@ export async function listProductOrders(portalCustomerId: number) {
     .where(eq(portalCustomersTable.id, portalCustomerId));
   if (!customer) throw new LogisticOrderServiceError(401, "Customer not found");
 
+  const context = await getPortalCustomerContext(portalCustomerId);
+  if (!context.customerType) {
+    throw new LogisticOrderServiceError(422, "Profil customer belum menyelesaikan tipe akun.");
+  }
+  if (context.customerType === "company" && !context.companyId) {
+    throw new LogisticOrderServiceError(422, "Customer Portal belum memiliki membership perusahaan aktif.");
+  }
+  const ownership = context.customerType === "individual"
+    ? sql`portal_customer_id = ${portalCustomerId} AND company_id IS NULL`
+    : sql`company_id = ${context.companyId}`;
+
   const rows = await db.execute(sql`
     SELECT id, order_number, status, grand_total, created_at, tracking_token, customer_name
     FROM portal_product_orders
-    WHERE email = ${customer.email}
+    WHERE ${ownership}
     ORDER BY created_at DESC
   `);
   return (rows.rows as Array<Record<string, unknown>>).map((r) => ({
@@ -357,6 +367,106 @@ export async function listProductOrders(portalCustomerId: number) {
         : String(r.created_at),
     trackingToken: r.tracking_token ?? null,
   }));
+}
+
+/**
+ * GET /service-orders — one canonical customer-owned feed for the five
+ * customer-facing logistics services. Pabean and Custom Clearance are stored
+ * as logistic orders and are identified by their persisted service type.
+ */
+export async function listPortalServiceOrders(portalCustomerId: number) {
+  const context = await getPortalCustomerContext(portalCustomerId);
+  if (!context.customerType) {
+    throw new LogisticOrderServiceError(422, "Profil customer belum menyelesaikan tipe akun.");
+  }
+  if (context.customerType === "company" && !context.companyId) {
+    throw new LogisticOrderServiceError(422, "Customer Portal belum memiliki membership perusahaan aktif.");
+  }
+
+  const ownerWhere = context.customerType === "individual"
+    ? sql`portal_customer_id = ${portalCustomerId} AND company_id IS NULL`
+    : sql`company_id = ${context.companyId}`;
+
+  const [logisticRows, oceanRows, airRows, truckingRows] = await Promise.all([
+    db.execute(sql`
+      SELECT id, order_number, shipment_type, origin, destination, status,
+             grand_total, created_at
+        FROM logistic_orders
+       WHERE ${ownerWhere}
+       ORDER BY created_at DESC
+    `),
+    db.execute(sql`
+      SELECT id, order_number, shipment_type, origin_city, origin_port,
+             destination_city, destination_port, status, grand_total, created_at
+        FROM ocean_freight_orders
+       WHERE ${ownerWhere}
+       ORDER BY created_at DESC
+    `),
+    db.execute(sql`
+      SELECT id, order_number, origin_airport, dest_airport, status,
+             grand_total, created_at
+        FROM air_freight_orders
+       WHERE ${ownerWhere}
+       ORDER BY created_at DESC
+    `),
+    db.execute(sql`
+      SELECT id, booking_number, vehicle_name, area_pickup, area_delivery,
+             status, estimasi_total, created_at
+        FROM trucking_booking_requests
+       WHERE ${ownerWhere}
+       ORDER BY created_at DESC
+    `),
+  ]);
+
+  const rows = [
+    ...(logisticRows.rows as Array<Record<string, unknown>>).map((row) => {
+      const shipmentType = String(row.shipment_type ?? "Logistic");
+      const lower = shipmentType.toLowerCase();
+      const serviceType = lower.includes("custom clearance")
+        ? "Custom Clearance"
+        : lower.includes("pabean") || lower.includes("ppjk")
+          ? "Pabean"
+          : shipmentType;
+      return {
+        id: Number(row.id),
+        orderNumber: String(row.order_number),
+        serviceType,
+        status: String(row.status),
+        grandTotal: Number(row.grand_total ?? 0),
+        createdAt: new Date(String(row.created_at)).toISOString(),
+        subtitle: `${row.origin ?? "—"} → ${row.destination ?? "—"}`,
+      };
+    }),
+    ...(oceanRows.rows as Array<Record<string, unknown>>).map((row) => ({
+      id: Number(row.id),
+      orderNumber: String(row.order_number),
+      serviceType: "Ocean Freight",
+      status: String(row.status),
+      grandTotal: Number(row.grand_total ?? 0),
+      createdAt: new Date(String(row.created_at)).toISOString(),
+      subtitle: `${row.origin_port ?? row.origin_city ?? "—"} → ${row.destination_port ?? row.destination_city ?? "—"}`,
+    })),
+    ...(airRows.rows as Array<Record<string, unknown>>).map((row) => ({
+      id: Number(row.id),
+      orderNumber: String(row.order_number),
+      serviceType: "Air Freight",
+      status: String(row.status),
+      grandTotal: Number(row.grand_total ?? 0),
+      createdAt: new Date(String(row.created_at)).toISOString(),
+      subtitle: `${row.origin_airport ?? "—"} → ${row.dest_airport ?? "—"}`,
+    })),
+    ...(truckingRows.rows as Array<Record<string, unknown>>).map((row) => ({
+      id: Number(row.id),
+      orderNumber: String(row.booking_number),
+      serviceType: "Domestic / Trucking",
+      status: String(row.status),
+      grandTotal: Number(row.estimasi_total ?? 0),
+      createdAt: new Date(String(row.created_at)).toISOString(),
+      subtitle: `${row.area_pickup ?? "—"} → ${row.area_delivery ?? "—"}`,
+    })),
+  ];
+
+  return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 type OrderItem = { productId?: number; name: string; quantity: number; unitPrice: number };
@@ -524,21 +634,24 @@ export async function cancelSalesOrder(portalCustomerId: number, orderId: number
     .where(eq(portalCustomersTable.id, portalCustomerId));
   if (!customer) throw new LogisticOrderServiceError(401, "Customer not found");
 
-  const [crmCustomer] = await db
-    .select()
-    .from(customersTable)
-    .where(eq(customersTable.email, customer.email));
-  if (!crmCustomer) throw new LogisticOrderServiceError(403, "Forbidden");
+  const context = await getPortalCustomerContext(portalCustomerId);
+  if (!context.customerType) {
+    throw new LogisticOrderServiceError(422, "Profil customer belum menyelesaikan tipe akun.");
+  }
+  if (context.customerType === "company" && !context.companyId) {
+    throw new LogisticOrderServiceError(422, "Customer Portal belum memiliki membership perusahaan aktif.");
+  }
+  const ownership = context.customerType === "individual"
+    ? and(
+        eq(salesDocumentsTable.createdById, `portal:${portalCustomerId}`),
+        isNull(salesDocumentsTable.companyId),
+      )
+    : eq(salesDocumentsTable.companyId, context.companyId!);
 
   const [doc] = await db
     .select()
     .from(salesDocumentsTable)
-    .where(
-      and(
-        eq(salesDocumentsTable.id, orderId),
-        eq(salesDocumentsTable.customerId, crmCustomer.id)
-      )
-    );
+    .where(and(eq(salesDocumentsTable.id, orderId), ownership));
   if (!doc) throw new LogisticOrderServiceError(404, "Order not found");
   if (doc.status === "cancelled" || doc.status === "done") {
     throw new LogisticOrderServiceError(400, "Order cannot be cancelled");
@@ -569,15 +682,24 @@ export async function cancelLogisticOrder(portalCustomerId: number, orderId: num
     .where(eq(portalCustomersTable.id, portalCustomerId));
   if (!customer) throw new LogisticOrderServiceError(401, "Customer not found");
 
+  const context = await getPortalCustomerContext(portalCustomerId);
+  if (!context.customerType) {
+    throw new LogisticOrderServiceError(422, "Profil customer belum menyelesaikan tipe akun.");
+  }
+  if (context.customerType === "company" && !context.companyId) {
+    throw new LogisticOrderServiceError(422, "Customer Portal belum memiliki membership perusahaan aktif.");
+  }
+  const ownership = context.customerType === "individual"
+    ? and(
+        eq(logisticOrdersTable.portalCustomerId, portalCustomerId),
+        isNull(logisticOrdersTable.companyId),
+      )
+    : eq(logisticOrdersTable.companyId, context.companyId!);
+
   const [order] = await db
     .select()
     .from(logisticOrdersTable)
-    .where(
-      and(
-        eq(logisticOrdersTable.id, orderId),
-        eq(logisticOrdersTable.email, customer.email)
-      )
-    );
+    .where(and(eq(logisticOrdersTable.id, orderId), ownership));
   if (!order) throw new LogisticOrderServiceError(404, "Order not found");
   if (order.status === "Cancelled" || order.status === "Completed") {
     throw new LogisticOrderServiceError(400, "Order cannot be cancelled");

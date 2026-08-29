@@ -50,6 +50,7 @@ export default function Dashboard() {
     const es = new EventSource("/api/ecommerce/events");
     es.addEventListener("logistic_order_status_changed", () => {
       qc.invalidateQueries({ queryKey: ["listPortalLogisticOrders"] });
+      qc.invalidateQueries({ queryKey: ["portal-service-orders"] });
     });
     return () => es.close();
   }, [authed, qc]);
@@ -80,6 +81,33 @@ export default function Dashboard() {
     staleTime: 60_000,
   });
 
+  const { data: serviceOrdersResponse, isLoading: isLoadingService } = useQuery<Array<{
+    id: number;
+    orderNumber: string;
+    serviceType: string;
+    status: string;
+    grandTotal: number;
+    createdAt: string;
+    subtitle: string;
+  }>>({
+    queryKey: ["portal-service-orders"],
+    queryFn: async () => {
+      const r = await fetch("/api/portal/service-orders", { credentials: "include" });
+      if (!r.ok) throw new Error("service orders error");
+      return r.json() as Promise<Array<{
+        id: number;
+        orderNumber: string;
+        serviceType: string;
+        status: string;
+        grandTotal: number;
+        createdAt: string;
+        subtitle: string;
+      }>>;
+    },
+    enabled: authed,
+    staleTime: 60_000,
+  });
+
   const { data: dashStats } = useQuery<DashboardStats>({
     queryKey: ["portal-dashboard-stats"],
     queryFn: async () => {
@@ -100,6 +128,7 @@ export default function Dashboard() {
   const logisticOrders  = Array.isArray(logisticResponse)      ? logisticResponse      : [];
   const crmOrders       = Array.isArray(ordersResponse)         ? ordersResponse        : [];
   const productOrders   = Array.isArray(productOrdersResponse)  ? productOrdersResponse : [];
+  const serviceOrders   = Array.isArray(serviceOrdersResponse)  ? serviceOrdersResponse : [];
 
   const allOrders = [
     ...logisticOrders.map((o) => ({
@@ -135,9 +164,20 @@ export default function Dashboard() {
       createdAt:     o.createdAt,
       trackUrl:      `/product-order-track?order=${encodeURIComponent(o.orderNumber)}`,
     })),
+    ...serviceOrders.map((o) => ({
+      _key:          `service-${o.id}-${o.serviceType}`,
+      displayNumber: o.orderNumber,
+      subtitle:      `${o.serviceType} · ${o.subtitle}`,
+      status:        o.status,
+      displayStatus: LOGISTIC_STATUS_ID[o.status] ?? o.status,
+      statusColor:   LOGISTIC_STATUS_COLOR[o.status] ?? "bg-gray-100 text-gray-800",
+      grandTotal:    o.grandTotal,
+      createdAt:     o.createdAt,
+      trackUrl:      `/track?order=${encodeURIComponent(o.orderNumber)}`,
+    })),
   ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-  const isLoadingOrders   = isLoadingCrm || isLoadingLogistic || isLoadingProduct;
+  const isLoadingOrders   = isLoadingCrm || isLoadingLogistic || isLoadingProduct || isLoadingService;
   const shipmentAktif     = dashStats?.activeOrders ?? logisticOrders.filter((o) => ACTIVE_STATUSES.has(o.status)).length;
   const menungguPenawaran = logisticOrders.filter((o) => PENDING_QUOTE_STATUSES.has(o.status)).length;
   const menungguApproval  = logisticOrders.filter((o) => PENDING_APPROVAL_STATUSES.has(o.status)).length;

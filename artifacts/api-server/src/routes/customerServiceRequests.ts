@@ -8,10 +8,15 @@ import {
 } from "@workspace/db";
 import { eq, and, desc, sql } from "drizzle-orm";
 import {
+  optionalCustomerPortalAuth,
   requirePortalAuth,
   type PortalAuthReq,
 } from "../lib/supabaseAuth.js";
 import { logger } from "../lib/logger.js";
+import {
+  getPortalCustomerContext,
+  PortalCustomerContextError,
+} from "../lib/services/portalCustomerContextService.js";
 
 export const customerServiceRequestsRouter = Router();
 
@@ -81,6 +86,42 @@ db.execute(sql`
   )
 `).catch(() => {});
 
+db.execute(sql`
+  ALTER TABLE customer_service_requests
+    ADD COLUMN IF NOT EXISTS portal_customer_id INTEGER,
+    ADD COLUMN IF NOT EXISTS company_id INTEGER
+`).catch(() => {});
+
+async function requireOwnedRequestId(req: Request, requestId: number): Promise<boolean> {
+  const portalCustomerId = (req as PortalAuthReq).portalCustomerId;
+  const context = await getPortalCustomerContext(portalCustomerId);
+  if (!context.customerType) {
+    throw new PortalCustomerContextError(422, "Profil customer belum menyelesaikan tipe akun.");
+  }
+  if (context.customerType === "company" && !context.companyId) {
+    throw new PortalCustomerContextError(422, "Customer Portal belum memiliki membership perusahaan aktif.");
+  }
+
+  const ownership = context.customerType === "individual"
+    ? sql`(portal_customer_id = ${portalCustomerId} OR customer_id = ${portalCustomerId}) AND company_id IS NULL`
+    : sql`company_id = ${context.companyId}`;
+  const result = await db.execute(sql`
+    SELECT id
+      FROM customer_service_requests
+     WHERE id = ${requestId} AND ${ownership}
+     LIMIT 1
+  `);
+  return result.rows.length === 1;
+}
+
+function contextErrorResponse(res: Response, error: unknown): boolean {
+  if (error instanceof PortalCustomerContextError) {
+    res.status(error.statusCode).json({ error: error.message });
+    return true;
+  }
+  return false;
+}
+
 // ── Number generator ──────────────────────────────────────────────────────────
 async function generateRequestNumber(): Promise<string> {
   const year = new Date().getFullYear();
@@ -94,26 +135,31 @@ async function generateRequestNumber(): Promise<string> {
 
 // ── POST /api/customer-service-requests ──────────────────────────────────────
 // Create a new draft request (auth optional — allows guest draft, customer saves to profile)
-customerServiceRequestsRouter.post("/", async (req: Request, res: Response) => {
+customerServiceRequestsRouter.post("/", optionalCustomerPortalAuth, async (req: Request, res: Response) => {
   try {
+    const portalCustomerId = (req as Partial<PortalAuthReq>).portalCustomerId ?? null;
     const {
       customerName, customerEmail, customerPhone, customerCompany,
       tradeType, orderMode, pricingMode, notes,
     } = req.body as Record<string, string>;
 
-    if (!customerName || !customerEmail || !tradeType) {
+    let context: Awaited<ReturnType<typeof getPortalCustomerContext>> | null = null;
+    if (portalCustomerId) {
+      context = await getPortalCustomerContext(portalCustomerId);
+      if (!context.customerType) {
+        return res.status(422).json({ error: "Profil customer belum menyelesaikan tipe akun." });
+      }
+      if (context.customerType === "company" && !context.companyId) {
+        return res.status(422).json({ error: "Customer Portal belum memiliki membership perusahaan aktif." });
+      }
+    }
+
+    if ((!context && (!customerName || !customerEmail)) || !tradeType) {
       return res.status(400).json({ error: "customerName, customerEmail, tradeType wajib diisi" });
     }
     if (!["EXPORT", "IMPORT", "DOMESTIC"].includes(String(tradeType).toUpperCase())) {
       return res.status(400).json({ error: "tradeType harus EXPORT, IMPORT, atau DOMESTIC" });
     }
-
-    // Try to link to a portal customer by email
-    const [existing] = await db
-      .select({ id: portalCustomersTable.id })
-      .from(portalCustomersTable)
-      .where(eq(portalCustomersTable.email, customerEmail.toLowerCase().trim()))
-      .limit(1);
 
     const requestNumber = await generateRequestNumber();
 
@@ -121,11 +167,11 @@ customerServiceRequestsRouter.post("/", async (req: Request, res: Response) => {
       .insert(customerServiceRequestsTable)
       .values({
         requestNumber,
-        customerId: existing?.id ?? null,
-        customerName: customerName.trim(),
-        customerEmail: customerEmail.toLowerCase().trim(),
-        customerPhone: customerPhone ?? null,
-        customerCompany: customerCompany ?? null,
+        customerId: portalCustomerId,
+        customerName: context?.customer.name ?? customerName!.trim(),
+        customerEmail: context?.customer.email ?? customerEmail!.toLowerCase().trim(),
+        customerPhone: context?.customer.phone ?? customerPhone ?? null,
+        customerCompany: context?.company?.name ?? (context ? null : customerCompany ?? null),
         tradeType: String(tradeType).toUpperCase(),
         orderMode: orderMode ?? "ITEM_MANDIRI",
         pricingMode: pricingMode ?? "PER_ITEM",
@@ -133,6 +179,15 @@ customerServiceRequestsRouter.post("/", async (req: Request, res: Response) => {
         notes: notes ?? null,
       })
       .returning();
+
+    if (portalCustomerId) {
+      await db.execute(sql`
+        UPDATE customer_service_requests
+           SET portal_customer_id = ${portalCustomerId},
+               company_id = ${context?.companyId ?? null}
+         WHERE id = ${inserted.id}
+      `);
+    }
 
     logger.info({ requestNumber: inserted.requestNumber }, "[CSR] draft request created");
     return res.status(201).json(inserted);
@@ -143,9 +198,12 @@ customerServiceRequestsRouter.post("/", async (req: Request, res: Response) => {
 });
 
 // ── GET /api/customer-service-requests/:id ───────────────────────────────────
-customerServiceRequestsRouter.get("/:id", async (req: Request, res: Response) => {
+customerServiceRequestsRouter.get("/:id", requirePortalAuth, async (req: Request, res: Response) => {
   try {
     const id = Number(String(req.params.id));
+    if (!Number.isInteger(id) || !(await requireOwnedRequestId(req, id))) {
+      return res.status(404).json({ error: "Request tidak ditemukan" });
+    }
     const [request] = await db
       .select()
       .from(customerServiceRequestsTable)
@@ -166,13 +224,14 @@ customerServiceRequestsRouter.get("/:id", async (req: Request, res: Response) =>
 
     return res.json({ ...request, items, documents });
   } catch (err) {
+    if (contextErrorResponse(res, err)) return;
     logger.error({ err }, "[CSR] get error");
     return res.status(500).json({ error: "Gagal mengambil request" });
   }
 });
 
 // ── GET /api/customer-service-requests/by-number/:number ─────────────────────
-customerServiceRequestsRouter.get("/by-number/:number", async (req: Request, res: Response) => {
+customerServiceRequestsRouter.get("/by-number/:number", requirePortalAuth, async (req: Request, res: Response) => {
   try {
     const [request] = await db
       .select()
@@ -180,6 +239,9 @@ customerServiceRequestsRouter.get("/by-number/:number", async (req: Request, res
       .where(eq(customerServiceRequestsTable.requestNumber, String(req.params.number)))
       .limit(1);
     if (!request) return res.status(404).json({ error: "Request tidak ditemukan" });
+    if (!(await requireOwnedRequestId(req, request.id))) {
+      return res.status(404).json({ error: "Request tidak ditemukan" });
+    }
 
     const items = await db
       .select()
@@ -194,6 +256,7 @@ customerServiceRequestsRouter.get("/by-number/:number", async (req: Request, res
 
     return res.json({ ...request, items, documents });
   } catch (err) {
+    if (contextErrorResponse(res, err)) return;
     logger.error({ err }, "[CSR] get-by-number error");
     return res.status(500).json({ error: "Gagal mengambil request" });
   }
