@@ -961,6 +961,10 @@ export async function fetchCandidates(
           bankAmount: Number(amount),
           absoluteVarianceTolerance: tolerance.absolute,
           percentageVarianceTolerance: tolerance.percentage,
+           // A canonical settlement outside the configured tolerance remains
+           // useful review evidence. scoreUnified marks the variance and the
+           // orchestration layer keeps canonical candidates manual-review-only.
+           includeOutsideTolerance: true,
           // expected_bank_settlements stores the external account number;
           // public bank_mutations stores company_bank_accounts.id.
           bankAccountId: externalBankAccountNumber ?? mutationBankAccountId,

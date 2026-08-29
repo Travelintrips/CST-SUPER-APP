@@ -1,10 +1,24 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const dbMock = vi.hoisted(() => ({
+  execute: vi.fn(),
+}));
+
+vi.mock("@workspace/db", () => ({
+  db: { execute: dbMock.execute },
+  RECONCILIATION_CANDIDATE_SOURCES: {
+    LEGACY_QRIS: "public.qris_settlements",
+    CANONICAL_SPORT_CENTER: "sport_center.payment_settlement_batches",
+  },
+}));
+
 import {
   CANONICAL_SETTLEMENT_SOURCE,
   CanonicalSettlementEligibilityError,
   canonicalSettlementDetailsSql,
   isCanonicalSettlementEligible,
   mapCanonicalSettlementRow,
+  shouldApplyCanonicalAmountTolerance,
 } from "../lib/reconciliation/canonicalSettlementAdapter.js";
 
 function makeRow(overrides: Record<string, unknown> = {}) {
@@ -31,6 +45,17 @@ function makeRow(overrides: Record<string, unknown> = {}) {
 }
 
 describe("Phase 4C-3 canonical settlement adapter", () => {
+  it("can expose an outside-tolerance row for review when requested", () => {
+    expect(shouldApplyCanonicalAmountTolerance({
+      bankAmount: 933420,
+      includeOutsideTolerance: false,
+    })).toBe(true);
+    expect(shouldApplyCanonicalAmountTolerance({
+      bankAmount: 933420,
+      includeOutsideTolerance: true,
+    })).toBe(false);
+  });
+
   it("maps the exact canonical row with expected bank amount as amount", () => {
     const candidate = mapCanonicalSettlementRow(
       makeRow({

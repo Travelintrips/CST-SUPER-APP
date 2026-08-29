@@ -1,4 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const dbMock = vi.hoisted(() => ({
+  execute: vi.fn(),
+}));
+
+vi.mock("@workspace/db", () => ({
+  db: { execute: dbMock.execute },
+  RECONCILIATION_CANDIDATE_SOURCES: {
+    LEGACY_QRIS: "public.qris_settlements",
+    CANONICAL_SPORT_CENTER: "sport_center.payment_settlement_batches",
+  },
+}));
+
 import {
   CANONICAL_SETTLEMENT_SOURCE,
   isCanonicalSettlementEligible,

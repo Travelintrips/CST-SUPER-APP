@@ -69,6 +69,12 @@ export type CanonicalSettlementLookupOptions = {
   absoluteVarianceTolerance?: number | null;
   percentageVarianceTolerance?: number | null;
   /**
+   * Keep identity/date/provider-matched settlements visible even when their
+   * variance is outside the configured tolerance. Callers must keep these
+   * candidates review-only; approval still performs its own strict checks.
+   */
+  includeOutsideTolerance?: boolean;
+  /**
    * May be either the internal company_bank_accounts.id used by public bank
    * mutations or the external account number stored by Sport Center.
    * The lookup normalizes both identities before returning a candidate.
@@ -78,6 +84,15 @@ export type CanonicalSettlementLookupOptions = {
   from?: string | null;
   to?: string | null;
 };
+
+export function shouldApplyCanonicalAmountTolerance(
+  options: Pick<
+    CanonicalSettlementLookupOptions,
+    "bankAmount" | "includeOutsideTolerance"
+  >,
+): boolean {
+  return options.bankAmount != null && options.includeOutsideTolerance !== true;
+}
 
 function numberOrNull(value: unknown): number | null {
   if (value === null || value === undefined || value === "") return null;
@@ -223,7 +238,7 @@ function canonicalEligibilityFilters(
   if (options.amount != null) {
     filters.push(sql`ABS(expected_bank_amount::numeric - ${options.amount}) < 0.01`);
   }
-  if (options.bankAmount != null) {
+  if (shouldApplyCanonicalAmountTolerance(options)) {
     const absoluteTolerance = Math.max(0, Number(options.absoluteVarianceTolerance ?? 0));
     const percentageTolerance = Math.max(0, Number(options.percentageVarianceTolerance ?? 0));
     filters.push(sql`(
