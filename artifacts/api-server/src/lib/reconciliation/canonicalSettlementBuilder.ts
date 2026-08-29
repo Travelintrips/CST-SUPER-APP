@@ -1,5 +1,6 @@
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
+import { checkQrisApprovalRule } from "./qrisApprovalRule.js";
 
 /**
  * Canonical Sport Center settlement builder.
@@ -67,6 +68,10 @@ export interface CanonicalSettlementBuildOptions {
    * fail closed instead of silently expanding to another natural batch.
    */
   selectedPaymentIds?: number[];
+  qrisApprovalEvidence?: {
+    mutationId: number;
+    companyId: number;
+  };
   actor: string;
 }
 
@@ -92,6 +97,7 @@ type PaymentIdentity = {
   settlement_rule_version: string | null;
   settlement_status: string | null;
   payment_status: string | null;
+  payment_date: string | null;
 };
 
 type GroupIdentity = {
@@ -563,7 +569,11 @@ async function buildInTransaction(
       p.expected_settlement_date::text AS expected_settlement_date,
       p.settlement_rule_version,
       p.settlement_status,
-      p.status::text AS payment_status
+      p.status::text AS payment_status,
+      (
+        COALESCE(p.paid_at, p.confirmed_at, p.created_at)
+        AT TIME ZONE 'Asia/Jakarta'
+      )::date::text AS payment_date
     FROM sport_center.sport_payments p
     WHERE ${sql.join(sourceFilters, sql` AND `)}
     FOR UPDATE
@@ -584,6 +594,7 @@ async function buildInTransaction(
     settlement_rule_version: textOrNull(sourceRow.settlement_rule_version),
     settlement_status: textOrNull(sourceRow.settlement_status),
     payment_status: textOrNull(sourceRow.payment_status),
+    payment_date: textOrNull(sourceRow.payment_date),
   };
   const group = assertGroup(source);
   const requestedPaymentIds = options.selectedPaymentIds == null
@@ -611,7 +622,11 @@ async function buildInTransaction(
       p.expected_settlement_date::text AS expected_settlement_date,
       p.settlement_rule_version,
       p.settlement_status,
-      p.status::text AS payment_status
+      p.status::text AS payment_status,
+      (
+        COALESCE(p.paid_at, p.confirmed_at, p.created_at)
+        AT TIME ZONE 'Asia/Jakarta'
+      )::date::text AS payment_date
     FROM sport_center.sport_payments p
     WHERE p.status::text = 'confirmed'
       AND p.company_id = ${group.companyId}
@@ -633,6 +648,7 @@ async function buildInTransaction(
     settlement_rule_version: textOrNull(row.settlement_rule_version),
     settlement_status: textOrNull(row.settlement_status),
     payment_status: textOrNull(row.payment_status),
+    payment_date: textOrNull(row.payment_date),
   }));
   if (!payments.some((payment) => payment.id === source.id)) {
     throw new CanonicalSettlementBuilderError(
@@ -658,7 +674,7 @@ async function buildInTransaction(
     );
   }
 
-  await resolveOwnerApprovedConfig(client, group);
+  const settlementConfig = await resolveOwnerApprovedConfig(client, group);
   const bankCoaCode = await resolveCanonicalBankCoa(client, group);
 
   /*
@@ -825,7 +841,83 @@ async function buildInTransaction(
     }
     await assertActiveItemsAbsent(client, paymentIds);
   }
-  await lockPaymentJournals(client, paymentIds);
+  const paymentJournals = await lockPaymentJournals(client, paymentIds);
+  if (options.qrisApprovalEvidence) {
+    const evidence = options.qrisApprovalEvidence;
+    const mutation = rowOrThrow(
+      await client.execute(sql`
+        SELECT id, company_id, transaction_date::text AS transaction_date, amount
+        FROM bank_mutations
+        WHERE id = ${evidence.mutationId}
+        FOR UPDATE
+      `),
+      CANONICAL_SETTLEMENT_BUILDER_CODES.PAYMENT_NOT_ELIGIBLE,
+      "Mutasi bank QRIS tidak ditemukan",
+    );
+    const activeSettlement = rows(await client.execute(sql`
+      SELECT i.payment_id
+      FROM sport_center.payment_settlement_items i
+      JOIN sport_center.payment_settlement_batches b ON b.id = i.settlement_id
+      WHERE i.item_status = 'active'
+        AND i.payment_id IN (${sql.join(paymentIds.map((id) => sql`${id}`), sql`, `)})
+        AND b.status IN ('posted', 'reconciled')
+      LIMIT 1
+      FOR UPDATE OF i, b
+    `));
+    const calculationMethod = textOrNull(settlementConfig.calculation_method);
+    const effectiveMdrRate = calculationMethod === "fixed_fee"
+      ? 0
+      : Number(settlementConfig.mdr_rate ?? 0);
+    const effectiveFixedFee = calculationMethod === "percentage_of_gross"
+      ? 0
+      : Number(settlementConfig.fixed_provider_fee ?? 0);
+    const grossAmount = paymentIds.reduce(
+      (sum, paymentId) => sum + Number(paymentJournals.get(paymentId)?.gross_amount ?? 0),
+      0,
+    );
+    const calculation = rowOrThrow(
+      await client.execute(sql`
+        SELECT *
+        FROM sport_center.calculate_settlement_mdr(
+          ${grossAmount},
+          ${effectiveMdrRate},
+          ${effectiveFixedFee},
+          ${Number(settlementConfig.fee_tax_rate ?? 0)},
+          ${settlementConfig.fee_tax_inclusive === true},
+          ${Number(settlementConfig.rounding_scale ?? 2)},
+          ${String(settlementConfig.rounding_method)}
+        )
+      `),
+      CANONICAL_SETTLEMENT_BUILDER_CODES.SETTLEMENT_CONFIG_UNRESOLVED,
+      "Kalkulasi MDR canonical tidak tersedia",
+    );
+    const totalDeduction = Number(calculation.total_deduction ?? 0);
+    const approvalRule = checkQrisApprovalRule({
+      companyId: evidence.companyId,
+      mutationDate: String(mutation.transaction_date ?? ""),
+      mutationAmount: Number(mutation.amount ?? 0),
+      payments: eligiblePayments.map((payment, index) => ({
+        id: payment.id,
+        paymentDate: payment.payment_date,
+        grossAmount: Number(paymentJournals.get(payment.id)?.gross_amount ?? 0),
+        companyId: payment.company_id,
+        canonicalMdrAmount: index === 0 ? totalDeduction : 0,
+        alreadyReconciled: activeSettlement.length > 0,
+      })),
+    });
+    if (numberOrNull(mutation.company_id) !== evidence.companyId) {
+      throw new CanonicalSettlementBuilderError(
+        CANONICAL_SETTLEMENT_BUILDER_CODES.PAYMENT_NOT_ELIGIBLE,
+        "Company payment tidak sama dengan mutasi bank",
+      );
+    }
+    if (!approvalRule.ok) {
+      throw new CanonicalSettlementBuilderError(
+        CANONICAL_SETTLEMENT_BUILDER_CODES.PAYMENT_NOT_ELIGIBLE,
+        approvalRule.reason,
+      );
+    }
+  }
 
   const hasCompletedBatch = existing.some((batch) => {
     const status = textOrNull(batch.status);

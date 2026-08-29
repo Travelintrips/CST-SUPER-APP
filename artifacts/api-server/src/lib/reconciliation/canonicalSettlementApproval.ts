@@ -4,6 +4,7 @@ import {
   RECONCILIATION_CANDIDATE_SOURCES,
   type ReconciliationCandidateSource,
 } from "@workspace/db";
+import { checkQrisApprovalRule } from "./qrisApprovalRule.js";
 
 export const CANONICAL_APPROVAL_BANK_MUTATION_STATUS = "approved" as const;
 export const CANONICAL_REOPEN_BANK_MUTATION_STATUS = "unmatched" as const;
@@ -443,6 +444,55 @@ export async function approveCanonicalSettlementLink(
       throw new CanonicalSettlementApprovalError(
         CANONICAL_APPROVAL_CODES.JOURNAL_NOT_ELIGIBLE,
         "Settlement journal harus ada, posted, bertipe settlement, bukan reversal, dan menunjuk batch yang sama.",
+      );
+    }
+
+    const { rows: strictPaymentRows } = await tx.execute(sql.raw(`
+      SELECT p.id,
+             p.company_id,
+             p.amount,
+             (
+               COALESCE(p.paid_at, p.confirmed_at, p.created_at)
+               AT TIME ZONE 'Asia/Jakarta'
+             )::date::text AS payment_date
+      FROM sport_center.payment_settlement_items i
+      JOIN sport_center.sport_payments p ON p.id = i.payment_id
+      WHERE i.settlement_id = ${settlementId}
+        AND i.item_status = 'active'
+      ORDER BY p.id
+      FOR UPDATE OF i, p
+    `));
+    const publicCompanyId = Number(publicMutation.company_id);
+    const settlementCompanyId = Number(settlement.company_id);
+    if (
+      !Number.isSafeInteger(publicCompanyId)
+      || publicCompanyId <= 0
+      || settlementCompanyId !== publicCompanyId
+    ) {
+      throw new CanonicalSettlementApprovalError(
+        CANONICAL_APPROVAL_CODES.MATCHING_EVIDENCE_INVALID,
+        "Company payment tidak sama dengan mutasi bank",
+      );
+    }
+    const settlementGross = Number(settlement.gross_amount ?? 0);
+    const settlementNet = Number(settlement.net_amount ?? 0);
+    const strictApproval = checkQrisApprovalRule({
+      companyId: publicCompanyId,
+      mutationDate: String(publicMutation.transaction_date ?? ""),
+      mutationAmount: Number(publicMutation.amount ?? 0),
+      payments: (strictPaymentRows as Array<Record<string, unknown>>).map((payment, index) => ({
+        id: Number(payment.id),
+        paymentDate: payment.payment_date == null ? null : String(payment.payment_date),
+        grossAmount: Number(payment.amount ?? 0),
+        companyId: payment.company_id == null ? null : Number(payment.company_id),
+        canonicalMdrAmount: index === 0 ? settlementGross - settlementNet : 0,
+        alreadyReconciled: false,
+      })),
+    });
+    if (!strictApproval.ok) {
+      throw new CanonicalSettlementApprovalError(
+        CANONICAL_APPROVAL_CODES.MATCHING_EVIDENCE_INVALID,
+        strictApproval.reason,
       );
     }
 

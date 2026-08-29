@@ -64,3 +64,18 @@ refresh to recreate the same QRIS candidate.
 and use the reconciled settlement state as an additional fail-closed
 completion guard; keep posted canonical settlements without a bank link
 recoverable.
+
+The strict QRIS business predicate must be evaluated twice: while the canonical
+settlement is built and again inside the final reconciliation-link transaction.
+Both evaluations must use locked, current mutation/payment evidence and the
+canonical owner-approved MDR calculator.
+
+**Why:** The canonical matcher intentionally permits amount/date tolerances, and
+the builder commits before the link transaction. Without final strict
+revalidation, a concurrent mutation edit can turn an exact H-1/net match into a
+tolerant match after the settlement has been posted.
+
+**How to apply:** Re-read and lock the public mutation in each write transaction;
+derive batch net with the database-owned calculation method, fixed fee, tax, and
+rounding; then compare exact money cents and calendar dates before any approval
+status update. Legacy candidate group metadata is not an approval predicate.
