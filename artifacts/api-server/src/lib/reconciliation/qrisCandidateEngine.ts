@@ -2,6 +2,7 @@ import {
   calculateObservedDeduction,
   classifyBankMutationSource,
   isQrisSettlementDescription,
+  resolveSettlementDate,
   type BankMutationSourceClassification,
 } from "./qrisSettlement.js";
 import {
@@ -110,6 +111,10 @@ export interface QrisMutationBatchCandidate {
   confidence: number;
   reason: string;
 }
+
+export type QrisCandidateRule =
+  | "strict"
+  | "payment_method_h_minus_one";
 
 function roundMoney(value: number): number {
   return Number((Math.max(0, value) || 0).toFixed(2));
@@ -277,8 +282,10 @@ export function generateQrisMutationBatchCandidates(input: {
   accountProviderRuleCatalog?: QrisAccountProviderRuleCatalog;
   existingMutationIds?: Iterable<number>;
   requireExplicitSettlementMetadata?: boolean;
+  candidateRule?: QrisCandidateRule;
 }): QrisMutationBatchCandidate[] {
   const requireExplicitSettlementMetadata = input.requireExplicitSettlementMetadata === true;
+  const paymentMethodHMinusOneOnly = input.candidateRule === "payment_method_h_minus_one";
   const baseRules = {
     ...DEFAULT_QRIS_PROVIDER_RULES,
     ...(input.providerRules ?? {}),
@@ -333,28 +340,37 @@ export function generateQrisMutationBatchCandidates(input: {
       rule?.resolutionError === "AMBIGUOUS_EFFECTIVE_WINDOW";
     const ruleVersion = rule?.ruleVersion ?? (requireExplicitSettlementMetadata ? "" : "legacy-v1");
     const dimensionPayments = eligiblePayments.map((payment) => ({
-        ...payment,
-        expectedSettlementDate: settlementDateForMatching(
+      ...payment,
+      // The simplified candidate rule intentionally derives the settlement
+      // cohort only from the payment timestamp. Stored provider/account
+      // metadata is not a candidate gate in this mode.
+      expectedSettlementDate: paymentMethodHMinusOneOnly
+        ? resolveSettlementDate(payment.paidAt, null, 1)
+        : settlementDateForMatching(
           payment,
           matchingRules,
           effectiveAccountRules,
         ),
-      })).filter((payment) =>
-        payment.companyId === mutation.companyId
-          && payment.bankAccountId === mutation.bankAccountId
-          && payment.expectedSettlementDate != null
-          && (!requireExplicitSettlementMetadata
-             || methodOnlyPath
-             || !rule?.ruleVersion
-             || !String(payment.settlementRuleVersion ?? "").trim()
-             || payment.settlementRuleVersion === rule.ruleVersion)
-          && (!requireExplicitSettlementMetadata
-             || payment.expectedSettlementDate === mutation.transactionDate)
-          && (!requireExplicitSettlementMetadata
-             || isPaymentChronologicallyValid(payment, mutation.transactionDate)),
-      );
+    })).filter((payment) =>
+      payment.companyId === mutation.companyId
+        && payment.expectedSettlementDate != null
+        && (
+          paymentMethodHMinusOneOnly
+            ? payment.expectedSettlementDate === mutation.transactionDate
+            : payment.bankAccountId === mutation.bankAccountId
+              && (!requireExplicitSettlementMetadata
+                 || methodOnlyPath
+                 || !rule?.ruleVersion
+                 || !String(payment.settlementRuleVersion ?? "").trim()
+                 || payment.settlementRuleVersion === rule.ruleVersion)
+              && (!requireExplicitSettlementMetadata
+                 || payment.expectedSettlementDate === mutation.transactionDate)
+              && (!requireExplicitSettlementMetadata
+                 || isPaymentChronologicallyValid(payment, mutation.transactionDate))
+        ),
+    );
     const cohortPayments = dimensionPayments.filter((payment) =>
-      requireExplicitSettlementMetadata
+      paymentMethodHMinusOneOnly || requireExplicitSettlementMetadata
         ? payment.expectedSettlementDate === mutation.transactionDate
         : businessDayDistance(
           payment.expectedSettlementDate!,
@@ -384,7 +400,8 @@ export function generateQrisMutationBatchCandidates(input: {
     // With no bank-side provider evidence, only a matching QRIS payment can
     // classify the mutation. Known provider evidence retains an empty audit
     // row for an unmatched mutation, which is useful to the reviewer.
-    if (naturalPayments.length === 0 && methodOnlyPath) continue;
+    if (naturalPayments.length === 0
+      && (methodOnlyPath || paymentMethodHMinusOneOnly)) continue;
     const paymentProviderMismatch = evidence.providerCode !== "unknown"
       && naturalPayments.some((payment) =>
         !areQrisProvidersCompatible(payment.providerName, evidence.providerCode));
@@ -428,7 +445,7 @@ export function generateQrisMutationBatchCandidates(input: {
     // auto-match and never a nominal subset.
     let selectedPayments = naturalPayments;
     let partitionBlocked = false;
-    if (hasMultipleSettlements) {
+    if (hasMultipleSettlements && !paymentMethodHMinusOneOnly) {
       // Multiple settlements on the same provider/date/account are not
       // evidence that an arbitrary amount-based subset belongs to this row.
       if (!deterministicPartition) {
@@ -476,19 +493,23 @@ export function generateQrisMutationBatchCandidates(input: {
     const completeBankDimension =
       mutation.companyId != null && mutation.bankAccountId != null;
     const expectedDatesPresent = naturalPayments.every((payment) => Boolean(payment.expectedSettlementDate));
-    const matched = completeBankDimension
-      && actualEvidence
-      && knownProvider
-      && !paymentProviderMismatch
-      && (!requireExplicitSettlementMetadata || rule != null)
-      && (!requireExplicitSettlementMetadata || settlementMetadataComplete)
-      && hasNaturalBatch
-      && expectedDatesPresent
-      && !mixedCanonicalProviderGroups
-      && !partitionBlocked
-      && !splitSettlementReconcilesTotal
-      && validDeduction;
-    const reviewReason = ambiguousEffectiveRule
+    const matched = paymentMethodHMinusOneOnly
+      ? false
+      : completeBankDimension
+        && actualEvidence
+        && knownProvider
+        && !paymentProviderMismatch
+        && (!requireExplicitSettlementMetadata || rule != null)
+        && (!requireExplicitSettlementMetadata || settlementMetadataComplete)
+        && hasNaturalBatch
+        && expectedDatesPresent
+        && !mixedCanonicalProviderGroups
+        && !partitionBlocked
+        && !splitSettlementReconcilesTotal
+        && validDeduction;
+    const reviewReason = paymentMethodHMinusOneOnly
+      ? "Kandidat QRIS: payment_method QRIS dan tanggal pembayaran tepat H-1 dari tanggal mutasi. Guard provider, rekening, metadata, nominal, dan rate tidak digunakan pada tahap kandidat."
+      : ambiguousEffectiveRule
       ? "AMBIGUOUS_EFFECTIVE_WINDOW: lebih dari satu aturan provider/rekening aktif pada tanggal settlement; kandidat wajib direview."
       : mixedCanonicalProviderGroups
         ? "MULTIPLE_CANONICAL_PROVIDER_GROUPS: payment kompatibel dengan bukti bank tetapi berasal dari kelompok provider canonical berbeda; approve per kelompok."
@@ -549,23 +570,25 @@ export function generateQrisMutationBatchCandidates(input: {
         paidAt: payment.paidAt == null ? null : String(payment.paidAt),
         paymentDate: canonicalPaymentDate(payment),
       })),
-      status: matched ? "MATCHED" : !completeBankDimension
-        ? "UNMATCHED"
-        : ambiguousEffectiveRule
+      status: paymentMethodHMinusOneOnly
         ? "REVIEW"
-        : mixedCanonicalProviderGroups
+        : matched ? "MATCHED" : !completeBankDimension
+          ? "UNMATCHED"
+          : ambiguousEffectiveRule
           ? "REVIEW"
-        : evidence.providerCode === "unknown"
-        ? "REVIEW"
-        : paymentProviderMismatch
-        ? "REVIEW"
-        : !settlementMetadataComplete
-        ? "REVIEW"
-        : completeBankDimension && dimensionPayments.length > 0 && !hasNaturalBatch
-          ? "REVIEW"
-          : partitionBlocked || (hasNaturalBatch && !validDeduction)
+          : mixedCanonicalProviderGroups
             ? "REVIEW"
-            : "UNMATCHED",
+          : evidence.providerCode === "unknown"
+          ? "REVIEW"
+          : paymentProviderMismatch
+          ? "REVIEW"
+          : !settlementMetadataComplete
+          ? "REVIEW"
+          : completeBankDimension && dimensionPayments.length > 0 && !hasNaturalBatch
+            ? "REVIEW"
+            : partitionBlocked || (hasNaturalBatch && !validDeduction)
+              ? "REVIEW"
+              : "UNMATCHED",
       confidence: matched ? (selectedPayments.length > 1 ? 0.9 : 0.98) : 0,
       reason: reviewReason,
     });

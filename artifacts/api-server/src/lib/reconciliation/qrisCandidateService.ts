@@ -517,7 +517,7 @@ export async function generateQrisCandidates(options: {
     providerRuleCatalog,
     accountProviderRuleCatalog,
     existingMutationIds: finalMutationIds,
-    requireExplicitSettlementMetadata: true,
+    candidateRule: "payment_method_h_minus_one",
   });
   const reviewableCandidates = candidates.filter((candidate) =>
     candidate.paymentItems.length > 0

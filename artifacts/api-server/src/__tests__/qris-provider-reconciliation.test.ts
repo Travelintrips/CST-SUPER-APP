@@ -79,6 +79,62 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     expect(result[0]?.reason).toContain("Provider unknown");
   });
 
+  it("uses only QRIS payment method and payment date H-1 for the simplified candidate rule", () => {
+    const result = generateQrisMutationBatchCandidates({
+      candidateRule: "payment_method_h_minus_one",
+      payments: [
+        {
+          id: 913,
+          companyId: 1,
+          bankAccountId: 999,
+          amount: 1_000_000,
+          method: "QRIS",
+          status: "paid",
+          paidAt: "2026-08-05T18:00:00+07:00",
+          expectedSettlementDate: "2026-08-20",
+          settlementRuleVersion: "stale-rule",
+          providerName: "paylabs",
+        },
+        {
+          id: 914,
+          companyId: 1,
+          bankAccountId: 999,
+          amount: 50_000,
+          method: "QRIS",
+          status: "paid",
+          paidAt: "2026-08-04T18:00:00+07:00",
+          expectedSettlementDate: "2026-08-05",
+          providerName: "mandiri_direct",
+        },
+      ],
+      mutations: [{
+        id: 915,
+        companyId: 1,
+        bankAccountId: 2,
+        amount: 1,
+        transactionDate: "2026-08-06",
+        direction: "IN",
+        source: "bank_import",
+        sourceClassification: "unknown",
+        providerName: null,
+        description: "TRANSFER MASUK",
+      }],
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      mutationId: 915,
+      status: "REVIEW",
+      providerCode: "unknown",
+      estimatedSettlementDate: "2026-08-06",
+      paymentItems: [{
+        paymentId: 913,
+        expectedSettlementDate: "2026-08-06",
+      }],
+    });
+    expect(result[0]?.reason).toContain("payment_method QRIS");
+  });
+
   it("selects the production account rule by effective settlement window", () => {
     const accountProviderRuleCatalog = accountProviderRuleCatalogFromRows([
       {
