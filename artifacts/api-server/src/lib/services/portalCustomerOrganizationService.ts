@@ -149,9 +149,14 @@ export async function configureCustomerOrganization(input: {
 }) {
   const customerId = positiveId(input.customerId, "Customer ID");
   if (input.customerType === "individual") {
-    await db.update(portalCustomersTable)
-      .set({ company: null, customerType: "individual" })
-      .where(eq(portalCustomersTable.id, customerId));
+    await db.transaction(async (tx) => {
+      await tx.update(portalCompanyMembersTable)
+        .set({ isActive: false, updatedAt: new Date() })
+        .where(eq(portalCompanyMembersTable.portalCustomerId, customerId));
+      await tx.update(portalCustomersTable)
+        .set({ company: null, customerType: "individual" })
+        .where(eq(portalCustomersTable.id, customerId));
+    });
     return { customerType: "individual" as const, companyId: null, membership: null, pendingRequest: null };
   }
 

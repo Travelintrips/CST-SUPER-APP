@@ -24,6 +24,11 @@ import {
 import type { ProductMediaItem, MarketplaceItem } from "@/lib/catalogFilters";
 import { resolveImageUrl } from "@/lib/utils";
 import { GooglePlacesAutocomplete, type SelectedGooglePlace } from "@/components/ui/google-places-autocomplete";
+import { getAuthHeaders, isAuthenticated } from "@/lib/auth";
+import {
+  RfqCustomerContextCompletion,
+  type RfqCustomerContext,
+} from "@/components/RfqCustomerContextCompletion";
 // C1: auth via cookie (credentials: "include")
 
 // ── Extended types for new sections ──────────────────────────────────────────
@@ -765,6 +770,8 @@ interface SubmitDialogProps {
 
 function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
   const { t } = useLanguage();
+  const [, setLocation] = useLocation();
+  const authenticatedCustomer = isAuthenticated();
   const [form, setForm] = useState<RfqForm>({
     buyerName: "", companyName: "", email: "", guestContact: "",
     destination: "", destinationPlace: null, requiredDate: "", notes: "",
@@ -773,6 +780,51 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
   const [success, setSuccess] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [phoneError, setPhoneError] = useState<string | null>(null);
+  const [customerContext, setCustomerContext] = useState<RfqCustomerContext | null>(null);
+  const [contextLoading, setContextLoading] = useState(authenticatedCustomer);
+  const [contextError, setContextError] = useState<string | null>(null);
+  const contextBlocksSubmit = authenticatedCustomer && (
+    contextLoading
+    || Boolean(contextError)
+    || !customerContext
+    || customerContext.status === "legacy_unresolved"
+    || customerContext.status === "company_unresolved"
+    || customerContext.status === "company_pending"
+  );
+
+  useEffect(() => {
+    if (!authenticatedCustomer) {
+      setContextLoading(false);
+      return;
+    }
+
+    let disposed = false;
+    fetch("/api/portal/organization", {
+      credentials: "include",
+      headers: getAuthHeaders(),
+    })
+      .then(async (response) => {
+        const data = await response.json() as RfqCustomerContext & { error?: string };
+        if (!response.ok) throw new Error(data.error ?? "Gagal memuat konteks customer.");
+        return data;
+      })
+      .then((data) => {
+        if (disposed) return;
+        setCustomerContext(data);
+        setContextError(null);
+      })
+      .catch((requestError: unknown) => {
+        if (disposed) return;
+        setContextError(requestError instanceof Error ? requestError.message : "Gagal memuat konteks customer.");
+      })
+      .finally(() => {
+        if (!disposed) setContextLoading(false);
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [authenticatedCustomer]);
 
   function validatePhone(phone: string): string | null {
     const normalized = phone.trim().replace(/[\s\-().]/g, "");
@@ -791,6 +843,24 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    if (authenticatedCustomer) {
+      if (contextLoading) {
+        setError("Konteks customer masih dimuat. Silakan tunggu sebentar.");
+        return;
+      }
+      if (contextError || !customerContext) {
+        setError(contextError ?? "Konteks customer belum tersedia. Silakan muat ulang halaman.");
+        return;
+      }
+      if (customerContext.status === "legacy_unresolved" || customerContext.status === "company_unresolved") {
+        setError("Lengkapi jenis akun customer terlebih dahulu.");
+        return;
+      }
+      if (customerContext.status === "company_pending") {
+        setError("Perusahaan Anda masih menunggu verifikasi Admin.");
+        return;
+      }
+    }
     const pErr = validatePhone(form.guestContact);
     setPhoneError(pErr);
     if (pErr) return;
@@ -806,7 +876,9 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
         notes: form.notes.trim() || undefined,
         includePpn: calc.includePpn,
         buyer_name: form.buyerName.trim(),
-        company_name: form.companyName.trim() || undefined,
+        // Authenticated company ownership comes from the canonical context.
+        // Only an unauthenticated guest may provide an informational company name.
+        company_name: authenticatedCustomer ? undefined : (form.companyName.trim() || undefined),
         guest_contact: form.guestContact.trim(),
         destination: form.destination.trim() || undefined,
         destination_place_id: form.destinationPlace?.placeId,
@@ -899,6 +971,37 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
           )}
         </div>
 
+        {authenticatedCustomer && contextLoading && (
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-[12px] text-slate-500 flex items-center gap-2">
+            <Loader2 className="h-4 w-4 animate-spin" /> Memuat konteks customer…
+          </div>
+        )}
+
+        {authenticatedCustomer && contextError && (
+          <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-[12px] text-red-600 flex items-start gap-2" role="alert">
+            <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" /> {contextError}
+          </div>
+        )}
+
+        {authenticatedCustomer && customerContext?.status === "company_mapped" && customerContext.company && (
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+            <p className="text-[11px] font-semibold text-emerald-700">Perusahaan</p>
+            <p className="text-[13px] font-bold text-emerald-900">{customerContext.company.name}</p>
+            <p className="text-[10px] text-emerald-700 mt-0.5">Diambil dari membership canonical Anda</p>
+          </div>
+        )}
+
+        {authenticatedCustomer && customerContext &&
+          (customerContext.status === "legacy_unresolved"
+            || customerContext.status === "company_unresolved"
+            || customerContext.status === "company_pending") && (
+          <RfqCustomerContextCompletion
+            context={customerContext}
+            onCompleted={setCustomerContext}
+            onViewStatus={() => setLocation("/pending-approval")}
+          />
+        )}
+
         <form onSubmit={handleSubmit} className="space-y-3">
           <div className="space-y-1">
             <Label className="text-[12px]">
@@ -915,15 +1018,17 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
             />
           </div>
 
-          <div className="space-y-1">
-            <Label className="text-[12px]">{t("marketplaceDetail.rfqFieldCompany")}</Label>
-            <Input
-              value={form.companyName}
-              onChange={(e) => setForm({ ...form, companyName: e.target.value })}
-              placeholder={t("marketplaceDetail.rfqFieldCompanyPlaceholder")}
-              className="h-9 text-sm"
-            />
-          </div>
+          {!authenticatedCustomer && (
+            <div className="space-y-1">
+              <Label className="text-[12px]">{t("marketplaceDetail.rfqFieldCompany")}</Label>
+              <Input
+                value={form.companyName}
+                onChange={(e) => setForm({ ...form, companyName: e.target.value })}
+                placeholder={t("marketplaceDetail.rfqFieldCompanyPlaceholder")}
+                className="h-9 text-sm"
+              />
+            </div>
+          )}
 
           <div className="space-y-1">
             <Label className="text-[12px]">
@@ -1001,9 +1106,14 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
             </div>
           )}
 
-          <Button type="submit" className="w-full rounded-xl h-11" disabled={loading}>
+          <Button type="submit" className="w-full rounded-xl h-11" disabled={loading || contextBlocksSubmit}>
             {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-            {t("marketplaceDetail.ctaRfq")}
+            {contextBlocksSubmit && customerContext?.status === "company_pending"
+              ? "Menunggu verifikasi perusahaan"
+              : contextBlocksSubmit && !contextLoading && !contextError && customerContext
+                && (customerContext.status === "legacy_unresolved" || customerContext.status === "company_unresolved")
+                ? "Lengkapi jenis akun terlebih dahulu"
+                : t("marketplaceDetail.ctaRfq")}
           </Button>
           <p className="text-center text-[11px] text-slate-400">
             {t("marketplaceDetail.rfqNoteFooter")}
