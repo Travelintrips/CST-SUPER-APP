@@ -362,7 +362,6 @@ export function ensureSportPaymentMirrorTrigger(): Promise<void> {
          AND psc.bank_account_id = v_external_bank_account_id
          AND psc.is_active = TRUE
          AND psc.source = 'OWNER_APPROVED'
-         AND psc.rule_version = 'PROD-MANDIRI-SC-20260810-v1'
          AND psc.effective_from <= v_payment_date
          AND (psc.effective_until IS NULL OR v_payment_date < psc.effective_until);
 
@@ -578,7 +577,6 @@ export function ensureSportPaymentMirrorTrigger(): Promise<void> {
          AND psc.bank_account_id = v_external_bank_account_id
          AND psc.is_active = TRUE
          AND psc.source = 'OWNER_APPROVED'
-         AND psc.rule_version = 'PROD-MANDIRI-SC-20260810-v1'
          AND psc.effective_from <= v_payment_date
          AND (psc.effective_until IS NULL OR v_payment_date < psc.effective_until);
 

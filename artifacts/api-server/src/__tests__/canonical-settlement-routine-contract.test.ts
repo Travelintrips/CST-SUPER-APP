@@ -51,6 +51,26 @@ describe("canonical Sport Center owner routine restoration contract", () => {
     expect(migrationSource).toContain("format_type(argument.oid, NULL)");
   });
 
+  it("resolves the active owner-approved rule by its effective window", () => {
+    const resolverStart = migrationSource.indexOf(
+      "CREATE OR REPLACE FUNCTION sport_center.resolve_and_persist_payment_metadata(",
+    );
+    const mirrorStart = migrationSource.indexOf(
+      "CREATE OR REPLACE FUNCTION sport_center.mirror_confirmed_payment_to_public(",
+    );
+    const resolver = migrationSource.slice(resolverStart, mirrorStart);
+    const mirror = migrationSource.slice(mirrorStart);
+
+    expect(resolver).toContain("psc.source = 'OWNER_APPROVED'");
+    expect(resolver).toContain("psc.effective_from <= v_payment_date");
+    expect(resolver).toContain("v_payment_date < psc.effective_until");
+    expect(resolver).not.toContain("PROD-MANDIRI-SC-20260810-v1");
+    expect(mirror).toContain("psc.source = 'OWNER_APPROVED'");
+    expect(mirror).toContain("psc.effective_from <= v_payment_date");
+    expect(mirror).toContain("v_payment_date < psc.effective_until");
+    expect(mirror).not.toContain("PROD-MANDIRI-SC-20260810-v1");
+  });
+
   it("guards the restoration runner against production execution", () => {
     const runner = readFileSync(
       resolve(process.cwd(), "src/run-canonical-contract-migration.ts"),
