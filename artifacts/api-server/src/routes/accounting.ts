@@ -272,6 +272,7 @@ router.get("/accounts", async (req, res) => {
       name: chartOfAccountsTable.name,
       type: chartOfAccountsTable.type,
       subtype: chartOfAccountsTable.subtype,
+      normalBalance: chartOfAccountsTable.normalBalance,
       parentId: chartOfAccountsTable.parentId,
       isActive: chartOfAccountsTable.isActive,
       isPostable: chartOfAccountsTable.isPostable,

@@ -2291,11 +2291,10 @@ function CoaReferenceDialog({
   // OUT = bank credit, so the contra account is debit.
   const contraNormalBalance = mutation?.direction === "IN" ? "CREDIT" : "DEBIT";
   const { data: accountData, isLoading: accountsLoading, refetch: refetchAccounts } = useQuery({
-    queryKey: ["coa-reference-accounts", companyId, contraNormalBalance],
+    queryKey: ["coa-reference-accounts", companyId],
     queryFn: async () => {
       const params = new URLSearchParams({
         companyId: String(companyId),
-        normalBalance: contraNormalBalance,
         postableOnly: "true",
       });
       const response = await fetch(`/api/accounting/accounts?${params.toString()}`, { credentials: "include" });
@@ -2611,7 +2610,7 @@ function CoaReferenceDialog({
 
           <div className="space-y-1.5">
             <label className="text-xs font-medium">
-              Pilih akun COA sisi {contraNormalBalance === "CREDIT" ? "kredit" : "debit"}
+              Pilih akun COA debit atau kredit
             </label>
             <div className="relative">
               <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -2623,8 +2622,7 @@ function CoaReferenceDialog({
               />
             </div>
             <p className="text-[11px] text-muted-foreground">
-              Hanya akun dengan saldo normal {contraNormalBalance === "CREDIT" ? "kredit" : "debit"} yang ditampilkan
-              sebagai lawan jurnal bank.
+              Semua akun aktif yang dapat diposting ditampilkan. Saldo normal akun ditandai sebagai debit atau kredit.
             </p>
             {creatingCoa ? (
               <div className="space-y-3 rounded-md border border-indigo-200 bg-indigo-50/40 p-3 dark:bg-indigo-950/20">
@@ -2800,7 +2798,16 @@ function CoaReferenceDialog({
                         >
                           <span className="w-20 shrink-0 font-mono text-xs font-semibold">{account.code}</span>
                           <span className="min-w-0 flex-1 truncate text-xs">{account.name}</span>
-                          <span className="text-[10px] text-muted-foreground">{account.type}</span>
+                          <span className="shrink-0 text-[10px] text-muted-foreground">{account.type}</span>
+                          <span
+                            className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold ${
+                              account.normalBalance === "CREDIT"
+                                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300"
+                                : "bg-sky-100 text-sky-700 dark:bg-sky-950/50 dark:text-sky-300"
+                            }`}
+                          >
+                            {account.normalBalance === "CREDIT" ? "KREDIT" : "DEBIT"}
+                          </span>
                         </button>
                         <Button
                           type="button"
