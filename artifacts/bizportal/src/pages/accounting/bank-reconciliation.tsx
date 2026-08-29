@@ -5133,7 +5133,6 @@ export default function BankReconciliationPage() {
     paymentDate: string;
   } | null>(null);
   const [qrisPaymentDate, setQrisPaymentDate] = useState("");
-  const [qrisCandidateRefreshPending, setQrisCandidateRefreshPending] = useState(false);
 
   // ── Queries ──────────────────────────────────────────────────────────────
   const queryKey = ["bank-reconciliation", filterStatus, filterDir, filterProvider, filterPaymentType, filterFrom, filterTo, filterSearch, page];
@@ -5250,7 +5249,6 @@ export default function BankReconciliationPage() {
       // The date mutation has already committed successfully. Refresh the
       // visible lists without keeping the save mutation in a pending state;
       // candidate regeneration on the API is also intentionally asynchronous.
-      setQrisCandidateRefreshPending(true);
       void (async () => {
         const retryDelays = [0, 750, 1500, 3000, 5000];
         let candidateUpdated = false;
@@ -5279,7 +5277,6 @@ export default function BankReconciliationPage() {
 
         await Promise.allSettled([refetch()]);
         void qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
-        setQrisCandidateRefreshPending(false);
         toast({
           title: candidateUpdated
             ? "Kandidat QRIS sudah diperbarui"
@@ -5289,7 +5286,6 @@ export default function BankReconciliationPage() {
             : "Data sumber sudah tersimpan. Kandidat akan diperbarui otomatis pada refresh berikutnya.",
         });
       })().catch(() => {
-        setQrisCandidateRefreshPending(false);
         void qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
       });
     },
