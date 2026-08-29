@@ -53,6 +53,32 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     expect(result[0]?.settlementRuleVersion).toBe("default-v1");
   });
 
+  it("detects a QRIS payment from payment method when bank evidence is generic", () => {
+    const result = generateQrisMutationBatchCandidates({
+      payments: [{
+        id: 911, companyId: 1, bankAccountId: 2, amount: 100_000,
+        method: "QRIS", status: "paid", paidAt: "2026-08-07T09:00:00+07:00",
+        expectedSettlementDate: null,
+        settlementRuleVersion: null,
+        providerName: null,
+      }],
+      mutations: [{
+        id: 912, companyId: 1, bankAccountId: 2, amount: 99_700,
+        transactionDate: "2026-08-08", direction: "IN",
+        source: "bank_import", sourceClassification: "actual_bank_mutation",
+        providerName: null,
+        description: "TRANSFER MASUK",
+      }],
+      requireExplicitSettlementMetadata: true,
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.estimatedSettlementDate).toBe("2026-08-08");
+    expect(result[0]?.paymentItems[0]?.expectedSettlementDate).toBe("2026-08-08");
+    expect(result[0]?.status).toBe("REVIEW");
+    expect(result[0]?.reason).toContain("Provider unknown");
+  });
+
   it("selects the production account rule by effective settlement window", () => {
     const accountProviderRuleCatalog = accountProviderRuleCatalogFromRows([
       {
@@ -829,7 +855,7 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     expect(result.every((candidate) => candidate.reason.includes("AMBIGUOUS_PAYMENT_PARTITION"))).toBe(true);
   });
 
-  it("does not synthesize settlement metadata in the strict runtime contract", () => {
+  it("derives settlement metadata from the QRIS payment date in the strict runtime contract", () => {
     const result = generateQrisMutationBatchCandidates({
       requireExplicitSettlementMetadata: true,
       payments: [{
@@ -848,12 +874,14 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({
-      status: "UNMATCHED",
-      estimatedSettlementDate: "",
-      settlementRuleVersion: "",
-      paymentItems: [],
+      status: "REVIEW",
+      estimatedSettlementDate: "2026-08-07",
+      settlementRuleVersion: "default-v1",
+      paymentItems: [{
+        paymentId: 91,
+        expectedSettlementDate: "2026-08-07",
+      }],
     });
-    expect(result[0]?.status).not.toBe("MATCHED");
   });
 
   it("recomputes strict H+1 from the payment time when legacy metadata is stale", () => {
