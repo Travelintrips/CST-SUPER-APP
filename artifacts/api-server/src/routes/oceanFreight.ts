@@ -716,7 +716,8 @@ router.patch("/:id/tracking", requireAdmin, async (req: Request, res: Response) 
 });
 
 // ── POST /api/ocean-freight — admin create order ──────────────────────────────
-router.post("/", requireAdmin, async (req: Request, res: Response) => {
+router.post("/", async (req: Request, res: Response) => {
+  if (!(await requireAdmin(req, res))) return;
   try {
     const b = req.body ?? {};
     if (!b.customer_name) return res.status(400).json({ error: "customer_name wajib" });

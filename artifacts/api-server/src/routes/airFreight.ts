@@ -911,6 +911,68 @@ router.get("/orders", async (req: Request, res: Response) => {
   }
 });
 
+// ── Get eligible vendors for the active Air Freight router ───────────────────
+// Keep this route on the default router: it is the router mounted by
+// routes/index.ts. The legacy airFreightRouter above is intentionally not
+// mounted, but the BizPortal detail page still calls this endpoint.
+router.get("/orders/:id/eligible-vendors", async (req: Request, res: Response) => {
+  if (!(await requireAdmin(req, res))) return;
+  try {
+    const id = Number(String(req.params.id));
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      return res.status(400).json({ error: "Invalid id" });
+    }
+
+    const orderResult = await db.execute(sql`
+      SELECT company_id, origin_airport, destination_airport, trade_type, cargo_type
+      FROM air_freight_orders
+      WHERE id = ${id}
+      LIMIT 1
+    `);
+    const order = orderResult.rows[0] as {
+      company_id: number | null;
+      origin_airport: string | null;
+      destination_airport: string | null;
+      trade_type: string | null;
+      cargo_type: string | null;
+    } | undefined;
+    if (!order) return res.status(404).json({ error: "Order tidak ditemukan" });
+
+    const allVendors = await db.select({
+      id: suppliersTable.id,
+      name: suppliersTable.name,
+      serviceType: suppliersTable.serviceType,
+      phone: suppliersTable.phone,
+      email: suppliersTable.contactEmail,
+      isActive: suppliersTable.isActive,
+    }).from(suppliersTable).where(eq(suppliersTable.isActive, true));
+
+    const eligible = await filterSuppliersByCapability(
+      allVendors,
+      VENDOR_CAPABILITY_KEYS.AIR_FREIGHT,
+      (serviceType) => {
+        const normalized = serviceType.toLowerCase();
+        return normalized.includes("air") || normalized.includes("udara");
+      },
+      order.company_id == null ? null : Number(order.company_id),
+    );
+
+    return res.json({
+      vendors: eligible,
+      order: {
+        companyId: order.company_id,
+        originAirport: order.origin_airport,
+        destAirport: order.destination_airport,
+        tradeType: order.trade_type,
+        cargoType: order.cargo_type,
+      },
+    });
+  } catch (err) {
+    console.error("[air-freight] GET /orders/:id/eligible-vendors error:", err);
+    return res.status(500).json({ error: "Gagal memuat vendor eligible" });
+  }
+});
+
 // ── POST /orders ──────────────────────────────────────────────────────────────
 router.post("/orders", async (req: Request, res: Response) => {
   if (!(await requireAdmin(req, res))) return;
