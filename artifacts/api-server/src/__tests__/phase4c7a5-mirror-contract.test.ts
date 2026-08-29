@@ -48,7 +48,9 @@ describe("Phase 4C-7A.5 additive mirror contract", () => {
     expect(mirrorMigration).toContain("cba.is_active = TRUE");
     expect(mirrorMigration).toContain("MIRROR_BANK_ACCOUNT_UNRESOLVED");
     expect(mirrorMigration).toContain("psc.source = 'OWNER_APPROVED'");
-    expect(mirrorMigration).toContain("psc.rule_version = 'PROD-MANDIRI-SC-20260810-v1'");
+    expect(mirrorMigration).toContain("psc.effective_from <= v_payment_date");
+    expect(mirrorMigration).toContain("v_payment_date < psc.effective_until");
+    expect(mirrorMigration).not.toContain("psc.rule_version = 'PROD-MANDIRI-SC-20260810-v1'");
     expect(mirrorMigration).toContain("MIRROR_PROVIDER_RULE_UNRESOLVED");
     expect(mirrorMigration).not.toMatch(/VALUES\s*\(\s*1\s*,/);
   });

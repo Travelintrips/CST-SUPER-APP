@@ -134,6 +134,42 @@ async function runQrisSettlementMigrationOnce(): Promise<void> {
   // public audit rule registry. The join resolves the production account
   // number to its internal ID, so no environment-specific IDs are hardcoded.
   // Existing versions remain immutable; a changed rule must use a new version.
+  // Older mirrors can have the same version identity with a stale end date.
+  // Repair that temporal boundary only when one canonical source row owns the
+  // identity; this is required by the legacy unique index that omits
+  // effective_until.
+  await db.execute(sql`
+    UPDATE qris_provider_settlement_rules mirror
+       SET effective_until = config.effective_until,
+           is_active = config.is_active,
+           updated_at = NOW()
+      FROM sport_center.payment_settlement_configs config
+      JOIN company_bank_accounts account
+        ON account.company_id = config.company_id
+       AND account.account_number::text = config.bank_account_id::text
+       AND account.is_active = TRUE
+     WHERE mirror.source = 'sport_center.payment_settlement_configs'
+       AND mirror.company_id = config.company_id
+       AND COALESCE(mirror.bank_account_id, 0) = account.id
+       AND mirror.provider_code = LOWER(BTRIM(config.provider_code))
+       AND mirror.rule_version = config.rule_version
+       AND mirror.effective_from = config.effective_from
+       AND mirror.effective_until IS DISTINCT FROM config.effective_until
+       AND config.source = 'OWNER_APPROVED'
+       AND config.rule_version IS NOT NULL
+       AND BTRIM(config.rule_version) <> ''
+       AND (
+         SELECT COUNT(*)
+           FROM sport_center.payment_settlement_configs same_config
+          WHERE same_config.company_id = config.company_id
+            AND LOWER(BTRIM(same_config.provider_code)) =
+                LOWER(BTRIM(config.provider_code))
+            AND same_config.bank_account_id = config.bank_account_id
+            AND same_config.rule_version = config.rule_version
+            AND same_config.effective_from = config.effective_from
+            AND same_config.source = 'OWNER_APPROVED'
+       ) = 1
+  `).catch(() => {});
   await db.execute(sql`
     INSERT INTO qris_provider_settlement_rules (
       company_id, bank_account_id, provider_code, rule_version,
@@ -180,6 +216,52 @@ async function runQrisSettlementMigrationOnce(): Promise<void> {
           AND existing.effective_from = config.effective_from
           AND existing.rule_version = config.rule_version
       )
+  `).catch(() => {});
+
+  // Keep the public audit registry's active state aligned with the canonical
+  // owner-approved source. The original INSERT is intentionally immutable and
+  // therefore cannot repair a stale active snapshot when an effective window
+  // is closed or a source row is deactivated.
+  await db.execute(sql`
+    UPDATE qris_provider_settlement_rules mirror
+       SET is_active = config.is_active,
+           updated_at = NOW()
+      FROM sport_center.payment_settlement_configs config
+      JOIN company_bank_accounts account
+        ON account.company_id = config.company_id
+       AND account.account_number::text = config.bank_account_id::text
+     WHERE mirror.source = 'sport_center.payment_settlement_configs'
+       AND mirror.company_id = config.company_id
+       AND COALESCE(mirror.bank_account_id, 0) = account.id
+       AND mirror.provider_code = LOWER(BTRIM(config.provider_code))
+       AND mirror.rule_version = config.rule_version
+       AND mirror.effective_from = config.effective_from
+       AND mirror.effective_until IS NOT DISTINCT FROM config.effective_until
+       AND config.source = 'OWNER_APPROVED'
+       AND config.rule_version IS NOT NULL
+       AND BTRIM(config.rule_version) <> ''
+  `).catch(() => {});
+  await db.execute(sql`
+    UPDATE qris_provider_settlement_rules mirror
+       SET is_active = FALSE,
+           updated_at = NOW()
+     WHERE mirror.source = 'sport_center.payment_settlement_configs'
+       AND NOT EXISTS (
+         SELECT 1
+           FROM sport_center.payment_settlement_configs config
+           JOIN company_bank_accounts account
+             ON account.company_id = config.company_id
+            AND account.account_number::text = config.bank_account_id::text
+          WHERE config.source = 'OWNER_APPROVED'
+            AND config.rule_version IS NOT NULL
+            AND BTRIM(config.rule_version) <> ''
+            AND mirror.company_id = config.company_id
+            AND COALESCE(mirror.bank_account_id, 0) = account.id
+            AND mirror.provider_code = LOWER(BTRIM(config.provider_code))
+            AND mirror.rule_version = config.rule_version
+            AND mirror.effective_from = config.effective_from
+            AND mirror.effective_until IS NOT DISTINCT FROM config.effective_until
+       )
   `).catch(() => {});
 
   await db.execute(sql`

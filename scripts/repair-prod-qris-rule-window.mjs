@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * Repair the owner-approved historical Mandiri QRIS rule window and refresh
- * the two live owner routines that previously pinned one rule version.
+ * Repair the owner-approved historical Mandiri QRIS rule window, reconcile its
+ * public audit-rule mirror, and refresh the two live owner routines that
+ * previously pinned one rule version.
  *
  * This is deliberately a narrow, guarded data migration. It only changes the
  * end of the exact historical row after proving the adjacent current row and
@@ -28,6 +29,7 @@ const LEGACY_EFFECTIVE_FROM = "2026-01-01";
 const OLD_EFFECTIVE_UNTIL = "2026-07-13";
 const SHARED_EFFECTIVE_FROM = "2026-07-14";
 const ACTOR = "production-qris-config-window-repair";
+const MIRROR_SOURCE = "sport_center.payment_settlement_configs";
 const HARD_CODED_RULE_LINE =
   "AND psc.rule_version = 'PROD-MANDIRI-SC-20260810-v1'";
 
@@ -114,6 +116,217 @@ try {
     );
   }
 
+  const bankAccount = await client.query(
+    `SELECT id
+       FROM public.company_bank_accounts
+      WHERE company_id = $1
+        AND account_number::text = $2
+        AND is_active = TRUE
+      FOR UPDATE`,
+    [TARGET_COMPANY_ID, TARGET_BANK_ACCOUNT],
+  );
+  if (bankAccount.rowCount !== 1) {
+    throw new Error(
+      `QRIS_WINDOW_REPAIR_BANK_ACCOUNT_PRECONDITION_FAILED: expected 1 active account, found ${bankAccount.rowCount}`,
+    );
+  }
+  const internalBankAccountId = bankAccount.rows[0].id;
+
+  const mirrorTable = await client.query(
+    `SELECT COUNT(*)::int AS required_columns
+       FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'qris_provider_settlement_rules'
+        AND column_name IN (
+          'company_id', 'bank_account_id', 'provider_code', 'rule_version',
+          'effective_from', 'effective_until', 'source', 'is_active',
+          'settlement_delay_business_days', 'match_window_business_days',
+          'max_effective_deduction_rate', 'absolute_variance_tolerance',
+          'percentage_variance_tolerance'
+        )`,
+  );
+  if (Number(mirrorTable.rows[0]?.required_columns) !== 13) {
+    throw new Error(
+      `QRIS_WINDOW_REPAIR_MIRROR_SCHEMA_PRECONDITION_FAILED: expected 13 columns, found ${mirrorTable.rows[0]?.required_columns ?? "null"}`,
+    );
+  }
+
+  const mirrorBefore = await client.query(
+    `SELECT id, company_id, bank_account_id, provider_code, rule_version,
+            effective_from::text, effective_until::text, source, is_active
+       FROM public.qris_provider_settlement_rules
+      WHERE company_id = $1
+        AND bank_account_id = $2
+        AND lower(btrim(provider_code)) = $3
+        AND source = $4
+      FOR UPDATE`,
+    [
+      TARGET_COMPANY_ID,
+      internalBankAccountId,
+      TARGET_PROVIDER,
+      MIRROR_SOURCE,
+    ],
+  );
+
+  const mirrorWindowRepair = await client.query(
+    `UPDATE public.qris_provider_settlement_rules mirror
+        SET effective_until = config.effective_until,
+            is_active = config.is_active,
+            updated_at = NOW()
+       FROM sport_center.payment_settlement_configs config
+      WHERE mirror.company_id = config.company_id
+        AND mirror.bank_account_id = $2
+        AND mirror.provider_code = lower(btrim(config.provider_code))
+        AND mirror.rule_version = config.rule_version
+        AND mirror.effective_from = config.effective_from
+        AND mirror.effective_until IS DISTINCT FROM config.effective_until
+        AND mirror.source = $3
+        AND config.company_id = $1
+        AND lower(btrim(config.provider_code)) = $4
+        AND config.bank_account_id = $5
+        AND config.source = 'OWNER_APPROVED'
+        AND config.rule_version IS NOT NULL
+        AND btrim(config.rule_version) <> ''
+        AND (
+          SELECT COUNT(*)
+            FROM sport_center.payment_settlement_configs same_config
+           WHERE same_config.company_id = config.company_id
+             AND lower(btrim(same_config.provider_code)) =
+                 lower(btrim(config.provider_code))
+             AND same_config.bank_account_id = config.bank_account_id
+             AND same_config.rule_version = config.rule_version
+             AND same_config.effective_from = config.effective_from
+             AND same_config.source = 'OWNER_APPROVED'
+        ) = 1
+     RETURNING mirror.id, mirror.effective_until::text, mirror.is_active`,
+    [
+      TARGET_COMPANY_ID,
+      internalBankAccountId,
+      MIRROR_SOURCE,
+      TARGET_PROVIDER,
+      TARGET_BANK_ACCOUNT,
+    ],
+  );
+
+  // The public registry is a versioned audit projection. Add any canonical
+  // owner-approved version that is missing, but never rewrite an existing
+  // snapshot's financial values. The exact temporal identity is the only
+  // safe conflict key.
+  const mirrorInserted = await client.query(
+    `INSERT INTO public.qris_provider_settlement_rules (
+       company_id, bank_account_id, provider_code, rule_version,
+       effective_from, effective_until, source,
+       settlement_delay_business_days, match_window_business_days,
+       max_effective_deduction_rate, absolute_variance_tolerance,
+       percentage_variance_tolerance, is_active
+     )
+     SELECT
+       config.company_id,
+       account.id,
+       lower(btrim(config.provider_code)),
+       config.rule_version,
+       config.effective_from,
+       config.effective_until,
+        $3,
+       config.settlement_delay_business_days,
+       1,
+       greatest(
+         coalesce(config.mdr_rate, 0)
+           + coalesce(config.settlement_tolerance_rate, 0),
+         0.100000
+       ),
+       coalesce(config.settlement_tolerance_amount, 10000.00),
+       coalesce(config.settlement_tolerance_rate, 0.0200) * 100,
+       config.is_active
+       FROM sport_center.payment_settlement_configs config
+       JOIN public.company_bank_accounts account
+         ON account.company_id = config.company_id
+        AND account.account_number::text = config.bank_account_id::text
+        AND account.is_active = TRUE
+      WHERE config.company_id = $1
+        AND lower(btrim(config.provider_code)) = $2
+        AND config.bank_account_id = $4
+        AND config.source = 'OWNER_APPROVED'
+        AND config.rule_version IS NOT NULL
+        AND btrim(config.rule_version) <> ''
+        AND NOT EXISTS (
+          SELECT 1
+            FROM public.qris_provider_settlement_rules existing
+           WHERE existing.company_id = config.company_id
+             AND existing.bank_account_id = account.id
+             AND existing.provider_code = lower(btrim(config.provider_code))
+             AND existing.rule_version = config.rule_version
+             AND existing.effective_from = config.effective_from
+             AND existing.effective_until IS NOT DISTINCT FROM config.effective_until
+              AND existing.source = $3
+        )
+     RETURNING id, rule_version, effective_from::text, effective_until::text`,
+    [
+      TARGET_COMPANY_ID,
+      TARGET_PROVIDER,
+      MIRROR_SOURCE,
+      TARGET_BANK_ACCOUNT,
+    ],
+  );
+
+  const mirrorSync = await client.query(
+    `UPDATE public.qris_provider_settlement_rules mirror
+        SET is_active = config.is_active,
+            updated_at = NOW()
+       FROM sport_center.payment_settlement_configs config
+      WHERE mirror.company_id = config.company_id
+        AND mirror.bank_account_id = $2
+        AND mirror.provider_code = lower(btrim(config.provider_code))
+        AND mirror.rule_version = config.rule_version
+        AND mirror.effective_from = config.effective_from
+        AND mirror.effective_until IS NOT DISTINCT FROM config.effective_until
+        AND mirror.source = $3
+        AND config.company_id = $1
+        AND lower(btrim(config.provider_code)) = $4
+        AND config.bank_account_id = $5
+        AND config.source = 'OWNER_APPROVED'
+     RETURNING mirror.id, mirror.is_active`,
+    [
+      TARGET_COMPANY_ID,
+      internalBankAccountId,
+      MIRROR_SOURCE,
+      TARGET_PROVIDER,
+      TARGET_BANK_ACCOUNT,
+    ],
+  );
+
+  const mirrorDeactivated = await client.query(
+    `UPDATE public.qris_provider_settlement_rules mirror
+        SET is_active = FALSE,
+            updated_at = NOW()
+      WHERE mirror.company_id = $1
+        AND mirror.bank_account_id = $2
+        AND mirror.provider_code = $3
+        AND mirror.source = $4
+        AND NOT EXISTS (
+          SELECT 1
+            FROM sport_center.payment_settlement_configs config
+           WHERE config.company_id = $1
+             AND lower(btrim(config.provider_code)) = $3
+             AND config.bank_account_id = $5
+             AND config.source = 'OWNER_APPROVED'
+             AND config.rule_version IS NOT NULL
+             AND btrim(config.rule_version) <> ''
+             AND config.rule_version = mirror.rule_version
+             AND config.effective_from = mirror.effective_from
+             AND config.effective_until IS NOT DISTINCT FROM mirror.effective_until
+        )
+        AND mirror.is_active = TRUE
+     RETURNING mirror.id`,
+    [
+      TARGET_COMPANY_ID,
+      internalBankAccountId,
+      TARGET_PROVIDER,
+      MIRROR_SOURCE,
+      TARGET_BANK_ACCOUNT,
+    ],
+  );
+
   let configChanged = false;
   if (String(legacy.rows[0].effective_until).slice(0, 10) === OLD_EFFECTIVE_UNTIL) {
     const update = await client.query(
@@ -179,6 +392,52 @@ try {
     );
   }
 
+  const mirrorCoverage = await client.query(
+    `SELECT
+       (SELECT COUNT(*)::int
+          FROM public.qris_provider_settlement_rules mirror
+         WHERE mirror.company_id = $1
+           AND mirror.bank_account_id = $2
+           AND mirror.provider_code = $3
+           AND mirror.source = $4
+           AND mirror.is_active = TRUE) AS active_mirror_rules,
+       (SELECT COUNT(*)::int
+          FROM sport_center.payment_settlement_configs config
+         WHERE config.company_id = $1
+           AND lower(btrim(config.provider_code)) = $3
+           AND config.bank_account_id = $5
+           AND config.source = 'OWNER_APPROVED'
+           AND config.rule_version IS NOT NULL
+           AND btrim(config.rule_version) <> ''
+           AND config.is_active = TRUE) AS active_canonical_rules,
+       (SELECT COUNT(*)::int
+          FROM public.qris_provider_settlement_rules mirror
+         WHERE mirror.company_id = $1
+           AND mirror.bank_account_id = $2
+           AND mirror.provider_code = $3
+           AND mirror.source = $4
+           AND mirror.is_active = TRUE
+           AND mirror.effective_from <= $6::date
+           AND ($6::date < mirror.effective_until OR mirror.effective_until IS NULL)) AS target_date_mirror_rules`,
+    [
+      TARGET_COMPANY_ID,
+      internalBankAccountId,
+      TARGET_PROVIDER,
+      MIRROR_SOURCE,
+      TARGET_BANK_ACCOUNT,
+      "2026-08-20",
+    ],
+  );
+  const mirrorCoverageRow = mirrorCoverage.rows[0] ?? {};
+  if (
+    mirrorCoverageRow.active_mirror_rules !== mirrorCoverageRow.active_canonical_rules ||
+    mirrorCoverageRow.target_date_mirror_rules !== 1
+  ) {
+    throw new Error(
+      `QRIS_WINDOW_REPAIR_MIRROR_COVERAGE_FAILED: active_mirror=${mirrorCoverageRow.active_mirror_rules ?? "null"} active_canonical=${mirrorCoverageRow.active_canonical_rules ?? "null"} target_date=${mirrorCoverageRow.target_date_mirror_rules ?? "null"}`,
+    );
+  }
+
   await client.query("COMMIT");
   console.log(
     JSON.stringify(
@@ -192,6 +451,12 @@ try {
         repairedEffectiveUntil: SHARED_EFFECTIVE_FROM,
         configChanged,
         routineChanges,
+        mirrorBefore: mirrorBefore.rowCount,
+        mirrorWindowRepaired: mirrorWindowRepair.rowCount,
+        mirrorInserted: mirrorInserted.rowCount,
+        mirrorSynced: mirrorSync.rowCount,
+        mirrorDeactivated: mirrorDeactivated.rowCount,
+        mirrorCoverage: mirrorCoverageRow,
         july13Coverage: coverageRow,
       },
       null,
