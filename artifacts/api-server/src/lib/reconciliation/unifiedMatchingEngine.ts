@@ -25,6 +25,7 @@ import { normalizeDescription } from "../bankDescriptionNormalizer.js";
 import {
   areQrisProvidersCompatible,
   normalizeQrisProvider,
+  resolveQrisProviderFromEvidence,
 } from "./providerSettlementRules.js";
 import { JournalMappingError } from "../journalMappingErrors.js";
 import {
@@ -649,10 +650,11 @@ export function scoreUnified(
     Number(cand.bank_account_id) !== Number(mutation.bank_account_id);
   const candidateProviderCode = normalizeQrisProvider(cand.provider_code);
   const candidateProviderName = normalizeQrisProvider(cand.provider_name);
-  const mutationProvider =
-    normalizeQrisProvider(mutation.provider_name) !== "unknown"
-      ? normalizeQrisProvider(mutation.provider_name)
-      : normalizeQrisProvider(mutation.normalized_description);
+  const mutationProvider = resolveQrisProviderFromEvidence({
+    providerName: mutation.provider_name,
+    providerOrderId: mutation.provider_order_id,
+    description: mutation.normalized_description,
+  });
   const candidateProvider =
     candidateProviderCode !== "unknown" ? candidateProviderCode : candidateProviderName;
   const providerMismatch =
@@ -851,7 +853,11 @@ export async function fetchCandidates(
     percentage: number;
     providerCode: string | null;
   }> => {
-    const providerCode = normalizeQrisProvider(mutation.provider_name);
+    const providerCode = resolveQrisProviderFromEvidence({
+      providerName: mutation.provider_name,
+      providerOrderId: mutation.provider_order_id,
+      description: mutation.normalized_description,
+    });
     if (providerCode === "unknown" || company_id == null || mutationBankAccountId == null) {
       // Unknown provider or incomplete bank identity is fail-closed for variance.
       return { absolute: 0, percentage: 0, providerCode: null };

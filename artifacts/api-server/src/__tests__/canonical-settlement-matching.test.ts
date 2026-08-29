@@ -10,6 +10,7 @@ import {
   scoreUnified,
   type MatchCandidate,
 } from "../lib/reconciliation/unifiedMatchingEngine.js";
+import { resolveQrisProviderFromEvidence } from "../lib/reconciliation/providerSettlementRules.js";
 
 function makeRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -112,6 +113,33 @@ describe("Phase 4C-5 canonical settlement matching", () => {
     expect(scored.amount_variance_match).toBe(true);
     expect(scored.variance_amount).toBe(-1580);
     expect(scored.variance_percent).toBeCloseTo(0.16898, 4);
+    expect(scored.reason).toContain("canonical variance — perlu review");
+  });
+
+  it("resolves the bank-side provider from QRTRAVELI evidence when provider_name is generic QRIS", () => {
+    expect(resolveQrisProviderFromEvidence({
+      providerName: "QRIS",
+      description: "7177 QRTRAVELI CC Merchant Paymt KR 1640006707220",
+    })).toBe("gpn_qris");
+
+    const scored = scoreUnified(
+      mutation({
+        amount: 158880,
+        provider_name: "QRIS",
+        normalized_description: "7177 QRTRAVELI CC MERCHANT PAYMT KR 1640006707220",
+      }),
+      canonicalCandidate({
+        expected_bank_amount: 159520,
+        amount: 159520,
+        provider_code: "mandiri_direct",
+        bank_account_id: 12,
+        variance_eligible: true,
+      }),
+    );
+
+    expect(scored.amount_match).toBe(false);
+    expect(scored.amount_variance_match).toBe(true);
+    expect(scored.variance_amount).toBe(-640);
     expect(scored.reason).toContain("canonical variance — perlu review");
   });
 

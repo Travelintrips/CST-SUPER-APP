@@ -2958,6 +2958,12 @@ function QrisMutationCard({
     && onRecoverQrisSettlement != null;
   const isCanonicalReconciled = isCanonicalSettlementMutation(m)
     && ["approved", "posted"].includes(String(m.status ?? "").toLowerCase());
+  const canonicalSettlementCandidate = (m.candidates ?? []).find(candidate =>
+    candidate.candidate_type === "qris_settlement"
+    && candidate.candidate_source === CANONICAL_SETTLEMENT_SOURCE,
+  );
+  const canonicalSettlementDetails = canonicalSettlementCandidate?.details;
+  const hasCanonicalSettlementCandidate = canonicalSettlementCandidate != null;
   const isApproved = isCanonicalReconciled
     || ["approved", "posted"].includes(String(m.status ?? "").toLowerCase())
     || String(audit.status ?? "").toLowerCase() === "approved";
@@ -2981,19 +2987,35 @@ function QrisMutationCard({
     : hasLiveScope
       ? (numericValue(audit.current_gross_amount) ?? 0)
       : snapshotGross;
-  const originalExpectedNet = numericValue(audit.net_amount) ?? Math.max(0, bankAmount - (numericValue(audit.observed_deduction) ?? 0));
+  const hasLiveSettlementProposal = !isReadOnlyEvidence
+    && (isMatched || isReview)
+    && allItems.length > 0;
+  const canonicalExpectedNet = numericValue(canonicalSettlementDetails?.expectedAmount)
+    ?? numericValue(canonicalSettlementDetails?.netAmount);
+  const auditExpectedNet = numericValue(audit.net_amount);
+  const originalExpectedNet = canonicalExpectedNet
+    ?? (hasLiveSettlementProposal ? auditExpectedNet : null);
+  const hasIdentifiedSettlement = originalExpectedNet != null;
   const expectedNet = hasLiveScope && !isReadOnlyEvidence
     ? (numericValue(audit.current_expected_amount)
-      ?? (snapshotGross > 0 ? candidateGross * originalExpectedNet / snapshotGross : 0))
+      ?? (snapshotGross > 0 && originalExpectedNet != null
+        ? candidateGross * originalExpectedNet / snapshotGross
+        : null))
     : originalExpectedNet;
-  const mdr = hasLiveScope && !isReadOnlyEvidence
-    ? Math.max(0, candidateGross - expectedNet)
-    : numericValue(audit.observed_deduction) ?? 0;
-  const difference = bankAmount - originalExpectedNet;
-  const differenceAbs = Math.abs(difference);
-  const differenceExplanation = differenceAbs < 0.5
+  const mdr = canonicalSettlementDetails?.mdrAmount != null
+    ? numericValue(canonicalSettlementDetails.mdrAmount)
+    : hasLiveScope && !isReadOnlyEvidence && expectedNet != null
+      ? Math.max(0, candidateGross - expectedNet)
+      : hasLiveSettlementProposal
+        ? numericValue(audit.observed_deduction)
+        : null;
+  const difference = originalExpectedNet == null ? null : bankAmount - originalExpectedNet;
+  const differenceAbs = difference == null ? null : Math.abs(difference);
+  const differenceExplanation = differenceAbs != null && differenceAbs < 0.5
     ? "Tidak ada selisih nominal pada snapshot kandidat. Kandidat tetap perlu diregenerasi karena bukti canonical-nya sudah stale."
-    : difference > 0
+    : differenceAbs == null
+      ? "Belum dapat dihitung karena belum ada settlement candidate yang valid dipilih atau teridentifikasi."
+      : difference != null && difference > 0
       ? `Bank lebih besar ${idrWhole(difference)} daripada netto payment. Periksa payment yang belum masuk, tanggal settlement, atau biaya MDR.`
       : `Netto payment lebih besar ${idrWhole(differenceAbs)} daripada mutasi bank. Periksa nominal payment, provider, dan potongan MDR.`;
   const metricScopeLabel = isPartialSettlement ? " tersisa" : "";
@@ -3023,6 +3045,8 @@ function QrisMutationCard({
   const displayedPaymentCount = isReadOnlyEvidence ? allItems.length : remainingPaymentCount;
   const statusText = isCanonicalReconciled
     ? "Sudah Direkonsiliasi"
+    : hasCanonicalSettlementCandidate
+      ? "Settlement Canonical — Perlu Review"
     : isApproved
       ? "Sudah Disetujui"
       : isDepleted
@@ -3037,7 +3061,8 @@ function QrisMutationCard({
   const positiveStatus = isCanonicalReconciled
     || isApproved
     || isDepleted
-    || (isMatched && !isEmptyMatchedCandidate && !isStaleMatchedCandidate);
+    || (isMatched && !isEmptyMatchedCandidate && !isStaleMatchedCandidate
+      && !hasCanonicalSettlementCandidate);
 
   return (
     <Card
@@ -3084,9 +3109,9 @@ function QrisMutationCard({
                 { label: "Total Uang Masuk", value: idr(bankAmount), tone: "text-foreground" },
                 { label: isReadOnlyEvidence ? "Payment pada Snapshot" : "Payment Disetujui", value: isReadOnlyEvidence ? `${allItems.length} payment` : `${approvedPaymentCount} payment${approvedGross > 0 ? ` · ${idr(approvedGross)}` : ""}`, tone: isReadOnlyEvidence ? "text-amber-600" : "text-green-600" },
                 { label: isReadOnlyEvidence ? "Siap Di-approve" : "Payment Belum Disetujui", value: isReadOnlyEvidence ? `${availablePaymentIds.length} payment` : `${remainingPaymentCount} payment`, tone: remainingPaymentCount > 0 ? "text-amber-600" : "text-green-600" },
-                { label: `MDR (Estimasi${metricScopeLabel})`, value: idrWhole(mdr), tone: "text-foreground" },
+                { label: canonicalSettlementDetails?.mdrAmount != null ? "MDR Canonical" : `MDR (Estimasi${metricScopeLabel})`, value: mdr == null ? "Belum dapat dihitung" : idrWhole(mdr), tone: "text-foreground" },
                 { label: isReadOnlyEvidence ? "Gross Snapshot" : "Sisa Payment", value: `${idr(candidateGross)} · ${displayedPaymentCount} payment`, tone: "text-foreground" },
-                { label: differenceLabel, value: idrWhole(differenceAbs), tone: differenceAbs < 0.5 ? "text-green-600" : "text-red-600" },
+                { label: canonicalSettlementDetails?.expectedAmount != null ? "Selisih Bank vs Netto Canonical" : differenceLabel, value: differenceAbs == null ? "Belum dapat dihitung" : idrWhole(differenceAbs), tone: differenceAbs != null && differenceAbs < 0.5 ? "text-green-600" : "text-red-600" },
               ].map(metric => (
                 <div key={metric.label} className="min-w-0 rounded-md border bg-muted/20 px-2.5 py-2">
                   <p className="text-[10px] leading-tight text-muted-foreground">{metric.label}</p>
@@ -3094,7 +3119,35 @@ function QrisMutationCard({
                 </div>
               ))}
             </div>
-            {(isReadOnlyEvidence || differenceAbs >= 0.5) && (
+            {hasCanonicalSettlementCandidate && canonicalSettlementDetails && (
+              <div className="mt-3 rounded-md border border-indigo-300 bg-indigo-50 px-3 py-2.5 text-xs text-indigo-950 dark:border-indigo-800 dark:bg-indigo-950 dark:text-indigo-100">
+                <div className="flex items-start gap-2">
+                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-indigo-600 dark:text-indigo-300" />
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <p className="font-semibold">Existing settlement canonical</p>
+                    <p className="leading-relaxed">
+                      Batch canonical ditampilkan sebagai satu settlement-level candidate.
+                      Payment yang sudah masuk batch ini tidak dikembalikan sebagai fresh candidate.
+                    </p>
+                    <div className="grid gap-x-4 gap-y-1 sm:grid-cols-2">
+                      <span>Referensi: <strong>{canonicalSettlementDetails.settlementReference ?? `Batch #${canonicalSettlementCandidate?.candidate_id}`}</strong></span>
+                      <span>Status: <strong>{canonicalSettlementDetails.settlementStatus ?? "posted"}</strong></span>
+                      <span>Gross: <strong>{idr(canonicalSettlementDetails.grossAmount ?? 0)}</strong></span>
+                      <span>MDR: <strong>{idr(canonicalSettlementDetails.mdrAmount ?? 0)}</strong></span>
+                      <span>Expected netto: <strong>{idr(canonicalSettlementDetails.expectedAmount ?? canonicalSettlementDetails.netAmount ?? 0)}</strong></span>
+                      <span>Mutasi bank: <strong>{idr(bankAmount)}</strong></span>
+                      <span className="sm:col-span-2">
+                        Selisih bank − netto: <strong>{difference == null ? "Belum dapat dihitung" : idrWhole(difference)}</strong>
+                      </span>
+                    </div>
+                    <p className="leading-relaxed">
+                      Variance canonical adalah bukti review, bukan sinyal auto-approve. Approval tetap link-only.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+            {(isReadOnlyEvidence || (differenceAbs != null && differenceAbs >= 0.5) || (!hasIdentifiedSettlement && differenceAbs == null)) && (
               <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2.5 text-xs text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
                 <div className="flex items-start gap-2">
                   <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-300" />
@@ -3105,9 +3158,9 @@ function QrisMutationCard({
                     <div className="grid gap-x-4 gap-y-1 sm:grid-cols-2">
                       <span>Mutasi bank: <strong>{idr(bankAmount)}</strong></span>
                       <span>Gross payment: <strong>{idr(snapshotGross)}</strong></span>
-                      <span>Potongan MDR/biaya: <strong>{idr(mdr)}</strong></span>
-                      <span>Netto yang diharapkan: <strong>{idr(originalExpectedNet)}</strong></span>
-                      <span className="sm:col-span-2">Selisih bank − netto: <strong>{idrWhole(difference)}</strong></span>
+                       <span>Potongan MDR/biaya: <strong>{mdr == null ? "Belum dapat dihitung" : idr(mdr)}</strong></span>
+                       <span>Netto yang diharapkan: <strong>{originalExpectedNet == null ? "Belum dapat dihitung" : idr(originalExpectedNet)}</strong></span>
+                       <span className="sm:col-span-2">Selisih bank − netto: <strong>{difference == null ? "Belum dapat dihitung" : idrWhole(difference)}</strong></span>
                     </div>
                     <p className="leading-relaxed">{differenceExplanation}</p>
                     <p className="leading-relaxed">
