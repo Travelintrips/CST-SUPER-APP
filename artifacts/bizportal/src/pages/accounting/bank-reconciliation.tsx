@@ -3554,6 +3554,7 @@ function MutationCard({
   const cands  = visibleCandidates(m);
   const qrisAudits = qrisAuditsForMutation(m);
   const best   = cands[0];
+  const evidence = reconciliationEvidence(m);
   // Amount/date are hard visibility requirements only for QRIS. For other
   // candidates (including manual recon rules), they remain reviewer evidence
   // and must not prevent the candidate from being selected.
@@ -3682,6 +3683,37 @@ function MutationCard({
                   diagnostic={m.qris_candidate_diagnostic}
                   compact
                 />
+                {evidence.transactions.length > 0 && (
+                  <div className="mt-2 rounded-md border border-amber-800/60 bg-card px-3 py-2 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-semibold text-amber-300">
+                        Transaksi ditemukan untuk review ({evidence.transactions.length})
+                      </p>
+                      <span className="text-[10px] text-amber-400">Belum kandidat QRIS valid</span>
+                    </div>
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      Transaksi tetap ditampilkan sebagai bukti pencocokan, tetapi belum dapat di-approve otomatis sebagai settlement QRIS.
+                    </p>
+                    <div className="mt-1.5 max-h-44 space-y-1 overflow-y-auto">
+                      {evidence.transactions.map((transaction, index) => (
+                        <div
+                          key={`${transaction.label}-${index}`}
+                          className="flex items-center justify-between gap-3 rounded border border-border/70 bg-background/60 px-2 py-1.5"
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate font-medium text-foreground">{transaction.label}</p>
+                            <p className="truncate text-[10px] text-muted-foreground">
+                              {[transaction.customer, transaction.facility, transaction.date ? fmtDate(String(transaction.date)) : null]
+                                .filter(Boolean)
+                                .join(" · ") || "Detail tersedia di sistem"}
+                            </p>
+                          </div>
+                          <p className="shrink-0 font-semibold tabular-nums text-foreground">{idr(transaction.amount)}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {onGenerateQrisCandidates && (
                   <Button
                     size="sm"
