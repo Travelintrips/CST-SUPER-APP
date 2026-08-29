@@ -137,6 +137,7 @@ export async function submitMarketplaceQuote(params: {
 
   const resolvedName  = (buyer_name  ?? customerName ?? "").trim();
   const resolvedPhone = (guest_contact ?? phone       ?? "").trim();
+  const resolvedEmail = (customerContext?.customer.email ?? email ?? "").trim().toLowerCase();
   if (!resolvedName)  throw makeServiceError(400, "Nama buyer wajib diisi");
   if (!resolvedPhone) throw makeServiceError(400, "No. WhatsApp wajib diisi");
   // Marketplace RFQ's current frontend field is `destination`; keep the
@@ -197,6 +198,54 @@ export async function submitMarketplaceQuote(params: {
     effectiveShippingAddress ? `Alamat: ${effectiveShippingAddress}` : null,
   ].filter(Boolean).join("\n") || null;
 
+  // ── 4. RFQ idempotency — same buyer + phone + catalog item within 5 minutes
+  // Keep catalog items distinct even when they share a template (or have none).
+  const quoteWindowStart = new Date(Date.now() - 5 * 60 * 1000);
+  const existingQuote = await db.execute(sql`
+    SELECT
+      ppo.id,
+      ppo.order_number,
+      dwl.mkt_rfq_id,
+      dwl.mkt_rfq_number
+    FROM portal_product_orders ppo
+    LEFT JOIN mkt_dual_write_log dwl
+      ON dwl.portal_order_id = ppo.id
+     AND dwl.mkt_rfq_id IS NOT NULL
+    WHERE ppo.phone = ${resolvedPhone}
+      AND ppo.email = ${resolvedEmail}
+      AND ppo.status = 'Quote Request'
+      AND ppo.created_at >= ${quoteWindowStart}
+      AND (
+        ppo.template_snapshot->>'vendorCatalogItemId' = ${String(item.id)}
+        OR (
+          ppo.template_snapshot->>'vendorCatalogItemId' IS NULL
+          AND ppo.template_id IS NOT DISTINCT FROM ${item.templateId ?? null}
+        )
+      )
+    ORDER BY ppo.id ASC
+    LIMIT 1
+  `);
+  const duplicate = (existingQuote.rows as Array<{
+    id: number | string;
+    order_number: string;
+    mkt_rfq_id?: number | string | null;
+    mkt_rfq_number?: string | null;
+  }>)[0];
+  if (duplicate) {
+    return {
+      orderNumber: duplicate.order_number,
+      id: Number(duplicate.id),
+      status: "Quote Request",
+      ...(duplicate.mkt_rfq_id
+        ? {
+            rfqId: Number(duplicate.mkt_rfq_id),
+            rfqNumber: duplicate.mkt_rfq_number ?? undefined,
+            newPipeline: true,
+          }
+        : {}),
+    };
+  }
+
   // ── 4. Phase 2A/2B/2B.1: New Marketplace Pipeline (feature-flagged) ──────
   let mktRfqResult: { rfqId: number; rfqNumber: string } | null = null;
   const newPipelineEnabled = await isMarketplaceNewPipelineEnabled();
@@ -210,7 +259,7 @@ export async function submitMarketplaceQuote(params: {
       mktRfqResult = await createMktRfqEntry({
         catalogItem:        item,
         buyerName:          resolvedName,
-        buyerEmail:         customerContext?.customer.email ?? email?.trim() ?? "",
+         buyerEmail:         resolvedEmail,
         buyerPhone:         resolvedPhone,
         buyerCompany:       customerContext?.company?.name ?? (portalCustomerId ? null : company_name?.trim() ?? null),
         companyId:          portalCompanyId,
@@ -246,7 +295,7 @@ export async function submitMarketplaceQuote(params: {
     const [hdr] = await tx.insert(portalProductOrdersTable).values({
       orderNumber,
       customerName:       resolvedName,
-      email:              customerContext?.customer.email ?? email?.trim() ?? "",
+       email:              resolvedEmail,
       companyId:          portalCompanyId,
       phone:              resolvedPhone,
       shippingAddress:    effectiveShippingAddress || "TBD — Quote Request",

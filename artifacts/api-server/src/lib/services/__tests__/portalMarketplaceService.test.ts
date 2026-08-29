@@ -91,6 +91,7 @@ function makeTx() {
 describe("submitMarketplaceQuote authenticated ownership boundary", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockDb.execute.mockResolvedValue({ rows: [] });
     mockGetCatalogItemPublic.mockResolvedValue(catalogItem);
     mockGetPortalCustomerContext.mockResolvedValue(individualContext);
   });
@@ -115,6 +116,41 @@ describe("submitMarketplaceQuote authenticated ownership boundary", () => {
       ),
     ).rejects.toBe(canonicalError);
 
+    expect(mockDb.transaction).not.toHaveBeenCalled();
+  });
+
+  it("returns the existing RFQ/order for a duplicate quote retry", async () => {
+    mockDb.execute.mockResolvedValue({
+      rows: [{
+        id: 101,
+        order_number: "MCT-260828-12345",
+        mkt_rfq_id: 202,
+        mkt_rfq_number: "MKT-RFQ-202608-0202",
+      }],
+    });
+
+    const { submitMarketplaceQuote } = await import("../portalMarketplaceService.js");
+    const result = await submitMarketplaceQuote({
+      catalogItemId: catalogItem.id,
+      portalCustomerId: individualContext.customer.id,
+      ip: "127.0.0.1",
+      body: {
+        buyer_name: "Canonical Buyer",
+        email: "forged@example.test",
+        guest_contact: individualContext.customer.phone!,
+        destination: "Jakarta",
+      },
+    });
+
+    expect(result).toEqual({
+      orderNumber: "MCT-260828-12345",
+      id: 101,
+      status: "Quote Request",
+      rfqId: 202,
+      rfqNumber: "MKT-RFQ-202608-0202",
+      newPipeline: true,
+    });
+    expect(mockCreateMktRfqEntry).not.toHaveBeenCalled();
     expect(mockDb.transaction).not.toHaveBeenCalled();
   });
 

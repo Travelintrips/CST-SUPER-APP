@@ -144,7 +144,7 @@ async function signup(email, jar, extra = {}) {
   return result;
 }
 
-async function submitQuote(label, jar, extra = {}) {
+async function submitQuote(label, jar, extra = {}, requestOptions = {}) {
   if (!catalogItem?.id) {
     record(`${label} RFQ`, false, "published catalog item unavailable");
     return null;
@@ -161,7 +161,7 @@ async function submitQuote(label, jar, extra = {}) {
     method: "POST",
     jar,
     headers: {
-      "x-forwarded-for": proofClientIp,
+      "x-forwarded-for": requestOptions.forwardedFor ?? proofClientIp,
       ...(token ? { authorization: `Bearer ${token}` } : {}),
     },
     body: {
@@ -392,6 +392,40 @@ async function verifyIndividualRfq() {
     && Number.isInteger(submitted.orderId);
   record("individual RFQ created", createdPass,
     submitted ? `HTTP ${submitted.result.status}; rfq=${submitted.rfqId}; order=${submitted.orderId}` : "not submitted");
+
+  const duplicateRetry = submitted
+    ? await submitQuote("individual duplicate retry", jars.relogin, {
+      qty: preservedRfqState.qty,
+      phone: preservedRfqState.phone,
+      guest_contact: preservedRfqState.phone,
+      notes: preservedRfqState.notes,
+      required_date: preservedRfqState.requiredDate,
+    }, { forwardedFor: "198.51.100.253" })
+    : null;
+  const canonicalCount = submitted?.rfqId
+    ? await one(
+      `SELECT COUNT(*)::int AS count
+         FROM mkt_rfqs r
+         JOIN mkt_rfq_lines l ON l.rfq_id = r.id
+        WHERE r.id = $1
+          AND r.portal_customer_id = $2
+          AND r.buyer_phone = $3
+          AND r.notes LIKE ($4 || '%')
+          AND l.vendor_catalog_item_id = $5`,
+      [submitted.rfqId, individualId, preservedRfqState.phone, preservedRfqState.notes, Number(catalogItem.id)],
+    )
+    : null;
+  const duplicatePass = duplicateRetry?.result.status === 201
+    && duplicateRetry.rfqId === submitted?.rfqId
+    && duplicateRetry.orderId === submitted?.orderId
+    && Number(canonicalCount?.count) === 1;
+  record(
+    "RFQ duplicate retry is idempotent",
+    duplicatePass,
+    duplicateRetry
+      ? `HTTP ${duplicateRetry.result.status}; first=${submitted?.rfqId}/${submitted?.orderId}; retry=${duplicateRetry.rfqId}/${duplicateRetry.orderId}; canonical=${canonicalCount?.count ?? "missing"}`
+      : "not retried",
+  );
 
   const rfq = submitted?.rfqId
     ? await one(
@@ -798,6 +832,7 @@ try {
     INDIVIDUAL_ACTIVE_COMPANY_MEMBERSHIP: has("individual membership count is zero") ? 0 : "UNKNOWN",
     INDIVIDUAL_MEMBERSHIP_DEACTIVATED: has("individual choice deactivates legacy memberships canonically") ? "PASS" : "FAIL",
     INDIVIDUAL_RFQ: has("individual RFQ created") && has("individual RFQ ownership is session-based") ? "PASS" : "FAIL",
+    DUPLICATE_RFQ_CREATED: has("RFQ duplicate retry is idempotent") ? 0 : 1,
     INDIVIDUAL_RFQ_PORTAL_CUSTOMER_ID: has("individual RFQ ownership is session-based") ? "PASS" : "FAIL",
     INDIVIDUAL_RFQ_COMPANY_ID_NULL: has("individual RFQ company_id IS NULL") ? "PASS" : "FAIL",
     INDIVIDUAL_RFQ_COMPANY_ID: has("individual RFQ company_id IS NULL") ? "NULL" : "UNKNOWN",

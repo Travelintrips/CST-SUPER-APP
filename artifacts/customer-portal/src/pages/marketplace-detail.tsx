@@ -86,6 +86,38 @@ function formatPrice(n: number, currency?: string | null): string {
   }).format(n);
 }
 
+type RfqSubmitErrorPayload = {
+  error?: unknown;
+  message?: unknown;
+  reqId?: unknown;
+};
+
+function mapRfqSubmitError(status: number, payload: RfqSubmitErrorPayload): string {
+  const serverMessage =
+    typeof payload.error === "string"
+      ? payload.error
+      : typeof payload.message === "string"
+        ? payload.message
+        : "";
+
+  if (status === 422) {
+    return serverMessage || "Konteks organisasi belum siap untuk membuat RFQ.";
+  }
+  if (status === 400) {
+    return serverMessage || "Periksa kembali data RFQ yang diisi.";
+  }
+  if (status === 409) {
+    return serverMessage || "Permintaan RFQ yang sama sedang diproses.";
+  }
+  if (status >= 500) {
+    const requestId = typeof payload.reqId === "string" ? payload.reqId : "";
+    return requestId
+      ? `Terjadi kesalahan server. Kode referensi: ${requestId}`
+      : "Terjadi kesalahan server. Silakan coba lagi.";
+  }
+  return serverMessage || "Gagal mengirim RFQ.";
+}
+
 // ── Stock Badge ───────────────────────────────────────────────────────────────
 function StockBadge({ status }: { status?: string | null }) {
   const { t } = useLanguage();
@@ -902,8 +934,13 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
         body: JSON.stringify(body),
       });
 
-      const data = (await res.json()) as { orderNumber?: string; error?: string };
-      if (!res.ok) throw new Error(data.error ?? "Gagal mengirim RFQ");
+       const data = (await res.json()) as {
+         orderNumber?: string;
+         error?: string;
+         message?: string;
+         reqId?: string;
+       };
+       if (!res.ok) throw new Error(mapRfqSubmitError(res.status, data));
       setSuccess(data.orderNumber ?? "OK");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Terjadi kesalahan");
