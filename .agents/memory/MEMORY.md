@@ -108,6 +108,7 @@
 - [Historical reversal live contract](historical-reversal-live-contract.md) — stale reversal runners must not authorize production; validate the active owner and live payment-booking identity first.
 - [Portal phone login normalization](portal-phone-login-normalization.md) — OTP login must compare normalized phone identities, not raw stored strings, because legacy accounts may use 08/+62/62 formats.
 - [Customer Portal finance scope](customer-portal-finance-scope.md) — Customer Portal uses company 1; Paylabs and tax configuration remain intentionally deferred.
+- [Legacy organization context](legacy-organization-context.md) — NULL customer_type stays unresolved even with stale memberships until canonical organization completion reconciles them.
 - [Canonical bridge live installation](canonical-bridge-live-install.md) — startup markers can skip a newer bridge function; verify pg_get_functiondef and restore the DEV additive contract before proofs.
 - [PROD COA resolution](prod-coa-resolution.md) — exact linked COA can be postable yet non-canonical when ownership is NULL; prove parent/sibling structure before additive repair.
 - [Customer order WhatsApp ownership](customer-order-whatsapp-ownership.md) — customer lifecycle WA must originate from the canonical logistic transition service; driver/vendor routes keep only internal notifications.
