@@ -12,6 +12,12 @@ const companyEmail = `final-rfq-company-${RUN_ID}@example.test`;
 const pendingEmail = `final-rfq-pending-${RUN_ID}@example.test`;
 const password = "FinalRfqProof!2026";
 const warningText = "Lengkapi atau tunggu verifikasi organisasi Customer Portal sebelum membuat RFQ.";
+const preservedRfqState = {
+  qty: 3,
+  phone: "081234567890",
+  requiredDate: "2026-09-15",
+  notes: `${MARKER} preserved notes`,
+};
 const pool = new Pool({
   connectionString: process.env.SUPABASE_DATABASE_URL_DEV,
   max: 2,
@@ -23,6 +29,7 @@ const pool = new Pool({
 const steps = [];
 const jars = {
   individual: new Map(),
+  relogin: new Map(),
   company: new Map(),
   pending: new Map(),
 };
@@ -117,20 +124,21 @@ async function one(text, params = []) {
 }
 
 async function signup(email, jar, extra = {}) {
+  const { tokenKey: requestedTokenKey, ...signupFields } = extra;
   const result = await request("/portal/auth/signup", {
     method: "POST",
     jar,
     body: {
-      name: `${MARKER} ${extra.customerType ?? "legacy"}`,
+      name: `${MARKER} ${signupFields.customerType ?? "legacy"}`,
       email,
       password,
-      phone: extra.phone,
-      ...extra,
+      phone: signupFields.phone,
+      ...signupFields,
     },
   });
-  const tokenKey = extra.customerType ?? "legacy";
+  const tokenKey = requestedTokenKey ?? signupFields.customerType ?? "legacy";
   if (typeof result.data?.token === "string") authTokens[tokenKey] = result.data.token;
-  record(`${extra.customerType ?? "legacy"} signup`,
+  record(`${signupFields.customerType ?? "legacy"} signup`,
     result.status === 201 && jar.has("portal_session"),
     message(result.data));
   return result;
@@ -197,7 +205,7 @@ async function setupSyntheticCompany() {
   record("synthetic selectable canonical company", Number.isInteger(canonicalCompanyId), String(canonicalCompanyId));
 }
 
-async function seedLegacyProfile() {
+async function seedLegacyProfile(customerId, phone, label = "Legacy") {
   await query(
     `INSERT INTO user_profiles
        (customer_id, full_name, phone, address, account_type, status, completed_at, updated_at)
@@ -210,7 +218,18 @@ async function seedLegacyProfile() {
        status = EXCLUDED.status,
        completed_at = EXCLUDED.completed_at,
        updated_at = NOW()`,
-    [individualId, `${MARKER} Legacy`, "081234560001", `${MARKER} address`],
+     [customerId, `${MARKER} ${label}`, phone, `${MARKER} address`],
+  );
+}
+
+async function seedLegacyActiveMembership(customerId) {
+  await query(
+    `INSERT INTO portal_company_members
+       (portal_customer_id, company_id, buyer_role, is_active, joined_at, updated_at)
+     VALUES ($1, $2, 'requester', true, NOW(), NOW())
+     ON CONFLICT (portal_customer_id, company_id) DO UPDATE
+       SET is_active = true, updated_at = NOW()`,
+    [customerId, canonicalCompanyId],
   );
 }
 
@@ -264,7 +283,8 @@ async function checkLegacyCompletion() {
     Number.isInteger(individualId) && customer.customer_type == null,
     customer ? `customer_type=${customer.customer_type ?? "NULL"}` : "customer missing");
 
-  await seedLegacyProfile();
+  await seedLegacyProfile(individualId, "081234560001", "Legacy Individual");
+  await seedLegacyActiveMembership(individualId);
   const status = await request("/portal/onboarding/status", {
     jar: jars.individual,
     headers: { authorization: `Bearer ${authTokens.legacy}` },
@@ -312,10 +332,61 @@ async function checkLegacyCompletion() {
     fresh?.customer_type === "individual"
     && Number(fresh.active_memberships) === 0,
     fresh ? `customer_type=${fresh.customer_type}; memberships=${fresh.active_memberships}` : "customer missing");
+
+  const deactivatedLegacyMembership = await one(
+    `SELECT count(*)::int AS total,
+            count(*) FILTER (WHERE is_active = true)::int AS active
+       FROM portal_company_members
+      WHERE portal_customer_id = $1`,
+    [individualId],
+  );
+  record(
+    "individual choice deactivates legacy memberships canonically",
+    Number(deactivatedLegacyMembership?.total) === 1
+      && Number(deactivatedLegacyMembership?.active) === 0,
+    deactivatedLegacyMembership
+      ? `total=${deactivatedLegacyMembership.total}; active=${deactivatedLegacyMembership.active}`
+      : "membership row missing",
+  );
+
+  const logout = await request("/portal/auth/logout", { method: "POST", jar: jars.individual });
+  const relogin = await request("/portal/auth/login", {
+    method: "POST",
+    jar: jars.relogin,
+    body: { email: individualEmail, password },
+  });
+  const reloginToken = relogin.data?.token;
+  if (typeof reloginToken === "string") authTokens.legacy = reloginToken;
+  const reloginContext = await request("/portal/onboarding/status", {
+    jar: jars.relogin,
+    headers: reloginToken ? { authorization: `Bearer ${reloginToken}` } : {},
+  });
+  const reloginStatus = reloginContext.data?.customerContext?.status;
+  const onboardingSource = readFileSync(new URL("../../customer-portal/src/pages/onboarding.tsx", import.meta.url), "utf8");
+  const repeatCompletionDoesNotAppear =
+    reloginStatus === "individual"
+    && reloginContext.data?.customerType === "individual"
+    && !["legacy_unresolved", "company_unresolved"].includes(reloginStatus)
+    && onboardingSource.includes("if (isExistingCustomerWithUnresolvedOrganization)")
+    && onboardingSource.includes("else if (d.status === \"active\")");
+  record(
+    "logout then login preserves individual completion",
+    logout.status === 200
+      && relogin.status === 200
+      && jars.relogin.has("portal_session")
+      && repeatCompletionDoesNotAppear,
+    `logout=${logout.status}; login=${relogin.status}; status=${reloginStatus ?? "missing"}`,
+  );
 }
 
 async function verifyIndividualRfq() {
-  const submitted = await submitQuote("individual");
+  const submitted = await submitQuote("individual", jars.relogin, {
+    qty: preservedRfqState.qty,
+    phone: preservedRfqState.phone,
+    guest_contact: preservedRfqState.phone,
+    notes: preservedRfqState.notes,
+    required_date: preservedRfqState.requiredDate,
+  });
   const createdPass = submitted?.result.status === 201
     && Number.isInteger(submitted.rfqId)
     && Number.isInteger(submitted.orderId);
@@ -325,15 +396,22 @@ async function verifyIndividualRfq() {
   const rfq = submitted?.rfqId
     ? await one(
       `SELECT id, portal_customer_id, company_id, buyer_email, delivery_address,
-              destination_place_id, destination_lat::text, destination_lng::text
+              destination_place_id, destination_lat::text, destination_lng::text,
+              buyer_phone, required_delivery_date, notes
          FROM mkt_rfqs WHERE id = $1`,
       [submitted.rfqId],
     )
     : null;
   const order = submitted?.orderId
     ? await one(
-      `SELECT id, company_id, email, shipping_address, notes
+      `SELECT id, company_id, email, phone, shipping_address, notes
          FROM portal_product_orders WHERE id = $1`,
+      [submitted.orderId],
+    )
+    : null;
+  const orderItem = submitted?.orderId
+    ? await one(
+      "SELECT qty FROM portal_product_order_items WHERE order_id = $1",
       [submitted.orderId],
     )
     : null;
@@ -362,6 +440,26 @@ async function verifyIndividualRfq() {
     `mkt=${rfq?.company_id ?? "NULL"}; legacy=${order?.company_id ?? "NULL"}`);
   record("individual destination/Google Maps persisted", destinationPass,
     rfq ? `${rfq.delivery_address}; ${rfq.destination_place_id ?? "NULL"}` : "RFQ row missing");
+  const statePreserved = Boolean(rfq)
+    && Boolean(order)
+    && Number(orderItem?.qty) === preservedRfqState.qty
+    && rfq.buyer_phone === preservedRfqState.phone
+    && order.phone === preservedRfqState.phone
+    && (
+      rfq.required_delivery_date instanceof Date
+        ? rfq.required_delivery_date.toISOString().slice(0, 10)
+        : String(rfq.required_delivery_date ?? "").slice(0, 10)
+    ) === preservedRfqState.requiredDate
+    && String(rfq.notes ?? "").includes(preservedRfqState.notes)
+    && String(order.notes ?? "").includes(preservedRfqState.notes)
+    && order.shipping_address === rfq.delivery_address;
+  record(
+    "RFQ state preserved after organization completion",
+    statePreserved,
+    rfq
+      ? `qty=${orderItem?.qty}; phone=${rfq.buyer_phone}; date=${rfq.required_delivery_date}; notes=${rfq.notes ? "present" : "missing"}`
+      : "RFQ row missing",
+  );
   record("individual organization warning removed", warningRemoved,
     `HTTP ${submitted?.result.status ?? "not-run"}`);
   return { submitted, rfq, order };
@@ -369,36 +467,69 @@ async function verifyIndividualRfq() {
 
 async function verifyCompanyRegression() {
   const signupResult = await signup(companyEmail, jars.company, {
-    customerType: "company",
-    companyId: canonicalCompanyId,
+    tokenKey: "legacy-company",
     phone: "081234560002",
-    company: `${MARKER} Company`,
   });
   if (signupResult.status !== 201) return false;
   const customer = await one("SELECT id FROM portal_customers WHERE email = $1", [companyEmail]);
   const companyCustomerId = Number(customer?.id);
   if (Number.isInteger(companyCustomerId)) created.customerIds.push(companyCustomerId);
+  await seedLegacyProfile(companyCustomerId, "081234560002", "Legacy Company");
+  const unresolved = await request("/portal/onboarding/status", {
+    jar: jars.company,
+    headers: { authorization: `Bearer ${authTokens["legacy-company"]}` },
+  });
+  const organization = await request("/portal/organization", {
+    method: "PUT",
+    jar: jars.company,
+    headers: { authorization: `Bearer ${authTokens["legacy-company"]}` },
+    body: {
+      customerId: 999999999,
+      email: `${MARKER}-forged-company@example.test`,
+      customerType: "company",
+      companyId: canonicalCompanyId,
+    },
+  });
   const membership = await one(
     `SELECT count(*)::int AS count
        FROM portal_company_members
       WHERE portal_customer_id = $1 AND company_id = $2 AND is_active = true`,
     [companyCustomerId, canonicalCompanyId],
   );
+  authTokens.company = authTokens["legacy-company"];
   const companySubmit = await submitQuote("company", jars.company, {
     email: `${MARKER}-company-forged@example.test`,
     customer_id: 999999999,
     company_id: 999999999,
   });
   const companyRfq = companySubmit?.rfqId
-    ? await one("SELECT portal_customer_id, company_id, buyer_email FROM mkt_rfqs WHERE id = $1", [companySubmit.rfqId])
+    ? await one(
+      "SELECT portal_customer_id, company_id, buyer_email, buyer_company FROM mkt_rfqs WHERE id = $1",
+      [companySubmit.rfqId],
+    )
     : null;
+  const customerUiSource = readFileSync(new URL("../../customer-portal/src/pages/marketplace-detail.tsx", import.meta.url), "utf8");
+  const companyReadOnlyUi = customerUiSource.includes("Diambil dari membership canonical Anda")
+    && customerUiSource.includes("authenticatedCustomer ? undefined :");
   const pass = companySubmit?.result.status === 201
+    && unresolved.status === 200
+    && unresolved.data?.customerContext?.status === "legacy_unresolved"
+    && organization.status === 200
+    && organization.data?.context?.status === "company_mapped"
     && Number(membership?.count) === 1
     && Number(companyRfq?.portal_customer_id) === companyCustomerId
     && Number(companyRfq?.company_id) === canonicalCompanyId
-    && companyRfq?.buyer_email === companyEmail;
+    && companyRfq?.buyer_email === companyEmail
+    && companyRfq?.buyer_company === `${MARKER} Company`
+    && companyReadOnlyUi;
   record("company active membership RFQ PASS", pass,
-    `HTTP ${companySubmit?.result.status ?? "not-run"}; membership=${membership?.count ?? "missing"}; company_id=${companyRfq?.company_id ?? "missing"}`);
+    `HTTP ${companySubmit?.result.status ?? "not-run"}; unresolved=${unresolved.data?.customerContext?.status ?? "missing"}; membership=${membership?.count ?? "missing"}; company_id=${companyRfq?.company_id ?? "missing"}`);
+  record(
+    "company name is canonical and read-only in RFQ",
+    companyReadOnlyUi
+      && companyRfq?.buyer_company === `${MARKER} Company`,
+    `buyer_company=${companyRfq?.buyer_company ?? "missing"}; ui=${companyReadOnlyUi}`,
+  );
   return pass;
 }
 
@@ -441,7 +572,7 @@ async function verifyPendingCompany() {
 }
 
 async function verifyForgedCompanyId() {
-  const forged = await submitQuote("forged company_id", jars.individual, {
+  const forged = await submitQuote("forged company_id", jars.relogin, {
     email: `${MARKER}-forged-email@example.test`,
     customer_id: 999999999,
     company_id: canonicalCompanyId,
@@ -569,7 +700,7 @@ async function cleanup() {
     );
     await safeDelete("portal profiles", "DELETE FROM portal_customer_profiles WHERE customer_id = ANY($1::int[])", [customerIds]);
     await safeDelete("user profiles", "DELETE FROM user_profiles WHERE customer_id = ANY($1::int[])", [customerIds]);
-    await safeDelete("notification logs", "DELETE FROM notification_logs WHERE recipient = ANY($1::text[])", [[individualEmail, companyEmail, pendingEmail]]);
+     await safeDelete("notification logs", "DELETE FROM notification_logs WHERE recipient = ANY($1::text[])", [[individualEmail, companyEmail, pendingEmail]]);
     await safeDelete("portal customers", "DELETE FROM portal_customers WHERE id = ANY($1::int[])", [customerIds]);
   }
   if (companyIds.length) {
@@ -593,6 +724,8 @@ async function residualRecords() {
 }
 
 async function main() {
+  const live = await request("/health/live");
+  record("development liveness", live.status === 200, `HTTP ${live.status}`);
   const ready = await request("/health/ready");
   record("development readiness", ready.status === 200 && ready.data?.ready === true,
     `HTTP ${ready.status}; ready=${ready.data?.ready}`);
@@ -658,15 +791,25 @@ try {
       ? "PASS"
       : "FAIL",
     LEGACY_COMPLETION: has("legacy completion flow appears") ? "PASS" : "FAIL",
+    LEGACY_COMPLETION_UI: has("legacy completion flow appears") ? "PASS" : "FAIL",
     INDIVIDUAL_CONTEXT_READY: has("individual context READY") ? "PASS" : "FAIL",
     INDIVIDUAL_MEMBERSHIP_COUNT: has("individual membership count is zero") ? 0 : "UNKNOWN",
+    INDIVIDUAL_COMPLETION: has("individual context READY") ? "PASS" : "FAIL",
+    INDIVIDUAL_ACTIVE_COMPANY_MEMBERSHIP: has("individual membership count is zero") ? 0 : "UNKNOWN",
+    INDIVIDUAL_MEMBERSHIP_DEACTIVATED: has("individual choice deactivates legacy memberships canonically") ? "PASS" : "FAIL",
     INDIVIDUAL_RFQ: has("individual RFQ created") && has("individual RFQ ownership is session-based") ? "PASS" : "FAIL",
     INDIVIDUAL_RFQ_PORTAL_CUSTOMER_ID: has("individual RFQ ownership is session-based") ? "PASS" : "FAIL",
     INDIVIDUAL_RFQ_COMPANY_ID_NULL: has("individual RFQ company_id IS NULL") ? "PASS" : "FAIL",
+    INDIVIDUAL_RFQ_COMPANY_ID: has("individual RFQ company_id IS NULL") ? "NULL" : "UNKNOWN",
     INDIVIDUAL_ORGANIZATION_WARNING_REMOVED: has("individual organization warning removed") ? "PASS" : "FAIL",
+    CUSTOMER_TYPE_PERSISTED: has("logout then login preserves individual completion") ? "individual" : "UNKNOWN",
+    REPEAT_COMPLETION_PROMPT: has("logout then login preserves individual completion") ? "NO" : "UNKNOWN",
     COMPANY_RFQ_REGRESSION: has("company active membership RFQ PASS") ? "PASS" : "FAIL",
     COMPANY_RFQ_PORTAL_CUSTOMER_ID: has("company active membership RFQ PASS") ? "PASS" : "FAIL",
     COMPANY_RFQ_CANONICAL_COMPANY_ID: has("company active membership RFQ PASS") ? "PASS" : "FAIL",
+    COMPANY_COMPLETION: has("company active membership RFQ PASS") ? "PASS" : "FAIL",
+    COMPANY_NAME_SOURCE: has("company name is canonical and read-only in RFQ") ? "CANONICAL_MEMBERSHIP" : "UNKNOWN",
+    COMPANY_NAME_EDITABLE: has("company name is canonical and read-only in RFQ") ? "NO" : "UNKNOWN",
     COMPANY_PENDING_BLOCK: has("company pending RFQ blocked") ? "PASS" : "FAIL",
     LEGACY_UNRESOLVED_BLOCK: has("legacy completion flow appears") && has("individual context READY") ? "PASS" : "FAIL",
     FORGED_EMAIL_BYPASS: has("forged email cannot change ownership") ? 0 : 1,
@@ -674,12 +817,23 @@ try {
     FORGED_COMPANY_BYPASS: has("forged company_id cannot change ownership") ? 0 : 1,
     GUEST_RFQ_REGRESSION: has("guest RFQ regression") ? "PASS" : "FAIL",
     GOOGLE_MAPS_REGRESSION: has("Google Maps autocomplete/detail") && has("individual destination/Google Maps persisted") ? "PASS" : "FAIL",
+    RFQ_STATE_PRESERVED: has("RFQ state preserved after organization completion") ? "PASS" : "FAIL",
     AUTH_OWNERSHIP_REGRESSION_TESTS: has("forged email cannot change ownership")
       && has("forged customer_id cannot change ownership")
       && has("forged company_id cannot change ownership")
       ? "PASS"
       : "FAIL",
-    API_LIVE: has("development readiness") ? "PASS" : "FAIL",
+    FOCUSED_TESTS: has("individual choice deactivates legacy memberships canonically")
+      && has("logout then login preserves individual completion")
+      && has("company active membership RFQ PASS")
+      && has("company pending RFQ blocked")
+      && has("RFQ state preserved after organization completion")
+      && has("forged email cannot change ownership")
+      && has("forged customer_id cannot change ownership")
+      && has("forged company_id cannot change ownership")
+      ? "PASS"
+      : "FAIL",
+    API_LIVE: has("development liveness") ? "PASS" : "FAIL",
     API_READY: has("development readiness") ? "PASS" : "FAIL",
     CLEANUP_ERRORS: cleanupErrors.length,
     RESIDUAL_AUDIT_RECORDS: residualCount,

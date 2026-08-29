@@ -133,12 +133,15 @@ export async function getPortalCustomerContext(customerId: number): Promise<Port
     .limit(1);
 
   const customerType = customer.customerType as PortalCustomerType | null;
-  const effectiveType = customerType
-    ?? (memberships.length > 0 || pendingRequest ? "company" : null);
+  // A NULL customer_type is an explicitly unresolved legacy identity. Do not
+  // infer "company" from stale memberships: those rows are precisely what the
+  // canonical organization completion flow must reconcile or deactivate.
+  const effectiveType = customerType;
   const company = memberships.length === 1 ? memberships[0]! : null;
 
   let status: PortalCustomerContextStatus;
-  if (effectiveType === "individual") status = "individual";
+  if (customerType === null) status = "legacy_unresolved";
+  else if (effectiveType === "individual") status = "individual";
   else if (company) status = "company_mapped";
   else if (pendingRequest) status = "company_pending";
   else if (effectiveType === "company") status = "company_unresolved";
