@@ -192,7 +192,7 @@ async function resolveManualQrisGroup(
         lower(btrim(c.provider_code)) AS provider_code,
         btrim(c.bank_account_id::text) AS bank_account_id,
         btrim(c.rule_version) AS rule_version,
-        m.transaction_date::text AS settlement_date
+        m.transaction_date::date::text AS settlement_date
       FROM sport_center.payment_settlement_configs c
       JOIN public.bank_mutations m
         ON m.id = ${evidence.mutationId}
@@ -201,8 +201,8 @@ async function resolveManualQrisGroup(
         AND c.company_id = ${evidence.companyId}
         AND c.is_active = TRUE
         AND c.source = 'OWNER_APPROVED'
-        AND c.effective_from <= m.transaction_date
-        AND (c.effective_until IS NULL OR m.transaction_date < c.effective_until)
+        AND c.effective_from <= m.transaction_date::date
+        AND (c.effective_until IS NULL OR m.transaction_date::date < c.effective_until)
       FOR UPDATE OF c, m
     `),
     CANONICAL_SETTLEMENT_BUILDER_CODES.SETTLEMENT_CONFIG_UNRESOLVED,

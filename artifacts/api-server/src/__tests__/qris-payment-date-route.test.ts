@@ -107,6 +107,12 @@ describe("QRIS exact-net approval route", () => {
     expect(route).toContain("JOIN public.bank_mutations bm");
     expect(route).toContain("FROM public.bank_mutations");
     expect(canonicalBuilderSource).toContain("JOIN public.bank_mutations m");
+    expect(canonicalBuilderSource).toContain(
+      "c.effective_from <= m.transaction_date::date",
+    );
+    expect(canonicalBuilderSource).toContain(
+      "m.transaction_date::date < c.effective_until",
+    );
     expect(canonicalApprovalSource).toContain("UPDATE public.bank_mutations");
     expect(candidateServiceSource).toContain("FROM public.bank_mutations bm");
   });
