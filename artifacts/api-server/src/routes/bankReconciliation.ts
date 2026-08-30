@@ -2991,6 +2991,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
         SELECT
           psc.id,
           lower(btrim(psc.provider_code)) AS provider_code,
+          btrim(psc.bank_account_id::text) AS canonical_bank_account_id,
           cba.id AS resolved_bank_account_id,
           btrim(psc.rule_version) AS rule_version,
           psc.mdr_rate,
@@ -3017,6 +3018,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       const normalizedConfigRows: Array<Record<string, unknown> & {
         configId: number;
         providerCode: ReturnType<typeof normalizeQrisProvider>;
+        canonicalBankAccountId: string | null;
         bankAccountId: number | null;
         ruleVersion: string | null;
       }> = configRows
@@ -3026,6 +3028,9 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
           providerCode: normalizeQrisProvider(
             config.provider_code == null ? null : String(config.provider_code),
           ),
+          canonicalBankAccountId: config.canonical_bank_account_id == null
+            ? null
+            : String(config.canonical_bank_account_id).trim() || null,
           bankAccountId: config.resolved_bank_account_id == null
             ? null
             : Number(config.resolved_bank_account_id),
@@ -3037,6 +3042,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
           Number.isSafeInteger(config.configId)
           && config.configId > 0
           && config.providerCode !== "unknown"
+          && config.canonicalBankAccountId
           && config.bankAccountId
           && config.ruleVersion,
         );
@@ -3090,21 +3096,22 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
         });
       }
       const resolvedProvider = settlementConfig.providerCode;
-      const resolvedBankAccountId = settlementConfig.bankAccountId!;
+      const canonicalBankAccountId = settlementConfig.canonicalBankAccountId!;
       const resolvedRuleVersion = settlementConfig.ruleVersion!;
 
       /*
-       * Materialize the selected financial config dimensions. This does not
-       * change payment amount, journal amount, or MDR rules; it lets the
-       * canonical settlement owner post one technical group even when legacy
-       * provider/group metadata was missing, conflicting, or ambiguous.
+       * The public mutation is linked to company_bank_accounts.id, while the
+       * settlement owner deliberately groups by the config's account number.
+       * Materialize that canonical external identity (not the internal ID)
+       * so the supplemental owner and its bank-COA resolver compare the same
+       * representation. This changes no financial value or MDR rule.
        */
       const selectedIdSql = selectedIds.join(",");
       await tx.execute(sql.raw(`
         UPDATE sport_center.sport_payments
         SET payment_provider = '${resolvedProvider}',
             provider_name = '${resolvedProvider}',
-            bank_account_id = '${String(resolvedBankAccountId).replace(/'/g, "''")}',
+            bank_account_id = '${canonicalBankAccountId.replace(/'/g, "''")}',
             expected_settlement_date = '${bankDate}',
             settlement_rule_version = '${resolvedRuleVersion.replace(/'/g, "''")}'
         WHERE id IN (${selectedIdSql})
@@ -3247,10 +3254,28 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       ...(reviewWarning ? { reviewWarning } : {}),
     });
   } catch (error: any) {
-    const code = error?.code ?? "QRIS_CANONICAL_APPROVAL_FAILED";
+    const directMessage = typeof error?.message === "string"
+      ? error.message.trim()
+      : "";
+    const nestedMessage = typeof error?.cause?.message === "string"
+      ? error.cause.message.trim()
+      : "";
+    const businessDbError = nestedMessage.match(
+      /^([A-Z][A-Z0-9_]+)(?::\s*(.{1,240}))?$/,
+    );
+    const code = (
+      error?.code === "P0001" && businessDbError
+        ? businessDbError[1]
+        : error?.code
+    ) ?? "QRIS_CANONICAL_APPROVAL_FAILED";
+    const publicErrorMessage = businessDbError
+      ? nestedMessage
+      : directMessage && !directMessage.startsWith("Failed query:")
+        ? directMessage
+        : "Approval canonical QRIS gagal";
     if (error?.eligibilityError) {
       return res.status(422).json({
-        error: error?.message ?? "Kandidat QRIS belum memenuhi syarat approval",
+        error: publicErrorMessage,
         code: "CANDIDATE_NOT_ELIGIBLE",
         reason_code: code,
         reconciliation_status: error?.reconciliation_status,
@@ -3277,16 +3302,18 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       "CANONICAL_SETTLEMENT_SELECTION_CONFLICT",
       "CANONICAL_PAYMENT_SETTLEMENT_STATE_CONFLICT",
       "CANONICAL_BANK_MUTATION_NOT_ELIGIBLE",
+      "CANONICAL_SETTLEMENT_ITEM_ALREADY_ACTIVE",
+      "ONE_OR_MORE_PAYMENTS_NOT_ELIGIBLE",
     ]);
     const status = code === "NOT_FOUND"
       ? 404
       : clientErrorCodes.has(code) ? 409 : 500;
     logger.warn(
-      { err: error?.cause?.message ?? error?.message, candidateId, code },
+      { err: nestedMessage || directMessage, candidateId, code },
       "[bankRecon] canonical QRIS one-click approval rejected",
     );
     return res.status(status).json({
-      error: error?.message ?? "Approval canonical QRIS gagal",
+      error: publicErrorMessage,
       code,
     });
   }

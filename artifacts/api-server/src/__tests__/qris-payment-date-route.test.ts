@@ -123,9 +123,27 @@ describe("QRIS exact-net approval route", () => {
     expect(route).toContain("JOIN public.company_bank_accounts cba");
     expect(route).toContain("cba.account_number::text = psc.bank_account_id::text");
     expect(route).toContain("cba.is_active = TRUE");
+    expect(route).toContain(
+      "btrim(psc.bank_account_id::text) AS canonical_bank_account_id",
+    );
     expect(route).toContain("const bankMutationAccountId = Number(row.bank_mutation_account_id)");
     expect(route).toContain("AND cba.id = ${bankMutationAccountId}");
+    expect(route).toContain("const canonicalBankAccountId = settlementConfig.canonicalBankAccountId!");
+    expect(route).toContain(
+      "bank_account_id = '${canonicalBankAccountId.replace(/'/g, \"''\")}'",
+    );
+    expect(route).not.toContain(
+      "const resolvedBankAccountId = settlementConfig.bankAccountId!",
+    );
     expect(route).not.toContain("OR psc.bank_account_id::text");
+  });
+
+  it("returns a sanitized PostgreSQL business reason instead of the wrapped SQL", () => {
+    expect(route).toContain("const businessDbError = nestedMessage.match(");
+    expect(route).toContain('error?.code === "P0001" && businessDbError');
+    expect(route).toContain('!directMessage.startsWith("Failed query:")');
+    expect(route).toContain('"CANONICAL_SETTLEMENT_ITEM_ALREADY_ACTIVE"');
+    expect(route).toContain('"ONE_OR_MORE_PAYMENTS_NOT_ELIGIBLE"');
   });
 
   it("treats an explicit manual QRIS selection as authoritative instead of using the source group", () => {

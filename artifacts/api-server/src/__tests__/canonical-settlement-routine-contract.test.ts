@@ -98,4 +98,28 @@ describe("canonical Sport Center owner routine restoration contract", () => {
     expect(runner).toContain("process.env.REPLIT_DEPLOYMENT");
     expect(runner).toContain("refusing to write outside the development database");
   });
+
+  it("keeps supplemental creation strict after manual metadata is canonicalized", () => {
+    const start = migrationSource.indexOf(
+      "CREATE OR REPLACE FUNCTION sport_center.create_payment_settlement_supplemental_batch(",
+    );
+    const end = migrationSource.indexOf(
+      "Phase 4C-7H: append-only reversal",
+      start,
+    );
+    const supplemental = migrationSource.slice(start, end);
+
+    expect(supplemental).toContain(
+      "lower(p.payment_provider::text) = lower(btrim(p_provider_code))",
+    );
+    expect(supplemental).toContain(
+      "p.bank_account_id = btrim(p_bank_account_id)",
+    );
+    expect(supplemental).toContain(
+      "p.settlement_rule_version = p_base_rule_version",
+    );
+    expect(supplemental).toContain(
+      "CANONICAL_SETTLEMENT_ITEM_ALREADY_ACTIVE",
+    );
+  });
 });

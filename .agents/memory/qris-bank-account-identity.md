@@ -14,3 +14,9 @@ Canonical `sport_center.sport_payments` tetap menyimpan identitas rekening provi
 **Why:** Nomor rekening provider dapat lebih besar dari INTEGER dan tidak boleh diganti dengan akun aktif pertama karena itu bisa salah pada company multi-rekening.
 
 **How to apply:** Backfill hanya boleh memulihkan external identity dari mirror atau memetakan ke ID internal jika tepat satu rekening aktif cocok; zero/ambiguous match tetap unresolved.
+
+Manual QRIS approval memakai `company_bank_accounts.id` hanya untuk membuktikan bahwa mutasi public terikat ke rekening aktif milik company yang sama. Canonical settlement group tetap memakai nomor rekening eksternal dari owner-approved config.
+
+**Why:** Supplemental owner, owner-config resolver, advisory-lock identity, dan bank-COA resolver semuanya berkontrak pada nomor rekening config. Menulis ID internal ke payment membuat group mismatch meskipun rekening bisnisnya sama.
+
+**How to apply:** Setelah config dibuktikan melalui join account-number → active internal ID, materialize nomor rekening config ke payment sebelum canonical builder; jangan meneruskan internal mutation account ID sebagai group identity.
