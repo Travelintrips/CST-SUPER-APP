@@ -100,6 +100,7 @@ export interface QrisMutationBatchCandidate {
   paymentItems: Array<{
     paymentId: number;
     grossAmount: number;
+    paymentStatus?: string | null;
     expectedSettlementDate: string | null;
     settlementRuleVersion: string | null;
     paymentNumber?: string | null;
@@ -389,6 +390,7 @@ export function generateQrisMutationBatchCandidates(input: {
         paymentItems: selectedPayments.map((payment) => ({
           paymentId: payment.id,
           grossAmount: roundMoney(Number(payment.amount) || 0),
+          paymentStatus: String(payment.status ?? "").trim() || null,
           canonicalSettlementId: payment.canonicalSettlementId ?? null,
           expectedSettlementDate: mutation.transactionDate,
           settlementRuleVersion: "payment-method-h-minus-one-v1",
