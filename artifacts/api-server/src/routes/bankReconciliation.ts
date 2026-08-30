@@ -3129,11 +3129,11 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
         SET payment_provider = '${resolvedProvider}',
             provider_name = '${resolvedProvider}',
             bank_account_id = '${resolvedBankAccountId.replace(/'/g, "''")}',
-            expected_settlement_date = '${bankDate}'::date,
+            expected_settlement_date = '${bankDate}',
             settlement_rule_version = '${resolvedRuleVersion.replace(/'/g, "''")}'
         WHERE id IN (${selectedIdSql})
           AND company_id = ${companyId}
-          AND lower(COALESCE(payment_method::text, method::text, '')) LIKE '%qris%'
+          AND lower(COALESCE(payment_method::text, '')) LIKE '%qris%'
       `));
 
       return {

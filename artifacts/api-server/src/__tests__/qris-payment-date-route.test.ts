@@ -67,6 +67,8 @@ describe("QRIS exact-net approval route", () => {
 
   it("keeps the live QRIS, H-1, company, and exact-net guards", () => {
     expect(route).toContain("payment.payment_method");
+    expect(route).toContain("COALESCE(payment_method::text, '')");
+    expect(route).not.toContain("COALESCE(payment_method::text, method::text");
     expect(route).toContain("expectedPaymentDate");
     expect(route).toContain("payment.company_id");
     expect(route).toContain("calculatedNetAmount");
