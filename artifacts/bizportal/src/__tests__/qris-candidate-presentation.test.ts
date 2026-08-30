@@ -83,4 +83,11 @@ describe("QRIS bank-evidence approval boundary", () => {
       description: "QRTRAVELI SETTLEMENT",
     })).toBe(true);
   });
+
+  it("does not block Mandiri settlement markers SA/KR", () => {
+    expect(isQrisBankApprovalAllowed({
+      providerName: "Bank Mandiri",
+      description: "SA 123456 KR 1640006707220",
+    })).toBe(true);
+  });
 });
