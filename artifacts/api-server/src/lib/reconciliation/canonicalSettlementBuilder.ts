@@ -63,9 +63,8 @@ export interface CanonicalSettlementBuildOptions {
   sourcePaymentId?: number;
   sourceEventId?: string;
   /**
-   * Optional explicit selection from the canonical group. When present, the
-   * owner builds exactly this payment set; arbitrary cross-group selections
-   * fail closed instead of silently expanding to another natural batch.
+   * Optional explicit payment selection. For manual QRIS approval, this is the
+   * authoritative payment set and is not partitioned by source-payment group.
    */
   selectedPaymentIds?: number[];
   qrisApprovalEvidence?: {
@@ -167,6 +166,60 @@ function assertGroup(payment: PaymentIdentity): GroupIdentity {
 
   return {
     companyId,
+    providerCode,
+    bankAccountId,
+    settlementDate,
+    ruleVersion,
+  };
+}
+
+async function resolveManualQrisGroup(
+  client: QueryClient,
+  evidence: NonNullable<CanonicalSettlementBuildOptions["qrisApprovalEvidence"]>,
+): Promise<GroupIdentity> {
+  const configId = Number(evidence.settlementConfigId);
+  if (!Number.isSafeInteger(configId) || configId <= 0) {
+    throw new CanonicalSettlementBuilderError(
+      CANONICAL_SETTLEMENT_BUILDER_CODES.SETTLEMENT_CONFIG_UNRESOLVED,
+      "Config MDR canonical untuk approval QRIS manual tidak valid.",
+    );
+  }
+
+  const config = rowOrThrow(
+    await client.execute(sql`
+      SELECT
+        c.company_id,
+        lower(btrim(c.provider_code)) AS provider_code,
+        btrim(c.bank_account_id::text) AS bank_account_id,
+        btrim(c.rule_version) AS rule_version,
+        m.transaction_date::text AS settlement_date
+      FROM sport_center.payment_settlement_configs c
+      JOIN bank_mutations m
+        ON m.id = ${evidence.mutationId}
+       AND m.company_id = c.company_id
+      WHERE c.id = ${configId}
+        AND c.company_id = ${evidence.companyId}
+        AND c.is_active = TRUE
+        AND c.source = 'OWNER_APPROVED'
+        AND c.effective_from <= m.transaction_date
+        AND (c.effective_until IS NULL OR m.transaction_date < c.effective_until)
+      FOR UPDATE OF c, m
+    `),
+    CANONICAL_SETTLEMENT_BUILDER_CODES.SETTLEMENT_CONFIG_UNRESOLVED,
+    "Config MDR canonical untuk approval QRIS manual tidak tersedia.",
+  );
+  const providerCode = normalizeProvider(config.provider_code);
+  const bankAccountId = textOrNull(config.bank_account_id);
+  const settlementDate = textOrNull(config.settlement_date)?.slice(0, 10) ?? null;
+  const ruleVersion = textOrNull(config.rule_version);
+  if (!providerCode || !bankAccountId || !settlementDate || !ruleVersion) {
+    throw new CanonicalSettlementBuilderError(
+      CANONICAL_SETTLEMENT_BUILDER_CODES.SETTLEMENT_CONFIG_UNRESOLVED,
+      "Config MDR canonical untuk approval QRIS manual tidak lengkap.",
+    );
+  }
+  return {
+    companyId: evidence.companyId,
     providerCode,
     bankAccountId,
     settlementDate,
@@ -602,10 +655,11 @@ async function buildInTransaction(
     payment_status: textOrNull(sourceRow.payment_status),
     payment_date: textOrNull(sourceRow.payment_date),
   };
-  const group = assertGroup(source);
   const requestedPaymentIds = options.selectedPaymentIds == null
     ? null
     : [...new Set(options.selectedPaymentIds)];
+  const manualQrisSelection =
+    options.qrisApprovalEvidence != null && requestedPaymentIds !== null;
   if (
     requestedPaymentIds !== null
     && (
@@ -615,10 +669,29 @@ async function buildInTransaction(
     )
   ) {
     throw new CanonicalSettlementBuilderError(
-      CANONICAL_SETTLEMENT_BUILDER_CODES.SETTLEMENT_GROUP_INVALID,
-      "Selected canonical payments must be non-empty, valid, and include the source payment.",
+      manualQrisSelection
+        ? CANONICAL_SETTLEMENT_BUILDER_CODES.PAYMENT_NOT_ELIGIBLE
+        : CANONICAL_SETTLEMENT_BUILDER_CODES.SETTLEMENT_GROUP_INVALID,
+      "Selected payments must be non-empty, valid, and include the source payment.",
     );
   }
+  const group = manualQrisSelection
+    ? await resolveManualQrisGroup(client, options.qrisApprovalEvidence!)
+    : assertGroup(source);
+  const paymentFilter = manualQrisSelection
+    ? sql`
+        p.status::text = 'confirmed'
+        AND p.company_id = ${group.companyId}
+        AND p.id IN (${sql.join(requestedPaymentIds!.map((id) => sql`${id}`), sql`, `)})
+      `
+    : sql`
+        p.status::text = 'confirmed'
+        AND p.company_id = ${group.companyId}
+        AND lower(btrim(p.payment_provider::text)) = ${group.providerCode}
+        AND p.bank_account_id::text = ${group.bankAccountId}
+        AND p.expected_settlement_date::date = ${group.settlementDate}::date
+        AND p.settlement_rule_version = ${group.ruleVersion}
+      `;
 
   const groupResult = await client.execute(sql`
     SELECT
@@ -635,12 +708,7 @@ async function buildInTransaction(
         AT TIME ZONE 'Asia/Jakarta'
       )::date::text AS payment_date
     FROM sport_center.sport_payments p
-    WHERE p.status::text = 'confirmed'
-      AND p.company_id = ${group.companyId}
-      AND lower(btrim(p.payment_provider::text)) = ${group.providerCode}
-      AND p.bank_account_id::text = ${group.bankAccountId}
-      AND p.expected_settlement_date::date = ${group.settlementDate}::date
-      AND p.settlement_rule_version = ${group.ruleVersion}
+    WHERE ${paymentFilter}
     ORDER BY p.id
     FOR UPDATE
   `);
@@ -661,11 +729,24 @@ async function buildInTransaction(
   if (!payments.some((payment) => payment.id === source.id)) {
     throw new CanonicalSettlementBuilderError(
       CANONICAL_SETTLEMENT_BUILDER_CODES.PAYMENT_NOT_ELIGIBLE,
-      `Source payment ${source.id} is not a confirmed member of its canonical group.`,
+      manualQrisSelection
+        ? `Source payment ${source.id} is not part of the manual QRIS selection.`
+        : `Source payment ${source.id} is not a confirmed member of its canonical group.`,
     );
   }
-  for (const payment of payments) assertSameGroup(group, payment);
-  if (requestedPaymentIds !== null) {
+  if (manualQrisSelection) {
+    const loadedIds = new Set(payments.map((payment) => payment.id));
+    const missingIds = requestedPaymentIds!.filter((id) => !loadedIds.has(id));
+    if (missingIds.length) {
+      throw new CanonicalSettlementBuilderError(
+        CANONICAL_SETTLEMENT_BUILDER_CODES.PAYMENT_NOT_FOUND,
+        `Payment QRIS terpilih tidak ditemukan atau tidak confirmed: ${missingIds.join(", ")}.`,
+      );
+    }
+  } else {
+    for (const payment of payments) assertSameGroup(group, payment);
+  }
+  if (requestedPaymentIds !== null && !manualQrisSelection) {
     const groupPaymentIds = new Set(payments.map((payment) => payment.id));
     const outsideGroup = requestedPaymentIds.filter((id) => !groupPaymentIds.has(id));
     if (outsideGroup.length) {

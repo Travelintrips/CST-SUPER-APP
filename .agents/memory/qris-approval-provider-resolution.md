@@ -7,4 +7,4 @@ QRIS Bank Reconciliation approval is decided by live QRIS payment method, H-1 ca
 
 **Why:** Legacy or ambiguous metadata can reject an otherwise provable exact settlement. The canonical monetary result is authoritative; metadata uniqueness is not.
 
-**How to apply:** Evaluate applicable owner-approved configs with the canonical MDR calculator and choose an exact-net result deterministically. Recheck the live rule under lock before final approval.
+**How to apply:** For manual QRIS approval, treat the selected unreconciled payment IDs as authoritative. Derive posting dimensions from the exact-net owner config—not from canonical_group or the source payment’s group—and recheck the live rule under lock.

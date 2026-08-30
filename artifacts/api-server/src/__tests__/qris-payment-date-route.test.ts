@@ -6,6 +6,10 @@ const routeSource = readFileSync(
   resolve(process.cwd(), "src/routes/bankReconciliation.ts"),
   "utf8",
 );
+const canonicalBuilderSource = readFileSync(
+  resolve(process.cwd(), "src/lib/reconciliation/canonicalSettlementBuilder.ts"),
+  "utf8",
+);
 
 describe("QRIS payment date update route", () => {
   it("locks only the canonical payment row when company mappings are nullable joins", () => {
@@ -74,5 +78,20 @@ describe("QRIS exact-net approval route", () => {
     expect(route).toContain("calculatedNetAmount");
     expect(route).toContain("selectQrisApprovalPaymentIds");
     expect(route).toContain("DUPLICATE_APPROVAL");
+  });
+
+  it("treats an explicit manual QRIS selection as authoritative instead of using the source group", () => {
+    expect(canonicalBuilderSource).toContain(
+      "options.qrisApprovalEvidence != null && requestedPaymentIds !== null",
+    );
+    expect(canonicalBuilderSource).toContain(
+      "p.id IN (${sql.join(requestedPaymentIds!.map",
+    );
+    expect(canonicalBuilderSource).toContain(
+      "if (requestedPaymentIds !== null && !manualQrisSelection)",
+    );
+    expect(canonicalBuilderSource).not.toContain(
+      "partitionQrisCanonicalGroup",
+    );
   });
 });

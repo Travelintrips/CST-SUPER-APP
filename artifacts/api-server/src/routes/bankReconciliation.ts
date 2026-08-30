@@ -2856,11 +2856,6 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       const paymentItems = rawItems.map((item: any) => ({
         paymentId: Number(item?.paymentId ?? item?.payment_id),
         grossAmount: Number(item?.grossAmount ?? item?.gross_amount ?? 0),
-        canonicalSettlementId: item?.canonicalSettlementId == null
-          ? item?.canonical_settlement_id == null
-            ? null
-            : Number(item.canonical_settlement_id)
-          : Number(item.canonicalSettlementId),
       }));
       const candidatePaymentIds = paymentItems.map((item) => item.paymentId);
       if (
@@ -2877,28 +2872,14 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
           sp.id,
           sp.amount,
           sp.company_id,
-          sp.settlement_status,
-          sp.payment_provider,
           sp.payment_method,
-          sp.bank_account_id::text AS bank_account_id,
-          sp.expected_settlement_date::text AS expected_settlement_date,
-          sp.settlement_rule_version,
           COALESCE(
             (sp.paid_at AT TIME ZONE 'Asia/Jakarta')::date::text,
             (sp.created_at AT TIME ZONE 'Asia/Jakarta')::date::text
           ) AS payment_date,
-          journal_provider.payment_provider AS journal_payment_provider
+          sp.status::text AS payment_status
         FROM sport_center.sport_payments
         sp
-        LEFT JOIN LATERAL (
-          SELECT aj.payment_provider
-          FROM sport_center.accounting_journals aj
-          WHERE aj.payment_id = sp.id
-            AND aj.journal_type = 'payment_confirmed'
-            AND aj.is_reversal = FALSE
-          ORDER BY aj.id DESC
-          LIMIT 1
-        ) journal_provider ON TRUE
         WHERE id IN (${candidatePaymentIds.join(",")})
         FOR SHARE OF sp
       `));
@@ -3286,14 +3267,6 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
         code: error.code,
         already_settled_payment_ids: error.alreadySettledPaymentIds,
         eligible_payment_ids: error.eligiblePaymentIds,
-      });
-    }
-    if (code === "CANONICAL_SETTLEMENT_SELECTION_CONFLICT") {
-      return res.status(409).json({
-        error: error?.message ?? "Payment yang dipilih berasal dari canonical group berbeda.",
-        code,
-        conflicting_payment_ids: error?.conflictingPaymentIds ?? [],
-        eligible_payment_ids: error?.eligiblePaymentIds ?? [],
       });
     }
     const clientErrorCodes = new Set([

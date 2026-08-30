@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  partitionQrisCanonicalGroup,
   QrisApprovalPaymentGuardError,
   selectQrisApprovalPaymentIds,
 } from "../lib/reconciliation/qrisApprovalPaymentGuard.js";
@@ -13,7 +12,7 @@ describe("QRIS supplemental approval payment guard", () => {
     })).toEqual([26]);
   });
 
-  it("keeps the exact canonical payment group available for the supplemental builder", () => {
+  it("keeps only the remaining unreconciled payment IDs for the builder", () => {
     expect(selectQrisApprovalPaymentIds({
       candidatePaymentIds: [25, 26],
       activePostedPaymentIds: [25],
@@ -49,18 +48,11 @@ describe("QRIS supplemental approval payment guard", () => {
     })).toThrow("Semua payment pada kandidat");
   });
 
-  it("partitions compatible bank-provider aliases into exact canonical groups", () => {
-    expect(partitionQrisCanonicalGroup(
-      [361, 362, 363, 364],
-      [
-        { id: 361, companyId: 1, providerCode: "mandiri_direct", bankAccountId: "17", expectedSettlementDate: "2026-08-16", settlementRuleVersion: "v1" },
-        { id: 362, companyId: 1, providerCode: "mandiri_direct", bankAccountId: "17", expectedSettlementDate: "2026-08-16", settlementRuleVersion: "v1" },
-        { id: 363, companyId: 1, providerCode: "mandiri_direct", bankAccountId: "17", expectedSettlementDate: "2026-08-16", settlementRuleVersion: "v1" },
-        { id: 364, companyId: 1, providerCode: "gpn_qris", bankAccountId: "17", expectedSettlementDate: "2026-08-16", settlementRuleVersion: "v1" },
-      ],
-    )).toEqual({
-      eligiblePaymentIds: [361, 362, 363],
-      conflictingPaymentIds: [364],
-    });
+  it("keeps every manually selected unreconciled payment regardless of canonical group metadata", () => {
+    expect(selectQrisApprovalPaymentIds({
+      candidatePaymentIds: [361, 362, 363, 364],
+      requestedPaymentIds: [361, 364],
+      activePostedPaymentIds: [],
+    })).toEqual([361, 364]);
   });
 });
