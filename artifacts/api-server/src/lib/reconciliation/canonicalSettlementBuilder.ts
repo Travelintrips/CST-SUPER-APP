@@ -194,7 +194,7 @@ async function resolveManualQrisGroup(
         btrim(c.rule_version) AS rule_version,
         m.transaction_date::text AS settlement_date
       FROM sport_center.payment_settlement_configs c
-      JOIN bank_mutations m
+      JOIN public.bank_mutations m
         ON m.id = ${evidence.mutationId}
        AND m.company_id = c.company_id
       WHERE c.id = ${configId}
@@ -940,7 +940,7 @@ async function buildInTransaction(
     const mutation = rowOrThrow(
       await client.execute(sql`
         SELECT id, company_id, transaction_date::text AS transaction_date, amount
-        FROM bank_mutations
+        FROM public.bank_mutations
         WHERE id = ${evidence.mutationId}
         FOR UPDATE
       `),

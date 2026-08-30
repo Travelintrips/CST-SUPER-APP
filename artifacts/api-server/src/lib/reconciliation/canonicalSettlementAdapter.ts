@@ -408,7 +408,7 @@ export function canonicalSettlementDetailsSql(
         )
       )
        FROM sport_center.expected_bank_settlements ebs
-       JOIN bank_mutations bm
+        JOIN public.bank_mutations bm
          ON bm.id = m.mutation_id
        WHERE ebs.settlement_id = ${candidateIdExpression}
         AND ebs.settlement_status = 'posted'

@@ -359,7 +359,7 @@ export async function generateQrisCandidates(options: {
         bm.transaction_date, bm.amount, bm.source_account,
         bm.direction, bm.source, bm.source_classification, bm.provider_name,
         bm.provider_order_id, bm.description, bm.status
-      FROM bank_mutations bm
+      FROM public.bank_mutations bm
       WHERE bm.direction = 'IN'
         AND COALESCE(bm.source_classification, 'unknown') <> 'synthetic'
         AND LOWER(COALESCE(bm.status, 'unmatched')) NOT IN
@@ -593,7 +593,7 @@ export async function generateQrisCandidates(options: {
         const refreshResult = await db.execute(sql.raw(`
           UPDATE qris_mutation_batch_candidates
           SET candidate_source = 'sport_center.sport_payments',
-              mutation_key = (SELECT mutation_key FROM bank_mutations WHERE id = ${candidate.mutationId}),
+              mutation_key = (SELECT mutation_key FROM public.bank_mutations WHERE id = ${candidate.mutationId}),
               payment_items = '${esc(itemJson)}'::jsonb,
               status = '${candidateStatus}',
               reconciliation_status = '${esc(candidate.status)}',
@@ -634,7 +634,7 @@ export async function generateQrisCandidates(options: {
           ${candidate.mutationId},
           ${candidate.companyId == null ? "NULL" : candidate.companyId},
           'sport_center.sport_payments',
-          (SELECT mutation_key FROM bank_mutations WHERE id = ${candidate.mutationId}),
+          (SELECT mutation_key FROM public.bank_mutations WHERE id = ${candidate.mutationId}),
           '${esc(candidate.sourceDate)}',
           ${estimatedSettlementDateSql},
           ${candidate.bankAccountId == null ? "NULL" : candidate.bankAccountId},
@@ -778,7 +778,7 @@ export async function listQrisCandidates(options: {
              ), '[]'::jsonb) AS settled_payment_ids,
              ${recoverableSettlementIdSql} AS recoverable_settlement_id
     FROM qris_mutation_batch_candidates c
-    LEFT JOIN bank_mutations bm ON bm.id = c.mutation_id
+    LEFT JOIN public.bank_mutations bm ON bm.id = c.mutation_id
      WHERE c.estimated_settlement_date::text = bm.transaction_date::text
        AND NOT EXISTS (
          SELECT 1

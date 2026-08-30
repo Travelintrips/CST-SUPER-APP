@@ -2294,7 +2294,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
                bm.mutation_key AS bank_mutation_key,
                bm.uploaded_proof_url AS bank_uploaded_proof_url
         FROM qris_mutation_batch_candidates c
-        JOIN bank_mutations bm ON bm.id = c.mutation_id
+         JOIN public.bank_mutations bm ON bm.id = c.mutation_id
         WHERE c.id = ${candidateId}
           AND c.company_id = ${companyId}
         FOR UPDATE OF c, bm
@@ -2656,7 +2656,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       SELECT id, amount, transaction_date, mutation_key, provider_order_id,
              provider_name, normalized_description, uploaded_proof_url,
              company_id, bank_account_id, direction
-      FROM bank_mutations
+       FROM public.bank_mutations
       WHERE id = ${result.mutationId} AND company_id = ${companyId}
     `));
     const mutation = mutationRows.rows[0] as Record<string, unknown> | undefined;
@@ -2786,7 +2786,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
                bm.mutation_key AS bank_mutation_key,
                bm.uploaded_proof_url AS bank_uploaded_proof_url
         FROM qris_mutation_batch_candidates c
-        JOIN bank_mutations bm ON bm.id = c.mutation_id
+        JOIN public.bank_mutations bm ON bm.id = c.mutation_id
         WHERE c.id = ${candidateId}
           AND c.company_id = ${companyId}
         FOR UPDATE OF c, bm
@@ -3131,7 +3131,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       SELECT id, amount, transaction_date, mutation_key, provider_order_id,
              provider_name, normalized_description, uploaded_proof_url,
              company_id, bank_account_id, direction
-      FROM bank_mutations
+      FROM public.bank_mutations
       WHERE id = ${mutationId}
         AND company_id = ${companyId}
       FOR UPDATE
@@ -3164,7 +3164,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
              pm.status AS public_mutation_status
       FROM sport_center.payment_settlement_batches b
       JOIN sport_center.accounting_journals j ON j.id = b.settlement_journal_id
-      JOIN bank_mutations pm ON pm.id = ${mutationId}
+       JOIN public.bank_mutations pm ON pm.id = ${mutationId}
       WHERE b.id = ${settlementId}
     `));
     const completion = completionRows[0] as Record<string, unknown> | undefined;

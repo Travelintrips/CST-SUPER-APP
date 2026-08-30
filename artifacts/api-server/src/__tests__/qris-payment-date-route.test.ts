@@ -10,6 +10,18 @@ const canonicalBuilderSource = readFileSync(
   resolve(process.cwd(), "src/lib/reconciliation/canonicalSettlementBuilder.ts"),
   "utf8",
 );
+const canonicalApprovalSource = readFileSync(
+  resolve(process.cwd(), "src/lib/reconciliation/canonicalSettlementApproval.ts"),
+  "utf8",
+);
+const canonicalAdapterSource = readFileSync(
+  resolve(process.cwd(), "src/lib/reconciliation/canonicalSettlementAdapter.ts"),
+  "utf8",
+);
+const candidateServiceSource = readFileSync(
+  resolve(process.cwd(), "src/lib/reconciliation/qrisCandidateService.ts"),
+  "utf8",
+);
 
 describe("QRIS payment date update route", () => {
   it("locks only the canonical payment row when company mappings are nullable joins", () => {
@@ -78,6 +90,25 @@ describe("QRIS exact-net approval route", () => {
     expect(route).toContain("calculatedNetAmount");
     expect(route).toContain("selectQrisApprovalPaymentIds");
     expect(route).toContain("DUPLICATE_APPROVAL");
+  });
+
+  it("reads and updates only the canonical public mutation source", () => {
+    for (const source of [
+      route,
+      canonicalBuilderSource,
+      canonicalApprovalSource,
+      canonicalAdapterSource,
+      candidateServiceSource,
+    ]) {
+      expect(source).not.toMatch(
+        /\b(?:FROM|JOIN|UPDATE|INSERT\s+INTO|DELETE\s+FROM)\s+bank_mutations\b/i,
+      );
+    }
+    expect(route).toContain("JOIN public.bank_mutations bm");
+    expect(route).toContain("FROM public.bank_mutations");
+    expect(canonicalBuilderSource).toContain("JOIN public.bank_mutations m");
+    expect(canonicalApprovalSource).toContain("UPDATE public.bank_mutations");
+    expect(candidateServiceSource).toContain("FROM public.bank_mutations bm");
   });
 
   it("resolves the settlement account number through an active company account before comparing IDs", () => {

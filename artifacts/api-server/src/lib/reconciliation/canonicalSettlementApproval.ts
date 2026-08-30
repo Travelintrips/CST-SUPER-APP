@@ -169,7 +169,7 @@ export async function approveCanonicalSettlementLink(
     const { rows: publicMutationRows } = await tx.execute(sql.raw(`
       SELECT id, status, journal_entry_id, amount, transaction_date,
              company_id, bank_account_id
-      FROM bank_mutations
+      FROM public.bank_mutations
       WHERE id = ${mutationId}
       FOR UPDATE
     `));
@@ -568,7 +568,7 @@ export async function approveCanonicalSettlementLink(
     }
 
     const publicMutationUpdate = await tx.execute(sql.raw(`
-      UPDATE bank_mutations
+      UPDATE public.bank_mutations
       SET status = '${CANONICAL_APPROVAL_BANK_MUTATION_STATUS}',
           approved_by = '${escapeSql(actor)}',
           approved_at = NOW(),
@@ -620,7 +620,7 @@ export async function reopenCanonicalSettlementLink(
   return client.transaction(async (tx) => {
     const { rows: publicRows } = await tx.execute(sql.raw(`
       SELECT id, status, journal_entry_id
-      FROM bank_mutations
+      FROM public.bank_mutations
       WHERE id = ${mutationId}
       FOR UPDATE
     `));
@@ -778,7 +778,7 @@ export async function reopenCanonicalSettlementLink(
     }
 
     const publicUpdate = await tx.execute(sql.raw(`
-      UPDATE bank_mutations
+      UPDATE public.bank_mutations
       SET status = 'unmatched',
           journal_entry_id = NULL,
           approved_by = NULL,
