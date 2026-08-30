@@ -96,11 +96,14 @@ type CanonicalApprovalInput = {
   candidateId?: number | null;
   candidateSource?: ReconciliationCandidateSource | null;
   actor: string;
+  manualOverride?: boolean;
+  overrideReason?: string | null;
 };
 
 export type CanonicalApprovalResult = {
   ok: true;
   idempotent: boolean;
+  manual_override: boolean;
   candidate_type: "qris_settlement";
   candidate_id: number;
   candidate_source: typeof CANONICAL_SETTLEMENT_SOURCE;
@@ -153,6 +156,8 @@ export async function approveCanonicalSettlementLink(
     candidateId = null,
     candidateSource = null,
     actor,
+    manualOverride = false,
+    overrideReason = null,
   } = input;
 
   if (!Number.isSafeInteger(mutationId) || mutationId <= 0) {
@@ -350,7 +355,7 @@ export async function approveCanonicalSettlementLink(
          mutation_id: mutationId,
       });
       if (idempotent && linkedCanonicalMutationId === mutationId) {
-        return buildResult(settlementId, mutationId, canonicalMutationId, true);
+        return buildResult(settlementId, mutationId, canonicalMutationId, true, manualOverride);
       }
       throw new CanonicalSettlementApprovalError(
         CANONICAL_APPROVAL_CODES.SETTLEMENT_NOT_ELIGIBLE,
@@ -478,7 +483,7 @@ export async function approveCanonicalSettlementLink(
         alreadyReconciled: false,
       })),
     });
-    if (!strictApproval.ok) {
+    if (!strictApproval.ok && !manualOverride) {
       throw new CanonicalSettlementApprovalError(
         CANONICAL_APPROVAL_CODES.MATCHING_EVIDENCE_INVALID,
         strictApproval.reason,
@@ -530,6 +535,9 @@ export async function approveCanonicalSettlementLink(
       settlement_id: settlementId,
       action: "canonical settlement reconciliation approved",
       journal_created: false,
+      manual_override: manualOverride,
+      override_reason: manualOverride ? (overrideReason?.trim() || "Override manual oleh reviewer") : null,
+      matching_evidence: strictApproval.ok ? "valid" : "overridden",
     };
 
     const settlementUpdate = await tx.execute(sql.raw(`
@@ -593,7 +601,7 @@ export async function approveCanonicalSettlementLink(
       )
     `));
 
-    return buildResult(settlementId, mutationId, canonicalMutationId, false);
+    return buildResult(settlementId, mutationId, canonicalMutationId, false, manualOverride);
   });
 }
 
@@ -829,10 +837,12 @@ function buildResult(
   mutationId: number,
   canonicalMutationId: number,
   idempotent: boolean,
+  manualOverride: boolean,
 ): CanonicalApprovalResult {
   return {
     ok: true,
     idempotent,
+    manual_override: manualOverride,
     candidate_type: "qris_settlement",
     candidate_id: settlementId,
     candidate_source: CANONICAL_SETTLEMENT_SOURCE,

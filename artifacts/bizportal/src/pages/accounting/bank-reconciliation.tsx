@@ -853,14 +853,18 @@ function canonicalSettlementCandidateForMutation(m: BankMutation): Candidate | u
   );
 }
 
-function isCanonicalSettlementApprovalEligible(m: BankMutation): boolean {
+function isCanonicalSettlementManualOverrideEligible(m: BankMutation): boolean {
   const candidate = canonicalSettlementCandidateForMutation(m);
   const settlementStatus = String(candidate?.details?.settlementStatus ?? "").toLowerCase();
   return canApprove(m)
     && candidate != null
-    && candidate.amount_match
-    && candidate.date_match
     && settlementStatus === "posted";
+}
+
+function isCanonicalSettlementApprovalEligible(m: BankMutation): boolean {
+  const candidate = canonicalSettlementCandidateForMutation(m);
+  if (!candidate || !isCanonicalSettlementManualOverrideEligible(m)) return false;
+  return candidate.amount_match && candidate.date_match;
 }
 
 function qrisAuditsForMutation(m: BankMutation): QrisCandidateAudit[] {
@@ -1014,6 +1018,7 @@ function statusLabel(m: BankMutation): string {
   if (m.status === "approved_pending_posting") return STATUS_LABELS.approved_pending_posting;
   if (m.status === "manual_review") return STATUS_LABELS.manual_review;
   if (isCanonicalSettlementApprovalEligible(m)) return "Siap Direconcile";
+  if (isCanonicalSettlementManualOverrideEligible(m)) return "Override Manual Tersedia";
   if (isQrisMutation(m) && qrisAuditsForMutation(m).length === 0) return "Perlu Kandidat QRIS";
   if (m.status === "duplicate_need_review" || hasUnresolvedVariance(m)) return "Perlu Diperiksa";
   if (m.status === "unmatched" && visibleCandidates(m).length > 0) return "Perlu Diperiksa";
@@ -1027,6 +1032,7 @@ function statusColor(m: BankMutation): string {
   if (m.status === "approved" || m.status === "posted") return STATUS_COLORS.approved;
   if (m.status === "manual_review") return STATUS_COLORS.manual_review;
   if (isCanonicalSettlementApprovalEligible(m)) return STATUS_COLORS.matched;
+  if (isCanonicalSettlementManualOverrideEligible(m)) return STATUS_COLORS.manual_review;
   if (isQrisMutation(m) && qrisAuditsForMutation(m).length === 0) return STATUS_COLORS.duplicate_need_review;
   if (m.status === "duplicate_need_review" || hasUnresolvedVariance(m)) return STATUS_COLORS.duplicate_need_review;
   if (m.status === "unmatched" && visibleCandidates(m).length > 0) return STATUS_COLORS.duplicate_need_review;
@@ -2964,6 +2970,7 @@ function QrisMutationCard({
   onDelete,
   onEditPaymentDate,
   onApproveQrisBatch,
+  onManualOverrideCandidate,
   onRecoverQrisSettlement,
   approveQrisPending,
   recoverQrisPending,
@@ -2987,6 +2994,7 @@ function QrisMutationCard({
     paymentDate: string;
   }) => void;
   onApproveQrisBatch?: (candidateId: number, mutationId: number, candidate: QrisCandidateAudit, paymentIds?: number[]) => void;
+  onManualOverrideCandidate?: (m: BankMutation, candidate: Candidate) => void;
   onRecoverQrisSettlement?: (mutationId: number, settlementId: number) => void;
   approveQrisPending?: boolean;
   recoverQrisPending?: boolean;
@@ -3041,6 +3049,8 @@ function QrisMutationCard({
     candidate.candidate_type === "qris_settlement"
     && candidate.candidate_source === CANONICAL_SETTLEMENT_SOURCE,
   );
+  const canonicalOverrideReady = isCanonicalSettlementManualOverrideEligible(m);
+  const canonicalApprovalReady = isCanonicalSettlementApprovalEligible(m);
   const canonicalSettlementDetails = canonicalSettlementCandidate?.details;
   const hasCanonicalSettlementCandidate = canonicalSettlementCandidate != null;
   const isApproved = isCanonicalReconciled
@@ -3525,6 +3535,21 @@ function QrisMutationCard({
                   {approveQrisPending ? "Memproses approval QRIS..." : `Approve QRIS Terpilih (${selectedPaymentIds.length})`}
                 </Button>
               )}
+              {!isApproved
+                && canonicalOverrideReady
+                && !canonicalApprovalReady
+                && canonicalSettlementCandidate
+                && onManualOverrideCandidate && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="ml-auto h-8 gap-1.5 border-orange-400 text-xs text-orange-800 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-200"
+                  onClick={() => onManualOverrideCandidate(m, canonicalSettlementCandidate)}
+                >
+                  <ShieldAlert className="h-3.5 w-3.5" />
+                  Selesaikan Manual (Override)
+                </Button>
+              )}
               {!isApproved && audit.id != null && !canSelect && (
                 <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
                   <span className="text-[11px] text-amber-700 dark:text-amber-300">
@@ -3606,6 +3631,7 @@ function MutationCard({
   selectedCandidateId,
   onToggleCandidate,
   onApproveCandidate,
+  onManualOverrideCandidate,
   approveQrisPending,
   selectedQrisPaymentIds,
   onToggleQrisPayment,
@@ -3636,6 +3662,7 @@ function MutationCard({
   selectedCandidateId?: number | null;
   onToggleCandidate?: (mutationId: number, candidateId: number, checked: boolean) => void;
   onApproveCandidate?: (m: BankMutation, candidate: Candidate) => void;
+  onManualOverrideCandidate?: (m: BankMutation, candidate: Candidate) => void;
   approveQrisPending?: boolean;
   selectedQrisPaymentIds: Record<number, number[]>;
   onToggleQrisPayment?: (candidateId: number, paymentId: number, checked: boolean) => void;
@@ -3650,6 +3677,7 @@ function MutationCard({
   const qrisAudits = qrisAuditsForMutation(m);
   const canonicalApprovalCandidate = canonicalSettlementCandidateForMutation(m);
   const canonicalApprovalReady = isCanonicalSettlementApprovalEligible(m);
+  const canonicalOverrideReady = isCanonicalSettlementManualOverrideEligible(m);
   const best   = cands[0];
   const evidence = reconciliationEvidence(m);
   // Amount/date are hard visibility requirements only for QRIS. For other
@@ -3689,6 +3717,7 @@ function MutationCard({
             onDelete={onDelete}
             onEditPaymentDate={onEditQrisPaymentDate}
             onApproveQrisBatch={onApproveQrisBatch}
+            onManualOverrideCandidate={onManualOverrideCandidate}
             approveQrisPending={approveQrisPending}
             selectedQrisPaymentIds={audit.id != null ? selectedQrisPaymentIds[audit.id] ?? [] : []}
             onToggleQrisPayment={onToggleQrisPayment}
@@ -4085,7 +4114,7 @@ function MutationCard({
                 Setujui
               </Button>
             )}
-            {!mappingError && canonicalApprovalReady && canonicalApprovalCandidate && onApproveCandidate && (
+            {canonicalApprovalReady && canonicalApprovalCandidate && onApproveCandidate && (
               <Button
                 size="sm"
                 className="h-7 text-xs gap-1 bg-green-600 hover:bg-green-700 disabled:opacity-50"
@@ -4096,6 +4125,23 @@ function MutationCard({
               >
                 <CheckCircle2 className="w-3.5 h-3.5" />
                 Tautkan &amp; Approve Settlement
+              </Button>
+            )}
+            {canonicalOverrideReady
+              && !canonicalApprovalReady
+              && canonicalApprovalCandidate
+              && onManualOverrideCandidate && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1 border-orange-400 text-xs text-orange-800 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-200"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onManualOverrideCandidate(m, canonicalApprovalCandidate);
+                }}
+              >
+                <ShieldAlert className="h-3.5 w-3.5" />
+                Selesaikan Manual (Override)
               </Button>
             )}
              {!isManualReviewActionable(m) && !isUiApprovalEligible(m) && !canonicalApprovalReady && matchingCandidates.length === 0 && (m.status === "unmatched" || m.status === "matched" || m.status === "duplicate_need_review") && (
@@ -4394,6 +4440,7 @@ function MutationDetailPanel({
   onReopen,
   onApproveQris,
   onApproveCandidate,
+  onManualOverrideCandidate,
   onFindMissing,
   onGenerateQrisCandidates,
   matchingPending,
@@ -4415,6 +4462,7 @@ function MutationDetailPanel({
   onReopen:  (m: BankMutation) => void;
   onApproveQris: (m: BankMutation) => void;
   onApproveCandidate?: (m: BankMutation, candidate: Candidate) => void;
+  onManualOverrideCandidate?: (m: BankMutation, candidate: Candidate) => void;
   onFindMissing: () => void;
   onGenerateQrisCandidates?: (mutationId?: number) => void;
   matchingPending: boolean;
@@ -4432,6 +4480,7 @@ function MutationDetailPanel({
   const qrisDiagnostic = m.qris_candidate_diagnostic ?? null;
   const canonicalApprovalCandidate = canonicalSettlementCandidateForMutation(m);
   const canonicalApprovalReady = isCanonicalSettlementApprovalEligible(m);
+  const canonicalOverrideReady = isCanonicalSettlementManualOverrideEligible(m);
   const canGenerateQrisForMutation = isQrisMutation(m)
     && qrisAudit == null
     && onGenerateQrisCandidates != null;
@@ -4951,7 +5000,7 @@ function MutationDetailPanel({
               {matchingPending ? "Mencari kandidat..." : "Cari Kandidat QRIS"}
             </Button>
           )}
-          {!mappingError && canonicalApprovalReady && canonicalApprovalCandidate && onApproveCandidate && (
+          {canonicalApprovalReady && canonicalApprovalCandidate && onApproveCandidate && (
             <Button
               className="flex-1 gap-1.5 bg-green-600 hover:bg-green-700 min-w-[190px]"
               onClick={() => {
@@ -4963,8 +5012,22 @@ function MutationDetailPanel({
               Tautkan &amp; Approve Settlement
             </Button>
           )}
+          {canonicalOverrideReady
+            && !canonicalApprovalReady
+            && canonicalApprovalCandidate
+            && onManualOverrideCandidate && (
+            <Button
+              variant="outline"
+              className="flex-1 gap-1.5 border-orange-400 text-orange-800 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-200 min-w-[190px]"
+              onClick={() => onManualOverrideCandidate(m, canonicalApprovalCandidate)}
+            >
+              <ShieldAlert className="w-4 h-4" />
+              Selesaikan Manual (Override)
+            </Button>
+          )}
           {!canGenerateQrisForMutation
             && !canonicalApprovalReady
+            && !canonicalOverrideReady
             && !isUiApprovalEligible(m)
             && m.status !== "manual_review"
             && (m.status === "unmatched" || m.status === "matched" || m.status === "duplicate_need_review") && (
@@ -6130,6 +6193,7 @@ export default function BankReconciliationPage() {
   const approveMut = useMutation({
     mutationFn: async ({
       mutId, matchId, candidateType, candidateId, candidateSource, manualCoaCode,
+      manualOverride, overrideReason,
     }: {
       mutId: number;
       matchId?: number;
@@ -6137,6 +6201,8 @@ export default function BankReconciliationPage() {
       candidateId?: number;
       candidateSource?: string | null;
       manualCoaCode?: string;
+      manualOverride?: boolean;
+      overrideReason?: string;
     }) => {
       const r = await fetch(`/api/bank-reconciliation/${mutId}/approve`, {
         method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
@@ -6146,6 +6212,8 @@ export default function BankReconciliationPage() {
           candidate_id: candidateId,
           candidate_source: candidateSource ?? null,
           manual_coa_code: manualCoaCode,
+          manual_override: manualOverride === true,
+          override_reason: overrideReason,
         }),
       });
       const body = await r.json().catch(() => ({ error: "Unknown error" }));
@@ -6171,7 +6239,9 @@ export default function BankReconciliationPage() {
       setManualReviewWarning(null);
       toast({
         title: d?.candidate_source === CANONICAL_SETTLEMENT_SOURCE
-          ? "Settlement disetujui dan direconcile ✓"
+          ? d?.manual_override
+            ? "Settlement diselesaikan dengan override manual ✓"
+            : "Settlement disetujui dan direconcile ✓"
           : "Approve berhasil — draft jurnal dibuat ✓",
       });
       setActionDialog(null);
@@ -6336,6 +6406,33 @@ export default function BankReconciliationPage() {
       candidateType: candidate.candidate_type,
       candidateId: candidate.candidate_id,
       candidateSource: candidate.candidate_source ?? null,
+    });
+  };
+
+  const handleManualOverrideCandidate = (m: BankMutation, candidate: Candidate) => {
+    const settlementReference =
+      candidate.details?.settlementReference
+      ?? `Settlement #${candidate.candidate_id}`;
+    const confirmed = window.confirm(
+      `Selesaikan ${settlementReference} secara manual?\n\n` +
+      "Pemeriksaan nominal/tanggal/provider akan dilewati. " +
+      "Settlement yang sudah posted akan ditautkan ke mutasi ini dan dicatat sebagai override manual.",
+    );
+    if (!confirmed) return;
+
+    const overrideReason = window.prompt(
+      "Alasan override manual (opsional):",
+      "Reviewer mengonfirmasi settlement ini sesuai dengan mutasi bank.",
+    )?.trim() || "Reviewer mengonfirmasi settlement secara manual.";
+
+    approveMut.mutate({
+      mutId: m.id,
+      matchId: candidate.id,
+      candidateType: candidate.candidate_type,
+      candidateId: candidate.candidate_id,
+      candidateSource: candidate.candidate_source ?? null,
+      manualOverride: true,
+      overrideReason,
     });
   };
 
@@ -6861,9 +6958,10 @@ export default function BankReconciliationPage() {
                   }}
                   onApproveQris={handleApproveQris}
                   onApproveQrisBatch={handleApproveQrisBatch}
-                   selectedCandidateId={selectedCandidateByMutation[m.id] ?? null}
-                   onToggleCandidate={toggleCandidate}
-                   onApproveCandidate={handleDirectApproveCandidate}
+                  onManualOverrideCandidate={handleManualOverrideCandidate}
+                  selectedCandidateId={selectedCandidateByMutation[m.id] ?? null}
+                  onToggleCandidate={toggleCandidate}
+                  onApproveCandidate={handleDirectApproveCandidate}
                   approveQrisPending={approveQrisBatchMut.isPending}
                   selectedQrisPaymentIds={selectedPaymentIdsByMutation(m)}
                   onToggleQrisPayment={toggleQrisPayment}
@@ -7002,6 +7100,7 @@ export default function BankReconciliationPage() {
         matchingPending={matchMut.isPending || matchingBackgroundPending}
         mappingError={detailMutation ? mappingRequiredErrors.get(detailMutation.id) : undefined}
         onApproveQrisBatch={handleApproveQrisBatch}
+        onManualOverrideCandidate={handleManualOverrideCandidate}
         approveQrisPending={approveQrisBatchMut.isPending}
         selectedQrisPaymentIds={
           detailMutation?.qris_candidate_audit?.id != null

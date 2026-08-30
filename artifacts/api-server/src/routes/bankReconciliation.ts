@@ -4227,6 +4227,7 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
 
   const {
     match_id, candidate_type, candidate_id, candidate_source, note, manual_coa_code,
+    manual_override, override_reason,
   } = req.body;
   const actor = (req as any).user?.email ?? "admin";
 
@@ -4319,6 +4320,8 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
           ? CANONICAL_SETTLEMENT_SOURCE
           : null,
         actor,
+        manualOverride: manual_override === true,
+        overrideReason: typeof override_reason === "string" ? override_reason : note ?? null,
       });
 
       audit(req, {
