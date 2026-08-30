@@ -2975,7 +2975,7 @@ function QrisMutationCard({
   onToggleQrisPayment?: (candidateId: number, paymentId: number, checked: boolean) => void;
   onToggleAllQrisPayments?: (candidate: QrisCandidateAudit, checked: boolean) => void;
   onRunMatching: (mode?: "new" | "retry_unmatched" | "rematch_non_final") => void;
-  onGenerateQrisCandidates?: () => void;
+  onGenerateQrisCandidates?: (mutationId?: number) => void;
   qrisGenerationPending?: boolean;
   mappingError?: MappingRequiredError;
 }) {
@@ -3470,7 +3470,10 @@ function QrisMutationCard({
                   variant="outline"
                   className="h-8 gap-1.5 border-amber-400 text-xs text-amber-800 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-200"
                   disabled={qrisGenerationPending}
-                  onClick={onGenerateQrisCandidates}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onGenerateQrisCandidates(m.id);
+                  }}
                 >
                   {qrisGenerationPending
                     ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -3520,7 +3523,10 @@ function QrisMutationCard({
                       variant="outline"
                       className="h-8 gap-1.5 border-amber-400 text-xs text-amber-800 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-200"
                       disabled={qrisGenerationPending}
-                      onClick={onGenerateQrisCandidates}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onGenerateQrisCandidates(m.id);
+                      }}
                     >
                       {qrisGenerationPending
                         ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -3616,7 +3622,7 @@ function MutationCard({
   onToggleQrisPayment?: (candidateId: number, paymentId: number, checked: boolean) => void;
   onToggleAllQrisPayments?: (candidate: QrisCandidateAudit, checked: boolean) => void;
   onRunMatching: (mode?: "new" | "retry_unmatched" | "rematch_non_final") => void;
-  onGenerateQrisCandidates?: () => void;
+  onGenerateQrisCandidates?: (mutationId?: number) => void;
   qrisGenerationPending?: boolean;
   retryReferenceCoaPending?: boolean;
   mappingError?: MappingRequiredError;
@@ -3926,7 +3932,10 @@ function MutationCard({
                     variant="outline"
                     className="h-7 gap-1 border-indigo-300 text-[11px] text-indigo-700 hover:bg-indigo-50 dark:border-indigo-700 dark:text-indigo-300 dark:hover:bg-indigo-950/40"
                     disabled={qrisGenerationPending}
-                    onClick={() => onGenerateQrisCandidates()}
+                     onClick={(event) => {
+                       event.stopPropagation();
+                       onGenerateQrisCandidates(m.id);
+                     }}
                   >
                     {qrisGenerationPending
                       ? <Loader2 className="h-3 w-3 animate-spin" />
@@ -4055,23 +4064,32 @@ function MutationCard({
                 Setujui
               </Button>
             )}
-            {!isManualReviewActionable(m) && !isUiApprovalEligible(m) && matchingCandidates.length === 0 && (m.status === "unmatched" || m.status === "matched" || m.status === "duplicate_need_review") && (
+             {!isManualReviewActionable(m) && !isUiApprovalEligible(m) && matchingCandidates.length === 0 && (m.status === "unmatched" || m.status === "matched" || m.status === "duplicate_need_review") && (
               <Button
                 size="sm"
                 variant="outline"
                 className="h-7 text-xs gap-1 border-amber-300 text-amber-800 hover:bg-amber-50 dark:text-amber-300"
-                onClick={() => {
-                  // A reviewer may explicitly approve a suggested bank-transfer
-                  // candidate from the selection dialog. QRIS stays on its
-                  // dedicated batch-review flow.
-                  if (cands.length > 0 && !isQrisMutation(m)) onApprove(m);
-                  else onDetail(m);
+                 onClick={(event) => {
+                   event.stopPropagation();
+                   // QRIS must first go through candidate generation. It cannot
+                   // be approved through the generic manual journal flow.
+                   if (isQris && onGenerateQrisCandidates) {
+                     onGenerateQrisCandidates(m.id);
+                   } else if (cands.length > 0 && !isQris) {
+                     onApprove(m);
+                   } else {
+                     onDetail(m);
+                   }
                 }}
               >
-                {cands.length > 0 && !isQrisMutation(m)
+                 {isQris && onGenerateQrisCandidates
+                   ? <CreditCard className="w-3.5 h-3.5" />
+                   : cands.length > 0 && !isQrisMutation(m)
                   ? <CheckCircle2 className="w-3.5 h-3.5" />
                   : <Eye className="w-3.5 h-3.5" />}
-                {cands.length > 0 && !isQrisMutation(m)
+                 {isQris && onGenerateQrisCandidates
+                   ? "Cari Kandidat QRIS"
+                   : cands.length > 0 && !isQrisMutation(m)
                   ? "Pilih Kandidat & Approve"
                   : "Lengkapi & Approve Manual"}
               </Button>
@@ -4342,6 +4360,7 @@ function MutationDetailPanel({
   onReopen,
   onApproveQris,
   onFindMissing,
+  onGenerateQrisCandidates,
   matchingPending,
   mappingError,
   onApproveQrisBatch,
@@ -4361,6 +4380,7 @@ function MutationDetailPanel({
   onReopen:  (m: BankMutation) => void;
   onApproveQris: (m: BankMutation) => void;
   onFindMissing: () => void;
+  onGenerateQrisCandidates?: (mutationId?: number) => void;
   matchingPending: boolean;
   mappingError?: MappingRequiredError;
   onApproveQrisBatch?: (candidateId: number, mutationId: number, candidate: QrisCandidateAudit, paymentIds?: number[]) => void;
@@ -4374,6 +4394,9 @@ function MutationDetailPanel({
   const cands = visibleCandidates(m);
   const qrisAudit = m.qris_candidate_audit ?? qrisAuditsForMutation(m)[0];
   const qrisDiagnostic = m.qris_candidate_diagnostic ?? null;
+  const canGenerateQrisForMutation = isQrisMutation(m)
+    && qrisAudit == null
+    && onGenerateQrisCandidates != null;
   const settledQrisPaymentIds = new Set((qrisAudit?.settled_payment_ids ?? []).map(Number));
   const currentQrisPaymentIds = Array.isArray(qrisAudit?.current_payment_ids)
     ? new Set(qrisAudit.current_payment_ids.map(Number))
@@ -4874,7 +4897,24 @@ function MutationDetailPanel({
                 Pilih Kandidat &amp; Approve
               </Button>
             )}
-          {!isUiApprovalEligible(m)
+          {canGenerateQrisForMutation && (
+            <Button
+              variant="outline"
+              className="flex-1 gap-1.5 border-indigo-300 text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:text-indigo-300 min-w-[170px]"
+              disabled={matchingPending}
+              onClick={() => {
+                onClose();
+                onGenerateQrisCandidates(m.id);
+              }}
+            >
+              {matchingPending
+                ? <Loader2 className="w-4 h-4 animate-spin" />
+                : <CreditCard className="w-4 h-4" />}
+              {matchingPending ? "Mencari kandidat..." : "Cari Kandidat QRIS"}
+            </Button>
+          )}
+          {!canGenerateQrisForMutation
+            && !isUiApprovalEligible(m)
             && m.status !== "manual_review"
             && (m.status === "unmatched" || m.status === "matched" || m.status === "duplicate_need_review") && (
             <Button
@@ -5359,7 +5399,7 @@ export default function BankReconciliationPage() {
   });
 
   const qrisDryRunMut = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (mutationId?: number) => {
       if (qrisCompanyId == null) {
         throw new Error("Pilih satu perusahaan aktif sebelum membuat kandidat review QRIS.");
       }
@@ -5369,7 +5409,11 @@ export default function BankReconciliationPage() {
         headers: { "Content-Type": "application/json" },
         // Persist only the candidate/review row. This is not final
         // reconciliation and does not create a journal or consume evidence.
-        body: JSON.stringify({ dryRun: false, companyId: qrisCompanyId }),
+        body: JSON.stringify({
+          dryRun: false,
+          companyId: qrisCompanyId,
+          ...(mutationId != null ? { mutationId } : {}),
+        }),
       });
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{
@@ -6354,7 +6398,7 @@ export default function BankReconciliationPage() {
             }
              matchMut.mutate(mode);
           }}
-          onGenerateQrisCandidates={qrisCompanyId != null ? () => qrisDryRunMut.mutate() : undefined}
+           onGenerateQrisCandidates={qrisCompanyId != null ? () => qrisDryRunMut.mutate(undefined) : undefined}
           onApproveAll={handleApproveAllMatched}
           onPostAll={handlePostAllPending}
           onSyncSheet={() => sheetSyncMut.mutate()}
@@ -6388,7 +6432,7 @@ export default function BankReconciliationPage() {
                 variant="outline"
                 size="sm"
                 className="gap-1.5"
-                onClick={() => qrisDryRunMut.mutate()}
+                 onClick={() => qrisDryRunMut.mutate(undefined)}
                 disabled={qrisDryRunMut.isPending || qrisCompanyId == null}
                 title={qrisCompanyId == null ? "Pilih satu perusahaan aktif terlebih dahulu" : undefined}
               >
@@ -6780,8 +6824,8 @@ export default function BankReconciliationPage() {
                       }
                        matchMut.mutate(mode);
                     }}
-                    onGenerateQrisCandidates={qrisCompanyId != null && workflowStage !== "matching"
-                      ? () => qrisDryRunMut.mutate()
+          onGenerateQrisCandidates={qrisCompanyId != null && workflowStage !== "matching"
+                       ? (mutationId) => qrisDryRunMut.mutate(mutationId)
                       : undefined}
                    qrisGenerationPending={qrisDryRunMut.isPending}
                   retryReferenceCoaPending={retryReferenceCoaMut.isPending}
@@ -6893,6 +6937,9 @@ export default function BankReconciliationPage() {
         onReverse={handleOpenReverse}
         onReopen={handleOpenReopen}
         onApproveQris={handleApproveQris}
+        onGenerateQrisCandidates={qrisCompanyId != null && workflowStage !== "matching"
+          ? (mutationId) => qrisDryRunMut.mutate(mutationId)
+          : undefined}
          onFindMissing={() => {
           if (workflowStage !== "matching") {
             toast({ title: "Sync mutasi bank terlebih dahulu", description: "Urutan aman dimulai dari sync mutasi bank." });
