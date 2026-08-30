@@ -846,6 +846,23 @@ function isCanonicalSettlementMutation(m: BankMutation): boolean {
   ) ?? false;
 }
 
+function canonicalSettlementCandidateForMutation(m: BankMutation): Candidate | undefined {
+  return visibleCandidates(m).find(candidate =>
+    candidate.candidate_type === "qris_settlement"
+    && candidate.candidate_source === CANONICAL_SETTLEMENT_SOURCE,
+  );
+}
+
+function isCanonicalSettlementApprovalEligible(m: BankMutation): boolean {
+  const candidate = canonicalSettlementCandidateForMutation(m);
+  const settlementStatus = String(candidate?.details?.settlementStatus ?? "").toLowerCase();
+  return canApprove(m)
+    && candidate != null
+    && candidate.amount_match
+    && candidate.date_match
+    && settlementStatus === "posted";
+}
+
 function qrisAuditsForMutation(m: BankMutation): QrisCandidateAudit[] {
   // Candidate metadata is not allowed to turn an InhouseTrf transfer into a
   // QRIS approval. Other Mandiri statement markers, including SA/KR, are
@@ -996,6 +1013,7 @@ function statusLabel(m: BankMutation): string {
   if (m.status === "void") return STATUS_LABELS.void;
   if (m.status === "approved_pending_posting") return STATUS_LABELS.approved_pending_posting;
   if (m.status === "manual_review") return STATUS_LABELS.manual_review;
+  if (isCanonicalSettlementApprovalEligible(m)) return "Siap Direconcile";
   if (isQrisMutation(m) && qrisAuditsForMutation(m).length === 0) return "Perlu Kandidat QRIS";
   if (m.status === "duplicate_need_review" || hasUnresolvedVariance(m)) return "Perlu Diperiksa";
   if (m.status === "unmatched" && visibleCandidates(m).length > 0) return "Perlu Diperiksa";
@@ -1008,6 +1026,7 @@ function statusColor(m: BankMutation): string {
   if (m.status === "approved_pending_posting") return STATUS_COLORS.approved_pending_posting;
   if (m.status === "approved" || m.status === "posted") return STATUS_COLORS.approved;
   if (m.status === "manual_review") return STATUS_COLORS.manual_review;
+  if (isCanonicalSettlementApprovalEligible(m)) return STATUS_COLORS.matched;
   if (isQrisMutation(m) && qrisAuditsForMutation(m).length === 0) return STATUS_COLORS.duplicate_need_review;
   if (m.status === "duplicate_need_review" || hasUnresolvedVariance(m)) return STATUS_COLORS.duplicate_need_review;
   if (m.status === "unmatched" && visibleCandidates(m).length > 0) return STATUS_COLORS.duplicate_need_review;
@@ -3629,6 +3648,8 @@ function MutationCard({
 }) {
   const cands  = visibleCandidates(m);
   const qrisAudits = qrisAuditsForMutation(m);
+  const canonicalApprovalCandidate = canonicalSettlementCandidateForMutation(m);
+  const canonicalApprovalReady = isCanonicalSettlementApprovalEligible(m);
   const best   = cands[0];
   const evidence = reconciliationEvidence(m);
   // Amount/date are hard visibility requirements only for QRIS. For other
@@ -3754,7 +3775,7 @@ function MutationCard({
               </div>
             )}
 
-            {isQris && qrisAudits.length === 0 && (
+             {isQris && qrisAudits.length === 0 && !canonicalApprovalReady && (
               <div>
                 <QrisCandidateDiagnosticBlock
                   mutation={m}
@@ -4064,7 +4085,20 @@ function MutationCard({
                 Setujui
               </Button>
             )}
-             {!isManualReviewActionable(m) && !isUiApprovalEligible(m) && matchingCandidates.length === 0 && (m.status === "unmatched" || m.status === "matched" || m.status === "duplicate_need_review") && (
+            {!mappingError && canonicalApprovalReady && canonicalApprovalCandidate && onApproveCandidate && (
+              <Button
+                size="sm"
+                className="h-7 text-xs gap-1 bg-green-600 hover:bg-green-700 disabled:opacity-50"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onApproveCandidate(m, canonicalApprovalCandidate);
+                }}
+              >
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                Tautkan &amp; Approve Settlement
+              </Button>
+            )}
+             {!isManualReviewActionable(m) && !isUiApprovalEligible(m) && !canonicalApprovalReady && matchingCandidates.length === 0 && (m.status === "unmatched" || m.status === "matched" || m.status === "duplicate_need_review") && (
               <Button
                 size="sm"
                 variant="outline"
@@ -4359,6 +4393,7 @@ function MutationDetailPanel({
   onReverse,
   onReopen,
   onApproveQris,
+  onApproveCandidate,
   onFindMissing,
   onGenerateQrisCandidates,
   matchingPending,
@@ -4379,6 +4414,7 @@ function MutationDetailPanel({
   onReverse: (m: BankMutation) => void;
   onReopen:  (m: BankMutation) => void;
   onApproveQris: (m: BankMutation) => void;
+  onApproveCandidate?: (m: BankMutation, candidate: Candidate) => void;
   onFindMissing: () => void;
   onGenerateQrisCandidates?: (mutationId?: number) => void;
   matchingPending: boolean;
@@ -4394,6 +4430,8 @@ function MutationDetailPanel({
   const cands = visibleCandidates(m);
   const qrisAudit = m.qris_candidate_audit ?? qrisAuditsForMutation(m)[0];
   const qrisDiagnostic = m.qris_candidate_diagnostic ?? null;
+  const canonicalApprovalCandidate = canonicalSettlementCandidateForMutation(m);
+  const canonicalApprovalReady = isCanonicalSettlementApprovalEligible(m);
   const canGenerateQrisForMutation = isQrisMutation(m)
     && qrisAudit == null
     && onGenerateQrisCandidates != null;
@@ -4913,7 +4951,20 @@ function MutationDetailPanel({
               {matchingPending ? "Mencari kandidat..." : "Cari Kandidat QRIS"}
             </Button>
           )}
+          {!mappingError && canonicalApprovalReady && canonicalApprovalCandidate && onApproveCandidate && (
+            <Button
+              className="flex-1 gap-1.5 bg-green-600 hover:bg-green-700 min-w-[190px]"
+              onClick={() => {
+                onClose();
+                onApproveCandidate(m, canonicalApprovalCandidate);
+              }}
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              Tautkan &amp; Approve Settlement
+            </Button>
+          )}
           {!canGenerateQrisForMutation
+            && !canonicalApprovalReady
             && !isUiApprovalEligible(m)
             && m.status !== "manual_review"
             && (m.status === "unmatched" || m.status === "matched" || m.status === "duplicate_need_review") && (
@@ -6937,6 +6988,7 @@ export default function BankReconciliationPage() {
         onReverse={handleOpenReverse}
         onReopen={handleOpenReopen}
         onApproveQris={handleApproveQris}
+        onApproveCandidate={handleDirectApproveCandidate}
         onGenerateQrisCandidates={qrisCompanyId != null && workflowStage !== "matching"
           ? (mutationId) => qrisDryRunMut.mutate(mutationId)
           : undefined}
