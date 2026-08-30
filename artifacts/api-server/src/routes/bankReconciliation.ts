@@ -687,34 +687,6 @@ export async function runBankReconciliationCoreMigration() {
   // ── Canonical key backfill (idempotent) ───────────────────────────────────
   await runCanonicalKeyBackfill();
 
-  // ── QRIS mutation bank_account_id backfill ────────────────────────────────
-  // Bank mutations imported from Google Sheet often have bank_account_id=NULL
-  // because the sheet config's source_account is unlinked. Without this field,
-  // the QRIS candidate engine treats bankAccountId=null as an incomplete
-  // dimension and can never produce a MATCHED candidate.
-  // Fix: for QRIS-labelled mutations that still have bank_account_id=NULL,
-  // assign the first active company bank account (same heuristic used for
-  // sport_center.sport_payments in runSportCenterMigration).
-  await db.execute(sql.raw(`
-    UPDATE bank_mutations bm
-    SET bank_account_id = cba.id
-    FROM (
-      SELECT DISTINCT ON (company_id) id, company_id
-      FROM company_bank_accounts
-      WHERE is_active = TRUE
-      ORDER BY company_id, id
-    ) cba
-    WHERE bm.bank_account_id IS NULL
-      AND bm.company_id = cba.company_id
-      AND (
-        bm.source_classification ILIKE '%qris%'
-        OR bm.provider_name ILIKE '%qris%'
-        OR bm.description ILIKE '%qris%'
-      )
-  `)).catch((e: any) => {
-    logger.warn({ err: e?.message }, "[bankRecon] QRIS mutation bank_account_id backfill skipped");
-  });
-
   // ── sport_center.expected_bank_settlements view ───────────────────────────
   // This view is required by canonicalSettlementDetailsSql() embedded in the
   // GET /mutations UNION ALL query.  It exposes payment_settlement_batches
@@ -2945,6 +2917,17 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       }
       const expectedPaymentDate = addCalendarDays(bankDate, -1);
 
+      // A QRIS settlement is bank-account scoped. Do not let a legacy mutation
+      // without a resolved internal company_bank_accounts ID select a config by
+      // company alone.
+      const bankMutationAccountId = Number(row.bank_mutation_account_id);
+      if (!Number.isSafeInteger(bankMutationAccountId) || bankMutationAccountId <= 0) {
+        throw Object.assign(
+          new Error("Akun bank mutasi QRIS belum dapat di-resolve secara unik"),
+          { code: "INVALID_CANDIDATE" },
+        );
+      }
+
       for (const payment of selectedLivePayments) {
         if (payment.company_id == null || Number(payment.company_id) !== companyId) {
           throw Object.assign(
@@ -2991,7 +2974,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
         SELECT
           psc.id,
           lower(btrim(psc.provider_code)) AS provider_code,
-          btrim(psc.bank_account_id::text) AS bank_account_id,
+          cba.id AS resolved_bank_account_id,
           btrim(psc.rule_version) AS rule_version,
           psc.mdr_rate,
           psc.fixed_provider_fee,
@@ -3001,28 +2984,23 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
           psc.rounding_scale,
           psc.rounding_method
         FROM sport_center.payment_settlement_configs psc
-        LEFT JOIN public.company_bank_accounts cba
+        JOIN public.company_bank_accounts cba
           ON cba.account_number::text = psc.bank_account_id::text
          AND cba.company_id = psc.company_id
+         AND cba.is_active = TRUE
         WHERE psc.company_id = ${companyId}
           AND psc.is_active = TRUE
           AND psc.source = 'OWNER_APPROVED'
           AND psc.effective_from <= '${bankDate}'::date
           AND (psc.effective_until IS NULL OR '${bankDate}'::date < psc.effective_until)
-          AND (
-            ${row.bank_mutation_account_id == null ? "NULL" : Number(row.bank_mutation_account_id)}::bigint IS NULL
-            OR cba.id = ${row.bank_mutation_account_id == null ? "NULL" : Number(row.bank_mutation_account_id)}
-            OR psc.bank_account_id::text = ${row.bank_mutation_account_id == null
-              ? "NULL"
-              : `'${String(row.bank_mutation_account_id).replace(/'/g, "''")}'`}
-          )
+          AND cba.id = ${bankMutationAccountId}
         ORDER BY psc.id
       `));
       const configRows = configResult.rows as Array<Record<string, unknown>>;
       const normalizedConfigRows: Array<Record<string, unknown> & {
         configId: number;
         providerCode: ReturnType<typeof normalizeQrisProvider>;
-        bankAccountId: string | null;
+        bankAccountId: number | null;
         ruleVersion: string | null;
       }> = configRows
         .map((config) => ({
@@ -3031,9 +3009,9 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
           providerCode: normalizeQrisProvider(
             config.provider_code == null ? null : String(config.provider_code),
           ),
-          bankAccountId: config.bank_account_id == null
+          bankAccountId: config.resolved_bank_account_id == null
             ? null
-            : String(config.bank_account_id),
+            : Number(config.resolved_bank_account_id),
           ruleVersion: config.rule_version == null
             ? null
             : String(config.rule_version).trim() || null,
@@ -3109,7 +3087,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
         UPDATE sport_center.sport_payments
         SET payment_provider = '${resolvedProvider}',
             provider_name = '${resolvedProvider}',
-            bank_account_id = '${resolvedBankAccountId.replace(/'/g, "''")}',
+            bank_account_id = '${String(resolvedBankAccountId).replace(/'/g, "''")}',
             expected_settlement_date = '${bankDate}',
             settlement_rule_version = '${resolvedRuleVersion.replace(/'/g, "''")}'
         WHERE id IN (${selectedIdSql})

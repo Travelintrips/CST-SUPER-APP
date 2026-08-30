@@ -615,6 +615,18 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     }, accounts)).toBeNull();
   });
 
+  it("does not use a global or another company's account for a scoped reference", () => {
+    const accounts = [
+      { id: 17, companyId: null, accountNumber: "1640006707220" },
+      { id: 18, companyId: 2, accountNumber: "1640006707220" },
+    ];
+
+    expect(resolveActiveBankAccountId({
+      companyId: 1,
+      sourceAccount: "1640006707220",
+    }, accounts)).toBeNull();
+  });
+
   it("does not treat missing bank-account mapping as a wildcard", () => {
     const result = generateQrisMutationBatchCandidates({
       payments: [{

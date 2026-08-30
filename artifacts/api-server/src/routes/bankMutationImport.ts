@@ -19,6 +19,10 @@ import {
   isStartupMigrationComplete,
   markStartupMigrationComplete,
 } from "../lib/startupMigrationState.js";
+import {
+  resolveActiveBankAccountId,
+  type ActiveBankAccount,
+} from "../lib/reconciliation/bankAccountIdentity.js";
 
 const router = Router();
 
@@ -113,6 +117,7 @@ export async function runBankMutationImportMigration() {
   await db.execute(sql.raw(`CREATE INDEX IF NOT EXISTS bmi_date_idx   ON bank_mutation_imports(transaction_date)`)).catch(() => {});
   await db.execute(sql.raw(`CREATE UNIQUE INDEX IF NOT EXISTS bmi_unique_key_uidx ON bank_mutation_imports(unique_key) WHERE unique_key IS NOT NULL`)).catch(() => {});
   await db.execute(sql.raw(`ALTER TABLE bank_mutation_import_rows    ADD COLUMN IF NOT EXISTS skip_reason TEXT`)).catch(() => {});
+  await db.execute(sql.raw(`ALTER TABLE bank_mutation_import_rows ADD COLUMN IF NOT EXISTS bank_account_id INTEGER`)).catch(() => {});
   await db.execute(sql.raw(`ALTER TABLE bank_mutation_imports ADD COLUMN IF NOT EXISTS journal_entry_id INTEGER`)).catch(() => {});
   await db.execute(sql.raw(`ALTER TABLE bank_mutation_imports ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ`)).catch(() => {});
   await db.execute(sql.raw(`ALTER TABLE bank_mutation_imports ADD COLUMN IF NOT EXISTS branch_id     INTEGER`)).catch(() => {});
@@ -986,10 +991,14 @@ async function postBatchFromNormalized(
   }
 
   const { rows: readyRows } = await db.execute(sql.raw(`
-    SELECT * FROM bank_mutation_normalized_entries
-    WHERE batch_id = ${batchId}
-      AND status = 'READY'
-    ORDER BY transaction_date ASC, id ASC
+    SELECT ne.*, bmi.bank_account_id, bmi.source_account
+    FROM bank_mutation_normalized_entries ne
+    JOIN bank_mutation_imports bmi
+      ON bmi.id = ne.row_id
+     AND bmi.bank_account_id IS NOT NULL
+    WHERE ne.batch_id = ${batchId}
+      AND ne.status = 'READY'
+    ORDER BY ne.transaction_date ASC, ne.id ASC
   `));
 
   if (!readyRows.length) return { posted: 0, matched: 0, failed: 0, skipped: 0, errors: [], total: 0 };
@@ -1100,14 +1109,17 @@ async function postBatchFromNormalized(
             const { rows: _ins } = await db.execute(sql.raw(`
               INSERT INTO bank_mutations
                 (transaction_date, description, credit_amount, debit_amount, amount, direction,
-                 mutation_key, normalized_description, company_id, import_batch_id, import_row_id, source, status)
+                 mutation_key, normalized_description, company_id, bank_account_id, source_account,
+                 import_batch_id, import_row_id, source, status)
               VALUES (
                 '${_txDate}', '${_descSafe.slice(0, 500)}',
                 ${Number(ne.credit || 0)}, ${Number(ne.debit || 0)},
                 ${_amount}, '${_dir}',
                 '${_mk.replace(/'/g, "''")}',
                 '${_normDesc.replace(/'/g, "''").slice(0, 500)}',
-                ${_effCoId ?? 'NULL'}, ${batchId}, ${ne.id}, 'bank_import', 'unmatched'
+                ${_effCoId ?? 'NULL'}, ${ne.bank_account_id ?? 'NULL'},
+                ${ne.source_account ? `'${String(ne.source_account).replace(/'/g, "''")}'` : 'NULL'},
+                ${batchId}, ${ne.id}, 'bank_import', 'unmatched'
               )
               RETURNING id
             `)).catch(() => ({ rows: [] }));
@@ -1177,14 +1189,17 @@ async function postBatchFromNormalized(
         await db.execute(sql.raw(`
           INSERT INTO bank_mutations
             (transaction_date, description, credit_amount, debit_amount, amount, direction,
-             mutation_key, normalized_description, company_id, import_batch_id, import_row_id, source, status)
+              mutation_key, normalized_description, company_id, bank_account_id, source_account,
+              import_batch_id, import_row_id, source, status)
           VALUES (
             '${_gDate}', '${_gDesc.slice(0, 500)}',
             ${Number(ne.credit || 0)}, ${Number(ne.debit || 0)},
             ${_gAmount}, '${_gDir}',
             '${_gMk.replace(/'/g, "''")}',
             '${_gNorm.replace(/'/g, "''").slice(0, 500)}',
-            ${_gCoId ?? 'NULL'}, ${batchId}, ${ne.id}, 'bank_import', 'unmatched'
+            ${_gCoId ?? 'NULL'}, ${ne.bank_account_id ?? 'NULL'},
+            ${ne.source_account ? `'${String(ne.source_account).replace(/'/g, "''")}'` : 'NULL'},
+            ${batchId}, ${ne.id}, 'bank_import', 'unmatched'
           )
           ON CONFLICT DO NOTHING
         `)).catch(() => {});
@@ -1949,6 +1964,20 @@ router.post("/save", async (req, res) => {
   try {
     // ── 1. Kumpulkan semua unique_key dari input ─────────────────────────────
     const mappedRows = rows.map((raw, i) => ({ raw, mapped: mapRow(raw, column_mapping), idx: i }));
+    // Resolve statement account evidence only against active accounts belonging
+    // to this company. A missing or ambiguous reference intentionally resolves
+    // to null; import paths must never select an arbitrary account.
+    const { rows: activeBankAccountRows } = await db.execute(sql`
+      SELECT id, company_id, account_number
+      FROM company_bank_accounts
+      WHERE company_id = ${Number(company_id)}
+        AND is_active = TRUE
+    `);
+    const activeBankAccounts: ActiveBankAccount[] = activeBankAccountRows.map((account: any) => ({
+      id: Number(account.id),
+      companyId: account.company_id == null ? null : Number(account.company_id),
+      accountNumber: account.account_number == null ? null : String(account.account_number),
+    })).filter((account) => Number.isSafeInteger(account.id) && account.id > 0);
     const incomingKeys = mappedRows
       .map(r => String(r.mapped["UNIQUE_KEY"] ?? "").trim())
       .filter(k => k !== "");
@@ -2037,6 +2066,16 @@ router.post("/save", async (req, res) => {
       const payMethod  = esc(mapped["PAYMENT_METHOD"]);
       const srcAccRaw  = mapped["SOURCE_ACCOUNT"] ? String(mapped["SOURCE_ACCOUNT"]).trim() : null;
       const srcAcc     = esc(srcAccRaw);
+      const rawBankAccountId = mapped["BANK_ACCOUNT_ID"]
+        ?? raw["bank_account_id"]
+        ?? raw["bankAccountId"]
+        ?? null;
+      const resolvedBankAccountId = resolveActiveBankAccountId({
+        companyId: Number(company_id),
+        bankAccountId: rawBankAccountId,
+        sourceAccount: srcAccRaw,
+        description: mapped["Description"],
+      }, activeBankAccounts);
       const plFlagRaw  = mapped["PL_FLAG"] ? String(mapped["PL_FLAG"]).trim().toUpperCase() : null;
       const plFlag     = esc(mapped["PL_FLAG"]);
       const rawClass     = mapped["ACCOUNTING_CLASS"] ? String(mapped["ACCOUNTING_CLASS"]) : null;
@@ -2090,19 +2129,24 @@ router.post("/save", async (req, res) => {
       const isNeedReview = normClass === "NEED_REVIEW"
         || (rawErpCatStr?.toUpperCase() === "NEED_REVIEW")
         || !normClass;
-      const rowStatus  = isNeedReview ? "'NEED_REVIEW'" : "'DRAFT'";
+      // An account identity is mandatory for reconciliation. Preserve the row
+      // and source evidence for correction, but fail closed rather than
+      // assigning a first/otherwise arbitrary active bank account.
+      const rowStatus  = isNeedReview || resolvedBankAccountId === null
+        ? "'NEED_REVIEW'"
+        : "'DRAFT'";
 
       auditValues.push(
         `(${batchId}, ${idx}, ${date}, ${desc}, ${debit ?? "NULL"}, ${credit ?? "NULL"}, ${balance ?? "NULL"}, ` +
         `${erpCat}, ${entType}, ${entName}, ${bu}, ${company}, ${taxType}, ${payMethod}, ${srcAcc}, ${plFlag}, ` +
-        `${accClass}, ${uniqueKey}, ${rawJson}, ${skipReason})`
+          `${accClass}, ${uniqueKey}, ${rawJson}, ${skipReason}, ${resolvedBankAccountId ?? "NULL"})`
       );
 
       if (!isDuplicate && !isInvalidDate && !isZeroAmount) {
         importValues.push(
           `(${batchId}, ${date}, ${desc}, ${debit ?? "NULL"}, ${credit ?? "NULL"}, ${balance ?? "NULL"}, ` +
           `${erpCat}, ${entType}, ${entName}, ${bu}, ${company}, ${taxType}, ${payMethod}, ${srcAcc}, ${plFlag}, ` +
-          `${accClass}, ${uniqueKey}, ${rowStatus}, ` +
+          `${accClass}, ${uniqueKey}, ${rowStatus}, ${resolvedBankAccountId ?? "NULL"}, ` +
           `${rowCompanyId ?? "NULL"}, ${rowRevenueCompanyId ?? "NULL"}, ${rowCollectingCompanyId ?? "NULL"}, 'PENDING', 'MISSING')`
         );
       }
@@ -2113,7 +2157,7 @@ router.post("/save", async (req, res) => {
     const auditCols = `(batch_id, row_index, date, description, debit, credit, balance,
       erp_category, entity_type, entity_name, business_unit, company,
       tax_type, payment_method, source_account, pl_flag, accounting_class,
-      unique_key, raw, skip_reason)`;
+      unique_key, raw, skip_reason, bank_account_id)`;
     for (let i = 0; i < auditValues.length; i += CHUNK) {
       const chunk = auditValues.slice(i, i + CHUNK);
       await db.execute(sql.raw(
@@ -2124,7 +2168,7 @@ router.post("/save", async (req, res) => {
     const importCols = `(import_batch_id, transaction_date, description, debit, credit, balance,
       erp_category, entity_type, entity_name, business_unit, company,
       tax_type, payment_method, source_account, pl_flag, accounting_class,
-      unique_key, status, company_id, revenue_company_id, collecting_company_id, coa_status, subledger_status)`;
+      unique_key, status, bank_account_id, company_id, revenue_company_id, collecting_company_id, coa_status, subledger_status)`;
     for (let i = 0; i < importValues.length; i += CHUNK) {
       const chunk = importValues.slice(i, i + CHUNK);
       await db.execute(sql.raw(
@@ -2835,13 +2879,13 @@ async function syncToBankMutations(batchId: number): Promise<void> {
       await db.execute(sql.raw(`
         INSERT INTO bank_mutations
           (transaction_date, description, credit_amount, debit_amount, amount, direction,
-           mutation_key, normalized_description,
+           mutation_key, normalized_description, bank_account_id,
            import_batch_id, import_row_id, source, company_id, source_account,
            reconciliation_status, linked_transaction_type, linked_transaction_id,
            status, created_at, updated_at)
         VALUES (
           '${txDate}', '${descSafe}', ${credit}, ${debit}, ${amount}, '${direction}',
-          '${ukSafe}', '${normDesc.replace(/'/g, "''")}',
+          '${ukSafe}', '${normDesc.replace(/'/g, "''")}', ${row.bank_account_id ?? "NULL"},
           ${batchId}, ${row.id}, 'bank_import',
           ${companyId ?? "NULL"}, ${srcAccount},
           ${recon}, ${ltype}, ${lid},

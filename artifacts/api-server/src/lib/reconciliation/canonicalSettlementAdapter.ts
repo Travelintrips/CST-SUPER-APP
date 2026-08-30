@@ -23,7 +23,10 @@ export type CanonicalSettlementRow = {
   expected_bank_amount: number | string | null;
   settlement_status: string | null;
   settlement_journal_id: number | string | null;
+  /** public.bank_mutations.id after the additive identity migration. */
   bank_mutation_id: number | string | null;
+  /** Compatibility link; must be null or equal to bank_mutation_id. */
+  canonical_bank_mutation_id?: number | string | null;
   settlement_rule_version?: string | null;
   posted_at?: string | Date | null;
   posted_by?: string | null;
@@ -57,7 +60,10 @@ export type CanonicalSettlementCandidate = {
   company_id: number | null;
   bank_account_id: number | null;
   settlement_journal_id: number | null;
+  /** public.bank_mutations.id after the additive identity migration. */
   bank_mutation_id: number | null;
+  /** Compatibility link; always null or equal to bank_mutation_id. */
+  canonical_bank_mutation_id: number | null;
   settlement_rule_version: string | null;
 };
 
@@ -112,17 +118,19 @@ function dateText(value: unknown): string | null {
 /**
  * Canonical eligibility is deliberately stricter than the view's broad
  * posted/reconciled scope. Only an unlinked, posted settlement with its
- * upstream journal is representable as a reconciliation candidate.
+ * upstream journal is representable as a reconciliation candidate. Its
+ * bank_mutation_id, when linked, is public.bank_mutations.id.
  */
 export function isCanonicalSettlementEligible(
   row: Pick<
     CanonicalSettlementRow,
-    "settlement_status" | "bank_mutation_id" | "settlement_journal_id"
+    "settlement_status" | "bank_mutation_id" | "canonical_bank_mutation_id" | "settlement_journal_id"
   >,
 ): boolean {
   return (
     String(row.settlement_status ?? "").toLowerCase() === "posted" &&
     row.bank_mutation_id == null &&
+    row.canonical_bank_mutation_id == null &&
     row.settlement_journal_id != null
   );
 }
@@ -188,6 +196,7 @@ export function mapCanonicalSettlementRow(
     ),
     settlement_journal_id: numberOrNull(row.settlement_journal_id),
     bank_mutation_id: numberOrNull(row.bank_mutation_id),
+    canonical_bank_mutation_id: numberOrNull(row.canonical_bank_mutation_id),
     settlement_rule_version: row.settlement_rule_version == null
       ? null
       : String(row.settlement_rule_version),
@@ -212,6 +221,7 @@ const CANONICAL_SETTLEMENT_COLUMNS = sql.raw(`
   settlement_status,
   settlement_journal_id,
   bank_mutation_id,
+  canonical_bank_mutation_id,
   settlement_rule_version,
   posted_at,
   posted_by,
@@ -226,6 +236,7 @@ function canonicalEligibilityFilters(
   const filters = [
     sql`settlement_status = 'posted'`,
     sql`bank_mutation_id IS NULL`,
+    sql`canonical_bank_mutation_id IS NULL`,
     sql`settlement_journal_id IS NOT NULL`,
   ];
 

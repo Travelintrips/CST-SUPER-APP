@@ -36,14 +36,13 @@ describe("Phase 4C-6 canonical link-only approval contract", () => {
     },
   );
 
-  it("recognizes only the complete same-settlement/same-mutation retry", () => {
+  it("recognizes only the complete same-settlement/public-mutation retry", () => {
     expect(
       isCanonicalApprovalIdempotentState({
         settlement_status: "reconciled",
         settlement_bank_mutation_id: 42,
-        canonical_mutation_id: 42,
+        mutation_id: 42,
         match_status: "approved",
-        canonical_mutation_status: "approved",
         public_mutation_status: "approved",
       }),
     ).toBe(true);
@@ -52,9 +51,8 @@ describe("Phase 4C-6 canonical link-only approval contract", () => {
       isCanonicalApprovalIdempotentState({
         settlement_status: "reconciled",
         settlement_bank_mutation_id: 99,
-        canonical_mutation_id: 42,
+        mutation_id: 42,
         match_status: "approved",
-        canonical_mutation_status: "approved",
         public_mutation_status: "approved",
       }),
     ).toBe(false);
@@ -81,7 +79,6 @@ describe("Phase 4C-6 canonical link-only approval contract", () => {
         settlement_status: "posted",
         settlement_bank_mutation_id: null,
         match_status: "candidate",
-        canonical_mutation_status: "unmatched",
         public_mutation_status: "unmatched",
       }),
     ).toBe(true);
@@ -90,7 +87,6 @@ describe("Phase 4C-6 canonical link-only approval contract", () => {
         settlement_status: "posted",
         settlement_bank_mutation_id: null,
         match_status: "candidate",
-        canonical_mutation_status: "unmatched",
         public_mutation_status: "approved",
       }),
     ).toBe(false);

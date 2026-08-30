@@ -51,6 +51,24 @@ describe("canonical Sport Center owner routine restoration contract", () => {
     expect(migrationSource).toContain("format_type(argument.oid, NULL)");
   });
 
+  it("never reinterprets public link IDs as legacy IDs on a later pass", () => {
+    expect(migrationSource).toContain(
+      "v_translate_legacy_bank_link boolean",
+    );
+    expect(migrationSource).toContain(
+      "v_translate_legacy_canonical_link boolean",
+    );
+    expect(migrationSource).toContain(
+      "con.confrelid = 'sport_center.bank_mutations'::regclass",
+    );
+    expect(migrationSource).toContain(
+      "IF v_translate_legacy_bank_link THEN",
+    );
+    expect(migrationSource).toContain(
+      "IF v_translate_legacy_canonical_link THEN",
+    );
+  });
+
   it("resolves the active owner-approved rule by its effective window", () => {
     const resolverStart = migrationSource.indexOf(
       "CREATE OR REPLACE FUNCTION sport_center.resolve_and_persist_payment_metadata(",

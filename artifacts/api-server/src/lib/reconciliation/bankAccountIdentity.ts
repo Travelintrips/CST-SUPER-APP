@@ -29,7 +29,9 @@ function accountBelongsToCompany(
   account: ActiveBankAccount,
   companyId: number | null,
 ): boolean {
-  return account.companyId === companyId || account.companyId === null;
+  // Bank identity is a company dimension. A legacy/global account must not
+  // satisfy a reference for an explicitly selected company.
+  return account.companyId === companyId;
 }
 
 /**

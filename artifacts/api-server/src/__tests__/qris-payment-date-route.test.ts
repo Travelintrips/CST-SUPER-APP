@@ -80,6 +80,15 @@ describe("QRIS exact-net approval route", () => {
     expect(route).toContain("DUPLICATE_APPROVAL");
   });
 
+  it("resolves the settlement account number through an active company account before comparing IDs", () => {
+    expect(route).toContain("JOIN public.company_bank_accounts cba");
+    expect(route).toContain("cba.account_number::text = psc.bank_account_id::text");
+    expect(route).toContain("cba.is_active = TRUE");
+    expect(route).toContain("const bankMutationAccountId = Number(row.bank_mutation_account_id)");
+    expect(route).toContain("AND cba.id = ${bankMutationAccountId}");
+    expect(route).not.toContain("OR psc.bank_account_id::text");
+  });
+
   it("treats an explicit manual QRIS selection as authoritative instead of using the source group", () => {
     expect(canonicalBuilderSource).toContain(
       "options.qrisApprovalEvidence != null && requestedPaymentIds !== null",

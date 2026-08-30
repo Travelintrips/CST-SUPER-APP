@@ -3760,6 +3760,9 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
    * No public provider/account fields are trusted, and no settlement,
    * reconciliation, or accounting state is changed here.
    */
+  // Retained as historical source context only. Executing this block would
+  // recreate the projection trigger/FKs before the public-only cutover below.
+  if (false) {
   await db.execute(sql.raw(`
     CREATE UNIQUE INDEX IF NOT EXISTS sport_center_bank_mutations_mutation_key_unique
       ON sport_center.bank_mutations (mutation_key)
@@ -4356,6 +4359,635 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
       END IF;
 
       RETURN v_canonical_id;
+    END;
+    $function$;
+  `));
+  }
+
+  /*
+   * public.bank_mutations is the only bank-evidence identity.
+   *
+   * Earlier versions used the same integer columns to point at legacy Sport
+   * Center mutation records. Translate a legacy link only when its provenance
+   * identifies exactly one public row.  In particular, do not "repair" an
+   * ambiguous integer by assuming equal ids: retaining an unresolved legacy
+   * value is safer than linking a settlement to somebody else's evidence.
+   */
+  await db.execute(sql.raw(`
+    DO $migration$
+    DECLARE
+      v_constraint record;
+      v_translate_legacy_bank_link boolean;
+      v_translate_legacy_canonical_link boolean;
+    BEGIN
+      ALTER TABLE sport_center.payment_settlement_batches
+        ADD COLUMN IF NOT EXISTS canonical_bank_mutation_id INTEGER;
+
+      SELECT EXISTS (
+        SELECT 1
+          FROM pg_constraint con
+         WHERE con.conrelid =
+                 'sport_center.payment_settlement_batches'::regclass
+           AND con.confrelid = 'sport_center.bank_mutations'::regclass
+           AND con.contype = 'f'
+           AND con.conkey = ARRAY[(
+             SELECT attnum FROM pg_attribute
+              WHERE attrelid = con.conrelid
+                AND attname = 'bank_mutation_id'
+                AND NOT attisdropped
+           )]::smallint[]
+      ) INTO v_translate_legacy_bank_link;
+
+      SELECT EXISTS (
+        SELECT 1
+          FROM pg_constraint con
+         WHERE con.conrelid =
+                 'sport_center.payment_settlement_batches'::regclass
+           AND con.confrelid = 'sport_center.bank_mutations'::regclass
+           AND con.contype = 'f'
+           AND con.conkey = ARRAY[(
+             SELECT attnum FROM pg_attribute
+              WHERE attrelid = con.conrelid
+                AND attname = 'canonical_bank_mutation_id'
+                AND NOT attisdropped
+           )]::smallint[]
+      ) INTO v_translate_legacy_canonical_link;
+
+      -- Release the legacy projection FKs before translating stored values.
+      -- The entire DO block is transactional, so the public FKs are installed
+      -- before this change can commit.
+      FOR v_constraint IN
+        SELECT con.conname
+          FROM pg_constraint con
+         WHERE con.conrelid =
+                 'sport_center.payment_settlement_batches'::regclass
+           AND con.contype = 'f'
+           AND con.conkey && ARRAY[
+             (
+               SELECT attnum FROM pg_attribute
+                WHERE attrelid = con.conrelid
+                  AND attname = 'bank_mutation_id'
+                  AND NOT attisdropped
+             ),
+             (
+               SELECT attnum FROM pg_attribute
+                WHERE attrelid = con.conrelid
+                  AND attname = 'canonical_bank_mutation_id'
+                  AND NOT attisdropped
+             )
+           ]::smallint[]
+      LOOP
+        EXECUTE format(
+          'ALTER TABLE sport_center.payment_settlement_batches DROP CONSTRAINT %I',
+          v_constraint.conname
+        );
+      END LOOP;
+
+      IF v_translate_legacy_bank_link THEN
+      WITH resolved_legacy AS (
+        SELECT legacy.id AS legacy_id, MIN(pm.id)::integer AS public_id
+          FROM sport_center.bank_mutations legacy
+          JOIN public.bank_mutations pm
+            ON (
+              legacy.source_table = 'public.bank_mutations'
+              AND legacy.source_id = pm.id::text
+            )
+            OR (
+              NULLIF(BTRIM(legacy.mutation_key), '') IS NOT NULL
+              AND pm.mutation_key = legacy.mutation_key
+            )
+         GROUP BY legacy.id
+        HAVING COUNT(DISTINCT pm.id) = 1
+      )
+      UPDATE sport_center.payment_settlement_batches batch
+         SET bank_mutation_id = candidate.public_id,
+             updated_at = NOW()
+        FROM resolved_legacy candidate
+       WHERE batch.bank_mutation_id = candidate.legacy_id
+         AND batch.bank_mutation_id IS DISTINCT FROM candidate.public_id;
+      END IF;
+
+      IF v_translate_legacy_canonical_link THEN
+      WITH resolved_legacy AS (
+        SELECT legacy.id AS legacy_id, MIN(pm.id)::integer AS public_id
+          FROM sport_center.bank_mutations legacy
+          JOIN public.bank_mutations pm
+            ON (
+              legacy.source_table = 'public.bank_mutations'
+              AND legacy.source_id = pm.id::text
+            )
+            OR (
+              NULLIF(BTRIM(legacy.mutation_key), '') IS NOT NULL
+              AND pm.mutation_key = legacy.mutation_key
+            )
+         GROUP BY legacy.id
+        HAVING COUNT(DISTINCT pm.id) = 1
+      )
+      UPDATE sport_center.payment_settlement_batches batch
+         SET canonical_bank_mutation_id = candidate.public_id,
+             updated_at = NOW()
+        FROM resolved_legacy candidate
+       WHERE batch.canonical_bank_mutation_id = candidate.legacy_id
+         AND batch.canonical_bank_mutation_id IS DISTINCT FROM candidate.public_id
+         -- The legacy unique index is retained.  Do not turn two historic
+         -- links into one public link; leave that conflict for a governed
+         -- operator repair instead.
+         AND NOT EXISTS (
+           SELECT 1
+             FROM sport_center.payment_settlement_batches other_batch
+            WHERE other_batch.id <> batch.id
+              AND other_batch.canonical_bank_mutation_id = candidate.public_id
+         );
+      END IF;
+
+      ALTER TABLE sport_center.payment_settlement_batches
+        ADD CONSTRAINT payment_settlement_batches_bank_mutation_public_fk
+        FOREIGN KEY (bank_mutation_id)
+        REFERENCES public.bank_mutations(id)
+        NOT VALID;
+      ALTER TABLE sport_center.payment_settlement_batches
+        ADD CONSTRAINT payment_settlement_batches_canonical_bank_mutation_public_fk
+        FOREIGN KEY (canonical_bank_mutation_id)
+        REFERENCES public.bank_mutations(id)
+        NOT VALID;
+    END;
+    $migration$;
+  `));
+
+  // A public insert must never create/update a sport_center projection.
+  await db.execute(sql.raw(`
+    DROP TRIGGER IF EXISTS trg_project_public_bank_mutation_to_canonical
+      ON public.bank_mutations;
+
+    CREATE OR REPLACE FUNCTION sport_center.project_public_bank_mutation_to_canonical(
+      p_public_mutation_id integer
+    )
+    RETURNS integer
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'sport_center', 'public'
+    AS $function$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM public.bank_mutations WHERE id = p_public_mutation_id
+      ) THEN
+        RAISE EXCEPTION 'PUBLIC_BANK_MUTATION_NOT_FOUND: %', p_public_mutation_id;
+      END IF;
+      RETURN p_public_mutation_id;
+    END;
+    $function$;
+
+    CREATE OR REPLACE FUNCTION sport_center.replay_public_bank_mutation_bridge(
+      p_public_mutation_id integer
+    )
+    RETURNS integer
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'sport_center', 'public'
+    AS $function$
+    BEGIN
+      RETURN sport_center.project_public_bank_mutation_to_canonical(
+        p_public_mutation_id
+      );
+    END;
+    $function$;
+
+    CREATE OR REPLACE FUNCTION sport_center.project_public_bank_mutation_to_canonical_trigger()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'sport_center', 'public'
+    AS $function$
+    BEGIN
+      -- Compatibility only. The projection trigger is intentionally absent.
+      RETURN NEW;
+    END;
+    $function$;
+  `));
+
+  await db.execute(sql.raw(`
+    CREATE OR REPLACE FUNCTION sport_center.ensure_canonical_bank_mutation_for_settlement(
+      p_settlement_id bigint,
+      p_actor text DEFAULT 'central-finance-processor'
+    )
+    RETURNS integer
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'sport_center', 'public'
+    AS $function$
+    DECLARE
+      v_batch sport_center.payment_settlement_batches%ROWTYPE;
+      v_payment_id integer;
+      v_public_id integer;
+      v_mutation_key text;
+      v_description text;
+      v_existing_count integer;
+      v_existing_company integer;
+      v_internal_bank_account_id integer;
+    BEGIN
+      IF p_settlement_id IS NULL OR p_settlement_id <= 0 THEN
+        RAISE EXCEPTION 'CANONICAL_MUTATION_SETTLEMENT_ID_INVALID: %', p_settlement_id;
+      END IF;
+      PERFORM pg_advisory_xact_lock(
+        hashtext('public-mutation-handoff:' || p_settlement_id::text)
+      );
+      SELECT * INTO v_batch
+        FROM sport_center.payment_settlement_batches
+       WHERE id = p_settlement_id FOR UPDATE;
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'CANONICAL_MUTATION_SETTLEMENT_NOT_FOUND: %', p_settlement_id;
+      END IF;
+
+      -- Both fields now carry public ids.  A disagreement is never guessed.
+      IF v_batch.bank_mutation_id IS NOT NULL
+         OR v_batch.canonical_bank_mutation_id IS NOT NULL THEN
+        IF v_batch.bank_mutation_id IS NOT NULL
+           AND v_batch.canonical_bank_mutation_id IS NOT NULL
+           AND v_batch.bank_mutation_id <> v_batch.canonical_bank_mutation_id
+        THEN
+          RAISE EXCEPTION 'PUBLIC_MUTATION_SETTLEMENT_LINK_AMBIGUOUS: %',
+            p_settlement_id;
+        END IF;
+        v_public_id := COALESCE(
+          v_batch.bank_mutation_id, v_batch.canonical_bank_mutation_id
+        );
+        IF EXISTS (SELECT 1 FROM public.bank_mutations WHERE id = v_public_id) THEN
+          UPDATE sport_center.payment_settlement_batches
+             SET bank_mutation_id = v_public_id,
+                 canonical_bank_mutation_id = v_public_id,
+                 updated_at = NOW()
+           WHERE id = p_settlement_id;
+          RETURN v_public_id;
+        END IF;
+        RAISE EXCEPTION 'PUBLIC_MUTATION_SETTLEMENT_LINK_UNRESOLVED: %',
+          p_settlement_id;
+      END IF;
+      IF v_batch.status <> 'posted'
+         OR v_batch.net_amount IS NULL OR v_batch.net_amount <= 0 THEN
+        RAISE EXCEPTION 'CANONICAL_MUTATION_SETTLEMENT_NOT_READY: %', p_settlement_id;
+      END IF;
+      SELECT COUNT(*)::integer, MIN(payment_id)
+        INTO v_existing_count, v_payment_id
+        FROM sport_center.payment_settlement_items
+       WHERE settlement_id = p_settlement_id AND item_status = 'active';
+      IF v_existing_count <> 1 OR v_payment_id IS NULL THEN
+        RAISE EXCEPTION 'CANONICAL_MUTATION_PAYMENT_IDENTITY_UNRESOLVED: settlement=% items=%',
+          p_settlement_id, v_existing_count;
+      END IF;
+      v_mutation_key := 'SC-PAY-' || v_payment_id::text;
+      v_description := 'Sport Center payment settlement ' || v_payment_id::text;
+      SELECT COUNT(*)::integer, MIN(cba.id)
+        INTO v_existing_count, v_internal_bank_account_id
+        FROM public.company_bank_accounts cba
+       WHERE cba.company_id = v_batch.company_id
+         AND cba.is_active = TRUE
+         AND (
+           cba.id::text = NULLIF(BTRIM(v_batch.bank_account_id::text), '')
+           OR cba.account_number::text =
+              NULLIF(BTRIM(v_batch.bank_account_id::text), '')
+         );
+      IF v_existing_count <> 1 OR v_internal_bank_account_id IS NULL THEN
+        RAISE EXCEPTION
+          'CANONICAL_MUTATION_BANK_ACCOUNT_UNRESOLVED: settlement=% matches=%',
+          p_settlement_id, v_existing_count;
+      END IF;
+      SELECT COUNT(*)::integer, MIN(company_id)
+        INTO v_existing_count, v_existing_company
+        FROM public.bank_mutations WHERE mutation_key = v_mutation_key;
+      IF v_existing_count > 1
+         OR (v_existing_count = 1 AND v_existing_company IS DISTINCT FROM v_batch.company_id)
+      THEN
+        RAISE EXCEPTION 'CANONICAL_MUTATION_IDENTITY_CONFLICT: key=%',
+          v_mutation_key;
+      END IF;
+      IF v_existing_count = 0 THEN
+        INSERT INTO public.bank_mutations (
+          bank_account_id, transaction_date, description, credit_amount,
+          debit_amount, amount, direction, mutation_key, normalized_description,
+          provider_name, company_id, status, source_account
+        ) VALUES (
+          v_internal_bank_account_id, v_batch.settlement_date, v_description,
+          v_batch.net_amount, 0, v_batch.net_amount, 'in', v_mutation_key,
+          lower(v_description), v_batch.provider_code, v_batch.company_id,
+          'unmatched', 'sport_center.payment_settlement_batches:' || p_settlement_id::text
+        ) RETURNING id INTO v_public_id;
+      ELSE
+        SELECT id INTO v_public_id FROM public.bank_mutations
+         WHERE mutation_key = v_mutation_key FOR UPDATE;
+      END IF;
+      UPDATE sport_center.payment_settlement_batches
+         SET bank_mutation_id = v_public_id,
+             canonical_bank_mutation_id = v_public_id,
+             updated_at = NOW()
+       WHERE id = p_settlement_id
+         AND bank_mutation_id IS NULL
+         AND canonical_bank_mutation_id IS NULL;
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'PUBLIC_MUTATION_SETTLEMENT_LINK_CONFLICT: %', p_settlement_id;
+      END IF;
+      RETURN v_public_id;
+    END;
+    $function$;
+  `));
+
+  await db.execute(sql.raw(`
+    CREATE OR REPLACE FUNCTION sport_center.find_settlement_bank_candidates(
+      p_settlement_id bigint,
+      p_date_tolerance_days integer DEFAULT 1
+    )
+    RETURNS TABLE (
+      settlement_id bigint, mutation_id integer, settlement_reference text,
+      settlement_date date, mutation_date date, expected_amount numeric,
+      mutation_amount numeric, amount_difference numeric,
+      allowed_amount_difference numeric, date_difference_days integer,
+      amount_match boolean, date_match boolean, company_match boolean,
+      bank_account_match boolean, provider_match boolean, candidate_eligible boolean
+    )
+    LANGUAGE plpgsql STABLE SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'sport_center', 'public'
+    AS $function$
+    BEGIN
+      IF p_date_tolerance_days IS NULL OR p_date_tolerance_days < 0 THEN
+        RAISE EXCEPTION 'DATE_TOLERANCE_MUST_BE_NON_NEGATIVE';
+      END IF;
+      RETURN QUERY
+      WITH base AS (
+        SELECT b.*
+          FROM sport_center.payment_settlement_batches b
+          JOIN sport_center.accounting_journals sj ON sj.id = b.settlement_journal_id
+           AND sj.status = 'posted' AND sj.journal_type = 'settlement'
+           AND sj.is_reversal = FALSE
+         WHERE b.id = p_settlement_id AND b.status IN ('posted', 'reconciled')
+           AND b.bank_mutation_id IS NULL AND b.canonical_bank_mutation_id IS NULL
+      ), settlement AS (
+        SELECT b.*, MIN(cba.id)::integer AS resolved_bank_account_id
+          FROM base b
+          JOIN public.company_bank_accounts cba ON cba.company_id = b.company_id
+           AND cba.is_active = TRUE
+           AND (
+             cba.id::text = NULLIF(BTRIM(b.bank_account_id::text), '')
+             OR cba.account_number::text = NULLIF(BTRIM(b.bank_account_id::text), '')
+           )
+         GROUP BY b.id
+        HAVING COUNT(DISTINCT cba.id) = 1
+      ), evidence AS (
+        SELECT s.id settlement_id, bm.id mutation_id, s.settlement_reference,
+          s.settlement_date, bm.transaction_date::date mutation_date,
+          s.net_amount expected_amount, bm.amount mutation_amount,
+          ABS(s.net_amount - bm.amount) amount_difference,
+          GREATEST(1::numeric, ABS(s.net_amount) * .001) allowed_amount_difference,
+          ABS(bm.transaction_date::date - s.settlement_date)::integer date_difference_days,
+          ABS(s.net_amount - bm.amount) <= GREATEST(1::numeric, ABS(s.net_amount) * .001) amount_match,
+          ABS(bm.transaction_date::date - s.settlement_date) <= p_date_tolerance_days date_match,
+          (bm.company_id = s.company_id) company_match,
+          (bm.bank_account_id = s.resolved_bank_account_id) bank_account_match,
+          (bm.provider_name IS NULL OR lower(BTRIM(bm.provider_name)) = lower(BTRIM(s.provider_code))) provider_match,
+          NOT EXISTS (
+            SELECT 1 FROM sport_center.payment_settlement_batches linked
+             WHERE linked.bank_mutation_id = bm.id
+                OR linked.canonical_bank_mutation_id = bm.id
+          ) mutation_unlinked
+        FROM settlement s JOIN public.bank_mutations bm
+          ON bm.transaction_date::date BETWEEN s.settlement_date - p_date_tolerance_days
+             AND s.settlement_date + p_date_tolerance_days
+         AND lower(COALESCE(bm.direction, '')) IN ('in', 'credit', 'incoming', 'cr')
+      )
+      SELECT settlement_id, mutation_id, settlement_reference, settlement_date,
+        mutation_date, expected_amount, mutation_amount, amount_difference,
+        allowed_amount_difference, date_difference_days, amount_match, date_match,
+        company_match, bank_account_match, provider_match,
+        amount_match AND date_match AND company_match AND bank_account_match
+          AND mutation_unlinked
+      FROM evidence ORDER BY mutation_date, mutation_id;
+    END;
+    $function$;
+  `));
+
+  /*
+   * Public-only replacement for the historical recovery owner.  Its retained
+   * signature is deliberate, but a "canonical" id in its result is now the
+   * same public evidence id.  Any case that cannot be proven from public
+   * evidence and settlement-owned records fails closed.
+   */
+  await db.execute(sql.raw(`
+    CREATE OR REPLACE FUNCTION sport_center.recover_posted_settlement_from_bank_mutation(
+      p_settlement_id bigint,
+      p_public_mutation_id integer,
+      p_actor text DEFAULT 'canonical-settlement-recovery'
+    )
+    RETURNS TABLE (
+      settlement_id bigint, public_mutation_id integer,
+      canonical_mutation_id integer, match_id integer,
+      old_net_amount numeric, recovered_net_amount numeric,
+      adjustment_amount numeric, settlement_status text,
+      public_mutation_status text, canonical_mutation_status text,
+      idempotent boolean
+    )
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'sport_center', 'public'
+    AS $function$
+    DECLARE
+      v_public public.bank_mutations%ROWTYPE;
+      v_batch sport_center.payment_settlement_batches%ROWTYPE;
+      v_journal sport_center.accounting_journals%ROWTYPE;
+      v_match record;
+      v_match_count integer;
+      v_payment_count integer;
+      v_conflict_count integer;
+      v_config_count integer;
+      v_account_count integer;
+      v_account_id integer;
+      v_match_id integer;
+      v_old_net numeric;
+      v_recovered_net numeric;
+      v_adjustment numeric;
+      v_idempotent boolean := false;
+      v_actor text;
+    BEGIN
+      IF p_settlement_id IS NULL OR p_settlement_id <= 0
+         OR p_public_mutation_id IS NULL OR p_public_mutation_id <= 0 THEN
+        RAISE EXCEPTION 'CANONICAL_SETTLEMENT_RECOVERY_INVALID_ID';
+      END IF;
+      v_actor := NULLIF(BTRIM(p_actor), '');
+      IF v_actor IS NULL THEN
+        RAISE EXCEPTION 'CANONICAL_SETTLEMENT_RECOVERY_ACTOR_REQUIRED';
+      END IF;
+      PERFORM pg_advisory_xact_lock(hashtext(
+        'public-settlement-recovery:' || p_settlement_id::text || ':' ||
+        p_public_mutation_id::text
+      ));
+      SELECT * INTO v_public FROM public.bank_mutations
+       WHERE id = p_public_mutation_id FOR UPDATE;
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'CANONICAL_SETTLEMENT_RECOVERY_PUBLIC_MUTATION_NOT_FOUND: %',
+          p_public_mutation_id;
+      END IF;
+      SELECT * INTO v_batch FROM sport_center.payment_settlement_batches
+       WHERE id = p_settlement_id FOR UPDATE;
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'CANONICAL_SETTLEMENT_RECOVERY_SETTLEMENT_NOT_FOUND: %',
+          p_settlement_id;
+      END IF;
+      SELECT * INTO v_journal FROM sport_center.accounting_journals
+       WHERE id = v_batch.settlement_journal_id FOR UPDATE;
+      IF NOT FOUND OR v_journal.status <> 'posted'
+         OR v_journal.journal_type <> 'settlement'
+         OR v_journal.is_reversal IS DISTINCT FROM FALSE
+         OR v_journal.settlement_batch_id IS DISTINCT FROM p_settlement_id THEN
+        RAISE EXCEPTION 'CANONICAL_SETTLEMENT_RECOVERY_JOURNAL_NOT_ELIGIBLE: settlement=%',
+          p_settlement_id;
+      END IF;
+      IF v_batch.company_id IS DISTINCT FROM v_public.company_id
+         OR v_public.transaction_date IS NULL OR v_public.amount IS NULL
+         OR v_public.amount <= 0
+         OR lower(COALESCE(v_public.direction, '')) NOT IN ('in','credit','incoming','cr')
+         OR ABS(v_public.transaction_date::date - v_batch.settlement_date) > 1
+         OR v_public.amount > v_batch.gross_amount
+         OR v_public.journal_entry_id IS NOT NULL THEN
+        RAISE EXCEPTION 'CANONICAL_SETTLEMENT_RECOVERY_BANK_EVIDENCE_INVALID: mutation=%',
+          p_public_mutation_id;
+      END IF;
+
+      -- Resolve the external settlement account before comparing it with the
+      -- public mutation's internal company_bank_accounts id.
+      SELECT COUNT(*)::integer, MIN(cba.id) INTO v_account_count, v_account_id
+        FROM public.company_bank_accounts cba
+       WHERE cba.company_id = v_batch.company_id AND cba.is_active = TRUE
+         AND (cba.id::text = NULLIF(BTRIM(v_batch.bank_account_id::text), '')
+           OR cba.account_number::text =
+              NULLIF(BTRIM(v_batch.bank_account_id::text), ''));
+      IF v_account_count <> 1 OR v_account_id IS NULL
+         OR (v_public.bank_account_id IS NOT NULL
+             AND v_public.bank_account_id <> v_account_id) THEN
+        RAISE EXCEPTION 'CANONICAL_SETTLEMENT_RECOVERY_BANK_ACCOUNT_MISMATCH: settlement=% mutation=%',
+          p_settlement_id, p_public_mutation_id;
+      END IF;
+       SELECT COUNT(*)::integer INTO v_config_count
+         FROM sport_center.payment_settlement_configs psc
+         JOIN public.company_bank_accounts config_account
+           ON config_account.company_id = psc.company_id
+          AND config_account.is_active = TRUE
+          AND config_account.account_number::text = BTRIM(psc.bank_account_id)
+       WHERE psc.company_id = v_batch.company_id
+         AND lower(BTRIM(psc.provider_code)) = lower(BTRIM(v_batch.provider_code))
+          AND config_account.id = v_account_id
+         AND psc.is_active AND psc.source = 'OWNER_APPROVED'
+         AND psc.effective_from <= v_batch.settlement_date
+         AND (psc.effective_until IS NULL
+              OR v_batch.settlement_date < psc.effective_until);
+      IF v_config_count <> 1 THEN
+        RAISE EXCEPTION 'CANONICAL_SETTLEMENT_RECOVERY_CONFIG_INVALID: settlement=%',
+          p_settlement_id;
+      END IF;
+      PERFORM 1 FROM sport_center.payment_settlement_items
+       WHERE settlement_id = p_settlement_id AND item_status = 'active' FOR UPDATE;
+      SELECT COUNT(*)::integer INTO v_payment_count
+        FROM sport_center.payment_settlement_items
+       WHERE settlement_id = p_settlement_id AND item_status = 'active';
+      IF v_payment_count = 0 THEN
+        RAISE EXCEPTION 'CANONICAL_SETTLEMENT_RECOVERY_ACTIVE_ITEMS_REQUIRED: settlement=%',
+          p_settlement_id;
+      END IF;
+      SELECT COUNT(DISTINCT other_item.settlement_id)::integer INTO v_conflict_count
+        FROM sport_center.payment_settlement_items item
+        JOIN sport_center.payment_settlement_items other_item
+          ON other_item.payment_id = item.payment_id
+         AND other_item.item_status = 'active'
+         AND other_item.settlement_id <> p_settlement_id
+       WHERE item.settlement_id = p_settlement_id AND item.item_status = 'active';
+      IF v_conflict_count <> 0 THEN
+        RAISE EXCEPTION 'CANONICAL_SETTLEMENT_RECOVERY_PAYMENT_ALREADY_SETTLED: settlement=%',
+          p_settlement_id;
+      END IF;
+      SELECT COUNT(*)::integer INTO v_conflict_count
+        FROM sport_center.payment_settlement_batches
+       WHERE id <> p_settlement_id
+         AND (bank_mutation_id = p_public_mutation_id
+              OR canonical_bank_mutation_id = p_public_mutation_id);
+      IF v_conflict_count <> 0 THEN
+        RAISE EXCEPTION 'CANONICAL_SETTLEMENT_RECOVERY_MUTATION_ALREADY_LINKED: mutation=%',
+          p_public_mutation_id;
+      END IF;
+      SELECT COUNT(*)::integer INTO v_match_count
+        FROM public.bank_reconciliation_matches
+       WHERE mutation_id = p_public_mutation_id AND status IN ('candidate','approved');
+      IF v_match_count > 1 THEN
+        RAISE EXCEPTION 'CANONICAL_SETTLEMENT_RECOVERY_MULTIPLE_ACTIVE_MATCHES: mutation=%',
+          p_public_mutation_id;
+      END IF;
+      SELECT * INTO v_match FROM public.bank_reconciliation_matches
+       WHERE mutation_id = p_public_mutation_id AND status IN ('candidate','approved')
+       ORDER BY id LIMIT 1 FOR UPDATE;
+      IF FOUND AND (v_match.candidate_type <> 'qris_settlement'
+         OR v_match.candidate_id <> p_settlement_id
+         OR v_match.candidate_source <> 'sport_center.payment_settlement_batches') THEN
+        RAISE EXCEPTION 'CANONICAL_SETTLEMENT_RECOVERY_MATCH_CONFLICT: mutation=%',
+          p_public_mutation_id;
+      END IF;
+      v_old_net := v_batch.net_amount;
+      v_recovered_net := ROUND(v_public.amount::numeric, 2);
+      v_adjustment := ROUND(v_recovered_net - ROUND((
+        v_batch.gross_amount - v_batch.mdr_amount - v_batch.provider_fee_amount
+        - v_batch.fee_tax_amount - v_batch.tax_withheld_amount
+      )::numeric, 2), 2);
+      IF v_batch.status = 'reconciled'
+         AND v_batch.bank_mutation_id = p_public_mutation_id
+         AND v_batch.canonical_bank_mutation_id = p_public_mutation_id
+         AND v_public.status = 'approved' AND v_match.id IS NOT NULL
+         AND v_match.status = 'approved' THEN
+        v_idempotent := true;
+        v_match_id := v_match.id;
+        v_recovered_net := v_batch.net_amount;
+        v_adjustment := v_batch.adjustment_amount;
+      ELSE
+        IF v_batch.status <> 'posted' OR v_batch.bank_mutation_id IS NOT NULL
+           OR v_batch.canonical_bank_mutation_id IS NOT NULL
+           OR v_public.status <> 'unmatched' THEN
+          RAISE EXCEPTION 'CANONICAL_SETTLEMENT_RECOVERY_STATE_NOT_RECOVERABLE: settlement=%',
+            p_settlement_id;
+        END IF;
+        UPDATE sport_center.payment_settlement_batches
+           SET net_amount = v_recovered_net, adjustment_amount = v_adjustment,
+               bank_mutation_id = p_public_mutation_id,
+               canonical_bank_mutation_id = p_public_mutation_id,
+               status = 'reconciled', reconciled_at = NOW(), reconciled_by = v_actor,
+               updated_at = NOW()
+         WHERE id = p_settlement_id AND status = 'posted'
+           AND bank_mutation_id IS NULL AND canonical_bank_mutation_id IS NULL;
+        IF NOT FOUND THEN RAISE EXCEPTION 'CANONICAL_SETTLEMENT_RECOVERY_STATE_CHANGED'; END IF;
+        UPDATE public.bank_mutations SET status = 'approved', approved_by = v_actor,
+          approved_at = NOW(), updated_at = NOW()
+         WHERE id = p_public_mutation_id AND status = 'unmatched';
+        IF NOT FOUND THEN RAISE EXCEPTION 'CANONICAL_SETTLEMENT_RECOVERY_PUBLIC_STATE_CHANGED'; END IF;
+        IF v_match.id IS NULL THEN
+          INSERT INTO public.bank_reconciliation_matches (
+            mutation_id, candidate_type, candidate_id, match_score, match_reason,
+            amount_match, date_match, name_match, order_id_match, proof_match,
+            status, candidate_source
+          ) VALUES (p_public_mutation_id, 'qris_settlement', p_settlement_id::integer,
+            100, 'OWNER_RECOVERY_NET_CORRECTION', TRUE, TRUE, FALSE, FALSE, FALSE,
+            'approved', 'sport_center.payment_settlement_batches')
+          RETURNING id INTO v_match_id;
+        ELSE
+          UPDATE public.bank_reconciliation_matches SET status = 'approved',
+            match_score = 100, match_reason = 'OWNER_RECOVERY_NET_CORRECTION',
+            amount_match = TRUE, date_match = TRUE WHERE id = v_match.id;
+          v_match_id := v_match.id;
+        END IF;
+      END IF;
+      INSERT INTO public.bank_reconciliation_audit (mutation_id, action, actor, meta)
+      VALUES (p_public_mutation_id, 'CANONICAL_SETTLEMENT_OWNER_RECOVERY', v_actor,
+        jsonb_build_object('settlement_id', p_settlement_id,
+          'public_mutation_id', p_public_mutation_id, 'match_id', v_match_id,
+          'old_net_amount', v_old_net, 'recovered_net_amount', v_recovered_net,
+          'adjustment_amount', v_adjustment, 'idempotent', v_idempotent));
+      settlement_id := p_settlement_id; public_mutation_id := p_public_mutation_id;
+      canonical_mutation_id := p_public_mutation_id; match_id := v_match_id;
+      old_net_amount := v_old_net; recovered_net_amount := v_recovered_net;
+      adjustment_amount := v_adjustment; settlement_status := 'reconciled';
+      public_mutation_status := 'approved'; canonical_mutation_status := 'approved';
+      idempotent := v_idempotent; RETURN NEXT;
     END;
     $function$;
   `));
@@ -5450,6 +6082,7 @@ export async function runSportCenterMigration(): Promise<void> {
           b.status                                  AS settlement_status,
           b.settlement_journal_id,
           b.bank_mutation_id,
+          b.canonical_bank_mutation_id,
           b.settlement_rule_version,
           b.posted_at,
           b.posted_by,

@@ -295,20 +295,17 @@ export async function generateQrisCandidates(options: {
     canonicalSettlementIdSql,
     alreadyReconciledSql,
   } = makeCanonicalFragments(canonicalAvailable);
-  // A canonical batch can be reconciled even when a legacy/public mutation
-  // header was not transitioned by an older approval attempt. Do not let that
-  // stale header re-enter candidate generation: the canonical bank mutation
-  // bridge is the authoritative completion signal.
+  // A canonical batch can be reconciled even when a legacy public mutation
+  // header was not transitioned by an older approval attempt. The additive
+  // settlement bank_mutation_id stores public.bank_mutations.id, so it is the
+  // authoritative completion signal without a cross-schema mutation bridge.
   const canonicalCompletedMutationFilter = canonicalAvailable
     ? `
         AND NOT EXISTS (
           SELECT 1
           FROM sport_center.payment_settlement_batches psb
-          JOIN sport_center.bank_mutations sbm
-            ON sbm.id = psb.bank_mutation_id
           WHERE psb.status = 'reconciled'
-            AND psb.bank_mutation_id IS NOT NULL
-            AND sbm.mutation_key = bm.mutation_key
+            AND psb.bank_mutation_id = bm.id
         )
       `
     : "";

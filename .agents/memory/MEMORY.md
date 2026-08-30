@@ -143,3 +143,4 @@
 - [Sport payment candidate visibility](sport-payment-candidate-visibility.md) — H-1 settlement filtering applies to QRIS only; ordinary Sport Center bank transfers remain reviewable.
 - [API artifact preview health](api-artifact-preview-health.md) — generic preview root checks may fail while namespaced API liveness/readiness are healthy.
 - [QRIS approval provider resolution](qris-approval-provider-resolution.md) — manual IDs are authoritative; canonical_group/source group cannot block H-1 exact-net QRIS approval.
+- [Public mutation cutover safety](public-mutation-cutover-safety.md) — disable legacy projection/FK setup before public-only link migration; prove idempotence with a second pass.
