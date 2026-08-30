@@ -34,8 +34,8 @@ interface GLRow {
 }
 
 interface GLSummary {
-  openingBalance: number;
-  closingBalance: number;
+  openingBalance: number | null;
+  closingBalance: number | null;
   totalDebit: number;
   totalCredit: number;
 }
@@ -129,7 +129,7 @@ export default function AccountingHubGLPage() {
 
   const [rows, setRows] = useState<GLRow[]>([]);
   const [total, setTotal] = useState(0);
-  const [summary, setSummary] = useState<GLSummary>({ openingBalance: 0, closingBalance: 0, totalDebit: 0, totalCredit: 0 });
+  const [summary, setSummary] = useState<GLSummary>({ openingBalance: null, closingBalance: null, totalDebit: 0, totalCredit: 0 });
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState({
@@ -478,13 +478,13 @@ export default function AccountingHubGLPage() {
         </CardContent>
       </Card>
 
-      {/* Summary card — Saldo Awal / Total / Saldo Akhir */}
-      {(total > 0 || summary.openingBalance !== 0) && (
+      {/* Summary card — account-scoped balance / period totals */}
+      {(total > 0 || summary.openingBalance !== null) && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div className="rounded-lg border bg-card px-4 py-3">
-            <div className="text-xs text-muted-foreground mb-1">Saldo Awal</div>
-            <div className={`font-mono text-sm font-semibold ${summary.openingBalance < 0 ? "text-red-600" : "text-foreground"}`}>
-              {fmtBalance(summary.openingBalance)}
+            <div className="text-xs text-muted-foreground mb-1">Saldo Awal{!filters.account_id && " (per akun)"}</div>
+            <div className={`font-mono text-sm font-semibold ${summary.openingBalance !== null && summary.openingBalance < 0 ? "text-red-600" : "text-foreground"}`}>
+              {summary.openingBalance !== null ? fmtBalance(summary.openingBalance) : "—"}
             </div>
           </div>
           <div className="rounded-lg border bg-card px-4 py-3">
@@ -496,11 +496,19 @@ export default function AccountingHubGLPage() {
             <div className="font-mono text-sm font-semibold text-foreground">Rp {fmt(summary.totalCredit)}</div>
           </div>
           <div className="rounded-lg border bg-card px-4 py-3">
-            <div className="text-xs text-muted-foreground mb-1">Saldo Akhir</div>
-            <div className={`font-mono text-sm font-semibold ${summary.closingBalance < 0 ? "text-red-600" : "text-primary"}`}>
-              {fmtBalance(summary.closingBalance)}
+            <div className="text-xs text-muted-foreground mb-1">Saldo Akhir{!filters.account_id && " (per akun)"}</div>
+            <div className={`font-mono text-sm font-semibold ${summary.closingBalance !== null && summary.closingBalance < 0 ? "text-red-600" : "text-primary"}`}>
+              {summary.closingBalance !== null ? fmtBalance(summary.closingBalance) : "—"}
             </div>
           </div>
+        </div>
+      )}
+
+      {total > 0 && !filters.account_id && (
+        <div className="text-xs text-muted-foreground bg-blue-50 border border-blue-200 rounded px-3 py-2">
+          <strong>Catatan saldo:</strong> Saldo awal/akhir tidak dijumlahkan lintas akun karena setiap COA memiliki saldo normal berbeda.
+          Pilih <em>Account ID</em> untuk melihat saldo awal, saldo berjalan, dan saldo akhir yang valid untuk satu akun.
+          Total Debit dan Kredit di atas tetap merupakan total seluruh baris yang ditampilkan.
         </div>
       )}
 
@@ -672,10 +680,16 @@ export default function AccountingHubGLPage() {
           <span>Debit <span className="font-mono font-semibold text-foreground">{fmt(rows.reduce((s, r) => s + Number(r.debit), 0))}</span></span>
           <span>Kredit <span className="font-mono font-semibold text-red-600">{fmt(rows.reduce((s, r) => s + Number(r.credit), 0))}</span></span>
           <span className="ml-auto">
-            Saldo Akhir Periode:{" "}
-            <span className={`font-mono font-semibold ${summary.closingBalance < 0 ? "text-red-600" : "text-primary"}`}>
-              {fmtBalance(summary.closingBalance)}
-            </span>
+            {summary.closingBalance !== null ? (
+              <>
+                Saldo Akhir Periode:{" "}
+                <span className={`font-mono font-semibold ${summary.closingBalance < 0 ? "text-red-600" : "text-primary"}`}>
+                  {fmtBalance(summary.closingBalance)}
+                </span>
+              </>
+            ) : (
+              "Saldo berjalan ditampilkan per akun"
+            )}
           </span>
         </div>
       )}

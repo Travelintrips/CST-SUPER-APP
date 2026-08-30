@@ -144,3 +144,5 @@
 - [API artifact preview health](api-artifact-preview-health.md) — generic preview root checks may fail while namespaced API liveness/readiness are healthy.
 - [QRIS approval provider resolution](qris-approval-provider-resolution.md) — manual IDs are authoritative; canonical_group/source group cannot block H-1 exact-net QRIS approval.
 - [Public mutation cutover safety](public-mutation-cutover-safety.md) — disable legacy projection/FK setup before public-only link migration; prove idempotence with a second pass.
+- [GL cross-account balance](gl-cross-account-balance.md) — saldo awal/akhir hanya valid untuk satu COA; agregat semua akun menyesatkan karena menjumlahkan sisi debit+kredit.
+- [QRIS approval provider resolution](qris-approval-provider-resolution.md) — incomplete payment metadata may resolve from bank evidence plus one owner-approved config; conflicts and InhouseTrf stay fail-closed.
