@@ -44,3 +44,33 @@ describe("QRIS payment date update route", () => {
     );
   });
 });
+
+describe("QRIS exact-net approval route", () => {
+  const routeStart = routeSource.lastIndexOf(
+    'router.post("/qris-candidates/:candidateId/approve"',
+  );
+  const routeEnd = routeSource.indexOf(
+    "// ─── GET /api/bank-reconciliation/mutations",
+    routeStart,
+  );
+  const route = routeSource.slice(routeStart, routeEnd);
+
+  it("does not block on provider, canonical-group, rail-label, or stale snapshot metadata", () => {
+    expect(route).toContain("selectQrisExactNetConfig");
+    expect(route).not.toContain(
+      "Provider dan settlement QRIS tidak dapat di-resolve secara unik",
+    );
+    expect(route).not.toContain("InhouseTrf");
+    expect(route).not.toContain("assertQrisBatchApprovalEligible");
+    expect(route).not.toContain("checkQrisCandidateFreshness");
+  });
+
+  it("keeps the live QRIS, H-1, company, and exact-net guards", () => {
+    expect(route).toContain("payment.payment_method");
+    expect(route).toContain("expectedPaymentDate");
+    expect(route).toContain("payment.company_id");
+    expect(route).toContain("calculatedNetAmount");
+    expect(route).toContain("selectQrisApprovalPaymentIds");
+    expect(route).toContain("DUPLICATE_APPROVAL");
+  });
+});

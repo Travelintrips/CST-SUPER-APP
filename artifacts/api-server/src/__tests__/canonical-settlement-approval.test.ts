@@ -22,14 +22,14 @@ describe("Phase 4C-6 canonical link-only approval contract", () => {
     expect(CANONICAL_REOPEN_MATCH_STATUS).toBe("candidate");
   });
 
-  it.each(["matched", "auto_matched"])(
+  it.each(["unmatched", "matched", "auto_matched"])(
     "accepts %s as pre-approval mutation state",
     (status) => {
       expect(isCanonicalBankMutationEligible(status)).toBe(true);
     },
   );
 
-  it.each(["need_review", "approved", "unmatched", "rejected", "posted", "reconciled"])(
+  it.each(["need_review", "approved", "rejected", "posted", "reconciled"])(
     "rejects %s as pre-approval mutation state",
     (status) => {
       expect(isCanonicalBankMutationEligible(status)).toBe(false);

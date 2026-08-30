@@ -1,4 +1,5 @@
 export const QRIS_APPROVAL_REASON_CODES = {
+  PAYMENT_METHOD_NOT_QRIS: "QRIS_PAYMENT_METHOD_NOT_QRIS",
   PAYMENT_DATE_NOT_H_MINUS_ONE: "QRIS_PAYMENT_DATE_NOT_H_MINUS_ONE",
   NET_AMOUNT_MISMATCH: "QRIS_NET_AMOUNT_MISMATCH",
   PAYMENT_ALREADY_RECONCILED: "QRIS_PAYMENT_ALREADY_RECONCILED",
@@ -11,11 +12,14 @@ export type QrisApprovalReasonCode =
 
 export interface QrisApprovalRulePayment {
   id: number;
+  paymentMethod: string | null;
   paymentDate: string | Date | null;
   grossAmount: number | string;
   companyId: number | null;
   /** Legacy candidate metadata; deliberately ignored by the approval rule. */
   canonicalGroup?: unknown;
+  providerCode?: unknown;
+  settlementConfig?: unknown;
   canonicalMdrAmount?: number | string | null;
   canonicalMdrRate?: number | string | null;
   alreadyReconciled?: boolean;
@@ -40,6 +44,11 @@ export type QrisApprovalRuleResult =
       code: QrisApprovalReasonCode;
       reason: string;
     };
+
+export interface QrisExactNetConfigCandidate {
+  configId: number;
+  calculatedNetAmount: number | string;
+}
 
 function calendarDate(value: string | Date | null): string | null {
   if (value == null) return null;
@@ -75,6 +84,21 @@ function moneyCents(value: number | string | null | undefined): number | null {
   return Number.isFinite(parsed) ? Math.round(parsed * 100) : null;
 }
 
+export function selectQrisExactNetConfig<T extends QrisExactNetConfigCandidate>(
+  candidates: T[],
+  bankAmount: number | string,
+): T | null {
+  const bankCents = moneyCents(bankAmount);
+  if (bankCents == null) return null;
+  return [...candidates]
+    .sort((left, right) => left.configId - right.configId)
+    .find((candidate) =>
+      Number.isSafeInteger(candidate.configId)
+      && candidate.configId > 0
+      && moneyCents(candidate.calculatedNetAmount) === bankCents,
+    ) ?? null;
+}
+
 function paymentMdrCents(payment: QrisApprovalRulePayment, grossCents: number): number | null {
   const explicitAmount = moneyCents(payment.canonicalMdrAmount);
   if (explicitAmount != null && explicitAmount > 0) return explicitAmount;
@@ -100,6 +124,18 @@ export function checkQrisApprovalRule(
       ok: false,
       code: QRIS_APPROVAL_REASON_CODES.INVALID_INPUT,
       reason: "Data approval QRIS tidak valid",
+    };
+  }
+
+  if (
+    input.payments.some((payment) =>
+      !String(payment.paymentMethod ?? "").toLowerCase().includes("qris"),
+    )
+  ) {
+    return {
+      ok: false,
+      code: QRIS_APPROVAL_REASON_CODES.PAYMENT_METHOD_NOT_QRIS,
+      reason: "Payment bukan QRIS",
     };
   }
 

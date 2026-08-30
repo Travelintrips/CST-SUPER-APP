@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   checkQrisApprovalRule,
   QRIS_APPROVAL_REASON_CODES,
+  selectQrisExactNetConfig,
   type QrisApprovalRuleInput,
 } from "../lib/reconciliation/qrisApprovalRule.js";
 
@@ -15,6 +16,7 @@ function validInput(overrides: Partial<QrisApprovalRuleInput> = {}): QrisApprova
     mutationAmount: 198_600,
     payments: [{
       id: 101,
+      paymentMethod: "QRIS",
       paymentDate: "2026-08-31",
       grossAmount: 200_000,
       companyId,
@@ -37,6 +39,52 @@ describe("simplified QRIS approval rule", () => {
       grossAmount: 200_000,
       mdrAmount: 1_400,
       expectedNetAmount: 198_600,
+    });
+  });
+
+  it("ignores ambiguous provider and settlement metadata when H-1 net is exact", () => {
+    const result = checkQrisApprovalRule({
+      ...validInput(),
+      payments: [{
+        ...validInput().payments[0],
+        providerCode: ["gpn_qris", "mandiri_direct"],
+        settlementConfig: { ambiguous: true },
+        canonicalGroup: null,
+      }],
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      expectedNetAmount: 198_600,
+    });
+  });
+
+  it("blocks when the live payment method is no longer QRIS", () => {
+    const result = checkQrisApprovalRule({
+      ...validInput(),
+      payments: [{
+        ...validInput().payments[0],
+        paymentMethod: "Transfer Bank",
+      }],
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: QRIS_APPROVAL_REASON_CODES.PAYMENT_METHOD_NOT_QRIS,
+      reason: "Payment bukan QRIS",
+    });
+  });
+
+  it("selects a deterministic exact-net config without treating provider ambiguity as a blocker", () => {
+    const selected = selectQrisExactNetConfig([
+      { configId: 20, providerCode: "mandiri_direct", calculatedNetAmount: 198_600 },
+      { configId: 10, providerCode: "gpn_qris", calculatedNetAmount: 198_600 },
+      { configId: 5, providerCode: "paylabs", calculatedNetAmount: 198_599 },
+    ], 198_600);
+
+    expect(selected).toMatchObject({
+      configId: 10,
+      providerCode: "gpn_qris",
     });
   });
 

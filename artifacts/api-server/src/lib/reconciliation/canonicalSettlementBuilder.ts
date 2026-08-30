@@ -71,6 +71,7 @@ export interface CanonicalSettlementBuildOptions {
   qrisApprovalEvidence?: {
     mutationId: number;
     companyId: number;
+    settlementConfigId?: number;
   };
   actor: string;
 }
@@ -88,6 +89,7 @@ type Row = Record<string, unknown>;
 
 type PaymentIdentity = {
   id: number;
+  payment_method: string | null;
   company_id: number | null;
   provider_id: string | null;
   provider_name: string | null;
@@ -291,6 +293,7 @@ async function resolveCanonicalBankCoa(
 async function resolveOwnerApprovedConfig(
   client: QueryClient,
   group: GroupIdentity,
+  settlementConfigId?: number,
 ): Promise<Row> {
   const result = await client.execute(sql`
     SELECT
@@ -305,6 +308,7 @@ async function resolveOwnerApprovedConfig(
       AND bank_account_id = ${group.bankAccountId}
       AND is_active = TRUE
       AND source = 'OWNER_APPROVED'
+      ${settlementConfigId == null ? sql`` : sql`AND id = ${settlementConfigId}`}
       AND rule_version = ${group.ruleVersion}
       AND effective_from <= ${group.settlementDate}::date
       AND (effective_until IS NULL OR ${group.settlementDate}::date < effective_until)
@@ -564,6 +568,7 @@ async function buildInTransaction(
   const sourceResult = await client.execute(sql`
     SELECT
       p.id, p.company_id, p.provider_id, p.provider_name,
+      p.payment_method::text AS payment_method,
       lower(btrim(p.payment_provider::text)) AS provider_code,
       p.bank_account_id::text AS bank_account_id,
       p.expected_settlement_date::text AS expected_settlement_date,
@@ -585,6 +590,7 @@ async function buildInTransaction(
   );
   const source: PaymentIdentity = {
     id: Number(sourceRow.id),
+    payment_method: textOrNull(sourceRow.payment_method),
     company_id: numberOrNull(sourceRow.company_id),
     provider_id: textOrNull(sourceRow.provider_id),
     provider_name: textOrNull(sourceRow.provider_name),
@@ -617,6 +623,7 @@ async function buildInTransaction(
   const groupResult = await client.execute(sql`
     SELECT
       p.id, p.company_id, p.provider_id, p.provider_name,
+      p.payment_method::text AS payment_method,
       lower(btrim(p.payment_provider::text)) AS provider_code,
       p.bank_account_id::text AS bank_account_id,
       p.expected_settlement_date::text AS expected_settlement_date,
@@ -639,6 +646,7 @@ async function buildInTransaction(
   `);
   const payments = rows(groupResult).map((row): PaymentIdentity => ({
     id: Number(row.id),
+    payment_method: textOrNull(row.payment_method),
     company_id: numberOrNull(row.company_id),
     provider_id: textOrNull(row.provider_id),
     provider_name: textOrNull(row.provider_name),
@@ -674,7 +682,11 @@ async function buildInTransaction(
     );
   }
 
-  const settlementConfig = await resolveOwnerApprovedConfig(client, group);
+  const settlementConfig = await resolveOwnerApprovedConfig(
+    client,
+    group,
+    options.qrisApprovalEvidence?.settlementConfigId,
+  );
   const bankCoaCode = await resolveCanonicalBankCoa(client, group);
 
   /*
@@ -898,6 +910,7 @@ async function buildInTransaction(
       mutationAmount: Number(mutation.amount ?? 0),
       payments: eligiblePayments.map((payment, index) => ({
         id: payment.id,
+        paymentMethod: payment.payment_method,
         paymentDate: payment.payment_date,
         grossAmount: Number(paymentJournals.get(payment.id)?.gross_amount ?? 0),
         companyId: payment.company_id,

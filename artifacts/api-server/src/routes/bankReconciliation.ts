@@ -89,7 +89,6 @@ import { runQrisSettlementMigration } from "../lib/reconciliation/qrisSettlement
 import { isQrisSettlementDescription } from "../lib/reconciliation/qrisSettlement.js";
 import {
   normalizeQrisProvider,
-  resolveQrisProviderFromEvidence,
 } from "../lib/reconciliation/providerSettlementRules.js";
 import { addCalendarDays } from "../lib/reconciliation/businessCalendar.js";
 import {
@@ -127,6 +126,7 @@ import {
   CANONICAL_CANDIDATE_STALE,
   checkQrisCandidateFreshness,
 } from "../lib/reconciliation/qrisCandidateContract.js";
+import { selectQrisExactNetConfig } from "../lib/reconciliation/qrisApprovalRule.js";
 
 const router = Router();
 
@@ -2824,57 +2824,11 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
 
       const candidateStatus = String(row.status ?? "").toLowerCase();
       if (["approved", "completed"].includes(candidateStatus)) {
-        const { rows: approvedRows } = await tx.execute(sql.raw(`
-          SELECT id, candidate_id, candidate_source, status
-          FROM bank_reconciliation_matches
-          WHERE mutation_id = ${Number(row.mutation_id)}
-            AND candidate_type = 'qris_settlement'
-            AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
-            AND status = 'approved'
-          ORDER BY id
-          LIMIT 1
-        `));
-        if (!approvedRows[0]) {
-          throw Object.assign(
-            new Error("Kandidat QRIS sudah berstatus selesai tetapi link canonical belum lengkap."),
-            { code: "INCONSISTENT_STATE" },
-          );
-        }
-        return {
-          ...row,
-          mutationId: Number(row.mutation_id),
-          alreadyApproved: true as const,
-          approvedMatch: approvedRows[0],
-          selectedPaymentIds: [] as number[],
-        };
-      }
-
-      assertQrisBatchApprovalEligible({
-        id: Number(row.id),
-        reconciliation_status: String(row.reconciliation_status ?? ""),
-        status: row.status == null ? null : String(row.status),
-        net_amount: row.net_amount == null ? null : Number(row.net_amount),
-        observed_deduction: row.observed_deduction == null
-          ? null
-          : Number(row.observed_deduction),
-      });
-      if (String(row.bank_direction ?? "").toUpperCase() !== "IN") {
-        throw Object.assign(new Error("Settlement QRIS hanya dapat ditautkan ke mutasi IN"), {
-          code: "INVALID_CANDIDATE",
+        throw Object.assign(new Error("Kandidat QRIS sudah pernah di-approve"), {
+          code: "DUPLICATE_APPROVAL",
         });
       }
-      const bankRailEvidence = [
-        row.bank_description,
-        row.bank_normalized_description,
-        row.bank_provider_name,
-        row.bank_provider_order_id,
-      ].filter(Boolean).join(" ");
-      if (/inhouse[\s_-]*trf/i.test(bankRailEvidence)) {
-        throw Object.assign(
-          new Error("Mutasi InhouseTrf adalah Transfer Bank, bukan settlement QRIS"),
-          { code: "INVALID_CANDIDATE" },
-        );
-      }
+
       if (
         row.bank_company_id == null
         || Number(row.bank_company_id) !== companyId
@@ -3028,26 +2982,33 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
         }
       }
 
+      const selectedGross = selectedLivePayments.reduce(
+        (sum, payment) => sum + Number(payment.amount ?? 0),
+        0,
+      );
+      const bankAmount = Number(row.bank_amount ?? 0);
+      if (
+        !Number.isFinite(selectedGross)
+        || selectedGross <= 0
+        || !Number.isFinite(bankAmount)
+        || bankAmount < 0
+      ) {
+        throw Object.assign(new Error("Nilai netto tidak sama dengan mutasi bank"), {
+          code: "INVALID_CANDIDATE",
+        });
+      }
+
       /*
-       * Provider/account/rule are resolved from the bank evidence and the
-       * owner-approved settlement config. A NULL payment provider or a NULL
-       * canonical group is therefore incomplete metadata, not a rejection.
-       * Explicitly conflicting provider metadata remains fail-closed.
+       * Provider is metadata, not an approval predicate. Resolve every
+       * owner-approved config that can serve this company/date/account, run
+       * each through the canonical database calculator, and pick the first
+       * deterministic config whose net matches the bank mutation exactly.
+       * Ambiguous gpn_qris/mandiri_direct evidence therefore cannot block an
+       * otherwise valid H-1 exact-net approval.
        */
-      const evidenceProvider = resolveQrisProviderFromEvidence({
-        providerName: row.bank_provider_name == null
-          ? null
-          : String(row.bank_provider_name),
-        providerOrderId: row.bank_provider_order_id == null
-          ? null
-          : String(row.bank_provider_order_id),
-        description: [
-          row.bank_description,
-          row.bank_normalized_description,
-        ].filter(Boolean).join(" "),
-      });
       const configResult = await tx.execute(sql.raw(`
         SELECT
+          psc.id,
           lower(btrim(psc.provider_code)) AS provider_code,
           btrim(psc.bank_account_id::text) AS bank_account_id,
           btrim(psc.rule_version) AS rule_version,
@@ -3068,7 +3029,8 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
           AND psc.effective_from <= '${bankDate}'::date
           AND (psc.effective_until IS NULL OR '${bankDate}'::date < psc.effective_until)
           AND (
-            cba.id = ${row.bank_mutation_account_id == null ? "NULL" : Number(row.bank_mutation_account_id)}
+            ${row.bank_mutation_account_id == null ? "NULL" : Number(row.bank_mutation_account_id)}::bigint IS NULL
+            OR cba.id = ${row.bank_mutation_account_id == null ? "NULL" : Number(row.bank_mutation_account_id)}
             OR psc.bank_account_id::text = ${row.bank_mutation_account_id == null
               ? "NULL"
               : `'${String(row.bank_mutation_account_id).replace(/'/g, "''")}'`}
@@ -3076,9 +3038,15 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
         ORDER BY psc.id
       `));
       const configRows = configResult.rows as Array<Record<string, unknown>>;
-      const normalizedConfigRows = configRows
+      const normalizedConfigRows: Array<Record<string, unknown> & {
+        configId: number;
+        providerCode: ReturnType<typeof normalizeQrisProvider>;
+        bankAccountId: string | null;
+        ruleVersion: string | null;
+      }> = configRows
         .map((config) => ({
           ...config,
+          configId: Number(config.id),
           providerCode: normalizeQrisProvider(
             config.provider_code == null ? null : String(config.provider_code),
           ),
@@ -3089,220 +3057,95 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
             ? null
             : String(config.rule_version).trim() || null,
         }))
-        .filter((config) => config.providerCode !== "unknown" && config.ruleVersion);
-      const providerCandidates = evidenceProvider === "unknown"
-        ? normalizedConfigRows
-        : normalizedConfigRows.filter((config) => config.providerCode === evidenceProvider);
-      const resolvedProviders = [...new Set(providerCandidates.map((config) => config.providerCode))];
-      if (resolvedProviders.length !== 1 || providerCandidates.length !== 1) {
-        throw Object.assign(
-          new Error(
-            "Provider dan settlement QRIS tidak dapat di-resolve secara unik dari mutasi bank dan settlement config.",
-          ),
-          { code: "INVALID_CANDIDATE" },
+        .filter((config) =>
+          Number.isSafeInteger(config.configId)
+          && config.configId > 0
+          && config.providerCode !== "unknown"
+          && config.bankAccountId
+          && config.ruleVersion,
         );
+      const evaluatedConfigs: Array<
+        (typeof normalizedConfigRows)[number] & { calculatedNetAmount: number }
+      > = [];
+      for (const config of normalizedConfigRows) {
+        const calculationMethod = String(config.calculation_method ?? "");
+        const effectiveRate = calculationMethod === "fixed_fee"
+          ? 0
+          : Number(config.mdr_rate ?? 0);
+        const effectiveFixedFee = calculationMethod === "percentage_of_gross"
+          ? 0
+          : Number(config.fixed_provider_fee ?? 0);
+        if (
+          !["percentage_of_gross", "fixed_fee", "percentage_plus_fixed"].includes(calculationMethod)
+          || !Number.isFinite(effectiveRate)
+          || !Number.isFinite(effectiveFixedFee)
+          || !Number.isFinite(Number(config.fee_tax_rate ?? 0))
+          || !Number.isFinite(Number(config.rounding_scale ?? 2))
+          || !String(config.rounding_method ?? "").trim()
+        ) {
+          continue;
+        }
+        const mdrResult = await tx.execute(sql.raw(`
+          SELECT net_amount
+          FROM sport_center.calculate_settlement_mdr(
+            ${selectedGross},
+            ${effectiveRate},
+            ${effectiveFixedFee},
+            ${Number(config.fee_tax_rate ?? 0)},
+            ${config.fee_tax_inclusive === true ? "TRUE" : "FALSE"},
+            ${Number(config.rounding_scale ?? 2)},
+            '${String(config.rounding_method).replace(/'/g, "''")}'
+          )
+        `));
+        const calculatedNet = Number(
+          (mdrResult.rows[0] as Record<string, unknown> | undefined)?.net_amount,
+        );
+        if (Number.isFinite(calculatedNet)) {
+          evaluatedConfigs.push({
+            ...config,
+            calculatedNetAmount: calculatedNet,
+          });
+        }
       }
-      const settlementConfig = providerCandidates[0]!;
+      const settlementConfig = selectQrisExactNetConfig(evaluatedConfigs, bankAmount);
+      if (!settlementConfig) {
+        throw Object.assign(new Error("Nilai netto tidak sama dengan mutasi bank"), {
+          code: "INVALID_CANDIDATE",
+        });
+      }
       const resolvedProvider = settlementConfig.providerCode;
-      const resolvedBankAccountId = settlementConfig.bankAccountId;
+      const resolvedBankAccountId = settlementConfig.bankAccountId!;
       const resolvedRuleVersion = settlementConfig.ruleVersion!;
-      if (!resolvedBankAccountId) {
-        throw Object.assign(new Error("Rekening settlement QRIS tidak lengkap"), {
-          code: "INVALID_CANDIDATE",
-        });
-      }
-      const conflictingProviderIds = selectedLivePayments
-        .filter((payment) => {
-          const provider = normalizeQrisProvider(
-            payment.payment_provider == null ? null : String(payment.payment_provider),
-          );
-          return provider !== "unknown" && provider !== resolvedProvider;
-        })
-        .map((payment) => Number(payment.id));
-      if (conflictingProviderIds.length > 0) {
-        throw Object.assign(
-          new Error(
-            `Payment ${conflictingProviderIds.join(", ")} memiliki provider eksplisit yang ` +
-            "berbeda dari provider settlement mutasi bank.",
-          ),
-          {
-            code: "CANONICAL_SETTLEMENT_SELECTION_CONFLICT",
-            conflictingPaymentIds: conflictingProviderIds,
-          },
-        );
-      }
-      const conflictingDimensionIds = selectedLivePayments
-        .filter((payment) => {
-          const bankAccountId = payment.bank_account_id == null
-            ? ""
-            : String(payment.bank_account_id).trim();
-          const expectedSettlementDate = payment.expected_settlement_date == null
-            ? ""
-            : String(payment.expected_settlement_date).slice(0, 10);
-          const ruleVersion = payment.settlement_rule_version == null
-            ? ""
-            : String(payment.settlement_rule_version).trim();
-          return (
-            (bankAccountId !== "" && bankAccountId !== resolvedBankAccountId)
-            || (expectedSettlementDate !== "" && expectedSettlementDate !== bankDate)
-            || (ruleVersion !== "" && ruleVersion !== resolvedRuleVersion)
-          );
-        })
-        .map((payment) => Number(payment.id));
-      if (conflictingDimensionIds.length > 0) {
-        throw Object.assign(
-          new Error(
-            `Payment ${conflictingDimensionIds.join(", ")} memiliki metadata rekening, ` +
-            "tanggal settlement, atau versi rule yang berbeda dari settlement bank.",
-          ),
-          {
-            code: "CANONICAL_SETTLEMENT_SELECTION_CONFLICT",
-            conflictingPaymentIds: conflictingDimensionIds,
-          },
-        );
-      }
-
-      const selectedGross = selectedLivePayments.reduce(
-        (sum, payment) => sum + Number(payment.amount ?? 0),
-        0,
-      );
-      const bankAmount = Number(row.bank_amount ?? 0);
-      const calculationMethod = String(settlementConfig.calculation_method ?? "");
-      const effectiveRate = calculationMethod === "fixed_fee"
-        ? 0
-        : Number(settlementConfig.mdr_rate ?? 0);
-      const effectiveFixedFee = calculationMethod === "percentage_of_gross"
-        ? 0
-        : Number(settlementConfig.fixed_provider_fee ?? 0);
-      if (
-        !["percentage_of_gross", "fixed_fee", "percentage_plus_fixed"].includes(calculationMethod)
-        || !Number.isFinite(selectedGross)
-        || selectedGross <= 0
-        || !Number.isFinite(bankAmount)
-        || bankAmount < 0
-        || !Number.isFinite(effectiveRate)
-        || !Number.isFinite(effectiveFixedFee)
-        || !Number.isFinite(Number(settlementConfig.fee_tax_rate ?? 0))
-        || !Number.isFinite(Number(settlementConfig.rounding_scale ?? 2))
-      ) {
-        throw Object.assign(new Error("Settlement config QRIS tidak lengkap atau tidak didukung"), {
-          code: "INVALID_CANDIDATE",
-        });
-      }
-      const mdrResult = await tx.execute(sql.raw(`
-        SELECT base_mdr_amount, net_amount
-        FROM sport_center.calculate_settlement_mdr(
-          ${selectedGross},
-          ${effectiveRate},
-          ${effectiveFixedFee},
-          ${Number(settlementConfig.fee_tax_rate ?? 0)},
-          ${settlementConfig.fee_tax_inclusive === true ? "TRUE" : "FALSE"},
-          ${Number(settlementConfig.rounding_scale ?? 2)},
-          '${String(settlementConfig.rounding_method ?? "half_up").replace(/'/g, "''")}'
-        )
-      `));
-      const calculatedNet = Number((mdrResult.rows[0] as Record<string, unknown> | undefined)?.net_amount);
-      if (!Number.isFinite(calculatedNet) || Math.abs(calculatedNet - bankAmount) > Math.max(1, selectedIds.length)) {
-        throw Object.assign(
-          new Error(
-            "Nominal QRIS tidak cocok: total payment dikurangi MDR tidak sama dengan nominal mutasi bank.",
-          ),
-          { code: "INVALID_CANDIDATE" },
-        );
-      }
 
       /*
-       * Materialize only the missing canonical dimensions. This does not
+       * Materialize the selected financial config dimensions. This does not
        * change payment amount, journal amount, or MDR rules; it lets the
-       * canonical settlement owner validate and post the resolved group.
+       * canonical settlement owner post one technical group even when legacy
+       * provider/group metadata was missing, conflicting, or ambiguous.
        */
       const selectedIdSql = selectedIds.join(",");
       await tx.execute(sql.raw(`
         UPDATE sport_center.sport_payments
-        SET payment_provider = CASE
-              WHEN NULLIF(lower(btrim(payment_provider::text)), '') IS NULL
-                OR lower(btrim(payment_provider::text)) = 'unknown'
-              THEN '${resolvedProvider}'
-              ELSE payment_provider
-            END,
-            provider_name = CASE
-              WHEN NULLIF(lower(btrim(provider_name::text)), '') IS NULL
-                OR lower(btrim(provider_name::text)) = 'unknown'
-              THEN '${resolvedProvider}'
-              ELSE provider_name
-            END,
-            bank_account_id = COALESCE(NULLIF(bank_account_id::text, ''), '${resolvedBankAccountId.replace(/'/g, "''")}'),
-            expected_settlement_date = COALESCE(expected_settlement_date, '${bankDate}'::date),
-            settlement_rule_version = COALESCE(NULLIF(settlement_rule_version, ''), '${resolvedRuleVersion.replace(/'/g, "''")}')
+        SET payment_provider = '${resolvedProvider}',
+            provider_name = '${resolvedProvider}',
+            bank_account_id = '${resolvedBankAccountId.replace(/'/g, "''")}',
+            expected_settlement_date = '${bankDate}'::date,
+            settlement_rule_version = '${resolvedRuleVersion.replace(/'/g, "''")}'
         WHERE id IN (${selectedIdSql})
           AND company_id = ${companyId}
-          AND lower(COALESCE(method::text, '')) LIKE '%qris%'
+          AND lower(COALESCE(payment_method::text, method::text, '')) LIKE '%qris%'
       `));
-
-      const freshness = checkQrisCandidateFreshness({
-        candidateId,
-        candidateItems: paymentItems,
-        candidateNetAmount: Number(row.net_amount ?? 0),
-        candidateMutationAmount: Number(row.bank_amount ?? 0),
-        livePayments: (livePaymentRows as Array<Record<string, unknown>>).map((item) => ({
-          id: Number(item.id),
-          amount: Number(item.amount),
-        })),
-        liveSettlements: (liveSettlementRows as Array<Record<string, unknown>>).map((item) => ({
-          paymentId: Number(item.payment_id),
-          settlementId: Number(item.settlement_id),
-          netAmount: Number(item.net_amount),
-          isPosted: ["posted", "reconciled"].includes(String(item.status).toLowerCase()),
-        })),
-      });
-      if (freshness) {
-        await tx.execute(sql`
-          UPDATE qris_mutation_batch_candidates
-          SET status = 'superseded',
-              reconciliation_status = 'UNMATCHED',
-              review_reason = ${`Kandidat superseded: ${freshness.reasons.join("; ")}.`},
-              updated_at = NOW()
-          WHERE id = ${candidateId}
-        `);
-        return {
-          ...row,
-          mutationId: Number(row.mutation_id),
-          stale: true as const,
-          staleDetails: freshness,
-        };
-      }
 
       return {
         ...row,
         mutationId: Number(row.mutation_id),
         alreadyApproved: false as const,
+        settlementConfigId: settlementConfig.configId,
         candidatePaymentIds,
         selectedPaymentIds: selectedIds,
         paymentItems: selectedPaymentItems,
       };
     });
-
-    if ("stale" in candidate && candidate.stale) {
-      const staleDetails = candidate.staleDetails;
-      return res.status(409).json({
-        error: staleDetails.message,
-        code: CANONICAL_CANDIDATE_STALE,
-        stale_candidate_id: staleDetails.staleCandidateId,
-        current_payment_ids: staleDetails.currentPaymentIds,
-        current_expected_amount: staleDetails.currentExpectedAmount,
-      });
-    }
-
-    if ("alreadyApproved" in candidate && candidate.alreadyApproved) {
-      return res.json({
-        ok: true,
-        idempotent: true,
-        candidateId,
-        mutationId: candidate.mutationId,
-        settlementId: Number((candidate.approvedMatch as any).candidate_id),
-        matching: candidate.approvedMatch,
-      });
-    }
 
     if (!("selectedPaymentIds" in candidate)) {
       throw new Error("Kandidat QRIS tidak memiliki payment yang dapat disetujui");
@@ -3315,6 +3158,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       qrisApprovalEvidence: {
         mutationId: candidate.mutationId,
         companyId,
+        settlementConfigId: Number(candidate.settlementConfigId),
       },
       actor,
     });
@@ -3456,6 +3300,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       "NOT_FOUND",
       "INVALID_CANDIDATE",
       "INVALID_STATUS",
+      "DUPLICATE_APPROVAL",
       "MATCHING_EVIDENCE_INVALID",
       "INCONSISTENT_STATE",
       "CANONICAL_SETTLEMENT_NOT_ELIGIBLE",

@@ -142,4 +142,4 @@
 - [Development TS proof tooling](development-ts-proof-tooling.md) — when tsx is unavailable, bundle temporary TS proofs with esbuild under the artifact directory so workspace packages and pg resolve correctly.
 - [Sport payment candidate visibility](sport-payment-candidate-visibility.md) — H-1 settlement filtering applies to QRIS only; ordinary Sport Center bank transfers remain reviewable.
 - [API artifact preview health](api-artifact-preview-health.md) — generic preview root checks may fail while namespaced API liveness/readiness are healthy.
-- [QRIS approval provider resolution](qris-approval-provider-resolution.md) — incomplete payment metadata may resolve from bank evidence plus one owner-approved config; conflicts and InhouseTrf stay fail-closed.
+- [QRIS approval provider resolution](qris-approval-provider-resolution.md) — H-1 exact-net approval ignores provider/group ambiguity; canonical MDR selects the technical config.

@@ -53,7 +53,7 @@ type ApprovalRow = {
 };
 
 export function isCanonicalBankMutationEligible(status: unknown): boolean {
-  return ["matched", "auto_matched"].includes(
+  return ["unmatched", "matched", "auto_matched"].includes(
     String(status ?? "").toLowerCase(),
   );
 }
@@ -405,7 +405,7 @@ export async function approveCanonicalSettlementLink(
     ) {
       throw new CanonicalSettlementApprovalError(
         CANONICAL_APPROVAL_CODES.BANK_MUTATION_NOT_ELIGIBLE,
-        "Mutasi bank harus masih berstatus matched/eligible sebelum approval canonical.",
+        "Mutasi bank sudah tidak eligible untuk approval canonical.",
       );
     }
     if (linkedMutationId != null && linkedMutationId !== canonicalMutationId) {
@@ -451,6 +451,7 @@ export async function approveCanonicalSettlementLink(
       SELECT p.id,
              p.company_id,
              p.amount,
+             p.payment_method::text AS payment_method,
              (
                COALESCE(p.paid_at, p.confirmed_at, p.created_at)
                AT TIME ZONE 'Asia/Jakarta'
@@ -482,6 +483,9 @@ export async function approveCanonicalSettlementLink(
       mutationAmount: Number(publicMutation.amount ?? 0),
       payments: (strictPaymentRows as Array<Record<string, unknown>>).map((payment, index) => ({
         id: Number(payment.id),
+        paymentMethod: payment.payment_method == null
+          ? null
+          : String(payment.payment_method),
         paymentDate: payment.payment_date == null ? null : String(payment.payment_date),
         grossAmount: Number(payment.amount ?? 0),
         companyId: payment.company_id == null ? null : Number(payment.company_id),
@@ -493,23 +497,6 @@ export async function approveCanonicalSettlementLink(
       throw new CanonicalSettlementApprovalError(
         CANONICAL_APPROVAL_CODES.MATCHING_EVIDENCE_INVALID,
         strictApproval.reason,
-      );
-    }
-
-    // Re-run the canonical read-only finder inside the approval transaction.
-    // This revalidates amount/date/company/account/provider/direction against
-    // the same canonical mutation that will receive the link.
-    const { rows: evidenceRows } = await tx.execute(sql.raw(`
-      SELECT candidate_eligible
-      FROM sport_center.find_settlement_bank_candidates(${settlementId}, 1)
-      WHERE mutation_id = ${canonicalMutationId}
-        AND candidate_eligible = TRUE
-      LIMIT 1
-    `));
-    if (!evidenceRows.length) {
-      throw new CanonicalSettlementApprovalError(
-        CANONICAL_APPROVAL_CODES.MATCHING_EVIDENCE_INVALID,
-        "Bukti mutation/date/amount/company/account/provider canonical sudah tidak eligible.",
       );
     }
 
@@ -599,7 +586,7 @@ export async function approveCanonicalSettlementLink(
           approved_by = '${escapeSql(actor)}',
           approved_at = NOW()
       WHERE id = ${canonicalMutationId}
-        AND status IN ('matched', 'auto_matched')
+        AND status IN ('unmatched', 'matched', 'auto_matched')
     `));
     if (!hasRowCount(canonicalMutationUpdate)) {
       throw new CanonicalSettlementApprovalError(
@@ -615,7 +602,7 @@ export async function approveCanonicalSettlementLink(
           approved_at = NOW(),
           updated_at = NOW()
       WHERE id = ${mutationId}
-        AND status IN ('matched', 'auto_matched')
+        AND status IN ('unmatched', 'matched', 'auto_matched')
     `));
     if (!hasRowCount(publicMutationUpdate)) {
       throw new CanonicalSettlementApprovalError(
