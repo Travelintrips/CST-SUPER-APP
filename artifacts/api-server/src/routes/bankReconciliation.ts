@@ -1658,10 +1658,10 @@ router.get("/qris-settlements/:settlementId", async (req, res) => {
   }
 });
 
-// ─── QRIS provider-aware candidate audit (dry-run/review only) ───────────────
-// This flow deliberately does not approve a mutation, create a journal, mark a
-// settlement as final, or consume bank evidence. A reviewer must use the
-// existing approval mechanism explicitly after verifying the candidate.
+// ─── QRIS provider-aware strict auto-match candidates ─────────────────────────
+// Auto-match only creates a MATCHED candidate snapshot. It does not approve a
+// settlement, create a journal, or consume bank evidence; posting remains an
+// explicit governed approval step.
 router.get("/qris-candidates", async (req, res) => {
   await runQrisSettlementMigration();
   try {
@@ -1675,8 +1675,9 @@ router.get("/qris-candidates", async (req, res) => {
       includeCompleted,
     });
     return res.json({
-      mode: "candidate_review",
+      mode: "strict_h_minus_one_auto",
       automaticFinalReconciliation: false,
+      automaticMatch: true,
       candidates,
     });
   } catch (e: any) {
@@ -1722,11 +1723,12 @@ router.post("/qris-candidates/generate", async (req, res) => {
         mutationId,
         generated: result.generated,
         automaticFinalReconciliation: false,
+        automaticMatch: true,
       },
     });
     return res.json({
       ok: true,
-      mode: "candidate_review",
+      mode: "strict_h_minus_one_auto",
       automaticFinalReconciliation: false,
       ...result,
     });

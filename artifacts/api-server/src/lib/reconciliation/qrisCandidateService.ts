@@ -320,13 +320,10 @@ export async function generateQrisCandidates(options: {
     db.execute(sql.raw(`
       SELECT
         sp.id, sp.company_id, sp.amount, sp.payment_method AS method,
-        -- Map local ENUM status to engine-understood 'paid':
-        -- 'confirmed' = explicitly confirmed in Supabase.
-        -- 'pending'   = Supabase status 'paid' that the sync CASE maps to
-        --               the local ENUM default 'pending' (ELSE branch).
-        -- Both are treated as "paid" by the matching engine.
-        CASE WHEN LOWER(COALESCE(sp.status::text, '')) IN ('confirmed', 'pending')
-          THEN 'paid' ELSE sp.status::text END AS status,
+        -- The strict generator below accepts confirmed only. Keep this
+        -- source status explicit so pending rows cannot become auto-matchable.
+        CASE WHEN LOWER(COALESCE(sp.status::text, '')) = 'confirmed'
+          THEN 'confirmed' ELSE sp.status::text END AS status,
         -- Payment date is paid_at. confirmed_at/created_at are legacy fallbacks
         -- only when the source payment date was not recorded.
         COALESCE(sp.paid_at, sp.confirmed_at, sp.created_at) AS paid_at,
@@ -348,7 +345,7 @@ export async function generateQrisCandidates(options: {
       LEFT JOIN sport_center.sport_bookings sb ON sb.id = sp.booking_id
       LEFT JOIN sport_center.sport_facilities sf ON sf.id = sb.facility_id
       WHERE LOWER(COALESCE(sp.payment_method::text, '')) LIKE '%qris%'
-        AND LOWER(COALESCE(sp.status::text, '')) IN ('confirmed', 'pending')
+         AND LOWER(COALESCE(sp.status::text, '')) = 'confirmed'
         ${companyFilter}
     `)),
     db.execute(sql.raw(`
@@ -514,7 +511,7 @@ export async function generateQrisCandidates(options: {
     providerRuleCatalog,
     accountProviderRuleCatalog,
     existingMutationIds: finalMutationIds,
-    candidateRule: "payment_method_h_minus_one",
+    candidateRule: "strict_h_minus_one_auto",
   });
   const reviewableCandidates = candidates.filter((candidate) =>
     candidate.paymentItems.length > 0
@@ -531,7 +528,9 @@ export async function generateQrisCandidates(options: {
       const estimatedSettlementDateSql = candidate.estimatedSettlementDate
         ? `'${esc(candidate.estimatedSettlementDate)}'`
         : "NULL";
-      const candidateStatus = candidate.paymentItems.length > 0
+      const candidateStatus = candidate.status === "MATCHED"
+        ? "candidate_auto_matched"
+        : candidate.paymentItems.length > 0
         ? "candidate_review"
         : "audit_unmatched";
       const settlementRuleVersion = candidate.settlementRuleVersion || "unavailable-v1";

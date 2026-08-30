@@ -117,7 +117,13 @@ export interface QrisMutationBatchCandidate {
 
 export type QrisCandidateRule =
   | "strict"
-  | "payment_method_h_minus_one";
+  | "payment_method_h_minus_one"
+  /**
+   * Production QRIS auto-match contract:
+   * confirmed payment + Jakarta H-1 + actual IN mutation + complete
+   * company/account/provider dimensions + exact gross/net/MDR evidence.
+   */
+  | "strict_h_minus_one_auto";
 
 function roundMoney(value: number): number {
   return Number((Math.max(0, value) || 0).toFixed(2));
@@ -127,9 +133,16 @@ function isQrisPayment(payment: QrisPaymentCandidateInput): boolean {
   return String(payment.method ?? "").trim().toLowerCase().includes("qris");
 }
 
-function isEligiblePayment(payment: QrisPaymentCandidateInput): boolean {
+function isEligiblePayment(
+  payment: QrisPaymentCandidateInput,
+  confirmedOnly = false,
+): boolean {
   return isQrisPayment(payment)
-    && String(payment.status ?? "").toLowerCase() === "paid"
+    && (
+      confirmedOnly
+        ? String(payment.status ?? "").toLowerCase() === "confirmed"
+        : String(payment.status ?? "").toLowerCase() === "paid"
+    )
     && !payment.alreadyReconciled;
 }
 
@@ -289,12 +302,16 @@ export function generateQrisMutationBatchCandidates(input: {
 }): QrisMutationBatchCandidate[] {
   const requireExplicitSettlementMetadata = input.requireExplicitSettlementMetadata === true;
   const paymentMethodHMinusOneOnly = input.candidateRule === "payment_method_h_minus_one";
+  const strictHMinusOneAuto = input.candidateRule === "strict_h_minus_one_auto";
+  const hMinusOneRule = paymentMethodHMinusOneOnly || strictHMinusOneAuto;
   const baseRules = {
     ...DEFAULT_QRIS_PROVIDER_RULES,
     ...(input.providerRules ?? {}),
   };
   const existingMutationIds = new Set(input.existingMutationIds ?? []);
-  const eligiblePayments = input.payments.filter(isEligiblePayment);
+  const eligiblePayments = input.payments.filter((payment) =>
+    isEligiblePayment(payment, strictHMinusOneAuto),
+  );
   const openMutations = input.mutations.filter(isOpenMutation);
   const output: QrisMutationBatchCandidate[] = [];
 
@@ -320,9 +337,9 @@ export function generateQrisMutationBatchCandidates(input: {
       : input.accountProviderRules;
     const evidence = providerEvidence(mutation, effectiveAccountRules);
     const methodOnlyPath = evidence.providerCode === "unknown";
-    // The payment method is the QRIS classifier. Bank-side provider data is
-    // optional enrichment for the rule/tolerance calculation, not a gate that
-    // can hide a QRIS payment from the reviewer.
+      // The payment method is the QRIS classifier for the legacy review path.
+      // The strict auto-match path below deliberately requires the complete
+      // bank-side evidence before it emits anything.
     const matchingRules = { ...DEFAULT_QRIS_PROVIDER_RULES, ...rules };
     const accountRules = effectiveAccountRules?.[String(mutation.bankAccountId)];
     const directAccountRule = accountRules?.[evidence.providerCode];
@@ -443,12 +460,11 @@ export function generateQrisMutationBatchCandidates(input: {
       && allPartitionReferences.every((reference) => reference !== null)
       && new Set(allPartitionReferences).size === allPartitionReferences.length;
 
-    // Unknown provider evidence is review-only. Showing the complete
-    // company/account/date pool is useful to a reviewer, but it is never an
-    // auto-match and never a nominal subset.
+      // Unknown provider evidence is review-only in the legacy path. The
+      // strict path does not emit this row at all.
     let selectedPayments = naturalPayments;
     let partitionBlocked = false;
-    if (hasMultipleSettlements && !paymentMethodHMinusOneOnly) {
+    if (hasMultipleSettlements && !hMinusOneRule) {
       // Multiple settlements on the same provider/date/account are not
       // evidence that an arbitrary amount-based subset belongs to this row.
       if (!deterministicPartition) {
@@ -496,9 +512,21 @@ export function generateQrisMutationBatchCandidates(input: {
     const completeBankDimension =
       mutation.companyId != null && mutation.bankAccountId != null;
     const expectedDatesPresent = naturalPayments.every((payment) => Boolean(payment.expectedSettlementDate));
-    const matched = paymentMethodHMinusOneOnly
-      ? false
-      : completeBankDimension
+    const matched = strictHMinusOneAuto
+      ? completeBankDimension
+        && actualEvidence
+        && knownProvider
+        && !ambiguousEffectiveRule
+        && !paymentProviderMismatch
+        && hasNaturalBatch
+        && expectedDatesPresent
+        && !mixedCanonicalProviderGroups
+        && !partitionBlocked
+        && !splitSettlementReconcilesTotal
+        && validDeduction
+      : paymentMethodHMinusOneOnly
+        ? false
+        : completeBankDimension
         && actualEvidence
         && knownProvider
         && !paymentProviderMismatch
@@ -510,7 +538,9 @@ export function generateQrisMutationBatchCandidates(input: {
         && !partitionBlocked
         && !splitSettlementReconcilesTotal
         && validDeduction;
-    const reviewReason = paymentMethodHMinusOneOnly
+    const reviewReason = strictHMinusOneAuto
+      ? "Auto-match QRIS: payment confirmed, H-1 kalender Jakarta, provider/rekening/company cocok, dan gross-net-MDR tervalidasi."
+      : paymentMethodHMinusOneOnly
       ? "Kandidat QRIS: payment_method QRIS dan tanggal pembayaran tepat H-1 dari tanggal mutasi. Guard provider, rekening, metadata, nominal, dan rate tidak digunakan pada tahap kandidat."
       : ambiguousEffectiveRule
       ? "AMBIGUOUS_EFFECTIVE_WINDOW: lebih dari satu aturan provider/rekening aktif pada tanggal settlement; kandidat wajib direview."
@@ -541,6 +571,10 @@ export function generateQrisMutationBatchCandidates(input: {
                               : !settlementMetadataComplete
                                 ? "Settlement metadata payment belum lengkap; tanggal H+1 dihitung dari paid_at dan kandidat wajib direview."
                                 : `${evidence.providerCode} natural batch cocok secara deterministic.`;
+
+    // Strict generation is a positive allow-list. Invalid evidence is kept
+    // only in the bank/source audit, never as a noisy REVIEW candidate.
+    if (strictHMinusOneAuto && !matched) continue;
 
     output.push({
       mutationId: mutation.id,
@@ -573,7 +607,9 @@ export function generateQrisMutationBatchCandidates(input: {
         paidAt: payment.paidAt == null ? null : String(payment.paidAt),
         paymentDate: canonicalPaymentDate(payment),
       })),
-      status: paymentMethodHMinusOneOnly
+      status: strictHMinusOneAuto
+        ? "MATCHED"
+        : paymentMethodHMinusOneOnly
         ? "REVIEW"
         : matched ? "MATCHED" : !completeBankDimension
           ? "UNMATCHED"
