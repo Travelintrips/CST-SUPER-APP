@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getAvailableQrisPaymentIds,
   getQrisCandidatePresentationState,
+  getUnconfirmedQrisPaymentIds,
 } from "../lib/qrisCandidatePresentation";
 import {
   classifyBankMutationPaymentType,
@@ -63,6 +64,20 @@ describe("QRIS candidate presentation state", () => {
       payment_items: [item(11)],
       current_payment_ids: [11],
     })).toBe("ineligible");
+  });
+
+  it("keeps pending payments visible but excludes them from approval", () => {
+    const candidate = {
+      reconciliation_status: "MATCHED",
+      payment_items: [item(361), item(364)],
+      current_payment_ids: [361, 364],
+      settled_payment_ids: [],
+      unconfirmed_payment_ids: [364],
+    };
+
+    expect(getUnconfirmedQrisPaymentIds(candidate)).toEqual([364]);
+    expect(getAvailableQrisPaymentIds(candidate)).toEqual([361]);
+    expect(getQrisCandidatePresentationState(candidate)).toBe("ineligible");
   });
 });
 

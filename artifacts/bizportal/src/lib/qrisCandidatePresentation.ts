@@ -15,6 +15,7 @@ type QrisCandidateLike = {
   payment_items?: QrisPaymentItemLike[] | null;
   current_payment_ids?: Array<number | string> | null;
   settled_payment_ids?: Array<number | string> | null;
+  unconfirmed_payment_ids?: Array<number | string> | null;
 };
 
 function validIds(values: unknown): number[] {
@@ -31,12 +32,19 @@ export function qrisCandidatePaymentIds(candidate: QrisCandidateLike): number[] 
 }
 
 export function getAvailableQrisPaymentIds(candidate: QrisCandidateLike): number[] {
+  const unconfirmed = new Set(getUnconfirmedQrisPaymentIds(candidate));
   if (Array.isArray(candidate.current_payment_ids)) {
-    return validIds(candidate.current_payment_ids);
+    return validIds(candidate.current_payment_ids).filter((id) => !unconfirmed.has(id));
   }
 
   const settled = new Set(validIds(candidate.settled_payment_ids));
-  return qrisCandidatePaymentIds(candidate).filter((id) => !settled.has(id));
+  return qrisCandidatePaymentIds(candidate).filter(
+    (id) => !settled.has(id) && !unconfirmed.has(id),
+  );
+}
+
+export function getUnconfirmedQrisPaymentIds(candidate: QrisCandidateLike): number[] {
+  return validIds(candidate.unconfirmed_payment_ids);
 }
 
 /**
@@ -54,6 +62,7 @@ export function getQrisCandidatePresentationState(
 
   const snapshotIds = qrisCandidatePaymentIds(candidate);
   if (snapshotIds.length === 0) return "empty";
+  if (getUnconfirmedQrisPaymentIds(candidate).length > 0) return "ineligible";
 
   const availableIds = getAvailableQrisPaymentIds(candidate);
   if (availableIds.length > 0) return "ready";

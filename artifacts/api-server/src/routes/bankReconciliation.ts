@@ -2894,6 +2894,23 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
           { code: "INVALID_CANDIDATE" },
         );
       }
+      const unconfirmedPaymentIds = selectedLivePayments
+        .filter((payment) =>
+          String(payment.payment_status ?? "").toLowerCase() !== "confirmed",
+        )
+        .map((payment) => Number(payment.id));
+      if (unconfirmedPaymentIds.length > 0) {
+        throw Object.assign(
+          new Error(
+            `Payment QRIS menunggu konfirmasi: ${unconfirmedPaymentIds.join(", ")}. ` +
+            "Konfirmasi payment di Sport Center sebelum approval QRIS.",
+          ),
+          {
+            code: "PAYMENT_NOT_CONFIRMED",
+            paymentIds: unconfirmedPaymentIds,
+          },
+        );
+      }
       const nonQrisPaymentIds = selectedLivePayments
         .filter((payment) =>
           !String(payment.payment_method ?? "").toLowerCase().includes("qris"),

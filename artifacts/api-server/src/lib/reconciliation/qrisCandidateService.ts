@@ -747,6 +747,20 @@ export async function listQrisCandidates(options: {
                   ${canonicalSettledExcludeSql}
               ) current_payment
             ), '[]'::jsonb) AS current_payment_ids,
+             COALESCE((
+               SELECT jsonb_agg(unconfirmed.payment_id ORDER BY unconfirmed.payment_id)
+               FROM (
+                 SELECT (item->>'paymentId')::int AS payment_id
+                 FROM jsonb_array_elements(c.payment_items) item
+                 WHERE item->>'paymentId' IS NOT NULL
+                   AND NOT EXISTS (
+                     SELECT 1
+                     FROM sport_center.sport_payments live_payment
+                     WHERE live_payment.id = (item->>'paymentId')::int
+                       AND LOWER(COALESCE(live_payment.status::text, '')) = 'confirmed'
+                   )
+               ) unconfirmed
+             ), '[]'::jsonb) AS unconfirmed_payment_ids,
             COALESCE((
               SELECT SUM(sp.amount)
               FROM sport_center.sport_payments sp

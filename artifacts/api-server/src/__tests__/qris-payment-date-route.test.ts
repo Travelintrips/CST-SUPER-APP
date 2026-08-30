@@ -90,6 +90,8 @@ describe("QRIS exact-net approval route", () => {
     expect(route).toContain("calculatedNetAmount");
     expect(route).toContain("selectQrisApprovalPaymentIds");
     expect(route).toContain("DUPLICATE_APPROVAL");
+    expect(route).toContain("PAYMENT_NOT_CONFIRMED");
+    expect(route).toContain("Payment QRIS menunggu konfirmasi");
   });
 
   it("reads and updates only the canonical public mutation source", () => {

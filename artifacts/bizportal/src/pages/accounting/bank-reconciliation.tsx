@@ -32,6 +32,7 @@ import { useCompany } from "@/contexts/CompanyContext";
 import {
   getAvailableQrisPaymentIds as getAvailableQrisPaymentIdsFromCandidate,
   getQrisCandidatePresentationState,
+  getUnconfirmedQrisPaymentIds,
 } from "@/lib/qrisCandidatePresentation";
 import {
   classifyBankMutationPaymentType,
@@ -617,6 +618,7 @@ interface QrisCandidateAudit {
   payment_items?: QrisPaymentItem[];
   settled_payment_ids?: Array<number | string> | null;
   current_payment_ids?: Array<number | string> | null;
+  unconfirmed_payment_ids?: Array<number | string> | null;
   current_payment_amounts?: Record<string, number | string> | null;
   current_gross_amount?: number | string | null;
   current_expected_amount?: number | string | null;
@@ -2981,6 +2983,7 @@ function QrisMutationCard({
   const auditStatus = String(audit.status ?? "").toLowerCase();
   const isReadOnlyEvidence = ["stale", "superseded", "ineligible"].includes(auditStatus);
   const settledPaymentIds = new Set((audit.settled_payment_ids ?? []).map(Number));
+  const unconfirmedPaymentIds = new Set(getUnconfirmedQrisPaymentIds(audit));
   const currentPaymentIds = Array.isArray(audit.current_payment_ids)
     ? new Set(audit.current_payment_ids.map(Number))
     : null;
@@ -3073,6 +3076,7 @@ function QrisMutationCard({
   const canSelect = audit.id != null
     && (isMatched || isReview)
     && !isApproved
+    && unconfirmedPaymentIds.size === 0
     && availablePaymentIds.length > 0
     && m.direction?.toUpperCase() === "IN"
     && differenceAbs != null
@@ -3206,6 +3210,15 @@ function QrisMutationCard({
                 </div>
               </div>
             )}
+            {unconfirmedPaymentIds.size > 0 && (
+              <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2.5 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+                <p className="font-semibold">Menunggu konfirmasi payment</p>
+                <p className="mt-1 leading-relaxed">
+                  Payment {Array.from(unconfirmedPaymentIds).join(", ")} belum berstatus confirmed.
+                  Konfirmasi payment di Sport Center sebelum memilih dan menyetujui batch QRIS ini.
+                </p>
+              </div>
+            )}
             {(isReadOnlyEvidence || (differenceAbs != null && differenceAbs >= 0.5) || (!hasIdentifiedSettlement && differenceAbs == null)) && (
               <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2.5 text-xs text-white dark:border-amber-800 dark:bg-amber-950">
                 <div className="flex items-start gap-2">
@@ -3323,7 +3336,14 @@ function QrisMutationCard({
                            <span className="truncate text-xs text-muted-foreground">QRIS</span>
                           <span className="text-right text-xs font-medium tabular-nums">{idr(gross)}</span>
                           <span className="flex justify-center">
-                            {canSelect && audit.id != null && paymentId != null && onToggleQrisPayment ? (
+                            {paymentId != null && unconfirmedPaymentIds.has(Number(paymentId)) ? (
+                              <Badge
+                                variant="outline"
+                                className="text-[9px] border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-300"
+                              >
+                                Belum confirmed
+                              </Badge>
+                            ) : canSelect && audit.id != null && paymentId != null && onToggleQrisPayment ? (
                               <Checkbox
                                 checked={selectedPaymentIds.includes(Number(paymentId))}
                                 disabled={currentPaymentIds
@@ -5474,6 +5494,7 @@ export default function BankReconciliationPage() {
     && ["MATCHED", "REVIEW"].includes(String(candidate.reconciliation_status ?? "").toUpperCase())
     && String(candidate.status ?? "").toLowerCase() !== "approved"
     && candidate.current_evidence_valid !== false
+    && getUnconfirmedQrisPaymentIds(candidate).length === 0
     && getAvailableQrisPaymentIds(candidate).length > 0;
   const qrisApprovableCandidates = qrisCandidates.filter(isQrisCandidateEligible);
   const selectedQrisCandidates = qrisApprovableCandidates.filter((candidate) =>
@@ -5544,12 +5565,13 @@ export default function BankReconciliationPage() {
       && ["MATCHED", "REVIEW"].includes(String(candidate.reconciliation_status ?? "").toUpperCase())
       && candidate.status !== "approved"
       && candidate.current_evidence_valid !== false
+      && getUnconfirmedQrisPaymentIds(candidate).length === 0
       && getAvailableQrisPaymentIds(candidate).length > 0
     );
     if (eligibleCandidates.length === 0) {
       toast({
         title: "Tidak ada kandidat QRIS yang dapat disetujui",
-        description: "Hanya kandidat berstatus MATCHED atau REVIEW yang dapat dipilih.",
+        description: "Kandidat harus MATCHED/REVIEW dan seluruh payment harus sudah confirmed.",
         variant: "destructive",
       });
       return;
