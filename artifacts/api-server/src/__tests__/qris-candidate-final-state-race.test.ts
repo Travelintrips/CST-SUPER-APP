@@ -38,7 +38,7 @@ describe("QRIS candidate final-state race protection", () => {
           }],
         };
       }
-      if (text.includes("FROM bank_mutations bm")) {
+      if (/FROM\s+(?:public\.)?bank_mutations bm/.test(text)) {
         return {
           rows: [{
             id: 99, company_id: 1, raw_bank_account_id: 7,

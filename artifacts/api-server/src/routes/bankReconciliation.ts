@@ -204,9 +204,10 @@ function qrisMutationReadyForApprovalSql(alias = "bm"): string {
       SELECT 1
       FROM qris_mutation_batch_candidates qris_ready
       WHERE qris_ready.mutation_id = ${alias}.id
-        AND qris_ready.status NOT IN (
-          'approved', 'completed', 'superseded', 'stale', 'ineligible'
+        AND UPPER(COALESCE(qris_ready.status, '')) NOT IN (
+          'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
         )
+        AND ${qrisCandidateSourcePaymentMethodSql("qris_ready", "qris_ready_item")}
         AND UPPER(COALESCE(qris_ready.reconciliation_status, '')) = 'MATCHED'
         AND qris_ready.estimated_settlement_date::text = ${alias}.transaction_date::text
         AND NOT EXISTS (
@@ -221,13 +222,47 @@ function qrisMutationReadyForApprovalSql(alias = "bm"): string {
           SELECT qris_latest.id
           FROM qris_mutation_batch_candidates qris_latest
           WHERE qris_latest.mutation_id = ${alias}.id
-            AND qris_latest.status NOT IN (
-              'approved', 'completed', 'superseded', 'stale', 'ineligible'
+            AND UPPER(COALESCE(qris_latest.status, '')) NOT IN (
+              'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
             )
+            AND ${qrisCandidateSourcePaymentMethodSql("qris_latest", "qris_latest_item")}
           ORDER BY qris_latest.updated_at DESC, qris_latest.id DESC
           LIMIT 1
         )
     )
+  )`;
+}
+
+/**
+ * A QRIS candidate is only valid while every payment snapshot item still
+ * resolves to a confirmed/pending source payment whose current rail is QRIS.
+ * Candidate snapshots are intentionally retained for audit, but a source
+ * payment changed to Transfer Bank must never re-enter the review or approval
+ * contract through historical fallback logic.
+ */
+function qrisCandidateSourcePaymentMethodSql(
+  candidateAlias = "qc",
+  itemAlias = "qris_source_item",
+): string {
+  return `NOT EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(COALESCE(${candidateAlias}.payment_items, '[]'::jsonb)) ${itemAlias}
+    WHERE COALESCE(${itemAlias}->>'paymentId', ${itemAlias}->>'payment_id') IS NULL
+      OR NOT EXISTS (
+        SELECT 1
+        FROM sport_center.sport_payments qris_source_payment
+        WHERE qris_source_payment.id = CASE
+            WHEN COALESCE(${itemAlias}->>'paymentId', ${itemAlias}->>'payment_id')
+              ~ '^[0-9]+$'
+              THEN COALESCE(
+                ${itemAlias}->>'paymentId',
+                ${itemAlias}->>'payment_id'
+              )::integer
+            ELSE NULL
+          END
+          AND LOWER(COALESCE(qris_source_payment.payment_method::text, '')) LIKE '%qris%'
+          AND LOWER(COALESCE(qris_source_payment.status::text, '')) IN ('confirmed', 'pending')
+      )
   )`;
 }
 
@@ -3417,24 +3452,12 @@ router.get("/mutations", async (req, res) => {
     )
   `;
   // A QRIS snapshot is only valid when every live payment in it is still a
-  // direct QRIS payment. Historical snapshots can outlive a correction to the
-  // source payment method, so status/date checks alone are not sufficient.
-  // Invalid item IDs are treated as invalid evidence rather than making the
-  // queue query fail.
+  // confirmed/pending direct QRIS payment. Historical snapshots can outlive a
+  // correction to the source payment method, so status/date checks alone are
+  // not sufficient. Empty or invalid snapshots are not reviewable evidence.
   const qrisSnapshotPaymentMethodSql = `
     COALESCE(jsonb_array_length(COALESCE(qc.payment_items, '[]'::jsonb)), 0) > 0
-    AND NOT EXISTS (
-      SELECT 1
-      FROM jsonb_array_elements(COALESCE(qc.payment_items, '[]'::jsonb)) item_method
-      LEFT JOIN sport_center.sport_payments sp_method
-        ON sp_method.id = CASE
-          WHEN COALESCE(item_method->>'paymentId', item_method->>'payment_id') ~ '^[0-9]+$'
-            THEN COALESCE(item_method->>'paymentId', item_method->>'payment_id')::int
-          ELSE NULL
-        END
-      WHERE sp_method.id IS NULL
-        OR LOWER(COALESCE(sp_method.payment_method::text, '')) NOT LIKE '%qris%'
-    )
+    AND ${qrisCandidateSourcePaymentMethodSql("qc", "item_method")}
   `;
 
   // SQL fragments conditionally included when canonical settlement tables exist.

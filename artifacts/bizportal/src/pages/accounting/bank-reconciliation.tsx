@@ -1335,7 +1335,7 @@ function visibleCandidates(m: BankMutation): Candidate[] {
 function reconciliationEvidence(m: BankMutation): ReconciliationEvidence {
   const candidate = visibleCandidates(m)[0];
   const d = candidate?.details;
-  const audit = m.qris_candidate_audit ?? qrisAuditsForMutation(m)[0];
+  const audit = qrisAuditsForMutation(m)[0];
   const bankAmount = numericValue(d?.actualBankAmount) ?? numericValue(m.amount) ?? 0;
   const expectedAmount =
     numericValue(d?.expectedAmount) ??
@@ -4476,7 +4476,7 @@ function MutationDetailPanel({
   if (!mutation) return null;
   const m     = mutation;
   const cands = visibleCandidates(m);
-  const qrisAudit = m.qris_candidate_audit ?? qrisAuditsForMutation(m)[0];
+  const qrisAudit = qrisAuditsForMutation(m)[0];
   const qrisDiagnostic = m.qris_candidate_diagnostic ?? null;
   const canonicalApprovalCandidate = canonicalSettlementCandidateForMutation(m);
   const canonicalApprovalReady = isCanonicalSettlementApprovalEligible(m);

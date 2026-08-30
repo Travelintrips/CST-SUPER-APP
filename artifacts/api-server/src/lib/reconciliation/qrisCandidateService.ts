@@ -710,9 +710,31 @@ export async function listQrisCandidates(options: {
   const completedFilter = options.includeCompleted
     ? ""
     : `
-        AND c.status NOT IN ('approved', 'completed', 'superseded', 'stale', 'ineligible')
+        AND UPPER(COALESCE(c.status, '')) NOT IN ('APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE')
         AND LOWER(COALESCE(bm.status, 'unmatched')) NOT IN
           ('posted', 'approved', 'approved_pending_posting', 'void')
+        AND NOT EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(COALESCE(c.payment_items, '[]'::jsonb)) qris_source_item
+          WHERE qris_source_item->>'paymentId' IS NULL
+            OR NOT EXISTS (
+              SELECT 1
+              FROM sport_center.sport_payments qris_source_payment
+              WHERE qris_source_payment.id = CASE
+                  WHEN COALESCE(
+                    qris_source_item->>'paymentId',
+                    qris_source_item->>'payment_id'
+                  ) ~ '^[0-9]+$'
+                    THEN COALESCE(
+                      qris_source_item->>'paymentId',
+                      qris_source_item->>'payment_id'
+                    )::integer
+                  ELSE NULL
+                END
+                AND LOWER(COALESCE(qris_source_payment.payment_method::text, '')) LIKE '%qris%'
+                AND LOWER(COALESCE(qris_source_payment.status::text, '')) IN ('confirmed', 'pending')
+            )
+        )
       `;
   const limit = Math.min(Math.max(Number(options.limit ?? 100), 1), 500);
 
