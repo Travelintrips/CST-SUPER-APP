@@ -49,5 +49,17 @@ export function classifyBankMutationPaymentType(
 export function isQrisBankApprovalAllowed(
   evidence: BankMutationPaymentEvidence,
 ): boolean {
-  return classifyBankMutationPaymentType(evidence) === "qris";
+  if (classifyBankMutationPaymentType(evidence) === "qris") return true;
+
+  // Mandiri settlement statements may expose only the operational SA/KR
+  // markers. Those markers are not a bank-transfer rail and must not block a
+  // QRIS candidate whose payment method and H-1 cohort were already proven.
+  const values = [
+    evidence.providerName,
+    evidence.providerOrderId,
+    evidence.description,
+    evidence.normalizedDescription,
+  ];
+  return values.some(value => /mandiri/i.test(String(value ?? "")))
+    && values.some(value => /\b(?:SA|KR)\b/i.test(String(value ?? "")));
 }

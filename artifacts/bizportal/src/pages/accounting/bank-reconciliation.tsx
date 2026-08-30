@@ -845,14 +845,16 @@ function isCanonicalSettlementMutation(m: BankMutation): boolean {
 }
 
 function qrisAuditsForMutation(m: BankMutation): QrisCandidateAudit[] {
-  // Candidate metadata is not bank-rail evidence. A legacy QRIS snapshot must
-  // not turn an InhouseTrf/ordinary transfer into a QRIS card.
-  if (!isQrisBankApprovalAllowed({
-    providerName: m.provider_name,
-    providerOrderId: m.provider_order_id,
-    description: m.description,
-    normalizedDescription: m.normalized_description,
-  })) {
+  // Candidate metadata is not allowed to turn an InhouseTrf transfer into a
+  // QRIS approval. Other Mandiri statement markers, including SA/KR, are
+  // enrichment only and remain eligible for resolver-based approval.
+  const bankEvidence = [
+    m.provider_name,
+    m.provider_order_id,
+    m.description,
+    m.normalized_description,
+  ];
+  if (bankEvidence.some(value => isInhouseBankTransferDescription(value))) {
     return [];
   }
   const audits = Array.isArray(m.qris_candidate_audits) && m.qris_candidate_audits.length > 0
@@ -860,6 +862,9 @@ function qrisAuditsForMutation(m: BankMutation): QrisCandidateAudit[] {
     : m.qris_candidate_audit
       ? [m.qris_candidate_audit]
       : [];
+  // Once the candidate has been generated from QRIS payments, provider
+  // labels in the bank description are enrichment only. In particular,
+  // Mandiri's SA/KR markers must not hide an approvable H-1 candidate.
   return audits.filter((audit) =>
     !["stale", "superseded", "ineligible"].includes(String(audit.status ?? "").toLowerCase())
     // H-1 is an exact settlement cohort: candidate expected settlement date
@@ -1176,15 +1181,6 @@ function candidateSportPaymentType(candidate: Candidate | undefined, mutation: B
 function mutationSportPaymentType(mutation: BankMutation): SportPaymentType | null {
   const best = visibleCandidates(mutation)[0];
   const paymentType = candidateSportPaymentType(best, mutation) ?? mutation.sport_payment_type ?? null;
-  const bankEvidenceType = classifyBankMutationPaymentType({
-    providerName: mutation.provider_name,
-    providerOrderId: mutation.provider_order_id,
-    description: mutation.description,
-    normalizedDescription: mutation.normalized_description,
-  });
-  // A stale/legacy match can point an ordinary bank mutation at a QRIS
-  // payment. Keep the reviewer-facing badge aligned with bank evidence.
-  if (paymentType === "qris" && bankEvidenceType === "bank_transfer") return "bank_transfer";
   if (paymentType) return paymentType;
   return isInhouseBankTransferMutation(mutation) ? "bank_transfer" : null;
 }
@@ -3009,12 +3005,6 @@ function QrisMutationCard({
   const isIN = m.direction === "IN";
   const isMatched = String(audit.reconciliation_status ?? "").toUpperCase() === "MATCHED";
   const isReview = String(audit.reconciliation_status ?? "").toUpperCase() === "REVIEW";
-  const bankEvidenceAllowsQrisApproval = isQrisBankApprovalAllowed({
-    providerName: m.provider_name,
-    providerOrderId: m.provider_order_id,
-    description: m.description,
-    normalizedDescription: m.normalized_description,
-  });
   const qrisPresentationState = getQrisCandidatePresentationState(audit);
   const isDepleted = qrisPresentationState === "depleted";
   const isEmptyMatchedCandidate = qrisPresentationState === "empty";
@@ -3036,11 +3026,6 @@ function QrisMutationCard({
     || String(audit.status ?? "").toLowerCase() === "approved";
   // REVIEW candidates are explicitly approvable through the existing override
   // flow, so they must be selectable in the card as well as in the batch toolbar.
-  const canSelect = audit.id != null
-    && (isMatched || isReview)
-    && !isApproved
-    && availablePaymentIds.length > 0
-    && bankEvidenceAllowsQrisApproval;
   const bankAmount = numericValue(m.amount) ?? 0;
   const snapshotGross = numericValue(audit.gross_amount)
     ?? allItems.reduce(
@@ -3085,6 +3070,13 @@ function QrisMutationCard({
       : difference != null && difference > 0
       ? `Bank lebih besar ${idrWhole(difference)} daripada netto payment. Periksa payment yang belum masuk, tanggal settlement, atau biaya MDR.`
       : `Netto payment lebih besar ${idrWhole(differenceAbs)} daripada mutasi bank. Periksa nominal payment, provider, dan potongan MDR.`;
+  const canSelect = audit.id != null
+    && (isMatched || isReview)
+    && !isApproved
+    && availablePaymentIds.length > 0
+    && m.direction?.toUpperCase() === "IN"
+    && differenceAbs != null
+    && differenceAbs < 0.5;
   const metricScopeLabel = isPartialSettlement ? " tersisa" : "";
   const differenceLabel = isPartialSettlement ? "Selisih Batch Awal" : "Selisih Bank vs Netto";
   const liveGrossForItem = (item: QrisPaymentItem) => {
@@ -3494,9 +3486,7 @@ function QrisMutationCard({
               {!isApproved && audit.id != null && !canSelect && (
                 <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
                   <span className="text-[11px] text-amber-700 dark:text-amber-300">
-                    {!bankEvidenceAllowsQrisApproval
-                      ? "Sumber mutasi terklasifikasi Transfer Bank; approval QRIS dikunci."
-                      : isReadOnlyEvidence
+                    {isReadOnlyEvidence
                       ? "Revisi sumber dan buat kandidat baru sebelum approve."
                       : isDepleted
                         ? "Semua payment sudah diproses; approval ulang dikunci."

@@ -347,6 +347,13 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     })).toBe("paylabs");
   });
 
+  it("resolves Mandiri even when the statement only adds SA/KR markers", () => {
+    expect(resolveQrisProviderFromEvidence({
+      providerName: "Bank Mandiri",
+      description: "SA 123456 KR 1640006707220",
+    })).toBe("mandiri_direct");
+  });
+
   it("resolves an external account number to the internal account ID", () => {
     const accounts = [
       { id: 17, companyId: 1, accountNumber: "1640006707220" },
@@ -736,7 +743,7 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     expect(result[0]?.status).toBe("REVIEW");
   });
 
-  it("does not auto-match compatible aliases that span canonical provider groups", () => {
+  it("matches QRTRAVELI payments when their canonical provider is standardized", () => {
     const result = generateQrisMutationBatchCandidates({
       payments: [
         {
@@ -747,7 +754,7 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
         {
           id: 364, companyId: 1, bankAccountId: 17, amount: 200_000,
           method: "QRIS", status: "paid", paidAt: "2026-08-15",
-          expectedSettlementDate: "2026-08-16", providerName: "gpn_qris",
+          expectedSettlementDate: "2026-08-16", providerName: "mandiri_direct",
         },
       ],
       mutations: [{
@@ -758,8 +765,10 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
       }],
     });
 
-    expect(result[0]?.status).toBe("REVIEW");
-    expect(result[0]?.reason).toContain("MULTIPLE_CANONICAL_PROVIDER_GROUPS");
+    expect(result[0]?.status).toBe("MATCHED");
+    expect(result[0]?.paymentItems.map((item) => item.paymentId)).toEqual([361, 364]);
+    expect(result[0]?.grossAmount).toBe(500_000);
+    expect(result[0]?.netAmount).toBe(496_500);
   });
 
   it("inherits provider defaults when an account rule omits optional tolerances", () => {
