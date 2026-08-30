@@ -347,6 +347,13 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     })).toBe("paylabs");
   });
 
+  it("resolves Mandiri even when the statement only adds SA/KR markers", () => {
+    expect(resolveQrisProviderFromEvidence({
+      providerName: "Bank Mandiri",
+      description: "SA 123456 KR 1640006707220",
+    })).toBe("mandiri_direct");
+  });
+
   it("resolves an external account number to the internal account ID", () => {
     const accounts = [
       { id: 17, companyId: 1, accountNumber: "1640006707220" },
