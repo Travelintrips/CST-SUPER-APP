@@ -418,9 +418,19 @@ router.get("/hub/general-ledger", async (req, res) => {
         ${balanceAnd}
     `).then(r => r.rows);
 
-    const openingBalance = Number(openingRow?.opening_balance ?? 0);
-    const periodNet      = Number(periodRow?.period_net       ?? 0);
-    const closingBalance = openingBalance + periodNet;
+    // A single saldo is meaningful only for one account. Across all COAs,
+    // normalizing each line by its account's normal balance turns both sides
+    // of a balanced journal into positive activity (e.g. debit asset +
+    // credit revenue), which is not a company-wide balance.
+    const openingBalance = f.accountId
+      ? Number(openingRow?.opening_balance ?? 0)
+      : null;
+    const periodNet = f.accountId
+      ? Number(periodRow?.period_net ?? 0)
+      : null;
+    const closingBalance = openingBalance != null && periodNet != null
+      ? openingBalance + periodNet
+      : null;
 
     res.json({
       data: rows,

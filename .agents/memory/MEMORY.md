@@ -142,3 +142,4 @@
 - [Development TS proof tooling](development-ts-proof-tooling.md) — when tsx is unavailable, bundle temporary TS proofs with esbuild under the artifact directory so workspace packages and pg resolve correctly.
 - [Sport payment candidate visibility](sport-payment-candidate-visibility.md) — H-1 settlement filtering applies to QRIS only; ordinary Sport Center bank transfers remain reviewable.
 - [API artifact preview health](api-artifact-preview-health.md) — generic preview root checks may fail while namespaced API liveness/readiness are healthy.
+- [GL cross-account balance](gl-cross-account-balance.md) — saldo awal/akhir hanya valid untuk satu COA; agregat semua akun menyesatkan karena menjumlahkan sisi debit+kredit.
