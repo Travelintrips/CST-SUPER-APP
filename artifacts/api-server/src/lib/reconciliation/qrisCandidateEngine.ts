@@ -38,6 +38,10 @@ export interface QrisPaymentCandidateInput {
   method: string | null;
   status: string | null;
   paidAt: string | Date | null;
+  /** Authoritative MDR amount, when already calculated on the payment. */
+  canonicalMdrAmount?: number | string | null;
+  /** Fallback MDR rate when the source stores a rate instead of an amount. */
+  canonicalMdrRate?: number | string | null;
   expectedSettlementDate: string | null;
   settlementRuleVersion?: string | null;
   providerName?: string | null;
@@ -127,6 +131,17 @@ export type QrisCandidateRule =
 
 function roundMoney(value: number): number {
   return Number((Math.max(0, value) || 0).toFixed(2));
+}
+
+function paymentMdrAmount(payment: QrisPaymentCandidateInput): number | null {
+  const explicit = payment.canonicalMdrAmount;
+  if (explicit != null && explicit !== "") {
+    const amount = Number(explicit);
+    return Number.isFinite(amount) && amount >= 0 ? roundMoney(amount) : null;
+  }
+  const rate = Number(payment.canonicalMdrRate ?? 0);
+  if (!Number.isFinite(rate) || rate < 0) return null;
+  return roundMoney((Number(payment.amount) * rate) / 100);
 }
 
 function isQrisPayment(payment: QrisPaymentCandidateInput): boolean {
@@ -314,9 +329,87 @@ export function generateQrisMutationBatchCandidates(input: {
   );
   const openMutations = input.mutations.filter(isOpenMutation);
   const output: QrisMutationBatchCandidate[] = [];
+  const claimedPaymentIds = new Set<number>();
 
   for (const mutation of [...openMutations].sort((a, b) => a.id - b.id)) {
     if (existingMutationIds.has(mutation.id)) continue;
+
+    /*
+     * The active QRIS contract is intentionally small:
+     *   1. source payment is QRIS and confirmed;
+     *   2. paid_at is exactly the calendar day before the bank mutation;
+     *   3. bank amount equals gross payment minus the payment MDR.
+     *
+     * Do not add provider, bank-account, settlement metadata, source-label,
+     * or partition guards here. Those fields are frequently absent on valid
+     * imports and must not turn a deterministic H-1/MDR match into REVIEW.
+     */
+    if (strictHMinusOneAuto) {
+      const selectedPayments = eligiblePayments.filter((payment) =>
+        payment.companyId === mutation.companyId
+          && !claimedPaymentIds.has(payment.id)
+          && calendarDate(payment.paidAt) != null
+          && resolveSettlementDate(payment.paidAt, null, 1) === mutation.transactionDate,
+      );
+      if (selectedPayments.length === 0) continue;
+
+      const grossAmount = roundMoney(
+        selectedPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0),
+      );
+      const mdrAmounts = selectedPayments.map(paymentMdrAmount);
+      if (mdrAmounts.some((amount) => amount == null)) continue;
+      const validMdrAmounts = mdrAmounts.filter(
+        (amount): amount is number => amount != null,
+      );
+      const mdrAmount = roundMoney(
+        validMdrAmounts.reduce((sum, amount) => sum + amount, 0),
+      );
+      const expectedNetAmount = roundMoney(grossAmount - mdrAmount);
+      const bankAmount = roundMoney(Number(mutation.amount) || 0);
+      if (expectedNetAmount !== bankAmount) continue;
+
+      const sourceClassification = classifyBankMutationSource(
+        mutation.source,
+        mutation.sourceClassification,
+      );
+      output.push({
+        mutationId: mutation.id,
+        companyId: mutation.companyId,
+        bankAccountId: mutation.bankAccountId,
+        providerCode: "unknown",
+        providerDetectionSource: "unknown",
+        mutationSourceClassification: sourceClassification,
+        sourceDate: mutation.transactionDate,
+        estimatedSettlementDate: mutation.transactionDate,
+        settlementRuleVersion: "payment-method-h-minus-one-v1",
+        grossAmount,
+        netAmount: bankAmount,
+        observedDeduction: mdrAmount,
+        effectiveDeductionRate: grossAmount > 0 ? mdrAmount / grossAmount : null,
+        paymentItems: selectedPayments.map((payment) => ({
+          paymentId: payment.id,
+          grossAmount: roundMoney(Number(payment.amount) || 0),
+          canonicalSettlementId: payment.canonicalSettlementId ?? null,
+          expectedSettlementDate: mutation.transactionDate,
+          settlementRuleVersion: "payment-method-h-minus-one-v1",
+          paymentNumber: payment.paymentNumber ?? null,
+          bookingId: payment.bookingId ?? null,
+          bookingNumber: payment.bookingNumber ?? null,
+          customerName: payment.customerName ?? null,
+          facilityName: payment.facilityName ?? null,
+          bookingDate: payment.bookingDate ?? null,
+          startTime: payment.startTime ?? null,
+          endTime: payment.endTime ?? null,
+          paidAt: payment.paidAt == null ? null : String(payment.paidAt),
+          paymentDate: canonicalPaymentDate(payment),
+        })),
+        status: "MATCHED",
+        confidence: 1,
+        reason: "Auto-match QRIS: payment confirmed, tanggal paid_at tepat H-1, dan netto setelah MDR sama dengan mutasi bank.",
+      });
+      for (const payment of selectedPayments) claimedPaymentIds.add(payment.id);
+      continue;
+    }
 
     const sourceClassification = classifyBankMutationSource(
       mutation.source,

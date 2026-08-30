@@ -324,9 +324,10 @@ export async function generateQrisCandidates(options: {
         -- source status explicit so pending rows cannot become auto-matchable.
         CASE WHEN LOWER(COALESCE(sp.status::text, '')) = 'confirmed'
           THEN 'confirmed' ELSE sp.status::text END AS status,
-        -- Payment date is paid_at. confirmed_at/created_at are legacy fallbacks
-        -- only when the source payment date was not recorded.
-        COALESCE(sp.paid_at, sp.confirmed_at, sp.created_at) AS paid_at,
+        -- paid_at is the only accepted payment timeline for H-1.
+        sp.paid_at AS paid_at,
+        COALESCE(sp.mdr_amount, 0) AS canonical_mdr_amount,
+        NULL::numeric AS canonical_mdr_rate,
         'SCPAY-SC-' || sp.id::text AS payment_number,
         sp.booking_id, sb.order_number AS booking_number,
         sb.customer_name,
@@ -442,6 +443,12 @@ export async function generateQrisCandidates(options: {
       method: String(row.method ?? ""),
       status: String(row.status ?? ""),
       paidAt: row.paid_at as string | null,
+      canonicalMdrAmount: row.canonical_mdr_amount == null
+        ? null
+        : Number(row.canonical_mdr_amount),
+      canonicalMdrRate: row.canonical_mdr_rate == null
+        ? null
+        : Number(row.canonical_mdr_rate),
       expectedSettlementDate: asDate(row.settlement_date),
       settlementRuleVersion: row.settlement_rule_version == null
         ? null
@@ -528,12 +535,11 @@ export async function generateQrisCandidates(options: {
       const estimatedSettlementDateSql = candidate.estimatedSettlementDate
         ? `'${esc(candidate.estimatedSettlementDate)}'`
         : "NULL";
-      const candidateStatus = candidate.status === "MATCHED"
-        ? "candidate_auto_matched"
-        : candidate.paymentItems.length > 0
-        ? "candidate_review"
-        : "audit_unmatched";
+      // Strict generation is positive-only: every persisted row is already
+      // confirmed + H-1 + exact MDR. There is no QRIS REVIEW/UNMATCHED row.
+      const candidateStatus = "candidate_auto_matched";
       const settlementRuleVersion = candidate.settlementRuleVersion || "unavailable-v1";
+      let persistedCandidateId: number | null = null;
       const existing = (existingRows.rows as Array<Record<string, unknown>>).find((row) =>
         Number(row.mutation_id) === candidate.mutationId
         && !["approved", "completed", "superseded", "stale", "ineligible"]
@@ -618,9 +624,9 @@ export async function generateQrisCandidates(options: {
         if ((refreshResult.rowCount ?? 0) !== 1) {
           continue;
         }
-        continue;
-      }
-      await db.execute(sql.raw(`
+        persistedCandidateId = Number(existing.id);
+      } else {
+        const insertResult = await db.execute(sql.raw(`
         INSERT INTO qris_mutation_batch_candidates (
           mutation_id, company_id, candidate_source, mutation_key,
           source_date, estimated_settlement_date,
@@ -655,7 +661,55 @@ export async function generateQrisCandidates(options: {
           NOW(),
           NOW()
         )
-      `));
+          RETURNING id
+        `));
+        persistedCandidateId = Number(
+          (insertResult.rows?.[0] as Record<string, unknown> | undefined)?.id,
+        );
+      }
+
+      /*
+       * The candidate is an actual automatic bank match, not just a label in
+       * the QRIS audit table. Keep journal/settlement approval separate: the
+       * bank row becomes matched and the source-qualified match is approved,
+       * while the dedicated QRIS settlement endpoint still owns posting.
+       */
+      if (persistedCandidateId != null && Number.isSafeInteger(persistedCandidateId)) {
+        try {
+          await db.execute(sql.raw(`
+            INSERT INTO public.bank_reconciliation_matches (
+              mutation_id, candidate_type, candidate_id, candidate_source,
+              match_score, match_reason, amount_match, date_match,
+              name_match, order_id_match, proof_match, status
+            ) VALUES (
+              ${candidate.mutationId}, 'qris_settlement', ${persistedCandidateId},
+              'sport_center.sport_payments', 100,
+              '${esc(candidate.reason)}', TRUE, TRUE, FALSE, FALSE, FALSE, 'approved'
+            )
+            ON CONFLICT DO NOTHING
+          `));
+          await db.execute(sql.raw(`
+            UPDATE public.bank_mutations
+            SET status = 'matched',
+                updated_at = NOW()
+            WHERE id = ${candidate.mutationId}
+              AND ${candidate.companyId == null ? "company_id IS NULL" : `company_id = ${candidate.companyId}`}
+              AND LOWER(COALESCE(status, 'unmatched')) NOT IN
+                ('posted', 'approved', 'approved_pending_posting', 'void')
+          `));
+        } catch (error) {
+          // Never leave a visible candidate behind when its automatic match
+          // could not be committed. The caller can retry after the DB issue is
+          // fixed, while the journal/settlement approval flow stays separate.
+          await db.execute(sql.raw(`
+            DELETE FROM qris_mutation_batch_candidates
+            WHERE id = ${persistedCandidateId}
+              AND status = 'candidate_auto_matched'
+              AND reconciliation_status = 'MATCHED'
+          `)).catch(() => {});
+          throw error;
+        }
+      }
     }
 
     // A previously generated candidate may contain metadata that was
@@ -703,9 +757,9 @@ export async function listQrisCandidates(options: {
   const companyFilter = options.companyId && Number.isInteger(options.companyId)
     ? `AND c.company_id = ${Number(options.companyId)}`
     : "";
-  const statusFilter = options.status && ["MATCHED", "REVIEW", "UNMATCHED"].includes(options.status)
+  const statusFilter = options.status && options.status === "MATCHED"
     ? `AND c.reconciliation_status = '${esc(options.status)}'`
-    : "";
+    : `AND c.reconciliation_status = 'MATCHED'`;
   const completedFilter = options.includeCompleted
     ? ""
     : `
@@ -731,7 +785,11 @@ export async function listQrisCandidates(options: {
                   ELSE NULL
                 END
                 AND LOWER(COALESCE(qris_source_payment.payment_method::text, '')) LIKE '%qris%'
-                AND LOWER(COALESCE(qris_source_payment.status::text, '')) IN ('confirmed', 'pending')
+                 AND LOWER(COALESCE(qris_source_payment.status::text, '')) = 'confirmed'
+                 AND qris_source_payment.paid_at IS NOT NULL
+                 AND (
+                   (qris_source_payment.paid_at AT TIME ZONE 'Asia/Jakarta')::date + 1
+                 ) = bm.transaction_date::date
             )
         )
       `;
@@ -814,7 +872,9 @@ export async function listQrisCandidates(options: {
              ${recoverableSettlementIdSql} AS recoverable_settlement_id
     FROM qris_mutation_batch_candidates c
     LEFT JOIN public.bank_mutations bm ON bm.id = c.mutation_id
-     WHERE c.estimated_settlement_date::text = bm.transaction_date::text
+     WHERE c.status = 'candidate_auto_matched'
+       AND c.reconciliation_status = 'MATCHED'
+       AND c.estimated_settlement_date::text = bm.transaction_date::text
        AND NOT EXISTS (
          SELECT 1
          FROM jsonb_array_elements(COALESCE(c.payment_items, '[]'::jsonb)) item_h1
@@ -823,6 +883,24 @@ export async function listQrisCandidates(options: {
            item_h1->>'expected_settlement_date'
          ) IS DISTINCT FROM bm.transaction_date::text
        )
+       AND jsonb_array_length(COALESCE(c.payment_items, '[]'::jsonb)) > 0
+       AND (
+         SELECT COALESCE(SUM(
+           qris_net_payment.amount - COALESCE(qris_net_payment.mdr_amount, 0)
+         ), 0)
+         FROM sport_center.sport_payments qris_net_payment
+         WHERE qris_net_payment.id IN (
+           SELECT (item_net->>'paymentId')::int
+           FROM jsonb_array_elements(COALESCE(c.payment_items, '[]'::jsonb)) item_net
+           WHERE item_net->>'paymentId' IS NOT NULL
+         )
+           AND LOWER(COALESCE(qris_net_payment.payment_method::text, '')) LIKE '%qris%'
+           AND LOWER(COALESCE(qris_net_payment.status::text, '')) = 'confirmed'
+           AND qris_net_payment.paid_at IS NOT NULL
+           AND (
+             (qris_net_payment.paid_at AT TIME ZONE 'Asia/Jakarta')::date + 1
+           ) = bm.transaction_date::date
+       ) = bm.amount
        ${companyFilter} ${statusFilter} ${completedFilter}
     ORDER BY c.source_date DESC, c.id DESC
     LIMIT ${limit}

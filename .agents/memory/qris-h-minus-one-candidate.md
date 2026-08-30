@@ -3,8 +3,8 @@ name: QRIS H-1 candidate cohort
 description: Production QRIS candidate generation must use exact settlement-date evidence for H-1.
 ---
 
-The QRIS candidate path treats H-1 as an exact cohort: a paid QRIS payment's Jakarta payment date plus one calendar day must equal the bank mutation date. Candidate discovery intentionally uses only `payment_method=QRIS`, payment date H-1, and company scope; provider, account, metadata, amount, and rate checks remain approval/review concerns. The booking date is not settlement evidence.
+The QRIS auto-match path treats H-1 as an exact cohort: a confirmed QRIS payment's Jakarta `paid_at` date plus one calendar day must equal the bank mutation date, and the bank amount must equal gross minus the payment MDR. Candidate discovery is positive-only; provider, account, metadata, and booking date are not gates.
 
-**Why:** The business review workflow needs to surface QRIS payments like the bank evidence even when legacy provider/account/settlement mirrors are incomplete or stale. A broad date window still displays payments from the wrong day, while booking dates and stale metadata are not settlement evidence.
+**Why:** The new operational flow must auto-match only deterministic evidence and must not expose failed rows as REVIEW/UNMATCHED candidates. Legacy provider/account/settlement mirrors can be absent or stale, while booking dates are not settlement evidence.
 
-**How to apply:** Generate review candidates from `paidAt`/payment time with exact H-1 date and preserve final approval safeguards. Never filter QRIS settlement by booking date or require stored expected settlement metadata merely to display a candidate.
+**How to apply:** Generate only `confirmed` payments from `paid_at` with exact calendar H-1 and exact MDR net. Auto-match the bank row and keep journal/settlement approval separate. Do not fall back to pending status, booking date, or stale settlement metadata.

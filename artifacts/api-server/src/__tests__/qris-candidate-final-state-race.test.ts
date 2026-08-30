@@ -31,8 +31,9 @@ describe("QRIS candidate final-state race protection", () => {
       if (text.includes("FROM sport_center.sport_payments")) {
         return {
           rows: [{
-            id: 1, company_id: 1, amount: 100, method: "QRIS", status: "paid",
+            id: 1, company_id: 1, amount: 100, method: "QRIS", status: "confirmed",
             paid_at: "2026-08-23T09:00:00+07:00", provider_code: "gpn_qris",
+            canonical_mdr_amount: 1,
             settlement_date: "2026-08-24", settlement_rule_version: "default-v1",
             bank_account_id: 7, already_reconciled: false,
           }],
@@ -55,12 +56,12 @@ describe("QRIS candidate final-state race protection", () => {
       if (text.includes("FROM qris_mutation_batch_candidates")) {
         return {
           rows: [{
-            id: 71, mutation_id: 99, status: "candidate_review",
+            id: 71, mutation_id: 99, status: "candidate_auto_matched",
             gross_amount: 100, net_amount: 99, estimated_settlement_date: "2026-08-24",
-            settlement_rule_version: "default-v1",
+            settlement_rule_version: "payment-method-h-minus-one-v1",
             payment_items: [{
               paymentId: 1, grossAmount: 100, expectedSettlementDate: "2026-08-24",
-              settlementRuleVersion: "default-v1", canonicalSettlementId: null,
+              settlementRuleVersion: "payment-method-h-minus-one-v1", canonicalSettlementId: null,
             }],
           }],
         };
