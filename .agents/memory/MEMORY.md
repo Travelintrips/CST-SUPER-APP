@@ -155,3 +155,4 @@
 - [Rule AI import auto-post](rule-ai-import-auto-post.md) — semua jalur import bank wajib melewati Decision Stack agar Rule AI ber-COA lengkap dapat auto-post dengan safeguard yang sama.
 - [Portal service operations runtime schema](portal-service-ops-runtime-schema.md) — cross-service UNION read models must match live Supabase columns; missing fields need typed constants, not assumptions.
 - [Sport payment group note identity](sport-payment-group-note-identity.md) — group note dapat mencakup banyak booking; bukan unique key payment, gunakan booking dan identitas provider untuk duplicate.
+- [Sport payment provider deduplication](sport-payment-provider-deduplication.md) — recurring bookings can create repeated source rows; provider_order_id is the logical payment identity for display and QRIS candidates.

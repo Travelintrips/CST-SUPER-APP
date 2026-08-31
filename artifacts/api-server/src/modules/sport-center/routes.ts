@@ -1900,8 +1900,7 @@ router.get("/payments", async (req, res) => {
     //   2. public.sport_payments WHERE payment_number NOT LIKE 'SCPAY-SC-%' (BizPortal-created, belum ada di canonical)
     // Payments dengan prefix SCPAY-SC- di public.sport_payments adalah mirror dari sport_center.sport_payments → tidak di-UNION ulang.
     console.log(`[PAYMENT SOURCE] GET /payments page=${page} status=${statusFilter} dateFrom=${dateFrom} dateTo=${dateTo} search=${search ?? '-'}`);
-    const [dataRes, countRes, revenueRes] = await Promise.all([
-      db.execute(sql`
+    const dataRes = await db.execute(sql`
         WITH
         sc_pay AS (
           -- Sumber 1: canonical sport_center.sport_payments
@@ -1937,7 +1936,8 @@ router.get("/payments", async (req, res) => {
             p.created_at::timestamptz                      AS created_at,
             'canonical'::text                              AS source,
             NULL::integer                                  AS bank_account_id,
-            NULL::text                                     AS bank_account_name
+            NULL::text                                     AS bank_account_name,
+            p.provider_order_id::text                      AS provider_order_id
           FROM sport_center.sport_payments p
           LEFT JOIN sport_center.sport_bookings  b ON b.id = p.booking_id
           LEFT JOIN sport_center.sport_facilities f ON f.id = b.facility_id
@@ -1975,7 +1975,8 @@ router.get("/payments", async (req, res) => {
             sp.created_at::timestamptz                     AS created_at,
             'bizportal_mirror'::text                       AS source,
             cba.id::integer                                AS bank_account_id,
-            cba.name::text                                 AS bank_account_name
+            cba.name::text                                 AS bank_account_name,
+            sp.provider_order_id::text                     AS provider_order_id
           FROM public.sport_payments sp
           LEFT JOIN public.sport_bookings  sb ON sb.id = sp.booking_id
           LEFT JOIN public.sport_facilities sf ON sf.id = sb.facility_id
@@ -1985,95 +1986,56 @@ router.get("/payments", async (req, res) => {
           WHERE sp.payment_number NOT LIKE 'SCPAY-SC-%'
         ),
         combined AS (
-          SELECT * FROM sc_pay
-          UNION ALL
-          SELECT * FROM bz_pay
+          SELECT
+            u.*,
+            COALESCE(
+              NULLIF(BTRIM(u.provider_order_id), ''),
+              u.source || ':' || u.payment_number
+            ) AS payment_identity
+          FROM (
+            SELECT * FROM sc_pay
+            UNION ALL
+            SELECT * FROM bz_pay
+          ) u
+        ),
+        ranked AS (
+          SELECT
+            c.*,
+            COUNT(*) OVER (PARTITION BY c.payment_identity)::int AS related_payment_count,
+            ARRAY_AGG(c.booking_number)
+              FILTER (WHERE c.booking_number IS NOT NULL)
+              OVER (PARTITION BY c.payment_identity) AS related_booking_numbers,
+            ROW_NUMBER() OVER (
+              PARTITION BY c.payment_identity
+              ORDER BY CASE WHEN c.source = 'canonical' THEN 0 ELSE 1 END,
+                       c.created_at, c.id
+            ) AS payment_identity_rank
+          FROM combined c
+        ),
+        filtered AS (
+          SELECT *
+          FROM ranked
+          WHERE payment_identity_rank = 1
+            AND (${statusFilter}::text IS NULL OR status = ${statusFilter})
+            AND (${methodFilter}::text IS NULL OR method = ${methodFilter})
+            AND (${dateFrom}::date IS NULL OR paid_at::date >= ${dateFrom}::date)
+            AND (${dateTo}::date   IS NULL OR paid_at::date <= ${dateTo}::date)
+            AND (${searchPattern}::text IS NULL
+                 OR booking_number ILIKE ${searchPattern}
+                 OR customer_name  ILIKE ${searchPattern}
+                 OR payment_number ILIKE ${searchPattern}
+                 OR facility_name  ILIKE ${searchPattern}
+                 OR ARRAY_TO_STRING(related_booking_numbers, ' ') ILIKE ${searchPattern})
         )
-        SELECT * FROM combined
-        WHERE (${statusFilter}::text IS NULL OR status = ${statusFilter})
-          AND (${methodFilter}::text IS NULL OR method = ${methodFilter})
-          AND (${dateFrom}::date IS NULL OR paid_at::date >= ${dateFrom}::date)
-          AND (${dateTo}::date   IS NULL OR paid_at::date <= ${dateTo}::date)
-          AND (${searchPattern}::text IS NULL
-               OR booking_number ILIKE ${searchPattern}
-               OR customer_name  ILIKE ${searchPattern}
-               OR payment_number ILIKE ${searchPattern}
-               OR facility_name  ILIKE ${searchPattern})
+        SELECT
+          filtered.*,
+          COUNT(*) OVER ()::int AS total_count,
+          COALESCE(SUM(CASE WHEN filtered.status = 'paid' THEN filtered.amount ELSE 0 END) OVER (), 0) AS filtered_revenue
+        FROM filtered
         ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}
-      `),
-      db.execute(sql`
-        SELECT COUNT(*) AS cnt FROM (
-          SELECT
-            CASE WHEN lower(p.status::text) IN ('confirmed','paid','settlement','capture') THEN 'paid' ELSE 'pending' END::text AS status,
-            p.payment_method::text AS method,
-            COALESCE(p.paid_at, p.confirmed_at, p.created_at)::timestamptz AS paid_at,
-            b.order_number::text AS booking_number,
-            b.customer_name::text AS customer_name,
-            COALESCE(f.name,'')::text AS facility_name
-          FROM sport_center.sport_payments p
-          LEFT JOIN sport_center.sport_bookings  b ON b.id = p.booking_id
-          LEFT JOIN sport_center.sport_facilities f ON f.id = b.facility_id
-          UNION ALL
-          SELECT
-            sp.status::text,
-            sp.method::text,
-            COALESCE(sp.paid_at, sp.created_at)::timestamptz,
-            sb.booking_number::text,
-            sb.customer_name::text,
-            COALESCE(sf.name, sb.facility_name,'')::text
-          FROM public.sport_payments sp
-          LEFT JOIN public.sport_bookings  sb ON sb.id = sp.booking_id
-          LEFT JOIN public.sport_facilities sf ON sf.id = sb.facility_id
-          WHERE sp.payment_number NOT LIKE 'SCPAY-SC-%'
-        ) u
-        WHERE (${statusFilter}::text IS NULL OR status = ${statusFilter})
-          AND (${methodFilter}::text IS NULL OR method = ${methodFilter})
-          AND (${dateFrom}::date IS NULL OR paid_at::date >= ${dateFrom}::date)
-          AND (${dateTo}::date   IS NULL OR paid_at::date <= ${dateTo}::date)
-          AND (${searchPattern}::text IS NULL
-               OR booking_number ILIKE ${searchPattern}
-               OR customer_name  ILIKE ${searchPattern}
-               OR facility_name  ILIKE ${searchPattern})
-      `),
-      db.execute(sql`
-        SELECT COALESCE(SUM(amount), 0) AS total_revenue FROM (
-          SELECT
-            CASE WHEN lower(p.status::text) IN ('confirmed','paid','settlement','capture') THEN 'paid' ELSE 'pending' END::text AS status,
-            p.payment_method::text AS method,
-            p.amount::numeric AS amount,
-            COALESCE(p.paid_at, p.confirmed_at, p.created_at)::timestamptz AS paid_at,
-            b.order_number::text AS booking_number,
-            b.customer_name::text AS customer_name,
-            COALESCE(f.name,'')::text AS facility_name
-          FROM sport_center.sport_payments p
-          LEFT JOIN sport_center.sport_bookings  b ON b.id = p.booking_id
-          LEFT JOIN sport_center.sport_facilities f ON f.id = b.facility_id
-          UNION ALL
-          SELECT
-            sp.status::text,
-            sp.method::text,
-            sp.amount::numeric,
-            COALESCE(sp.paid_at, sp.created_at)::timestamptz,
-            sb.booking_number::text,
-            sb.customer_name::text,
-            COALESCE(sf.name, sb.facility_name,'')::text
-          FROM public.sport_payments sp
-          LEFT JOIN public.sport_bookings  sb ON sb.id = sp.booking_id
-          LEFT JOIN public.sport_facilities sf ON sf.id = sb.facility_id
-          WHERE sp.payment_number NOT LIKE 'SCPAY-SC-%'
-        ) u
-        WHERE status = 'paid'
-          AND (${statusFilter}::text IS NULL OR status = ${statusFilter})
-          AND (${methodFilter}::text IS NULL OR method = ${methodFilter})
-          AND (${dateFrom}::date IS NULL OR paid_at::date >= ${dateFrom}::date)
-          AND (${dateTo}::date   IS NULL OR paid_at::date <= ${dateTo}::date)
-          AND (${searchPattern}::text IS NULL
-               OR booking_number ILIKE ${searchPattern}
-               OR customer_name  ILIKE ${searchPattern}
-               OR facility_name  ILIKE ${searchPattern})
-      `),
-    ]);
-    const rows = dataRes.rows as Array<Record<string, unknown>>;
+      `);
+    const rawRows = dataRes.rows as Array<Record<string, unknown>>;
+    const rows = rawRows.map(({ payment_identity, payment_identity_rank, total_count, filtered_revenue, ...row }) => row);
     const canonicalCount = rows.filter(r => r.source === 'canonical').length;
     const bizportalCount = rows.filter(r => r.source === 'bizportal_mirror').length;
     console.log(`[PAYMENT SOURCE] → ${rows.length} total | canonical=${canonicalCount} bizportal_mirror=${bizportalCount}`);
@@ -2082,8 +2044,8 @@ router.get("/payments", async (req, res) => {
     }
     res.json({
       data: rows,
-      total: Number((countRes.rows[0] as any).cnt),
-      totalRevenue: Number((revenueRes.rows[0] as any).total_revenue ?? 0),
+      total: Number(rawRows[0]?.total_count ?? 0),
+      totalRevenue: Number(rawRows[0]?.filtered_revenue ?? 0),
     });
   } catch (err: any) {
     console.error("[sport-center] GET /payments error:", err?.message);

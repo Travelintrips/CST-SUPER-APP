@@ -347,12 +347,24 @@ export async function generateQrisCandidates(options: {
         ${paymentBankAccountSql} AS bank_account_id,
         ${canonicalSettlementIdSql} AS canonical_settlement_id,
         ${alreadyReconciledSql} AS already_reconciled
-      FROM sport_center.sport_payments sp
+      FROM (
+        SELECT
+          source_payment.*,
+          ROW_NUMBER() OVER (
+            PARTITION BY COALESCE(
+              NULLIF(BTRIM(source_payment.provider_order_id::text), ''),
+              'payment:' || source_payment.id::text
+            )
+            ORDER BY source_payment.id
+          ) AS provider_payment_rank
+        FROM sport_center.sport_payments source_payment
+        WHERE LOWER(COALESCE(source_payment.payment_method::text, '')) LIKE '%qris%'
+          AND LOWER(COALESCE(source_payment.status::text, '')) = 'confirmed'
+          ${companyFilter.replaceAll("sp.", "source_payment.")}
+      ) sp
       LEFT JOIN sport_center.sport_bookings sb ON sb.id = sp.booking_id
       LEFT JOIN sport_center.sport_facilities sf ON sf.id = sb.facility_id
-      WHERE LOWER(COALESCE(sp.payment_method::text, '')) LIKE '%qris%'
-         AND LOWER(COALESCE(sp.status::text, '')) = 'confirmed'
-        ${companyFilter}
+      WHERE sp.provider_payment_rank = 1
     `)),
     db.execute(sql.raw(`
       SELECT
