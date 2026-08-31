@@ -4045,21 +4045,33 @@ router.get("/mutations", async (req, res) => {
               )
             ), 0)
              ,
-              'current_expected_amount', COALESCE((
-                SELECT SUM(sp.amount - COALESCE(sp.mdr_amount, 0))
-               FROM sport_center.sport_payments sp
-               WHERE sp.id IN (
-                 SELECT (item->>'paymentId')::int
-                 FROM jsonb_array_elements(qc.payment_items) item
-                 WHERE item->>'paymentId' IS NOT NULL
-                   AND NOT EXISTS (
-                     SELECT 1
-                     FROM qris_settlement_items qsi
-                     WHERE qsi.sport_payment_id = (item->>'paymentId')::int
-                   )
-                   ${canonicalSettledExcludeSql}
-               )
-             ), 0)
+              /*
+               * A full, still-unsettled candidate uses the persisted
+               * canonical MDR. Do not recompute from sport_payments.mdr_amount:
+               * legacy confirmed payments may still store zero even though the
+               * owner-approved settlement rule has already produced the exact
+               * candidate deduction. Partial selections remain null here so
+               * the UI does not present a falsely precise prorated fee.
+               */
+              'current_expected_amount', CASE
+                WHEN (
+                  SELECT COUNT(*)
+                  FROM sport_center.sport_payments current_payment
+                  WHERE current_payment.id IN (
+                    SELECT (item->>'paymentId')::int
+                    FROM jsonb_array_elements(qc.payment_items) item
+                    WHERE item->>'paymentId' IS NOT NULL
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM qris_settlement_items qsi
+                        WHERE qsi.sport_payment_id = (item->>'paymentId')::int
+                      )
+                      ${canonicalSettledExcludeSql}
+                  )
+                ) = jsonb_array_length(COALESCE(qc.payment_items, '[]'::jsonb))
+                THEN qc.gross_amount - qc.mdr_amount
+                ELSE NULL
+              END
           )
            FROM qris_mutation_batch_candidates qc
             WHERE qc.mutation_id = bm.id
@@ -4139,21 +4151,25 @@ router.get("/mutations", async (req, res) => {
                   ${canonicalSettledExcludeSql}
               )
             ), 0),
-              'current_expected_amount', COALESCE((
-                SELECT SUM(sp.amount - COALESCE(sp.mdr_amount, 0))
-               FROM sport_center.sport_payments sp
-               WHERE sp.id IN (
-                 SELECT (item->>'paymentId')::int
-                 FROM jsonb_array_elements(qc.payment_items) item
-                 WHERE item->>'paymentId' IS NOT NULL
-                   AND NOT EXISTS (
-                     SELECT 1
-                     FROM qris_settlement_items qsi
-                     WHERE qsi.sport_payment_id = (item->>'paymentId')::int
-                   )
-                   ${canonicalSettledExcludeSql}
-               )
-             ), 0)
+              'current_expected_amount', CASE
+                WHEN (
+                  SELECT COUNT(*)
+                  FROM sport_center.sport_payments current_payment
+                  WHERE current_payment.id IN (
+                    SELECT (item->>'paymentId')::int
+                    FROM jsonb_array_elements(qc.payment_items) item
+                    WHERE item->>'paymentId' IS NOT NULL
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM qris_settlement_items qsi
+                        WHERE qsi.sport_payment_id = (item->>'paymentId')::int
+                      )
+                      ${canonicalSettledExcludeSql}
+                  )
+                ) = jsonb_array_length(COALESCE(qc.payment_items, '[]'::jsonb))
+                THEN qc.gross_amount - qc.mdr_amount
+                ELSE NULL
+              END
            )
            ORDER BY
              qc.updated_at DESC,

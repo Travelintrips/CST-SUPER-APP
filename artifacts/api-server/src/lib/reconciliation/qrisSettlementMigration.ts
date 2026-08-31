@@ -38,6 +38,40 @@ async function runQrisSettlementMigrationOnce(): Promise<void> {
       ADD COLUMN IF NOT EXISTS settlement_rule_version TEXT
   `).catch(() => {});
 
+  /*
+   * Older owner-approved settlement rows predate the canonical calculator's
+   * optional financial columns. These values are safe zero/default semantics:
+   * the configured MDR rate remains authoritative, while a percentage-only
+   * rule has no fixed fee or fee tax and uses two-decimal half-up rounding.
+   * Keep the canonical builder strict by repairing the source row once rather
+   * than silently defaulting incomplete configuration during approval.
+   */
+  await db.execute(sql`
+    UPDATE sport_center.payment_settlement_configs
+       SET fixed_provider_fee = COALESCE(fixed_provider_fee, 0),
+           fee_tax_rate = COALESCE(fee_tax_rate, 0),
+           fee_tax_inclusive = COALESCE(fee_tax_inclusive, FALSE),
+           rounding_scale = COALESCE(rounding_scale, 2),
+           rounding_method = COALESCE(
+             NULLIF(BTRIM(rounding_method::text), ''),
+             'round_half_up'
+           )
+     WHERE source = 'OWNER_APPROVED'
+       AND calculation_method IN (
+         'percentage_of_gross',
+         'fixed_fee',
+         'percentage_plus_fixed'
+       )
+       AND (
+         fixed_provider_fee IS NULL
+         OR fee_tax_rate IS NULL
+         OR fee_tax_inclusive IS NULL
+         OR rounding_scale IS NULL
+         OR rounding_method IS NULL
+         OR BTRIM(rounding_method::text) = ''
+       )
+  `).catch(() => {});
+
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS qris_business_calendar_holidays (
       id SERIAL PRIMARY KEY,

@@ -14,3 +14,9 @@ Candidate generation must fall back to the active owner-approved settlement calc
 **Why:** A production Mandiri batch had an exact 0.7% bank deduction while all source rows still held zero MDR, causing a false `UNMATCHED` result and an unrelated “provider unknown” label.
 
 **How to apply:** Resolve the active company/provider/account config for the H+1 date, calculate deductions with the canonical database function, and keep payment-source provider identity separate from bank-evidence detection.
+
+Canonical approval must remain fail-closed for an incomplete owner-approved config; repair legacy optional financial columns at the migration boundary with zero/false/two-decimal defaults for supported calculation methods.
+
+**Why:** The exact production candidate was valid, but approval stopped at the builder because the legacy config omitted fixed fee, fee tax, tax-inclusion, and rounding-scale values.
+
+**How to apply:** Backfill only null optional fields on `OWNER_APPROVED` rows, preserve the configured MDR rate and calculation method, then let the strict builder validate the repaired row.
