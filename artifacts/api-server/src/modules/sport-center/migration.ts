@@ -1490,7 +1490,10 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
   `));
 
   await db.execute(sql.raw(`
-    CREATE OR REPLACE FUNCTION sport_center.create_payment_accounting_draft(p_payment_id integer)
+    CREATE OR REPLACE FUNCTION sport_center.create_payment_accounting_draft_owner(
+      p_payment_id integer,
+      p_legacy_public_entry_id integer DEFAULT NULL
+    )
     RETURNS integer
     LANGUAGE plpgsql
     SECURITY DEFINER
@@ -1581,6 +1584,25 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
         END IF;
 
         -- --------------------------------------------------------
+        -- Canonical journal idempotency.
+        -- Existing canonical journal wins before inspecting the
+        -- public projection, including recovery retries.
+        -- --------------------------------------------------------
+
+        SELECT id
+          INTO v_existing_journal_id
+          FROM sport_center.accounting_journals
+         WHERE payment_id = p_payment_id
+           AND journal_type = 'payment_confirmed'
+           AND is_reversal = false
+         ORDER BY id
+         LIMIT 1;
+
+        IF v_existing_journal_id IS NOT NULL THEN
+            RETURN v_existing_journal_id;
+        END IF;
+
+        -- --------------------------------------------------------
         -- Canonical accounting idempotency.
         --
         -- A public accounting payment may already own this source
@@ -1633,54 +1655,59 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
         IF v_existing_accounting_payment_id IS NOT NULL
            OR v_existing_accounting_entry_id IS NOT NULL
         THEN
-            IF v_existing_accounting_payment_id IS NULL
-               OR v_existing_accounting_entry_id IS NULL
-               OR v_existing_payment_status <> 'posted'
-               OR v_existing_entry_status <> 'posted'
-               OR ABS(COALESCE(v_existing_payment_amount, -1) - ROUND(v_payment.amount::numeric, 2)) > 0.01
-               OR ABS(COALESCE(v_existing_entry_total_debit, -1) - ROUND(v_payment.amount::numeric, 2)) > 0.01
-               OR ABS(COALESCE(v_existing_entry_total_credit, -1) - ROUND(v_payment.amount::numeric, 2)) > 0.01
-               OR (
-                 COALESCE(v_existing_entry_source_payment_id, -1) <> p_payment_id
-                 AND NOT (
-                   v_existing_entry_source = 'sport_center_payment'
-                   AND v_existing_entry_source_id = p_payment_id
-                 )
-               )
+            IF p_legacy_public_entry_id IS NOT NULL
+               AND v_existing_accounting_payment_id IS NULL
+               AND v_existing_accounting_entry_id = p_legacy_public_entry_id
             THEN
-                RAISE EXCEPTION
-                    'ACCOUNTING_IDEMPOTENCY_MISMATCH: payment=% accounting_payment=% accounting_entry=%',
-                    p_payment_id,
-                    COALESCE(v_existing_accounting_payment_id, 0),
-                    COALESCE(v_existing_accounting_entry_id, 0);
+                -- A separately validated recovery call may complete the
+                -- canonical owner from an exact, posted legacy public entry.
+                -- Keep all ordinary callers fail-closed.
+                IF v_existing_entry_status <> 'posted'
+                   OR ABS(COALESCE(v_existing_entry_total_debit, -1) - ROUND(v_payment.amount::numeric, 2)) > 0.01
+                   OR ABS(COALESCE(v_existing_entry_total_credit, -1) - ROUND(v_payment.amount::numeric, 2)) > 0.01
+                   OR (
+                     COALESCE(v_existing_entry_source_payment_id, -1) <> p_payment_id
+                     AND NOT (
+                       v_existing_entry_source = 'sport_center_payment'
+                       AND v_existing_entry_source_id = p_payment_id
+                     )
+                   )
+                THEN
+                    RAISE EXCEPTION
+                        'ACCOUNTING_IDEMPOTENCY_MISMATCH: payment=% accounting_payment=% accounting_entry=%',
+                        p_payment_id,
+                        COALESCE(v_existing_accounting_payment_id, 0),
+                        COALESCE(v_existing_accounting_entry_id, 0);
+                END IF;
+            ELSE
+                IF v_existing_accounting_payment_id IS NULL
+                   OR v_existing_accounting_entry_id IS NULL
+                   OR v_existing_payment_status <> 'posted'
+                   OR v_existing_entry_status <> 'posted'
+                   OR ABS(COALESCE(v_existing_payment_amount, -1) - ROUND(v_payment.amount::numeric, 2)) > 0.01
+                   OR ABS(COALESCE(v_existing_entry_total_debit, -1) - ROUND(v_payment.amount::numeric, 2)) > 0.01
+                   OR ABS(COALESCE(v_existing_entry_total_credit, -1) - ROUND(v_payment.amount::numeric, 2)) > 0.01
+                   OR (
+                     COALESCE(v_existing_entry_source_payment_id, -1) <> p_payment_id
+                     AND NOT (
+                       v_existing_entry_source = 'sport_center_payment'
+                       AND v_existing_entry_source_id = p_payment_id
+                     )
+                   )
+                THEN
+                    RAISE EXCEPTION
+                        'ACCOUNTING_IDEMPOTENCY_MISMATCH: payment=% accounting_payment=% accounting_entry=%',
+                        p_payment_id,
+                        COALESCE(v_existing_accounting_payment_id, 0),
+                        COALESCE(v_existing_accounting_entry_id, 0);
+                END IF;
+
+                -- The public posting is authoritative. Returning NULL tells
+                -- callers there is no Sport Center journal to create; most
+                -- importantly, this branch performs zero Sport Center writes.
+                RETURN NULL;
             END IF;
-
-            -- The public posting is authoritative. Returning NULL tells
-            -- callers there is no Sport Center journal to create; most
-            -- importantly, this branch performs zero Sport Center writes.
-            RETURN NULL;
         END IF;
-
-
-        -- --------------------------------------------------------
-        -- Idempotency.
-        -- Existing journal wins.
-        -- --------------------------------------------------------
-
-        SELECT id
-          INTO v_existing_journal_id
-          FROM sport_center.accounting_journals
-         WHERE payment_id = p_payment_id
-           AND journal_type = 'payment_confirmed'
-           AND is_reversal = false
-         ORDER BY id
-         LIMIT 1;
-
-
-        IF v_existing_journal_id IS NOT NULL THEN
-            RETURN v_existing_journal_id;
-        END IF;
-
 
         -- --------------------------------------------------------
         -- Booking snapshot.
@@ -2074,6 +2101,195 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
 
         RETURN v_journal_id;
 
+    END;
+    $function$
+  `));
+
+  await db.execute(sql.raw(`
+    CREATE OR REPLACE FUNCTION sport_center.create_payment_accounting_draft(p_payment_id integer)
+    RETURNS integer
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'sport_center', 'public'
+    AS $function$
+    BEGIN
+      RETURN sport_center.create_payment_accounting_draft_owner(p_payment_id, NULL);
+    END;
+    $function$
+  `));
+
+  await db.execute(sql.raw(`
+    CREATE OR REPLACE FUNCTION sport_center.recover_payment_accounting_draft(
+      p_payment_id integer,
+      p_public_entry_id integer
+    )
+    RETURNS integer
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'sport_center', 'public'
+    AS $function$
+    DECLARE
+      v_payment sport_center.sport_payments%ROWTYPE;
+      v_entry record;
+      v_mirror record;
+      v_match_count integer;
+      v_payment_amount numeric;
+      v_ppn_rate numeric;
+      v_expected_dpp numeric;
+      v_expected_tax numeric;
+      v_line_count integer;
+      v_debit_count integer;
+      v_credit_count integer;
+      v_debit_total numeric;
+      v_credit_total numeric;
+    BEGIN
+      IF p_payment_id IS NULL OR p_payment_id <= 0
+         OR p_public_entry_id IS NULL OR p_public_entry_id <= 0
+      THEN
+        RAISE EXCEPTION 'LEGACY_PUBLIC_RECOVERY_INVALID_INPUT';
+      END IF;
+
+      SELECT *
+        INTO v_payment
+        FROM sport_center.sport_payments
+       WHERE id = p_payment_id
+       FOR UPDATE;
+
+      IF NOT FOUND OR v_payment.status::text <> 'confirmed' THEN
+        RAISE EXCEPTION
+          'LEGACY_PUBLIC_RECOVERY_PAYMENT_NOT_CONFIRMED: payment=%',
+          p_payment_id;
+      END IF;
+
+      SELECT
+        ae.id,
+        ae.company_id,
+        ae.status::text AS status,
+        ae.source::text AS source,
+        ae.source_id,
+        ae.source_payment_id,
+        ae.total_debit,
+        ae.total_credit
+        INTO v_entry
+        FROM public.accounting_entries ae
+       WHERE ae.id = p_public_entry_id
+       FOR UPDATE;
+
+      IF NOT FOUND THEN
+        RAISE EXCEPTION
+          'LEGACY_PUBLIC_RECOVERY_ENTRY_NOT_FOUND: payment=% entry=%',
+          p_payment_id, p_public_entry_id;
+      END IF;
+
+      SELECT COUNT(DISTINCT ae.id)::integer
+        INTO v_match_count
+        FROM public.accounting_entries ae
+       WHERE ae.source_payment_id = p_payment_id
+          OR (
+            ae.source::text = 'sport_center_payment'
+            AND ae.source_id = p_payment_id
+          );
+
+      IF v_match_count <> 1 THEN
+        RAISE EXCEPTION
+          'LEGACY_PUBLIC_RECOVERY_ENTRY_AMBIGUOUS: payment=% matches=%',
+          p_payment_id, v_match_count;
+      END IF;
+
+      IF v_entry.status <> 'posted'
+         OR (
+           COALESCE(v_entry.source_payment_id, -1) <> p_payment_id
+           AND NOT (
+             v_entry.source = 'sport_center_payment'
+             AND v_entry.source_id = p_payment_id
+           )
+         )
+         OR ABS(COALESCE(v_entry.total_debit, -1) - ROUND(v_payment.amount::numeric, 2)) > 0.01
+         OR ABS(COALESCE(v_entry.total_credit, -1) - ROUND(v_payment.amount::numeric, 2)) > 0.01
+      THEN
+        RAISE EXCEPTION
+          'LEGACY_PUBLIC_RECOVERY_ENTRY_MISMATCH: payment=% entry=%',
+          p_payment_id, p_public_entry_id;
+      END IF;
+
+      IF EXISTS (
+        SELECT 1
+          FROM public.accounting_payments ap
+         WHERE ap.entry_id = p_public_entry_id
+            OR (
+              ap.source_type = 'sport_center'
+              AND ap.source_doc_id = p_public_entry_id
+            )
+      ) THEN
+        RAISE EXCEPTION
+          'LEGACY_PUBLIC_RECOVERY_ENTRY_ALREADY_LINKED: payment=% entry=%',
+          p_payment_id, p_public_entry_id;
+      END IF;
+
+      SELECT
+        COUNT(*)::integer,
+        COUNT(*) FILTER (WHERE ael.debit > 0)::integer,
+        COUNT(*) FILTER (WHERE ael.credit > 0)::integer,
+        ROUND(COALESCE(SUM(ael.debit), 0), 2),
+        ROUND(COALESCE(SUM(ael.credit), 0), 2)
+        INTO
+          v_line_count,
+          v_debit_count,
+          v_credit_count,
+          v_debit_total,
+          v_credit_total
+        FROM public.accounting_entry_lines ael
+       WHERE ael.entry_id = p_public_entry_id;
+
+      SELECT COALESCE(b.ppn_rate, 0)
+        INTO v_ppn_rate
+        FROM sport_center.sport_bookings b
+       WHERE b.id = v_payment.booking_id;
+
+      v_payment_amount := ROUND(v_payment.amount::numeric, 2);
+      v_expected_dpp := CASE
+        WHEN v_ppn_rate > 0
+        THEN ROUND(v_payment_amount / (1 + (v_ppn_rate / 100)), 2)
+        ELSE v_payment_amount
+      END;
+      v_expected_tax := v_payment_amount - v_expected_dpp;
+
+      IF v_line_count <> CASE WHEN v_expected_tax > 0 THEN 3 ELSE 2 END
+         OR v_debit_count <> 1
+         OR v_credit_count <> CASE WHEN v_expected_tax > 0 THEN 2 ELSE 1 END
+         OR ABS(v_debit_total - v_payment_amount) > 0.01
+         OR ABS(v_credit_total - v_payment_amount) > 0.01
+      THEN
+        RAISE EXCEPTION
+          'LEGACY_PUBLIC_RECOVERY_LINES_MISMATCH: payment=% entry=%',
+          p_payment_id, p_public_entry_id;
+      END IF;
+
+      SELECT
+        sp.id,
+        sp.company_id,
+        sp.amount,
+        sp.posting_status,
+        sp.source_payment_id
+        INTO v_mirror
+        FROM public.sport_payments sp
+       WHERE sp.source_payment_id = p_payment_id
+       FOR UPDATE;
+
+      IF NOT FOUND
+         OR v_mirror.posting_status <> 'posted'
+         OR v_mirror.company_id IS DISTINCT FROM v_payment.company_id
+         OR ABS(COALESCE(v_mirror.amount, -1) - v_payment_amount) > 0.01
+      THEN
+        RAISE EXCEPTION
+          'LEGACY_PUBLIC_RECOVERY_MIRROR_MISMATCH: payment=%',
+          p_payment_id;
+      END IF;
+
+      RETURN sport_center.create_payment_accounting_draft_owner(
+        p_payment_id,
+        p_public_entry_id
+      );
     END;
     $function$
   `));
@@ -5088,6 +5304,325 @@ export async function verifyCanonicalSettlementOwnerRoutines(): Promise<void> {
       `CANONICAL_SETTLEMENT_OWNER_ROUTINES_INCOMPLETE: missing ${missing.join(", ")}`,
     );
   }
+}
+
+/**
+ * Additive repair owner for production databases that already completed the
+ * Sport Center bootstrap before the canonical payment handoff was installed.
+ *
+ * This stage is deliberately independent from the large bootstrap marker:
+ * existing environments must receive the owner without replaying legacy data
+ * cleanup or synchronization.
+ */
+export async function ensureSportCenterLegacyPaymentRecoveryOwner(): Promise<void> {
+  await db.execute(sql.raw(`
+    CREATE OR REPLACE FUNCTION sport_center.recover_payment_accounting_draft(
+      p_payment_id integer,
+      p_public_entry_id integer
+    )
+    RETURNS integer
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'sport_center', 'public'
+    AS $function$
+    DECLARE
+      v_payment sport_center.sport_payments%ROWTYPE;
+      v_booking sport_center.sport_bookings%ROWTYPE;
+      v_entry record;
+      v_mirror record;
+      v_match_count integer;
+      v_mirror_count integer;
+      v_line_count integer;
+      v_debit_count integer;
+      v_credit_count integer;
+      v_debit_total numeric;
+      v_credit_total numeric;
+      v_payment_amount numeric(18,2);
+      v_dpp numeric(18,2);
+      v_tax numeric(18,2);
+      v_bank_count integer;
+      v_bank_id integer;
+      v_journal_id integer;
+      v_public_payment_id integer;
+      v_journal_date text;
+      v_payment_method text;
+      v_payment_provider text;
+      v_debit_account_code text;
+      v_debit_account_name text;
+      v_source_event_id text;
+    BEGIN
+      IF p_payment_id IS NULL OR p_payment_id <= 0
+         OR p_public_entry_id IS NULL OR p_public_entry_id <= 0
+      THEN
+        RAISE EXCEPTION 'LEGACY_PUBLIC_RECOVERY_INVALID_INPUT';
+      END IF;
+
+      SELECT *
+        INTO v_payment
+        FROM sport_center.sport_payments
+       WHERE id = p_payment_id
+       FOR UPDATE;
+
+      IF NOT FOUND OR v_payment.status::text <> 'confirmed' THEN
+        RAISE EXCEPTION
+          'LEGACY_PUBLIC_RECOVERY_PAYMENT_NOT_CONFIRMED: payment=%',
+          p_payment_id;
+      END IF;
+
+      SELECT *
+        INTO v_booking
+        FROM sport_center.sport_bookings
+       WHERE id = v_payment.booking_id
+       FOR UPDATE;
+
+      IF NOT FOUND THEN
+        RAISE EXCEPTION
+          'LEGACY_PUBLIC_RECOVERY_BOOKING_NOT_FOUND: payment=% booking=%',
+          p_payment_id, v_payment.booking_id;
+      END IF;
+
+      SELECT
+        ae.id,
+        ae.journal_id,
+        ae.company_id,
+        ae.date,
+        ae.ref,
+        ae.description,
+        ae.payment_method,
+        ae.payment_provider,
+        ae.bank_account_id,
+        ae.status::text AS status,
+        ae.source::text AS source,
+        ae.source_id,
+        ae.source_payment_id,
+        ae.total_debit,
+        ae.total_credit
+        INTO v_entry
+        FROM public.accounting_entries ae
+       WHERE ae.id = p_public_entry_id
+       FOR UPDATE;
+
+      IF NOT FOUND THEN
+        RAISE EXCEPTION
+          'LEGACY_PUBLIC_RECOVERY_ENTRY_NOT_FOUND: payment=% entry=%',
+          p_payment_id, p_public_entry_id;
+      END IF;
+
+      SELECT COUNT(DISTINCT ae.id)::integer
+        INTO v_match_count
+        FROM public.accounting_entries ae
+       WHERE ae.source_payment_id = p_payment_id
+          OR (
+            ae.source::text = 'sport_center_payment'
+            AND ae.source_id = p_payment_id
+          );
+
+      IF v_match_count <> 1
+         OR v_entry.status <> 'posted'
+         OR (
+           COALESCE(v_entry.source_payment_id, -1) <> p_payment_id
+           AND NOT (
+             v_entry.source = 'sport_center_payment'
+             AND v_entry.source_id = p_payment_id
+           )
+         )
+         OR ABS(COALESCE(v_entry.total_debit, -1) - ROUND(v_payment.amount::numeric, 2)) > 0.01
+         OR ABS(COALESCE(v_entry.total_credit, -1) - ROUND(v_payment.amount::numeric, 2)) > 0.01
+      THEN
+        RAISE EXCEPTION
+          'LEGACY_PUBLIC_RECOVERY_ENTRY_MISMATCH: payment=% entry=% matches=%',
+          p_payment_id, p_public_entry_id, v_match_count;
+      END IF;
+
+      IF EXISTS (
+        SELECT 1
+          FROM public.accounting_payments ap
+         WHERE ap.entry_id = p_public_entry_id
+            OR (
+              ap.source_type = 'sport_center'
+              AND ap.source_doc_id = p_public_entry_id
+            )
+      ) THEN
+        RAISE EXCEPTION
+          'LEGACY_PUBLIC_RECOVERY_ENTRY_ALREADY_LINKED: payment=% entry=%',
+          p_payment_id, p_public_entry_id;
+      END IF;
+
+      v_payment_amount := ROUND(v_payment.amount::numeric, 2);
+      v_dpp := CASE
+        WHEN COALESCE(v_booking.ppn_rate, 0) > 0
+        THEN ROUND(v_payment_amount / (1 + (v_booking.ppn_rate / 100)), 2)
+        ELSE v_payment_amount
+      END;
+      v_tax := v_payment_amount - v_dpp;
+
+      SELECT
+        COUNT(*)::integer,
+        COUNT(*) FILTER (WHERE ael.debit > 0)::integer,
+        COUNT(*) FILTER (WHERE ael.credit > 0)::integer,
+        ROUND(COALESCE(SUM(ael.debit), 0), 2),
+        ROUND(COALESCE(SUM(ael.credit), 0), 2)
+        INTO
+          v_line_count,
+          v_debit_count,
+          v_credit_count,
+          v_debit_total,
+          v_credit_total
+        FROM public.accounting_entry_lines ael
+       WHERE ael.entry_id = p_public_entry_id;
+
+      IF v_line_count <> CASE WHEN v_tax > 0 THEN 3 ELSE 2 END
+         OR v_debit_count <> 1
+         OR v_credit_count <> CASE WHEN v_tax > 0 THEN 2 ELSE 1 END
+         OR ABS(v_debit_total - v_payment_amount) > 0.01
+         OR ABS(v_credit_total - v_payment_amount) > 0.01
+      THEN
+        RAISE EXCEPTION
+          'LEGACY_PUBLIC_RECOVERY_LINES_MISMATCH: payment=% entry=%',
+          p_payment_id, p_public_entry_id;
+      END IF;
+
+      SELECT COUNT(*)::integer, MIN(sp.id)
+        INTO v_mirror_count, v_mirror
+        FROM public.sport_payments sp
+       WHERE sp.source_payment_id = p_payment_id;
+
+      IF v_mirror_count <> 1 THEN
+        RAISE EXCEPTION
+          'LEGACY_PUBLIC_RECOVERY_MIRROR_AMBIGUOUS: payment=% matches=%',
+          p_payment_id, v_mirror_count;
+      END IF;
+
+      SELECT sp.*
+        INTO v_mirror
+        FROM public.sport_payments sp
+       WHERE sp.source_payment_id = p_payment_id
+       FOR UPDATE;
+
+      IF v_mirror.posting_status <> 'posted'
+         OR v_mirror.company_id IS DISTINCT FROM v_payment.company_id
+         OR ABS(COALESCE(v_mirror.amount, -1) - v_payment_amount) > 0.01
+         OR NULLIF(BTRIM(v_mirror.external_bank_account_id::text), '') IS NULL
+      THEN
+        RAISE EXCEPTION
+          'LEGACY_PUBLIC_RECOVERY_MIRROR_MISMATCH: payment=%',
+          p_payment_id;
+      END IF;
+
+      SELECT COUNT(*)::integer, MIN(cba.id)
+        INTO v_bank_count, v_bank_id
+        FROM public.company_bank_accounts cba
+       WHERE cba.company_id = v_payment.company_id
+         AND cba.is_active = TRUE
+         AND cba.account_number::text = v_mirror.external_bank_account_id::text;
+
+      IF v_bank_count <> 1 OR v_bank_id IS NULL THEN
+        RAISE EXCEPTION
+          'LEGACY_PUBLIC_RECOVERY_BANK_UNRESOLVED: payment=% account=% matches=%',
+          p_payment_id, v_mirror.external_bank_account_id, v_bank_count;
+      END IF;
+
+      v_payment_method := COALESCE(NULLIF(BTRIM(v_payment.payment_method::text), ''), 'Unknown');
+      v_payment_provider := NULLIF(BTRIM(v_payment.payment_provider::text), '');
+      v_debit_account_code := CASE
+        WHEN LOWER(v_payment_method) LIKE '%qris%' OR v_payment_provider IS NOT NULL
+        THEN 'PAYMENT_CLEARING'
+        WHEN LOWER(v_payment_method) LIKE '%cash%' OR LOWER(v_payment_method) LIKE '%tunai%'
+        THEN 'CASH'
+        ELSE 'BANK_RECEIPT'
+      END;
+      v_debit_account_name := CASE v_debit_account_code
+        WHEN 'PAYMENT_CLEARING' THEN 'Payment Clearing'
+        WHEN 'CASH' THEN 'Kas'
+        ELSE 'Bank / Kas Masuk'
+      END;
+      v_journal_date := COALESCE(
+        v_payment.paid_at,
+        v_payment.confirmed_at,
+        v_payment.created_at,
+        now()
+      )::date::text;
+      v_source_event_id := gen_random_uuid()::text;
+
+      INSERT INTO sport_center.accounting_journals
+      (
+        booking_id, payment_id, company_id, order_number,
+        journal_type, status,
+        debit_account, debit_amount,
+        credit_revenue_account, credit_revenue_amount,
+        credit_ppn_account, credit_ppn_amount,
+        journal_date, payment_method, payment_provider,
+        payment_type, bank_account_id,
+        gross_amount, dpp_amount, tax_amount,
+        provider_reference, provider_order_id, merchant_trade_no,
+        provider_trade_no, source_schema, source_table, source_id,
+        source_event_id, correlation_id, is_reversal, notes, created_by
+      )
+      VALUES
+      (
+        v_payment.booking_id, p_payment_id, v_payment.company_id,
+        v_booking.order_number, 'payment_confirmed', 'draft',
+        v_debit_account_name, v_payment_amount,
+        'Pendapatan Sport Center', v_dpp,
+        'PPN Keluaran', v_tax,
+        v_journal_date, v_payment_method, v_payment_provider,
+        COALESCE(v_payment.payment_type::text, 'full_payment'), v_bank_id,
+        v_payment_amount, v_dpp, v_tax,
+        v_payment.provider_reference, v_payment.provider_order_id,
+        v_payment.merchant_trade_no, v_payment.provider_trade_no,
+        'sport_center', 'sport_payments', p_payment_id::text,
+        v_source_event_id, v_source_event_id, false,
+        'Recovered from exact posted legacy public entry ' || p_public_entry_id::text,
+        'canonical-recovery'
+      )
+      RETURNING id INTO v_journal_id;
+
+      INSERT INTO sport_center.accounting_journal_lines
+        (journal_id, line_type, account_code, account_name, amount, description)
+      VALUES
+        (v_journal_id, 'debit', v_debit_account_code, v_debit_account_name,
+         v_payment_amount, v_debit_account_name || ' - ' || v_booking.order_number),
+        (v_journal_id, 'credit', 'REVENUE', 'Pendapatan Sport Center',
+         v_dpp, 'Pendapatan - ' || v_booking.order_number);
+
+      IF v_tax > 0 THEN
+        INSERT INTO sport_center.accounting_journal_lines
+          (journal_id, line_type, account_code, account_name, amount, description)
+        VALUES
+          (v_journal_id, 'credit', 'PPN_OUTPUT', 'PPN Keluaran',
+           v_tax, 'PPN Keluaran - ' || v_booking.order_number);
+      END IF;
+
+      PERFORM sport_center.validate_accounting_journal(v_journal_id);
+
+      INSERT INTO public.accounting_payments
+      (
+        company_id, payment_number, payment_type, status, amount,
+        journal_id, date, ref, memo, payment_method, payment_provider,
+        entry_id, source_type, source_doc_id, created_by_id,
+        source_schema, source_module, posted_at
+      )
+      VALUES
+      (
+        v_payment.company_id, v_mirror.payment_number, 'inbound', 'posted',
+        v_payment_amount, v_entry.journal_id, v_entry.date, v_entry.ref,
+        v_entry.description, v_payment_method, v_payment_provider,
+        p_public_entry_id, 'sport_center', v_mirror.id, 'canonical-recovery',
+        'sport_center', 'sport_center_payment', now()
+      )
+      RETURNING id INTO v_public_payment_id;
+
+      UPDATE public.sport_payments
+         SET accounting_payment_id = v_public_payment_id,
+             posting_status = 'posted',
+             posting_error = NULL,
+             updated_at = now()
+       WHERE id = v_mirror.id;
+
+      RETURN v_journal_id;
+    END;
+    $function$
+  `));
 }
 
 const SPORT_CENTER_BOOTSTRAP_VERSION = "schema-bootstrap-v3";
