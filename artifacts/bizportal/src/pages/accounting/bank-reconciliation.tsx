@@ -2687,14 +2687,11 @@ function CoaReferenceDialog({
           description: `Mutasi berikutnya dengan referensi ini akan diarahkan ke ${selectedAccount.code}.`,
         });
       }
-      // A saved rule changes the server-side candidate recommendation. The
-      // mutation list and QRIS candidate audit use different React Query keys,
-      // so invalidating only bank-reconciliation leaves the candidate/approval
-      // view stale until its polling interval or a hard refresh.
-      qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] });
-      qc.invalidateQueries({ queryKey: ["coa-proposals-by-source"] });
-      await onSaved();
+      // Refresh related lists in the background. Waiting here kept the modal
+      // in a loading state while several active reconciliation queries
+      // refetched, even though the rule itself was already saved.
       onClose();
+      void Promise.resolve(onSaved()).catch(() => undefined);
     } catch (error) {
       toast({
         title: "Gagal menyimpan pemetaan COA",
