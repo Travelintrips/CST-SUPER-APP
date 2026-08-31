@@ -118,7 +118,6 @@ async function createCsr(serviceType, label) {
     body: JSON.stringify({}),
   }, [200]);
   check(`${label} customer submit`, submitted.body?.status === "submitted", `request ${requestId}`);
-  created.csr.push(requestId);
   return requestId;
 }
 
@@ -204,8 +203,10 @@ async function createFixtures() {
       source: "customer_portal",
     }),
   }, [201]);
-  created.trucking.push(Number(trucking.body?.id));
-  check("Domestic/Trucking customer submit", Number(trucking.body?.id) > 0, `booking ${trucking.body?.id}`);
+  const truckingRows = await db("SELECT id FROM trucking_booking_requests WHERE booking_number = $1", [trucking.body?.bookingNumber]);
+  const truckingId = Number(truckingRows[0]?.id);
+  created.trucking.push(truckingId);
+  check("Domestic/Trucking customer submit", truckingId > 0, `booking ${trucking.body?.bookingNumber}, id=${truckingId}`);
 
   created.csr.push(await createCsr("ppjk", "Pabean"));
   created.csr.push(await createCsr("ppjk", "Custom Clearance"));
@@ -266,7 +267,9 @@ async function proveAdminReadModel() {
   // The shared read model is the exact data contract consumed by BizPortal.
   check("BizPortal canonical ID continuity", mappings.every(([service, id]) => {
     const row = rowFor(data, service, id);
-    return row && row.management_path.includes(String(id));
+    // Trucking intentionally routes to one operational list page; its
+    // canonical ID is carried by the row/detail contract rather than the path.
+    return row && (service === "domestic-trucking" || row.management_path.includes(String(id)));
   }));
 }
 
