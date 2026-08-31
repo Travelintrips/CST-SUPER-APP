@@ -142,6 +142,7 @@
 - [QRIS UI evidence boundary](qris-ui-evidence.md) — generic cards can combine bank-source labeling with a QRIS badge inherited from a persisted candidate.
 - [Development TS proof tooling](development-ts-proof-tooling.md) — when tsx is unavailable, bundle temporary TS proofs with esbuild under the artifact directory so workspace packages and pg resolve correctly.
 - [Sport payment candidate visibility](sport-payment-candidate-visibility.md) — H-1 settlement filtering applies to QRIS only; ordinary Sport Center bank transfers remain reviewable.
+- [Production verification timestamp boundary](production-verification-timestamp-boundary.md) — rounded checkpoint seconds can double-count the baseline row; resolve the exact boundary from its known max ID.
 - [API artifact preview health](api-artifact-preview-health.md) — generic preview root checks may fail while namespaced API liveness/readiness are healthy.
 - [Marketplace destination production migration](marketplace-destination-prod-migration.md) — RFQ production requires three nullable destination columns; the dev-only migration does not update external Supabase prod.
 - [QRIS approval provider resolution](qris-approval-provider-resolution.md) — manual IDs are authoritative; canonical_group/source group cannot block H-1 exact-net QRIS approval.
