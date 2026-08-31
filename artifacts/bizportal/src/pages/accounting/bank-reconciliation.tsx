@@ -3359,7 +3359,7 @@ function QrisMutationCard({
                           <span className="truncate text-xs font-medium">{booking}</span>
                           <span className="min-w-0 truncate text-xs text-muted-foreground">{payment}</span>
                            <span className="min-w-0 truncate text-xs font-medium text-foreground">
-                             {item.providerName ?? item.provider_name ?? qrisAudit.provider_code ?? "Belum dikenali"}
+                             {item.providerName ?? item.provider_name ?? audit.provider_code ?? "Belum dikenali"}
                            </span>
                            <span className="min-w-0 text-xs text-muted-foreground">
                              <span className="flex min-w-0 items-center gap-1">
