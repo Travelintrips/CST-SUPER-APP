@@ -37,6 +37,11 @@ export function capabilityForServiceRequest(
   return null;
 }
 
+export type SupplierCapabilityCandidate = SupplierLike & {
+  vendorName?: string | null;
+  [key: string]: unknown;
+};
+
 type SupplierLike = {
   id: number;
   serviceType?: string | null;
@@ -124,6 +129,26 @@ export async function filterSuppliersByCapability<T extends SupplierLike>(
     if (state?.configured) return state.active.has(capability);
     return legacyMatch((supplier.serviceType ?? "").toLowerCase());
   });
+}
+
+/**
+ * Filter an already-loaded supplier/pricing result without losing the
+ * pricing row. This keeps capability precedence in one place for public
+ * discovery and authenticated submission validation.
+ */
+export async function filterRowsByCapability<T extends SupplierCapabilityCandidate>(
+  rows: T[],
+  capability: VendorCapabilityKey,
+  legacyMatch: (serviceType: string) => boolean,
+  companyId?: number | null,
+): Promise<T[]> {
+  const eligible = await filterSuppliersByCapability(
+    rows,
+    capability,
+    legacyMatch,
+    companyId,
+  );
+  return eligible;
 }
 
 export function capabilityMatches(

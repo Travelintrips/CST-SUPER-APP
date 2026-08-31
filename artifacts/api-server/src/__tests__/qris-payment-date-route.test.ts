@@ -55,9 +55,13 @@ describe("QRIS payment date update route", () => {
 
   it("uses the Jakarta payment date for the H-1 review cohort", () => {
     expect(routeSource).toContain("AT TIME ZONE 'Asia/Jakarta'");
+    expect(routeSource).toContain("(sp.paid_at AT TIME ZONE 'Asia/Jakarta')::date::text AS payment_date");
+    expect(routeSource).toContain("sp_h1.paid_at AT TIME ZONE 'Asia/Jakarta'");
     expect(routeSource).not.toContain(
       "COALESCE(sp_h1.paid_at::date, sp_h1.created_at::date) + 1",
     );
+    expect(routeSource).not.toContain("COALESCE(sp_h1.paid_at, sp_h1.created_at)");
+    expect(routeSource).not.toContain("COALESCE(sp.paid_at, sp.created_at)");
   });
 });
 

@@ -943,6 +943,43 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     expect(result[0]?.reason).toContain("AMBIGUOUS_PAYMENT_PARTITION");
   });
 
+  it("keeps a confirmed H-1 batch visible when its net amount differs", () => {
+    const result = generateQrisMutationBatchCandidates({
+      candidateRule: "strict_h_minus_one_auto",
+      payments: [{
+        id: 35,
+        companyId: 10,
+        bankAccountId: 77,
+        amount: 250_000,
+        method: "QRIS",
+        status: "confirmed",
+        paidAt: "2026-08-20T09:00:00+07:00",
+        canonicalMdrAmount: 0,
+        expectedSettlementDate: null,
+      }],
+      mutations: [{
+        id: 36,
+        companyId: 10,
+        bankAccountId: 77,
+        amount: 218_460,
+        transactionDate: "2026-08-21",
+        direction: "IN",
+        source: "bank_import",
+        sourceClassification: "actual_bank_mutation",
+        providerName: "QRIS",
+      }],
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      mutationId: 36,
+      status: "UNMATCHED",
+      paymentItems: [{ paymentId: 35, paymentStatus: "confirmed" }],
+    });
+    expect(result[0]?.reason).toContain("netto yang dihitung 250000.00");
+    expect(result[0]?.reason).toContain("218460.00");
+  });
+
   it("keeps negative observed deduction out of MATCHED", () => {
     const result = generateQrisMutationBatchCandidates({
       payments: [{

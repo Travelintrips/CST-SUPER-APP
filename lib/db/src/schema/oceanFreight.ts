@@ -99,6 +99,7 @@ export const oceanFreightOrdersTable = pgTable("ocean_freight_orders", {
   finalPrice: numeric("final_price", { precision: 14, scale: 2 }),
   finalPriceIdr: numeric("final_price_idr", { precision: 14, scale: 2 }),
   markupAmount: numeric("markup_amount", { precision: 14, scale: 2 }),
+  ppnPct: numeric("ppn_pct", { precision: 5, scale: 2 }).default("11"),
   ppnAmount: numeric("ppn_amount", { precision: 14, scale: 2 }),
   grandTotal: numeric("grand_total", { precision: 14, scale: 2 }),
   finalBreakdown: jsonb("final_breakdown"),
@@ -127,6 +128,8 @@ export const oceanFreightOrdersTable = pgTable("ocean_freight_orders", {
   bookingConfirmedAt: timestamp("booking_confirmed_at", { withTimezone: true }),
   // Tracking status (post-booking)
   trackingStatus: text("tracking_status"),
+  trackingNotes: text("tracking_notes"),
+  trackingUpdatedAt: timestamp("tracking_updated_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => ({

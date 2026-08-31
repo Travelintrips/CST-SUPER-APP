@@ -4,7 +4,10 @@ import {
   RECONCILIATION_CANDIDATE_SOURCES,
   type ReconciliationCandidateSource,
 } from "@workspace/db";
-import { checkQrisApprovalRule } from "./qrisApprovalRule.js";
+import {
+  checkQrisApprovalRule,
+  QRIS_APPROVAL_REASON_CODES,
+} from "./qrisApprovalRule.js";
 
 export const CANONICAL_APPROVAL_BANK_MUTATION_STATUS = "approved" as const;
 export const CANONICAL_REOPEN_BANK_MUTATION_STATUS = "unmatched" as const;
@@ -27,6 +30,7 @@ export const CANONICAL_APPROVAL_CODES = {
   GENERIC_JOURNAL_ALREADY_EXISTS: "CANONICAL_GENERIC_JOURNAL_ALREADY_EXISTS",
   INCONSISTENT_STATE: "CANONICAL_APPROVAL_INCONSISTENT_STATE",
   MATCHING_EVIDENCE_INVALID: "CANONICAL_SETTLEMENT_MATCHING_EVIDENCE_INVALID",
+  HISTORICAL_REPAIR_CONFIRMATION_REQUIRED: "CANONICAL_HISTORICAL_REPAIR_CONFIRMATION_REQUIRED",
   REOPEN_NOT_ELIGIBLE: "CANONICAL_SETTLEMENT_REOPEN_NOT_ELIGIBLE",
 } as const;
 
@@ -76,6 +80,79 @@ export function isCanonicalReopenIdempotentState(row: ApprovalRow): boolean {
   );
 }
 
+export type HistoricalSettlementRepairEvidence = {
+  settlementStatus: unknown;
+  linkedMutationId: unknown;
+  linkedCanonicalMutationId: unknown;
+  mutationDirection: unknown;
+  mutationCompanyId: unknown;
+  settlementCompanyId: unknown;
+  mutationDate: unknown;
+  settlementDate: unknown;
+  mutationAmount: unknown;
+  settlementNetAmount: unknown;
+  accountMatched: boolean;
+  journalEligible: boolean;
+  paymentMethods: unknown[];
+  paymentStatuses: unknown[];
+};
+
+export function validateHistoricalSettlementRepairEvidence(
+  evidence: HistoricalSettlementRepairEvidence,
+): { ok: true } | { ok: false; reason: string } {
+  if (String(evidence.settlementStatus ?? "").toLowerCase() !== "posted") {
+    return { ok: false, reason: "Settlement harus berstatus posted." };
+  }
+  if (evidence.linkedMutationId != null || evidence.linkedCanonicalMutationId != null) {
+    return { ok: false, reason: "Settlement sudah tertaut ke mutasi bank." };
+  }
+  if (String(evidence.mutationDirection ?? "").toUpperCase() !== "IN") {
+    return { ok: false, reason: "Mutasi harus berupa uang masuk." };
+  }
+  if (
+    Number(evidence.mutationCompanyId) <= 0
+    || Number(evidence.mutationCompanyId) !== Number(evidence.settlementCompanyId)
+  ) {
+    return { ok: false, reason: "Company settlement dan mutasi tidak sama." };
+  }
+  if (
+    String(evidence.mutationDate ?? "").slice(0, 10)
+    !== String(evidence.settlementDate ?? "").slice(0, 10)
+  ) {
+    return { ok: false, reason: "Tanggal settlement dan mutasi tidak sama." };
+  }
+  if (
+    Math.abs(
+      Number(evidence.mutationAmount ?? 0) - Number(evidence.settlementNetAmount ?? 0),
+    ) > 0.001
+  ) {
+    return { ok: false, reason: "Net settlement dan nominal mutasi tidak sama." };
+  }
+  if (!evidence.accountMatched) {
+    return { ok: false, reason: "Rekening settlement dan mutasi tidak sama." };
+  }
+  if (!evidence.journalEligible) {
+    return { ok: false, reason: "Journal settlement tidak eligible." };
+  }
+  if (
+    evidence.paymentMethods.length === 0
+    || evidence.paymentMethods.some(
+      (method) => !String(method ?? "").toLowerCase().includes("qris"),
+    )
+  ) {
+    return { ok: false, reason: "Settlement harus memiliki payment QRIS aktif." };
+  }
+  if (
+    evidence.paymentStatuses.length !== evidence.paymentMethods.length
+    || evidence.paymentStatuses.some(
+      (status) => String(status ?? "").toLowerCase() !== "confirmed",
+    )
+  ) {
+    return { ok: false, reason: "Semua payment settlement harus berstatus confirmed." };
+  }
+  return { ok: true };
+}
+
 function escapeSql(value: string): string {
   return value.replace(/'/g, "''");
 }
@@ -98,12 +175,14 @@ type CanonicalApprovalInput = {
   actor: string;
   manualOverride?: boolean;
   overrideReason?: string | null;
+  historicalRepair?: boolean;
 };
 
 export type CanonicalApprovalResult = {
   ok: true;
   idempotent: boolean;
   manual_override: boolean;
+  historical_repair: boolean;
   candidate_type: "qris_settlement";
   candidate_id: number;
   candidate_source: typeof CANONICAL_SETTLEMENT_SOURCE;
@@ -158,6 +237,7 @@ export async function approveCanonicalSettlementLink(
     actor,
     manualOverride = false,
     overrideReason = null,
+    historicalRepair = false,
   } = input;
 
   if (!Number.isSafeInteger(mutationId) || mutationId <= 0) {
@@ -166,13 +246,19 @@ export async function approveCanonicalSettlementLink(
       "Mutasi rekonsiliasi tidak valid.",
     );
   }
+  if (historicalRepair && (!manualOverride || !overrideReason?.trim())) {
+    throw new CanonicalSettlementApprovalError(
+      CANONICAL_APPROVAL_CODES.HISTORICAL_REPAIR_CONFIRMATION_REQUIRED,
+      "Repair settlement historis membutuhkan konfirmasi dan alasan reviewer.",
+    );
+  }
 
   return client.transaction(async (tx) => {
      // Lock order is stable for every canonical approval:
      // public mutation -> source-aware match -> settlement
     // -> settlement journal -> underlying public payment mirrors.
     const { rows: publicMutationRows } = await tx.execute(sql.raw(`
-      SELECT id, status, journal_entry_id, amount, transaction_date,
+      SELECT id, status, journal_entry_id, amount, transaction_date, direction,
              company_id, bank_account_id
       FROM public.bank_mutations
       WHERE id = ${mutationId}
@@ -249,6 +335,60 @@ export async function approveCanonicalSettlementLink(
           CANONICAL_APPROVAL_CODES.INCONSISTENT_STATE,
           "Terdapat lebih dari satu match canonical untuk mutasi ini.",
         );
+      }
+    }
+
+    if (!matchRows.length && historicalRepair && requestedId) {
+      const inserted = await tx.execute(sql.raw(`
+        INSERT INTO bank_reconciliation_matches (
+          mutation_id,
+          candidate_type,
+          candidate_id,
+          candidate_source,
+          match_score,
+          match_reason,
+          amount_match,
+          date_match,
+          status,
+          is_manual
+        )
+        SELECT
+          ${mutationId},
+          'qris_settlement',
+          ${requestedId},
+          '${CANONICAL_SETTLEMENT_SOURCE}',
+          100,
+          'Historical posted-settlement repair; final evidence validated transactionally',
+          TRUE,
+          TRUE,
+          'candidate',
+          TRUE
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM bank_reconciliation_matches existing
+          WHERE existing.mutation_id = ${mutationId}
+            AND existing.candidate_type = 'qris_settlement'
+            AND existing.candidate_id = ${requestedId}
+            AND existing.candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
+            AND existing.status IN ('candidate', 'approved')
+        )
+        RETURNING id, mutation_id, candidate_type, candidate_id, candidate_source, status
+      `));
+      matchRows = inserted.rows as Record<string, unknown>[];
+      if (!matchRows.length) {
+        const concurrent = await tx.execute(sql.raw(`
+          SELECT id, mutation_id, candidate_type, candidate_id, candidate_source, status
+          FROM bank_reconciliation_matches
+          WHERE mutation_id = ${mutationId}
+            AND candidate_type = 'qris_settlement'
+            AND candidate_id = ${requestedId}
+            AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
+            AND status IN ('candidate', 'approved')
+          ORDER BY CASE WHEN status = 'approved' THEN 0 ELSE 1 END, id
+          LIMIT 1
+          FOR UPDATE
+        `));
+        matchRows = concurrent.rows as Record<string, unknown>[];
       }
     }
 
@@ -355,7 +495,14 @@ export async function approveCanonicalSettlementLink(
          mutation_id: mutationId,
       });
       if (idempotent && linkedCanonicalMutationId === mutationId) {
-        return buildResult(settlementId, mutationId, canonicalMutationId, true, manualOverride);
+        return buildResult(
+          settlementId,
+          mutationId,
+          canonicalMutationId,
+          true,
+          manualOverride,
+          historicalRepair,
+        );
       }
       throw new CanonicalSettlementApprovalError(
         CANONICAL_APPROVAL_CODES.SETTLEMENT_NOT_ELIGIBLE,
@@ -370,24 +517,41 @@ export async function approveCanonicalSettlementLink(
         "Mutasi bank sudah tidak eligible untuk approval canonical.",
       );
     }
-    if (linkedMutationId != null && linkedMutationId !== mutationId) {
+    if (String(publicMutation.direction ?? "").toUpperCase() !== "IN") {
+      throw new CanonicalSettlementApprovalError(
+        CANONICAL_APPROVAL_CODES.MATCHING_EVIDENCE_INVALID,
+        "Settlement QRIS hanya boleh ditautkan ke mutasi uang masuk.",
+      );
+    }
+    if (
+      String(settlement.settlement_date ?? "").slice(0, 10)
+      !== String(publicMutation.transaction_date ?? "").slice(0, 10)
+    ) {
+      throw new CanonicalSettlementApprovalError(
+        CANONICAL_APPROVAL_CODES.MATCHING_EVIDENCE_INVALID,
+        "Tanggal settlement harus sama persis dengan tanggal mutasi bank.",
+      );
+    }
+    if (
+      Math.abs(
+        Number(settlement.net_amount ?? 0) - Number(publicMutation.amount ?? 0),
+      ) > 0.001
+    ) {
+      throw new CanonicalSettlementApprovalError(
+        CANONICAL_APPROVAL_CODES.MATCHING_EVIDENCE_INVALID,
+        "Nominal net settlement harus sama persis dengan nominal mutasi bank.",
+      );
+    }
+    // A previous attempt can have written one of the two compatibility link
+    // columns before the status update was interrupted. Treat that exact same
+    // mutation as a recoverable partial link; a link to any other mutation is
+    // still a hard conflict.
+    const conflictingLinkId = [linkedMutationId, linkedCanonicalMutationId]
+      .find((linkedId) => linkedId != null && linkedId !== mutationId);
+    if (conflictingLinkId != null) {
       throw new CanonicalSettlementApprovalError(
         CANONICAL_APPROVAL_CODES.SETTLEMENT_ALREADY_USED,
         "Settlement canonical sudah terhubung ke mutasi bank lain.",
-      );
-    }
-    if (linkedMutationId === mutationId) {
-      throw new CanonicalSettlementApprovalError(
-        CANONICAL_APPROVAL_CODES.INCONSISTENT_STATE,
-        "Settlement canonical memiliki link sebelum status reconciled.",
-      );
-    }
-    if (linkedCanonicalMutationId != null) {
-      throw new CanonicalSettlementApprovalError(
-        CANONICAL_APPROVAL_CODES.SETTLEMENT_ALREADY_USED,
-        linkedCanonicalMutationId === mutationId
-          ? "Settlement canonical memiliki link sebelum status reconciled."
-          : "Settlement canonical sudah terhubung ke mutasi bank lain.",
       );
     }
     if (settlement.settlement_journal_id == null) {
@@ -453,6 +617,7 @@ export async function approveCanonicalSettlementLink(
       SELECT p.id,
              p.company_id,
              p.amount,
+             p.status::text AS payment_status,
              p.payment_method::text AS payment_method,
              (
                COALESCE(p.paid_at, p.confirmed_at, p.created_at)
@@ -467,6 +632,33 @@ export async function approveCanonicalSettlementLink(
     `));
     const settlementGross = Number(settlement.gross_amount ?? 0);
     const settlementNet = Number(settlement.net_amount ?? 0);
+    if (historicalRepair) {
+      const repairEvidence = validateHistoricalSettlementRepairEvidence({
+        settlementStatus: settlement.status,
+        linkedMutationId,
+        linkedCanonicalMutationId,
+        mutationDirection: publicMutation.direction,
+        mutationCompanyId: publicCompanyId,
+        settlementCompanyId: settlementCompanyId,
+        mutationDate: publicMutation.transaction_date,
+        settlementDate: settlement.settlement_date,
+        mutationAmount: publicMutation.amount,
+        settlementNetAmount: settlement.net_amount,
+        accountMatched: Number(accountResolution?.account_count) === 1
+          && Number(accountResolution?.account_id) === Number(publicMutation.bank_account_id),
+        journalEligible: true,
+        paymentMethods: (strictPaymentRows as Array<Record<string, unknown>>)
+          .map((payment) => payment.payment_method),
+        paymentStatuses: (strictPaymentRows as Array<Record<string, unknown>>)
+          .map((payment) => payment.payment_status),
+      });
+      if (!repairEvidence.ok) {
+        throw new CanonicalSettlementApprovalError(
+          CANONICAL_APPROVAL_CODES.MATCHING_EVIDENCE_INVALID,
+          repairEvidence.reason,
+        );
+      }
+    }
     const strictApproval = checkQrisApprovalRule({
       companyId: publicCompanyId,
       mutationDate: String(publicMutation.transaction_date ?? ""),
@@ -483,6 +675,59 @@ export async function approveCanonicalSettlementLink(
         alreadyReconciled: false,
       })),
     });
+    if (historicalRepair) {
+      const mutationDate = String(publicMutation.transaction_date ?? "").slice(0, 10);
+      const expectedDate = new Date(`${mutationDate}T00:00:00.000Z`);
+      expectedDate.setUTCDate(expectedDate.getUTCDate() - 1);
+      const expectedHMinusOne = expectedDate.toISOString().slice(0, 10);
+      const coreApproval = checkQrisApprovalRule({
+        companyId: publicCompanyId,
+        mutationDate,
+        mutationAmount: Number(publicMutation.amount ?? 0),
+        payments: (strictPaymentRows as Array<Record<string, unknown>>).map((payment, index) => ({
+          id: Number(payment.id),
+          paymentMethod: payment.payment_method == null
+            ? null
+            : String(payment.payment_method),
+          paymentDate: expectedHMinusOne,
+          grossAmount: Number(payment.amount ?? 0),
+          companyId: payment.company_id == null ? null : Number(payment.company_id),
+          canonicalMdrAmount: index === 0 ? settlementGross - settlementNet : 0,
+          alreadyReconciled: false,
+        })),
+      });
+      if (!coreApproval.ok) {
+        throw new CanonicalSettlementApprovalError(
+          CANONICAL_APPROVAL_CODES.MATCHING_EVIDENCE_INVALID,
+          coreApproval.reason,
+        );
+      }
+      if (
+        !strictApproval.ok
+        && strictApproval.code !== QRIS_APPROVAL_REASON_CODES.PAYMENT_DATE_NOT_H_MINUS_ONE
+      ) {
+        throw new CanonicalSettlementApprovalError(
+          CANONICAL_APPROVAL_CODES.MATCHING_EVIDENCE_INVALID,
+          strictApproval.reason,
+        );
+      }
+    }
+    if (strictPaymentRows.length === 0) {
+      throw new CanonicalSettlementApprovalError(
+        CANONICAL_APPROVAL_CODES.MATCHING_EVIDENCE_INVALID,
+        "Settlement canonical tidak memiliki payment aktif.",
+      );
+    }
+    if (
+      (strictPaymentRows as Array<Record<string, unknown>>).some(
+        (payment) => !String(payment.payment_method ?? "").toLowerCase().includes("qris"),
+      )
+    ) {
+      throw new CanonicalSettlementApprovalError(
+        CANONICAL_APPROVAL_CODES.MATCHING_EVIDENCE_INVALID,
+        "Repair settlement historis hanya boleh memuat payment QRIS.",
+      );
+    }
     if (!strictApproval.ok && !manualOverride) {
       throw new CanonicalSettlementApprovalError(
         CANONICAL_APPROVAL_CODES.MATCHING_EVIDENCE_INVALID,
@@ -536,6 +781,7 @@ export async function approveCanonicalSettlementLink(
       action: "canonical settlement reconciliation approved",
       journal_created: false,
       manual_override: manualOverride,
+      historical_repair: historicalRepair,
       override_reason: manualOverride ? (overrideReason?.trim() || "Override manual oleh reviewer") : null,
       matching_evidence: strictApproval.ok ? "valid" : "overridden",
     };
@@ -548,9 +794,9 @@ export async function approveCanonicalSettlementLink(
           reconciled_at = NOW(),
           reconciled_by = '${escapeSql(actor)}'
       WHERE id = ${settlementId}
-        AND status = 'posted'
-        AND bank_mutation_id IS NULL
-        AND canonical_bank_mutation_id IS NULL
+        AND LOWER(status) = 'posted'
+        AND (bank_mutation_id IS NULL OR bank_mutation_id = ${mutationId})
+        AND (canonical_bank_mutation_id IS NULL OR canonical_bank_mutation_id = ${mutationId})
     `));
     if (!hasRowCount(settlementUpdate)) {
       throw new CanonicalSettlementApprovalError(
@@ -601,7 +847,14 @@ export async function approveCanonicalSettlementLink(
       )
     `));
 
-    return buildResult(settlementId, mutationId, canonicalMutationId, false, manualOverride);
+    return buildResult(
+      settlementId,
+      mutationId,
+      canonicalMutationId,
+      false,
+      manualOverride,
+      historicalRepair,
+    );
   });
 }
 
@@ -838,11 +1091,13 @@ function buildResult(
   canonicalMutationId: number,
   idempotent: boolean,
   manualOverride: boolean,
+  historicalRepair = false,
 ): CanonicalApprovalResult {
   return {
     ok: true,
     idempotent,
     manual_override: manualOverride,
+    historical_repair: historicalRepair,
     candidate_type: "qris_settlement",
     candidate_id: settlementId,
     candidate_source: CANONICAL_SETTLEMENT_SOURCE,

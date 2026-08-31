@@ -15,11 +15,15 @@
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { readSheet, batchUpdateSheet, ensureSheets, clearAndWriteSheet, formatRowsColor, type RowColor } from "./googleSheets.js";
-import { runUnifiedMatching } from "./reconciliation/unifiedMatchingEngine.js";
+import {
+  approveAndCreateJournal,
+  runUnifiedMatching,
+} from "./reconciliation/unifiedMatchingEngine.js";
 import {
   runReconDecisionStack,
   type MutationForDecisionStack,
 } from "./reconciliation/reconDecisionStack.js";
+import { planReferenceCoaAutoPost } from "./reconciliation/referenceCoaAutoPost.js";
 import { logger } from "./logger.js";
 import { canonicalMutationKey, canonicalNormalizeDesc } from "./reconciliation/canonicalMutationKey.js";
 import { isQrisSettlementDescription } from "./reconciliation/qrisSettlement.js";
@@ -576,24 +580,136 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
         };
         const decision = await runReconDecisionStack(decisionInput);
         if (decision.decisionSource === "MANUAL_RULE" && decision.matchedRuleId) {
+          const ruleRows = await db.execute(sql`
+            SELECT target_coa_code, confidence_score
+            FROM recon_rules
+            WHERE id = ${Number(decision.matchedRuleId)}
+              AND company_id = ${Number(company_id)}
+              AND is_active = TRUE
+            LIMIT 1
+          `);
+          const matchedRule = (ruleRows.rows as any[])[0] as {
+            target_coa_code?: string | null;
+            confidence_score?: number | string | null;
+          } | undefined;
+          const targetCoaCode = String(matchedRule?.target_coa_code ?? "").trim();
+          const autoPostPlan = planReferenceCoaAutoPost({
+            targetCoaCode,
+            ruleConfidence: matchedRule?.confidence_score == null
+              ? null
+              : Number(matchedRule.confidence_score),
+            decisionConfidence: decision.confidence,
+          });
           const reason = decision.confidenceBreakdown[0]?.label
             ?.slice(0, 100)
             .replace(/'/g, "''") ?? "manual reconciliation rule";
-          await db.execute(sql.raw(`
+          await db.execute(sql`
             INSERT INTO bank_reconciliation_matches
               (mutation_id, candidate_type, candidate_id, match_score, match_reason,
                amount_match, date_match, status)
             VALUES
-              (${id}, 'recon_rule', ${decision.matchedRuleId},
-               ${decision.confidence}, 'MANUAL_RULE:${reason}',
+              (${id}, 'recon_rule', ${Number(decision.matchedRuleId)},
+                ${decision.confidence}, ${`MANUAL_RULE:${reason}`},
                FALSE, FALSE, 'candidate')
             ON CONFLICT DO NOTHING
-          `));
-          await db.execute(sql`
-            UPDATE bank_mutations
-               SET status = 'manual_review', updated_at = NOW()
-             WHERE id = ${id} AND status = 'unmatched'
           `);
+
+          if (autoPostPlan.shouldAttempt) {
+            const attemptedMeta = JSON.stringify({
+              rule_id: Number(decision.matchedRuleId),
+              target_coa_code: targetCoaCode,
+              confidence: decision.confidence,
+              source: "sheet-sync",
+            });
+            await db.execute(sql`
+              INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
+              VALUES (
+                ${id},
+                'AUTO_POST_ATTEMPTED',
+                'sheet-sync',
+                ${attemptedMeta}::jsonb
+              )
+            `);
+
+            const approval = await approveAndCreateJournal(
+              id,
+              null,
+              null,
+              null,
+              "sheet-sync",
+              `Auto-post berdasarkan Referensi COA #${Number(decision.matchedRuleId)}`,
+              targetCoaCode,
+              null,
+              true,
+            );
+
+            if (approval.ok) {
+              // The journal approval is authoritative. Mark the persisted
+              // Rule AI candidate approved as well so the UI and sheet
+              // write-back do not continue showing a stale candidate.
+              await db.execute(sql`
+                UPDATE bank_reconciliation_matches
+                   SET status = 'approved'
+                 WHERE mutation_id = ${id}
+                   AND candidate_type = 'recon_rule'
+                   AND candidate_id = ${Number(decision.matchedRuleId)}
+                   AND status = 'candidate'
+              `);
+              continue;
+            }
+
+            const blockedReason = approval.error ?? "Auto-post ditahan oleh safeguard jurnal.";
+            const blockedCode = approval.code ?? "AUTO_POST_GUARD";
+            const blockedMeta = JSON.stringify({
+              rule_id: Number(decision.matchedRuleId),
+              target_coa_code: targetCoaCode,
+              confidence: decision.confidence,
+              error: blockedReason,
+              code: blockedCode,
+              source: "sheet-sync",
+            });
+            await db.transaction(async (tx) => {
+              await tx.execute(sql`
+                UPDATE bank_mutations
+                   SET status = 'manual_review',
+                       review_reason = ${blockedReason},
+                       review_code = ${blockedCode},
+                       updated_at = NOW()
+                 WHERE id = ${id}
+                   AND status IN ('unmatched', 'matched', 'duplicate_need_review', 'manual_review')
+              `);
+              await tx.execute(sql`
+                INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
+                VALUES (${id}, 'AUTO_POST_BLOCKED', 'sheet-sync', ${blockedMeta}::jsonb)
+              `);
+            });
+            continue;
+          }
+
+          const reviewReason = autoPostPlan.reason ?? "Rule AI memerlukan review manual.";
+          const reviewCode = autoPostPlan.code ?? "AUTO_POST_GUARD";
+          const reviewMeta = JSON.stringify({
+            rule_id: Number(decision.matchedRuleId),
+            target_coa_code: targetCoaCode || null,
+            confidence: decision.confidence,
+            error: reviewReason,
+            code: reviewCode,
+            source: "sheet-sync",
+          });
+          await db.transaction(async (tx) => {
+            await tx.execute(sql`
+              UPDATE bank_mutations
+                 SET status = 'manual_review',
+                     review_reason = ${reviewReason},
+                     review_code = ${reviewCode},
+                     updated_at = NOW()
+               WHERE id = ${id} AND status = 'unmatched'
+            `);
+            await tx.execute(sql`
+              INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
+              VALUES (${id}, 'AUTO_POST_BLOCKED', 'sheet-sync', ${reviewMeta}::jsonb)
+            `);
+          });
           continue;
         }
         await runUnifiedMatching({

@@ -14,6 +14,7 @@ import {
   getPortalCustomerContext,
   PortalCustomerContextError,
 } from "../lib/services/portalCustomerContextService.js";
+import { NotificationService } from "../lib/services/notificationService.js";
 
 export const oceanFreightPublicRouter = Router();
 
@@ -531,6 +532,18 @@ oceanFreightPublicRouter.post("/inquiry", submitLimit, optionalCustomerPortalAut
     `);
 
     const order = rows[0] as any;
+
+    void NotificationService.saveAndBroadcast("admin_notification", {
+      type: "portal_service_submitted",
+      orderId: order.id,
+      orderNumber: order.order_number,
+      customerName,
+      companyName: customerCompany,
+      title: "Inquiry Ocean Freight baru",
+      body: `${customerName} mengirim inquiry Ocean Freight ${order.order_number}.`,
+      serviceKey: "ocean-freight",
+      dedupeKey: `portal-service:ocean-freight:${order.id}:submitted`,
+    });
 
     // Notify admin
     try {

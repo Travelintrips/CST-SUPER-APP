@@ -327,7 +327,6 @@ router.post("/", async (req, res) => {
     // the classification config is the reusable reference shown in the
     // configuration screen, and the AI rule links back to that config.
     try {
-      await runReconClassificationMigration();
       const aiFlow = body.direction === "IN"
         ? "INCOME_ALLOCATION"
         : "ROUTINE_EXPENSE_ALLOCATION";
@@ -422,7 +421,15 @@ router.post("/", async (req, res) => {
       // write leaves Rule AI and runtime editing on different identities.
       // Run even when NOT EXISTS found an older mirror: that older row may
       // still be unlinked from the operational rule.
-      await syncAiClassificationRulesToOperational(companyId);
+      // The newly-created recon_rules row is already authoritative and can
+      // be used immediately. The reverse mirror is maintenance work and
+      // must not keep the Save request/loading state open.
+      void syncAiClassificationRulesToOperational(companyId).catch((syncError: any) => {
+        logger.warn(
+          { err: syncError?.message ?? String(syncError), ruleId: rule.id },
+          "[recon_rules] deferred Rule AI operational sync failed",
+        );
+      });
     } catch (syncError: any) {
       // The operational rule is already saved and remains usable for
       // auto-approval. Do not turn a configuration mirror issue into a

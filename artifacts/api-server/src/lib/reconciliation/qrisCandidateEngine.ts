@@ -38,6 +38,10 @@ export interface QrisPaymentCandidateInput {
   method: string | null;
   status: string | null;
   paidAt: string | Date | null;
+  /** Authoritative MDR amount, when already calculated on the payment. */
+  canonicalMdrAmount?: number | string | null;
+  /** Fallback MDR rate when the source stores a rate instead of an amount. */
+  canonicalMdrRate?: number | string | null;
   expectedSettlementDate: string | null;
   settlementRuleVersion?: string | null;
   providerName?: string | null;
@@ -47,6 +51,7 @@ export interface QrisPaymentCandidateInput {
   bookingNumber?: string | null;
   customerName?: string | null;
   facilityName?: string | null;
+  revenueDescription?: string | null;
   bookingDate?: string | null;
   startTime?: string | null;
   endTime?: string | null;
@@ -96,6 +101,7 @@ export interface QrisMutationBatchCandidate {
   paymentItems: Array<{
     paymentId: number;
     grossAmount: number;
+    paymentStatus?: string | null;
     expectedSettlementDate: string | null;
     settlementRuleVersion: string | null;
     paymentNumber?: string | null;
@@ -103,6 +109,7 @@ export interface QrisMutationBatchCandidate {
     bookingNumber?: string | null;
     customerName?: string | null;
     facilityName?: string | null;
+    revenueDescription?: string | null;
     bookingDate?: string | null;
     startTime?: string | null;
     endTime?: string | null;
@@ -117,19 +124,43 @@ export interface QrisMutationBatchCandidate {
 
 export type QrisCandidateRule =
   | "strict"
-  | "payment_method_h_minus_one";
+  | "payment_method_h_minus_one"
+  /**
+   * Production QRIS auto-match contract:
+   * confirmed payment + Jakarta H-1 + actual IN mutation + complete
+   * company/account/provider dimensions + exact gross/net/MDR evidence.
+   */
+  | "strict_h_minus_one_auto";
 
 function roundMoney(value: number): number {
   return Number((Math.max(0, value) || 0).toFixed(2));
+}
+
+function paymentMdrAmount(payment: QrisPaymentCandidateInput): number | null {
+  const explicit = payment.canonicalMdrAmount;
+  if (explicit != null && explicit !== "") {
+    const amount = Number(explicit);
+    return Number.isFinite(amount) && amount >= 0 ? roundMoney(amount) : null;
+  }
+  const rate = Number(payment.canonicalMdrRate ?? 0);
+  if (!Number.isFinite(rate) || rate < 0) return null;
+  return roundMoney((Number(payment.amount) * rate) / 100);
 }
 
 function isQrisPayment(payment: QrisPaymentCandidateInput): boolean {
   return String(payment.method ?? "").trim().toLowerCase().includes("qris");
 }
 
-function isEligiblePayment(payment: QrisPaymentCandidateInput): boolean {
+function isEligiblePayment(
+  payment: QrisPaymentCandidateInput,
+  confirmedOnly = false,
+): boolean {
   return isQrisPayment(payment)
-    && String(payment.status ?? "").toLowerCase() === "paid"
+    && (
+      confirmedOnly
+        ? String(payment.status ?? "").toLowerCase() === "confirmed"
+        : String(payment.status ?? "").toLowerCase() === "paid"
+    )
     && !payment.alreadyReconciled;
 }
 
@@ -289,17 +320,106 @@ export function generateQrisMutationBatchCandidates(input: {
 }): QrisMutationBatchCandidate[] {
   const requireExplicitSettlementMetadata = input.requireExplicitSettlementMetadata === true;
   const paymentMethodHMinusOneOnly = input.candidateRule === "payment_method_h_minus_one";
+  const strictHMinusOneAuto = input.candidateRule === "strict_h_minus_one_auto";
+  const hMinusOneRule = paymentMethodHMinusOneOnly || strictHMinusOneAuto;
   const baseRules = {
     ...DEFAULT_QRIS_PROVIDER_RULES,
     ...(input.providerRules ?? {}),
   };
   const existingMutationIds = new Set(input.existingMutationIds ?? []);
-  const eligiblePayments = input.payments.filter(isEligiblePayment);
+  const eligiblePayments = input.payments.filter((payment) =>
+    isEligiblePayment(payment, strictHMinusOneAuto),
+  );
   const openMutations = input.mutations.filter(isOpenMutation);
   const output: QrisMutationBatchCandidate[] = [];
+  const claimedPaymentIds = new Set<number>();
 
   for (const mutation of [...openMutations].sort((a, b) => a.id - b.id)) {
     if (existingMutationIds.has(mutation.id)) continue;
+
+    /*
+     * The active QRIS contract is intentionally small:
+     *   1. source payment is QRIS and confirmed;
+     *   2. paid_at is exactly the calendar day before the bank mutation;
+     *   3. bank amount equals gross payment minus the payment MDR for MATCHED.
+     *      H-1 batches are still returned as UNMATCHED review evidence when
+     *      this amount does not agree.
+     *
+     * Do not add provider, bank-account, settlement metadata, source-label,
+     * or partition guards here. Those fields are frequently absent on valid
+     * imports and must not turn a deterministic H-1/MDR match into REVIEW.
+     */
+    if (strictHMinusOneAuto) {
+      const selectedPayments = eligiblePayments.filter((payment) =>
+        payment.companyId === mutation.companyId
+          && !claimedPaymentIds.has(payment.id)
+          && calendarDate(payment.paidAt) != null
+          && resolveSettlementDate(payment.paidAt, null, 1) === mutation.transactionDate,
+      );
+      if (selectedPayments.length === 0) continue;
+
+      const grossAmount = roundMoney(
+        selectedPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0),
+      );
+      const mdrAmounts = selectedPayments.map(paymentMdrAmount);
+      if (mdrAmounts.some((amount) => amount == null)) continue;
+      const validMdrAmounts = mdrAmounts.filter(
+        (amount): amount is number => amount != null,
+      );
+      const mdrAmount = roundMoney(
+        validMdrAmounts.reduce((sum, amount) => sum + amount, 0),
+      );
+       const expectedNetAmount = roundMoney(grossAmount - mdrAmount);
+      const bankAmount = roundMoney(Number(mutation.amount) || 0);
+       const amountMatches = expectedNetAmount === bankAmount;
+       const amountDifference = roundMoney(Math.abs(expectedNetAmount - bankAmount));
+
+      const sourceClassification = classifyBankMutationSource(
+        mutation.source,
+        mutation.sourceClassification,
+      );
+      output.push({
+        mutationId: mutation.id,
+        companyId: mutation.companyId,
+        bankAccountId: mutation.bankAccountId,
+        providerCode: "unknown",
+        providerDetectionSource: "unknown",
+        mutationSourceClassification: sourceClassification,
+        sourceDate: mutation.transactionDate,
+        estimatedSettlementDate: mutation.transactionDate,
+        settlementRuleVersion: "payment-method-h-minus-one-v1",
+        grossAmount,
+        netAmount: bankAmount,
+        observedDeduction: mdrAmount,
+        effectiveDeductionRate: grossAmount > 0 ? mdrAmount / grossAmount : null,
+        paymentItems: selectedPayments.map((payment) => ({
+          paymentId: payment.id,
+          grossAmount: roundMoney(Number(payment.amount) || 0),
+          paymentStatus: String(payment.status ?? "").trim() || null,
+          canonicalSettlementId: payment.canonicalSettlementId ?? null,
+          expectedSettlementDate: mutation.transactionDate,
+          settlementRuleVersion: "payment-method-h-minus-one-v1",
+          paymentNumber: payment.paymentNumber ?? null,
+          bookingId: payment.bookingId ?? null,
+          bookingNumber: payment.bookingNumber ?? null,
+          customerName: payment.customerName ?? null,
+          facilityName: payment.facilityName ?? null,
+          revenueDescription: payment.revenueDescription ?? null,
+          bookingDate: payment.bookingDate ?? null,
+          startTime: payment.startTime ?? null,
+          endTime: payment.endTime ?? null,
+          paidAt: payment.paidAt == null ? null : String(payment.paidAt),
+          paymentDate: canonicalPaymentDate(payment),
+        })),
+         status: amountMatches ? "MATCHED" : "UNMATCHED",
+         confidence: amountMatches ? 1 : 0,
+         reason: amountMatches
+           ? "Auto-match QRIS: payment confirmed, tanggal paid_at tepat H-1, dan netto setelah MDR sama dengan mutasi bank."
+           : `Review QRIS H-1: payment confirmed dan tanggal paid_at tepat H-1, tetapi netto yang dihitung ${expectedNetAmount.toFixed(2)} tidak sama dengan mutasi bank ${bankAmount.toFixed(2)} (selisih ${amountDifference.toFixed(2)}).`,
+      });
+      for (const payment of selectedPayments) claimedPaymentIds.add(payment.id);
+      continue;
+    }
 
     const sourceClassification = classifyBankMutationSource(
       mutation.source,
@@ -320,9 +440,9 @@ export function generateQrisMutationBatchCandidates(input: {
       : input.accountProviderRules;
     const evidence = providerEvidence(mutation, effectiveAccountRules);
     const methodOnlyPath = evidence.providerCode === "unknown";
-    // The payment method is the QRIS classifier. Bank-side provider data is
-    // optional enrichment for the rule/tolerance calculation, not a gate that
-    // can hide a QRIS payment from the reviewer.
+      // The payment method is the QRIS classifier for the legacy review path.
+      // The strict auto-match path below deliberately requires the complete
+      // bank-side evidence before it emits anything.
     const matchingRules = { ...DEFAULT_QRIS_PROVIDER_RULES, ...rules };
     const accountRules = effectiveAccountRules?.[String(mutation.bankAccountId)];
     const directAccountRule = accountRules?.[evidence.providerCode];
@@ -443,12 +563,11 @@ export function generateQrisMutationBatchCandidates(input: {
       && allPartitionReferences.every((reference) => reference !== null)
       && new Set(allPartitionReferences).size === allPartitionReferences.length;
 
-    // Unknown provider evidence is review-only. Showing the complete
-    // company/account/date pool is useful to a reviewer, but it is never an
-    // auto-match and never a nominal subset.
+      // Unknown provider evidence is review-only in the legacy path. The
+      // strict path does not emit this row at all.
     let selectedPayments = naturalPayments;
     let partitionBlocked = false;
-    if (hasMultipleSettlements && !paymentMethodHMinusOneOnly) {
+    if (hasMultipleSettlements && !hMinusOneRule) {
       // Multiple settlements on the same provider/date/account are not
       // evidence that an arbitrary amount-based subset belongs to this row.
       if (!deterministicPartition) {
@@ -496,9 +615,21 @@ export function generateQrisMutationBatchCandidates(input: {
     const completeBankDimension =
       mutation.companyId != null && mutation.bankAccountId != null;
     const expectedDatesPresent = naturalPayments.every((payment) => Boolean(payment.expectedSettlementDate));
-    const matched = paymentMethodHMinusOneOnly
-      ? false
-      : completeBankDimension
+    const matched = strictHMinusOneAuto
+      ? completeBankDimension
+        && actualEvidence
+        && knownProvider
+        && !ambiguousEffectiveRule
+        && !paymentProviderMismatch
+        && hasNaturalBatch
+        && expectedDatesPresent
+        && !mixedCanonicalProviderGroups
+        && !partitionBlocked
+        && !splitSettlementReconcilesTotal
+        && validDeduction
+      : paymentMethodHMinusOneOnly
+        ? false
+        : completeBankDimension
         && actualEvidence
         && knownProvider
         && !paymentProviderMismatch
@@ -510,7 +641,9 @@ export function generateQrisMutationBatchCandidates(input: {
         && !partitionBlocked
         && !splitSettlementReconcilesTotal
         && validDeduction;
-    const reviewReason = paymentMethodHMinusOneOnly
+    const reviewReason = strictHMinusOneAuto
+      ? "Auto-match QRIS: payment confirmed, H-1 kalender Jakarta, provider/rekening/company cocok, dan gross-net-MDR tervalidasi."
+      : paymentMethodHMinusOneOnly
       ? "Kandidat QRIS: payment_method QRIS dan tanggal pembayaran tepat H-1 dari tanggal mutasi. Guard provider, rekening, metadata, nominal, dan rate tidak digunakan pada tahap kandidat."
       : ambiguousEffectiveRule
       ? "AMBIGUOUS_EFFECTIVE_WINDOW: lebih dari satu aturan provider/rekening aktif pada tanggal settlement; kandidat wajib direview."
@@ -542,6 +675,10 @@ export function generateQrisMutationBatchCandidates(input: {
                                 ? "Settlement metadata payment belum lengkap; tanggal H+1 dihitung dari paid_at dan kandidat wajib direview."
                                 : `${evidence.providerCode} natural batch cocok secara deterministic.`;
 
+    // Strict generation is a positive allow-list. Invalid evidence is kept
+    // only in the bank/source audit, never as a noisy REVIEW candidate.
+    if (strictHMinusOneAuto && !matched) continue;
+
     output.push({
       mutationId: mutation.id,
       companyId: mutation.companyId,
@@ -567,13 +704,16 @@ export function generateQrisMutationBatchCandidates(input: {
         bookingNumber: payment.bookingNumber ?? null,
         customerName: payment.customerName ?? null,
         facilityName: payment.facilityName ?? null,
+        revenueDescription: payment.revenueDescription ?? null,
         bookingDate: payment.bookingDate ?? null,
         startTime: payment.startTime ?? null,
         endTime: payment.endTime ?? null,
         paidAt: payment.paidAt == null ? null : String(payment.paidAt),
         paymentDate: canonicalPaymentDate(payment),
       })),
-      status: paymentMethodHMinusOneOnly
+      status: strictHMinusOneAuto
+        ? "MATCHED"
+        : paymentMethodHMinusOneOnly
         ? "REVIEW"
         : matched ? "MATCHED" : !completeBankDimension
           ? "UNMATCHED"

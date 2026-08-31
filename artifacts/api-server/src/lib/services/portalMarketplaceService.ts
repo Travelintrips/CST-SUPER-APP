@@ -12,6 +12,7 @@ import {
   portalProductOrdersTable,
   portalProductOrderItemsTable,
 } from "@workspace/db";
+import { createHash } from "crypto";
 import { eq, and, asc, sql } from "drizzle-orm";
 import { getCatalogItemPublic } from "./portalVendorCatalogService.js";
 import { getPortalCustomerContext } from "./portalCustomerContextService.js";
@@ -21,6 +22,7 @@ import {
   linkMktRfqToLegacy,
   validateMarketplaceDestinationMetadata,
 } from "./marketplaceRfqService.js";
+import { NotificationService } from "./notificationService.js";
 
 // ─── private helpers ──────────────────────────────────────────────────────────
 
@@ -35,6 +37,26 @@ function mkMarketplaceOrderNumber(): string {
 
 function makeServiceError(statusCode: number, message: string): Error {
   return Object.assign(new Error(message), { statusCode });
+}
+
+function normalizeIdempotencyKey(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const key = value.trim();
+  return key.length >= 1 && key.length <= 200 ? key : null;
+}
+
+function buildLogicalRequestKey(input: {
+  catalogItemId: number;
+  portalCustomerId: number | null;
+  buyerEmail: string;
+  buyerPhone: string;
+}): string {
+  // Preserve the legacy five-minute duplicate window while making the
+  // canonical identity survive a retry much later.
+  const bucket = Math.floor(Date.now() / (5 * 60 * 1000));
+  return `mkt-rfq:${createHash("sha256")
+    .update(JSON.stringify({ ...input, bucket }))
+    .digest("hex")}`;
 }
 
 // ─── submitMarketplaceQuote ───────────────────────────────────────────────────
@@ -62,6 +84,7 @@ export interface SubmitQuoteBody {
   estimated_price?:     number;
   marketplace_item_id?: number;
   item_type?:           string;
+  idempotency_key?:     string;
 }
 
 export interface SubmitQuoteResult {
@@ -93,6 +116,7 @@ export async function submitMarketplaceQuote(params: {
   portalCustomerId:     number | null;
   ip:                   string | null;
   body:                 SubmitQuoteBody;
+  idempotencyKey?:      string | null;
 }): Promise<SubmitQuoteResult> {
   const { catalogItemId, portalCustomerId, ip, body } = params;
 
@@ -150,6 +174,15 @@ export async function submitMarketplaceQuote(params: {
     destinationLng: destination_lng,
     destinationAddress: effectiveShippingAddress,
   });
+  const logicalRequestKey =
+    normalizeIdempotencyKey(params.idempotencyKey) ??
+    normalizeIdempotencyKey(body.idempotency_key) ??
+    buildLogicalRequestKey({
+      catalogItemId,
+      portalCustomerId,
+      buyerEmail: resolvedEmail,
+      buyerPhone: resolvedPhone,
+    });
 
   // ── 3. Price / order calculations ────────────────────────────────────────
   const qtyNum     = Math.max(1, Number(qty) || 1);
@@ -277,6 +310,7 @@ export async function submitMarketplaceQuote(params: {
         destinationLng: destinationMetadata.lng,
         requiredDeliveryDate: required_date?.trim() ?? null,
         ipAddress:          ip,
+         idempotencyKey:     logicalRequestKey,
       });
     } catch (err) {
       // A guest has no canonical owner, so retain the explicit legacy fallback
@@ -330,6 +364,18 @@ export async function submitMarketplaceQuote(params: {
       order.id,
       order.orderNumber,
     ).catch(() => {});
+
+    void NotificationService.saveAndBroadcast("admin_notification", {
+      type: "portal_service_submitted",
+      orderId: mktRfqResult.rfqId,
+      orderNumber: mktRfqResult.rfqNumber,
+      customerName: resolvedName,
+      companyName: customerContext?.company?.name ?? null,
+      title: "RFQ Marketplace baru",
+      body: `${resolvedName} mengirim RFQ Marketplace ${mktRfqResult.rfqNumber}.`,
+      serviceKey: "marketplace",
+      dedupeKey: `portal-service:marketplace:${mktRfqResult.rfqId}:submitted`,
+    });
   }
 
   // ── 7. Increment quote_count (fire-and-forget) ────────────────────────────

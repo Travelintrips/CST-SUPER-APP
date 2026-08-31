@@ -1130,15 +1130,106 @@ async function postBatchFromNormalized(
         }
 
         if (_mutId) {
-          const { runUnifiedMatching } = await import('../lib/reconciliation/unifiedMatchingEngine.js');
-          const _result = await runUnifiedMatching({
-            id: _mutId, amount: _amount, transaction_date: _txDate,
-            mutation_key: _mk, company_id: _effCoId ?? null,
-            provider_name: null,
+          const { runReconDecisionStack } = await import('../lib/reconciliation/reconDecisionStack.js');
+          const { approveAndCreateJournal, runUnifiedMatching } = await import('../lib/reconciliation/unifiedMatchingEngine.js');
+          const { planReferenceCoaAutoPost } = await import('../lib/reconciliation/referenceCoaAutoPost.js');
+          const _decision = await runReconDecisionStack({
+            id: _mutId,
+            companyId: _effCoId,
+            amount: _amount,
             direction: _dir,
-          }, actor).catch(() => ({ status: 'unmatched' as const, all: [] }));
+            transactionDate: _txDate,
+            description: String(ne.description ?? ''),
+            normalizedDescription: _normDesc,
+            reference: null,
+            providerOrderId: null,
+            bankAccountId: ne.bank_account_id ?? null,
+            bank: ne.source_account ?? null,
+            transactionCode: null,
+            counterpartyName: null,
+            counterpartyAccount: null,
+            status: 'unmatched',
+          }).catch(() => null);
 
-          const _matched = _result.status === 'auto_matched' || _result.status === 'manual_review';
+          let _result: any;
+          let _ruleAutoPosted = false;
+          if (_decision?.decisionSource === 'MANUAL_RULE' && _decision.matchedRuleId) {
+            const { rows: _ruleRows } = await db.execute(sql.raw(`
+              SELECT target_coa_code, confidence_score
+              FROM recon_rules
+              WHERE id = ${Number(_decision.matchedRuleId)}
+                AND company_id = ${Number(_effCoId)}
+                AND is_active = TRUE
+              LIMIT 1
+            `)).catch(() => ({ rows: [] as any[] }));
+            const _rule = _ruleRows[0] as any;
+            const _coaCode = String(_rule?.target_coa_code ?? '').trim();
+            const _plan = planReferenceCoaAutoPost({
+              targetCoaCode: _coaCode,
+              ruleConfidence: _rule?.confidence_score == null ? null : Number(_rule.confidence_score),
+              decisionConfidence: _decision.confidence,
+            });
+
+            await db.execute(sql.raw(`
+              INSERT INTO bank_reconciliation_matches
+                (mutation_id, candidate_type, candidate_id, match_score, match_reason,
+                 amount_match, date_match, status)
+              VALUES
+                (${_mutId}, 'recon_rule', ${Number(_decision.matchedRuleId)},
+                 ${Number(_decision.confidence)}, 'MANUAL_RULE', FALSE, FALSE, 'candidate')
+              ON CONFLICT DO NOTHING
+            `)).catch(() => {});
+
+            if (_plan.shouldAttempt) {
+              const _approval = await approveAndCreateJournal(
+                _mutId,
+                null,
+                null,
+                null,
+                actor,
+                `Auto-post berdasarkan Referensi COA #${Number(_decision.matchedRuleId)}`,
+                _coaCode,
+                null,
+                true,
+              );
+              _ruleAutoPosted = _approval.ok;
+              if (!_approval.ok) {
+                const _reason = _approval.error ?? 'Auto-post ditahan oleh safeguard jurnal.';
+                const _code = _approval.code ?? 'AUTO_POST_GUARD';
+                await db.execute(sql.raw(`
+                  UPDATE bank_mutations
+                  SET status = 'manual_review',
+                      review_reason = '${String(_reason).replace(/'/g, "''")}',
+                      review_code = '${String(_code).replace(/'/g, "''")}',
+                      updated_at = NOW()
+                  WHERE id = ${_mutId}
+                `)).catch(() => {});
+              }
+            } else {
+              await db.execute(sql.raw(`
+                UPDATE bank_mutations
+                SET status = 'manual_review',
+                    review_reason = '${String(_plan.reason).replace(/'/g, "''")}',
+                    review_code = '${String(_plan.code).replace(/'/g, "''")}',
+                    updated_at = NOW()
+                WHERE id = ${_mutId}
+              `)).catch(() => {});
+            }
+            _result = {
+              status: _ruleAutoPosted ? 'auto_matched' : 'manual_review',
+              best: { candidate: { type: 'recon_rule', id: Number(_decision.matchedRuleId) } },
+              all: [],
+            };
+          } else {
+            _result = await runUnifiedMatching({
+              id: _mutId, amount: _amount, transaction_date: _txDate,
+              mutation_key: _mk, company_id: _effCoId ?? null,
+              provider_name: null,
+              direction: _dir,
+            }, actor).catch(() => ({ status: 'unmatched' as const, all: [] }));
+          }
+
+          const _matched = _result.status === 'auto_matched';
           const _cand = (_result as any).best?.candidate;
 
           await db.execute(sql.raw(`

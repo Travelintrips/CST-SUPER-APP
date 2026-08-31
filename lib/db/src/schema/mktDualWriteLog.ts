@@ -69,6 +69,8 @@ export const mktDualWriteLogTable = pgTable(
 
     // ── Full snapshot for retry (tidak re-fetch catalog saat retry)
     payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    // Stable logical-request identity. NULL is retained for legacy rows.
+    idempotencyKey: text("idempotency_key"),
 
     // ── State machine
     status:    mktDualWriteStatusEnum("status").notNull().default("pending"),
@@ -102,6 +104,7 @@ export const mktDualWriteLogTable = pgTable(
     index("mdwl_created_at_idx").on(t.createdAt),
     index("mdwl_portal_order_id_idx").on(t.portalOrderId),
     index("mdwl_buyer_email_idx").on(t.buyerEmail),
+    index("mdwl_idempotency_key_idx").on(t.idempotencyKey),
   ],
 );
 

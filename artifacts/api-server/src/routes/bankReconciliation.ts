@@ -204,9 +204,10 @@ function qrisMutationReadyForApprovalSql(alias = "bm"): string {
       SELECT 1
       FROM qris_mutation_batch_candidates qris_ready
       WHERE qris_ready.mutation_id = ${alias}.id
-        AND qris_ready.status NOT IN (
-          'approved', 'completed', 'superseded', 'stale', 'ineligible'
+        AND UPPER(COALESCE(qris_ready.status, '')) NOT IN (
+          'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
         )
+        AND ${qrisCandidateSourcePaymentMethodSql("qris_ready", "qris_ready_item")}
         AND UPPER(COALESCE(qris_ready.reconciliation_status, '')) = 'MATCHED'
         AND qris_ready.estimated_settlement_date::text = ${alias}.transaction_date::text
         AND NOT EXISTS (
@@ -221,13 +222,47 @@ function qrisMutationReadyForApprovalSql(alias = "bm"): string {
           SELECT qris_latest.id
           FROM qris_mutation_batch_candidates qris_latest
           WHERE qris_latest.mutation_id = ${alias}.id
-            AND qris_latest.status NOT IN (
-              'approved', 'completed', 'superseded', 'stale', 'ineligible'
+            AND UPPER(COALESCE(qris_latest.status, '')) NOT IN (
+              'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
             )
+            AND ${qrisCandidateSourcePaymentMethodSql("qris_latest", "qris_latest_item")}
           ORDER BY qris_latest.updated_at DESC, qris_latest.id DESC
           LIMIT 1
         )
     )
+  )`;
+}
+
+/**
+ * A QRIS candidate is only valid while every payment snapshot item still
+ * resolves to a confirmed/pending source payment whose current rail is QRIS.
+ * Candidate snapshots are intentionally retained for audit, but a source
+ * payment changed to Transfer Bank must never re-enter the review or approval
+ * contract through historical fallback logic.
+ */
+function qrisCandidateSourcePaymentMethodSql(
+  candidateAlias = "qc",
+  itemAlias = "qris_source_item",
+): string {
+  return `NOT EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(COALESCE(${candidateAlias}.payment_items, '[]'::jsonb)) ${itemAlias}
+    WHERE COALESCE(${itemAlias}->>'paymentId', ${itemAlias}->>'payment_id') IS NULL
+      OR NOT EXISTS (
+        SELECT 1
+        FROM sport_center.sport_payments qris_source_payment
+        WHERE qris_source_payment.id = CASE
+            WHEN COALESCE(${itemAlias}->>'paymentId', ${itemAlias}->>'payment_id')
+              ~ '^[0-9]+$'
+              THEN COALESCE(
+                ${itemAlias}->>'paymentId',
+                ${itemAlias}->>'payment_id'
+              )::integer
+            ELSE NULL
+          END
+          AND LOWER(COALESCE(qris_source_payment.payment_method::text, '')) LIKE '%qris%'
+          AND LOWER(COALESCE(qris_source_payment.status::text, '')) IN ('confirmed', 'pending')
+      )
   )`;
 }
 
@@ -279,6 +314,51 @@ function genericCandidateSameDaySql(matchAlias = "m", mutationAlias = "bm"): str
 // timeout. Keep one background run per API process so repeated clicks do not
 // fan out duplicate work against the same mutation set.
 let unifiedMatchingJobActive = false;
+
+// Date corrections can arrive back-to-back (for example, when one booking has
+// multiple QRIS payments). Serialize the provisional candidate refresh per
+// company so a slower refresh based on older source data cannot overwrite the
+// snapshot produced by a newer correction.
+const qrisCandidateRefreshQueues = new Map<number, Promise<void>>();
+
+function queueQrisCandidateRefresh(companyId: number, paymentId: number): void {
+  const previous = qrisCandidateRefreshQueues.get(companyId) ?? Promise.resolve();
+  const next = previous
+    .catch(() => undefined)
+    .then(async () => {
+      try {
+        const refreshed = await generateQrisCandidates({
+          companyId,
+          dryRun: false,
+        });
+        logger.info(
+          {
+            paymentId,
+            generated: refreshed.generated,
+            persisted: refreshed.persisted,
+            reviewable: refreshed.reviewable,
+          },
+          "[bankRecon] QRIS candidate refresh after payment date update completed",
+        );
+      } catch (refreshError: any) {
+        // The source and mirror transaction has already committed. Candidate
+        // generation is provisional and can be retried from the UI without
+        // rolling back a valid source correction.
+        logger.warn(
+          { err: refreshError?.cause?.message ?? refreshError?.message, paymentId },
+          "[bankRecon] QRIS candidate refresh after payment date update failed",
+        );
+      }
+    });
+
+  qrisCandidateRefreshQueues.set(companyId, next);
+  void next.finally(() => {
+    if (qrisCandidateRefreshQueues.get(companyId) === next) {
+      qrisCandidateRefreshQueues.delete(companyId);
+    }
+  });
+}
+
 router.use(async (req, res, next) => {
   if (!(await requireAdmin(req, res))) return;
   next();
@@ -1623,10 +1703,10 @@ router.get("/qris-settlements/:settlementId", async (req, res) => {
   }
 });
 
-// ─── QRIS provider-aware candidate audit (dry-run/review only) ───────────────
-// This flow deliberately does not approve a mutation, create a journal, mark a
-// settlement as final, or consume bank evidence. A reviewer must use the
-// existing approval mechanism explicitly after verifying the candidate.
+// ─── QRIS provider-aware strict auto-match candidates ─────────────────────────
+// Auto-match only creates a MATCHED candidate snapshot. It does not approve a
+// settlement, create a journal, or consume bank evidence; posting remains an
+// explicit governed approval step.
 router.get("/qris-candidates", async (req, res) => {
   await runQrisSettlementMigration();
   try {
@@ -1640,8 +1720,9 @@ router.get("/qris-candidates", async (req, res) => {
       includeCompleted,
     });
     return res.json({
-      mode: "candidate_review",
+      mode: "strict_h_minus_one_auto",
       automaticFinalReconciliation: false,
+      automaticMatch: true,
       candidates,
     });
   } catch (e: any) {
@@ -1687,18 +1768,22 @@ router.post("/qris-candidates/generate", async (req, res) => {
         mutationId,
         generated: result.generated,
         automaticFinalReconciliation: false,
+        automaticMatch: true,
       },
     });
     return res.json({
       ok: true,
-      mode: "candidate_review",
+      mode: "strict_h_minus_one_auto",
       automaticFinalReconciliation: false,
       ...result,
     });
   } catch (e: any) {
     const postgresError = findPostgresError(e);
     logger.error(
-      { err: postgresError?.message ?? e?.cause?.message ?? e?.message },
+      {
+        stage: typeof e?.qrisStage === "string" ? e.qrisStage : "candidate generation",
+        err: postgresError?.message ?? e?.cause?.message ?? e?.message,
+      },
       "[bankRecon] POST /qris-candidates/generate failed",
     );
     if (postgresError?.code === "23505") {
@@ -1871,30 +1956,7 @@ router.patch("/qris-candidates/payments/:paymentId/date", async (req, res) => {
     // mutation for the company. Do not make the reviewer wait for that work:
     // the canonical source transaction above is already committed and the
     // candidate refresh can safely run after the response has been flushed.
-    setImmediate(() => {
-      void generateQrisCandidates({
-        companyId,
-        dryRun: false,
-      }).then((refreshed) => {
-        logger.info(
-          {
-            paymentId,
-            generated: refreshed.generated,
-            persisted: refreshed.persisted,
-            reviewable: refreshed.reviewable,
-          },
-          "[bankRecon] QRIS candidate refresh after payment date update completed",
-        );
-      }).catch((refreshError: any) => {
-        // The source and mirror transaction has already committed. Candidate
-        // generation is provisional and can be retried from the UI without
-        // rolling back a valid source correction.
-        logger.warn(
-          { err: refreshError?.cause?.message ?? refreshError?.message, paymentId },
-          "[bankRecon] QRIS candidate refresh after payment date update failed",
-        );
-      });
-    });
+    setImmediate(() => queueQrisCandidateRefresh(companyId, paymentId));
 
     return res.json({
       ok: true,
@@ -1976,9 +2038,9 @@ router.post("/qris-candidates/:candidateId/approve-legacy", async (req, res) => 
           code: "ALREADY_APPROVED",
         });
       }
-      // Allow MATCHED (normal) and REVIEW (force-approve with user confirmation on frontend).
-      // UNMATCHED and other statuses are still blocked.
-      const approvableStatuses = ["MATCHED", "REVIEW"];
+      // Only exact-net MATCHED candidates may approve. H-1 UNMATCHED review
+      // evidence is visible to the reviewer but must remain non-approvable.
+      const approvableStatuses = ["MATCHED"];
       if (!approvableStatuses.includes(reconciliationStatus)) {
         throw Object.assign(
           new Error(`Kandidat QRIS berstatus ${reconciliationStatus || "UNKNOWN"} dan belum dapat di-approve`),
@@ -2855,10 +2917,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
           sp.amount,
           sp.company_id,
           sp.payment_method,
-          COALESCE(
-            (sp.paid_at AT TIME ZONE 'Asia/Jakarta')::date::text,
-            (sp.created_at AT TIME ZONE 'Asia/Jakarta')::date::text
-          ) AS payment_date,
+          (sp.paid_at AT TIME ZONE 'Asia/Jakarta')::date::text AS payment_date,
           sp.status::text AS payment_status
         FROM sport_center.sport_payments
         sp
@@ -3407,8 +3466,7 @@ router.get("/mutations", async (req, res) => {
               ${sportPaymentTypeSql("sp_h1")} = 'qris'
               AND (
                 (
-                  COALESCE(sp_h1.paid_at, sp_h1.created_at)
-                  AT TIME ZONE 'Asia/Jakarta'
+                  sp_h1.paid_at AT TIME ZONE 'Asia/Jakarta'
                 )::date + 1
               )::text = bm.transaction_date::text
             )
@@ -3445,24 +3503,12 @@ router.get("/mutations", async (req, res) => {
     )
   `;
   // A QRIS snapshot is only valid when every live payment in it is still a
-  // direct QRIS payment. Historical snapshots can outlive a correction to the
-  // source payment method, so status/date checks alone are not sufficient.
-  // Invalid item IDs are treated as invalid evidence rather than making the
-  // queue query fail.
+  // confirmed/pending direct QRIS payment. Historical snapshots can outlive a
+  // correction to the source payment method, so status/date checks alone are
+  // not sufficient. Empty or invalid snapshots are not reviewable evidence.
   const qrisSnapshotPaymentMethodSql = `
     COALESCE(jsonb_array_length(COALESCE(qc.payment_items, '[]'::jsonb)), 0) > 0
-    AND NOT EXISTS (
-      SELECT 1
-      FROM jsonb_array_elements(COALESCE(qc.payment_items, '[]'::jsonb)) item_method
-      LEFT JOIN sport_center.sport_payments sp_method
-        ON sp_method.id = CASE
-          WHEN COALESCE(item_method->>'paymentId', item_method->>'payment_id') ~ '^[0-9]+$'
-            THEN COALESCE(item_method->>'paymentId', item_method->>'payment_id')::int
-          ELSE NULL
-        END
-      WHERE sp_method.id IS NULL
-        OR LOWER(COALESCE(sp_method.payment_method::text, '')) NOT LIKE '%qris%'
-    )
+    AND ${qrisCandidateSourcePaymentMethodSql("qc", "item_method")}
   `;
 
   // SQL fragments conditionally included when canonical settlement tables exist.
@@ -3698,14 +3744,10 @@ router.get("/mutations", async (req, res) => {
           'taxWithheldAmount', COALESCE(sp.tax_withheld_amount, 0),
           'otherFeeAmount', COALESCE(sp.other_fee_amount, 0),
           'netAmount', GREATEST(0, sp.amount - COALESCE(sp.mdr_amount, 0) - COALESCE(sp.tax_withheld_amount, 0) - COALESCE(sp.other_fee_amount, 0)),
-          'date', (
-            COALESCE(sp.paid_at, sp.created_at)
-            AT TIME ZONE 'Asia/Jakarta'
-          )::date,
+           'date', (sp.paid_at AT TIME ZONE 'Asia/Jakarta')::date,
           'settlementDate', (
             (
-              COALESCE(sp.paid_at, sp.created_at)
-              AT TIME ZONE 'Asia/Jakarta'
+               sp.paid_at AT TIME ZONE 'Asia/Jakarta'
             )::date + 1
           ),
           'settlementReference', sp.settlement_reference,
@@ -4003,11 +4045,8 @@ router.get("/mutations", async (req, res) => {
               )
             ), 0)
              ,
-             'current_expected_amount', COALESCE((
-               SELECT CASE
-                 WHEN NULLIF(qc.gross_amount, 0) IS NULL THEN 0
-                 ELSE SUM(sp.amount) * qc.net_amount / NULLIF(qc.gross_amount, 0)
-               END
+              'current_expected_amount', COALESCE((
+                SELECT SUM(sp.amount - COALESCE(sp.mdr_amount, 0))
                FROM sport_center.sport_payments sp
                WHERE sp.id IN (
                  SELECT (item->>'paymentId')::int
@@ -4100,11 +4139,8 @@ router.get("/mutations", async (req, res) => {
                   ${canonicalSettledExcludeSql}
               )
             ), 0),
-             'current_expected_amount', COALESCE((
-               SELECT CASE
-                 WHEN NULLIF(qc.gross_amount, 0) IS NULL THEN 0
-                 ELSE SUM(sp.amount) * qc.net_amount / NULLIF(qc.gross_amount, 0)
-               END
+              'current_expected_amount', COALESCE((
+                SELECT SUM(sp.amount - COALESCE(sp.mdr_amount, 0))
                FROM sport_center.sport_payments sp
                WHERE sp.id IN (
                  SELECT (item->>'paymentId')::int
@@ -4168,7 +4204,128 @@ router.get("/mutations", async (req, res) => {
             AND ${bankMutationPaymentTypeSql("bm")} = 'qris'
           ORDER BY qc.updated_at DESC, qc.id DESC
           LIMIT 1
-        ) AS qris_candidate_diagnostic
+         ) AS qris_candidate_diagnostic,
+         (
+           SELECT CASE
+             WHEN COUNT(*) = 1 THEN (jsonb_agg(repair.details))->0
+             ELSE NULL
+           END
+           FROM (
+             SELECT jsonb_build_object(
+               'settlement_id', psb.id,
+               'settlement_reference', psb.settlement_reference,
+               'settlement_date', psb.settlement_date::text,
+               'gross_amount', psb.gross_amount,
+               'mdr_amount', psb.mdr_amount,
+               'net_amount', psb.net_amount,
+               'journal_id', psb.settlement_journal_id,
+               'journal_status', aj.status,
+               'payment_count', (
+                 SELECT COUNT(*)
+                 FROM sport_center.payment_settlement_items psi_count
+                 WHERE psi_count.settlement_id = psb.id
+                   AND psi_count.item_status = 'active'
+               ),
+               'payments', COALESCE((
+                 SELECT jsonb_agg(
+                   jsonb_build_object(
+                     'payment_id', sp.id,
+                     'payment_number', 'SCPAY-SC-' || sp.id::text,
+                     'amount', sp.amount,
+                     'payment_method', sp.payment_method::text,
+                     'payment_date', (
+                       COALESCE(sp.paid_at, sp.confirmed_at, sp.created_at)
+                       AT TIME ZONE 'Asia/Jakarta'
+                     )::date::text,
+                     'is_h_minus_one', (
+                       COALESCE(sp.paid_at, sp.confirmed_at, sp.created_at)
+                       AT TIME ZONE 'Asia/Jakarta'
+                     )::date = psb.settlement_date - 1
+                   )
+                   ORDER BY sp.id
+                 )
+                 FROM sport_center.payment_settlement_items psi
+                 JOIN sport_center.sport_payments sp ON sp.id = psi.payment_id
+                 WHERE psi.settlement_id = psb.id
+                   AND psi.item_status = 'active'
+               ), '[]'::jsonb),
+               'non_h1_payment_ids', COALESCE((
+                 SELECT jsonb_agg(sp.id ORDER BY sp.id)
+                 FROM sport_center.payment_settlement_items psi
+                 JOIN sport_center.sport_payments sp ON sp.id = psi.payment_id
+                 WHERE psi.settlement_id = psb.id
+                   AND psi.item_status = 'active'
+                   AND (
+                     COALESCE(sp.paid_at, sp.confirmed_at, sp.created_at)
+                     AT TIME ZONE 'Asia/Jakarta'
+                   )::date <> psb.settlement_date - 1
+               ), '[]'::jsonb)
+             ) AS details
+             FROM sport_center.payment_settlement_batches psb
+             JOIN sport_center.accounting_journals aj
+               ON aj.id = psb.settlement_journal_id
+              AND aj.settlement_batch_id = psb.id
+             WHERE bm.direction::text = 'IN'
+               AND bm.status::text IN ('unmatched', 'matched', 'auto_matched')
+               AND bm.journal_entry_id IS NULL
+               AND ${bankMutationPaymentTypeSql("bm")} = 'qris'
+                AND LOWER(psb.status::text) = 'posted'
+                AND (psb.bank_mutation_id IS NULL OR psb.bank_mutation_id = bm.id)
+                AND (psb.canonical_bank_mutation_id IS NULL OR psb.canonical_bank_mutation_id = bm.id)
+               AND psb.company_id = bm.company_id
+               AND psb.settlement_date::date = bm.transaction_date::date
+               AND ABS(psb.net_amount - bm.amount) <= 0.001
+               AND aj.status = 'posted'
+               AND aj.journal_type = 'settlement'
+               AND aj.is_reversal = FALSE
+               AND EXISTS (
+                 SELECT 1
+                 FROM company_bank_accounts cba
+                 WHERE cba.company_id = bm.company_id
+                   AND cba.id::text = BTRIM(bm.bank_account_id::text)
+                   AND cba.is_active = TRUE
+                   AND (
+                     cba.id::text = BTRIM(psb.bank_account_id::text)
+                     OR cba.account_number::text = BTRIM(psb.bank_account_id::text)
+                   )
+               )
+               AND EXISTS (
+                 SELECT 1
+                 FROM sport_center.payment_settlement_items psi
+                 JOIN sport_center.sport_payments sp ON sp.id = psi.payment_id
+                 WHERE psi.settlement_id = psb.id
+                   AND psi.item_status = 'active'
+                   AND sp.company_id = bm.company_id
+                   AND LOWER(sp.payment_method::text) LIKE '%qris%'
+                   AND LOWER(sp.status::text) = 'confirmed'
+               )
+               AND NOT EXISTS (
+                 SELECT 1
+                 FROM sport_center.payment_settlement_items psi
+                 JOIN sport_center.sport_payments sp ON sp.id = psi.payment_id
+                 WHERE psi.settlement_id = psb.id
+                   AND psi.item_status = 'active'
+                   AND (
+                     sp.company_id IS DISTINCT FROM bm.company_id
+                     OR LOWER(sp.payment_method::text) NOT LIKE '%qris%'
+                     OR LOWER(sp.status::text) <> 'confirmed'
+                   )
+               )
+               AND NOT EXISTS (
+                 SELECT 1
+                 FROM bank_reconciliation_matches used
+                 WHERE used.status = 'approved'
+                   AND (
+                     used.mutation_id = bm.id
+                     OR (
+                       used.candidate_type = 'qris_settlement'
+                       AND used.candidate_id = psb.id
+                       AND used.candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
+                     )
+                   )
+               )
+           ) repair
+         ) AS historical_settlement_repair
     FROM bank_mutations bm
     ${bmWhere}
   `;
@@ -4208,7 +4365,8 @@ router.get("/mutations", async (req, res) => {
        NULL::json AS candidates,
         NULL::jsonb AS qris_candidate_audit,
         '[]'::jsonb AS qris_candidate_audits,
-        NULL::jsonb AS qris_candidate_diagnostic
+         NULL::jsonb AS qris_candidate_diagnostic,
+         NULL::jsonb AS historical_settlement_repair
     FROM bank_mutation_imports bmi
     ${bmiWhere}
   ` : "";
@@ -4243,6 +4401,75 @@ router.get("/mutations", async (req, res) => {
     return res.status(500).json({ error: dbMsg });
   }
 });
+
+// Historical repair only: link one already-posted, unlinked canonical settlement
+// without changing its journal or payment items. All evidence is revalidated
+// under the same transaction that creates the source-aware match and link.
+router.post(
+  "/:mutationId/link-historical-settlement",
+  createIdempotencyMiddleware("reconciliation:link-historical-settlement"),
+  async (req, res) => {
+    await runBankReconciliationCoreMigration();
+    const mutationId = Number.parseInt(String(req.params.mutationId ?? ""), 10);
+    const settlementId = Number(req.body?.settlement_id);
+    const confirmed = req.body?.confirm_historical_repair === true;
+    const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+    const actor = (req as any).user?.email ?? "admin";
+
+    if (!Number.isSafeInteger(mutationId) || mutationId <= 0) {
+      return res.status(400).json({ error: "ID mutasi tidak valid" });
+    }
+    if (!Number.isSafeInteger(settlementId) || settlementId <= 0) {
+      return res.status(400).json({ error: "ID settlement tidak valid" });
+    }
+    if (!confirmed || reason.length < 10) {
+      return res.status(400).json({
+        error: "Konfirmasi eksplisit dan alasan reviewer minimal 10 karakter wajib diisi.",
+        code: "CANONICAL_HISTORICAL_REPAIR_CONFIRMATION_REQUIRED",
+      });
+    }
+
+    try {
+      const result = await approveCanonicalSettlementLink(db as any, {
+        mutationId,
+        candidateType: "qris_settlement",
+        candidateId: settlementId,
+        candidateSource: CANONICAL_SETTLEMENT_SOURCE,
+        actor,
+        manualOverride: true,
+        overrideReason: reason,
+        historicalRepair: true,
+      });
+
+      audit(req, {
+        action: "link-historical-posted-settlement",
+        module: "bank-reconciliation",
+        resourceId: `bank-mutation-${mutationId}`,
+        after: result,
+      });
+      triggerWritebackForMutation(mutationId).catch(() => {});
+      trackMutationApproval({
+        mutationId,
+        actor,
+        companyId: (req as any).user?.companyId ?? null,
+      }).catch(() => {});
+      return res.json(result);
+    } catch (e: any) {
+      const code = e instanceof CanonicalSettlementApprovalError
+        ? e.code
+        : "CANONICAL_HISTORICAL_REPAIR_FAILED";
+      const status = code === "CANONICAL_BANK_MUTATION_NOT_FOUND" ? 404 : 409;
+      logger.warn(
+        { err: e?.cause?.message ?? e?.message, code, mutationId, settlementId },
+        "[bankRecon/link-historical-settlement] repair rejected",
+      );
+      return res.status(status).json({
+        error: e?.message ?? "Settlement historis gagal ditautkan",
+        code,
+      });
+    }
+  },
+);
 
 // ─── POST /api/bank-reconciliation/:mutationId/approve ───────────────────────
 // RULE 3: Wrapped dalam real DB transaction (SELECT FOR UPDATE efektif).

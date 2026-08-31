@@ -6,6 +6,7 @@ import { requireAdmin } from "../lib/requireAdmin.js";
 import { sendViaService as sendWhatsApp } from "../lib/waTransport.js";
 import { getAdminGroupWa, getAdminWa } from "../lib/adminWa.js";
 import { logger } from "../lib/logger.js";
+import { NotificationService } from "../lib/services/notificationService.js";
 import {
   optionalCustomerPortalAuth,
   type PortalAuthReq,
@@ -14,6 +15,7 @@ import {
   getPortalCustomerContext,
   PortalCustomerContextError,
 } from "../lib/services/portalCustomerContextService.js";
+import { getEligibleTruckingVendorIds } from "../lib/truckingVendorEligibility.js";
 
 const router = Router();
 
@@ -206,6 +208,20 @@ router.post("/", optionalCustomerPortalAuth, async (req: Request, res: Response)
   }
 
   const b = parsed.data;
+  const candidateVendorIds = b.candidateVendorIds ?? [];
+  const submittedVendorIds = [
+    ...candidateVendorIds,
+    ...(b.selectedVendorId == null ? [] : [b.selectedVendorId]),
+  ];
+  const eligibleVendorIds = await getEligibleTruckingVendorIds(submittedVendorIds);
+  const invalidCandidateVendorIds = submittedVendorIds.filter((id) => !eligibleVendorIds.has(id));
+  if (invalidCandidateVendorIds.length > 0) {
+    res.status(422).json({
+      message: "Daftar vendor trucking berisi vendor yang tidak eligible.",
+      invalidVendorIds: [...new Set(invalidCandidateVendorIds)],
+    });
+    return;
+  }
   let context: Awaited<ReturnType<typeof getPortalCustomerContext>> | null = null;
   if (customerId) {
     try {
@@ -224,9 +240,10 @@ router.post("/", optionalCustomerPortalAuth, async (req: Request, res: Response)
     }
   }
   const bookingNumber = generateBookingNumber();
+  let insertedId = 0;
 
   try {
-    await db.execute(sql`
+    const insertedResult = await db.execute(sql`
       INSERT INTO trucking_booking_requests (
         booking_number, customer_id, portal_customer_id, company_id,
         vehicle_type, vehicle_name,
@@ -255,7 +272,9 @@ router.post("/", optionalCustomerPortalAuth, async (req: Request, res: Response)
         ${"customer_portal"},
         ${"pending_review"}
       )
+      RETURNING id
     `);
+    insertedId = Number((insertedResult.rows[0] as { id: number }).id);
   } catch (err) {
     logger.error({ err }, "[truckingBookings] DB insert failed");
     res.status(500).json({ message: "Gagal menyimpan order" });
@@ -268,6 +287,17 @@ router.post("/", optionalCustomerPortalAuth, async (req: Request, res: Response)
     if (group)    sendWhatsApp(group,    msg, { context: "trucking_order", refId: bookingNumber }).catch((e: unknown) => logger.warn({ e }, "WA group failed"));
     if (personal) sendWhatsApp(personal, msg, { context: "trucking_order", refId: bookingNumber }).catch((e: unknown) => logger.warn({ e }, "WA personal failed"));
   }).catch((e: unknown) => logger.warn({ e }, "getAdminWa failed"));
+
+  void NotificationService.saveAndBroadcast("admin_notification", {
+    type: "portal_service_submitted",
+    orderId: insertedId,
+    orderNumber: bookingNumber,
+    customerName: b.picPickup,
+    title: "Order trucking baru",
+    body: `Order trucking ${bookingNumber} menunggu review admin.`,
+    serviceKey: "domestic-trucking",
+    dedupeKey: `portal-service:domestic-trucking:${insertedId}:submitted`,
+  });
 
   res.status(201).json({
     bookingNumber,

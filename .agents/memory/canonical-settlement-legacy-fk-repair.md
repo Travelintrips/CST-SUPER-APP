@@ -14,3 +14,9 @@ An active payment item in an unlinked `posted` settlement remains unavailable to
 **Why:** Reusing it as a fresh candidate could double-settle a payment whose financial batch already exists, while silently deleting it could corrupt posted-ledger evidence.
 
 **How to apply:** Diagnose the owning batch first. Either link the complete batch through governed owner recovery when its mutation identity is provable, or perform an explicit posted-settlement repair; regeneration alone must not release the payment.
+
+Do not link an orphaned historical batch merely because its net equals one bank mutation. Revalidate every active item's payment date against the current cohort rule; a legacy batch may mix valid H-1 payments with a same-day payment that only makes the total balance.
+
+**Why:** Exact batch net can conceal invalid membership. Linking such a batch would restore the bank foreign key while violating the current settlement contract.
+
+**How to apply:** Compare the full active item set—not only the rows visible in the UI—against the mutation date. If any item is outside H-1, stop owner recovery and require a governed repair or a verified missing H-1 payment.

@@ -1,6 +1,9 @@
+- [Marketplace RFQ retry idempotency](marketplace-rfq-retry-idempotency.md) — canonical writes need a unique logical key and atomic ledger claim; legacy unkeyed rows stay manual-only during containment.
+- [Marketplace RFQ duplicate cleanup](marketplace-rfq-duplicate-cleanup.md) — exact manifest + locked fail-closed cleanup; preserve dual-write audit ledger and safely de-link activity history.
 - [Production secret bundle JSON](production-secret-json-loader.md) — malformed managed PROD JSON blocks recovery before DB access; never bypass the official loader.
 - [Customer Portal harness fixtures](customer-portal-harness-fixtures.md) — order fixtures need one active company membership; reset capture stays loopback-only and DEV-harness gated.
 - [Customer Portal runtime proofs](customer-portal-runtime-proofs.md) — run one-off portal proofs through the development Secret Manager loader or they may fall back to a schema-less local DB.
+- [Customer Portal proof cleanup](customer-portal-proof-cleanup.md) — explicit child deletion is required when live Supabase relationships are not enforced as foreign keys.
 - [DB Pool lock_timeout fix](lock-timeout-db-pool.md) — set lock_timeout via on('connect') handler (not pool options) to prevent DDL hang after kill-restart cycles.
 - [Startup pooler latency](startup-pooler-latency.md) — cold pooler checkout can dominate registry startup; measure phases and reuse one client for adjacent checks.
 - [Asset storage rule](asset-storage-rule.md) — gambar/biner wajib ke Supabase Storage, bukan git; history sudah di-rewrite Jul 2026 (475 MB → 139 MB).
@@ -141,8 +144,14 @@
 - [QRIS UI evidence boundary](qris-ui-evidence.md) — generic cards can combine bank-source labeling with a QRIS badge inherited from a persisted candidate.
 - [Development TS proof tooling](development-ts-proof-tooling.md) — when tsx is unavailable, bundle temporary TS proofs with esbuild under the artifact directory so workspace packages and pg resolve correctly.
 - [Sport payment candidate visibility](sport-payment-candidate-visibility.md) — H-1 settlement filtering applies to QRIS only; ordinary Sport Center bank transfers remain reviewable.
+- [Production verification timestamp boundary](production-verification-timestamp-boundary.md) — rounded checkpoint seconds can double-count the baseline row; resolve the exact boundary from its known max ID.
 - [API artifact preview health](api-artifact-preview-health.md) — generic preview root checks may fail while namespaced API liveness/readiness are healthy.
+- [Marketplace destination production migration](marketplace-destination-prod-migration.md) — RFQ production requires three nullable destination columns; the dev-only migration does not update external Supabase prod.
 - [QRIS approval provider resolution](qris-approval-provider-resolution.md) — manual IDs are authoritative; canonical_group/source group cannot block H-1 exact-net QRIS approval.
 - [Public mutation cutover safety](public-mutation-cutover-safety.md) — disable legacy projection/FK setup before public-only link migration; prove idempotence with a second pass.
 - [GL cross-account balance](gl-cross-account-balance.md) — saldo awal/akhir hanya valid untuk satu COA; agregat semua akun menyesatkan karena menjumlahkan sisi debit+kredit.
 - [QRIS approval provider resolution](qris-approval-provider-resolution.md) — incomplete payment metadata may resolve from bank evidence plus one owner-approved config; conflicts and InhouseTrf stay fail-closed.
+- [Historical settlement repair boundary](historical-settlement-repair-boundary.md) — posted legacy repair may override only payment H-1; every other bank, journal, and payment invariant remains fail-closed.
+- [Rule AI import auto-post](rule-ai-import-auto-post.md) — semua jalur import bank wajib melewati Decision Stack agar Rule AI ber-COA lengkap dapat auto-post dengan safeguard yang sama.
+- [Portal service operations runtime schema](portal-service-ops-runtime-schema.md) — cross-service UNION read models must match live Supabase columns; missing fields need typed constants, not assumptions.
+- [Sport payment group note identity](sport-payment-group-note-identity.md) — group note dapat mencakup banyak booking; bukan unique key payment, gunakan booking dan identitas provider untuk duplicate.
