@@ -793,6 +793,8 @@ const STATUS_COLORS: Record<string, string> = {
 
 const QRIS_AUDIT_STATUS_LABELS: Record<string, string> = {
   MATCHED: "Cocok",
+  REVIEW: "Perlu review",
+  UNMATCHED: "Netto belum cocok",
 };
 
 const CARD_BORDER: Record<string, string> = {
@@ -5371,7 +5373,11 @@ export default function BankReconciliationPage() {
   } = useQuery({
     queryKey: ["qris-candidate-audit", qrisCompanyId],
     queryFn: async () => {
-      const params = new URLSearchParams({ limit: "50", companyId: String(qrisCompanyId) });
+       const params = new URLSearchParams({
+         limit: "50",
+         companyId: String(qrisCompanyId),
+         status: "ALL",
+       });
       const r = await fetch(`/api/bank-reconciliation/qris-candidates?${params}`, { credentials: "include" });
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{
@@ -5533,8 +5539,6 @@ export default function BankReconciliationPage() {
     !["approved", "completed", "superseded", "stale", "ineligible"].includes(
       String(candidate.status ?? "").toLowerCase(),
     ),
-  ).filter((candidate) =>
-    String(candidate.reconciliation_status ?? "").toUpperCase() === "MATCHED",
   );
   const getAvailableQrisPaymentIds = (candidate: QrisCandidateAudit): number[] =>
     getAvailableQrisPaymentIdsFromCandidate(candidate);
@@ -6495,8 +6499,11 @@ export default function BankReconciliationPage() {
             ) : (
               <div className="space-y-2">
                  <div className="rounded-lg border border-green-300 bg-green-50 px-2.5 py-2 text-green-800 dark:border-green-800 dark:bg-green-950 dark:text-green-300">
-                   <p className="text-[11px] font-medium leading-tight">Kandidat cocok otomatis</p>
+                    <p className="text-[11px] font-medium leading-tight">Kandidat QRIS H-1 ditemukan</p>
                    <p className="mt-1 text-xl font-bold tabular-nums">{qrisCandidates.length}</p>
+                    <p className="mt-1 text-[10px]">
+                      {qrisApprovableCandidates.length} cocok netto · {qrisCandidates.length - qrisApprovableCandidates.length} perlu review
+                    </p>
                  </div>
                   <Button variant="outline" size="sm" className="w-full gap-1.5 text-xs" onClick={() => setShowQrisAuditList(value => !value)}>
                    <Eye className="h-3.5 w-3.5" />
@@ -6664,11 +6671,11 @@ export default function BankReconciliationPage() {
                                const canApprove = isQrisCandidateEligible(candidate);
                               if (!canApprove) return (
                                 <span
-                                  title={`Status ${candidate.reconciliation_status}: jalankan AI Matching terlebih dahulu`}
+                                   title={`Status ${candidate.reconciliation_status}: kandidat H-1 hanya dapat direview sampai netto cocok`}
                                   className="text-[10px] text-slate-500 dark:text-slate-400 flex items-center gap-0.5 cursor-help"
                                 >
                                   <AlertTriangle className="w-3 h-3 shrink-0" />
-                                  Belum bisa
+                                   Review saja
                                 </span>
                               );
                               return (

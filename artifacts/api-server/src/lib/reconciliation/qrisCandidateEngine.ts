@@ -339,7 +339,9 @@ export function generateQrisMutationBatchCandidates(input: {
      * The active QRIS contract is intentionally small:
      *   1. source payment is QRIS and confirmed;
      *   2. paid_at is exactly the calendar day before the bank mutation;
-     *   3. bank amount equals gross payment minus the payment MDR.
+     *   3. bank amount equals gross payment minus the payment MDR for MATCHED.
+     *      H-1 batches are still returned as UNMATCHED review evidence when
+     *      this amount does not agree.
      *
      * Do not add provider, bank-account, settlement metadata, source-label,
      * or partition guards here. Those fields are frequently absent on valid
@@ -365,9 +367,10 @@ export function generateQrisMutationBatchCandidates(input: {
       const mdrAmount = roundMoney(
         validMdrAmounts.reduce((sum, amount) => sum + amount, 0),
       );
-      const expectedNetAmount = roundMoney(grossAmount - mdrAmount);
+       const expectedNetAmount = roundMoney(grossAmount - mdrAmount);
       const bankAmount = roundMoney(Number(mutation.amount) || 0);
-      if (expectedNetAmount !== bankAmount) continue;
+       const amountMatches = expectedNetAmount === bankAmount;
+       const amountDifference = roundMoney(Math.abs(expectedNetAmount - bankAmount));
 
       const sourceClassification = classifyBankMutationSource(
         mutation.source,
@@ -405,9 +408,11 @@ export function generateQrisMutationBatchCandidates(input: {
           paidAt: payment.paidAt == null ? null : String(payment.paidAt),
           paymentDate: canonicalPaymentDate(payment),
         })),
-        status: "MATCHED",
-        confidence: 1,
-        reason: "Auto-match QRIS: payment confirmed, tanggal paid_at tepat H-1, dan netto setelah MDR sama dengan mutasi bank.",
+         status: amountMatches ? "MATCHED" : "UNMATCHED",
+         confidence: amountMatches ? 1 : 0,
+         reason: amountMatches
+           ? "Auto-match QRIS: payment confirmed, tanggal paid_at tepat H-1, dan netto setelah MDR sama dengan mutasi bank."
+           : `Review QRIS H-1: payment confirmed dan tanggal paid_at tepat H-1, tetapi netto yang dihitung ${expectedNetAmount.toFixed(2)} tidak sama dengan mutasi bank ${bankAmount.toFixed(2)} (selisih ${amountDifference.toFixed(2)}).`,
       });
       for (const payment of selectedPayments) claimedPaymentIds.add(payment.id);
       continue;

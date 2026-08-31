@@ -2013,9 +2013,9 @@ router.post("/qris-candidates/:candidateId/approve-legacy", async (req, res) => 
           code: "ALREADY_APPROVED",
         });
       }
-      // Allow MATCHED (normal) and REVIEW (force-approve with user confirmation on frontend).
-      // UNMATCHED and other statuses are still blocked.
-      const approvableStatuses = ["MATCHED", "REVIEW"];
+      // Only exact-net MATCHED candidates may approve. H-1 UNMATCHED review
+      // evidence is visible to the reviewer but must remain non-approvable.
+      const approvableStatuses = ["MATCHED"];
       if (!approvableStatuses.includes(reconciliationStatus)) {
         throw Object.assign(
           new Error(`Kandidat QRIS berstatus ${reconciliationStatus || "UNKNOWN"} dan belum dapat di-approve`),

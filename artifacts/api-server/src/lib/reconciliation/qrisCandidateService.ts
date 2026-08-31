@@ -535,9 +535,11 @@ export async function generateQrisCandidates(options: {
       const estimatedSettlementDateSql = candidate.estimatedSettlementDate
         ? `'${esc(candidate.estimatedSettlementDate)}'`
         : "NULL";
-      // Strict generation is positive-only: every persisted row is already
-      // confirmed + H-1 + exact MDR. There is no QRIS REVIEW/UNMATCHED row.
-      const candidateStatus = "candidate_auto_matched";
+       // Persist both exact matches and H-1 review evidence. Only the former
+       // is allowed to create a bank reconciliation match below.
+       const candidateStatus = candidate.status === "MATCHED"
+         ? "candidate_auto_matched"
+         : "candidate_review";
       const settlementRuleVersion = candidate.settlementRuleVersion || "unavailable-v1";
       let persistedCandidateId: number | null = null;
       const existing = (existingRows.rows as Array<Record<string, unknown>>).find((row) =>
@@ -668,13 +670,16 @@ export async function generateQrisCandidates(options: {
         );
       }
 
-      /*
-       * The candidate is an actual automatic bank match, not just a label in
-       * the QRIS audit table. Keep journal/settlement approval separate: the
-       * bank row becomes matched and the source-qualified match is approved,
-       * while the dedicated QRIS settlement endpoint still owns posting.
-       */
-      if (persistedCandidateId != null && Number.isSafeInteger(persistedCandidateId)) {
+       /*
+        * An exact candidate is an actual automatic bank match, not just a
+        * label in the QRIS audit table. Review evidence must never change the
+        * bank mutation status or create an approved reconciliation match.
+        */
+       if (
+         candidate.status === "MATCHED"
+         && persistedCandidateId != null
+         && Number.isSafeInteger(persistedCandidateId)
+       ) {
         try {
           await db.execute(sql.raw(`
             INSERT INTO public.bank_reconciliation_matches (
@@ -757,9 +762,12 @@ export async function listQrisCandidates(options: {
   const companyFilter = options.companyId && Number.isInteger(options.companyId)
     ? `AND c.company_id = ${Number(options.companyId)}`
     : "";
-  const statusFilter = options.status && options.status === "MATCHED"
-    ? `AND c.reconciliation_status = '${esc(options.status)}'`
-    : `AND c.reconciliation_status = 'MATCHED'`;
+  const requestedStatus = String(options.status ?? "").trim().toUpperCase();
+  const statusFilter = requestedStatus === "ALL"
+    ? ""
+    : ["MATCHED", "REVIEW", "UNMATCHED"].includes(requestedStatus)
+      ? `AND c.reconciliation_status = '${requestedStatus}'`
+      : "AND c.reconciliation_status = 'MATCHED'";
   const completedFilter = options.includeCompleted
     ? ""
     : `
@@ -872,8 +880,8 @@ export async function listQrisCandidates(options: {
              ${recoverableSettlementIdSql} AS recoverable_settlement_id
     FROM qris_mutation_batch_candidates c
     LEFT JOIN public.bank_mutations bm ON bm.id = c.mutation_id
-     WHERE c.status = 'candidate_auto_matched'
-       AND c.reconciliation_status = 'MATCHED'
+     WHERE c.status IN ('candidate_auto_matched', 'candidate_review')
+       AND c.reconciliation_status IN ('MATCHED', 'REVIEW', 'UNMATCHED')
        AND c.estimated_settlement_date::text = bm.transaction_date::text
        AND NOT EXISTS (
          SELECT 1
@@ -884,23 +892,6 @@ export async function listQrisCandidates(options: {
          ) IS DISTINCT FROM bm.transaction_date::text
        )
        AND jsonb_array_length(COALESCE(c.payment_items, '[]'::jsonb)) > 0
-       AND (
-         SELECT COALESCE(SUM(
-           qris_net_payment.amount - COALESCE(qris_net_payment.mdr_amount, 0)
-         ), 0)
-         FROM sport_center.sport_payments qris_net_payment
-         WHERE qris_net_payment.id IN (
-           SELECT (item_net->>'paymentId')::int
-           FROM jsonb_array_elements(COALESCE(c.payment_items, '[]'::jsonb)) item_net
-           WHERE item_net->>'paymentId' IS NOT NULL
-         )
-           AND LOWER(COALESCE(qris_net_payment.payment_method::text, '')) LIKE '%qris%'
-           AND LOWER(COALESCE(qris_net_payment.status::text, '')) = 'confirmed'
-           AND qris_net_payment.paid_at IS NOT NULL
-           AND (
-             (qris_net_payment.paid_at AT TIME ZONE 'Asia/Jakarta')::date + 1
-           ) = bm.transaction_date::date
-       ) = bm.amount
        ${companyFilter} ${statusFilter} ${completedFilter}
     ORDER BY c.source_date DESC, c.id DESC
     LIMIT ${limit}
