@@ -330,6 +330,16 @@ export async function createMktRfqEntry(opts: CreateMktRfqOptions): Promise<Crea
         const logRow = lockedLog.rows[0] as Record<string, unknown> | undefined;
         if (!logRow) throw new Error(`Dual-write log ${logId} tidak ditemukan`);
 
+        // Exhausted is terminal until an explicit, separately governed
+        // recovery process handles it. Never revive it by replaying payload,
+        // even if a previous partial write left an RFQ ID on the log.
+        if (String(logRow["status"]) === "exhausted") {
+          throw Object.assign(
+            new Error(`Dual-write log ${logId} sudah exhausted dan tidak boleh dihidupkan ulang otomatis`),
+            { code: "DUAL_WRITE_EXHAUSTED" },
+          );
+        }
+
         const existingRfqId = Number(logRow["mkt_rfq_id"] ?? 0);
         if (existingRfqId > 0) {
           const existingRfq = await tx.execute(sql`
@@ -353,15 +363,6 @@ export async function createMktRfqEntry(opts: CreateMktRfqOptions): Promise<Crea
             `);
             return;
           }
-        }
-
-        // Exhausted is terminal until an explicit, separately governed
-        // recovery process handles it. Never revive it by replaying payload.
-        if (String(logRow["status"]) === "exhausted") {
-          throw Object.assign(
-            new Error(`Dual-write log ${logId} sudah exhausted dan tidak boleh dihidupkan ulang otomatis`),
-            { code: "DUAL_WRITE_EXHAUSTED" },
-          );
         }
       }
 
