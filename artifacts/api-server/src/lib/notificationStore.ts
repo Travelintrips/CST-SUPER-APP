@@ -51,9 +51,9 @@ export async function saveAndBroadcast(
       RETURNING id, created_at
     `);
     if (!result.rows.length) return;
-    const row = result.rows[0] as { id: number; created_at: Date };
+    const row = result.rows[0] as { id: number; created_at: Date | string };
     dbId = row.id;
-    createdAt = row.created_at.toISOString();
+    createdAt = new Date(row.created_at).toISOString();
   } catch (err: unknown) {
     // DB save failed — log with a correlation id so the failure is traceable
     // (previously this was a silent `catch {}` and left no trace at all),
