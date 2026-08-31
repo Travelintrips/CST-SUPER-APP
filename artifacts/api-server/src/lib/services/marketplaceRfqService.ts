@@ -48,7 +48,7 @@
 import { randomUUID } from "crypto";
 import { hashToken } from "../tokenUtils.js";
 import { db, mktRfqsTable, mktRfqLinesTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { getAppConfig } from "../appConfig.js";
 import { logActivity } from "../activityLog.js";
 import { logger } from "../logger.js";
@@ -123,6 +123,11 @@ export interface CreateMktRfqOptions {
 
   // Audit
   ipAddress?: string | null;
+
+  // Stable logical-request identity for initial writes and retries.
+  idempotencyKey?: string | null;
+  // Internal retry path: reuse the original reliability-log row.
+  dualWriteLogId?: number | null;
 }
 
 export interface CreateMktRfqResult {
@@ -279,11 +284,16 @@ export async function createMktRfqEntry(opts: CreateMktRfqOptions): Promise<Crea
 
   // UUID-based temp number — globally unique, safe under any concurrency
   const tempNumber = `MKT-RFQ-TEMP-${randomUUID()}`;
+  const logicalRequestKey = opts.idempotencyKey?.trim() || null;
+  const suppliedDualWriteLogId =
+    Number.isInteger(opts.dualWriteLogId) && Number(opts.dualWriteLogId) > 0
+      ? Number(opts.dualWriteLogId)
+      : 0;
 
   // ── Phase 2A.2: create pending log BEFORE transaction ─────────────────────
   // Menggunakan CreateDualWriteLogOpts — kolom terstruktur diisi di sini.
   // Non-fatal: jika createDualWriteLog gagal, logId = 0 (skip reliability tracking)
-  const logId = await createDualWriteLog({
+  const logId = suppliedDualWriteLogId || await createDualWriteLog({
     catalogItemId:   catalogItem.id,
     buyerName:       opts.buyerName.trim(),
     buyerEmail:      opts.buyerEmail.trim().toLowerCase(),
@@ -291,15 +301,70 @@ export async function createMktRfqEntry(opts: CreateMktRfqOptions): Promise<Crea
     qty:             qtyNum,
     unit:            unitStr,
     shippingAddress: opts.shippingAddress?.trim() ?? undefined,
+    idempotencyKey:  logicalRequestKey ?? undefined,
     payload:         opts as unknown as Record<string, unknown>,
   }).catch(() => 0);
+
+  // A keyed write without a reliability row cannot prove one-log/one-RFQ
+  // semantics. Fail closed instead of creating an untracked canonical RFQ.
+  if ((logicalRequestKey || suppliedDualWriteLogId) && !logId) {
+    throw new Error("RFQ idempotency ledger unavailable");
+  }
 
   // ── Single transaction: header insert + number update + line insert ────────
   let rfqId: number;
   let rfqNumber: string;
+  let reusedExisting = false;
 
   try {
     await db.transaction(async (tx) => {
+      // Lock the logical-request ledger row for the complete canonical write.
+      // This serializes requests and retry workers across separate processes.
+      if (logId) {
+        const lockedLog = await tx.execute(sql`
+          SELECT id, status, mkt_rfq_id, mkt_rfq_number
+          FROM mkt_dual_write_log
+          WHERE id = ${logId}
+          FOR UPDATE
+        `);
+        const logRow = lockedLog.rows[0] as Record<string, unknown> | undefined;
+        if (!logRow) throw new Error(`Dual-write log ${logId} tidak ditemukan`);
+
+        const existingRfqId = Number(logRow["mkt_rfq_id"] ?? 0);
+        if (existingRfqId > 0) {
+          const existingRfq = await tx.execute(sql`
+            SELECT id, rfq_number
+            FROM mkt_rfqs
+            WHERE id = ${existingRfqId}
+            FOR UPDATE
+          `);
+          const existing = existingRfq.rows[0] as Record<string, unknown> | undefined;
+          if (existing) {
+            rfqId = Number(existing["id"]);
+            rfqNumber = String(existing["rfq_number"]);
+            reusedExisting = true;
+            await tx.execute(sql`
+              UPDATE mkt_dual_write_log
+              SET status      = CASE WHEN status = 'linked' THEN status ELSE 'success' END,
+                  updated_at  = NOW(),
+                  resolved_at = COALESCE(resolved_at, NOW()),
+                  resolution  = COALESCE(resolution, 'AUTO_IDEMPOTENT_REUSE')
+              WHERE id = ${logId}
+            `);
+            return;
+          }
+        }
+
+        // Exhausted is terminal until an explicit, separately governed
+        // recovery process handles it. Never revive it by replaying payload.
+        if (String(logRow["status"]) === "exhausted") {
+          throw Object.assign(
+            new Error(`Dual-write log ${logId} sudah exhausted dan tidak boleh dihidupkan ulang otomatis`),
+            { code: "DUAL_WRITE_EXHAUSTED" },
+          );
+        }
+      }
+
       // 1. Insert header dengan temp rfq_number
       const [rfq] = await tx
         .insert(mktRfqsTable)
@@ -359,13 +424,30 @@ export async function createMktRfqEntry(opts: CreateMktRfqOptions): Promise<Crea
         notes: null,
         sortOrder: 0,
       });
+
+      // Persist the canonical result atomically with the RFQ. A process crash
+      // after this commit therefore makes the next retry reuse this ID.
+      if (logId) {
+        await tx.execute(sql`
+          UPDATE mkt_dual_write_log
+          SET status         = 'success',
+              mkt_rfq_id     = ${rfqId},
+              mkt_rfq_number = ${rfqNumber},
+              attempt        = GREATEST(attempt, 1),
+              updated_at     = NOW(),
+              resolved_at    = NOW(),
+              resolution     = COALESCE(resolution, 'AUTO_SUCCESS')
+          WHERE id = ${logId}
+            AND status <> 'linked'
+        `);
+      }
     });
 
     // ── Phase 2A.1: mark success (fire-and-forget) ─────────────────────────
-    markDualWriteSuccess(logId, rfqId!, rfqNumber!).catch(() => {});
+    if (!logId) markDualWriteSuccess(logId, rfqId!, rfqNumber!).catch(() => {});
 
     // ── Phase 2F: init approval flow jika diperlukan (non-fatal, log error) ─
-    if (needsApproval) {
+    if (needsApproval && !reusedExisting) {
       initApprovalFlow(rfqId!, rfqNumber!, opts.companyId!, opts.buyerApprovalLevel!).catch(async (err: unknown) => {
         const errMsg = err instanceof Error ? err.message : String(err);
         logger.error({ err, rfqId, rfqNumber }, "[marketplaceRfq] initApprovalFlow gagal (non-fatal — RFQ tetap tersimpan)");
@@ -382,8 +464,14 @@ export async function createMktRfqEntry(opts: CreateMktRfqOptions): Promise<Crea
   } catch (txErr: unknown) {
     // ── Phase 2A.1: mark failed (fire-and-forget) lalu rethrow ───────────
     const errMsg = txErr instanceof Error ? txErr.message : String(txErr);
-    markDualWriteFailed(logId, errMsg).catch(() => {});
+    // Retry callers own the state transition after a claimed attempt. Doing
+    // it here as well would race and increment attempt twice.
+    if (!suppliedDualWriteLogId) markDualWriteFailed(logId, errMsg).catch(() => {});
     throw txErr; // caller (portal.ts) harus tetap handle fallback
+  }
+
+  if (reusedExisting) {
+    return { rfqId: rfqId!, rfqNumber: rfqNumber! };
   }
 
   // ── Activity log DI LUAR transaksi (non-fatal) ─────────────────────────────

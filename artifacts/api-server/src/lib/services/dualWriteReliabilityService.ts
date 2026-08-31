@@ -111,6 +111,7 @@ export interface CreateDualWriteLogOpts {
   qty?:            number | string;
   unit?:           string;
   shippingAddress?: string;
+  idempotencyKey?: string;
   payload:         Record<string, unknown>;
 }
 
@@ -126,7 +127,7 @@ export async function createDualWriteLog(opts: CreateDualWriteLogOpts): Promise<
     const { rows } = await db.execute(sql`
       INSERT INTO mkt_dual_write_log
         (catalog_item_id, buyer_name, buyer_email, buyer_company,
-         qty, unit, shipping_address, payload, status, attempt)
+         qty, unit, shipping_address, idempotency_key, payload, status, attempt)
       VALUES
         (${opts.catalogItemId},
          ${opts.buyerName ?? ""},
@@ -135,11 +136,21 @@ export async function createDualWriteLog(opts: CreateDualWriteLogOpts): Promise<
          ${qty},
          ${unit},
          ${opts.shippingAddress ?? null},
+         ${opts.idempotencyKey ?? null},
          ${JSON.stringify(opts.payload)},
          'pending', 0)
-      RETURNING id
+       ON CONFLICT DO NOTHING
+       RETURNING id
     `);
-    return Number((rows[0] as Record<string, unknown>)?.["id"] ?? 0);
+    if (rows.length) return Number((rows[0] as Record<string, unknown>)?.["id"] ?? 0);
+    if (!opts.idempotencyKey) return 0;
+    const existing = await db.execute(sql`
+      SELECT id
+      FROM mkt_dual_write_log
+      WHERE idempotency_key = ${opts.idempotencyKey}
+      LIMIT 1
+    `);
+    return Number((existing.rows[0] as Record<string, unknown>)?.["id"] ?? 0);
   } catch (err: unknown) {
     logger.warn({ err }, "[dualWrite] createDualWriteLog gagal (non-fatal)");
     return 0;
@@ -166,6 +177,8 @@ export async function markDualWriteSuccess(
         resolved_at    = NOW(),
         resolution     = 'AUTO_SUCCESS'
     WHERE id = ${logId}
+      AND mkt_rfq_id IS NULL
+      AND status IN ('pending', 'retrying')
   `).catch((err: unknown) => {
     logger.warn({ err, logId }, "[dualWrite] markDualWriteSuccess gagal (non-fatal)");
   });
@@ -187,6 +200,7 @@ export async function markDualWriteFailed(
         attempt    = attempt + 1,
         updated_at = NOW()
     WHERE id = ${logId}
+      AND status IN ('pending', 'retrying')
   `).catch((err: unknown) => {
     logger.warn({ err, logId }, "[dualWrite] markDualWriteFailed gagal (non-fatal)");
   });
@@ -615,13 +629,26 @@ export async function retryFailedDualWrites(): Promise<{
 
   try {
     const { rows } = await db.execute(sql`
-      SELECT id, catalog_item_id, buyer_email, payload, attempt
-      FROM mkt_dual_write_log
-      WHERE status = 'failed'
-        AND attempt < ${MAX_RETRY}
-      ORDER BY created_at ASC
-      LIMIT ${RETRY_BATCH_SIZE}
-      FOR UPDATE SKIP LOCKED
+      WITH candidates AS (
+        SELECT id
+        FROM mkt_dual_write_log
+        WHERE status = 'failed'
+          AND attempt < ${MAX_RETRY}
+          -- Containment: legacy rows have no stable logical identity. They
+          -- remain reviewable/manual-only until explicitly reconciled.
+          AND idempotency_key IS NOT NULL
+        ORDER BY created_at ASC
+        LIMIT ${RETRY_BATCH_SIZE}
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE mkt_dual_write_log AS log
+      SET status           = 'retrying',
+          last_retry_at    = NOW(),
+          retry_started_at = NOW(),
+          updated_at       = NOW()
+      FROM candidates
+      WHERE log.id = candidates.id
+      RETURNING log.id, log.catalog_item_id, log.buyer_email, log.payload, log.attempt
     `).catch(() => ({ rows: [] as unknown[] }));
 
     if (!rows.length) return result;
@@ -632,15 +659,6 @@ export async function retryFailedDualWrites(): Promise<{
       const logId   = Number(row["id"]);
       const attempt = Number(row["attempt"] ?? 0);
       const retryStart = new Date().toISOString();
-
-      await db.execute(sql`
-        UPDATE mkt_dual_write_log
-        SET status           = 'retrying',
-            last_retry_at    = NOW(),
-            retry_started_at = NOW(),
-            updated_at       = NOW()
-        WHERE id = ${logId} AND status = 'failed'
-      `).catch(() => {});
 
       result.retried++;
 
@@ -661,20 +679,24 @@ export async function retryFailedDualWrites(): Promise<{
       }
 
       try {
-        const rfqResult = await createMktRfqEntry(opts as never);
+        const rfqResult = await createMktRfqEntry({
+          ...opts,
+          dualWriteLogId: logId,
+        } as never);
         const now = new Date().toISOString();
 
         await db.execute(sql`
           UPDATE mkt_dual_write_log
-          SET status              = 'success',
+           SET status              = CASE WHEN status = 'linked' THEN status ELSE 'success' END,
               mkt_rfq_id          = ${rfqResult.rfqId},
               mkt_rfq_number      = ${rfqResult.rfqNumber},
               attempt             = ${attempt + 1},
               updated_at          = NOW(),
               resolved_at         = NOW(),
               retry_completed_at  = NOW(),
-              resolution          = 'AUTO_RETRIED'
-          WHERE id = ${logId}
+           resolution          = 'AUTO_RETRIED'
+           WHERE id = ${logId}
+             AND status IN ('success', 'linked')
         `).catch(() => {});
 
         logger.info({ logId, rfqId: rfqResult.rfqId, rfqNumber: rfqResult.rfqNumber, retryStart, now }, `[dualWrite:retry] Recovered — logId=${logId}`);
@@ -693,6 +715,7 @@ export async function retryFailedDualWrites(): Promise<{
                 retry_completed_at = NOW(),
                 resolution        = 'EXHAUSTED'
             WHERE id = ${logId}
+              AND status = 'retrying'
           `).catch(() => {});
 
           logger.error({ logId, nextAttempt, err: errMsg }, `[dualWrite:retry] EXHAUSTED setelah ${nextAttempt} attempts — logId=${logId}`);
@@ -706,6 +729,7 @@ export async function retryFailedDualWrites(): Promise<{
                 updated_at        = NOW(),
                 retry_completed_at = NOW()
             WHERE id = ${logId}
+              AND status = 'retrying'
           `).catch(() => {});
 
           logger.warn({ logId, nextAttempt, err: errMsg }, `[dualWrite:retry] Masih gagal, attempt=${nextAttempt}`);
@@ -739,7 +763,14 @@ export async function retrySingleEntry(logId: number): Promise<{
   if (!rows.length) return { ok: false, error: `logId ${logId} tidak ditemukan` };
 
   const row     = rows[0] as Record<string, unknown>;
+  const currentStatus = String(row["status"] ?? "");
   const attempt = Number(row["attempt"] ?? 0);
+  if (currentStatus !== "failed") {
+    return { ok: false, error: `logId ${logId} berstatus ${currentStatus}; hanya failed yang boleh di-retry` };
+  }
+  if (attempt >= MAX_RETRY) {
+    return { ok: false, error: `logId ${logId} sudah mencapai batas retry` };
+  }
 
   let opts: Record<string, unknown>;
   try {
@@ -750,27 +781,35 @@ export async function retrySingleEntry(logId: number): Promise<{
     return { ok: false, error: "payload parse error" };
   }
 
-  await db.execute(sql`
+  const claimed = await db.execute(sql`
     UPDATE mkt_dual_write_log
     SET status = 'retrying', last_retry_at = NOW(), retry_started_at = NOW(), updated_at = NOW()
-    WHERE id = ${logId}
-  `).catch(() => {});
+    WHERE id = ${logId} AND status = 'failed' AND attempt < ${MAX_RETRY}
+    RETURNING id, payload, attempt
+  `).catch(() => ({ rows: [] as unknown[] }));
+  if (!claimed.rows.length) {
+    return { ok: false, error: `logId ${logId} sedang diproses atau sudah berubah status` };
+  }
 
   try {
     const { createMktRfqEntry } = await import("./marketplaceRfqService.js");
-    const rfqResult = await createMktRfqEntry(opts as never);
+    const rfqResult = await createMktRfqEntry({
+      ...opts,
+      dualWriteLogId: logId,
+    } as never);
 
     await db.execute(sql`
       UPDATE mkt_dual_write_log
-      SET status             = 'success',
+       SET status             = CASE WHEN status = 'linked' THEN status ELSE 'success' END,
           mkt_rfq_id         = ${rfqResult.rfqId},
           mkt_rfq_number     = ${rfqResult.rfqNumber},
           attempt            = ${attempt + 1},
           updated_at         = NOW(),
           resolved_at        = NOW(),
           retry_completed_at = NOW(),
-          resolution         = 'MANUAL_RECOVERY'
-      WHERE id = ${logId}
+           resolution         = 'MANUAL_RECOVERY'
+       WHERE id = ${logId}
+         AND status IN ('success', 'linked')
     `).catch(() => {});
 
     logger.info({ logId, rfqId: rfqResult.rfqId, rfqNumber: rfqResult.rfqNumber }, `[dualWrite:manual] Berhasil — logId=${logId}`);
@@ -787,7 +826,8 @@ export async function retrySingleEntry(logId: number): Promise<{
           updated_at         = NOW(),
           retry_completed_at = NOW(),
           resolution         = ${nextAttempt >= MAX_RETRY ? 'EXHAUSTED' : null}
-      WHERE id = ${logId}
+       WHERE id = ${logId}
+         AND status = 'retrying'
     `).catch(() => {});
 
     return { ok: false, error: errMsg };
@@ -797,6 +837,11 @@ export async function retrySingleEntry(logId: number): Promise<{
 // ── Workers ───────────────────────────────────────────────────────────────────
 
 export function startDualWriteRetryWorker(): void {
+  if (process.env["MKT_DUAL_WRITE_RETRY_ENABLED"] === "false") {
+    logger.warn("[dualWrite:retry] Auto-retry dinonaktifkan oleh MKT_DUAL_WRITE_RETRY_ENABLED=false");
+    return;
+  }
+
   registerHeartbeat("mkt-dual-write-retry", RETRY_INTERVAL_MS);
   setTimeout(() => {
     beat("mkt-dual-write-retry");
