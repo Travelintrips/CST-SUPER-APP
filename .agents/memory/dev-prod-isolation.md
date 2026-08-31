@@ -57,3 +57,10 @@ Preview frontend services must run Vite with `APP_ENV=development` and load secr
 **Why:** The unified Gateway previously served pre-built frontend assets while its API had been corrected to development, leaving direct Supabase clients in the browser connected to the production project.
 
 **How to apply:** Use Vite development servers for the Replit preview; reserve pre-built `vite preview` assets for actual production deployments where `REPLIT_DEPLOYMENT` is set.
+
+## Evidence boundary
+An apparently successful RFQ submission from a Replit preview can create a development `portal_product_orders` row and development canonical RFQ while production remains unchanged. A returned legacy order number is not production proof.
+
+**Why:** A controlled UI submission returned success for `MCT-260831-76825`, but the exact order and matching development RFQ existed only in the development database; production had no new row.
+
+**How to apply:** Always record the submit URL and independently match the returned identifier against the intended environment's database before declaring a production lifecycle proof.
