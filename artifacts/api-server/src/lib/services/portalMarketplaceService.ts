@@ -22,6 +22,7 @@ import {
   linkMktRfqToLegacy,
   validateMarketplaceDestinationMetadata,
 } from "./marketplaceRfqService.js";
+import { NotificationService } from "./notificationService.js";
 
 // ─── private helpers ──────────────────────────────────────────────────────────
 
@@ -363,6 +364,18 @@ export async function submitMarketplaceQuote(params: {
       order.id,
       order.orderNumber,
     ).catch(() => {});
+
+    void NotificationService.saveAndBroadcast("admin_notification", {
+      type: "portal_service_submitted",
+      orderId: mktRfqResult.rfqId,
+      orderNumber: mktRfqResult.rfqNumber,
+      customerName: resolvedName,
+      companyName: customerContext?.company?.name ?? null,
+      title: "RFQ Marketplace baru",
+      body: `${resolvedName} mengirim RFQ Marketplace ${mktRfqResult.rfqNumber}.`,
+      serviceKey: "marketplace",
+      dedupeKey: `portal-service:marketplace:${mktRfqResult.rfqId}:submitted`,
+    });
   }
 
   // ── 7. Increment quote_count (fire-and-forget) ────────────────────────────

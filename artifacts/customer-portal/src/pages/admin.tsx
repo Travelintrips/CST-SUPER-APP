@@ -15,7 +15,7 @@ import {
   Shield, FileText, Box, Settings, Tag, Truck, Loader2, Wrench,
   Building2, Store, Package, Users, BarChart2, ClipboardList, Ship,
   UserCheck, MessageCircle, UserPlus, Layers, Link2, ShoppingCart,
-  CreditCard, DollarSign, BookOpen, Receipt, Wallet, ArrowUpRight,
+  CreditCard, DollarSign, BookOpen, Receipt, Wallet, ArrowUpRight, Inbox,
   LayoutDashboard, PackageCheck, Mail, Image as ImageIcon, X, Menu,
 } from "lucide-react";
 import { useLanguage } from "@/i18n/LanguageContext";
@@ -32,6 +32,7 @@ import { MiniFormTab }                                   from "@/pages/admin/Min
 import { VendorMarketplaceTab, VendorInvitationsTab, VendorCatalogTab } from "@/pages/admin/VendorSystems";
 import { FixJasaNamesTool, ProdukUnggulanTab }           from "@/pages/admin/PromoManagement";
 import { MasterPriceManagement }                         from "@/pages/admin/MasterPriceManagement";
+import { ServiceOperationsTab }                           from "@/pages/admin/ServiceOperationsTab";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type ErpStats = {
@@ -57,7 +58,7 @@ export default function AdminPage() {
 
   const [pendingVendorApprovals, setPendingVendorApprovals] = useState(0);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<string>(isPortalAdmin() ? "content" : "claim");
+  const [activeTab, setActiveTab] = useState<string>(isPortalAdmin() ? "service-operations" : "claim");
 
   useEffect(() => {
     if (!isPortalAdmin()) return;
@@ -199,6 +200,13 @@ export default function AdminPage() {
           <nav className="flex-1 overflow-y-auto p-2 flex flex-col gap-0.5 [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:bg-slate-700">
             {isAdmin && (
               <>
+                <p className="px-3 pt-4 pb-1.5 text-[10px] font-semibold tracking-widest text-slate-600 uppercase select-none">Operations</p>
+                <button type="button" aria-current={activeTab === "service-operations" ? "page" : undefined}
+                  onClick={() => { setActiveTab("service-operations"); setMobileNavOpen(false); }}
+                  className={sidebarBtnCls("service-operations")}>
+                  <Inbox className="h-4 w-4 shrink-0" strokeWidth={2} />
+                  <span className="flex-1">Semua Layanan</span>
+                </button>
                 <p className="px-3 pt-4 pb-1.5 text-[10px] font-semibold tracking-widest text-slate-600 uppercase select-none">{t("adminPage.nav.sectionWebsite", "Website & Konten")}</p>
                 {[
                   { value: "content",         icon: FileText,   label: t("adminPage.nav.websiteContent", "Konten Website") },
@@ -291,6 +299,8 @@ export default function AdminPage() {
             <TabsList className="flex flex-col h-auto bg-transparent p-2 gap-0.5 items-stretch flex-1">
               {isAdmin && (
                 <>
+                  <p className="px-3 pt-4 pb-1.5 text-[10px] font-semibold tracking-widest text-slate-600 uppercase select-none">Operations</p>
+                  <TabsTrigger value="service-operations" className={TABS_TRIGGER_CLS}><Inbox className="h-4 w-4 shrink-0" strokeWidth={2} />Semua Layanan</TabsTrigger>
                   <p className="px-3 pt-4 pb-1.5 text-[10px] font-semibold tracking-widest text-slate-600 uppercase select-none">{t("adminPage.nav.sectionWebsite", "Website & Konten")}</p>
                   <TabsTrigger value="content"          className={TABS_TRIGGER_CLS}><FileText  className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.websiteContent", "Konten Website")}</TabsTrigger>
                   <TabsTrigger value="services"         className={TABS_TRIGGER_CLS}><Settings  className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.manageServices", "Kelola Layanan")}</TabsTrigger>
@@ -340,6 +350,9 @@ export default function AdminPage() {
 
               {isAdmin && (
                 <>
+                  <TabsContent value="service-operations">
+                    <ServiceOperationsTab />
+                  </TabsContent>
                   <TabsContent value="content">
                     <Card>
                       <CardHeader>

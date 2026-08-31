@@ -6,6 +6,7 @@ import { requireAdmin } from "../lib/requireAdmin.js";
 import { sendViaService as sendWhatsApp } from "../lib/waTransport.js";
 import { getAdminGroupWa, getAdminWa } from "../lib/adminWa.js";
 import { logger } from "../lib/logger.js";
+import { NotificationService } from "../lib/services/notificationService.js";
 import {
   optionalCustomerPortalAuth,
   type PortalAuthReq,
@@ -224,9 +225,10 @@ router.post("/", optionalCustomerPortalAuth, async (req: Request, res: Response)
     }
   }
   const bookingNumber = generateBookingNumber();
+  let insertedId = 0;
 
   try {
-    await db.execute(sql`
+    const insertedResult = await db.execute(sql`
       INSERT INTO trucking_booking_requests (
         booking_number, customer_id, portal_customer_id, company_id,
         vehicle_type, vehicle_name,
@@ -255,7 +257,9 @@ router.post("/", optionalCustomerPortalAuth, async (req: Request, res: Response)
         ${"customer_portal"},
         ${"pending_review"}
       )
+      RETURNING id
     `);
+    insertedId = Number((insertedResult.rows[0] as { id: number }).id);
   } catch (err) {
     logger.error({ err }, "[truckingBookings] DB insert failed");
     res.status(500).json({ message: "Gagal menyimpan order" });
@@ -268,6 +272,17 @@ router.post("/", optionalCustomerPortalAuth, async (req: Request, res: Response)
     if (group)    sendWhatsApp(group,    msg, { context: "trucking_order", refId: bookingNumber }).catch((e: unknown) => logger.warn({ e }, "WA group failed"));
     if (personal) sendWhatsApp(personal, msg, { context: "trucking_order", refId: bookingNumber }).catch((e: unknown) => logger.warn({ e }, "WA personal failed"));
   }).catch((e: unknown) => logger.warn({ e }, "getAdminWa failed"));
+
+  void NotificationService.saveAndBroadcast("admin_notification", {
+    type: "portal_service_submitted",
+    orderId: insertedId,
+    orderNumber: bookingNumber,
+    customerName: b.picPickup,
+    title: "Order trucking baru",
+    body: `Order trucking ${bookingNumber} menunggu review admin.`,
+    serviceKey: "domestic-trucking",
+    dedupeKey: `portal-service:domestic-trucking:${insertedId}:submitted`,
+  });
 
   res.status(201).json({
     bookingNumber,

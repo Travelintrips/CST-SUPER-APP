@@ -13,6 +13,8 @@ export interface AdminNotifPayload {
   /** Optional explicit title/body for admin_notifications (NOT NULL columns). Falls back to a generic message derived from `type` when omitted. */
   title?: string;
   body?: string;
+  /** Stable logical-event key. When supplied, concurrent retries produce one row. */
+  dedupeKey?: string;
   [key: string]: unknown;
 }
 
@@ -33,7 +35,7 @@ export async function saveAndBroadcast(
   const body = payload.body?.trim() || `${payload.customerName} — ${payload.orderNumber}`;
   try {
     const result = await db.execute(sql`
-      INSERT INTO admin_notifications (type, order_id, order_number, customer_name, company_name, payload, title, body)
+      INSERT INTO admin_notifications (type, order_id, order_number, customer_name, company_name, payload, title, body, dedupe_key)
       VALUES (
         ${payload.type},
         ${payload.orderId ?? null},
@@ -42,10 +44,13 @@ export async function saveAndBroadcast(
         ${payload.companyName ?? null},
         ${JSON.stringify(payload)}::jsonb,
         ${title},
-        ${body}
+        ${body},
+        ${payload.dedupeKey ?? null}
       )
+      ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
       RETURNING id, created_at
     `);
+    if (!result.rows.length) return;
     const row = result.rows[0] as { id: number; created_at: Date };
     dbId = row.id;
     createdAt = row.created_at.toISOString();

@@ -13,6 +13,7 @@ import {
   type PortalAuthReq,
 } from "../lib/supabaseAuth.js";
 import { logger } from "../lib/logger.js";
+import { NotificationService } from "../lib/services/notificationService.js";
 import {
   getPortalCustomerContext,
   PortalCustomerContextError,
@@ -441,6 +442,17 @@ customerServiceRequestsRouter.post("/:id/submit", optionalCustomerPortalAuth, as
       .returning();
 
     logger.info({ requestNumber: updated.requestNumber, itemCount: items.length }, "[CSR] submitted");
+    void NotificationService.saveAndBroadcast("admin_notification", {
+      type: "portal_service_submitted",
+      orderId: updated.id,
+      orderNumber: updated.requestNumber,
+      customerName: updated.customerName,
+      companyName: updated.customerCompany,
+      title: "Request layanan baru",
+      body: `${updated.customerName} mengirim request layanan ${updated.requestNumber}.`,
+      serviceKey: "service-request",
+      dedupeKey: `portal-service:service-request:${updated.id}:submitted`,
+    });
     return res.json(updated);
   } catch (err) {
     logger.error({ err }, "[CSR] submit error");

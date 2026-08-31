@@ -587,6 +587,8 @@ export async function createSalesOrder(
     grandTotal: Number(doc!.grandTotal),
     itemCount: items.length,
     createdAt: (doc!.createdAt as Date).toISOString(),
+    serviceKey: "freight-forwarding",
+    dedupeKey: `portal-service:freight-forwarding:${doc!.id}:submitted`,
   }).catch(() => {});
 
   // [HIGH-C] Notify admin via WhatsApp — uses DB template, fallback to default

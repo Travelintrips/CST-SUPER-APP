@@ -11,6 +11,7 @@ import {
   type PortalAuthReq,
 } from "../lib/supabaseAuth.js";
 import { getPortalCustomerContext } from "../lib/services/portalCustomerContextService.js";
+import { NotificationService } from "../lib/services/notificationService.js";
 
 const router = Router();
 
@@ -230,6 +231,18 @@ router.post("/public/orders", optionalCustomerPortalAuth, async (req: Request, r
     `);
 
     const order = r.rows[0] as any;
+
+    void NotificationService.saveAndBroadcast("admin_notification", {
+      type: "portal_service_submitted",
+      orderId: order.id,
+      orderNumber: order.order_number,
+      customerName: order.customer_name,
+      companyName: order.customer_company,
+      title: "Inquiry Air Freight baru",
+      body: `${order.customer_name} mengirim inquiry Air Freight ${order.order_number}.`,
+      serviceKey: "air-freight",
+      dedupeKey: `portal-service:air-freight:${order.id}:submitted`,
+    });
 
     res.status(201).json({ ok: true, order_number: order.order_number, id: order.id });
 

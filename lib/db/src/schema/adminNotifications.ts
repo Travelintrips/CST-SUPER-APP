@@ -18,6 +18,7 @@ export const adminNotificationsTable = pgTable("admin_notifications", {
   payload:      jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
   title:        text("title").notNull().default(""),
   body:         text("body").notNull().default(""),
+  dedupeKey:    text("dedupe_key"),
   readAt:       timestamp("read_at", { withTimezone: true }),
   createdAt:    timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
