@@ -2754,12 +2754,22 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
   const candidateId = Number(req.params.candidateId);
   const companyId = resolveCompanyId(req);
   const actor = (req as any).user?.email ?? "system";
+  const manualOverride = req.body?.manual_override === true;
+  const overrideReason = typeof req.body?.override_reason === "string"
+    ? req.body.override_reason.trim().slice(0, 500)
+    : "";
 
   if (!Number.isSafeInteger(candidateId) || candidateId <= 0) {
     return res.status(400).json({ error: "candidateId tidak valid" });
   }
   if (!Number.isSafeInteger(companyId) || companyId <= 0) {
     return res.status(400).json({ error: "companyId tidak valid" });
+  }
+  if (manualOverride && !overrideReason) {
+    return res.status(400).json({
+      error: "Alasan override manual wajib diisi agar keputusan dapat diaudit.",
+      code: "OVERRIDE_REASON_REQUIRED",
+    });
   }
 
   try {
@@ -3089,9 +3099,19 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
           });
         }
       }
-      const settlementConfig = selectQrisExactNetConfig(evaluatedConfigs, bankAmount);
+      const exactSettlementConfig = selectQrisExactNetConfig(evaluatedConfigs, bankAmount);
+      // A REVIEW candidate may be approved by an explicit reviewer decision.
+      // Keep the owner-approved configuration and all identity checks, but do
+      // not require its calculated net to equal the bank amount when the
+      // reviewer intentionally overrides the evidence mismatch.
+      const settlementConfig = exactSettlementConfig
+        ?? (manualOverride && evaluatedConfigs.length === 1 ? evaluatedConfigs[0] : null);
       if (!settlementConfig) {
-        throw Object.assign(new Error("Nilai netto tidak sama dengan mutasi bank"), {
+        throw Object.assign(new Error(
+          manualOverride && evaluatedConfigs.length > 1
+            ? "Override manual memerlukan tepat satu konfigurasi MDR owner-approved yang aktif pada rekening/tanggal ini."
+            : "Nilai netto tidak sama dengan mutasi bank",
+        ), {
           code: "INVALID_CANDIDATE",
         });
       }
@@ -3142,6 +3162,8 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
         mutationId: candidate.mutationId,
         companyId,
         settlementConfigId: Number(candidate.settlementConfigId),
+        manualOverride,
+        overrideReason: overrideReason || null,
       },
       actor,
     });
@@ -3178,6 +3200,8 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       candidateId: settlementId,
       candidateSource: CANONICAL_SETTLEMENT_SOURCE,
       actor,
+      manualOverride,
+      overrideReason: overrideReason || null,
     });
 
     const { rows: completionRows } = await db.execute(sql.raw(`
@@ -3222,6 +3246,8 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
         mutationId,
         settlementId,
         selectedPaymentIds,
+          manualOverride,
+          overrideReason: overrideReason || null,
         idempotent: built.idempotent || approval.idempotent,
       },
     });
@@ -3251,6 +3277,8 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
       },
       approval,
       completion,
+      manual_override: manualOverride,
+      override_reason: overrideReason || null,
       ...(reviewWarning ? { reviewWarning } : {}),
     });
   } catch (error: any) {

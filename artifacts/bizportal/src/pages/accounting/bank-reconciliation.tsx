@@ -4477,6 +4477,12 @@ function MutationDetailPanel({
   const m     = mutation;
   const cands = visibleCandidates(m);
   const qrisAudit = m.qris_candidate_audit ?? qrisAuditsForMutation(m)[0];
+  const qrisGrossAmount = numericValue(qrisAudit?.gross_amount) ?? 0;
+  const qrisNetAmount = numericValue(qrisAudit?.net_amount) ?? 0;
+  const qrisStoredDeduction = numericValue(qrisAudit?.observed_deduction) ?? 0;
+  const qrisImpliedDeduction = Math.max(0, qrisGrossAmount - qrisNetAmount);
+  const qrisDeductionMetadataMismatch =
+    qrisAudit != null && Math.abs(qrisStoredDeduction - qrisImpliedDeduction) >= 0.5;
   const qrisDiagnostic = m.qris_candidate_diagnostic ?? null;
   const canonicalApprovalCandidate = canonicalSettlementCandidateForMutation(m);
   const canonicalApprovalReady = isCanonicalSettlementApprovalEligible(m);
@@ -4738,6 +4744,18 @@ function MutationDetailPanel({
                       <span className="min-w-0 font-medium break-words text-green-700 sm:text-right">{idr(qrisAudit.net_amount)}</span>
                       <span className="text-slate-600 dark:text-slate-400">Potongan MDR</span>
                       <span className="min-w-0 font-medium break-words text-red-600 sm:text-right">{idr(qrisAudit.observed_deduction)}</span>
+                      {qrisDeductionMetadataMismatch && (
+                        <>
+                          <span className="text-slate-600 dark:text-slate-400">MDR tersirat gross − netto</span>
+                          <span className="min-w-0 font-medium break-words text-amber-700 sm:text-right">
+                            {idr(qrisImpliedDeduction)}
+                          </span>
+                          <p className="sm:col-span-2 rounded border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] leading-relaxed text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
+                            Data kandidat lama menyimpan MDR {idr(qrisStoredDeduction)}, tetapi gross − netto menunjukkan {idr(qrisImpliedDeduction)}.
+                            Regenerasi kandidat atau gunakan override manual setelah memastikan bukti bank.
+                          </p>
+                        </>
+                      )}
                     </div>
 
                     {/* Payment items list */}
@@ -5624,6 +5642,8 @@ export default function BankReconciliationPage() {
 
   const [qrisBatchConfirm, setQrisBatchConfirm] = useState<{
     selections: QrisApprovalSelection[];
+    manualOverride?: boolean;
+    overrideReason?: string;
   } | null>(null);
 
   const waitForMatchingCompletion = async () => {
@@ -5711,12 +5731,39 @@ export default function BankReconciliationPage() {
     candidate: QrisCandidateAudit,
     paymentIds?: number[],
   ) => {
-    openQrisBatchApprovalConfirmation([candidate], paymentIds);
+    const isReview = String(candidate.reconciliation_status ?? "").toUpperCase() === "REVIEW";
+    if (!isReview) {
+      openQrisBatchApprovalConfirmation([candidate], paymentIds);
+      return;
+    }
+    const confirmed = window.confirm(
+      "Kandidat ini masih REVIEW karena provider atau MDR belum terverifikasi.\n\n" +
+      "Lanjutkan sebagai override manual? Payment tetap wajib confirmed, QRIS, H-1, " +
+      "dan berada pada company/rekening yang sama.",
+    );
+    if (!confirmed) return;
+    const overrideReason = window.prompt(
+      "Alasan override manual (wajib untuk audit):",
+      "Reviewer mengonfirmasi settlement QRIS sesuai dengan mutasi bank.",
+    )?.trim();
+    if (!overrideReason) {
+      toast({
+        title: "Override dibatalkan",
+        description: "Alasan override wajib diisi agar keputusan dapat diaudit.",
+        variant: "destructive",
+      });
+      return;
+    }
+    openQrisBatchApprovalConfirmation([candidate], paymentIds, {
+      manualOverride: true,
+      overrideReason,
+    });
   };
 
   const openQrisBatchApprovalConfirmation = (
     candidates: QrisCandidateAudit[],
     paymentIdsForSingleCandidate?: number[],
+    override?: { manualOverride: boolean; overrideReason: string },
   ) => {
     const eligibleCandidates = candidates.filter((candidate) =>
       candidate.id != null
@@ -5756,11 +5803,38 @@ export default function BankReconciliationPage() {
           ? selectedPaymentIdsForCandidate(candidate)
           : getAvailableQrisPaymentIds(candidate),
     }));
-    setQrisBatchConfirm({ selections });
+    setQrisBatchConfirm({ selections, ...override });
   };
 
   const handleApproveSelectedQris = () => {
-    openQrisBatchApprovalConfirmation(selectedQrisCandidates);
+    const hasReview = selectedQrisCandidates.some(
+      (candidate) => String(candidate.reconciliation_status ?? "").toUpperCase() === "REVIEW",
+    );
+    if (!hasReview) {
+      openQrisBatchApprovalConfirmation(selectedQrisCandidates);
+      return;
+    }
+    const confirmed = window.confirm(
+      "Pilihan berisi kandidat REVIEW. Lanjutkan seluruh batch sebagai override manual?\n\n" +
+      "Keputusan ini akan dicatat di audit dan payment tetap melalui validasi keamanan.",
+    );
+    if (!confirmed) return;
+    const overrideReason = window.prompt(
+      "Alasan override manual (wajib untuk audit):",
+      "Reviewer mengonfirmasi settlement QRIS sesuai dengan mutasi bank.",
+    )?.trim();
+    if (!overrideReason) {
+      toast({
+        title: "Override dibatalkan",
+        description: "Alasan override wajib diisi agar keputusan dapat diaudit.",
+        variant: "destructive",
+      });
+      return;
+    }
+    openQrisBatchApprovalConfirmation(selectedQrisCandidates, undefined, {
+      manualOverride: true,
+      overrideReason,
+    });
   };
 
   const handleConfirmQrisBatch = async () => {
@@ -5790,6 +5864,8 @@ export default function BankReconciliationPage() {
           mutationId: candidate.mutation_id,
           companyId: Number(candidate.company_id),
           paymentIds,
+          manualOverride: qrisBatchConfirm.manualOverride,
+          overrideReason: qrisBatchConfirm.overrideReason,
           silent: true,
         });
         approvedCount += 1;
@@ -5889,7 +5965,11 @@ export default function BankReconciliationPage() {
         variant: "destructive",
       });
     } else if (!needsSelectionReconcile) {
-      toast({ title: `${approvedCount} approval QRIS berhasil disetujui ✓` });
+      toast({
+        title: qrisBatchConfirm?.manualOverride
+          ? `${approvedCount} settlement QRIS diselesaikan dengan override manual ✓`
+          : `${approvedCount} approval QRIS berhasil disetujui ✓`,
+      });
     }
   };
 
@@ -6064,7 +6144,17 @@ export default function BankReconciliationPage() {
       mutationId,
       companyId,
       paymentIds,
-    }: { candidateId: number; mutationId: number; companyId: number; paymentIds?: number[]; silent?: boolean }) => {
+      manualOverride,
+      overrideReason,
+    }: {
+      candidateId: number;
+      mutationId: number;
+      companyId: number;
+      paymentIds?: number[];
+      manualOverride?: boolean;
+      overrideReason?: string;
+      silent?: boolean;
+    }) => {
       const controller = new AbortController();
       const timeoutId = window.setTimeout(() => controller.abort(), 120_000);
       let r: Response;
@@ -6073,7 +6163,13 @@ export default function BankReconciliationPage() {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mutationId, companyId, paymentIds }),
+          body: JSON.stringify({
+            mutationId,
+            companyId,
+            paymentIds,
+            manual_override: manualOverride === true,
+            override_reason: overrideReason,
+          }),
           signal: controller.signal,
         });
       } catch (error) {

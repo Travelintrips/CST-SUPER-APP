@@ -71,6 +71,8 @@ export interface CanonicalSettlementBuildOptions {
     mutationId: number;
     companyId: number;
     settlementConfigId?: number;
+    manualOverride?: boolean;
+    overrideReason?: string | null;
   };
   actor: string;
 }
@@ -1005,7 +1007,7 @@ async function buildInTransaction(
         "Company payment tidak sama dengan mutasi bank",
       );
     }
-    if (!approvalRule.ok) {
+    if (!approvalRule.ok && !evidence.manualOverride) {
       throw new CanonicalSettlementBuilderError(
         CANONICAL_SETTLEMENT_BUILDER_CODES.PAYMENT_NOT_ELIGIBLE,
         approvalRule.reason,
