@@ -15,6 +15,7 @@ import {
   getPortalCustomerContext,
   PortalCustomerContextError,
 } from "../lib/services/portalCustomerContextService.js";
+import { getEligibleTruckingVendorIds } from "../lib/truckingVendorEligibility.js";
 
 const router = Router();
 
@@ -207,6 +208,20 @@ router.post("/", optionalCustomerPortalAuth, async (req: Request, res: Response)
   }
 
   const b = parsed.data;
+  const candidateVendorIds = b.candidateVendorIds ?? [];
+  const submittedVendorIds = [
+    ...candidateVendorIds,
+    ...(b.selectedVendorId == null ? [] : [b.selectedVendorId]),
+  ];
+  const eligibleVendorIds = await getEligibleTruckingVendorIds(submittedVendorIds);
+  const invalidCandidateVendorIds = submittedVendorIds.filter((id) => !eligibleVendorIds.has(id));
+  if (invalidCandidateVendorIds.length > 0) {
+    res.status(422).json({
+      message: "Daftar vendor trucking berisi vendor yang tidak eligible.",
+      invalidVendorIds: [...new Set(invalidCandidateVendorIds)],
+    });
+    return;
+  }
   let context: Awaited<ReturnType<typeof getPortalCustomerContext>> | null = null;
   if (customerId) {
     try {

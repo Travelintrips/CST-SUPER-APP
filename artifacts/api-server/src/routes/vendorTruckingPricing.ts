@@ -3,6 +3,7 @@ import { requireAdmin } from "../lib/requireAdmin.js";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { calculateTruckingEstimate, pricingRowToInput, type TruckingEstimateOptions } from "../lib/truckingPricingEngine.js";
+import { getEligibleTruckingPricingRows, TRUCKING_AREA_LABELS } from "../lib/truckingVendorEligibility.js";
 
 const router = Router();
 
@@ -215,12 +216,7 @@ router.delete("/:id", async (req: Request, res: Response) => {
   }
 });
 
-const AREA_LABELS_MAP: Record<string, string[]> = {
-  "jawa-sumatra": ["Jabodetabek", "Jawa Barat", "Jawa Tengah", "Jawa Timur", "Sumatra"],
-  "kalimantan":   ["Kalimantan"],
-  "sulawesi":     ["Sulawesi"],
-  "bali-nusra":   ["Bali", "Nusa Tenggara"],
-};
+const AREA_LABELS_MAP = TRUCKING_AREA_LABELS;
 
 router.post("/public-estimate", async (req: Request, res: Response) => {
   const b = req.body as Record<string, unknown>;
@@ -229,38 +225,18 @@ router.post("/public-estimate", async (req: Request, res: Response) => {
   const deliverySlug    = String(b.delivery_area   ?? "").trim();
   const pickupLabels    = AREA_LABELS_MAP[pickupSlug]   ?? [];
   const deliveryLabels  = AREA_LABELS_MAP[deliverySlug] ?? [];
-  const allLabels       = [...new Set([...pickupLabels, ...deliveryLabels])];
 
   if (!vehicleType) {
     res.json({ has_data: false, cheapest: null, candidates: [] });
     return;
   }
   try {
-    let rows;
-    if (allLabels.length > 0) {
-      const arrSql = sql.raw(
-        `ARRAY[${allLabels.map((l) => `'${l.replace(/'/g, "''")}'`).join(",")}]::text[]`,
-      );
-      rows = await db.execute(sql`
-        SELECT vtp.*, s.name AS vendor_name
-        FROM vendor_trucking_pricing vtp
-        JOIN suppliers s ON s.id = vtp.vendor_id
-        WHERE vtp.is_active = TRUE
-          AND lower(vtp.vehicle_type) = lower(${vehicleType})
-          AND (cardinality(vtp.operation_areas) = 0 OR vtp.operation_areas && ${arrSql})
-        ORDER BY vtp.price_per_km ASC
-      `);
-    } else {
-      rows = await db.execute(sql`
-        SELECT vtp.*, s.name AS vendor_name
-        FROM vendor_trucking_pricing vtp
-        JOIN suppliers s ON s.id = vtp.vendor_id
-        WHERE vtp.is_active = TRUE AND lower(vtp.vehicle_type) = lower(${vehicleType})
-        ORDER BY vtp.price_per_km ASC
-      `);
-    }
+    const eligibleRows = await getEligibleTruckingPricingRows(
+      vehicleType,
+      [pickupSlug, deliverySlug],
+    );
 
-    if (!rows.rows.length) {
+    if (!eligibleRows.length) {
       res.json({ has_data: false, cheapest: null, candidates: [] });
       return;
     }
@@ -278,7 +254,7 @@ router.post("/public-estimate", async (req: Request, res: Response) => {
       cargoValue:          Number(b.cargo_value      ?? 0),
     };
 
-    const candidates = (rows.rows as Record<string, unknown>[]).map((row) => ({
+    const candidates = eligibleRows.map((row) => ({
       vendor_id:   row.vendor_id,
       vendor_name: row.vendor_name,
       pricing_id:  row.id,

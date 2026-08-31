@@ -1824,3 +1824,26 @@ ALTER TABLE "logistic_orders" ADD CONSTRAINT "logistic_orders_customer_confirm_t
 ALTER TABLE "logistic_orders" ADD CONSTRAINT "logistic_orders_options_token_unique" UNIQUE("options_token");
 --> statement-breakpoint
 ALTER TABLE "logistic_orders" ADD CONSTRAINT "logistic_orders_public_rfq_token_unique" UNIQUE("public_rfq_token");
+--> statement-breakpoint
+-- Freight order tables are bootstrapped here so a fresh migration chain never
+-- reaches the public Ocean/Air endpoints without their canonical base tables.
+-- Migration 0042 adds the complete additive column contract for existing DBs.
+CREATE TABLE IF NOT EXISTS "air_freight_orders" (
+  "id" serial PRIMARY KEY,
+  "order_number" text NOT NULL UNIQUE,
+  "customer_name" text NOT NULL DEFAULT '',
+  "origin_airport" text NOT NULL DEFAULT '',
+  "dest_airport" text NOT NULL DEFAULT '',
+  "created_at" timestamptz NOT NULL DEFAULT NOW(),
+  "updated_at" timestamptz NOT NULL DEFAULT NOW()
+);
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "ocean_freight_orders" (
+  "id" serial PRIMARY KEY,
+  "order_number" text NOT NULL UNIQUE,
+  "customer_name" text NOT NULL DEFAULT '',
+  "origin_port" text NOT NULL DEFAULT '',
+  "destination_port" text NOT NULL DEFAULT '',
+  "created_at" timestamptz NOT NULL DEFAULT NOW(),
+  "updated_at" timestamptz NOT NULL DEFAULT NOW()
+);
