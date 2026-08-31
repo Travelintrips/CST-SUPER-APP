@@ -892,7 +892,7 @@ function qrisAuditsForMutation(m: BankMutation): QrisCandidateAudit[] {
   // Mandiri's SA/KR markers must not hide an approvable H-1 candidate.
   return audits.filter((audit) =>
     !["stale", "superseded", "ineligible"].includes(String(audit.status ?? "").toLowerCase())
-    && String(audit.reconciliation_status ?? "").toUpperCase() === "MATCHED"
+    && ["MATCHED", "REVIEW", "UNMATCHED"].includes(String(audit.reconciliation_status ?? "").toUpperCase())
     // H-1 is an exact settlement cohort: candidate expected settlement date
     // must be the same calendar date as the bank mutation.
     && isSameCalendarDate(m.transaction_date, audit.estimated_settlement_date)
@@ -1022,6 +1022,8 @@ function statusLabel(m: BankMutation): string {
   if (m.status === "manual_review") return STATUS_LABELS.manual_review;
   if (isCanonicalSettlementApprovalEligible(m)) return "Siap Direconcile";
   if (isCanonicalSettlementManualOverrideEligible(m)) return "Override Manual Tersedia";
+  const qrisAuditStatus = qrisAuditsForMutation(m)[0]?.reconciliation_status?.toUpperCase();
+  if (qrisAuditStatus === "UNMATCHED") return "Review QRIS — Netto Tidak Cocok";
   if (isQrisMutation(m) && qrisAuditsForMutation(m).length === 0) return "Perlu Kandidat QRIS";
   if (m.status === "duplicate_need_review" || hasUnresolvedVariance(m)) return "Perlu Diperiksa";
   if (m.status === "unmatched" && visibleCandidates(m).length > 0) return "Perlu Diperiksa";
@@ -1036,6 +1038,8 @@ function statusColor(m: BankMutation): string {
   if (m.status === "manual_review") return STATUS_COLORS.manual_review;
   if (isCanonicalSettlementApprovalEligible(m)) return STATUS_COLORS.matched;
   if (isCanonicalSettlementManualOverrideEligible(m)) return STATUS_COLORS.manual_review;
+  const qrisAuditStatus = qrisAuditsForMutation(m)[0]?.reconciliation_status?.toUpperCase();
+  if (qrisAuditStatus === "UNMATCHED") return STATUS_COLORS.duplicate_need_review;
   if (isQrisMutation(m) && qrisAuditsForMutation(m).length === 0) return STATUS_COLORS.duplicate_need_review;
   if (m.status === "duplicate_need_review" || hasUnresolvedVariance(m)) return STATUS_COLORS.duplicate_need_review;
   if (m.status === "unmatched" && visibleCandidates(m).length > 0) return STATUS_COLORS.duplicate_need_review;
@@ -3076,9 +3080,15 @@ function QrisMutationCard({
     && allItems.length > 0;
   const canonicalExpectedNet = numericValue(canonicalSettlementDetails?.expectedAmount)
     ?? numericValue(canonicalSettlementDetails?.netAmount);
+  const liveExpectedNet = numericValue(audit.current_expected_amount);
   const auditExpectedNet = numericValue(audit.net_amount);
+  const snapshotExpectedNet = snapshotGross > 0
+    ? Math.max(0, snapshotGross - (numericValue(audit.observed_deduction) ?? 0))
+    : null;
   const originalExpectedNet = canonicalExpectedNet
-    ?? (hasLiveSettlementProposal ? auditExpectedNet : null);
+    ?? (hasLiveSettlementProposal
+      ? auditExpectedNet
+      : liveExpectedNet ?? snapshotExpectedNet);
   const hasIdentifiedSettlement = originalExpectedNet != null;
   const expectedNet = hasLiveScope && !isReadOnlyEvidence
     ? (numericValue(audit.current_expected_amount)
@@ -3092,7 +3102,7 @@ function QrisMutationCard({
       ? Math.max(0, candidateGross - expectedNet)
       : hasLiveSettlementProposal
         ? numericValue(audit.observed_deduction)
-        : null;
+        : numericValue(audit.observed_deduction);
   const difference = originalExpectedNet == null ? null : bankAmount - originalExpectedNet;
   const differenceAbs = difference == null ? null : Math.abs(difference);
   const differenceExplanation = differenceAbs != null && differenceAbs < 0.5
@@ -3149,7 +3159,7 @@ function QrisMutationCard({
             ? "Perlu Diperbarui"
             : isMatched
               ? "Cocok"
-              : "Tidak tersedia";
+              : "Review QRIS — Netto Tidak Cocok";
   const positiveStatus = isCanonicalReconciled
     || isApproved
     || isDepleted
@@ -3211,6 +3221,42 @@ function QrisMutationCard({
                 </div>
               ))}
             </div>
+            {!isMatched && !isApproved && differenceAbs != null && differenceAbs >= 0.5 && (
+              <div className="mt-3 rounded-md border-2 border-amber-400 bg-amber-50 px-3 py-3 text-xs text-amber-950 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-100">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-300" />
+                  <div className="min-w-0 flex-1">
+                    <p className="font-semibold">Review kandidat QRIS — netto tidak cocok</p>
+                    <div className="mt-1 grid gap-x-4 gap-y-1 sm:grid-cols-3">
+                      <span>Mutasi bank: <strong>{idr(bankAmount)}</strong></span>
+                      <span>Netto sistem: <strong>{originalExpectedNet == null ? "—" : idr(originalExpectedNet)}</strong></span>
+                      <span>Selisih: <strong>{idrWhole(differenceAbs)}</strong></span>
+                    </div>
+                    <p className="mt-1.5 leading-relaxed">
+                      Kandidat ini tampil untuk koreksi saja. Periksa nominal, MDR, provider, atau tanggal payment di Sport Center.
+                      Approval dikunci sampai hasil regenerasi berstatus <strong>MATCHED</strong>.
+                    </p>
+                    {onGenerateQrisCandidates && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="mt-2 h-7 gap-1.5 border-amber-500 bg-white text-[11px] text-amber-800 hover:bg-amber-100 dark:border-amber-600 dark:bg-slate-950 dark:text-amber-200"
+                        disabled={qrisGenerationPending}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onGenerateQrisCandidates(m.id);
+                        }}
+                      >
+                        {qrisGenerationPending
+                          ? <Loader2 className="h-3 w-3 animate-spin" />
+                          : <RotateCcw className="h-3 w-3" />}
+                        {qrisGenerationPending ? "Menghitung ulang..." : "Cari ulang setelah koreksi"}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
             {hasCanonicalSettlementCandidate && canonicalSettlementDetails && (
               <div className="mt-3 rounded-md border border-indigo-300 bg-indigo-50 px-3 py-2.5 text-xs text-white dark:border-indigo-800 dark:bg-indigo-950">
                 <div className="flex items-start gap-2">

@@ -4000,11 +4000,8 @@ router.get("/mutations", async (req, res) => {
               )
             ), 0)
              ,
-             'current_expected_amount', COALESCE((
-               SELECT CASE
-                 WHEN NULLIF(qc.gross_amount, 0) IS NULL THEN 0
-                 ELSE SUM(sp.amount) * qc.net_amount / NULLIF(qc.gross_amount, 0)
-               END
+              'current_expected_amount', COALESCE((
+                SELECT SUM(sp.amount - COALESCE(sp.mdr_amount, 0))
                FROM sport_center.sport_payments sp
                WHERE sp.id IN (
                  SELECT (item->>'paymentId')::int
@@ -4097,11 +4094,8 @@ router.get("/mutations", async (req, res) => {
                   ${canonicalSettledExcludeSql}
               )
             ), 0),
-             'current_expected_amount', COALESCE((
-               SELECT CASE
-                 WHEN NULLIF(qc.gross_amount, 0) IS NULL THEN 0
-                 ELSE SUM(sp.amount) * qc.net_amount / NULLIF(qc.gross_amount, 0)
-               END
+              'current_expected_amount', COALESCE((
+                SELECT SUM(sp.amount - COALESCE(sp.mdr_amount, 0))
                FROM sport_center.sport_payments sp
                WHERE sp.id IN (
                  SELECT (item->>'paymentId')::int
