@@ -347,12 +347,24 @@ export async function generateQrisCandidates(options: {
         ${paymentBankAccountSql} AS bank_account_id,
         ${canonicalSettlementIdSql} AS canonical_settlement_id,
         ${alreadyReconciledSql} AS already_reconciled
-      FROM sport_center.sport_payments sp
+      FROM (
+        SELECT
+          source_payment.*,
+          ROW_NUMBER() OVER (
+            PARTITION BY COALESCE(
+              NULLIF(BTRIM(source_payment.provider_order_id::text), ''),
+              'payment:' || source_payment.id::text
+            )
+            ORDER BY source_payment.id
+          ) AS provider_payment_rank
+        FROM sport_center.sport_payments source_payment
+        WHERE LOWER(COALESCE(source_payment.payment_method::text, '')) LIKE '%qris%'
+          AND LOWER(COALESCE(source_payment.status::text, '')) = 'confirmed'
+          ${companyFilter.replaceAll("sp.", "source_payment.")}
+      ) sp
       LEFT JOIN sport_center.sport_bookings sb ON sb.id = sp.booking_id
       LEFT JOIN sport_center.sport_facilities sf ON sf.id = sb.facility_id
-      WHERE LOWER(COALESCE(sp.payment_method::text, '')) LIKE '%qris%'
-         AND LOWER(COALESCE(sp.status::text, '')) = 'confirmed'
-        ${companyFilter}
+      WHERE sp.provider_payment_rank = 1
     `)),
     db.execute(sql.raw(`
       SELECT
@@ -817,6 +829,10 @@ export async function listQrisCandidates(options: {
   const limit = Math.min(Math.max(Number(options.limit ?? 100), 1), 500);
 
   const canonicalAvailable = await hasCanonicalSettlementSchema();
+  const phase4ColumnsAvailable = await hasQrisPaymentPhase4Columns();
+  const livePaymentProviderSql = phase4ColumnsAvailable
+    ? "NULLIF(BTRIM(live_provider_payment.payment_provider::text), '')"
+    : "NULL::text";
   const {
     currentExpectedAmountSql,
     canonicalSettledExcludeSql,
@@ -832,6 +848,47 @@ export async function listQrisCandidates(options: {
            bm.bank_account_id,
            bm.source, bm.provider_name AS bank_provider_name,
             COALESCE(c.candidate_source, 'sport_center.sport_payments') AS candidate_source,
+             COALESCE((
+               SELECT jsonb_object_agg(
+                 payment_id::text,
+                 provider_name
+               )
+               FROM (
+                 SELECT
+                   CASE
+                     WHEN COALESCE(
+                       item->>'paymentId',
+                       item->>'payment_id'
+                     ) ~ '^[0-9]+$'
+                       THEN COALESCE(
+                         item->>'paymentId',
+                         item->>'payment_id'
+                       )::int
+                     ELSE NULL
+                   END AS payment_id,
+                   COALESCE(
+                     ${livePaymentProviderSql},
+                     'unknown'
+                   ) AS provider_name
+                 FROM jsonb_array_elements(COALESCE(c.payment_items, '[]'::jsonb)) item
+                 LEFT JOIN sport_center.sport_payments live_provider_payment
+                   ON live_provider_payment.id = CASE
+                     WHEN COALESCE(
+                       item->>'paymentId',
+                       item->>'payment_id'
+                     ) ~ '^[0-9]+$'
+                       THEN COALESCE(
+                         item->>'paymentId',
+                         item->>'payment_id'
+                       )::int
+                     ELSE NULL
+                   END
+                 WHERE COALESCE(
+                   item->>'paymentId',
+                   item->>'payment_id'
+                 ) ~ '^[0-9]+$'
+               ) live_payment_provider
+             ), '{}'::jsonb) AS payment_provider_by_id,
             ${currentExpectedAmountSql} AS current_expected_amount,
             COALESCE((
               SELECT jsonb_agg(current_payment.payment_id ORDER BY current_payment.payment_id)
@@ -909,5 +966,31 @@ export async function listQrisCandidates(options: {
     ORDER BY c.source_date DESC, c.id DESC
     LIMIT ${limit}
   `));
-  return rows;
+   return rows.map((row) => {
+     const providerById = row.payment_provider_by_id as Record<string, unknown> | null | undefined;
+     const { payment_provider_by_id: _providerById, ...candidate } = row;
+     const rawItems = candidate.payment_items;
+     const paymentItems = Array.isArray(rawItems)
+       ? rawItems
+       : typeof rawItems === "string"
+         ? JSON.parse(rawItems)
+         : [];
+     if (!Array.isArray(paymentItems)) return candidate;
+
+     return {
+       ...candidate,
+       payment_items: paymentItems.map((item) => {
+         if (item == null || typeof item !== "object") return item;
+         const paymentItem = item as Record<string, unknown>;
+         const paymentId = paymentItem.paymentId ?? paymentItem.payment_id;
+         const provider =
+           paymentItem.providerName
+           ?? paymentItem.provider_name
+           ?? (paymentId != null ? providerById?.[String(paymentId)] : null)
+           ?? candidate.provider_code
+           ?? "unknown";
+         return { ...paymentItem, providerName: String(provider) };
+       }),
+     };
+   });
 }

@@ -50,6 +50,8 @@ type Payment = {
   settlement_status: "unsettled" | "settled" | "partial" | "exception" | string;
   mdr_posting_status: "unposted" | "posted" | "failed" | string;
   mdr_accounting_entry_id: number | null; mdr_posting_error: string | null;
+  related_payment_count?: number;
+  related_booking_numbers?: string[];
 };
 
 const METHOD_LABEL: Record<string, string> = {
@@ -321,7 +323,14 @@ export default function SportCenterPayments() {
                 ) : displayedRows.map((p) => (
                   <tr key={p.id} className="border-b border-border/20 hover:bg-muted/20 transition-colors">
                     <td className="py-2.5 px-3 font-mono text-xs text-muted-foreground whitespace-nowrap">{p.payment_number}</td>
-                    <td className="py-2.5 px-3 font-mono text-xs text-muted-foreground whitespace-nowrap">{p.booking_number ?? "—"}</td>
+                    <td className="py-2.5 px-3 font-mono text-xs text-muted-foreground whitespace-nowrap">
+                      <div>{p.booking_number ?? "—"}</div>
+                      {Number(p.related_payment_count ?? 1) > 1 && (
+                        <div className="mt-0.5 font-sans text-[10px] text-sky-300">
+                          Recurring · {p.related_payment_count} booking
+                        </div>
+                      )}
+                    </td>
                     <td className="py-2.5 px-3 text-foreground whitespace-nowrap">{p.customer_name ?? "—"}</td>
                     <td className="py-2.5 px-3 text-muted-foreground text-xs whitespace-nowrap">{p.facility_name ?? "—"}</td>
                     <td className="py-2.5 px-3 text-muted-foreground text-xs whitespace-nowrap">{fmtDate(p.booking_date)}</td>

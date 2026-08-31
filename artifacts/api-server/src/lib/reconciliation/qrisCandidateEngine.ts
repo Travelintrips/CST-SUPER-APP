@@ -102,6 +102,7 @@ export interface QrisMutationBatchCandidate {
     paymentId: number;
     grossAmount: number;
     paymentStatus?: string | null;
+    providerName?: string | null;
     expectedSettlementDate: string | null;
     settlementRuleVersion: string | null;
     paymentNumber?: string | null;
@@ -396,6 +397,7 @@ export function generateQrisMutationBatchCandidates(input: {
           paymentId: payment.id,
           grossAmount: roundMoney(Number(payment.amount) || 0),
           paymentStatus: String(payment.status ?? "").trim() || null,
+          providerName: payment.providerName ?? null,
           canonicalSettlementId: payment.canonicalSettlementId ?? null,
           expectedSettlementDate: mutation.transactionDate,
           settlementRuleVersion: "payment-method-h-minus-one-v1",
@@ -696,6 +698,7 @@ export function generateQrisMutationBatchCandidates(input: {
       paymentItems: selectedPayments.map((payment) => ({
         paymentId: payment.id,
         grossAmount: roundMoney(Number(payment.amount) || 0),
+        providerName: payment.providerName ?? null,
         canonicalSettlementId: payment.canonicalSettlementId ?? null,
         expectedSettlementDate: payment.expectedSettlementDate,
         settlementRuleVersion: ruleVersion || payment.settlementRuleVersion || null,
