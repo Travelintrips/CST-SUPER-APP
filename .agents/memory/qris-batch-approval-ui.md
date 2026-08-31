@@ -7,7 +7,7 @@ The QRIS approval UI selects whole candidate batches. A checked batch is approve
 
 **Why:** The current backend contract validates and settles the complete candidate item set; selecting individual payment rows without a partial-settlement API would misrepresent what approval does.
 
-**How to apply:** Keep `Pilih semua` and per-row checkboxes scoped to MATCHED candidate batches. Only introduce payment-level selection after the backend explicitly supports partial settlement, amount allocation, mutation status, and rollback semantics.
+**How to apply:** Keep batch selection scoped to MATCHED candidates and REVIEW candidates that the reviewer explicitly confirms as a manual override. Only introduce payment-level selection after the backend explicitly supports partial settlement, amount allocation, mutation status, and rollback semantics.
 
 Every read path that renders a QRIS candidate must use live settlement membership (`current_payment_ids`) rather than the persisted `payment_items` snapshot alone.
 
@@ -44,3 +44,9 @@ When a bank mutation is identified as QRIS but has no QRIS audit candidate, neve
 **Why:** Generic approval creates a normal bank journal and bypasses the canonical Sport Center settlement bridge, leaving the QRIS mutation unable to complete through the governed PROD flow.
 
 **How to apply:** Keep QRIS detection as an exclusion in every generic approval predicate, and make the per-mutation candidate-generation action available in every safe review stage, not only the initial candidates stage.
+
+Manual approval of a REVIEW batch must retain all identity and state guards, use one active owner-approved MDR configuration when available, and require a reviewer reason; only the evidence/net mismatch is overridden.
+
+**Why:** Reviewers may have authoritative bank evidence even when provider/MDR metadata is incomplete, but bypassing payment, company, date, account, or idempotency checks would make the settlement unsafe.
+
+**How to apply:** Send an explicit override flag and reason through the batch approval endpoint, keep the canonical settlement link-only path, and persist the decision in audit metadata.
