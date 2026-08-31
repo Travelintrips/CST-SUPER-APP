@@ -64,6 +64,11 @@ type FixtureState = {
   };
 };
 
+type AuditFailureTrigger = {
+  triggerName: string;
+  functionName: string;
+};
+
 let pool: pg.Pool;
 let approvalDb: ReturnType<typeof drizzle>;
 const rejectCases: Array<[string, FixtureOverrides]> = [
@@ -333,6 +338,58 @@ async function cleanupFixture(fixture: Fixture): Promise<void> {
   }
 }
 
+async function installAuditFailureTrigger(): Promise<AuditFailureTrigger> {
+  const suffix = randomUUID().replaceAll("-", "").slice(0, 20);
+  const triggerName = `canonical_audit_failure_${suffix}`;
+  const functionName = `canonical_audit_failure_fn_${suffix}`;
+  const client = await pool.connect();
+
+  try {
+    await client.query(`
+      CREATE FUNCTION public."${functionName}"()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $$
+      BEGIN
+        RAISE EXCEPTION 'controlled canonical settlement audit write failure';
+      END;
+      $$
+    `);
+    await client.query(`
+      CREATE TRIGGER "${triggerName}"
+      BEFORE INSERT ON public.bank_reconciliation_audit
+      FOR EACH ROW
+      WHEN (NEW.action = 'CANONICAL_SETTLEMENT_RECONCILIATION_APPROVED')
+      EXECUTE FUNCTION public."${functionName}"()
+    `);
+    return { triggerName, functionName };
+  } catch (error) {
+    await client.query(
+      `DROP FUNCTION IF EXISTS public."${functionName}"()`,
+    ).catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function removeAuditFailureTrigger(
+  trigger: AuditFailureTrigger,
+): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query(
+      `DROP TRIGGER IF EXISTS "${trigger.triggerName}"
+       ON public.bank_reconciliation_audit`,
+    );
+    await client.query(
+      `DROP FUNCTION IF EXISTS public."${trigger.functionName}"()`,
+    );
+  } finally {
+    client.release();
+  }
+}
+
 async function fixtureState(fixture: Fixture): Promise<FixtureState> {
   const result = await pool.query(
     `SELECT
@@ -417,6 +474,7 @@ beforeAll(async () => {
   expect(required.rows[0]?.ready).toBe(true);
 });
 
+
 afterAll(async () => {
   await pool?.end();
 });
@@ -487,6 +545,50 @@ describe("canonical historical settlement repair database transaction", () => {
       expect(await fixtureState(fixture)).toEqual(committed);
     } finally {
       await cleanupFixture(fixture);
+    }
+  });
+
+  it("rolls back settlement, match, and mutation changes when the final audit write fails", async () => {
+    const fixture = await createFixture();
+    let auditFailureTrigger: AuditFailureTrigger | undefined;
+
+    try {
+      const before = await fixtureState(fixture);
+      auditFailureTrigger = await installAuditFailureTrigger();
+
+      await expect(approveHistoricalRepair(fixture)).rejects.toMatchObject({
+        message: expect.stringContaining(
+          "controlled canonical settlement audit write failure",
+        ),
+      });
+
+      const after = await fixtureState(fixture);
+      expect(after).toEqual(before);
+      expect(after).toMatchObject({
+        match_count: 0,
+        approved_match_count: 0,
+        audit_count: 0,
+        settlement: {
+          status: "posted",
+          bank_mutation_id: null,
+          canonical_bank_mutation_id: null,
+          reconciled_at: null,
+          reconciled_by: null,
+        },
+        mutation: {
+          status: "unmatched",
+          approved_by: null,
+          approved_at: null,
+        },
+      });
+    } finally {
+      try {
+        if (auditFailureTrigger) {
+          await removeAuditFailureTrigger(auditFailureTrigger);
+        }
+      } finally {
+        await cleanupFixture(fixture);
+      }
     }
   });
 });
