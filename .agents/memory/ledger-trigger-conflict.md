@@ -21,3 +21,11 @@ END IF;
 **Why:** The two triggers were written independently; the ledger guard was added later without awareness of the cancellation exception in governance. Any future tightening of `ae_immutability_fn` must preserve this cancellation window.
 
 **How to apply:** Whenever adding a new exception to `fn_block_posted_entry_update`, check `ae_immutability_fn` in `ledgerGuard.ts` and add a matching exception there too. The repair migration pattern (downgrade → insert lines → promote) depends on the cancellation window being open in BOTH triggers.
+
+## Production void caveat
+
+The live production contract can still reject the application's direct `posted → voided` update when the governance trigger has not received the same exception. The current void helper creates and commits the reversal before attempting that status update, so a failed update can leave a balanced reversal paired with an original that is still `posted`; production schema drift may also make its `updated_at` assignment fail.
+
+**Why:** The helper's reversal insert and original-entry metadata update are not one database transaction, while the two live immutability triggers are independently maintained.
+
+**How to apply:** Preflight the live trigger definitions and update-column availability before a production void. Make the helper atomic and keep both triggers aligned; if a legacy partial void exists, repair only through a verified, explicitly allowed cancellation bridge rather than disabling triggers or deleting ledger rows.
