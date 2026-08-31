@@ -3,8 +3,8 @@ name: Sport payment group note identity
 description: Group notes such as GRP identifiers can span multiple legitimate bookings and are not payment uniqueness keys.
 ---
 
-Note grup pada payment Sport Center adalah label batch/event dan boleh muncul pada banyak payment untuk booking yang berbeda. Duplicate payment harus ditentukan dari `booking_id` lalu diperkuat dengan provider transaction identity, bukan dari note, nominal, atau timestamp saja.
+Note grup pada payment Sport Center merepresentasikan satu payment event untuk beberapa booking schedule ketika group/member membayar satu paket sekaligus. Karena itu audit harus meng-collapse row berdasarkan group note sebelum menghitung jumlah payment ekonomis. Note tetap bukan unique key database; identity provider dan konteks company harus diverifikasi.
 
-**Why:** Audit PROD menemukan satu note grup yang sama pada empat payment untuk empat booking berbeda, semuanya confirmed dan bernilai sama; menjadikan note sebagai unique key akan menghapus payment yang sah.
+**Why:** Audit PROD menemukan `[Grup GRP-43886]` pada empat payment untuk empat booking schedule berbeda. Keempat row bernilai sama dan timestamp-nya sama, sehingga pola tersebut adalah satu pembayaran grup yang tereplikasi, bukan empat pembayaran independen.
 
-**How to apply:** Gunakan note hanya sebagai dimensi audit. Tandai sebagai duplicate/review bila `booking_id` sama dan provider reference/merchant trade/order identity sama; jika provider identity null, tetap fail-closed dan minta review.
+**How to apply:** Untuk group note yang valid, bandingkan satu payment event dengan total schedule/booking group dan tandai row tambahan sebagai replicated allocation, bukan payment baru. Jangan menghapus atau menggabungkan posted rows otomatis jika provider identity kosong; gunakan review/repair terkontrol dengan company dan group context.
