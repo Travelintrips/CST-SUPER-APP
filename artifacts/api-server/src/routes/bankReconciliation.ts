@@ -314,6 +314,51 @@ function genericCandidateSameDaySql(matchAlias = "m", mutationAlias = "bm"): str
 // timeout. Keep one background run per API process so repeated clicks do not
 // fan out duplicate work against the same mutation set.
 let unifiedMatchingJobActive = false;
+
+// Date corrections can arrive back-to-back (for example, when one booking has
+// multiple QRIS payments). Serialize the provisional candidate refresh per
+// company so a slower refresh based on older source data cannot overwrite the
+// snapshot produced by a newer correction.
+const qrisCandidateRefreshQueues = new Map<number, Promise<void>>();
+
+function queueQrisCandidateRefresh(companyId: number, paymentId: number): void {
+  const previous = qrisCandidateRefreshQueues.get(companyId) ?? Promise.resolve();
+  const next = previous
+    .catch(() => undefined)
+    .then(async () => {
+      try {
+        const refreshed = await generateQrisCandidates({
+          companyId,
+          dryRun: false,
+        });
+        logger.info(
+          {
+            paymentId,
+            generated: refreshed.generated,
+            persisted: refreshed.persisted,
+            reviewable: refreshed.reviewable,
+          },
+          "[bankRecon] QRIS candidate refresh after payment date update completed",
+        );
+      } catch (refreshError: any) {
+        // The source and mirror transaction has already committed. Candidate
+        // generation is provisional and can be retried from the UI without
+        // rolling back a valid source correction.
+        logger.warn(
+          { err: refreshError?.cause?.message ?? refreshError?.message, paymentId },
+          "[bankRecon] QRIS candidate refresh after payment date update failed",
+        );
+      }
+    });
+
+  qrisCandidateRefreshQueues.set(companyId, next);
+  void next.finally(() => {
+    if (qrisCandidateRefreshQueues.get(companyId) === next) {
+      qrisCandidateRefreshQueues.delete(companyId);
+    }
+  });
+}
+
 router.use(async (req, res, next) => {
   if (!(await requireAdmin(req, res))) return;
   next();
@@ -1911,30 +1956,7 @@ router.patch("/qris-candidates/payments/:paymentId/date", async (req, res) => {
     // mutation for the company. Do not make the reviewer wait for that work:
     // the canonical source transaction above is already committed and the
     // candidate refresh can safely run after the response has been flushed.
-    setImmediate(() => {
-      void generateQrisCandidates({
-        companyId,
-        dryRun: false,
-      }).then((refreshed) => {
-        logger.info(
-          {
-            paymentId,
-            generated: refreshed.generated,
-            persisted: refreshed.persisted,
-            reviewable: refreshed.reviewable,
-          },
-          "[bankRecon] QRIS candidate refresh after payment date update completed",
-        );
-      }).catch((refreshError: any) => {
-        // The source and mirror transaction has already committed. Candidate
-        // generation is provisional and can be retried from the UI without
-        // rolling back a valid source correction.
-        logger.warn(
-          { err: refreshError?.cause?.message ?? refreshError?.message, paymentId },
-          "[bankRecon] QRIS candidate refresh after payment date update failed",
-        );
-      });
-    });
+    setImmediate(() => queueQrisCandidateRefresh(companyId, paymentId));
 
     return res.json({
       ok: true,

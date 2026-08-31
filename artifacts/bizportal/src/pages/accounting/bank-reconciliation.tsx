@@ -6746,9 +6746,9 @@ export default function BankReconciliationPage() {
                             <p className="mt-1 truncate max-w-[400px] font-medium text-slate-900 dark:text-slate-100">
                               {candidate.review_reason ?? candidate.description ?? "Belum ada alasan tambahan."}
                             </p>
-                            <p className="text-slate-600 dark:text-slate-400 mt-0.5">
-                               Settlement {candidate.estimated_settlement_date ? fmtDate(candidate.estimated_settlement_date) : "belum tersedia"} · {getAvailableQrisPaymentIds(candidate).length} payment · Netto {idr(candidate.current_expected_amount ?? candidate.net_amount)}
-                            </p>
+                             <p className="text-slate-600 dark:text-slate-400 mt-0.5">
+                                Settlement/mutasi {candidate.estimated_settlement_date ? fmtDate(candidate.estimated_settlement_date) : "belum tersedia"} · {getAvailableQrisPaymentIds(candidate).length} payment · Netto {idr(candidate.current_expected_amount ?? candidate.net_amount)}
+                             </p>
                              {(candidate.payment_items?.length ?? 0) > 0 && (
                                <div className="mt-2 rounded border bg-slate-50/80 px-2 py-1.5 text-[10px] dark:bg-slate-900/60">
                                 <p className="mb-1 font-semibold uppercase tracking-wide text-slate-500">
@@ -6765,8 +6765,14 @@ export default function BankReconciliationPage() {
                                      const grossAmount = item.gross_amount ?? item.grossAmount;
                                     const customer = item.customer_name ?? item.customerName;
                                     const facility = item.facility_name ?? item.facilityName;
-                                     const paymentDate = item.paymentDate ?? item.paidAt ?? item.paid_at ?? item.date;
+                                      const paymentDate = item.paymentDate ?? item.paidAt ?? item.paid_at ?? item.date;
                                       const paymentDateIso = paymentDate ? String(paymentDate).slice(0, 10) : "";
+                                      const settlementDate = item.expectedSettlementDate
+                                        ?? item.expected_settlement_date
+                                        ?? candidate.estimated_settlement_date;
+                                      const settlementDateIso = settlementDate
+                                        ? String(settlementDate).slice(0, 10)
+                                        : "";
                                       const canEditPaymentDate = Number.isInteger(Number(paymentId)) && Number(paymentId) > 0;
                                      return (
                                       <div key={`${candidate.id}-${paymentId ?? index}`} className="rounded border border-slate-200/80 bg-white/70 px-2 py-1.5 dark:border-slate-700 dark:bg-slate-950/30">
@@ -6802,6 +6808,9 @@ export default function BankReconciliationPage() {
                                                  <Pencil className="h-3 w-3" />
                                                </button>
                                              )}
+                                           </span>
+                                           <span>
+                                             Settlement: {settlementDate ? fmtDate(settlementDateIso) : "—"}
                                            </span>
                                            <span>Status: {(item.paymentStatus ?? item.payment_status ?? "confirmed").toUpperCase()}</span>
                                            <span className="sm:col-span-2">No. Payment: {paymentNumber || `SCPAY-SC-${paymentId ?? "—"}`}</span>
