@@ -5457,7 +5457,7 @@ export default function BankReconciliationPage() {
   // ── Queries ──────────────────────────────────────────────────────────────
   const queryKey = ["bank-reconciliation", filterStatus, filterDir, filterProvider, filterPaymentType, filterFrom, filterTo, filterSearch, page];
 
-  const { data, isLoading, refetch } = useQuery({
+  const { data, isLoading, error: mutationListError, refetch } = useQuery({
     queryKey,
     queryFn: async () => {
       const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(page * PAGE_SIZE) });
@@ -6989,6 +6989,23 @@ export default function BankReconciliationPage() {
                 <Card key={i} className="animate-pulse"><CardContent className="p-4 h-24" /></Card>
               ))}
             </div>
+          ) : mutationListError ? (
+            <Card className="border-destructive/50">
+              <CardContent className="py-12 flex flex-col items-center gap-3 text-center">
+                <AlertTriangle className="w-10 h-10 text-destructive" />
+                <div>
+                  <p className="font-medium text-destructive">Daftar mutasi gagal dimuat</p>
+                  <p className="text-sm text-muted-foreground">
+                    {mutationListError instanceof Error
+                      ? mutationListError.message
+                      : "Terjadi kesalahan saat mengambil data mutasi."}
+                  </p>
+                </div>
+                <Button variant="outline" size="sm" onClick={() => void refetch()}>
+                  Coba Lagi
+                </Button>
+              </CardContent>
+            </Card>
           ) : mutations.length === 0 ? (
             <Card>
               <CardContent className="py-16 flex flex-col items-center gap-3 text-muted-foreground">

@@ -24,6 +24,10 @@ When writing raw SQL in `candidateDetailsSql` or any UNION ALL query in `bankRec
 `bank_mutations.status` is a USER-DEFINED enum on this Supabase DB. Any UNION ALL with a TEXT CASE expression fails.
 Fix: always cast `bm.status::text`, `bm.transaction_date::text`, `bm.direction::text` explicitly in the bm side of the UNION.
 
+`bank_mutations.bank_account_id` is TEXT in the runtime Supabase schema while `company_bank_accounts.id` is INTEGER. Compare normalized text identities (and allow the account number where required); a direct equality makes the entire mutation list return HTTP 500.
+
+**Why:** A correlated eligibility subquery is evaluated as part of every list request, even when no eligible historical settlement exists.
+
 ## Drizzle error logging fix
 `e.message` only says "Failed query: …\nparams: ". Real PostgreSQL error is in `e.cause?.message`.
 Always log: `const dbMsg = e.cause?.message ?? e.cause ?? e.message; logger.error({ err: dbMsg }, "...")`.

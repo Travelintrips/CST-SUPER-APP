@@ -4254,7 +4254,7 @@ router.get("/mutations", async (req, res) => {
                  SELECT 1
                  FROM company_bank_accounts cba
                  WHERE cba.company_id = bm.company_id
-                   AND cba.id = bm.bank_account_id
+                   AND cba.id::text = BTRIM(bm.bank_account_id::text)
                    AND cba.is_active = TRUE
                    AND (
                      cba.id::text = BTRIM(psb.bank_account_id::text)
