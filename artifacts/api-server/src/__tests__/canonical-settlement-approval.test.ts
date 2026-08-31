@@ -9,6 +9,7 @@ import {
   isCanonicalApprovalIdempotentState,
   isCanonicalBankMutationEligible,
   isCanonicalReopenIdempotentState,
+  validateHistoricalSettlementRepairEvidence,
 } from "../lib/reconciliation/canonicalSettlementApproval.js";
 
 describe("Phase 4C-6 canonical link-only approval contract", () => {
@@ -93,5 +94,46 @@ describe("Phase 4C-6 canonical link-only approval contract", () => {
     expect(CANONICAL_APPROVAL_CODES.REOPEN_NOT_ELIGIBLE).toBe(
       "CANONICAL_SETTLEMENT_REOPEN_NOT_ELIGIBLE",
     );
+  });
+
+  const validHistoricalEvidence = {
+    settlementStatus: "posted",
+    linkedMutationId: null,
+    linkedCanonicalMutationId: null,
+    mutationDirection: "IN",
+    mutationCompanyId: 1,
+    settlementCompanyId: 1,
+    mutationDate: "2026-07-13",
+    settlementDate: "2026-07-13",
+    mutationAmount: 873_840,
+    settlementNetAmount: 873_840,
+    accountMatched: true,
+    journalEligible: true,
+    paymentMethods: ["QRIS", "qris"],
+  };
+
+  it("accepts a posted historical batch without requiring every payment to be H-1", () => {
+    expect(validateHistoricalSettlementRepairEvidence(validHistoricalEvidence)).toEqual({ ok: true });
+    expect(CANONICAL_APPROVAL_CODES.HISTORICAL_REPAIR_CONFIRMATION_REQUIRED).toBe(
+      "CANONICAL_HISTORICAL_REPAIR_CONFIRMATION_REQUIRED",
+    );
+  });
+
+  it.each([
+    ["stale state", { settlementStatus: "reconciled" }],
+    ["duplicate link", { linkedMutationId: 4037 }],
+    ["wrong company", { settlementCompanyId: 2 }],
+    ["wrong date", { settlementDate: "2026-07-14" }],
+    ["wrong net", { settlementNetAmount: 774_540 }],
+    ["wrong account", { accountMatched: false }],
+    ["missing journal", { journalEligible: false }],
+    ["non QRIS item", { paymentMethods: ["QRIS", "BANK_TRANSFER"] }],
+  ])("rejects historical repair with %s", (_label, override) => {
+    expect(
+      validateHistoricalSettlementRepairEvidence({
+        ...validHistoricalEvidence,
+        ...override,
+      }),
+    ).toMatchObject({ ok: false });
   });
 });

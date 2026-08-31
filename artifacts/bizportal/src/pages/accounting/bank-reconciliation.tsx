@@ -24,7 +24,7 @@ import {
   ChevronDown, ChevronUp, ArrowUpRight, ArrowDownLeft, Zap, Eye,
   BookOpen, TrendingUp, Clock, FileText, CreditCard, Users,
   CircleCheck, CircleDot, ReceiptText, X, Undo2, RotateCcw,
-  Paperclip, ImageIcon, ExternalLink, Pencil,
+  Paperclip, ImageIcon, ExternalLink, Pencil, Link2,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { AIReviewSourcePanel } from "@/components/ai-review";
@@ -548,6 +548,27 @@ interface JournalLine {
   description?: string | null;
 }
 
+interface HistoricalSettlementRepair {
+  settlement_id: number;
+  settlement_reference?: string | null;
+  settlement_date: string;
+  gross_amount: number | string;
+  mdr_amount: number | string;
+  net_amount: number | string;
+  journal_id: number;
+  journal_status: string;
+  payment_count: number;
+  non_h1_payment_ids: number[];
+  payments: Array<{
+    payment_id: number;
+    payment_number: string;
+    amount: number | string;
+    payment_method: string;
+    payment_date: string;
+    is_h_minus_one: boolean;
+  }>;
+}
+
 interface BankMutation {
   id: number;
   company_id: number | null;
@@ -572,6 +593,8 @@ interface BankMutation {
   qris_candidate_audits?: QrisCandidateAudit[] | null;
   /** Latest QRIS candidate retained for diagnostics, even when it is outside the reviewable H-1 cohort. */
   qris_candidate_diagnostic?: QrisCandidateAudit | null;
+  /** Exactly one posted, unlinked canonical settlement that passed server preflight. */
+  historical_settlement_repair?: HistoricalSettlementRepair | null;
   uploaded_proof_url?: string | null;
   source?: string;
   import_batch_id?: number | null;
@@ -1025,6 +1048,7 @@ function statusLabel(m: BankMutation): string {
   if (m.status === "void") return STATUS_LABELS.void;
   if (m.status === "approved_pending_posting") return STATUS_LABELS.approved_pending_posting;
   if (m.status === "manual_review") return STATUS_LABELS.manual_review;
+  if (m.historical_settlement_repair) return "Settlement Belum Ditautkan";
   if (isCanonicalSettlementApprovalEligible(m)) return "Siap Direconcile";
   if (isCanonicalSettlementManualOverrideEligible(m)) return "Override Manual Tersedia";
   const qrisAuditStatus = qrisAuditsForMutation(m)[0]?.reconciliation_status?.toUpperCase();
@@ -1041,6 +1065,7 @@ function statusColor(m: BankMutation): string {
   if (m.status === "approved_pending_posting") return STATUS_COLORS.approved_pending_posting;
   if (m.status === "approved" || m.status === "posted") return STATUS_COLORS.approved;
   if (m.status === "manual_review") return STATUS_COLORS.manual_review;
+  if (m.historical_settlement_repair) return STATUS_COLORS.manual_review;
   if (isCanonicalSettlementApprovalEligible(m)) return STATUS_COLORS.matched;
   if (isCanonicalSettlementManualOverrideEligible(m)) return STATUS_COLORS.manual_review;
   const qrisAuditStatus = qrisAuditsForMutation(m)[0]?.reconciliation_status?.toUpperCase();
@@ -3523,6 +3548,23 @@ function QrisMutationCard({
             )}
 
             <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t pt-3" onClick={e => e.stopPropagation()}>
+              {m.historical_settlement_repair && onRecoverQrisSettlement && !canRecoverSettlement && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1.5 border-orange-400 text-xs text-orange-800 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-200"
+                  disabled={recoverQrisPending}
+                  onClick={() => onRecoverQrisSettlement(
+                    m.id,
+                    m.historical_settlement_repair!.settlement_id,
+                  )}
+                >
+                  {recoverQrisPending
+                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    : <Link2 className="h-3.5 w-3.5" />}
+                  {recoverQrisPending ? "Menautkan..." : "Tautkan Settlement"}
+                </Button>
+              )}
               <Button
                 size="sm"
                 variant="outline"
@@ -3682,7 +3724,9 @@ function MutationCard({
   onToggleCandidate,
   onApproveCandidate,
   onManualOverrideCandidate,
+  onLinkHistoricalSettlement,
   approveQrisPending,
+  historicalRepairPending,
   selectedQrisPaymentIds,
   onToggleQrisPayment,
   onToggleAllQrisPayments,
@@ -3713,7 +3757,9 @@ function MutationCard({
   onToggleCandidate?: (mutationId: number, candidateId: number, checked: boolean) => void;
   onApproveCandidate?: (m: BankMutation, candidate: Candidate) => void;
   onManualOverrideCandidate?: (m: BankMutation, candidate: Candidate) => void;
+  onLinkHistoricalSettlement?: (m: BankMutation) => void;
   approveQrisPending?: boolean;
+  historicalRepairPending?: boolean;
   selectedQrisPaymentIds: Record<number, number[]>;
   onToggleQrisPayment?: (candidateId: number, paymentId: number, checked: boolean) => void;
   onToggleAllQrisPayments?: (candidate: QrisCandidateAudit, checked: boolean) => void;
@@ -3768,7 +3814,11 @@ function MutationCard({
             onEditPaymentDate={onEditQrisPaymentDate}
             onApproveQrisBatch={onApproveQrisBatch}
             onManualOverrideCandidate={onManualOverrideCandidate}
+            onRecoverQrisSettlement={m.historical_settlement_repair
+              ? () => onLinkHistoricalSettlement?.(m)
+              : undefined}
             approveQrisPending={approveQrisPending}
+            recoverQrisPending={historicalRepairPending}
             selectedQrisPaymentIds={audit.id != null ? selectedQrisPaymentIds[audit.id] ?? [] : []}
             onToggleQrisPayment={onToggleQrisPayment}
             onToggleAllQrisPayments={onToggleAllQrisPayments}
@@ -4158,6 +4208,20 @@ function MutationCard({
                    : cands.length > 0 && !isQrisMutation(m)
                   ? "Pilih Kandidat & Approve"
                   : "Lengkapi & Approve Manual"}
+              </Button>
+            )}
+            {m.historical_settlement_repair && onLinkHistoricalSettlement && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1 border-orange-400 text-xs text-orange-800 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-200"
+                disabled={historicalRepairPending}
+                onClick={() => onLinkHistoricalSettlement(m)}
+              >
+                {historicalRepairPending
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <Link2 className="h-3.5 w-3.5" />}
+                {historicalRepairPending ? "Menautkan..." : "Tautkan Settlement"}
               </Button>
             )}
             {/* Post ke Accounting — only for approved_pending_posting; disabled when mapping-required */}
@@ -5364,6 +5428,9 @@ export default function BankReconciliationPage() {
   const [detailMutation,      setDetailMutation]      = useState<BankMutation | null>(null);
   const [coaReferenceTarget,  setCoaReferenceTarget]  = useState<BankMutation | null>(null);
   const [actionDialog,        setActionDialog]        = useState<{ mutation: BankMutation; mode: DialogMode } | null>(null);
+  const [historicalRepairTarget, setHistoricalRepairTarget] = useState<BankMutation | null>(null);
+  const [historicalRepairReason, setHistoricalRepairReason] = useState("");
+  const [historicalRepairConfirmed, setHistoricalRepairConfirmed] = useState(false);
   const [qrisDetailLoadingId, setQrisDetailLoadingId] = useState<number | null>(null);
   const [selectedQrisCandidateIds, setSelectedQrisCandidateIds] = useState<number[]>([]);
   const [selectedQrisPaymentIds, setSelectedQrisPaymentIds] = useState<Record<number, number[]>>({});
@@ -6210,6 +6277,50 @@ export default function BankReconciliationPage() {
     onError: (e: Error) => toast({ title: "Gagal approve", description: e.message, variant: "destructive" }),
   });
 
+  const historicalRepairMut = useMutation({
+    mutationFn: async ({
+      mutationId,
+      settlementId,
+      reason,
+    }: {
+      mutationId: number;
+      settlementId: number;
+      reason: string;
+    }) => {
+      const response = await fetch(
+        `/api/bank-reconciliation/${mutationId}/link-historical-settlement`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            settlement_id: settlementId,
+            confirm_historical_repair: true,
+            reason,
+          }),
+        },
+      );
+      const body = await response.json().catch(() => ({ error: response.statusText }));
+      if (!response.ok) throw new Error(body.error ?? response.statusText);
+      return body;
+    },
+    onSuccess: () => {
+      toast({ title: "Settlement historis berhasil ditautkan ✓" });
+      setHistoricalRepairTarget(null);
+      setHistoricalRepairReason("");
+      setHistoricalRepairConfirmed(false);
+      invalidate();
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Gagal menautkan settlement historis",
+        description: error.message,
+        variant: "destructive",
+      });
+      invalidate();
+    },
+  });
+
   // Post Accounting → POST /:id/post → status becomes posted
   const postMut = useMutation({
     mutationFn: async (mutId: number) => {
@@ -6908,10 +7019,18 @@ export default function BankReconciliationPage() {
                   onApproveQris={handleApproveQris}
                   onApproveQrisBatch={handleApproveQrisBatch}
                   onManualOverrideCandidate={handleManualOverrideCandidate}
+                   onLinkHistoricalSettlement={(mutation) => {
+                     setHistoricalRepairTarget(mutation);
+                     setHistoricalRepairReason(
+                       "Reviewer mengonfirmasi batch settlement posted ini sesuai dengan mutasi bank.",
+                     );
+                     setHistoricalRepairConfirmed(false);
+                   }}
                   selectedCandidateId={selectedCandidateByMutation[m.id] ?? null}
                   onToggleCandidate={toggleCandidate}
                   onApproveCandidate={handleDirectApproveCandidate}
                   approveQrisPending={approveQrisBatchMut.isPending}
+                   historicalRepairPending={historicalRepairMut.isPending}
                   selectedQrisPaymentIds={selectedPaymentIdsByMutation(m)}
                   onToggleQrisPayment={toggleQrisPayment}
                   onToggleAllQrisPayments={toggleAllQrisPayments}
@@ -7593,6 +7712,122 @@ export default function BankReconciliationPage() {
             >
               {voidMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
               {voidMut.isPending ? "Memproses..." : "Reverse Journal"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Historical posted-settlement repair ──────────────── */}
+      <Dialog
+        open={historicalRepairTarget != null}
+        onOpenChange={(open) => {
+          if (!open && !historicalRepairMut.isPending) {
+            setHistoricalRepairTarget(null);
+            setHistoricalRepairReason("");
+            setHistoricalRepairConfirmed(false);
+          }
+        }}
+      >
+        <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Link2 className="h-5 w-5 text-orange-600" />
+              Tautkan Settlement Historis
+            </DialogTitle>
+            <DialogDescription>
+              Jalur repair ini hanya menautkan batch dan mutasi. Jurnal posted serta item payment tidak diubah.
+            </DialogDescription>
+          </DialogHeader>
+          {historicalRepairTarget?.historical_settlement_repair && (() => {
+            const repair = historicalRepairTarget.historical_settlement_repair!;
+            const nonH1 = repair.non_h1_payment_ids ?? [];
+            return (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-2 rounded-md border bg-muted/20 p-3 text-sm sm:grid-cols-4">
+                  <div><p className="text-xs text-muted-foreground">Batch</p><p className="font-medium">{repair.settlement_reference || `#${repair.settlement_id}`}</p></div>
+                  <div><p className="text-xs text-muted-foreground">Gross</p><p className="font-medium">{idr(repair.gross_amount)}</p></div>
+                  <div><p className="text-xs text-muted-foreground">MDR</p><p className="font-medium">{idr(repair.mdr_amount)}</p></div>
+                  <div><p className="text-xs text-muted-foreground">Net / Mutasi</p><p className="font-medium">{idr(repair.net_amount)}</p></div>
+                  <div><p className="text-xs text-muted-foreground">Tanggal settlement</p><p className="font-medium">{fmtDate(repair.settlement_date)}</p></div>
+                  <div><p className="text-xs text-muted-foreground">Journal</p><p className="font-medium">#{repair.journal_id} · {repair.journal_status}</p></div>
+                  <div><p className="text-xs text-muted-foreground">Payment</p><p className="font-medium">{repair.payment_count} item</p></div>
+                  <div><p className="text-xs text-muted-foreground">Mutasi</p><p className="font-medium">#{historicalRepairTarget.id}</p></div>
+                </div>
+
+                {nonH1.length > 0 && (
+                  <Alert className="border-orange-400 bg-orange-50 text-orange-950 dark:border-orange-700 dark:bg-orange-950 dark:text-orange-100">
+                    <ShieldAlert className="h-4 w-4 text-orange-600" />
+                    <AlertDescription className="text-xs">
+                      <strong>Peringatan:</strong> payment {nonH1.join(", ")} tidak memenuhi H-1.
+                      Repair ini hanya diperbolehkan karena batch sudah posted secara historis. Aturan approval QRIS normal tetap ketat.
+                    </AlertDescription>
+                  </Alert>
+                )}
+
+                <div className="overflow-hidden rounded-md border">
+                  <div className="grid grid-cols-[1fr_auto_auto] gap-2 bg-muted/50 px-3 py-2 text-xs font-semibold">
+                    <span>Payment</span><span>Tanggal bayar</span><span>Nominal</span>
+                  </div>
+                  {(repair.payments ?? []).map((payment) => (
+                    <div key={payment.payment_id} className="grid grid-cols-[1fr_auto_auto] gap-2 border-t px-3 py-2 text-xs">
+                      <span>
+                        {payment.payment_number}
+                        {!payment.is_h_minus_one && <Badge variant="outline" className="ml-2 border-orange-300 text-[9px] text-orange-700">Non-H-1</Badge>}
+                      </span>
+                      <span>{fmtDate(payment.payment_date)}</span>
+                      <span className="font-medium">{idr(payment.amount)}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Alasan reviewer</label>
+                  <Textarea
+                    value={historicalRepairReason}
+                    onChange={(event) => setHistoricalRepairReason(event.target.value)}
+                    placeholder="Jelaskan dasar konfirmasi settlement historis ini."
+                  />
+                </div>
+                <label className="flex items-start gap-2 rounded-md border border-orange-300 bg-orange-50/60 p-3 text-sm dark:border-orange-800 dark:bg-orange-950/40">
+                  <Checkbox
+                    checked={historicalRepairConfirmed}
+                    onCheckedChange={(checked) => setHistoricalRepairConfirmed(checked === true)}
+                  />
+                  <span>Saya sudah memeriksa company, rekening, tanggal settlement, exact net, journal posted, seluruh payment, dan memahami peringatan non-H-1.</span>
+                </label>
+              </div>
+            );
+          })()}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={historicalRepairMut.isPending}
+              onClick={() => setHistoricalRepairTarget(null)}
+            >
+              Batal
+            </Button>
+            <Button
+              className="bg-orange-600 text-white hover:bg-orange-700"
+              disabled={
+                historicalRepairMut.isPending
+                || !historicalRepairConfirmed
+                || historicalRepairReason.trim().length < 10
+                || !historicalRepairTarget?.historical_settlement_repair
+              }
+              onClick={() => {
+                const repair = historicalRepairTarget?.historical_settlement_repair;
+                if (!historicalRepairTarget || !repair) return;
+                historicalRepairMut.mutate({
+                  mutationId: historicalRepairTarget.id,
+                  settlementId: repair.settlement_id,
+                  reason: historicalRepairReason.trim(),
+                });
+              }}
+            >
+              {historicalRepairMut.isPending
+                ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                : <Link2 className="mr-2 h-4 w-4" />}
+              {historicalRepairMut.isPending ? "Menautkan..." : "Konfirmasi & Tautkan"}
             </Button>
           </DialogFooter>
         </DialogContent>

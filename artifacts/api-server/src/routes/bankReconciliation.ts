@@ -4154,7 +4154,126 @@ router.get("/mutations", async (req, res) => {
             AND ${bankMutationPaymentTypeSql("bm")} = 'qris'
           ORDER BY qc.updated_at DESC, qc.id DESC
           LIMIT 1
-        ) AS qris_candidate_diagnostic
+         ) AS qris_candidate_diagnostic,
+         (
+           SELECT CASE
+             WHEN COUNT(*) = 1 THEN (jsonb_agg(repair.details))->0
+             ELSE NULL
+           END
+           FROM (
+             SELECT jsonb_build_object(
+               'settlement_id', psb.id,
+               'settlement_reference', psb.settlement_reference,
+               'settlement_date', psb.settlement_date::text,
+               'gross_amount', psb.gross_amount,
+               'mdr_amount', psb.mdr_amount,
+               'net_amount', psb.net_amount,
+               'journal_id', psb.settlement_journal_id,
+               'journal_status', aj.status,
+               'payment_count', (
+                 SELECT COUNT(*)
+                 FROM sport_center.payment_settlement_items psi_count
+                 WHERE psi_count.settlement_id = psb.id
+                   AND psi_count.item_status = 'active'
+               ),
+               'payments', COALESCE((
+                 SELECT jsonb_agg(
+                   jsonb_build_object(
+                     'payment_id', sp.id,
+                     'payment_number', 'SCPAY-SC-' || sp.id::text,
+                     'amount', sp.amount,
+                     'payment_method', sp.payment_method::text,
+                     'payment_date', (
+                       COALESCE(sp.paid_at, sp.confirmed_at, sp.created_at)
+                       AT TIME ZONE 'Asia/Jakarta'
+                     )::date::text,
+                     'is_h_minus_one', (
+                       COALESCE(sp.paid_at, sp.confirmed_at, sp.created_at)
+                       AT TIME ZONE 'Asia/Jakarta'
+                     )::date = psb.settlement_date - 1
+                   )
+                   ORDER BY sp.id
+                 )
+                 FROM sport_center.payment_settlement_items psi
+                 JOIN sport_center.sport_payments sp ON sp.id = psi.payment_id
+                 WHERE psi.settlement_id = psb.id
+                   AND psi.item_status = 'active'
+               ), '[]'::jsonb),
+               'non_h1_payment_ids', COALESCE((
+                 SELECT jsonb_agg(sp.id ORDER BY sp.id)
+                 FROM sport_center.payment_settlement_items psi
+                 JOIN sport_center.sport_payments sp ON sp.id = psi.payment_id
+                 WHERE psi.settlement_id = psb.id
+                   AND psi.item_status = 'active'
+                   AND (
+                     COALESCE(sp.paid_at, sp.confirmed_at, sp.created_at)
+                     AT TIME ZONE 'Asia/Jakarta'
+                   )::date <> psb.settlement_date - 1
+               ), '[]'::jsonb)
+             ) AS details
+             FROM sport_center.payment_settlement_batches psb
+             JOIN sport_center.accounting_journals aj
+               ON aj.id = psb.settlement_journal_id
+              AND aj.settlement_batch_id = psb.id
+             WHERE bm.direction::text = 'IN'
+               AND bm.status::text IN ('unmatched', 'matched', 'auto_matched')
+               AND bm.journal_entry_id IS NULL
+               AND ${bankMutationPaymentTypeSql("bm")} = 'qris'
+               AND psb.status = 'posted'
+               AND psb.bank_mutation_id IS NULL
+               AND psb.canonical_bank_mutation_id IS NULL
+               AND psb.company_id = bm.company_id
+               AND psb.settlement_date::date = bm.transaction_date::date
+               AND ABS(psb.net_amount - bm.amount) <= 0.001
+               AND aj.status = 'posted'
+               AND aj.journal_type = 'settlement'
+               AND aj.is_reversal = FALSE
+               AND EXISTS (
+                 SELECT 1
+                 FROM company_bank_accounts cba
+                 WHERE cba.company_id = bm.company_id
+                   AND cba.id = bm.bank_account_id
+                   AND cba.is_active = TRUE
+                   AND (
+                     cba.id::text = BTRIM(psb.bank_account_id::text)
+                     OR cba.account_number::text = BTRIM(psb.bank_account_id::text)
+                   )
+               )
+               AND EXISTS (
+                 SELECT 1
+                 FROM sport_center.payment_settlement_items psi
+                 JOIN sport_center.sport_payments sp ON sp.id = psi.payment_id
+                 WHERE psi.settlement_id = psb.id
+                   AND psi.item_status = 'active'
+                   AND sp.company_id = bm.company_id
+                   AND LOWER(sp.payment_method::text) LIKE '%qris%'
+               )
+               AND NOT EXISTS (
+                 SELECT 1
+                 FROM sport_center.payment_settlement_items psi
+                 JOIN sport_center.sport_payments sp ON sp.id = psi.payment_id
+                 WHERE psi.settlement_id = psb.id
+                   AND psi.item_status = 'active'
+                   AND (
+                     sp.company_id IS DISTINCT FROM bm.company_id
+                     OR LOWER(sp.payment_method::text) NOT LIKE '%qris%'
+                   )
+               )
+               AND NOT EXISTS (
+                 SELECT 1
+                 FROM bank_reconciliation_matches used
+                 WHERE used.status = 'approved'
+                   AND (
+                     used.mutation_id = bm.id
+                     OR (
+                       used.candidate_type = 'qris_settlement'
+                       AND used.candidate_id = psb.id
+                       AND used.candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
+                     )
+                   )
+               )
+           ) repair
+         ) AS historical_settlement_repair
     FROM bank_mutations bm
     ${bmWhere}
   `;
@@ -4194,7 +4313,8 @@ router.get("/mutations", async (req, res) => {
        NULL::json AS candidates,
         NULL::jsonb AS qris_candidate_audit,
         '[]'::jsonb AS qris_candidate_audits,
-        NULL::jsonb AS qris_candidate_diagnostic
+         NULL::jsonb AS qris_candidate_diagnostic,
+         NULL::jsonb AS historical_settlement_repair
     FROM bank_mutation_imports bmi
     ${bmiWhere}
   ` : "";
@@ -4229,6 +4349,75 @@ router.get("/mutations", async (req, res) => {
     return res.status(500).json({ error: dbMsg });
   }
 });
+
+// Historical repair only: link one already-posted, unlinked canonical settlement
+// without changing its journal or payment items. All evidence is revalidated
+// under the same transaction that creates the source-aware match and link.
+router.post(
+  "/:mutationId/link-historical-settlement",
+  createIdempotencyMiddleware("reconciliation:link-historical-settlement"),
+  async (req, res) => {
+    await runBankReconciliationCoreMigration();
+    const mutationId = Number.parseInt(String(req.params.mutationId ?? ""), 10);
+    const settlementId = Number(req.body?.settlement_id);
+    const confirmed = req.body?.confirm_historical_repair === true;
+    const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+    const actor = (req as any).user?.email ?? "admin";
+
+    if (!Number.isSafeInteger(mutationId) || mutationId <= 0) {
+      return res.status(400).json({ error: "ID mutasi tidak valid" });
+    }
+    if (!Number.isSafeInteger(settlementId) || settlementId <= 0) {
+      return res.status(400).json({ error: "ID settlement tidak valid" });
+    }
+    if (!confirmed || reason.length < 10) {
+      return res.status(400).json({
+        error: "Konfirmasi eksplisit dan alasan reviewer minimal 10 karakter wajib diisi.",
+        code: "CANONICAL_HISTORICAL_REPAIR_CONFIRMATION_REQUIRED",
+      });
+    }
+
+    try {
+      const result = await approveCanonicalSettlementLink(db as any, {
+        mutationId,
+        candidateType: "qris_settlement",
+        candidateId: settlementId,
+        candidateSource: CANONICAL_SETTLEMENT_SOURCE,
+        actor,
+        manualOverride: true,
+        overrideReason: reason,
+        historicalRepair: true,
+      });
+
+      audit(req, {
+        action: "link-historical-posted-settlement",
+        module: "bank-reconciliation",
+        resourceId: `bank-mutation-${mutationId}`,
+        after: result,
+      });
+      triggerWritebackForMutation(mutationId).catch(() => {});
+      trackMutationApproval({
+        mutationId,
+        actor,
+        companyId: (req as any).user?.companyId ?? null,
+      }).catch(() => {});
+      return res.json(result);
+    } catch (e: any) {
+      const code = e instanceof CanonicalSettlementApprovalError
+        ? e.code
+        : "CANONICAL_HISTORICAL_REPAIR_FAILED";
+      const status = code === "CANONICAL_BANK_MUTATION_NOT_FOUND" ? 404 : 409;
+      logger.warn(
+        { err: e?.cause?.message ?? e?.message, code, mutationId, settlementId },
+        "[bankRecon/link-historical-settlement] repair rejected",
+      );
+      return res.status(status).json({
+        error: e?.message ?? "Settlement historis gagal ditautkan",
+        code,
+      });
+    }
+  },
+);
 
 // ─── POST /api/bank-reconciliation/:mutationId/approve ───────────────────────
 // RULE 3: Wrapped dalam real DB transaction (SELECT FOR UPDATE efektif).
