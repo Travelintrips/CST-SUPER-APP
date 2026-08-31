@@ -646,6 +646,9 @@ interface QrisPaymentItem {
   paymentNumber?: string | null;
   paymentDate?: string | null;
   paidAt?: string | null;
+  paid_at?: string | null;
+  confirmedAt?: string | null;
+  confirmed_at?: string | null;
   payment_number?: string | null;
   booking_id?: number | null;
   booking_number?: string | null;
@@ -661,7 +664,6 @@ interface QrisPaymentItem {
   start_time?: string | null;
   endTime?: string | null;
   end_time?: string | null;
-  paid_at?: string | null;
 }
 
 type QrisApprovalSelection = {
@@ -1074,6 +1076,26 @@ function qrisPaymentGross(
     ?? 0;
 }
 
+/**
+ * Canonical payment-date presentation for QRIS candidates.
+ * `paid_at` remains the preferred source. Historical confirmed payments may
+ * legitimately have `paid_at` empty, so fall back to `confirmed_at` instead
+ * of making the candidate appear undated. Persisted backfill/mirror sync is
+ * still handled by the API/database layer; this helper only keeps every UI
+ * path consistent while that canonicalization is applied.
+ */
+function qrisPaymentDateValue(item: QrisPaymentItem): string | null {
+  const value = item.paymentDate
+    ?? item.paidAt
+    ?? item.paid_at
+    ?? item.confirmedAt
+    ?? item.confirmed_at
+    ?? item.date
+    ?? null;
+  if (value == null || String(value).trim() === "") return null;
+  return String(value);
+}
+
 function hasUnresolvedVariance(m: BankMutation): boolean {
   const candidate = visibleCandidates(m)[0];
   const d = candidate?.details;
@@ -1369,7 +1391,7 @@ function reconciliationEvidence(m: BankMutation): ReconciliationEvidence {
     : auditItems.map((item, index) => ({
         label: item.bookingNumber ?? item.booking_number ?? item.paymentNumber ?? item.payment_number ?? `Transaksi #${index + 1}`,
         amount: numericValue(item.grossAmount ?? item.gross_amount) ?? 0,
-        date: item.paidAt ?? item.paid_at,
+        date: qrisPaymentDateValue(item),
         customer: null,
         facility: "Sport Center",
       }));
@@ -1540,8 +1562,7 @@ function QrisPaymentItemsSummary({
   const hasPaymentDetails = items.some(item =>
     item.bookingNumber
     || item.paymentNumber
-    || item.paidAt
-    || item.paid_at,
+    || qrisPaymentDateValue(item),
   );
 
   return (
@@ -1577,9 +1598,9 @@ function QrisPaymentItemsSummary({
                   Payment: {item.paymentNumber ?? item.payment_number ?? `#${item.paymentId ?? item.payment_id ?? "—"}`}
                 </span>
               </div>
-              {(item.paidAt ?? item.paid_at) && (
+              {qrisPaymentDateValue(item) && (
                 <span className="text-muted-foreground">
-                  Dibayar {fmtDate(String(item.paidAt ?? item.paid_at))}
+                  Dibayar {fmtDate(qrisPaymentDateValue(item)!)}
                 </span>
               )}
             </div>
@@ -3322,7 +3343,7 @@ function QrisMutationCard({
                       const paymentId = item.paymentId ?? item.payment_id;
                       const booking = item.bookingNumber ?? item.booking_number ?? (item.booking_id != null ? `SC-${String(item.booking_id).padStart(4, "0")}` : "—");
                       const payment = item.paymentNumber ?? item.payment_number ?? (paymentId != null ? `#${paymentId}` : "—");
-                      const paymentDate = item.paymentDate ?? item.paidAt ?? item.paid_at ?? item.date;
+                      const paymentDate = qrisPaymentDateValue(item);
                       const paymentDateIso = calendarDateInJakarta(paymentDate);
                       const canEditPaymentDate = Number.isInteger(Number(paymentId))
                         && Number(paymentId) > 0
@@ -4771,7 +4792,7 @@ function MutationDetailPanel({
                              const gross = paymentAmount ?? item.grossAmount ?? item.gross_amount ?? 0;
                             const paymentNo = item.payment_number;
                             const bookingNo = item.booking_number;
-                            const paidAt = item.paidAt ?? item.paid_at;
+                            const paidAt = qrisPaymentDateValue(item);
                             return (
                               <div key={idx} className="flex items-start gap-2 px-2 py-1.5 space-y-0.5">
                                 {qrisAudit.id != null && onToggleQrisPayment && (
@@ -5609,7 +5630,7 @@ export default function BankReconciliationPage() {
               (candidate.payment_items ?? []).some(item => {
                 const itemPaymentId = Number(item.payment_id ?? item.paymentId);
                 const itemPaymentDate = String(
-                  item.paymentDate ?? item.paidAt ?? item.paid_at ?? item.date ?? "",
+                  qrisPaymentDateValue(item) ?? "",
                 ).slice(0, 10);
                 return itemPaymentId === variables.paymentId
                   && itemPaymentDate === variables.paymentDate;
@@ -6801,7 +6822,7 @@ export default function BankReconciliationPage() {
                                      const grossAmount = item.gross_amount ?? item.grossAmount;
                                     const customer = item.customer_name ?? item.customerName;
                                     const facility = item.facility_name ?? item.facilityName;
-                                     const paymentDate = item.paymentDate ?? item.paidAt ?? item.paid_at ?? item.date;
+                                     const paymentDate = qrisPaymentDateValue(item);
                                       const paymentDateIso = paymentDate ? String(paymentDate).slice(0, 10) : "";
                                       const canEditPaymentDate = Number.isInteger(Number(paymentId)) && Number(paymentId) > 0;
                                      return (
@@ -6919,7 +6940,7 @@ export default function BankReconciliationPage() {
           </CardContent>
         </Card>
         )}
-        
+
         {/* ── Google Sheet (collapsed) ──────────────────────── */}
         <SheetConfigCollapsed />
 
