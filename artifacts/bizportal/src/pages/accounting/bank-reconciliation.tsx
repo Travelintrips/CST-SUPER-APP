@@ -678,6 +678,8 @@ interface QrisPaymentItem {
   customer_name?: string | null;
   facilityName?: string | null;
   facility_name?: string | null;
+  revenueDescription?: string | null;
+  revenue_description?: string | null;
   bookingDate?: string | null;
   booking_date?: string | null;
   date?: string | null;
@@ -1109,6 +1111,15 @@ function qrisPaymentGross(
   return liveAmount
     ?? numericValue(item.grossAmount ?? item.gross_amount)
     ?? 0;
+}
+
+function qrisRevenueDescription(item: QrisPaymentItem): string {
+  const explicit = item.revenueDescription ?? item.revenue_description;
+  if (explicit && String(explicit).trim()) return String(explicit);
+  const facility = item.facilityName ?? item.facility_name;
+  return facility && String(facility).trim()
+    ? `Pendapatan Sewa Lapangan — ${facility}`
+    : "Pendapatan Booking Sport Center";
 }
 
 function hasUnresolvedVariance(m: BankMutation): boolean {
@@ -1577,6 +1588,8 @@ function QrisPaymentItemsSummary({
   const hasPaymentDetails = items.some(item =>
     item.bookingNumber
     || item.paymentNumber
+    || item.revenueDescription
+    || item.revenue_description
     || item.paidAt
     || item.paid_at,
   );
@@ -1614,6 +1627,9 @@ function QrisPaymentItemsSummary({
                   Payment: {item.paymentNumber ?? item.payment_number ?? `#${item.paymentId ?? item.payment_id ?? "—"}`}
                 </span>
               </div>
+              <span className="text-muted-foreground">
+                Pendapatan: {qrisRevenueDescription(item)}
+              </span>
               {(item.paidAt ?? item.paid_at) && (
                 <span className="text-muted-foreground">
                   Dibayar {fmtDate(String(item.paidAt ?? item.paid_at))}
@@ -3389,10 +3405,11 @@ function QrisMutationCard({
                   )}
                 </div>
                 <div className="overflow-x-auto">
-                    <div className="min-w-[600px]">
-                     <div className="grid grid-cols-[1.1fr_1.4fr_1.2fr_1fr_1fr_44px] gap-2 border-b bg-muted/15 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    <div className="min-w-[760px]">
+                      <div className="grid grid-cols-[1.05fr_1.25fr_1.45fr_1.25fr_.8fr_1fr_44px] gap-2 border-b bg-muted/15 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                       <span>Booking</span>
                       <span>Pelanggan / Payment</span>
+                       <span>Pendapatan</span>
                       <span>Payment / Settlement</span>
                       <span>Metode Bayar</span>
                       <span className="text-right">Nominal (Gross)</span>
@@ -3411,9 +3428,12 @@ function QrisMutationCard({
                         item.expectedSettlementDate ?? item.expected_settlement_date;
                        const gross = liveGrossForItem(item);
                       return (
-                         <div key={`${paymentId ?? index}-${booking}`} className="grid grid-cols-[1.1fr_1.4fr_1.2fr_1fr_1fr_44px] items-center gap-2 border-b px-2.5 py-2 last:border-b-0">
+                         <div key={`${paymentId ?? index}-${booking}`} className="grid grid-cols-[1.05fr_1.25fr_1.45fr_1.25fr_.8fr_1fr_44px] items-center gap-2 border-b px-2.5 py-2 last:border-b-0">
                           <span className="truncate text-xs font-medium">{booking}</span>
                           <span className="min-w-0 truncate text-xs text-muted-foreground">{payment}</span>
+                           <span className="min-w-0 truncate text-xs text-muted-foreground" title={qrisRevenueDescription(item)}>
+                             {qrisRevenueDescription(item)}
+                           </span>
                            <span className="min-w-0 text-xs text-muted-foreground">
                              <span className="flex min-w-0 items-center gap-1">
                                <span className="truncate">

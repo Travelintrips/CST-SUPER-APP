@@ -332,6 +332,11 @@ export async function generateQrisCandidates(options: {
         sp.booking_id, sb.order_number AS booking_number,
         sb.customer_name,
         COALESCE(sf.name, '') AS facility_name,
+         CASE
+           WHEN NULLIF(BTRIM(COALESCE(sf.name, '')), '') IS NULL
+             THEN 'Pendapatan Booking Sport Center'
+           ELSE 'Pendapatan Sewa Lapangan — ' || BTRIM(sf.name)
+         END AS revenue_description,
         sb.booking_date,
         sb.start_time::text AS start_time,
         sb.end_time::text AS end_time,
@@ -460,6 +465,7 @@ export async function generateQrisCandidates(options: {
       bookingNumber: row.booking_number == null ? null : String(row.booking_number),
       customerName: row.customer_name == null ? null : String(row.customer_name),
       facilityName: row.facility_name == null ? null : String(row.facility_name),
+      revenueDescription: row.revenue_description == null ? null : String(row.revenue_description),
       bookingDate: row.booking_date == null ? null : String(row.booking_date).slice(0, 10),
       startTime: row.start_time == null ? null : String(row.start_time),
       endTime: row.end_time == null ? null : String(row.end_time),

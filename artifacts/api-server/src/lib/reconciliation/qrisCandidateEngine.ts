@@ -51,6 +51,7 @@ export interface QrisPaymentCandidateInput {
   bookingNumber?: string | null;
   customerName?: string | null;
   facilityName?: string | null;
+  revenueDescription?: string | null;
   bookingDate?: string | null;
   startTime?: string | null;
   endTime?: string | null;
@@ -108,6 +109,7 @@ export interface QrisMutationBatchCandidate {
     bookingNumber?: string | null;
     customerName?: string | null;
     facilityName?: string | null;
+    revenueDescription?: string | null;
     bookingDate?: string | null;
     startTime?: string | null;
     endTime?: string | null;
@@ -402,6 +404,7 @@ export function generateQrisMutationBatchCandidates(input: {
           bookingNumber: payment.bookingNumber ?? null,
           customerName: payment.customerName ?? null,
           facilityName: payment.facilityName ?? null,
+          revenueDescription: payment.revenueDescription ?? null,
           bookingDate: payment.bookingDate ?? null,
           startTime: payment.startTime ?? null,
           endTime: payment.endTime ?? null,
@@ -701,6 +704,7 @@ export function generateQrisMutationBatchCandidates(input: {
         bookingNumber: payment.bookingNumber ?? null,
         customerName: payment.customerName ?? null,
         facilityName: payment.facilityName ?? null,
+        revenueDescription: payment.revenueDescription ?? null,
         bookingDate: payment.bookingDate ?? null,
         startTime: payment.startTime ?? null,
         endTime: payment.endTime ?? null,
