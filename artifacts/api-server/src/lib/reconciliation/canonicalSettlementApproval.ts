@@ -161,9 +161,9 @@ function jsonSql(value: Record<string, unknown>): string {
   return `'${JSON.stringify(value).replace(/'/g, "''")}'`;
 }
 
-function hasRowCount(result: unknown, expected = 1): boolean {
-  const rowCount = Number((result as { rowCount?: number })?.rowCount);
-  return Number.isFinite(rowCount) && rowCount === expected;
+function hasReturnedRow(result: unknown, expected = 1): boolean {
+  const rows = (result as { rows?: unknown[] })?.rows;
+  return Array.isArray(rows) && rows.length === expected;
 }
 
 type CanonicalApprovalInput = {
@@ -494,8 +494,9 @@ export async function approveCanonicalSettlementLink(
             WHERE id = ${supersededHistoricalMatchId}
               AND mutation_id = ${mutationId}
               AND status = 'approved'
+            RETURNING id
           `));
-          if (!hasRowCount(supersedeResult)) {
+          if (!hasReturnedRow(supersedeResult)) {
             throw new CanonicalSettlementApprovalError(
               CANONICAL_APPROVAL_CODES.INCONSISTENT_STATE,
               "Match lama berubah saat historical repair berlangsung.",
@@ -868,8 +869,9 @@ export async function approveCanonicalSettlementLink(
         AND LOWER(status) = 'posted'
         AND (bank_mutation_id IS NULL OR bank_mutation_id = ${mutationId})
         AND (canonical_bank_mutation_id IS NULL OR canonical_bank_mutation_id = ${mutationId})
+         RETURNING id
     `));
-    if (!hasRowCount(settlementUpdate)) {
+    if (!hasReturnedRow(settlementUpdate)) {
       throw new CanonicalSettlementApprovalError(
         CANONICAL_APPROVAL_CODES.INCONSISTENT_STATE,
         "Settlement berubah saat approval canonical berlangsung.",
@@ -884,8 +886,9 @@ export async function approveCanonicalSettlementLink(
         AND candidate_type = 'qris_settlement'
         AND candidate_id = ${settlementId}
         AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
+       RETURNING id
     `));
-    if (!hasRowCount(matchUpdate)) {
+    if (!hasReturnedRow(matchUpdate)) {
       throw new CanonicalSettlementApprovalError(
         CANONICAL_APPROVAL_CODES.INCONSISTENT_STATE,
         "Match canonical berubah saat approval berlangsung.",
@@ -900,8 +903,9 @@ export async function approveCanonicalSettlementLink(
           updated_at = NOW()
       WHERE id = ${mutationId}
         AND status IN ('unmatched', 'matched', 'auto_matched')
+       RETURNING id
     `));
-    if (!hasRowCount(publicMutationUpdate)) {
+    if (!hasReturnedRow(publicMutationUpdate)) {
       throw new CanonicalSettlementApprovalError(
         CANONICAL_APPROVAL_CODES.INCONSISTENT_STATE,
         "Mutasi bank publik berubah saat approval berlangsung.",
@@ -1084,8 +1088,9 @@ export async function reopenCanonicalSettlementLink(
         AND status = 'reconciled'
         AND bank_mutation_id = ${mutationId}
         AND canonical_bank_mutation_id = ${mutationId}
+       RETURNING id
     `));
-    if (!hasRowCount(settlementUpdate)) {
+    if (!hasReturnedRow(settlementUpdate)) {
       throw new CanonicalSettlementApprovalError(
         CANONICAL_APPROVAL_CODES.INCONSISTENT_STATE,
         "Settlement berubah saat membuka link canonical.",
@@ -1101,8 +1106,9 @@ export async function reopenCanonicalSettlementLink(
         AND candidate_id = ${settlementId}
         AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
         AND status = 'approved'
+       RETURNING id
     `));
-    if (!hasRowCount(matchUpdate)) {
+    if (!hasReturnedRow(matchUpdate)) {
       throw new CanonicalSettlementApprovalError(
         CANONICAL_APPROVAL_CODES.INCONSISTENT_STATE,
         "Match canonical berubah saat membuka link.",
@@ -1120,8 +1126,9 @@ export async function reopenCanonicalSettlementLink(
           updated_at = NOW()
       WHERE id = ${mutationId}
         AND status = 'approved'
+         RETURNING id
     `));
-    if (!hasRowCount(publicUpdate)) {
+    if (!hasReturnedRow(publicUpdate)) {
       throw new CanonicalSettlementApprovalError(
         CANONICAL_APPROVAL_CODES.INCONSISTENT_STATE,
         "Mutasi bank publik berubah saat membuka link.",

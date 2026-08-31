@@ -145,7 +145,7 @@ export const STARTUP_MIGRATION_REGISTRY: readonly StartupStageDefinition[] = REG
        : name === "admin_notifications"
         ? 2
         : name === "sport_center_canonical_finance_config"
-          ? 6
+          ? 7
         : name === "customer_portal_payment_boundary"
          ? 3
         : name === "customer_portal_finance_processing"
