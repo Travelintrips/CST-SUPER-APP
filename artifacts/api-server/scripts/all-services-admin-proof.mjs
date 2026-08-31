@@ -33,6 +33,7 @@ const created = {
 };
 const checks = [];
 let adminToken = "";
+let internalCookie = "";
 
 function check(name, ok, detail = "") {
   checks.push({ name, ok: Boolean(ok), detail: detail ? String(detail) : undefined });
@@ -357,19 +358,47 @@ async function proveNotifications() {
 }
 
 async function proveVendorDiscovery() {
-  const ppjk = await http("/api/ppjk/vendors", { headers: adminHeaders() });
+  const adminEmail = [
+    ...(process.env.ADMIN_EMAIL ?? "").split(","),
+    ...(process.env.ADMIN_EMAILS ?? "").split(","),
+  ].map((value) => value.trim()).filter(Boolean)[0] ?? "audit-admin@example.invalid";
+  const internal = await http("/api/dev-login", {
+    method: "POST",
+    body: JSON.stringify({ email: adminEmail }),
+  }, [200]);
+  internalCookie = internal.headers.get("set-cookie") ?? "";
+  check("Development internal BizPortal session", Boolean(internalCookie));
+  const internalHeaders = () => ({ cookie: internalCookie });
+
+  const ppjk = await http("/api/ppjk/vendors", { headers: internalHeaders() });
   const ppjkVendors = ppjk.body?.vendors ?? [];
   check("Pabean/Customs vendor discovery", ppjkVendors.some((v) => Number(v.id) === 36), "PT Wangsamas eligible");
   check("Custom Clearance vendor discovery excludes non-capability vendor",
     !ppjkVendors.some((v) => Number(v.id) === 35), "PT Diva Servis excluded from customs");
 
-  const delivery = await http("/api/portal/delivery-vendors");
-  const deliveryVendors = Array.isArray(delivery.body) ? delivery.body : (delivery.body?.vendors ?? []);
-  const diva = deliveryVendors.find((v) => Number(v.id) === 35);
-  const wangsamas = deliveryVendors.find((v) => Number(v.id) === 36);
-  check("Trucking vendor discovery includes active capability", Boolean(diva), "PT Diva Servis listed");
-  check("Trucking eligibility does not over-claim Wangsamas", !wangsamas || String(wangsamas.service_type ?? "").toLowerCase().includes("trucking") === false,
-    "PT Wangsamas is not a trucking capability");
+  // Trucking has no separate public discovery endpoint. Its canonical
+  // eligibility resolver uses explicit vendor_capabilities when configured,
+  // otherwise falls back to suppliers.service_type for legacy vendors.
+  const truckingRows = await db(`
+    SELECT s.id, s.name, s.service_type,
+           EXISTS (
+             SELECT 1 FROM vendor_capabilities c
+              WHERE c.vendor_id = s.id AND c.is_active = TRUE
+           ) AS has_explicit_capability,
+           EXISTS (
+             SELECT 1 FROM vendor_capabilities c
+              WHERE c.vendor_id = s.id AND c.is_active = TRUE AND c.service_type = 'trucking'
+           ) AS has_trucking_capability
+      FROM suppliers s
+     WHERE s.id IN (35, 36) AND s.is_active = TRUE
+  `);
+  const diva = truckingRows.find((v) => Number(v.id) === 35);
+  const wangsamas = truckingRows.find((v) => Number(v.id) === 36);
+  const divaEligible = diva && (diva.has_explicit_capability ? diva.has_trucking_capability : /trucking/i.test(diva.service_type ?? ""));
+  const wangsamasEligible = wangsamas && (wangsamas.has_explicit_capability ? wangsamas.has_trucking_capability : /trucking/i.test(wangsamas.service_type ?? ""));
+  check("Trucking vendor discovery includes active capability", Boolean(divaEligible), "PT Diva Servis eligible via legacy service_type");
+  check("Trucking eligibility does not over-claim Wangsamas", !wangsamasEligible,
+    "PT Wangsamas has explicit capabilities but no trucking capability");
 }
 
 async function proveRbac() {
@@ -410,6 +439,20 @@ async function cleanup() {
   let descendants = 0;
   try {
     await client.query("BEGIN");
+    if (roots.customer_service_requests.length) {
+      const csrChildren = await client.query(
+        `DELETE FROM customer_service_request_documents WHERE request_id = ANY($1::int[])`,
+        [roots.customer_service_requests],
+      );
+      descendants += csrChildren.rowCount ?? 0;
+      const csrItems = await client.query(
+        `DELETE FROM customer_service_request_items
+          WHERE request_id = ANY($1::int[])
+             OR title ILIKE $2 OR description ILIKE $2 OR form_data::text ILIKE $2`,
+        [roots.customer_service_requests, `%${marker}%`],
+      );
+      descendants += csrItems.rowCount ?? 0;
+    }
     const edges = [];
     const queue = rootEntries.map(([table, ids]) => ({ table, ids, depth: 0 }));
     const visited = new Set(queue.map(({ table, ids }) => `${table}:${ids.join(",")}`));
