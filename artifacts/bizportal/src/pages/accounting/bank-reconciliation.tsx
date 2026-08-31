@@ -638,6 +638,8 @@ interface QrisCandidateAudit {
 interface QrisPaymentItem {
   paymentId?: number;
   payment_id?: number;
+  providerName?: string | null;
+  provider_name?: string | null;
   grossAmount?: number | string | null;
   gross_amount?: number | string | null;
   expectedSettlementDate?: string | null;
@@ -3330,10 +3332,11 @@ function QrisMutationCard({
                   )}
                 </div>
                 <div className="overflow-x-auto">
-                    <div className="min-w-[600px]">
-                     <div className="grid grid-cols-[1.1fr_1.4fr_1.2fr_1fr_1fr_44px] gap-2 border-b bg-muted/15 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    <div className="min-w-[680px]">
+                     <div className="grid grid-cols-[1.1fr_1.35fr_1fr_1.2fr_0.9fr_1fr_44px] gap-2 border-b bg-muted/15 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                       <span>Booking</span>
                       <span>Pelanggan / Payment</span>
+                      <span>Provider Payment</span>
                       <span>Payment / Settlement</span>
                       <span>Metode Bayar</span>
                       <span className="text-right">Nominal (Gross)</span>
@@ -3352,9 +3355,12 @@ function QrisMutationCard({
                         item.expectedSettlementDate ?? item.expected_settlement_date;
                        const gross = liveGrossForItem(item);
                       return (
-                         <div key={`${paymentId ?? index}-${booking}`} className="grid grid-cols-[1.1fr_1.4fr_1.2fr_1fr_1fr_44px] items-center gap-2 border-b px-2.5 py-2 last:border-b-0">
+                          <div key={`${paymentId ?? index}-${booking}`} className="grid grid-cols-[1.1fr_1.35fr_1fr_1.2fr_0.9fr_1fr_44px] items-center gap-2 border-b px-2.5 py-2 last:border-b-0">
                           <span className="truncate text-xs font-medium">{booking}</span>
                           <span className="min-w-0 truncate text-xs text-muted-foreground">{payment}</span>
+                           <span className="min-w-0 truncate text-xs font-medium text-foreground">
+                             {item.providerName ?? item.provider_name ?? qrisAudit.provider_code ?? "Belum dikenali"}
+                           </span>
                            <span className="min-w-0 text-xs text-muted-foreground">
                              <span className="flex min-w-0 items-center gap-1">
                                <span className="truncate">
