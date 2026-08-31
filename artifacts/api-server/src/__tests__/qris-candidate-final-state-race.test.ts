@@ -53,7 +53,7 @@ describe("QRIS candidate final-state race protection", () => {
             id: 99, company_id: 1, raw_bank_account_id: 7,
             transaction_date: "2026-08-24", amount: 99, direction: "IN",
             source: "bank_import", source_classification: "actual_bank_mutation",
-            description: "QRIS SETTLEMENT", status: "unmatched",
+            description: "QRTRAVELI", status: "unmatched",
           }],
         };
       }

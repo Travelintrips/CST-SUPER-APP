@@ -542,24 +542,16 @@ export async function approveCanonicalSettlementLink(
         "Nominal net settlement harus sama persis dengan nominal mutasi bank.",
       );
     }
-    if (linkedMutationId != null && linkedMutationId !== mutationId) {
+    // A previous attempt can have written one of the two compatibility link
+    // columns before the status update was interrupted. Treat that exact same
+    // mutation as a recoverable partial link; a link to any other mutation is
+    // still a hard conflict.
+    const conflictingLinkId = [linkedMutationId, linkedCanonicalMutationId]
+      .find((linkedId) => linkedId != null && linkedId !== mutationId);
+    if (conflictingLinkId != null) {
       throw new CanonicalSettlementApprovalError(
         CANONICAL_APPROVAL_CODES.SETTLEMENT_ALREADY_USED,
         "Settlement canonical sudah terhubung ke mutasi bank lain.",
-      );
-    }
-    if (linkedMutationId === mutationId) {
-      throw new CanonicalSettlementApprovalError(
-        CANONICAL_APPROVAL_CODES.INCONSISTENT_STATE,
-        "Settlement canonical memiliki link sebelum status reconciled.",
-      );
-    }
-    if (linkedCanonicalMutationId != null) {
-      throw new CanonicalSettlementApprovalError(
-        CANONICAL_APPROVAL_CODES.SETTLEMENT_ALREADY_USED,
-        linkedCanonicalMutationId === mutationId
-          ? "Settlement canonical memiliki link sebelum status reconciled."
-          : "Settlement canonical sudah terhubung ke mutasi bank lain.",
       );
     }
     if (settlement.settlement_journal_id == null) {
@@ -802,9 +794,9 @@ export async function approveCanonicalSettlementLink(
           reconciled_at = NOW(),
           reconciled_by = '${escapeSql(actor)}'
       WHERE id = ${settlementId}
-        AND status = 'posted'
-        AND bank_mutation_id IS NULL
-        AND canonical_bank_mutation_id IS NULL
+        AND LOWER(status) = 'posted'
+        AND (bank_mutation_id IS NULL OR bank_mutation_id = ${mutationId})
+        AND (canonical_bank_mutation_id IS NULL OR canonical_bank_mutation_id = ${mutationId})
     `));
     if (!hasRowCount(settlementUpdate)) {
       throw new CanonicalSettlementApprovalError(

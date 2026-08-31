@@ -4241,9 +4241,9 @@ router.get("/mutations", async (req, res) => {
                AND bm.status::text IN ('unmatched', 'matched', 'auto_matched')
                AND bm.journal_entry_id IS NULL
                AND ${bankMutationPaymentTypeSql("bm")} = 'qris'
-               AND psb.status = 'posted'
-               AND psb.bank_mutation_id IS NULL
-               AND psb.canonical_bank_mutation_id IS NULL
+                AND LOWER(psb.status::text) = 'posted'
+                AND (psb.bank_mutation_id IS NULL OR psb.bank_mutation_id = bm.id)
+                AND (psb.canonical_bank_mutation_id IS NULL OR psb.canonical_bank_mutation_id = bm.id)
                AND psb.company_id = bm.company_id
                AND psb.settlement_date::date = bm.transaction_date::date
                AND ABS(psb.net_amount - bm.amount) <= 0.001

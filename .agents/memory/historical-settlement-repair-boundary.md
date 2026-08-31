@@ -7,4 +7,4 @@ Historical repair may override only the payment-date H-1 rule. It must independe
 
 **Why:** A posted legacy batch can legitimately contain a same-day payment, but using a generic manual override would also suppress cross-company, invalid payment, or amount failures and could authorize the wrong settlement.
 
-**How to apply:** Normalize payment dates only for a second core-evidence calculation, then require the actual-date validation to fail solely with the non-H-1 reason. All match creation, locks, link updates, and audit writes must share one transaction.
+**How to apply:** Normalize payment dates only for a second core-evidence calculation, then require the actual-date validation to fail solely with the non-H-1 reason. All match creation, locks, link updates, and audit writes must share one transaction. A retry may complete a partial same-mutation link when the batch is still posted; links to another mutation remain blocked.

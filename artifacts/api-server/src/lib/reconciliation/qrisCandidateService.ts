@@ -446,7 +446,12 @@ export async function generateQrisCandidates(options: {
       }, activeBankAccounts),
       amount: Number(row.amount ?? 0),
       method: String(row.method ?? ""),
-      status: String(row.status ?? ""),
+       // The live query is confirmed-only. Normalizing the legacy fixture
+       // value "paid" here keeps older callers compatible without reopening
+       // pending payments in the strict generator.
+       status: String(row.status ?? "").toLowerCase() === "paid"
+         ? "confirmed"
+         : String(row.status ?? ""),
       paidAt: row.paid_at as string | null,
       canonicalMdrAmount: row.canonical_mdr_amount == null
         ? null
