@@ -14,3 +14,9 @@ Production candidate visibility also requires the corresponding `public.bank_mut
 **Why:** Confirmed payments can be valid H-1 while the production mutation feed is stale; without the bank row there is no candidate identity or amount to match.
 
 **How to apply:** Before debugging provider/MDR logic, compare the latest production mutation date with the payment's expected settlement date. Sync/import mutations, wait for matching to finish, then explicitly generate QRIS candidates.
+
+Legacy posted settlement snapshots can combine H-1 payments with a later-dated payment and still produce an exact bank total; they are not strict QRIS evidence.
+
+**Why:** A historical canonical settlement can look numerically ready while failing the current `paid_at` H-1 contract during approval, creating a misleading ready label and a guaranteed approval error.
+
+**How to apply:** Never expose legacy `qris_settlement` links as QRIS approval or override actions. Require a current strict candidate whose live canonical payments pass `paid_at`, confirmed status, H-1, and exact MDR checks.

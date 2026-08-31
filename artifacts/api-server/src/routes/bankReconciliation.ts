@@ -2882,10 +2882,7 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
           sp.amount,
           sp.company_id,
           sp.payment_method,
-          COALESCE(
-            (sp.paid_at AT TIME ZONE 'Asia/Jakarta')::date::text,
-            (sp.created_at AT TIME ZONE 'Asia/Jakarta')::date::text
-          ) AS payment_date,
+          (sp.paid_at AT TIME ZONE 'Asia/Jakarta')::date::text AS payment_date,
           sp.status::text AS payment_status
         FROM sport_center.sport_payments
         sp
@@ -3416,8 +3413,7 @@ router.get("/mutations", async (req, res) => {
               ${sportPaymentTypeSql("sp_h1")} = 'qris'
               AND (
                 (
-                  COALESCE(sp_h1.paid_at, sp_h1.created_at)
-                  AT TIME ZONE 'Asia/Jakarta'
+                  sp_h1.paid_at AT TIME ZONE 'Asia/Jakarta'
                 )::date + 1
               )::text = bm.transaction_date::text
             )
@@ -3695,14 +3691,10 @@ router.get("/mutations", async (req, res) => {
           'taxWithheldAmount', COALESCE(sp.tax_withheld_amount, 0),
           'otherFeeAmount', COALESCE(sp.other_fee_amount, 0),
           'netAmount', GREATEST(0, sp.amount - COALESCE(sp.mdr_amount, 0) - COALESCE(sp.tax_withheld_amount, 0) - COALESCE(sp.other_fee_amount, 0)),
-          'date', (
-            COALESCE(sp.paid_at, sp.created_at)
-            AT TIME ZONE 'Asia/Jakarta'
-          )::date,
+           'date', (sp.paid_at AT TIME ZONE 'Asia/Jakarta')::date,
           'settlementDate', (
             (
-              COALESCE(sp.paid_at, sp.created_at)
-              AT TIME ZONE 'Asia/Jakarta'
+               sp.paid_at AT TIME ZONE 'Asia/Jakarta'
             )::date + 1
           ),
           'settlementReference', sp.settlement_reference,

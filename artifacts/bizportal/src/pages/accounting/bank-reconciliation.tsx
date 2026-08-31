@@ -856,6 +856,10 @@ function canonicalSettlementCandidateForMutation(m: BankMutation): Candidate | u
 }
 
 function isCanonicalSettlementManualOverrideEligible(m: BankMutation): boolean {
+  // QRIS has one active owner: the strict H-1 candidate flow. A legacy
+  // canonical settlement link must never surface a second approval/override
+  // action for the same QRIS mutation.
+  if (isQrisMutation(m)) return false;
   const candidate = canonicalSettlementCandidateForMutation(m);
   const settlementStatus = String(candidate?.details?.settlementStatus ?? "").toLowerCase();
   return canApprove(m)
@@ -864,6 +868,7 @@ function isCanonicalSettlementManualOverrideEligible(m: BankMutation): boolean {
 }
 
 function isCanonicalSettlementApprovalEligible(m: BankMutation): boolean {
+  if (isQrisMutation(m)) return false;
   const candidate = canonicalSettlementCandidateForMutation(m);
   if (!candidate || !isCanonicalSettlementManualOverrideEligible(m)) return false;
   return candidate.amount_match && candidate.date_match;
@@ -3058,7 +3063,11 @@ function QrisMutationCard({
   const canonicalOverrideReady = isCanonicalSettlementManualOverrideEligible(m);
   const canonicalApprovalReady = isCanonicalSettlementApprovalEligible(m);
   const canonicalSettlementDetails = canonicalSettlementCandidate?.details;
-  const hasCanonicalSettlementCandidate = canonicalSettlementCandidate != null;
+  // Do not let a legacy canonical settlement snapshot change the QRIS
+  // presentation or expose its approval action. QRIS approval is owned by the
+  // strict candidate audit above.
+  const hasCanonicalSettlementCandidate = !isQrisMutation(m)
+    && canonicalSettlementCandidate != null;
   const isApproved = isCanonicalReconciled
     || ["approved", "posted"].includes(String(m.status ?? "").toLowerCase())
     || String(audit.status ?? "").toLowerCase() === "approved";
