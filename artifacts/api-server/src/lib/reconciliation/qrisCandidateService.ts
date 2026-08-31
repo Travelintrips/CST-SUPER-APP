@@ -530,7 +530,11 @@ export async function generateQrisCandidates(options: {
   );
 
   if (!options.dryRun) {
-    for (const candidate of candidates) {
+    await db.transaction(async (tx) => {
+      let persistenceStage = "candidate snapshot persistence";
+      try {
+        for (const candidate of candidates) {
+          persistenceStage = "candidate snapshot persistence";
       const itemJson = JSON.stringify(candidate.paymentItems);
       const estimatedSettlementDateSql = candidate.estimatedSettlementDate
         ? `'${esc(candidate.estimatedSettlementDate)}'`
@@ -580,7 +584,7 @@ export async function generateQrisCandidates(options: {
         || normalizeItems(existingItems) !== normalizeItems(candidate.paymentItems)
       );
       if (evidenceChanged) {
-        const supersedeResult = await db.execute(sql.raw(`
+        const supersedeResult = await tx.execute(sql.raw(`
           UPDATE qris_mutation_batch_candidates
           SET status = 'superseded',
               reconciliation_status = 'UNMATCHED',
@@ -597,7 +601,7 @@ export async function generateQrisCandidates(options: {
         }
       }
       if (existing && !evidenceChanged) {
-        const refreshResult = await db.execute(sql.raw(`
+        const refreshResult = await tx.execute(sql.raw(`
           UPDATE qris_mutation_batch_candidates
           SET candidate_source = 'sport_center.sport_payments',
               mutation_key = (SELECT mutation_key FROM public.bank_mutations WHERE id = ${candidate.mutationId}),
@@ -628,7 +632,7 @@ export async function generateQrisCandidates(options: {
         }
         persistedCandidateId = Number(existing.id);
       } else {
-        const insertResult = await db.execute(sql.raw(`
+        const insertResult = await tx.execute(sql.raw(`
         INSERT INTO qris_mutation_batch_candidates (
           mutation_id, company_id, candidate_source, mutation_key,
           source_date, estimated_settlement_date,
@@ -680,8 +684,8 @@ export async function generateQrisCandidates(options: {
          && persistedCandidateId != null
          && Number.isSafeInteger(persistedCandidateId)
        ) {
-        try {
-          await db.execute(sql.raw(`
+        persistenceStage = "automatic bank match projection";
+        await tx.execute(sql.raw(`
             INSERT INTO public.bank_reconciliation_matches (
               mutation_id, candidate_type, candidate_id, candidate_source,
               match_score, match_reason, amount_match, date_match,
@@ -693,7 +697,7 @@ export async function generateQrisCandidates(options: {
             )
             ON CONFLICT DO NOTHING
           `));
-          await db.execute(sql.raw(`
+        await tx.execute(sql.raw(`
             UPDATE public.bank_mutations
             SET status = 'matched',
                 updated_at = NOW()
@@ -702,46 +706,44 @@ export async function generateQrisCandidates(options: {
               AND LOWER(COALESCE(status, 'unmatched')) NOT IN
                 ('posted', 'approved', 'approved_pending_posting', 'void')
           `));
-        } catch (error) {
-          // Never leave a visible candidate behind when its automatic match
-          // could not be committed. The caller can retry after the DB issue is
-          // fixed, while the journal/settlement approval flow stays separate.
-          await db.execute(sql.raw(`
-            DELETE FROM qris_mutation_batch_candidates
-            WHERE id = ${persistedCandidateId}
-              AND status = 'candidate_auto_matched'
-              AND reconciliation_status = 'MATCHED'
-          `)).catch(() => {});
-          throw error;
-        }
       }
     }
 
-    // A previously generated candidate may contain metadata that was
-    // synthesized by the old fallback path. Once the strict regeneration
-    // cannot reproduce it, retire that provisional snapshot so it cannot
-    // remain approvable merely because the source payment is now unresolved.
-    const currentMutationIds = new Set(mutations.map((mutation) => mutation.id));
-    for (const existing of existingRows.rows as Array<Record<string, unknown>>) {
-      const mutationId = Number(existing.mutation_id);
-      const existingStatus = String(existing.status ?? "").toLowerCase();
-      if (
-        !currentMutationIds.has(mutationId)
-        || auditedMutationIds.has(mutationId)
-        || ["approved", "completed", "superseded", "stale", "ineligible"].includes(existingStatus)
-      ) {
-        continue;
+        // A previously generated candidate may contain metadata that was
+        // synthesized by the old fallback path. Once the strict regeneration
+        // cannot reproduce it, retire that provisional snapshot so it cannot
+        // remain approvable merely because the source payment is now unresolved.
+        persistenceStage = "stale snapshot cleanup";
+        const currentMutationIds = new Set(mutations.map((mutation) => mutation.id));
+        for (const existing of existingRows.rows as Array<Record<string, unknown>>) {
+          const mutationId = Number(existing.mutation_id);
+          const existingStatus = String(existing.status ?? "").toLowerCase();
+          if (
+            !currentMutationIds.has(mutationId)
+            || auditedMutationIds.has(mutationId)
+            || ["approved", "completed", "superseded", "stale", "ineligible"].includes(existingStatus)
+          ) {
+            continue;
+          }
+          await tx.execute(sql.raw(`
+            UPDATE qris_mutation_batch_candidates
+            SET status = 'stale',
+                reconciliation_status = 'UNMATCHED',
+                review_reason = 'Kandidat ditutup: metadata QRIS canonical tidak lagi lengkap atau tidak unik; tidak ada fallback sintetis.',
+                updated_at = NOW()
+            WHERE id = ${Number(existing.id)}
+              AND status NOT IN ('approved', 'completed', 'superseded', 'stale', 'ineligible')
+          `));
+        }
+      } catch (error) {
+        const stagedError = new Error(
+          `QRIS candidate generation failed during ${persistenceStage}`,
+          { cause: error },
+        ) as Error & { qrisStage?: string };
+        stagedError.qrisStage = persistenceStage;
+        throw stagedError;
       }
-      await db.execute(sql.raw(`
-        UPDATE qris_mutation_batch_candidates
-        SET status = 'stale',
-            reconciliation_status = 'UNMATCHED',
-            review_reason = 'Kandidat ditutup: metadata QRIS canonical tidak lagi lengkap atau tidak unik; tidak ada fallback sintetis.',
-            updated_at = NOW()
-        WHERE id = ${Number(existing.id)}
-          AND status NOT IN ('approved', 'completed', 'superseded', 'stale', 'ineligible')
-      `));
-    }
+    });
   }
 
   return {

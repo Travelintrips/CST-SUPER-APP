@@ -1735,7 +1735,10 @@ router.post("/qris-candidates/generate", async (req, res) => {
   } catch (e: any) {
     const postgresError = findPostgresError(e);
     logger.error(
-      { err: postgresError?.message ?? e?.cause?.message ?? e?.message },
+      {
+        stage: typeof e?.qrisStage === "string" ? e.qrisStage : "candidate generation",
+        err: postgresError?.message ?? e?.cause?.message ?? e?.message,
+      },
       "[bankRecon] POST /qris-candidates/generate failed",
     );
     if (postgresError?.code === "23505") {

@@ -5462,13 +5462,23 @@ export default function BankReconciliationPage() {
           ...(mutationId != null ? { mutationId } : {}),
         }),
       });
-      if (!r.ok) throw new Error(await r.text());
-      return r.json() as Promise<{
+      const body = await r.json().catch(() => null) as {
+        error?: string;
+        code?: string;
+        generated?: number;
+        persisted?: number;
+        reviewable?: number;
+        candidates?: QrisCandidateAudit[];
+      } | null;
+      if (!r.ok) {
+        throw new Error(body?.error ?? "Gagal menyimpan pemeriksaan QRIS.");
+      }
+      return body as {
         generated: number;
         persisted: number;
         reviewable: number;
         candidates: QrisCandidateAudit[];
-      }>;
+      };
     },
     onSuccess: async (result) => {
       toast({
