@@ -149,3 +149,4 @@
 - [GL cross-account balance](gl-cross-account-balance.md) — saldo awal/akhir hanya valid untuk satu COA; agregat semua akun menyesatkan karena menjumlahkan sisi debit+kredit.
 - [QRIS approval provider resolution](qris-approval-provider-resolution.md) — incomplete payment metadata may resolve from bank evidence plus one owner-approved config; conflicts and InhouseTrf stay fail-closed.
 - [Historical settlement repair boundary](historical-settlement-repair-boundary.md) — posted legacy repair may override only payment H-1; every other bank, journal, and payment invariant remains fail-closed.
+- [Rule AI import auto-post](rule-ai-import-auto-post.md) — semua jalur import bank wajib melewati Decision Stack agar Rule AI ber-COA lengkap dapat auto-post dengan safeguard yang sama.
