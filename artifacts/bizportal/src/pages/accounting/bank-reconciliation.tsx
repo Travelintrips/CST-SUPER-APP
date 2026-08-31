@@ -6804,6 +6804,9 @@ export default function BankReconciliationPage() {
                                         <div className="mt-0.5 grid gap-x-3 gap-y-0.5 text-[10px] text-slate-500 dark:text-slate-400 sm:grid-cols-2">
                                           <span>Customer: {customer || "—"}</span>
                                           <span>Fasilitas: {facility || "—"}</span>
+                                           <span className="sm:col-span-2">
+                                             Pendapatan: {qrisRevenueDescription(item)}
+                                           </span>
                                            <span className="flex items-center gap-1">
                                              <span>Payment: {paymentDate ? fmtDate(paymentDateIso) : "—"}</span>
                                              {canEditPaymentDate && (
