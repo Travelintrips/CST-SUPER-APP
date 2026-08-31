@@ -25,6 +25,7 @@ import {
 export type QrisReconciliationStatus = "MATCHED" | "REVIEW" | "UNMATCHED";
 export type QrisProviderDetectionSource =
   | "provider_reference"
+  | "payment_source"
   | "mutation_description"
   | "settlement_rule"
   | "manual"
@@ -374,6 +375,16 @@ export function generateQrisMutationBatchCandidates(input: {
       const bankAmount = roundMoney(Number(mutation.amount) || 0);
        const amountMatches = expectedNetAmount === bankAmount;
        const amountDifference = roundMoney(Math.abs(expectedNetAmount - bankAmount));
+      const paymentProviders = new Set(
+        selectedPayments
+          .map((payment) => normalizeQrisProvider(payment.providerName))
+          .filter((provider) => provider !== "unknown"),
+      );
+      const paymentProvider = paymentProviders.size === 1
+        ? [...paymentProviders][0]!
+        : "unknown";
+      const paymentProviderDetectionSource: QrisProviderDetectionSource =
+        paymentProvider === "unknown" ? "unknown" : "payment_source";
 
       const sourceClassification = classifyBankMutationSource(
         mutation.source,
@@ -383,8 +394,8 @@ export function generateQrisMutationBatchCandidates(input: {
         mutationId: mutation.id,
         companyId: mutation.companyId,
         bankAccountId: mutation.bankAccountId,
-        providerCode: "unknown",
-        providerDetectionSource: "unknown",
+        providerCode: paymentProvider,
+        providerDetectionSource: paymentProviderDetectionSource,
         mutationSourceClassification: sourceClassification,
         sourceDate: mutation.transactionDate,
         estimatedSettlementDate: mutation.transactionDate,

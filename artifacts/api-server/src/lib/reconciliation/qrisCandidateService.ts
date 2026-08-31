@@ -326,7 +326,15 @@ export async function generateQrisCandidates(options: {
           THEN 'confirmed' ELSE sp.status::text END AS status,
         -- paid_at is the only accepted payment timeline for H-1.
         sp.paid_at AS paid_at,
-        COALESCE(sp.mdr_amount, 0) AS canonical_mdr_amount,
+         -- Payment rows imported before the owner-approved MDR config may have
+         -- mdr_amount=0. Prefer a positive stored amount, otherwise use the
+         -- canonical settlement calculator for the active provider/account
+         -- config; this keeps candidate matching aligned with approval.
+         COALESCE(
+           NULLIF(sp.mdr_amount, 0),
+           settlement_calculation.total_deduction,
+           0
+         ) AS canonical_mdr_amount,
         NULL::numeric AS canonical_mdr_rate,
         'SCPAY-SC-' || sp.id::text AS payment_number,
         sp.booking_id, sb.order_number AS booking_number,
@@ -364,6 +372,62 @@ export async function generateQrisCandidates(options: {
       ) sp
       LEFT JOIN sport_center.sport_bookings sb ON sb.id = sp.booking_id
       LEFT JOIN sport_center.sport_facilities sf ON sf.id = sb.facility_id
+       LEFT JOIN LATERAL (
+         SELECT
+           psc.id,
+           psc.mdr_rate,
+           psc.fixed_provider_fee,
+           psc.fee_tax_rate,
+           psc.fee_tax_inclusive,
+           psc.calculation_method,
+           psc.rounding_scale,
+           psc.rounding_method
+         FROM sport_center.payment_settlement_configs psc
+         WHERE psc.company_id = sp.company_id
+           AND LOWER(BTRIM(psc.provider_code::text)) =
+             LOWER(BTRIM(COALESCE(sp.payment_provider::text, sp.provider_name::text, '')))
+           AND BTRIM(psc.bank_account_id::text) =
+             BTRIM(COALESCE(sp.bank_account_id::text, ''))
+           AND psc.is_active = TRUE
+           AND psc.source = 'OWNER_APPROVED'
+           AND psc.effective_from <= COALESCE(
+             (
+               COALESCE(sp.paid_at, sp.confirmed_at, sp.created_at)
+               AT TIME ZONE 'Asia/Jakarta'
+             )::date + 1,
+             sp.expected_settlement_date::date
+           )
+           AND (
+             psc.effective_until IS NULL
+             OR COALESCE(
+               (
+                 COALESCE(sp.paid_at, sp.confirmed_at, sp.created_at)
+                 AT TIME ZONE 'Asia/Jakarta'
+               )::date + 1,
+               sp.expected_settlement_date::date
+             ) < psc.effective_until
+           )
+         ORDER BY psc.id DESC
+         LIMIT 1
+       ) settlement_config ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT total_deduction
+         FROM sport_center.calculate_settlement_mdr(
+           sp.amount,
+           CASE
+             WHEN settlement_config.calculation_method = 'fixed_fee' THEN 0
+             ELSE COALESCE(settlement_config.mdr_rate, 0)
+           END,
+           CASE
+             WHEN settlement_config.calculation_method = 'percentage_of_gross' THEN 0
+             ELSE COALESCE(settlement_config.fixed_provider_fee, 0)
+           END,
+           COALESCE(settlement_config.fee_tax_rate, 0),
+           COALESCE(settlement_config.fee_tax_inclusive, FALSE),
+           COALESCE(settlement_config.rounding_scale, 2),
+           COALESCE(settlement_config.rounding_method, 'round_half_up')
+         )
+       ) settlement_calculation ON settlement_config.id IS NOT NULL
       WHERE sp.provider_payment_rank = 1
     `)),
     db.execute(sql.raw(`
