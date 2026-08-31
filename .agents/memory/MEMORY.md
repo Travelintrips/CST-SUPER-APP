@@ -1,3 +1,4 @@
+- [Marketplace RFQ retry idempotency](marketplace-rfq-retry-idempotency.md) — canonical writes need a unique logical key and atomic ledger claim; legacy unkeyed rows stay manual-only during containment.
 - [Production secret bundle JSON](production-secret-json-loader.md) — malformed managed PROD JSON blocks recovery before DB access; never bypass the official loader.
 - [Customer Portal harness fixtures](customer-portal-harness-fixtures.md) — order fixtures need one active company membership; reset capture stays loopback-only and DEV-harness gated.
 - [Customer Portal runtime proofs](customer-portal-runtime-proofs.md) — run one-off portal proofs through the development Secret Manager loader or they may fall back to a schema-less local DB.
