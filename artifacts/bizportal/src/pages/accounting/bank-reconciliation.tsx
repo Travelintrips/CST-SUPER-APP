@@ -3655,11 +3655,13 @@ function MutationCard({
   onEditQrisPaymentDate,
   onApproveQris,
   onApproveQrisBatch,
+  onRecoverQrisSettlement,
   selectedCandidateId,
   onToggleCandidate,
   onApproveCandidate,
   onManualOverrideCandidate,
   approveQrisPending,
+  recoverQrisPending,
   selectedQrisPaymentIds,
   onToggleQrisPayment,
   onToggleAllQrisPayments,
@@ -3686,11 +3688,13 @@ function MutationCard({
   }) => void;
   onApproveQris: (m: BankMutation) => void;
   onApproveQrisBatch?: (candidateId: number, mutationId: number, candidate: QrisCandidateAudit, paymentIds?: number[]) => void;
+  onRecoverQrisSettlement?: (mutationId: number, settlementId: number) => void;
   selectedCandidateId?: number | null;
   onToggleCandidate?: (mutationId: number, candidateId: number, checked: boolean) => void;
   onApproveCandidate?: (m: BankMutation, candidate: Candidate) => void;
   onManualOverrideCandidate?: (m: BankMutation, candidate: Candidate) => void;
   approveQrisPending?: boolean;
+  recoverQrisPending?: boolean;
   selectedQrisPaymentIds: Record<number, number[]>;
   onToggleQrisPayment?: (candidateId: number, paymentId: number, checked: boolean) => void;
   onToggleAllQrisPayments?: (candidate: QrisCandidateAudit, checked: boolean) => void;
@@ -3744,6 +3748,8 @@ function MutationCard({
             onDelete={onDelete}
             onEditPaymentDate={onEditQrisPaymentDate}
             onApproveQrisBatch={onApproveQrisBatch}
+            onRecoverQrisSettlement={onRecoverQrisSettlement}
+            recoverQrisPending={recoverQrisPending}
             onManualOverrideCandidate={onManualOverrideCandidate}
             approveQrisPending={approveQrisPending}
             selectedQrisPaymentIds={audit.id != null ? selectedQrisPaymentIds[audit.id] ?? [] : []}
@@ -6297,6 +6303,60 @@ export default function BankReconciliationPage() {
     },
   });
 
+  const recoverQrisSettlementMut = useMutation({
+    mutationFn: async ({
+      mutationId,
+      settlementId,
+      reason,
+    }: {
+      mutationId: number;
+      settlementId: number;
+      reason: string;
+    }) => {
+      const response = await fetch(
+        `/api/bank-reconciliation/${mutationId}/link-historical-settlement`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            settlement_id: settlementId,
+            confirm_historical_repair: true,
+            reason,
+          }),
+        },
+      );
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(body?.error ?? "Settlement canonical gagal ditautkan.");
+      }
+      return body as {
+        mutation_id?: number;
+        candidate_id?: number;
+        settlement_status?: string;
+        bank_mutation_status?: string;
+      };
+    },
+    onSuccess: async () => {
+      toast({
+        title: "Settlement canonical selesai ditautkan",
+        description: "Batch posted sudah direkonsiliasi dan mutasi dipindahkan ke Selesai.",
+      });
+      await Promise.all([refetchQrisAudit(), refetch()]);
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] });
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Gagal menyelesaikan settlement",
+        description: error.message,
+        variant: "destructive",
+      });
+      void Promise.all([refetchQrisAudit(), refetch()]);
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] });
+    },
+  });
+
   const sheetSyncMut = useMutation({
     mutationFn: async () => {
       const r = await fetch("/api/bank-reconciliation/sheet-sync", { method: "POST", credentials: "include" });
@@ -6494,6 +6554,29 @@ export default function BankReconciliationPage() {
       return;
     }
     approveQrisBatchMut.mutate({ candidateId, mutationId: m.id, companyId });
+  };
+
+  const handleRecoverQrisSettlement = (mutationId: number, settlementId: number) => {
+    const confirmed = window.confirm(
+      "Settlement canonical sudah posted dan payment-nya sudah diproses. " +
+      "Tautkan batch ini ke mutasi bank sekarang?",
+    );
+    if (!confirmed) return;
+
+    const reason = window.prompt(
+      "Alasan historical repair (minimal 10 karakter):",
+      "Batch canonical posted identik dengan match lama; menyelesaikan link mutasi bank.",
+    )?.trim();
+    if (!reason || reason.length < 10) {
+      toast({
+        title: "Recovery dibatalkan",
+        description: "Alasan historical repair minimal 10 karakter wajib diisi.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    recoverQrisSettlementMut.mutate({ mutationId, settlementId, reason });
   };
 
   const handleConfirmApprove = () => {
@@ -7081,6 +7164,8 @@ export default function BankReconciliationPage() {
                   }}
                   onApproveQris={handleApproveQris}
                   onApproveQrisBatch={handleApproveQrisBatch}
+                  onRecoverQrisSettlement={handleRecoverQrisSettlement}
+                  recoverQrisPending={recoverQrisSettlementMut.isPending}
                   onManualOverrideCandidate={handleManualOverrideCandidate}
                   selectedCandidateId={selectedCandidateByMutation[m.id] ?? null}
                   onToggleCandidate={toggleCandidate}

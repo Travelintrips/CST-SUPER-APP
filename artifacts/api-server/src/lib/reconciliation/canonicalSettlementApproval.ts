@@ -434,11 +434,81 @@ export async function approveCanonicalSettlementLink(
     const otherMutationApproval = approvedForMutation.find(
       (row) => Number(row.id) !== Number(match.id),
     );
+    let supersededHistoricalMatchId: number | null = null;
     if (otherMutationApproval) {
-      throw new CanonicalSettlementApprovalError(
-        CANONICAL_APPROVAL_CODES.MUTATION_ALREADY_USED,
-        "Mutasi bank sudah memiliki approved match lain.",
-      );
+      // An interrupted canonical approval can leave the mutation approved
+      // against the old sport-payment snapshot after its posted canonical
+      // batch was created. Historical repair may replace only that exact
+      // snapshot; unrelated approved matches must remain fail-closed.
+      if (historicalRepair) {
+        const { rows: equivalentRows } = await tx.execute(sql.raw(`
+          SELECT legacy.id
+          FROM bank_reconciliation_matches legacy
+          JOIN qris_mutation_batch_candidates snapshot
+            ON snapshot.id = legacy.candidate_id
+          JOIN sport_center.payment_settlement_batches canonical
+            ON canonical.id = ${settlementId}
+          WHERE legacy.id = ${Number(otherMutationApproval.id)}
+            AND legacy.mutation_id = ${mutationId}
+            AND legacy.candidate_type = 'qris_settlement'
+            AND legacy.candidate_source = 'sport_center.sport_payments'
+            AND snapshot.company_id = canonical.company_id
+            AND snapshot.gross_amount = canonical.gross_amount
+            AND snapshot.net_amount = canonical.net_amount
+            AND snapshot.estimated_settlement_date::date = canonical.settlement_date::date
+            AND (
+              SELECT COUNT(*)
+              FROM sport_center.payment_settlement_items canonical_item
+              WHERE canonical_item.settlement_id = canonical.id
+                AND canonical_item.item_status = 'active'
+            ) = jsonb_array_length(COALESCE(snapshot.payment_items, '[]'::jsonb))
+            AND NOT EXISTS (
+              SELECT 1
+              FROM sport_center.payment_settlement_items canonical_extra
+              WHERE canonical_extra.settlement_id = canonical.id
+                AND canonical_extra.item_status = 'active'
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM jsonb_array_elements(COALESCE(snapshot.payment_items, '[]'::jsonb)) snapshot_item
+                  WHERE (snapshot_item->>'paymentId')::int = canonical_extra.payment_id
+                )
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements(COALESCE(snapshot.payment_items, '[]'::jsonb)) snapshot_item
+              WHERE NOT EXISTS (
+                SELECT 1
+                FROM sport_center.payment_settlement_items canonical_missing
+                WHERE canonical_missing.settlement_id = canonical.id
+                  AND canonical_missing.item_status = 'active'
+                  AND canonical_missing.payment_id = (snapshot_item->>'paymentId')::int
+              )
+            )
+          LIMIT 2
+        `));
+        if (equivalentRows.length === 1) {
+          supersededHistoricalMatchId = Number((equivalentRows[0] as Record<string, unknown>).id);
+          const supersedeResult = await tx.execute(sql.raw(`
+            UPDATE bank_reconciliation_matches
+            SET status = 'superseded'
+            WHERE id = ${supersededHistoricalMatchId}
+              AND mutation_id = ${mutationId}
+              AND status = 'approved'
+          `));
+          if (!hasRowCount(supersedeResult)) {
+            throw new CanonicalSettlementApprovalError(
+              CANONICAL_APPROVAL_CODES.INCONSISTENT_STATE,
+              "Match lama berubah saat historical repair berlangsung.",
+            );
+          }
+        }
+      }
+      if (supersededHistoricalMatchId == null) {
+        throw new CanonicalSettlementApprovalError(
+          CANONICAL_APPROVAL_CODES.MUTATION_ALREADY_USED,
+          "Mutasi bank sudah memiliki approved match lain.",
+        );
+      }
     }
 
     const { rows: settlementRows } = await tx.execute(sql.raw(`
@@ -784,6 +854,7 @@ export async function approveCanonicalSettlementLink(
       historical_repair: historicalRepair,
       override_reason: manualOverride ? (overrideReason?.trim() || "Override manual oleh reviewer") : null,
       matching_evidence: strictApproval.ok ? "valid" : "overridden",
+      superseded_historical_match_id: supersededHistoricalMatchId,
     };
 
     const settlementUpdate = await tx.execute(sql.raw(`
