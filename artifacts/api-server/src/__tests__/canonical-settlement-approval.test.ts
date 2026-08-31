@@ -110,6 +110,7 @@ describe("Phase 4C-6 canonical link-only approval contract", () => {
     accountMatched: true,
     journalEligible: true,
     paymentMethods: ["QRIS", "qris"],
+    paymentStatuses: ["confirmed", "confirmed"],
   };
 
   it("accepts a posted historical batch without requiring every payment to be H-1", () => {
@@ -128,6 +129,7 @@ describe("Phase 4C-6 canonical link-only approval contract", () => {
     ["wrong account", { accountMatched: false }],
     ["missing journal", { journalEligible: false }],
     ["non QRIS item", { paymentMethods: ["QRIS", "BANK_TRANSFER"] }],
+    ["pending payment", { paymentStatuses: ["confirmed", "pending"] }],
   ])("rejects historical repair with %s", (_label, override) => {
     expect(
       validateHistoricalSettlementRepairEvidence({

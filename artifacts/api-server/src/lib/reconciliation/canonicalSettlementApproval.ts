@@ -4,7 +4,10 @@ import {
   RECONCILIATION_CANDIDATE_SOURCES,
   type ReconciliationCandidateSource,
 } from "@workspace/db";
-import { checkQrisApprovalRule } from "./qrisApprovalRule.js";
+import {
+  checkQrisApprovalRule,
+  QRIS_APPROVAL_REASON_CODES,
+} from "./qrisApprovalRule.js";
 
 export const CANONICAL_APPROVAL_BANK_MUTATION_STATUS = "approved" as const;
 export const CANONICAL_REOPEN_BANK_MUTATION_STATUS = "unmatched" as const;
@@ -91,6 +94,7 @@ export type HistoricalSettlementRepairEvidence = {
   accountMatched: boolean;
   journalEligible: boolean;
   paymentMethods: unknown[];
+  paymentStatuses: unknown[];
 };
 
 export function validateHistoricalSettlementRepairEvidence(
@@ -137,6 +141,14 @@ export function validateHistoricalSettlementRepairEvidence(
     )
   ) {
     return { ok: false, reason: "Settlement harus memiliki payment QRIS aktif." };
+  }
+  if (
+    evidence.paymentStatuses.length !== evidence.paymentMethods.length
+    || evidence.paymentStatuses.some(
+      (status) => String(status ?? "").toLowerCase() !== "confirmed",
+    )
+  ) {
+    return { ok: false, reason: "Semua payment settlement harus berstatus confirmed." };
   }
   return { ok: true };
 }
@@ -613,6 +625,7 @@ export async function approveCanonicalSettlementLink(
       SELECT p.id,
              p.company_id,
              p.amount,
+             p.status::text AS payment_status,
              p.payment_method::text AS payment_method,
              (
                COALESCE(p.paid_at, p.confirmed_at, p.created_at)
@@ -644,6 +657,8 @@ export async function approveCanonicalSettlementLink(
         journalEligible: true,
         paymentMethods: (strictPaymentRows as Array<Record<string, unknown>>)
           .map((payment) => payment.payment_method),
+        paymentStatuses: (strictPaymentRows as Array<Record<string, unknown>>)
+          .map((payment) => payment.payment_status),
       });
       if (!repairEvidence.ok) {
         throw new CanonicalSettlementApprovalError(
@@ -668,6 +683,43 @@ export async function approveCanonicalSettlementLink(
         alreadyReconciled: false,
       })),
     });
+    if (historicalRepair) {
+      const mutationDate = String(publicMutation.transaction_date ?? "").slice(0, 10);
+      const expectedDate = new Date(`${mutationDate}T00:00:00.000Z`);
+      expectedDate.setUTCDate(expectedDate.getUTCDate() - 1);
+      const expectedHMinusOne = expectedDate.toISOString().slice(0, 10);
+      const coreApproval = checkQrisApprovalRule({
+        companyId: publicCompanyId,
+        mutationDate,
+        mutationAmount: Number(publicMutation.amount ?? 0),
+        payments: (strictPaymentRows as Array<Record<string, unknown>>).map((payment, index) => ({
+          id: Number(payment.id),
+          paymentMethod: payment.payment_method == null
+            ? null
+            : String(payment.payment_method),
+          paymentDate: expectedHMinusOne,
+          grossAmount: Number(payment.amount ?? 0),
+          companyId: payment.company_id == null ? null : Number(payment.company_id),
+          canonicalMdrAmount: index === 0 ? settlementGross - settlementNet : 0,
+          alreadyReconciled: false,
+        })),
+      });
+      if (!coreApproval.ok) {
+        throw new CanonicalSettlementApprovalError(
+          CANONICAL_APPROVAL_CODES.MATCHING_EVIDENCE_INVALID,
+          coreApproval.reason,
+        );
+      }
+      if (
+        !strictApproval.ok
+        && strictApproval.code !== QRIS_APPROVAL_REASON_CODES.PAYMENT_DATE_NOT_H_MINUS_ONE
+      ) {
+        throw new CanonicalSettlementApprovalError(
+          CANONICAL_APPROVAL_CODES.MATCHING_EVIDENCE_INVALID,
+          strictApproval.reason,
+        );
+      }
+    }
     if (strictPaymentRows.length === 0) {
       throw new CanonicalSettlementApprovalError(
         CANONICAL_APPROVAL_CODES.MATCHING_EVIDENCE_INVALID,

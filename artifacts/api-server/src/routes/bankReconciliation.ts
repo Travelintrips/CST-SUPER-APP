@@ -4247,6 +4247,7 @@ router.get("/mutations", async (req, res) => {
                    AND psi.item_status = 'active'
                    AND sp.company_id = bm.company_id
                    AND LOWER(sp.payment_method::text) LIKE '%qris%'
+                   AND LOWER(sp.status::text) = 'confirmed'
                )
                AND NOT EXISTS (
                  SELECT 1
@@ -4257,6 +4258,7 @@ router.get("/mutations", async (req, res) => {
                    AND (
                      sp.company_id IS DISTINCT FROM bm.company_id
                      OR LOWER(sp.payment_method::text) NOT LIKE '%qris%'
+                     OR LOWER(sp.status::text) <> 'confirmed'
                    )
                )
                AND NOT EXISTS (
