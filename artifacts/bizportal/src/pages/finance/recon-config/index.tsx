@@ -161,6 +161,26 @@ interface RuleCoaAccount {
   isHeader?: boolean | null;
 }
 
+function nextSequentialChildCode(parent: RuleCoaAccount, accounts: RuleCoaAccount[]): string {
+  const match = parent.code.match(/^(.*?)(\d+)([^0-9]*)$/);
+  if (!match) return `${parent.code}-01`;
+
+  const [, prefix, digits, suffix] = match;
+  const usedNumbers = new Set(
+    accounts
+      .map((account) => account.code.match(/^(.*?)(\d+)([^0-9]*)$/))
+      .filter((candidate): candidate is RegExpMatchArray =>
+        !!candidate && candidate[1] === prefix && candidate[3] === suffix,
+      )
+      .map((candidate) => Number(candidate[2]))
+      .filter(Number.isFinite),
+  );
+
+  let nextNumber = Number(digits) + 1;
+  while (usedNumbers.has(nextNumber)) nextNumber += 1;
+  return `${prefix}${String(nextNumber).padStart(digits.length, "0")}${suffix}`;
+}
+
 // ─── Generic config tab (Business, Routine, Income) ───────────────────────────
 
 function ConfigTab({ category }: { category: "BUSINESS_TRANSACTION" | "ROUTINE_EXPENSE" | "INCOME_ALLOCATION" }) {
@@ -716,6 +736,7 @@ function AiRulesTab() {
   const [showModal, setShowModal] = useState(false);
   const [creatingCoa, setCreatingCoa] = useState(false);
   const [creatingCoaLoading, setCreatingCoaLoading] = useState(false);
+  const [quickCreateChild, setQuickCreateChild] = useState(false);
   const [newCoaRole, setNewCoaRole] = useState<"parent" | "child">("child");
   const [parentSearch, setParentSearch] = useState("");
   const [newCoaForm, setNewCoaForm] = useState({
@@ -822,6 +843,7 @@ function AiRulesTab() {
       specificity: 1, amount_tolerance: 0, reference_amount: null,
       confidence: 0.8, priority: 50, source: "manual" });
     setCreatingCoa(false);
+    setQuickCreateChild(false);
     setNewCoaRole("child");
     setParentSearch("");
     setNewCoaForm({
@@ -853,6 +875,7 @@ function AiRulesTab() {
         ? Number(row.amount_tolerance)
         : 0 });
     setCreatingCoa(false);
+    setQuickCreateChild(false);
     setParentSearch("");
     setPreview(null);
     setPreviewAmount("");
@@ -884,6 +907,7 @@ function AiRulesTab() {
 
   const startCreateCoa = () => {
     setCreatingCoa(true);
+    setQuickCreateChild(false);
     setNewCoaRole("child");
     setParentSearch("");
     setNewCoaForm((current) => ({
@@ -892,6 +916,26 @@ function AiRulesTab() {
       parentId: null,
       type: form.action_flow === "ROUTINE_EXPENSE_ALLOCATION" ? "expense" : "revenue",
     }));
+    void loadParentAccounts();
+  };
+
+  const startCreateChildCoa = () => {
+    const selected = coaAccounts.find((account) => account.code === form.action_coa_code);
+    if (!selected) {
+      alert("Pilih COA parent terlebih dahulu.");
+      return;
+    }
+
+    setCreatingCoa(true);
+    setQuickCreateChild(true);
+    setNewCoaRole("child");
+    setParentSearch("");
+    setNewCoaForm({
+      code: nextSequentialChildCode(selected, coaAccounts),
+      name: "",
+      type: selected.type || "expense",
+      parentId: selected.id,
+    });
     void loadParentAccounts();
   };
 
@@ -942,6 +986,7 @@ function AiRulesTab() {
       }));
       await loadCoaOptions();
       setCreatingCoa(false);
+      setQuickCreateChild(false);
       setNewCoaForm((current) => ({ ...current, code: "", name: "", parentId: null }));
     } catch (error) {
       alert(error instanceof Error ? error.message : "Gagal membuat COA baru.");
@@ -1198,8 +1243,9 @@ function AiRulesTab() {
                         <Input
                           value={newCoaForm.code}
                           onChange={(event) => setNewCoaForm((current) => ({ ...current, code: event.target.value }))}
+                          readOnly={quickCreateChild}
                           placeholder="Contoh: 4-1050"
-                          className="bg-slate-800 border-slate-600 text-white text-xs"
+                          className={`bg-slate-800 border-slate-600 text-white text-xs ${quickCreateChild ? "cursor-not-allowed opacity-70" : ""}`}
                         />
                       </div>
                       <div className="space-y-1">
@@ -1217,6 +1263,7 @@ function AiRulesTab() {
                       <Label className="text-slate-300 text-xs">Kelompok akun</Label>
                       <Select
                         value={newCoaForm.type}
+                          disabled={quickCreateChild}
                         onValueChange={(value) => setNewCoaForm((current) => ({
                           ...current,
                           type: value,
@@ -1242,39 +1289,49 @@ function AiRulesTab() {
                     {newCoaRole === "child" && (
                       <div className="space-y-1">
                         <Label className="text-slate-300 text-xs">Parent akun</Label>
-                        <div className="relative">
-                          <Search className="pointer-events-none absolute left-2 top-2 h-3.5 w-3.5 text-slate-500" />
-                          <Input
-                            value={parentSearch}
-                            onChange={(event) => setParentSearch(event.target.value)}
-                            placeholder="Cari parent berdasarkan kode atau nama..."
-                            className="bg-slate-800 border-slate-600 pl-7 text-white text-xs"
-                          />
-                        </div>
-                        <Select
-                          value={newCoaForm.parentId ? String(newCoaForm.parentId) : "__none"}
-                          onValueChange={(value) => setNewCoaForm((current) => ({
-                            ...current,
-                            parentId: value === "__none" ? null : Number(value),
-                          }))}
-                        >
-                          <SelectTrigger className="bg-slate-800 border-slate-600 text-white text-xs">
-                            <SelectValue placeholder="Pilih parent akun..." />
-                          </SelectTrigger>
-                          <SelectContent className="bg-slate-800 border-slate-600 text-white">
-                            <SelectItem value="__none">Pilih parent akun...</SelectItem>
-                            {parentAccounts.map((account) => (
-                              <SelectItem key={account.id} value={String(account.id)}>
-                                {account.code} — {account.name}
-                              </SelectItem>
-                            ))}
-                            {parentAccounts.length === 0 && (
-                              <SelectItem value="__no_parent_results" disabled>
-                                Parent tidak ditemukan
-                              </SelectItem>
-                            )}
-                          </SelectContent>
-                        </Select>
+                        {quickCreateChild ? (
+                          <div className="rounded-md border border-indigo-400/40 bg-slate-800 px-3 py-2 text-xs text-white">
+                            {coaAccounts.find((account) => account.id === newCoaForm.parentId)?.code ?? "Parent terpilih"}
+                            {" — "}
+                            {coaAccounts.find((account) => account.id === newCoaForm.parentId)?.name ?? "Akun parent"}
+                          </div>
+                        ) : (
+                          <>
+                            <div className="relative">
+                              <Search className="pointer-events-none absolute left-2 top-2 h-3.5 w-3.5 text-slate-500" />
+                              <Input
+                                value={parentSearch}
+                                onChange={(event) => setParentSearch(event.target.value)}
+                                placeholder="Cari parent berdasarkan kode atau nama..."
+                                className="bg-slate-800 border-slate-600 pl-7 text-white text-xs"
+                              />
+                            </div>
+                            <Select
+                              value={newCoaForm.parentId ? String(newCoaForm.parentId) : "__none"}
+                              onValueChange={(value) => setNewCoaForm((current) => ({
+                                ...current,
+                                parentId: value === "__none" ? null : Number(value),
+                              }))}
+                            >
+                              <SelectTrigger className="bg-slate-800 border-slate-600 text-white text-xs">
+                                <SelectValue placeholder="Pilih parent akun..." />
+                              </SelectTrigger>
+                              <SelectContent className="bg-slate-800 border-slate-600 text-white">
+                                <SelectItem value="__none">Pilih parent akun...</SelectItem>
+                                {parentAccounts.map((account) => (
+                                  <SelectItem key={account.id} value={String(account.id)}>
+                                    {account.code} — {account.name}
+                                  </SelectItem>
+                                ))}
+                                {parentAccounts.length === 0 && (
+                                  <SelectItem value="__no_parent_results" disabled>
+                                    Parent tidak ditemukan
+                                  </SelectItem>
+                                )}
+                              </SelectContent>
+                            </Select>
+                          </>
+                        )}
                         {creatingCoaLoading && (
                           <p className="flex items-center gap-1 text-[11px] text-slate-400">
                             <Loader2 className="h-3 w-3 animate-spin" /> Memuat parent...
@@ -1295,21 +1352,35 @@ function AiRulesTab() {
                       className="w-full gap-1.5 bg-indigo-600 text-white hover:bg-indigo-700"
                     >
                       {creatingCoaLoading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                      Buat &amp; Pilih COA
+                      {quickCreateChild ? "Buat Child & Pilih COA" : "Buat & Pilih COA"}
                     </Button>
                   </div>
                 ) : (
                   <>
-                    <div className="mt-1">
-                      <CreatableCombobox
-                        value={form.action_coa_code ?? ""}
-                        onChange={value => setForm((f: any) => ({ ...f, action_coa_code: value || null }))}
-                        options={coaOptions}
-                        loading={loadingCoaOptions}
-                        placeholder="Pilih akun COA — kode dan nama"
-                        searchPlaceholder="Cari kode atau nama COA…"
-                        emptyText="Akun COA tidak ditemukan."
-                      />
+                    <div className="mt-1 flex items-center gap-1.5">
+                      <div className="min-w-0 flex-1">
+                        <CreatableCombobox
+                          value={form.action_coa_code ?? ""}
+                          onChange={value => setForm((f: any) => ({ ...f, action_coa_code: value || null }))}
+                          options={coaOptions}
+                          loading={loadingCoaOptions}
+                          placeholder="Pilih akun COA — kode dan nama"
+                          searchPlaceholder="Cari kode atau nama COA…"
+                          emptyText="Akun COA tidak ditemukan."
+                        />
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        onClick={startCreateChildCoa}
+                        disabled={!form.action_coa_code || loadingCoaOptions}
+                        title="Tambah child dari COA terpilih"
+                        aria-label="Tambah child dari COA terpilih"
+                        className="h-9 w-9 shrink-0 border-indigo-400/60 text-indigo-300 hover:bg-indigo-950/50 hover:text-indigo-200"
+                      >
+                        <Plus size={15} />
+                      </Button>
                     </div>
                     <Button
                       type="button"
