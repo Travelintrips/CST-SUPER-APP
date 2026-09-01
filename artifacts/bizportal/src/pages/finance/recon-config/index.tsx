@@ -32,6 +32,7 @@ import {
   SlidersHorizontal, Plus, Pencil, PowerOff, RefreshCw,
   Brain, BookOpen, Tag, Upload, Shield, ArrowLeft,
   BarChart2, TrendingUp, TrendingDown, Clock, AlertCircle, CheckCircle2,
+  Search, Loader2,
 } from "lucide-react";
 
 const API = "/api";
@@ -145,6 +146,19 @@ function flowBadge(flow: string) {
       {FLOWS.find(f => f.value === flow)?.label ?? flow}
     </span>
   );
+}
+
+interface RuleCoaAccount {
+  id: number;
+  companyId?: number | null;
+  code: string;
+  name: string;
+  type: string;
+  normalBalance?: "DEBIT" | "CREDIT" | string | null;
+  parentId?: number | null;
+  isActive?: boolean | null;
+  isPostable?: boolean | null;
+  isHeader?: boolean | null;
 }
 
 // ─── Generic config tab (Business, Routine, Income) ───────────────────────────
@@ -697,8 +711,19 @@ function AiRulesTab() {
   const [rows, setRows]       = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [coaOptions, setCoaOptions] = useState<ComboboxOption[]>([]);
+  const [coaAccounts, setCoaAccounts] = useState<RuleCoaAccount[]>([]);
   const [loadingCoaOptions, setLoadingCoaOptions] = useState(false);
   const [showModal, setShowModal] = useState(false);
+  const [creatingCoa, setCreatingCoa] = useState(false);
+  const [creatingCoaLoading, setCreatingCoaLoading] = useState(false);
+  const [newCoaRole, setNewCoaRole] = useState<"parent" | "child">("child");
+  const [parentSearch, setParentSearch] = useState("");
+  const [newCoaForm, setNewCoaForm] = useState({
+    code: "",
+    name: "",
+    type: "revenue",
+    parentId: null as number | null,
+  });
   const [editRow, setEditRow] = useState<any>(null);
   const [saving, setSaving]   = useState(false);
   const [form, setForm]       = useState<any>({});
@@ -715,17 +740,65 @@ function AiRulesTab() {
       if (!r.ok) throw new Error("Gagal mengambil akun COA");
       const j = await r.json();
       const coas = Array.isArray(j) ? j : (j.data ?? []);
-      setCoaOptions(coas
+      const normalized = coas
         .filter((c: any) => c && (c.code ?? c.coa_code))
         .map((c: any) => ({
-          value: String(c.code ?? c.coa_code),
-          label: `${c.code ?? c.coa_code} — ${c.name ?? c.coa_name ?? "Tanpa nama"}`,
+          id: Number(c.id),
+          companyId: c.companyId ?? c.company_id ?? null,
+          code: String(c.code ?? c.coa_code),
+          name: String(c.name ?? c.coa_name ?? "Tanpa nama"),
+          type: String(c.type ?? "").toLowerCase(),
+          normalBalance: c.normalBalance ?? c.normal_balance ?? null,
+          parentId: c.parentId ?? c.parent_id ?? null,
+          isActive: c.isActive ?? c.is_active ?? true,
+          isPostable: c.isPostable ?? c.is_postable ?? true,
+          isHeader: c.isHeader ?? c.is_header ?? false,
+        }));
+      setCoaAccounts(normalized);
+      setCoaOptions(normalized
+        .filter((c: RuleCoaAccount) => c.isActive !== false && c.isPostable !== false)
+        .map((c: RuleCoaAccount) => ({
+          value: c.code,
+          label: `${c.code} — ${c.name}`,
         })));
     } catch {
-      // The field remains usable as free text if the COA master cannot be loaded.
+      setCoaAccounts([]);
       setCoaOptions([]);
     } finally {
       setLoadingCoaOptions(false);
+    }
+  }, [activeCompanyId]);
+
+  const loadParentAccounts = useCallback(async () => {
+    if (activeCompanyId == null) return;
+    setCreatingCoaLoading(true);
+    try {
+      const params = new URLSearchParams({
+        companyId: String(activeCompanyId),
+        includeHeaders: "true",
+      });
+      const r = await fetch(`${API}/accounting/accounts?${params}`, { credentials: "include" });
+      if (!r.ok) throw new Error("Gagal mengambil daftar parent COA");
+      const accounts = await r.json();
+      setCoaAccounts((current) => {
+        const incoming = (Array.isArray(accounts) ? accounts : []).map((c: any): RuleCoaAccount => ({
+          id: Number(c.id),
+          companyId: c.companyId ?? c.company_id ?? null,
+          code: String(c.code ?? ""),
+          name: String(c.name ?? ""),
+          type: String(c.type ?? "").toLowerCase(),
+          normalBalance: c.normalBalance ?? c.normal_balance ?? null,
+          parentId: c.parentId ?? c.parent_id ?? null,
+          isActive: c.isActive ?? c.is_active ?? true,
+          isPostable: c.isPostable ?? c.is_postable ?? true,
+          isHeader: c.isHeader ?? c.is_header ?? false,
+        })).filter((c) => c.id > 0 && c.code && c.name);
+        const byId = new Map(current.map((account) => [account.id, account]));
+        incoming.forEach((account) => byId.set(account.id, account));
+        return Array.from(byId.values());
+      });
+    } finally {
+      setCreatingCoaLoading(false);
     }
   }, [activeCompanyId]);
 
@@ -748,6 +821,15 @@ function AiRulesTab() {
       conditions: [{ field: "description", operator: "contains", value: "" }], logic: "AND",
       specificity: 1, amount_tolerance: 0, reference_amount: null,
       confidence: 0.8, priority: 50, source: "manual" });
+    setCreatingCoa(false);
+    setNewCoaRole("child");
+    setParentSearch("");
+    setNewCoaForm({
+      code: "",
+      name: "",
+      type: "revenue",
+      parentId: null,
+    });
     setPreview(null);
     setPreviewAmount("");
     setShowModal(true);
@@ -770,6 +852,8 @@ function AiRulesTab() {
       amount_tolerance: row.reference_amount != null && row.amount_tolerance != null
         ? Number(row.amount_tolerance)
         : 0 });
+    setCreatingCoa(false);
+    setParentSearch("");
     setPreview(null);
     setPreviewAmount("");
     setShowModal(true);
@@ -785,6 +869,86 @@ function AiRulesTab() {
     const conditions = (f.conditions ?? []).filter((_: any, i: number) => i !== index);
     return { ...f, conditions, specificity: Math.max(1, conditions.length) };
   });
+
+  const parentAccounts = coaAccounts
+    .filter((account) =>
+      account.isActive !== false
+      && (account.isHeader === true || account.isPostable === false)
+      && account.type === newCoaForm.type,
+    )
+    .filter((account) => {
+      const query = parentSearch.trim().toLowerCase();
+      return !query || `${account.code} ${account.name}`.toLowerCase().includes(query);
+    })
+    .sort((a, b) => a.code.localeCompare(b.code));
+
+  const startCreateCoa = () => {
+    setCreatingCoa(true);
+    setNewCoaRole("child");
+    setParentSearch("");
+    setNewCoaForm((current) => ({
+      ...current,
+      name: current.name || String(form.name ?? "").trim(),
+      parentId: null,
+      type: form.action_flow === "ROUTINE_EXPENSE_ALLOCATION" ? "expense" : "revenue",
+    }));
+    void loadParentAccounts();
+  };
+
+  const createCoa = async () => {
+    if (activeCompanyId == null) {
+      alert("Pilih perusahaan aktif terlebih dahulu.");
+      return;
+    }
+    const code = newCoaForm.code.trim();
+    const name = newCoaForm.name.trim();
+    if (!code || !name) {
+      alert("Kode dan nama COA wajib diisi.");
+      return;
+    }
+    if (newCoaRole === "child" && !newCoaForm.parentId) {
+      alert("Pilih parent untuk COA child.");
+      return;
+    }
+
+    setCreatingCoaLoading(true);
+    try {
+      const normalBalance = ["revenue", "liability", "equity"].includes(newCoaForm.type)
+        ? "CREDIT"
+        : "DEBIT";
+      const r = await fetch(`${API}/accounting/accounts`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          companyId: activeCompanyId,
+          code,
+          name,
+          type: newCoaForm.type,
+          parentId: newCoaRole === "child" ? newCoaForm.parentId : null,
+          isActive: true,
+          accountCategory: newCoaForm.type.toUpperCase(),
+          normalBalance,
+          isHeader: newCoaRole === "parent",
+          isPostable: newCoaRole !== "parent",
+        }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.message ?? body.error ?? "Gagal membuat COA baru.");
+      const created = body as RuleCoaAccount;
+      setForm((current: any) => ({
+        ...current,
+        action_coa_code: created.code || code,
+      }));
+      await loadCoaOptions();
+      setCreatingCoa(false);
+      setNewCoaForm((current) => ({ ...current, code: "", name: "", parentId: null }));
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Gagal membuat COA baru.");
+    } finally {
+      setCreatingCoaLoading(false);
+    }
+  };
 
   const save = async () => {
     setSaving(true);
@@ -985,19 +1149,179 @@ function AiRulesTab() {
               </div>
               <div>
                 <Label className="text-slate-300">Akun COA</Label>
-                <div className="mt-1">
-                  <CreatableCombobox
-                    value={form.action_coa_code ?? ""}
-                    onChange={value => setForm((f: any) => ({ ...f, action_coa_code: value || null }))}
-                    options={coaOptions}
-                    loading={loadingCoaOptions}
-                    placeholder="Pilih akun COA — kode dan nama"
-                    searchPlaceholder="Cari kode atau nama COA…"
-                    emptyText="Akun COA tidak ditemukan."
-                    onAddNew={value => setForm((f: any) => ({ ...f, action_coa_code: value }))}
-                    addNewLabel="Gunakan kode COA"
-                  />
-                </div>
+                {creatingCoa ? (
+                  <div className="mt-1 space-y-3 rounded-md border border-indigo-400/40 bg-indigo-500/10 p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-semibold text-white">Buat COA baru</p>
+                        <p className="text-[11px] text-slate-400">
+                          Akun baru akan langsung ditambahkan ke perusahaan aktif dan dipilih untuk rule ini.
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setCreatingCoa(false)}
+                        className="text-slate-300"
+                      >
+                        Kembali
+                      </Button>
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-slate-300 text-xs">Jenis akun</Label>
+                      <Select
+                        value={newCoaRole}
+                        onValueChange={(value) => {
+                          const role = value as "parent" | "child";
+                          setNewCoaRole(role);
+                          if (role === "parent") {
+                            setParentSearch("");
+                            setNewCoaForm((current) => ({ ...current, parentId: null }));
+                          }
+                        }}
+                      >
+                        <SelectTrigger className="bg-slate-800 border-slate-600 text-white text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-slate-800 border-slate-600 text-white">
+                          <SelectItem value="parent">Parent / akun grup</SelectItem>
+                          <SelectItem value="child">Child / akun detail</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <Label className="text-slate-300 text-xs">Kode COA</Label>
+                        <Input
+                          value={newCoaForm.code}
+                          onChange={(event) => setNewCoaForm((current) => ({ ...current, code: event.target.value }))}
+                          placeholder="Contoh: 4-1050"
+                          className="bg-slate-800 border-slate-600 text-white text-xs"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-slate-300 text-xs">Nama COA</Label>
+                        <Input
+                          value={newCoaForm.name}
+                          onChange={(event) => setNewCoaForm((current) => ({ ...current, name: event.target.value }))}
+                          placeholder="Contoh: Pendapatan Sewa Lapangan"
+                          className="bg-slate-800 border-slate-600 text-white text-xs"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-slate-300 text-xs">Kelompok akun</Label>
+                      <Select
+                        value={newCoaForm.type}
+                        onValueChange={(value) => setNewCoaForm((current) => ({
+                          ...current,
+                          type: value,
+                          parentId: null,
+                        }))}
+                      >
+                        <SelectTrigger className="bg-slate-800 border-slate-600 text-white text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-slate-800 border-slate-600 text-white">
+                          <SelectItem value="asset">Aset</SelectItem>
+                          <SelectItem value="liability">Liabilitas</SelectItem>
+                          <SelectItem value="equity">Ekuitas</SelectItem>
+                          <SelectItem value="revenue">Pendapatan</SelectItem>
+                          <SelectItem value="expense">Beban</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-[11px] text-slate-500">
+                        Saldo normal otomatis: {["revenue", "liability", "equity"].includes(newCoaForm.type) ? "kredit" : "debit"}.
+                      </p>
+                    </div>
+
+                    {newCoaRole === "child" && (
+                      <div className="space-y-1">
+                        <Label className="text-slate-300 text-xs">Parent akun</Label>
+                        <div className="relative">
+                          <Search className="pointer-events-none absolute left-2 top-2 h-3.5 w-3.5 text-slate-500" />
+                          <Input
+                            value={parentSearch}
+                            onChange={(event) => setParentSearch(event.target.value)}
+                            placeholder="Cari parent berdasarkan kode atau nama..."
+                            className="bg-slate-800 border-slate-600 pl-7 text-white text-xs"
+                          />
+                        </div>
+                        <Select
+                          value={newCoaForm.parentId ? String(newCoaForm.parentId) : "__none"}
+                          onValueChange={(value) => setNewCoaForm((current) => ({
+                            ...current,
+                            parentId: value === "__none" ? null : Number(value),
+                          }))}
+                        >
+                          <SelectTrigger className="bg-slate-800 border-slate-600 text-white text-xs">
+                            <SelectValue placeholder="Pilih parent akun..." />
+                          </SelectTrigger>
+                          <SelectContent className="bg-slate-800 border-slate-600 text-white">
+                            <SelectItem value="__none">Pilih parent akun...</SelectItem>
+                            {parentAccounts.map((account) => (
+                              <SelectItem key={account.id} value={String(account.id)}>
+                                {account.code} — {account.name}
+                              </SelectItem>
+                            ))}
+                            {parentAccounts.length === 0 && (
+                              <SelectItem value="__no_parent_results" disabled>
+                                Parent tidak ditemukan
+                              </SelectItem>
+                            )}
+                          </SelectContent>
+                        </Select>
+                        {creatingCoaLoading && (
+                          <p className="flex items-center gap-1 text-[11px] text-slate-400">
+                            <Loader2 className="h-3 w-3 animate-spin" /> Memuat parent...
+                          </p>
+                        )}
+                        {!creatingCoaLoading && parentAccounts.length === 0 && (
+                          <p className="text-[11px] text-amber-400">
+                            Belum ada parent dengan kelompok akun ini. Buat parent terlebih dahulu.
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    <Button
+                      type="button"
+                      onClick={createCoa}
+                      disabled={creatingCoaLoading || (newCoaRole === "child" && parentAccounts.length === 0)}
+                      className="w-full gap-1.5 bg-indigo-600 text-white hover:bg-indigo-700"
+                    >
+                      {creatingCoaLoading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                      Buat &amp; Pilih COA
+                    </Button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="mt-1">
+                      <CreatableCombobox
+                        value={form.action_coa_code ?? ""}
+                        onChange={value => setForm((f: any) => ({ ...f, action_coa_code: value || null }))}
+                        options={coaOptions}
+                        loading={loadingCoaOptions}
+                        placeholder="Pilih akun COA — kode dan nama"
+                        searchPlaceholder="Cari kode atau nama COA…"
+                        emptyText="Akun COA tidak ditemukan."
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={startCreateCoa}
+                      className="mt-1 w-full gap-1.5 text-indigo-300 hover:bg-indigo-950/40 hover:text-indigo-200"
+                    >
+                      <Plus size={13} /> Tambah COA baru sebagai parent atau child
+                    </Button>
+                  </>
+                )}
                 <p className="mt-1 text-[11px] text-slate-500">
                   Nilai yang disimpan tetap kode COA; nama ditampilkan dari master akun.
                 </p>
