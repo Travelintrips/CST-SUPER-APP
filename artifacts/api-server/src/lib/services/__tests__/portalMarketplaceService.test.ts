@@ -255,4 +255,72 @@ describe("submitMarketplaceQuote authenticated ownership boundary", () => {
       "fb9a7a52-1d44-4b52-94e1-331c08647b90",
     );
   });
+
+  it("reuses the same canonical RFQ when the client retries after compatibility failure", async () => {
+    const legacyError = Object.assign(
+      new Error("legacy compatibility unavailable"),
+      {
+        code: "23505",
+        constraint: "portal_product_orders_order_number_unique",
+        detail: "Key (order_number)=(MCT-260901-54321) already exists.",
+      },
+    );
+    const secondTx = makeTx();
+    mockCreateMktRfqEntry.mockResolvedValue({
+      rfqId: 303,
+      rfqNumber: "MKT-RFQ-202609-0303",
+    });
+    mockDb.transaction
+      .mockRejectedValueOnce(legacyError)
+      .mockRejectedValueOnce(legacyError)
+      .mockRejectedValueOnce(legacyError)
+      .mockImplementationOnce(async (callback: (transaction: ReturnType<typeof makeTx>["tx"]) => unknown) => callback(secondTx.tx));
+
+    const { submitMarketplaceQuote } = await import("../portalMarketplaceService.js");
+    const request = {
+      catalogItemId: catalogItem.id,
+      portalCustomerId: individualContext.customer.id,
+      ip: "127.0.0.1",
+      correlationId: "retry-correlation-id",
+      idempotencyKey: "stable-marketplace-request",
+      body: {
+        buyer_name: "Canonical Buyer",
+        email: "forged@example.test",
+        guest_contact: individualContext.customer.phone!,
+        destination: "Jakarta",
+      },
+    };
+
+    const firstResult = await submitMarketplaceQuote(request);
+    const secondResult = await submitMarketplaceQuote(request);
+
+    expect(firstResult).toMatchObject({
+      rfqId: 303,
+      rfqNumber: "MKT-RFQ-202609-0303",
+      id: 303,
+      legacyWritePending: true,
+    });
+    expect(secondResult).toMatchObject({
+      rfqId: 303,
+      rfqNumber: "MKT-RFQ-202609-0303",
+      id: 101,
+      newPipeline: true,
+    });
+    expect(secondResult.orderNumber).toMatch(/^MCT-\d{6}-\d{5}$/);
+    expect(mockCreateMktRfqEntry).toHaveBeenCalledTimes(2);
+    expect(mockCreateMktRfqEntry).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ idempotencyKey: "stable-marketplace-request" }),
+    );
+    expect(mockCreateMktRfqEntry).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ idempotencyKey: "stable-marketplace-request" }),
+    );
+    expect(mockRecordLegacyWriteFailure).toHaveBeenCalledWith(
+      303,
+      expect.stringContaining("legacy compatibility unavailable"),
+      "retry-correlation-id",
+    );
+    expect(secondTx.insertedValues).toHaveLength(2);
+  });
 });

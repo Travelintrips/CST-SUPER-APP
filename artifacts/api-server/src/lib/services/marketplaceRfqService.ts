@@ -445,7 +445,7 @@ export async function createMktRfqEntry(opts: CreateMktRfqOptions): Promise<Crea
     });
 
     // ── Phase 2A.1: mark success (fire-and-forget) ─────────────────────────
-    if (!logId) markDualWriteSuccess(logId, rfqId!, rfqNumber!).catch(() => {});
+    if (logId) markDualWriteSuccess(logId, rfqId!, rfqNumber!).catch(() => {});
 
     // ── Phase 2F: init approval flow jika diperlukan (non-fatal, log error) ─
     if (needsApproval && !reusedExisting) {

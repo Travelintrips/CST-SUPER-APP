@@ -21,8 +21,8 @@ vi.mock("drizzle-orm", () => ({
 
 vi.mock("../dualWriteReliabilityService.js", () => ({
   createDualWriteLog: mockCreateDualWriteLog,
-  markDualWriteSuccess: vi.fn(),
-  markDualWriteFailed: vi.fn(),
+  markDualWriteSuccess: vi.fn().mockResolvedValue(undefined),
+  markDualWriteFailed: vi.fn().mockResolvedValue(undefined),
   linkLegacyOrder: vi.fn(),
 }));
 

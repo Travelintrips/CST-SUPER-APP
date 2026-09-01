@@ -358,10 +358,15 @@ async function proveNotifications() {
 }
 
 async function proveVendorDiscovery() {
-  const adminEmail = [
+  const configuredAdminEmail = [
     ...(process.env.ADMIN_EMAIL ?? "").split(","),
     ...(process.env.ADMIN_EMAILS ?? "").split(","),
-  ].map((value) => value.trim()).filter(Boolean)[0] ?? "audit-admin@example.invalid";
+  ].map((value) => value.trim()).filter(Boolean)[0];
+  const devUsers = await http("/api/dev-users", {}, [200]);
+  const seededAdminEmail = (devUsers.body?.users ?? [])
+    .find((user) => ["admin", "super_admin", "logistics", "operations"].includes(user?.role) && typeof user?.email === "string")
+    ?.email;
+  const adminEmail = configuredAdminEmail ?? seededAdminEmail ?? "audit-admin@example.invalid";
   const internal = await http("/api/dev-login", {
     method: "POST",
     body: JSON.stringify({ email: adminEmail }),
