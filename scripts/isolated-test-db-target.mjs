@@ -9,6 +9,7 @@ const PROD_PROJECT_REF = "nzdweipzckfszczzqtuw";
 const DEFAULT_DEV_PROJECT_REF = "xssrfshdrtdfupgqwfdw";
 
 function extractProjectRef(url) {
+  if (!url) return null;
   return (
     url.match(/postgres(?:ql)?:\/\/[^.]+\.([a-z0-9]+):/i)?.[1] ??
     url.match(/db\.([a-z0-9]+)\.supabase\.co/i)?.[1] ??
@@ -16,13 +17,18 @@ function extractProjectRef(url) {
   );
 }
 
-export function resolveIsolatedTestDatabaseUrl(env = process.env) {
+export function resolveIsolatedTestDatabaseUrl(env = process.env, options = {}) {
+  const requireExplicitTest = options.requireExplicitTest === true;
   const source = env.TEST_DATABASE_URL ? "TEST_DATABASE_URL" : "STAGING_DATABASE_URL";
-  const url = env.TEST_DATABASE_URL ?? env.STAGING_DATABASE_URL;
+  const url = requireExplicitTest
+    ? env.TEST_DATABASE_URL
+    : env.TEST_DATABASE_URL ?? env.STAGING_DATABASE_URL;
   if (!url) {
     throw new Error(
-      "[test-db] BLOCKED: set TEST_DATABASE_URL or STAGING_DATABASE_URL; " +
-      "live regression scripts never fall back to DEV, PROD, or Helium/Replit.",
+      requireExplicitTest
+        ? "[test-db] BLOCKED: this runner requires TEST_DATABASE_URL; it never falls back to STAGING, DEV, PROD, or Helium/Replit."
+        : "[test-db] BLOCKED: set TEST_DATABASE_URL or STAGING_DATABASE_URL; " +
+          "live regression scripts never fall back to DEV, PROD, or Helium/Replit.",
     );
   }
 
@@ -56,6 +62,26 @@ export function resolveIsolatedTestDatabaseUrl(env = process.env) {
   ]);
   if (projectRef && reservedRefs.has(projectRef)) {
     throw new Error("[test-db] BLOCKED: target points to a reserved DEV/PROD Supabase project.");
+  }
+
+  if (requireExplicitTest) {
+    if (!projectRef) {
+      throw new Error(
+        "[test-db] BLOCKED: TEST_DATABASE_URL must identify its Supabase project in the URL.",
+      );
+    }
+
+    const expectedProjectRef =
+      options.expectedProjectRef ??
+      env.TEST_DATABASE_PROJECT_REF ??
+      env.TEST_SUPABASE_PROJECT_REF ??
+      extractProjectRef(env.TEST_SUPABASE_URL);
+
+    if (expectedProjectRef && projectRef !== expectedProjectRef) {
+      throw new Error(
+        "[test-db] BLOCKED: TEST_DATABASE_URL does not belong to the configured TEST Supabase project.",
+      );
+    }
   }
 
   return url;

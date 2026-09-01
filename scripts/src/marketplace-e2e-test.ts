@@ -5,15 +5,43 @@
  * Run: pnpm --filter @workspace/scripts exec tsx ./src/marketplace-e2e-test.ts
  */
 import pg from "pg";
+import { resolveIsolatedTestDatabaseUrl } from "../isolated-test-db-target.mjs";
 
 const { Pool } = pg;
 
-const connStr =
-  process.env.SUPABASE_DATABASE_URL_DEV ||
-  process.env.SUPABASE_PG_URL ||
-  process.env.DATABASE_URL;
+function assertRejected(label: string, env: NodeJS.ProcessEnv): void {
+  try {
+    resolveIsolatedTestDatabaseUrl(env, { requireExplicitTest: true });
+  } catch {
+    console.log(`${label}=PASS`);
+    return;
+  }
+  throw new Error(`${label}=FAIL`);
+}
 
-if (!connStr) throw new Error("No DB connection string found");
+function probeUrl(projectRef: string): string {
+  return `postgresql://postgres.${projectRef}:guard-probe@pooler.supabase.com:5432/postgres`;
+}
+
+function verifyTargetGuard(): string {
+  const testUrl = resolveIsolatedTestDatabaseUrl(process.env, {
+    requireExplicitTest: true,
+  });
+
+  assertRejected(
+    "DEV_TARGET_REJECTED",
+    { ...process.env, TEST_DATABASE_URL: probeUrl("xssrfshdrtdfupgqwfdw") },
+  );
+  assertRejected(
+    "PROD_TARGET_REJECTED",
+    { ...process.env, TEST_DATABASE_URL: probeUrl("nzdweipzckfszczzqtuw") },
+  );
+  console.log("TEST_TARGET_ACCEPTED=PASS");
+  console.log("MARKETPLACE_E2E_TARGET_GUARD=PASS");
+  return testUrl;
+}
+
+const connStr = verifyTargetGuard();
 
 const pool = new Pool({ connectionString: connStr, max: 3 });
 const API_BASE = (process.env.API_BASE_URL ?? "http://127.0.0.1:18444").replace(/\/$/, "");
