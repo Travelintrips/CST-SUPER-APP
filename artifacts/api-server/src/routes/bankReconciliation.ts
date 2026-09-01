@@ -3875,6 +3875,35 @@ router.get("/mutations", async (req, res) => {
       bm.mutation_key, bm.normalized_description,
       bm.provider_name, bm.provider_order_id,
       bm.status::text, bm.journal_entry_id, bm.company_id,
+      (
+        SELECT COALESCE(jsonb_agg(
+          jsonb_build_object(
+            'code', coa.code,
+            'name', coa.name,
+            'debit', ael.debit,
+            'credit', ael.credit
+          )
+          ORDER BY ael.id
+        ), '[]'::jsonb)
+        FROM accounting_entry_lines ael
+        JOIN chart_of_accounts coa ON coa.id = ael.account_id
+        LEFT JOIN company_bank_accounts cba ON cba.id = bm.bank_account_id
+        WHERE ael.entry_id = bm.journal_entry_id
+          AND (
+            (
+              cba.coa_id IS NOT NULL
+              AND ael.account_id <> cba.coa_id
+            )
+            OR (
+              cba.coa_id IS NULL
+              AND (
+                (UPPER(COALESCE(bm.direction, 'IN')) = 'IN' AND COALESCE(ael.credit, 0) > 0)
+                OR
+                (UPPER(COALESCE(bm.direction, 'IN')) = 'OUT' AND COALESCE(ael.debit, 0) > 0)
+              )
+            )
+          )
+      ) AS posted_coa_accounts,
       bm.uploaded_proof_url, bm.source,
       COALESCE(
         NULLIF(bm.review_reason, ''),
@@ -4365,6 +4394,7 @@ router.get("/mutations", async (req, res) => {
       END AS status,
       bmi.journal_entry_id,
       NULL::integer AS company_id,
+      NULL::jsonb AS posted_coa_accounts,
       NULL::text AS uploaded_proof_url,
       'bank_import' AS source,
       NULL::text AS review_reason,

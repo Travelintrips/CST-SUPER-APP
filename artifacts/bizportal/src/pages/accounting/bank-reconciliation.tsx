@@ -579,6 +579,12 @@ interface BankMutation {
   linked_transaction_type?: string | null;
   linked_transaction_id?: number | null;
   journal_entry_id?: number | null;
+  posted_coa_accounts?: Array<{
+    code?: string | null;
+    name?: string | null;
+    debit?: number | string | null;
+    credit?: number | string | null;
+  }> | null;
   posted_at?: string | null;
   posted_by?: string | null;
   review_reason?: string | null;
@@ -3833,6 +3839,25 @@ function MutationCard({
                   {m.description}
                   {m.provider_order_id && <span className="ml-1">· Ref: {m.provider_order_id}</span>}
                 </div>
+                {m.status === "posted" && (m.posted_coa_accounts?.length ?? 0) > 0 && (
+                  <div
+                    className="mt-2 rounded-md border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-xs dark:border-emerald-800 dark:bg-emerald-950/30"
+                    onClick={e => e.stopPropagation()}
+                  >
+                    <p className="font-semibold text-emerald-800 dark:text-emerald-300">
+                      Diposting ke akun COA
+                    </p>
+                    <div className="mt-1 space-y-0.5 text-emerald-700 dark:text-emerald-400">
+                      {m.posted_coa_accounts!.map((account, index) => (
+                        <p key={`${account.code ?? "coa"}-${index}`} className="break-words">
+                          <span className="font-semibold">{account.code || "—"}</span>
+                          {" — "}
+                          {account.name || "Nama akun belum tersedia"}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
               <div className="text-right shrink-0">
                 <span className={`text-[10px] px-1.5 py-0.5 rounded-full border font-medium ${statusColor(m)}`}>
