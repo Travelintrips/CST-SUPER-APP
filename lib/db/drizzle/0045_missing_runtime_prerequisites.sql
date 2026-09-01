@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS ppjk_orders (
   id SERIAL PRIMARY KEY,
   order_number TEXT NOT NULL UNIQUE,
   company_id INTEGER,
-  portal_order_id INTEGER REFERENCES logistic_orders(id) ON DELETE SET NULL,
+  portal_order_id INTEGER,
   customer_name TEXT NOT NULL,
   customer_email TEXT,
   customer_phone TEXT,
@@ -78,6 +78,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS ppjk_portal_order_id_uniq
 ALTER TABLE ppjk_orders
   DROP CONSTRAINT IF EXISTS ppjk_orders_company_id_fkey;
 --> statement-breakpoint
+ALTER TABLE ppjk_orders
+  DROP CONSTRAINT IF EXISTS ppjk_orders_portal_order_id_fkey;
+--> statement-breakpoint
 
 CREATE TABLE IF NOT EXISTS ppjk_audit_logs (
   id SERIAL PRIMARY KEY,
@@ -136,6 +139,18 @@ CREATE TABLE IF NOT EXISTS ppjk_document_checklist (
 CREATE INDEX IF NOT EXISTS ppjk_dc_order_idx ON ppjk_document_checklist (ppjk_order_id);
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS ppjk_dc_type_idx ON ppjk_document_checklist (ppjk_order_id, doc_type);
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS ppjk_dc_order_type_uniq
+  ON ppjk_document_checklist (ppjk_order_id, doc_type);
+--> statement-breakpoint
+ALTER TABLE ppjk_orders
+  ADD CONSTRAINT ppjk_status_check CHECK (status IN (
+    'draft','waiting_documents','document_review','document_completed',
+    'quotation','waiting_customer','customer_approved',
+    'preparing_pib','preparing_peb','submitted_ceisa','inspection',
+    'red_lane','yellow_lane','green_lane','hold',
+    'sppb','released','completed','cancelled'
+  )) NOT VALID;
 --> statement-breakpoint
 
 CREATE TABLE IF NOT EXISTS recon_rules (
