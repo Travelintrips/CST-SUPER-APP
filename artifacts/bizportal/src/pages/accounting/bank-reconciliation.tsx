@@ -4446,15 +4446,55 @@ function MutationCard({
 // Proof Section — used inside MutationDetailPanel
 // ─────────────────────────────────────────────────────────────────────────────
 
+type ProofOcrData = {
+  document_type?: string | null;
+  vendor_name?: string | null;
+  invoice_number?: string | null;
+  invoice_date?: string | null;
+  subtotal?: number | null;
+  tax_amount?: number | null;
+  tax_type?: string | null;
+  total_amount?: number | null;
+  payment_reference?: string | null;
+  raw_confidence?: number | null;
+  flags?: string[];
+};
+
 function ProofSection({ mutationId, initialUrl }: { mutationId: number; initialUrl: string | null }) {
   const qc             = useQueryClient();
   const fileRef        = useRef<HTMLInputElement>(null);
   const [url, setUrl]  = useState<string | null>(initialUrl);
+  const [ocrStatus, setOcrStatus] = useState<"not_started" | "processing" | "completed" | "failed">("not_started");
+  const [ocrData, setOcrData] = useState<ProofOcrData | null>(null);
+  const [ocrError, setOcrError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const { toast }      = useToast();
 
   const isImage = url ? /\.(jpe?g|png|webp|gif)(\?|$)/i.test(url) : false;
   const isPdf   = url ? /\.pdf(\?|$)/i.test(url) : false;
+
+  useEffect(() => {
+    if (!initialUrl) {
+      setOcrStatus("not_started");
+      setOcrData(null);
+      setOcrError(null);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/bank-reconciliation/${mutationId}/proof-ocr`, { credentials: "include" })
+      .then(async (response) => {
+        if (!response.ok) return null;
+        return response.json();
+      })
+      .then((body) => {
+        if (cancelled || !body) return;
+        setOcrStatus(body.status ?? "not_started");
+        setOcrData(body.data ?? null);
+        setOcrError(body.error ?? null);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [initialUrl, mutationId]);
 
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -4469,7 +4509,13 @@ function ProofSection({ mutationId, initialUrl }: { mutationId: number; initialU
       const body = await r.json();
       if (!r.ok) throw new Error(body.error ?? "Gagal upload");
       setUrl(body.url);
-      toast({ title: "Bukti berhasil diupload" });
+      setOcrStatus(body.ocr?.status ?? "not_started");
+      setOcrData(body.ocr?.data ?? null);
+      setOcrError(body.ocr?.error ?? null);
+      toast({
+        title: body.ocr?.status === "completed" ? "Bukti diupload dan OCR selesai" : "Bukti berhasil diupload",
+        description: body.ocr?.status === "failed" ? "OCR gagal diproses, tetapi file tetap tersimpan." : undefined,
+      });
       qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
     } catch (err: any) {
       toast({ title: "Upload gagal", description: err.message, variant: "destructive" });
@@ -4488,6 +4534,9 @@ function ProofSection({ mutationId, initialUrl }: { mutationId: number; initialU
       });
       if (!r.ok) throw new Error("Gagal hapus");
       setUrl(null);
+      setOcrStatus("not_started");
+      setOcrData(null);
+      setOcrError(null);
       toast({ title: "Bukti dihapus" });
       qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
     } catch (err: any) {
@@ -4559,6 +4608,41 @@ function ProofSection({ mutationId, initialUrl }: { mutationId: number; initialU
               <span className="text-xs break-all">{url}</span>
               <ExternalLink className="w-3 h-3 shrink-0 ml-auto" />
             </a>
+          )}
+          {ocrStatus !== "not_started" && (
+            <div className="border-t px-3 py-2.5 bg-background/60">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 text-xs font-semibold">
+                  <FileText className="w-3.5 h-3.5 text-indigo-500" />
+                  OCR OpenAI
+                </div>
+                <Badge
+                  variant="outline"
+                  className={
+                    ocrStatus === "completed"
+                      ? "text-green-600 border-green-300"
+                      : ocrStatus === "failed"
+                        ? "text-red-600 border-red-300"
+                        : "text-amber-600 border-amber-300"
+                  }
+                >
+                  {ocrStatus === "completed" ? "Selesai" : ocrStatus === "failed" ? "Gagal" : "Memproses"}
+                </Badge>
+              </div>
+              {ocrStatus === "completed" && ocrData && (
+                <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                  <span className="text-muted-foreground">Vendor</span>
+                  <span className="truncate">{ocrData.vendor_name ?? "—"}</span>
+                  <span className="text-muted-foreground">No. invoice</span>
+                  <span className="truncate">{ocrData.invoice_number ?? "—"}</span>
+                  <span className="text-muted-foreground">Pajak</span>
+                  <span>{ocrData.tax_amount != null ? `${ocrData.tax_type ?? "PPN"} ${ocrData.tax_amount.toLocaleString("id-ID")}` : "—"}</span>
+                  <span className="text-muted-foreground">Total</span>
+                  <span>{ocrData.total_amount != null ? ocrData.total_amount.toLocaleString("id-ID") : "—"}</span>
+                </div>
+              )}
+              {ocrError && <p className="mt-1 text-[11px] text-red-600">{ocrError}</p>}
+            </div>
           )}
         </div>
       ) : (

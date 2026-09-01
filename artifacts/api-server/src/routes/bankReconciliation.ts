@@ -64,6 +64,7 @@ import { canonicalMutationKey } from "../lib/reconciliation/canonicalMutationKey
 import { voidApprovedJournal } from "../lib/accounting/approveAndCreateJournal.js";
 import { trackMutationApproval, runUsageTrackingMigration } from "../lib/usageTrackingService.js";
 import { ObjectStorageService } from "../lib/objectStorage.js";
+import { extractBankProofOcr } from "../lib/bankProofOcr.js";
 import {
   detectFormat,
   parseMT940,
@@ -453,6 +454,10 @@ export async function runBankReconciliationCoreMigration() {
       matched_payment_id INTEGER,
       matched_order_id   INTEGER,
       uploaded_proof_url TEXT,
+      proof_ocr_status TEXT NOT NULL DEFAULT 'not_started',
+      proof_ocr_result JSONB,
+      proof_ocr_error TEXT,
+      proof_ocr_completed_at TIMESTAMPTZ,
       journal_entry_id   INTEGER,
       company_id         INTEGER,
       import_batch_id    INTEGER,
@@ -750,6 +755,10 @@ export async function runBankReconciliationCoreMigration() {
   await db.execute(sql.raw(`ALTER TABLE bank_mutations ADD COLUMN IF NOT EXISTS posted_at TIMESTAMPTZ`)).catch(() => {});
   // suspected_duplicate: flagged by canonical backfill when key collision exists
   await db.execute(sql.raw(`ALTER TABLE bank_mutations ADD COLUMN IF NOT EXISTS suspected_duplicate BOOLEAN NOT NULL DEFAULT FALSE`)).catch(() => {});
+  await db.execute(sql.raw(`ALTER TABLE bank_mutations ADD COLUMN IF NOT EXISTS proof_ocr_status TEXT NOT NULL DEFAULT 'not_started'`)).catch(() => {});
+  await db.execute(sql.raw(`ALTER TABLE bank_mutations ADD COLUMN IF NOT EXISTS proof_ocr_result JSONB`)).catch(() => {});
+  await db.execute(sql.raw(`ALTER TABLE bank_mutations ADD COLUMN IF NOT EXISTS proof_ocr_error TEXT`)).catch(() => {});
+  await db.execute(sql.raw(`ALTER TABLE bank_mutations ADD COLUMN IF NOT EXISTS proof_ocr_completed_at TIMESTAMPTZ`)).catch(() => {});
 
   // ── Journal Reuse Engine: voided/reversed flags on accounting_entries ────────
   // resolveSportPaymentEntry (and all other source adapters in journalReuseEngine.ts)
@@ -5338,12 +5347,49 @@ router.post("/:mutationId/upload-proof", upload.single("file"), async (req, res)
     const url = await oss.uploadPublic(storagePath, req.file.buffer, req.file.mimetype);
 
     await db.execute(sql`UPDATE bank_mutations SET uploaded_proof_url = ${url} WHERE id = ${mutId}`);
+    await db.execute(sql`
+      UPDATE bank_mutations
+      SET proof_ocr_status = 'processing',
+          proof_ocr_result = NULL,
+          proof_ocr_error = NULL,
+          proof_ocr_completed_at = NULL,
+          updated_at = NOW()
+      WHERE id = ${mutId}
+    `);
+
+    let ocr: { status: "completed" | "failed"; provider: "openai"; model?: string; data?: unknown; error?: string };
+    try {
+      const extracted = await extractBankProofOcr(req.file.buffer, req.file.mimetype);
+      await db.execute(sql`
+        UPDATE bank_mutations
+        SET proof_ocr_status = 'completed',
+            proof_ocr_result = ${JSON.stringify(extracted.data)}::jsonb,
+            proof_ocr_error = NULL,
+            proof_ocr_completed_at = NOW(),
+            updated_at = NOW()
+        WHERE id = ${mutId}
+      `);
+      ocr = { status: "completed", provider: extracted.provider, model: extracted.model, data: extracted.data };
+    } catch (ocrError: any) {
+      const message = ocrError instanceof Error ? ocrError.message : String(ocrError);
+      await db.execute(sql`
+        UPDATE bank_mutations
+        SET proof_ocr_status = 'failed',
+            proof_ocr_result = NULL,
+            proof_ocr_error = ${message.slice(0, 500)},
+            proof_ocr_completed_at = NOW(),
+            updated_at = NOW()
+        WHERE id = ${mutId}
+      `);
+      logger.warn({ mutId, error: message }, "[BankRecon] OCR bukti gagal; file tetap tersimpan");
+      ocr = { status: "failed", provider: "openai", error: "OCR gagal diproses; file tetap tersimpan." };
+    }
 
     const actor = (req as any).user?.email ?? "admin";
     audit(req, { action: "upload_proof", module: "accounting", resourceId: `bank-mutation-${mutId}` });
-    logger.info({ mutId, url }, "[BankRecon] Bukti transfer diupload");
+    logger.info({ mutId, url, ocrStatus: ocr.status }, "[BankRecon] Bukti transfer diupload");
 
-    return res.json({ ok: true, url });
+    return res.json({ ok: true, url, ocr });
   } catch (err) {
     logger.error({ err }, "[BankRecon] Gagal upload bukti transfer");
     return res.status(500).json({ error: "Gagal upload file. Coba lagi." });
@@ -5357,9 +5403,44 @@ router.delete("/:mutationId/upload-proof", async (req, res) => {
   const mutId = parseInt(req.params.mutationId);
   if (isNaN(mutId)) return res.status(400).json({ error: "ID tidak valid" });
 
-  await db.execute(sql`UPDATE bank_mutations SET uploaded_proof_url = NULL WHERE id = ${mutId}`);
+  await db.execute(sql`
+    UPDATE bank_mutations
+    SET uploaded_proof_url = NULL,
+        proof_ocr_status = 'not_started',
+        proof_ocr_result = NULL,
+        proof_ocr_error = NULL,
+        proof_ocr_completed_at = NULL,
+        updated_at = NOW()
+    WHERE id = ${mutId}
+  `);
   audit(req, { action: "remove_proof", module: "accounting", resourceId: `bank-mutation-${mutId}` });
   return res.json({ ok: true });
+});
+
+// ─── GET /api/bank-reconciliation/:mutationId/proof-ocr ──────────────────────
+// Read the persisted OCR result without downloading the private upload again.
+router.get("/:mutationId/proof-ocr", async (req, res) => {
+  await runBankReconciliationCoreMigration();
+  const mutId = parseInt(String(req.params.mutationId ?? ""), 10);
+  if (isNaN(mutId)) return res.status(400).json({ error: "ID tidak valid" });
+
+  const result = await db.execute(sql`
+    SELECT uploaded_proof_url, proof_ocr_status, proof_ocr_result,
+           proof_ocr_error, proof_ocr_completed_at
+    FROM bank_mutations
+    WHERE id = ${mutId}
+    LIMIT 1
+  `);
+  const row = result.rows[0] as Record<string, unknown> | undefined;
+  if (!row) return res.status(404).json({ error: "Mutasi tidak ditemukan" });
+  return res.json({
+    ok: true,
+    hasProof: Boolean(row.uploaded_proof_url),
+    status: String(row.proof_ocr_status ?? "not_started"),
+    data: row.proof_ocr_result ?? null,
+    error: row.proof_ocr_error ? "OCR gagal diproses; file tetap tersimpan." : null,
+    completedAt: row.proof_ocr_completed_at ?? null,
+  });
 });
 
 // ─── POST /api/bank-reconciliation/run-matching ───────────────────────────────
