@@ -15,7 +15,7 @@ import {
   getPortalCustomerContext,
   PortalCustomerContextError,
 } from "../lib/services/portalCustomerContextService.js";
-import { getEligibleTruckingVendorIds } from "../lib/truckingVendorEligibility.js";
+import { validateTruckingVendorIds } from "../lib/truckingVendorEligibility.js";
 
 const router = Router();
 
@@ -213,13 +213,18 @@ router.post("/", optionalCustomerPortalAuth, async (req: Request, res: Response)
     ...candidateVendorIds,
     ...(b.selectedVendorId == null ? [] : [b.selectedVendorId]),
   ];
-  const eligibleVendorIds = await getEligibleTruckingVendorIds(submittedVendorIds);
-  const invalidCandidateVendorIds = submittedVendorIds.filter((id) => !eligibleVendorIds.has(id));
-  if (invalidCandidateVendorIds.length > 0) {
-    res.status(422).json({
-      message: "Daftar vendor trucking berisi vendor yang tidak eligible.",
-      invalidVendorIds: [...new Set(invalidCandidateVendorIds)],
-    });
+  try {
+    const validation = await validateTruckingVendorIds(submittedVendorIds);
+    if (validation.invalidVendorIds.length > 0) {
+      res.status(422).json({
+        message: "Daftar vendor trucking berisi vendor yang tidak eligible.",
+        invalidVendorIds: validation.invalidVendorIds,
+      });
+      return;
+    }
+  } catch (error) {
+    logger.error({ err: error }, "[truckingBookings] vendor eligibility resolver failed");
+    res.status(503).json({ message: "Eligibility vendor trucking tidak tersedia." });
     return;
   }
   let context: Awaited<ReturnType<typeof getPortalCustomerContext>> | null = null;

@@ -76,3 +76,22 @@ export async function getEligibleTruckingVendorIds(
   );
   return new Set(eligible.map((supplier) => Number(supplier.id)));
 }
+
+export async function validateTruckingVendorIds(
+  vendorIds: unknown[],
+): Promise<{
+  requestedVendorIds: number[];
+  eligibleVendorIds: Set<number>;
+  invalidVendorIds: number[];
+}> {
+  const requestedVendorIds = vendorIds.map((vendorId) => Number(vendorId));
+  const eligibleVendorIds = await getEligibleTruckingVendorIds(requestedVendorIds);
+  const invalidVendorIds = [...new Set(
+    requestedVendorIds.filter((vendorId) =>
+      !Number.isSafeInteger(vendorId) ||
+      vendorId <= 0 ||
+      !eligibleVendorIds.has(vendorId),
+    ),
+  )];
+  return { requestedVendorIds, eligibleVendorIds, invalidVendorIds };
+}

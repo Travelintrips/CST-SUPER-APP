@@ -38,6 +38,7 @@ import {
   capabilityForServiceRequest,
   getVendorCapabilityStates,
 } from "../lib/vendorCapabilityService.js";
+import { validateTruckingVendorIds } from "../lib/truckingVendorEligibility.js";
 
 function getConfirmFormUrl(token: string): string {
   const domain = getPreferredDomain();
@@ -314,6 +315,13 @@ function getChooseOptionUrl(token: string): string {
 // [TRUCKING-FIX] Detect if order is trucking-type (has truck_type or vehicleType set)
 function isTruckingOrder(order: { vehicleType?: string | null; truckType?: string | null }): boolean {
   return !!(order.vehicleType || order.truckType);
+}
+
+function isTruckingOrderWithItems(
+  order: { vehicleType?: string | null; truckType?: string | null },
+  orderItems: Array<{ calculatorType?: string | null }>,
+): boolean {
+  return isTruckingOrder(order) || orderItems.some((item) => item.calculatorType === "trucking");
 }
 
 // [TRUCKING-FIX] Format ISO date "2026-05-14" → "14 Mei 2026"
