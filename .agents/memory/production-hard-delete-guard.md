@@ -8,3 +8,9 @@ Hard deletion of posted bank-reconciliation data must cover both the accounting 
 **Why:** The posted-journal workflow is intentionally reversal-first, and the fleet mirror has an independent immutable guard. Deleting only the primary journal guard either fails or leaves derived ledger rows behind; relying only on `MATCH_APPROVED_AUTO_POSTED` misses older auto-post journals whose source mutation or audit history is gone.
 
 **How to apply:** Re-identify exact targets at execution time from source, line-description and audit evidence, fail closed on count or reference changes, remove derived mirror rows and source rows atomically, and verify every targeted surface plus trigger state after commit.
+
+During a production purge, pause both the active DB sheet configuration and the legacy environment-based sheet fallback first; marking every DB config inactive alone can cause the legacy worker to reimport the same sheet.
+
+**Why:** The nightly sync treats “no active DB config” as permission to use `GOOGLE_SHEET_ID_BANK_MUTATIONS`, so a successful delete can be undone minutes later.
+
+**How to apply:** Keep the source sheet untouched, use a reversible pause/circuit-breaker state for the configured sheet, delete only after the sync cycle stops, then verify zero rows over a stability window.
