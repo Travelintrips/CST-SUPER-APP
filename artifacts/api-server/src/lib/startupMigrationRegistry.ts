@@ -80,6 +80,7 @@ const REGISTRY_ROWS: readonly RegistryRow[] = [
   ["sport_center_shadow_observer", "Sport Center shadow observer migration", "schema"],
   ["sport_center_canonical_finance_config", "Sport Center canonical finance config refresh", "repair"],
   ["sport_center_payment_mirror_refresh", "Sport Center payment mirror trigger refresh", "repair"],
+  ["sport_center_legacy_payment_recovery_owner", "Sport Center legacy payment recovery owner", "repair"],
   ["sport_center_account_correction", "Sport Center account correction", "repair"],
   ["sport_center_company_invoice", "Sport Center company invoice migration", "schema"],
   ["sport_expenses", "Sport Expenses migration", "schema"],
@@ -145,7 +146,7 @@ export const STARTUP_MIGRATION_REGISTRY: readonly StartupStageDefinition[] = REG
        : name === "admin_notifications"
         ? 2
         : name === "sport_center_canonical_finance_config"
-          ? 7
+          ? 8
         : name === "customer_portal_payment_boundary"
          ? 3
         : name === "customer_portal_finance_processing"
