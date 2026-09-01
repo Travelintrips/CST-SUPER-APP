@@ -269,6 +269,9 @@ export async function processCentralFinance(options: { client?: pg.PoolClient; f
   retried: number;
   manualReview: number;
 }> {
+  if (!isCentralFinanceMode() || process.env.NODE_ENV === "production") {
+    return { claimed: 0, posted: 0, retried: 0, manualReview: 0 };
+  }
   const db = options.client ?? getPool();
   if (!db || !isCentralFinancePostingEnabled()) {
     return { claimed: 0, posted: 0, retried: 0, manualReview: 0 };

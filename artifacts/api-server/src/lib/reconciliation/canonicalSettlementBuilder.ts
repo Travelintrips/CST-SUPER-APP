@@ -410,7 +410,7 @@ async function lockPaymentJournals(
       j.id, j.payment_id, j.status, j.journal_type, j.is_reversal,
       j.gross_amount, j.source_event_id
     FROM sport_center.accounting_journals j
-    WHERE j.payment_id IN (${sql.join(paymentIds.map((id) => sql`${id}`), sql`, `)})
+      WHERE j.payment_id::text IN (${sql.join(paymentIds.map((id) => sql`${id}::text`), sql`, `)})
       AND j.journal_type = 'payment_confirmed'
       AND j.is_reversal = FALSE
     ORDER BY j.id
@@ -513,7 +513,7 @@ async function assertBatchResult(
   const itemResult = await client.execute(sql`
     SELECT id, payment_id, payment_journal_id, gross_amount, item_status
     FROM sport_center.payment_settlement_items
-    WHERE settlement_id = ${batchId}
+      WHERE settlement_id = ${batchId}::text
       AND item_status = 'active'
     ORDER BY payment_id
     FOR UPDATE

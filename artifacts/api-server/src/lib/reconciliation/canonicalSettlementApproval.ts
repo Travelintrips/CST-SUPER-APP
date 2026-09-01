@@ -520,7 +520,7 @@ export async function approveCanonicalSettlementLink(
              company_id, bank_account_id, provider_code, provider_name,
              settlement_date
       FROM sport_center.payment_settlement_batches
-      WHERE id = ${settlementId}
+      WHERE id::text = ${settlementId}::text
       FOR UPDATE
     `));
     if (!settlementRows.length) {
@@ -696,7 +696,7 @@ export async function approveCanonicalSettlementLink(
              )::date::text AS payment_date
       FROM sport_center.payment_settlement_items i
       JOIN sport_center.sport_payments p ON p.id = i.payment_id
-      WHERE i.settlement_id = ${settlementId}
+      WHERE i.settlement_id::text = ${settlementId}::text
         AND i.item_status = 'active'
       ORDER BY p.id
       FOR UPDATE OF i, p
@@ -816,7 +816,7 @@ export async function approveCanonicalSettlementLink(
         ON psb.id = psi.settlement_id
       JOIN public.sport_payments sp
         ON sp.payment_number = 'SCPAY-SC-' || psi.payment_id::text
-      WHERE psi.settlement_id = ${settlementId}
+        WHERE psi.settlement_id::text = ${settlementId}::text
         AND psi.item_status = 'active'
         AND psb.status IN ('posted', 'reconciled')
       FOR UPDATE OF sp
@@ -865,7 +865,7 @@ export async function approveCanonicalSettlementLink(
           canonical_bank_mutation_id = ${mutationId},
           reconciled_at = NOW(),
           reconciled_by = '${escapeSql(actor)}'
-      WHERE id = ${settlementId}
+      WHERE id::text = ${settlementId}::text
         AND LOWER(status) = 'posted'
         AND (bank_mutation_id IS NULL OR bank_mutation_id = ${mutationId})
         AND (canonical_bank_mutation_id IS NULL OR canonical_bank_mutation_id = ${mutationId})
@@ -1009,7 +1009,7 @@ export async function reopenCanonicalSettlementLink(
       SELECT id, status, bank_mutation_id, canonical_bank_mutation_id,
              settlement_journal_id
       FROM sport_center.payment_settlement_batches
-      WHERE id = ${settlementId}
+      WHERE id::text = ${settlementId}::text
       FOR UPDATE
     `));
     if (!settlementRows.length) {

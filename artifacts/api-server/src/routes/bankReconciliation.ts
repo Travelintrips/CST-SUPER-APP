@@ -4316,7 +4316,7 @@ router.get("/mutations", async (req, res) => {
              FROM sport_center.payment_settlement_batches psb
              JOIN sport_center.accounting_journals aj
                ON aj.id = psb.settlement_journal_id
-              AND aj.settlement_batch_id = psb.id
+              AND aj.settlement_batch_id::text = psb.id::text
              WHERE bm.direction::text = 'IN'
                AND bm.status::text IN ('unmatched', 'matched', 'auto_matched')
                AND bm.journal_entry_id IS NULL
