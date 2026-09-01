@@ -488,7 +488,18 @@ reconClassificationRouter.get("/ai-rules", async (req, res) => {
     if (companyId != null) where += ` AND (r.company_id = ${companyId} OR r.company_id IS NULL)`;
 
     const rows = await db.execute(sql.raw(`
-      SELECT r.*, c.name AS config_name, c.category AS config_category
+      SELECT
+        r.*,
+        c.name AS config_name,
+        c.category AS config_category,
+        (
+          SELECT coa.name
+          FROM chart_of_accounts coa
+          WHERE coa.code = r.action_coa_code
+            AND (coa.company_id = r.company_id OR coa.company_id IS NULL)
+          ORDER BY (coa.company_id IS NULL) ASC, coa.id DESC
+          LIMIT 1
+        ) AS action_coa_name
       FROM recon_ai_classification_rules r
       LEFT JOIN recon_classification_configs c ON c.id = r.config_id
       ${where}

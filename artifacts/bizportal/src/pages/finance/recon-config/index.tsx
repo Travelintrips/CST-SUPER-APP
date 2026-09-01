@@ -1079,6 +1079,19 @@ function AiRulesTab() {
     load();
   };
 
+  const coaDetails = (row: any) => {
+    const code = typeof row.action_coa_code === "string" && row.action_coa_code.trim()
+      ? row.action_coa_code.trim()
+      : null;
+    if (!code) return null;
+
+    const account = coaAccounts.find((coa) => coa.code === code);
+    return {
+      code,
+      name: row.action_coa_name ?? account?.name ?? null,
+    };
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex justify-end gap-2">
@@ -1096,7 +1109,8 @@ function AiRulesTab() {
               <tr className="border-b border-slate-700 text-slate-400 text-left">
                 <th className="pb-2 pr-3">Nama</th>
                 <th className="pb-2 pr-3">Kondisi</th>
-                <th className="pb-2 pr-3">Action Flow</th>
+                 <th className="pb-2 pr-3">Action Flow</th>
+                 <th className="pb-2 pr-3">Keterangan COA</th>
                   <th className="pb-2 pr-3">Nominal referensi</th>
                  <th className="pb-2 pr-3">Conf.</th>
                 <th className="pb-2 pr-3">Prioritas</th>
@@ -1107,7 +1121,7 @@ function AiRulesTab() {
             </thead>
             <tbody>
               {rows.length === 0 && (
-                 <tr><td colSpan={9} className="py-8 text-center text-slate-500">Belum ada AI rule.</td></tr>
+                  <tr><td colSpan={10} className="py-8 text-center text-slate-500">Belum ada AI rule.</td></tr>
               )}
               {rows.map(row => (
                 <tr key={row.id} className="border-b border-slate-800 hover:bg-slate-800/40">
@@ -1115,7 +1129,20 @@ function AiRulesTab() {
                   <td className="py-2 pr-3 font-mono text-xs text-slate-400">
                     {conditionSummary(row)}
                   </td>
-                  <td className="py-2 pr-3">{row.action_flow ? flowBadge(row.action_flow) : "—"}</td>
+                   <td className="py-2 pr-3">{row.action_flow ? flowBadge(row.action_flow) : "—"}</td>
+                   <td className="py-2 pr-3 min-w-[170px]">
+                     {(() => {
+                       const coa = coaDetails(row);
+                       return coa ? (
+                         <div className="leading-tight">
+                           <div className="font-mono text-xs text-orange-300">COA {coa.code}</div>
+                           <div className="text-xs text-slate-300 mt-0.5">{coa.name ?? "Nama akun tidak ditemukan"}</div>
+                         </div>
+                       ) : (
+                         <span className="text-slate-500">—</span>
+                       );
+                     })()}
+                   </td>
                    <td className="py-2 pr-3 text-slate-400">
                      {row.reference_amount != null
                        ? `Rp${Number(row.reference_amount).toLocaleString("id-ID")}`
