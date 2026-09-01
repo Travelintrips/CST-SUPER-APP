@@ -20,3 +20,9 @@ Manual QRIS approval memakai `company_bank_accounts.id` hanya untuk membuktikan 
 **Why:** Supplemental owner, owner-config resolver, advisory-lock identity, dan bank-COA resolver semuanya berkontrak pada nomor rekening config. Menulis ID internal ke payment membuat group mismatch meskipun rekening bisnisnya sama.
 
 **How to apply:** Setelah config dibuktikan melalui join account-number → active internal ID, materialize nomor rekening config ke payment sebelum canonical builder; jangan meneruskan internal mutation account ID sebagai group identity.
+
+Daftar mutasi juga harus memperlakukan `public.bank_mutations.bank_account_id` sebagai identitas teks pada runtime produksi, walaupun instalasi lama atau deklarasi awal dapat mengasumsikannya sebagai INTEGER.
+
+**Why:** Join langsung ke `company_bank_accounts.id` membuat seluruh endpoint daftar gagal dengan `integer = text`, sementara kartu ringkasan tetap berhasil dan UI terlihat seperti memiliki data tetapi menampilkan nol baris.
+
+**How to apply:** Pada query read-model, scope ke company lalu bandingkan `company_bank_accounts.id::text` dengan nilai mutasi yang sudah di-trim; jangan mengubah tipe atau isi historis hanya untuk merender daftar.

@@ -3892,7 +3892,9 @@ router.get("/mutations", async (req, res) => {
         ), '[]'::jsonb)
         FROM accounting_entry_lines ael
         JOIN chart_of_accounts coa ON coa.id = ael.account_id
-        LEFT JOIN company_bank_accounts cba ON cba.id = bm.bank_account_id
+        LEFT JOIN company_bank_accounts cba
+          ON cba.company_id = bm.company_id
+         AND cba.id::text = BTRIM(bm.bank_account_id::text)
         WHERE ael.entry_id = bm.journal_entry_id
           AND (
             (
