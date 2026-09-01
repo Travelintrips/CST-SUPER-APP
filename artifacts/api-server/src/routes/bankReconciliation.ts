@@ -5787,6 +5787,18 @@ router.get("/summary", async (req, res) => {
   // The effective status below depends on provider-aware QRIS candidates.
   // Ensure their table exists before the summary is requested on a cold start.
   await runQrisSettlementMigration();
+  const requestedCompanyId = req.query["company_id"] == null
+    ? null
+    : Number(req.query["company_id"]);
+  if (
+    requestedCompanyId != null
+    && (!Number.isInteger(requestedCompanyId) || requestedCompanyId <= 0)
+  ) {
+    return res.status(400).json({ error: "company_id tidak valid" });
+  }
+  const companyFilter = requestedCompanyId == null
+    ? ""
+    : `WHERE bm.company_id = ${requestedCompanyId}`;
   const { rows } = await db.execute(sql.raw(`
     SELECT
       CASE
@@ -5821,6 +5833,7 @@ router.get("/summary", async (req, res) => {
       COUNT(*) as count,
       SUM(bm.amount) as total_amount
     FROM bank_mutations bm
+    ${companyFilter}
     GROUP BY 1
     ORDER BY count DESC
   `));

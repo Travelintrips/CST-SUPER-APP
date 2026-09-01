@@ -5560,11 +5560,21 @@ export default function BankReconciliationPage() {
   const { toast }  = useToast();
   const qc         = useQueryClient();
   const [, setLocation] = useLocation();
-  const { activeCompanyId } = useCompany();
+  const {
+    activeCompanyId,
+    activeCompany,
+    companies,
+    isConsolidated,
+    isLoading: companiesLoading,
+    setActiveCompany,
+    setConsolidatedMode,
+  } = useCompany();
   const qrisCompanyId =
     typeof activeCompanyId === "number" && Number.isInteger(activeCompanyId) && activeCompanyId > 0
       ? activeCompanyId
       : null;
+  const companyScopeReady =
+    !companiesLoading && (isConsolidated || qrisCompanyId != null);
 
   // ── Filters ──────────────────────────────────────────────────────────────
   const [filterStatus,   setFilterStatus]   = useState("all");
@@ -5611,12 +5621,24 @@ export default function BankReconciliationPage() {
   const [qrisPaymentDate, setQrisPaymentDate] = useState("");
 
   // ── Queries ──────────────────────────────────────────────────────────────
-  const queryKey = ["bank-reconciliation", filterStatus, filterDir, filterProvider, filterPaymentType, filterFrom, filterTo, filterSearch, page];
+  const queryKey = [
+    "bank-reconciliation",
+    activeCompanyId,
+    filterStatus,
+    filterDir,
+    filterProvider,
+    filterPaymentType,
+    filterFrom,
+    filterTo,
+    filterSearch,
+    page,
+  ];
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey,
     queryFn: async () => {
       const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(page * PAGE_SIZE) });
+      if (qrisCompanyId != null) params.set("company_id", String(qrisCompanyId));
       if (filterStatus !== "all")   params.set("status",    filterStatus);
       if (filterDir    !== "all")   params.set("direction", filterDir);
       if (filterProvider !== "all") params.set("provider",  filterProvider);
@@ -5628,6 +5650,7 @@ export default function BankReconciliationPage() {
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{ mutations: BankMutation[]; total: number }>;
     },
+    enabled: companyScopeReady,
     // Keep the primary mutation list in sync with approvals performed by
     // another tab/admin. The QRIS audit query polls separately, but this list
     // used to stay stale until a hard reload.
@@ -5636,11 +5659,15 @@ export default function BankReconciliationPage() {
   });
 
   const { data: summary } = useQuery({
-    queryKey: ["bank-reconciliation-summary"],
+    queryKey: ["bank-reconciliation-summary", activeCompanyId],
     queryFn: async () => {
-      const r = await fetch("/api/bank-reconciliation/summary", { credentials: "include" });
+      const params = new URLSearchParams();
+      if (qrisCompanyId != null) params.set("company_id", String(qrisCompanyId));
+      const r = await fetch(`/api/bank-reconciliation/summary?${params}`, { credentials: "include" });
+      if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{ summary: { status: string; count: string; total_amount: string }[] }>;
     },
+    enabled: companyScopeReady,
     refetchInterval: 30_000,
   });
 
@@ -6870,6 +6897,46 @@ export default function BankReconciliationPage() {
             </div>
           </div>
           <div className="flex gap-2 flex-wrap items-center">
+             <div className="flex items-center gap-2 rounded-md border border-indigo-200 bg-indigo-50/70 px-2 py-1.5 dark:border-indigo-900 dark:bg-indigo-950/40">
+               <Building2 className="h-3.5 w-3.5 shrink-0 text-indigo-600 dark:text-indigo-300" />
+               <label htmlFor="bank-recon-company-scope" className="text-[11px] font-medium text-indigo-900 dark:text-indigo-100">
+                 Perusahaan
+               </label>
+               <Select
+                 value={isConsolidated ? "all" : (activeCompany?.id != null ? String(activeCompany.id) : "all")}
+                 onValueChange={(value) => {
+                   setPage(0);
+                   setSelectedQrisCandidateIds([]);
+                   setSelectedQrisPaymentIds({});
+                   setSelectedCandidateByMutation({});
+                   setSelectedCandidateId(null);
+                   setDetailMutation(null);
+                   setWorkflowStage("sync");
+                   if (value === "all") {
+                     setConsolidatedMode();
+                     return;
+                   }
+                   const selected = companies.find((company) => String(company.id) === value);
+                   if (selected) setActiveCompany(selected);
+                 }}
+               >
+                 <SelectTrigger
+                   id="bank-recon-company-scope"
+                   className="h-7 w-[190px] border-indigo-200 bg-white text-xs dark:border-indigo-800 dark:bg-slate-900"
+                   aria-label="Pilih perusahaan untuk rekonsiliasi bank"
+                 >
+                   <SelectValue placeholder="Pilih perusahaan" />
+                 </SelectTrigger>
+                 <SelectContent>
+                   <SelectItem value="all">Semua Perusahaan (Konsolidasi)</SelectItem>
+                   {companies.filter((company) => !company.isHolding).map((company) => (
+                     <SelectItem key={company.id} value={String(company.id)}>
+                       {company.companyCode ? `${company.companyCode} — ` : ""}{company.companyName}
+                     </SelectItem>
+                   ))}
+                 </SelectContent>
+               </Select>
+             </div>
             <label>
               <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleFileUpload} />
               <Button variant="outline" size="sm" asChild>
