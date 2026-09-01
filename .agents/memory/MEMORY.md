@@ -154,4 +154,5 @@
 - [Publish Repl-layer timeout](publish-repl-layer-timeout.md) — build tanpa error yang berhenti setelah pid1 layer dapat merupakan timeout platform saat membuat Repl layer; bandingkan build sukses.
 - [Sport payment provider deduplication](sport-payment-provider-deduplication.md) — recurring bookings can create repeated source rows; provider_order_id is the logical payment identity for display and QRIS candidates.
 - [Scoped Rule AI retry](scoped-rule-ai-retry.md) — AUTO_POST_GUARD with a full-confidence recon rule needs a mutation-scoped retry, while final statuses remain backend-blocked.
+- [Isolated test DB connectivity](isolated-test-db-connectivity.md) — TEST_DATABASE_URL may be IPv6-only or schema-incomplete; never bypass isolation with DEV/PROD fallback.
 - [Bank recon list schema gate](bank-recon-list-schema-gate.md) — summary and mutation list must initialize the same QRIS schema; never hide list query failures as “0 mutasi”.
