@@ -4,9 +4,7 @@
  *
  * Run: pnpm exec tsx scripts/marketplace-e2e-test.mts
  */
-import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
-import { eq, inArray } from "drizzle-orm";
 
 // ── Inline DB connection (mirror lib/db/src/index.ts logic) ──────────────────
 const connStr =
@@ -17,10 +15,9 @@ const connStr =
 if (!connStr) throw new Error("No DB connection string found");
 
 const pool = new pg.Pool({ connectionString: connStr, max: 3 });
-const db = drizzle(pool);
 
 // ── Inline table references (raw SQL to avoid workspace import issues) ────────
-const API_BASE = "http://localhost:8080";
+const API_BASE = (process.env.PROOF_API_URL ?? "http://localhost:8080").replace(/\/+$/, "");
 
 // ── Result tracking ───────────────────────────────────────────────────────────
 interface TestResult {
