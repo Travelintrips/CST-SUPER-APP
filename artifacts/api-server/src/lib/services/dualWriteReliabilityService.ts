@@ -232,6 +232,34 @@ export async function linkLegacyOrder(
   });
 }
 
+/**
+ * Record a compatibility-write failure without changing the canonical RFQ
+ * state. The canonical write is already committed at this point, so marking
+ * the reliability row as failed would make the retry worker replay the whole
+ * RFQ pipeline. Keep status=success and retain the sanitized error for
+ * operational reconciliation instead.
+ */
+export async function recordLegacyWriteFailure(
+  mktRfqId: number,
+  error: string,
+  correlationId?: string | null,
+): Promise<void> {
+  if (!mktRfqId || !(await validateTableReadiness())) return;
+  const prefix = correlationId ? `reqId=${correlationId}; ` : "";
+  const lastError = `${prefix}${error}`.slice(0, 2000);
+  await db.execute(sql`
+    UPDATE mkt_dual_write_log
+    SET last_error = ${lastError},
+        updated_at = NOW(),
+        resolution = 'LEGACY_WRITE_FAILED'
+    WHERE mkt_rfq_id = ${mktRfqId}
+      AND portal_order_id IS NULL
+      AND status IN ('success', 'linked')
+  `).catch((err: unknown) => {
+    logger.warn({ err, mktRfqId }, "[dualWrite] recordLegacyWriteFailure gagal");
+  });
+}
+
 // ── Stats & Query helpers ─────────────────────────────────────────────────────
 
 export interface DualWriteStats {

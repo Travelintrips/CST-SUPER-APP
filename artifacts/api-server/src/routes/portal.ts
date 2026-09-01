@@ -456,6 +456,7 @@ router.post("/marketplace/:id/quote", marketplaceSubmitLimiter, optionalPortalAu
       ip:                   (req as Request & { ip?: string }).ip ?? null,
       body:                 req.body,
        idempotencyKey:       req.get("Idempotency-Key") ?? null,
+      correlationId:        (req as Request & { id?: string }).id ?? req.get("X-Request-ID") ?? null,
     });
     // Backward-compatible response — legacy fields unchanged.
     // New clients can read rfqId/rfqNumber when new pipeline is active.

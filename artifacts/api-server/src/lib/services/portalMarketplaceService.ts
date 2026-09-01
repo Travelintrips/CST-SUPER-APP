@@ -16,12 +16,14 @@ import { createHash } from "crypto";
 import { eq, and, asc, sql } from "drizzle-orm";
 import { getCatalogItemPublic } from "./portalVendorCatalogService.js";
 import { getPortalCustomerContext } from "./portalCustomerContextService.js";
+import { logger } from "../logger.js";
 import {
   isMarketplaceNewPipelineEnabled,
   createMktRfqEntry,
   linkMktRfqToLegacy,
   validateMarketplaceDestinationMetadata,
 } from "./marketplaceRfqService.js";
+import { recordLegacyWriteFailure } from "./dualWriteReliabilityService.js";
 import { NotificationService } from "./notificationService.js";
 
 // ─── private helpers ──────────────────────────────────────────────────────────
@@ -37,6 +39,36 @@ function mkMarketplaceOrderNumber(): string {
 
 function makeServiceError(statusCode: number, message: string): Error {
   return Object.assign(new Error(message), { statusCode });
+}
+
+function unwrapDbError(error: unknown): Record<string, unknown> {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current && typeof current === "object"; depth += 1) {
+    const candidate = current as Record<string, unknown>;
+    if (candidate.code || candidate.constraint || candidate.detail || candidate.message) {
+      return candidate;
+    }
+    current = candidate.cause;
+  }
+  return { message: error instanceof Error ? error.message : String(error) };
+}
+
+function isOrderNumberCollision(error: unknown): boolean {
+  const dbError = unwrapDbError(error);
+  return dbError.code === "23505"
+    && (
+      dbError.constraint === "portal_product_orders_order_number_unique"
+      || dbError.constraint === "portal_product_orders_order_number_key"
+      || String(dbError.detail ?? "").includes("(order_number)")
+    );
+}
+
+function sanitizedDbError(error: unknown): string {
+  const dbError = unwrapDbError(error);
+  const message = String(dbError.message ?? "database error");
+  const constraint = dbError.constraint ? ` constraint=${String(dbError.constraint)}` : "";
+  const detail = dbError.detail ? ` detail=${String(dbError.detail)}` : "";
+  return `${message}${constraint}${detail}`.slice(0, 1800);
 }
 
 function normalizeIdempotencyKey(value: unknown): string | null {
@@ -94,6 +126,73 @@ export interface SubmitQuoteResult {
   rfqId?:       number;
   rfqNumber?:   string;
   newPipeline?: boolean;
+  legacyWritePending?: boolean;
+}
+
+type LegacyQuoteOrder = { orderNumber: string; id: number };
+
+async function insertLegacyQuote(params: {
+  resolvedName: string;
+  resolvedEmail: string;
+  portalCompanyId: number | null;
+  resolvedPhone: string;
+  effectiveShippingAddress: string | null;
+  combinedNotes: string | null;
+  subtotal: number;
+  grandTotal: number;
+  orderStatus: string;
+  productCategory: string | null;
+  templateId: string | null;
+  templateVersion: string | null;
+  customFieldValues: Record<string, string | number | boolean>;
+  catalogSnapshot: Record<string, unknown>;
+  itemName: string;
+  unitStr: string;
+  sellPrice: number;
+  qtyNum: number;
+}): Promise<LegacyQuoteOrder> {
+  // Preserve the legacy MCT-YYMMDD-RAND5 contract. Retry only a unique
+  // order-number collision; never replay an arbitrary failed transaction.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const orderNumber = mkMarketplaceOrderNumber();
+    try {
+      const order = await db.transaction(async (tx) => {
+        const [hdr] = await tx.insert(portalProductOrdersTable).values({
+          orderNumber,
+          customerName:       params.resolvedName,
+          email:              params.resolvedEmail,
+          companyId:          params.portalCompanyId,
+          phone:              params.resolvedPhone,
+          shippingAddress:    params.effectiveShippingAddress || "TBD — Quote Request",
+          notes:              params.combinedNotes,
+          subtotal:           String(params.subtotal),
+          grandTotal:         String(params.grandTotal),
+          status:             params.orderStatus,
+          productCategory:    params.productCategory,
+          templateId:         params.templateId,
+          templateVersion:    params.templateVersion,
+          customFieldValues:  params.customFieldValues,
+          templateSnapshot:   params.catalogSnapshot,
+        }).returning();
+
+        await tx.insert(portalProductOrderItemsTable).values({
+          orderId:     hdr!.id,
+          productName: params.itemName,
+          unit:        params.unitStr,
+          unitPrice:   String(params.sellPrice),
+          qty:         params.qtyNum,
+          subtotal:    String(params.sellPrice * params.qtyNum),
+        });
+
+        return hdr!;
+      });
+
+      return { orderNumber, id: order.id };
+    } catch (error) {
+      if (!isOrderNumberCollision(error) || attempt === 2) throw error;
+    }
+  }
+  throw new Error("Legacy order number could not be allocated");
 }
 
 /**
@@ -117,6 +216,7 @@ export async function submitMarketplaceQuote(params: {
   ip:                   string | null;
   body:                 SubmitQuoteBody;
   idempotencyKey?:      string | null;
+  correlationId?:       string | null;
 }): Promise<SubmitQuoteResult> {
   const { catalogItemId, portalCustomerId, ip, body } = params;
 
@@ -191,8 +291,6 @@ export async function submitMarketplaceQuote(params: {
   const subtotal   = sellPrice * qtyNum;
   const ppnRate    = includePpn ? 0.11 : 0;
   const grandTotal = subtotal * (1 + ppnRate);
-
-  const orderNumber = mkMarketplaceOrderNumber();
 
   const catalogSnapshot = {
     catalogSource:        "catalog" as const,
@@ -323,48 +421,10 @@ export async function submitMarketplaceQuote(params: {
     }
   }
 
-  // ── 5. Legacy write: portal_product_orders + order items (atomic) ─────────
-  const orderStatus = urgency === "order" ? "New Order" : "Quote Request";
-  const order = await db.transaction(async (tx) => {
-    const [hdr] = await tx.insert(portalProductOrdersTable).values({
-      orderNumber,
-      customerName:       resolvedName,
-       email:              resolvedEmail,
-      companyId:          portalCompanyId,
-      phone:              resolvedPhone,
-      shippingAddress:    effectiveShippingAddress || "TBD — Quote Request",
-      notes:              combinedNotes,
-      subtotal:           String(subtotal),
-      grandTotal:         String(grandTotal),
-      status:             orderStatus,
-      productCategory:    item.categoryKey ?? item.serviceType ?? item.kategori ?? null,
-      templateId:         item.templateId ?? null,
-      templateVersion:    item.templateVersion ?? null,
-      customFieldValues:  (item.specValues && typeof item.specValues === "object" ? item.specValues : {}) as Record<string, string | number | boolean>,
-      templateSnapshot:   catalogSnapshot as Record<string, unknown>,
-    }).returning();
-
-    await tx.insert(portalProductOrderItemsTable).values({
-      orderId:     hdr!.id,
-      productName: item.name,
-      unit:        unitStr,
-      unitPrice:   String(sellPrice),
-      qty:         qtyNum,
-      subtotal:    String(sellPrice * qtyNum),
-    });
-
-    return hdr!;
-  });
-
-  // ── 6. Phase 2A: dual-write backlink (fire-and-forget, non-fatal) ─────────
+  // ── 5. Canonical side effects do not depend on legacy compatibility ───────
+  // Notify as soon as the canonical RFQ is committed. The notification store
+  // has a durable dedupe key, so an ambiguous client retry is safe.
   if (mktRfqResult) {
-    linkMktRfqToLegacy(
-      mktRfqResult.rfqId,
-      mktRfqResult.rfqNumber,
-      order.id,
-      order.orderNumber,
-    ).catch(() => {});
-
     void NotificationService.saveAndBroadcast("admin_notification", {
       type: "portal_service_submitted",
       orderId: mktRfqResult.rfqId,
@@ -376,13 +436,65 @@ export async function submitMarketplaceQuote(params: {
       serviceKey: "marketplace",
       dedupeKey: `portal-service:marketplace:${mktRfqResult.rfqId}:submitted`,
     });
+    db.execute(sql`UPDATE vendor_catalog_items SET quote_count = quote_count + 1 WHERE id = ${catalogItemId}`).catch(() => {});
   }
 
-  // ── 7. Increment quote_count (fire-and-forget) ────────────────────────────
-  db.execute(sql`UPDATE vendor_catalog_items SET quote_count = quote_count + 1 WHERE id = ${catalogItemId}`).catch(() => {});
+  // ── 6. Legacy compatibility write: atomic header + line ──────────────────
+  const orderStatus = urgency === "order" ? "New Order" : "Quote Request";
+  let order: LegacyQuoteOrder;
+  try {
+    order = await insertLegacyQuote({
+      resolvedName,
+      resolvedEmail,
+      portalCompanyId,
+      resolvedPhone,
+      effectiveShippingAddress,
+      combinedNotes,
+      subtotal,
+      grandTotal,
+      orderStatus,
+      productCategory: item.categoryKey ?? item.serviceType ?? item.kategori ?? null,
+      templateId: item.templateId ?? null,
+      templateVersion: item.templateVersion ?? null,
+      customFieldValues: (item.specValues && typeof item.specValues === "object" ? item.specValues : {}) as Record<string, string | number | boolean>,
+      catalogSnapshot: catalogSnapshot as Record<string, unknown>,
+      itemName: item.name,
+      unitStr,
+      sellPrice,
+      qtyNum,
+    });
+  } catch (error) {
+    if (!mktRfqResult) throw error;
+    const dbError = sanitizedDbError(error);
+    const correlationId = params.correlationId ?? null;
+    logger.error(
+      { reqId: correlationId, rfqId: mktRfqResult.rfqId, rfqNumber: mktRfqResult.rfqNumber, error: dbError },
+      "Canonical Marketplace RFQ committed; legacy compatibility write failed",
+    );
+    void recordLegacyWriteFailure(mktRfqResult.rfqId, dbError, correlationId);
+    return {
+      orderNumber: mktRfqResult.rfqNumber,
+      id: mktRfqResult.rfqId,
+      status: "Quote Request",
+      rfqId: mktRfqResult.rfqId,
+      rfqNumber: mktRfqResult.rfqNumber,
+      newPipeline: true,
+      legacyWritePending: true,
+    };
+  }
+
+  // ── 7. Phase 2A: dual-write backlink (fire-and-forget, non-fatal) ─────────
+  if (mktRfqResult) {
+    linkMktRfqToLegacy(
+      mktRfqResult.rfqId,
+      mktRfqResult.rfqNumber,
+      order.id,
+      order.orderNumber,
+    ).catch(() => {});
+  }
 
   return {
-    orderNumber,
+    orderNumber: order.orderNumber,
     id:     order.id,
     status: "Quote Request",
     ...(mktRfqResult

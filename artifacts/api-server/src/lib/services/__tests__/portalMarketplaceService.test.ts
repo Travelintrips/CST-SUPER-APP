@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockDb, mockGetCatalogItemPublic, mockGetPortalCustomerContext, mockCreateMktRfqEntry } =
+const {
+  mockDb,
+  mockGetCatalogItemPublic,
+  mockGetPortalCustomerContext,
+  mockCreateMktRfqEntry,
+  mockRecordLegacyWriteFailure,
+} =
   vi.hoisted(() => ({
     mockDb: {
       execute: vi.fn().mockResolvedValue({ rows: [] }),
@@ -9,6 +15,7 @@ const { mockDb, mockGetCatalogItemPublic, mockGetPortalCustomerContext, mockCrea
     mockGetCatalogItemPublic: vi.fn(),
     mockGetPortalCustomerContext: vi.fn(),
     mockCreateMktRfqEntry: vi.fn(),
+    mockRecordLegacyWriteFailure: vi.fn().mockResolvedValue(undefined),
   }));
 
 vi.mock("@workspace/db", () => ({
@@ -34,6 +41,16 @@ vi.mock("../marketplaceRfqService.js", () => ({
     lat: null,
     lng: null,
   }),
+}));
+
+vi.mock("../dualWriteReliabilityService.js", () => ({
+  recordLegacyWriteFailure: mockRecordLegacyWriteFailure,
+}));
+
+vi.mock("../notificationService.js", () => ({
+  NotificationService: {
+    saveAndBroadcast: vi.fn().mockResolvedValue(undefined),
+  },
 }));
 
 const catalogItem = {
@@ -190,5 +207,52 @@ describe("submitMarketplaceQuote authenticated ownership boundary", () => {
       email: "forged@example.test",
       companyId: 999999999,
     });
+  });
+
+  it("returns canonical success when the legacy compatibility write fails", async () => {
+    const legacyError = Object.assign(
+      new Error("duplicate key value violates unique constraint"),
+      {
+        code: "23505",
+        constraint: "portal_product_orders_order_number_unique",
+        detail: "Key (order_number)=(MCT-260901-12345) already exists.",
+      },
+    );
+    mockCreateMktRfqEntry.mockResolvedValue({
+      rfqId: 202,
+      rfqNumber: "MKT-RFQ-202609-0202",
+    });
+    mockDb.transaction.mockRejectedValue(legacyError);
+
+    const { submitMarketplaceQuote } = await import("../portalMarketplaceService.js");
+    const result = await submitMarketplaceQuote({
+      catalogItemId: catalogItem.id,
+      portalCustomerId: individualContext.customer.id,
+      ip: "127.0.0.1",
+      correlationId: "fb9a7a52-1d44-4b52-94e1-331c08647b90",
+      idempotencyKey: "retry-safe-marketplace-request",
+      body: {
+        buyer_name: "Canonical Buyer",
+        email: "forged@example.test",
+        guest_contact: individualContext.customer.phone!,
+        destination: "Jakarta",
+      },
+    });
+
+    expect(result).toMatchObject({
+      orderNumber: "MKT-RFQ-202609-0202",
+      id: 202,
+      status: "Quote Request",
+      rfqId: 202,
+      rfqNumber: "MKT-RFQ-202609-0202",
+      newPipeline: true,
+      legacyWritePending: true,
+    });
+    expect(mockDb.transaction).toHaveBeenCalledTimes(3);
+    expect(mockRecordLegacyWriteFailure).toHaveBeenCalledWith(
+      202,
+      expect.stringContaining("duplicate key value"),
+      "fb9a7a52-1d44-4b52-94e1-331c08647b90",
+    );
   });
 });

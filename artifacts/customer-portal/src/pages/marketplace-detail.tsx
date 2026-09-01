@@ -812,6 +812,14 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
   const [success, setSuccess] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [phoneError, setPhoneError] = useState<string | null>(null);
+  // Keep one logical request identity for the lifetime of this dialog. If the
+  // response is ambiguous, pressing submit again must reuse the same RFQ.
+  const [submissionIdempotencyKey] = useState(() => {
+    if (typeof globalThis.crypto?.randomUUID === "function") {
+      return globalThis.crypto.randomUUID();
+    }
+    return `mkt-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  });
   const [customerContext, setCustomerContext] = useState<RfqCustomerContext | null>(null);
   const [contextLoading, setContextLoading] = useState(authenticatedCustomer);
   const [contextError, setContextError] = useState<string | null>(null);
@@ -929,7 +937,10 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
 
       const res = await fetch(`/api/portal/marketplace/${item.id}/quote`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": submissionIdempotencyKey,
+        },
         credentials: "include",
         body: JSON.stringify(body),
       });
