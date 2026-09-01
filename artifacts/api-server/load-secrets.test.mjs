@@ -14,7 +14,6 @@ import {
   resolveBundleName,
   extractSecretVersion,
   buildStartupIdentity,
-  buildRuntimeIdentity,
   injectSecrets,
   validateRequiredSecrets,
 } from "./load-secrets.mjs";
@@ -59,36 +58,35 @@ describe("Secret Manager version observability", () => {
     });
   });
 
-  it("builds safe NEW runtime identity metadata", () => {
-    expect(buildRuntimeIdentity({
+  it("builds safe NEW startup identity metadata for the resolved bundle", () => {
+    expect(buildStartupIdentity({
       appEnv: "production",
-      legacyMode: false,
-      projectId: "secret-504012",
-      bundleName: "cst-super-app-production",
-      secretName: "projects/secret-504012/secrets/cst-super-app-production/versions/latest",
-      resolvedSecretVersion: "12",
-    })).toEqual({
-      architectureMode: "NEW",
       projectId: "secret-504012",
       bundleId: "cst-super-app-production",
-      version: "12",
-      appEnv: "production",
+      legacyMode: false,
+      secretVersion: "12",
+    })).toEqual({
+      APP_SECRET_ARCHITECTURE_MODE: "NEW",
+      APP_SECRET_PROJECT_ID: "secret-504012",
+      APP_SECRET_BUNDLE_ID: "cst-super-app-production",
+      APP_SECRET_BUNDLE_VERSION: "12",
+      APP_ENV: "production",
     });
   });
 
-  it("derives the legacy bundle id without exposing secret payload", () => {
-    expect(buildRuntimeIdentity({
+  it("builds safe LEGACY startup identity metadata without secret payload", () => {
+    expect(buildStartupIdentity({
       appEnv: "production",
-      legacyMode: true,
-      projectId: "legacy-project",
-      secretName: "projects/legacy-project/secrets/legacy-bundle/versions/latest",
-      resolvedSecretVersion: "3",
-    })).toEqual({
-      architectureMode: "LEGACY",
       projectId: "legacy-project",
       bundleId: "legacy-bundle",
-      version: "3",
-      appEnv: "production",
+      legacyMode: true,
+      secretVersion: "3",
+    })).toEqual({
+      APP_SECRET_ARCHITECTURE_MODE: "LEGACY",
+      APP_SECRET_PROJECT_ID: "legacy-project",
+      APP_SECRET_BUNDLE_ID: "legacy-bundle",
+      APP_SECRET_BUNDLE_VERSION: "3",
+      APP_ENV: "production",
     });
   });
 });

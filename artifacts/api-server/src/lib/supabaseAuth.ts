@@ -165,6 +165,19 @@ export async function requirePortalAuth(req: Request, res: Response, next: NextF
     res.status(401).json({ message: "Unauthorized" });
     return;
   }
+
+  // Reject malformed credentials before the revocation lookup. A token with
+  // neither the signed dev format nor JWT shape can never authenticate, so a
+  // temporary revocation-table outage must not turn this deterministic 401
+  // into a misleading 503.
+  const isDevToken = token.startsWith("devportal.");
+  const jwtParts = token.split(".");
+  const hasJwtShape = jwtParts.length === 3 && jwtParts.every((part) => part.length > 0);
+  if ((isDevToken && !verifyDevToken(token)) || (!isDevToken && !hasJwtShape)) {
+    res.status(401).json({ message: "Invalid or expired token" });
+    return;
+  }
+
   let revoked: boolean;
   try {
     revoked = await isPortalSessionRevoked(token);
@@ -318,6 +331,19 @@ export async function requirePortalAdmin(req: Request, res: Response, next: Next
     res.status(401).json({ message: "Unauthorized" });
     return;
   }
+
+  // Reject malformed credentials before the revocation lookup. A token with
+  // neither the signed dev format nor JWT shape can never authenticate, so a
+  // temporary revocation-table outage must not turn this deterministic 401
+  // into a misleading 503.
+  const isDevToken = token.startsWith("devportal.");
+  const jwtParts = token.split(".");
+  const hasJwtShape = jwtParts.length === 3 && jwtParts.every((part) => part.length > 0);
+  if ((isDevToken && !verifyDevToken(token)) || (!isDevToken && !hasJwtShape)) {
+    res.status(401).json({ message: "Invalid or expired token" });
+    return;
+  }
+
   let revoked: boolean;
   try {
     revoked = await isPortalSessionRevoked(token);
