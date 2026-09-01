@@ -3862,10 +3862,10 @@ function MutationCard({
                     className="mt-2 rounded-md border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-xs dark:border-emerald-800 dark:bg-emerald-950/30"
                     onClick={e => e.stopPropagation()}
                   >
-                    <p className="font-semibold text-emerald-800 dark:text-emerald-300">
+                     <p className="font-semibold text-black dark:text-black">
                       Diposting ke akun COA
                     </p>
-                    <div className="mt-1 space-y-0.5 text-emerald-700 dark:text-emerald-400">
+                     <div className="mt-1 space-y-0.5 text-black dark:text-black">
                       {m.posted_coa_accounts!.map((account, index) => (
                         <p key={`${account.code ?? "coa"}-${index}`} className="break-words">
                           <span className="font-semibold">{account.code || "—"}</span>
