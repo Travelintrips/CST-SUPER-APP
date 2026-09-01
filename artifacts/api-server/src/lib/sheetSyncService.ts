@@ -1288,13 +1288,16 @@ export async function syncOneSheetConfig(configId: number): Promise<{
 
 // ── Public: sync all active DB configs ───────────────────────────────────────
 
-export async function syncAllSheetConfigs(): Promise<void> {
+export async function syncAllSheetConfigs(companyId?: number): Promise<void> {
   if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) return;
 
   let configs: SheetConfig[] = [];
   try {
+    const companyFilter = companyId == null ? "" : ` AND company_id = ${companyId}`;
     const { rows } = await db.execute(sql.raw(
-      `SELECT id, company_id, sheet_id, tab_name, label FROM bank_sheet_configs WHERE is_active = TRUE`,
+      `SELECT id, company_id, sheet_id, tab_name, label
+       FROM bank_sheet_configs
+       WHERE is_active = TRUE${companyFilter}`,
     ));
     configs = rows as unknown as SheetConfig[];
   } catch { /* table may not exist yet */ }

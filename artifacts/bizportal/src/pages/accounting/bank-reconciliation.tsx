@@ -100,6 +100,12 @@ interface MappingRequiredError {
 function SheetConfigManager() {
   const { toast } = useToast();
   const qc = useQueryClient();
+  const {
+    activeCompanyId,
+    isConsolidated,
+    companies: contextCompanies,
+    isLoading: companiesLoading,
+  } = useCompany();
   const [showForm, setShowForm] = useState(false);
   const [editTarget, setEditTarget] = useState<SheetConfig | null>(null);
   const [testResults, setTestResults] = useState<Record<number, TestResult>>({});
@@ -116,21 +122,46 @@ function SheetConfigManager() {
   });
 
   const { data: configsData, isLoading } = useQuery({
-    queryKey: ["sheet-configs"],
-    queryFn: () => fetch("/api/bank-reconciliation/sheet-configs", { credentials: "include" }).then(r => r.json()),
-  });
-
-  const { data: companiesData } = useQuery({
-    queryKey: ["companies-list"],
-    queryFn: () => fetch("/api/accounting/companies", { credentials: "include" }).then(r => r.json()),
+    queryKey: ["sheet-configs", isConsolidated ? "all" : activeCompanyId],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (!isConsolidated && activeCompanyId != null && activeCompanyId > 0) {
+        params.set("company_id", String(activeCompanyId));
+      }
+      const query = params.toString();
+      const response = await fetch(
+        `/api/bank-reconciliation/sheet-configs${query ? `?${query}` : ""}`,
+        { credentials: "include" },
+      );
+      if (!response.ok) throw new Error(await response.text());
+      return response.json();
+    },
+    enabled: !companiesLoading && (isConsolidated || (activeCompanyId != null && activeCompanyId > 0)),
   });
 
   const configs: SheetConfig[] = configsData?.configs ?? [];
-  const companies: Company[] = Array.isArray(companiesData) ? companiesData : (companiesData?.companies ?? []);
+  const companies: Company[] = contextCompanies;
+
+  useEffect(() => {
+    // A test/sync result belongs to the previous company's config and should
+    // never appear after switching scope.
+    setTestResults({});
+    setTesting({});
+    setSyncing({});
+  }, [activeCompanyId, isConsolidated]);
 
   const openCreate = () => {
     setEditTarget(null);
-    setForm({ company_id: "", label: "", sheet_id: "", bank_account_number: "", bank_name: "", tab_name: "Mutasi_Bank" });
+    setForm({
+      company_id: !isConsolidated && activeCompanyId != null && activeCompanyId > 0
+        ? String(activeCompanyId)
+        : "",
+      label: "",
+      sheet_id: "",
+      bank_account_number: "",
+      bank_name: "",
+      tab_name: "Mutasi_Bank",
+    });
     setShowForm(true);
   };
 
@@ -256,7 +287,7 @@ function SheetConfigManager() {
         </div>
         <p className="text-xs text-muted-foreground mt-1">
           Setiap perusahaan dapat memiliki Google Sheet sumber mutasi bank tersendiri.
-          Auto-sync berjalan setiap menit.
+          Panel ini mengikuti company yang dipilih di atas. Auto-sync berjalan setiap menit.
         </p>
       </CardHeader>
       <CardContent className="pt-0">
@@ -6535,7 +6566,11 @@ export default function BankReconciliationPage() {
 
   const sheetSyncMut = useMutation({
     mutationFn: async () => {
-      const r = await fetch("/api/bank-reconciliation/sheet-sync", { method: "POST", credentials: "include" });
+      const query = qrisCompanyId != null ? `?company_id=${qrisCompanyId}` : "";
+      const r = await fetch(`/api/bank-reconciliation/sheet-sync${query}`, {
+        method: "POST",
+        credentials: "include",
+      });
       if (!r.ok) throw new Error(await r.text());
       return r.json();
     },

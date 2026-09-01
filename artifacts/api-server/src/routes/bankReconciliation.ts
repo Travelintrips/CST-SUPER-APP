@@ -5931,13 +5931,24 @@ async function testSheetConnection(sheetId: string, tabName: string) {
   }
 }
 
-// GET /api/bank-reconciliation/sheet-configs — list all configs
-router.get("/sheet-configs", async (_req, res) => {
+// GET /api/bank-reconciliation/sheet-configs — list configs for the active
+// company, or all configs in consolidated mode.
+router.get("/sheet-configs", async (req, res) => {
   await runBankReconciliationCoreMigration();
+  const rawCompanyId = req.query.company_id;
+  const companyId =
+    rawCompanyId == null || rawCompanyId === "" || rawCompanyId === "all"
+      ? null
+      : Number(rawCompanyId);
+  if (companyId !== null && (!Number.isInteger(companyId) || companyId <= 0)) {
+    return res.status(400).json({ error: "company_id tidak valid" });
+  }
+  const companyFilter = companyId === null ? "" : `WHERE sc.company_id = ${companyId}`;
   const { rows } = await db.execute(sql.raw(`
     SELECT sc.*, c.company_name
     FROM bank_sheet_configs sc
     LEFT JOIN companies c ON c.id = sc.company_id
+    ${companyFilter}
     ORDER BY sc.company_id NULLS LAST, sc.label
   `));
   return res.json({ configs: rows });
@@ -6120,18 +6131,33 @@ router.get("/test-connection", async (_req, res) => {
 });
 
 // ─── POST /api/bank-reconciliation/sheet-sync ─────────────────────────────────
-// Manual trigger Google Sheet sync (tanpa menunggu cron 60s)
+// Manual trigger Google Sheet sync (tanpa menunggu cron 60s). With
+// company_id, only that company's active configs are synchronized.
 router.post("/sheet-sync", async (req, res) => {
   const { syncAllSheetConfigs, syncSheetToReplit } = await import("../lib/sheetSyncService.js");
   try {
-    // Sync semua DB configs (multi-sheet) terlebih dahulu
-    await syncAllSheetConfigs();
+    const rawCompanyId = req.query.company_id;
+    const companyId =
+      rawCompanyId == null || rawCompanyId === "" || rawCompanyId === "all"
+        ? undefined
+        : Number(rawCompanyId);
+    if (companyId !== undefined && (!Number.isInteger(companyId) || companyId <= 0)) {
+      return res.status(400).json({ error: "company_id tidak valid" });
+    }
+
+    // Sync DB configs (multi-sheet), scoped when a company was selected.
+    await syncAllSheetConfigs(companyId);
     // Fallback legacy env-var sheet jika tidak ada DB config
-    const { rows: cfgRows } = await db.execute(sql.raw(
-      `SELECT COUNT(*) AS n FROM bank_sheet_configs WHERE is_active = TRUE`,
-    )).catch(() => ({ rows: [{ n: "0" }] }));
+    const companyFilter = companyId === undefined ? "" : ` AND company_id = ${companyId}`;
+    const { rows: cfgRows } = await db.execute(sql.raw(`
+      SELECT COUNT(*) AS n
+      FROM bank_sheet_configs
+      WHERE is_active = TRUE${companyFilter}
+    `)).catch(() => ({ rows: [{ n: "0" }] }));
     const hasDbConfigs = Number((cfgRows as any[])[0]?.n ?? 0) > 0;
-    if (!hasDbConfigs) await syncSheetToReplit();
+    // Legacy env-var sync is only safe for the unscoped/consolidated request.
+    // A company-specific request must never import an unowned legacy sheet.
+    if (!hasDbConfigs && companyId === undefined) await syncSheetToReplit();
     return res.json({ ok: true, message: "Sync dari Google Sheet selesai" });
   } catch (err: any) {
     return res.status(500).json({ error: err.message ?? "Sheet sync gagal" });
