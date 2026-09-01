@@ -63,6 +63,8 @@ const COL_REFERENSI    = "nomor_referensi";
 const COL_KATEGORI     = "kategori";
 const COL_PERUSAHAAN   = "nama_perusahaan";
 const COL_FASILITAS    = "fasilitas";
+const COL_COA          = "coa";
+const COL_NAMA_COA     = "nama_coa";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -333,6 +335,8 @@ type ColIndexMap = {
   kategoriIdx: number;
   perusahaanIdx: number;
   fasilitasIdx: number;
+  coaIdx: number;
+  namaCoaIdx: number;
 };
 
 async function ensureSystemColumns(
@@ -362,13 +366,28 @@ async function ensureSystemColumns(
   const kategoriIdx    = ensure(COL_KATEGORI);
   const perusahaanIdx  = ensure(COL_PERUSAHAAN);
   const fasilitasIdx   = ensure(COL_FASILITAS);
+  const coaIdx         = ensure(COL_COA);
+  const namaCoaIdx     = ensure(COL_NAMA_COA);
 
   if (updates.length > 0) {
     await batchUpdateSheet(sheetId, updates);
     logger.info({ sheetId, tabName, added: updates.length }, "[sheetSync] Header kolom system ditambahkan");
   }
 
-  return { mutationKeyIdx, statusIdx, scoreIdx, resultIdx, lastSyncIdx, namaIdx, referensiIdx, kategoriIdx, perusahaanIdx, fasilitasIdx };
+  return {
+    mutationKeyIdx,
+    statusIdx,
+    scoreIdx,
+    resultIdx,
+    lastSyncIdx,
+    namaIdx,
+    referensiIdx,
+    kategoriIdx,
+    perusahaanIdx,
+    fasilitasIdx,
+    coaIdx,
+    namaCoaIdx,
+  };
 }
 
 function kategoriLabel(type: string): string {
@@ -427,7 +446,20 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
     return { imported: 0, total: rows.length > 0 ? rows.length - 1 : 0, parsed: 0, existing: 0 };
   }
 
-  const { mutationKeyIdx, statusIdx, scoreIdx, resultIdx, lastSyncIdx, namaIdx, referensiIdx, kategoriIdx, perusahaanIdx, fasilitasIdx } =
+  const {
+    mutationKeyIdx,
+    statusIdx,
+    scoreIdx,
+    resultIdx,
+    lastSyncIdx,
+    namaIdx,
+    referensiIdx,
+    kategoriIdx,
+    perusahaanIdx,
+    fasilitasIdx,
+    coaIdx,
+    namaCoaIdx,
+  } =
     await ensureSystemColumns(sheetId, tabName, headers);
 
   // Fetch existing keys for dedup — check BOTH mutation_key AND canonical_key
@@ -745,6 +777,8 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
     detail_ref: string;
     detail_company: string;
     detail_service: string;
+    coa_code: string;
+    coa_name: string;
   }>();
   try {
     const { rows: sRows } = await db.execute(sql.raw(`
@@ -829,6 +863,9 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
             WHEN 'tenant_invoice' THEN 'Sewa Tenant'
             ELSE NULL
           END, '') AS detail_service
+        ,
+        COALESCE(recon_coa.coa_code, '') AS coa_code,
+        COALESCE(recon_coa.coa_name, '') AS coa_name
       FROM bank_mutations bm
       LEFT JOIN LATERAL (
         SELECT match_score
@@ -845,6 +882,38 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
         ORDER BY (status = 'approved') DESC, match_score DESC
         LIMIT 1
       ) brm_cand ON true
+      LEFT JOIN LATERAL (
+        /*
+         * The bank line is the other side of the reconciliation journal.
+         * Only write the contra account(s) to the result sheet; writing the
+         * bank COA would make every row look like the same account.
+         *
+         * When bank_account_id is unavailable on legacy rows, use the
+         * direction of the bank mutation to identify the contra side.
+         */
+        SELECT
+          STRING_AGG(DISTINCT coa.code, ', ' ORDER BY coa.code) AS coa_code,
+          STRING_AGG(DISTINCT coa.name, ', ' ORDER BY coa.name) AS coa_name
+        FROM accounting_entries ae
+        JOIN accounting_entry_lines ael ON ael.entry_id = ae.id
+        JOIN chart_of_accounts coa ON coa.id = ael.account_id
+        LEFT JOIN company_bank_accounts cba ON cba.id = bm.bank_account_id
+        WHERE ae.id = bm.journal_entry_id
+          AND (
+            (
+              cba.coa_id IS NOT NULL
+              AND ael.account_id <> cba.coa_id
+            )
+            OR (
+              cba.coa_id IS NULL
+              AND (
+                (UPPER(COALESCE(bm.direction, 'IN')) = 'IN' AND COALESCE(ael.credit, 0) > 0)
+                OR
+                (UPPER(COALESCE(bm.direction, 'IN')) = 'OUT' AND COALESCE(ael.debit, 0) > 0)
+              )
+            )
+          )
+      ) recon_coa ON true
       WHERE bm.mutation_key IN (${keyList})
     `));
     for (const r of sRows as any[]) {
@@ -859,6 +928,8 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
         detail_ref:     String(r.detail_ref ?? ""),
         detail_company: String(r.detail_company ?? ""),
         detail_service: String(r.detail_service ?? ""),
+        coa_code:      String(r.coa_code ?? ""),
+        coa_name:      String(r.coa_name ?? ""),
       });
     }
   } catch (err: any) {
@@ -939,6 +1010,8 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
       addIfChanged(kategoriIdx, kategori);
       addIfChanged(perusahaanIdx, info.detail_company + companySuffix);
       addIfChanged(fasilitasIdx, info.detail_service + serviceSuffix);
+      addIfChanged(coaIdx, info.coa_code);
+      addIfChanged(namaCoaIdx, info.coa_name);
     }
 
     if (rowUpdates.length === 0) continue;

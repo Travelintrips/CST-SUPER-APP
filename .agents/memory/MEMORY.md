@@ -16,6 +16,7 @@
 - [Artifact workflow CWD](artifact-workflow-cwd.md) — artifact workflows start at workspace root; use workspace-relative script paths or explicitly `cd` into the artifact.
 - [Accounting settings seed bug](accounting-settings-seed-bug.md) — null journal IDs in accounting_settings blocks sport center accounting; fix + enum 'draft' + bizportal Supabase key mismatch solution.
 - [Reconciliation account mapping](reconciliation-account-mapping.md) — direct bank expenses use expense COA; AP/AR are only for explicit payable/receivable settlements.
+- [Recon sheet COA display](recon-sheet-coa-display.md) — write contra-account COA and name to the result sheet, excluding the bank/cash COA.
 - [AI policy COA contract](ai-policy-coa-contract.md) — decision policy reads Phase 3 `primaryRecommendation`; legacy `recommendedCoa` causes false manual-review flags.
 - [API Server Startup Requirements](api-server-startup-blocker.md) — butuh GCP_PROJECT_ID + GCP_SECRET_ID + GCP_SECRET_MANAGER_BOOTSTRAP_JSON + SUPABASE_DATABASE_URL_DEV; semua wajib; PORTAL_ADMIN_KEY + CASHIER_TOKEN_SECRET non-fatal warning.
 - [API runtime migrations](api-runtime-migrations.md) — schema yang dipakai API harus dimigrasikan ke database Supabase runtime, bukan hanya database Drizzle/Replit lokal.
@@ -147,7 +148,6 @@
 - [Production verification timestamp boundary](production-verification-timestamp-boundary.md) — rounded checkpoint seconds can double-count the baseline row; resolve the exact boundary from its known max ID.
 - [API artifact preview health](api-artifact-preview-health.md) — generic preview root checks may fail while namespaced API liveness/readiness are healthy.
 - [Marketplace destination production migration](marketplace-destination-prod-migration.md) — RFQ production requires three nullable destination columns; the dev-only migration does not update external Supabase prod.
-- [QRIS approval provider resolution](qris-approval-provider-resolution.md) — manual IDs are authoritative; canonical_group/source group cannot block H-1 exact-net QRIS approval.
 - [Public mutation cutover safety](public-mutation-cutover-safety.md) — disable legacy projection/FK setup before public-only link migration; prove idempotence with a second pass.
 - [GL cross-account balance](gl-cross-account-balance.md) — saldo awal/akhir hanya valid untuk satu COA; agregat semua akun menyesatkan karena menjumlahkan sisi debit+kredit.
 - [QRIS approval provider resolution](qris-approval-provider-resolution.md) — incomplete payment metadata may resolve from bank evidence plus one owner-approved config; conflicts and InhouseTrf stay fail-closed.
