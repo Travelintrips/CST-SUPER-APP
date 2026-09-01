@@ -1152,6 +1152,18 @@ function isLegacyReferenceCoaRetryable(m: BankMutation): boolean {
     && !isCanonicalSettlementMutation(m);
 }
 
+function isRuleAutoPostRetryable(m: BankMutation, candidates: Candidate[]): boolean {
+  return m.status === "manual_review"
+    && m.review_code === "AUTO_POST_GUARD"
+    && !isQrisMutation(m)
+    && !isCanonicalSettlementMutation(m)
+    && candidates.some(candidate =>
+      candidate.candidate_type === "recon_rule"
+      && Number(candidate.match_score) >= 100
+      && String(candidate.status).toLowerCase() !== "approved"
+    );
+}
+
 function mutationHeading(m: BankMutation): string {
   return `${m.direction === "IN" ? "Uang Masuk" : "Uang Keluar"} ${idr(m.amount)}`;
 }
@@ -3666,9 +3678,11 @@ function MutationCard({
   onToggleQrisPayment,
   onToggleAllQrisPayments,
   onRunMatching,
+  onRetryMatching,
   onGenerateQrisCandidates,
   qrisGenerationPending,
   retryReferenceCoaPending,
+  retryMatchingPending,
   mappingError,
 }: {
   m: BankMutation;
@@ -3699,9 +3713,11 @@ function MutationCard({
   onToggleQrisPayment?: (candidateId: number, paymentId: number, checked: boolean) => void;
   onToggleAllQrisPayments?: (candidate: QrisCandidateAudit, checked: boolean) => void;
   onRunMatching: (mode?: "new" | "retry_unmatched" | "rematch_non_final") => void;
+  onRetryMatching?: (m: BankMutation) => void;
   onGenerateQrisCandidates?: (mutationId?: number) => void;
   qrisGenerationPending?: boolean;
   retryReferenceCoaPending?: boolean;
+  retryMatchingPending?: boolean;
   mappingError?: MappingRequiredError;
 }) {
   const cands  = visibleCandidates(m);
@@ -3733,6 +3749,7 @@ function MutationCard({
       )
       || !m.review_code
     );
+  const canRetryRuleAutoPost = isRuleAutoPostRetryable(m, cands);
 
   if (qrisAudits.length > 0) {
     return (
@@ -4099,6 +4116,21 @@ function MutationCard({
               >
                 <RotateCcw className="h-3.5 w-3.5" />
                 Jalankan Ulang Matching
+              </Button>
+            )}
+            {canRetryRuleAutoPost && onRetryMatching && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1 border-amber-400 bg-amber-50 text-xs text-amber-900 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200 dark:hover:bg-amber-900"
+                disabled={retryMatchingPending}
+                onClick={() => onRetryMatching(m)}
+                title="Evaluasi ulang Rule AI untuk mutasi ini saja. Jurnal hanya dibuat bila seluruh safeguard lulus."
+              >
+                {retryMatchingPending
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <RotateCcw className="h-3.5 w-3.5" />}
+                {retryMatchingPending ? "Recon ulang..." : "Recon Ulang"}
               </Button>
             )}
             {isLegacyReferenceCoaRetryable(m) && onRetryReferenceCoa && (
@@ -6124,6 +6156,54 @@ export default function BankReconciliationPage() {
     onError: (e: Error) => toast({ title: "Gagal matching", description: e.message, variant: "destructive" }),
   });
 
+  const retryMatchingMut = useMutation({
+    mutationFn: async (mutationId: number) => {
+      const r = await fetch("/api/bank-reconciliation/run-matching", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ids: [mutationId],
+          matching_mode: "rematch_non_final",
+        }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      return r.json() as Promise<{
+        processed: number;
+        auto_matched: number;
+        manual_review: number;
+        unmatched: number;
+      }>;
+    },
+    onSuccess: async (result, mutationId) => {
+      await invalidate();
+      await refreshMutationDetail(mutationId);
+      if (result.auto_matched > 0) {
+        toast({
+          title: "Recon ulang berhasil",
+          description: "Rule AI berhasil membuat dan mem-posting jurnal setelah seluruh safeguard lulus.",
+        });
+      } else if (result.manual_review > 0) {
+        toast({
+          title: "Recon ulang selesai",
+          description: "Rule AI tetap cocok, tetapi safeguard jurnal masih menahan transaksi untuk review manual.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Recon ulang selesai",
+          description: "Mutasi tidak berubah. Periksa kembali rule AI dan konfigurasi accounting.",
+          variant: "destructive",
+        });
+      }
+    },
+    onError: (e: Error) => toast({
+      title: "Gagal recon ulang",
+      description: e.message,
+      variant: "destructive",
+    }),
+  });
+
   const retryReferenceCoaMut = useMutation({
     mutationFn: async (mutationId: number) => {
       const r = await fetch("/api/bank-reconciliation/run-matching", {
@@ -7174,7 +7254,9 @@ export default function BankReconciliationPage() {
                   selectedQrisPaymentIds={selectedPaymentIdsByMutation(m)}
                   onToggleQrisPayment={toggleQrisPayment}
                   onToggleAllQrisPayments={toggleAllQrisPayments}
-                     onRunMatching={(mode = "new") => {
+                  onRetryMatching={mutation => retryMatchingMut.mutate(mutation.id)}
+                  retryMatchingPending={retryMatchingMut.isPending}
+                  onRunMatching={(mode = "new") => {
                       if (workflowStage !== "matching") {
                         toast({ title: "Sync mutasi bank terlebih dahulu", description: "Urutan aman dimulai dari sync mutasi bank." });
                         return;
