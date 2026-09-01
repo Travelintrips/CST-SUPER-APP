@@ -5287,6 +5287,12 @@ function MutationDetailPanel({
 function SheetConfigCollapsed() {
   const { toast } = useToast();
   const qc = useQueryClient();
+  const {
+    activeCompanyId,
+    isConsolidated,
+    companies: contextCompanies,
+    isLoading: companiesLoading,
+  } = useCompany();
   const [expanded, setExpanded] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [editTarget, setEditTarget] = useState<SheetConfig | null>(null);
@@ -5295,9 +5301,29 @@ function SheetConfigCollapsed() {
   const [syncing, setSyncing] = useState<Record<number, boolean>>({});
   const [form, setForm] = useState({ company_id: "", label: "", sheet_id: "", bank_account_number: "", bank_name: "", tab_name: "Mutasi_Bank" });
 
+  const sheetCompanyId =
+    !isConsolidated &&
+    typeof activeCompanyId === "number" &&
+    activeCompanyId > 0
+      ? activeCompanyId
+      : null;
+
   const { data: configsData, isLoading } = useQuery({
-    queryKey: ["sheet-configs"],
-    queryFn: () => fetch("/api/bank-reconciliation/sheet-configs", { credentials: "include" }).then(r => r.json()),
+    queryKey: ["sheet-configs", isConsolidated ? "all" : sheetCompanyId],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (sheetCompanyId != null) params.set("company_id", String(sheetCompanyId));
+      const query = params.toString();
+      const response = await fetch(
+        `/api/bank-reconciliation/sheet-configs${query ? `?${query}` : ""}`,
+        { credentials: "include" },
+      );
+      if (!response.ok) throw new Error(await response.text());
+      return response.json();
+    },
+    enabled:
+      !companiesLoading &&
+      (isConsolidated || sheetCompanyId != null),
   });
   const { data: companiesData } = useQuery({
     queryKey: ["companies-list"],
@@ -5306,9 +5332,19 @@ function SheetConfigCollapsed() {
   });
 
   const configs: SheetConfig[]  = configsData?.configs ?? [];
-  const companies: Company[]    = Array.isArray(companiesData) ? companiesData : (companiesData?.companies ?? []);
+  const companies: Company[]    = contextCompanies.length > 0
+    ? contextCompanies
+    : (Array.isArray(companiesData) ? companiesData : (companiesData?.companies ?? []));
   const activeConfigs            = configs.filter(c => c.is_active);
   const lastSyncOk               = activeConfigs.every(c => c.last_sync_status === "ok" || !c.last_sync_status);
+
+  useEffect(() => {
+    // A result belongs to the previous company's config and must not leak into
+    // the newly selected company when config IDs happen to overlap.
+    setTestResults({});
+    setTesting({});
+    setSyncing({});
+  }, [sheetCompanyId, isConsolidated]);
 
   const testOne = async (cfg: SheetConfig) => {
     setTesting(p => ({ ...p, [cfg.id]: true }));
@@ -5339,7 +5375,14 @@ function SheetConfigCollapsed() {
 
   const openCreate = () => {
     setEditTarget(null);
-    setForm({ company_id: "", label: "", sheet_id: "", bank_account_number: "", bank_name: "", tab_name: "Mutasi_Bank" });
+    setForm({
+      company_id: sheetCompanyId != null ? String(sheetCompanyId) : "",
+      label: "",
+      sheet_id: "",
+      bank_account_number: "",
+      bank_name: "",
+      tab_name: "Mutasi_Bank",
+    });
     setShowForm(true);
   };
   const openEdit = (cfg: SheetConfig) => {
