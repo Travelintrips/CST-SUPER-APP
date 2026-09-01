@@ -13,10 +13,9 @@
 - [CMS upload object keys](cms-upload-object-key.md) — public CMS upload wajib memakai key ber-ekstensi sesuai bytes hasil kompresi; bare UUID ditolak resolver frontend.
 - [Supabase Node 20 WebSocket](supabase-node20-websocket.md) — one-off Supabase client scripts di Node 20 memerlukan transport `ws` eksplisit.
 - [Production static asset promotion](production-static-assets.md) — asset dev tidak otomatis ada di bucket production; cek secret runtime live dan verifikasi bucket production sebelum publish.
-- [Git repo cleanup](git-repo-cleanup.md) — strip dist/+attached_assets/+.agents/outputs/ via git-filter-repo; re-add origin after; resolve subrepl conflicts with --ours; gateway workflow = "Start application".
-- [Artifact workflow CWD](artifact-workflow-cwd.md) — artifact workflows start at workspace root; use workspace-relative script paths or explicitly `cd` into the artifact.
 - [Accounting settings seed bug](accounting-settings-seed-bug.md) — null journal IDs in accounting_settings blocks sport center accounting; fix + enum 'draft' + bizportal Supabase key mismatch solution.
 - [Reconciliation account mapping](reconciliation-account-mapping.md) — direct bank expenses use expense COA; AP/AR are only for explicit payable/receivable settlements.
+- [Recon sheet COA display](recon-sheet-coa-display.md) — write contra-account COA and name to the result sheet, excluding the bank/cash COA.
 - [AI policy COA contract](ai-policy-coa-contract.md) — decision policy reads Phase 3 `primaryRecommendation`; legacy `recommendedCoa` causes false manual-review flags.
 - [API Server Startup Requirements](api-server-startup-blocker.md) — butuh GCP_PROJECT_ID + GCP_SECRET_ID + GCP_SECRET_MANAGER_BOOTSTRAP_JSON + SUPABASE_DATABASE_URL_DEV; semua wajib; PORTAL_ADMIN_KEY + CASHIER_TOKEN_SECRET non-fatal warning.
 - [API runtime migrations](api-runtime-migrations.md) — schema yang dipakai API harus dimigrasikan ke database Supabase runtime, bukan hanya database Drizzle/Replit lokal.
@@ -24,7 +23,6 @@
 - [Auth user role contract](auth-user-role-contract.md) — `/api/auth/user` wajib mempertahankan `role` dan `companyId` agar authorization UI tidak salah.
 - [COA proposal and bank reconciliation flow](coa-proposal-bank-reconciliation-flow.md) — approval proposal and bank-mutation approval are separate governance states.
 - [Payment posting visibility](payment-posting-visibility.md) — payment sumber harus menyimpan status error dan pesan saat accounting entry gagal; jangan tandai posted hanya karena row payment berhasil dibuat.
-- [Tax COA collision fix](tax-coa-collision.md) — 2-1060 ditempati Hutang Intercompany; safe header = 2-1090 (children 2-1091–2-1102); 128 CRs PENDING_APPROVAL di dev; vitest runner (testTimeout=120s) adalah cara terbaik menjalankan migration function tanpa server.
 - [Deployment publish build prerequisites](deployment-publish-build.md) — root manifest yang tidak terpakai dapat memicu builder bahasa lain; validasi build publish dan preflight environment harus dipisahkan.
 - [Custom domain deployment ownership](custom-domain-deployment-ownership.md) — getDeploymentInfo() kosong tidak berarti domain publik mati; domain dapat tetap menunjuk ke deployment/project lain.
 - [Production DB availability gate](production-db-availability-gate.md) — audit PROD harus berhenti jika workspace belum memiliki production database; jangan substitusi DEV atau inferensi historis.
@@ -34,7 +32,6 @@
 - [BizPortal preview API proxy](bizportal-preview-api-proxy.md) — preview BizPortal harus meneruskan `/api` ke API server port 8080 agar login tidak 502.
 - [Dev/Prod DB Isolation](dev-prod-isolation.md) — APP_ENV=development di start-dev.sh; load-secrets.mjs inject *_DEV keys as canonical + shared keys tanpa _DEV counterpart.
 - [accounting_entries missing columns](accounting-entries-missing-columns.md) — is_voided/is_reversed missing → journalReuseEngine FAIL-CLOSED → false MANUAL_REVIEW_REQUIRED saat approve sport payment.
-- [BizPortal startup 40s wait](bizportal-startup-40s-wait.md) — start-dev.sh tunggu 40s jika BIZPORTAL_PORT/CUSTOMER_PORT di-set; fix: yield hanya jika port sudah dipakai; BIZPORTAL_VITE_PORT=18442 wajib.
 - [Drizzle v0.45 Serial Sequence Desync](sequence-desync-drizzle.md) — Drizzle v0.45 eksplisit `id DEFAULT`; sequence yg di-bypass saat bulk-import → duplicate key; fix: syncAccountingSequences() di startup.
 - [Draft journal reuse policy](draft-journal-reuse.md) — bank recon on unlinked draft + matching amount → REUSE_EXISTING_JOURNAL; was incorrectly blocked as MANUAL_REVIEW_REQUIRED → false "Buat Proposal COA".
 - [Posting service draft-first rule](posting-service-draft-first.md) — insert entry as 'draft', insert lines, then promote to 'posted'; trigger blocks line INSERT on posted entries.
@@ -68,7 +65,6 @@
 - [Development accounting purge guard](development-accounting-purge-guard.md) — posted accounting entries are trigger-protected; explicit dev-only purge needs worker quiescence, one transaction, and post-delete FK verification.
 - [Startup readiness boundary](startup-readiness-boundary.md) — resolver can install and replay can pass while /api/health/ready remains false during a long background migration chain; do not certify runtime healthy.
 - [Startup additive stage](startup-additive-stage.md) — completed legacy registry markers can skip newer schema work; repairs need their own idempotent stage and catalog verification.
-- [Baseline consistency and generated output](baseline-consistency-generated-output.md) — cold-checkout dan post-build typecheck dapat berbeda saat package membutuhkan file generated yang di-ignore Git.
 - [Canonical settlement contract gate](canonical-settlement-contract-gate.md) — reuse qris_settlement hanya aman dengan source discriminator; canonical runtime contract harus terverifikasi sebelum implementasi.
 - [Freight runtime forward migration](freight-runtime-forward-migration.md) — changes to already-applied 0001 need a separate additive migration for existing environments.
 - [Canonical builder contract](canonical-settlement-builder-contract.md) — builder remains fail-closed until payment-journal, fee config, journal owner, status transition, and batch uniqueness are proven.
@@ -157,3 +153,4 @@
 - [Sport payment group note identity](sport-payment-group-note-identity.md) — group note dapat mencakup banyak booking; bukan unique key payment, gunakan booking dan identitas provider untuk duplicate.
 - [Publish Repl-layer timeout](publish-repl-layer-timeout.md) — build tanpa error yang berhenti setelah pid1 layer dapat merupakan timeout platform saat membuat Repl layer; bandingkan build sukses.
 - [Sport payment provider deduplication](sport-payment-provider-deduplication.md) — recurring bookings can create repeated source rows; provider_order_id is the logical payment identity for display and QRIS candidates.
+- [Scoped Rule AI retry](scoped-rule-ai-retry.md) — AUTO_POST_GUARD with a full-confidence recon rule needs a mutation-scoped retry, while final statuses remain backend-blocked.
