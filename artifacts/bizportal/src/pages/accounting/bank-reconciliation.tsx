@@ -3885,7 +3885,7 @@ function MutationCard({
                 </div>
                 {m.status === "posted" && (m.posted_coa_accounts?.length ?? 0) > 0 && (
                   <div
-                    className="mt-2 rounded-md border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-xs dark:border-emerald-800 dark:bg-emerald-950/30"
+                     className="mt-2 rounded-md border border-emerald-200 bg-emerald-50/90 px-3 py-2 text-xs dark:border-emerald-800 dark:bg-emerald-50/90"
                     onClick={e => e.stopPropagation()}
                   >
                      <p className="font-semibold text-black dark:text-black">
