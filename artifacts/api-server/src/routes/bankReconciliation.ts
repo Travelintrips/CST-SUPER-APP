@@ -5534,6 +5534,7 @@ router.post("/run-matching", async (req, res) => {
         transactionCode:      m.transaction_code ?? null,
         counterpartyName:     null,
         counterpartyAccount:  null,
+         uploadedProofUrl:      m.uploaded_proof_url ?? null,
         status:               String(m.status ?? "unmatched"),
       };
 

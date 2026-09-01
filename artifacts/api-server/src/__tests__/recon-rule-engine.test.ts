@@ -98,6 +98,37 @@ describe("Rule Engine — Test 1: contains match", () => {
   });
 });
 
+describe("Rule Engine — required document gate", () => {
+  it("does not match and reports the document requirement when proof is missing", () => {
+    const rules = [makeRule({
+      name: "PPN invoice requires OCR proof",
+      requiresDocumentUpload: true,
+      taxType: "ppn_input",
+    })];
+
+    const result = evaluateReconRules(rules, makeMutation({ hasDocumentUpload: false }));
+
+    expect(result.matched).toBe(false);
+    expect(result.documentRequired).toEqual({
+      ruleId: 1,
+      ruleName: "PPN invoice requires OCR proof",
+    });
+  });
+
+  it("matches after a proof document is uploaded", () => {
+    const rules = [makeRule({
+      requiresDocumentUpload: true,
+      taxType: "ppn_output",
+      targetCoaCode: "2-1020-CST",
+    })];
+
+    const result = evaluateReconRules(rules, makeMutation({ hasDocumentUpload: true }));
+
+    expect(result.matched).toBe(true);
+    expect(result.targetCoaCode).toBe("2-1020-CST");
+  });
+});
+
 // ─── Test 2: equals match ──────────────────────────────────────────────────────
 
 describe("Rule Engine — Test 2: equals match", () => {

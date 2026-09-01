@@ -73,6 +73,8 @@ export async function runReconRulesMigration(): Promise<void> {
       target_coa_code     TEXT,
       amount_tolerance    NUMERIC(16,2),
       reference_amount    NUMERIC(16,2),
+      requires_document_upload BOOLEAN NOT NULL DEFAULT FALSE,
+      tax_type            TEXT NOT NULL DEFAULT 'none',
       confidence_score    INTEGER NOT NULL DEFAULT 100 CHECK (confidence_score BETWEEN 0 AND 100),
       stop_processing     BOOLEAN NOT NULL DEFAULT TRUE,
       match_count         INTEGER NOT NULL DEFAULT 0,
@@ -89,7 +91,9 @@ export async function runReconRulesMigration(): Promise<void> {
       ADD COLUMN IF NOT EXISTS specificity INTEGER NOT NULL DEFAULT 1,
       ADD COLUMN IF NOT EXISTS amount_tolerance NUMERIC(16,2),
       ADD COLUMN IF NOT EXISTS reference_amount NUMERIC(16,2),
-      ADD COLUMN IF NOT EXISTS ai_classification_rule_id INTEGER
+      ADD COLUMN IF NOT EXISTS ai_classification_rule_id INTEGER,
+      ADD COLUMN IF NOT EXISTS requires_document_upload BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS tax_type TEXT NOT NULL DEFAULT 'none'
   `)).catch(e => logger.warn({ err: e.message }, "[recon_rules] multi-condition columns warning"));
 
   await db.execute(sql.raw(`CREATE INDEX IF NOT EXISTS rr_company_idx   ON recon_rules(company_id)`)).catch(() => {});
@@ -154,6 +158,8 @@ function rowToRule(r: Record<string, unknown>): ReconRule {
     targetCoaCode:    r.target_coa_code ? String(r.target_coa_code) : null,
     amountTolerance:  r.amount_tolerance == null ? null : Number(r.amount_tolerance),
     referenceAmount:  r.reference_amount == null ? null : Number(r.reference_amount),
+    requiresDocumentUpload: Boolean(r.requires_document_upload),
+    taxType: r.tax_type === "ppn_input" || r.tax_type === "ppn_output" ? r.tax_type : "none",
     aiClassificationRuleId: r.ai_classification_rule_id == null ? null : Number(r.ai_classification_rule_id),
     confidenceScore:  Number(r.confidence_score ?? 100),
     stopProcessing:   Boolean(r.stop_processing),

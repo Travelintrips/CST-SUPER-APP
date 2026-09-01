@@ -83,6 +83,10 @@ export interface ReconRule {
   amountTolerance?: number | null;
   /** Amount captured when a reference rule was created. */
   referenceAmount?: number | null;
+  /** A matching mutation must have a proof document before this rule can apply. */
+  requiresDocumentUpload?: boolean;
+  /** Optional tax routing selected in the Rule AI editor. */
+  taxType?: "none" | "ppn_input" | "ppn_output";
   aiClassificationRuleId?: number | null;
   conditions?: RuleCondition[];
   targetType: TargetType;
@@ -117,6 +121,8 @@ export interface ReconRuleMutationInput {
   bank?: string | null;
   transactionCode?: string | null;
   normalizedDescription?: string | null;
+  /** True when the bank mutation has at least one uploaded proof document. */
+  hasDocumentUpload?: boolean;
   companyId: number;
 }
 
@@ -137,6 +143,10 @@ export interface ReconRuleMatchResult {
   stopProcessing?: boolean;
   ambiguityCode?: "AMBIGUOUS_RULE_MATCH";
   ambiguityReason?: string;
+  documentRequired?: {
+    ruleId: number;
+    ruleName: string;
+  };
   evaluated: Array<{ ruleId: number; ruleName: string; matched: boolean }>;
 }
 
@@ -435,6 +445,7 @@ export function evaluateReconRules(
 ): ReconRuleMatchResult {
   const evaluated: Array<{ ruleId: number; ruleName: string; matched: boolean }> = [];
   const matching: Array<{ rule: ReconRule; reasons: ReconRuleMatchReason[] }> = [];
+  let documentRequired: ReconRuleMatchResult["documentRequired"];
 
   // Priority first; specificity makes business-context rules win over broad
   // signals without relying on creation order.
@@ -530,6 +541,11 @@ export function evaluateReconRules(
           && Math.abs(Number(mutation.amount) - referenceAmount)
             <= (isLegacyAiReference ? 0 : hasPositiveTolerance ? Number(rule.amountTolerance) : 0);
     const conditionPassed = conditionsPassed && amountPassed;
+    if (conditionPassed && rule.requiresDocumentUpload && !mutation.hasDocumentUpload) {
+      evaluated.push({ ruleId: rule.id, ruleName: rule.name, matched: false });
+      documentRequired ??= { ruleId: rule.id, ruleName: rule.name };
+      continue;
+    }
     evaluated.push({ ruleId: rule.id, ruleName: rule.name, matched: conditionPassed });
     if (conditionPassed) {
       const reasons: ReconRuleMatchReason[] = conditions.map((condition, index) => ({
@@ -562,6 +578,7 @@ export function evaluateReconRules(
     }
   }
 
+  if (documentRequired) return { matched: false, documentRequired, evaluated };
   if (matching.length === 0) return { matched: false, evaluated };
   const top = matching[0];
   const contenders = matching.filter(candidate =>

@@ -141,6 +141,7 @@ export interface MutationForDecisionStack {
   transactionCode?: string | null;
   counterpartyName?: string | null;
   counterpartyAccount?: string | null;
+  uploadedProofUrl?: string | null;
   status: string;
 }
 
@@ -164,6 +165,7 @@ export async function loadReconRulesForCompany(companyId: number): Promise<Recon
         condition_operator, condition_value, target_type, target_id,
         target_coa_code, confidence_score, stop_processing,
         conditions_json, logic, specificity, amount_tolerance, reference_amount,
+         requires_document_upload, tax_type,
         ai_classification_rule_id,
         match_count, last_matched_at, created_by, created_at, updated_at
       FROM recon_rules
@@ -194,6 +196,8 @@ export async function loadReconRulesForCompany(companyId: number): Promise<Recon
       specificity:      Number(r.specificity ?? 1),
       amountTolerance:  r.amount_tolerance != null ? Number(r.amount_tolerance) : null,
       referenceAmount:  r.reference_amount != null ? Number(r.reference_amount) : null,
+       requiresDocumentUpload: Boolean(r.requires_document_upload),
+       taxType: r.tax_type === "ppn_input" || r.tax_type === "ppn_output" ? r.tax_type : "none",
       aiClassificationRuleId: r.ai_classification_rule_id != null ? Number(r.ai_classification_rule_id) : null,
       targetType:       String(r.target_type) as ReconRule["targetType"],
       targetId:         r.target_id != null ? Number(r.target_id) : null,
@@ -265,11 +269,31 @@ export async function runReconDecisionStack(
       transactionCode:   mutation.transactionCode ?? null,
       counterpartyName:  mutation.counterpartyName ?? null,
       counterpartyAccount: mutation.counterpartyAccount ?? null,
+      hasDocumentUpload: Boolean(mutation.uploadedProofUrl),
       companyId:         mutation.companyId,
     };
 
     const ruleResult = evaluateReconRules(rules, mutInput);
     const ruleTimeMs = Date.now() - tRuleStart;
+
+    if (ruleResult.documentRequired) {
+      return {
+        mutationId: mutation.id,
+        eligible: false,
+        blockedReason: `Rule "${ruleResult.documentRequired.ruleName}" mewajibkan upload dokumen sebelum posting.`,
+        decisionSource: "BLOCKED_STATUS",
+        matchedRuleId: ruleResult.documentRequired.ruleId,
+        matchedRuleVersionId: null,
+        expectedCashFlowId: null,
+        confidence: 0,
+        confidenceBreakdown: [],
+        candidateCount: 0,
+        ecfCandidates: [],
+        engineVersion: ENGINE_VERSION,
+        evaluatedAt,
+        candidateRank: null,
+      };
+    }
 
     if (ruleResult.matched && ruleResult.ruleId != null) {
       // Fetch current_version_id for the matched rule

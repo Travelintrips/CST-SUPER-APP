@@ -53,6 +53,12 @@ const UPLOAD_OPTS = [
 
 const FILE_TYPES = ["PDF", "JPG", "PNG", "WEBP"];
 
+const TAX_TYPES = [
+  { value: "none", label: "Tidak ada pajak" },
+  { value: "ppn_input", label: "PPN Masukan" },
+  { value: "ppn_output", label: "PPN Keluaran" },
+] as const;
+
 const COND_FIELDS = [
   { value: "description", label: "Deskripsi" },
   { value: "amount",      label: "Jumlah" },
@@ -790,6 +796,32 @@ function AiRulesTab() {
     }
   }, [activeCompanyId]);
 
+  const taxAccountFor = (taxType: string): RuleCoaAccount | null => {
+    if (taxType !== "ppn_input" && taxType !== "ppn_output") return null;
+    const baseCode = taxType === "ppn_input" ? "1-1050" : "2-1020";
+    return coaAccounts
+      .filter((account) =>
+        account.isActive !== false
+        && account.isPostable !== false
+        && (account.code === baseCode || account.code.startsWith(`${baseCode}-`)
+          || account.name.toLowerCase().includes(taxType === "ppn_input" ? "ppn masukan" : "ppn keluaran")),
+      )
+      .sort((a, b) => {
+        const aExact = a.code === baseCode ? 0 : a.name.toLowerCase().includes(taxType === "ppn_input" ? "ppn masukan" : "ppn keluaran") ? 1 : 2;
+        const bExact = b.code === baseCode ? 0 : b.name.toLowerCase().includes(taxType === "ppn_input" ? "ppn masukan" : "ppn keluaran") ? 1 : 2;
+        return aExact - bExact || a.code.localeCompare(b.code);
+      })[0] ?? null;
+  };
+
+  const setTaxType = (taxType: string) => {
+    const account = taxAccountFor(taxType);
+    setForm((current: any) => ({
+      ...current,
+      tax_type: taxType,
+      action_coa_code: taxType === "none" ? null : account?.code ?? current.action_coa_code ?? null,
+    }));
+  };
+
   const loadParentAccounts = useCallback(async () => {
     if (activeCompanyId == null) return;
     setCreatingCoaLoading(true);
@@ -841,7 +873,8 @@ function AiRulesTab() {
     setForm({ condition_field: "description", condition_operator: "contains", condition_value: "",
       conditions: [{ field: "description", operator: "contains", value: "" }], logic: "AND",
       specificity: 1, amount_tolerance: 0, reference_amount: null,
-      confidence: 0.8, priority: 50, source: "manual" });
+      confidence: 0.8, priority: 50, source: "manual",
+      requires_document_upload: false, tax_type: "none" });
     setCreatingCoa(false);
     setQuickCreateChild(false);
     setNewCoaRole("child");
@@ -873,7 +906,9 @@ function AiRulesTab() {
           : null,
       amount_tolerance: row.reference_amount != null && row.amount_tolerance != null
         ? Number(row.amount_tolerance)
-        : 0 });
+         : 0,
+       requires_document_upload: Boolean(row.requires_document_upload),
+       tax_type: row.tax_type === "ppn_input" || row.tax_type === "ppn_output" ? row.tax_type : "none" });
     setCreatingCoa(false);
     setQuickCreateChild(false);
     setParentSearch("");
@@ -1030,6 +1065,9 @@ function AiRulesTab() {
            action_flow: form.action_flow, action_coa_code: form.action_coa_code,
            amount_tolerance: form.amount_tolerance,
            reference_amount: form.reference_amount,
+            requires_document_upload: Boolean(form.requires_document_upload),
+            tax_type: form.tax_type ?? "none",
+            has_document_upload: true,
            confidence: form.confidence }) });
       setPreview(await r.json());
     } finally { setPreviewing(false); }
@@ -1062,13 +1100,14 @@ function AiRulesTab() {
                   <th className="pb-2 pr-3">Nominal referensi</th>
                  <th className="pb-2 pr-3">Conf.</th>
                 <th className="pb-2 pr-3">Prioritas</th>
-                <th className="pb-2 pr-3">Sumber</th>
+                 <th className="pb-2 pr-3">Dokumen / Pajak</th>
+                 <th className="pb-2 pr-3">Sumber</th>
                 <th className="pb-2">Aksi</th>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 && (
-                 <tr><td colSpan={8} className="py-8 text-center text-slate-500">Belum ada AI rule.</td></tr>
+                 <tr><td colSpan={9} className="py-8 text-center text-slate-500">Belum ada AI rule.</td></tr>
               )}
               {rows.map(row => (
                 <tr key={row.id} className="border-b border-slate-800 hover:bg-slate-800/40">
@@ -1086,7 +1125,21 @@ function AiRulesTab() {
                    </td>
                   <td className="py-2 pr-3 text-slate-400">{Number(row.confidence).toFixed(2)}</td>
                   <td className="py-2 pr-3 text-slate-400">{row.priority}</td>
-                  <td className="py-2 pr-3">
+                   <td className="py-2 pr-3">
+                     <div className="flex flex-wrap gap-1">
+                       {row.requires_document_upload && (
+                         <Badge className="bg-amber-900 text-amber-300 text-xs">Upload wajib</Badge>
+                       )}
+                       {row.tax_type === "ppn_input" && (
+                         <Badge className="bg-cyan-900 text-cyan-300 text-xs">PPN Masukan</Badge>
+                       )}
+                       {row.tax_type === "ppn_output" && (
+                         <Badge className="bg-cyan-900 text-cyan-300 text-xs">PPN Keluaran</Badge>
+                       )}
+                       {!row.requires_document_upload && (!row.tax_type || row.tax_type === "none") && "—"}
+                     </div>
+                   </td>
+                   <td className="py-2 pr-3">
                     <Badge className={row.source === "ai_generated" ? "bg-purple-900 text-purple-300 text-xs" : "bg-slate-700 text-slate-300 text-xs"}>
                       {row.source === "ai_generated" ? "AI" : "Manual"}
                     </Badge>
@@ -1396,6 +1449,50 @@ function AiRulesTab() {
                 <p className="mt-1 text-[11px] text-slate-500">
                   Nilai yang disimpan tetap kode COA; nama ditampilkan dari master akun.
                 </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+                <div className="flex items-start gap-3">
+                  <input
+                    id="ai-rule-require-document"
+                    type="checkbox"
+                    checked={Boolean(form.requires_document_upload)}
+                    onChange={(event) => setForm((current: any) => ({
+                      ...current,
+                      requires_document_upload: event.target.checked,
+                    }))}
+                    className="mt-1 h-4 w-4 accent-orange-500"
+                  />
+                  <div>
+                    <Label htmlFor="ai-rule-require-document" className="cursor-pointer text-slate-200">
+                      Wajib upload dokumen / gambar
+                    </Label>
+                    <p className="mt-1 text-[11px] text-slate-500">
+                      Rule tidak dapat memicu posting sampai bukti tersedia untuk dipindai OCR.
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-3">
+                <Label className="text-slate-300">Perlakuan Pajak</Label>
+                <Select value={form.tax_type ?? "none"} onValueChange={setTaxType}>
+                  <SelectTrigger className="bg-slate-800 border-slate-600 text-white mt-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-slate-800 border-slate-600 text-white">
+                    {TAX_TYPES.map((tax) => (
+                      <SelectItem key={tax.value} value={tax.value}>{tax.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {form.tax_type !== "none" && (
+                  <p className="mt-1 text-[11px] text-cyan-300">
+                    {taxAccountFor(form.tax_type)?.code
+                      ? `Posting akan diarahkan ke ${taxAccountFor(form.tax_type)?.code} — ${taxAccountFor(form.tax_type)?.name}.`
+                      : "COA PPN yang sesuai belum tersedia; simpan akan ditolak sampai COA dibuat."}
+                  </p>
+                )}
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
