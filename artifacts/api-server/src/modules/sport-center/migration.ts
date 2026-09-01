@@ -2254,9 +2254,9 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
       END;
       v_expected_tax := v_payment_amount - v_expected_dpp;
 
-      IF v_line_count <> CASE WHEN v_expected_tax > 0 THEN 3 ELSE 2 END
+      IF v_line_count <> (CASE WHEN v_expected_tax > 0 THEN 3 ELSE 2 END)
          OR v_debit_count <> 1
-         OR v_credit_count <> CASE WHEN v_expected_tax > 0 THEN 2 ELSE 1 END
+         OR v_credit_count <> (CASE WHEN v_expected_tax > 0 THEN 2 ELSE 1 END)
          OR ABS(v_debit_total - v_payment_amount) > 0.01
          OR ABS(v_credit_total - v_payment_amount) > 0.01
       THEN
@@ -5349,7 +5349,8 @@ export async function ensureSportCenterLegacyPaymentRecoveryOwner(): Promise<voi
       v_payment_provider text;
       v_debit_account_code text;
       v_debit_account_name text;
-      v_source_event_id text;
+      v_source_event_id uuid;
+      v_external_bank_account_id text;
     BEGIN
       IF p_payment_id IS NULL OR p_payment_id <= 0
          OR p_public_entry_id IS NULL OR p_public_entry_id <= 0
@@ -5471,9 +5472,9 @@ export async function ensureSportCenterLegacyPaymentRecoveryOwner(): Promise<voi
         FROM public.accounting_entry_lines ael
        WHERE ael.entry_id = p_public_entry_id;
 
-      IF v_line_count <> CASE WHEN v_tax > 0 THEN 3 ELSE 2 END
+      IF v_line_count <> (CASE WHEN v_tax > 0 THEN 3 ELSE 2 END)
          OR v_debit_count <> 1
-         OR v_credit_count <> CASE WHEN v_tax > 0 THEN 2 ELSE 1 END
+         OR v_credit_count <> (CASE WHEN v_tax > 0 THEN 2 ELSE 1 END)
          OR ABS(v_debit_total - v_payment_amount) > 0.01
          OR ABS(v_credit_total - v_payment_amount) > 0.01
       THEN
@@ -5482,8 +5483,8 @@ export async function ensureSportCenterLegacyPaymentRecoveryOwner(): Promise<voi
           p_payment_id, p_public_entry_id;
       END IF;
 
-      SELECT COUNT(*)::integer, MIN(sp.id)
-        INTO v_mirror_count, v_mirror
+      SELECT COUNT(*)::integer
+        INTO v_mirror_count
         FROM public.sport_payments sp
        WHERE sp.source_payment_id = p_payment_id;
 
@@ -5502,10 +5503,20 @@ export async function ensureSportCenterLegacyPaymentRecoveryOwner(): Promise<voi
       IF v_mirror.posting_status <> 'posted'
          OR v_mirror.company_id IS DISTINCT FROM v_payment.company_id
          OR ABS(COALESCE(v_mirror.amount, -1) - v_payment_amount) > 0.01
-         OR NULLIF(BTRIM(v_mirror.external_bank_account_id::text), '') IS NULL
       THEN
         RAISE EXCEPTION
           'LEGACY_PUBLIC_RECOVERY_MIRROR_MISMATCH: payment=%',
+          p_payment_id;
+      END IF;
+
+      v_external_bank_account_id := COALESCE(
+        NULLIF(BTRIM(v_mirror.external_bank_account_id::text), ''),
+        NULLIF(BTRIM(v_payment.bank_account_id::text), '')
+      );
+
+      IF v_external_bank_account_id IS NULL THEN
+        RAISE EXCEPTION
+          'LEGACY_PUBLIC_RECOVERY_BANK_UNRESOLVED: payment=% has no bank identity',
           p_payment_id;
       END IF;
 
@@ -5514,12 +5525,15 @@ export async function ensureSportCenterLegacyPaymentRecoveryOwner(): Promise<voi
         FROM public.company_bank_accounts cba
        WHERE cba.company_id = v_payment.company_id
          AND cba.is_active = TRUE
-         AND cba.account_number::text = v_mirror.external_bank_account_id::text;
+         AND (
+           cba.account_number::text = v_external_bank_account_id
+           OR cba.id::text = v_external_bank_account_id
+         );
 
       IF v_bank_count <> 1 OR v_bank_id IS NULL THEN
         RAISE EXCEPTION
           'LEGACY_PUBLIC_RECOVERY_BANK_UNRESOLVED: payment=% account=% matches=%',
-          p_payment_id, v_mirror.external_bank_account_id, v_bank_count;
+          p_payment_id, v_external_bank_account_id, v_bank_count;
       END IF;
 
       v_payment_method := COALESCE(NULLIF(BTRIM(v_payment.payment_method::text), ''), 'Unknown');
@@ -5542,7 +5556,7 @@ export async function ensureSportCenterLegacyPaymentRecoveryOwner(): Promise<voi
         v_payment.created_at,
         now()
       )::date::text;
-      v_source_event_id := gen_random_uuid()::text;
+      v_source_event_id := gen_random_uuid();
 
       INSERT INTO sport_center.accounting_journals
       (
