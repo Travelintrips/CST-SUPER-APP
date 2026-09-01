@@ -437,6 +437,8 @@ async function findCompanyCoa(
     WHERE ${companyWhere}
       AND (code = '${code}' OR code LIKE '${code}-%')
       AND is_active = TRUE
+      AND is_header = FALSE
+      AND is_postable = TRUE
     ORDER BY CASE WHEN company_id ${companyId != null ? `= ${companyId}` : "IS NULL"} THEN 0 ELSE 1 END,
              LENGTH(code), id
     LIMIT 1

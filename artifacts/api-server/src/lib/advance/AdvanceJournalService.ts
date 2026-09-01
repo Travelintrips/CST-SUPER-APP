@@ -224,6 +224,8 @@ async function requireCompanyCoa(companyId: number, baseCode: string, type: stri
       AND code LIKE ${baseCode + "%"}
       AND type = ${type}
       AND is_active = true
+      AND is_header = false
+      AND is_postable = true
     ORDER BY code LIMIT 1
   `).then((r) => r.rows);
 

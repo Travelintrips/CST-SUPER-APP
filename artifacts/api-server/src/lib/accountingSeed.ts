@@ -496,6 +496,111 @@ export async function repairMandiriCiputatHierarchy(): Promise<void> {
   }
 }
 
+/**
+ * Keep the CST salary hierarchy aligned with the governed COA decision:
+ *
+ *   5-2000 → 5-2010 (header) → 5-2010-CST (postable leaf)
+ *
+ * This repair is idempotent and never rewrites accounting entry lines.
+ */
+export async function repairCstSalaryHierarchy(): Promise<void> {
+  try {
+    const parentRows = await db.execute(sql`
+      SELECT id, parent_id, is_header, is_postable, is_active, status::text AS status
+      FROM chart_of_accounts
+      WHERE company_id = 1 AND code = '5-2010'
+      LIMIT 1
+    `);
+    const childRows = await db.execute(sql`
+      SELECT id, parent_id, is_header, is_postable, is_active, status::text AS status
+      FROM chart_of_accounts
+      WHERE company_id = 1 AND code = '5-2010-CST'
+      LIMIT 1
+    `);
+    const groupRows = await db.execute(sql`
+      SELECT id
+      FROM chart_of_accounts
+      WHERE company_id IS NULL AND code = '5-2000'
+      LIMIT 1
+    `);
+    const parent = parentRows.rows[0] as {
+      id?: number; parent_id?: number | null; is_header?: boolean;
+      is_postable?: boolean; is_active?: boolean; status?: string;
+    } | undefined;
+    const child = childRows.rows[0] as {
+      id?: number; parent_id?: number | null; is_header?: boolean;
+      is_postable?: boolean; is_active?: boolean; status?: string;
+    } | undefined;
+    const groupId = Number((groupRows.rows[0] as { id?: number } | undefined)?.id);
+    const parentId = Number(parent?.id);
+    const childId = Number(child?.id);
+    if (!parentId || !childId || !groupId) return;
+
+    if (
+      parent?.parent_id !== groupId
+      || parent.is_header !== true
+      || parent.is_postable !== false
+      || parent.is_active !== true
+      || parent.status !== "ACTIVE"
+    ) {
+      await db.execute(sql`
+        UPDATE chart_of_accounts
+        SET parent_id = ${groupId},
+            is_header = TRUE,
+            is_postable = FALSE,
+            is_active = TRUE,
+            status = 'ACTIVE',
+            updated_at = NOW()
+        WHERE id = ${parentId}
+      `);
+    }
+
+    if (
+      child?.parent_id !== parentId
+      || child.is_header !== false
+      || child.is_postable !== true
+      || child.is_active !== true
+      || child.status !== "ACTIVE"
+    ) {
+      await db.execute(sql`
+        UPDATE chart_of_accounts
+        SET parent_id = ${parentId},
+            is_header = FALSE,
+            is_postable = TRUE,
+            is_active = TRUE,
+            status = 'ACTIVE',
+            updated_at = NOW()
+        WHERE id = ${childId}
+      `);
+    }
+
+    // Existing configuration must never direct a new expense posting to the
+    // non-postable header.
+    await db.execute(sql`
+      UPDATE accounting_settings
+      SET salary_expense_account_id = CASE
+            WHEN salary_expense_account_id = ${parentId} THEN ${childId}
+            ELSE salary_expense_account_id
+          END,
+          allowance_expense_account_id = CASE
+            WHEN allowance_expense_account_id = ${parentId} THEN ${childId}
+            ELSE allowance_expense_account_id
+          END
+      WHERE salary_expense_account_id = ${parentId}
+         OR allowance_expense_account_id = ${parentId}
+    `);
+    await db.execute(sql`
+      UPDATE expense_categories
+      SET expense_account_id = ${childId}
+      WHERE code = 'EXP-GAJI'
+        AND (company_id = 1 OR company_id IS NULL)
+        AND expense_account_id IS DISTINCT FROM ${childId}
+    `);
+  } catch (err) {
+    logger.warn({ err }, "Accounting seed: CST salary hierarchy repair deferred");
+  }
+}
+
 export async function seedAccountingDefaults(companyId?: number): Promise<void> {
   const cid = companyId ?? (await ensureDefaultCompany());
 
@@ -508,6 +613,7 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
   // when the general seed takes its fast path.  The parent is a header only;
   // all new CST bank postings must use the Ciputat child account.
   await repairMandiriCiputatHierarchy();
+  await repairCstSalaryHierarchy();
 
   // ── Fast-path: skip heavy seed if COA, journals, AND settings already fully populated ──
   // Check journals FIRST: if empty → always run full seed regardless of COA state.
@@ -768,6 +874,7 @@ export async function seedAccountingDefaults(companyId?: number): Promise<void> 
   // Pass 3 creates the child on a fresh database; run the repair again so the
   // hierarchy and related defaults are also applied on the full-seed path.
   await repairMandiriCiputatHierarchy();
+  await repairCstSalaryHierarchy();
 
   // Tax headers and subaccounts are intentionally absent from this seed.
   // Run coaTaxMigration and approve its change requests instead.
