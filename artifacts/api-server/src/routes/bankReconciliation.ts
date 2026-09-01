@@ -3411,6 +3411,11 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
 // dengan satu SQL UNION ALL query — lebih efisien, filtering konsisten.
 router.get("/mutations", async (req, res) => {
   await runBankReconciliationCoreMigration();
+  // The list query below reads QRIS settlement tables unconditionally in its
+  // candidate/audit subqueries. Summary already initializes this schema, but
+  // the list must do the same so a cold PROD database cannot return 500 while
+  // the summary still shows valid mutation counts.
+  await runQrisSettlementMigration();
 
   // ── Canonical settlement schema availability check ────────────────────────
   // sport_center.payment_settlement_batches / _items and

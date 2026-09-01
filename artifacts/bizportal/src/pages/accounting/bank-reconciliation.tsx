@@ -5569,7 +5569,7 @@ export default function BankReconciliationPage() {
   // ── Queries ──────────────────────────────────────────────────────────────
   const queryKey = ["bank-reconciliation", filterStatus, filterDir, filterProvider, filterPaymentType, filterFrom, filterTo, filterSearch, page];
 
-  const { data, isLoading, refetch } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey,
     queryFn: async () => {
       const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(page * PAGE_SIZE) });
@@ -7231,6 +7231,21 @@ export default function BankReconciliationPage() {
                 <Card key={i} className="animate-pulse"><CardContent className="p-4 h-24" /></Card>
               ))}
             </div>
+          ) : error ? (
+            <Card className="border-red-200 dark:border-red-900/60">
+              <CardContent className="py-10 flex flex-col items-center gap-3 text-center">
+                <AlertTriangle className="w-10 h-10 text-red-500/70" />
+                <div>
+                  <p className="font-medium text-red-700 dark:text-red-300">Gagal memuat mutasi bank</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Server PROD belum siap atau schema rekonsiliasi belum lengkap. Coba muat ulang.
+                  </p>
+                </div>
+                <Button variant="outline" size="sm" onClick={() => refetch()}>
+                  Coba Lagi
+                </Button>
+              </CardContent>
+            </Card>
           ) : mutations.length === 0 ? (
             <Card>
               <CardContent className="py-16 flex flex-col items-center gap-3 text-muted-foreground">
