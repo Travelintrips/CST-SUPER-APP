@@ -3617,7 +3617,7 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
          AND v_batch.bank_mutation_id = v_canonical.id
          AND v_public.status = 'approved'
          AND v_existing_match.id IS NOT NULL
-         AND v_existing_match.candidate_id = p_settlement_id
+         AND v_existing_match.candidate_id::text = p_settlement_id::text
          AND v_existing_match.candidate_source =
              'sport_center.payment_settlement_batches'
          AND v_existing_match.status = 'approved'
@@ -3651,7 +3651,7 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
         IF v_existing_match.id IS NOT NULL
            AND (
              v_existing_match.candidate_type <> 'qris_settlement'
-             OR v_existing_match.candidate_id <> p_settlement_id
+             OR v_existing_match.candidate_id::text <> p_settlement_id::text
              OR v_existing_match.candidate_source <>
                 'sport_center.payment_settlement_batches'
            )
@@ -3759,7 +3759,7 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
         ELSE
           UPDATE public.bank_reconciliation_matches
              SET candidate_type = 'qris_settlement',
-                 candidate_id = p_settlement_id::integer,
+             candidate_id = p_settlement_id::text,
                  match_score = 100,
                  match_reason = 'OWNER_RECOVERY_NET_CORRECTION',
                  amount_match = TRUE,
@@ -5128,7 +5128,7 @@ export async function ensureCanonicalSettlementContracts(): Promise<void> {
        WHERE mutation_id = p_public_mutation_id AND status IN ('candidate','approved')
        ORDER BY id LIMIT 1 FOR UPDATE;
       IF FOUND AND (v_match.candidate_type <> 'qris_settlement'
-         OR v_match.candidate_id <> p_settlement_id
+         OR v_match.candidate_id::text <> p_settlement_id::text
          OR v_match.candidate_source <> 'sport_center.payment_settlement_batches') THEN
         RAISE EXCEPTION 'CANONICAL_SETTLEMENT_RECOVERY_MATCH_CONFLICT: mutation=%',
           p_public_mutation_id;

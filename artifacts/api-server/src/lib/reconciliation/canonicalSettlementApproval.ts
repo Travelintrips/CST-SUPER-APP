@@ -322,7 +322,7 @@ export async function approveCanonicalSettlementLink(
         FROM bank_reconciliation_matches
         WHERE mutation_id = ${mutationId}
           AND candidate_type = 'qris_settlement'
-          AND candidate_id = ${requestedId}
+          AND candidate_id::text = ${requestedId}::text
           AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
           AND status IN ('candidate', 'approved')
         ORDER BY id
@@ -368,7 +368,7 @@ export async function approveCanonicalSettlementLink(
           FROM bank_reconciliation_matches existing
           WHERE existing.mutation_id = ${mutationId}
             AND existing.candidate_type = 'qris_settlement'
-            AND existing.candidate_id = ${requestedId}
+            AND existing.candidate_id::text = ${requestedId}::text
             AND existing.candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
             AND existing.status IN ('candidate', 'approved')
         )
@@ -381,7 +381,7 @@ export async function approveCanonicalSettlementLink(
           FROM bank_reconciliation_matches
           WHERE mutation_id = ${mutationId}
             AND candidate_type = 'qris_settlement'
-            AND candidate_id = ${requestedId}
+            AND candidate_id::text = ${requestedId}::text
             AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
             AND status IN ('candidate', 'approved')
           ORDER BY CASE WHEN status = 'approved' THEN 0 ELSE 1 END, id
@@ -535,7 +535,7 @@ export async function approveCanonicalSettlementLink(
       SELECT id, mutation_id
       FROM bank_reconciliation_matches
       WHERE candidate_type = 'qris_settlement'
-        AND candidate_id = ${settlementId}
+        AND candidate_id::text = ${settlementId}::text
         AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
         AND status = 'approved'
       FOR UPDATE
@@ -830,7 +830,7 @@ export async function approveCanonicalSettlementLink(
         SELECT id, candidate_id
         FROM bank_reconciliation_matches
         WHERE candidate_type = 'sport_payment'
-          AND candidate_id IN (${paymentIdList})
+          AND candidate_id::text IN (${paymentIdList.split(",").map((id) => `'${id}'`).join(",")})
           AND status IN ('candidate', 'approved')
         FOR UPDATE
       `));
@@ -884,7 +884,7 @@ export async function approveCanonicalSettlementLink(
       WHERE id = ${Number(match.id)}
         AND mutation_id = ${mutationId}
         AND candidate_type = 'qris_settlement'
-        AND candidate_id = ${settlementId}
+        AND candidate_id::text = ${settlementId}::text
         AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
        RETURNING id
     `));
@@ -1103,7 +1103,7 @@ export async function reopenCanonicalSettlementLink(
       WHERE id = ${Number(match.id)}
         AND mutation_id = ${mutationId}
         AND candidate_type = 'qris_settlement'
-        AND candidate_id = ${settlementId}
+        AND candidate_id::text = ${settlementId}::text
         AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
         AND status = 'approved'
        RETURNING id
