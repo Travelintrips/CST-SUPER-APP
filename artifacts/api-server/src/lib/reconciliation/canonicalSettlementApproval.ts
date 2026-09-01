@@ -912,15 +912,27 @@ export async function approveCanonicalSettlementLink(
       );
     }
 
-    await tx.execute(sql.raw(`
-      INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
-      VALUES (
-        ${mutationId},
-        'CANONICAL_SETTLEMENT_RECONCILIATION_APPROVED',
-        '${escapeSql(actor)}',
-        ${jsonSql(auditMeta)}
-      )
-    `));
+    try {
+      await tx.execute(sql.raw(`
+        INSERT INTO bank_reconciliation_audit (mutation_id, action, actor, meta)
+        VALUES (
+          ${mutationId},
+          'CANONICAL_SETTLEMENT_RECONCILIATION_APPROVED',
+          '${escapeSql(actor)}',
+          ${jsonSql(auditMeta)}
+        )
+      `));
+    } catch (error) {
+      // Drizzle v0.45 wraps PostgreSQL errors in a query error whose public
+      // message is only "Failed query: ...". Preserve the database cause as
+      // the thrown error so transaction callers can classify an audit failure
+      // without reaching into ORM internals.
+      const cause = (error as { cause?: unknown })?.cause;
+      if (cause instanceof Error && cause.message) {
+        throw Object.assign(new Error(cause.message), cause);
+      }
+      throw error;
+    }
 
     return buildResult(
       settlementId,
