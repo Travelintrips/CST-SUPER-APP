@@ -2405,6 +2405,7 @@ function CoaReferenceDialog({
   const [selectedCode, setSelectedCode] = useState("");
   const [conditionValue, setConditionValue] = useState("");
   const [saving, setSaving] = useState<"rule" | "current" | null>(null);
+  const [saveToRuleAi, setSaveToRuleAi] = useState(true);
   const [creatingCoa, setCreatingCoa] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newCoaRole, setNewCoaRole] = useState<"parent" | "child">("child");
@@ -2458,6 +2459,7 @@ function CoaReferenceDialog({
     setSelectedCode("");
     setConditionValue(mutation.normalized_description || mutation.description || "");
     setSaving(null);
+    setSaveToRuleAi(true);
     setCreatingCoa(false);
     setCreating(false);
     setNewCoaRole("child");
@@ -2646,6 +2648,7 @@ function CoaReferenceDialog({
           condition_value: condition,
           target_type: mutation.direction === "IN" ? "income" : "expense",
           target_coa_code: selectedAccount.code,
+           save_to_rule_ai: saveToRuleAi,
           confidence_score: 100,
           stop_processing: true,
         }),
@@ -2678,8 +2681,10 @@ function CoaReferenceDialog({
         });
       } else {
         toast({
-          title: "Referensi COA tersimpan",
-          description: `Mutasi berikutnya dengan referensi ini akan diarahkan ke ${selectedAccount.code}.`,
+          title: saveToRuleAi ? "Referensi COA tersimpan" : "Referensi COA tersimpan tanpa Rule AI",
+          description: saveToRuleAi
+            ? `Mutasi berikutnya dengan referensi ini akan diarahkan ke ${selectedAccount.code}.`
+            : `Referensi operasional tetap diarahkan ke ${selectedAccount.code}; Rule AI tidak dibuat.`,
         });
       }
       // A saved rule changes the server-side candidate recommendation. The
@@ -2971,6 +2976,27 @@ function CoaReferenceDialog({
                 Terpilih: <strong>{selectedAccount.code} — {selectedAccount.name}</strong>
               </p>
             )}
+          </div>
+
+          <div className="flex items-start gap-3 rounded-md border border-indigo-200 bg-indigo-50/60 px-3 py-2.5 dark:border-indigo-900 dark:bg-indigo-950/30">
+            <Checkbox
+              id="save-reference-to-rule-ai"
+              checked={saveToRuleAi}
+              onCheckedChange={(checked) => setSaveToRuleAi(checked === true)}
+              className="mt-0.5"
+            />
+            <div className="space-y-0.5">
+              <label
+                htmlFor="save-reference-to-rule-ai"
+                className="cursor-pointer text-xs font-medium text-indigo-900 dark:text-indigo-100"
+              >
+                Simpan juga ke Rule AI
+              </label>
+              <p className="text-[11px] text-indigo-700 dark:text-indigo-300">
+                Jika dicentang, referensi ini menjadi rule AI untuk transaksi bank berikutnya.
+                Jika tidak, hanya referensi rekonsiliasi operasional yang disimpan.
+              </p>
+            </div>
           </div>
 
           {!canApplyCurrent && canApprove(mutation) && visibleCandidates(mutation).length > 0 && (

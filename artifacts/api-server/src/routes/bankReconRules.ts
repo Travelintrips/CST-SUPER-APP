@@ -322,11 +322,14 @@ router.post("/", async (req, res) => {
     const rule = rowToRule(created);
 
     // Keep the configuration workspace in sync with the operational
-    // reconciliation rule created from the Bank Reconciliation screen.
+    // reconciliation rule created from the Bank Reconciliation screen only
+    // when the caller explicitly keeps the "save to Rule AI" option enabled.
     // `recon_rules` remains the authoritative matching/auto-approval source;
     // the classification config is the reusable reference shown in the
     // configuration screen, and the AI rule links back to that config.
-    try {
+    const saveToRuleAi = body.save_to_rule_ai !== false;
+    if (saveToRuleAi) {
+      try {
       const aiFlow = body.direction === "IN"
         ? "INCOME_ALLOCATION"
         : "ROUTINE_EXPENSE_ALLOCATION";
@@ -430,14 +433,15 @@ router.post("/", async (req, res) => {
           "[recon_rules] deferred Rule AI operational sync failed",
         );
       });
-    } catch (syncError: any) {
-      // The operational rule is already saved and remains usable for
-      // auto-approval. Do not turn a configuration mirror issue into a
-      // failed COA reference save.
-      logger.warn(
-        { err: syncError?.message ?? String(syncError), ruleId: rule.id },
-        "[recon_rules] configuration Rule AI mirror failed",
-      );
+      } catch (syncError: any) {
+        // The operational rule is already saved and remains usable for
+        // auto-approval. Do not turn a configuration mirror issue into a
+        // failed COA reference save.
+        logger.warn(
+          { err: syncError?.message ?? String(syncError), ruleId: rule.id },
+          "[recon_rules] configuration Rule AI mirror failed",
+        );
+      }
     }
 
     // Snapshot version (async — non-blocking to response)
@@ -449,6 +453,7 @@ router.post("/", async (req, res) => {
 
     return res.status(201).json({
       rule,
+      saveToRuleAi,
       conflicts: conflicts ?? [],
       conflictWarning: conflicts ? `${conflicts.length} potensi konflik ditemukan — lihat 'conflicts' untuk detail` : null,
     });
