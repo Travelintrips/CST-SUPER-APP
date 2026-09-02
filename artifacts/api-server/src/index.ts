@@ -200,6 +200,7 @@ import { runBankReceiptMigration } from "./lib/bankReceiptMigration.js";
 import { runAdvanceMigration } from "./routes/advances.js";
 import { runAllocationMigration } from "./lib/allocationMigration.js";
 import { runTreasuryMigration } from "./lib/treasury/treasuryMigration.js";
+import { runBankMutationAllocationLineageMigration } from "./lib/reconciliation/bankMutationAllocationLineageMigration.js";
 import { runBankAllocationMigration } from "./lib/bankAllocationMigration.js";
 import { runExpenseRuleMigration } from "./lib/expenseRuleMigration.js";
 import { runExpenseClassificationMigration } from "./lib/expenseClassificationMigration.js";
@@ -2156,6 +2157,7 @@ async function startServer() {
     .then(() => runWithRetry("Advance Management migration", runAdvanceMigration))
     .then(() => runWithRetry("Allocation Engine migration", runAllocationMigration))
     .then(() => runWithRetry("Treasury Batch 4 migration", runTreasuryMigration))
+    .then(() => runWithRetry("Bank mutation allocation lineage migration", runBankMutationAllocationLineageMigration))
     .then(() => runWithRetry("Bank Allocation Phase 2 migration", runBankAllocationMigration))
     .then(() => runWithRetry("Expense Rule Engine migration (Phase 3)", runExpenseRuleMigration))
     .then(() => runWithRetry("Expense Classification columns migration (Phase 6D)", runExpenseClassificationMigration))

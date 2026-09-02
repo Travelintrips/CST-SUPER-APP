@@ -123,6 +123,7 @@ const REGISTRY_ROWS: readonly RegistryRow[] = [
   ["allocation_engine", "Allocation Engine migration", "schema"],
   ["treasury_batch_4", "Treasury Batch 4 migration", "schema"],
   ["bank_allocation_phase_2", "Bank Allocation Phase 2 migration", "schema"],
+  ["bank_mutation_allocation_lineage", "Bank mutation allocation lineage migration", "schema"],
   ["expense_rule_engine", "Expense Rule Engine migration (Phase 3)", "schema"],
   ["expense_classification_columns", "Expense Classification columns migration (Phase 6D)", "schema"],
   ["logistics_payments", "ASK logistics_payments migration", "schema"],

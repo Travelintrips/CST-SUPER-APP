@@ -43,6 +43,12 @@ import {
   type AllocationMutationInput,
 } from "../lib/reconciliation/bankAllocationScoring.js";
 import { normalizeCompanyId } from "../lib/services/portalCompanyScopeUtils.js";
+import {
+  allocateBankMutation,
+  BankMutationAllocationError,
+  searchPreviousMutationAllocations,
+} from "../lib/reconciliation/bankMutationAllocationService.js";
+import { classifyMutationAllocationStatus } from "../lib/reconciliation/bankMutationAllocationRules.js";
 
 const router = Router();
 
@@ -333,9 +339,22 @@ router.get("/mutation/:id", async (req, res) => {
       WHERE bank_mutation_id = ${id}
       ORDER BY created_at ASC
     `).then((r) => r.rows);
+    const allocationSummaryRows = await db.execute<any>(sql`
+      SELECT COALESCE(SUM(allocated_amount), 0) AS allocated_amount
+      FROM payment_allocations
+      WHERE mutation_id = ${id} AND is_active = TRUE
+    `).then((r) => r.rows);
+    const mutationAmount = Number(mutRows[0].amount ?? 0);
+    const allocatedAmount = Number(allocationSummaryRows[0]?.allocated_amount ?? 0);
 
     res.json({
-      mutation: { ...mutRows[0], amount: parseFloat(mutRows[0].amount) },
+      mutation: {
+        ...mutRows[0],
+        amount: mutationAmount,
+        allocation_amount: allocatedAmount,
+        allocation_remaining_amount: Math.max(0, mutationAmount - allocatedAmount),
+        allocation_status: classifyMutationAllocationStatus(mutationAmount, allocatedAmount),
+      },
       candidates: matchRows.map((m: any) => ({
         ...m,
         match_score: parseFloat(m.match_score),
@@ -347,6 +366,112 @@ router.get("/mutation/:id", async (req, res) => {
   } catch (err) {
     logger.error({ err }, "[bankAllocation] mutation detail error");
     res.status(500).json({ error: "Gagal mengambil detail mutasi" });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GET /mutation/:id/previous-allocations
+//
+// Previous-payment lookup intentionally accepts only date + description. The
+// reviewer chooses the result; amount/provider/account heuristics are not used.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.get("/mutation/:id/previous-allocations", async (req, res) => {
+  try {
+    const currentMutationId = Number(req.params.id);
+    const userCompanyId = normalizeCompanyId((req as any).user?.companyId);
+    if (!Number.isInteger(currentMutationId) || currentMutationId <= 0) {
+      return res.status(400).json({ error: "mutationId tidak valid" });
+    }
+
+    const currentRows = await db.execute<any>(sql`
+      SELECT id, company_id
+      FROM bank_mutations
+      WHERE id = ${currentMutationId}
+      LIMIT 1
+    `).then((result) => result.rows);
+    const current = currentRows[0];
+    if (!current) return res.status(404).json({ error: "Mutasi tidak ditemukan" });
+
+    const mutationCompanyId = normalizeCompanyId(current.company_id);
+    if (mutationCompanyId == null) {
+      return res.status(400).json({ error: "Mutasi tidak memiliki company_id yang valid" });
+    }
+    if (userCompanyId != null && userCompanyId !== mutationCompanyId) {
+      return res.status(403).json({ error: "Akses ditolak" });
+    }
+
+    const rows = await searchPreviousMutationAllocations({
+      currentMutationId,
+      companyId: mutationCompanyId,
+      transactionDate: String(req.query.date ?? ""),
+      description: String(req.query.description ?? ""),
+    });
+    return res.json({ ok: true, rows });
+  } catch (err: any) {
+    if (err instanceof BankMutationAllocationError) {
+      return res.status(err.httpStatus).json({ error: err.message });
+    }
+    logger.error({ err }, "[bankAllocation] previous allocation search error");
+    return res.status(500).json({ error: "Gagal mencari allocation sebelumnya" });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// POST /mutation/:id/allocate
+//
+// Creates immutable payment_allocations edges for the current mutation. This
+// endpoint does not create a journal; posting remains governed by the existing
+// reconciliation/allocation approval flows.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.post("/mutation/:id/allocate", async (req, res) => {
+  try {
+    const mutationId = Number(req.params.id);
+    const user = (req as any).user;
+    const userCompanyId = normalizeCompanyId(user?.companyId);
+    if (!Number.isInteger(mutationId) || mutationId <= 0) {
+      return res.status(400).json({ error: "mutationId tidak valid" });
+    }
+
+    const currentRows = await db.execute<any>(sql`
+      SELECT company_id FROM bank_mutations WHERE id = ${mutationId} LIMIT 1
+    `).then((result) => result.rows);
+    const mutationCompanyId = normalizeCompanyId(currentRows[0]?.company_id);
+    if (mutationCompanyId == null) {
+      return res.status(404).json({ error: "Mutasi tidak ditemukan atau company_id tidak valid" });
+    }
+    if (userCompanyId != null && userCompanyId !== mutationCompanyId) {
+      return res.status(403).json({ error: "Akses ditolak" });
+    }
+
+    const requestedAllocations = Array.isArray(req.body?.allocations)
+      ? req.body.allocations
+      : [];
+    const result = await allocateBankMutation({
+      mutationId,
+      companyId: mutationCompanyId,
+      allocations: requestedAllocations.map((line: any) => ({
+        invoiceId: Number(line.invoiceId ?? line.invoice_id),
+        invoiceRef: line.invoiceRef ?? line.invoice_ref ?? null,
+        amount: Number(line.amount ?? line.allocatedNow ?? line.allocated_amount),
+        previousAllocationId: line.previousAllocationId != null
+          ? Number(line.previousAllocationId)
+          : line.previous_allocation_id != null
+            ? Number(line.previous_allocation_id)
+            : null,
+      })),
+      actor: String(user?.email ?? user?.id ?? "finance"),
+      requestedGroupId: req.body?.groupId != null ? Number(req.body.groupId) : null,
+    });
+
+    return res.status(201).json({ ok: true, result });
+  } catch (err: any) {
+    if (err instanceof BankMutationAllocationError) {
+      return res.status(err.httpStatus).json({ error: err.message });
+    }
+    logger.error({ err }, "[bankAllocation] allocate mutation error");
+    return res.status(500).json({ error: "Gagal menyimpan allocation mutasi" });
   }
 });
 

@@ -78,7 +78,8 @@ import { runReconBatch3Migration } from "../lib/reconciliation/reconBatch3Migrat
 import { getCalibrationReport, recordMatchOutcome } from "../lib/reconciliation/confidenceCalibrationService.js";
 import { buildGraphFromMutation, buildGraphFromInvoice } from "../lib/reconciliation/paymentRelationshipGraph.js";
 import { findBestMultiInvoiceMatch } from "../lib/reconciliation/multiInvoiceMatchingEngine.js";
-import { buildAllocationPlan, getCompanyAllocationStrategy, applyAllocationPlan } from "../lib/reconciliation/paymentAllocationEngine.js";
+import { buildAllocationPlan, getCompanyAllocationStrategy } from "../lib/reconciliation/paymentAllocationEngine.js";
+import { allocateBankMutation, BankMutationAllocationError } from "../lib/reconciliation/bankMutationAllocationService.js";
 import { resolveCompanyId } from "../lib/resolveCompany.js";
 import { normalizeCompanyId } from "../lib/services/portalCompanyScopeUtils.js";
 import {
@@ -7338,16 +7339,30 @@ router.post("/mutations/:mutationId/apply-allocation", async (req, res) => {
   if (!allocationPlan || !companyId) return res.status(400).json({ error: "allocationPlan and companyId required" });
 
   try {
-    const result = await applyAllocationPlan(
-      allocationPlan,
-      Number(mutId),
-      Number(companyId),
-      groupId != null ? Number(groupId) : null,
-      String(actor ?? "api"),
-    );
+    const sessionCompanyId = normalizeCompanyId((req as any).user?.companyId);
+    const requestedCompanyId = Number(companyId);
+    if (sessionCompanyId != null && sessionCompanyId !== requestedCompanyId) {
+      return res.status(403).json({ error: "Akses ditolak: company scope tidak sesuai" });
+    }
+    const result = await allocateBankMutation({
+      mutationId: Number(mutId),
+      companyId: requestedCompanyId,
+      allocations: Array.isArray(allocationPlan.lines)
+        ? allocationPlan.lines.map((line: any) => ({
+            invoiceId: Number(line.invoiceId),
+            invoiceRef: line.invoiceRef ?? null,
+            amount: Number(line.allocatedNow),
+          }))
+        : [],
+      requestedGroupId: groupId != null ? Number(groupId) : null,
+      actor: String(actor ?? (req as any).user?.email ?? "api"),
+    });
     return res.json({ ok: true, result });
   } catch (e: any) {
     logger.error({ err: e.message, mutId }, "[bankRecon] apply-allocation failed");
+    if (e instanceof BankMutationAllocationError) {
+      return res.status(e.httpStatus).json({ error: e.message });
+    }
     return res.status(500).json({ error: e.message });
   }
 });
