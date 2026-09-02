@@ -23,7 +23,7 @@ const TARGET_MUTATION_ID = 4903;
 const TARGET_CANDIDATE_ID = 2673;
 const TARGET_PAYMENT_IDS = [278, 279, 280];
 const TARGET_BANK_ACCOUNT_ID = 2;
-const TARGET_BANK_AMOUNT = "158880.00";
+const TARGET_BANK_AMOUNT = 158880;
 const TARGET_BANK_DATE = "2026-08-01";
 const TARGET_PROVIDER = "mandiri_direct";
 const ACTOR = "production-orphan-qris-status-repair";
@@ -83,7 +83,7 @@ try {
     || Number(bank.company_id) !== TARGET_COMPANY_ID
     || Number(bank.bank_account_id) !== TARGET_BANK_ACCOUNT_ID
     || String(bank.transaction_date).slice(0, 10) !== TARGET_BANK_DATE
-    || String(bank.amount) !== TARGET_BANK_AMOUNT
+    || Number(bank.amount) !== TARGET_BANK_AMOUNT
     || String(bank.status).toLowerCase() !== "matched"
   ) {
     throw new Error(
@@ -160,6 +160,14 @@ try {
       `ORPHAN_QRIS_RESET_LEGACY_ITEMS_PRESENT: ${JSON.stringify(legacyItems.rows)}`,
     );
   }
+
+  // The canonical source update fires the existing accounting mirror trigger.
+  // PROD permits that trigger to refresh payment metadata on a posted journal
+  // only inside this explicit transaction-local repair window. This does not
+  // bypass triggers and does not permit financial-field changes.
+  await client.query(
+    "SET LOCAL sport_center.allow_posted_accounting_metadata_correction = 'on'",
+  );
 
   const update = await client.query(
     `UPDATE sport_center.sport_payments

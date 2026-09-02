@@ -152,3 +152,4 @@
 - [Development synthetic marker cleanup](dev-synthetic-marker-cleanup.md) — stale audit leaves can outlive parents and numeric IDs can be reused; classify live parents before exact-manifest deletion.
 - [Rule AI document and tax gate](rule-ai-document-tax-gate.md) — required proof blocks posting; PPN routing follows configured company tax accounts before standard-code fallback.
 - [Rule AI zero reference sentinel](rule-ai-zero-reference-sentinel.md) — reference_amount=0 with zero tolerance means nominal unset, not an exact zero-amount rule.
+- [Canonical payment status repair](canonical-payment-status-repair.md) — source status resets can fire posted-journal mirrors; use the transaction-local metadata correction window, never disable guards.
