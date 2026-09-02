@@ -5021,9 +5021,42 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
 
   const {
     match_id, candidate_type, candidate_id, candidate_source, note, manual_coa_code,
-    manual_override, override_reason,
+    manual_override, override_reason, rule_ai,
   } = req.body;
   const actor = (req as any).user?.email ?? "admin";
+  if (rule_ai != null && (typeof rule_ai !== "object" || Array.isArray(rule_ai))) {
+    return res.status(400).json({ error: "Payload Rule AI tidak valid." });
+  }
+  const atomicRuleAi = rule_ai == null
+    ? null
+    : {
+        companyId: Number(rule_ai.company_id),
+        name: String(rule_ai.name ?? ""),
+        description: rule_ai.description == null ? null : String(rule_ai.description),
+        conditionField: String(rule_ai.condition_field ?? ""),
+        conditionOperator: String(rule_ai.condition_operator ?? ""),
+        conditionValue: String(rule_ai.condition_value ?? ""),
+        conditions: Array.isArray(rule_ai.conditions)
+          ? rule_ai.conditions.map((condition: any) => ({
+              field: String(condition?.field ?? ""),
+              operator: String(condition?.operator ?? ""),
+              value: String(condition?.value ?? ""),
+              negate: Boolean(condition?.negate),
+            }))
+          : [],
+        logic: rule_ai.logic === "OR" ? "OR" as const : "AND" as const,
+        specificity: Number(rule_ai.specificity ?? 1),
+        actionFlow: String(rule_ai.action_flow ?? ""),
+        actionCoaCode: String(rule_ai.action_coa_code ?? ""),
+        confidence: Number(rule_ai.confidence ?? 1),
+        priority: Number(rule_ai.priority ?? 120),
+        source: String(rule_ai.source ?? "manual"),
+      };
+
+  // The combined COA-selection path needs the Rule AI tables and operational
+  // columns ready before the approval transaction starts. DDL/seed setup is
+  // infrastructure; the actual rule and journal writes happen atomically below.
+  if (atomicRuleAi) await runReconRulesMigration();
 
   // ── Promote bank_mutation_imports row → bank_mutations if needed ─────────────
   // The GET /mutations list is a UNION ALL of bank_mutations + bank_mutation_imports.
@@ -5156,6 +5189,8 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
       candidate_source === RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER
       ? candidate_source as ReconciliationCandidateSource
       : null,
+    false,
+    atomicRuleAi,
   );
 
   if (!result.ok) {
@@ -5177,7 +5212,11 @@ router.post("/:mutationId/approve", createIdempotencyMiddleware("reconciliation:
     return res.status(400).json({ error: result.error });
   }
 
-  const responseBody = { ok: true, journal_entry_id: result.journalEntryId };
+  const responseBody = {
+    ok: true,
+    journal_entry_id: result.journalEntryId,
+    ...(result.ruleAiId != null ? { rule_ai_id: result.ruleAiId } : {}),
+  };
 
   audit(req, { action: "approve", module: "accounting", resourceId: `bank-mutation-${mutId}`, after: { journal_entry_id: result.journalEntryId } });
 

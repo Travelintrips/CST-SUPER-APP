@@ -128,6 +128,7 @@
 - [QRIS audit rate precision](qris-audit-rate-precision.md) — unmatched QRIS evidence can have a rate beyond ±10; persist it as audit-only instead of overflowing.
 - [Historical QRIS settlement config](historical-qris-settlement-config.md) — owner-approved rules must cover legacy settlement dates with contiguous effective windows.
 - [Rule AI operational mirror](rule-ai-operational-mirror.md) — Rule AI must sync to a managed operational matcher rule without altering independent COA references.
+- [Atomic Rule AI approval](atomic-rule-ai-approval.md) — manual COA approval must persist Rule AI, its runtime mirror, and the draft journal in one idempotent transaction.
 - [Runtime fixture FK cleanup](runtime-fixture-fk-cleanup.md) — cleanup proofs must discover marker-linked descendants and isolate each delete with savepoints.
 - [Production hard-delete guard](production-hard-delete-guard.md) — posted bank-recon cleanup must cover journal/line and fleet-ledger guards in one locked transaction, then restore them.
 - [Supabase pooler startup parameters](supabase-pooler-startup-parameter.md) — set statement_timeout after connect; passing it as a startup option can be rejected by the pooler.

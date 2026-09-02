@@ -2520,6 +2520,7 @@ function CoaReferenceDialog({
   const [saving, setSaving] = useState(false);
   const [creatingCoa, setCreatingCoa] = useState(false);
   const [creating, setCreating] = useState(false);
+  const approvalKeyRef = useRef<{ mutationId: number; coaCode: string; key: string } | null>(null);
   const [newCoaRole, setNewCoaRole] = useState<"parent" | "child">("child");
   const [parentSearch, setParentSearch] = useState("");
   const [newCoaForm, setNewCoaForm] = useState({
@@ -2725,7 +2726,7 @@ function CoaReferenceDialog({
     }
   };
 
-  const saveRuleAi = async (selected: CoaAccountReference) => {
+  const buildRuleAiPayload = (selected: CoaAccountReference) => {
     if (!mutation || !companyId) {
       throw new Error("Perusahaan aktif atau mutasi belum tersedia");
     }
@@ -2747,34 +2748,24 @@ function CoaReferenceDialog({
     ];
     const ruleName = `Pemetaan COA — ${description}`.slice(0, 120);
 
-    const response = await fetch("/api/recon-classification/ai-rules", {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: ruleName,
-        description: `Dibuat dari pemilihan COA pada mutasi bank #${mutation.id}`,
-        condition_field: primaryCondition.field,
-        condition_operator: primaryCondition.operator,
-        condition_value: primaryCondition.value,
-        conditions,
-        logic: "AND",
-        specificity: conditions.length,
-        action_flow: mutation.direction === "IN"
-          ? "INCOME_ALLOCATION"
-          : "ROUTINE_EXPENSE_ALLOCATION",
-        action_coa_code: selected.code,
-        confidence: 1,
-        priority: 120,
-        source: "manual",
-        company_id: companyId,
-      }),
-    });
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(body.error ?? "Rule AI gagal disimpan");
-    }
-    return body;
+    return {
+      name: ruleName,
+      description: `Dibuat dari pemilihan COA pada mutasi bank #${mutation.id}`,
+      condition_field: primaryCondition.field,
+      condition_operator: primaryCondition.operator,
+      condition_value: primaryCondition.value,
+      conditions,
+      logic: "AND" as const,
+      specificity: conditions.length,
+      action_flow: mutation.direction === "IN"
+        ? "INCOME_ALLOCATION"
+        : "ROUTINE_EXPENSE_ALLOCATION",
+      action_coa_code: selected.code,
+      confidence: 1,
+      priority: 120,
+      source: "manual",
+      company_id: companyId,
+    };
   };
 
   const save = async () => {
@@ -2798,14 +2789,28 @@ function CoaReferenceDialog({
 
     setSaving(true);
     try {
-      const ruleAiBody = await saveRuleAi(selectedAccount);
+      const ruleAi = buildRuleAiPayload(selectedAccount);
+      const previousApprovalKey = approvalKeyRef.current;
+      const approvalKey = previousApprovalKey?.mutationId === mutation.id &&
+        previousApprovalKey.coaCode === selectedAccount.code
+        ? previousApprovalKey.key
+        : crypto.randomUUID();
+      approvalKeyRef.current = {
+        mutationId: mutation.id,
+        coaCode: selectedAccount.code,
+        key: approvalKey,
+      };
       const approveResponse = await fetch(`/api/bank-reconciliation/${mutation.id}/approve`, {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-idempotency-key": approvalKey,
+        },
         body: JSON.stringify({
           manual_coa_code: selectedAccount.code,
           note: `COA dipilih manual hanya untuk mutasi ini: ${selectedAccount.code}`,
+          rule_ai: ruleAi,
         }),
       });
       const approveBody = await approveResponse.json().catch(() => ({}));
@@ -2816,8 +2821,9 @@ function CoaReferenceDialog({
       }
       toast({
         title: "COA disimpan ke Rule AI dan draft jurnal dibuat",
-        description: `${selectedAccount.code} — ${selectedAccount.name}. Rule AI #${ruleAiBody?.data?.id ?? "baru"} aktif untuk perusahaan ini.`,
+        description: `${selectedAccount.code} — ${selectedAccount.name}. Rule AI dan draft jurnal tersimpan atomik.`,
       });
+      approvalKeyRef.current = null;
       // The mutation list and QRIS candidate audit use different React Query
       // keys, so refresh both views after the one-time approval.
       qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] });

@@ -56,6 +56,7 @@ import {
   type ReconRule,
   type ReconRuleMutationInput,
 } from "./reconRuleEngine.js";
+import { invalidateRulesCache } from "./reconCache.js";
 export { dedupeCandidatesByBusinessIdentity } from "./candidateBusinessIdentity.js";
 import { dedupeCandidatesByBusinessIdentity } from "./candidateBusinessIdentity.js";
 
@@ -455,6 +456,272 @@ async function loadReconRuleTarget(
 
 function escapeSql(value: string): string {
   return value.replace(/'/g, "''");
+}
+
+export interface AtomicRuleAiInput {
+  companyId: number;
+  name: string;
+  description?: string | null;
+  conditionField: string;
+  conditionOperator: string;
+  conditionValue: string;
+  conditions: Array<{
+    field: string;
+    operator: string;
+    value: string;
+    negate?: boolean;
+  }>;
+  logic: "AND" | "OR";
+  specificity: number;
+  actionFlow: string;
+  actionCoaCode: string;
+  confidence: number;
+  priority: number;
+  source?: string;
+}
+
+/**
+ * Persist the Rule AI selected during manual COA approval using the caller's
+ * transaction client. This intentionally owns the operational mirror as well:
+ * the matcher must never observe an AI rule without its runtime rule.
+ *
+ * The advisory lock makes the logical rule identity safe under concurrent
+ * retries. The surrounding approval transaction then guarantees that a journal
+ * failure rolls back both the AI row and its operational mirror.
+ */
+export async function persistRuleAiWithinTransaction(
+  client: DbClient,
+  input: AtomicRuleAiInput,
+  actor: string,
+): Promise<{ id: number }> {
+  const allowedConditionFields = new Set([
+    "description", "amount", "direction", "bank", "transaction_code",
+    "normalized", "reference", "counterparty_name", "counterparty_account",
+  ]);
+  const allowedConditionOperators = new Set([
+    "contains", "not_contains", "equals", "not_equals", "starts_with",
+    "ends_with", "eq", "neq", "regex", "greater_than", "less_than",
+    "gte", "lte", "between",
+  ]);
+  const allowedActionFlows = new Set([
+    "BUSINESS_MATCHING", "ROUTINE_EXPENSE_ALLOCATION", "INTERNAL_TRANSFER",
+    "INCOME_ALLOCATION", "MANUAL_REVIEW", "BLOCKED",
+  ]);
+
+  if (!Number.isSafeInteger(input.companyId) || input.companyId <= 0) {
+    throw new Error("Rule AI membutuhkan company_id yang valid");
+  }
+  if (!input.name.trim() || !input.conditionValue.trim() || !input.actionCoaCode.trim()) {
+    throw new Error("Rule AI membutuhkan nama, kondisi, dan COA tujuan");
+  }
+  if (!Array.isArray(input.conditions) || input.conditions.length === 0) {
+    throw new Error("Rule AI membutuhkan minimal satu kondisi");
+  }
+  if (!allowedConditionFields.has(input.conditionField) ||
+      !allowedConditionOperators.has(input.conditionOperator) ||
+      !allowedActionFlows.has(input.actionFlow)) {
+    throw new Error("Field, operator, atau alur Rule AI tidak valid");
+  }
+
+  const conditions = input.conditions.map((condition) => ({
+    field: String(condition.field),
+    operator: String(condition.operator),
+    value: String(condition.value),
+    negate: Boolean(condition.negate),
+  }));
+  if (conditions.some((condition) =>
+    !allowedConditionFields.has(condition.field) ||
+    !allowedConditionOperators.has(condition.operator) ||
+    !condition.value.trim()
+  )) {
+    throw new Error("Kondisi Rule AI tidak valid");
+  }
+  const conditionsJson = JSON.stringify(conditions);
+  const conditionsSql = `'${escapeSql(conditionsJson)}'::jsonb`;
+  const conditionValueSql = `'${escapeSql(input.conditionValue)}'`;
+  const conditionFieldSql = `'${escapeSql(input.conditionField)}'`;
+  const conditionOperatorSql = `'${escapeSql(input.conditionOperator)}'`;
+  const logic = input.logic === "OR" ? "OR" : "AND";
+  const actionFlow = escapeSql(input.actionFlow);
+  const actionCoaCode = escapeSql(input.actionCoaCode.trim());
+  const descriptionSql = input.description?.trim()
+    ? `'${escapeSql(input.description.trim())}'`
+    : "NULL";
+  const source = escapeSql(input.source ?? "manual");
+  const escapedActor = escapeSql(actor);
+  const specificity = Math.max(1, Math.min(999, Math.trunc(input.specificity)));
+  const priority = Math.max(1, Math.min(999, Math.trunc(input.priority)));
+  const confidence = Math.max(0, Math.min(1, Number(input.confidence)));
+  const confidenceScore = Math.max(0, Math.min(100, Math.round(confidence * 100)));
+
+  // Same condition/action identity must serialize before SELECT+UPDATE/INSERT.
+  const lockIdentity = [
+    input.companyId,
+    input.conditionField,
+    input.conditionOperator,
+    input.conditionValue,
+    conditionsJson,
+    logic,
+    input.actionFlow,
+  ].join(":");
+  await client.execute(sql.raw(
+    `SELECT pg_advisory_xact_lock(hashtext('${escapeSql(lockIdentity)}'))`,
+  ));
+
+  const existing = await client.execute(sql.raw(`
+    SELECT id
+    FROM recon_ai_classification_rules
+    WHERE company_id = ${input.companyId}
+      AND condition_field = ${conditionFieldSql}
+      AND condition_operator = ${conditionOperatorSql}
+      AND condition_value = ${conditionValueSql}
+      AND COALESCE(
+        conditions_json,
+        jsonb_build_array(jsonb_build_object(
+          'field', condition_field,
+          'operator', condition_operator,
+          'value', condition_value,
+          'negate', false
+        ))
+      ) = ${conditionsSql}
+      AND COALESCE(logic, 'AND') = '${logic}'
+      AND COALESCE(action_flow, '') = '${actionFlow}'
+    ORDER BY is_active DESC, updated_at DESC NULLS LAST, id DESC
+    LIMIT 1
+    FOR UPDATE
+  `));
+  const existingId = Number((existing.rows[0] as any)?.id ?? 0);
+
+  const ruleResult = await client.execute(sql.raw(existingId > 0
+    ? `
+      UPDATE recon_ai_classification_rules
+      SET name = '${escapeSql(input.name.trim())}',
+          description = ${descriptionSql},
+          condition_field = ${conditionFieldSql},
+          condition_operator = ${conditionOperatorSql},
+          condition_value = ${conditionValueSql},
+          conditions_json = ${conditionsSql},
+          logic = '${logic}',
+          specificity = ${specificity},
+          action_flow = '${actionFlow}',
+          action_coa_code = '${actionCoaCode}',
+          confidence = ${confidence},
+          priority = ${priority},
+          source = '${source}',
+          is_active = TRUE,
+          updated_at = NOW()
+      WHERE id = ${existingId}
+      RETURNING *
+    `
+    : `
+      INSERT INTO recon_ai_classification_rules
+        (company_id, name, description, condition_field, condition_operator,
+         condition_value, conditions_json, logic, specificity, action_flow,
+         action_coa_code, confidence, priority, source, created_by)
+      VALUES
+        (${input.companyId}, '${escapeSql(input.name.trim())}', ${descriptionSql},
+         ${conditionFieldSql}, ${conditionOperatorSql}, ${conditionValueSql},
+         ${conditionsSql}, '${logic}', ${specificity}, '${actionFlow}',
+         '${actionCoaCode}', ${confidence}, ${priority}, '${source}', '${escapedActor}')
+      RETURNING *
+    `));
+  const aiRule = ruleResult.rows[0] as Record<string, unknown> | undefined;
+  if (!aiRule?.id) throw new Error("Rule AI gagal disimpan");
+  const aiRuleId = Number(aiRule.id);
+
+  const direction = input.actionFlow === "INCOME_ALLOCATION"
+    ? "IN"
+    : input.actionFlow === "INTERNAL_TRANSFER"
+      ? null
+      : "OUT";
+  const directionSql = direction == null ? "NULL" : `'${direction}'`;
+  const directionPredicate = direction == null
+    ? "direction IS NULL"
+    : `direction = '${direction}'`;
+  const targetType = input.actionFlow === "INTERNAL_TRANSFER"
+    ? "internal_transfer"
+    : input.actionFlow === "INCOME_ALLOCATION"
+      ? "income"
+      : "expense";
+
+  const linkedMirror = await client.execute(sql.raw(`
+    SELECT id
+    FROM recon_rules
+    WHERE ai_classification_rule_id = ${aiRuleId}
+    LIMIT 1
+    FOR UPDATE
+  `));
+  let mirrorId = Number((linkedMirror.rows[0] as any)?.id ?? 0);
+
+  if (!mirrorId) {
+    const existingMirror = await client.execute(sql.raw(`
+      SELECT id
+      FROM recon_rules
+      WHERE company_id = ${input.companyId}
+        AND is_active = TRUE
+        AND ai_classification_rule_id IS NULL
+        AND ${directionPredicate}
+        AND condition_field = ${conditionFieldSql}
+        AND condition_operator = ${conditionOperatorSql}
+        AND condition_value = ${conditionValueSql}
+        AND COALESCE(target_coa_code, '') = '${actionCoaCode}'
+      ORDER BY id ASC
+      LIMIT 1
+      FOR UPDATE
+    `));
+    mirrorId = Number((existingMirror.rows[0] as any)?.id ?? 0);
+  }
+
+  if (mirrorId) {
+    await client.execute(sql.raw(`
+      UPDATE recon_rules
+      SET name = '${escapeSql(input.name.trim())}',
+          description = ${descriptionSql},
+          priority = ${priority},
+          is_active = TRUE,
+          direction = ${directionSql},
+          condition_type = 'AI_CLASSIFICATION',
+          condition_field = ${conditionFieldSql},
+          condition_operator = ${conditionOperatorSql},
+          condition_value = ${conditionValueSql},
+          conditions_json = ${conditionsSql},
+          logic = '${logic}',
+          specificity = ${specificity},
+          target_type = '${targetType}',
+          target_coa_code = '${actionCoaCode}',
+          confidence_score = ${confidenceScore},
+          stop_processing = TRUE,
+          ai_classification_rule_id = ${aiRuleId},
+          updated_at = NOW()
+      WHERE id = ${mirrorId}
+    `));
+  } else {
+    const mirrorResult = await client.execute(sql.raw(`
+      INSERT INTO recon_rules
+        (company_id, name, description, priority, is_active, direction,
+         condition_type, condition_field, condition_operator, condition_value,
+         conditions_json, logic, specificity, target_type, target_coa_code,
+         confidence_score, stop_processing, created_by, ai_classification_rule_id)
+      VALUES
+        (${input.companyId}, '${escapeSql(input.name.trim())}', ${descriptionSql},
+         ${priority}, TRUE, ${directionSql}, 'AI_CLASSIFICATION',
+         ${conditionFieldSql}, ${conditionOperatorSql}, ${conditionValueSql},
+         ${conditionsSql}, '${logic}', ${specificity}, '${targetType}',
+         '${actionCoaCode}', ${confidenceScore}, TRUE, '${escapedActor}',
+         ${aiRuleId})
+      RETURNING id
+    `));
+    mirrorId = Number((mirrorResult.rows[0] as any)?.id ?? 0);
+    if (!mirrorId) throw new Error("Mirror operasional Rule AI gagal disimpan");
+  }
+
+  await client.execute(sql.raw(`
+    UPDATE recon_ai_classification_rules
+    SET operational_rule_id = ${mirrorId}, updated_at = NOW()
+    WHERE id = ${aiRuleId}
+  `));
+
+  return { id: aiRuleId };
 }
 
 /**
@@ -1784,10 +2051,12 @@ export async function approveAndCreateJournal(
   manualCoaCode?: string | null,
   candidateSource: ReconciliationCandidateSource | null = null,
   autoPost = false,
-): Promise<{ ok: boolean; journalEntryId: number | null; error?: string; manual_review_required?: true; code?: string }> {
+  ruleAi?: AtomicRuleAiInput | null,
+): Promise<{ ok: boolean; journalEntryId: number | null; ruleAiId?: number; error?: string; manual_review_required?: true; code?: string }> {
 
   let journalEntryId: number | null = null;
   let journalEntryNumber = "";
+  let persistedRuleAiId: number | null = null;
 
   try {
     const txResult = await db.transaction(async (tx) => {
@@ -1819,6 +2088,24 @@ export async function approveAndCreateJournal(
           { code: "COMPANY_SCOPE_REQUIRED" },
         );
       }
+
+       // When manual COA selection also teaches Rule AI, persist it before any
+       // journal work but on this same transaction. A journal failure therefore
+       // rolls back the rule and its operational mirror too.
+       if (ruleAi) {
+         if (ruleAi.companyId !== companyId) {
+           throw Object.assign(
+             new Error("Rule AI dan mutasi harus berada dalam perusahaan yang sama"),
+             { code: "COMPANY_SCOPE_REQUIRED" },
+           );
+         }
+         const persisted = await persistRuleAiWithinTransaction(
+           tx as unknown as DbClient,
+           ruleAi,
+           actor,
+         );
+         persistedRuleAiId = persisted.id;
+       }
 
        // A previous auto-post can successfully create the source journal but
        // fail before the mutation status is promoted. The next run must adopt
@@ -1904,6 +2191,7 @@ export async function approveAndCreateJournal(
            return {
              txJournalEntryId: entryId,
              entryNumber,
+              ruleAiId: persistedRuleAiId,
            };
          }
        }
@@ -2192,6 +2480,7 @@ export async function approveAndCreateJournal(
          return {
            txJournalEntryId: reusedEntry.id,
            entryNumber: reusedEntry.entryNumber,
+            ruleAiId: persistedRuleAiId,
          };
        }
 
@@ -2382,7 +2671,11 @@ export async function approveAndCreateJournal(
        VALUES (${mutationId}, '${autoPost ? "MATCH_APPROVED_AUTO_POSTED" : "MATCH_APPROVED"}', '${actor.replace(/'/g, "''")}', '${auditMeta}')
       `));
 
-      return { txJournalEntryId: entry.id, entryNumber: entry.entryNumber };
+       return {
+         txJournalEntryId: entry.id,
+         entryNumber: entry.entryNumber,
+         ruleAiId: persistedRuleAiId,
+       };
     });
 
     journalEntryId     = txResult.txJournalEntryId;
@@ -2433,11 +2726,18 @@ export async function approveAndCreateJournal(
     journal_entry_id: journalEntryId,
     entry_number:     journalEntryNumber,
   }).catch(() => {});
+  if (persistedRuleAiId != null) {
+    invalidateRulesCache(ruleAi?.companyId ?? 0);
+  }
 
   logger.info(
     { mutationId, journalEntryId, entryNumber: journalEntryNumber, actor },
     "[approveAndCreateJournal] success — all steps committed",
   );
 
-  return { ok: true, journalEntryId };
+  return {
+    ok: true,
+    journalEntryId,
+    ...(persistedRuleAiId != null ? { ruleAiId: persistedRuleAiId } : {}),
+  };
 }
