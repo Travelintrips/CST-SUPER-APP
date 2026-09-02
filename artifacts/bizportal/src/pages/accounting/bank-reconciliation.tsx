@@ -3167,7 +3167,13 @@ function QrisMutationCard({
   const currentPaymentAmounts = audit.current_payment_amounts ?? {};
   const availableItems = allItems.filter((item) => {
     const paymentId = item.paymentId ?? item.payment_id;
+    const liveSettlementStatus = String(
+      item.settlementStatus
+      ?? item.settlement_status
+      ?? "unsettled",
+    ).toLowerCase();
     return paymentId != null
+      && liveSettlementStatus === "unsettled"
       && (currentPaymentIds
         ? currentPaymentIds.has(Number(paymentId))
         : !settledPaymentIds.has(Number(paymentId)));
@@ -3178,7 +3184,10 @@ function QrisMutationCard({
     .filter((id) => Number.isInteger(id) && id > 0);
   // A stale candidate is deliberately not approvable, but its last snapshot is
   // still useful evidence for correcting the source payment before regeneration.
-  const displayItems = isReadOnlyEvidence ? allItems : availableItems;
+  // Keep live-settled rows visible so reviewers can distinguish an orphaned
+  // source flag (which can be reset) from a payment already owned by a
+  // canonical settlement batch. Only live-unsettled rows are selectable.
+  const displayItems = allItems;
   const selectedPaymentIds = selectedQrisPaymentIds.filter((id) => availablePaymentIds.includes(id));
   const allPaymentsSelected = availablePaymentIds.length > 0
     && availablePaymentIds.every((id) => selectedPaymentIds.includes(id));
@@ -3541,7 +3550,7 @@ function QrisMutationCard({
                              <span className="block truncate font-medium text-indigo-600 dark:text-indigo-400">
                                Settlement H-1: {expectedSettlementDate ? fmtDate(String(expectedSettlementDate)) : "—"}
                              </span>
-                              <span className="mt-0.5 flex min-w-0 items-center gap-1">
+                               <span className="mt-0.5 flex min-w-0 items-center gap-1">
                                 <Badge
                                   variant="outline"
                                   className={`h-4 px-1.5 text-[9px] ${paymentSettlementStatusClass(paymentSettlementStatus)}`}
@@ -3589,7 +3598,9 @@ function QrisMutationCard({
                               >
                                 Belum confirmed
                               </Badge>
-                            ) : canSelect && audit.id != null && paymentId != null && onToggleQrisPayment ? (
+                            ) : canSelect && audit.id != null && paymentId != null
+                              && paymentSettlementStatus === "unsettled"
+                              && onToggleQrisPayment ? (
                               <Checkbox
                                 checked={selectedPaymentIds.includes(Number(paymentId))}
                                 disabled={currentPaymentIds
@@ -3599,6 +3610,10 @@ function QrisMutationCard({
                                 onClick={e => e.stopPropagation()}
                                 aria-label={`Pilih ${booking} ${payment}`}
                               />
+                            ) : paymentSettlementStatus !== "unsettled" ? (
+                              <Badge variant="outline" className="text-[9px] border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-300">
+                                Tersettle
+                              </Badge>
                             ) : settledPaymentIds.has(Number(paymentId)) ? (
                               <Badge variant="outline" className="text-[9px] border-green-300 text-green-700">Tersettle</Badge>
                             ) : isReadOnlyEvidence ? (

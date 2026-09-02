@@ -3823,6 +3823,42 @@ router.get("/mutations", async (req, res) => {
       )`
     : "NULL::bigint";
 
+  // Candidate snapshots are historical evidence, while settlement status is
+  // mutable state on the canonical Sport Center payment. Always overlay the
+  // live status before returning a candidate; otherwise an orphaned/stale
+  // source flag can be hidden by an old snapshot and the UI can offer an
+  // approval that the canonical builder must reject.
+  const qrisCandidatePaymentItemsSql = (candidateAlias: string) => `
+    COALESCE((
+      SELECT jsonb_agg(
+        item.item
+        || jsonb_build_object(
+          'settlementStatus',
+          COALESCE(
+            NULLIF(BTRIM(live_payment.settlement_status::text), ''),
+            'unsettled'
+          )
+        )
+        ORDER BY item.ordinality
+      )
+      FROM jsonb_array_elements(
+        COALESCE(${candidateAlias}.payment_items, '[]'::jsonb)
+      ) WITH ORDINALITY AS item(item, ordinality)
+      LEFT JOIN sport_center.sport_payments live_payment
+        ON live_payment.id = CASE
+          WHEN COALESCE(
+            item.item->>'paymentId',
+            item.item->>'payment_id'
+          ) ~ '^[0-9]+$'
+            THEN COALESCE(
+              item.item->>'paymentId',
+              item.item->>'payment_id'
+            )::integer
+          ELSE NULL
+        END
+    ), '[]'::jsonb)
+  `;
+
   const {
     status, from, to, direction, provider, search,
     limit = "100", offset = "0",
@@ -4249,6 +4285,7 @@ router.get("/mutations", async (req, res) => {
        ) AS candidates,
         (
           SELECT to_jsonb(qc) || jsonb_build_object(
+            'payment_items', ${qrisCandidatePaymentItemsSql("qc")},
             'settled_payment_ids', COALESCE((
               SELECT jsonb_agg(settled.payment_id ORDER BY settled.payment_id)
               FROM (
@@ -4356,6 +4393,7 @@ router.get("/mutations", async (req, res) => {
          (
           SELECT COALESCE(jsonb_agg(
             to_jsonb(qc) || jsonb_build_object(
+              'payment_items', ${qrisCandidatePaymentItemsSql("qc")},
              'settled_payment_ids', COALESCE((
                SELECT jsonb_agg(settled.payment_id ORDER BY settled.payment_id)
                FROM (
@@ -4454,6 +4492,7 @@ router.get("/mutations", async (req, res) => {
         ,
         (
           SELECT to_jsonb(qc) || jsonb_build_object(
+             'payment_items', ${qrisCandidatePaymentItemsSql("qc")},
             'diagnostic_bank_date', bm.transaction_date::text,
             'diagnostic_payment_count', jsonb_array_length(COALESCE(qc.payment_items, '[]'::jsonb)),
             'diagnostic_has_expected_dates', NOT EXISTS (
