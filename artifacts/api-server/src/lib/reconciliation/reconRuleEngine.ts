@@ -507,15 +507,21 @@ export function evaluateReconRules(
     const conditionsPassed = rule.logic === "OR"
       ? conditionResults.some(Boolean)
       : conditionResults.every(Boolean);
-    // `referenceAmount` is the nominal criterion. A missing tolerance means
-    // exact equality; tolerance is only an optional compatibility extension
-    // for rules that explicitly need a range around that reference.
-    const hasStoredReferenceAmount = rule.referenceAmount !== null
-      && rule.referenceAmount !== undefined
-      && Number.isFinite(Number(rule.referenceAmount));
     const hasPositiveTolerance = rule.amountTolerance !== null
       && rule.amountTolerance !== undefined
       && Number(rule.amountTolerance) > 0;
+    // `referenceAmount` is the nominal criterion. A missing tolerance means
+    // exact equality; tolerance is only an optional compatibility extension
+    // for rules that explicitly need a range around that reference.
+    //
+    // The Rule AI form historically serialized an empty nominal field as
+    // numeric zero while also storing a zero tolerance. That pair means
+    // "no nominal criterion", not "only match zero-value mutations".
+    const numericReferenceAmount = Number(rule.referenceAmount);
+    const hasStoredReferenceAmount = rule.referenceAmount !== null
+      && rule.referenceAmount !== undefined
+      && Number.isFinite(numericReferenceAmount)
+      && (numericReferenceAmount !== 0 || hasPositiveTolerance);
     // The first version of the Rule AI form wrote its nominal input to
     // amount_tolerance. Only linked AI mirrors may use that value as a
     // legacy exact reference; an independent operational rule with a

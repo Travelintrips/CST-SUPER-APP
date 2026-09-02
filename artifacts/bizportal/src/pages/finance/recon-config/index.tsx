@@ -899,9 +899,9 @@ function AiRulesTab() {
       // Before the reference-amount field existed, this screen incorrectly
       // stored its nominal input as amount_tolerance. Treat that legacy value
       // as the reference when opening it so saving repairs the rule.
-      reference_amount: row.reference_amount != null
+      reference_amount: row.reference_amount != null && Number(row.reference_amount) !== 0
         ? Number(row.reference_amount)
-        : row.amount_tolerance != null
+        : row.amount_tolerance != null && Number(row.amount_tolerance) > 0
           ? Number(row.amount_tolerance)
           : null,
       amount_tolerance: row.reference_amount != null && row.amount_tolerance != null
@@ -1144,9 +1144,9 @@ function AiRulesTab() {
                      })()}
                    </td>
                    <td className="py-2 pr-3 text-slate-400">
-                     {row.reference_amount != null
+                      {row.reference_amount != null && Number(row.reference_amount) !== 0
                        ? `Rp${Number(row.reference_amount).toLocaleString("id-ID")}`
-                       : row.amount_tolerance != null
+                        : row.amount_tolerance != null && Number(row.amount_tolerance) > 0
                          ? `Rp${Number(row.amount_tolerance).toLocaleString("id-ID")}`
                          : "Tidak dibatasi"}
                    </td>

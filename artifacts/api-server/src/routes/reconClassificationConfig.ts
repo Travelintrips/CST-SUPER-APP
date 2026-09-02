@@ -240,6 +240,18 @@ function parseCompanyId(val: unknown): number | null {
   return isNaN(n) ? null : n;
 }
 
+function normalizeReferenceAmount(
+  value: number | null | undefined,
+  tolerance: number | null | undefined,
+): number | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  // Zero with no positive tolerance is the legacy empty-field sentinel.
+  return numeric === 0 && !(tolerance != null && tolerance > 0) ? null : numeric;
+}
+
 type RuleTaxType = "none" | "ppn_input" | "ppn_output";
 
 /**
@@ -551,7 +563,8 @@ reconClassificationRouter.post("/ai-rules", async (req, res) => {
     const conditionValueSql = `'${String(normalized.condition.value).replace(/'/g, "''")}'`;
     const logicSql = `'${normalized.logic}'`;
     const amountToleranceSql = d.amount_tolerance == null ? "NULL" : `${d.amount_tolerance}`;
-    const referenceAmountSql = d.reference_amount == null ? "NULL" : `${d.reference_amount}`;
+    const normalizedReferenceAmount = normalizeReferenceAmount(d.reference_amount, d.amount_tolerance);
+    const referenceAmountSql = normalizedReferenceAmount == null ? "NULL" : `${normalizedReferenceAmount}`;
 
     // Creating the same logical rule again should revise the existing Rule AI
     // instead of creating a second active rule. The identity deliberately
@@ -797,7 +810,10 @@ reconClassificationRouter.patch("/ai-rules/:id", async (req, res) => {
     }
     if (d.action_config_code !== undefined) setClauses.push(`action_config_code = ${d.action_config_code ? `'${d.action_config_code.replace(/'/g, "''")}'` : "NULL"}`);
     if (d.amount_tolerance !== undefined)   setClauses.push(`amount_tolerance = ${d.amount_tolerance == null ? "NULL" : d.amount_tolerance}`);
-    if (d.reference_amount !== undefined)   setClauses.push(`reference_amount = ${d.reference_amount == null ? "NULL" : d.reference_amount}`);
+    if (d.reference_amount !== undefined) {
+      const normalizedReferenceAmount = normalizeReferenceAmount(d.reference_amount, d.amount_tolerance);
+      setClauses.push(`reference_amount = ${normalizedReferenceAmount == null ? "NULL" : normalizedReferenceAmount}`);
+    }
     if (d.requires_document_upload !== undefined) setClauses.push(`requires_document_upload = ${d.requires_document_upload}`);
     if (d.tax_type !== undefined || resolvedTaxCoaCode) setClauses.push(`tax_type = '${nextTaxType}'`);
     if (d.confidence !== undefined)         setClauses.push(`confidence = ${d.confidence}`);

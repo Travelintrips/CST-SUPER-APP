@@ -441,6 +441,23 @@ describe("Rule Engine — amount tolerance guard", () => {
       amount: 2500,
     })).matched).toBe(false);
   });
+
+  it("treats legacy zero reference and zero tolerance as no nominal criterion", () => {
+    const rules = [makeRule({
+      conditions: [
+        { field: "description", operator: "contains", value: "kas besar" },
+      ],
+      logic: "OR",
+      amountTolerance: 0,
+      referenceAmount: 0,
+      confidenceScore: 100,
+    })];
+
+    expect(evaluateReconRules(rules, makeMutation({
+      description: "TRANSFER KAS BESAR99102",
+      amount: 6000000,
+    })).matched).toBe(true);
+  });
 });
 
 // ─── Test 11-20: Expected Cash Flow ───────────────────────────────────────────
