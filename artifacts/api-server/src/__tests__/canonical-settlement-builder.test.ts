@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   CANONICAL_SETTLEMENT_BANK_COA,
   CANONICAL_PAYMENT_CLEARING_COA,
@@ -73,5 +74,14 @@ describe("4C-7A.7G canonical settlement builder contract", () => {
     expect(source).toContain(
       "SET LOCAL sport_center.allow_posted_accounting_metadata_correction = 'on'",
     );
+  });
+
+  it("compares canonical settlement IDs using the bigint database type", () => {
+    const source = readFileSync(
+      new URL("../lib/reconciliation/canonicalSettlementBuilder.ts", import.meta.url),
+      "utf8",
+    );
+    expect(source).toContain("WHERE settlement_id = ${batchId}::bigint");
+    expect(source).not.toContain("WHERE settlement_id = ${batchId}::text");
   });
 });

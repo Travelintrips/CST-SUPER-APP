@@ -513,7 +513,7 @@ async function assertBatchResult(
   const itemResult = await client.execute(sql`
     SELECT id, payment_id, payment_journal_id, gross_amount, item_status
     FROM sport_center.payment_settlement_items
-      WHERE settlement_id = ${batchId}::text
+      WHERE settlement_id = ${batchId}::bigint
       AND item_status = 'active'
     ORDER BY payment_id
     FOR UPDATE
