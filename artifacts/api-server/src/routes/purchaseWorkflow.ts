@@ -51,6 +51,7 @@ import {
 } from "../lib/sapInvoiceLockEngine.js";
 import { sapInvoiceLockMiddleware } from "../middlewares/sapInvoiceLockMiddleware.js";
 import { sapAuditMiddleware } from "../middlewares/sapAuditMiddleware.js";
+import { isInvoiceTaxBalanced } from "../lib/invoiceTaxPostingPolicy.js";
 import {
   APPROVAL_STATES,
   loadOrCreateApprovalState,
@@ -1449,8 +1450,34 @@ router.post("/vendor-invoices/:id/post", async (req, res) => {
     const settings = await ensureAccountingSettings(invoiceCompanyId);
     const grandTotal = num(vi.grandTotal);
     const taxAmount = num(vi.taxAmount);
-    const netAmount = grandTotal - taxAmount;
+    // total_amount is the persisted OCR/manual DPP. Do not derive it from
+    // grand_total here, otherwise a mismatched OCR header would self-heal
+    // silently and pass the posting gate.
+    const netAmount = num(vi.totalAmount);
     const lines = [];
+
+    // Header values are the financial source of truth. Never create a
+    // partial journal for an OCR/malformed invoice.
+    if (
+      netAmount < 0 ||
+      taxAmount < 0 ||
+      grandTotal < 0 ||
+      !isInvoiceTaxBalanced(netAmount, taxAmount, grandTotal)
+    ) {
+      return res.status(422).json({
+        message: "Invoice tidak dapat diposting: DPP + PPN harus sama dengan total invoice.",
+      });
+    }
+    if (!settings.purchaseJournalId || !settings.apAccountId) {
+      return res.status(422).json({
+        message: "Invoice tidak dapat diposting: jurnal pembelian atau akun hutang belum dikonfigurasi.",
+      });
+    }
+    if (taxAmount > 0 && !settings.ppnInputAccountId) {
+      return res.status(422).json({
+        message: "Invoice tidak dapat diposting: akun PPN Masukan belum dikonfigurasi.",
+      });
+    }
 
     if (isSportCenter) {
       // Sport Center: Debit Biaya Operasional (purchaseExpenseAccountId), Credit Hutang Vendor (AP)
@@ -1479,6 +1506,11 @@ router.post("/vendor-invoices/:id/post", async (req, res) => {
       }
 
       const expAcct = settings.purchaseExpenseAccountId;
+      if (!expAcct) {
+        return res.status(422).json({
+          message: "Invoice tidak dapat diposting: akun beban pembelian belum dikonfigurasi.",
+        });
+      }
       const facilityDesc = sportCenterFacility ? ` — ${sportCenterFacility}` : "";
       if (expAcct) lines.push({ accountId: expAcct, debit: netAmount, credit: 0, description: `Biaya Operasional Sport Center${facilityDesc}: ${vi.invoiceNumber}` });
       if (taxAmount > 0 && settings.ppnInputAccountId) lines.push({ accountId: settings.ppnInputAccountId!, debit: taxAmount, credit: 0, description: "PPN Masukan" });
@@ -1510,6 +1542,11 @@ router.post("/vendor-invoices/:id/post", async (req, res) => {
       const debitAccId = vi.grId
         ? (settings.grirAccountId ?? settings.inventoryAccountId ?? settings.purchaseExpenseAccountId)
         : settings.purchaseExpenseAccountId;
+      if (!debitAccId) {
+        return res.status(422).json({
+          message: "Invoice tidak dapat diposting: akun beban/persediaan pembelian belum dikonfigurasi.",
+        });
+      }
       const debitDesc = vi.grId
         ? (settings.grirAccountId
           ? `GR/IR clearing ${vi.invoiceNumber}`
@@ -1525,7 +1562,13 @@ router.post("/vendor-invoices/:id/post", async (req, res) => {
         await db.update(vendorInvoicesTable).set({ status: "posted", isLocked: true, threeWayMatchStatus: matchStatus, matchNotes, updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, id));
       }
     }
-  } catch (e) { console.error("[VI post]", e); await db.update(vendorInvoicesTable).set({ status: "posted", isLocked: true, updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, id)); }
+  } catch (e) {
+    // A journal error must not be converted into a false posted invoice.
+    console.error("[VI post]", e);
+    return res.status(422).json({
+      message: "Invoice tersimpan sebagai draft karena jurnal gagal dibuat. Periksa konfigurasi akuntansi lalu coba lagi.",
+    });
+  }
 
   const [updated] = await db.select().from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
 

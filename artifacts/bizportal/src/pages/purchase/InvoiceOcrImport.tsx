@@ -110,6 +110,41 @@ function confidenceLabel(c: number) {
   return "Rendah";
 }
 
+const OCR_AUTO_POST_CONFIDENCE = 0.9;
+const OCR_AUTO_POST_RAW_CONFIDENCE = 0.85;
+const TAX_AMOUNT_TOLERANCE = 100;
+
+function getOcrAutoPostReviewReasons(
+  result: OcrResult,
+  sapTax: SapTaxResult,
+): string[] {
+  const reasons: string[] = [];
+  const { net, vat, gross } = sapTax.tax;
+  const amountsAreNumeric = [net, vat, gross].every(
+    (value) => typeof value === "number" && Number.isFinite(value),
+  );
+
+  if (
+    !amountsAreNumeric ||
+    Math.abs((net ?? 0) + (vat ?? 0) - (gross ?? 0)) > TAX_AMOUNT_TOLERANCE
+  ) {
+    reasons.push("DPP + PPN tidak sama dengan total invoice.");
+  }
+  if (!sapTax.validation.is_valid) {
+    reasons.push("Validasi header invoice gagal.");
+  }
+  if (sapTax.confidence < OCR_AUTO_POST_CONFIDENCE) {
+    reasons.push("Confidence SAP Tax di bawah batas auto-post 90%.");
+  }
+  if (result.raw_confidence < OCR_AUTO_POST_RAW_CONFIDENCE) {
+    reasons.push("Confidence OCR di bawah batas auto-post 85%.");
+  }
+  if (sapTax.tax.type === "PPN" && !(typeof vat === "number" && vat > 0)) {
+    reasons.push("Invoice PPN tidak memiliki nilai PPN yang terbaca.");
+  }
+  return reasons;
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function InvoiceOcrImportPage() {
@@ -134,6 +169,12 @@ export default function InvoiceOcrImportPage() {
 
   // Duplicate invoice warning — checked right after extraction against vendorInvoiceRef+supplierName
   const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
+
+  const ocrAutoPostReviewReasons = useMemo(
+    () => (result && sapTax ? getOcrAutoPostReviewReasons(result, sapTax) : []),
+    [result, sapTax],
+  );
+  const canAutoPostOcrInvoice = ocrAutoPostReviewReasons.length === 0;
 
   const [form, setForm] = useState({
     supplierName: "",
@@ -403,17 +444,21 @@ export default function InvoiceOcrImportPage() {
       }
       const data = (await res.json()) as { id: number };
 
-      // Auto-post invoice setelah AI Import — user sudah review data di form,
-      // sehingga tidak perlu post manual terpisah agar muncul di Bank Disbursement outstanding.
-      const postRes = await fetch(`/api/purchase-workflow/vendor-invoices/${data.id}/post`, {
-        method: "POST",
-        credentials: "include",
-      });
-      if (!postRes.ok) {
-        // Non-fatal: invoice tetap tersimpan, tapi perlu di-post manual
-        toast.success("Vendor invoice berhasil dibuat (perlu di-post manual untuk bisa dibayar)");
+      if (!canAutoPostOcrInvoice) {
+        toast.success("Vendor invoice disimpan sebagai draft untuk review — jurnal tidak dibuat otomatis");
       } else {
-        toast.success("Vendor invoice berhasil dibuat & diposting — siap dibayar via Bank Disbursement");
+        // Auto-post only after the header/tax/confidence gate passes. A failed
+        // post leaves the saved invoice as draft; the API must never mark it
+        // posted when journal creation fails.
+        const postRes = await fetch(`/api/purchase-workflow/vendor-invoices/${data.id}/post`, {
+          method: "POST",
+          credentials: "include",
+        });
+        if (!postRes.ok) {
+          toast.success("Vendor invoice berhasil dibuat (perlu di-post manual untuk bisa dibayar)");
+        } else {
+          toast.success("Vendor invoice berhasil dibuat & diposting — siap dibayar via Bank Disbursement");
+        }
       }
       navigate(`/purchase/vendor-invoices/${data.id}`);
     } catch (err) {
@@ -563,7 +608,7 @@ export default function InvoiceOcrImportPage() {
             {/* SAP Tax Validation banner */}
             <div
               className={`flex items-start gap-3 p-4 rounded-lg border text-sm ${
-                sapTax.validation.is_valid
+                canAutoPostOcrInvoice
                   ? "bg-green-50 border-green-200 text-green-700"
                   : "bg-amber-50 border-amber-200 text-amber-700"
               }`}
@@ -595,6 +640,18 @@ export default function InvoiceOcrImportPage() {
                       </li>
                     ))}
                   </ul>
+                )}
+                {canAutoPostOcrInvoice ? (
+                  <p className="mt-2 text-xs">
+                    ✓ Header seimbang dan confidence memenuhi syarat. Invoice dapat auto-post ke jurnal.
+                  </p>
+                ) : (
+                  <div className="mt-2 text-xs">
+                    <p className="font-semibold">Auto-post diblokir — invoice akan tetap menjadi draft untuk review.</p>
+                    <ul className="mt-1 list-disc pl-4 space-y-0.5">
+                      {ocrAutoPostReviewReasons.map((reason) => <li key={reason}>{reason}</li>)}
+                    </ul>
+                  </div>
                 )}
               </div>
             </div>

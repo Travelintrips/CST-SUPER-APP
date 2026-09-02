@@ -675,13 +675,32 @@ router.post("/documents/:id/action", async (req, res) => {
       if (editReason) patch["editReason"] = editReason;
       break;
     case "mark_invoiced": {
-      // Idempotency guard via service
-      const invResult = await markSalesInvoiced(id, "manual");
-      if (!invResult.ok) {
-        return res.status(500).json({ message: invResult.error ?? "Gagal update invoice status" });
-      }
-      if (invResult.alreadySet) {
+      // Do not change invoice status until the revenue/tax journal exists.
+      // postEntry is source-idempotent, so this also remains safe when the
+      // confirm action already created the same sales_invoice entry.
+      if (doc.invoiceStatus === "invoiced") {
         return res.status(409).json({ message: "Invoice sudah diterbitkan untuk dokumen ini" });
+      }
+      const salesPosted = await postSalesInvoice({
+        salesDocId: doc.id,
+        docNumber: doc.docNumber,
+        customerName: doc.customerName,
+        netAmount: Number(doc.totalAmount ?? 0),
+        taxAmount: Number(doc.taxAmount ?? 0),
+        taxAccountId: null,
+        createdById: actorId,
+        companyId: doc.companyId ?? null,
+      });
+      if (!salesPosted) {
+        return res.status(422).json({
+          message: "Invoice penjualan tetap draft karena jurnal pendapatan/PPN Keluaran gagal dibuat.",
+        });
+      }
+      const invResult = await markSalesInvoiced(id, "manual");
+      if (!invResult.ok || invResult.alreadySet) {
+        return res.status(invResult.alreadySet ? 409 : 500).json({
+          message: invResult.error ?? "Invoice sudah diterbitkan untuk dokumen ini",
+        });
       }
       // Auto-numbering: INV/YYYY/NNNN
       const invYear = new Date().getFullYear();

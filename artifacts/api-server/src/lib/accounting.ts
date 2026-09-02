@@ -1172,6 +1172,17 @@ export async function postSalesInvoice(args: {
       });
       return false;
     }
+    if (args.taxAmount > 0 && !(args.taxAccountId ?? settings.ppnOutputAccountId)) {
+      throw new Error("SALES_TAX_ACCOUNT_MISSING: akun PPN Keluaran belum dikonfigurasi");
+    }
+    if (
+      !Number.isFinite(args.netAmount) ||
+      !Number.isFinite(args.taxAmount) ||
+      args.netAmount < 0 ||
+      args.taxAmount < 0
+    ) {
+      throw new Error("SALES_INVOICE_AMOUNT_INVALID: nilai DPP atau PPN tidak valid");
+    }
     const grand = round2(args.netAmount + args.taxAmount);
     const lines: PostingLine[] = [
       {
