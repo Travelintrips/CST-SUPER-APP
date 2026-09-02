@@ -66,4 +66,12 @@ describe("4C-7A.7G canonical settlement builder contract", () => {
     expect(source).not.toContain("bank_mutation_id =");
     expect(source).not.toContain("UPDATE sport_center.sport_payments");
   });
+
+  it("keeps the posted-journal metadata capability local to the builder transaction", async () => {
+    const module = await import("../lib/reconciliation/canonicalSettlementBuilder.js");
+    const source = String(module.buildCanonicalSportCenterSettlements);
+    expect(source).toContain(
+      "SET LOCAL sport_center.allow_posted_accounting_metadata_correction = 'on'",
+    );
+  });
 });
