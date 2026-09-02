@@ -59,6 +59,11 @@ type Detail = {
 const SERVICE_LABELS: Record<string, string> = {
   all: "Semua layanan",
   marketplace: "Marketplace / RFQ",
+  "marketplace-po": "Marketplace / Purchase Order",
+  "logistic-order": "Logistics / Customer Order",
+  ppjk: "Pabean / PPJK",
+  "quote-request": "Request a Quote",
+  "product-order": "Marketplace / Product Order",
   "service-request": "Pabean / Custom Clearance / Layanan",
   "domestic-trucking": "Domestic / Trucking",
   "air-freight": "Air Freight",

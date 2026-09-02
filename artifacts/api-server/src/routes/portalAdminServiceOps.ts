@@ -27,8 +27,8 @@ const sourceRows = sql`
       COALESCE(po.company_id, r.company_id)::int AS company_id,
       r.portal_customer_id::int AS portal_customer_id,
       CASE WHEN po.id IS NULL
-        THEN r.status::text IN ('submitted', 'customer_review', 'quoted')
-        ELSE po.status::text NOT IN ('cancelled', 'closed', 'completed')
+        THEN r.status::text IN ('submitted', 'customer_review', 'quoted', 'awarded')
+        ELSE po.status::text IN ('pending', 'confirmed', 'in_progress', 'delivered', 'issued', 'vendor_accepted', 'revision_requested', 'vendor_rejected', 'production', 'ready_to_ship', 'in_transit', 'partially_delivered', 'rejected_goods')
       END AS is_pending,
       CASE WHEN po.id IS NULL
         THEN r.status::text IN ('draft', 'submitted', 'customer_review', 'quoted', 'awarded', 'closed', 'cancelled')
@@ -100,7 +100,12 @@ const sourceRows = sql`
       COALESCE(r.customer_company, '')::text,
       r.company_id::int,
       NULL::int,
-      r.status::text NOT IN ('completed', 'cancelled'),
+      r.status::text IN (
+        'draft', 'waiting_documents', 'document_review', 'document_completed',
+        'quotation', 'waiting_customer', 'customer_approved', 'preparing_pib',
+        'preparing_peb', 'submitted_ceisa', 'inspection', 'red_lane',
+        'yellow_lane', 'green_lane', 'hold', 'sppb', 'released'
+      ),
       r.status::text IN (
         'draft', 'waiting_documents', 'document_review', 'document_completed',
         'quotation', 'waiting_customer', 'customer_approved', 'preparing_pib',
@@ -146,7 +151,12 @@ const sourceRows = sql`
       ''::text,
       r.company_id::int,
       r.portal_customer_id::int,
-      r.status::text NOT IN ('Completed', 'Cancelled', 'completed', 'cancelled'),
+      r.status::text IN (
+        'Quote Request', 'Product RFQ Sent', 'Product Quote Received',
+        'Product Vendor Selected', 'Customer Product Approval',
+        'Shipment Selection Pending', 'Shipment RFQ Sent', 'Ready for Pickup',
+        'Vendor Confirmed', 'In Progress', 'Delivered'
+      ),
       r.status::text IN (
         'Quote Request', 'Product RFQ Sent', 'Product Quote Received',
         'Product Vendor Selected', 'Customer Product Approval',
@@ -192,8 +202,8 @@ const sourceRows = sql`
       ''::text,
       r.company_id::int,
       COALESCE(r.portal_customer_id, r.customer_id)::int,
-      r.status::text NOT IN ('completed', 'cancelled', 'delivered'),
-      r.status::text IN ('new', 'submitted', 'pending_review', 'quoted', 'approved', 'booked', 'in_progress', 'delivered', 'completed', 'cancelled'),
+      r.status::text IN ('new', 'submitted', 'pending_review', 'waiting_rate', 'quoted', 'approved', 'booked', 'in_progress'),
+      r.status::text IN ('new', 'submitted', 'pending_review', 'waiting_rate', 'quoted', 'approved', 'booked', 'in_progress', 'delivered', 'completed', 'cancelled'),
       r.created_at,
       r.updated_at,
       '/bizportal/logistics/trucking-orders'::text,
@@ -213,8 +223,8 @@ const sourceRows = sql`
       ''::text,
       r.company_id::int,
       NULL::int,
-      r.status::text NOT IN ('completed', 'cancelled', 'delivered'),
-      r.status::text IN ('new', 'submitted', 'pending_review', 'quoted', 'approved', 'booked', 'in_progress', 'delivered', 'completed', 'cancelled'),
+      r.status::text IN ('new', 'submitted', 'pending_review', 'waiting_rate', 'quoted', 'approved', 'booked', 'in_progress'),
+      r.status::text IN ('new', 'submitted', 'pending_review', 'waiting_rate', 'quoted', 'approved', 'booked', 'in_progress', 'delivered', 'completed', 'cancelled'),
       r.created_at,
       r.updated_at,
       ('/bizportal/air-freight/orders/' || r.id)::text,
@@ -234,8 +244,8 @@ const sourceRows = sql`
       COALESCE(r.customer_company, '')::text,
       r.company_id::int,
       NULL::int,
-      r.status::text NOT IN ('completed', 'cancelled', 'delivered'),
-      r.status::text IN ('new', 'submitted', 'pending_review', 'quoted', 'approved', 'booked', 'in_progress', 'delivered', 'completed', 'cancelled'),
+      r.status::text IN ('new', 'submitted', 'pending_review', 'waiting_rate', 'quoted', 'approved', 'booked', 'in_progress'),
+      r.status::text IN ('new', 'submitted', 'pending_review', 'waiting_rate', 'quoted', 'approved', 'booked', 'in_progress', 'delivered', 'completed', 'cancelled'),
       r.created_at,
       r.updated_at,
       ('/bizportal/logistics/ocean-freight/' || r.id)::text,
@@ -265,7 +275,7 @@ const sourceRows = sql`
       ''::text,
       d.company_id::int,
       NULL::int,
-      d.status::text NOT IN ('completed', 'cancelled', 'paid'),
+      d.status::text IN ('draft', 'submitted', 'pending_review', 'approved', 'booked'),
       d.status::text IN ('draft', 'submitted', 'pending_review', 'approved', 'booked', 'completed', 'cancelled', 'paid'),
       d.created_at,
       d.updated_at,

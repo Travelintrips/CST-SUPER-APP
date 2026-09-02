@@ -57,6 +57,7 @@ export default function AdminPage() {
   const erpPendingEventRef = useRef<string | null>(null);
 
   const [pendingVendorApprovals, setPendingVendorApprovals] = useState(0);
+  const [pendingPortalWorkload, setPendingPortalWorkload] = useState(0);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<string>(isPortalAdmin() ? "service-operations" : "claim");
 
@@ -65,12 +66,21 @@ export default function AdminPage() {
     let cancelled = false;
     const loadPendingCount = async () => {
       try {
-        const res = await fetch("/api/portal/admin/vendor-invitations", { headers: getAuthHeaders(), credentials: "include", cache: "no-store" });
-        if (!res.ok) return;
-        const data = await res.json();
-        const items: any[] = Array.isArray(data) ? data : (data.items ?? []);
-        const count = items.filter(inv => inv.status === "accepted" && !inv.supplier_id).length;
-        if (!cancelled) setPendingVendorApprovals(count);
+        const [res, workloadRes] = await Promise.all([
+          fetch("/api/portal/admin/vendor-invitations", { headers: getAuthHeaders(), credentials: "include", cache: "no-store" }),
+          fetch("/api/portal/admin/service-operations?limit=1&offset=0", { headers: getAuthHeaders(), credentials: "include", cache: "no-store" }),
+        ]);
+        if (res.ok) {
+          const data = await res.json();
+          const items: any[] = Array.isArray(data) ? data : (data.items ?? []);
+          const count = items.filter(inv => inv.status === "accepted" && !inv.supplier_id).length;
+          if (!cancelled) setPendingVendorApprovals(count);
+        }
+        if (workloadRes.ok) {
+          const workload = await workloadRes.json();
+          const count = (workload.summary ?? []).reduce((sum: number, item: { pending?: number }) => sum + Number(item.pending ?? 0), 0);
+          if (!cancelled) setPendingPortalWorkload(count);
+        }
       } catch { /* silent */ }
     };
     loadPendingCount();
@@ -300,7 +310,13 @@ export default function AdminPage() {
               {isAdmin && (
                 <>
                   <p className="px-3 pt-4 pb-1.5 text-[10px] font-semibold tracking-widest text-slate-600 uppercase select-none">Operations</p>
-                  <TabsTrigger value="service-operations" className={TABS_TRIGGER_CLS}><Inbox className="h-4 w-4 shrink-0" strokeWidth={2} />Semua Layanan</TabsTrigger>
+                  <TabsTrigger value="service-operations" className={TABS_TRIGGER_CLS}>
+                    <Inbox className="h-4 w-4 shrink-0" strokeWidth={2} />
+                    <span className="flex-1 text-left">Semua Layanan</span>
+                    {pendingPortalWorkload > 0 && (
+                      <span className="ml-auto bg-amber-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-5 text-center">{pendingPortalWorkload}</span>
+                    )}
+                  </TabsTrigger>
                   <p className="px-3 pt-4 pb-1.5 text-[10px] font-semibold tracking-widest text-slate-600 uppercase select-none">{t("adminPage.nav.sectionWebsite", "Website & Konten")}</p>
                   <TabsTrigger value="content"          className={TABS_TRIGGER_CLS}><FileText  className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.websiteContent", "Konten Website")}</TabsTrigger>
                   <TabsTrigger value="services"         className={TABS_TRIGGER_CLS}><Settings  className="h-4 w-4 shrink-0" strokeWidth={2} />{t("adminPage.nav.manageServices", "Kelola Layanan")}</TabsTrigger>
