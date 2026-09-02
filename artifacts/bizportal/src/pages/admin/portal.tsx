@@ -17,10 +17,11 @@ import {
   RefreshCw, Search, AlertCircle,
   MessageCircle, Mail, ArrowRight, Loader2,
   ShieldCheck, UserCheck, BarChart3, Pencil, Eye, Ban,
-  Link2, Copy, ExternalLink, RotateCcw, FileText,
+  Link2, Copy, ExternalLink, RotateCcw, FileText, ClipboardList,
 } from "lucide-react";
 import { Link } from "wouter";
 import { toast } from "@/hooks/use-toast";
+import { CustomerPortalWorkload } from "@/components/admin/CustomerPortalWorkload";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -897,7 +898,8 @@ function CustomersTab() {
 export default function AdminPortalPage() {
   const [activeTab, setActiveTab] = useState(() => {
     if (typeof window === "undefined") return "overview";
-    return new URLSearchParams(window.location.search).get("tab") === "vendors" ? "vendors" : "overview";
+    const tab = new URLSearchParams(window.location.search).get("tab");
+    return tab === "vendors" || tab === "workload" ? tab : "overview";
   });
 
   return (
@@ -915,9 +917,12 @@ export default function AdminPortalPage() {
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid grid-cols-3 w-full max-w-md">
+          <TabsList className="grid grid-cols-4 w-full max-w-xl">
             <TabsTrigger value="overview" className="gap-1.5 text-xs">
               <BarChart3 className="h-3.5 w-3.5" /> Overview
+            </TabsTrigger>
+            <TabsTrigger value="workload" className="gap-1.5 text-xs">
+              <ClipboardList className="h-3.5 w-3.5" /> Workload
             </TabsTrigger>
             <TabsTrigger value="customers" className="gap-1.5 text-xs">
               <Users className="h-3.5 w-3.5" /> Pelanggan
@@ -982,6 +987,10 @@ export default function AdminPortalPage() {
                 </div>
               </CardContent>
             </Card>
+          </TabsContent>
+
+          <TabsContent value="workload" className="mt-6">
+            <CustomerPortalWorkload />
           </TabsContent>
 
           {/* ── Customers ── */}
