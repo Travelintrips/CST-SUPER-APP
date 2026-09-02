@@ -1650,6 +1650,7 @@ function AiRulesTab() {
                   </p>
                 </div>
               </div>
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
                 <div className="flex items-start gap-3">
