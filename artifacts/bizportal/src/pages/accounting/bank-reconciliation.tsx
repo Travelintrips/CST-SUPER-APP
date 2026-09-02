@@ -25,7 +25,7 @@ import {
   ChevronDown, ChevronUp, ArrowUpRight, ArrowDownLeft, Zap, Eye,
   BookOpen, TrendingUp, Clock, FileText, CreditCard, Users,
   CircleCheck, CircleDot, ReceiptText, X, Undo2, RotateCcw,
-  Paperclip, ImageIcon, ExternalLink, Pencil,
+  Paperclip, ImageIcon, ExternalLink, Pencil, Link2,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { AIReviewSourcePanel } from "@/components/ai-review";
@@ -953,6 +953,16 @@ const canReopen = (m: BankMutation) =>
 /** Delete → jangan hapus yang sudah posted. */
 const canDelete = (m: BankMutation) =>
   m.status !== "posted" && m.source !== "bank_import";
+
+/** Multi-allocation hanya tersedia untuk uang masuk yang belum final. */
+const canMultiAllocate = (m: BankMutation) =>
+  m.direction === "IN"
+  && (
+    m.status === "unmatched"
+    || m.status === "matched"
+    || m.status === "manual_review"
+    || m.status === "duplicate_need_review"
+  );
 
 function isCanonicalSettlementMutation(m: BankMutation): boolean {
   return m.candidates?.some(
@@ -3940,6 +3950,7 @@ function MutationCard({
   onReopen,
   onDelete,
   onDetail,
+  onMultiAllocate,
   onEditQrisPaymentDate,
   onRequestUnsettlePayment,
   unsettledPaymentId,
@@ -3973,6 +3984,7 @@ function MutationCard({
   onReopen:  (m: BankMutation) => void;
   onDelete:  (id: number) => void;
   onDetail:  (m: BankMutation) => void;
+  onMultiAllocate?: (m: BankMutation) => void;
   onEditQrisPaymentDate?: (target: {
     paymentId: number;
     paymentNumber: string;
@@ -4411,6 +4423,21 @@ function MutationCard({
               <BookOpen className="h-3.5 w-3.5" />
               Referensi COA
             </Button>
+            {onMultiAllocate && canMultiAllocate(m) && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1 border-purple-300 text-xs text-purple-700 hover:bg-purple-50 dark:border-purple-800 dark:text-purple-300 dark:hover:bg-purple-950/40"
+                title="Alokasikan satu mutasi ke beberapa invoice"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onMultiAllocate(m);
+                }}
+              >
+                <Link2 className="h-3.5 w-3.5" />
+                Multi-Allocation
+              </Button>
+            )}
             {canRematchHistoricalReview && (
               <Button
                 size="sm"
@@ -8021,6 +8048,9 @@ export default function BankReconciliationPage() {
                   onReopen={handleOpenReopen}
                   onDelete={id => deleteMut.mutate(id)}
                   onDetail={setDetailMutation}
+                  onMultiAllocate={mutation => {
+                    setLocation(`/finance/bank-allocation?mutationId=${mutation.id}`);
+                  }}
                   onEditQrisPaymentDate={(target) => {
                     setQrisDateTarget(target);
                     setQrisPaymentDate(target.paymentDate);

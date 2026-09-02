@@ -243,6 +243,13 @@ export default function BankAllocationPage() {
     }
   };
 
+  useEffect(() => {
+    const mutationId = Number(new URLSearchParams(window.location.search).get("mutationId"));
+    if (Number.isInteger(mutationId) && mutationId > 0) {
+      void openDetail(mutationId);
+    }
+  }, []);
+
   const doMatchAction = async (matchId: number, action: "select" | "confirm" | "reject", body?: Record<string, any>) => {
     setActionLoading(matchId);
     try {
