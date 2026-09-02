@@ -148,6 +148,38 @@ function flowBadge(flow: string) {
   );
 }
 
+function expectedActionCoaType(flow: string | null | undefined): "expense" | "revenue" | null {
+  if (flow === "ROUTINE_EXPENSE_ALLOCATION") return "expense";
+  if (flow === "INCOME_ALLOCATION") return "revenue";
+  return null;
+}
+
+function taxTreatmentForFlow(flow: string | null | undefined): {
+  label: string;
+  description: string;
+  tone: "blue" | "green" | "slate";
+} {
+  if (flow === "ROUTINE_EXPENSE_ALLOCATION") {
+    return {
+      label: "Otomatis — PPN Masukan",
+      description: "Untuk invoice beban/pembelian, OCR mengambil PPN dari invoice dan mengarahkannya ke akun PPN Masukan perusahaan.",
+      tone: "blue",
+    };
+  }
+  if (flow === "INCOME_ALLOCATION") {
+    return {
+      label: "Otomatis — PPN Keluaran",
+      description: "Untuk invoice pendapatan/penjualan, OCR mengambil PPN dari invoice dan mengarahkannya ke akun PPN Keluaran perusahaan.",
+      tone: "green",
+    };
+  }
+  return {
+    label: "Otomatis dari konteks dokumen",
+    description: "Arah PPN ditentukan dari konteks transaksi dan hasil OCR. Jika bukti atau konteks tidak cukup, transaksi masuk review manual.",
+    tone: "slate",
+  };
+}
+
 interface RuleCoaAccount {
   id: number;
   companyId?: number | null;
@@ -893,6 +925,19 @@ function AiRulesTab() {
     return { ...f, conditions, specificity: Math.max(1, conditions.length) };
   });
 
+  const expectedCoaType = expectedActionCoaType(form.action_flow);
+  const selectedActionCoa = coaAccounts.find((account) => account.code === form.action_coa_code);
+  const actionCoaMismatch = Boolean(
+    expectedCoaType &&
+    (!selectedActionCoa || selectedActionCoa.type?.toLowerCase() !== expectedCoaType),
+  );
+  const taxTreatment = taxTreatmentForFlow(form.action_flow);
+  const actionCoaOptions = coaOptions.filter((option) => {
+    if (!expectedCoaType) return true;
+    const account = coaAccounts.find((candidate) => candidate.code === option.value);
+    return account?.type?.toLowerCase() === expectedCoaType || option.value === form.action_coa_code;
+  });
+
   const parentAccounts = coaAccounts
     .filter((account) =>
       account.isActive !== false
@@ -996,6 +1041,15 @@ function AiRulesTab() {
   };
 
   const save = async () => {
+    const expectedType = expectedActionCoaType(form.action_flow);
+    const selectedCoa = coaAccounts.find((account) => account.code === form.action_coa_code);
+    if (expectedType && (!selectedCoa || selectedCoa.type?.toLowerCase() !== expectedType)) {
+      alert(
+        `Action Flow ${expectedType === "expense" ? "beban" : "pendapatan"} wajib memakai akun COA tipe ${expectedType}. ` +
+        "Akun PPN Masukan/Keluaran dipetakan terpisah dari hasil OCR.",
+      );
+      return;
+    }
     setSaving(true);
     try {
       const url    = editRow ? `${API}/recon-classification/ai-rules/${editRow.id}` : `${API}/recon-classification/ai-rules`;
@@ -1362,7 +1416,7 @@ function AiRulesTab() {
                         <CreatableCombobox
                           value={form.action_coa_code ?? ""}
                           onChange={value => setForm((f: any) => ({ ...f, action_coa_code: value || null }))}
-                          options={coaOptions}
+                          options={actionCoaOptions}
                           loading={loadingCoaOptions}
                           placeholder="Pilih akun COA — kode dan nama"
                           searchPlaceholder="Cari kode atau nama COA…"
@@ -1382,6 +1436,12 @@ function AiRulesTab() {
                         <Plus size={15} />
                       </Button>
                     </div>
+                    {actionCoaMismatch && (
+                      <p className="mt-1 text-[11px] text-red-300">
+                        Action Flow ini membutuhkan akun tipe <strong>{expectedCoaType}</strong>.
+                        Jangan pilih akun PPN di sini; pilih akun beban/pendapatan.
+                      </p>
+                    )}
                     <Button
                       type="button"
                       variant="ghost"
@@ -1396,6 +1456,33 @@ function AiRulesTab() {
                 <p className="mt-1 text-[11px] text-slate-500">
                   Nilai yang disimpan tetap kode COA; nama ditampilkan dari master akun.
                 </p>
+              </div>
+            </div>
+            <div className={`rounded-lg border p-3 ${
+              taxTreatment.tone === "blue"
+                ? "border-sky-500/30 bg-sky-500/5"
+                : taxTreatment.tone === "green"
+                  ? "border-emerald-500/30 bg-emerald-500/5"
+                  : "border-slate-700 bg-slate-800/50"
+            }`}>
+              <div className="flex items-start gap-2">
+                <AlertCircle className={`mt-0.5 h-4 w-4 shrink-0 ${
+                  taxTreatment.tone === "blue"
+                    ? "text-sky-300"
+                    : taxTreatment.tone === "green"
+                      ? "text-emerald-300"
+                      : "text-slate-400"
+                }`} />
+                <div>
+                  <Label className="text-slate-300">Perlakuan Pajak</Label>
+                  <p className="mt-1 text-sm font-semibold text-white">{taxTreatment.label}</p>
+                  <p className="mt-1 text-[11px] leading-relaxed text-slate-400">
+                    {taxTreatment.description}
+                  </p>
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Pengaturan ini informatif dan tidak menggantikan akun COA transaksi.
+                  </p>
+                </div>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
@@ -1433,6 +1520,7 @@ function AiRulesTab() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowModal(false)} className="border-slate-600 text-slate-300">Batal</Button>
             <Button onClick={save} disabled={saving || !form.name ||
+              actionCoaMismatch ||
               !(form.conditions ?? []).every((condition: any) => String(condition?.value ?? "").trim())}
               className="bg-orange-500 hover:bg-orange-600 text-white">
               {saving && <RefreshCw size={14} className="animate-spin mr-1" />}Simpan
