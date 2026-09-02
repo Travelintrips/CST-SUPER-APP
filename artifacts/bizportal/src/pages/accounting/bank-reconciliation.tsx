@@ -674,6 +674,33 @@ interface QrisCandidateAudit {
   diagnostic_amount_difference?: number | string | null;
 }
 
+interface CanonicalSettlementQueueItem {
+  id: number;
+  candidateId: number;
+  candidateSource: string;
+  settlement_reference: string | null;
+  settlement_date: string | null;
+  settlement_status: string | null;
+  provider_code: string | null;
+  provider_name: string | null;
+  company_id: number | null;
+  gross_amount: number;
+  mdr_amount: number;
+  expected_bank_amount: number;
+  settlement_journal_id: number | null;
+  bank_mutation_id: number | null;
+  queue_status: "active" | "completed";
+  payment_items: Array<{
+    paymentId: number;
+    grossAmount: number;
+    itemStatus: string | null;
+  }>;
+  bank_status: string | null;
+  bank_transaction_date: string | null;
+  bank_amount: number | null;
+  bank_description: string | null;
+}
+
 interface QrisPaymentItem {
   paymentId?: number;
   payment_id?: number;
@@ -5965,11 +5992,13 @@ export default function BankReconciliationPage() {
     queryKey: ["qris-candidate-audit", qrisCompanyId],
     queryFn: async () => {
       const params = new URLSearchParams({ limit: "50", companyId: String(qrisCompanyId) });
+      params.set("includeCompleted", "true");
       const r = await fetch(`/api/bank-reconciliation/qris-candidates?${params}`, { credentials: "include" });
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{
         mode: string;
         automaticFinalReconciliation: boolean;
+        canonicalSettlements: CanonicalSettlementQueueItem[];
         candidates: QrisCandidateAudit[];
       }>;
     },
@@ -6174,6 +6203,13 @@ export default function BankReconciliationPage() {
     && getUnconfirmedQrisPaymentIds(candidate).length === 0
     && getAvailableQrisPaymentIds(candidate).length > 0;
   const qrisApprovableCandidates = qrisCandidates.filter(isQrisCandidateEligible);
+  const canonicalSettlements = qrisAuditData?.canonicalSettlements ?? [];
+  const activeCanonicalSettlements = canonicalSettlements.filter(
+    (settlement) => settlement.queue_status === "active",
+  );
+  const completedCanonicalSettlements = canonicalSettlements.filter(
+    (settlement) => settlement.queue_status === "completed",
+  );
   const selectedQrisCandidates = qrisApprovableCandidates.filter((candidate) =>
     selectedQrisCandidateIds.includes(candidate.id!),
   );
@@ -7323,6 +7359,104 @@ export default function BankReconciliationPage() {
 
         {/* ── Summary Cards ─────────────────────────────────── */}
         <SummaryCards summaryMap={summaryMap} activeFilter={filterStatus} onFilter={v => { setFilterStatus(v); setPage(0); }} />
+
+        {/* Canonical QRIS settlement queue/history. The legacy candidate audit
+            remains available below for bank-evidence approval compatibility,
+            but this is the source-of-truth view for settlement lifecycle. */}
+        <Card className="border-indigo-200/70 dark:border-indigo-900/70">
+          <CardHeader className="pb-3">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <CreditCard className="h-4 w-4 text-indigo-600" />
+                  Antrean Settlement QRIS Canonical
+                </CardTitle>
+                <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
+                  Sumber status, nominal, payment, dan history berasal dari Sport Center canonical settlement.
+                </p>
+              </div>
+              {qrisAuditLoading && <Loader2 className="h-4 w-4 animate-spin text-indigo-600" />}
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid grid-cols-2 gap-2">
+              <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+                <p className="text-[11px] font-medium">Menunggu rekonsiliasi</p>
+                <p className="mt-1 text-xl font-bold tabular-nums">{activeCanonicalSettlements.length}</p>
+              </div>
+              <div className="rounded-lg border border-green-300 bg-green-50 px-3 py-2 text-green-900 dark:border-green-800 dark:bg-green-950 dark:text-green-200">
+                <p className="text-[11px] font-medium">Selesai</p>
+                <p className="mt-1 text-xl font-bold tabular-nums">{completedCanonicalSettlements.length}</p>
+              </div>
+            </div>
+
+            {canonicalSettlements.length === 0 && !qrisAuditLoading ? (
+              <div className="rounded-md border border-dashed px-3 py-5 text-center text-xs text-slate-500">
+                Belum ada settlement canonical QRIS pada scope perusahaan ini.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {canonicalSettlements.map((settlement) => {
+                  const isCompleted = settlement.queue_status === "completed";
+                  return (
+                    <div
+                      key={`canonical-settlement-${settlement.id}`}
+                      className="rounded-md border px-3 py-2.5 text-xs"
+                    >
+                      <div className="flex items-start justify-between gap-3 flex-wrap">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <Badge variant="outline" className="border-indigo-300 text-indigo-800 dark:border-indigo-700 dark:text-indigo-300">
+                              {settlement.provider_code || settlement.provider_name || "Provider belum dikenali"}
+                            </Badge>
+                            <Badge
+                              className={isCompleted
+                                ? "gap-1 bg-green-600 text-white"
+                                : "gap-1 bg-amber-500 text-white"}
+                            >
+                              {isCompleted
+                                ? <CheckCircle2 className="h-3 w-3" />
+                                : <Clock className="h-3 w-3" />}
+                              {isCompleted ? "Selesai" : "Menunggu mutasi bank"}
+                            </Badge>
+                            <span className="text-slate-500">Settlement #{settlement.id}</span>
+                          </div>
+                          <p className="mt-1 truncate font-medium text-slate-900 dark:text-slate-100">
+                            {settlement.settlement_reference || "Tanpa referensi settlement"}
+                          </p>
+                          <p className="mt-0.5 text-slate-600 dark:text-slate-400">
+                            {settlement.settlement_date ? fmtDate(settlement.settlement_date) : "Tanggal belum tersedia"}
+                            {" · "}
+                            {settlement.payment_items.length} payment
+                            {" · "}
+                            Gross {idr(settlement.gross_amount)}
+                            {" · "}
+                            Netto {idr(settlement.expected_bank_amount)}
+                          </p>
+                        </div>
+                        <div className="text-right text-slate-600 dark:text-slate-400">
+                          <p className="font-semibold text-slate-900 dark:text-slate-100">
+                            {idr(settlement.expected_bank_amount)}
+                          </p>
+                          <p>
+                            {settlement.bank_mutation_id != null
+                              ? `Mutasi #${settlement.bank_mutation_id}`
+                              : "Belum ter-link"}
+                          </p>
+                        </div>
+                      </div>
+                      {settlement.bank_description && (
+                        <p className="mt-2 truncate border-t pt-2 text-slate-500 dark:border-slate-800">
+                          {settlement.bank_description}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         {/* QRIS candidates are shown directly inside each bank mutation card.
             Keep the legacy audit block unreachable while the endpoint contract

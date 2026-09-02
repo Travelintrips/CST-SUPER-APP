@@ -16,3 +16,15 @@ Runtime verification must treat the live Supabase catalog as authoritative: pass
 **How to apply:** Run the approved DEV and PROD catalog preflight through `load-secrets.mjs` before claiming end-to-end parity; classify missing routines, unresolved source/status ownership, and readiness timeout as publish blockers rather than silently applying a DEV→PROD sync.
 
 When diagnosing an apparent duplicate or missing bank link, inspect canonical settlement items by payment ID as well as batch `bank_mutation_id` and net amount; a posted batch can be unlinked and have the wrong net, so the bank mutation lookup alone misses the stale settlement.
+
+The development runtime currently exposes `expected_bank_settlements.bank_mutation_id`
+but not the optional compatibility column `canonical_bank_mutation_id`. Read adapters
+must use the live column contract until an additive runtime migration proves the
+compatibility link exists.
+
+**Why:** The checked-in adapter contract can be ahead of the Supabase runtime schema;
+referencing an absent compatibility column turns a read-only queue into an HTTP 500.
+
+**How to apply:** Verify `information_schema.columns` before adding canonical queue
+filters or joins, and keep the queue read-only and source-aware rather than guessing
+legacy columns.

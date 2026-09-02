@@ -94,13 +94,15 @@ import {
 import { addCalendarDays } from "../lib/reconciliation/businessCalendar.js";
 import {
   generateQrisCandidates,
-  listQrisCandidates,
 } from "../lib/reconciliation/qrisCandidateService.js";
 import {
   QrisApprovalPaymentGuardError,
   selectQrisApprovalPaymentIds,
 } from "../lib/reconciliation/qrisApprovalPaymentGuard.js";
-import { canonicalSettlementDetailsSql } from "../lib/reconciliation/canonicalSettlementAdapter.js";
+import {
+  canonicalSettlementDetailsSql,
+  listCanonicalSettlementQueue,
+} from "../lib/reconciliation/canonicalSettlementAdapter.js";
 import {
   approveCanonicalSettlementLink,
   reopenCanonicalSettlementLink,
@@ -1712,27 +1714,27 @@ router.get("/qris-settlements/:settlementId", async (req, res) => {
   }
 });
 
-// ─── QRIS provider-aware strict auto-match candidates ─────────────────────────
-// Auto-match only creates a MATCHED candidate snapshot. It does not approve a
-// settlement, create a journal, or consume bank evidence; posting remains an
-// explicit governed approval step.
+// ─── Canonical QRIS settlement queue ─────────────────────────────────────────
+// This read endpoint exposes canonical Sport Center settlement lifecycle data.
+// It does not approve a settlement, create a journal, or consume bank evidence.
 router.get("/qris-candidates", async (req, res) => {
   await runQrisSettlementMigration();
   try {
     const companyId = resolveCompanyId(req);
-    const status = req.query.status ? String(req.query.status).toUpperCase() : null;
     const includeCompleted = String(req.query.includeCompleted ?? "").toLowerCase() === "true";
-    const candidates = await listQrisCandidates({
+    const canonicalSettlements = await listCanonicalSettlementQueue({
       companyId,
-      status,
-      limit: Number(req.query.limit ?? 100),
       includeCompleted,
+      limit: Number(req.query.limit ?? 100),
     });
     return res.json({
-      mode: "strict_h_minus_one_auto",
+      mode: "canonical_settlement_queue",
       automaticFinalReconciliation: false,
-      automaticMatch: true,
-      candidates,
+      automaticMatch: false,
+      canonicalSettlements,
+      // Preserve the old response key for clients that have not migrated yet.
+      // The active queue never populates it from qris_mutation_batch_candidates.
+      candidates: [],
     });
   } catch (e: any) {
     logger.error({ err: e?.cause?.message ?? e?.message }, "[bankRecon] GET /qris-candidates failed");
