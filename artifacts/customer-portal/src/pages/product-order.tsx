@@ -132,6 +132,18 @@ async function submitOrder(body: unknown): Promise<{ orderNumber: string }> {
   return res.json();
 }
 
+function getStableSubmissionKey(storageKey: string): string {
+  try {
+    const existing = window.sessionStorage.getItem(storageKey);
+    if (existing) return existing;
+    const key = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+    window.sessionStorage.setItem(storageKey, key);
+    return key;
+  } catch {
+    return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+  }
+}
+
 // ── Vehicle comparison helpers ─────────────────────────────────────────────────
 
 const VEHICLE_RATES_PO: Record<string, { rate: number; min: number; maxKg: number }> = {
@@ -190,6 +202,7 @@ export default function ProductOrderPage() {
   const [address, setAddress] = useState("");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [submissionIdempotencyKey, setSubmissionIdempotencyKey] = useState<string | null>(null);
 
   // Pre-fill customer info from logged-in profile
   useEffect(() => {
@@ -411,6 +424,9 @@ export default function ProductOrderPage() {
 
     setSubmitting(true);
     try {
+      const idempotencyKey = submissionIdempotencyKey
+        ?? getStableSubmissionKey("customer-portal:product-order:pending");
+      if (!submissionIdempotencyKey) setSubmissionIdempotencyKey(idempotencyKey);
       const items = cart.map(i => ({
         productId: i.product.id, productName: i.product.name, productSku: i.product.sku,
         unit: i.product.unit ?? "pcs", unitPrice: i.product.price, qty: i.qty,
@@ -437,7 +453,10 @@ export default function ProductOrderPage() {
           estimatedCost: selectedService.estimatedCost, summaryLine: selectedService.summaryLine,
         } : undefined,
         subtotal, ppn, grandTotal,
+        idempotencyKey,
       });
+      try { window.sessionStorage.removeItem("customer-portal:product-order:pending"); } catch {}
+      setSubmissionIdempotencyKey(null);
       setOrderNumber(result.orderNumber);
       setStep("success");
     } catch (err) {

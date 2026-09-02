@@ -91,14 +91,17 @@ const individualContext = {
 function makeTx() {
   const insertedValues: Record<string, unknown>[] = [];
   const tx = {
+    execute: vi.fn().mockResolvedValue({ rows: [] }),
     insert: vi.fn(() => ({
       values: vi.fn((values: Record<string, unknown>) => {
         insertedValues.push(values);
-        return {
+        const query = {
+          onConflictDoNothing: vi.fn(() => query),
           returning: vi.fn().mockResolvedValue([
             { id: 101, orderNumber: "MCT-260828-12345" },
           ]),
         };
+        return query;
       }),
     })),
   };
@@ -124,6 +127,7 @@ describe("submitMarketplaceQuote authenticated ownership boundary", () => {
           portalCustomerId: individualContext.customer.id,
           ip: "127.0.0.1",
           body: {
+            idempotency_key: "authenticated-canonical-failure",
             buyer_name: "Canonical Buyer",
             email: "forged@example.test",
             guest_contact: individualContext.customer.phone!,
@@ -152,6 +156,7 @@ describe("submitMarketplaceQuote authenticated ownership boundary", () => {
       portalCustomerId: individualContext.customer.id,
       ip: "127.0.0.1",
       body: {
+        idempotency_key: "duplicate-quote-retry",
         buyer_name: "Canonical Buyer",
         email: "forged@example.test",
         guest_contact: individualContext.customer.phone!,
@@ -182,6 +187,7 @@ describe("submitMarketplaceQuote authenticated ownership boundary", () => {
       portalCustomerId: individualContext.customer.id,
       ip: "127.0.0.1",
       body: {
+        idempotency_key: "authenticated-ownership-boundary",
         buyer_name: "Forged Display Name",
         email: "forged@example.test",
         customer_id: 999999999,
@@ -322,5 +328,118 @@ describe("submitMarketplaceQuote authenticated ownership boundary", () => {
       "retry-correlation-id",
     );
     expect(secondTx.insertedValues).toHaveLength(2);
+  });
+
+  it("treats identical payloads with different keys as two intentional submissions", async () => {
+    const legacyError = Object.assign(new Error("legacy unavailable"), {
+      code: "23505",
+      constraint: "portal_product_orders_order_number_unique",
+    });
+    mockCreateMktRfqEntry
+      .mockResolvedValueOnce({ rfqId: 401, rfqNumber: "MKT-RFQ-202609-0401" })
+      .mockResolvedValueOnce({ rfqId: 402, rfqNumber: "MKT-RFQ-202609-0402" });
+    mockDb.transaction.mockRejectedValue(legacyError);
+
+    const { submitMarketplaceQuote } = await import("../portalMarketplaceService.js");
+    const baseRequest = {
+      catalogItemId: catalogItem.id,
+      portalCustomerId: individualContext.customer.id,
+      ip: "127.0.0.1",
+      body: {
+        buyer_name: "Canonical Buyer",
+        email: "forged@example.test",
+        guest_contact: individualContext.customer.phone!,
+        destination: "Jakarta",
+      },
+    };
+
+    const first = await submitMarketplaceQuote({ ...baseRequest, idempotencyKey: "intentional-submit-a" });
+    const second = await submitMarketplaceQuote({ ...baseRequest, idempotencyKey: "intentional-submit-b" });
+
+    expect(first.rfqId).toBe(401);
+    expect(second.rfqId).toBe(402);
+    expect(mockCreateMktRfqEntry).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ idempotencyKey: "intentional-submit-a" }),
+    );
+    expect(mockCreateMktRfqEntry).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ idempotencyKey: "intentional-submit-b" }),
+    );
+  });
+
+  it("fails closed for a blank idempotency identity", async () => {
+    const { submitMarketplaceQuote } = await import("../portalMarketplaceService.js");
+    await expect(submitMarketplaceQuote({
+      catalogItemId: catalogItem.id,
+      portalCustomerId: individualContext.customer.id,
+      ip: "127.0.0.1",
+      idempotencyKey: "   ",
+      body: {
+        buyer_name: "Canonical Buyer",
+        guest_contact: individualContext.customer.phone!,
+        destination: "Jakarta",
+      },
+    })).rejects.toMatchObject({ statusCode: 400 });
+    expect(mockCreateMktRfqEntry).not.toHaveBeenCalled();
+  });
+
+  it("concurrent compatibility retries converge on one legacy order", async () => {
+    const { tx, insertedValues } = makeTx();
+    let firstInsert = true;
+    tx.insert = vi.fn(() => ({
+      values: vi.fn((values: Record<string, unknown>) => {
+        insertedValues.push(values);
+        const query = {
+          onConflictDoNothing: vi.fn(() => query),
+          returning: vi.fn().mockResolvedValue(
+            firstInsert
+              ? (firstInsert = false, [{ id: 901, orderNumber: "MCT-260903-00901" }])
+              : [],
+          ),
+        };
+        return query;
+      }),
+    }));
+    tx.execute.mockResolvedValue({
+      rows: [{ id: 901, order_number: "MCT-260903-00901" }],
+    });
+    mockDb.transaction.mockImplementation(async (callback: (transaction: typeof tx) => unknown) => callback(tx));
+
+    const { retryLegacyCompatibilityWrite } = await import("../portalMarketplaceService.js");
+    const payload = {
+      idempotencyKey: "mkt-rfq:compat-concurrent",
+      buyerName: "Buyer",
+      buyerEmail: "buyer@example.test",
+      buyerPhone: "081234567890",
+      companyId: null,
+      legacyCompatibility: {
+        orderStatus: "Quote Request",
+        subtotal: 100,
+        grandTotal: 100,
+        productCategory: null,
+        templateId: null,
+        templateVersion: null,
+        customFieldValues: {},
+        catalogSnapshot: {},
+        itemName: "Service",
+        unitStr: "unit",
+        sellPrice: 100,
+        qtyNum: 1,
+      },
+    };
+
+    const [first, second] = await Promise.all([
+      retryLegacyCompatibilityWrite({ payload }),
+      retryLegacyCompatibilityWrite({ payload }),
+    ]);
+
+    expect(first.id).toBe(901);
+    expect(second.id).toBe(901);
+    // Both transactions may issue an INSERT, but the unique conflict means
+    // only the first header is committed; both calls resolve to that same id.
+    expect(insertedValues.filter((values) => "orderNumber" in values)).toHaveLength(2);
+    expect(insertedValues).toHaveLength(3);
+    expect(mockDb.transaction).toHaveBeenCalledTimes(2);
   });
 });

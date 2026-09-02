@@ -96,6 +96,67 @@ describe("Rule Engine — Test 1: contains match", () => {
     const result = evaluateReconRules(rules, makeMutation({ description: "transfer gaji karyawan" }));
     expect(result.matched).toBe(false);
   });
+
+  it("matches kas besar as an internal transfer without requiring a word boundary", () => {
+    const rules = [makeRule({
+      conditionValue: "kas besar",
+      targetType: "internal_transfer",
+      targetCoaCode: "1-1010-CST",
+    })];
+    const result = evaluateReconRules(rules, makeMutation({
+      description: "BBLUI FELICIA JUSTIANI KAS BESAR99102",
+    }));
+    expect(result.matched).toBe(true);
+    expect(result.targetType).toBe("internal_transfer");
+    expect(result.targetCoaCode).toBe("1-1010-CST");
+  });
+
+  it("keeps the configured rule target as an asset treatment", () => {
+    const rules = [makeRule({
+      conditionValue: "kas besar",
+      targetType: "internal_transfer",
+      targetCoaCode: "1-1010-CST",
+    })];
+    const result = evaluateReconRules(rules, makeMutation({
+      description: "TRANSFER KE KAS BESAR99102",
+    }));
+    expect(result).toMatchObject({
+      matched: true,
+      targetType: "internal_transfer",
+      targetCoaCode: "1-1010-CST",
+    });
+  });
+});
+
+describe("Rule Engine — required document gate", () => {
+  it("does not match and reports the document requirement when proof is missing", () => {
+    const rules = [makeRule({
+      name: "PPN invoice requires OCR proof",
+      requiresDocumentUpload: true,
+      taxType: "ppn_input",
+    })];
+
+    const result = evaluateReconRules(rules, makeMutation({ hasDocumentUpload: false }));
+
+    expect(result.matched).toBe(false);
+    expect(result.documentRequired).toEqual({
+      ruleId: 1,
+      ruleName: "PPN invoice requires OCR proof",
+    });
+  });
+
+  it("matches after a proof document is uploaded", () => {
+    const rules = [makeRule({
+      requiresDocumentUpload: true,
+      taxType: "ppn_output",
+      targetCoaCode: "2-1020-CST",
+    })];
+
+    const result = evaluateReconRules(rules, makeMutation({ hasDocumentUpload: true }));
+
+    expect(result.matched).toBe(true);
+    expect(result.targetCoaCode).toBe("2-1020-CST");
+  });
 });
 
 // ─── Test 2: equals match ──────────────────────────────────────────────────────
@@ -409,6 +470,23 @@ describe("Rule Engine — amount tolerance guard", () => {
       description: "TRANSFER LAIN",
       amount: 2500,
     })).matched).toBe(false);
+  });
+
+  it("treats legacy zero reference and zero tolerance as no nominal criterion", () => {
+    const rules = [makeRule({
+      conditions: [
+        { field: "description", operator: "contains", value: "kas besar" },
+      ],
+      logic: "OR",
+      amountTolerance: 0,
+      referenceAmount: 0,
+      confidenceScore: 100,
+    })];
+
+    expect(evaluateReconRules(rules, makeMutation({
+      description: "TRANSFER KAS BESAR99102",
+      amount: 6000000,
+    })).matched).toBe(true);
   });
 });
 

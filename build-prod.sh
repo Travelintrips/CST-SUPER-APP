@@ -9,7 +9,6 @@
 #   1. API Server  (load-secrets.mjs bergantung pada node_modules api-server)
 #   2. Customer Portal  (VITE_SUPABASE_URL wajib di-bake via load-secrets)
 #   3. BizPortal        (VITE_SUPABASE_URL wajib di-bake via load-secrets)
-#   4. Logistic Order   (tidak ada VITE_SUPABASE env, tidak perlu load-secrets)
 
 set -eo pipefail
 cd "$(dirname "$0")"
@@ -47,9 +46,20 @@ APP_ENV=production node "../api-server/load-secrets.mjs" \
 cd ../..
 echo "[build-prod] BizPortal ✓"
 
-# ── 4. Logistic Order ─────────────────────────────────────────────────────────
-echo "[build-prod] Building Logistic Order..."
-pnpm --filter @workspace/logistic-order run build
-echo "[build-prod] Logistic Order ✓"
+# ── 4. Deployment artifact validation ─────────────────────────────────────────
+# Fail closed instead of allowing pnpm filters with no matching project to
+# produce a successful publishing build with missing runtime assets.
+echo "[build-prod] Validating deployment artifacts..."
+for required_file in \
+  "artifacts/api-server/dist/index.mjs" \
+  "artifacts/customer-portal/dist/public/index.html" \
+  "artifacts/bizportal/dist/public/index.html"
+do
+  if [ ! -s "$required_file" ]; then
+    echo "[build-prod] ERROR: required artifact missing or empty: $required_file" >&2
+    exit 1
+  fi
+done
+echo "[build-prod] Deployment artifacts ✓"
 
 echo "[build-prod] === All artifacts built successfully ==="

@@ -513,7 +513,7 @@ async function assertBatchResult(
   const itemResult = await client.execute(sql`
     SELECT id, payment_id, payment_journal_id, gross_amount, item_status
     FROM sport_center.payment_settlement_items
-      WHERE settlement_id = ${batchId}::text
+      WHERE settlement_id = ${batchId}::bigint
       AND item_status = 'active'
     ORDER BY payment_id
     FOR UPDATE
@@ -1126,9 +1126,20 @@ export async function buildCanonicalSportCenterSettlements(
   client: QueryClient = db,
 ): Promise<CanonicalSettlementBuildResult> {
   try {
-    return await client.transaction((tx) =>
-      buildInTransaction(tx as unknown as QueryClient, options),
-    );
+    return await client.transaction(async (tx) => {
+      /*
+       * The canonical owner finalizer transitions source payments to
+       * settled. Its metadata mirror then synchronizes the existing
+       * payment_confirmed journal. Keep this capability transaction-local:
+       * the posted-journal guard still rejects every non-allowlisted
+       * financial/status change, while the separate candidate-validation
+       * transaction cannot leak this setting into the builder transaction.
+       */
+      await tx.execute(sql.raw(
+        "SET LOCAL sport_center.allow_posted_accounting_metadata_correction = 'on'",
+      ));
+      return buildInTransaction(tx as unknown as QueryClient, options);
+    });
   } catch (error) {
     if (error instanceof CanonicalSettlementBuilderError) throw error;
 

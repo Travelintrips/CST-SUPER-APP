@@ -162,6 +162,7 @@ async function submitQuote(label, jar, extra = {}, requestOptions = {}) {
     jar,
     headers: {
       "x-forwarded-for": requestOptions.forwardedFor ?? proofClientIp,
+      "Idempotency-Key": requestOptions.idempotencyKey ?? `${MARKER}:${label}`,
       ...(token ? { authorization: `Bearer ${token}` } : {}),
     },
     body: {
@@ -400,7 +401,10 @@ async function verifyIndividualRfq() {
       guest_contact: preservedRfqState.phone,
       notes: preservedRfqState.notes,
       required_date: preservedRfqState.requiredDate,
-    }, { forwardedFor: "198.51.100.253" })
+    }, {
+      forwardedFor: "198.51.100.253",
+      idempotencyKey: `${MARKER}:individual`,
+    })
     : null;
   const canonicalCount = submitted?.rfqId
     ? await one(

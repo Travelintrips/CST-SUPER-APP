@@ -70,9 +70,21 @@ export async function runReconBatch3Migration(): Promise<void> {
       strategy            TEXT NOT NULL DEFAULT 'MANUAL'
         CHECK (strategy IN ('FIFO','LIFO','DUE_DATE','REFERENCE','MANUAL')),
       is_active           BOOLEAN NOT NULL DEFAULT TRUE,
+       source_allocation_id INTEGER REFERENCES payment_allocations(id) ON DELETE RESTRICT,
       created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `)).catch(() => {});
+
+  // A new current-payment edge may point to an old allocation only once.
+  // The old edge remains immutable, preserving its original mutation lineage.
+  await db.execute(sql.raw(
+    `ALTER TABLE payment_allocations ADD COLUMN IF NOT EXISTS source_allocation_id INTEGER`
+  )).catch(() => {});
+  await db.execute(sql.raw(
+    `CREATE UNIQUE INDEX IF NOT EXISTS pa_source_allocation_active_unique
+     ON payment_allocations(source_allocation_id)
+     WHERE source_allocation_id IS NOT NULL AND is_active = TRUE`
+  )).catch(() => {});
 
   await db.execute(sql.raw(
     `CREATE INDEX IF NOT EXISTS pa_invoice_idx   ON payment_allocations(invoice_id)`

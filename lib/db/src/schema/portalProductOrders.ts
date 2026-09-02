@@ -55,6 +55,9 @@ export const portalProductOrdersTable = pgTable("portal_product_orders", {
   // Analytics / profitability fields
   productPrice: numeric("product_price", { precision: 14, scale: 2 }),
   companyId: integer("company_id"),
+  // Stable logical-request identity for marketplace compatibility writes.
+  // NULL is retained for legacy orders created before idempotency was added.
+  idempotencyKey: text("idempotency_key"),
   // Audit timestamps
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),

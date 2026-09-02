@@ -1184,8 +1184,8 @@ async function postBatchFromNormalized(
               const _approval = await approveAndCreateJournal(
                 _mutId,
                 null,
-                null,
-                null,
+                "recon_rule",
+                Number(_decision.matchedRuleId),
                 actor,
                 `Auto-post berdasarkan Referensi COA #${Number(_decision.matchedRuleId)}`,
                 _coaCode,

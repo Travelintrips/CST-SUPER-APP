@@ -1,6 +1,7 @@
 import React from "react";
 import { AlertTriangle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { isChunkLoadError } from "@/lib/chunkLoadRecovery";
 
 interface Props {
   children: React.ReactNode;
@@ -50,6 +51,14 @@ export class ErrorBoundary extends React.Component<Props, State> {
     }
   }
 
+  private retry = () => {
+    if (isChunkLoadError(this.state.error)) {
+      window.location.reload();
+      return;
+    }
+    this.setState({ hasError: false, error: null });
+  };
+
   render() {
     if (this.state.hasError) {
       if (this.props.fallback) return this.props.fallback;
@@ -73,7 +82,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
             variant="outline"
             size="sm"
             className="gap-2"
-            onClick={() => this.setState({ hasError: false, error: null })}
+            onClick={this.retry}
           >
             <RefreshCw className="h-4 w-4" />
             Coba Lagi

@@ -28,6 +28,7 @@ import { runFinanceCoreMigration } from "./lib/financeCoreMigration.js";
 import { runBankReceiptMigration } from "./lib/bankReceiptMigration.js";
 import { runAllocationMigration } from "./lib/allocationMigration.js";
 import { runTreasuryMigration } from "./lib/treasury/treasuryMigration.js";
+import { runBankMutationAllocationLineageMigration } from "./lib/reconciliation/bankMutationAllocationLineageMigration.js";
 import { runBankAllocationMigration } from "./lib/bankAllocationMigration.js";
 import { runExpenseRuleMigration } from "./lib/expenseRuleMigration.js";
 import { runExpenseClassificationMigration } from "./lib/expenseClassificationMigration.js";
@@ -287,6 +288,7 @@ async function main() {
   await runSafe("bankReceipt", runBankReceiptMigration);
   await runSafe("allocation", runAllocationMigration);
   await runSafe("treasury", runTreasuryMigration);
+  await runSafe("bankMutationAllocationLineage", runBankMutationAllocationLineageMigration);
   await runSafe("bankAllocation", runBankAllocationMigration);
   await runSafe("expenseRule", runExpenseRuleMigration);
   await runSafe("expenseClassification", runExpenseClassificationMigration);

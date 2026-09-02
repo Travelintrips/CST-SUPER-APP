@@ -206,6 +206,24 @@ export function AppShell({ children, noPadding }: AppShellProps) {
     },
   });
   const { unreadCount, dbUnreadTotal } = useOrderNotificationsContext();
+  const { data: portalWorkload } = useQuery({
+    queryKey: ["/api/portal/admin/service-operations", "pending-count"],
+    queryFn: async () => {
+      const response = await fetch("/api/portal/admin/service-operations?limit=1&offset=0", {
+        credentials: "include",
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error("Portal workload unavailable");
+      return response.json() as Promise<{ summary?: Array<{ pending?: number }> }>;
+    },
+    enabled: ["admin", "owner", "manager", "staff"].includes(dbUser?.role ?? ""),
+    retry: false,
+    refetchInterval: 30_000,
+  });
+  const portalPendingCount = (portalWorkload?.summary ?? []).reduce(
+    (sum, item) => sum + Number(item.pending ?? 0),
+    0,
+  );
 
   useAlertWebSocket({ enabled: secondaryReady });
 
@@ -266,6 +284,14 @@ export function AppShell({ children, noPadding }: AppShellProps) {
     },
 
     // ── 4c. UNIFIED VENDOR INVITES ───────────────────────────────────────
+    {
+      type: "flat",
+      titleKey: "Customer Portal Ops",
+      href: "/admin/portal?tab=workload",
+      icon: ClipboardList,
+      roles: ["admin", "owner", "super_admin"],
+      activePaths: ["/admin/portal"],
+    },
     {
       type: "flat",
       titleKey: "Undang Vendor",
@@ -767,6 +793,7 @@ export function AppShell({ children, noPadding }: AppShellProps) {
 
     if (item.type === "flat") {
       const isNotif = item.href === "/notifications";
+      const isPortalOps = item.href === "/admin/portal?tab=workload";
       const isActive =
         location === item.href ||
         location.startsWith(`${item.href}/`) ||
@@ -788,6 +815,11 @@ export function AppShell({ children, noPadding }: AppShellProps) {
                 {isNotif && dbUnreadTotal > 0 && (
                   <span className="ml-auto inline-flex items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-bold text-white leading-none min-w-[18px]">
                     {dbUnreadTotal > 99 ? "99+" : dbUnreadTotal}
+                  </span>
+                )}
+                {isPortalOps && portalPendingCount > 0 && (
+                  <span className="ml-auto inline-flex min-w-[18px] items-center justify-center rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white">
+                    {portalPendingCount > 99 ? "99+" : portalPendingCount}
                   </span>
                 )}
               </Link>

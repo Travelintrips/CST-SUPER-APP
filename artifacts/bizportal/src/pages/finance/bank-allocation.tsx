@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/use-toast";
 import {
   RefreshCw,
@@ -33,6 +34,9 @@ import {
   AlertTriangle,
   ArrowLeftRight,
   Wand2,
+  Link2,
+  Plus,
+  Trash2,
 } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -62,6 +66,25 @@ interface MatchRow {
   transaction_date: string;
   allocation_status: string | null;
   allocation_no: string | null;
+}
+
+interface PreviousMutationAllocation {
+  id: number;
+  transactionDate: string;
+  description: string;
+  amount: number;
+  allocatedAmount: number;
+  remainingAmount: number;
+  allocationStatus: "UNMATCHED" | "PARTIALLY_MATCHED" | "FULLY_MATCHED";
+  allocations: Array<{
+    id: number;
+    invoiceId: number;
+    invoiceRef: string | null;
+    amount: number;
+    remainingAmount: number;
+    groupId: number | null;
+    isLinked: boolean;
+  }>;
 }
 
 interface ExceptionRow {
@@ -220,6 +243,13 @@ export default function BankAllocationPage() {
     }
   };
 
+  useEffect(() => {
+    const mutationId = Number(new URLSearchParams(window.location.search).get("mutationId"));
+    if (Number.isInteger(mutationId) && mutationId > 0) {
+      void openDetail(mutationId);
+    }
+  }, []);
+
   const doMatchAction = async (matchId: number, action: "select" | "confirm" | "reject", body?: Record<string, any>) => {
     setActionLoading(matchId);
     try {
@@ -243,6 +273,39 @@ export default function BankAllocationPage() {
       toast({ title: err.message ?? `Gagal ${action}`, variant: "destructive" });
     } finally {
       setActionLoading(null);
+    }
+  };
+
+  const allocateMutation = async (
+    mutationId: number,
+    allocations: Array<{
+      invoiceId: number;
+      invoiceRef?: string | null;
+      amount: number;
+      previousAllocationId?: number | null;
+    }>,
+  ) => {
+    setDetailLoading(true);
+    try {
+      const res = await fetch(`/api/bank-allocation/mutation/${mutationId}/allocate`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ allocations }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Gagal menyimpan allocation");
+      toast({
+        title: "Allocation tersimpan",
+        description: `${data.result?.status ?? "MATCHED"} — sisa mutasi Rp ${fmt(data.result?.remainingAmount ?? 0)}`,
+      });
+      await fetchTab(tab);
+      await fetchSummary();
+      await openDetail(mutationId);
+    } catch (err: any) {
+      toast({ title: err.message ?? "Gagal menyimpan allocation", variant: "destructive" });
+    } finally {
+      setDetailLoading(false);
     }
   };
 
@@ -328,6 +391,7 @@ export default function BankAllocationPage() {
               onSelect={(id) => doMatchAction(id, "select")}
               onConfirm={(id) => doMatchAction(id, "confirm")}
               onReject={(id) => setRejectTarget(id)}
+              onAllocate={(allocations) => allocateMutation(detail.mutation.id, allocations)}
               actionLoading={actionLoading}
             />
           ) : null}
@@ -518,22 +582,278 @@ function ExceptionTable({ rows, loading, onView }: { rows: ExceptionRow[]; loadi
 }
 
 function MutationDetailView({
-  detail, onSelect, onConfirm, onReject, actionLoading,
+  detail, onSelect, onConfirm, onReject, onAllocate, actionLoading,
 }: {
   detail: MutationDetail;
   onSelect: (matchId: number) => void;
   onConfirm: (matchId: number) => void;
   onReject: (matchId: number) => void;
+  onAllocate: (allocations: Array<{
+    invoiceId: number;
+    invoiceRef?: string | null;
+    amount: number;
+    previousAllocationId?: number | null;
+  }>) => Promise<void>;
   actionLoading: number | null;
 }) {
   const m = detail.mutation;
+  const [previousDate, setPreviousDate] = useState(String(m.transaction_date ?? "").slice(0, 10));
+  const [previousDescription, setPreviousDescription] = useState("");
+  const [previousRows, setPreviousRows] = useState<PreviousMutationAllocation[]>([]);
+  const [previousLoading, setPreviousLoading] = useState(false);
+  const [allocationLines, setAllocationLines] = useState<Array<{
+    invoiceId: number;
+    invoiceRef: string;
+    amount: string;
+    previousAllocationId?: number | null;
+  }>>([]);
+  const [allocationSaving, setAllocationSaving] = useState(false);
+
+  useEffect(() => {
+    setPreviousDate(String(m.transaction_date ?? "").slice(0, 10));
+    setPreviousDescription("");
+    setPreviousRows([]);
+    setAllocationLines([]);
+  }, [m.id, m.transaction_date]);
+
+  const searchPrevious = async () => {
+    if (!previousDate || !previousDescription.trim()) {
+      toast({ title: "Tanggal dan nama/deskripsi wajib diisi", variant: "destructive" });
+      return;
+    }
+    setPreviousLoading(true);
+    try {
+      const params = new URLSearchParams({
+        date: previousDate,
+        description: previousDescription.trim(),
+      });
+      const res = await fetch(`/api/bank-allocation/mutation/${m.id}/previous-allocations?${params}`, {
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Gagal mencari allocation sebelumnya");
+      setPreviousRows(data.rows ?? []);
+      if (!data.rows?.length) {
+        toast({ title: "Tidak ada allocation sebelumnya yang cocok" });
+      }
+    } catch (err: any) {
+      toast({ title: err.message ?? "Gagal mencari allocation sebelumnya", variant: "destructive" });
+    } finally {
+      setPreviousLoading(false);
+    }
+  };
+
+  const addAllocationLine = (line: {
+    invoiceId: number;
+    invoiceRef?: string | null;
+    amount?: number;
+    previousAllocationId?: number | null;
+  }) => {
+    if (allocationLines.some((existing) => existing.invoiceId === line.invoiceId)) {
+      toast({ title: "Invoice sudah ada di batch allocation", variant: "destructive" });
+      return;
+    }
+    const currentAmount = allocationLines.reduce((sum, existing) => sum + Number(existing.amount || 0), 0);
+    const availableMutationAmount = Math.max(0, Number(m.amount ?? 0) - currentAmount);
+    const requestedAmount = Math.min(
+      availableMutationAmount,
+      Math.max(0, Number(line.amount ?? 0)),
+    );
+    setAllocationLines((existing) => [
+      ...existing,
+      {
+        invoiceId: line.invoiceId,
+        invoiceRef: String(line.invoiceRef ?? `#${line.invoiceId}`),
+        amount: String(requestedAmount || availableMutationAmount || ""),
+        previousAllocationId: line.previousAllocationId ?? null,
+      },
+    ]);
+  };
+
+  const submitAllocations = async () => {
+    const payload = allocationLines.map((line) => ({
+      invoiceId: line.invoiceId,
+      invoiceRef: line.invoiceRef,
+      amount: Number(line.amount),
+      previousAllocationId: line.previousAllocationId ?? null,
+    }));
+    const total = payload.reduce((sum, line) => sum + line.amount, 0);
+    if (!payload.length || payload.some((line) => !Number.isFinite(line.amount) || line.amount <= 0)) {
+      toast({ title: "Isi nominal allocation yang valid", variant: "destructive" });
+      return;
+    }
+    if (total > Number(m.amount ?? 0) + 0.01) {
+      toast({ title: "Total allocation melebihi nominal mutasi", variant: "destructive" });
+      return;
+    }
+    setAllocationSaving(true);
+    try {
+      await onAllocate(payload);
+      setAllocationLines([]);
+      setPreviousRows([]);
+    } finally {
+      setAllocationSaving(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 text-sm">
         <div><span className="text-slate-500">Tanggal:</span> {fmtDate(m.transaction_date)}</div>
         <div><span className="text-slate-500">Nominal:</span> Rp {fmt(m.amount)}</div>
         <div className="col-span-2"><span className="text-slate-500">Deskripsi:</span> {m.description ?? m.normalized_description ?? "-"}</div>
+        <div className="col-span-2 flex items-center gap-2">
+          <span className="text-slate-500">Status allocation:</span>
+          <Badge variant="outline">{m.allocation_status ?? "UNMATCHED"}</Badge>
+          <span className="text-xs text-muted-foreground">
+            Rp {fmt(m.allocation_amount ?? 0)} dialokasikan · sisa Rp {fmt(m.allocation_remaining_amount ?? m.amount ?? 0)}
+          </span>
+        </div>
       </div>
+
+      <section className="rounded-lg border border-indigo-200 bg-indigo-50/60 p-3 space-y-3 dark:border-indigo-800 dark:bg-indigo-950/30">
+        <div className="flex items-start gap-2">
+          <Link2 className="h-4 w-4 mt-0.5 text-indigo-600 shrink-0" />
+          <div>
+            <h3 className="text-sm font-semibold text-indigo-950 dark:text-indigo-100">Multi-allocation & Link DP Lama</h3>
+            <p className="text-xs text-indigo-800/80 dark:text-indigo-200/80">
+              Pilih beberapa invoice untuk satu mutasi. Untuk pelunasan, cari mutasi sebelumnya hanya dengan tanggal dan nama/deskripsi pengirim.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-[10rem_1fr_auto] gap-2">
+          <Input
+            type="date"
+            value={previousDate}
+            onChange={(event) => setPreviousDate(event.target.value)}
+            aria-label="Tanggal mutasi sebelumnya"
+          />
+          <Input
+            placeholder="Nama/deskripsi pengirim"
+            value={previousDescription}
+            onChange={(event) => setPreviousDescription(event.target.value)}
+            onKeyDown={(event) => { if (event.key === "Enter") searchPrevious(); }}
+            aria-label="Nama atau deskripsi pengirim"
+          />
+          <Button size="sm" variant="outline" onClick={searchPrevious} disabled={previousLoading}>
+            <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${previousLoading ? "animate-spin" : ""}`} />
+            Cari mutasi lama
+          </Button>
+        </div>
+
+        {previousRows.length > 0 && (
+          <div className="space-y-2">
+            <p className="text-xs font-semibold text-indigo-950 dark:text-indigo-100">Hasil pencarian — pilih allocation yang akan dikaitkan</p>
+            {previousRows.map((previous) => (
+              <div key={previous.id} className="rounded border bg-background p-2.5 space-y-2">
+                <div className="flex items-start justify-between gap-2 text-xs">
+                  <div className="min-w-0">
+                    <p className="font-medium truncate">{fmtDate(previous.transactionDate)} · {previous.description || "-"}</p>
+                    <p className="text-muted-foreground">
+                      Mutasi Rp {fmt(previous.amount)} · sudah dialokasikan Rp {fmt(previous.allocatedAmount)} · sisa Rp {fmt(previous.remainingAmount)}
+                    </p>
+                  </div>
+                  <Badge variant="outline" className="shrink-0 text-[10px]">{previous.allocationStatus}</Badge>
+                </div>
+                {previous.allocations.map((allocation) => (
+                  <div key={allocation.id} className="flex items-center justify-between gap-2 rounded bg-muted/40 px-2 py-1.5 text-xs">
+                    <div className="min-w-0">
+                      <p className="font-medium truncate">{allocation.invoiceRef ?? `Invoice #${allocation.invoiceId}`}</p>
+                      <p className="text-muted-foreground">
+                        Allocation Rp {fmt(allocation.amount)} · outstanding invoice Rp {fmt(allocation.remainingAmount)}
+                        {allocation.isLinked ? " · sudah dikaitkan" : ""}
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={allocation.isLinked || allocationLines.some((line) => line.invoiceId === allocation.invoiceId)}
+                      onClick={() => addAllocationLine({
+                        invoiceId: allocation.invoiceId,
+                        invoiceRef: allocation.invoiceRef,
+                        amount: allocation.remainingAmount,
+                        previousAllocationId: allocation.id,
+                      })}
+                    >
+                      <Plus className="h-3.5 w-3.5 mr-1" /> Kaitkan
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {detail.candidates.filter((candidate) => candidate.candidate_type === "invoice").length > 0 && (
+          <div className="space-y-2">
+            <p className="text-xs font-semibold text-indigo-950 dark:text-indigo-100">Tambah invoice lain dari kandidat mutasi ini</p>
+            <div className="flex flex-wrap gap-2">
+              {detail.candidates
+                .filter((candidate) => candidate.candidate_type === "invoice")
+                .map((candidate) => (
+                  <Button
+                    key={candidate.id}
+                    size="sm"
+                    variant="outline"
+                    disabled={allocationLines.some((line) => line.invoiceId === candidate.candidate_id)}
+                    onClick={() => addAllocationLine({
+                      invoiceId: candidate.candidate_id,
+                      invoiceRef: candidate.candidate_ref ?? candidate.candidate_name,
+                      amount: Math.min(Number(m.amount ?? 0), Number(candidate.candidate_amount ?? 0)),
+                    })}
+                  >
+                    <Plus className="h-3.5 w-3.5 mr-1" />
+                    {candidate.candidate_ref ?? `Invoice #${candidate.candidate_id}`}
+                  </Button>
+                ))}
+            </div>
+          </div>
+        )}
+
+        {allocationLines.length > 0 && (
+          <div className="rounded border bg-background p-2.5 space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <p className="font-semibold">Allocation baru dari mutasi ini</p>
+              <p className="text-muted-foreground">
+                Total Rp {fmt(allocationLines.reduce((sum, line) => sum + Number(line.amount || 0), 0))} / Rp {fmt(m.amount)}
+              </p>
+            </div>
+            {allocationLines.map((line, index) => (
+              <div key={`${line.invoiceId}-${line.previousAllocationId ?? "new"}`} className="grid grid-cols-[1fr_8rem_auto] items-center gap-2">
+                <div className="min-w-0 text-xs truncate">
+                  {line.invoiceRef} {line.previousAllocationId ? <span className="text-indigo-600">(link DP #{line.previousAllocationId})</span> : null}
+                </div>
+                <Input
+                  type="number"
+                  min="0.01"
+                  value={line.amount}
+                  onChange={(event) => setAllocationLines((existing) => existing.map((item, itemIndex) => (
+                    itemIndex === index ? { ...item, amount: event.target.value } : item
+                  )))}
+                  aria-label={`Nominal allocation ${line.invoiceRef}`}
+                />
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="text-red-600"
+                  onClick={() => setAllocationLines((existing) => existing.filter((_, itemIndex) => itemIndex !== index))}
+                  aria-label={`Hapus allocation ${line.invoiceRef}`}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            ))}
+            <Button className="w-full" size="sm" onClick={submitAllocations} disabled={allocationSaving}>
+              {allocationSaving ? <RefreshCw className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" />}
+              Simpan multi-allocation
+            </Button>
+            <p className="text-[11px] text-muted-foreground">
+              Sisa mutasi boleh tetap ada untuk status PARTIALLY_MATCHED. Allocation lama tidak dipindahkan dan tidak dihitung dua kali.
+            </p>
+          </div>
+        )}
+      </section>
 
       <div>
         <h3 className="text-sm font-semibold mb-2 flex items-center gap-1.5">

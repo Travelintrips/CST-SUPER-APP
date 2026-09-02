@@ -666,8 +666,8 @@ export async function syncOneConfig(cfg: SheetConfig): Promise<{
             const approval = await approveAndCreateJournal(
               id,
               null,
-              null,
-              null,
+              "recon_rule",
+              Number(decision.matchedRuleId),
               "sheet-sync",
               `Auto-post berdasarkan Referensi COA #${Number(decision.matchedRuleId)}`,
               targetCoaCode,

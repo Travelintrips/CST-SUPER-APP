@@ -1,7 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { mockDb } = vi.hoisted(() => ({
   mockDb: { execute: vi.fn() },
+}));
+const { mockRetryLegacyCompatibilityWrite } = vi.hoisted(() => ({
+  mockRetryLegacyCompatibilityWrite: vi.fn(),
 }));
 
 vi.mock("@workspace/db", () => ({ db: mockDb }));
@@ -18,10 +21,39 @@ vi.mock("../../workerHeartbeat.js", () => ({
   registerHeartbeat: vi.fn(),
   beat: vi.fn(),
 }));
+vi.mock("../portalMarketplaceService.js", () => ({
+  retryLegacyCompatibilityWrite: mockRetryLegacyCompatibilityWrite,
+}));
 
 describe("dual-write retry idempotency guards", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    delete process.env["MKT_DUAL_WRITE_RETRY_ENABLED"];
+    vi.useRealTimers();
+  });
+
+  it.each([
+    { label: "undefined", value: undefined, enabled: false },
+    { label: "false", value: "false", enabled: false },
+    { label: "true", value: "true", enabled: true },
+    { label: "invalid", value: "TRUE", enabled: false },
+  ])("enforces exact opt-in auto-retry flag for $label", async ({ value, enabled }) => {
+    vi.resetModules();
+    vi.useFakeTimers();
+    if (value === undefined) {
+      delete process.env["MKT_DUAL_WRITE_RETRY_ENABLED"];
+    } else {
+      process.env["MKT_DUAL_WRITE_RETRY_ENABLED"] = value;
+    }
+
+    const { registerHeartbeat } = await import("../../workerHeartbeat.js");
+    const { startDualWriteRetryWorker } = await import("../dualWriteReliabilityService.js");
+    startDualWriteRetryWorker();
+
+    expect(registerHeartbeat).toHaveBeenCalledTimes(enabled ? 1 : 0);
   });
 
   it("resolves an existing ledger row after a conflict instead of creating another log", async () => {
@@ -82,5 +114,59 @@ describe("dual-write retry idempotency guards", () => {
     expect(claimSql).toContain("FOR UPDATE SKIP LOCKED");
     expect(claimSql).toContain("UPDATE mkt_dual_write_log AS log");
     expect(claimSql).toContain("idempotency_key IS NOT NULL");
+  });
+
+  it("repairs failed compatibility writes without invoking canonical RFQ creation", async () => {
+    mockRetryLegacyCompatibilityWrite.mockResolvedValue({
+      id: 901,
+      orderNumber: "MCT-260903-00901",
+    });
+    mockDb.execute
+      .mockResolvedValueOnce({ rows: [{ exists: true }] })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 88,
+          attempt: 1,
+          original_status: "success",
+          payload: {
+            idempotencyKey: "mkt-rfq:compat-retry",
+            buyerName: "Buyer",
+            buyerEmail: "buyer@example.test",
+            buyerPhone: "081234567890",
+            legacyCompatibility: {
+              orderStatus: "Quote Request",
+              subtotal: 100,
+              grandTotal: 100,
+              productCategory: null,
+              templateId: null,
+              templateVersion: null,
+              customFieldValues: {},
+              catalogSnapshot: {},
+              itemName: "Service",
+              unitStr: "unit",
+              sellPrice: 100,
+              qtyNum: 1,
+            },
+          },
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [{ id: 88 }] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const { retryFailedDualWrites, resetTableReadinessCache } =
+      await import("../dualWriteReliabilityService.js");
+    resetTableReadinessCache();
+    await expect(retryFailedDualWrites()).resolves.toEqual({
+      retried: 1,
+      recovered: 1,
+      exhausted: 0,
+      skipped: 0,
+    });
+
+    expect(mockRetryLegacyCompatibilityWrite).toHaveBeenCalledWith({
+      payload: expect.objectContaining({ idempotencyKey: "mkt-rfq:compat-retry" }),
+    });
+    const canonicalClaimQuery = mockDb.execute.mock.calls[3]?.[0];
+    expect(canonicalClaimQuery.strings.join(" ")).toContain("status = 'failed'");
   });
 });

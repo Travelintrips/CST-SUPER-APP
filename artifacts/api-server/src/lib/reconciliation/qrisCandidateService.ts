@@ -352,6 +352,7 @@ export async function generateQrisCandidates(options: {
         ${settlementDateSql} AS settlement_date,
         ${settlementRuleVerSql} AS settlement_rule_version,
         NULL::text AS settlement_reference,
+         COALESCE(sp.settlement_status::text, 'unsettled') AS settlement_status,
         ${paymentBankAccountSql} AS bank_account_id,
         ${canonicalSettlementIdSql} AS canonical_settlement_id,
         ${alreadyReconciledSql} AS already_reconciled
@@ -651,6 +652,9 @@ export async function generateQrisCandidates(options: {
             expectedSettlementDate: asDate(
               item.expectedSettlementDate ?? item.expected_settlement_date,
             ),
+             settlementStatus: String(
+               item.settlementStatus ?? item.settlement_status ?? "unsettled",
+             ).trim() || "unsettled",
             settlementRuleVersion: String(
               item.settlementRuleVersion ?? item.settlement_rule_version ?? "",
             ).trim() || null,
@@ -953,6 +957,47 @@ export async function listQrisCandidates(options: {
                  ) ~ '^[0-9]+$'
                ) live_payment_provider
              ), '{}'::jsonb) AS payment_provider_by_id,
+             COALESCE((
+               SELECT jsonb_object_agg(
+                 payment_id::text,
+                 settlement_status
+               )
+               FROM (
+                 SELECT
+                   CASE
+                     WHEN COALESCE(
+                       item->>'paymentId',
+                       item->>'payment_id'
+                     ) ~ '^[0-9]+$'
+                       THEN COALESCE(
+                         item->>'paymentId',
+                         item->>'payment_id'
+                       )::int
+                     ELSE NULL
+                   END AS payment_id,
+                   COALESCE(
+                     NULLIF(BTRIM(live_settlement_payment.settlement_status::text), ''),
+                     'unsettled'
+                   ) AS settlement_status
+                 FROM jsonb_array_elements(COALESCE(c.payment_items, '[]'::jsonb)) item
+                 LEFT JOIN sport_center.sport_payments live_settlement_payment
+                   ON live_settlement_payment.id = CASE
+                     WHEN COALESCE(
+                       item->>'paymentId',
+                       item->>'payment_id'
+                     ) ~ '^[0-9]+$'
+                       THEN COALESCE(
+                         item->>'paymentId',
+                         item->>'payment_id'
+                       )::int
+                     ELSE NULL
+                   END
+                 WHERE COALESCE(
+                   item->>'paymentId',
+                   item->>'payment_id'
+                 ) ~ '^[0-9]+$'
+               ) live_payment_settlement
+             ), '{}'::jsonb) AS payment_settlement_status_by_id,
             ${currentExpectedAmountSql} AS current_expected_amount,
             COALESCE((
               SELECT jsonb_agg(current_payment.payment_id ORDER BY current_payment.payment_id)
@@ -1011,6 +1056,19 @@ export async function listQrisCandidates(options: {
                 ${canonicalSettledUnionSql}
               ) settled
              ), '[]'::jsonb) AS settled_payment_ids,
+             COALESCE((
+               SELECT jsonb_agg(active.payment_id ORDER BY active.payment_id)
+               FROM (
+                 SELECT i.payment_id
+                 FROM sport_center.payment_settlement_items i
+                 WHERE i.payment_id IN (
+                   SELECT (item->>'paymentId')::int
+                   FROM jsonb_array_elements(c.payment_items) item
+                   WHERE item->>'paymentId' IS NOT NULL
+                 )
+                   AND i.item_status = 'active'
+               ) active
+             ), '[]'::jsonb) AS active_settlement_payment_ids,
              ${recoverableSettlementIdSql} AS recoverable_settlement_id
     FROM qris_mutation_batch_candidates c
     LEFT JOIN public.bank_mutations bm ON bm.id = c.mutation_id
@@ -1032,7 +1090,13 @@ export async function listQrisCandidates(options: {
   `));
    return rows.map((row) => {
      const providerById = row.payment_provider_by_id as Record<string, unknown> | null | undefined;
-     const { payment_provider_by_id: _providerById, ...candidate } = row;
+      const settlementStatusById =
+        row.payment_settlement_status_by_id as Record<string, unknown> | null | undefined;
+      const {
+        payment_provider_by_id: _providerById,
+        payment_settlement_status_by_id: _settlementStatusById,
+        ...candidate
+      } = row;
      const rawItems = candidate.payment_items;
      const paymentItems = Array.isArray(rawItems)
        ? rawItems
@@ -1053,7 +1117,20 @@ export async function listQrisCandidates(options: {
            ?? (paymentId != null ? providerById?.[String(paymentId)] : null)
            ?? candidate.provider_code
            ?? "unknown";
-         return { ...paymentItem, providerName: String(provider) };
+          const settlementStatus =
+            paymentId != null
+              ? settlementStatusById?.[String(paymentId)]
+              : null;
+          return {
+            ...paymentItem,
+            providerName: String(provider),
+            settlementStatus: String(
+              settlementStatus
+              ?? paymentItem.settlementStatus
+              ?? paymentItem.settlement_status
+              ?? "unsettled",
+            ),
+          };
        }),
      };
    });

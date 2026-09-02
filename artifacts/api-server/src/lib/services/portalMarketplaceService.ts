@@ -12,7 +12,6 @@ import {
   portalProductOrdersTable,
   portalProductOrderItemsTable,
 } from "@workspace/db";
-import { createHash } from "crypto";
 import { eq, and, asc, sql } from "drizzle-orm";
 import { getCatalogItemPublic } from "./portalVendorCatalogService.js";
 import { getPortalCustomerContext } from "./portalCustomerContextService.js";
@@ -22,6 +21,7 @@ import {
   createMktRfqEntry,
   linkMktRfqToLegacy,
   validateMarketplaceDestinationMetadata,
+  type LegacyCompatibilitySnapshot,
 } from "./marketplaceRfqService.js";
 import { recordLegacyWriteFailure } from "./dualWriteReliabilityService.js";
 import { NotificationService } from "./notificationService.js";
@@ -75,20 +75,6 @@ function normalizeIdempotencyKey(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const key = value.trim();
   return key.length >= 1 && key.length <= 200 ? key : null;
-}
-
-function buildLogicalRequestKey(input: {
-  catalogItemId: number;
-  portalCustomerId: number | null;
-  buyerEmail: string;
-  buyerPhone: string;
-}): string {
-  // Preserve the legacy five-minute duplicate window while making the
-  // canonical identity survive a retry much later.
-  const bucket = Math.floor(Date.now() / (5 * 60 * 1000));
-  return `mkt-rfq:${createHash("sha256")
-    .update(JSON.stringify({ ...input, bucket }))
-    .digest("hex")}`;
 }
 
 // ─── submitMarketplaceQuote ───────────────────────────────────────────────────
@@ -150,6 +136,7 @@ async function insertLegacyQuote(params: {
   unitStr: string;
   sellPrice: number;
   qtyNum: number;
+  idempotencyKey: string | null;
 }): Promise<LegacyQuoteOrder> {
   // Preserve the legacy MCT-YYMMDD-RAND5 contract. Retry only a unique
   // order-number collision; never replay an arbitrary failed transaction.
@@ -173,7 +160,33 @@ async function insertLegacyQuote(params: {
           templateVersion:    params.templateVersion,
           customFieldValues:  params.customFieldValues,
           templateSnapshot:   params.catalogSnapshot,
+          idempotencyKey:     params.idempotencyKey,
+        }).onConflictDoNothing({
+          target: portalProductOrdersTable.idempotencyKey,
         }).returning();
+
+        // A concurrent retry can wait on the unique key and then observe the
+        // compatibility row committed by the first request. Reuse that row
+        // instead of creating another header and line.
+        if (!hdr) {
+          const existing = await tx.execute(sql`
+            SELECT id, order_number
+            FROM portal_product_orders
+            WHERE idempotency_key = ${params.idempotencyKey}
+            LIMIT 1
+          `);
+          const existingRow = existing.rows[0] as {
+            id?: number | string;
+            order_number?: string;
+          } | undefined;
+          if (!existingRow?.id || !existingRow.order_number) {
+            throw new Error("Legacy compatibility idempotency row tidak ditemukan");
+          }
+          return {
+            orderNumber: existingRow.order_number,
+            id: Number(existingRow.id),
+          };
+        }
 
         await tx.insert(portalProductOrderItemsTable).values({
           orderId:     hdr!.id,
@@ -193,6 +206,63 @@ async function insertLegacyQuote(params: {
     }
   }
   throw new Error("Legacy order number could not be allocated");
+}
+
+function parseLegacyCompatibilitySnapshot(value: unknown): LegacyCompatibilitySnapshot {
+  if (!value || typeof value !== "object") {
+    throw new Error("Legacy compatibility snapshot tidak tersedia");
+  }
+  const snapshot = value as Partial<LegacyCompatibilitySnapshot>;
+  const numericFields = ["subtotal", "grandTotal", "sellPrice", "qtyNum"] as const;
+  for (const field of numericFields) {
+    if (typeof snapshot[field] !== "number" || !Number.isFinite(snapshot[field])) {
+      throw new Error(`Legacy compatibility snapshot ${field} tidak valid`);
+    }
+  }
+  if (
+    typeof snapshot.orderStatus !== "string"
+    || typeof snapshot.itemName !== "string"
+    || typeof snapshot.unitStr !== "string"
+    || !snapshot.catalogSnapshot
+    || typeof snapshot.catalogSnapshot !== "object"
+    || !snapshot.customFieldValues
+    || typeof snapshot.customFieldValues !== "object"
+  ) {
+    throw new Error("Legacy compatibility snapshot tidak lengkap");
+  }
+  return snapshot as LegacyCompatibilitySnapshot;
+}
+
+/**
+ * Repairs only the legacy compatibility projection for an already-created
+ * canonical RFQ. This function intentionally has no canonical create call.
+ */
+export async function retryLegacyCompatibilityWrite(params: {
+  payload: Record<string, unknown>;
+}): Promise<LegacyQuoteOrder> {
+  const payload = params.payload;
+  const idempotencyKey = normalizeIdempotencyKey(payload.idempotencyKey);
+  if (!idempotencyKey) {
+    throw new Error("Legacy compatibility retry membutuhkan Idempotency-Key");
+  }
+  const snapshot = parseLegacyCompatibilitySnapshot(payload.legacyCompatibility);
+  const buyerName = typeof payload.buyerName === "string" ? payload.buyerName.trim() : "";
+  const buyerEmail = typeof payload.buyerEmail === "string" ? payload.buyerEmail.trim().toLowerCase() : "";
+  const buyerPhone = typeof payload.buyerPhone === "string" ? payload.buyerPhone.trim() : "";
+  if (!buyerName || !buyerEmail || !buyerPhone) {
+    throw new Error("Legacy compatibility retry membutuhkan buyer identity lengkap");
+  }
+
+  return insertLegacyQuote({
+    resolvedName: buyerName,
+    resolvedEmail: buyerEmail,
+    portalCompanyId: typeof payload.companyId === "number" ? payload.companyId : null,
+    resolvedPhone: buyerPhone,
+    effectiveShippingAddress: typeof payload.shippingAddress === "string" ? payload.shippingAddress : null,
+    combinedNotes: typeof payload.notes === "string" ? payload.notes : null,
+    ...snapshot,
+    idempotencyKey,
+  });
 }
 
 /**
@@ -276,13 +346,10 @@ export async function submitMarketplaceQuote(params: {
   });
   const logicalRequestKey =
     normalizeIdempotencyKey(params.idempotencyKey) ??
-    normalizeIdempotencyKey(body.idempotency_key) ??
-    buildLogicalRequestKey({
-      catalogItemId,
-      portalCustomerId,
-      buyerEmail: resolvedEmail,
-      buyerPhone: resolvedPhone,
-    });
+    normalizeIdempotencyKey(body.idempotency_key);
+  if (!logicalRequestKey) {
+    throw makeServiceError(400, "Idempotency-Key wajib diisi dengan identity yang valid");
+  }
 
   // ── 3. Price / order calculations ────────────────────────────────────────
   const qtyNum     = Math.max(1, Number(qty) || 1);
@@ -329,9 +396,10 @@ export async function submitMarketplaceQuote(params: {
     effectiveShippingAddress ? `Alamat: ${effectiveShippingAddress}` : null,
   ].filter(Boolean).join("\n") || null;
 
-  // ── 4. RFQ idempotency — same buyer + phone + catalog item within 5 minutes
-  // Keep catalog items distinct even when they share a template (or have none).
-  const quoteWindowStart = new Date(Date.now() - 5 * 60 * 1000);
+  // ── 4. RFQ idempotency — exact logical request only ─────────────────────
+  // Do not deduplicate by customer/payload/time window: two legitimate orders
+  // may contain the same values. Explicit Idempotency-Key and correlation
+  // identity are the only reusable request identities.
   const existingQuote = await db.execute(sql`
     SELECT
       ppo.id,
@@ -342,17 +410,7 @@ export async function submitMarketplaceQuote(params: {
     LEFT JOIN mkt_dual_write_log dwl
       ON dwl.portal_order_id = ppo.id
      AND dwl.mkt_rfq_id IS NOT NULL
-    WHERE ppo.phone = ${resolvedPhone}
-      AND ppo.email = ${resolvedEmail}
-      AND ppo.status = 'Quote Request'
-      AND ppo.created_at >= ${quoteWindowStart}
-      AND (
-        ppo.template_snapshot->>'vendorCatalogItemId' = ${String(item.id)}
-        OR (
-          ppo.template_snapshot->>'vendorCatalogItemId' IS NULL
-          AND ppo.template_id IS NOT DISTINCT FROM ${item.templateId ?? null}
-        )
-      )
+    WHERE ppo.idempotency_key = ${logicalRequestKey}
     ORDER BY ppo.id ASC
     LIMIT 1
   `);
@@ -409,15 +467,27 @@ export async function submitMarketplaceQuote(params: {
         requiredDeliveryDate: required_date?.trim() ?? null,
         ipAddress:          ip,
          idempotencyKey:     logicalRequestKey,
+         legacyCompatibility: {
+           orderStatus: urgency === "order" ? "New Order" : "Quote Request",
+           subtotal,
+           grandTotal,
+           productCategory: item.categoryKey ?? item.serviceType ?? item.kategori ?? null,
+           templateId: item.templateId ?? null,
+           templateVersion: item.templateVersion ?? null,
+           customFieldValues: (item.specValues && typeof item.specValues === "object"
+             ? item.specValues
+             : {}) as Record<string, string | number | boolean>,
+           catalogSnapshot: catalogSnapshot as Record<string, unknown>,
+           itemName: item.name,
+           unitStr,
+           sellPrice,
+           qtyNum,
+         },
       });
     } catch (err) {
-      // A guest has no canonical owner, so retain the explicit legacy fallback
-      // for backward-compatible guest RFQs. An authenticated request must never
-      // silently become a legacy/guest-shaped submission when the canonical
-      // ownership write fails.
-      if (portalCustomerId !== null) throw err;
-      console.error("[marketplaceRfq] createMktRfqEntry failed — continuing with legacy path", { err, catalogItemId });
-      mktRfqResult = null;
+      // Canonical is authoritative for guests and authenticated buyers alike.
+      // Never turn a failed canonical submission into a legacy-only order.
+      throw err;
     }
   }
 
@@ -462,6 +532,7 @@ export async function submitMarketplaceQuote(params: {
       unitStr,
       sellPrice,
       qtyNum,
+      idempotencyKey: logicalRequestKey,
     });
   } catch (error) {
     if (!mktRfqResult) throw error;

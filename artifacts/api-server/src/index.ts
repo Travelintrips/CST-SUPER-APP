@@ -35,6 +35,7 @@ import { runCustomerPortalProductTaxMigration } from "./lib/customerPortalProduc
 import { runCustomerPortalProductCoaMigration } from "./lib/customerPortalProductCoaMigration.js";
 import { runCustomerPortalServiceTypeMigration } from "./lib/customerPortalServiceTypeMigration.js";
 import { runCustomerPortalPaylabsMigration } from "./lib/customerPortalPaylabsMigration.js";
+import { runMarketplaceLegacyWriteIdempotencyMigration } from "./lib/marketplaceLegacyWriteIdempotencyMigration.js";
 import { runVendorProfileFieldsMigration } from "./lib/vendorProfileFieldsMigration";
 import { runSupplierEnhancementMigration } from "./lib/supplierEnhancementMigration";
 import { runAccountingMigration, repairKasErSportCenterEntries, repairOrphanedEntryLines, syncAccountingSequences, checkSequenceDesync } from "./lib/accountingMigration";
@@ -200,6 +201,7 @@ import { runBankReceiptMigration } from "./lib/bankReceiptMigration.js";
 import { runAdvanceMigration } from "./routes/advances.js";
 import { runAllocationMigration } from "./lib/allocationMigration.js";
 import { runTreasuryMigration } from "./lib/treasury/treasuryMigration.js";
+import { runBankMutationAllocationLineageMigration } from "./lib/reconciliation/bankMutationAllocationLineageMigration.js";
 import { runBankAllocationMigration } from "./lib/bankAllocationMigration.js";
 import { runExpenseRuleMigration } from "./lib/expenseRuleMigration.js";
 import { runExpenseClassificationMigration } from "./lib/expenseClassificationMigration.js";
@@ -2125,6 +2127,7 @@ async function startServer() {
     .then(() => runWithRetry("Vendor catalog schema migration", runVendorCatalogSchemaMigration))
     .then(() => runWithRetry("Vendor profile hardening migration (Phase Final)", runVendorProfileMigration))
     .then(() => runWithRetry("Featured product migration", runFeaturedProductMigration))
+       .then(() => runWithRetry("Marketplace legacy write idempotency migration", runMarketplaceLegacyWriteIdempotencyMigration))
        .then(() => runWithRetry("Marketplace vendor invoice migration", runMktVendorInvoiceMigration))
        .then(() => runWithRetry("Marketplace AP preparation migration", runMktApPreparationMigration))
     .then(() => runWithRetry("Logistic vendor fulfillments migration", runLogisticVendorFulfillmentsMigration))
@@ -2156,6 +2159,7 @@ async function startServer() {
     .then(() => runWithRetry("Advance Management migration", runAdvanceMigration))
     .then(() => runWithRetry("Allocation Engine migration", runAllocationMigration))
     .then(() => runWithRetry("Treasury Batch 4 migration", runTreasuryMigration))
+    .then(() => runWithRetry("Bank mutation allocation lineage migration", runBankMutationAllocationLineageMigration))
     .then(() => runWithRetry("Bank Allocation Phase 2 migration", runBankAllocationMigration))
     .then(() => runWithRetry("Expense Rule Engine migration (Phase 3)", runExpenseRuleMigration))
     .then(() => runWithRetry("Expense Classification columns migration (Phase 6D)", runExpenseClassificationMigration))

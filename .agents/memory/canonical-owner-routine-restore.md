@@ -62,6 +62,19 @@ the existing immutability trigger correctly rejects posted financial changes.
 only immediately before the guarded owner UPDATE, and preserve the trigger's
 normal protections outside that narrow path.
 
+The posted-journal metadata capability must be set in the same transaction that
+invokes the canonical settlement builder/finalizer. Setting it in a preceding
+candidate-validation transaction does not carry into the owner transaction.
+
+**Why:** Canonical finalization changes payment settlement metadata after the
+validation transaction has committed; the mirror then updates the existing
+posted payment journal and the live guard correctly rejects it without the
+transaction-local capability.
+
+**How to apply:** Set the capability at the outer builder transaction boundary,
+before calling the owner routines. Keep the allowlist guard active so this
+does not permit financial or status changes.
+
 The reconciliation UI must treat an approved canonical settlement match as a
 completed state even when an older QRIS audit snapshot remains
 `candidate_review/MATCHED`. Once all snapshot payments are already linked, the

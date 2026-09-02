@@ -1,15 +1,14 @@
 #!/bin/bash
-# Kill anything on our ports first
-fuser -k 5000/tcp 2>/dev/null || true
-fuser -k 8080/tcp 2>/dev/null || true
-sleep 1
+# Production entrypoint for Replit Autoscale/Cloud Run.
+# The API process serves the prebuilt Customer Portal, BizPortal, and Logistic
+# Order static bundles, so production needs exactly one HTTP listener.
+set -euo pipefail
+cd "$(dirname "$0")/artifacts/api-server"
 
-# Start API Server in background
-(cd artifacts/api-server && PORT=8080 pnpm run dev) &
-API_PID=$!
+export APP_ENV=production
+export NODE_ENV=production
+export REPLIT_DEPLOYMENT="${REPLIT_DEPLOYMENT:-1}"
+export PORT="${PORT:-8080}"
 
-# Start Customer Portal dev server in foreground (port 5000 = webview preview)
-cd artifacts/customer-portal && PORT=5000 BASE_PATH=/ pnpm run dev
-
-# If customer portal exits, kill api server too
-kill $API_PID 2>/dev/null
+exec node load-secrets.mjs \
+  node --enable-source-maps ./dist/index.mjs

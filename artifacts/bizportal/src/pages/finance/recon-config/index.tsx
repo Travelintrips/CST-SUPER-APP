@@ -40,6 +40,7 @@ const API = "/api";
 const FLOWS = [
   { value: "BUSINESS_MATCHING",           label: "Business Matching" },
   { value: "ROUTINE_EXPENSE_ALLOCATION",  label: "Routine Expense Allocation" },
+  { value: "INTERNAL_TRANSFER",           label: "Internal Transfer (bukan beban)" },
   { value: "INCOME_ALLOCATION",           label: "Income Allocation" },
   { value: "MANUAL_REVIEW",              label: "Manual Review" },
   { value: "BLOCKED",                    label: "Blocked" },
@@ -52,6 +53,12 @@ const UPLOAD_OPTS = [
 ];
 
 const FILE_TYPES = ["PDF", "JPG", "PNG", "WEBP"];
+
+const TAX_TYPES = [
+  { value: "none", label: "Tidak ada pajak" },
+  { value: "ppn_input", label: "PPN Masukan" },
+  { value: "ppn_output", label: "PPN Keluaran" },
+] as const;
 
 const COND_FIELDS = [
   { value: "description", label: "Deskripsi" },
@@ -137,6 +144,7 @@ function flowBadge(flow: string) {
   const colors: Record<string, string> = {
     BUSINESS_MATCHING:           "bg-blue-900 text-blue-300",
     ROUTINE_EXPENSE_ALLOCATION:  "bg-amber-900 text-amber-300",
+    INTERNAL_TRANSFER:           "bg-cyan-900 text-cyan-300",
     INCOME_ALLOCATION:           "bg-green-900 text-green-300",
     MANUAL_REVIEW:               "bg-slate-700 text-slate-300",
     BLOCKED:                     "bg-red-900 text-red-400",
@@ -784,6 +792,8 @@ function AiRulesTab() {
   const [previewAmount, setPreviewAmount] = useState("");
   const [preview, setPreview] = useState<any>(null);
   const [previewing, setPreviewing] = useState(false);
+  const [ruleSearch, setRuleSearch] = useState("");
+  const [coaDirectionFilter, setCoaDirectionFilter] = useState<"all" | "in" | "out">("all");
 
   const loadCoaOptions = useCallback(async () => {
     setLoadingCoaOptions(true);
@@ -821,6 +831,32 @@ function AiRulesTab() {
       setLoadingCoaOptions(false);
     }
   }, [activeCompanyId]);
+
+  const taxAccountFor = (taxType: string): RuleCoaAccount | null => {
+    if (taxType !== "ppn_input" && taxType !== "ppn_output") return null;
+    const baseCode = taxType === "ppn_input" ? "1-1050" : "2-1020";
+    return coaAccounts
+      .filter((account) =>
+        account.isActive !== false
+        && account.isPostable !== false
+        && (account.code === baseCode || account.code.startsWith(`${baseCode}-`)
+          || account.name.toLowerCase().includes(taxType === "ppn_input" ? "ppn masukan" : "ppn keluaran")),
+      )
+      .sort((a, b) => {
+        const aExact = a.code === baseCode ? 0 : a.name.toLowerCase().includes(taxType === "ppn_input" ? "ppn masukan" : "ppn keluaran") ? 1 : 2;
+        const bExact = b.code === baseCode ? 0 : b.name.toLowerCase().includes(taxType === "ppn_input" ? "ppn masukan" : "ppn keluaran") ? 1 : 2;
+        return aExact - bExact || a.code.localeCompare(b.code);
+      })[0] ?? null;
+  };
+
+  const setTaxType = (taxType: string) => {
+    const account = taxAccountFor(taxType);
+    setForm((current: any) => ({
+      ...current,
+      tax_type: taxType,
+      action_coa_code: taxType === "none" ? null : account?.code ?? current.action_coa_code ?? null,
+    }));
+  };
 
   const loadParentAccounts = useCallback(async () => {
     if (activeCompanyId == null) return;
@@ -873,7 +909,8 @@ function AiRulesTab() {
     setForm({ condition_field: "description", condition_operator: "contains", condition_value: "",
       conditions: [{ field: "description", operator: "contains", value: "" }], logic: "AND",
       specificity: 1, amount_tolerance: 0, reference_amount: null,
-      confidence: 0.8, priority: 50, source: "manual" });
+      confidence: 0.8, priority: 50, source: "manual",
+      requires_document_upload: false, tax_type: "none" });
     setCreatingCoa(false);
     setQuickCreateChild(false);
     setNewCoaRole("child");
@@ -898,14 +935,16 @@ function AiRulesTab() {
       // Before the reference-amount field existed, this screen incorrectly
       // stored its nominal input as amount_tolerance. Treat that legacy value
       // as the reference when opening it so saving repairs the rule.
-      reference_amount: row.reference_amount != null
+      reference_amount: row.reference_amount != null && Number(row.reference_amount) !== 0
         ? Number(row.reference_amount)
-        : row.amount_tolerance != null
+        : row.amount_tolerance != null && Number(row.amount_tolerance) > 0
           ? Number(row.amount_tolerance)
           : null,
       amount_tolerance: row.reference_amount != null && row.amount_tolerance != null
         ? Number(row.amount_tolerance)
-        : 0 });
+         : 0,
+       requires_document_upload: Boolean(row.requires_document_upload),
+       tax_type: row.tax_type === "ppn_input" || row.tax_type === "ppn_output" ? row.tax_type : "none" });
     setCreatingCoa(false);
     setQuickCreateChild(false);
     setParentSearch("");
@@ -959,7 +998,11 @@ function AiRulesTab() {
       ...current,
       name: current.name || String(form.name ?? "").trim(),
       parentId: null,
-      type: form.action_flow === "ROUTINE_EXPENSE_ALLOCATION" ? "expense" : "revenue",
+       type: form.action_flow === "INTERNAL_TRANSFER"
+         ? "asset"
+         : form.action_flow === "ROUTINE_EXPENSE_ALLOCATION"
+           ? "expense"
+           : "revenue",
     }));
     void loadParentAccounts();
   };
@@ -1084,6 +1127,9 @@ function AiRulesTab() {
            action_flow: form.action_flow, action_coa_code: form.action_coa_code,
            amount_tolerance: form.amount_tolerance,
            reference_amount: form.reference_amount,
+            requires_document_upload: Boolean(form.requires_document_upload),
+            tax_type: form.tax_type ?? "none",
+            has_document_upload: true,
            confidence: form.confidence }) });
       setPreview(await r.json());
     } finally { setPreviewing(false); }
@@ -1095,13 +1141,96 @@ function AiRulesTab() {
     load();
   };
 
+  const coaDetails = (row: any) => {
+    const code = typeof row.action_coa_code === "string" && row.action_coa_code.trim()
+      ? row.action_coa_code.trim()
+      : null;
+    if (!code) return null;
+
+    const account = coaAccounts.find((coa) => coa.code === code);
+    return {
+      code,
+      name: row.action_coa_name ?? account?.name ?? null,
+    };
+  };
+
+  const coaDirection = (row: any): "in" | "out" | "other" => {
+    const ruleIdentity = `${row.name ?? ""} ${row.description ?? ""}`.toLowerCase();
+    if (/\b(coa\s+)?uang\s+masuk\b/.test(ruleIdentity) || row.action_flow === "INCOME_ALLOCATION") {
+      return "in";
+    }
+    if (/\b(coa\s+)?uang\s+keluar\b/.test(ruleIdentity) || row.action_flow === "ROUTINE_EXPENSE_ALLOCATION") {
+      return "out";
+    }
+    return "other";
+  };
+
+  const normalizedRuleSearch = ruleSearch.trim().toLowerCase();
+  const filteredRows = rows.filter((row) => {
+    const matchesDirection = coaDirectionFilter === "all" || coaDirection(row) === coaDirectionFilter;
+    if (!matchesDirection) return false;
+    if (!normalizedRuleSearch) return true;
+
+    const coa = coaDetails(row);
+    const searchableText = [
+      conditionSummary(row),
+      row.condition_field,
+      row.condition_value,
+      coa?.code,
+      coa?.name,
+      row.action_coa_code,
+      row.action_coa_name,
+    ].filter(Boolean).join(" ").toLowerCase();
+    return searchableText.includes(normalizedRuleSearch);
+  });
+
   return (
     <div className="space-y-4">
-      <div className="flex justify-end gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-1 flex-wrap items-center gap-2 min-w-[320px]">
+          <div className="relative min-w-[260px] flex-1 max-w-xl">
+            <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-slate-500" />
+            <Input
+              value={ruleSearch}
+              onChange={(event) => setRuleSearch(event.target.value)}
+              placeholder="Cari kondisi atau keterangan COA..."
+              aria-label="Cari kondisi atau keterangan COA"
+              className="bg-slate-800 border-slate-600 text-white pl-9"
+            />
+          </div>
+          <Select value={coaDirectionFilter} onValueChange={(value) => setCoaDirectionFilter(value as "all" | "in" | "out")}>
+            <SelectTrigger className="bg-slate-800 border-slate-600 text-white w-[170px]" aria-label="Filter COA masuk atau keluar">
+              <SelectValue placeholder="Filter COA" />
+            </SelectTrigger>
+            <SelectContent className="bg-slate-800 border-slate-600 text-white">
+              <SelectItem value="all">Semua COA</SelectItem>
+              <SelectItem value="in">COA Masuk</SelectItem>
+              <SelectItem value="out">COA Keluar</SelectItem>
+            </SelectContent>
+          </Select>
+          {(ruleSearch || coaDirectionFilter !== "all") && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setRuleSearch("");
+                setCoaDirectionFilter("all");
+              }}
+              className="text-slate-400 hover:text-white"
+            >
+              Reset filter
+            </Button>
+          )}
+          <span className="text-xs text-slate-500 whitespace-nowrap">
+            {filteredRows.length} dari {rows.length} rule
+          </span>
+        </div>
+        <div className="flex justify-end gap-2">
         <Button size="sm" variant="outline" onClick={load} className="border-slate-600 text-slate-300"><RefreshCw size={14} /></Button>
         <Button size="sm" onClick={openAdd} className="bg-orange-500 hover:bg-orange-600 text-white">
           <Plus size={14} className="mr-1" /> Tambah Rule
         </Button>
+        </div>
       </div>
       {loading ? (
         <div className="flex items-center justify-center h-32"><RefreshCw className="animate-spin text-orange-400" size={24} /></div>
@@ -1112,35 +1241,67 @@ function AiRulesTab() {
               <tr className="border-b border-slate-700 text-slate-400 text-left">
                 <th className="pb-2 pr-3">Nama</th>
                 <th className="pb-2 pr-3">Kondisi</th>
-                <th className="pb-2 pr-3">Action Flow</th>
+                 <th className="pb-2 pr-3">Action Flow</th>
+                 <th className="pb-2 pr-3">Keterangan COA</th>
                   <th className="pb-2 pr-3">Nominal referensi</th>
                  <th className="pb-2 pr-3">Conf.</th>
                 <th className="pb-2 pr-3">Prioritas</th>
-                <th className="pb-2 pr-3">Sumber</th>
+                 <th className="pb-2 pr-3">Dokumen / Pajak</th>
+                 <th className="pb-2 pr-3">Sumber</th>
                 <th className="pb-2">Aksi</th>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 && (
-                 <tr><td colSpan={8} className="py-8 text-center text-slate-500">Belum ada AI rule.</td></tr>
+                  <tr><td colSpan={10} className="py-8 text-center text-slate-500">Belum ada AI rule.</td></tr>
               )}
-              {rows.map(row => (
+              {rows.length > 0 && filteredRows.length === 0 && (
+                <tr><td colSpan={10} className="py-8 text-center text-slate-500">Tidak ada rule yang sesuai filter.</td></tr>
+              )}
+              {filteredRows.map(row => (
                 <tr key={row.id} className="border-b border-slate-800 hover:bg-slate-800/40">
                   <td className="py-2 pr-3 text-white">{row.name}</td>
                   <td className="py-2 pr-3 font-mono text-xs text-slate-400">
                     {conditionSummary(row)}
                   </td>
-                  <td className="py-2 pr-3">{row.action_flow ? flowBadge(row.action_flow) : "—"}</td>
+                   <td className="py-2 pr-3">{row.action_flow ? flowBadge(row.action_flow) : "—"}</td>
+                   <td className="py-2 pr-3 min-w-[170px]">
+                     {(() => {
+                       const coa = coaDetails(row);
+                       return coa ? (
+                         <div className="leading-tight">
+                           <div className="font-mono text-xs text-orange-300">COA {coa.code}</div>
+                           <div className="text-xs text-slate-300 mt-0.5">{coa.name ?? "Nama akun tidak ditemukan"}</div>
+                         </div>
+                       ) : (
+                         <span className="text-slate-500">—</span>
+                       );
+                     })()}
+                   </td>
                    <td className="py-2 pr-3 text-slate-400">
-                     {row.reference_amount != null
+                      {row.reference_amount != null && Number(row.reference_amount) !== 0
                        ? `Rp${Number(row.reference_amount).toLocaleString("id-ID")}`
-                       : row.amount_tolerance != null
+                        : row.amount_tolerance != null && Number(row.amount_tolerance) > 0
                          ? `Rp${Number(row.amount_tolerance).toLocaleString("id-ID")}`
                          : "Tidak dibatasi"}
                    </td>
                   <td className="py-2 pr-3 text-slate-400">{Number(row.confidence).toFixed(2)}</td>
                   <td className="py-2 pr-3 text-slate-400">{row.priority}</td>
-                  <td className="py-2 pr-3">
+                   <td className="py-2 pr-3">
+                     <div className="flex flex-wrap gap-1">
+                       {row.requires_document_upload && (
+                         <Badge className="bg-amber-900 text-amber-300 text-xs">Upload wajib</Badge>
+                       )}
+                       {row.tax_type === "ppn_input" && (
+                         <Badge className="bg-cyan-900 text-cyan-300 text-xs">PPN Masukan</Badge>
+                       )}
+                       {row.tax_type === "ppn_output" && (
+                         <Badge className="bg-cyan-900 text-cyan-300 text-xs">PPN Keluaran</Badge>
+                       )}
+                       {!row.requires_document_upload && (!row.tax_type || row.tax_type === "none") && "—"}
+                     </div>
+                   </td>
+                   <td className="py-2 pr-3">
                     <Badge className={row.source === "ai_generated" ? "bg-purple-900 text-purple-300 text-xs" : "bg-slate-700 text-slate-300 text-xs"}>
                       {row.source === "ai_generated" ? "AI" : "Manual"}
                     </Badge>
@@ -1245,6 +1406,11 @@ function AiRulesTab() {
                     {FLOWS.map(f => <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>)}
                   </SelectContent>
                 </Select>
+                {form.action_flow === "INTERNAL_TRANSFER" && (
+                  <p className="mt-1 text-[11px] text-cyan-300">
+                    Transfer internal bukan beban P&amp;L. Pilih COA tujuan kas/bank yang aktif dan dapat diposting.
+                  </p>
+                )}
               </div>
               <div>
                 <Label className="text-slate-300">Akun COA</Label>
@@ -1483,6 +1649,49 @@ function AiRulesTab() {
                     Pengaturan ini informatif dan tidak menggantikan akun COA transaksi.
                   </p>
                 </div>
+              </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+                <div className="flex items-start gap-3">
+                  <input
+                    id="ai-rule-require-document"
+                    type="checkbox"
+                    checked={Boolean(form.requires_document_upload)}
+                    onChange={(event) => setForm((current: any) => ({
+                      ...current,
+                      requires_document_upload: event.target.checked,
+                    }))}
+                    className="mt-1 h-4 w-4 accent-orange-500"
+                  />
+                  <div>
+                    <Label htmlFor="ai-rule-require-document" className="cursor-pointer text-slate-200">
+                      Wajib upload dokumen / gambar
+                    </Label>
+                    <p className="mt-1 text-[11px] text-slate-500">
+                      Rule tidak dapat memicu posting sampai bukti tersedia untuk dipindai OCR.
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-3">
+                <Label className="text-slate-300">Perlakuan Pajak</Label>
+                <Select value={form.tax_type ?? "none"} onValueChange={setTaxType}>
+                  <SelectTrigger className="bg-slate-800 border-slate-600 text-white mt-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-slate-800 border-slate-600 text-white">
+                    {TAX_TYPES.map((tax) => (
+                      <SelectItem key={tax.value} value={tax.value}>{tax.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {form.tax_type !== "none" && (
+                  <p className="mt-1 text-[11px] text-cyan-300">
+                    {taxAccountFor(form.tax_type)?.code
+                      ? `Posting akan diarahkan ke ${taxAccountFor(form.tax_type)?.code} — ${taxAccountFor(form.tax_type)?.name}.`
+                      : "COA PPN yang sesuai belum tersedia; simpan akan ditolak sampai COA dibuat."}
+                  </p>
+                )}
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">

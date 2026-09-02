@@ -67,6 +67,19 @@ export type CanonicalSettlementCandidate = {
   settlement_rule_version: string | null;
 };
 
+export type CanonicalSettlementQueueItem = CanonicalSettlementCandidate & {
+  queue_status: "active" | "completed";
+  payment_items: Array<{
+    paymentId: number;
+    grossAmount: number;
+    itemStatus: string | null;
+  }>;
+  bank_status: string | null;
+  bank_transaction_date: string | null;
+  bank_amount: number | null;
+  bank_description: string | null;
+};
+
 export type CanonicalSettlementLookupOptions = {
   companyId?: number | null;
   settlementId?: number | null;
@@ -163,6 +176,12 @@ export function mapCanonicalSettlementRow(
   row: CanonicalSettlementRow,
 ): CanonicalSettlementCandidate {
   assertCanonicalSettlementEligibility(row);
+  return mapCanonicalSettlementDisplayRow(row);
+}
+
+function mapCanonicalSettlementDisplayRow(
+  row: CanonicalSettlementRow,
+): CanonicalSettlementCandidate {
 
   const id = Number(row.settlement_id);
   const settlementDate = dateText(row.settlement_date);
@@ -333,6 +352,119 @@ export async function findCanonicalSettlementCandidates(
   return (result.rows as Array<CanonicalSettlementRow & {
     bank_account_internal_id?: number | string | null;
   }>).map(mapCanonicalSettlementRow);
+}
+
+/**
+ * Read the canonical settlement queue and history. This is intentionally
+ * separate from findCanonicalSettlementCandidates: the reconciliation
+ * candidate adapter only returns unlinked posted batches, while the UI also
+ * needs completed batches to explain why an item disappeared from the active
+ * queue.
+ *
+ * The query does not read qris_mutation_batch_candidates and does not mutate
+ * either the canonical settlement or bank mutation tables.
+ */
+export async function listCanonicalSettlementQueue(options: {
+  companyId?: number | null;
+  includeCompleted?: boolean;
+  limit?: number;
+} = {}): Promise<CanonicalSettlementQueueItem[]> {
+  const limit = Math.min(Math.max(Number(options.limit ?? 100), 1), 500);
+  const companyFilter = options.companyId == null
+    ? sql``
+    : sql`AND ebs.company_id = ${options.companyId}`;
+  const activeFilter = options.includeCompleted
+    ? sql``
+    : sql`
+        AND ebs.settlement_status = 'posted'
+        AND ebs.bank_mutation_id IS NULL
+      `;
+
+  const result = await db.execute(sql`
+    SELECT
+      ebs.*,
+      COALESCE((
+        SELECT jsonb_agg(
+          jsonb_build_object(
+            'paymentId', psi.payment_id,
+            'grossAmount', psi.gross_amount,
+            'itemStatus', psi.item_status
+          )
+          ORDER BY psi.payment_id
+        )
+        FROM sport_center.payment_settlement_items psi
+        WHERE psi.settlement_id = ebs.settlement_id
+      ), '[]'::jsonb) AS payment_items,
+      bm.status::text AS bank_status,
+      bm.transaction_date AS bank_transaction_date,
+      bm.amount AS bank_amount,
+      bm.description AS bank_description
+    FROM sport_center.expected_bank_settlements ebs
+    JOIN sport_center.accounting_journals aj
+      ON aj.id = ebs.settlement_journal_id
+     AND aj.status = 'posted'
+    LEFT JOIN public.bank_mutations bm
+      ON bm.id = ebs.bank_mutation_id
+    WHERE 1 = 1
+      ${companyFilter}
+      ${activeFilter}
+      AND (
+        ebs.settlement_status = 'posted'
+        OR ebs.settlement_status = 'reconciled'
+        OR ebs.bank_mutation_id IS NOT NULL
+      )
+    ORDER BY ebs.settlement_date DESC, ebs.settlement_id DESC
+    LIMIT ${limit}
+  `);
+
+  return (result.rows as Array<CanonicalSettlementRow & {
+    payment_items?: unknown;
+    bank_status?: unknown;
+    bank_transaction_date?: unknown;
+    bank_amount?: unknown;
+    bank_description?: unknown;
+  }>).map((row) => {
+    // Queue/history includes reconciled rows, so use the display projection
+    // without applying the stricter approval-candidate assertion.
+    const canonical = mapCanonicalSettlementDisplayRow(row);
+    const rawItems = Array.isArray(row.payment_items) ? row.payment_items : [];
+    const paymentItems = rawItems
+      .map((item) => {
+        const value = item as Record<string, unknown>;
+        const paymentId = numberOrNull(value.paymentId);
+        if (paymentId == null) return null;
+        return {
+          paymentId,
+          grossAmount: numberOrZero(value.grossAmount),
+          itemStatus: value.itemStatus == null ? null : String(value.itemStatus),
+        };
+      })
+      .filter((item): item is {
+        paymentId: number;
+        grossAmount: number;
+        itemStatus: string | null;
+      } => item != null);
+
+    const linkedMutationId = numberOrNull(
+      row.bank_mutation_id,
+    );
+    const isCompleted =
+      String(row.settlement_status ?? "").toLowerCase() === "reconciled"
+      || linkedMutationId != null;
+
+    return {
+      ...canonical,
+      settlement_status: row.settlement_status,
+      bank_mutation_id: linkedMutationId,
+      canonical_bank_mutation_id: null,
+      queue_status: isCompleted ? "completed" : "active",
+      payment_items: paymentItems,
+      bank_status: row.bank_status == null ? null : String(row.bank_status),
+      bank_transaction_date: dateText(row.bank_transaction_date),
+      bank_amount: numberOrNull(row.bank_amount),
+      bank_description: row.bank_description == null ? null : String(row.bank_description),
+    };
+  });
 }
 
 export async function getCanonicalSettlementForReconciliation(

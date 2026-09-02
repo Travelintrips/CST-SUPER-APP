@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
@@ -24,7 +25,7 @@ import {
   ChevronDown, ChevronUp, ArrowUpRight, ArrowDownLeft, Zap, Eye,
   BookOpen, TrendingUp, Clock, FileText, CreditCard, Users,
   CircleCheck, CircleDot, ReceiptText, X, Undo2, RotateCcw,
-  Paperclip, ImageIcon, ExternalLink, Pencil,
+  Paperclip, ImageIcon, ExternalLink, Pencil, Link2,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { AIReviewSourcePanel } from "@/components/ai-review";
@@ -654,6 +655,7 @@ interface QrisCandidateAudit {
   review_reason?: string | null;
   payment_items?: QrisPaymentItem[];
   settled_payment_ids?: Array<number | string> | null;
+  active_settlement_payment_ids?: Array<number | string> | null;
   current_payment_ids?: Array<number | string> | null;
   unconfirmed_payment_ids?: Array<number | string> | null;
   current_payment_amounts?: Record<string, number | string> | null;
@@ -670,6 +672,46 @@ interface QrisCandidateAudit {
   diagnostic_has_expected_dates?: boolean | null;
   diagnostic_date_match?: boolean | null;
   diagnostic_amount_difference?: number | string | null;
+  auto_post_status?: "pending" | "running" | "succeeded" | "failed" | string | null;
+  auto_post_stage?: string | null;
+  auto_post_problem?: string | null;
+  auto_post_revision?: string | null;
+  auto_post_action?: string | null;
+  auto_post_details?: {
+    code?: string | null;
+    stage?: string | null;
+    problem?: string | null;
+    revision?: string | null;
+    action?: string | null;
+    technicalDetail?: string | null;
+  } | null;
+}
+
+interface CanonicalSettlementQueueItem {
+  id: number;
+  candidateId: number;
+  candidateSource: string;
+  settlement_reference: string | null;
+  settlement_date: string | null;
+  settlement_status: string | null;
+  provider_code: string | null;
+  provider_name: string | null;
+  company_id: number | null;
+  gross_amount: number;
+  mdr_amount: number;
+  expected_bank_amount: number;
+  settlement_journal_id: number | null;
+  bank_mutation_id: number | null;
+  queue_status: "active" | "completed";
+  payment_items: Array<{
+    paymentId: number;
+    grossAmount: number;
+    itemStatus: string | null;
+  }>;
+  bank_status: string | null;
+  bank_transaction_date: string | null;
+  bank_amount: number | null;
+  bank_description: string | null;
 }
 
 interface QrisPaymentItem {
@@ -688,6 +730,8 @@ interface QrisPaymentItem {
   paid_at?: string | null;
   confirmedAt?: string | null;
   confirmed_at?: string | null;
+  settlementStatus?: string | null;
+  settlement_status?: string | null;
   payment_number?: string | null;
   booking_id?: number | null;
   booking_number?: string | null;
@@ -836,6 +880,36 @@ const QRIS_AUDIT_STATUS_LABELS: Record<string, string> = {
   UNMATCHED: "Transaksi Belum Lengkap",
 };
 
+const PAYMENT_SETTLEMENT_STATUS_LABELS: Record<string, string> = {
+  unsettled: "Belum settle",
+  settled: "Settled",
+  partial: "Partial",
+  partially_settled: "Partial",
+  "partially-settled": "Partial",
+  exception: "Exception",
+  settlement_confirmed: "Settlement confirmed",
+};
+
+const paymentSettlementStatusLabel = (status: string | null | undefined): string =>
+  PAYMENT_SETTLEMENT_STATUS_LABELS[String(status ?? "unsettled").toLowerCase()]
+  ?? String(status ?? "unsettled");
+
+const paymentSettlementStatusClass = (status: string | null | undefined): string => {
+  switch (String(status ?? "unsettled").toLowerCase()) {
+    case "settled":
+    case "settlement_confirmed":
+      return "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300";
+    case "partial":
+    case "partially_settled":
+    case "partially-settled":
+      return "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-300";
+    case "exception":
+      return "border-red-300 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950/50 dark:text-red-300";
+    default:
+      return "border-slate-300 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-900/50 dark:text-slate-300";
+  }
+};
+
 const CARD_BORDER: Record<string, string> = {
   unmatched:               "border-l-4 border-l-amber-400",
   matched:                 "border-l-4 border-l-blue-400",
@@ -879,6 +953,16 @@ const canReopen = (m: BankMutation) =>
 /** Delete → jangan hapus yang sudah posted. */
 const canDelete = (m: BankMutation) =>
   m.status !== "posted" && m.source !== "bank_import";
+
+/** Multi-allocation hanya tersedia untuk uang masuk yang belum final. */
+const canMultiAllocate = (m: BankMutation) =>
+  m.direction === "IN"
+  && (
+    m.status === "unmatched"
+    || m.status === "matched"
+    || m.status === "manual_review"
+    || m.status === "duplicate_need_review"
+  );
 
 function isCanonicalSettlementMutation(m: BankMutation): boolean {
   return m.candidates?.some(
@@ -2413,10 +2497,9 @@ function ProofUploadButton({ mutationId, proofUrl }: { mutationId: number; proof
   );
 }
 
-// ── COA Reference Dialog ──────────────────────────────────────────────────────
-// A bank mutation can create a reusable manual rule. This keeps the selected
-// account useful for the current review and for future mutations with the same
-// bank description, without silently changing the chart of accounts.
+// ── One-time COA Selection Dialog ────────────────────────────────────────────
+// The selected account is sent only to the current approval request. This
+// action must never create a reusable reconciliation rule or a Rule AI entry.
 function CoaReferenceDialog({
   mutation,
   open,
@@ -2434,9 +2517,7 @@ function CoaReferenceDialog({
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const [selectedCode, setSelectedCode] = useState("");
-  const [conditionValue, setConditionValue] = useState("");
-  const [saving, setSaving] = useState<"rule" | "current" | null>(null);
-  const [saveToRuleAi, setSaveToRuleAi] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [creatingCoa, setCreatingCoa] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newCoaRole, setNewCoaRole] = useState<"parent" | "child">("child");
@@ -2488,9 +2569,7 @@ function CoaReferenceDialog({
     if (!open || !mutation) return;
     setSearch("");
     setSelectedCode("");
-    setConditionValue(mutation.normalized_description || mutation.description || "");
-    setSaving(null);
-    setSaveToRuleAi(true);
+    setSaving(false);
     setCreatingCoa(false);
     setCreating(false);
     setNewCoaRole("child");
@@ -2632,7 +2711,7 @@ function CoaReferenceDialog({
       setCreatingCoa(false);
       toast({
         title: "COA baru berhasil dibuat",
-        description: `${created.code ?? code} — ${created.name ?? name} siap dipakai sebagai referensi.`,
+        description: `${created.code ?? code} — ${created.name ?? name} siap dipakai untuk transaksi ini.`,
       });
     } catch (error) {
       toast({
@@ -2645,7 +2724,7 @@ function CoaReferenceDialog({
     }
   };
 
-  const save = async (applyCurrent: boolean) => {
+  const save = async () => {
     if (!mutation) return;
     if (!companyId) {
       toast({ title: "Perusahaan aktif belum dipilih", variant: "destructive" });
@@ -2655,75 +2734,39 @@ function CoaReferenceDialog({
       toast({ title: "Pilih akun COA terlebih dahulu", variant: "destructive" });
       return;
     }
-    const condition = conditionValue.trim();
-    if (!condition) {
-      toast({ title: "Referensi aturan belum diisi", variant: "destructive" });
+    if (!canApplyCurrent) {
+      toast({
+        title: "COA hanya dapat dipilih untuk transaksi ini",
+        description: "Jika kandidat transaksi tersedia, pilih kandidat tersebut melalui alur review.",
+        variant: "destructive",
+      });
       return;
     }
 
-    setSaving(applyCurrent ? "current" : "rule");
+    setSaving(true);
     try {
-      const ruleResponse = await fetch("/api/bank-reconciliation/rules", {
+      const approveResponse = await fetch(`/api/bank-reconciliation/${mutation.id}/approve`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          company_id: companyId,
-          name: `COA ${mutation.direction === "IN" ? "Uang Masuk" : "Uang Keluar"} — ${condition.slice(0, 60)}`,
-          description: `Dibuat dari referensi mutasi bank #${mutation.id}: ${mutation.description}`,
-          priority: 120,
-          is_active: true,
-          direction: mutation.direction,
-          condition_field: "description",
-          condition_operator: "contains",
-          condition_value: condition,
-          target_type: mutation.direction === "IN" ? "income" : "expense",
-          target_coa_code: selectedAccount.code,
-           save_to_rule_ai: saveToRuleAi,
-          confidence_score: 100,
-          stop_processing: true,
+          manual_coa_code: selectedAccount.code,
+          note: `COA dipilih manual hanya untuk mutasi ini: ${selectedAccount.code}`,
         }),
       });
-      const ruleBody = await ruleResponse.json().catch(() => ({}));
-      if (!ruleResponse.ok) {
-        throw new Error(ruleBody.error ?? "Gagal menyimpan referensi COA");
+      const approveBody = await approveResponse.json().catch(() => ({}));
+      if (!approveResponse.ok) {
+        throw new Error(
+          approveBody.error ?? "COA dipilih, tetapi draft jurnal untuk mutasi ini belum berhasil dibuat.",
+        );
       }
-
-      if (applyCurrent) {
-        const approveResponse = await fetch(`/api/bank-reconciliation/${mutation.id}/approve`, {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            manual_coa_code: selectedAccount.code,
-            note: `COA dipetakan dari referensi manual: ${selectedAccount.code}`,
-          }),
-        });
-        const approveBody = await approveResponse.json().catch(() => ({}));
-        if (!approveResponse.ok) {
-          throw new Error(
-            approveBody.error ??
-            "Referensi tersimpan, tetapi draft jurnal untuk mutasi ini belum berhasil dibuat.",
-          );
-        }
-        toast({
-          title: "COA dipetakan dan draft jurnal dibuat",
-          description: `${selectedAccount.code} — ${selectedAccount.name}`,
-        });
-      } else {
-        toast({
-          title: saveToRuleAi ? "Referensi COA tersimpan" : "Referensi COA tersimpan tanpa Rule AI",
-          description: saveToRuleAi
-            ? `Mutasi berikutnya dengan referensi ini akan diarahkan ke ${selectedAccount.code}.`
-            : `Referensi operasional tetap diarahkan ke ${selectedAccount.code}; Rule AI tidak dibuat.`,
-        });
-      }
-      // A saved rule changes the server-side candidate recommendation. The
-      // mutation list and QRIS candidate audit use different React Query keys,
-      // so invalidating only bank-reconciliation leaves the candidate/approval
-      // view stale until its polling interval or a hard refresh.
+      toast({
+        title: "COA dipilih dan draft jurnal dibuat",
+        description: `${selectedAccount.code} — ${selectedAccount.name}. Pilihan ini tidak disimpan sebagai referensi atau Rule AI.`,
+      });
+      // The mutation list and QRIS candidate audit use different React Query
+      // keys, so refresh both views after the one-time approval.
       qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] });
-      qc.invalidateQueries({ queryKey: ["coa-proposals-by-source"] });
       await onSaved();
       onClose();
     } catch (error) {
@@ -2733,7 +2776,7 @@ function CoaReferenceDialog({
         variant: "destructive",
       });
     } finally {
-      setSaving(null);
+      setSaving(false);
     }
   };
 
@@ -2745,11 +2788,11 @@ function CoaReferenceDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <BookOpen className="h-4 w-4 text-indigo-600" />
-            Referensi COA
+            Pilih COA untuk Transaksi Ini
           </DialogTitle>
           <DialogDescription>
             Pilih akun tujuan untuk {mutation.direction === "IN" ? "uang masuk" : "uang keluar"} ini.
-            Aturan akan dipakai lagi untuk mutasi dengan keterangan yang sama.
+            Pilihan ini hanya dipakai untuk membuat draft jurnal transaksi ini.
           </DialogDescription>
         </DialogHeader>
 
@@ -2759,19 +2802,6 @@ function CoaReferenceDialog({
             <p className="mt-1 text-xs text-muted-foreground">
               {fmtDate(mutation.transaction_date)} · {idr(mutation.amount)} ·{" "}
               {mutation.direction === "IN" ? "Uang Masuk" : "Uang Keluar"}
-            </p>
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium">Referensi untuk transaksi berikutnya</label>
-            <Input
-              value={conditionValue}
-              onChange={event => setConditionValue(event.target.value)}
-              placeholder="Contoh: BUNGA, ADMIN BANK, TRANSFER DARI..."
-            />
-            <p className="text-[11px] text-muted-foreground">
-              Sistem mencocokkan teks ini pada keterangan mutasi, dengan arah{" "}
-              <strong>{mutation.direction}</strong>.
             </p>
           </div>
 
@@ -3009,36 +3039,18 @@ function CoaReferenceDialog({
             )}
           </div>
 
-          <div className="flex items-start gap-3 rounded-md border border-indigo-200 bg-indigo-50/60 px-3 py-2.5 dark:border-indigo-900 dark:bg-indigo-950/30">
-            <Checkbox
-              id="save-reference-to-rule-ai"
-              checked={saveToRuleAi}
-              onCheckedChange={(checked) => setSaveToRuleAi(checked === true)}
-              className="mt-0.5"
-            />
-            <div className="space-y-0.5">
-              <label
-                htmlFor="save-reference-to-rule-ai"
-                className="cursor-pointer text-xs font-medium text-indigo-900 dark:text-indigo-100"
-              >
-                Simpan juga ke Rule AI
-              </label>
-              <p className="text-[11px] text-indigo-700 dark:text-indigo-300">
-                Jika dicentang, referensi ini menjadi rule AI untuk transaksi bank berikutnya.
-                Jika tidak, hanya referensi rekonsiliasi operasional yang disimpan.
-              </p>
-            </div>
+          <div className="rounded-md border border-emerald-200 bg-emerald-50/70 px-3 py-2.5 text-xs text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200">
+            COA pilihan tidak menjadi referensi untuk transaksi berikutnya dan tidak disimpan ke Rule AI.
           </div>
 
           {!canApplyCurrent && canApprove(mutation) && visibleCandidates(mutation).length > 0 && (
-            <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-              Mutasi ini memiliki kandidat transaksi. Simpan aturan COA untuk transaksi berikutnya,
-              lalu gunakan alur review untuk memilih kandidat yang benar.
+              <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                Mutasi ini memiliki kandidat transaksi. Pilih kandidat yang benar melalui alur review sebelum membuat draft jurnal.
             </p>
           )}
           {isQrisMutation(mutation) && canApprove(mutation) && (
             <p className="rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-800">
-              Untuk QRIS, referensi COA disimpan sebagai aturan berikutnya. Approval saat ini tetap
+              Untuk QRIS, pemilihan COA manual tidak tersedia di alur ini. Approval tetap
               mengikuti alur settlement QRIS agar jurnal settlement tidak terduplikasi.
             </p>
           )}
@@ -3048,13 +3060,13 @@ function CoaReferenceDialog({
           <Button variant="outline" onClick={onClose}>Batal</Button>
           <Button
             className="gap-1.5 bg-indigo-600 text-white hover:bg-indigo-700"
-            onClick={() => save(canApplyCurrent)}
-            disabled={saving !== null || !selectedAccount}
+            onClick={save}
+            disabled={saving || !selectedAccount || !canApplyCurrent}
           >
-            {(saving === "rule" || saving === "current") && (
+            {saving && (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             )}
-            {canApplyCurrent ? "Simpan Referensi & Buat Draft" : "Simpan Referensi COA"}
+            {saving ? "Membuat Draft..." : "Pilih COA & Buat Draft"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -3074,6 +3086,8 @@ function QrisMutationCard({
   onDetail,
   onDelete,
   onEditPaymentDate,
+  onRequestUnsettlePayment,
+  unsettledPaymentId,
   onApproveQrisBatch,
   onManualOverrideCandidate,
   onRecoverQrisSettlement,
@@ -3098,6 +3112,12 @@ function QrisMutationCard({
     paymentNumber: string;
     paymentDate: string;
   }) => void;
+  onRequestUnsettlePayment?: (target: {
+    paymentId: number;
+    paymentNumber: string;
+    settlementStatus: string;
+  }) => void;
+  unsettledPaymentId?: number | null;
   onApproveQrisBatch?: (candidateId: number, mutationId: number, candidate: QrisCandidateAudit, paymentIds?: number[]) => void;
   onManualOverrideCandidate?: (m: BankMutation, candidate: Candidate) => void;
   onRecoverQrisSettlement?: (mutationId: number, settlementId: number) => void;
@@ -3115,6 +3135,9 @@ function QrisMutationCard({
   const auditStatus = String(audit.status ?? "").toLowerCase();
   const isReadOnlyEvidence = ["stale", "superseded", "ineligible"].includes(auditStatus);
   const settledPaymentIds = new Set((audit.settled_payment_ids ?? []).map(Number));
+  const activeSettlementPaymentIds = new Set(
+    (audit.active_settlement_payment_ids ?? []).map(Number),
+  );
   const unconfirmedPaymentIds = new Set(getUnconfirmedQrisPaymentIds(audit));
   const currentPaymentIds = Array.isArray(audit.current_payment_ids)
     ? new Set(audit.current_payment_ids.map(Number))
@@ -3122,7 +3145,13 @@ function QrisMutationCard({
   const currentPaymentAmounts = audit.current_payment_amounts ?? {};
   const availableItems = allItems.filter((item) => {
     const paymentId = item.paymentId ?? item.payment_id;
+    const liveSettlementStatus = String(
+      item.settlementStatus
+      ?? item.settlement_status
+      ?? "unsettled",
+    ).toLowerCase();
     return paymentId != null
+      && liveSettlementStatus === "unsettled"
       && (currentPaymentIds
         ? currentPaymentIds.has(Number(paymentId))
         : !settledPaymentIds.has(Number(paymentId)));
@@ -3133,7 +3162,10 @@ function QrisMutationCard({
     .filter((id) => Number.isInteger(id) && id > 0);
   // A stale candidate is deliberately not approvable, but its last snapshot is
   // still useful evidence for correcting the source payment before regeneration.
-  const displayItems = isReadOnlyEvidence ? allItems : availableItems;
+  // Keep live-settled rows visible so reviewers can distinguish an orphaned
+  // source flag (which can be reset) from a payment already owned by a
+  // canonical settlement batch. Only live-unsettled rows are selectable.
+  const displayItems = allItems;
   const selectedPaymentIds = selectedQrisPaymentIds.filter((id) => availablePaymentIds.includes(id));
   const allPaymentsSelected = availablePaymentIds.length > 0
     && availablePaymentIds.every((id) => selectedPaymentIds.includes(id));
@@ -3242,6 +3274,12 @@ function QrisMutationCard({
   const displayedPaymentCount = isReadOnlyEvidence ? allItems.length : remainingPaymentCount;
   const statusText = isCanonicalReconciled
     ? "Sudah Direkonsiliasi"
+    : audit.auto_post_status === "running"
+      ? "Auto-post sedang berjalan"
+    : audit.auto_post_status === "failed"
+      ? "Auto-post gagal — Perlu Revisi"
+    : audit.auto_post_status === "succeeded"
+      ? "Auto-post selesai"
     : hasCanonicalSettlementCandidate
       ? "Settlement Canonical — Perlu Review"
     : isApproved
@@ -3258,6 +3296,7 @@ function QrisMutationCard({
   const positiveStatus = isCanonicalReconciled
     || isApproved
     || isDepleted
+    || audit.auto_post_status === "succeeded"
     || (isMatched && !isEmptyMatchedCandidate && !isStaleMatchedCandidate
       && !hasCanonicalSettlementCandidate);
 
@@ -3353,6 +3392,42 @@ function QrisMutationCard({
                 </p>
               </div>
             )}
+            {audit.auto_post_status === "failed" && (
+              <div
+                className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2.5 text-xs text-red-950 dark:border-red-800 dark:bg-red-950 dark:text-red-100"
+                onClick={e => e.stopPropagation()}
+              >
+                <div className="flex items-start gap-2">
+                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-300" />
+                  <div className="min-w-0 flex-1 space-y-1.5">
+                    <p className="font-semibold">Auto-post QRIS tertahan oleh safeguard</p>
+                    <p><strong>Masalahnya:</strong> {audit.auto_post_problem ?? audit.auto_post_details?.problem ?? "Safeguard canonical menahan proses."}</p>
+                    <p><strong>Perlu direvisi di:</strong> {audit.auto_post_revision ?? audit.auto_post_details?.revision ?? audit.auto_post_stage ?? "Data/configuration canonical"}</p>
+                    <p><strong>Cara memperbaiki:</strong> {audit.auto_post_action ?? audit.auto_post_details?.action ?? "Perbaiki data terkait lalu coba lagi."}</p>
+                    {audit.auto_post_details?.code && (
+                      <p className="text-[10px] opacity-75">Kode: {audit.auto_post_details.code}</p>
+                    )}
+                    {onGenerateQrisCandidates && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="mt-1 h-7 border-red-300 bg-white text-[11px] text-red-900 hover:bg-red-100 dark:border-red-700 dark:bg-red-950 dark:text-red-100"
+                        disabled={qrisGenerationPending}
+                        onClick={() => onGenerateQrisCandidates(m.id)}
+                      >
+                        {qrisGenerationPending ? "Mencoba ulang..." : "Periksa ulang & retry scoped"}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+            {audit.auto_post_status === "running" && (
+              <p className="mt-3 rounded-md border border-blue-300 bg-blue-50 px-3 py-2 text-xs text-blue-900 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-100">
+                Kandidat MATCHED sedang diproses melalui settlement canonical. Status final akan muncul setelah jurnal dan mutasi selesai diverifikasi.
+              </p>
+            )}
             {(isReadOnlyEvidence || (differenceAbs != null && differenceAbs >= 0.5) || (!hasIdentifiedSettlement && differenceAbs == null)) && (
               <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2.5 text-xs text-white dark:border-amber-800 dark:bg-amber-950">
                 <div className="flex items-start gap-2">
@@ -3426,6 +3501,7 @@ function QrisMutationCard({
                     </div>
                     {displayItems.map((item, index) => {
                       const paymentId = item.paymentId ?? item.payment_id;
+                       const numericPaymentId = Number(paymentId);
                       const booking = item.bookingNumber ?? item.booking_number ?? (item.booking_id != null ? `SC-${String(item.booking_id).padStart(4, "0")}` : "—");
                       const payment = item.paymentNumber ?? item.payment_number ?? (paymentId != null ? `#${paymentId}` : "—");
                       const customerName = qrisPaymentCustomerName(item);
@@ -3436,6 +3512,20 @@ function QrisMutationCard({
                         && onEditPaymentDate != null;
                       const expectedSettlementDate =
                         item.expectedSettlementDate ?? item.expected_settlement_date;
+                       const paymentSettlementStatus = String(
+                         item.settlementStatus
+                         ?? item.settlement_status
+                         ?? "unsettled",
+                       ).toLowerCase();
+                       const hasActiveSettlementMembership =
+                         Number.isInteger(numericPaymentId)
+                         && activeSettlementPaymentIds.has(numericPaymentId);
+                       const canRequestUnsettle =
+                         Number.isInteger(numericPaymentId)
+                         && numericPaymentId > 0
+                         && paymentSettlementStatus !== "unsettled"
+                         && !hasActiveSettlementMembership
+                         && onRequestUnsettlePayment != null;
                        const gross = liveGrossForItem(item);
                       return (
                           <div key={`${paymentId ?? index}-${booking}`} className="grid grid-cols-[1.1fr_1.35fr_1fr_1.2fr_0.9fr_1fr_44px] items-center gap-2 border-b px-2.5 py-2 last:border-b-0">
@@ -3481,6 +3571,43 @@ function QrisMutationCard({
                              <span className="block truncate font-medium text-indigo-600 dark:text-indigo-400">
                                Settlement H-1: {expectedSettlementDate ? fmtDate(String(expectedSettlementDate)) : "—"}
                              </span>
+                               <span className="mt-0.5 flex min-w-0 items-center gap-1">
+                                <Badge
+                                  variant="outline"
+                                  className={`h-4 px-1.5 text-[9px] ${paymentSettlementStatusClass(paymentSettlementStatus)}`}
+                                >
+                                  {paymentSettlementStatusLabel(paymentSettlementStatus)}
+                                </Badge>
+                                {paymentSettlementStatus !== "unsettled" && (
+                                  hasActiveSettlementMembership ? (
+                                    <span className="truncate text-[9px] text-amber-700 dark:text-amber-300">
+                                      Reset diblokir: batch aktif
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      className="inline-flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[9px] font-medium text-amber-700 hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:text-amber-300 dark:hover:bg-amber-950"
+                                      disabled={!canRequestUnsettle || unsettledPaymentId === numericPaymentId}
+                                      title="Reset status payment menjadi unsettled"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        if (canRequestUnsettle) {
+                                          onRequestUnsettlePayment({
+                                            paymentId: numericPaymentId,
+                                            paymentNumber: payment,
+                                            settlementStatus: paymentSettlementStatus,
+                                          });
+                                        }
+                                      }}
+                                    >
+                                      {unsettledPaymentId === numericPaymentId
+                                        ? <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                                        : <RefreshCw className="h-2.5 w-2.5" />}
+                                      Unsettle
+                                    </button>
+                                  )
+                                )}
+                              </span>
                            </span>
                            <span className="truncate text-xs text-muted-foreground">QRIS</span>
                           <span className="text-right text-xs font-medium tabular-nums">{idr(gross)}</span>
@@ -3492,7 +3619,9 @@ function QrisMutationCard({
                               >
                                 Belum confirmed
                               </Badge>
-                            ) : canSelect && audit.id != null && paymentId != null && onToggleQrisPayment ? (
+                            ) : canSelect && audit.id != null && paymentId != null
+                              && paymentSettlementStatus === "unsettled"
+                              && onToggleQrisPayment ? (
                               <Checkbox
                                 checked={selectedPaymentIds.includes(Number(paymentId))}
                                 disabled={currentPaymentIds
@@ -3502,6 +3631,10 @@ function QrisMutationCard({
                                 onClick={e => e.stopPropagation()}
                                 aria-label={`Pilih ${booking} ${payment}`}
                               />
+                            ) : paymentSettlementStatus !== "unsettled" ? (
+                              <Badge variant="outline" className="text-[9px] border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-300">
+                                Tersettle
+                              </Badge>
                             ) : settledPaymentIds.has(Number(paymentId)) ? (
                               <Badge variant="outline" className="text-[9px] border-green-300 text-green-700">Tersettle</Badge>
                             ) : isReadOnlyEvidence ? (
@@ -3600,7 +3733,7 @@ function QrisMutationCard({
                 onClick={() => onMapCoa(m)}
               >
                 <BookOpen className="h-3.5 w-3.5" />
-                Referensi COA
+                Pilih COA (sekali)
               </Button>
               {!isApproved && !isDepleted && !isMatched && (
                 <Button
@@ -3745,7 +3878,10 @@ function MutationCard({
   onReopen,
   onDelete,
   onDetail,
+  onMultiAllocate,
   onEditQrisPaymentDate,
+  onRequestUnsettlePayment,
+  unsettledPaymentId,
   onApproveQris,
   onApproveQrisBatch,
   onRecoverQrisSettlement,
@@ -3776,11 +3912,18 @@ function MutationCard({
   onReopen:  (m: BankMutation) => void;
   onDelete:  (id: number) => void;
   onDetail:  (m: BankMutation) => void;
+  onMultiAllocate?: (m: BankMutation) => void;
   onEditQrisPaymentDate?: (target: {
     paymentId: number;
     paymentNumber: string;
     paymentDate: string;
   }) => void;
+  onRequestUnsettlePayment?: (target: {
+    paymentId: number;
+    paymentNumber: string;
+    settlementStatus: string;
+  }) => void;
+  unsettledPaymentId?: number | null;
   onApproveQris: (m: BankMutation) => void;
   onApproveQrisBatch?: (candidateId: number, mutationId: number, candidate: QrisCandidateAudit, paymentIds?: number[]) => void;
   onRecoverQrisSettlement?: (mutationId: number, settlementId: number) => void;
@@ -3845,6 +3988,8 @@ function MutationCard({
             onDetail={onDetail}
             onDelete={onDelete}
             onEditPaymentDate={onEditQrisPaymentDate}
+            onRequestUnsettlePayment={onRequestUnsettlePayment}
+            unsettledPaymentId={unsettledPaymentId}
             onApproveQrisBatch={onApproveQrisBatch}
             onRecoverQrisSettlement={onRecoverQrisSettlement}
             recoverQrisPending={recoverQrisPending}
@@ -4204,15 +4349,30 @@ function MutationCard({
               onClick={() => onMapCoa(m)}
             >
               <BookOpen className="h-3.5 w-3.5" />
-              Referensi COA
+              Pilih COA (sekali)
             </Button>
+            {onMultiAllocate && canMultiAllocate(m) && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1 border-purple-300 text-xs text-purple-700 hover:bg-purple-50 dark:border-purple-800 dark:text-purple-300 dark:hover:bg-purple-950/40"
+                title="Alokasikan satu mutasi ke beberapa invoice"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onMultiAllocate(m);
+                }}
+              >
+                <Link2 className="h-3.5 w-3.5" />
+                Multi-Allocation
+              </Button>
+            )}
             {canRematchHistoricalReview && (
               <Button
                 size="sm"
                 variant="outline"
                 className="h-7 gap-1 border-amber-300 text-xs text-amber-900 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-200"
                 onClick={() => onRunMatching("rematch_non_final")}
-                title="Evaluasi ulang transaksi ini dengan Rule AI dan Referensi COA terbaru."
+                title="Evaluasi ulang transaksi ini dengan Rule AI dan mapping operasional terbaru."
               >
                 <RotateCcw className="h-3.5 w-3.5" />
                 Jalankan Ulang Matching
@@ -4240,7 +4400,7 @@ function MutationCard({
                 className="h-7 gap-1 border-indigo-300 text-xs text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:text-indigo-300"
                 disabled={retryReferenceCoaPending}
                 onClick={() => onRetryReferenceCoa(m)}
-                title="Menjalankan ulang Referensi COA. Jurnal hanya dibuat bila semua safeguard lulus."
+                title="Menjalankan ulang mapping COA lama. Jurnal hanya dibuat bila semua safeguard lulus."
               >
                 {retryReferenceCoaPending
                   ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -4446,15 +4606,55 @@ function MutationCard({
 // Proof Section — used inside MutationDetailPanel
 // ─────────────────────────────────────────────────────────────────────────────
 
+type ProofOcrData = {
+  document_type?: string | null;
+  vendor_name?: string | null;
+  invoice_number?: string | null;
+  invoice_date?: string | null;
+  subtotal?: number | null;
+  tax_amount?: number | null;
+  tax_type?: string | null;
+  total_amount?: number | null;
+  payment_reference?: string | null;
+  raw_confidence?: number | null;
+  flags?: string[];
+};
+
 function ProofSection({ mutationId, initialUrl }: { mutationId: number; initialUrl: string | null }) {
   const qc             = useQueryClient();
   const fileRef        = useRef<HTMLInputElement>(null);
   const [url, setUrl]  = useState<string | null>(initialUrl);
+  const [ocrStatus, setOcrStatus] = useState<"not_started" | "processing" | "completed" | "failed">("not_started");
+  const [ocrData, setOcrData] = useState<ProofOcrData | null>(null);
+  const [ocrError, setOcrError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const { toast }      = useToast();
 
   const isImage = url ? /\.(jpe?g|png|webp|gif)(\?|$)/i.test(url) : false;
   const isPdf   = url ? /\.pdf(\?|$)/i.test(url) : false;
+
+  useEffect(() => {
+    if (!initialUrl) {
+      setOcrStatus("not_started");
+      setOcrData(null);
+      setOcrError(null);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/bank-reconciliation/${mutationId}/proof-ocr`, { credentials: "include" })
+      .then(async (response) => {
+        if (!response.ok) return null;
+        return response.json();
+      })
+      .then((body) => {
+        if (cancelled || !body) return;
+        setOcrStatus(body.status ?? "not_started");
+        setOcrData(body.data ?? null);
+        setOcrError(body.error ?? null);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [initialUrl, mutationId]);
 
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -4469,7 +4669,13 @@ function ProofSection({ mutationId, initialUrl }: { mutationId: number; initialU
       const body = await r.json();
       if (!r.ok) throw new Error(body.error ?? "Gagal upload");
       setUrl(body.url);
-      toast({ title: "Bukti berhasil diupload" });
+      setOcrStatus(body.ocr?.status ?? "not_started");
+      setOcrData(body.ocr?.data ?? null);
+      setOcrError(body.ocr?.error ?? null);
+      toast({
+        title: body.ocr?.status === "completed" ? "Bukti diupload dan OCR selesai" : "Bukti berhasil diupload",
+        description: body.ocr?.status === "failed" ? "OCR gagal diproses, tetapi file tetap tersimpan." : undefined,
+      });
       qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
     } catch (err: any) {
       toast({ title: "Upload gagal", description: err.message, variant: "destructive" });
@@ -4488,6 +4694,9 @@ function ProofSection({ mutationId, initialUrl }: { mutationId: number; initialU
       });
       if (!r.ok) throw new Error("Gagal hapus");
       setUrl(null);
+      setOcrStatus("not_started");
+      setOcrData(null);
+      setOcrError(null);
       toast({ title: "Bukti dihapus" });
       qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
     } catch (err: any) {
@@ -4559,6 +4768,41 @@ function ProofSection({ mutationId, initialUrl }: { mutationId: number; initialU
               <span className="text-xs break-all">{url}</span>
               <ExternalLink className="w-3 h-3 shrink-0 ml-auto" />
             </a>
+          )}
+          {ocrStatus !== "not_started" && (
+            <div className="border-t px-3 py-2.5 bg-background/60">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 text-xs font-semibold">
+                  <FileText className="w-3.5 h-3.5 text-indigo-500" />
+                  OCR OpenAI
+                </div>
+                <Badge
+                  variant="outline"
+                  className={
+                    ocrStatus === "completed"
+                      ? "text-green-600 border-green-300"
+                      : ocrStatus === "failed"
+                        ? "text-red-600 border-red-300"
+                        : "text-amber-600 border-amber-300"
+                  }
+                >
+                  {ocrStatus === "completed" ? "Selesai" : ocrStatus === "failed" ? "Gagal" : "Memproses"}
+                </Badge>
+              </div>
+              {ocrStatus === "completed" && ocrData && (
+                <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                  <span className="text-muted-foreground">Vendor</span>
+                  <span className="truncate">{ocrData.vendor_name ?? "—"}</span>
+                  <span className="text-muted-foreground">No. invoice</span>
+                  <span className="truncate">{ocrData.invoice_number ?? "—"}</span>
+                  <span className="text-muted-foreground">Pajak</span>
+                  <span>{ocrData.tax_amount != null ? `${ocrData.tax_type ?? "PPN"} ${ocrData.tax_amount.toLocaleString("id-ID")}` : "—"}</span>
+                  <span className="text-muted-foreground">Total</span>
+                  <span>{ocrData.total_amount != null ? ocrData.total_amount.toLocaleString("id-ID") : "—"}</span>
+                </div>
+              )}
+              {ocrError && <p className="mt-1 text-[11px] text-red-600">{ocrError}</p>}
+            </div>
           )}
         </div>
       ) : (
@@ -4714,7 +4958,7 @@ function MutationDetailPanel({
                           </p>
                           {m.review_code && <p className="font-mono text-[11px] opacity-80">Kode: {m.review_code}</p>}
                           <p className="text-xs">
-                            Periksa COA dan gunakan “Referensi COA” atau “Pilih COA & Buat Draft” setelah transaksi dipastikan benar.
+                            Periksa COA dan gunakan “Pilih COA (sekali)” atau “Pilih COA & Buat Draft” setelah transaksi dipastikan benar.
                           </p>
                         </AlertDescription>
                       </Alert>
@@ -5663,6 +5907,7 @@ export default function BankReconciliationPage() {
   const [page,           setPage]           = useState(0);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [showQrisAuditList, setShowQrisAuditList] = useState(false);
+  const [showCanonicalSettlementQueue, setShowCanonicalSettlementQueue] = useState(true);
   const PAGE_SIZE = 20;
 
   // ── UI state ──────────────────────────────────────────────────────────────
@@ -5693,6 +5938,12 @@ export default function BankReconciliationPage() {
     paymentDate: string;
   } | null>(null);
   const [qrisPaymentDate, setQrisPaymentDate] = useState("");
+  const [qrisSettlementResetTarget, setQrisSettlementResetTarget] = useState<{
+    paymentId: number;
+    paymentNumber: string;
+    settlementStatus: string;
+  } | null>(null);
+  const [qrisSettlementResetReason, setQrisSettlementResetReason] = useState("");
 
   // ── Queries ──────────────────────────────────────────────────────────────
   const queryKey = [
@@ -5753,11 +6004,13 @@ export default function BankReconciliationPage() {
     queryKey: ["qris-candidate-audit", qrisCompanyId],
     queryFn: async () => {
       const params = new URLSearchParams({ limit: "50", companyId: String(qrisCompanyId) });
+      params.set("includeCompleted", "true");
       const r = await fetch(`/api/bank-reconciliation/qris-candidates?${params}`, { credentials: "include" });
       if (!r.ok) throw new Error(await r.text());
       return r.json() as Promise<{
         mode: string;
         automaticFinalReconciliation: boolean;
+        canonicalSettlements: CanonicalSettlementQueueItem[];
         candidates: QrisCandidateAudit[];
       }>;
     },
@@ -5875,6 +6128,58 @@ export default function BankReconciliationPage() {
     },
   });
 
+  const qrisSettlementStatusMut = useMutation({
+    mutationFn: async ({
+      paymentId,
+      reason,
+    }: {
+      paymentId: number;
+      reason: string;
+    }) => {
+      const response = await fetch(
+        `/api/bank-reconciliation/qris-candidates/payments/${paymentId}/settlement-status`,
+        {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            settlementStatus: "unsettled",
+            reason,
+            companyId: qrisCompanyId,
+          }),
+        },
+      );
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(body?.error ?? "Gagal mengubah status settlement payment");
+      }
+      return body as {
+        changed?: boolean;
+        message?: string;
+        payment?: { settlement_status?: string };
+      };
+    },
+    onSuccess: async (result) => {
+      setQrisSettlementResetTarget(null);
+      setQrisSettlementResetReason("");
+      toast({
+        title: result.changed ? "Status settlement di-reset" : "Tidak ada perubahan",
+        description: result.message ?? "Status payment sudah diperbarui.",
+      });
+      await Promise.all([refetchQrisAudit(), refetch()]);
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
+      qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Gagal mereset status settlement",
+        description: error.message,
+        variant: "destructive",
+      });
+      void refetchQrisAudit();
+    },
+  });
+
   const [qrisBatchConfirm, setQrisBatchConfirm] = useState<{
     selections: QrisApprovalSelection[];
     manualOverride?: boolean;
@@ -5910,6 +6215,13 @@ export default function BankReconciliationPage() {
     && getUnconfirmedQrisPaymentIds(candidate).length === 0
     && getAvailableQrisPaymentIds(candidate).length > 0;
   const qrisApprovableCandidates = qrisCandidates.filter(isQrisCandidateEligible);
+  const canonicalSettlements = qrisAuditData?.canonicalSettlements ?? [];
+  const activeCanonicalSettlements = canonicalSettlements.filter(
+    (settlement) => settlement.queue_status === "active",
+  );
+  const completedCanonicalSettlements = canonicalSettlements.filter(
+    (settlement) => settlement.queue_status === "completed",
+  );
   const selectedQrisCandidates = qrisApprovableCandidates.filter((candidate) =>
     selectedQrisCandidateIds.includes(candidate.id!),
   );
@@ -6213,50 +6525,12 @@ export default function BankReconciliationPage() {
     summaryMap[s.status] = { count: Number(s.count), amount: Number(s.total_amount) };
   }
 
-  // ── Task #7: COA proposals by source — checks for an existing proposal
-  //    tied to the current bank mutation; shown in the manual_review_required banner.
-  const COA_GAP_CODES = ["SPECIFIC_COA_REQUIRED", "JOURNAL_MAPPING_REQUIRED", "COA_NOT_FOUND", "COA_MAPPING_AMBIGUOUS"] as const;
-  const sourceKey = actionDialog?.mutation?.mutation_key ?? null;
-  // Enable as soon as the approve dialog opens — do NOT gate on manualReviewWarning.
-  // This way the proposal data is always fresh when the banner appears, and stale
-  // React Query cache (e.g. from a previous session) cannot show the wrong code.
-  const shouldQueryBySource = !!(sourceKey && actionDialog?.mode === "approve");
-  const {
-    data: existingSourceProposals,
-    isLoading: isSourceProposalLoading,
-    isError: isSourceProposalError,
-  } = useQuery({
-    queryKey: ["coa-proposals-by-source", "BANK_MUTATION", sourceKey],
-    queryFn: async () => {
-      const r = await fetch(
-        `/api/accounting/coa-proposals/by-source?sourceType=BANK_MUTATION&sourceRecordId=${encodeURIComponent(sourceKey!)}`,
-        { credentials: "include" },
-      );
-      if (!r.ok) return [] as { id: number; proposalNumber: string; status: string; proposedCode?: string; proposedName?: string }[];
-      return r.json() as Promise<{ id: number; proposalNumber: string; status: string; proposedCode?: string; proposedName?: string }[]>;
-    },
-    enabled: shouldQueryBySource,
-    staleTime: 0,          // always fetch fresh — proposal code may change after implementation
-    refetchOnMount: true,  // re-fetch whenever the approve dialog mounts
-  });
-  const latestSourceProposal = existingSourceProposals?.[0] ?? null;
-
-  // When a JOURNAL_MAPPING_REQUIRED error is active but an IMPLEMENTED proposal
-  // already has the COA ready, surface that code so the footer button can re-enable
-  // and pass it directly — no need to hunt for the small "↻" button.
-  const resolvedManualCoaCode = (
-    manualReviewWarning &&
-    latestSourceProposal?.status === "IMPLEMENTED" &&
-    latestSourceProposal?.proposedCode
-  ) ? latestSourceProposal.proposedCode : null;
-
   // ── Invalidate helper ────────────────────────────────────────────────────
   const invalidate = async () => {
     await Promise.all([
       qc.invalidateQueries({ queryKey: ["bank-reconciliation"] }),
       qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] }),
       qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] }),
-      qc.invalidateQueries({ queryKey: ["coa-proposals-by-source"] }),
     ]);
   };
 
@@ -6668,9 +6942,6 @@ export default function BankReconciliationPage() {
       if (d?.__manualReview) {
         // Show warning in-dialog; do NOT close or invalidate — mapping not done.
         setManualReviewWarning({ error: d.error, code: d.code, mutId: d.mutId });
-        // Invalidate all by-source proposal caches so the next render uses fresh data from the DB.
-        // This prevents stale proposed_code (e.g. from a previous session) from being re-used.
-        qc.invalidateQueries({ queryKey: ["coa-proposals-by-source"] });
         return;
       }
       setManualReviewWarning(null);
@@ -6846,9 +7117,6 @@ export default function BankReconciliationPage() {
       candidateType: chosen?.candidate_type,
       candidateId: chosen?.candidate_id,
       candidateSource: chosen?.candidate_source ?? null,
-      // When a JOURNAL_MAPPING_REQUIRED error is active but an IMPLEMENTED COA proposal
-      // is ready, pass the code so the backend bypasses resolveContraAccount.
-      manualCoaCode: resolvedManualCoaCode ?? undefined,
     });
   };
 
@@ -7060,6 +7328,130 @@ export default function BankReconciliationPage() {
         {/* ── Summary Cards ─────────────────────────────────── */}
         <SummaryCards summaryMap={summaryMap} activeFilter={filterStatus} onFilter={v => { setFilterStatus(v); setPage(0); }} />
 
+        {/* Canonical QRIS settlement queue/history. The legacy candidate audit
+            remains available below for bank-evidence approval compatibility,
+            but this is the source-of-truth view for settlement lifecycle. */}
+        <Collapsible
+          open={showCanonicalSettlementQueue}
+          onOpenChange={setShowCanonicalSettlementQueue}
+          className="w-full"
+        >
+          <Card className="border-indigo-200/70 dark:border-indigo-900/70">
+          <CardHeader className="pb-3">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <CreditCard className="h-4 w-4 text-indigo-600" />
+                  Antrean Settlement QRIS Canonical
+                </CardTitle>
+                <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
+                  Sumber status, nominal, payment, dan history berasal dari Sport Center canonical settlement.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {qrisAuditLoading && <Loader2 className="h-4 w-4 animate-spin text-indigo-600" />}
+                <CollapsibleTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground"
+                    aria-label={showCanonicalSettlementQueue
+                      ? "Tutup antrean settlement QRIS canonical"
+                      : "Buka antrean settlement QRIS canonical"}
+                  >
+                    {showCanonicalSettlementQueue ? "Tutup" : "Buka"}
+                    {showCanonicalSettlementQueue
+                      ? <ChevronUp className="h-3.5 w-3.5" />
+                      : <ChevronDown className="h-3.5 w-3.5" />}
+                  </Button>
+                </CollapsibleTrigger>
+              </div>
+            </div>
+          </CardHeader>
+          <CollapsibleContent asChild>
+          <CardContent className="space-y-3">
+            <div className="grid grid-cols-2 gap-2">
+              <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+                <p className="text-[11px] font-medium">Menunggu rekonsiliasi</p>
+                <p className="mt-1 text-xl font-bold tabular-nums">{activeCanonicalSettlements.length}</p>
+              </div>
+              <div className="rounded-lg border border-green-300 bg-green-50 px-3 py-2 text-green-900 dark:border-green-800 dark:bg-green-950 dark:text-green-200">
+                <p className="text-[11px] font-medium">Selesai</p>
+                <p className="mt-1 text-xl font-bold tabular-nums">{completedCanonicalSettlements.length}</p>
+              </div>
+            </div>
+
+            {canonicalSettlements.length === 0 && !qrisAuditLoading ? (
+              <div className="rounded-md border border-dashed px-3 py-5 text-center text-xs text-slate-500">
+                Belum ada settlement canonical QRIS pada scope perusahaan ini.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {canonicalSettlements.map((settlement) => {
+                  const isCompleted = settlement.queue_status === "completed";
+                  return (
+                    <div
+                      key={`canonical-settlement-${settlement.id}`}
+                      className="rounded-md border px-3 py-2.5 text-xs"
+                    >
+                      <div className="flex items-start justify-between gap-3 flex-wrap">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <Badge variant="outline" className="border-indigo-300 text-indigo-800 dark:border-indigo-700 dark:text-indigo-300">
+                              {settlement.provider_code || settlement.provider_name || "Provider belum dikenali"}
+                            </Badge>
+                            <Badge
+                              className={isCompleted
+                                ? "gap-1 bg-green-600 text-white"
+                                : "gap-1 bg-amber-500 text-white"}
+                            >
+                              {isCompleted
+                                ? <CheckCircle2 className="h-3 w-3" />
+                                : <Clock className="h-3 w-3" />}
+                              {isCompleted ? "Selesai" : "Menunggu mutasi bank"}
+                            </Badge>
+                            <span className="text-slate-500">Settlement #{settlement.id}</span>
+                          </div>
+                          <p className="mt-1 truncate font-medium text-slate-900 dark:text-slate-100">
+                            {settlement.settlement_reference || "Tanpa referensi settlement"}
+                          </p>
+                          <p className="mt-0.5 text-slate-600 dark:text-slate-400">
+                            {settlement.settlement_date ? fmtDate(settlement.settlement_date) : "Tanggal belum tersedia"}
+                            {" · "}
+                            {settlement.payment_items.length} payment
+                            {" · "}
+                            Gross {idr(settlement.gross_amount)}
+                            {" · "}
+                            Netto {idr(settlement.expected_bank_amount)}
+                          </p>
+                        </div>
+                        <div className="text-right text-slate-600 dark:text-slate-400">
+                          <p className="font-semibold text-slate-900 dark:text-slate-100">
+                            {idr(settlement.expected_bank_amount)}
+                          </p>
+                          <p>
+                            {settlement.bank_mutation_id != null
+                              ? `Mutasi #${settlement.bank_mutation_id}`
+                              : "Belum ter-link"}
+                          </p>
+                        </div>
+                      </div>
+                      {settlement.bank_description && (
+                        <p className="mt-2 truncate border-t pt-2 text-slate-500 dark:border-slate-800">
+                          {settlement.bank_description}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+          </CollapsibleContent>
+          </Card>
+        </Collapsible>
+
         {/* QRIS candidates are shown directly inside each bank mutation card.
             Keep the legacy audit block unreachable while the endpoint contract
             remains available for the batch selection toolbar below. */}
@@ -7207,7 +7599,27 @@ export default function BankReconciliationPage() {
                                     const facility = item.facility_name ?? item.facilityName;
                                      const paymentDate = qrisPaymentDateValue(item);
                                       const paymentDateIso = paymentDate ? String(paymentDate).slice(0, 10) : "";
-                                      const canEditPaymentDate = Number.isInteger(Number(paymentId)) && Number(paymentId) > 0;
+                                      const numericPaymentId = Number(paymentId);
+                                      const canEditPaymentDate = Number.isInteger(numericPaymentId) && numericPaymentId > 0;
+                                      const paymentSettlementStatus = String(
+                                        item.settlementStatus
+                                        ?? item.settlement_status
+                                        ?? "unsettled",
+                                      ).toLowerCase();
+                                      const hasActiveSettlementMembership =
+                                        Number.isInteger(numericPaymentId)
+                                        && new Set(
+                                          (
+                                            candidate.active_settlement_payment_ids
+                                            ?? candidate.settled_payment_ids
+                                            ?? []
+                                          ).map(Number),
+                                        ).has(numericPaymentId);
+                                      const canRequestUnsettle =
+                                        canEditPaymentDate
+                                        && paymentSettlementStatus !== "unsettled"
+                                        && !hasActiveSettlementMembership
+                                        && qrisSettlementStatusMut != null;
                                      return (
                                       <div key={`${candidate.id}-${paymentId ?? index}`} className="rounded border border-slate-200/80 bg-white/70 px-2 py-1.5 dark:border-slate-700 dark:bg-slate-950/30">
                                         <div className="flex min-w-0 items-center justify-between gap-2">
@@ -7221,6 +7633,21 @@ export default function BankReconciliationPage() {
                                         <div className="mt-0.5 grid gap-x-3 gap-y-0.5 text-[10px] text-slate-500 dark:text-slate-400 sm:grid-cols-2">
                                           <span>Customer: {customer || "—"}</span>
                                           <span>Fasilitas: {facility || "—"}</span>
+                                           <span className="flex items-center gap-1.5">
+                                             <span>Payment settlement:</span>
+                                             <Badge
+                                               variant="outline"
+                                               className={`h-4 px-1.5 text-[9px] ${paymentSettlementStatusClass(paymentSettlementStatus)}`}
+                                             >
+                                               {paymentSettlementStatusLabel(paymentSettlementStatus)}
+                                             </Badge>
+                                           </span>
+                                           <span>
+                                             Membership batch aktif:{" "}
+                                             <strong className={hasActiveSettlementMembership ? "text-emerald-700 dark:text-emerald-300" : ""}>
+                                               {hasActiveSettlementMembership ? "Ya" : "Tidak"}
+                                             </strong>
+                                           </span>
                                            <span className="flex items-center gap-1">
                                              <span>Payment: {paymentDate ? fmtDate(paymentDateIso) : "—"}</span>
                                              {canEditPaymentDate && (
@@ -7243,6 +7670,44 @@ export default function BankReconciliationPage() {
                                                </button>
                                              )}
                                            </span>
+                                           {paymentSettlementStatus !== "unsettled" && (
+                                             <span className="flex items-center gap-1 sm:col-span-2">
+                                               {hasActiveSettlementMembership ? (
+                                                 <span className="text-[10px] text-amber-700 dark:text-amber-300">
+                                                   Reset diblokir: batch posted/reconciled masih memiliki payment ini.
+                                                 </span>
+                                               ) : (
+                                                 <Button
+                                                   type="button"
+                                                   variant="ghost"
+                                                   size="sm"
+                                                   className="h-6 px-1.5 text-[10px] text-amber-700 hover:bg-amber-100 hover:text-amber-800 dark:text-amber-300 dark:hover:bg-amber-950/50"
+                                                   disabled={!canRequestUnsettle || (
+                                                     qrisSettlementStatusMut.isPending
+                                                     && qrisSettlementStatusMut.variables?.paymentId === numericPaymentId
+                                                   )}
+                                                   title="Reset status payment menjadi unsettled"
+                                                   onClick={(event) => {
+                                                     event.stopPropagation();
+                                                     if (canRequestUnsettle) {
+                                                       setQrisSettlementResetTarget({
+                                                         paymentId: numericPaymentId,
+                                                         paymentNumber: paymentNumber || `SCPAY-SC-${numericPaymentId}`,
+                                                         settlementStatus: paymentSettlementStatus,
+                                                       });
+                                                       setQrisSettlementResetReason("");
+                                                     }
+                                                   }}
+                                                 >
+                                                   {qrisSettlementStatusMut.isPending
+                                                     && qrisSettlementStatusMut.variables?.paymentId === numericPaymentId
+                                                     ? <Loader2 className="h-3 w-3 animate-spin" />
+                                                     : <RefreshCw className="h-3 w-3" />}
+                                                   Reset ke unsettled
+                                                 </Button>
+                                               )}
+                                             </span>
+                                           )}
                                           <span className="sm:col-span-2">No. Payment: {paymentNumber || `SCPAY-SC-${paymentId ?? "—"}`}</span>
                                         </div>
                                        </div>
@@ -7467,10 +7932,22 @@ export default function BankReconciliationPage() {
                   onReopen={handleOpenReopen}
                   onDelete={id => deleteMut.mutate(id)}
                   onDetail={setDetailMutation}
+                  onMultiAllocate={mutation => {
+                    setLocation(`/finance/bank-allocation?mutationId=${mutation.id}`);
+                  }}
                   onEditQrisPaymentDate={(target) => {
                     setQrisDateTarget(target);
                     setQrisPaymentDate(target.paymentDate);
                   }}
+                   onRequestUnsettlePayment={(target) => {
+                     setQrisSettlementResetTarget(target);
+                     setQrisSettlementResetReason("");
+                   }}
+                   unsettledPaymentId={
+                     qrisSettlementStatusMut.isPending
+                       ? qrisSettlementStatusMut.variables?.paymentId ?? null
+                       : null
+                   }
                   onApproveQris={handleApproveQris}
                   onApproveQrisBatch={handleApproveQrisBatch}
                   onRecoverQrisSettlement={handleRecoverQrisSettlement}
@@ -7580,6 +8057,84 @@ export default function BankReconciliationPage() {
             >
               {qrisPaymentDateMut.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
               {qrisPaymentDateMut.isPending ? "Menyimpan..." : "Simpan tanggal"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={qrisSettlementResetTarget != null}
+        onOpenChange={(open) => {
+          if (!open && !qrisSettlementStatusMut.isPending) {
+            setQrisSettlementResetTarget(null);
+            setQrisSettlementResetReason("");
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Reset status settlement payment?</DialogTitle>
+            <DialogDescription>
+              Status sumber canonical akan diubah dari{" "}
+              <strong>{paymentSettlementStatusLabel(qrisSettlementResetTarget?.settlementStatus)}</strong>{" "}
+              menjadi <strong>Belum settle</strong>.
+            </DialogDescription>
+          </DialogHeader>
+          {qrisSettlementResetTarget && (
+            <div className="space-y-4">
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
+                <p className="font-medium">{qrisSettlementResetTarget.paymentNumber}</p>
+                <p className="mt-1 text-xs">
+                  Aksi hanya aman jika payment tidak lagi menjadi anggota batch settlement
+                  posted/reconciled. Sistem akan menolak reset bila batch aktif masih ada.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="qris-settlement-reset-reason">Alasan perubahan *</Label>
+                <Textarea
+                  id="qris-settlement-reset-reason"
+                  value={qrisSettlementResetReason}
+                  onChange={(event) => setQrisSettlementResetReason(event.target.value)}
+                  placeholder="Contoh: status settled tersisa dari import lama, tidak ada batch settlement aktif."
+                  maxLength={500}
+                  rows={4}
+                  disabled={qrisSettlementStatusMut.isPending}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Minimal 5 karakter. Perubahan dicatat di audit log.
+                </p>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setQrisSettlementResetTarget(null);
+                setQrisSettlementResetReason("");
+              }}
+              disabled={qrisSettlementStatusMut.isPending}
+            >
+              Batal
+            </Button>
+            <Button
+              className="gap-1.5 bg-amber-600 text-white hover:bg-amber-700"
+              onClick={() => {
+                if (qrisSettlementResetTarget && qrisSettlementResetReason.trim().length >= 5) {
+                  qrisSettlementStatusMut.mutate({
+                    paymentId: qrisSettlementResetTarget.paymentId,
+                    reason: qrisSettlementResetReason.trim(),
+                  });
+                }
+              }}
+              disabled={
+                !qrisSettlementResetTarget
+                || qrisSettlementResetReason.trim().length < 5
+                || qrisSettlementStatusMut.isPending
+              }
+            >
+              {qrisSettlementStatusMut.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
+              {qrisSettlementStatusMut.isPending ? "Menyimpan..." : "Konfirmasi reset"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -7713,99 +8268,23 @@ export default function BankReconciliationPage() {
                   {!manualReviewWarning && (
                     <div className="border rounded-lg p-3 space-y-2">
                       <p className="text-sm font-medium">Pilih akun COA untuk jurnal ini:</p>
-                      {isSourceProposalLoading ? (
-                        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                          <Loader2 className="w-3 h-3 animate-spin" />
-                          Memeriksa proposal…
-                        </span>
-                      ) : isSourceProposalError ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const url = [
-                              "/accounting/coa-proposals?new=1",
-                              `sourceType=BANK_MUTATION`,
-                              `sourceRecordId=${encodeURIComponent(actionDialog?.mutation?.mutation_key ?? "")}`,
-                              `intent=COA_NOT_FOUND`,
-                              `description=${encodeURIComponent(actionDialog?.mutation?.description ?? "")}`,
-                              `direction=${encodeURIComponent(actionDialog?.mutation?.direction ?? "")}`,
-                            ].join("&");
-                            setActionDialog(null);
-                            setLocation(url);
-                          }}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-indigo-700 hover:text-indigo-900 bg-indigo-50 border border-indigo-200 rounded px-2 py-1"
-                        >
-                          ✦ Buat Proposal COA
-                        </button>
-                      ) : latestSourceProposal?.status === "IMPLEMENTED" ? (
-                        <button
-                          type="button"
-                          disabled={approveMut.isPending || !latestSourceProposal.proposedCode}
-                          onClick={() => {
-                            const m = actionDialog?.mutation;
-                            if (!m || !latestSourceProposal.proposedCode) return;
-                            approveMut.mutate({
-                              mutId: m.id,
-                              manualCoaCode: latestSourceProposal.proposedCode,
-                            });
-                          }}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-green-700 hover:text-green-900 bg-green-50 border border-green-200 rounded px-2 py-1 disabled:opacity-50"
-                        >
-                          ↻ Approve dengan akun {latestSourceProposal.proposedCode || "—"}
-                        </button>
-                      ) : latestSourceProposal?.status === "APPROVED" ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setActionDialog(null);
-                            setLocation(`/accounting/coa-proposals/${latestSourceProposal.id}`);
-                          }}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-orange-700 hover:text-orange-900 bg-orange-50 border border-orange-200 rounded px-2 py-1"
-                        >
-                          ⚡ Terapkan Proposal #{latestSourceProposal.proposalNumber}
-                        </button>
-                      ) : latestSourceProposal ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setActionDialog(null);
-                            setLocation(`/accounting/coa-proposals/${latestSourceProposal.id}`);
-                          }}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-indigo-700 hover:text-indigo-900 bg-indigo-50 border border-indigo-200 rounded px-2 py-1"
-                        >
-                          ✦ Lihat Proposal COA #{latestSourceProposal.proposalNumber}
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const url = [
-                              "/accounting/coa-proposals?new=1",
-                              `sourceType=BANK_MUTATION`,
-                              `sourceRecordId=${encodeURIComponent(actionDialog?.mutation?.mutation_key ?? "")}`,
-                              `intent=COA_NOT_FOUND`,
-                              `description=${encodeURIComponent(actionDialog?.mutation?.description ?? "")}`,
-                              `direction=${encodeURIComponent(actionDialog?.mutation?.direction ?? "")}`,
-                            ].join("&");
-                            setActionDialog(null);
-                            setLocation(url);
-                          }}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-indigo-700 hover:text-indigo-900 bg-indigo-50 border border-indigo-200 rounded px-2 py-1"
-                        >
-                          ✦ Buat Proposal COA
-                        </button>
-                      )}
-                      {!isSourceProposalLoading && (
-                        <p className="text-xs text-muted-foreground">
-                          {latestSourceProposal
-                            ? latestSourceProposal.status === "IMPLEMENTED"
-                              ? `Akun ${latestSourceProposal.proposedCode || "dari proposal"} sudah aktif — klik tombol di atas untuk approve.`
-                              : latestSourceProposal.status === "APPROVED"
-                                ? `Proposal #${latestSourceProposal.proposalNumber} sudah disetujui tapi akun belum dibuat. Klik ⚡ untuk terapkan, lalu kembali dan approve.`
-                                : `Proposal ${latestSourceProposal.status.toLowerCase()} — butuh approval maker-checker.`
-                            : "Belum ada proposal COA. Klik tombol di atas untuk mengusulkan akun baru."}
-                        </p>
-                      )}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="gap-1.5 text-xs"
+                        onClick={() => {
+                          const m = actionDialog?.mutation;
+                          if (!m) return;
+                          setActionDialog(null);
+                          setCoaReferenceTarget(m);
+                        }}
+                      >
+                        <BookOpen className="h-3.5 w-3.5" />
+                        Tampilkan &amp; Pilih COA
+                      </Button>
+                      <p className="text-xs text-muted-foreground">
+                        COA pilihan hanya digunakan untuk draft jurnal mutasi ini; tidak disimpan sebagai referensi atau Rule AI.
+                      </p>
                     </div>
                   )}
                 </div>
@@ -7835,11 +8314,8 @@ export default function BankReconciliationPage() {
                 />
               )}
 
-              {/* Task #6: manual_review_required banner — shown when backend
-                  returns 422 because no specific COA mapping is available.
-                  Approve and Post are disabled until the mapping is configured.
-                  Task #7 Phase 20: adds "Buat Proposal COA" action for gap error codes.
-                  User must click explicitly — never auto-created. */}
+              {/* Manual review banner — the reviewer can choose a one-time COA
+                  for this mutation without creating a proposal or Rule AI rule. */}
               {manualReviewWarning && (
                 <div className="bg-amber-50 border border-amber-400 rounded-lg p-3 space-y-2">
                   <div className="flex items-center gap-2 font-semibold text-amber-800">
@@ -7849,137 +8325,25 @@ export default function BankReconciliationPage() {
                   <p className="text-sm text-amber-700">{manualReviewWarning.error}</p>
                   <p className="text-xs text-amber-600 font-mono">Kode: {manualReviewWarning.code}</p>
                   <p className="text-xs text-amber-600">
-                    Konfigurasikan mapping COA spesifik di Accounting Settings, lalu coba approve kembali.
+                    Pilih COA di bawah untuk transaksi ini. Pilihan tersebut tidak menjadi mapping permanen.
                   </p>
-                  {/* Task #7: COA proposal action — only for gap-triggering codes.
-                      Shows "Lihat Proposal COA" if an existing proposal is already linked
-                      to this source record; otherwise shows "Buat Proposal COA" with
-                      pre-filled query params so the create form is pre-populated.
-                      User must click explicitly — no auto-creation. */}
-                  {(COA_GAP_CODES as readonly string[]).includes(manualReviewWarning.code ?? "") && (
-                    <div className="pt-1.5 border-t border-amber-300 flex items-center gap-2 flex-wrap">
-                      {/* Loading state while checking for existing proposal */}
-                      {isSourceProposalLoading ? (
-                        <span className="inline-flex items-center gap-1 text-xs text-amber-600">
-                          <Loader2 className="w-3 h-3 animate-spin" />
-                          Memeriksa proposal…
-                        </span>
-                      ) : isSourceProposalError ? (
-                        /* Error state — fail open: allow user to create */
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const url = [
-                              "/accounting/coa-proposals?new=1",
-                              `sourceType=BANK_MUTATION`,
-                              `sourceRecordId=${encodeURIComponent(actionDialog?.mutation?.mutation_key ?? "")}`,
-                              `intent=${encodeURIComponent(manualReviewWarning.code ?? "")}`,
-                              `description=${encodeURIComponent(actionDialog?.mutation?.description ?? "")}`,
-                              `mappingError=${encodeURIComponent(manualReviewWarning.error ?? "")}`,
-                              `direction=${encodeURIComponent(actionDialog?.mutation?.direction ?? "")}`,
-                            ].join("&");
-                            setActionDialog(null);
-                            setLocation(url);
-                          }}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-indigo-700 hover:text-indigo-900 bg-indigo-50 border border-indigo-200 rounded px-2 py-1"
-                        >
-                          ✦ Buat Proposal COA
-                        </button>
-                      ) : latestSourceProposal ? (
-                        /* Proposal exists — behaviour depends on its status.
-                           IMPLEMENTED = COA sudah ada di DB, bisa langsung approve.
-                           APPROVED    = COA belum dibuat, harus implement dulu.
-                           lainnya     = masih butuh maker-checker. */
-                        latestSourceProposal.status === "IMPLEMENTED" ? (
-                          /* COA sudah dibuat — tombol ini melewati resolveContraAccount
-                             dan menggunakan akun dari proposal secara langsung. */
-                          <button
-                            type="button"
-                            disabled={approveMut.isPending || !latestSourceProposal.proposedCode}
-                            onClick={() => {
-                              const m = actionDialog?.mutation;
-                              if (!m) return;
-                              if (!latestSourceProposal.proposedCode) {
-                                toast({
-                                  title: "Kode COA tidak ditemukan",
-                                  description: `Proposal #${latestSourceProposal.proposalNumber} tidak memiliki kode akun. Buka halaman proposal dan pastikan kode COA terisi.`,
-                                  variant: "destructive",
-                                });
-                                return;
-                              }
-                              const chosen = (m.candidates ?? []).find(c => c.id === selectedCandidateId);
-                              approveMut.mutate({
-                                mutId: m.id,
-                                matchId: chosen?.id,
-                                candidateType: chosen?.candidate_type,
-                                candidateId: chosen?.candidate_id,
-                                candidateSource: chosen?.candidate_source ?? null,
-                                manualCoaCode: latestSourceProposal.proposedCode,
-                              });
-                            }}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-green-700 hover:text-green-900 bg-green-50 border border-green-200 rounded px-2 py-1 disabled:opacity-50"
-                          >
-                            ↻ Approve dengan akun {latestSourceProposal.proposedCode || "—"}
-                          </button>
-                        ) : latestSourceProposal.status === "APPROVED" ? (
-                          /* Proposal disetujui tapi COA belum dibuat — arahkan ke halaman
-                             proposal untuk klik Terapkan, baru bisa approve mutasi. */
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setActionDialog(null);
-                              setLocation(`/accounting/coa-proposals/${latestSourceProposal.id}`);
-                            }}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-orange-700 hover:text-orange-900 bg-orange-50 border border-orange-200 rounded px-2 py-1"
-                          >
-                            ⚡ Terapkan Proposal #{latestSourceProposal.proposalNumber}
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setActionDialog(null);
-                              setLocation(`/accounting/coa-proposals/${latestSourceProposal.id}`);
-                            }}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-indigo-700 hover:text-indigo-900 bg-indigo-50 border border-indigo-200 rounded px-2 py-1"
-                          >
-                            ✦ Lihat Proposal COA #{latestSourceProposal.proposalNumber}
-                          </button>
-                        )
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const url = [
-                              "/accounting/coa-proposals?new=1",
-                              `sourceType=BANK_MUTATION`,
-                              `sourceRecordId=${encodeURIComponent(actionDialog?.mutation?.mutation_key ?? "")}`,
-                              `intent=${encodeURIComponent(manualReviewWarning.code ?? "")}`,
-                              `description=${encodeURIComponent(actionDialog?.mutation?.description ?? "")}`,
-                              `mappingError=${encodeURIComponent(manualReviewWarning.error ?? "")}`,
-                              `direction=${encodeURIComponent(actionDialog?.mutation?.direction ?? "")}`,
-                            ].join("&");
-                            setActionDialog(null);
-                            setLocation(url);
-                          }}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-indigo-700 hover:text-indigo-900 bg-indigo-50 border border-indigo-200 rounded px-2 py-1"
-                        >
-                          ✦ Buat Proposal COA
-                        </button>
-                      )}
-                      {!isSourceProposalLoading && (
-                        <span className="text-xs text-amber-600">
-                          {latestSourceProposal
-                            ? latestSourceProposal.status === "IMPLEMENTED"
-                              ? `Akun ${latestSourceProposal.proposedCode || "dari proposal"} sudah aktif — tombol Approve di bawah sudah siap digunakan.`
-                              : latestSourceProposal.status === "APPROVED"
-                                ? `Proposal #${latestSourceProposal.proposalNumber} sudah disetujui tapi akun belum dibuat. Klik ⚡ untuk terapkan proposal (buat akun), lalu kembali ke sini dan approve mutasi.`
-                                : `Proposal ${latestSourceProposal.status.toLowerCase()} — butuh approval maker-checker sebelum bisa diterapkan.`
-                            : "AI akan mengusulkan akun baru — membutuhkan approval maker-checker."}
-                        </span>
-                      )}
-                    </div>
-                  )}
+                  <div className="pt-1.5 border-t border-amber-300">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="gap-1.5 text-xs border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+                      onClick={() => {
+                        const m = actionDialog?.mutation;
+                        if (!m) return;
+                        setActionDialog(null);
+                        setManualReviewWarning(null);
+                        setCoaReferenceTarget(m);
+                      }}
+                    >
+                      <BookOpen className="h-3.5 w-3.5" />
+                      Tampilkan &amp; Pilih COA
+                    </Button>
+                  </div>
                 </div>
               )}
             </div>
@@ -7992,24 +8356,19 @@ export default function BankReconciliationPage() {
               disabled={
                 approveMut.isPending ||
                 (approveDialogCands.length > 0 && selectedCandidateId === null) ||
-                // Keep disabled only when a review error exists AND no ready COA to resolve it.
-                // When resolvedManualCoaCode is set, the button re-enables and passes that code.
-                (!!manualReviewWarning && !resolvedManualCoaCode)
+                // Resolve manual-review errors through the one-time COA picker.
+                !!manualReviewWarning
               }
               title={
-                manualReviewWarning && !resolvedManualCoaCode
+                manualReviewWarning
                   ? "Selesaikan review manual sebelum approve"
-                  : resolvedManualCoaCode
-                    ? `Approve mutasi menggunakan akun ${resolvedManualCoaCode}`
-                    : undefined
+                  : undefined
               }
             >
               {approveMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
               {approveMut.isPending
                 ? "Menyimpan..."
-                : resolvedManualCoaCode
-                  ? `Approve dengan akun ${resolvedManualCoaCode}`
-                  : "Approve & Buat Draft Jurnal"}
+                : "Approve & Buat Draft Jurnal"}
             </Button>
           </DialogFooter>
         </DialogContent>

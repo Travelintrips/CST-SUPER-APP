@@ -91,6 +91,7 @@ const REGISTRY_ROWS: readonly RegistryRow[] = [
   ["vendor_catalog_schema", "Vendor catalog schema migration", "schema"],
   ["vendor_profile_hardening", "Vendor profile hardening migration (Phase Final)", "repair"],
   ["featured_product", "Featured product migration", "schema"],
+  ["marketplace_legacy_write_idempotency", "Marketplace legacy write idempotency migration", "schema"],
   ["marketplace_vendor_invoice", "Marketplace vendor invoice migration", "schema"],
   ["marketplace_ap_preparation", "Marketplace AP preparation migration", "schema"],
   ["logistic_vendor_fulfillments", "Logistic vendor fulfillments migration", "schema"],
@@ -123,6 +124,7 @@ const REGISTRY_ROWS: readonly RegistryRow[] = [
   ["allocation_engine", "Allocation Engine migration", "schema"],
   ["treasury_batch_4", "Treasury Batch 4 migration", "schema"],
   ["bank_allocation_phase_2", "Bank Allocation Phase 2 migration", "schema"],
+  ["bank_mutation_allocation_lineage", "Bank mutation allocation lineage migration", "schema"],
   ["expense_rule_engine", "Expense Rule Engine migration (Phase 3)", "schema"],
   ["expense_classification_columns", "Expense Classification columns migration (Phase 6D)", "schema"],
   ["logistics_payments", "ASK logistics_payments migration", "schema"],
@@ -147,8 +149,10 @@ export const STARTUP_MIGRATION_REGISTRY: readonly StartupStageDefinition[] = REG
         ? 2
         : name === "sport_center_canonical_finance_config"
           ? 8
+        : name === "finance_governance"
+          ? 2
         : name === "customer_portal_payment_boundary"
-         ? 3
+          ? 3
         : name === "customer_portal_finance_processing"
           ? 1
         : name === "customer_portal_settlement"

@@ -812,14 +812,11 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
   const [success, setSuccess] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [phoneError, setPhoneError] = useState<string | null>(null);
-  // Keep one logical request identity for the lifetime of this dialog. If the
-  // response is ambiguous, pressing submit again must reuse the same RFQ.
-  const [submissionIdempotencyKey] = useState(() => {
-    if (typeof globalThis.crypto?.randomUUID === "function") {
-      return globalThis.crypto.randomUUID();
-    }
-    return `mkt-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  });
+  const idempotencyStorageKey = `customer-portal:marketplace-rfq:${item.id}:pending`;
+  // Keep one logical request identity across refreshes and network retries. A
+  // key is removed only when the dialog is intentionally closed or the request
+  // has definitively succeeded.
+  const [submissionIdempotencyKey, setSubmissionIdempotencyKey] = useState<string | null>(null);
   const [customerContext, setCustomerContext] = useState<RfqCustomerContext | null>(null);
   const [contextLoading, setContextLoading] = useState(authenticatedCustomer);
   const [contextError, setContextError] = useState<string | null>(null);
@@ -880,6 +877,25 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
   const ppnAmount = calc.includePpn ? estimatedPrice * 0.11 : 0;
   const grandTotal = estimatedPrice + ppnAmount;
 
+  function closeDialog() {
+    try { window.sessionStorage.removeItem(idempotencyStorageKey); } catch {}
+    onClose();
+  }
+
+  function getOrCreateSubmissionKey(): string {
+    try {
+      const existing = window.sessionStorage.getItem(idempotencyStorageKey);
+      if (existing) return existing;
+      const key = globalThis.crypto?.randomUUID?.()
+        ?? `mkt-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      window.sessionStorage.setItem(idempotencyStorageKey, key);
+      return key;
+    } catch {
+      return globalThis.crypto?.randomUUID?.()
+        ?? `mkt-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    }
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -906,6 +922,8 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
     if (pErr) return;
     setLoading(true);
     try {
+      const idempotencyKey = submissionIdempotencyKey ?? getOrCreateSubmissionKey();
+      if (!submissionIdempotencyKey) setSubmissionIdempotencyKey(idempotencyKey);
       const body: Record<string, unknown> = {
         // Backward-compatible legacy fields
         customerName: form.buyerName.trim(),
@@ -939,7 +957,7 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Idempotency-Key": submissionIdempotencyKey,
+           "Idempotency-Key": idempotencyKey,
         },
         credentials: "include",
         body: JSON.stringify(body),
@@ -952,6 +970,8 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
          reqId?: string;
        };
        if (!res.ok) throw new Error(mapRfqSubmitError(res.status, data));
+       try { window.sessionStorage.removeItem(idempotencyStorageKey); } catch {}
+       setSubmissionIdempotencyKey(null);
       setSuccess(data.orderNumber ?? "OK");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Terjadi kesalahan");
@@ -962,7 +982,7 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
 
   if (success) {
     return (
-      <Dialog open onOpenChange={onClose}>
+      <Dialog open onOpenChange={closeDialog}>
         <DialogContent className="max-w-sm rounded-2xl text-center py-8">
           <div className="flex flex-col items-center gap-4">
             <div className="w-16 h-16 rounded-full bg-emerald-50 flex items-center justify-center">
@@ -979,7 +999,7 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
                 {t("marketplaceDetail.rfqSuccessNote")}
               </p>
             </div>
-            <Button onClick={onClose} className="mt-2 rounded-xl px-8">
+            <Button onClick={closeDialog} className="mt-2 rounded-xl px-8">
               {t("marketplaceDetail.rfqClose")}
             </Button>
           </div>
@@ -989,7 +1009,7 @@ function SubmitDialog({ item, calc, onClose }: SubmitDialogProps) {
   }
 
   return (
-    <Dialog open onOpenChange={onClose}>
+    <Dialog open onOpenChange={closeDialog}>
       <DialogContent className="max-w-md rounded-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
