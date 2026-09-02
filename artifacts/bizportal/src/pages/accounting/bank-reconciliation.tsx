@@ -2497,9 +2497,9 @@ function ProofUploadButton({ mutationId, proofUrl }: { mutationId: number; proof
   );
 }
 
-// ── One-time COA Selection Dialog ────────────────────────────────────────────
-// The selected account is sent only to the current approval request. This
-// action must never create a reusable reconciliation rule or a Rule AI entry.
+// ── COA Selection + Rule AI Dialog ───────────────────────────────────────────
+// The selected account is persisted as a company-scoped Rule AI mapping and
+// is also sent to the current approval request for the draft journal.
 function CoaReferenceDialog({
   mutation,
   open,
@@ -2530,6 +2530,7 @@ function CoaReferenceDialog({
   });
 
   const companyId = mutation?.company_id ?? activeCompanyId;
+  const ruleAiReference = String(mutation?.provider_order_id ?? "").trim();
   // The bank account is the opposite side of the selected COA:
   // IN = bank debit, so the contra account is credit;
   // OUT = bank credit, so the contra account is debit.
@@ -2724,6 +2725,58 @@ function CoaReferenceDialog({
     }
   };
 
+  const saveRuleAi = async (selected: CoaAccountReference) => {
+    if (!mutation || !companyId) {
+      throw new Error("Perusahaan aktif atau mutasi belum tersedia");
+    }
+
+    const description = String(mutation.description ?? "").trim();
+    if (!description) {
+      throw new Error("Deskripsi mutasi wajib tersedia untuk membuat Rule AI");
+    }
+
+    // Prefer a provider/order reference when available because it is more
+    // specific than a generic bank description. Direction is always included
+    // so an incoming and outgoing transaction cannot share the same mapping.
+    const primaryCondition = ruleAiReference
+      ? { field: "reference", operator: "equals", value: ruleAiReference }
+      : { field: "description", operator: "contains", value: description };
+    const conditions = [
+      primaryCondition,
+      { field: "direction", operator: "equals", value: mutation.direction },
+    ];
+    const ruleName = `Pemetaan COA — ${description}`.slice(0, 120);
+
+    const response = await fetch("/api/recon-classification/ai-rules", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: ruleName,
+        description: `Dibuat dari pemilihan COA pada mutasi bank #${mutation.id}`,
+        condition_field: primaryCondition.field,
+        condition_operator: primaryCondition.operator,
+        condition_value: primaryCondition.value,
+        conditions,
+        logic: "AND",
+        specificity: conditions.length,
+        action_flow: mutation.direction === "IN"
+          ? "INCOME_ALLOCATION"
+          : "ROUTINE_EXPENSE_ALLOCATION",
+        action_coa_code: selected.code,
+        confidence: 1,
+        priority: 120,
+        source: "manual",
+        company_id: companyId,
+      }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(body.error ?? "Rule AI gagal disimpan");
+    }
+    return body;
+  };
+
   const save = async () => {
     if (!mutation) return;
     if (!companyId) {
@@ -2745,6 +2798,7 @@ function CoaReferenceDialog({
 
     setSaving(true);
     try {
+      const ruleAiBody = await saveRuleAi(selectedAccount);
       const approveResponse = await fetch(`/api/bank-reconciliation/${mutation.id}/approve`, {
         method: "POST",
         credentials: "include",
@@ -2761,8 +2815,8 @@ function CoaReferenceDialog({
         );
       }
       toast({
-        title: "COA dipilih dan draft jurnal dibuat",
-        description: `${selectedAccount.code} — ${selectedAccount.name}. Pilihan ini tidak disimpan sebagai referensi atau Rule AI.`,
+        title: "COA disimpan ke Rule AI dan draft jurnal dibuat",
+        description: `${selectedAccount.code} — ${selectedAccount.name}. Rule AI #${ruleAiBody?.data?.id ?? "baru"} aktif untuk perusahaan ini.`,
       });
       // The mutation list and QRIS candidate audit use different React Query
       // keys, so refresh both views after the one-time approval.
@@ -2792,7 +2846,7 @@ function CoaReferenceDialog({
           </DialogTitle>
           <DialogDescription>
             Pilih akun tujuan untuk {mutation.direction === "IN" ? "uang masuk" : "uang keluar"} ini.
-            Pilihan ini hanya dipakai untuk membuat draft jurnal transaksi ini.
+            Pilihan ini disimpan sebagai Rule AI perusahaan dan dipakai untuk membuat draft jurnal transaksi ini.
           </DialogDescription>
         </DialogHeader>
 
@@ -3039,8 +3093,9 @@ function CoaReferenceDialog({
             )}
           </div>
 
-          <div className="rounded-md border border-emerald-200 bg-emerald-50/70 px-3 py-2.5 text-xs text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200">
-            COA pilihan tidak menjadi referensi untuk transaksi berikutnya dan tidak disimpan ke Rule AI.
+          <div className="rounded-md border border-indigo-200 bg-indigo-50/70 px-3 py-2.5 text-xs text-indigo-800 dark:border-indigo-900 dark:bg-indigo-950/30 dark:text-indigo-200">
+            Rule AI akan memakai {ruleAiReference ? "referensi provider/order ID" : "deskripsi mutasi"} dan arah transaksi sebagai kondisi.
+            Rule tetap terbatas pada perusahaan aktif.
           </div>
 
           {!canApplyCurrent && canApprove(mutation) && visibleCandidates(mutation).length > 0 && (
@@ -3066,7 +3121,7 @@ function CoaReferenceDialog({
             {saving && (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             )}
-            {saving ? "Membuat Draft..." : "Pilih COA & Buat Draft"}
+            {saving ? "Menyimpan Rule AI..." : "Simpan Rule AI & Buat Draft"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -3733,7 +3788,7 @@ function QrisMutationCard({
                 onClick={() => onMapCoa(m)}
               >
                 <BookOpen className="h-3.5 w-3.5" />
-                Pilih COA (sekali)
+                Pilih COA &amp; Simpan Rule AI
               </Button>
               {!isApproved && !isDepleted && !isMatched && (
                 <Button
@@ -4349,7 +4404,7 @@ function MutationCard({
               onClick={() => onMapCoa(m)}
             >
               <BookOpen className="h-3.5 w-3.5" />
-              Pilih COA (sekali)
+              Pilih COA &amp; Simpan Rule AI
             </Button>
             {onMultiAllocate && canMultiAllocate(m) && (
               <Button
@@ -4478,10 +4533,12 @@ function MutationCard({
                    event.stopPropagation();
                    // QRIS must first go through candidate generation. It cannot
                    // be approved through the generic manual journal flow.
-                   if (isQris && onGenerateQrisCandidates) {
+                    if (isQris && onGenerateQrisCandidates) {
                      onGenerateQrisCandidates(m.id);
                    } else if (cands.length > 0 && !isQris) {
                      onApprove(m);
+                    } else if (!isQris && canApprove(m)) {
+                      onMapCoa(m);
                    } else {
                      onDetail(m);
                    }
@@ -4495,8 +4552,8 @@ function MutationCard({
                  {isQris && onGenerateQrisCandidates
                    ? "Cari Kandidat QRIS"
                    : cands.length > 0 && !isQrisMutation(m)
-                  ? "Pilih Kandidat & Approve"
-                  : "Lengkapi & Approve Manual"}
+                   ? "Pilih Kandidat & Approve"
+                   : "Pilih COA & Simpan Rule AI"}
               </Button>
             )}
             {/* Post ke Accounting — only for approved_pending_posting; disabled when mapping-required */}
@@ -4958,7 +5015,7 @@ function MutationDetailPanel({
                           </p>
                           {m.review_code && <p className="font-mono text-[11px] opacity-80">Kode: {m.review_code}</p>}
                           <p className="text-xs">
-                            Periksa COA dan gunakan “Pilih COA (sekali)” atau “Pilih COA & Buat Draft” setelah transaksi dipastikan benar.
+                            Periksa COA dan gunakan “Pilih COA & Simpan Rule AI” setelah transaksi dipastikan benar.
                           </p>
                         </AlertDescription>
                       </Alert>
@@ -5464,7 +5521,7 @@ function MutationDetailPanel({
               onClick={() => {
                 if (canApprove(m) && cands.length === 0 && !isQrisMutation(m)) {
                   onClose();
-                  onApprove(m);
+                  onMapCoa(m);
                   return;
                 }
                 onClose();
@@ -5474,7 +5531,7 @@ function MutationDetailPanel({
                 ? <CheckCircle2 className="w-4 h-4" />
                 : <Search className="w-4 h-4" />}
               {canApprove(m) && cands.length === 0 && !isQrisMutation(m)
-                ? "Lengkapi & Approve Manual"
+                ? "Pilih COA & Simpan Rule AI"
                 : "Periksa Transaksi"}
             </Button>
           )}
@@ -8283,7 +8340,7 @@ export default function BankReconciliationPage() {
                         Tampilkan &amp; Pilih COA
                       </Button>
                       <p className="text-xs text-muted-foreground">
-                        COA pilihan hanya digunakan untuk draft jurnal mutasi ini; tidak disimpan sebagai referensi atau Rule AI.
+                        COA pilihan disimpan sebagai Rule AI perusahaan dan dipakai untuk draft jurnal mutasi ini.
                       </p>
                     </div>
                   )}
@@ -8314,8 +8371,8 @@ export default function BankReconciliationPage() {
                 />
               )}
 
-              {/* Manual review banner — the reviewer can choose a one-time COA
-                  for this mutation without creating a proposal or Rule AI rule. */}
+              {/* Manual review banner — the reviewer can choose a COA,
+                  persist its Rule AI mapping, and create the draft journal. */}
               {manualReviewWarning && (
                 <div className="bg-amber-50 border border-amber-400 rounded-lg p-3 space-y-2">
                   <div className="flex items-center gap-2 font-semibold text-amber-800">
@@ -8325,7 +8382,7 @@ export default function BankReconciliationPage() {
                   <p className="text-sm text-amber-700">{manualReviewWarning.error}</p>
                   <p className="text-xs text-amber-600 font-mono">Kode: {manualReviewWarning.code}</p>
                   <p className="text-xs text-amber-600">
-                    Pilih COA di bawah untuk transaksi ini. Pilihan tersebut tidak menjadi mapping permanen.
+                    Pilih COA di bawah. Pilihan akan disimpan sebagai mapping Rule AI perusahaan.
                   </p>
                   <div className="pt-1.5 border-t border-amber-300">
                     <Button
@@ -8356,7 +8413,7 @@ export default function BankReconciliationPage() {
               disabled={
                 approveMut.isPending ||
                 (approveDialogCands.length > 0 && selectedCandidateId === null) ||
-                // Resolve manual-review errors through the one-time COA picker.
+                // Resolve manual-review errors through the COA + Rule AI picker.
                 !!manualReviewWarning
               }
               title={
