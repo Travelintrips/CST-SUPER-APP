@@ -954,6 +954,20 @@ function AiRulesTab() {
     setShowModal(true);
   };
 
+  useEffect(() => {
+    if (
+      !Number.isSafeInteger(highlightedRuleId) ||
+      highlightedRuleId <= 0 ||
+      loading ||
+      showModal ||
+      rows.length === 0
+    ) {
+      return;
+    }
+    const highlightedRule = rows.find((row) => Number(row.id) === highlightedRuleId);
+    if (highlightedRule) openEdit(highlightedRule);
+  }, [highlightedRuleId, loading, rows, showModal]);
+
   const updateCondition = (index: number, patch: any) => {
     setForm((f: any) => ({ ...f, conditions: (f.conditions ?? []).map((c: any, i: number) => i === index ? { ...c, ...patch } : c) }));
   };

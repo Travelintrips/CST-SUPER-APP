@@ -3142,7 +3142,11 @@ function CoaReferenceDialog({
             {saving && (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             )}
-            {saving ? "Menyimpan Rule AI..." : "Simpan Rule AI & Buat Draft"}
+            {saving
+              ? "Menyimpan Rule AI..."
+              : isQris
+                ? "Simpan Rule AI & Approve Settlement"
+                : "Simpan Rule AI & Buat Draft"}
           </Button>
         </DialogFooter>
       </DialogContent>
