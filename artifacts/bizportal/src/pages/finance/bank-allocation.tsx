@@ -711,12 +711,12 @@ function MutationDetailView({
         </div>
       </div>
 
-      <section className="rounded-lg border border-indigo-200 bg-indigo-50/60 p-3 space-y-3 dark:border-indigo-800 dark:bg-indigo-950/30">
+      <section className="rounded-lg border border-indigo-200 bg-indigo-50/60 p-3 space-y-3 text-black dark:border-indigo-800 dark:bg-indigo-950/30">
         <div className="flex items-start gap-2">
           <Link2 className="h-4 w-4 mt-0.5 text-indigo-600 shrink-0" />
           <div>
-            <h3 className="text-sm font-semibold text-indigo-950 dark:text-indigo-100">Multi-allocation & Link DP Lama</h3>
-            <p className="text-xs text-indigo-800/80 dark:text-indigo-200/80">
+            <h3 className="text-sm font-semibold text-black">Multi-allocation & Link DP Lama</h3>
+            <p className="text-xs text-black">
               Pilih beberapa invoice untuk satu mutasi. Untuk pelunasan, cari mutasi sebelumnya hanya dengan tanggal dan nama/deskripsi pengirim.
             </p>
           </div>
@@ -727,6 +727,7 @@ function MutationDetailView({
             type="date"
             value={previousDate}
             onChange={(event) => setPreviousDate(event.target.value)}
+            className="text-black placeholder:text-black"
             aria-label="Tanggal mutasi sebelumnya"
           />
           <Input
@@ -734,9 +735,10 @@ function MutationDetailView({
             value={previousDescription}
             onChange={(event) => setPreviousDescription(event.target.value)}
             onKeyDown={(event) => { if (event.key === "Enter") searchPrevious(); }}
+            className="text-black placeholder:text-black"
             aria-label="Nama atau deskripsi pengirim"
           />
-          <Button size="sm" variant="outline" onClick={searchPrevious} disabled={previousLoading}>
+          <Button size="sm" variant="outline" className="text-black" onClick={searchPrevious} disabled={previousLoading}>
             <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${previousLoading ? "animate-spin" : ""}`} />
             Cari mutasi lama
           </Button>
@@ -744,13 +746,13 @@ function MutationDetailView({
 
         {previousRows.length > 0 && (
           <div className="space-y-2">
-            <p className="text-xs font-semibold text-indigo-950 dark:text-indigo-100">Hasil pencarian — pilih allocation yang akan dikaitkan</p>
+            <p className="text-xs font-semibold text-black">Hasil pencarian — pilih allocation yang akan dikaitkan</p>
             {previousRows.map((previous) => (
               <div key={previous.id} className="rounded border bg-background p-2.5 space-y-2">
                 <div className="flex items-start justify-between gap-2 text-xs">
                   <div className="min-w-0">
                     <p className="font-medium truncate">{fmtDate(previous.transactionDate)} · {previous.description || "-"}</p>
-                    <p className="text-muted-foreground">
+                    <p className="text-black">
                       Mutasi Rp {fmt(previous.amount)} · sudah dialokasikan Rp {fmt(previous.allocatedAmount)} · sisa Rp {fmt(previous.remainingAmount)}
                     </p>
                   </div>
@@ -760,7 +762,7 @@ function MutationDetailView({
                   <div key={allocation.id} className="flex items-center justify-between gap-2 rounded bg-muted/40 px-2 py-1.5 text-xs">
                     <div className="min-w-0">
                       <p className="font-medium truncate">{allocation.invoiceRef ?? `Invoice #${allocation.invoiceId}`}</p>
-                      <p className="text-muted-foreground">
+                      <p className="text-black">
                         Allocation Rp {fmt(allocation.amount)} · outstanding invoice Rp {fmt(allocation.remainingAmount)}
                         {allocation.isLinked ? " · sudah dikaitkan" : ""}
                       </p>
@@ -787,7 +789,7 @@ function MutationDetailView({
 
         {detail.candidates.filter((candidate) => candidate.candidate_type === "invoice").length > 0 && (
           <div className="space-y-2">
-            <p className="text-xs font-semibold text-indigo-950 dark:text-indigo-100">Tambah invoice lain dari kandidat mutasi ini</p>
+            <p className="text-xs font-semibold text-black">Tambah invoice lain dari kandidat mutasi ini</p>
             <div className="flex flex-wrap gap-2">
               {detail.candidates
                 .filter((candidate) => candidate.candidate_type === "invoice")
@@ -796,6 +798,7 @@ function MutationDetailView({
                     key={candidate.id}
                     size="sm"
                     variant="outline"
+                    className="text-black"
                     disabled={allocationLines.some((line) => line.invoiceId === candidate.candidate_id)}
                     onClick={() => addAllocationLine({
                       invoiceId: candidate.candidate_id,
@@ -815,7 +818,7 @@ function MutationDetailView({
           <div className="rounded border bg-background p-2.5 space-y-2">
             <div className="flex items-center justify-between text-xs">
               <p className="font-semibold">Allocation baru dari mutasi ini</p>
-              <p className="text-muted-foreground">
+              <p className="text-black">
                 Total Rp {fmt(allocationLines.reduce((sum, line) => sum + Number(line.amount || 0), 0))} / Rp {fmt(m.amount)}
               </p>
             </div>
@@ -848,7 +851,7 @@ function MutationDetailView({
               {allocationSaving ? <RefreshCw className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" />}
               Simpan multi-allocation
             </Button>
-            <p className="text-[11px] text-muted-foreground">
+              <p className="text-[11px] text-black">
               Sisa mutasi boleh tetap ada untuk status PARTIALLY_MATCHED. Allocation lama tidak dipindahkan dan tidak dihitung dua kali.
             </p>
           </div>
