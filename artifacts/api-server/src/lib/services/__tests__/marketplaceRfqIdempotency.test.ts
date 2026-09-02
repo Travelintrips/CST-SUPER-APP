@@ -130,4 +130,29 @@ describe("canonical RFQ idempotency", () => {
     });
     expect(mockDb.transaction).not.toHaveBeenCalled();
   });
+
+  it("serializes concurrent retries onto the same canonical RFQ", async () => {
+    tx.execute.mockImplementation(async (query: { strings: string[] }) => {
+      const text = query.strings.join(" ");
+      if (text.includes("FROM mkt_rfqs")) {
+        return { rows: [{ id: 777, rfq_number: "MKT-RFQ-202608-0777" }] };
+      }
+      if (text.includes("FROM mkt_dual_write_log")) {
+        return { rows: [{ id: 55, status: "success", mkt_rfq_id: 777, idempotency_key: "mkt-rfq:test-key" }] };
+      }
+      return { rows: [] };
+    });
+
+    const { createMktRfqEntry } = await import("../marketplaceRfqService.js");
+    const results = await Promise.all([
+      createMktRfqEntry(baseOptions),
+      createMktRfqEntry(baseOptions),
+    ]);
+
+    expect(results).toEqual([
+      { rfqId: 777, rfqNumber: "MKT-RFQ-202608-0777" },
+      { rfqId: 777, rfqNumber: "MKT-RFQ-202608-0777" },
+    ]);
+    expect(tx.insert).not.toHaveBeenCalled();
+  });
 });

@@ -383,4 +383,63 @@ describe("submitMarketplaceQuote authenticated ownership boundary", () => {
     })).rejects.toMatchObject({ statusCode: 400 });
     expect(mockCreateMktRfqEntry).not.toHaveBeenCalled();
   });
+
+  it("concurrent compatibility retries converge on one legacy order", async () => {
+    const { tx, insertedValues } = makeTx();
+    let firstInsert = true;
+    tx.insert = vi.fn(() => ({
+      values: vi.fn((values: Record<string, unknown>) => {
+        insertedValues.push(values);
+        const query = {
+          onConflictDoNothing: vi.fn(() => query),
+          returning: vi.fn().mockResolvedValue(
+            firstInsert
+              ? (firstInsert = false, [{ id: 901, orderNumber: "MCT-260903-00901" }])
+              : [],
+          ),
+        };
+        return query;
+      }),
+    }));
+    tx.execute.mockResolvedValue({
+      rows: [{ id: 901, order_number: "MCT-260903-00901" }],
+    });
+    mockDb.transaction.mockImplementation(async (callback: (transaction: typeof tx) => unknown) => callback(tx));
+
+    const { retryLegacyCompatibilityWrite } = await import("../portalMarketplaceService.js");
+    const payload = {
+      idempotencyKey: "mkt-rfq:compat-concurrent",
+      buyerName: "Buyer",
+      buyerEmail: "buyer@example.test",
+      buyerPhone: "081234567890",
+      companyId: null,
+      legacyCompatibility: {
+        orderStatus: "Quote Request",
+        subtotal: 100,
+        grandTotal: 100,
+        productCategory: null,
+        templateId: null,
+        templateVersion: null,
+        customFieldValues: {},
+        catalogSnapshot: {},
+        itemName: "Service",
+        unitStr: "unit",
+        sellPrice: 100,
+        qtyNum: 1,
+      },
+    };
+
+    const [first, second] = await Promise.all([
+      retryLegacyCompatibilityWrite({ payload }),
+      retryLegacyCompatibilityWrite({ payload }),
+    ]);
+
+    expect(first.id).toBe(901);
+    expect(second.id).toBe(901);
+    // Both transactions may issue an INSERT, but the unique conflict means
+    // only the first header is committed; both calls resolve to that same id.
+    expect(insertedValues.filter((values) => "orderNumber" in values)).toHaveLength(2);
+    expect(insertedValues).toHaveLength(3);
+    expect(mockDb.transaction).toHaveBeenCalledTimes(2);
+  });
 });
