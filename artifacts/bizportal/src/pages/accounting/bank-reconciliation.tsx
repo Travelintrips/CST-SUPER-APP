@@ -2497,10 +2497,9 @@ function ProofUploadButton({ mutationId, proofUrl }: { mutationId: number; proof
   );
 }
 
-// ── COA Reference Dialog ──────────────────────────────────────────────────────
-// A bank mutation can create a reusable manual rule. This keeps the selected
-// account useful for the current review and for future mutations with the same
-// bank description, without silently changing the chart of accounts.
+// ── One-time COA Selection Dialog ────────────────────────────────────────────
+// The selected account is sent only to the current approval request. This
+// action must never create a reusable reconciliation rule or a Rule AI entry.
 function CoaReferenceDialog({
   mutation,
   open,
@@ -2518,9 +2517,7 @@ function CoaReferenceDialog({
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const [selectedCode, setSelectedCode] = useState("");
-  const [conditionValue, setConditionValue] = useState("");
-  const [saving, setSaving] = useState<"rule" | "current" | null>(null);
-  const [saveToRuleAi, setSaveToRuleAi] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [creatingCoa, setCreatingCoa] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newCoaRole, setNewCoaRole] = useState<"parent" | "child">("child");
@@ -2572,9 +2569,7 @@ function CoaReferenceDialog({
     if (!open || !mutation) return;
     setSearch("");
     setSelectedCode("");
-    setConditionValue(mutation.normalized_description || mutation.description || "");
-    setSaving(null);
-    setSaveToRuleAi(true);
+    setSaving(false);
     setCreatingCoa(false);
     setCreating(false);
     setNewCoaRole("child");
@@ -2716,7 +2711,7 @@ function CoaReferenceDialog({
       setCreatingCoa(false);
       toast({
         title: "COA baru berhasil dibuat",
-        description: `${created.code ?? code} — ${created.name ?? name} siap dipakai sebagai referensi.`,
+        description: `${created.code ?? code} — ${created.name ?? name} siap dipakai untuk transaksi ini.`,
       });
     } catch (error) {
       toast({
@@ -2729,7 +2724,7 @@ function CoaReferenceDialog({
     }
   };
 
-  const save = async (applyCurrent: boolean) => {
+  const save = async () => {
     if (!mutation) return;
     if (!companyId) {
       toast({ title: "Perusahaan aktif belum dipilih", variant: "destructive" });
@@ -2739,75 +2734,39 @@ function CoaReferenceDialog({
       toast({ title: "Pilih akun COA terlebih dahulu", variant: "destructive" });
       return;
     }
-    const condition = conditionValue.trim();
-    if (!condition) {
-      toast({ title: "Referensi aturan belum diisi", variant: "destructive" });
+    if (!canApplyCurrent) {
+      toast({
+        title: "COA hanya dapat dipilih untuk transaksi ini",
+        description: "Jika kandidat transaksi tersedia, pilih kandidat tersebut melalui alur review.",
+        variant: "destructive",
+      });
       return;
     }
 
-    setSaving(applyCurrent ? "current" : "rule");
+    setSaving(true);
     try {
-      const ruleResponse = await fetch("/api/bank-reconciliation/rules", {
+      const approveResponse = await fetch(`/api/bank-reconciliation/${mutation.id}/approve`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          company_id: companyId,
-          name: `COA ${mutation.direction === "IN" ? "Uang Masuk" : "Uang Keluar"} — ${condition.slice(0, 60)}`,
-          description: `Dibuat dari referensi mutasi bank #${mutation.id}: ${mutation.description}`,
-          priority: 120,
-          is_active: true,
-          direction: mutation.direction,
-          condition_field: "description",
-          condition_operator: "contains",
-          condition_value: condition,
-          target_type: mutation.direction === "IN" ? "income" : "expense",
-          target_coa_code: selectedAccount.code,
-           save_to_rule_ai: saveToRuleAi,
-          confidence_score: 100,
-          stop_processing: true,
+          manual_coa_code: selectedAccount.code,
+          note: `COA dipilih manual hanya untuk mutasi ini: ${selectedAccount.code}`,
         }),
       });
-      const ruleBody = await ruleResponse.json().catch(() => ({}));
-      if (!ruleResponse.ok) {
-        throw new Error(ruleBody.error ?? "Gagal menyimpan referensi COA");
+      const approveBody = await approveResponse.json().catch(() => ({}));
+      if (!approveResponse.ok) {
+        throw new Error(
+          approveBody.error ?? "COA dipilih, tetapi draft jurnal untuk mutasi ini belum berhasil dibuat.",
+        );
       }
-
-      if (applyCurrent) {
-        const approveResponse = await fetch(`/api/bank-reconciliation/${mutation.id}/approve`, {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            manual_coa_code: selectedAccount.code,
-            note: `COA dipetakan dari referensi manual: ${selectedAccount.code}`,
-          }),
-        });
-        const approveBody = await approveResponse.json().catch(() => ({}));
-        if (!approveResponse.ok) {
-          throw new Error(
-            approveBody.error ??
-            "Referensi tersimpan, tetapi draft jurnal untuk mutasi ini belum berhasil dibuat.",
-          );
-        }
-        toast({
-          title: "COA dipetakan dan draft jurnal dibuat",
-          description: `${selectedAccount.code} — ${selectedAccount.name}`,
-        });
-      } else {
-        toast({
-          title: saveToRuleAi ? "Referensi COA tersimpan" : "Referensi COA tersimpan tanpa Rule AI",
-          description: saveToRuleAi
-            ? `Mutasi berikutnya dengan referensi ini akan diarahkan ke ${selectedAccount.code}.`
-            : `Referensi operasional tetap diarahkan ke ${selectedAccount.code}; Rule AI tidak dibuat.`,
-        });
-      }
-      // A saved rule changes the server-side candidate recommendation. The
-      // mutation list and QRIS candidate audit use different React Query keys,
-      // so invalidating only bank-reconciliation leaves the candidate/approval
-      // view stale until its polling interval or a hard refresh.
+      toast({
+        title: "COA dipilih dan draft jurnal dibuat",
+        description: `${selectedAccount.code} — ${selectedAccount.name}. Pilihan ini tidak disimpan sebagai referensi atau Rule AI.`,
+      });
+      // The mutation list and QRIS candidate audit use different React Query
+      // keys, so refresh both views after the one-time approval.
       qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] });
-      qc.invalidateQueries({ queryKey: ["coa-proposals-by-source"] });
       await onSaved();
       onClose();
     } catch (error) {
@@ -2817,7 +2776,7 @@ function CoaReferenceDialog({
         variant: "destructive",
       });
     } finally {
-      setSaving(null);
+      setSaving(false);
     }
   };
 
@@ -2829,11 +2788,11 @@ function CoaReferenceDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <BookOpen className="h-4 w-4 text-indigo-600" />
-            Referensi COA
+            Pilih COA untuk Transaksi Ini
           </DialogTitle>
           <DialogDescription>
             Pilih akun tujuan untuk {mutation.direction === "IN" ? "uang masuk" : "uang keluar"} ini.
-            Aturan akan dipakai lagi untuk mutasi dengan keterangan yang sama.
+            Pilihan ini hanya dipakai untuk membuat draft jurnal transaksi ini.
           </DialogDescription>
         </DialogHeader>
 
@@ -2843,19 +2802,6 @@ function CoaReferenceDialog({
             <p className="mt-1 text-xs text-muted-foreground">
               {fmtDate(mutation.transaction_date)} · {idr(mutation.amount)} ·{" "}
               {mutation.direction === "IN" ? "Uang Masuk" : "Uang Keluar"}
-            </p>
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium">Referensi untuk transaksi berikutnya</label>
-            <Input
-              value={conditionValue}
-              onChange={event => setConditionValue(event.target.value)}
-              placeholder="Contoh: BUNGA, ADMIN BANK, TRANSFER DARI..."
-            />
-            <p className="text-[11px] text-muted-foreground">
-              Sistem mencocokkan teks ini pada keterangan mutasi, dengan arah{" "}
-              <strong>{mutation.direction}</strong>.
             </p>
           </div>
 
@@ -3093,36 +3039,18 @@ function CoaReferenceDialog({
             )}
           </div>
 
-          <div className="flex items-start gap-3 rounded-md border border-indigo-200 bg-indigo-50/60 px-3 py-2.5 dark:border-indigo-900 dark:bg-indigo-950/30">
-            <Checkbox
-              id="save-reference-to-rule-ai"
-              checked={saveToRuleAi}
-              onCheckedChange={(checked) => setSaveToRuleAi(checked === true)}
-              className="mt-0.5"
-            />
-            <div className="space-y-0.5">
-              <label
-                htmlFor="save-reference-to-rule-ai"
-                className="cursor-pointer text-xs font-medium text-indigo-900 dark:text-indigo-100"
-              >
-                Simpan juga ke Rule AI
-              </label>
-              <p className="text-[11px] text-indigo-700 dark:text-indigo-300">
-                Jika dicentang, referensi ini menjadi rule AI untuk transaksi bank berikutnya.
-                Jika tidak, hanya referensi rekonsiliasi operasional yang disimpan.
-              </p>
-            </div>
+          <div className="rounded-md border border-emerald-200 bg-emerald-50/70 px-3 py-2.5 text-xs text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200">
+            COA pilihan tidak menjadi referensi untuk transaksi berikutnya dan tidak disimpan ke Rule AI.
           </div>
 
           {!canApplyCurrent && canApprove(mutation) && visibleCandidates(mutation).length > 0 && (
-            <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-              Mutasi ini memiliki kandidat transaksi. Simpan aturan COA untuk transaksi berikutnya,
-              lalu gunakan alur review untuk memilih kandidat yang benar.
+              <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                Mutasi ini memiliki kandidat transaksi. Pilih kandidat yang benar melalui alur review sebelum membuat draft jurnal.
             </p>
           )}
           {isQrisMutation(mutation) && canApprove(mutation) && (
             <p className="rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-800">
-              Untuk QRIS, referensi COA disimpan sebagai aturan berikutnya. Approval saat ini tetap
+              Untuk QRIS, pemilihan COA manual tidak tersedia di alur ini. Approval tetap
               mengikuti alur settlement QRIS agar jurnal settlement tidak terduplikasi.
             </p>
           )}
@@ -3132,13 +3060,13 @@ function CoaReferenceDialog({
           <Button variant="outline" onClick={onClose}>Batal</Button>
           <Button
             className="gap-1.5 bg-indigo-600 text-white hover:bg-indigo-700"
-            onClick={() => save(canApplyCurrent)}
-            disabled={saving !== null || !selectedAccount}
+            onClick={save}
+            disabled={saving || !selectedAccount || !canApplyCurrent}
           >
-            {(saving === "rule" || saving === "current") && (
+            {saving && (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             )}
-            {canApplyCurrent ? "Simpan Referensi & Buat Draft" : "Simpan Referensi COA"}
+            {saving ? "Membuat Draft..." : "Pilih COA & Buat Draft"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -3805,7 +3733,7 @@ function QrisMutationCard({
                 onClick={() => onMapCoa(m)}
               >
                 <BookOpen className="h-3.5 w-3.5" />
-                Referensi COA
+                Pilih COA (sekali)
               </Button>
               {!isApproved && !isDepleted && !isMatched && (
                 <Button
@@ -4421,7 +4349,7 @@ function MutationCard({
               onClick={() => onMapCoa(m)}
             >
               <BookOpen className="h-3.5 w-3.5" />
-              Referensi COA
+              Pilih COA (sekali)
             </Button>
             {onMultiAllocate && canMultiAllocate(m) && (
               <Button
@@ -4444,7 +4372,7 @@ function MutationCard({
                 variant="outline"
                 className="h-7 gap-1 border-amber-300 text-xs text-amber-900 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-200"
                 onClick={() => onRunMatching("rematch_non_final")}
-                title="Evaluasi ulang transaksi ini dengan Rule AI dan Referensi COA terbaru."
+                title="Evaluasi ulang transaksi ini dengan Rule AI dan mapping operasional terbaru."
               >
                 <RotateCcw className="h-3.5 w-3.5" />
                 Jalankan Ulang Matching
@@ -4472,7 +4400,7 @@ function MutationCard({
                 className="h-7 gap-1 border-indigo-300 text-xs text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:text-indigo-300"
                 disabled={retryReferenceCoaPending}
                 onClick={() => onRetryReferenceCoa(m)}
-                title="Menjalankan ulang Referensi COA. Jurnal hanya dibuat bila semua safeguard lulus."
+                title="Menjalankan ulang mapping COA lama. Jurnal hanya dibuat bila semua safeguard lulus."
               >
                 {retryReferenceCoaPending
                   ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -5030,7 +4958,7 @@ function MutationDetailPanel({
                           </p>
                           {m.review_code && <p className="font-mono text-[11px] opacity-80">Kode: {m.review_code}</p>}
                           <p className="text-xs">
-                            Periksa COA dan gunakan “Referensi COA” atau “Pilih COA & Buat Draft” setelah transaksi dipastikan benar.
+                            Periksa COA dan gunakan “Pilih COA (sekali)” atau “Pilih COA & Buat Draft” setelah transaksi dipastikan benar.
                           </p>
                         </AlertDescription>
                       </Alert>
@@ -6597,50 +6525,12 @@ export default function BankReconciliationPage() {
     summaryMap[s.status] = { count: Number(s.count), amount: Number(s.total_amount) };
   }
 
-  // ── Task #7: COA proposals by source — checks for an existing proposal
-  //    tied to the current bank mutation; shown in the manual_review_required banner.
-  const COA_GAP_CODES = ["SPECIFIC_COA_REQUIRED", "JOURNAL_MAPPING_REQUIRED", "COA_NOT_FOUND", "COA_MAPPING_AMBIGUOUS"] as const;
-  const sourceKey = actionDialog?.mutation?.mutation_key ?? null;
-  // Enable as soon as the approve dialog opens — do NOT gate on manualReviewWarning.
-  // This way the proposal data is always fresh when the banner appears, and stale
-  // React Query cache (e.g. from a previous session) cannot show the wrong code.
-  const shouldQueryBySource = !!(sourceKey && actionDialog?.mode === "approve");
-  const {
-    data: existingSourceProposals,
-    isLoading: isSourceProposalLoading,
-    isError: isSourceProposalError,
-  } = useQuery({
-    queryKey: ["coa-proposals-by-source", "BANK_MUTATION", sourceKey],
-    queryFn: async () => {
-      const r = await fetch(
-        `/api/accounting/coa-proposals/by-source?sourceType=BANK_MUTATION&sourceRecordId=${encodeURIComponent(sourceKey!)}`,
-        { credentials: "include" },
-      );
-      if (!r.ok) return [] as { id: number; proposalNumber: string; status: string; proposedCode?: string; proposedName?: string }[];
-      return r.json() as Promise<{ id: number; proposalNumber: string; status: string; proposedCode?: string; proposedName?: string }[]>;
-    },
-    enabled: shouldQueryBySource,
-    staleTime: 0,          // always fetch fresh — proposal code may change after implementation
-    refetchOnMount: true,  // re-fetch whenever the approve dialog mounts
-  });
-  const latestSourceProposal = existingSourceProposals?.[0] ?? null;
-
-  // When a JOURNAL_MAPPING_REQUIRED error is active but an IMPLEMENTED proposal
-  // already has the COA ready, surface that code so the footer button can re-enable
-  // and pass it directly — no need to hunt for the small "↻" button.
-  const resolvedManualCoaCode = (
-    manualReviewWarning &&
-    latestSourceProposal?.status === "IMPLEMENTED" &&
-    latestSourceProposal?.proposedCode
-  ) ? latestSourceProposal.proposedCode : null;
-
   // ── Invalidate helper ────────────────────────────────────────────────────
   const invalidate = async () => {
     await Promise.all([
       qc.invalidateQueries({ queryKey: ["bank-reconciliation"] }),
       qc.invalidateQueries({ queryKey: ["bank-reconciliation-summary"] }),
       qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] }),
-      qc.invalidateQueries({ queryKey: ["coa-proposals-by-source"] }),
     ]);
   };
 
@@ -7052,9 +6942,6 @@ export default function BankReconciliationPage() {
       if (d?.__manualReview) {
         // Show warning in-dialog; do NOT close or invalidate — mapping not done.
         setManualReviewWarning({ error: d.error, code: d.code, mutId: d.mutId });
-        // Invalidate all by-source proposal caches so the next render uses fresh data from the DB.
-        // This prevents stale proposed_code (e.g. from a previous session) from being re-used.
-        qc.invalidateQueries({ queryKey: ["coa-proposals-by-source"] });
         return;
       }
       setManualReviewWarning(null);
@@ -7230,9 +7117,6 @@ export default function BankReconciliationPage() {
       candidateType: chosen?.candidate_type,
       candidateId: chosen?.candidate_id,
       candidateSource: chosen?.candidate_source ?? null,
-      // When a JOURNAL_MAPPING_REQUIRED error is active but an IMPLEMENTED COA proposal
-      // is ready, pass the code so the backend bypasses resolveContraAccount.
-      manualCoaCode: resolvedManualCoaCode ?? undefined,
     });
   };
 
@@ -8384,99 +8268,23 @@ export default function BankReconciliationPage() {
                   {!manualReviewWarning && (
                     <div className="border rounded-lg p-3 space-y-2">
                       <p className="text-sm font-medium">Pilih akun COA untuk jurnal ini:</p>
-                      {isSourceProposalLoading ? (
-                        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                          <Loader2 className="w-3 h-3 animate-spin" />
-                          Memeriksa proposal…
-                        </span>
-                      ) : isSourceProposalError ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const url = [
-                              "/accounting/coa-proposals?new=1",
-                              `sourceType=BANK_MUTATION`,
-                              `sourceRecordId=${encodeURIComponent(actionDialog?.mutation?.mutation_key ?? "")}`,
-                              `intent=COA_NOT_FOUND`,
-                              `description=${encodeURIComponent(actionDialog?.mutation?.description ?? "")}`,
-                              `direction=${encodeURIComponent(actionDialog?.mutation?.direction ?? "")}`,
-                            ].join("&");
-                            setActionDialog(null);
-                            setLocation(url);
-                          }}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-indigo-700 hover:text-indigo-900 bg-indigo-50 border border-indigo-200 rounded px-2 py-1"
-                        >
-                          ✦ Buat Proposal COA
-                        </button>
-                      ) : latestSourceProposal?.status === "IMPLEMENTED" ? (
-                        <button
-                          type="button"
-                          disabled={approveMut.isPending || !latestSourceProposal.proposedCode}
-                          onClick={() => {
-                            const m = actionDialog?.mutation;
-                            if (!m || !latestSourceProposal.proposedCode) return;
-                            approveMut.mutate({
-                              mutId: m.id,
-                              manualCoaCode: latestSourceProposal.proposedCode,
-                            });
-                          }}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-green-700 hover:text-green-900 bg-green-50 border border-green-200 rounded px-2 py-1 disabled:opacity-50"
-                        >
-                          ↻ Approve dengan akun {latestSourceProposal.proposedCode || "—"}
-                        </button>
-                      ) : latestSourceProposal?.status === "APPROVED" ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setActionDialog(null);
-                            setLocation(`/accounting/coa-proposals/${latestSourceProposal.id}`);
-                          }}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-orange-700 hover:text-orange-900 bg-orange-50 border border-orange-200 rounded px-2 py-1"
-                        >
-                          ⚡ Terapkan Proposal #{latestSourceProposal.proposalNumber}
-                        </button>
-                      ) : latestSourceProposal ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setActionDialog(null);
-                            setLocation(`/accounting/coa-proposals/${latestSourceProposal.id}`);
-                          }}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-indigo-700 hover:text-indigo-900 bg-indigo-50 border border-indigo-200 rounded px-2 py-1"
-                        >
-                          ✦ Lihat Proposal COA #{latestSourceProposal.proposalNumber}
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const url = [
-                              "/accounting/coa-proposals?new=1",
-                              `sourceType=BANK_MUTATION`,
-                              `sourceRecordId=${encodeURIComponent(actionDialog?.mutation?.mutation_key ?? "")}`,
-                              `intent=COA_NOT_FOUND`,
-                              `description=${encodeURIComponent(actionDialog?.mutation?.description ?? "")}`,
-                              `direction=${encodeURIComponent(actionDialog?.mutation?.direction ?? "")}`,
-                            ].join("&");
-                            setActionDialog(null);
-                            setLocation(url);
-                          }}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-indigo-700 hover:text-indigo-900 bg-indigo-50 border border-indigo-200 rounded px-2 py-1"
-                        >
-                          ✦ Buat Proposal COA
-                        </button>
-                      )}
-                      {!isSourceProposalLoading && (
-                        <p className="text-xs text-muted-foreground">
-                          {latestSourceProposal
-                            ? latestSourceProposal.status === "IMPLEMENTED"
-                              ? `Akun ${latestSourceProposal.proposedCode || "dari proposal"} sudah aktif — klik tombol di atas untuk approve.`
-                              : latestSourceProposal.status === "APPROVED"
-                                ? `Proposal #${latestSourceProposal.proposalNumber} sudah disetujui tapi akun belum dibuat. Klik ⚡ untuk terapkan, lalu kembali dan approve.`
-                                : `Proposal ${latestSourceProposal.status.toLowerCase()} — butuh approval maker-checker.`
-                            : "Belum ada proposal COA. Klik tombol di atas untuk mengusulkan akun baru."}
-                        </p>
-                      )}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="gap-1.5 text-xs"
+                        onClick={() => {
+                          const m = actionDialog?.mutation;
+                          if (!m) return;
+                          setActionDialog(null);
+                          setCoaReferenceTarget(m);
+                        }}
+                      >
+                        <BookOpen className="h-3.5 w-3.5" />
+                        Tampilkan &amp; Pilih COA
+                      </Button>
+                      <p className="text-xs text-muted-foreground">
+                        COA pilihan hanya digunakan untuk draft jurnal mutasi ini; tidak disimpan sebagai referensi atau Rule AI.
+                      </p>
                     </div>
                   )}
                 </div>
@@ -8506,11 +8314,8 @@ export default function BankReconciliationPage() {
                 />
               )}
 
-              {/* Task #6: manual_review_required banner — shown when backend
-                  returns 422 because no specific COA mapping is available.
-                  Approve and Post are disabled until the mapping is configured.
-                  Task #7 Phase 20: adds "Buat Proposal COA" action for gap error codes.
-                  User must click explicitly — never auto-created. */}
+              {/* Manual review banner — the reviewer can choose a one-time COA
+                  for this mutation without creating a proposal or Rule AI rule. */}
               {manualReviewWarning && (
                 <div className="bg-amber-50 border border-amber-400 rounded-lg p-3 space-y-2">
                   <div className="flex items-center gap-2 font-semibold text-amber-800">
@@ -8520,137 +8325,25 @@ export default function BankReconciliationPage() {
                   <p className="text-sm text-amber-700">{manualReviewWarning.error}</p>
                   <p className="text-xs text-amber-600 font-mono">Kode: {manualReviewWarning.code}</p>
                   <p className="text-xs text-amber-600">
-                    Konfigurasikan mapping COA spesifik di Accounting Settings, lalu coba approve kembali.
+                    Pilih COA di bawah untuk transaksi ini. Pilihan tersebut tidak menjadi mapping permanen.
                   </p>
-                  {/* Task #7: COA proposal action — only for gap-triggering codes.
-                      Shows "Lihat Proposal COA" if an existing proposal is already linked
-                      to this source record; otherwise shows "Buat Proposal COA" with
-                      pre-filled query params so the create form is pre-populated.
-                      User must click explicitly — no auto-creation. */}
-                  {(COA_GAP_CODES as readonly string[]).includes(manualReviewWarning.code ?? "") && (
-                    <div className="pt-1.5 border-t border-amber-300 flex items-center gap-2 flex-wrap">
-                      {/* Loading state while checking for existing proposal */}
-                      {isSourceProposalLoading ? (
-                        <span className="inline-flex items-center gap-1 text-xs text-amber-600">
-                          <Loader2 className="w-3 h-3 animate-spin" />
-                          Memeriksa proposal…
-                        </span>
-                      ) : isSourceProposalError ? (
-                        /* Error state — fail open: allow user to create */
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const url = [
-                              "/accounting/coa-proposals?new=1",
-                              `sourceType=BANK_MUTATION`,
-                              `sourceRecordId=${encodeURIComponent(actionDialog?.mutation?.mutation_key ?? "")}`,
-                              `intent=${encodeURIComponent(manualReviewWarning.code ?? "")}`,
-                              `description=${encodeURIComponent(actionDialog?.mutation?.description ?? "")}`,
-                              `mappingError=${encodeURIComponent(manualReviewWarning.error ?? "")}`,
-                              `direction=${encodeURIComponent(actionDialog?.mutation?.direction ?? "")}`,
-                            ].join("&");
-                            setActionDialog(null);
-                            setLocation(url);
-                          }}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-indigo-700 hover:text-indigo-900 bg-indigo-50 border border-indigo-200 rounded px-2 py-1"
-                        >
-                          ✦ Buat Proposal COA
-                        </button>
-                      ) : latestSourceProposal ? (
-                        /* Proposal exists — behaviour depends on its status.
-                           IMPLEMENTED = COA sudah ada di DB, bisa langsung approve.
-                           APPROVED    = COA belum dibuat, harus implement dulu.
-                           lainnya     = masih butuh maker-checker. */
-                        latestSourceProposal.status === "IMPLEMENTED" ? (
-                          /* COA sudah dibuat — tombol ini melewati resolveContraAccount
-                             dan menggunakan akun dari proposal secara langsung. */
-                          <button
-                            type="button"
-                            disabled={approveMut.isPending || !latestSourceProposal.proposedCode}
-                            onClick={() => {
-                              const m = actionDialog?.mutation;
-                              if (!m) return;
-                              if (!latestSourceProposal.proposedCode) {
-                                toast({
-                                  title: "Kode COA tidak ditemukan",
-                                  description: `Proposal #${latestSourceProposal.proposalNumber} tidak memiliki kode akun. Buka halaman proposal dan pastikan kode COA terisi.`,
-                                  variant: "destructive",
-                                });
-                                return;
-                              }
-                              const chosen = (m.candidates ?? []).find(c => c.id === selectedCandidateId);
-                              approveMut.mutate({
-                                mutId: m.id,
-                                matchId: chosen?.id,
-                                candidateType: chosen?.candidate_type,
-                                candidateId: chosen?.candidate_id,
-                                candidateSource: chosen?.candidate_source ?? null,
-                                manualCoaCode: latestSourceProposal.proposedCode,
-                              });
-                            }}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-green-700 hover:text-green-900 bg-green-50 border border-green-200 rounded px-2 py-1 disabled:opacity-50"
-                          >
-                            ↻ Approve dengan akun {latestSourceProposal.proposedCode || "—"}
-                          </button>
-                        ) : latestSourceProposal.status === "APPROVED" ? (
-                          /* Proposal disetujui tapi COA belum dibuat — arahkan ke halaman
-                             proposal untuk klik Terapkan, baru bisa approve mutasi. */
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setActionDialog(null);
-                              setLocation(`/accounting/coa-proposals/${latestSourceProposal.id}`);
-                            }}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-orange-700 hover:text-orange-900 bg-orange-50 border border-orange-200 rounded px-2 py-1"
-                          >
-                            ⚡ Terapkan Proposal #{latestSourceProposal.proposalNumber}
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setActionDialog(null);
-                              setLocation(`/accounting/coa-proposals/${latestSourceProposal.id}`);
-                            }}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-indigo-700 hover:text-indigo-900 bg-indigo-50 border border-indigo-200 rounded px-2 py-1"
-                          >
-                            ✦ Lihat Proposal COA #{latestSourceProposal.proposalNumber}
-                          </button>
-                        )
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const url = [
-                              "/accounting/coa-proposals?new=1",
-                              `sourceType=BANK_MUTATION`,
-                              `sourceRecordId=${encodeURIComponent(actionDialog?.mutation?.mutation_key ?? "")}`,
-                              `intent=${encodeURIComponent(manualReviewWarning.code ?? "")}`,
-                              `description=${encodeURIComponent(actionDialog?.mutation?.description ?? "")}`,
-                              `mappingError=${encodeURIComponent(manualReviewWarning.error ?? "")}`,
-                              `direction=${encodeURIComponent(actionDialog?.mutation?.direction ?? "")}`,
-                            ].join("&");
-                            setActionDialog(null);
-                            setLocation(url);
-                          }}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-indigo-700 hover:text-indigo-900 bg-indigo-50 border border-indigo-200 rounded px-2 py-1"
-                        >
-                          ✦ Buat Proposal COA
-                        </button>
-                      )}
-                      {!isSourceProposalLoading && (
-                        <span className="text-xs text-amber-600">
-                          {latestSourceProposal
-                            ? latestSourceProposal.status === "IMPLEMENTED"
-                              ? `Akun ${latestSourceProposal.proposedCode || "dari proposal"} sudah aktif — tombol Approve di bawah sudah siap digunakan.`
-                              : latestSourceProposal.status === "APPROVED"
-                                ? `Proposal #${latestSourceProposal.proposalNumber} sudah disetujui tapi akun belum dibuat. Klik ⚡ untuk terapkan proposal (buat akun), lalu kembali ke sini dan approve mutasi.`
-                                : `Proposal ${latestSourceProposal.status.toLowerCase()} — butuh approval maker-checker sebelum bisa diterapkan.`
-                            : "AI akan mengusulkan akun baru — membutuhkan approval maker-checker."}
-                        </span>
-                      )}
-                    </div>
-                  )}
+                  <div className="pt-1.5 border-t border-amber-300">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="gap-1.5 text-xs border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+                      onClick={() => {
+                        const m = actionDialog?.mutation;
+                        if (!m) return;
+                        setActionDialog(null);
+                        setManualReviewWarning(null);
+                        setCoaReferenceTarget(m);
+                      }}
+                    >
+                      <BookOpen className="h-3.5 w-3.5" />
+                      Tampilkan &amp; Pilih COA
+                    </Button>
+                  </div>
                 </div>
               )}
             </div>
@@ -8663,24 +8356,19 @@ export default function BankReconciliationPage() {
               disabled={
                 approveMut.isPending ||
                 (approveDialogCands.length > 0 && selectedCandidateId === null) ||
-                // Keep disabled only when a review error exists AND no ready COA to resolve it.
-                // When resolvedManualCoaCode is set, the button re-enables and passes that code.
-                (!!manualReviewWarning && !resolvedManualCoaCode)
+                // Resolve manual-review errors through the one-time COA picker.
+                !!manualReviewWarning
               }
               title={
-                manualReviewWarning && !resolvedManualCoaCode
+                manualReviewWarning
                   ? "Selesaikan review manual sebelum approve"
-                  : resolvedManualCoaCode
-                    ? `Approve mutasi menggunakan akun ${resolvedManualCoaCode}`
-                    : undefined
+                  : undefined
               }
             >
               {approveMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
               {approveMut.isPending
                 ? "Menyimpan..."
-                : resolvedManualCoaCode
-                  ? `Approve dengan akun ${resolvedManualCoaCode}`
-                  : "Approve & Buat Draft Jurnal"}
+                : "Approve & Buat Draft Jurnal"}
             </Button>
           </DialogFooter>
         </DialogContent>
