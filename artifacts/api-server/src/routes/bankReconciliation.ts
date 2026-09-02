@@ -2040,11 +2040,23 @@ router.patch("/qris-candidates/payments/:paymentId/settlement-status", async (re
         SELECT
           sp.id,
           sp.company_id,
-          sp.payment_number,
+          COALESCE(
+            to_jsonb(sp)->>'payment_number',
+            to_jsonb(sp)->>'reference_number',
+            to_jsonb(sp)->>'provider_order_id',
+            CONCAT('SPORT-', sp.id::text)
+          ) AS payment_number,
           sp.payment_method::text AS payment_method,
           sp.settlement_status::text AS settlement_status,
-          sp.settlement_reference,
-          sp.settlement_date,
+          COALESCE(
+            to_jsonb(sp)->>'settlement_reference',
+            to_jsonb(sp)->>'provider_reference',
+            to_jsonb(sp)->>'reference_number'
+          ) AS settlement_reference,
+          COALESCE(
+            to_jsonb(sp)->>'settlement_date',
+            to_jsonb(sp)->>'expected_settlement_date'
+          ) AS settlement_date,
           COALESCE(
             sp.company_id,
             CASE WHEN mapping.company_count = 1 THEN mapping.company_id END
@@ -2130,18 +2142,21 @@ router.patch("/qris-candidates/payments/:paymentId/settlement-status", async (re
         WHERE id = ${paymentId}
         RETURNING
           id,
-          payment_number,
-          settlement_status::text AS settlement_status,
-          settlement_reference,
-          settlement_date
+          settlement_status::text AS settlement_status
       `);
-      const payment = updatedResult.rows[0] as Record<string, unknown> | undefined;
-      if (!payment) {
+      const updatedPayment = updatedResult.rows[0] as Record<string, unknown> | undefined;
+      if (!updatedPayment) {
         throw Object.assign(new Error("Payment gagal diperbarui"), {
           statusCode: 409,
           code: "PAYMENT_UPDATE_FAILED",
         });
       }
+      const payment: Record<string, unknown> = {
+        ...updatedPayment,
+        payment_number: source.payment_number ?? null,
+        settlement_reference: source.settlement_reference ?? null,
+        settlement_date: source.settlement_date ?? null,
+      };
 
       return {
         changed: true,

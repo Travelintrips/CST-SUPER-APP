@@ -44,6 +44,7 @@
 - [Sport payment trigger provenance](sport-payment-trigger-provenance.md) — mirror trigger is verified in Supabase runtime but not defined in the current repository migration chain.
 - [Sport payment reconciliation](sport-payment-reconciliation-canonical.md) — sport_payments is the canonical candidate; accounting_payments only links the existing journal.
 - [Sport payment legacy cleanup](sport-payment-legacy-cleanup.md) — production SCPAY cleanup needs runtime Supabase schema introspection and a guarded delete that preserves posted rows.
+- [Production Sport settlement schema](production-sport-settlement-schema.md) — production source may lack payment_number/settlement_reference/settlement_date; use verified legacy aliases.
 - [Reconciliation source uniqueness](reconciliation-source-uniqueness.md) — one payment source may reconcile to only one ledger line, enforced server-side for concurrent auto-match safety.
 - [Candidate display identity](candidate-display-identity.md) — technical candidate identities can mirror one business payment; collapse known references for reviewer display.
 - [Unified vendor service label](unified-vendor-service-label.md) — preserve canonical marketplace line/catalog names before normalized service keys in Admin vendor-request display.

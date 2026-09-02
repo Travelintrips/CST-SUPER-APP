@@ -78,6 +78,9 @@ describe("QRIS settlement status reset route", () => {
   it("updates the canonical source and requires a reviewer reason", () => {
     expect(route).toContain("if (!await requireAdmin(req, res)) return;");
     expect(route).toContain("FROM sport_center.sport_payments sp");
+    expect(route).toContain("to_jsonb(sp)->>'payment_number'");
+    expect(route).toContain("to_jsonb(sp)->>'settlement_reference'");
+    expect(route).toContain("to_jsonb(sp)->>'expected_settlement_date'");
     expect(route).toContain("UPDATE sport_center.sport_payments");
     expect(route).toContain("reason.length < 5 || reason.length > 500");
     expect(route).not.toContain("UPDATE public.sport_payments");
