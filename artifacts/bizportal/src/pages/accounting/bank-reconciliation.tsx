@@ -3157,6 +3157,9 @@ function QrisMutationCard({
   const auditStatus = String(audit.status ?? "").toLowerCase();
   const isReadOnlyEvidence = ["stale", "superseded", "ineligible"].includes(auditStatus);
   const settledPaymentIds = new Set((audit.settled_payment_ids ?? []).map(Number));
+  const activeSettlementPaymentIds = new Set(
+    (audit.active_settlement_payment_ids ?? []).map(Number),
+  );
   const unconfirmedPaymentIds = new Set(getUnconfirmedQrisPaymentIds(audit));
   const currentPaymentIds = Array.isArray(audit.current_payment_ids)
     ? new Set(audit.current_payment_ids.map(Number))
@@ -3468,6 +3471,7 @@ function QrisMutationCard({
                     </div>
                     {displayItems.map((item, index) => {
                       const paymentId = item.paymentId ?? item.payment_id;
+                       const numericPaymentId = Number(paymentId);
                       const booking = item.bookingNumber ?? item.booking_number ?? (item.booking_id != null ? `SC-${String(item.booking_id).padStart(4, "0")}` : "—");
                       const payment = item.paymentNumber ?? item.payment_number ?? (paymentId != null ? `#${paymentId}` : "—");
                       const customerName = qrisPaymentCustomerName(item);
@@ -3478,6 +3482,20 @@ function QrisMutationCard({
                         && onEditPaymentDate != null;
                       const expectedSettlementDate =
                         item.expectedSettlementDate ?? item.expected_settlement_date;
+                       const paymentSettlementStatus = String(
+                         item.settlementStatus
+                         ?? item.settlement_status
+                         ?? "unsettled",
+                       ).toLowerCase();
+                       const hasActiveSettlementMembership =
+                         Number.isInteger(numericPaymentId)
+                         && activeSettlementPaymentIds.has(numericPaymentId);
+                       const canRequestUnsettle =
+                         Number.isInteger(numericPaymentId)
+                         && numericPaymentId > 0
+                         && paymentSettlementStatus !== "unsettled"
+                         && !hasActiveSettlementMembership
+                         && onRequestUnsettlePayment != null;
                        const gross = liveGrossForItem(item);
                       return (
                           <div key={`${paymentId ?? index}-${booking}`} className="grid grid-cols-[1.1fr_1.35fr_1fr_1.2fr_0.9fr_1fr_44px] items-center gap-2 border-b px-2.5 py-2 last:border-b-0">
@@ -3523,6 +3541,43 @@ function QrisMutationCard({
                              <span className="block truncate font-medium text-indigo-600 dark:text-indigo-400">
                                Settlement H-1: {expectedSettlementDate ? fmtDate(String(expectedSettlementDate)) : "—"}
                              </span>
+                              <span className="mt-0.5 flex min-w-0 items-center gap-1">
+                                <Badge
+                                  variant="outline"
+                                  className={`h-4 px-1.5 text-[9px] ${paymentSettlementStatusClass(paymentSettlementStatus)}`}
+                                >
+                                  {paymentSettlementStatusLabel(paymentSettlementStatus)}
+                                </Badge>
+                                {paymentSettlementStatus !== "unsettled" && (
+                                  hasActiveSettlementMembership ? (
+                                    <span className="truncate text-[9px] text-amber-700 dark:text-amber-300">
+                                      Reset diblokir: batch aktif
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      className="inline-flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[9px] font-medium text-amber-700 hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:text-amber-300 dark:hover:bg-amber-950"
+                                      disabled={!canRequestUnsettle || unsettledPaymentId === numericPaymentId}
+                                      title="Reset status payment menjadi unsettled"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        if (canRequestUnsettle) {
+                                          onRequestUnsettlePayment({
+                                            paymentId: numericPaymentId,
+                                            paymentNumber: payment,
+                                            settlementStatus: paymentSettlementStatus,
+                                          });
+                                        }
+                                      }}
+                                    >
+                                      {unsettledPaymentId === numericPaymentId
+                                        ? <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                                        : <RefreshCw className="h-2.5 w-2.5" />}
+                                      Unsettle
+                                    </button>
+                                  )
+                                )}
+                              </span>
                            </span>
                            <span className="truncate text-xs text-muted-foreground">QRIS</span>
                           <span className="text-right text-xs font-medium tabular-nums">{idr(gross)}</span>
