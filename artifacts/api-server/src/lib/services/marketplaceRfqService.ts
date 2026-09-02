@@ -128,6 +128,24 @@ export interface CreateMktRfqOptions {
   idempotencyKey?: string | null;
   // Internal retry path: reuse the original reliability-log row.
   dualWriteLogId?: number | null;
+  // Exact snapshot used to repair the legacy compatibility write without
+  // replaying the canonical RFQ create path.
+  legacyCompatibility?: LegacyCompatibilitySnapshot;
+}
+
+export interface LegacyCompatibilitySnapshot {
+  orderStatus: string;
+  subtotal: number;
+  grandTotal: number;
+  productCategory: string | null;
+  templateId: string | null;
+  templateVersion: string | null;
+  customFieldValues: Record<string, string | number | boolean>;
+  catalogSnapshot: Record<string, unknown>;
+  itemName: string;
+  unitStr: string;
+  sellPrice: number;
+  qtyNum: number;
 }
 
 export interface CreateMktRfqResult {
@@ -290,6 +308,13 @@ export async function createMktRfqEntry(opts: CreateMktRfqOptions): Promise<Crea
       ? Number(opts.dualWriteLogId)
       : 0;
 
+  if (!logicalRequestKey && !suppliedDualWriteLogId) {
+    throw Object.assign(
+      new Error("RFQ membutuhkan Idempotency-Key yang valid"),
+      { code: "RFQ_IDEMPOTENCY_KEY_REQUIRED", statusCode: 400 },
+    );
+  }
+
   // ── Phase 2A.2: create pending log BEFORE transaction ─────────────────────
   // Menggunakan CreateDualWriteLogOpts — kolom terstruktur diisi di sini.
   // Non-fatal: jika createDualWriteLog gagal, logId = 0 (skip reliability tracking)
@@ -322,13 +347,27 @@ export async function createMktRfqEntry(opts: CreateMktRfqOptions): Promise<Crea
       // This serializes requests and retry workers across separate processes.
       if (logId) {
         const lockedLog = await tx.execute(sql`
-          SELECT id, status, mkt_rfq_id, mkt_rfq_number
+          SELECT id, status, mkt_rfq_id, mkt_rfq_number, idempotency_key
           FROM mkt_dual_write_log
           WHERE id = ${logId}
           FOR UPDATE
         `);
         const logRow = lockedLog.rows[0] as Record<string, unknown> | undefined;
         if (!logRow) throw new Error(`Dual-write log ${logId} tidak ditemukan`);
+
+        const storedLogicalKey = String(logRow["idempotency_key"] ?? "").trim() || null;
+        if (!storedLogicalKey && !logicalRequestKey) {
+          throw Object.assign(
+            new Error(`Dual-write log ${logId} tidak memiliki logical identity yang dapat dipakai`),
+            { code: "DUAL_WRITE_IDENTITY_MISSING" },
+          );
+        }
+        if (storedLogicalKey && logicalRequestKey && storedLogicalKey !== logicalRequestKey) {
+          throw Object.assign(
+            new Error(`Idempotency-Key tidak cocok dengan dual-write log ${logId}`),
+            { code: "DUAL_WRITE_IDENTITY_MISMATCH" },
+          );
+        }
 
         // Exhausted is terminal until an explicit, separately governed
         // recovery process handles it. Never revive it by replaying payload,

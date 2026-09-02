@@ -127,6 +127,7 @@ describe("submitMarketplaceQuote authenticated ownership boundary", () => {
           portalCustomerId: individualContext.customer.id,
           ip: "127.0.0.1",
           body: {
+            idempotency_key: "authenticated-canonical-failure",
             buyer_name: "Canonical Buyer",
             email: "forged@example.test",
             guest_contact: individualContext.customer.phone!,
@@ -155,6 +156,7 @@ describe("submitMarketplaceQuote authenticated ownership boundary", () => {
       portalCustomerId: individualContext.customer.id,
       ip: "127.0.0.1",
       body: {
+        idempotency_key: "duplicate-quote-retry",
         buyer_name: "Canonical Buyer",
         email: "forged@example.test",
         guest_contact: individualContext.customer.phone!,
@@ -185,6 +187,7 @@ describe("submitMarketplaceQuote authenticated ownership boundary", () => {
       portalCustomerId: individualContext.customer.id,
       ip: "127.0.0.1",
       body: {
+        idempotency_key: "authenticated-ownership-boundary",
         buyer_name: "Forged Display Name",
         email: "forged@example.test",
         customer_id: 999999999,
@@ -325,5 +328,59 @@ describe("submitMarketplaceQuote authenticated ownership boundary", () => {
       "retry-correlation-id",
     );
     expect(secondTx.insertedValues).toHaveLength(2);
+  });
+
+  it("treats identical payloads with different keys as two intentional submissions", async () => {
+    const legacyError = Object.assign(new Error("legacy unavailable"), {
+      code: "23505",
+      constraint: "portal_product_orders_order_number_unique",
+    });
+    mockCreateMktRfqEntry
+      .mockResolvedValueOnce({ rfqId: 401, rfqNumber: "MKT-RFQ-202609-0401" })
+      .mockResolvedValueOnce({ rfqId: 402, rfqNumber: "MKT-RFQ-202609-0402" });
+    mockDb.transaction.mockRejectedValue(legacyError);
+
+    const { submitMarketplaceQuote } = await import("../portalMarketplaceService.js");
+    const baseRequest = {
+      catalogItemId: catalogItem.id,
+      portalCustomerId: individualContext.customer.id,
+      ip: "127.0.0.1",
+      body: {
+        buyer_name: "Canonical Buyer",
+        email: "forged@example.test",
+        guest_contact: individualContext.customer.phone!,
+        destination: "Jakarta",
+      },
+    };
+
+    const first = await submitMarketplaceQuote({ ...baseRequest, idempotencyKey: "intentional-submit-a" });
+    const second = await submitMarketplaceQuote({ ...baseRequest, idempotencyKey: "intentional-submit-b" });
+
+    expect(first.rfqId).toBe(401);
+    expect(second.rfqId).toBe(402);
+    expect(mockCreateMktRfqEntry).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ idempotencyKey: "intentional-submit-a" }),
+    );
+    expect(mockCreateMktRfqEntry).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ idempotencyKey: "intentional-submit-b" }),
+    );
+  });
+
+  it("fails closed for a blank idempotency identity", async () => {
+    const { submitMarketplaceQuote } = await import("../portalMarketplaceService.js");
+    await expect(submitMarketplaceQuote({
+      catalogItemId: catalogItem.id,
+      portalCustomerId: individualContext.customer.id,
+      ip: "127.0.0.1",
+      idempotencyKey: "   ",
+      body: {
+        buyer_name: "Canonical Buyer",
+        guest_contact: individualContext.customer.phone!,
+        destination: "Jakarta",
+      },
+    })).rejects.toMatchObject({ statusCode: 400 });
+    expect(mockCreateMktRfqEntry).not.toHaveBeenCalled();
   });
 });

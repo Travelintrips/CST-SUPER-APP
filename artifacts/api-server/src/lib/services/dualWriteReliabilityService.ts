@@ -656,7 +656,89 @@ export async function retryFailedDualWrites(): Promise<{
   const result = { retried: 0, recovered: 0, exhausted: 0, skipped: 0 };
 
   try {
-    const { rows } = await db.execute(sql`
+    // Compatibility repair is a separate state machine. It must never enter
+    // createMktRfqEntry: the canonical RFQ already exists at this point.
+    const legacyClaim = await Promise.resolve(db.execute(sql`
+      WITH candidates AS (
+        SELECT id, status AS original_status
+        FROM mkt_dual_write_log
+        WHERE status IN ('success', 'linked')
+          AND resolution = 'LEGACY_WRITE_FAILED'
+          AND portal_order_id IS NULL
+          AND attempt < ${MAX_RETRY}
+          AND idempotency_key IS NOT NULL
+        ORDER BY created_at ASC
+        LIMIT ${RETRY_BATCH_SIZE}
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE mkt_dual_write_log AS log
+      SET status           = 'retrying',
+          resolution       = 'LEGACY_RETRYING',
+          last_retry_at    = NOW(),
+          retry_started_at = NOW(),
+          updated_at       = NOW()
+      FROM candidates
+      WHERE log.id = candidates.id
+      RETURNING log.id, log.payload, log.attempt, candidates.original_status
+    `)).catch(() => ({ rows: [] as unknown[] })) ?? { rows: [] as unknown[] };
+    const legacyRows = legacyClaim.rows;
+
+    if (legacyRows.length) {
+      const { retryLegacyCompatibilityWrite } = await import("./portalMarketplaceService.js");
+      for (const row of legacyRows as Array<Record<string, unknown>>) {
+        const logId = Number(row["id"]);
+        const attempt = Number(row["attempt"] ?? 0);
+        const originalStatus = String(row["original_status"] ?? "success");
+        result.retried++;
+
+        try {
+          const opts = (typeof row["payload"] === "string"
+            ? JSON.parse(row["payload"])
+            : row["payload"]) as Record<string, unknown>;
+          const order = await retryLegacyCompatibilityWrite({ payload: opts });
+          const updated = await db.execute(sql`
+            UPDATE mkt_dual_write_log
+            SET status             = 'linked',
+                portal_order_id    = ${order.id},
+                portal_order_number = ${order.orderNumber},
+                attempt            = ${attempt + 1},
+                last_error         = NULL,
+                updated_at         = NOW(),
+                resolved_at        = NOW(),
+                retry_completed_at = NOW(),
+                resolution         = 'AUTO_LEGACY_RETRIED'
+            WHERE id = ${logId}
+              AND status = 'retrying'
+            RETURNING id
+          `);
+          if (updated.rows.length !== 1) throw new Error("Legacy retry claim sudah berubah");
+          result.recovered++;
+          logger.info(
+            { logId, orderId: order.id, orderNumber: order.orderNumber },
+            `[dualWrite:legacy-retry] Recovered compatibility row — logId=${logId}`,
+          );
+        } catch (err: unknown) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          const nextAttempt = attempt + 1;
+          await db.execute(sql`
+            UPDATE mkt_dual_write_log
+            SET status             = ${nextAttempt >= MAX_RETRY ? originalStatus : originalStatus},
+                resolution         = ${nextAttempt >= MAX_RETRY ? "LEGACY_EXHAUSTED" : "LEGACY_WRITE_FAILED"},
+                last_error         = ${errMsg.slice(0, 2000)},
+                attempt            = ${nextAttempt},
+                updated_at         = NOW(),
+                retry_completed_at = NOW()
+            WHERE id = ${logId}
+              AND status = 'retrying'
+          `).catch(() => {});
+          if (nextAttempt >= MAX_RETRY) result.exhausted++;
+          else result.skipped++;
+          logger.warn({ logId, nextAttempt, err: errMsg }, "[dualWrite:legacy-retry] Masih gagal");
+        }
+      }
+    }
+
+    const canonicalClaim = await Promise.resolve(db.execute(sql`
       WITH candidates AS (
         SELECT id
         FROM mkt_dual_write_log
@@ -677,7 +759,8 @@ export async function retryFailedDualWrites(): Promise<{
       FROM candidates
       WHERE log.id = candidates.id
       RETURNING log.id, log.catalog_item_id, log.buyer_email, log.payload, log.attempt
-    `).catch(() => ({ rows: [] as unknown[] }));
+    `)).catch(() => ({ rows: [] as unknown[] })) ?? { rows: [] as unknown[] };
+    const rows = canonicalClaim.rows;
 
     if (!rows.length) return result;
 
@@ -724,7 +807,7 @@ export async function retryFailedDualWrites(): Promise<{
               retry_completed_at  = NOW(),
            resolution          = 'AUTO_RETRIED'
            WHERE id = ${logId}
-             AND status IN ('success', 'linked')
+             AND status = 'retrying'
         `).catch(() => {});
 
         logger.info({ logId, rfqId: rfqResult.rfqId, rfqNumber: rfqResult.rfqNumber, retryStart, now }, `[dualWrite:retry] Recovered — logId=${logId}`);

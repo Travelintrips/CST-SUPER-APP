@@ -12,7 +12,6 @@ import {
   portalProductOrdersTable,
   portalProductOrderItemsTable,
 } from "@workspace/db";
-import { createHash, randomUUID } from "crypto";
 import { eq, and, asc, sql } from "drizzle-orm";
 import { getCatalogItemPublic } from "./portalVendorCatalogService.js";
 import { getPortalCustomerContext } from "./portalCustomerContextService.js";
@@ -22,6 +21,7 @@ import {
   createMktRfqEntry,
   linkMktRfqToLegacy,
   validateMarketplaceDestinationMetadata,
+  type LegacyCompatibilitySnapshot,
 } from "./marketplaceRfqService.js";
 import { recordLegacyWriteFailure } from "./dualWriteReliabilityService.js";
 import { NotificationService } from "./notificationService.js";
@@ -75,24 +75,6 @@ function normalizeIdempotencyKey(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const key = value.trim();
   return key.length >= 1 && key.length <= 200 ? key : null;
-}
-
-function buildLogicalRequestKey(input: {
-  catalogItemId: number;
-  portalCustomerId: number | null;
-  buyerEmail: string;
-  buyerPhone: string;
-}, correlationId?: string | null): string {
-  // A caller-provided correlation id is stable when the caller explicitly
-  // retries a request. Without one, generate a fresh identity: payload
-  // fingerprints are not safe idempotency keys because two real orders can
-  // legitimately have identical payloads.
-  if (correlationId) {
-    return `mkt-rfq:correlation:${createHash("sha256")
-      .update(JSON.stringify({ ...input, correlationId }))
-      .digest("hex")}`;
-  }
-  return `mkt-rfq:request:${randomUUID()}`;
 }
 
 // ─── submitMarketplaceQuote ───────────────────────────────────────────────────
@@ -226,6 +208,63 @@ async function insertLegacyQuote(params: {
   throw new Error("Legacy order number could not be allocated");
 }
 
+function parseLegacyCompatibilitySnapshot(value: unknown): LegacyCompatibilitySnapshot {
+  if (!value || typeof value !== "object") {
+    throw new Error("Legacy compatibility snapshot tidak tersedia");
+  }
+  const snapshot = value as Partial<LegacyCompatibilitySnapshot>;
+  const numericFields = ["subtotal", "grandTotal", "sellPrice", "qtyNum"] as const;
+  for (const field of numericFields) {
+    if (typeof snapshot[field] !== "number" || !Number.isFinite(snapshot[field])) {
+      throw new Error(`Legacy compatibility snapshot ${field} tidak valid`);
+    }
+  }
+  if (
+    typeof snapshot.orderStatus !== "string"
+    || typeof snapshot.itemName !== "string"
+    || typeof snapshot.unitStr !== "string"
+    || !snapshot.catalogSnapshot
+    || typeof snapshot.catalogSnapshot !== "object"
+    || !snapshot.customFieldValues
+    || typeof snapshot.customFieldValues !== "object"
+  ) {
+    throw new Error("Legacy compatibility snapshot tidak lengkap");
+  }
+  return snapshot as LegacyCompatibilitySnapshot;
+}
+
+/**
+ * Repairs only the legacy compatibility projection for an already-created
+ * canonical RFQ. This function intentionally has no canonical create call.
+ */
+export async function retryLegacyCompatibilityWrite(params: {
+  payload: Record<string, unknown>;
+}): Promise<LegacyQuoteOrder> {
+  const payload = params.payload;
+  const idempotencyKey = normalizeIdempotencyKey(payload.idempotencyKey);
+  if (!idempotencyKey) {
+    throw new Error("Legacy compatibility retry membutuhkan Idempotency-Key");
+  }
+  const snapshot = parseLegacyCompatibilitySnapshot(payload.legacyCompatibility);
+  const buyerName = typeof payload.buyerName === "string" ? payload.buyerName.trim() : "";
+  const buyerEmail = typeof payload.buyerEmail === "string" ? payload.buyerEmail.trim().toLowerCase() : "";
+  const buyerPhone = typeof payload.buyerPhone === "string" ? payload.buyerPhone.trim() : "";
+  if (!buyerName || !buyerEmail || !buyerPhone) {
+    throw new Error("Legacy compatibility retry membutuhkan buyer identity lengkap");
+  }
+
+  return insertLegacyQuote({
+    resolvedName: buyerName,
+    resolvedEmail: buyerEmail,
+    portalCompanyId: typeof payload.companyId === "number" ? payload.companyId : null,
+    resolvedPhone: buyerPhone,
+    effectiveShippingAddress: typeof payload.shippingAddress === "string" ? payload.shippingAddress : null,
+    combinedNotes: typeof payload.notes === "string" ? payload.notes : null,
+    ...snapshot,
+    idempotencyKey,
+  });
+}
+
 /**
  * Submit a marketplace quote (RFQ). Performs:
  *  1. Catalog item validation (exists, not expired)
@@ -307,13 +346,10 @@ export async function submitMarketplaceQuote(params: {
   });
   const logicalRequestKey =
     normalizeIdempotencyKey(params.idempotencyKey) ??
-    normalizeIdempotencyKey(body.idempotency_key) ??
-    buildLogicalRequestKey({
-      catalogItemId,
-      portalCustomerId,
-      buyerEmail: resolvedEmail,
-      buyerPhone: resolvedPhone,
-    }, params.correlationId);
+    normalizeIdempotencyKey(body.idempotency_key);
+  if (!logicalRequestKey) {
+    throw makeServiceError(400, "Idempotency-Key wajib diisi dengan identity yang valid");
+  }
 
   // ── 3. Price / order calculations ────────────────────────────────────────
   const qtyNum     = Math.max(1, Number(qty) || 1);
@@ -431,15 +467,27 @@ export async function submitMarketplaceQuote(params: {
         requiredDeliveryDate: required_date?.trim() ?? null,
         ipAddress:          ip,
          idempotencyKey:     logicalRequestKey,
+         legacyCompatibility: {
+           orderStatus: urgency === "order" ? "New Order" : "Quote Request",
+           subtotal,
+           grandTotal,
+           productCategory: item.categoryKey ?? item.serviceType ?? item.kategori ?? null,
+           templateId: item.templateId ?? null,
+           templateVersion: item.templateVersion ?? null,
+           customFieldValues: (item.specValues && typeof item.specValues === "object"
+             ? item.specValues
+             : {}) as Record<string, string | number | boolean>,
+           catalogSnapshot: catalogSnapshot as Record<string, unknown>,
+           itemName: item.name,
+           unitStr,
+           sellPrice,
+           qtyNum,
+         },
       });
     } catch (err) {
-      // A guest has no canonical owner, so retain the explicit legacy fallback
-      // for backward-compatible guest RFQs. An authenticated request must never
-      // silently become a legacy/guest-shaped submission when the canonical
-      // ownership write fails.
-      if (portalCustomerId !== null) throw err;
-      console.error("[marketplaceRfq] createMktRfqEntry failed — continuing with legacy path", { err, catalogItemId });
-      mktRfqResult = null;
+      // Canonical is authoritative for guests and authenticated buyers alike.
+      // Never turn a failed canonical submission into a legacy-only order.
+      throw err;
     }
   }
 

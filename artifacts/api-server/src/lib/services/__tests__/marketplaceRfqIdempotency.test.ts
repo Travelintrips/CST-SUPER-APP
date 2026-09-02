@@ -74,6 +74,7 @@ const baseOptions = {
   buyerEmail: "buyer@example.test",
   buyerPhone: "081234567890",
   qty: 1,
+  idempotencyKey: "mkt-rfq:test-key",
   dualWriteLogId: 55,
 };
 
@@ -89,7 +90,7 @@ describe("canonical RFQ idempotency", () => {
 
   it("reuses the canonical RFQ recorded on the locked retry log", async () => {
     tx.execute
-      .mockResolvedValueOnce({ rows: [{ id: 55, status: "retrying", mkt_rfq_id: 777 }] })
+      .mockResolvedValueOnce({ rows: [{ id: 55, status: "retrying", mkt_rfq_id: 777, idempotency_key: "mkt-rfq:test-key" }] })
       .mockResolvedValueOnce({ rows: [{ id: 777, rfq_number: "MKT-RFQ-202608-0777" }] })
       .mockResolvedValueOnce({ rows: [] });
 
@@ -109,7 +110,7 @@ describe("canonical RFQ idempotency", () => {
 
   it("does not revive an exhausted retry log", async () => {
     tx.execute.mockResolvedValueOnce({
-      rows: [{ id: 55, status: "exhausted", mkt_rfq_id: null }],
+      rows: [{ id: 55, status: "exhausted", mkt_rfq_id: null, idempotency_key: "mkt-rfq:test-key" }],
     });
 
     const { createMktRfqEntry } = await import("../marketplaceRfqService.js");
@@ -118,5 +119,15 @@ describe("canonical RFQ idempotency", () => {
     });
     expect(tx.insert).not.toHaveBeenCalled();
     expect(tx.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when a new canonical RFQ has no durable identity", async () => {
+    const { createMktRfqEntry } = await import("../marketplaceRfqService.js");
+    const { dualWriteLogId: _ignored, idempotencyKey: _key, ...withoutIdentity } = baseOptions;
+
+    await expect(createMktRfqEntry(withoutIdentity)).rejects.toMatchObject({
+      code: "RFQ_IDEMPOTENCY_KEY_REQUIRED",
+    });
+    expect(mockDb.transaction).not.toHaveBeenCalled();
   });
 });
