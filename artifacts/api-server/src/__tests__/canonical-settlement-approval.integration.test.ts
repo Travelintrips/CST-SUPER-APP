@@ -591,4 +591,58 @@ describe("canonical historical settlement repair database transaction", () => {
       }
     }
   });
+
+  it("allows QRIS metadata materialization while preserving posted journal amounts", async () => {
+    const fixture = await createFixture();
+    const before = await pool.query(
+      `SELECT gross_amount, debit_amount, credit_revenue_amount,
+              credit_ppn_amount
+         FROM sport_center.accounting_journals
+        WHERE id = $1`,
+      [fixture.paymentJournalId],
+    );
+    const client = await pool.connect();
+
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        "SET LOCAL sport_center.allow_posted_accounting_metadata_correction = 'on'",
+      );
+      await client.query(
+        `UPDATE sport_center.sport_payments
+            SET payment_provider = 'mandiri_direct',
+                provider_name = 'qris-metadata-regression',
+                bank_account_id = $1,
+                expected_settlement_date = $2,
+                settlement_rule_version = 'ROLLBACK-TEST-metadata-v2'
+          WHERE id = $3`,
+        [`ROLLBACK-ACCOUNT-${randomUUID()}`, PAYMENT_DATE, fixture.paymentId],
+      );
+      await client.query("COMMIT");
+
+      const after = await pool.query(
+        `SELECT gross_amount, debit_amount, credit_revenue_amount,
+                credit_ppn_amount, provider_name, expected_settlement_date,
+                settlement_status
+           FROM sport_center.accounting_journals
+          WHERE id = $1`,
+        [fixture.paymentJournalId],
+      );
+      expect(after.rows[0]).toMatchObject({
+        gross_amount: before.rows[0].gross_amount,
+        debit_amount: before.rows[0].debit_amount,
+        credit_revenue_amount: before.rows[0].credit_revenue_amount,
+        credit_ppn_amount: before.rows[0].credit_ppn_amount,
+        provider_name: "qris-metadata-regression",
+        expected_settlement_date: PAYMENT_DATE,
+        settlement_status: "unsettled",
+      });
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+      await cleanupFixture(fixture);
+    }
+  });
 });

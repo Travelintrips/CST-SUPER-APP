@@ -3416,6 +3416,13 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
        * representation. This changes no financial value or MDR rule.
        */
       const selectedIdSql = selectedIds.join(",");
+      // The source mirror synchronizes payment metadata into the existing
+      // payment_confirmed journal. Posted-journal financial fields remain
+      // immutable; this transaction-local window permits only the metadata
+      // columns explicitly allowlisted by sport_center.guard_posted_accounting_journal.
+      await tx.execute(sql.raw(
+        "SET LOCAL sport_center.allow_posted_accounting_metadata_correction = 'on'",
+      ));
       await tx.execute(sql.raw(`
         UPDATE sport_center.sport_payments
         SET payment_provider = '${resolvedProvider}',
