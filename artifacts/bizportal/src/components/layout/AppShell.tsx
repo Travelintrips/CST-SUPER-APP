@@ -286,6 +286,14 @@ export function AppShell({ children, noPadding }: AppShellProps) {
     // ── 4c. UNIFIED VENDOR INVITES ───────────────────────────────────────
     {
       type: "flat",
+      titleKey: "Customer Portal Ops",
+      href: "/admin/portal?tab=workload",
+      icon: ClipboardList,
+      roles: ["admin", "owner", "super_admin"],
+      activePaths: ["/admin/portal"],
+    },
+    {
+      type: "flat",
       titleKey: "Undang Vendor",
       href: "/admin/portal?tab=vendors",
       icon: Link2,
@@ -785,7 +793,7 @@ export function AppShell({ children, noPadding }: AppShellProps) {
 
     if (item.type === "flat") {
       const isNotif = item.href === "/notifications";
-      const isPortalOps = item.href === "/admin/portal?tab=vendors";
+      const isPortalOps = item.href === "/admin/portal?tab=workload";
       const isActive =
         location === item.href ||
         location.startsWith(`${item.href}/`) ||

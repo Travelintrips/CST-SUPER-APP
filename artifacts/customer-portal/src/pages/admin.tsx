@@ -216,6 +216,9 @@ export default function AdminPage() {
                   className={sidebarBtnCls("service-operations")}>
                   <Inbox className="h-4 w-4 shrink-0" strokeWidth={2} />
                   <span className="flex-1">Semua Layanan</span>
+                  {pendingPortalWorkload > 0 && (
+                    <span className="ml-auto bg-amber-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-5 text-center">{pendingPortalWorkload}</span>
+                  )}
                 </button>
                 <p className="px-3 pt-4 pb-1.5 text-[10px] font-semibold tracking-widest text-slate-600 uppercase select-none">{t("adminPage.nav.sectionWebsite", "Website & Konten")}</p>
                 {[

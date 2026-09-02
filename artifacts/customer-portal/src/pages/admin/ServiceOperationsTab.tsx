@@ -19,6 +19,7 @@ type ServiceSummary = {
   service_label: string;
   total: number;
   pending: number;
+  ambiguous?: number;
 };
 
 type ServiceRow = {
@@ -27,6 +28,7 @@ type ServiceRow = {
   id: number;
   reference: string;
   status: string;
+  status_known?: boolean;
   customer_name: string;
   customer_company: string;
   company_id: number | null;
@@ -284,7 +286,7 @@ export function ServiceOperationsTab() {
             <p className="text-xs text-slate-500 truncate">{item.service_label}</p>
             <div className="flex items-end justify-between gap-2 mt-1">
               <p className="text-2xl font-bold text-slate-900">{Number(item.total).toLocaleString("id-ID")}</p>
-              <span className="text-xs text-amber-700">{Number(item.pending)} pending</span>
+              <span className="text-xs text-amber-700">{Number(item.pending)} pending{Number(item.ambiguous) > 0 ? ` · ${Number(item.ambiguous)} review` : ""}</span>
             </div>
           </button>
         ))}
@@ -344,7 +346,10 @@ export function ServiceOperationsTab() {
                   <span className="block text-sm text-slate-700 mt-1">{row.customer_name}</span>
                   {row.customer_company && <span className="block text-xs text-slate-400">{row.customer_company}</span>}
                 </span>
-                <span className={`inline-flex w-fit items-center rounded-full border px-2 py-1 text-xs font-medium ${statusClass(row.status)}`}>{statusLabel(row.status)}</span>
+                <span>
+                  {!row.status_known && <span className="block text-[10px] text-slate-500 mb-1">Mapping perlu review</span>}
+                  <span className={`inline-flex w-fit items-center rounded-full border px-2 py-1 text-xs font-medium ${statusClass(row.status)}`}>{statusLabel(row.status)}</span>
+                </span>
                 <span className="text-xs text-slate-500">{row.company_id ? `Company #${row.company_id}` : row.portal_customer_id ? `Customer #${row.portal_customer_id}` : "Guest / portal"}</span>
                 <span className="text-xs text-slate-500">{formatDate(row.created_at)}</span>
                 <ChevronRight className="h-4 w-4 text-slate-400" />
