@@ -40,6 +40,7 @@ const API = "/api";
 const FLOWS = [
   { value: "BUSINESS_MATCHING",           label: "Business Matching" },
   { value: "ROUTINE_EXPENSE_ALLOCATION",  label: "Routine Expense Allocation" },
+  { value: "INTERNAL_TRANSFER",           label: "Internal Transfer (bukan beban)" },
   { value: "INCOME_ALLOCATION",           label: "Income Allocation" },
   { value: "MANUAL_REVIEW",              label: "Manual Review" },
   { value: "BLOCKED",                    label: "Blocked" },
@@ -143,6 +144,7 @@ function flowBadge(flow: string) {
   const colors: Record<string, string> = {
     BUSINESS_MATCHING:           "bg-blue-900 text-blue-300",
     ROUTINE_EXPENSE_ALLOCATION:  "bg-amber-900 text-amber-300",
+    INTERNAL_TRANSFER:           "bg-cyan-900 text-cyan-300",
     INCOME_ALLOCATION:           "bg-green-900 text-green-300",
     MANUAL_REVIEW:               "bg-slate-700 text-slate-300",
     BLOCKED:                     "bg-red-900 text-red-400",
@@ -949,7 +951,11 @@ function AiRulesTab() {
       ...current,
       name: current.name || String(form.name ?? "").trim(),
       parentId: null,
-      type: form.action_flow === "ROUTINE_EXPENSE_ALLOCATION" ? "expense" : "revenue",
+       type: form.action_flow === "INTERNAL_TRANSFER"
+         ? "asset"
+         : form.action_flow === "ROUTINE_EXPENSE_ALLOCATION"
+           ? "expense"
+           : "revenue",
     }));
     void loadParentAccounts();
   };
@@ -1271,6 +1277,11 @@ function AiRulesTab() {
                     {FLOWS.map(f => <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>)}
                   </SelectContent>
                 </Select>
+                {form.action_flow === "INTERNAL_TRANSFER" && (
+                  <p className="mt-1 text-[11px] text-cyan-300">
+                    Transfer internal bukan beban P&amp;L. Pilih COA tujuan kas/bank yang aktif dan dapat diposting.
+                  </p>
+                )}
               </div>
               <div>
                 <Label className="text-slate-300">Akun COA</Label>

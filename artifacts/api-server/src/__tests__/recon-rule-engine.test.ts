@@ -96,6 +96,36 @@ describe("Rule Engine — Test 1: contains match", () => {
     const result = evaluateReconRules(rules, makeMutation({ description: "transfer gaji karyawan" }));
     expect(result.matched).toBe(false);
   });
+
+  it("matches kas besar as an internal transfer without requiring a word boundary", () => {
+    const rules = [makeRule({
+      conditionValue: "kas besar",
+      targetType: "internal_transfer",
+      targetCoaCode: "1-1010-CST",
+    })];
+    const result = evaluateReconRules(rules, makeMutation({
+      description: "BBLUI FELICIA JUSTIANI KAS BESAR99102",
+    }));
+    expect(result.matched).toBe(true);
+    expect(result.targetType).toBe("internal_transfer");
+    expect(result.targetCoaCode).toBe("1-1010-CST");
+  });
+
+  it("keeps the configured rule target as an asset treatment", () => {
+    const rules = [makeRule({
+      conditionValue: "kas besar",
+      targetType: "internal_transfer",
+      targetCoaCode: "1-1010-CST",
+    })];
+    const result = evaluateReconRules(rules, makeMutation({
+      description: "TRANSFER KE KAS BESAR99102",
+    }));
+    expect(result).toMatchObject({
+      matched: true,
+      targetType: "internal_transfer",
+      targetCoaCode: "1-1010-CST",
+    });
+  });
 });
 
 describe("Rule Engine — required document gate", () => {

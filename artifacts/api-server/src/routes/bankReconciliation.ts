@@ -5962,8 +5962,8 @@ router.post("/run-matching", async (req, res) => {
           const approval = await approveAndCreateJournal(
             Number(m.id),
             null,
-            null,
-            null,
+            "recon_rule",
+            Number(decision.matchedRuleId),
             actor,
             `Auto-post berdasarkan Referensi COA #${decision.matchedRuleId}`,
             autoCoaCode,

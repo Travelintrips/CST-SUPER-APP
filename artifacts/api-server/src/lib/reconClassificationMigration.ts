@@ -293,8 +293,16 @@ export async function syncOperationalReconRulesToClassification(): Promise<void>
           UPPER(SUBSTRING(md5(UPPER(COALESCE(r.direction, '')) || ':' ||
             LOWER(TRIM(COALESCE(r.condition_value, ''))) || ':' ||
             COALESCE(r.target_coa_code, '')) FROM 1 FOR 10)),
-        CASE WHEN r.direction = 'IN' THEN 'income' ELSE 'expense' END,
-        CASE WHEN r.direction = 'IN' THEN 'INCOME_ALLOCATION' ELSE 'ROUTINE_EXPENSE_ALLOCATION' END,
+        CASE
+          WHEN r.target_type = 'internal_transfer' THEN 'internal_transfer'
+          WHEN r.direction = 'IN' THEN 'income'
+          ELSE 'expense'
+        END,
+        CASE
+          WHEN r.target_type = 'internal_transfer' THEN 'INTERNAL_TRANSFER'
+          WHEN r.direction = 'IN' THEN 'INCOME_ALLOCATION'
+          ELSE 'ROUTINE_EXPENSE_ALLOCATION'
+        END,
         NULLIF(TRIM(r.target_coa_code), ''),
         jsonb_build_array(TRIM(COALESCE(r.condition_value, ''))),
         COALESCE(r.priority, 120),
@@ -354,7 +362,11 @@ export async function syncOperationalReconRulesToClassification(): Promise<void>
         r.condition_field,
         r.condition_operator,
         r.condition_value,
-        CASE WHEN r.direction = 'IN' THEN 'INCOME_ALLOCATION' ELSE 'ROUTINE_EXPENSE_ALLOCATION' END,
+         CASE
+           WHEN r.target_type = 'internal_transfer' THEN 'INTERNAL_TRANSFER'
+           WHEN r.direction = 'IN' THEN 'INCOME_ALLOCATION'
+           ELSE 'ROUTINE_EXPENSE_ALLOCATION'
+         END,
         NULLIF(TRIM(r.target_coa_code), ''),
         c.code,
          r.conditions_json,
@@ -446,10 +458,11 @@ export async function syncAiClassificationRulesToOperational(
         AND o.ai_classification_rule_id IS NULL
         AND COALESCE(o.is_active, TRUE) = TRUE
         AND o.company_id = r.company_id
-        AND COALESCE(o.direction, '') = CASE
+        AND COALESCE(o.direction, '') = COALESCE(CASE
           WHEN UPPER(COALESCE(r.action_flow, '')) LIKE '%INCOME%' THEN 'IN'
+          WHEN UPPER(COALESCE(r.action_flow, '')) = 'INTERNAL_TRANSFER' THEN NULL
           ELSE 'OUT'
-        END
+        END, '')
         AND o.condition_field = r.condition_field
         AND o.condition_operator = r.condition_operator
         AND o.condition_value = COALESCE(r.condition_value, '')
@@ -460,10 +473,11 @@ export async function syncAiClassificationRulesToOperational(
           WHERE o2.ai_classification_rule_id IS NULL
             AND COALESCE(o2.is_active, TRUE) = TRUE
             AND o2.company_id = r.company_id
-            AND COALESCE(o2.direction, '') = CASE
+            AND COALESCE(o2.direction, '') = COALESCE(CASE
               WHEN UPPER(COALESCE(r.action_flow, '')) LIKE '%INCOME%' THEN 'IN'
+              WHEN UPPER(COALESCE(r.action_flow, '')) = 'INTERNAL_TRANSFER' THEN NULL
               ELSE 'OUT'
-            END
+            END, '')
             AND o2.condition_field = r.condition_field
             AND o2.condition_operator = r.condition_operator
             AND o2.condition_value = COALESCE(r.condition_value, '')
@@ -516,6 +530,7 @@ export async function syncAiClassificationRulesToOperational(
         is_active = COALESCE(r.is_active, TRUE),
         direction = CASE
           WHEN UPPER(COALESCE(r.action_flow, '')) LIKE '%INCOME%' THEN 'IN'
+          WHEN UPPER(COALESCE(r.action_flow, '')) = 'INTERNAL_TRANSFER' THEN NULL
           ELSE 'OUT'
         END,
         condition_type = 'AI_CLASSIFICATION',
@@ -530,6 +545,7 @@ export async function syncAiClassificationRulesToOperational(
          requires_document_upload = COALESCE(r.requires_document_upload, FALSE),
          tax_type = COALESCE(r.tax_type, 'none'),
         target_type = CASE
+          WHEN UPPER(COALESCE(r.action_flow, '')) = 'INTERNAL_TRANSFER' THEN 'internal_transfer'
           WHEN UPPER(COALESCE(r.action_flow, '')) LIKE '%INCOME%' THEN 'income'
           ELSE 'expense'
         END,
@@ -563,6 +579,7 @@ export async function syncAiClassificationRulesToOperational(
         TRUE,
         CASE
           WHEN UPPER(COALESCE(r.action_flow, '')) LIKE '%INCOME%' THEN 'IN'
+          WHEN UPPER(COALESCE(r.action_flow, '')) = 'INTERNAL_TRANSFER' THEN NULL
           ELSE 'OUT'
         END,
         NULL,
@@ -574,6 +591,7 @@ export async function syncAiClassificationRulesToOperational(
         COALESCE(r.logic, 'AND'),
         COALESCE(r.specificity, 1),
         CASE
+          WHEN UPPER(COALESCE(r.action_flow, '')) = 'INTERNAL_TRANSFER' THEN 'internal_transfer'
           WHEN UPPER(COALESCE(r.action_flow, '')) LIKE '%INCOME%' THEN 'income'
           ELSE 'expense'
         END,
@@ -596,10 +614,11 @@ export async function syncAiClassificationRulesToOperational(
           SELECT 1
           FROM recon_rules o
           WHERE o.company_id = r.company_id
-            AND COALESCE(o.direction, '') = CASE
+            AND COALESCE(o.direction, '') = COALESCE(CASE
               WHEN UPPER(COALESCE(r.action_flow, '')) LIKE '%INCOME%' THEN 'IN'
+              WHEN UPPER(COALESCE(r.action_flow, '')) = 'INTERNAL_TRANSFER' THEN NULL
               ELSE 'OUT'
-            END
+            END, '')
             AND o.condition_field = r.condition_field
             AND o.condition_operator = r.condition_operator
             AND o.condition_value = COALESCE(r.condition_value, '')

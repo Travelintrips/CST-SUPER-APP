@@ -416,6 +416,43 @@ function canonicalCandidateType(value: string | null | undefined): string | null
   return aliases[value] ?? value;
 }
 
+function treatmentForReconRuleTarget(targetType: string | null | undefined): ContraResolution["treatment"] {
+  switch (String(targetType ?? "").toLowerCase()) {
+    case "internal_transfer":
+    case "intercompany_transfer":
+      return "asset";
+    case "customer_payment":
+      return "ar";
+    case "vendor_payment":
+      return "ap";
+    case "income":
+      return "revenue";
+    default:
+      return "expense";
+  }
+}
+
+async function loadReconRuleTarget(
+  client: DbClient,
+  companyId: number,
+  ruleId: number,
+): Promise<{ targetType: string; targetCoaCode: string | null } | null> {
+  const { rows } = await client.execute(sql.raw(`
+    SELECT target_type, target_coa_code
+    FROM recon_rules
+    WHERE id = ${ruleId}
+      AND company_id = ${companyId}
+      AND is_active = TRUE
+    LIMIT 1
+  `)).catch(() => ({ rows: [] as any[] }));
+  const row = rows[0] as Record<string, unknown> | undefined;
+  if (!row) return null;
+  return {
+    targetType: String(row.target_type ?? ""),
+    targetCoaCode: row.target_coa_code == null ? null : String(row.target_coa_code).trim() || null,
+  };
+}
+
 function escapeSql(value: string): string {
   return value.replace(/'/g, "''");
 }
@@ -481,6 +518,21 @@ export async function resolveContraAccount(
     settings,
   } = args;
   const type = canonicalCandidateType(args.candidateType);
+
+  // A Rule AI match is an explicit COA decision. Resolve it before the
+  // description normalizer so a "kas besar" rule cannot fall through to an
+  // arbitrary second bank account or an expense fallback.
+  if (type === "recon_rule" && candidateId != null && companyId != null) {
+    const ruleTarget = await loadReconRuleTarget(client, companyId, candidateId);
+    if (!ruleTarget?.targetCoaCode) return null;
+    const accountId = await findCompanyCoa(client, companyId, ruleTarget.targetCoaCode);
+    if (!accountId) return null;
+    return {
+      accountId,
+      label: `COA Rule AI: ${ruleTarget.targetCoaCode}`,
+      treatment: treatmentForReconRuleTarget(ruleTarget.targetType),
+    };
+  }
 
   const normalized = normalizeDescription(description);
   const category = String(expenseCategory ?? normalized.category ?? "").toLowerCase();
@@ -1888,6 +1940,7 @@ export async function approveAndCreateJournal(
          "sport_payment",
         "qris_settlement",
          "tenant_invoice",
+          "recon_rule",
        ]);
        if (selectedType && !allowedCandidateTypes.has(selectedType)) {
          throw Object.assign(new Error("Tipe kandidat rekonsiliasi tidak valid"), { code: "INVALID_MATCH" });
@@ -2154,7 +2207,16 @@ export async function approveAndCreateJournal(
          }
          contraCoaId     = manualId;
          contraLabel     = `Akun dipilih manual: ${manualCoaCode}`;
-         contraTreatment = "expense";
+          if (selectedType === "recon_rule" && selectedCandidateId != null) {
+            const ruleTarget = await loadReconRuleTarget(
+              tx as unknown as DbClient,
+              companyId,
+              selectedCandidateId,
+            );
+            contraTreatment = treatmentForReconRuleTarget(ruleTarget?.targetType);
+          } else {
+            contraTreatment = "expense";
+          }
          logger.info({ mutationId, manualCoaCode, contraCoaId }, "[approveAndCreateJournal] manual COA override applied");
        } else {
          const contra = await resolveContraAccount(tx as unknown as DbClient, {

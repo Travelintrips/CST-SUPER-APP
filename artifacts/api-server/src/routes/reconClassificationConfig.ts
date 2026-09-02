@@ -161,7 +161,7 @@ const AiRuleSchema = z.object({
   })).min(1).optional(),
   logic: z.enum(["AND", "OR"]).default("AND"),
   specificity: z.coerce.number().int().min(1).max(999).optional(),
-  action_flow:         z.enum(["BUSINESS_MATCHING", "ROUTINE_EXPENSE_ALLOCATION", "INCOME_ALLOCATION", "MANUAL_REVIEW", "BLOCKED"]).optional().nullable(),
+  action_flow:         z.enum(["BUSINESS_MATCHING", "ROUTINE_EXPENSE_ALLOCATION", "INTERNAL_TRANSFER", "INCOME_ALLOCATION", "MANUAL_REVIEW", "BLOCKED"]).optional().nullable(),
   action_coa_code:     z.string().optional().nullable(),
   action_config_code:  z.string().optional().nullable(),
   amount_tolerance:    z.coerce.number().min(0).max(1_000_000_000).optional().nullable(),
@@ -202,7 +202,11 @@ function aiRowToReconRule(row: any, fallbackCompanyId: number): ReconRule {
     conditionField: conditions[0].field, conditionOperator: conditions[0].operator,
     conditionValue: String(conditions[0].value ?? ""), conditions,
     logic: row.logic === "OR" ? "OR" : "AND", specificity: Number(row.specificity ?? conditions.length),
-    targetType: row.action_flow === "INCOME_ALLOCATION" ? "income" : "expense",
+    targetType: row.action_flow === "INTERNAL_TRANSFER"
+      ? "internal_transfer"
+      : row.action_flow === "INCOME_ALLOCATION"
+        ? "income"
+        : "expense",
     targetId: null, targetCoaCode: row.action_coa_code ?? null,
     amountTolerance: row.amount_tolerance == null ? null : Number(row.amount_tolerance),
     referenceAmount: row.reference_amount == null ? null : Number(row.reference_amount),
@@ -530,6 +534,11 @@ reconClassificationRouter.post("/ai-rules", async (req, res) => {
     const parsed = AiRuleSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Validasi gagal.", details: parsed.error.issues });
     const d = parsed.data;
+    if (d.action_flow === "INTERNAL_TRANSFER" && !d.action_coa_code?.trim()) {
+      return res.status(400).json({
+        error: "COA tujuan wajib dipilih untuk action Internal Transfer.",
+      });
+    }
     if (d.amount_tolerance != null && d.amount_tolerance > 0 && d.reference_amount == null) {
       return res.status(400).json({
         error: "reference_amount wajib diisi jika amount_tolerance lebih besar dari nol.",
@@ -771,7 +780,7 @@ reconClassificationRouter.patch("/ai-rules/:id", async (req, res) => {
       });
     }
     const existingRuleResult = await db.execute(sql.raw(`
-      SELECT company_id, tax_type
+      SELECT company_id, tax_type, action_flow, action_coa_code
       FROM recon_ai_classification_rules
       WHERE id = ${id}
       LIMIT 1
@@ -786,6 +795,15 @@ reconClassificationRouter.patch("/ai-rules/:id", async (req, res) => {
     const nextCompanyId = d.company_id !== undefined ? d.company_id : (
       existingRule.company_id == null ? null : Number(existingRule.company_id)
     );
+    const nextActionFlow = d.action_flow !== undefined ? d.action_flow : existingRule.action_flow;
+    const nextActionCoaCode = d.action_coa_code !== undefined
+      ? d.action_coa_code
+      : existingRule.action_coa_code;
+    if (nextActionFlow === "INTERNAL_TRANSFER" && !nextActionCoaCode?.trim()) {
+      return res.status(400).json({
+        error: "COA tujuan wajib dipilih untuk action Internal Transfer.",
+      });
+    }
     let resolvedTaxCoaCode: string | null = null;
     try {
       resolvedTaxCoaCode = await enforceTaxRouting(nextTaxType, nextCompanyId);
