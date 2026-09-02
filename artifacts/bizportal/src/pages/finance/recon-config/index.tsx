@@ -760,6 +760,8 @@ function AiRulesTab() {
   const [previewAmount, setPreviewAmount] = useState("");
   const [preview, setPreview] = useState<any>(null);
   const [previewing, setPreviewing] = useState(false);
+  const [ruleSearch, setRuleSearch] = useState("");
+  const [coaDirectionFilter, setCoaDirectionFilter] = useState<"all" | "in" | "out">("all");
 
   const loadCoaOptions = useCallback(async () => {
     setLoadingCoaOptions(true);
@@ -1098,13 +1100,83 @@ function AiRulesTab() {
     };
   };
 
+  const coaDirection = (row: any): "in" | "out" | "other" => {
+    const ruleIdentity = `${row.name ?? ""} ${row.description ?? ""}`.toLowerCase();
+    if (/\b(coa\s+)?uang\s+masuk\b/.test(ruleIdentity) || row.action_flow === "INCOME_ALLOCATION") {
+      return "in";
+    }
+    if (/\b(coa\s+)?uang\s+keluar\b/.test(ruleIdentity) || row.action_flow === "ROUTINE_EXPENSE_ALLOCATION") {
+      return "out";
+    }
+    return "other";
+  };
+
+  const normalizedRuleSearch = ruleSearch.trim().toLowerCase();
+  const filteredRows = rows.filter((row) => {
+    const matchesDirection = coaDirectionFilter === "all" || coaDirection(row) === coaDirectionFilter;
+    if (!matchesDirection) return false;
+    if (!normalizedRuleSearch) return true;
+
+    const coa = coaDetails(row);
+    const searchableText = [
+      conditionSummary(row),
+      row.condition_field,
+      row.condition_value,
+      coa?.code,
+      coa?.name,
+      row.action_coa_code,
+      row.action_coa_name,
+    ].filter(Boolean).join(" ").toLowerCase();
+    return searchableText.includes(normalizedRuleSearch);
+  });
+
   return (
     <div className="space-y-4">
-      <div className="flex justify-end gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-1 flex-wrap items-center gap-2 min-w-[320px]">
+          <div className="relative min-w-[260px] flex-1 max-w-xl">
+            <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-slate-500" />
+            <Input
+              value={ruleSearch}
+              onChange={(event) => setRuleSearch(event.target.value)}
+              placeholder="Cari kondisi atau keterangan COA..."
+              aria-label="Cari kondisi atau keterangan COA"
+              className="bg-slate-800 border-slate-600 text-white pl-9"
+            />
+          </div>
+          <Select value={coaDirectionFilter} onValueChange={(value) => setCoaDirectionFilter(value as "all" | "in" | "out")}>
+            <SelectTrigger className="bg-slate-800 border-slate-600 text-white w-[170px]" aria-label="Filter COA masuk atau keluar">
+              <SelectValue placeholder="Filter COA" />
+            </SelectTrigger>
+            <SelectContent className="bg-slate-800 border-slate-600 text-white">
+              <SelectItem value="all">Semua COA</SelectItem>
+              <SelectItem value="in">COA Masuk</SelectItem>
+              <SelectItem value="out">COA Keluar</SelectItem>
+            </SelectContent>
+          </Select>
+          {(ruleSearch || coaDirectionFilter !== "all") && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setRuleSearch("");
+                setCoaDirectionFilter("all");
+              }}
+              className="text-slate-400 hover:text-white"
+            >
+              Reset filter
+            </Button>
+          )}
+          <span className="text-xs text-slate-500 whitespace-nowrap">
+            {filteredRows.length} dari {rows.length} rule
+          </span>
+        </div>
+        <div className="flex justify-end gap-2">
         <Button size="sm" variant="outline" onClick={load} className="border-slate-600 text-slate-300"><RefreshCw size={14} /></Button>
         <Button size="sm" onClick={openAdd} className="bg-orange-500 hover:bg-orange-600 text-white">
           <Plus size={14} className="mr-1" /> Tambah Rule
         </Button>
+        </div>
       </div>
       {loading ? (
         <div className="flex items-center justify-center h-32"><RefreshCw className="animate-spin text-orange-400" size={24} /></div>
@@ -1129,7 +1201,10 @@ function AiRulesTab() {
               {rows.length === 0 && (
                   <tr><td colSpan={10} className="py-8 text-center text-slate-500">Belum ada AI rule.</td></tr>
               )}
-              {rows.map(row => (
+              {rows.length > 0 && filteredRows.length === 0 && (
+                <tr><td colSpan={10} className="py-8 text-center text-slate-500">Tidak ada rule yang sesuai filter.</td></tr>
+              )}
+              {filteredRows.map(row => (
                 <tr key={row.id} className="border-b border-slate-800 hover:bg-slate-800/40">
                   <td className="py-2 pr-3 text-white">{row.name}</td>
                   <td className="py-2 pr-3 font-mono text-xs text-slate-400">
