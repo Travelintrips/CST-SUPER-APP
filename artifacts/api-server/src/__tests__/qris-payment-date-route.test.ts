@@ -65,6 +65,39 @@ describe("QRIS payment date update route", () => {
   });
 });
 
+describe("QRIS settlement status reset route", () => {
+  const routeStart = routeSource.indexOf(
+    'router.patch("/qris-candidates/payments/:paymentId/settlement-status"',
+  );
+  const routeEnd = routeSource.indexOf(
+    '// ─── POST /api/bank-reconciliation/qris-candidates/:id/approve',
+    routeStart,
+  );
+  const route = routeSource.slice(routeStart, routeEnd);
+
+  it("updates the canonical source and requires a reviewer reason", () => {
+    expect(route).toContain("if (!await requireAdmin(req, res)) return;");
+    expect(route).toContain("FROM sport_center.sport_payments sp");
+    expect(route).toContain("UPDATE sport_center.sport_payments");
+    expect(route).toContain("reason.length < 5 || reason.length > 500");
+    expect(route).not.toContain("UPDATE public.sport_payments");
+  });
+
+  it("fails closed when any active settlement item still owns the payment", () => {
+    expect(route).toContain("i.item_status = 'active'");
+    expect(route).toContain("FOR UPDATE OF i, b");
+    expect(route).toContain('"ACTIVE_SETTLEMENT_EXISTS"');
+    expect(route).toContain("workflow reversal/de-link");
+  });
+
+  it("records the status change and refreshes candidates asynchronously", () => {
+    expect(route).toContain('action: "status_change"');
+    expect(route).toContain("settlement_status: result.previousStatus");
+    expect(route).toContain("candidateRefreshPending: result.changed");
+    expect(route).toContain("setImmediate(() => queueQrisCandidateRefresh(companyId, paymentId))");
+  });
+});
+
 describe("QRIS exact-net approval route", () => {
   const routeStart = routeSource.lastIndexOf(
     'router.post("/qris-candidates/:candidateId/approve"',

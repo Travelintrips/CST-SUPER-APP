@@ -38,6 +38,7 @@ export interface QrisPaymentCandidateInput {
   amount: number;
   method: string | null;
   status: string | null;
+  settlementStatus?: string | null;
   paidAt: string | Date | null;
   /** Authoritative MDR amount, when already calculated on the payment. */
   canonicalMdrAmount?: number | string | null;
@@ -103,6 +104,7 @@ export interface QrisMutationBatchCandidate {
     paymentId: number;
     grossAmount: number;
     paymentStatus?: string | null;
+    settlementStatus?: string | null;
     providerName?: string | null;
     expectedSettlementDate: string | null;
     settlementRuleVersion: string | null;
@@ -408,6 +410,7 @@ export function generateQrisMutationBatchCandidates(input: {
           paymentId: payment.id,
           grossAmount: roundMoney(Number(payment.amount) || 0),
           paymentStatus: String(payment.status ?? "").trim() || null,
+          settlementStatus: String(payment.settlementStatus ?? "unsettled").trim() || "unsettled",
           providerName: payment.providerName ?? null,
           canonicalSettlementId: payment.canonicalSettlementId ?? null,
           expectedSettlementDate: mutation.transactionDate,
@@ -709,6 +712,8 @@ export function generateQrisMutationBatchCandidates(input: {
       paymentItems: selectedPayments.map((payment) => ({
         paymentId: payment.id,
         grossAmount: roundMoney(Number(payment.amount) || 0),
+        paymentStatus: String(payment.status ?? "").trim() || null,
+        settlementStatus: String(payment.settlementStatus ?? "unsettled").trim() || "unsettled",
         providerName: payment.providerName ?? null,
         canonicalSettlementId: payment.canonicalSettlementId ?? null,
         expectedSettlementDate: payment.expectedSettlementDate,
