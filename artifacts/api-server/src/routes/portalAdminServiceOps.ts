@@ -257,14 +257,14 @@ const sourceRows = sql`
 
     SELECT
       CASE
-        WHEN LOWER(COALESCE(d.category_key, '') || ' ' || COALESCE(d.product_scope, '') || ' ' || COALESCE(lines.line_names, '')) LIKE '%custom%'
-          OR LOWER(COALESCE(d.category_key, '') || ' ' || COALESCE(d.product_scope, '') || ' ' || COALESCE(lines.line_names, '')) LIKE '%pabean%'
+        WHEN LOWER(COALESCE(d.category_key, '') || ' ' || COALESCE(lines.line_names, '')) LIKE '%custom%'
+          OR LOWER(COALESCE(d.category_key, '') || ' ' || COALESCE(lines.line_names, '')) LIKE '%pabean%'
         THEN 'custom-clearance'
         ELSE 'freight-forwarding'
       END::text,
       CASE
-        WHEN LOWER(COALESCE(d.category_key, '') || ' ' || COALESCE(d.product_scope, '') || ' ' || COALESCE(lines.line_names, '')) LIKE '%custom%'
-          OR LOWER(COALESCE(d.category_key, '') || ' ' || COALESCE(d.product_scope, '') || ' ' || COALESCE(lines.line_names, '')) LIKE '%pabean%'
+        WHEN LOWER(COALESCE(d.category_key, '') || ' ' || COALESCE(lines.line_names, '')) LIKE '%custom%'
+          OR LOWER(COALESCE(d.category_key, '') || ' ' || COALESCE(lines.line_names, '')) LIKE '%pabean%'
         THEN 'Pabean / Custom Clearance'
         ELSE 'Freight Forwarding'
       END::text,
