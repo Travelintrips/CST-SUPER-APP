@@ -2515,6 +2515,7 @@ function CoaReferenceDialog({
 }) {
   const { toast } = useToast();
   const qc = useQueryClient();
+  const [, setLocation] = useLocation();
   const [search, setSearch] = useState("");
   const [selectedCode, setSelectedCode] = useState("");
   const [saving, setSaving] = useState(false);
@@ -2815,14 +2816,17 @@ function CoaReferenceDialog({
         );
       }
       toast({
-        title: "COA disimpan ke Rule AI dan draft jurnal dibuat",
-        description: `${selectedAccount.code} — ${selectedAccount.name}. Rule AI #${ruleAiBody?.data?.id ?? "baru"} aktif untuk perusahaan ini.`,
+        title: "Rule AI disetujui & referensi aktif",
+        description: `${selectedAccount.code} — ${selectedAccount.name}. Mutasi disetujui dan draft jurnal dibuat; Rule AI akan menjadi referensi transaksi berikutnya.`,
       });
       // The mutation list and QRIS candidate audit use different React Query
       // keys, so refresh both views after the one-time approval.
       qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] });
       await onSaved();
       onClose();
+      const ruleId = Number(ruleAiBody?.data?.id ?? 0);
+      const ruleQuery = ruleId > 0 ? `&highlightRuleId=${ruleId}` : "";
+      setLocation(`/finance/recon-config?tab=ai-rules${ruleQuery}`);
     } catch (error) {
       toast({
         title: "Gagal menyimpan pemetaan COA",

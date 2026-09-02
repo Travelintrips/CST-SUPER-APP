@@ -794,6 +794,10 @@ function AiRulesTab() {
   const [previewing, setPreviewing] = useState(false);
   const [ruleSearch, setRuleSearch] = useState("");
   const [coaDirectionFilter, setCoaDirectionFilter] = useState<"all" | "in" | "out">("all");
+  const [highlightedRuleId] = useState(() => {
+    const value = Number(new URLSearchParams(window.location.search).get("highlightRuleId") ?? 0);
+    return Number.isInteger(value) && value > 0 ? value : null;
+  });
 
   const loadCoaOptions = useCallback(async () => {
     setLoadingCoaOptions(true);
@@ -1183,9 +1187,23 @@ function AiRulesTab() {
     ].filter(Boolean).join(" ").toLowerCase();
     return searchableText.includes(normalizedRuleSearch);
   });
+  const highlightedRule = highlightedRuleId == null
+    ? null
+    : rows.find((row) => Number(row.id) === highlightedRuleId) ?? null;
 
   return (
     <div className="space-y-4">
+      {highlightedRule && (
+        <div className="flex items-start gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2.5 text-sm text-emerald-200">
+          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
+          <div>
+            <p className="font-semibold">Rule AI langsung disetujui dan aktif sebagai referensi</p>
+            <p className="mt-0.5 text-xs text-emerald-300/80">
+              {highlightedRule.name} akan digunakan untuk transaksi berikutnya pada perusahaan aktif.
+            </p>
+          </div>
+        </div>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-1 flex-wrap items-center gap-2 min-w-[320px]">
           <div className="relative min-w-[260px] flex-1 max-w-xl">
@@ -1247,19 +1265,27 @@ function AiRulesTab() {
                  <th className="pb-2 pr-3">Conf.</th>
                 <th className="pb-2 pr-3">Prioritas</th>
                  <th className="pb-2 pr-3">Dokumen / Pajak</th>
+                 <th className="pb-2 pr-3">Status</th>
                  <th className="pb-2 pr-3">Sumber</th>
                 <th className="pb-2">Aksi</th>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 && (
-                  <tr><td colSpan={10} className="py-8 text-center text-slate-500">Belum ada AI rule.</td></tr>
+                  <tr><td colSpan={11} className="py-8 text-center text-slate-500">Belum ada AI rule.</td></tr>
               )}
               {rows.length > 0 && filteredRows.length === 0 && (
-                <tr><td colSpan={10} className="py-8 text-center text-slate-500">Tidak ada rule yang sesuai filter.</td></tr>
+                 <tr><td colSpan={11} className="py-8 text-center text-slate-500">Tidak ada rule yang sesuai filter.</td></tr>
               )}
               {filteredRows.map(row => (
-                <tr key={row.id} className="border-b border-slate-800 hover:bg-slate-800/40">
+                 <tr
+                   key={row.id}
+                   className={`border-b border-slate-800 hover:bg-slate-800/40 ${
+                     Number(row.id) === highlightedRuleId
+                       ? "bg-emerald-500/10 ring-1 ring-inset ring-emerald-500/40"
+                       : ""
+                   }`}
+                 >
                   <td className="py-2 pr-3 text-white">{row.name}</td>
                   <td className="py-2 pr-3 font-mono text-xs text-slate-400">
                     {conditionSummary(row)}
@@ -1302,6 +1328,11 @@ function AiRulesTab() {
                      </div>
                    </td>
                    <td className="py-2 pr-3">
+                      {row.is_active
+                        ? <Badge className="bg-emerald-900 text-emerald-300 text-xs">Approved · Referensi aktif</Badge>
+                        : <Badge className="bg-slate-700 text-slate-400 text-xs">Nonaktif</Badge>}
+                    </td>
+                    <td className="py-2 pr-3">
                     <Badge className={row.source === "ai_generated" ? "bg-purple-900 text-purple-300 text-xs" : "bg-slate-700 text-slate-300 text-xs"}>
                       {row.source === "ai_generated" ? "AI" : "Manual"}
                     </Badge>
@@ -2307,7 +2338,12 @@ function UsageStatsTab() {
 // ─── Main page ─────────────────────────────────────────────────────────────────
 
 export default function ReconClassificationConfigPage() {
-  const [tab, setTab] = useState("business");
+  const [tab, setTab] = useState(() => {
+    const requestedTab = new URLSearchParams(window.location.search).get("tab");
+    return ["business", "routine", "income", "ai-rules", "keywords", "upload", "approval", "stats"].includes(requestedTab ?? "")
+      ? requestedTab!
+      : "business";
+  });
 
   const TABS = [
     { value: "business",  label: "Tipe Bisnis",          icon: BookOpen },
