@@ -1293,7 +1293,6 @@ function AiRulesTab() {
                  <tr><td colSpan={11} className="py-8 text-center text-slate-500">Tidak ada rule yang sesuai filter.</td></tr>
               )}
               {filteredRows.map(row => (
-<<<<<<< HEAD
                 <tr
                   key={row.id}
                   className={`border-b border-slate-800 hover:bg-slate-800/40 ${
@@ -1312,7 +1311,6 @@ function AiRulesTab() {
                       )}
                     </div>
                   </td>
-=======
                  <tr
                    key={row.id}
                    className={`border-b border-slate-800 hover:bg-slate-800/40 ${
@@ -1322,7 +1320,6 @@ function AiRulesTab() {
                    }`}
                  >
                   <td className="py-2 pr-3 text-white">{row.name}</td>
->>>>>>> 4031ec9de407047da3d475ec825bf9125b2f870d
                   <td className="py-2 pr-3 font-mono text-xs text-slate-400">
                     {conditionSummary(row)}
                   </td>
