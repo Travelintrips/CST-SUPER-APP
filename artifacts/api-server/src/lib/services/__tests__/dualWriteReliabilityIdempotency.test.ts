@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { mockDb } = vi.hoisted(() => ({
   mockDb: { execute: vi.fn() },
@@ -22,6 +22,32 @@ vi.mock("../../workerHeartbeat.js", () => ({
 describe("dual-write retry idempotency guards", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    delete process.env["MKT_DUAL_WRITE_RETRY_ENABLED"];
+    vi.useRealTimers();
+  });
+
+  it.each([
+    { label: "undefined", value: undefined, enabled: false },
+    { label: "false", value: "false", enabled: false },
+    { label: "true", value: "true", enabled: true },
+    { label: "invalid", value: "TRUE", enabled: false },
+  ])("enforces exact opt-in auto-retry flag for $label", async ({ value, enabled }) => {
+    vi.resetModules();
+    vi.useFakeTimers();
+    if (value === undefined) {
+      delete process.env["MKT_DUAL_WRITE_RETRY_ENABLED"];
+    } else {
+      process.env["MKT_DUAL_WRITE_RETRY_ENABLED"] = value;
+    }
+
+    const { registerHeartbeat } = await import("../../workerHeartbeat.js");
+    const { startDualWriteRetryWorker } = await import("../dualWriteReliabilityService.js");
+    startDualWriteRetryWorker();
+
+    expect(registerHeartbeat).toHaveBeenCalledTimes(enabled ? 1 : 0);
   });
 
   it("resolves an existing ledger row after a conflict instead of creating another log", async () => {

@@ -865,8 +865,8 @@ export async function retrySingleEntry(logId: number): Promise<{
 // ── Workers ───────────────────────────────────────────────────────────────────
 
 export function startDualWriteRetryWorker(): void {
-  if (process.env["MKT_DUAL_WRITE_RETRY_ENABLED"] === "false") {
-    logger.warn("[dualWrite:retry] Auto-retry dinonaktifkan oleh MKT_DUAL_WRITE_RETRY_ENABLED=false");
+  if (process.env["MKT_DUAL_WRITE_RETRY_ENABLED"] !== "true") {
+    logger.warn("[dualWrite:retry] Auto-retry dinonaktifkan; MKT_DUAL_WRITE_RETRY_ENABLED harus bernilai exact \"true\"");
     return;
   }
 
