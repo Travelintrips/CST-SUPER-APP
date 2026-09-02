@@ -1260,6 +1260,179 @@ function qrisEsc(value: string): string {
   return value.replace(/'/g, "''");
 }
 
+type QrisAutoPostDiagnostic = {
+  code: string;
+  stage: string;
+  problem: string;
+  revision: string;
+  action: string;
+  technicalDetail?: string | null;
+};
+
+function qrisAutoPostDiagnostic(error: any): QrisAutoPostDiagnostic {
+  const postgresError = findPostgresError(error);
+  const code = String(error?.code ?? postgresError?.code ?? "QRIS_AUTO_POST_FAILED");
+  const message = String(error?.message ?? postgresError?.message ?? "Auto-post QRIS gagal")
+    .replace(/^Failed query:\s*/i, "")
+    .trim()
+    .slice(0, 500);
+  const stage = String(error?.qrisStage ?? (
+    code.includes("CONFIG") ? "konfigurasi MDR" :
+      code.includes("COA") ? "COA bank canonical" :
+        code.includes("JOURNAL") ? "jurnal settlement" :
+          code.includes("PAYMENT") ? "validasi payment" :
+            code.includes("BANK") || code.includes("MUTATION") ? "mutasi bank" :
+              "settlement canonical"
+  ));
+  const mapping: Record<string, { revision: string; action: string }> = {
+    PAYMENT_NOT_CONFIRMED: {
+      revision: "Status payment di Sport Center",
+      action: "Konfirmasi payment, lalu buat kandidat QRIS ulang.",
+    },
+    INVALID_CANDIDATE: {
+      revision: "Nominal/tanggal/provider/rekening pada sumber payment atau mutasi",
+      action: "Perbaiki sumber yang disebutkan, lalu generate kandidat QRIS ulang.",
+    },
+    CANONICAL_SETTLEMENT_CONFIG_UNRESOLVED: {
+      revision: "Konfigurasi MDR owner-approved untuk company, provider, rekening, dan tanggal settlement",
+      action: "Lengkapi atau aktifkan satu konfigurasi MDR owner-approved, lalu retry.",
+    },
+    CANONICAL_SETTLEMENT_CONFIG_AMBIGUOUS: {
+      revision: "Konfigurasi MDR owner-approved yang tumpang tindih",
+      action: "Sisakan satu konfigurasi yang berlaku untuk rekening dan tanggal tersebut, lalu retry.",
+    },
+    CANONICAL_SETTLEMENT_BANK_COA_UNRESOLVED: {
+      revision: "COA bank canonical",
+      action: "Hubungkan rekening bank ke COA postable canonical, lalu retry.",
+    },
+    CANONICAL_PAYMENT_JOURNAL_NOT_POSTED: {
+      revision: "Jurnal payment Sport Center",
+      action: "Pastikan jurnal payment sudah posted melalui workflow akuntansi, lalu retry.",
+    },
+    CANONICAL_PAYMENT_JOURNAL_BRIDGE_UNRESOLVED: {
+      revision: "Bridge jurnal payment canonical",
+      action: "Perbaiki relasi payment ke jurnal canonical, lalu retry.",
+    },
+    CANONICAL_SETTLEMENT_JOURNAL_NOT_POSTED: {
+      revision: "Jurnal settlement canonical",
+      action: "Periksa posting jurnal settlement; jangan membuat jurnal manual, gunakan retry scoped.",
+    },
+    CANONICAL_SETTLEMENT_JOURNAL_NOT_BALANCED: {
+      revision: "Keseimbangan jurnal settlement",
+      action: "Perbaiki konfigurasi/COA yang menghasilkan jurnal tidak seimbang, lalu retry scoped.",
+    },
+    CANONICAL_PAYMENT_SETTLEMENT_STATE_CONFLICT: {
+      revision: "Status settlement payment",
+      action: "Muat ulang kandidat. Jika payment sudah dimiliki batch lain, jangan approve ulang.",
+    },
+  };
+  const guidance = mapping[code] ?? {
+    revision: "Data dan safeguard pada tahap auto-post yang disebutkan",
+    action: "Periksa detail teknis, revisi sumber/configuration terkait, lalu retry scoped setelah data konsisten.",
+  };
+  return {
+    code,
+    stage,
+    problem: message || "Safeguard canonical menahan auto-post.",
+    revision: guidance.revision,
+    action: guidance.action,
+    technicalDetail: postgresError?.detail
+      ? String(postgresError.detail).slice(0, 500)
+      : null,
+  };
+}
+
+async function persistQrisAutoPostStatus(
+  candidateId: number,
+  status: "running" | "succeeded" | "failed",
+  diagnostic?: QrisAutoPostDiagnostic,
+): Promise<boolean> {
+  const details = diagnostic ? `'${qrisEsc(JSON.stringify(diagnostic))}'::jsonb` : "NULL";
+  const result = await db.execute(sql.raw(`
+    UPDATE qris_mutation_batch_candidates
+    SET auto_post_status = '${status}',
+        auto_post_stage = ${diagnostic ? `'${qrisEsc(diagnostic.stage)}'` : "NULL"},
+        auto_post_problem = ${diagnostic ? `'${qrisEsc(diagnostic.problem)}'` : "NULL"},
+        auto_post_revision = ${diagnostic ? `'${qrisEsc(diagnostic.revision)}'` : "NULL"},
+        auto_post_action = ${diagnostic ? `'${qrisEsc(diagnostic.action)}'` : "NULL"},
+        auto_post_details = ${details},
+        auto_post_attempted_at = COALESCE(auto_post_attempted_at, NOW()),
+        auto_post_completed_at = ${status === "succeeded" ? "NOW()" : "NULL"},
+        updated_at = NOW()
+    WHERE id = ${candidateId}
+      AND (
+        '${status}' <> 'running'
+        OR COALESCE(auto_post_status, 'pending') IN ('pending', 'failed')
+      )
+  `));
+  return (result.rowCount ?? 0) === 1;
+}
+
+async function triggerAutomaticQrisApproval(
+  req: any,
+  candidateIds: number[],
+  companyId: number,
+): Promise<void> {
+  const port = Number(process.env.REPLIT_API_PORT ?? process.env.PORT ?? process.env.API_PORT ?? 8080);
+  if (!Number.isInteger(port) || port <= 0) return;
+  const cookie = typeof req.headers?.cookie === "string" ? req.headers.cookie : "";
+  const authorization = typeof req.headers?.authorization === "string"
+    ? req.headers.authorization
+    : "";
+  let nextIndex = 0;
+  const worker = async () => {
+    while (nextIndex < candidateIds.length) {
+      const candidateId = candidateIds[nextIndex++];
+      try {
+        const claimed = await persistQrisAutoPostStatus(candidateId, "running");
+        // A second generation request may see the same candidate while the first
+        // approval is still running. The database claim makes this retry-safe.
+        if (!claimed) continue;
+        const response = await fetch(
+          `http://127.0.0.1:${port}/api/bank-reconciliation/qris-candidates/${candidateId}/approve`,
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-qris-auto-approval": "1",
+              ...(cookie ? { cookie } : {}),
+              ...(authorization ? { authorization } : {}),
+            },
+            body: JSON.stringify({ companyId }),
+          },
+        );
+        if (!response.ok) {
+          const body = await response.json().catch(
+            () => ({} as Record<string, unknown>),
+          ) as Record<string, any>;
+          const diagnostic = qrisAutoPostDiagnostic({
+            code: body?.code,
+            message: body?.error,
+          });
+          await persistQrisAutoPostStatus(candidateId, "failed", diagnostic);
+          continue;
+        }
+        await persistQrisAutoPostStatus(candidateId, "succeeded");
+      } catch (error: any) {
+        await persistQrisAutoPostStatus(candidateId, "failed", qrisAutoPostDiagnostic(error))
+          .catch((persistError) => logger.error(
+            { err: persistError?.message, candidateId },
+            "[bankRecon] failed to persist QRIS auto-post diagnostic",
+          ));
+        logger.warn(
+          { err: error?.message, candidateId, companyId },
+          "[bankRecon] QRIS automatic approval failed",
+        );
+      }
+    }
+  };
+  // Keep background approval bounded so a large import cannot exhaust the
+  // development/prod pool while still processing candidates independently.
+  await Promise.all(
+    Array.from({ length: Math.min(3, candidateIds.length) }, () => worker()),
+  );
+}
+
 function findPostgresError(error: unknown): Record<string, unknown> | null {
   let current: unknown = error;
   for (let depth = 0; depth < 5 && current; depth += 1) {
@@ -1771,6 +1944,37 @@ router.post("/qris-candidates/generate", async (req, res) => {
       to: req.body?.to ?? null,
       dryRun,
     });
+    const automaticCandidateIds: number[] = [];
+    if (!dryRun && Number.isInteger(Number(companyId)) && Number(companyId) > 0) {
+      const matchedMutationIds = result.candidates
+        .filter((candidate) => candidate.status === "MATCHED")
+        .map((candidate) => Number(candidate.mutationId))
+        .filter((id) => Number.isSafeInteger(id) && id > 0);
+      if (matchedMutationIds.length > 0) {
+        const { rows } = await db.execute(sql.raw(`
+          SELECT id
+          FROM qris_mutation_batch_candidates
+          WHERE company_id = ${Number(companyId)}
+            AND mutation_id IN (${[...new Set(matchedMutationIds)].join(",")})
+            AND UPPER(COALESCE(reconciliation_status, '')) = 'MATCHED'
+            AND LOWER(COALESCE(status, '')) NOT IN
+              ('approved', 'completed', 'superseded', 'stale', 'ineligible')
+            AND COALESCE(auto_post_status, 'pending') IN ('pending', 'failed')
+          ORDER BY id
+        `));
+        automaticCandidateIds.push(
+          ...(rows as Array<Record<string, unknown>>)
+            .map((row) => Number(row.id))
+            .filter((id) => Number.isSafeInteger(id) && id > 0),
+        );
+      }
+      if (automaticCandidateIds.length > 0) {
+        // The approval request is deliberately sent through the active
+        // canonical endpoint. It therefore keeps all payment, company, MDR,
+        // COA, journal, settlement, and race guards in one place.
+        void triggerAutomaticQrisApproval(req, automaticCandidateIds, Number(companyId));
+      }
+    }
     audit(req, {
       action: "qris_candidate_generation",
       module: "accounting",
@@ -1779,14 +1983,17 @@ router.post("/qris-candidates/generate", async (req, res) => {
         dryRun: result.dryRun,
         mutationId,
         generated: result.generated,
-        automaticFinalReconciliation: false,
+        automaticFinalReconciliation: automaticCandidateIds.length > 0,
         automaticMatch: true,
+        automaticCandidateIds,
       },
     });
     return res.json({
       ok: true,
       mode: "strict_h_minus_one_auto",
-      automaticFinalReconciliation: false,
+      automaticFinalReconciliation: automaticCandidateIds.length > 0,
+      automaticPostStatus: automaticCandidateIds.length > 0 ? "started" : "not_applicable",
+      automaticCandidateIds,
       ...result,
     });
   } catch (e: any) {

@@ -672,6 +672,19 @@ interface QrisCandidateAudit {
   diagnostic_has_expected_dates?: boolean | null;
   diagnostic_date_match?: boolean | null;
   diagnostic_amount_difference?: number | string | null;
+  auto_post_status?: "pending" | "running" | "succeeded" | "failed" | string | null;
+  auto_post_stage?: string | null;
+  auto_post_problem?: string | null;
+  auto_post_revision?: string | null;
+  auto_post_action?: string | null;
+  auto_post_details?: {
+    code?: string | null;
+    stage?: string | null;
+    problem?: string | null;
+    revision?: string | null;
+    action?: string | null;
+    technicalDetail?: string | null;
+  } | null;
 }
 
 interface CanonicalSettlementQueueItem {
@@ -3323,6 +3336,12 @@ function QrisMutationCard({
   const displayedPaymentCount = isReadOnlyEvidence ? allItems.length : remainingPaymentCount;
   const statusText = isCanonicalReconciled
     ? "Sudah Direkonsiliasi"
+    : audit.auto_post_status === "running"
+      ? "Auto-post sedang berjalan"
+    : audit.auto_post_status === "failed"
+      ? "Auto-post gagal — Perlu Revisi"
+    : audit.auto_post_status === "succeeded"
+      ? "Auto-post selesai"
     : hasCanonicalSettlementCandidate
       ? "Settlement Canonical — Perlu Review"
     : isApproved
@@ -3339,6 +3358,7 @@ function QrisMutationCard({
   const positiveStatus = isCanonicalReconciled
     || isApproved
     || isDepleted
+    || audit.auto_post_status === "succeeded"
     || (isMatched && !isEmptyMatchedCandidate && !isStaleMatchedCandidate
       && !hasCanonicalSettlementCandidate);
 
@@ -3433,6 +3453,42 @@ function QrisMutationCard({
                   Konfirmasi payment di Sport Center sebelum memilih dan menyetujui batch QRIS ini.
                 </p>
               </div>
+            )}
+            {audit.auto_post_status === "failed" && (
+              <div
+                className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2.5 text-xs text-red-950 dark:border-red-800 dark:bg-red-950 dark:text-red-100"
+                onClick={e => e.stopPropagation()}
+              >
+                <div className="flex items-start gap-2">
+                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-300" />
+                  <div className="min-w-0 flex-1 space-y-1.5">
+                    <p className="font-semibold">Auto-post QRIS tertahan oleh safeguard</p>
+                    <p><strong>Masalahnya:</strong> {audit.auto_post_problem ?? audit.auto_post_details?.problem ?? "Safeguard canonical menahan proses."}</p>
+                    <p><strong>Perlu direvisi di:</strong> {audit.auto_post_revision ?? audit.auto_post_details?.revision ?? audit.auto_post_stage ?? "Data/configuration canonical"}</p>
+                    <p><strong>Cara memperbaiki:</strong> {audit.auto_post_action ?? audit.auto_post_details?.action ?? "Perbaiki data terkait lalu coba lagi."}</p>
+                    {audit.auto_post_details?.code && (
+                      <p className="text-[10px] opacity-75">Kode: {audit.auto_post_details.code}</p>
+                    )}
+                    {onGenerateQrisCandidates && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="mt-1 h-7 border-red-300 bg-white text-[11px] text-red-900 hover:bg-red-100 dark:border-red-700 dark:bg-red-950 dark:text-red-100"
+                        disabled={qrisGenerationPending}
+                        onClick={() => onGenerateQrisCandidates(m.id)}
+                      >
+                        {qrisGenerationPending ? "Mencoba ulang..." : "Periksa ulang & retry scoped"}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+            {audit.auto_post_status === "running" && (
+              <p className="mt-3 rounded-md border border-blue-300 bg-blue-50 px-3 py-2 text-xs text-blue-900 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-100">
+                Kandidat MATCHED sedang diproses melalui settlement canonical. Status final akan muncul setelah jurnal dan mutasi selesai diverifikasi.
+              </p>
             )}
             {(isReadOnlyEvidence || (differenceAbs != null && differenceAbs >= 0.5) || (!hasIdentifiedSettlement && differenceAbs == null)) && (
               <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2.5 text-xs text-white dark:border-amber-800 dark:bg-amber-950">

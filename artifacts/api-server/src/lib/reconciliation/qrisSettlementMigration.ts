@@ -367,6 +367,14 @@ async function runQrisSettlementMigrationOnce(): Promise<void> {
        -- so a constrained rate would prevent the audit row from being saved.
        effective_deduction_rate NUMERIC,
       review_reason TEXT,
+       auto_post_status TEXT NOT NULL DEFAULT 'pending',
+       auto_post_stage TEXT,
+       auto_post_problem TEXT,
+       auto_post_revision TEXT,
+       auto_post_action TEXT,
+       auto_post_details JSONB,
+       auto_post_attempted_at TIMESTAMPTZ,
+       auto_post_completed_at TIMESTAMPTZ,
       generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -387,8 +395,16 @@ async function runQrisSettlementMigrationOnce(): Promise<void> {
       ADD COLUMN IF NOT EXISTS confidence NUMERIC(5,4) NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS observed_deduction NUMERIC(16,2) NOT NULL DEFAULT 0,
        ADD COLUMN IF NOT EXISTS effective_deduction_rate NUMERIC,
-      ADD COLUMN IF NOT EXISTS review_reason TEXT,
-      ADD COLUMN IF NOT EXISTS generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+       ADD COLUMN IF NOT EXISTS review_reason TEXT,
+       ADD COLUMN IF NOT EXISTS generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+       ADD COLUMN IF NOT EXISTS auto_post_status TEXT NOT NULL DEFAULT 'pending',
+       ADD COLUMN IF NOT EXISTS auto_post_stage TEXT,
+       ADD COLUMN IF NOT EXISTS auto_post_problem TEXT,
+       ADD COLUMN IF NOT EXISTS auto_post_revision TEXT,
+       ADD COLUMN IF NOT EXISTS auto_post_action TEXT,
+       ADD COLUMN IF NOT EXISTS auto_post_details JSONB,
+       ADD COLUMN IF NOT EXISTS auto_post_attempted_at TIMESTAMPTZ,
+       ADD COLUMN IF NOT EXISTS auto_post_completed_at TIMESTAMPTZ
   `).catch(() => {});
   // Existing databases may have the former NUMERIC(9,8) column. The generated
   // rate is retained as audit evidence even when it is far outside the provider
