@@ -91,6 +91,7 @@ const REGISTRY_ROWS: readonly RegistryRow[] = [
   ["vendor_catalog_schema", "Vendor catalog schema migration", "schema"],
   ["vendor_profile_hardening", "Vendor profile hardening migration (Phase Final)", "repair"],
   ["featured_product", "Featured product migration", "schema"],
+  ["marketplace_legacy_write_idempotency", "Marketplace legacy write idempotency migration", "schema"],
   ["marketplace_vendor_invoice", "Marketplace vendor invoice migration", "schema"],
   ["marketplace_ap_preparation", "Marketplace AP preparation migration", "schema"],
   ["logistic_vendor_fulfillments", "Logistic vendor fulfillments migration", "schema"],

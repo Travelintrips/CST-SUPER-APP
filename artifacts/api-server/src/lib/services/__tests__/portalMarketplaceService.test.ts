@@ -91,14 +91,17 @@ const individualContext = {
 function makeTx() {
   const insertedValues: Record<string, unknown>[] = [];
   const tx = {
+    execute: vi.fn().mockResolvedValue({ rows: [] }),
     insert: vi.fn(() => ({
       values: vi.fn((values: Record<string, unknown>) => {
         insertedValues.push(values);
-        return {
+        const query = {
+          onConflictDoNothing: vi.fn(() => query),
           returning: vi.fn().mockResolvedValue([
             { id: 101, orderNumber: "MCT-260828-12345" },
           ]),
         };
+        return query;
       }),
     })),
   };

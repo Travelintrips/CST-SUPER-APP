@@ -35,6 +35,7 @@ import { runCustomerPortalProductTaxMigration } from "./lib/customerPortalProduc
 import { runCustomerPortalProductCoaMigration } from "./lib/customerPortalProductCoaMigration.js";
 import { runCustomerPortalServiceTypeMigration } from "./lib/customerPortalServiceTypeMigration.js";
 import { runCustomerPortalPaylabsMigration } from "./lib/customerPortalPaylabsMigration.js";
+import { runMarketplaceLegacyWriteIdempotencyMigration } from "./lib/marketplaceLegacyWriteIdempotencyMigration.js";
 import { runVendorProfileFieldsMigration } from "./lib/vendorProfileFieldsMigration";
 import { runSupplierEnhancementMigration } from "./lib/supplierEnhancementMigration";
 import { runAccountingMigration, repairKasErSportCenterEntries, repairOrphanedEntryLines, syncAccountingSequences, checkSequenceDesync } from "./lib/accountingMigration";
@@ -2126,6 +2127,7 @@ async function startServer() {
     .then(() => runWithRetry("Vendor catalog schema migration", runVendorCatalogSchemaMigration))
     .then(() => runWithRetry("Vendor profile hardening migration (Phase Final)", runVendorProfileMigration))
     .then(() => runWithRetry("Featured product migration", runFeaturedProductMigration))
+       .then(() => runWithRetry("Marketplace legacy write idempotency migration", runMarketplaceLegacyWriteIdempotencyMigration))
        .then(() => runWithRetry("Marketplace vendor invoice migration", runMktVendorInvoiceMigration))
        .then(() => runWithRetry("Marketplace AP preparation migration", runMktApPreparationMigration))
     .then(() => runWithRetry("Logistic vendor fulfillments migration", runLogisticVendorFulfillmentsMigration))

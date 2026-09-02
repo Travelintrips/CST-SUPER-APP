@@ -12,7 +12,7 @@ import {
   portalProductOrdersTable,
   portalProductOrderItemsTable,
 } from "@workspace/db";
-import { createHash } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { eq, and, asc, sql } from "drizzle-orm";
 import { getCatalogItemPublic } from "./portalVendorCatalogService.js";
 import { getPortalCustomerContext } from "./portalCustomerContextService.js";
@@ -82,13 +82,17 @@ function buildLogicalRequestKey(input: {
   portalCustomerId: number | null;
   buyerEmail: string;
   buyerPhone: string;
-}): string {
-  // Preserve the legacy five-minute duplicate window while making the
-  // canonical identity survive a retry much later.
-  const bucket = Math.floor(Date.now() / (5 * 60 * 1000));
-  return `mkt-rfq:${createHash("sha256")
-    .update(JSON.stringify({ ...input, bucket }))
-    .digest("hex")}`;
+}, correlationId?: string | null): string {
+  // A caller-provided correlation id is stable when the caller explicitly
+  // retries a request. Without one, generate a fresh identity: payload
+  // fingerprints are not safe idempotency keys because two real orders can
+  // legitimately have identical payloads.
+  if (correlationId) {
+    return `mkt-rfq:correlation:${createHash("sha256")
+      .update(JSON.stringify({ ...input, correlationId }))
+      .digest("hex")}`;
+  }
+  return `mkt-rfq:request:${randomUUID()}`;
 }
 
 // ─── submitMarketplaceQuote ───────────────────────────────────────────────────
@@ -150,6 +154,7 @@ async function insertLegacyQuote(params: {
   unitStr: string;
   sellPrice: number;
   qtyNum: number;
+  idempotencyKey: string | null;
 }): Promise<LegacyQuoteOrder> {
   // Preserve the legacy MCT-YYMMDD-RAND5 contract. Retry only a unique
   // order-number collision; never replay an arbitrary failed transaction.
@@ -173,7 +178,33 @@ async function insertLegacyQuote(params: {
           templateVersion:    params.templateVersion,
           customFieldValues:  params.customFieldValues,
           templateSnapshot:   params.catalogSnapshot,
+          idempotencyKey:     params.idempotencyKey,
+        }).onConflictDoNothing({
+          target: portalProductOrdersTable.idempotencyKey,
         }).returning();
+
+        // A concurrent retry can wait on the unique key and then observe the
+        // compatibility row committed by the first request. Reuse that row
+        // instead of creating another header and line.
+        if (!hdr) {
+          const existing = await tx.execute(sql`
+            SELECT id, order_number
+            FROM portal_product_orders
+            WHERE idempotency_key = ${params.idempotencyKey}
+            LIMIT 1
+          `);
+          const existingRow = existing.rows[0] as {
+            id?: number | string;
+            order_number?: string;
+          } | undefined;
+          if (!existingRow?.id || !existingRow.order_number) {
+            throw new Error("Legacy compatibility idempotency row tidak ditemukan");
+          }
+          return {
+            orderNumber: existingRow.order_number,
+            id: Number(existingRow.id),
+          };
+        }
 
         await tx.insert(portalProductOrderItemsTable).values({
           orderId:     hdr!.id,
@@ -282,7 +313,7 @@ export async function submitMarketplaceQuote(params: {
       portalCustomerId,
       buyerEmail: resolvedEmail,
       buyerPhone: resolvedPhone,
-    });
+    }, params.correlationId);
 
   // ── 3. Price / order calculations ────────────────────────────────────────
   const qtyNum     = Math.max(1, Number(qty) || 1);
@@ -329,9 +360,10 @@ export async function submitMarketplaceQuote(params: {
     effectiveShippingAddress ? `Alamat: ${effectiveShippingAddress}` : null,
   ].filter(Boolean).join("\n") || null;
 
-  // ── 4. RFQ idempotency — same buyer + phone + catalog item within 5 minutes
-  // Keep catalog items distinct even when they share a template (or have none).
-  const quoteWindowStart = new Date(Date.now() - 5 * 60 * 1000);
+  // ── 4. RFQ idempotency — exact logical request only ─────────────────────
+  // Do not deduplicate by customer/payload/time window: two legitimate orders
+  // may contain the same values. Explicit Idempotency-Key and correlation
+  // identity are the only reusable request identities.
   const existingQuote = await db.execute(sql`
     SELECT
       ppo.id,
@@ -342,17 +374,7 @@ export async function submitMarketplaceQuote(params: {
     LEFT JOIN mkt_dual_write_log dwl
       ON dwl.portal_order_id = ppo.id
      AND dwl.mkt_rfq_id IS NOT NULL
-    WHERE ppo.phone = ${resolvedPhone}
-      AND ppo.email = ${resolvedEmail}
-      AND ppo.status = 'Quote Request'
-      AND ppo.created_at >= ${quoteWindowStart}
-      AND (
-        ppo.template_snapshot->>'vendorCatalogItemId' = ${String(item.id)}
-        OR (
-          ppo.template_snapshot->>'vendorCatalogItemId' IS NULL
-          AND ppo.template_id IS NOT DISTINCT FROM ${item.templateId ?? null}
-        )
-      )
+    WHERE ppo.idempotency_key = ${logicalRequestKey}
     ORDER BY ppo.id ASC
     LIMIT 1
   `);
@@ -462,6 +484,7 @@ export async function submitMarketplaceQuote(params: {
       unitStr,
       sellPrice,
       qtyNum,
+      idempotencyKey: logicalRequestKey,
     });
   } catch (error) {
     if (!mktRfqResult) throw error;
