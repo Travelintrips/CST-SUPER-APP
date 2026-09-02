@@ -5952,6 +5952,7 @@ export default function BankReconciliationPage() {
   const [page,           setPage]           = useState(0);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [showQrisAuditList, setShowQrisAuditList] = useState(false);
+  const [showCanonicalSettlementQueue, setShowCanonicalSettlementQueue] = useState(true);
   const PAGE_SIZE = 20;
 
   // ── UI state ──────────────────────────────────────────────────────────────
@@ -7419,7 +7420,12 @@ export default function BankReconciliationPage() {
         {/* Canonical QRIS settlement queue/history. The legacy candidate audit
             remains available below for bank-evidence approval compatibility,
             but this is the source-of-truth view for settlement lifecycle. */}
-        <Card className="border-indigo-200/70 dark:border-indigo-900/70">
+        <Collapsible
+          open={showCanonicalSettlementQueue}
+          onOpenChange={setShowCanonicalSettlementQueue}
+          className="w-full"
+        >
+          <Card className="border-indigo-200/70 dark:border-indigo-900/70">
           <CardHeader className="pb-3">
             <div className="flex items-start justify-between gap-3 flex-wrap">
               <div>
@@ -7431,9 +7437,28 @@ export default function BankReconciliationPage() {
                   Sumber status, nominal, payment, dan history berasal dari Sport Center canonical settlement.
                 </p>
               </div>
-              {qrisAuditLoading && <Loader2 className="h-4 w-4 animate-spin text-indigo-600" />}
+              <div className="flex items-center gap-2">
+                {qrisAuditLoading && <Loader2 className="h-4 w-4 animate-spin text-indigo-600" />}
+                <CollapsibleTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground"
+                    aria-label={showCanonicalSettlementQueue
+                      ? "Tutup antrean settlement QRIS canonical"
+                      : "Buka antrean settlement QRIS canonical"}
+                  >
+                    {showCanonicalSettlementQueue ? "Tutup" : "Buka"}
+                    {showCanonicalSettlementQueue
+                      ? <ChevronUp className="h-3.5 w-3.5" />
+                      : <ChevronDown className="h-3.5 w-3.5" />}
+                  </Button>
+                </CollapsibleTrigger>
+              </div>
             </div>
           </CardHeader>
+          <CollapsibleContent asChild>
           <CardContent className="space-y-3">
             <div className="grid grid-cols-2 gap-2">
               <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
@@ -7512,7 +7537,9 @@ export default function BankReconciliationPage() {
               </div>
             )}
           </CardContent>
-        </Card>
+          </CollapsibleContent>
+          </Card>
+        </Collapsible>
 
         {/* QRIS candidates are shown directly inside each bank mutation card.
             Keep the legacy audit block unreachable while the endpoint contract
