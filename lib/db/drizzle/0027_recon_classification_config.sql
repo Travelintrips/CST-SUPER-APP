@@ -72,6 +72,8 @@ CREATE TABLE IF NOT EXISTS "recon_ai_classification_rules" (
   "action_flow"         TEXT,
   "action_coa_code"     TEXT,
   "action_config_code"  TEXT,
+  "requires_document_upload" BOOLEAN NOT NULL DEFAULT FALSE,
+  "tax_type"            TEXT NOT NULL DEFAULT 'none',
   "confidence"          NUMERIC(4,2) DEFAULT 0.80,
   "priority"            INTEGER NOT NULL DEFAULT 50,
   "is_active"           BOOLEAN NOT NULL DEFAULT TRUE,

@@ -64,6 +64,7 @@ import { canonicalMutationKey } from "../lib/reconciliation/canonicalMutationKey
 import { voidApprovedJournal } from "../lib/accounting/approveAndCreateJournal.js";
 import { trackMutationApproval, runUsageTrackingMigration } from "../lib/usageTrackingService.js";
 import { ObjectStorageService } from "../lib/objectStorage.js";
+import { extractBankProofOcr } from "../lib/bankProofOcr.js";
 import {
   detectFormat,
   parseMT940,
@@ -453,6 +454,10 @@ export async function runBankReconciliationCoreMigration() {
       matched_payment_id INTEGER,
       matched_order_id   INTEGER,
       uploaded_proof_url TEXT,
+      proof_ocr_status TEXT NOT NULL DEFAULT 'not_started',
+      proof_ocr_result JSONB,
+      proof_ocr_error TEXT,
+      proof_ocr_completed_at TIMESTAMPTZ,
       journal_entry_id   INTEGER,
       company_id         INTEGER,
       import_batch_id    INTEGER,
@@ -750,6 +755,10 @@ export async function runBankReconciliationCoreMigration() {
   await db.execute(sql.raw(`ALTER TABLE bank_mutations ADD COLUMN IF NOT EXISTS posted_at TIMESTAMPTZ`)).catch(() => {});
   // suspected_duplicate: flagged by canonical backfill when key collision exists
   await db.execute(sql.raw(`ALTER TABLE bank_mutations ADD COLUMN IF NOT EXISTS suspected_duplicate BOOLEAN NOT NULL DEFAULT FALSE`)).catch(() => {});
+  await db.execute(sql.raw(`ALTER TABLE bank_mutations ADD COLUMN IF NOT EXISTS proof_ocr_status TEXT NOT NULL DEFAULT 'not_started'`)).catch(() => {});
+  await db.execute(sql.raw(`ALTER TABLE bank_mutations ADD COLUMN IF NOT EXISTS proof_ocr_result JSONB`)).catch(() => {});
+  await db.execute(sql.raw(`ALTER TABLE bank_mutations ADD COLUMN IF NOT EXISTS proof_ocr_error TEXT`)).catch(() => {});
+  await db.execute(sql.raw(`ALTER TABLE bank_mutations ADD COLUMN IF NOT EXISTS proof_ocr_completed_at TIMESTAMPTZ`)).catch(() => {});
 
   // ── Journal Reuse Engine: voided/reversed flags on accounting_entries ────────
   // resolveSportPaymentEntry (and all other source adapters in journalReuseEngine.ts)
@@ -1976,6 +1985,227 @@ router.patch("/qris-candidates/payments/:paymentId/date", async (req, res) => {
     return res.status(status).json({
       error: e?.message ?? "Gagal memperbarui tanggal payment Sport Center",
       code: e?.code ?? "PAYMENT_DATE_UPDATE_FAILED",
+    });
+  }
+});
+
+// ─── PATCH /api/bank-reconciliation/qris-candidates/payments/:paymentId/settlement-status
+// Only the canonical Sport Center source is updated here. The public mirror is
+// maintained by the source trigger, so a reviewer cannot accidentally update
+// the mirror and leave the settlement builder reading a different status.
+router.patch("/qris-candidates/payments/:paymentId/settlement-status", async (req, res) => {
+  if (!await requireAdmin(req, res)) return;
+
+  const paymentId = Number.parseInt(String(req.params.paymentId ?? ""), 10);
+  const requestedStatus = String(
+    req.body?.settlementStatus ?? req.body?.settlement_status ?? "",
+  ).trim().toLowerCase();
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  const companyFromBody = req.body?.companyId ?? req.body?.company_id;
+
+  if (!Number.isInteger(paymentId) || paymentId <= 0) {
+    return res.status(400).json({
+      error: "ID payment Sport Center tidak valid",
+      code: "INVALID_PAYMENT_ID",
+    });
+  }
+  if (requestedStatus !== "unsettled") {
+    return res.status(400).json({
+      error: "Aksi ini hanya dapat mengubah status menjadi unsettled",
+      code: "INVALID_SETTLEMENT_STATUS",
+    });
+  }
+  if (reason.length < 5 || reason.length > 500) {
+    return res.status(400).json({
+      error: "Alasan perubahan wajib diisi (5–500 karakter)",
+      code: "INVALID_REASON",
+    });
+  }
+
+  try {
+    const companyId = resolveCompanyId(req);
+    if (
+      companyFromBody != null
+      && companyFromBody !== ""
+      && Number(companyFromBody) !== companyId
+    ) {
+      return res.status(403).json({
+        error: "Company payment tidak sesuai dengan perusahaan aktif",
+        code: "COMPANY_CONTEXT_MISMATCH",
+      });
+    }
+
+    const result = await db.transaction(async (tx) => {
+      const sourceResult = await tx.execute(sql`
+        SELECT
+          sp.id,
+          sp.company_id,
+          COALESCE(
+            to_jsonb(sp)->>'payment_number',
+            to_jsonb(sp)->>'reference_number',
+            to_jsonb(sp)->>'provider_order_id',
+            CONCAT('SPORT-', sp.id::text)
+          ) AS payment_number,
+          sp.payment_method::text AS payment_method,
+          sp.settlement_status::text AS settlement_status,
+          COALESCE(
+            to_jsonb(sp)->>'settlement_reference',
+            to_jsonb(sp)->>'provider_reference',
+            to_jsonb(sp)->>'reference_number'
+          ) AS settlement_reference,
+          COALESCE(
+            to_jsonb(sp)->>'settlement_date',
+            to_jsonb(sp)->>'expected_settlement_date'
+          ) AS settlement_date,
+          COALESCE(
+            sp.company_id,
+            CASE WHEN mapping.company_count = 1 THEN mapping.company_id END
+          ) AS resolved_company_id
+        FROM sport_center.sport_payments sp
+        LEFT JOIN sport_center.sport_bookings sb ON sb.id = sp.booking_id
+        LEFT JOIN LATERAL (
+          SELECT
+            COUNT(*)::integer AS company_count,
+            MIN(fcm.company_id)::integer AS company_id
+          FROM sport_center.facility_company_mappings fcm
+          WHERE fcm.facility_id = sb.facility_id
+            AND fcm.is_active = TRUE
+            AND fcm.approval_status = 'OWNER_APPROVED'
+        ) mapping ON TRUE
+        WHERE sp.id = ${paymentId}
+        FOR UPDATE OF sp
+      `);
+      const source = sourceResult.rows[0] as Record<string, unknown> | undefined;
+      if (!source) {
+        throw Object.assign(new Error("Payment Sport Center tidak ditemukan"), {
+          statusCode: 404,
+          code: "PAYMENT_NOT_FOUND",
+        });
+      }
+      if (Number(source.resolved_company_id ?? source.company_id) !== companyId) {
+        throw Object.assign(new Error("Payment bukan milik perusahaan aktif"), {
+          statusCode: 403,
+          code: "COMPANY_ACCESS_DENIED",
+        });
+      }
+      if (!String(source.payment_method ?? "").toLowerCase().includes("qris")) {
+        throw Object.assign(new Error("Payment ini bukan payment QRIS"), {
+          statusCode: 409,
+          code: "PAYMENT_NOT_QRIS",
+        });
+      }
+
+      const previousStatus = String(source.settlement_status ?? "unsettled").toLowerCase();
+      if (previousStatus === "unsettled") {
+        return {
+          changed: false,
+          previousStatus,
+          payment: source,
+          activeSettlement: null,
+        };
+      }
+
+      // A posted/reconciled batch owns the settlement state. Resetting the
+      // source status without reversing/de-linking that batch would corrupt
+      // the canonical ledger and make the next approval ambiguous.
+      const activeSettlementResult = await tx.execute(sql`
+        SELECT
+          i.settlement_id,
+          b.status::text AS settlement_batch_status
+        FROM sport_center.payment_settlement_items i
+        JOIN sport_center.payment_settlement_batches b
+          ON b.id = i.settlement_id
+        WHERE i.payment_id = ${paymentId}
+          AND i.item_status = 'active'
+        LIMIT 1
+        FOR UPDATE OF i, b
+      `);
+      const activeSettlement =
+        activeSettlementResult.rows[0] as Record<string, unknown> | undefined;
+      if (activeSettlement) {
+        throw Object.assign(
+          new Error(
+            `Payment masih berada di settlement batch aktif #${activeSettlement.settlement_id}; gunakan workflow reversal/de-link terlebih dahulu`,
+          ),
+          {
+            statusCode: 409,
+            code: "ACTIVE_SETTLEMENT_EXISTS",
+            settlementId: Number(activeSettlement.settlement_id),
+          },
+        );
+      }
+
+      const updatedResult = await tx.execute(sql`
+        UPDATE sport_center.sport_payments
+        SET settlement_status = 'unsettled',
+            updated_at = NOW()
+        WHERE id = ${paymentId}
+        RETURNING
+          id,
+          settlement_status::text AS settlement_status
+      `);
+      const updatedPayment = updatedResult.rows[0] as Record<string, unknown> | undefined;
+      if (!updatedPayment) {
+        throw Object.assign(new Error("Payment gagal diperbarui"), {
+          statusCode: 409,
+          code: "PAYMENT_UPDATE_FAILED",
+        });
+      }
+      const payment: Record<string, unknown> = {
+        ...updatedPayment,
+        payment_number: source.payment_number ?? null,
+        settlement_reference: source.settlement_reference ?? null,
+        settlement_date: source.settlement_date ?? null,
+      };
+
+      return {
+        changed: true,
+        previousStatus,
+        payment,
+        activeSettlement: null,
+      };
+    });
+
+    audit(req, {
+      action: "status_change",
+      module: "accounting",
+      resourceId: `sport-payment-${paymentId}`,
+      companyId,
+      description: "Reset settlement status QRIS ke unsettled",
+      before: {
+        settlement_status: result.previousStatus,
+        settlement_reference: result.payment.settlement_reference ?? null,
+        settlement_date: result.payment.settlement_date ?? null,
+      },
+      after: {
+        settlement_status: result.payment.settlement_status ?? "unsettled",
+        reason,
+      },
+    });
+
+    if (result.changed) {
+      setImmediate(() => queueQrisCandidateRefresh(companyId, paymentId));
+    }
+
+    return res.json({
+      ok: true,
+      changed: result.changed,
+      payment: result.payment,
+      candidateRefreshPending: result.changed,
+      message: result.changed
+        ? "Status settlement payment berhasil diubah menjadi unsettled."
+        : "Payment sudah berstatus unsettled; tidak ada perubahan.",
+    });
+  } catch (e: any) {
+    const status = Number(e?.statusCode) || 500;
+    logger.error(
+      { err: e?.cause?.message ?? e?.message, paymentId },
+      "[bankRecon] PATCH QRIS settlement status failed",
+    );
+    return res.status(status).json({
+      error: e?.message ?? "Gagal memperbarui status settlement payment",
+      code: e?.code ?? "SETTLEMENT_STATUS_UPDATE_FAILED",
+      settlement_id: e?.settlementId,
     });
   }
 });
@@ -5338,12 +5568,49 @@ router.post("/:mutationId/upload-proof", upload.single("file"), async (req, res)
     const url = await oss.uploadPublic(storagePath, req.file.buffer, req.file.mimetype);
 
     await db.execute(sql`UPDATE bank_mutations SET uploaded_proof_url = ${url} WHERE id = ${mutId}`);
+    await db.execute(sql`
+      UPDATE bank_mutations
+      SET proof_ocr_status = 'processing',
+          proof_ocr_result = NULL,
+          proof_ocr_error = NULL,
+          proof_ocr_completed_at = NULL,
+          updated_at = NOW()
+      WHERE id = ${mutId}
+    `);
+
+    let ocr: { status: "completed" | "failed"; provider: "openai"; model?: string; data?: unknown; error?: string };
+    try {
+      const extracted = await extractBankProofOcr(req.file.buffer, req.file.mimetype);
+      await db.execute(sql`
+        UPDATE bank_mutations
+        SET proof_ocr_status = 'completed',
+            proof_ocr_result = ${JSON.stringify(extracted.data)}::jsonb,
+            proof_ocr_error = NULL,
+            proof_ocr_completed_at = NOW(),
+            updated_at = NOW()
+        WHERE id = ${mutId}
+      `);
+      ocr = { status: "completed", provider: extracted.provider, model: extracted.model, data: extracted.data };
+    } catch (ocrError: any) {
+      const message = ocrError instanceof Error ? ocrError.message : String(ocrError);
+      await db.execute(sql`
+        UPDATE bank_mutations
+        SET proof_ocr_status = 'failed',
+            proof_ocr_result = NULL,
+            proof_ocr_error = ${message.slice(0, 500)},
+            proof_ocr_completed_at = NOW(),
+            updated_at = NOW()
+        WHERE id = ${mutId}
+      `);
+      logger.warn({ mutId, error: message }, "[BankRecon] OCR bukti gagal; file tetap tersimpan");
+      ocr = { status: "failed", provider: "openai", error: "OCR gagal diproses; file tetap tersimpan." };
+    }
 
     const actor = (req as any).user?.email ?? "admin";
     audit(req, { action: "upload_proof", module: "accounting", resourceId: `bank-mutation-${mutId}` });
-    logger.info({ mutId, url }, "[BankRecon] Bukti transfer diupload");
+    logger.info({ mutId, url, ocrStatus: ocr.status }, "[BankRecon] Bukti transfer diupload");
 
-    return res.json({ ok: true, url });
+    return res.json({ ok: true, url, ocr });
   } catch (err) {
     logger.error({ err }, "[BankRecon] Gagal upload bukti transfer");
     return res.status(500).json({ error: "Gagal upload file. Coba lagi." });
@@ -5357,9 +5624,44 @@ router.delete("/:mutationId/upload-proof", async (req, res) => {
   const mutId = parseInt(req.params.mutationId);
   if (isNaN(mutId)) return res.status(400).json({ error: "ID tidak valid" });
 
-  await db.execute(sql`UPDATE bank_mutations SET uploaded_proof_url = NULL WHERE id = ${mutId}`);
+  await db.execute(sql`
+    UPDATE bank_mutations
+    SET uploaded_proof_url = NULL,
+        proof_ocr_status = 'not_started',
+        proof_ocr_result = NULL,
+        proof_ocr_error = NULL,
+        proof_ocr_completed_at = NULL,
+        updated_at = NOW()
+    WHERE id = ${mutId}
+  `);
   audit(req, { action: "remove_proof", module: "accounting", resourceId: `bank-mutation-${mutId}` });
   return res.json({ ok: true });
+});
+
+// ─── GET /api/bank-reconciliation/:mutationId/proof-ocr ──────────────────────
+// Read the persisted OCR result without downloading the private upload again.
+router.get("/:mutationId/proof-ocr", async (req, res) => {
+  await runBankReconciliationCoreMigration();
+  const mutId = parseInt(String(req.params.mutationId ?? ""), 10);
+  if (isNaN(mutId)) return res.status(400).json({ error: "ID tidak valid" });
+
+  const result = await db.execute(sql`
+    SELECT uploaded_proof_url, proof_ocr_status, proof_ocr_result,
+           proof_ocr_error, proof_ocr_completed_at
+    FROM bank_mutations
+    WHERE id = ${mutId}
+    LIMIT 1
+  `);
+  const row = result.rows[0] as Record<string, unknown> | undefined;
+  if (!row) return res.status(404).json({ error: "Mutasi tidak ditemukan" });
+  return res.json({
+    ok: true,
+    hasProof: Boolean(row.uploaded_proof_url),
+    status: String(row.proof_ocr_status ?? "not_started"),
+    data: row.proof_ocr_result ?? null,
+    error: row.proof_ocr_error ? "OCR gagal diproses; file tetap tersimpan." : null,
+    completedAt: row.proof_ocr_completed_at ?? null,
+  });
 });
 
 // ─── POST /api/bank-reconciliation/run-matching ───────────────────────────────
@@ -5534,6 +5836,7 @@ router.post("/run-matching", async (req, res) => {
         transactionCode:      m.transaction_code ?? null,
         counterpartyName:     null,
         counterpartyAccount:  null,
+         uploadedProofUrl:      m.uploaded_proof_url ?? null,
         status:               String(m.status ?? "unmatched"),
       };
 

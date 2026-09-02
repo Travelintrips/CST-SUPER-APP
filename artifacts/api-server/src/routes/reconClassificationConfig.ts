@@ -166,6 +166,8 @@ const AiRuleSchema = z.object({
   action_config_code:  z.string().optional().nullable(),
   amount_tolerance:    z.coerce.number().min(0).max(1_000_000_000).optional().nullable(),
   reference_amount:    z.coerce.number().finite().min(0).optional().nullable(),
+  requires_document_upload: z.boolean().default(false),
+  tax_type: z.enum(["none", "ppn_input", "ppn_output"]).default("none"),
   confidence:          z.coerce.number().min(0).max(1).default(0.8),
   priority:            z.coerce.number().int().min(1).max(999).default(50),
   source:              z.enum(["manual", "ai_generated"]).default("manual"),
@@ -206,6 +208,8 @@ function aiRowToReconRule(row: any, fallbackCompanyId: number): ReconRule {
     referenceAmount: row.reference_amount == null ? null : Number(row.reference_amount),
     aiClassificationRuleId: row.id == null ? null : Number(row.id),
     confidenceScore: Math.round(Number(row.confidence ?? 0) * 100), stopProcessing: true,
+    requiresDocumentUpload: Boolean(row.requires_document_upload),
+    taxType: row.tax_type === "ppn_input" || row.tax_type === "ppn_output" ? row.tax_type : "none",
     matchCount: 0, lastMatchedAt: null, createdBy: row.created_by ?? null,
     createdAt: String(row.created_at ?? ""), updatedAt: String(row.updated_at ?? ""),
   };
@@ -234,6 +238,72 @@ function parseCompanyId(val: unknown): number | null {
   if (val == null || val === "" || val === "null") return null;
   const n = Number(val);
   return isNaN(n) ? null : n;
+}
+
+function normalizeReferenceAmount(
+  value: number | null | undefined,
+  tolerance: number | null | undefined,
+): number | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  // Zero with no positive tolerance is the legacy empty-field sentinel.
+  return numeric === 0 && !(tolerance != null && tolerance > 0) ? null : numeric;
+}
+
+type RuleTaxType = "none" | "ppn_input" | "ppn_output";
+
+/**
+ * Resolve the company's actual postable PPN account. We store the resolved
+ * code on the rule so runtime posting cannot be redirected to an arbitrary
+ * expense/revenue account by a forged request.
+ */
+async function resolveTaxCoaCode(companyId: number | null | undefined, taxType: RuleTaxType): Promise<string | null> {
+  if (taxType === "none") return null;
+  if (!companyId || !Number.isSafeInteger(companyId) || companyId <= 0) return null;
+
+  const baseCode = taxType === "ppn_input" ? "1-1050" : "2-1020";
+  const settingsColumn = taxType === "ppn_input" ? "ppn_input_account_id" : "ppn_output_account_id";
+  const configured = await db.execute(sql.raw(`
+    SELECT coa.code
+    FROM accounting_settings s
+    JOIN chart_of_accounts coa ON coa.id = s.${settingsColumn}
+    WHERE s.company_id = ${companyId}
+      AND coa.is_active = TRUE
+      AND COALESCE(coa.is_postable, TRUE) = TRUE
+    LIMIT 1
+  `)).catch(() => ({ rows: [] as any[] }));
+  if (configured.rows[0]?.code) return String(configured.rows[0].code);
+
+  const escapedBase = baseCode.replace(/'/g, "''");
+  const result = await db.execute(sql.raw(`
+    SELECT code
+    FROM chart_of_accounts
+    WHERE is_active = TRUE
+      AND COALESCE(is_postable, TRUE) = TRUE
+      AND (company_id = ${companyId} OR company_id IS NULL)
+      AND (code = '${escapedBase}' OR code LIKE '${escapedBase}-%')
+    ORDER BY
+      CASE WHEN company_id = ${companyId} THEN 0 ELSE 1 END,
+      CASE WHEN code = '${escapedBase}' THEN 0 ELSE 1 END,
+      code
+    LIMIT 1
+  `));
+  return result.rows[0]?.code ? String(result.rows[0].code) : null;
+}
+
+async function enforceTaxRouting(
+  taxType: RuleTaxType,
+  companyId: number | null | undefined,
+): Promise<string | null> {
+  if (taxType === "none") return null;
+  const code = await resolveTaxCoaCode(companyId, taxType);
+  if (!code) {
+    const label = taxType === "ppn_input" ? "PPN Masukan (1-1050)" : "PPN Keluaran (2-1020)";
+    throw new Error(`COA ${label} yang aktif dan dapat diposting belum tersedia untuk perusahaan ini.`);
+  }
+  return code;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -430,7 +500,18 @@ reconClassificationRouter.get("/ai-rules", async (req, res) => {
     if (companyId != null) where += ` AND (r.company_id = ${companyId} OR r.company_id IS NULL)`;
 
     const rows = await db.execute(sql.raw(`
-      SELECT r.*, c.name AS config_name, c.category AS config_category
+      SELECT
+        r.*,
+        c.name AS config_name,
+        c.category AS config_category,
+        (
+          SELECT coa.name
+          FROM chart_of_accounts coa
+          WHERE coa.code = r.action_coa_code
+            AND (coa.company_id = r.company_id OR coa.company_id IS NULL)
+          ORDER BY (coa.company_id IS NULL) ASC, coa.id DESC
+          LIMIT 1
+        ) AS action_coa_name
       FROM recon_ai_classification_rules r
       LEFT JOIN recon_classification_configs c ON c.id = r.config_id
       ${where}
@@ -454,6 +535,12 @@ reconClassificationRouter.post("/ai-rules", async (req, res) => {
         error: "reference_amount wajib diisi jika amount_tolerance lebih besar dari nol.",
       });
     }
+    let resolvedTaxCoaCode: string | null = null;
+    try {
+      resolvedTaxCoaCode = await enforceTaxRouting(d.tax_type, d.company_id);
+    } catch (error: any) {
+      return res.status(400).json({ error: error?.message ?? "COA pajak tidak tersedia." });
+    }
     const normalized = normalizeRuleConditions(d);
     const userId = (req as any).user?.id ?? null;
     const companyWhere = d.company_id == null
@@ -463,8 +550,9 @@ reconClassificationRouter.post("/ai-rules", async (req, res) => {
     const actionFlowSql = d.action_flow == null
       ? "''"
       : `'${d.action_flow.replace(/'/g, "''")}'`;
-    const actionCoaSql = d.action_coa_code
-      ? `'${d.action_coa_code.replace(/'/g, "''")}'`
+    const effectiveActionCoaCode = resolvedTaxCoaCode ?? d.action_coa_code ?? null;
+    const actionCoaSql = effectiveActionCoaCode
+      ? `'${effectiveActionCoaCode.replace(/'/g, "''")}'`
       : "NULL";
     const actionConfigSql = d.action_config_code
       ? `'${d.action_config_code.replace(/'/g, "''")}'`
@@ -475,7 +563,8 @@ reconClassificationRouter.post("/ai-rules", async (req, res) => {
     const conditionValueSql = `'${String(normalized.condition.value).replace(/'/g, "''")}'`;
     const logicSql = `'${normalized.logic}'`;
     const amountToleranceSql = d.amount_tolerance == null ? "NULL" : `${d.amount_tolerance}`;
-    const referenceAmountSql = d.reference_amount == null ? "NULL" : `${d.reference_amount}`;
+    const normalizedReferenceAmount = normalizeReferenceAmount(d.reference_amount, d.amount_tolerance);
+    const referenceAmountSql = normalizedReferenceAmount == null ? "NULL" : `${normalizedReferenceAmount}`;
 
     // Creating the same logical rule again should revise the existing Rule AI
     // instead of creating a second active rule. The identity deliberately
@@ -522,6 +611,8 @@ reconClassificationRouter.post("/ai-rules", async (req, res) => {
           action_config_code = ${actionConfigSql},
           amount_tolerance = ${amountToleranceSql},
           reference_amount = ${referenceAmountSql},
+           requires_document_upload = ${d.requires_document_upload},
+           tax_type = '${d.tax_type}',
           confidence = ${d.confidence},
           priority = ${d.priority},
           source = '${d.source}',
@@ -535,6 +626,7 @@ reconClassificationRouter.post("/ai-rules", async (req, res) => {
           (company_id, config_id, name, description, condition_field, condition_operator, condition_value,
            conditions_json, logic, specificity,
            action_flow, action_coa_code, action_config_code, amount_tolerance, reference_amount,
+            requires_document_upload, tax_type,
            confidence, priority, source, created_by)
         VALUES (
           ${d.company_id ?? "NULL"},
@@ -551,6 +643,8 @@ reconClassificationRouter.post("/ai-rules", async (req, res) => {
           ${actionConfigSql},
            ${amountToleranceSql},
            ${referenceAmountSql},
+           ${d.requires_document_upload},
+           '${d.tax_type}',
           ${d.confidence},
           ${d.priority},
           '${d.source}',
@@ -598,6 +692,7 @@ reconClassificationRouter.post("/ai-rules/preview", async (req, res) => {
       transactionCode: req.body?.transaction_code ? String(req.body.transaction_code) : null,
       counterpartyName: req.body?.counterparty_name ? String(req.body.counterparty_name) : null,
       counterpartyAccount: req.body?.counterparty_account ? String(req.body.counterparty_account) : null,
+       hasDocumentUpload: Boolean(req.body?.has_document_upload),
       companyId: companyId ?? 0,
     };
     const savedRules = (rows.rows as any[]).map((row: any) => aiRowToReconRule(row, companyId ?? 0));
@@ -609,6 +704,8 @@ reconClassificationRouter.post("/ai-rules/preview", async (req, res) => {
       action_flow: req.body?.action_flow, action_coa_code: req.body?.action_coa_code,
       amount_tolerance: req.body?.amount_tolerance ?? null,
       reference_amount: req.body?.reference_amount ?? null,
+       requires_document_upload: Boolean(req.body?.requires_document_upload),
+       tax_type: req.body?.tax_type,
       confidence: req.body?.confidence ?? 0.8,
     }, companyId ?? 0) : null;
     const result = evaluateReconRules(draftRule ? [draftRule, ...savedRules] : savedRules, mutation);
@@ -618,7 +715,8 @@ reconClassificationRouter.post("/ai-rules/preview", async (req, res) => {
         id: result.ruleId, name: result.ruleName, targetType: result.targetType,
         targetCoaCode: result.targetCoaCode, confidence: result.confidence,
       } : null,
-      matchedConditions: result.reasons ?? [], evaluated: result.evaluated,
+       matchedConditions: result.reasons ?? [], evaluated: result.evaluated,
+       documentRequired: result.documentRequired ?? null,
     });
   } catch (err) {
     logger.error({ err }, "[ReconClassification] AI rule preview failed");
@@ -672,6 +770,28 @@ reconClassificationRouter.patch("/ai-rules/:id", async (req, res) => {
         error: "reference_amount wajib diisi jika amount_tolerance lebih besar dari nol.",
       });
     }
+    const existingRuleResult = await db.execute(sql.raw(`
+      SELECT company_id, tax_type
+      FROM recon_ai_classification_rules
+      WHERE id = ${id}
+      LIMIT 1
+    `));
+    const existingRule = existingRuleResult.rows[0] as any;
+    if (!existingRule) return res.status(404).json({ error: "Rule tidak ditemukan." });
+    const nextTaxType: RuleTaxType = d.tax_type ?? (
+      existingRule.tax_type === "ppn_input" || existingRule.tax_type === "ppn_output"
+        ? existingRule.tax_type
+        : "none"
+    );
+    const nextCompanyId = d.company_id !== undefined ? d.company_id : (
+      existingRule.company_id == null ? null : Number(existingRule.company_id)
+    );
+    let resolvedTaxCoaCode: string | null = null;
+    try {
+      resolvedTaxCoaCode = await enforceTaxRouting(nextTaxType, nextCompanyId);
+    } catch (error: any) {
+      return res.status(400).json({ error: error?.message ?? "COA pajak tidak tersedia." });
+    }
     const normalized = normalizeRuleConditions({ ...d, condition_field: d.condition_field ?? "description", condition_operator: d.condition_operator ?? "contains", condition_value: d.condition_value ?? " " });
 
     const setClauses: string[] = [`updated_at = NOW()`];
@@ -684,10 +804,18 @@ reconClassificationRouter.patch("/ai-rules/:id", async (req, res) => {
     if (d.logic !== undefined)              setClauses.push(`logic = '${d.logic}'`);
     if (d.specificity !== undefined)        setClauses.push(`specificity = ${d.specificity}`);
     if (d.action_flow !== undefined)        setClauses.push(`action_flow = ${d.action_flow ? `'${d.action_flow}'` : "NULL"}`);
-    if (d.action_coa_code !== undefined)    setClauses.push(`action_coa_code = ${d.action_coa_code ? `'${d.action_coa_code.replace(/'/g, "''")}'` : "NULL"}`);
+    if (d.action_coa_code !== undefined || resolvedTaxCoaCode) {
+      const effectiveActionCoaCode = resolvedTaxCoaCode ?? d.action_coa_code ?? null;
+      setClauses.push(`action_coa_code = ${effectiveActionCoaCode ? `'${effectiveActionCoaCode.replace(/'/g, "''")}'` : "NULL"}`);
+    }
     if (d.action_config_code !== undefined) setClauses.push(`action_config_code = ${d.action_config_code ? `'${d.action_config_code.replace(/'/g, "''")}'` : "NULL"}`);
     if (d.amount_tolerance !== undefined)   setClauses.push(`amount_tolerance = ${d.amount_tolerance == null ? "NULL" : d.amount_tolerance}`);
-    if (d.reference_amount !== undefined)   setClauses.push(`reference_amount = ${d.reference_amount == null ? "NULL" : d.reference_amount}`);
+    if (d.reference_amount !== undefined) {
+      const normalizedReferenceAmount = normalizeReferenceAmount(d.reference_amount, d.amount_tolerance);
+      setClauses.push(`reference_amount = ${normalizedReferenceAmount == null ? "NULL" : normalizedReferenceAmount}`);
+    }
+    if (d.requires_document_upload !== undefined) setClauses.push(`requires_document_upload = ${d.requires_document_upload}`);
+    if (d.tax_type !== undefined || resolvedTaxCoaCode) setClauses.push(`tax_type = '${nextTaxType}'`);
     if (d.confidence !== undefined)         setClauses.push(`confidence = ${d.confidence}`);
     if (d.priority !== undefined)           setClauses.push(`priority = ${d.priority}`);
 

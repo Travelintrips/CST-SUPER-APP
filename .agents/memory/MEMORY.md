@@ -9,9 +9,6 @@
 - [Supavisor advisory locks](supavisor-advisory-locks.md) — session advisory locks can survive pooled client restarts; clear only the identified DEV backend before retrying startup.
 - [Asset storage rule](asset-storage-rule.md) — gambar/biner wajib ke Supabase Storage, bukan git; history sudah di-rewrite Jul 2026 (475 MB → 139 MB).
 - [Development Storage writes](development-storage-writes.md) — safe-dev tetap memblokir integrasi eksternal, tetapi preview upload boleh menulis hanya ke Supabase Storage development.
-- [Safe-dev Google Maps exception](safe-dev-google-maps.md) — autocomplete alamat perlu allowlist sempit ke path Google Maps, tanpa membuka outbound eksternal umum.
-- [CMS upload object keys](cms-upload-object-key.md) — public CMS upload wajib memakai key ber-ekstensi sesuai bytes hasil kompresi; bare UUID ditolak resolver frontend.
-- [Supabase Node 20 WebSocket](supabase-node20-websocket.md) — one-off Supabase client scripts di Node 20 memerlukan transport `ws` eksplisit.
 - [Production static asset promotion](production-static-assets.md) — asset dev tidak otomatis ada di bucket production; cek secret runtime live dan verifikasi bucket production sebelum publish.
 - [Accounting settings seed bug](accounting-settings-seed-bug.md) — null journal IDs in accounting_settings blocks sport center accounting; fix + enum 'draft' + bizportal Supabase key mismatch solution.
 - [Reconciliation account mapping](reconciliation-account-mapping.md) — direct bank expenses use expense COA; AP/AR are only for explicit payable/receivable settlements.
@@ -24,11 +21,9 @@
 - [COA proposal and bank reconciliation flow](coa-proposal-bank-reconciliation-flow.md) — approval proposal and bank-mutation approval are separate governance states.
 - [Payment posting visibility](payment-posting-visibility.md) — payment sumber harus menyimpan status error dan pesan saat accounting entry gagal; jangan tandai posted hanya karena row payment berhasil dibuat.
 - [Deployment publish build prerequisites](deployment-publish-build.md) — root manifest yang tidak terpakai dapat memicu builder bahasa lain; validasi build publish dan preflight environment harus dipisahkan.
-- [Custom domain deployment ownership](custom-domain-deployment-ownership.md) — getDeploymentInfo() kosong tidak berarti domain publik mati; domain dapat tetap menunjuk ke deployment/project lain.
 - [Production DB availability gate](production-db-availability-gate.md) — audit PROD harus berhenti jika workspace belum memiliki production database; jangan substitusi DEV atau inferensi historis.
 - [Production connection contract](production-connection-contract.md) — PROD business DB eksternal Supabase dimuat dari GCP bundle production; jangan samakan dengan abstraction DB pane Replit.
 - [Google credential separation](google-credential-separation.md) — Service Account Google Sheets dan bootstrap Secret Manager dapat berbeda dan membutuhkan izin berbeda.
-- [Customer Portal Google OAuth](customer-portal-google-oauth.md) — public login uses backend Google OAuth + portal JWT; Supabase external-provider exchange is not the production path.
 - [BizPortal preview API proxy](bizportal-preview-api-proxy.md) — preview BizPortal harus meneruskan `/api` ke API server port 8080 agar login tidak 502.
 - [Dev/Prod DB Isolation](dev-prod-isolation.md) — APP_ENV=development di start-dev.sh; load-secrets.mjs inject *_DEV keys as canonical + shared keys tanpa _DEV counterpart.
 - [accounting_entries missing columns](accounting-entries-missing-columns.md) — is_voided/is_reversed missing → journalReuseEngine FAIL-CLOSED → false MANUAL_REVIEW_REQUIRED saat approve sport payment.
@@ -42,7 +37,6 @@
 - [Customer Portal bootstrap secrets](customer-portal-bootstrap-secrets.md) — Customer Portal startup invokes Secret Manager loader and fails closed when bootstrap credentials are unavailable.
 - [Live SMTP credential drift](live-smtp-credential-drift.md) — production notification logs can show SMTP 535 while the workspace production bundle verifies; compare the live runtime's secret source, not only the current Repl bundle.
 - [Portal auth cookie and reset origin](portal-auth-cookie-and-reset-origin.md) — login must persist HttpOnly session cookies; production reset links must use the canonical portal origin.
-- [Activity log runtime schema](activity-log-runtime-schema.md) — Supabase dev activity_logs can lag the app schema and block marketplace E2E setup/cleanup.
 - [QRIS settlement matching](qris-settlement-matching.md) — QRIS reconciliation needs provider/reference, gross-net fee handling, and a matcher path that includes Sport Center payments.
 - [QRIS calendar settlement policy](qris-calendar-settlement-policy.md) — QRIS settles H+1 calendar day; bank transfers settle on the next business day.
 - [QRIS provider-aware rollout](qris-provider-aware-rollout.md) — provider must be explicit; unknown/synthetic evidence stays review-only until explicit final approval.
@@ -50,6 +44,7 @@
 - [Sport payment trigger provenance](sport-payment-trigger-provenance.md) — mirror trigger is verified in Supabase runtime but not defined in the current repository migration chain.
 - [Sport payment reconciliation](sport-payment-reconciliation-canonical.md) — sport_payments is the canonical candidate; accounting_payments only links the existing journal.
 - [Sport payment legacy cleanup](sport-payment-legacy-cleanup.md) — production SCPAY cleanup needs runtime Supabase schema introspection and a guarded delete that preserves posted rows.
+- [Production Sport settlement schema](production-sport-settlement-schema.md) — production source may lack payment_number/settlement_reference/settlement_date; use verified legacy aliases.
 - [Reconciliation source uniqueness](reconciliation-source-uniqueness.md) — one payment source may reconcile to only one ledger line, enforced server-side for concurrent auto-match safety.
 - [Candidate display identity](candidate-display-identity.md) — technical candidate identities can mirror one business payment; collapse known references for reviewer display.
 - [Unified vendor service label](unified-vendor-service-label.md) — preserve canonical marketplace line/catalog names before normalized service keys in Admin vendor-request display.
@@ -81,6 +76,7 @@
 - [Password reset safe-mode capture](password-reset-safe-mode.md) — safe mode menonaktifkan SMTP; harness reset password perlu capture khusus tanpa mengembalikan token ke API normal.
 - [QRIS bank-account identity](qris-bank-account-identity.md) — payment QRIS dapat menyimpan nomor rekening eksternal, sedangkan mutasi menyimpan ID internal; normalisasi wajib sebelum matching.
 - [QRIS approval response](qris-approval-response.md) — migration runtime jangan diulang setiap approval; tampilkan pending state dan pesan error server.
+- [QRIS stale settlement reset](qris-stale-settlement-reset.md) — reset status stale hanya pada sumber canonical, wajib audit reason, dan fail-closed bila ada item settlement aktif.
 - [QRIS legacy unique index](qris-legacy-unique-index.md) — migration harus menghapus unique constraint dan standalone index lama agar snapshot superseded dapat diregenerasi.
 - [QRIS provider mirror unique key](qris-provider-rule-mirror-unique-key.md) — legacy mirror unik tanpa effective_until; repair boundary harus mendahului insert-if-missing.
 - [Marketplace catalog kind contract](marketplace-catalog-kind-contract.md) — `type` dan `template_kind` wajib sinkron; mismatch legacy dapat menyembunyikan produk dari tab Marketplace.
@@ -96,7 +92,6 @@
 - [GitHub push authentication](github-push-authentication.md) — secret presence does not prove a PAT has valid repository write access; prefer verified GitHub connection or scoped replacement.
 - [Health readiness contract](health-readiness-contract.md) — liveness must precede auth middleware; readiness may remain starting during the serial migration chain.
 - [Persistent gate readiness timing](persistent-gate-readiness-timing.md) — initialize migration timing before the gated pre-start callback, because a completed marker can skip that callback on restart.
-- [Managed artifact removal](managed-artifact-removal.md) — managed artifacts must be deleted from Library; workflow APIs can stop but not remove their registry entry.
 - [Persistent gate failure safety](persistent-gate-failure-safety.md) — gated stage callbacks must propagate failures; compatibility marker writes need lock-aware context to avoid false completion and recursive advisory-lock waits.
 - [Steady-state startup gate](steady-state-startup-gate.md) — use authoritative registry initialization as DB readiness; snapshot only completed matches and retain locked fallback semantics.
 - [Bank recon workflow gate](bank-recon-workflow-gate.md) — queued matching is not completion; QRIS candidate generation must be explicit and blocked while matching is active.
@@ -139,7 +134,6 @@
 - [Production legacy QRIS COA mirrors](production-legacy-qris-coa-mirrors.md) — legacy settlement owner requires exact internal bank/MDR mirrors in addition to public COA identities.
 - [QRIS canonical provider groups](qris-canonical-provider-groups.md) — compatible provider aliases may match bank evidence but must settle as separate exact canonical groups.
 - [QRIS UI evidence boundary](qris-ui-evidence.md) — generic cards can combine bank-source labeling with a QRIS badge inherited from a persisted candidate.
-- [Development TS proof tooling](development-ts-proof-tooling.md) — when tsx is unavailable, bundle temporary TS proofs with esbuild under the artifact directory so workspace packages and pg resolve correctly.
 - [Sport payment candidate visibility](sport-payment-candidate-visibility.md) — H-1 settlement filtering applies to QRIS only; ordinary Sport Center bank transfers remain reviewable.
 - [Production verification timestamp boundary](production-verification-timestamp-boundary.md) — rounded checkpoint seconds can double-count the baseline row; resolve the exact boundary from its known max ID.
 - [API artifact preview health](api-artifact-preview-health.md) — generic preview root checks may fail while namespaced API liveness/readiness are healthy.
@@ -151,9 +145,10 @@
 - [Rule AI import auto-post](rule-ai-import-auto-post.md) — semua jalur import bank wajib melewati Decision Stack agar Rule AI ber-COA lengkap dapat auto-post dengan safeguard yang sama.
 - [Portal service operations runtime schema](portal-service-ops-runtime-schema.md) — cross-service UNION read models must match live Supabase columns; missing fields need typed constants, not assumptions.
 - [Sport payment group note identity](sport-payment-group-note-identity.md) — group note dapat mencakup banyak booking; bukan unique key payment, gunakan booking dan identitas provider untuk duplicate.
-- [Publish Repl-layer timeout](publish-repl-layer-timeout.md) — build tanpa error yang berhenti setelah pid1 layer dapat merupakan timeout platform saat membuat Repl layer; bandingkan build sukses.
 - [Sport payment provider deduplication](sport-payment-provider-deduplication.md) — recurring bookings can create repeated source rows; provider_order_id is the logical payment identity for display and QRIS candidates.
 - [Scoped Rule AI retry](scoped-rule-ai-retry.md) — AUTO_POST_GUARD with a full-confidence recon rule needs a mutation-scoped retry, while final statuses remain backend-blocked.
 - [Isolated test DB connectivity](isolated-test-db-connectivity.md) — TEST_DATABASE_URL may be IPv6-only or schema-incomplete; never bypass isolation with DEV/PROD fallback.
 - [Bank recon list schema gate](bank-recon-list-schema-gate.md) — summary and mutation list must initialize the same QRIS schema; never hide list query failures as “0 mutasi”.
 - [Development synthetic marker cleanup](dev-synthetic-marker-cleanup.md) — stale audit leaves can outlive parents and numeric IDs can be reused; classify live parents before exact-manifest deletion.
+- [Rule AI document and tax gate](rule-ai-document-tax-gate.md) — required proof blocks posting; PPN routing follows configured company tax accounts before standard-code fallback.
+- [Rule AI zero reference sentinel](rule-ai-zero-reference-sentinel.md) — reference_amount=0 with zero tolerance means nominal unset, not an exact zero-amount rule.

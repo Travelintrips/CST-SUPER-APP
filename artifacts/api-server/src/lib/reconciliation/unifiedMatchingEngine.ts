@@ -260,7 +260,7 @@ export interface MutationInput {
  * zero when exact matching is desired.
  */
 export async function getMatchingAmountTolerance(
-  mutation: Pick<MutationInput, "amount" | "company_id" | "bank_account_id" | "direction" | "normalized_description" | "provider_order_id">,
+  mutation: Pick<MutationInput, "amount" | "company_id" | "bank_account_id" | "direction" | "normalized_description" | "provider_order_id" | "uploaded_proof_url">,
 ): Promise<number> {
   const companyId = normalizeCompanyId(mutation.company_id);
   if (companyId == null) return 0;
@@ -272,6 +272,7 @@ export async function getMatchingAmountTolerance(
              condition_operator, condition_value, target_type, target_id,
              target_coa_code, amount_tolerance, confidence_score,
              stop_processing, conditions_json, logic, specificity, reference_amount,
+             requires_document_upload, tax_type,
              ai_classification_rule_id,
              match_count, last_matched_at, created_by, created_at, updated_at
       FROM recon_rules
@@ -306,6 +307,8 @@ export async function getMatchingAmountTolerance(
         targetCoaCode: row.target_coa_code == null ? null : String(row.target_coa_code),
         amountTolerance: row.amount_tolerance == null ? null : Number(row.amount_tolerance),
         referenceAmount: row.reference_amount == null ? null : Number(row.reference_amount),
+        requiresDocumentUpload: Boolean(row.requires_document_upload),
+        taxType: row.tax_type === "ppn_input" || row.tax_type === "ppn_output" ? row.tax_type : "none",
         aiClassificationRuleId: row.ai_classification_rule_id == null ? null : Number(row.ai_classification_rule_id),
         confidenceScore: Number(row.confidence_score ?? 100),
         stopProcessing: row.stop_processing !== false,
@@ -322,6 +325,7 @@ export async function getMatchingAmountTolerance(
       amount: Number(mutation.amount),
       direction: String(mutation.direction ?? "IN").toUpperCase() === "OUT" ? "OUT" : "IN",
       bankAccountId: mutation.bank_account_id ?? null,
+      hasDocumentUpload: Boolean(mutation.uploaded_proof_url),
       companyId,
     };
     const result = evaluateReconRules(rules, mutationInput);

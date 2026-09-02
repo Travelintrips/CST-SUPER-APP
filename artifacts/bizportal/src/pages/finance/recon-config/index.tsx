@@ -53,6 +53,12 @@ const UPLOAD_OPTS = [
 
 const FILE_TYPES = ["PDF", "JPG", "PNG", "WEBP"];
 
+const TAX_TYPES = [
+  { value: "none", label: "Tidak ada pajak" },
+  { value: "ppn_input", label: "PPN Masukan" },
+  { value: "ppn_output", label: "PPN Keluaran" },
+] as const;
+
 const COND_FIELDS = [
   { value: "description", label: "Deskripsi" },
   { value: "amount",      label: "Jumlah" },
@@ -159,6 +165,26 @@ interface RuleCoaAccount {
   isActive?: boolean | null;
   isPostable?: boolean | null;
   isHeader?: boolean | null;
+}
+
+function nextSequentialChildCode(parent: RuleCoaAccount, accounts: RuleCoaAccount[]): string {
+  const match = parent.code.match(/^(.*?)(\d+)([^0-9]*)$/);
+  if (!match) return `${parent.code}-01`;
+
+  const [, prefix, digits, suffix] = match;
+  const usedNumbers = new Set(
+    accounts
+      .map((account) => account.code.match(/^(.*?)(\d+)([^0-9]*)$/))
+      .filter((candidate): candidate is RegExpMatchArray =>
+        !!candidate && candidate[1] === prefix && candidate[3] === suffix,
+      )
+      .map((candidate) => Number(candidate[2]))
+      .filter(Number.isFinite),
+  );
+
+  let nextNumber = Number(digits) + 1;
+  while (usedNumbers.has(nextNumber)) nextNumber += 1;
+  return `${prefix}${String(nextNumber).padStart(digits.length, "0")}${suffix}`;
 }
 
 // ─── Generic config tab (Business, Routine, Income) ───────────────────────────
@@ -716,6 +742,7 @@ function AiRulesTab() {
   const [showModal, setShowModal] = useState(false);
   const [creatingCoa, setCreatingCoa] = useState(false);
   const [creatingCoaLoading, setCreatingCoaLoading] = useState(false);
+  const [quickCreateChild, setQuickCreateChild] = useState(false);
   const [newCoaRole, setNewCoaRole] = useState<"parent" | "child">("child");
   const [parentSearch, setParentSearch] = useState("");
   const [newCoaForm, setNewCoaForm] = useState({
@@ -769,6 +796,32 @@ function AiRulesTab() {
     }
   }, [activeCompanyId]);
 
+  const taxAccountFor = (taxType: string): RuleCoaAccount | null => {
+    if (taxType !== "ppn_input" && taxType !== "ppn_output") return null;
+    const baseCode = taxType === "ppn_input" ? "1-1050" : "2-1020";
+    return coaAccounts
+      .filter((account) =>
+        account.isActive !== false
+        && account.isPostable !== false
+        && (account.code === baseCode || account.code.startsWith(`${baseCode}-`)
+          || account.name.toLowerCase().includes(taxType === "ppn_input" ? "ppn masukan" : "ppn keluaran")),
+      )
+      .sort((a, b) => {
+        const aExact = a.code === baseCode ? 0 : a.name.toLowerCase().includes(taxType === "ppn_input" ? "ppn masukan" : "ppn keluaran") ? 1 : 2;
+        const bExact = b.code === baseCode ? 0 : b.name.toLowerCase().includes(taxType === "ppn_input" ? "ppn masukan" : "ppn keluaran") ? 1 : 2;
+        return aExact - bExact || a.code.localeCompare(b.code);
+      })[0] ?? null;
+  };
+
+  const setTaxType = (taxType: string) => {
+    const account = taxAccountFor(taxType);
+    setForm((current: any) => ({
+      ...current,
+      tax_type: taxType,
+      action_coa_code: taxType === "none" ? null : account?.code ?? current.action_coa_code ?? null,
+    }));
+  };
+
   const loadParentAccounts = useCallback(async () => {
     if (activeCompanyId == null) return;
     setCreatingCoaLoading(true);
@@ -820,8 +873,10 @@ function AiRulesTab() {
     setForm({ condition_field: "description", condition_operator: "contains", condition_value: "",
       conditions: [{ field: "description", operator: "contains", value: "" }], logic: "AND",
       specificity: 1, amount_tolerance: 0, reference_amount: null,
-      confidence: 0.8, priority: 50, source: "manual" });
+      confidence: 0.8, priority: 50, source: "manual",
+      requires_document_upload: false, tax_type: "none" });
     setCreatingCoa(false);
+    setQuickCreateChild(false);
     setNewCoaRole("child");
     setParentSearch("");
     setNewCoaForm({
@@ -844,15 +899,18 @@ function AiRulesTab() {
       // Before the reference-amount field existed, this screen incorrectly
       // stored its nominal input as amount_tolerance. Treat that legacy value
       // as the reference when opening it so saving repairs the rule.
-      reference_amount: row.reference_amount != null
+      reference_amount: row.reference_amount != null && Number(row.reference_amount) !== 0
         ? Number(row.reference_amount)
-        : row.amount_tolerance != null
+        : row.amount_tolerance != null && Number(row.amount_tolerance) > 0
           ? Number(row.amount_tolerance)
           : null,
       amount_tolerance: row.reference_amount != null && row.amount_tolerance != null
         ? Number(row.amount_tolerance)
-        : 0 });
+         : 0,
+       requires_document_upload: Boolean(row.requires_document_upload),
+       tax_type: row.tax_type === "ppn_input" || row.tax_type === "ppn_output" ? row.tax_type : "none" });
     setCreatingCoa(false);
+    setQuickCreateChild(false);
     setParentSearch("");
     setPreview(null);
     setPreviewAmount("");
@@ -884,6 +942,7 @@ function AiRulesTab() {
 
   const startCreateCoa = () => {
     setCreatingCoa(true);
+    setQuickCreateChild(false);
     setNewCoaRole("child");
     setParentSearch("");
     setNewCoaForm((current) => ({
@@ -892,6 +951,26 @@ function AiRulesTab() {
       parentId: null,
       type: form.action_flow === "ROUTINE_EXPENSE_ALLOCATION" ? "expense" : "revenue",
     }));
+    void loadParentAccounts();
+  };
+
+  const startCreateChildCoa = () => {
+    const selected = coaAccounts.find((account) => account.code === form.action_coa_code);
+    if (!selected) {
+      alert("Pilih COA parent terlebih dahulu.");
+      return;
+    }
+
+    setCreatingCoa(true);
+    setQuickCreateChild(true);
+    setNewCoaRole("child");
+    setParentSearch("");
+    setNewCoaForm({
+      code: nextSequentialChildCode(selected, coaAccounts),
+      name: "",
+      type: selected.type || "expense",
+      parentId: selected.id,
+    });
     void loadParentAccounts();
   };
 
@@ -942,6 +1021,7 @@ function AiRulesTab() {
       }));
       await loadCoaOptions();
       setCreatingCoa(false);
+      setQuickCreateChild(false);
       setNewCoaForm((current) => ({ ...current, code: "", name: "", parentId: null }));
     } catch (error) {
       alert(error instanceof Error ? error.message : "Gagal membuat COA baru.");
@@ -985,6 +1065,9 @@ function AiRulesTab() {
            action_flow: form.action_flow, action_coa_code: form.action_coa_code,
            amount_tolerance: form.amount_tolerance,
            reference_amount: form.reference_amount,
+            requires_document_upload: Boolean(form.requires_document_upload),
+            tax_type: form.tax_type ?? "none",
+            has_document_upload: true,
            confidence: form.confidence }) });
       setPreview(await r.json());
     } finally { setPreviewing(false); }
@@ -994,6 +1077,19 @@ function AiRulesTab() {
     if (!confirm(`Nonaktifkan rule "${row.name}"?`)) return;
     await fetch(`${API}/recon-classification/ai-rules/${row.id}`, { method: "DELETE", credentials: "include" });
     load();
+  };
+
+  const coaDetails = (row: any) => {
+    const code = typeof row.action_coa_code === "string" && row.action_coa_code.trim()
+      ? row.action_coa_code.trim()
+      : null;
+    if (!code) return null;
+
+    const account = coaAccounts.find((coa) => coa.code === code);
+    return {
+      code,
+      name: row.action_coa_name ?? account?.name ?? null,
+    };
   };
 
   return (
@@ -1013,17 +1109,19 @@ function AiRulesTab() {
               <tr className="border-b border-slate-700 text-slate-400 text-left">
                 <th className="pb-2 pr-3">Nama</th>
                 <th className="pb-2 pr-3">Kondisi</th>
-                <th className="pb-2 pr-3">Action Flow</th>
+                 <th className="pb-2 pr-3">Action Flow</th>
+                 <th className="pb-2 pr-3">Keterangan COA</th>
                   <th className="pb-2 pr-3">Nominal referensi</th>
                  <th className="pb-2 pr-3">Conf.</th>
                 <th className="pb-2 pr-3">Prioritas</th>
-                <th className="pb-2 pr-3">Sumber</th>
+                 <th className="pb-2 pr-3">Dokumen / Pajak</th>
+                 <th className="pb-2 pr-3">Sumber</th>
                 <th className="pb-2">Aksi</th>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 && (
-                 <tr><td colSpan={8} className="py-8 text-center text-slate-500">Belum ada AI rule.</td></tr>
+                  <tr><td colSpan={10} className="py-8 text-center text-slate-500">Belum ada AI rule.</td></tr>
               )}
               {rows.map(row => (
                 <tr key={row.id} className="border-b border-slate-800 hover:bg-slate-800/40">
@@ -1031,17 +1129,44 @@ function AiRulesTab() {
                   <td className="py-2 pr-3 font-mono text-xs text-slate-400">
                     {conditionSummary(row)}
                   </td>
-                  <td className="py-2 pr-3">{row.action_flow ? flowBadge(row.action_flow) : "—"}</td>
+                   <td className="py-2 pr-3">{row.action_flow ? flowBadge(row.action_flow) : "—"}</td>
+                   <td className="py-2 pr-3 min-w-[170px]">
+                     {(() => {
+                       const coa = coaDetails(row);
+                       return coa ? (
+                         <div className="leading-tight">
+                           <div className="font-mono text-xs text-orange-300">COA {coa.code}</div>
+                           <div className="text-xs text-slate-300 mt-0.5">{coa.name ?? "Nama akun tidak ditemukan"}</div>
+                         </div>
+                       ) : (
+                         <span className="text-slate-500">—</span>
+                       );
+                     })()}
+                   </td>
                    <td className="py-2 pr-3 text-slate-400">
-                     {row.reference_amount != null
+                      {row.reference_amount != null && Number(row.reference_amount) !== 0
                        ? `Rp${Number(row.reference_amount).toLocaleString("id-ID")}`
-                       : row.amount_tolerance != null
+                        : row.amount_tolerance != null && Number(row.amount_tolerance) > 0
                          ? `Rp${Number(row.amount_tolerance).toLocaleString("id-ID")}`
                          : "Tidak dibatasi"}
                    </td>
                   <td className="py-2 pr-3 text-slate-400">{Number(row.confidence).toFixed(2)}</td>
                   <td className="py-2 pr-3 text-slate-400">{row.priority}</td>
-                  <td className="py-2 pr-3">
+                   <td className="py-2 pr-3">
+                     <div className="flex flex-wrap gap-1">
+                       {row.requires_document_upload && (
+                         <Badge className="bg-amber-900 text-amber-300 text-xs">Upload wajib</Badge>
+                       )}
+                       {row.tax_type === "ppn_input" && (
+                         <Badge className="bg-cyan-900 text-cyan-300 text-xs">PPN Masukan</Badge>
+                       )}
+                       {row.tax_type === "ppn_output" && (
+                         <Badge className="bg-cyan-900 text-cyan-300 text-xs">PPN Keluaran</Badge>
+                       )}
+                       {!row.requires_document_upload && (!row.tax_type || row.tax_type === "none") && "—"}
+                     </div>
+                   </td>
+                   <td className="py-2 pr-3">
                     <Badge className={row.source === "ai_generated" ? "bg-purple-900 text-purple-300 text-xs" : "bg-slate-700 text-slate-300 text-xs"}>
                       {row.source === "ai_generated" ? "AI" : "Manual"}
                     </Badge>
@@ -1198,8 +1323,9 @@ function AiRulesTab() {
                         <Input
                           value={newCoaForm.code}
                           onChange={(event) => setNewCoaForm((current) => ({ ...current, code: event.target.value }))}
+                          readOnly={quickCreateChild}
                           placeholder="Contoh: 4-1050"
-                          className="bg-slate-800 border-slate-600 text-white text-xs"
+                          className={`bg-slate-800 border-slate-600 text-white text-xs ${quickCreateChild ? "cursor-not-allowed opacity-70" : ""}`}
                         />
                       </div>
                       <div className="space-y-1">
@@ -1217,6 +1343,7 @@ function AiRulesTab() {
                       <Label className="text-slate-300 text-xs">Kelompok akun</Label>
                       <Select
                         value={newCoaForm.type}
+                          disabled={quickCreateChild}
                         onValueChange={(value) => setNewCoaForm((current) => ({
                           ...current,
                           type: value,
@@ -1242,39 +1369,49 @@ function AiRulesTab() {
                     {newCoaRole === "child" && (
                       <div className="space-y-1">
                         <Label className="text-slate-300 text-xs">Parent akun</Label>
-                        <div className="relative">
-                          <Search className="pointer-events-none absolute left-2 top-2 h-3.5 w-3.5 text-slate-500" />
-                          <Input
-                            value={parentSearch}
-                            onChange={(event) => setParentSearch(event.target.value)}
-                            placeholder="Cari parent berdasarkan kode atau nama..."
-                            className="bg-slate-800 border-slate-600 pl-7 text-white text-xs"
-                          />
-                        </div>
-                        <Select
-                          value={newCoaForm.parentId ? String(newCoaForm.parentId) : "__none"}
-                          onValueChange={(value) => setNewCoaForm((current) => ({
-                            ...current,
-                            parentId: value === "__none" ? null : Number(value),
-                          }))}
-                        >
-                          <SelectTrigger className="bg-slate-800 border-slate-600 text-white text-xs">
-                            <SelectValue placeholder="Pilih parent akun..." />
-                          </SelectTrigger>
-                          <SelectContent className="bg-slate-800 border-slate-600 text-white">
-                            <SelectItem value="__none">Pilih parent akun...</SelectItem>
-                            {parentAccounts.map((account) => (
-                              <SelectItem key={account.id} value={String(account.id)}>
-                                {account.code} — {account.name}
-                              </SelectItem>
-                            ))}
-                            {parentAccounts.length === 0 && (
-                              <SelectItem value="__no_parent_results" disabled>
-                                Parent tidak ditemukan
-                              </SelectItem>
-                            )}
-                          </SelectContent>
-                        </Select>
+                        {quickCreateChild ? (
+                          <div className="rounded-md border border-indigo-400/40 bg-slate-800 px-3 py-2 text-xs text-white">
+                            {coaAccounts.find((account) => account.id === newCoaForm.parentId)?.code ?? "Parent terpilih"}
+                            {" — "}
+                            {coaAccounts.find((account) => account.id === newCoaForm.parentId)?.name ?? "Akun parent"}
+                          </div>
+                        ) : (
+                          <>
+                            <div className="relative">
+                              <Search className="pointer-events-none absolute left-2 top-2 h-3.5 w-3.5 text-slate-500" />
+                              <Input
+                                value={parentSearch}
+                                onChange={(event) => setParentSearch(event.target.value)}
+                                placeholder="Cari parent berdasarkan kode atau nama..."
+                                className="bg-slate-800 border-slate-600 pl-7 text-white text-xs"
+                              />
+                            </div>
+                            <Select
+                              value={newCoaForm.parentId ? String(newCoaForm.parentId) : "__none"}
+                              onValueChange={(value) => setNewCoaForm((current) => ({
+                                ...current,
+                                parentId: value === "__none" ? null : Number(value),
+                              }))}
+                            >
+                              <SelectTrigger className="bg-slate-800 border-slate-600 text-white text-xs">
+                                <SelectValue placeholder="Pilih parent akun..." />
+                              </SelectTrigger>
+                              <SelectContent className="bg-slate-800 border-slate-600 text-white">
+                                <SelectItem value="__none">Pilih parent akun...</SelectItem>
+                                {parentAccounts.map((account) => (
+                                  <SelectItem key={account.id} value={String(account.id)}>
+                                    {account.code} — {account.name}
+                                  </SelectItem>
+                                ))}
+                                {parentAccounts.length === 0 && (
+                                  <SelectItem value="__no_parent_results" disabled>
+                                    Parent tidak ditemukan
+                                  </SelectItem>
+                                )}
+                              </SelectContent>
+                            </Select>
+                          </>
+                        )}
                         {creatingCoaLoading && (
                           <p className="flex items-center gap-1 text-[11px] text-slate-400">
                             <Loader2 className="h-3 w-3 animate-spin" /> Memuat parent...
@@ -1295,21 +1432,35 @@ function AiRulesTab() {
                       className="w-full gap-1.5 bg-indigo-600 text-white hover:bg-indigo-700"
                     >
                       {creatingCoaLoading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                      Buat &amp; Pilih COA
+                      {quickCreateChild ? "Buat Child & Pilih COA" : "Buat & Pilih COA"}
                     </Button>
                   </div>
                 ) : (
                   <>
-                    <div className="mt-1">
-                      <CreatableCombobox
-                        value={form.action_coa_code ?? ""}
-                        onChange={value => setForm((f: any) => ({ ...f, action_coa_code: value || null }))}
-                        options={coaOptions}
-                        loading={loadingCoaOptions}
-                        placeholder="Pilih akun COA — kode dan nama"
-                        searchPlaceholder="Cari kode atau nama COA…"
-                        emptyText="Akun COA tidak ditemukan."
-                      />
+                    <div className="mt-1 flex items-center gap-1.5">
+                      <div className="min-w-0 flex-1">
+                        <CreatableCombobox
+                          value={form.action_coa_code ?? ""}
+                          onChange={value => setForm((f: any) => ({ ...f, action_coa_code: value || null }))}
+                          options={coaOptions}
+                          loading={loadingCoaOptions}
+                          placeholder="Pilih akun COA — kode dan nama"
+                          searchPlaceholder="Cari kode atau nama COA…"
+                          emptyText="Akun COA tidak ditemukan."
+                        />
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        onClick={startCreateChildCoa}
+                        disabled={!form.action_coa_code || loadingCoaOptions}
+                        title="Tambah child dari COA terpilih"
+                        aria-label="Tambah child dari COA terpilih"
+                        className="h-9 w-9 shrink-0 border-indigo-400/60 text-indigo-300 hover:bg-indigo-950/50 hover:text-indigo-200"
+                      >
+                        <Plus size={15} />
+                      </Button>
                     </div>
                     <Button
                       type="button"
@@ -1325,6 +1476,50 @@ function AiRulesTab() {
                 <p className="mt-1 text-[11px] text-slate-500">
                   Nilai yang disimpan tetap kode COA; nama ditampilkan dari master akun.
                 </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+                <div className="flex items-start gap-3">
+                  <input
+                    id="ai-rule-require-document"
+                    type="checkbox"
+                    checked={Boolean(form.requires_document_upload)}
+                    onChange={(event) => setForm((current: any) => ({
+                      ...current,
+                      requires_document_upload: event.target.checked,
+                    }))}
+                    className="mt-1 h-4 w-4 accent-orange-500"
+                  />
+                  <div>
+                    <Label htmlFor="ai-rule-require-document" className="cursor-pointer text-slate-200">
+                      Wajib upload dokumen / gambar
+                    </Label>
+                    <p className="mt-1 text-[11px] text-slate-500">
+                      Rule tidak dapat memicu posting sampai bukti tersedia untuk dipindai OCR.
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-3">
+                <Label className="text-slate-300">Perlakuan Pajak</Label>
+                <Select value={form.tax_type ?? "none"} onValueChange={setTaxType}>
+                  <SelectTrigger className="bg-slate-800 border-slate-600 text-white mt-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-slate-800 border-slate-600 text-white">
+                    {TAX_TYPES.map((tax) => (
+                      <SelectItem key={tax.value} value={tax.value}>{tax.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {form.tax_type !== "none" && (
+                  <p className="mt-1 text-[11px] text-cyan-300">
+                    {taxAccountFor(form.tax_type)?.code
+                      ? `Posting akan diarahkan ke ${taxAccountFor(form.tax_type)?.code} — ${taxAccountFor(form.tax_type)?.name}.`
+                      : "COA PPN yang sesuai belum tersedia; simpan akan ditolak sampai COA dibuat."}
+                  </p>
+                )}
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
