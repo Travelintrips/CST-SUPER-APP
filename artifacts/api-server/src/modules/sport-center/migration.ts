@@ -744,14 +744,25 @@ export function ensureSportPaymentMirrorTrigger(): Promise<void> {
        WHERE ap.source_type = 'sport_center'
          AND ap.source_doc_id = NEW.id;
 
-      -- Keep journal metadata aligned. The immutability trigger permits this
-      -- update because payment_method is not a financial column.
+      -- Keep journal metadata aligned without ever touching posted financial
+      -- fields.  The WHERE predicate is important: an MDR/settlement-only
+      -- source update must not issue a no-op UPDATE against a posted entry,
+      -- because legacy immutability triggers may still reject UPDATEs before
+      -- the additive metadata policy has been installed.
       UPDATE accounting_entries ae
-         SET company_id = COALESCE(NEW.company_id, ae.company_id),
+         SET company_id = CASE
+               WHEN ae.status::text <> 'posted'
+               THEN COALESCE(NEW.company_id, ae.company_id)
+               ELSE ae.company_id
+             END,
              payment_method = COALESCE(NULLIF(BTRIM(NEW.method::text), ''), ae.payment_method),
              payment_provider = COALESCE(NULLIF(BTRIM(NEW.payment_provider::text), ''), ae.payment_provider),
              bank_account_id = COALESCE(
-               NULLIF(BTRIM(NEW.external_bank_account_id::text), ''),
+               CASE
+                 WHEN ae.status::text <> 'posted'
+                 THEN NULLIF(BTRIM(NEW.external_bank_account_id::text), '')
+                 ELSE NULL
+               END,
                ae.bank_account_id
              ),
              date = CASE
@@ -765,6 +776,30 @@ export function ensureSportPaymentMirrorTrigger(): Promise<void> {
          WHERE ap.source_type = 'sport_center'
            AND ap.source_doc_id = NEW.id
            AND ap.entry_id IS NOT NULL
+       )
+       AND (
+         ae.company_id IS DISTINCT FROM CASE
+           WHEN ae.status::text <> 'posted'
+           THEN COALESCE(NEW.company_id, ae.company_id)
+           ELSE ae.company_id
+         END
+         OR ae.payment_method IS DISTINCT FROM
+           COALESCE(NULLIF(BTRIM(NEW.method::text), ''), ae.payment_method)
+         OR ae.payment_provider IS DISTINCT FROM
+           COALESCE(NULLIF(BTRIM(NEW.payment_provider::text), ''), ae.payment_provider)
+         OR ae.bank_account_id IS DISTINCT FROM COALESCE(
+           CASE
+             WHEN ae.status::text <> 'posted'
+             THEN NULLIF(BTRIM(NEW.external_bank_account_id::text), '')
+             ELSE NULL
+           END,
+           ae.bank_account_id
+         )
+         OR ae.date IS DISTINCT FROM CASE
+           WHEN ae.status::text <> 'posted'
+           THEN COALESCE(NEW.paid_at::date, ae.date)
+           ELSE ae.date
+         END
        );
 
       IF v_financial_conflict THEN
