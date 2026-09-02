@@ -767,6 +767,7 @@ function ConfigTab({ category }: { category: "BUSINESS_TRANSACTION" | "ROUTINE_E
 // ─── AI Classification Rules tab ───────────────────────────────────────────────
 
 function AiRulesTab() {
+  const highlightedRuleId = Number(new URLSearchParams(window.location.search).get("ruleId"));
   const { activeCompanyId } = useCompany();
   const [rows, setRows]       = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1259,8 +1260,24 @@ function AiRulesTab() {
                 <tr><td colSpan={10} className="py-8 text-center text-slate-500">Tidak ada rule yang sesuai filter.</td></tr>
               )}
               {filteredRows.map(row => (
-                <tr key={row.id} className="border-b border-slate-800 hover:bg-slate-800/40">
-                  <td className="py-2 pr-3 text-white">{row.name}</td>
+                <tr
+                  key={row.id}
+                  className={`border-b border-slate-800 hover:bg-slate-800/40 ${
+                    Number.isSafeInteger(highlightedRuleId) && Number(row.id) === highlightedRuleId
+                      ? "bg-emerald-950/50 ring-1 ring-inset ring-emerald-500/50"
+                      : ""
+                  }`}
+                >
+                  <td className="py-2 pr-3 text-white">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span>{row.name}</span>
+                      {row.is_active !== false && (
+                        <Badge className="bg-emerald-900 text-emerald-300 text-[10px]">
+                          Approved &amp; Aktif
+                        </Badge>
+                      )}
+                    </div>
+                  </td>
                   <td className="py-2 pr-3 font-mono text-xs text-slate-400">
                     {conditionSummary(row)}
                   </td>
@@ -2307,7 +2324,20 @@ function UsageStatsTab() {
 // ─── Main page ─────────────────────────────────────────────────────────────────
 
 export default function ReconClassificationConfigPage() {
-  const [tab, setTab] = useState("business");
+  const allowedTabs = new Set([
+    "business",
+    "routine",
+    "income",
+    "ai-rules",
+    "keywords",
+    "upload",
+    "approval",
+    "stats",
+  ]);
+  const requestedTab = new URLSearchParams(window.location.search).get("tab");
+  const [tab, setTab] = useState(
+    requestedTab && allowedTabs.has(requestedTab) ? requestedTab : "business",
+  );
 
   const TABS = [
     { value: "business",  label: "Tipe Bisnis",          icon: BookOpen },

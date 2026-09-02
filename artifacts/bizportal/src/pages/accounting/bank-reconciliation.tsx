@@ -2511,7 +2511,7 @@ function CoaReferenceDialog({
   open: boolean;
   activeCompanyId: number | null;
   onClose: () => void;
-  onSaved: () => void | Promise<void>;
+  onSaved: (ruleId: number | null) => void | Promise<void>;
 }) {
   const { toast } = useToast();
   const qc = useQueryClient();
@@ -2821,7 +2821,8 @@ function CoaReferenceDialog({
       // The mutation list and QRIS candidate audit use different React Query
       // keys, so refresh both views after the one-time approval.
       qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] });
-      await onSaved();
+      const savedRuleId = Number(ruleAiBody?.data?.id);
+      await onSaved(Number.isSafeInteger(savedRuleId) && savedRuleId > 0 ? savedRuleId : null);
       onClose();
     } catch (error) {
       toast({
@@ -8202,7 +8203,12 @@ export default function BankReconciliationPage() {
         open={!!coaReferenceTarget}
         activeCompanyId={qrisCompanyId}
         onClose={() => setCoaReferenceTarget(null)}
-        onSaved={invalidate}
+        onSaved={async (ruleId) => {
+          await invalidate();
+          const params = new URLSearchParams({ tab: "ai-rules" });
+          if (ruleId != null) params.set("ruleId", String(ruleId));
+          setLocation(`/finance/recon-config?${params.toString()}`);
+        }}
       />
 
       {/* ── Detail Side Panel ─────────────────────────────────── */}
