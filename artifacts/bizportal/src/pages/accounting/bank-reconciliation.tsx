@@ -2519,7 +2519,6 @@ function CoaReferenceDialog({
 }) {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const [, setLocation] = useLocation();
   const [search, setSearch] = useState("");
   const [selectedCode, setSelectedCode] = useState("");
   const [saving, setSaving] = useState(false);
@@ -2799,52 +2798,50 @@ function CoaReferenceDialog({
     setSaving(true);
     try {
       const ruleAi = buildRuleAiPayload(selectedAccount);
-      const previousApprovalKey = approvalKeyRef.current;
-      const approvalKey = previousApprovalKey?.mutationId === mutation.id &&
-        previousApprovalKey.coaCode === selectedAccount.code
-        ? previousApprovalKey.key
-        : crypto.randomUUID();
-      approvalKeyRef.current = {
-        mutationId: mutation.id,
-        coaCode: selectedAccount.code,
-        key: approvalKey,
-      };
-      const approveResponse = await fetch(`/api/bank-reconciliation/${mutation.id}/approve`, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          "x-idempotency-key": approvalKey,
-        },
-        body: JSON.stringify({
-          manual_coa_code: selectedAccount.code,
-          note: `COA dipilih manual hanya untuk mutasi ini: ${selectedAccount.code}`,
-          rule_ai: ruleAi,
-        }),
-      });
-      const approveBody = await approveResponse.json().catch(() => ({}));
-      if (!approveResponse.ok) {
-        throw new Error(
-          approveBody.error ?? "COA dipilih, tetapi draft jurnal untuk mutasi ini belum berhasil dibuat.",
-        );
-      }
-      toast({
-        title: "COA disimpan ke Rule AI dan draft jurnal dibuat",
-        description: `${selectedAccount.code} — ${selectedAccount.name}. Rule AI dan draft jurnal tersimpan atomik.`,
-      const ruleAiBody = await saveRuleAi(selectedAccount);
+      let savedRuleId: number | null = null;
+
       if (isQris) {
+        const ruleResponse = await fetch("/api/recon-classification/ai-rules", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(ruleAi),
+        });
+        const ruleBody = await ruleResponse.json().catch(() => ({}));
+        if (!ruleResponse.ok) {
+          throw new Error(ruleBody.error ?? "Rule AI QRIS belum berhasil disimpan.");
+        }
+        const createdRuleId = Number(ruleBody?.data?.id);
+        savedRuleId = Number.isSafeInteger(createdRuleId) && createdRuleId > 0
+          ? createdRuleId
+          : null;
+
         if (!canonicalCandidate || !onApproveCanonical) {
           throw new Error("Settlement QRIS belum memenuhi syarat approval canonical.");
         }
         await onApproveCanonical(mutation, canonicalCandidate);
       } else {
+        const previousApprovalKey = approvalKeyRef.current;
+        const approvalKey = previousApprovalKey?.mutationId === mutation.id &&
+          previousApprovalKey.coaCode === selectedAccount.code
+          ? previousApprovalKey.key
+          : crypto.randomUUID();
+        approvalKeyRef.current = {
+          mutationId: mutation.id,
+          coaCode: selectedAccount.code,
+          key: approvalKey,
+        };
         const approveResponse = await fetch(`/api/bank-reconciliation/${mutation.id}/approve`, {
           method: "POST",
           credentials: "include",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "x-idempotency-key": approvalKey,
+          },
           body: JSON.stringify({
             manual_coa_code: selectedAccount.code,
-            note: `COA dipilih manual untuk mutasi ini: ${selectedAccount.code}`,
+            note: `COA dipilih manual hanya untuk mutasi ini: ${selectedAccount.code}`,
+            rule_ai: ruleAi,
           }),
         });
         const approveBody = await approveResponse.json().catch(() => ({}));
@@ -2853,19 +2850,23 @@ function CoaReferenceDialog({
             approveBody.error ?? "COA dipilih, tetapi draft jurnal untuk mutasi ini belum berhasil dibuat.",
           );
         }
+        const createdRuleId = Number(approveBody?.rule_ai_id);
+        savedRuleId = Number.isSafeInteger(createdRuleId) && createdRuleId > 0
+          ? createdRuleId
+          : null;
       }
+
       toast({
         title: isQris
           ? "Rule AI aktif dan settlement QRIS disetujui"
           : "COA disimpan ke Rule AI dan draft jurnal dibuat",
-        description: `${selectedAccount.code} — ${selectedAccount.name}. Rule AI #${ruleAiBody?.data?.id ?? "baru"} aktif untuk perusahaan ini.`,
+        description: `${selectedAccount.code} — ${selectedAccount.name}. Rule AI #${savedRuleId ?? "baru"} aktif untuk perusahaan ini.`,
       });
       approvalKeyRef.current = null;
       // The mutation list and QRIS candidate audit use different React Query
       // keys, so refresh both views after the one-time approval.
       qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] });
-      const savedRuleId = Number(ruleAiBody?.data?.id);
-      await onSaved(Number.isSafeInteger(savedRuleId) && savedRuleId > 0 ? savedRuleId : null);
+      await onSaved(savedRuleId);
       onClose();
     } catch (error) {
       toast({
