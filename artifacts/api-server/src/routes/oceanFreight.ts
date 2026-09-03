@@ -479,20 +479,31 @@ router.patch("/:id/status", requireAdmin, async (req: Request, res: Response) =>
   try {
     const id     = Number(String(req.params.id));
     const status = String(req.body?.status ?? "");
+    const trace = process.env.SAFE_DEV_TEST_MODE === "true";
+    const traceStartedAt = trace ? Date.now() : 0;
+    const traceLog = (step: string) => {
+      if (trace) console.log(`[ocean-freight/status] ${step} ${Date.now() - traceStartedAt}ms`);
+    };
+    traceLog(`start id=${id} status=${status}`);
     const validStatuses = ["draft","estimated","waiting_rate","rate_requested","rate_received","quoted","approved","booked","sailed","arrived","completed","cancelled","quote_declined"];
     if (!validStatuses.includes(status)) return res.status(400).json({ error: "Status tidak valid" });
 
+    traceLog("before existing order query");
     const existingOcn = await db.execute(sql`
       SELECT company_id, portal_customer_id, order_number
       FROM ocean_freight_orders WHERE id = ${id} LIMIT 1
     `);
+    traceLog(`after existing order query rows=${existingOcn.rows.length}`);
     if (!existingOcn.rows.length) return res.status(404).json({ error: "Order tidak ditemukan" });
     const cid = resolveCompanyId(req);
+    traceLog(`after company resolve cid=${cid}`);
     if (!await assertCompanyAccess((existingOcn.rows[0] as any).company_id, cid, req, res, { resourceType: "ocean_freight_order", resourceId: id })) return;
+    traceLog("after company access");
     const updated = await db.execute(sql`
       UPDATE ocean_freight_orders SET status = ${status}, updated_at = NOW() WHERE id = ${id}
       RETURNING status
     `);
+    traceLog("after status update");
     await notifyCustomerPortal({
       portalCustomerId: (existingOcn.rows[0] as any).portal_customer_id,
       eventKey: `ocean-freight:${id}:status:${status}`,
@@ -506,6 +517,7 @@ router.patch("/:id/status", requireAdmin, async (req: Request, res: Response) =>
         status: (updated.rows[0] as any)?.status ?? status,
       },
     });
+    traceLog("after customer notification");
     return res.json({ ok: true });
   } catch (e) {
     return res.status(500).json({ error: "Gagal update status" });

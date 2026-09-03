@@ -10,7 +10,11 @@ import { eq, sql } from "drizzle-orm";
 export async function hasPermission(userId: string, permission: string, sessionRole?: string | null): Promise<boolean> {
   // Fast-path: session role says admin — try DB first, fall back if unavailable
   try {
+    const trace = process.env.SAFE_DEV_TEST_MODE === "true";
+    const startedAt = trace ? Date.now() : 0;
+    if (trace) console.log(`[requireAdmin] permission lookup start user=${userId} permission=${permission}`);
     const rows = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+    if (trace) console.log(`[requireAdmin] permission user lookup done ${Date.now() - startedAt}ms rows=${rows.length}`);
     const u = rows[0];
     if (!u) {
       // User not in DB — trust session role
@@ -25,6 +29,7 @@ export async function hasPermission(userId: string, permission: string, sessionR
       const result = await db.execute(sql`
         SELECT permissions FROM custom_roles WHERE id = ${u.customRoleId}
       `);
+      if (trace) console.log(`[requireAdmin] custom role lookup done ${Date.now() - startedAt}ms`);
       const crRow = result.rows[0] as { permissions: unknown } | undefined;
       const perms = crRow?.permissions;
       if (Array.isArray(perms)) {
@@ -36,6 +41,9 @@ export async function hasPermission(userId: string, permission: string, sessionR
 
     return false;
   } catch {
+    if (process.env.SAFE_DEV_TEST_MODE === "true") {
+      console.log(`[requireAdmin] permission lookup fell back to session role=${sessionRole ?? "null"}`);
+    }
     // DB unavailable — fall back to session role
     if (permission === "admin") return sessionRole === "admin";
     return sessionRole === "admin" || sessionRole === permission;
@@ -131,7 +139,13 @@ export async function requireAdmin(req: Request, res: Response): Promise<boolean
 
   const userId = (req.user as { id: string }).id;
   const sessionRole = (req.user as { role?: string | null }).role ?? null;
+  if (process.env.SAFE_DEV_TEST_MODE === "true") {
+    console.log(`[requireAdmin] start user=${userId} role=${sessionRole ?? "null"}`);
+  }
   const allowed = await hasPermission(userId, "admin", sessionRole);
+  if (process.env.SAFE_DEV_TEST_MODE === "true") {
+    console.log(`[requireAdmin] result allowed=${allowed}`);
+  }
   if (!allowed) {
     res.status(403).json({ message: "Forbidden: admin only" });
     return false;
