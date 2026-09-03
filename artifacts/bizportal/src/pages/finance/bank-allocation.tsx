@@ -393,6 +393,11 @@ export default function BankAllocationPage() {
               onReject={(id) => setRejectTarget(id)}
               onAllocate={(allocations) => allocateMutation(detail.mutation.id, allocations)}
               actionLoading={actionLoading}
+              onRunMatching={async () => {
+                await runMatching();
+                await openDetail(detail.mutation.id);
+              }}
+              matchingPending={running}
             />
           ) : null}
         </DialogContent>
@@ -582,7 +587,7 @@ function ExceptionTable({ rows, loading, onView }: { rows: ExceptionRow[]; loadi
 }
 
 function MutationDetailView({
-  detail, onSelect, onConfirm, onReject, onAllocate, actionLoading,
+  detail, onSelect, onConfirm, onReject, onAllocate, actionLoading, onRunMatching, matchingPending,
 }: {
   detail: MutationDetail;
   onSelect: (matchId: number) => void;
@@ -595,12 +600,15 @@ function MutationDetailView({
     previousAllocationId?: number | null;
   }>) => Promise<void>;
   actionLoading: number | null;
+  onRunMatching?: () => Promise<void> | void;
+  matchingPending?: boolean;
 }) {
   const m = detail.mutation;
   const [previousDate, setPreviousDate] = useState(String(m.transaction_date ?? "").slice(0, 10));
   const [previousDescription, setPreviousDescription] = useState("");
   const [previousRows, setPreviousRows] = useState<PreviousMutationAllocation[]>([]);
   const [previousLoading, setPreviousLoading] = useState(false);
+  const [previousSearchAttempted, setPreviousSearchAttempted] = useState(false);
   const [allocationLines, setAllocationLines] = useState<Array<{
     invoiceId: number;
     invoiceRef: string;
@@ -613,6 +621,7 @@ function MutationDetailView({
     setPreviousDate(String(m.transaction_date ?? "").slice(0, 10));
     setPreviousDescription("");
     setPreviousRows([]);
+    setPreviousSearchAttempted(false);
     setAllocationLines([]);
   }, [m.id, m.transaction_date]);
 
@@ -633,6 +642,7 @@ function MutationDetailView({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Gagal mencari allocation sebelumnya");
       setPreviousRows(data.rows ?? []);
+      setPreviousSearchAttempted(true);
       if (!data.rows?.length) {
         toast({ title: "Tidak ada allocation sebelumnya yang cocok" });
       }
@@ -717,7 +727,8 @@ function MutationDetailView({
           <div>
             <h3 className="text-sm font-semibold text-black">Multi-allocation & Link DP Lama</h3>
             <p className="text-xs text-black">
-              Pilih beberapa invoice untuk satu mutasi. Untuk pelunasan, cari mutasi sebelumnya hanya dengan tanggal dan nama/deskripsi pengirim.
+              Pilih beberapa invoice untuk satu mutasi. Link DP hanya mencari mutasi lain yang sudah memiliki allocation aktif.
+              Mutasi yang sedang dibuka tidak ikut ditampilkan.
             </p>
           </div>
         </div>
@@ -743,6 +754,17 @@ function MutationDetailView({
             Cari mutasi lama
           </Button>
         </div>
+
+        {previousSearchAttempted && previousRows.length === 0 && (
+          <div className="rounded border border-amber-300 bg-amber-50 px-2.5 py-2 text-xs text-amber-950">
+            <p className="font-semibold">Mutasi lama yang bisa dikaitkan belum ditemukan</p>
+            <p className="mt-0.5">
+              Pencarian memakai tanggal dan potongan deskripsi pada tanggal tersebut, mengecualikan mutasi saat ini,
+              dan hanya menampilkan mutasi yang sudah punya allocation aktif. Jika DP berada di tanggal lain,
+              ubah tanggal pencarian ke tanggal DP-nya.
+            </p>
+          </div>
+        )}
 
         {previousRows.length > 0 && (
           <div className="space-y-2">
@@ -784,6 +806,26 @@ function MutationDetailView({
                 ))}
               </div>
             ))}
+          </div>
+        )}
+
+        {detail.candidates.length === 0 && onRunMatching && (
+          <div className="rounded border border-blue-200 bg-blue-50 px-2.5 py-2 text-xs text-blue-950">
+            <p className="font-semibold">Belum ada kandidat invoice atau DP untuk mutasi ini</p>
+            <p className="mt-0.5">
+              Jalankan matching agar sistem mencari invoice/advance berdasarkan nominal, referensi, nama,
+              tanggal, dan company. Matching hanya membuat rekomendasi; finance tetap harus memilih dan mengonfirmasi.
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-2 border-blue-300 text-blue-900"
+              onClick={() => void onRunMatching()}
+              disabled={matchingPending}
+            >
+              {matchingPending && <RefreshCw className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
+              {matchingPending ? "Menjalankan matching..." : "Jalankan Matching untuk Cari Kandidat"}
+            </Button>
           </div>
         )}
 
