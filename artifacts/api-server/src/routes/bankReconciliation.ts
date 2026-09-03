@@ -555,6 +555,14 @@ export async function runBankReconciliationCoreMigration() {
       ADD COLUMN IF NOT EXISTS candidate_source TEXT
   `)).catch(() => {});
 
+  // Historical canonical settlement repair records its explicit reviewer
+  // action on the match row. Older production schemas predate this column;
+  // keep the upgrade additive and default legacy rows to non-manual.
+  await db.execute(sql.raw(`
+    ALTER TABLE public.bank_reconciliation_matches
+      ADD COLUMN IF NOT EXISTS is_manual BOOLEAN NOT NULL DEFAULT FALSE
+  `)).catch(() => {});
+
   // Preserve the duplicate candidate evidence while making only one row
   // active per source-qualified identity. This is intentionally not a DELETE:
   // only rows classified as non-approved candidates are superseded, and
