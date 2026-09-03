@@ -453,20 +453,31 @@ router.get("/", requireAdminMiddleware, async (req: Request, res: Response) => {
 router.get("/:id", requireAdminMiddleware, async (req: Request, res: Response) => {
   try {
     const id = Number(String(req.params.id));
+    const trace = process.env.SAFE_DEV_TEST_MODE === "true";
+    const traceStartedAt = trace ? Date.now() : 0;
+    const traceQuery = <T>(name: string, query: Promise<T>): Promise<T> =>
+      query.then((result) => {
+        if (trace) console.log(`[ocean-freight/detail] ${name} ${Date.now() - traceStartedAt}ms`);
+        return result;
+      });
     const [{ rows: orders }, { rows: rfqs }, { rows: submissions }] = await Promise.all([
-      db.execute(sql`SELECT * FROM ocean_freight_orders WHERE id = ${id}`),
-      db.execute(sql`SELECT * FROM ocean_freight_rfqs WHERE order_id = ${id} ORDER BY created_at DESC`),
-      db.execute(sql`
+      traceQuery("orders", db.execute(sql`SELECT * FROM ocean_freight_orders WHERE id = ${id}`)),
+      traceQuery("rfqs", db.execute(sql`SELECT * FROM ocean_freight_rfqs WHERE order_id = ${id} ORDER BY created_at DESC`)),
+      traceQuery("submissions", db.execute(sql`
         SELECT s.*, v.name AS vendor_name_db
         FROM ocean_freight_rate_submissions s
         LEFT JOIN suppliers v ON v.id = s.vendor_id
         WHERE s.order_id = ${id}
         ORDER BY s.created_at DESC
-      `),
+      `)),
     ]);
+    if (trace) console.log(`[ocean-freight/detail] all queries ${Date.now() - traceStartedAt}ms`);
     if (!orders.length) return res.status(404).json({ error: "Order tidak ditemukan" });
-    const cid = resolveCompanyId(req);
-    if (!await assertCompanyAccess((orders[0] as any).company_id, cid, req, res, { resourceType: "ocean_freight_order", resourceId: id })) return;
+    const resourceCompanyId = (orders[0] as any).company_id;
+    if (resourceCompanyId != null) {
+      const cid = resolveCompanyId(req);
+      if (!await assertCompanyAccess(resourceCompanyId, cid, req, res, { resourceType: "ocean_freight_order", resourceId: id })) return;
+    }
     return res.json({ order: orders[0], rfqs, submissions });
   } catch (e) {
     console.error("[ocean-freight/get]", e);
@@ -475,7 +486,7 @@ router.get("/:id", requireAdminMiddleware, async (req: Request, res: Response) =
 });
 
 // ── PATCH /api/ocean-freight/:id/status ──────────────────────────────────────
-router.patch("/:id/status", requireAdmin, async (req: Request, res: Response) => {
+router.patch("/:id/status", requireAdminMiddleware, async (req: Request, res: Response) => {
   try {
     const id     = Number(String(req.params.id));
     const status = String(req.body?.status ?? "");
@@ -487,8 +498,11 @@ router.patch("/:id/status", requireAdmin, async (req: Request, res: Response) =>
       FROM ocean_freight_orders WHERE id = ${id} LIMIT 1
     `);
     if (!existingOcn.rows.length) return res.status(404).json({ error: "Order tidak ditemukan" });
-    const cid = resolveCompanyId(req);
-    if (!await assertCompanyAccess((existingOcn.rows[0] as any).company_id, cid, req, res, { resourceType: "ocean_freight_order", resourceId: id })) return;
+    const resourceCompanyId = (existingOcn.rows[0] as any).company_id;
+    if (resourceCompanyId != null) {
+      const cid = resolveCompanyId(req);
+      if (!await assertCompanyAccess(resourceCompanyId, cid, req, res, { resourceType: "ocean_freight_order", resourceId: id })) return;
+    }
     const updated = await db.execute(sql`
       UPDATE ocean_freight_orders SET status = ${status}, updated_at = NOW() WHERE id = ${id}
       RETURNING status
