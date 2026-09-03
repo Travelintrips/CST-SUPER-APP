@@ -41,6 +41,7 @@ const REGISTRY_ROWS: readonly RegistryRow[] = [
   ["notification_log", "Notification log migration", "schema"],
   ["admin_notifications", "Admin notifications migration", "schema"],
   ["vendor_notifications", "Vendor notifications migration", "schema"],
+  ["customer_portal_notifications", "Customer portal notifications migration", "schema"],
   ["vendor_profile_fields", "Vendor profile fields migration", "schema"],
   ["supplier_enhancement", "Supplier enhancement migration (status/marketplace/documents/reviews)", "schema"],
   ["nav_preferences", "Nav preferences migration", "schema"],
