@@ -4838,14 +4838,14 @@ function MutationCard({
         {/* Mapping-Required Warning (Task #6) */}
         {mappingError && (
           <Alert
-            className="mt-3 border-orange-300 bg-orange-50 text-orange-900 dark:bg-orange-950 dark:border-orange-700 dark:text-orange-200"
+            className="mt-3 border-orange-300 bg-orange-50 text-white dark:bg-orange-950 dark:border-orange-700 dark:text-white"
             onClick={e => e.stopPropagation()}
           >
             <AlertTriangle className="h-4 w-4 text-orange-500 shrink-0" />
-            <AlertDescription className="text-xs space-y-1">
+            <AlertDescription className="text-xs space-y-1 text-white">
               <p className="font-semibold">COA spesifik belum tersedia. Jurnal belum dibuat.</p>
               <p>{mappingError.message}</p>
-              <p className="font-mono text-[10px] text-orange-600 dark:text-orange-400">
+              <p className="font-mono text-[10px] text-white">
                 {mappingError.code} · Review manual diperlukan
               </p>
             </AlertDescription>
