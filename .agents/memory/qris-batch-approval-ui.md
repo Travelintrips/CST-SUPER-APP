@@ -50,3 +50,9 @@ Manual approval of a REVIEW batch must retain all identity and state guards, use
 **Why:** Reviewers may have authoritative bank evidence even when provider/MDR metadata is incomplete, but bypassing payment, company, date, account, or idempotency checks would make the settlement unsafe.
 
 **How to apply:** Send an explicit override flag and reason through the batch approval endpoint, keep the canonical settlement link-only path, and persist the decision in audit metadata.
+
+Manual review may resolve provider or metadata ambiguity, but it must never bypass the exact-net invariant. A calculated MDR/net mismatch remains review-only until the source evidence or configuration is corrected.
+
+**Why:** Allowing a single fallback MDR configuration to approve a non-matching bank amount would turn an evidence mismatch into a posted settlement and break reconciliation integrity.
+
+**How to apply:** Keep exact-net selection mandatory in every QRIS approval route, including manual-override requests; use the dedicated historical link-only workflow only when its full evidence contract passes.

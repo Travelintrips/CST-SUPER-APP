@@ -3608,12 +3608,10 @@ router.post("/qris-candidates/:candidateId/approve", async (req, res) => {
         }
       }
       const exactSettlementConfig = selectQrisExactNetConfig(evaluatedConfigs, bankAmount);
-      // A REVIEW candidate may be approved by an explicit reviewer decision.
-      // Keep the owner-approved configuration and all identity checks, but do
-      // not require its calculated net to equal the bank amount when the
-      // reviewer intentionally overrides the evidence mismatch.
-      const settlementConfig = exactSettlementConfig
-        ?? (manualOverride && evaluatedConfigs.length === 1 ? evaluatedConfigs[0] : null);
+      // A manual review may resolve metadata ambiguity, but it must never
+      // override the financial invariant: the calculated net must equal the
+      // bank mutation exactly. A nominal/MDR mismatch stays review-only.
+      const settlementConfig = exactSettlementConfig;
       if (!settlementConfig) {
         throw Object.assign(new Error(
           manualOverride && evaluatedConfigs.length > 1

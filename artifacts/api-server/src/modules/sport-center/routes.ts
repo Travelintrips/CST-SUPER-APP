@@ -2211,6 +2211,18 @@ router.patch("/payments/:id", async (req, res) => {
   if (!await requireAdmin(req, res)) return;
   const id = parseInt(req.params.id, 10);
   if (!id || isNaN(id)) return res.status(400).json({ error: "ID tidak valid" });
+  if (
+    req.body
+    && (
+      Object.prototype.hasOwnProperty.call(req.body, "settlement_status")
+      || Object.prototype.hasOwnProperty.call(req.body, "settlementStatus")
+    )
+  ) {
+    return res.status(409).json({
+      error: "Status settlement tidak dapat diubah melalui edit payment umum",
+      code: "SETTLEMENT_STATUS_GOVERNED_BY_RECONCILIATION",
+    });
+  }
   try {
     // Ambil data payment sekarang
     const existing = await db.execute(sql`
@@ -2248,9 +2260,6 @@ router.patch("/payments/:id", async (req, res) => {
       req.body.settlement_date != null
         ? (req.body.settlement_date === "" ? null : String(req.body.settlement_date))
         : undefined;
-    const newSettlementStatus: string | undefined =
-      req.body.settlement_status != null ? String(req.body.settlement_status) : undefined;
-
     if (newMdrRate !== undefined && (!Number.isFinite(newMdrRate) || newMdrRate < 0 || newMdrRate > 100)) {
       return res.status(400).json({ error: "mdr_rate harus antara 0 dan 100" });
     }
@@ -2281,13 +2290,6 @@ router.patch("/payments/:id", async (req, res) => {
     if (newSettlementDate !== undefined) {
       sets.push(`settlement_date = ${newSettlementDate == null ? "NULL" : `'${newSettlementDate.replace(/'/g, "''")}'::date`}`);
     }
-    if (newSettlementStatus !== undefined) {
-      if (!["unsettled", "settled", "partial", "exception"].includes(newSettlementStatus)) {
-        return res.status(400).json({ error: "settlement_status tidak valid" });
-      }
-      sets.push(`settlement_status = '${newSettlementStatus}'`);
-    }
-
     if (sets.length === 1) return res.status(400).json({ error: "Tidak ada field yang diubah" });
 
     const updated = await db.execute(sql.raw(`

@@ -1011,6 +1011,8 @@ function isCanonicalSettlementManualOverrideEligible(m: BankMutation): boolean {
   const settlementStatus = String(candidate?.details?.settlementStatus ?? "").toLowerCase();
   return canApprove(m)
     && candidate != null
+    && candidate.amount_match !== false
+    && candidate.date_match !== false
     && String(candidate.status ?? "").toLowerCase() !== "approved"
     && !hasApprovedReconciliationMatch(m)
     && settlementStatus === "posted";
@@ -3406,7 +3408,11 @@ function QrisMutationCard({
     candidate.candidate_type === "qris_settlement"
     && candidate.candidate_source === CANONICAL_SETTLEMENT_SOURCE,
   );
-  const canonicalOverrideReady = isCanonicalSettlementManualOverrideEligible(m);
+  const canonicalOverrideReady =
+    isCanonicalSettlementManualOverrideEligible(m)
+    && canonicalSettlementCandidate != null
+    && canonicalSettlementCandidate.amount_match !== false
+    && canonicalSettlementCandidate.date_match !== false;
   const canonicalApprovalReady = isCanonicalSettlementApprovalEligible(m);
   const canonicalHistoricalRepairReady = isCanonicalHistoricalRepairEligible(
     m,
@@ -3506,8 +3512,10 @@ function QrisMutationCard({
       ? "Auto-post gagal — Perlu Revisi"
     : audit.auto_post_status === "succeeded"
       ? "Auto-post selesai"
+     : canonicalHistoricalRepairReady
+       ? "Settlement Tertunda — Siap Ditautkan"
     : hasCanonicalSettlementCandidate
-      ? "Settlement Canonical — Perlu Review"
+       ? "Settlement Canonical — Perlu Review"
     : isApproved
       ? "Sudah Disetujui"
       : isDepleted
@@ -3516,9 +3524,7 @@ function QrisMutationCard({
           ? "Bukti Stale — Revisi"
           : isEmptyMatchedCandidate || isStaleMatchedCandidate
             ? "Perlu Diperbarui"
-          : canonicalHistoricalRepairReady
-            ? "Settlement Tertunda — Siap Ditautkan"
-            : isMatched
+           : isMatched
               ? "Cocok"
               : "Perlu Diperiksa";
   const positiveStatus = isCanonicalReconciled
@@ -3816,7 +3822,7 @@ function QrisMutationCard({
                                       type="button"
                                       className="inline-flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[9px] font-medium text-amber-700 hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:text-amber-300 dark:hover:bg-amber-950"
                                       disabled={!canRequestUnsettle || unsettledPaymentId === numericPaymentId}
-                                      title="Reset status payment menjadi unsettled"
+                                       title="Reset hanya melalui workflow settlement yang terkontrol"
                                       onClick={(event) => {
                                         event.stopPropagation();
                                         if (canRequestUnsettle) {
@@ -3831,7 +3837,7 @@ function QrisMutationCard({
                                       {unsettledPaymentId === numericPaymentId
                                         ? <Loader2 className="h-2.5 w-2.5 animate-spin" />
                                         : <RefreshCw className="h-2.5 w-2.5" />}
-                                      Unsettle
+                                       Reset terkontrol
                                     </button>
                                   )
                                 )}
@@ -3876,7 +3882,7 @@ function QrisMutationCard({
                     })}
                   </div>
                 </div>
-                <p className="border-t bg-muted/15 px-2.5 py-1.5 text-[10px] text-muted-foreground">
+                 <p className="border-t bg-muted/15 px-2.5 py-1.5 text-[10px] text-muted-foreground">
                    {isReadOnlyEvidence
                      ? "Audit = bukti snapshot, bukan persetujuan. Revisi sumber payment lalu buat kandidat baru."
                      : "Legenda: MDR (Estimasi) = Total potongan QRIS · Approval hanya memproses payment yang dipilih."}
@@ -3953,8 +3959,9 @@ function QrisMutationCard({
               </Alert>
             )}
 
-            <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t pt-3" onClick={e => e.stopPropagation()}>
-              <Button
+             <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t pt-3" onClick={e => e.stopPropagation()}>
+               {!canonicalHistoricalRepairReady && (
+                 <Button
                 size="sm"
                 variant="outline"
                 className="h-8 gap-1.5 border-indigo-300 text-xs text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:text-indigo-300"
@@ -3962,7 +3969,8 @@ function QrisMutationCard({
               >
                 <BookOpen className="h-3.5 w-3.5" />
                 Pilih COA &amp; Simpan Rule AI
-              </Button>
+                 </Button>
+               )}
               {!isApproved && !isDepleted && !isMatched && (
                 <Button
                   size="sm"
@@ -4033,7 +4041,7 @@ function QrisMutationCard({
                   {recoverQrisPending
                     ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     : <Link2 className="h-3.5 w-3.5" />}
-                  {recoverQrisPending ? "Menyelesaikan link..." : "Tautkan Settlement Posted"}
+                     {recoverQrisPending ? "Menyelesaikan link..." : "Selesaikan link historical"}
                 </Button>
               )}
               {!isApproved && hasApprovedReconciliationMatch(m) && (
@@ -4046,7 +4054,7 @@ function QrisMutationCard({
                 && !canonicalApprovalReady
                 && canonicalSettlementCandidate
                 && onManualOverrideCandidate && (
-                <Button
+               <Button
                   size="sm"
                   variant="outline"
                   className="ml-auto h-8 gap-1.5 border-orange-400 text-xs text-orange-800 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-200"
@@ -4620,7 +4628,7 @@ function MutationCard({
           onClick={e => e.stopPropagation()}
         >
           <div className="flex gap-1.5 flex-wrap">
-            {!isManualReviewActionable(m) && (
+            {!isManualReviewActionable(m) && !canonicalHistoricalRepairReady && (
               <Button
                 size="sm"
                 variant="outline"
@@ -4719,7 +4727,7 @@ function MutationCard({
                 Setujui
               </Button>
             )}
-             {canonicalApprovalReady && canonicalApprovalCandidate && (
+             {(canonicalApprovalReady || canonicalHistoricalRepairReady) && canonicalApprovalCandidate && (
                canonicalHistoricalRepairReady && onRecoverQrisSettlement ? (
                  <Button
                    size="sm"
@@ -4734,7 +4742,7 @@ function MutationCard({
                    {recoverQrisPending
                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
                      : <CheckCircle2 className="h-3.5 w-3.5" />}
-                   {recoverQrisPending ? "Menyelesaikan link..." : "Tautkan Settlement Posted"}
+               {recoverQrisPending ? "Menyelesaikan link..." : "Selesaikan link historical"}
                  </Button>
                ) : onApproveCandidate ? (
                  <Button
@@ -4750,7 +4758,8 @@ function MutationCard({
                  </Button>
                ) : null
              )}
-            {canonicalOverrideReady
+             {canonicalOverrideReady
+               && !canonicalHistoricalRepairReady
               && !canonicalApprovalReady
               && canonicalApprovalCandidate
               && onManualOverrideCandidate && (
@@ -5194,6 +5203,8 @@ function MutationDetailPanel({
   const qrisNetAmount = numericValue(qrisAudit?.net_amount) ?? 0;
   const qrisStoredDeduction = numericValue(qrisAudit?.observed_deduction) ?? 0;
   const qrisImpliedDeduction = Math.max(0, qrisGrossAmount - qrisNetAmount);
+  const qrisAuditNetMatchesMutation =
+    qrisAudit != null && Math.abs(qrisNetAmount - (numericValue(m.amount) ?? 0)) < 0.5;
   const qrisDeductionMetadataMismatch =
     qrisAudit != null && Math.abs(qrisStoredDeduction - qrisImpliedDeduction) >= 0.5;
   const qrisDiagnostic = m.qris_candidate_diagnostic ?? null;
@@ -5541,8 +5552,8 @@ function MutationDetailPanel({
                   {/* Approve button — MATCHED = normal, REVIEW = force-approve with warning */}
                   {String(qrisAudit.status ?? "").toLowerCase() !== "approved" && qrisAudit.id != null && onApproveQrisBatch && (() => {
                     const recoStatus = String(qrisAudit.reconciliation_status ?? "").toUpperCase();
-                    const isMatched = recoStatus === "MATCHED";
-                    const isReview  = recoStatus === "REVIEW";
+                    const isMatched = recoStatus === "MATCHED" && qrisAuditNetMatchesMutation;
+                    const isReview  = recoStatus === "REVIEW" && qrisAuditNetMatchesMutation;
                     if (isMatched) {
                       return (
                         <Button
@@ -5750,7 +5761,7 @@ function MutationDetailPanel({
               {recoverQrisPending
                 ? <Loader2 className="h-4 w-4 animate-spin" />
                 : <Link2 className="h-4 w-4" />}
-              {recoverQrisPending ? "Menyelesaikan link..." : "Tautkan Settlement Posted"}
+                     {recoverQrisPending ? "Menyelesaikan link..." : "Selesaikan link historical"}
             </Button>
           ) : canonicalApprovalReady && canonicalApprovalCandidate && onApproveCandidate && (
             <Button
