@@ -1,5 +1,5 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
-import { requireAdmin } from "../lib/requireAdmin.js";
+import { requireAdmin, requireAdminMiddleware } from "../lib/requireAdmin.js";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../lib/logger.js";
@@ -603,7 +603,7 @@ const today = new Date().toISOString().slice(0, 10);
 const in90  = new Date(Date.now() + 90 * 86400_000).toISOString().slice(0, 10);
 
 // GET /api/ocean-freight-rates — list
-router.get("/", requireAdmin, async (req: Request, res: Response) => {
+router.get("/", requireAdminMiddleware, async (req: Request, res: Response) => {
   try {
     const origin = req.query.origin_port ? String(req.query.origin_port) : null;
     const dest   = req.query.destination_port ? String(req.query.destination_port) : null;
@@ -623,7 +623,7 @@ router.get("/", requireAdmin, async (req: Request, res: Response) => {
 });
 
 // GET /api/ocean-freight-rates/export
-router.get("/export", requireAdmin, async (_req: Request, res: Response) => {
+router.get("/export", requireAdminMiddleware, async (_req: Request, res: Response) => {
   try {
     const { rows } = await db.execute(sql`SELECT * FROM ocean_freight_rates ORDER BY origin_port, destination_port, shipment_type, container_type`);
     const lines = [RATE_HEADERS.join(",")];
@@ -639,7 +639,7 @@ router.get("/export", requireAdmin, async (_req: Request, res: Response) => {
 });
 
 // POST /api/ocean-freight-rates/import
-router.post("/import", requireAdmin, csvTextParser, async (req: Request, res: Response) => {
+router.post("/import", requireAdminMiddleware, csvTextParser, async (req: Request, res: Response) => {
   try {
     const csvRows = parseCsvText(String(req.body ?? ""));
     if (!csvRows.length) return res.status(400).json({ error: "File CSV kosong atau format tidak valid" });
@@ -743,7 +743,7 @@ router.post("/import", requireAdmin, csvTextParser, async (req: Request, res: Re
 });
 
 // GET /api/ocean-freight-rates/:id
-router.get("/:id", requireAdmin, async (req: Request, res: Response) => {
+router.get("/:id", requireAdminMiddleware, async (req: Request, res: Response) => {
   try {
     const { rows } = await db.execute(sql`
       SELECT * FROM ocean_freight_rates WHERE id = ${Number(req.params.id)}
@@ -756,7 +756,7 @@ router.get("/:id", requireAdmin, async (req: Request, res: Response) => {
 });
 
 // POST /api/ocean-freight-rates
-router.post("/", requireAdmin, async (req: Request, res: Response) => {
+router.post("/", requireAdminMiddleware, async (req: Request, res: Response) => {
   const b = req.body ?? {};
   const err = validateRate(b);
   if (err) return res.status(400).json({ error: err });
@@ -807,7 +807,7 @@ router.post("/", requireAdmin, async (req: Request, res: Response) => {
 });
 
 // PUT /api/ocean-freight-rates/:id
-router.put("/:id", requireAdmin, async (req: Request, res: Response) => {
+router.put("/:id", requireAdminMiddleware, async (req: Request, res: Response) => {
   const b = req.body ?? {};
   const err = validateRate(b);
   if (err) return res.status(400).json({ error: err });
@@ -870,7 +870,7 @@ router.put("/:id", requireAdmin, async (req: Request, res: Response) => {
 });
 
 // DELETE /api/ocean-freight-rates/:id
-router.delete("/:id", requireAdmin, async (req: Request, res: Response) => {
+router.delete("/:id", requireAdminMiddleware, async (req: Request, res: Response) => {
   try {
     await db.execute(sql`DELETE FROM ocean_freight_rates WHERE id = ${Number(req.params.id)}`);
     return res.json({ ok: true });

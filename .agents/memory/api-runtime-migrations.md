@@ -14,3 +14,13 @@ Posting dapat tetap sukses ketika penulisan audit/event dibuat non-fatal, walaup
 **Why:** Bukti posting Sport Center berhasil membuat jurnal balanced, tetapi insert `ledger_events` gagal karena `entry_id` belum ada di runtime development.
 
 **How to apply:** Setelah migrasi, cek kolom yang dipakai helper audit/event dan sertakan persistensi event dalam proof untuk operasi accounting kritis.
+
+Setiap kolom yang dipakai jalur repair idempoten harus ikut dalam migration gate additive
+(`IF NOT EXISTS`) dan diverifikasi pada database runtime target; keberadaan tabel saja tidak
+menjamin jalur repair dapat berjalan.
+
+**Why:** Historical QRIS repair baru gagal saat insert match karena runtime PROD tertinggal
+kolom metadata reviewer, meskipun tabel dan approval path sudah tersedia.
+
+**How to apply:** Saat menambah write path pada tabel runtime, audit semua kolom baru dan
+jalankan preflight schema terhadap target sebelum menjalankan repair atau posting massal.

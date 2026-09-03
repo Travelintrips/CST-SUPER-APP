@@ -40,6 +40,11 @@ import {
   isInhouseBankTransferDescription,
   isQrisBankApprovalAllowed,
 } from "@/lib/bankMutationPaymentType";
+import {
+  buildManualRuleAiPayload,
+  defaultRuleAiMetadata,
+  type RuleAiMetadataForm,
+} from "@/lib/ruleAiMetadata";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -1662,6 +1667,7 @@ function CandidateDetailsBlock({
   candidate: Candidate;
   compact?: boolean;
 }) {
+  const [open, setOpen] = useState(false);
   const d = candidate.details;
   if (!d) return null;
   const isCanonicalSettlement =
@@ -1717,81 +1723,103 @@ function CandidateDetailsBlock({
   if (rows.length === 0) return null;
 
   return (
-    <div className={`min-w-0 rounded-md bg-muted/35 border border-dashed space-y-1 ${compact ? "p-2 mt-1.5" : "p-2.5 mt-2"}`}>
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {isRuleCandidate ? "Detail Rule AI / sumber pencocokan" : "Detail transaksi sumber"}
-      </p>
-      {d.settlementPartial && (
-        <p className="text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-          Settlement QRIS PARTIAL — hanya sebagian dana/provider batch yang sudah tersettle; perlu review sebelum dianggap lunas.
-        </p>
-      )}
-      {hasVarianceEvidence && (
-        <div className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-2 text-[11px] text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
-          <div className="flex items-center justify-between gap-2">
-            <p className="font-semibold">Variance settlement QRIS</p>
-            <Badge variant="outline" className="border-amber-400 bg-amber-100 text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
-              Perlu Review
-            </Badge>
+    <Collapsible
+      open={open}
+      onOpenChange={setOpen}
+      className={`min-w-0 rounded-md border border-dashed bg-muted/35 ${compact ? "mt-1.5" : "mt-2"}`}
+    >
+      <CollapsibleTrigger asChild>
+        <button
+          type="button"
+          className={`flex w-full items-center justify-between gap-2 rounded-md text-left transition-colors hover:bg-muted/60 ${compact ? "p-2" : "p-2.5"}`}
+          onClick={event => event.stopPropagation()}
+          onKeyDown={event => event.stopPropagation()}
+          aria-label={`${open ? "Sembunyikan" : "Lihat"} ${isRuleCandidate ? "detail Rule AI" : "detail transaksi sumber"}`}
+        >
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            {open
+              ? (isRuleCandidate ? "Sembunyikan detail Rule AI / sumber pencocokan" : "Sembunyikan detail transaksi sumber")
+              : (isRuleCandidate ? "Lihat detail Rule AI / sumber pencocokan" : "Lihat detail transaksi sumber")}
+          </span>
+          {open ? <ChevronUp className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+        </button>
+      </CollapsibleTrigger>
+      <CollapsibleContent
+        className={`space-y-1 border-t border-dashed ${compact ? "p-2" : "p-2.5"}`}
+        onClick={event => event.stopPropagation()}
+      >
+        {d.settlementPartial && (
+          <p className="text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+            Settlement QRIS PARTIAL — hanya sebagian dana/provider batch yang sudah tersettle; perlu review sebelum dianggap lunas.
+          </p>
+        )}
+        {hasVarianceEvidence && (
+          <div className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-2 text-[11px] text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
+            <div className="flex items-center justify-between gap-2">
+              <p className="font-semibold">Variance settlement QRIS</p>
+              <Badge variant="outline" className="border-amber-400 bg-amber-100 text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
+                Perlu Review
+              </Badge>
+            </div>
+            <div className="mt-1 grid grid-cols-1 gap-0.5 sm:grid-cols-2">
+              <span>Expected Settlement: <b>{idr(d.expectedAmount ?? 0)}</b></span>
+              <span>Mutasi Bank: <b>{idr(d.actualBankAmount ?? 0)}</b></span>
+              <span>Selisih: <b>{Number(d.varianceAmount) >= 0 ? "+" : ""}{idr(d.varianceAmount ?? 0)}</b></span>
+              <span>Variance: <b>{Number(d.variancePercent ?? 0).toFixed(2)}%</b></span>
+            </div>
+            <p className="mt-1 text-[10px]">
+              Status: <b>need_review</b> · reason: <b>amount_variance</b>
+              {d.settlementRuleVersion ? <> · rule {d.settlementRuleVersion}</> : null}
+            </p>
+            <p className="mt-1 text-[10px] text-amber-800 dark:text-amber-200">
+              Kandidat ini tidak auto-match dan tidak auto-approve.
+            </p>
           </div>
-          <div className="mt-1 grid grid-cols-1 gap-0.5 sm:grid-cols-2">
-            <span>Expected Settlement: <b>{idr(d.expectedAmount ?? 0)}</b></span>
-            <span>Mutasi Bank: <b>{idr(d.actualBankAmount ?? 0)}</b></span>
-            <span>Selisih: <b>{Number(d.varianceAmount) >= 0 ? "+" : ""}{idr(d.varianceAmount ?? 0)}</b></span>
-            <span>Variance: <b>{Number(d.variancePercent ?? 0).toFixed(2)}%</b></span>
-          </div>
-          <p className="mt-1 text-[10px]">
-            Status: <b>need_review</b> · reason: <b>amount_variance</b>
-            {d.settlementRuleVersion ? <> · rule {d.settlementRuleVersion}</> : null}
-          </p>
-          <p className="mt-1 text-[10px] text-amber-800 dark:text-amber-200">
-            Kandidat ini tidak auto-match dan tidak auto-approve.
-          </p>
-        </div>
-      )}
-      {d.settlementItems && d.settlementItems.length > 0 && (
-        <div className="border-t pt-1.5 mt-1.5 space-y-1.5">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-            Rincian payment settlement
-          </p>
-          <div className="space-y-1">
-            {d.settlementItems.map((item, index) => (
-              <div
-                key={item.id ?? item.sportPaymentId ?? index}
-                className="rounded border bg-background/70 px-2 py-1.5 text-[10px]"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-medium">
-                    {item.paymentNumber ?? `Payment #${item.sportPaymentId ?? "—"}`}
-                  </span>
-                  {item.bookingId != null && (
-                    <span className="text-muted-foreground">Booking #{item.bookingId}</span>
-                  )}
+        )}
+        {d.settlementItems && d.settlementItems.length > 0 && (
+          <div className="border-t pt-1.5 mt-1.5 space-y-1.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Rincian payment settlement
+            </p>
+            <div className="space-y-1">
+              {d.settlementItems.map((item, index) => (
+                <div
+                  key={item.id ?? item.sportPaymentId ?? index}
+                  className="rounded border bg-background/70 px-2 py-1.5 text-[10px]"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium">
+                      {item.paymentNumber ?? `Payment #${item.sportPaymentId ?? "—"}`}
+                    </span>
+                    {item.bookingId != null && (
+                      <span className="text-muted-foreground">Booking #{item.bookingId}</span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-2 gap-y-0.5 mt-1 text-muted-foreground">
+                    <span>Gross: <b className="text-foreground">{item.grossAmount != null ? idr(item.grossAmount) : "—"}</b></span>
+                    <span>MDR: <b className="text-foreground">{item.mdrAmount != null ? idr(item.mdrAmount) : "—"}</b></span>
+                    <span>Pajak/fee: <b className="text-foreground">
+                      {idr(Number(item.taxWithheldAmount ?? 0) + Number(item.otherFeeAmount ?? 0))}
+                    </b></span>
+                    <span>Net: <b className="text-foreground">{item.netAmount != null ? idr(item.netAmount) : "—"}</b></span>
+                  </div>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-2 gap-y-0.5 mt-1 text-muted-foreground">
-                  <span>Gross: <b className="text-foreground">{item.grossAmount != null ? idr(item.grossAmount) : "—"}</b></span>
-                  <span>MDR: <b className="text-foreground">{item.mdrAmount != null ? idr(item.mdrAmount) : "—"}</b></span>
-                  <span>Pajak/fee: <b className="text-foreground">
-                    {idr(Number(item.taxWithheldAmount ?? 0) + Number(item.otherFeeAmount ?? 0))}
-                  </b></span>
-                  <span>Net: <b className="text-foreground">{item.netAmount != null ? idr(item.netAmount) : "—"}</b></span>
-                </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
+        )}
+        <div className={`min-w-0 grid ${compact ? "grid-cols-1" : "grid-cols-1 sm:grid-cols-[minmax(0,auto)_minmax(0,1fr)]"} gap-x-3 gap-y-1`}>
+          {rows.map(row => (
+            <React.Fragment key={row.label}>
+              <span className="min-w-0 text-[10px] text-muted-foreground">{row.label}</span>
+              <span className={`min-w-0 text-xs font-medium ${compact ? "" : "sm:text-right"} break-all`}>
+                {String(row.value)}
+              </span>
+            </React.Fragment>
+          ))}
         </div>
-      )}
-      <div className={`min-w-0 grid ${compact ? "grid-cols-1" : "grid-cols-1 sm:grid-cols-[minmax(0,auto)_minmax(0,1fr)]"} gap-x-3 gap-y-1`}>
-        {rows.map(row => (
-          <React.Fragment key={row.label}>
-            <span className="min-w-0 text-[10px] text-muted-foreground">{row.label}</span>
-            <span className={`min-w-0 text-xs font-medium ${compact ? "" : "sm:text-right"} break-all`}>
-              {String(row.value)}
-            </span>
-          </React.Fragment>
-        ))}
-      </div>
-    </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -2630,6 +2658,15 @@ function CoaReferenceDialog({
   const [search, setSearch] = useState("");
   const [selectedCode, setSelectedCode] = useState("");
   const [saving, setSaving] = useState(false);
+  const [showRuleMetadata, setShowRuleMetadata] = useState(true);
+  const [ruleMetadata, setRuleMetadata] = useState<RuleAiMetadataForm>({
+    name: "",
+    description: "",
+    referenceAmount: "",
+    amountTolerance: "",
+    confidence: "1",
+    priority: "120",
+  });
   const [creatingCoa, setCreatingCoa] = useState(false);
   const [creating, setCreating] = useState(false);
   const approvalKeyRef = useRef<{ mutationId: number; coaCode: string; key: string } | null>(null);
@@ -2684,6 +2721,8 @@ function CoaReferenceDialog({
     setSearch("");
     setSelectedCode("");
     setSaving(false);
+    setShowRuleMetadata(true);
+    setRuleMetadata(defaultRuleAiMetadata(mutation));
     setCreatingCoa(false);
     setCreating(false);
     setNewCoaRole("child");
@@ -2847,41 +2886,7 @@ function CoaReferenceDialog({
       throw new Error("Perusahaan aktif atau mutasi belum tersedia");
     }
 
-    const description = String(mutation.description ?? "").trim();
-    if (!description) {
-      throw new Error("Deskripsi mutasi wajib tersedia untuk membuat Rule AI");
-    }
-
-    // Prefer a provider/order reference when available because it is more
-    // specific than a generic bank description. Direction is always included
-    // so an incoming and outgoing transaction cannot share the same mapping.
-    const primaryCondition = ruleAiReference
-      ? { field: "reference", operator: "equals", value: ruleAiReference }
-      : { field: "description", operator: "contains", value: description };
-    const conditions = [
-      primaryCondition,
-      { field: "direction", operator: "equals", value: mutation.direction },
-    ];
-    const ruleName = `Pemetaan COA — ${description}`.slice(0, 120);
-
-    return {
-      name: ruleName,
-      description: `Dibuat dari pemilihan COA pada mutasi bank #${mutation.id}`,
-      condition_field: primaryCondition.field,
-      condition_operator: primaryCondition.operator,
-      condition_value: primaryCondition.value,
-      conditions,
-      logic: "AND" as const,
-      specificity: conditions.length,
-      action_flow: mutation.direction === "IN"
-        ? "INCOME_ALLOCATION"
-        : "ROUTINE_EXPENSE_ALLOCATION",
-      action_coa_code: selected.code,
-      confidence: 1,
-      priority: 120,
-      source: "manual",
-      company_id: companyId,
-    };
+    return buildManualRuleAiPayload(mutation, selected, ruleMetadata, companyId);
   };
 
   const save = async () => {
@@ -2997,7 +3002,7 @@ function CoaReferenceDialog({
 
   return (
     <Dialog open={open} onOpenChange={value => !value && onClose()}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <BookOpen className="h-4 w-4 text-indigo-600" />
@@ -3243,6 +3248,155 @@ function CoaReferenceDialog({
             )}
           </div>
 
+          <div className="rounded-md border border-indigo-200 bg-indigo-50/40 p-3 dark:border-indigo-900 dark:bg-indigo-950/20">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-indigo-950 dark:text-indigo-100">
+                  Metadata Rule AI
+                </p>
+                <p className="text-[11px] text-indigo-800/80 dark:text-indigo-200/80">
+                  Isi atau ubah informasi yang akan disimpan bersama mapping COA ini.
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="shrink-0 text-xs text-indigo-700 hover:bg-indigo-100 hover:text-indigo-900 dark:text-indigo-200 dark:hover:bg-indigo-900"
+                onClick={() => setShowRuleMetadata(value => !value)}
+                aria-expanded={showRuleMetadata}
+              >
+                {showRuleMetadata ? "Sembunyikan" : "Tampilkan"}
+              </Button>
+            </div>
+
+            {showRuleMetadata && (
+              <div className="mt-3 space-y-3 border-t border-indigo-200/70 pt-3 dark:border-indigo-900/70">
+                <div className="space-y-1.5">
+                  <Label htmlFor="coa-rule-name" className="text-xs font-medium">
+                    Nama Rule AI <span className="text-red-500">*</span>
+                  </Label>
+                  <Input
+                    id="coa-rule-name"
+                    value={ruleMetadata.name}
+                    maxLength={120}
+                    onChange={event => setRuleMetadata(metadata => ({
+                      ...metadata,
+                      name: event.target.value,
+                    }))}
+                    placeholder="Contoh: Pembayaran vendor listrik"
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    Nama ini tampil di daftar Rule AI dan dapat diedit lagi dari menu Konfigurasi Rekonsiliasi.
+                  </p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="coa-rule-description" className="text-xs font-medium">
+                    Deskripsi / catatan
+                  </Label>
+                  <Textarea
+                    id="coa-rule-description"
+                    value={ruleMetadata.description}
+                    maxLength={500}
+                    rows={2}
+                    onChange={event => setRuleMetadata(metadata => ({
+                      ...metadata,
+                      description: event.target.value,
+                    }))}
+                    placeholder="Jelaskan kapan rule ini boleh digunakan..."
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="coa-rule-reference-amount" className="text-xs font-medium">
+                      Nominal referensi (Rp)
+                    </Label>
+                    <Input
+                      id="coa-rule-reference-amount"
+                      type="number"
+                      min={0}
+                      step={1}
+                      inputMode="numeric"
+                      value={ruleMetadata.referenceAmount}
+                      onChange={event => setRuleMetadata(metadata => ({
+                        ...metadata,
+                        referenceAmount: event.target.value,
+                      }))}
+                      placeholder="Kosong = semua nominal"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="coa-rule-amount-tolerance" className="text-xs font-medium">
+                      Toleransi nominal (Rp)
+                    </Label>
+                    <Input
+                      id="coa-rule-amount-tolerance"
+                      type="number"
+                      min={0}
+                      step={1}
+                      inputMode="numeric"
+                      value={ruleMetadata.amountTolerance}
+                      onChange={event => setRuleMetadata(metadata => ({
+                        ...metadata,
+                        amountTolerance: event.target.value,
+                      }))}
+                      placeholder="Kosong = exact"
+                    />
+                  </div>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Toleransi hanya boleh diisi jika nominal referensi diisi. Kondisi ini tetap berjalan bersama kondisi deskripsi/referensi dan arah transaksi.
+                </p>
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="coa-rule-confidence" className="text-xs font-medium">
+                      Confidence (0–1)
+                    </Label>
+                    <Input
+                      id="coa-rule-confidence"
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      inputMode="decimal"
+                      value={ruleMetadata.confidence}
+                      onChange={event => setRuleMetadata(metadata => ({
+                        ...metadata,
+                        confidence: event.target.value,
+                      }))}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="coa-rule-priority" className="text-xs font-medium">
+                      Prioritas (1–999)
+                    </Label>
+                    <Input
+                      id="coa-rule-priority"
+                      type="number"
+                      min={1}
+                      max={999}
+                      step={1}
+                      inputMode="numeric"
+                      value={ruleMetadata.priority}
+                      onChange={event => setRuleMetadata(metadata => ({
+                        ...metadata,
+                        priority: event.target.value,
+                      }))}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-md border border-indigo-200 bg-indigo-50/70 px-3 py-2.5 text-xs text-indigo-800 dark:border-indigo-900 dark:bg-indigo-950/30 dark:text-indigo-200">
+            Rule AI akan memakai {ruleAiReference ? "referensi provider/order ID" : "deskripsi mutasi"} dan arah transaksi sebagai kondisi.
+            Rule tetap terbatas pada perusahaan aktif.
+          </div>
+
           {!canApplyCurrent && !isQris && canApprove(mutation) && visibleCandidates(mutation).length > 0 && (
               <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                 Mutasi ini memiliki kandidat transaksi. Pilih kandidat yang benar melalui alur review sebelum membuat draft jurnal.
@@ -3428,8 +3582,20 @@ function QrisMutationCard({
   const canonicalExpectedNet = numericValue(canonicalSettlementDetails?.expectedAmount)
     ?? numericValue(canonicalSettlementDetails?.netAmount);
   const auditExpectedNet = numericValue(audit.net_amount);
+  const auditObservedDeduction = hasLiveSettlementProposal
+    ? numericValue(audit.observed_deduction)
+    : null;
+  // Some older review snapshots persisted gross and observed MDR but did not
+  // persist net_amount. Reconstruct the original expected net for display
+  // only; approval still uses the server-side settlement validation.
+  const estimatedOriginalExpectedNet =
+    snapshotGross > 0 && auditObservedDeduction != null
+      ? Math.max(0, snapshotGross - auditObservedDeduction)
+      : null;
   const originalExpectedNet = canonicalExpectedNet
-    ?? (hasLiveSettlementProposal ? auditExpectedNet : null);
+    ?? (hasLiveSettlementProposal
+      ? auditExpectedNet ?? estimatedOriginalExpectedNet
+      : null);
   const hasIdentifiedSettlement = originalExpectedNet != null;
   const expectedNet = hasLiveScope && !isReadOnlyEvidence
     ? (numericValue(audit.current_expected_amount)
@@ -3437,12 +3603,15 @@ function QrisMutationCard({
         ? candidateGross * originalExpectedNet / snapshotGross
         : null))
     : originalExpectedNet;
-  const mdr = canonicalSettlementDetails?.mdrAmount != null
+  const canonicalMdr = canonicalSettlementDetails?.mdrAmount != null
     ? numericValue(canonicalSettlementDetails.mdrAmount)
+    : null;
+  const mdr = canonicalSettlementDetails?.mdrAmount != null
+    ? canonicalMdr
     : hasLiveScope && !isReadOnlyEvidence && expectedNet != null
       ? Math.max(0, candidateGross - expectedNet)
       : hasLiveSettlementProposal
-        ? numericValue(audit.observed_deduction)
+        ? auditObservedDeduction
         : null;
   const difference = originalExpectedNet == null ? null : bankAmount - originalExpectedNet;
   const differenceAbs = difference == null ? null : Math.abs(difference);
@@ -3657,7 +3826,7 @@ function QrisMutationCard({
                     <div className="grid gap-x-4 gap-y-1 sm:grid-cols-2">
                       <span>Mutasi bank: <strong>{idr(bankAmount)}</strong></span>
                       <span>Gross payment: <strong>{idr(snapshotGross)}</strong></span>
-                       <span>Potongan MDR/biaya: <strong>{mdr == null ? "Belum dapat dihitung" : idr(mdr)}</strong></span>
+                        <span>Potongan MDR/biaya: <strong>{(canonicalMdr ?? auditObservedDeduction) == null ? "Belum dapat dihitung" : idr(canonicalMdr ?? auditObservedDeduction!)}</strong></span>
                        <span>Netto yang diharapkan: <strong>{originalExpectedNet == null ? "Belum dapat dihitung" : idr(originalExpectedNet)}</strong></span>
                        <span className="sm:col-span-2">Selisih bank − netto: <strong>{difference == null ? "Belum dapat dihitung" : idrWhole(difference)}</strong></span>
                     </div>

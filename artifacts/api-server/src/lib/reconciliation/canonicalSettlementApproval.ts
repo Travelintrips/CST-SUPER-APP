@@ -28,6 +28,7 @@ export const CANONICAL_APPROVAL_CODES = {
   SETTLEMENT_ALREADY_USED: "CANONICAL_SETTLEMENT_ALREADY_USED",
   PAYMENT_CONFLICT: "CANONICAL_SETTLEMENT_PAYMENT_RECONCILIATION_CONFLICT",
   GENERIC_JOURNAL_ALREADY_EXISTS: "CANONICAL_GENERIC_JOURNAL_ALREADY_EXISTS",
+  SELECTION_CONFLICT: "CANONICAL_SETTLEMENT_SELECTION_CONFLICT",
   INCONSISTENT_STATE: "CANONICAL_APPROVAL_INCONSISTENT_STATE",
   MATCHING_EVIDENCE_INVALID: "CANONICAL_SETTLEMENT_MATCHING_EVIDENCE_INVALID",
   HISTORICAL_REPAIR_CONFIRMATION_REQUIRED: "CANONICAL_HISTORICAL_REPAIR_CONFIRMATION_REQUIRED",
@@ -59,6 +60,17 @@ export function isCanonicalBankMutationEligible(status: unknown): boolean {
   return ["unmatched", "matched", "auto_matched"].includes(
     String(status ?? "").toLowerCase(),
   );
+}
+
+/**
+ * A canonical approval is only safe when the mutation has one active
+ * source-qualified settlement candidate. Duplicate rows for the same batch
+ * are unsafe too: they indicate a broken candidate invariant.
+ */
+export function hasCanonicalSettlementSelectionConflict(
+  activeMatches: readonly { id: unknown; candidate_id: unknown }[],
+): boolean {
+  return activeMatches.length > 1;
 }
 
 export function isCanonicalApprovalIdempotentState(row: ApprovalRow): boolean {
@@ -421,6 +433,36 @@ export async function approveCanonicalSettlementLink(
       throw new CanonicalSettlementApprovalError(
         CANONICAL_APPROVAL_CODES.INVALID_MATCH,
         "candidate_id pada request tidak sama dengan match yang dikunci.",
+      );
+    }
+
+    /*
+     * A bank mutation may have several amount/date candidates in the
+     * source-aware table. Selecting one from that set is not evidence that
+     * the allocation is unique (the 4816 -> 24/25/43 case is the important
+     * example). Keep this check inside the same transaction as the link so a
+     * reviewer cannot turn an ambiguous candidate list into an approved
+     * settlement by racing another approval.
+     *
+     * Duplicate rows for the same batch are also unsafe: they indicate a
+     * broken candidate invariant and must be repaired rather than guessed.
+     */
+    const { rows: activeCanonicalMatches } = await tx.execute(sql.raw(`
+      SELECT id, candidate_id
+      FROM bank_reconciliation_matches
+      WHERE mutation_id = ${mutationId}
+        AND candidate_type = 'qris_settlement'
+        AND candidate_source = '${CANONICAL_SETTLEMENT_SOURCE}'
+        AND status IN ('candidate', 'approved')
+      ORDER BY candidate_id, id
+      FOR UPDATE
+    `));
+    if (hasCanonicalSettlementSelectionConflict(
+      activeCanonicalMatches as Array<{ id: unknown; candidate_id: unknown }>,
+    )) {
+      throw new CanonicalSettlementApprovalError(
+        CANONICAL_APPROVAL_CODES.SELECTION_CONFLICT,
+        "Mutasi bank memiliki lebih dari satu kandidat settlement canonical aktif; approval ditahan sampai owner menetapkan bukti yang unik.",
       );
     }
 

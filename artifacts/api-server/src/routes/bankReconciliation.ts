@@ -555,6 +555,14 @@ export async function runBankReconciliationCoreMigration() {
       ADD COLUMN IF NOT EXISTS candidate_source TEXT
   `)).catch(() => {});
 
+  // Historical canonical settlement repair records its explicit reviewer
+  // action on the match row. Older production schemas predate this column;
+  // keep the upgrade additive and default legacy rows to non-manual.
+  await db.execute(sql.raw(`
+    ALTER TABLE public.bank_reconciliation_matches
+      ADD COLUMN IF NOT EXISTS is_manual BOOLEAN NOT NULL DEFAULT FALSE
+  `)).catch(() => {});
+
   // Preserve the duplicate candidate evidence while making only one row
   // active per source-qualified identity. This is intentionally not a DELETE:
   // only rows classified as non-approved candidates are superseded, and
@@ -1946,6 +1954,7 @@ router.get("/qris-settlements/:settlementId", async (req, res) => {
 // This read endpoint exposes canonical Sport Center settlement lifecycle data.
 // It does not approve a settlement, create a journal, or consume bank evidence.
 router.get("/qris-candidates", async (req, res) => {
+  await runBankReconciliationCoreMigration();
   await runQrisSettlementMigration();
   try {
     const companyId = resolveCompanyId(req);
@@ -1967,6 +1976,104 @@ router.get("/qris-candidates", async (req, res) => {
   } catch (e: any) {
     logger.error({ err: e?.cause?.message ?? e?.message }, "[bankRecon] GET /qris-candidates failed");
     return res.status(500).json({ error: e?.message ?? "Gagal mengambil kandidat QRIS" });
+  }
+});
+
+// ─── POST /api/bank-reconciliation/qris-candidates/:settlementId/audit ───────
+// Record an owner/reviewer explanation for a posted canonical batch that could
+// not be linked to a unique bank mutation. This never changes settlement,
+// mutation, match, payment, or journal state; it only makes the unresolved
+// outcome auditable in the canonical queue.
+router.post("/qris-candidates/:settlementId/audit", async (req, res) => {
+  await runBankReconciliationCoreMigration();
+  await runQrisSettlementMigration();
+  const settlementId = Number.parseInt(String(req.params.settlementId ?? ""), 10);
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  const actor = String((req as any).user?.email ?? "admin").trim() || "admin";
+
+  if (!Number.isSafeInteger(settlementId) || settlementId <= 0) {
+    return res.status(400).json({
+      error: "ID settlement canonical tidak valid.",
+      code: "CANONICAL_SETTLEMENT_AUDIT_INVALID_ID",
+    });
+  }
+  if (reason.length < 10 || reason.length > 2000) {
+    return res.status(400).json({
+      error: "Alasan audit wajib diisi antara 10 dan 2000 karakter.",
+      code: "CANONICAL_SETTLEMENT_AUDIT_REASON_REQUIRED",
+    });
+  }
+
+  try {
+    const companyId = resolveCompanyId(req);
+    const result = await db.transaction(async (tx) => {
+      const { rows } = await tx.execute(sql`
+        SELECT id, company_id, status, bank_mutation_id, canonical_bank_mutation_id
+        FROM sport_center.payment_settlement_batches
+        WHERE id = ${settlementId}
+          AND company_id = ${companyId}
+        FOR UPDATE
+      `);
+      const batch = rows[0] as Record<string, unknown> | undefined;
+      if (!batch) {
+        throw Object.assign(new Error("Settlement canonical tidak ditemukan."), {
+          code: "CANONICAL_SETTLEMENT_AUDIT_NOT_FOUND",
+        });
+      }
+      if (
+        String(batch.status ?? "").toLowerCase() !== "posted"
+        || batch.bank_mutation_id != null
+        || batch.canonical_bank_mutation_id != null
+      ) {
+        throw Object.assign(new Error(
+          "Alasan audit unresolved hanya boleh dicatat untuk batch canonical posted yang belum tertaut.",
+        ), {
+          code: "CANONICAL_SETTLEMENT_AUDIT_NOT_ELIGIBLE",
+        });
+      }
+
+      const { rows: inserted } = await tx.execute(sql`
+        INSERT INTO public.bank_reconciliation_audit (mutation_id, action, actor, meta)
+        VALUES (
+          NULL,
+          'CANONICAL_SETTLEMENT_AUDIT_RECORDED',
+          ${actor},
+          jsonb_build_object(
+            'entity', 'canonical_settlement',
+            'settlement_id', ${String(settlementId)},
+            'reason', ${reason},
+            'resolution', 'unresolved'
+          )
+        )
+        RETURNING id, action, actor, meta, created_at
+      `);
+      return inserted[0];
+    });
+
+    audit(req, {
+      action: "canonical-settlement-audit-recorded",
+      module: "bank-reconciliation",
+      resourceId: `canonical-settlement-${settlementId}`,
+      after: result,
+    });
+    return res.json({
+      ok: true,
+      settlementId,
+      audit: result,
+    });
+  } catch (error: any) {
+    const code = error?.code ?? "CANONICAL_SETTLEMENT_AUDIT_FAILED";
+    const status = code === "CANONICAL_SETTLEMENT_AUDIT_NOT_FOUND" ? 404
+      : code === "CANONICAL_SETTLEMENT_AUDIT_NOT_ELIGIBLE" ? 409
+        : 500;
+    logger.warn(
+      { err: error?.cause?.message ?? error?.message, settlementId, code },
+      "[bankRecon/qris-candidates/audit] rejected",
+    );
+    return res.status(status).json({
+      error: error?.message ?? "Alasan audit canonical gagal dicatat.",
+      code,
+    });
   }
 });
 

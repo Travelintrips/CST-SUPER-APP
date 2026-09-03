@@ -1,4 +1,4 @@
-import type { Request, Response } from "express";
+import type { NextFunction, Request, Response } from "express";
 import { db, usersTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 
@@ -137,4 +137,21 @@ export async function requireAdmin(req: Request, res: Response): Promise<boolean
     return false;
   }
   return true;
+}
+
+/**
+ * Express middleware adapter for the async boolean guard above.
+ * Route declarations must use this adapter; calling requireAdmin directly as
+ * middleware would resolve without advancing the Express middleware chain.
+ */
+export function requireAdminMiddleware(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  requireAdmin(req, res)
+    .then((allowed) => {
+      if (allowed) next();
+    })
+    .catch(next);
 }

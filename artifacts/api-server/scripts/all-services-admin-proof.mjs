@@ -63,6 +63,14 @@ const adminHeaders = () => ({ authorization: `Bearer ${adminToken}` });
 const customerHeaders = () => ({ authorization: `Bearer ${customerToken}` });
 const internalHeaders = () => ({ cookie: internalCookie });
 
+function fixturePhone(label) {
+  let hash = 2166136261;
+  for (const char of `${marker}:${label}`) {
+    hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+  }
+  return `08${String(hash >>> 0).padStart(10, "0")}`;
+}
+
 async function db(sql, params = []) {
   return (await pool.query(sql, params)).rows;
 }
@@ -94,7 +102,7 @@ async function signupFixture(label) {
       name: `${marker} ${label}`,
       email: `${label.toLowerCase()}-${suffix}@example.invalid`,
       password: "AuditProof!2026",
-      phone: `08${[...suffix].map((char) => char.charCodeAt(0) % 10).join("").slice(0, 10)}`,
+      phone: fixturePhone(label),
       customerType: "individual",
     }),
   }, [201]);
