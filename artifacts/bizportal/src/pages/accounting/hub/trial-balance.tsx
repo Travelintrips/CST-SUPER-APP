@@ -1,7 +1,7 @@
 import { DatePicker } from "@/components/ui/date-picker";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Link, useLocation } from "wouter";
+import { Link, useLocation, useSearch } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -34,11 +34,17 @@ const typeColor: Record<string, string> = {
 };
 
 export default function AccountingHubTrialBalancePage() {
+  const search = useSearch();
+  const urlParams = new URLSearchParams(search);
   const [rows, setRows] = useState<TBRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [companies, setCompanies] = useState<CompanyOption[]>([]);
-  const [filters, setFilters] = useState({ company_id: "", date_from: "", date_to: "" });
+  const [filters, setFilters] = useState(() => ({
+    company_id: urlParams.get("company_id") ?? "",
+    date_from: urlParams.get("date_from") ?? "",
+    date_to: urlParams.get("date_to") ?? "",
+  }));
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [, navigate] = useLocation();
   const requestVersion = useRef(0);
