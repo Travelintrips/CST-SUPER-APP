@@ -1736,6 +1736,112 @@ function CandidateDetailsBlock({
   );
 }
 
+const REVIEW_CODE_LABELS: Record<string, string> = {
+  AUTO_POST_GUARD: "Safeguard jurnal menahan auto-post",
+  MATCH_SCORE_REVIEW: "Skor pencocokan belum mencapai ambang otomatis",
+  CANONICAL_SETTLEMENT_REVIEW: "Settlement canonical wajib direview",
+  TRANSACTION_TYPE_MISMATCH: "Jenis transaksi dan kandidat tidak sesuai",
+  JOURNAL_MAPPING_REQUIRED: "Mapping jurnal/COA belum lengkap",
+  MANUAL_REVIEW_REASON_NOT_RECORDED: "Alasan historis belum tercatat",
+};
+
+function matchingReviewReasons(m: BankMutation, candidate?: Candidate): string[] {
+  if (m.review_reason) return [m.review_reason];
+
+  const approvedCount = (m.candidates ?? []).filter(
+    item => String(item.status ?? "").toLowerCase() === "approved",
+  ).length;
+  if (m.status === "duplicate_need_review" && approvedCount > 1) {
+    return [`Ada ${approvedCount} kandidat yang sudah approved untuk satu mutasi; sistem menahan posting sampai admin menentukan satu sumber yang benar.`];
+  }
+  if (m.status === "duplicate_need_review") {
+    return ["Mutasi memiliki kandidat atau sumber pencocokan yang berpotensi ganda; sistem menahan keputusan agar tidak terjadi posting ganda."];
+  }
+  if (!candidate) {
+    return ["Tidak ada kandidat yang memenuhi syarat otomatis; admin perlu memilih COA atau sumber transaksi secara manual."];
+  }
+
+  const reasons: string[] = [];
+  const candidateAmount = numericValue(
+    candidate.details?.amount
+      ?? candidate.details?.expectedAmount
+      ?? candidate.details?.netAmount,
+  );
+  const bankAmount = numericValue(m.amount);
+  if (!candidate.amount_match) {
+    reasons.push(
+      `Nominal tidak sama: bank ${idr(bankAmount ?? 0)} vs kandidat ${idr(candidateAmount ?? 0)}.`,
+    );
+  }
+  if (!candidate.date_match) {
+    reasons.push(
+      `Tanggal tidak cocok: bank ${fmtDate(m.transaction_date)} vs kandidat ${candidate.details?.date ? fmtDate(String(candidate.details.date)) : "tidak tersedia"}.`,
+    );
+  }
+  if (!candidate.order_id_match) {
+    reasons.push(
+      m.provider_order_id
+        ? `Referensi ${m.provider_order_id} tidak cocok dengan referensi kandidat ${candidate.details?.reference ?? candidate.details?.paymentNumber ?? "yang tidak tersedia"}.`
+        : "Referensi bank tidak tersedia atau tidak cocok.",
+    );
+  }
+  if (!candidate.name_match && (candidate.details?.name || candidate.customer_name)) {
+    reasons.push(`Nama/deskripsi bank belum cukup cocok dengan ${candidate.details?.name ?? candidate.customer_name}.`);
+  }
+  if (
+    candidate.candidate_type !== "recon_rule"
+    && Number(candidate.match_score) < 80
+  ) {
+    reasons.push(`Skor pencocokan ${Number(candidate.match_score).toFixed(2)}% berada di bawah ambang auto-match 80%.`);
+  }
+
+  if (reasons.length === 0 && candidate.match_reason) {
+    reasons.push(`Sinyal pencocokan: ${candidate.match_reason}.`);
+  }
+  if (reasons.length === 0) {
+    reasons.push("Kandidat belum memenuhi seluruh safeguard untuk diproses otomatis.");
+  }
+  return reasons;
+}
+
+function MatchingReviewReasonBlock({
+  mutation,
+  candidate,
+}: {
+  mutation: BankMutation;
+  candidate?: Candidate;
+}) {
+  const reasons = matchingReviewReasons(mutation, candidate);
+  const code = mutation.review_code
+    ? REVIEW_CODE_LABELS[mutation.review_code] ?? mutation.review_code
+    : null;
+  const isDuplicate = mutation.status === "duplicate_need_review";
+  const isManual = mutation.status === "manual_review";
+
+  return (
+    <div className="mt-2 rounded-md border border-orange-200 bg-orange-50 px-3 py-2 text-xs text-orange-950 dark:border-orange-800 dark:bg-orange-950 dark:text-orange-100">
+      <div className="flex items-start justify-between gap-2">
+        <p className="font-semibold">
+          {isDuplicate ? "Dasar penahanan duplicate review" : isManual ? "Dasar review manual" : "Dasar perlu diperiksa"}
+        </p>
+        {candidate && <ScoreBadge score={candidate.match_score} />}
+      </div>
+      <ul className="mt-1 list-disc space-y-0.5 pl-4">
+        {reasons.map((reason, index) => <li key={`${reason}-${index}`}>{reason}</li>)}
+      </ul>
+      {code && <p className="mt-1 font-mono text-[10px] opacity-75">Kode: {code}</p>}
+      {candidate && candidate.match_reason && (
+        <p className="mt-1 border-t border-orange-200/70 pt-1 text-[10px] dark:border-orange-800/70">
+          Sinyal tersimpan: {candidate.match_reason}
+        </p>
+      )}
+      <p className="mt-1 text-[10px] font-medium">
+        Tindakan: periksa kandidat/COA, lalu approve secara manual jika buktinya sesuai.
+      </p>
+    </div>
+  );
+}
+
 function QrisPaymentItemsSummary({
   items,
   compact = false,
@@ -2897,33 +3003,10 @@ function CoaReferenceDialog({
           ? "Rule AI aktif dan settlement QRIS disetujui"
           : "COA disimpan ke Rule AI dan draft jurnal dibuat",
         description: `${selectedAccount.code} — ${selectedAccount.name}. Rule AI #${ruleAiBody?.data?.id ?? ruleAiBody?.rule_ai_id ?? "baru"} aktif untuk perusahaan ini.`,
-      const approveResponse = await fetch(`/api/bank-reconciliation/${mutation.id}/approve`, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          "x-idempotency-key": approvalKey,
-        },
-        body: JSON.stringify({
-          manual_coa_code: selectedAccount.code,
-          note: `COA dipilih manual hanya untuk mutasi ini: ${selectedAccount.code}`,
-          rule_ai: ruleAi,
-        }),
-      });
-      const approveBody = await approveResponse.json().catch(() => ({}));
-      if (!approveResponse.ok) {
-        throw new Error(
-          approveBody.error ?? "COA dipilih, tetapi draft jurnal untuk mutasi ini belum berhasil dibuat.",
-        );
-      }
-      toast({
-        title: "COA disimpan ke Rule AI dan draft jurnal dibuat",
-        description: `${selectedAccount.code} — ${selectedAccount.name}. Rule AI dan draft jurnal tersimpan atomik.`,
       });
       approvalKeyRef.current = null;
       qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] });
       const savedRuleId = Number(ruleAiBody?.data?.id ?? ruleAiBody?.rule_ai_id);
-      const savedRuleId = Number(approveBody?.rule_ai_id);
       await onSaved(Number.isSafeInteger(savedRuleId) && savedRuleId > 0 ? savedRuleId : null);
       onClose();
     } catch (error) {
@@ -4336,49 +4419,14 @@ function MutationCard({
               </div>
             )}
 
-            {m.status === "matched" && !isExactMatch(m) && (
-              <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
-                <p className="font-semibold">Perlu Diperiksa</p>
-                <p className="mt-0.5">Sistem menemukan transaksi, tetapi nominal atau bukti belum sepenuhnya cocok.</p>
-              </div>
-            )}
-
-            {m.status === "manual_review" && (
-              <div className="mt-2 rounded-md border border-orange-200 bg-orange-50 px-3 py-2 text-xs text-orange-900 dark:border-orange-800 dark:bg-orange-950 dark:text-orange-200">
-                <p className="font-semibold">Alasan review manual</p>
-                <p className="mt-0.5">
-                  {m.review_reason ??
-                    "Mutasi ini memerlukan review manual, tetapi alasan historisnya belum tercatat. Jalankan ulang matching untuk mengevaluasi rule terbaru."}
-                </p>
-                {m.review_code && <p className="mt-1 font-mono text-[10px] opacity-75">Kode: {m.review_code}</p>}
-              </div>
-            )}
-
-            {best && m.status === "unmatched" && !isExactMatch(m) && (
-              <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
-                <p className="font-semibold">Kandidat ditemukan — perlu diperiksa</p>
-                <p className="mt-0.5">
-                  Sistem menemukan transaksi yang mungkin terkait, tetapi pencocokan belum dikonfirmasi.
-                </p>
-                <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-amber-800 dark:text-amber-300">
-                  <span>
-                    {best.candidate_type === "sport_payment" ? "Sport Center" : "Transaksi sistem"}
-                  </span>
-                   {candidateSportPaymentType(best, m) && (
-                     <span>Jenis payment {SPORT_PAYMENT_TYPE_LABELS[candidateSportPaymentType(best, m)!]}</span>
-                   )}
-                   {(best.details?.paymentMethod ?? best.details?.method) && (
-                     <span>Metode {best.details?.paymentMethod ?? best.details?.method}</span>
-                   )}
-                  {best.details?.settlementDate && (
-                    <span>Settlement {fmtDate(String(best.details.settlementDate))}</span>
-                  )}
-                  {best.details?.amount != null && (
-                    <span>Nominal {idr(Number(best.details.amount))}</span>
-                  )}
-                </div>
-              </div>
-            )}
+             {(
+               m.status === "manual_review"
+               || m.status === "duplicate_need_review"
+               || (m.status === "matched" && !isExactMatch(m))
+               || (m.status === "unmatched" && best && !isExactMatch(m))
+             ) && (
+               <MatchingReviewReasonBlock mutation={m} candidate={best} />
+             )}
 
             {!isQris && matchingCandidates.length > 0 && (
               <div

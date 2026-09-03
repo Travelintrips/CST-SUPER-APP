@@ -1721,6 +1721,60 @@ export async function fetchCandidates(
 
 // ─── Audit helper ─────────────────────────────────────────────────────────────
 
+function formatReviewAmount(value: number): string {
+  return `Rp ${Number(value || 0).toLocaleString("id-ID", {
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+/**
+ * Keep the reason for a score-based review alongside the mutation status.
+ * The reviewer should be able to see which matching signals failed, rather
+ * than having to infer it from a generic "matched" or "review" label.
+ */
+export function buildMatchingReviewReason(
+  mutation: MutationInput,
+  best: UnifiedScoredMatch,
+): string {
+  const reasons: string[] = [];
+  const mutationAmount = Number(mutation.amount ?? 0);
+  const candidateAmount = Number(best.candidate.amount ?? 0);
+
+  if (!best.amount_match) {
+    reasons.push(
+      `nominal bank ${formatReviewAmount(mutationAmount)} berbeda dari kandidat ${formatReviewAmount(candidateAmount)}`,
+    );
+  }
+  if (!best.date_match) {
+    reasons.push(
+      `tanggal bank ${String(mutation.transaction_date ?? "").slice(0, 10)} tidak sama atau di luar toleransi tanggal kandidat ${String(best.candidate.date ?? "").slice(0, 10)}`,
+    );
+  }
+  if (!best.ref_match) {
+    reasons.push(
+      mutation.provider_order_id
+        ? `referensi bank "${mutation.provider_order_id}" tidak cocok dengan referensi kandidat "${best.candidate.ref ?? "-"}"`
+        : "referensi bank tidak tersedia atau tidak cocok",
+    );
+  }
+  if (!best.vendor_match && best.candidate.name) {
+    reasons.push(
+      `nama/deskripsi bank belum cukup cocok dengan pihak "${best.candidate.name}"`,
+    );
+  }
+  if (best.candidate.candidateSource === CANONICAL_SETTLEMENT_SOURCE) {
+    reasons.push("kandidat settlement canonical wajib melalui review settlement khusus");
+  } else if (best.score < 80) {
+    reasons.push(`skor pencocokan ${best.score.toFixed(2)}% belum mencapai ambang auto-match 80%`);
+  }
+
+  if (reasons.length === 0) {
+    reasons.push("seluruh sinyal utama belum memenuhi safeguard auto-match");
+  }
+
+  return `Review ditampilkan karena ${reasons.join("; ")}. Admin perlu memeriksa kandidat dan mengonfirmasi hasilnya.`;
+}
+
 async function writeReconAudit(
   mutationId: number | null,
   action: string,
@@ -1963,8 +2017,17 @@ export async function runUnifiedMatching(
     )).catch(() => {});
     logger.info({ mutationId: mutation.id, score: best.score }, "[unifiedMatchingEngine] auto_matched");
   } else if (classification === "manual_review") {
+    const reviewReason = buildMatchingReviewReason(mutation, best);
+    const reviewCode = isCanonicalBest
+      ? "CANONICAL_SETTLEMENT_REVIEW"
+      : "MATCH_SCORE_REVIEW";
     await db.execute(sql.raw(
-      `UPDATE bank_mutations SET status = 'matched', updated_at = NOW() WHERE id = ${mutation.id}`,
+      `UPDATE bank_mutations
+       SET status = 'matched',
+           review_reason = '${reviewReason.replace(/'/g, "''")}',
+           review_code = '${reviewCode}',
+           updated_at = NOW()
+       WHERE id = ${mutation.id}`,
     )).catch(() => {});
   }
 
