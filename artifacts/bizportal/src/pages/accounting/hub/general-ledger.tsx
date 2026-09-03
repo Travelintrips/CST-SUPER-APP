@@ -145,6 +145,15 @@ export default function AccountingHubGLPage() {
   const [sortBy,  setSortBy]  = useState<SortCol>(DEFAULT_SORT_COL);
   const [sortDir, setSortDir] = useState<SortDir>(DEFAULT_SORT_DIR);
 
+  // Keep the previous Trial Balance step scoped to the same company and
+  // period when the user drills down into General Ledger and goes back.
+  const trialBalanceParams = new URLSearchParams();
+  for (const key of ["company_id", "date_from", "date_to"]) {
+    const value = filters[key as "company_id" | "date_from" | "date_to"];
+    if (value) trialBalanceParams.set(key, value);
+  }
+  const trialBalanceHref = `/accounting/hub/trial-balance${trialBalanceParams.toString() ? `?${trialBalanceParams}` : ""}`;
+
   // ── Rows per page ─────────────────────────────────────────────────────────
   const LS_RPP_KEY = "gl_hub_rows_per_page";
   const RPP_OPTIONS = [10, 25, 50, 100, 250, 500, "all"] as const;
@@ -326,7 +335,7 @@ export default function AccountingHubGLPage() {
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Link href="/accounting/hub/trial-balance">
+          <Link href={trialBalanceHref}>
             <Button variant="ghost" size="sm" className="h-8 w-8 p-0" title="Kembali ke Trial Balance">
               <ArrowLeft className="h-4 w-4" />
             </Button>

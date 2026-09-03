@@ -3091,15 +3091,7 @@ function CoaReferenceDialog({
         title: isQris
           ? "Rule AI aktif dan settlement QRIS disetujui"
           : "COA disimpan ke Rule AI dan draft jurnal dibuat",
-        description: `${selectedAccount.code} — ${selectedAccount.name}. Rule AI #${ruleAiBody?.data?.id ?? ruleAiBody?.rule_ai_id ?? "baru"} aktif untuk perusahaan ini.`,
-      });
-      approvalKeyRef.current = null;
-      qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] });
-      const savedRuleId = Number(ruleAiBody?.data?.id ?? ruleAiBody?.rule_ai_id);
-      await onSaved(Number.isSafeInteger(savedRuleId) && savedRuleId > 0 ? savedRuleId : null);
-          ? "COA dipilih dan settlement QRIS disetujui"
-          : "COA dipilih dan draft jurnal dibuat",
-        description: `${selectedAccount.code} — ${selectedAccount.name}.`,
+        description: `${selectedAccount.code} — ${selectedAccount.name}.${savedRuleId ? ` Rule AI #${savedRuleId} aktif untuk perusahaan ini.` : ""}`,
       });
       approvalKeyRef.current = null;
       qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] });
