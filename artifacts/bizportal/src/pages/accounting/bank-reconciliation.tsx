@@ -971,6 +971,12 @@ function isCanonicalSettlementMutation(m: BankMutation): boolean {
   ) ?? false;
 }
 
+function hasApprovedReconciliationMatch(m: BankMutation): boolean {
+  return m.candidates?.some(
+    candidate => String(candidate.status ?? "").toLowerCase() === "approved",
+  ) ?? false;
+}
+
 function canonicalSettlementCandidateForMutation(m: BankMutation): Candidate | undefined {
   return visibleCandidates(m).find(candidate =>
     candidate.candidate_type === "qris_settlement"
@@ -983,6 +989,8 @@ function isCanonicalSettlementManualOverrideEligible(m: BankMutation): boolean {
   const settlementStatus = String(candidate?.details?.settlementStatus ?? "").toLowerCase();
   return canApprove(m)
     && candidate != null
+    && String(candidate.status ?? "").toLowerCase() !== "approved"
+    && !hasApprovedReconciliationMatch(m)
     && settlementStatus === "posted";
 }
 
@@ -1142,6 +1150,7 @@ function statusLabel(m: BankMutation): string {
   if (m.status === "void") return STATUS_LABELS.void;
   if (m.status === "approved_pending_posting") return STATUS_LABELS.approved_pending_posting;
   if (m.status === "manual_review") return STATUS_LABELS.manual_review;
+  if (m.status === "matched" && hasApprovedReconciliationMatch(m)) return "Perlu Diperiksa";
   if (isCanonicalSettlementApprovalEligible(m)) return "Siap Direconcile";
   if (isCanonicalSettlementManualOverrideEligible(m)) return "Override Manual Tersedia";
   if (isQrisMutation(m) && qrisAuditsForMutation(m).length === 0) return "Perlu Kandidat QRIS";
@@ -1156,6 +1165,7 @@ function statusColor(m: BankMutation): string {
   if (m.status === "approved_pending_posting") return STATUS_COLORS.approved_pending_posting;
   if (m.status === "approved" || m.status === "posted") return STATUS_COLORS.approved;
   if (m.status === "manual_review") return STATUS_COLORS.manual_review;
+  if (m.status === "matched" && hasApprovedReconciliationMatch(m)) return STATUS_COLORS.duplicate_need_review;
   if (isCanonicalSettlementApprovalEligible(m)) return STATUS_COLORS.matched;
   if (isCanonicalSettlementManualOverrideEligible(m)) return STATUS_COLORS.manual_review;
   if (isQrisMutation(m) && qrisAuditsForMutation(m).length === 0) return STATUS_COLORS.duplicate_need_review;
@@ -2809,30 +2819,19 @@ function CoaReferenceDialog({
         coaCode: selectedAccount.code,
         key: approvalKey,
       };
-      const approveResponse = await fetch(`/api/bank-reconciliation/${mutation.id}/approve`, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          "x-idempotency-key": approvalKey,
-        },
-        body: JSON.stringify({
-          manual_coa_code: selectedAccount.code,
-          note: `COA dipilih manual hanya untuk mutasi ini: ${selectedAccount.code}`,
-          rule_ai: ruleAi,
-        }),
-      });
-      const approveBody = await approveResponse.json().catch(() => ({}));
-      if (!approveResponse.ok) {
-        throw new Error(
-          approveBody.error ?? "COA dipilih, tetapi draft jurnal untuk mutasi ini belum berhasil dibuat.",
-        );
-      }
-      toast({
-        title: "COA disimpan ke Rule AI dan draft jurnal dibuat",
-        description: `${selectedAccount.code} — ${selectedAccount.name}. Rule AI dan draft jurnal tersimpan atomik.`,
-      const ruleAiBody = await saveRuleAi(selectedAccount);
+      let ruleAiBody: { data?: { id?: number }; rule_ai_id?: number } = {};
       if (isQris) {
+        const ruleResponse = await fetch("/api/recon-classification/ai-rules", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(ruleAi),
+        });
+        const ruleBody = await ruleResponse.json().catch(() => ({}));
+        if (!ruleResponse.ok) {
+          throw new Error(ruleBody.error ?? "Rule AI gagal disimpan.");
+        }
+        ruleAiBody = ruleBody;
         if (!canonicalCandidate || !onApproveCanonical) {
           throw new Error("Settlement QRIS belum memenuhi syarat approval canonical.");
         }
@@ -2845,6 +2844,7 @@ function CoaReferenceDialog({
           body: JSON.stringify({
             manual_coa_code: selectedAccount.code,
             note: `COA dipilih manual untuk mutasi ini: ${selectedAccount.code}`,
+            rule_ai: ruleAi,
           }),
         });
         const approveBody = await approveResponse.json().catch(() => ({}));
@@ -2853,18 +2853,19 @@ function CoaReferenceDialog({
             approveBody.error ?? "COA dipilih, tetapi draft jurnal untuk mutasi ini belum berhasil dibuat.",
           );
         }
+        ruleAiBody = approveBody;
       }
       toast({
         title: isQris
           ? "Rule AI aktif dan settlement QRIS disetujui"
           : "COA disimpan ke Rule AI dan draft jurnal dibuat",
-        description: `${selectedAccount.code} — ${selectedAccount.name}. Rule AI #${ruleAiBody?.data?.id ?? "baru"} aktif untuk perusahaan ini.`,
+        description: `${selectedAccount.code} — ${selectedAccount.name}. Rule AI #${ruleAiBody?.data?.id ?? ruleAiBody?.rule_ai_id ?? "baru"} aktif untuk perusahaan ini.`,
       });
       approvalKeyRef.current = null;
       // The mutation list and QRIS candidate audit use different React Query
       // keys, so refresh both views after the one-time approval.
       qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] });
-      const savedRuleId = Number(ruleAiBody?.data?.id);
+      const savedRuleId = Number(ruleAiBody?.data?.id ?? ruleAiBody?.rule_ai_id);
       await onSaved(Number.isSafeInteger(savedRuleId) && savedRuleId > 0 ? savedRuleId : null);
       onClose();
     } catch (error) {
@@ -3348,6 +3349,7 @@ function QrisMutationCard({
   const canSelect = audit.id != null
     && (isMatched || isReview)
     && !isApproved
+    && !hasApprovedReconciliationMatch(m)
     && unconfirmedPaymentIds.size === 0
     && availablePaymentIds.length > 0
     && m.direction?.toUpperCase() === "IN"
@@ -3893,6 +3895,11 @@ function QrisMutationCard({
                     : <CheckCircle2 className="h-3.5 w-3.5" />}
                   {approveQrisPending ? "Memproses approval QRIS..." : `Approve QRIS Terpilih (${selectedPaymentIds.length})`}
                 </Button>
+              )}
+              {!isApproved && hasApprovedReconciliationMatch(m) && (
+                <div className="ml-auto rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
+                  Mutasi sudah memiliki approved match lain. Approval QRIS dikunci; periksa atau batalkan approval sebelumnya.
+                </div>
               )}
               {!isApproved
                 && canonicalOverrideReady

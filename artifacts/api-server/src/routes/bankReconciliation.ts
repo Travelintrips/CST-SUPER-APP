@@ -208,6 +208,15 @@ function qrisMutationReadyForApprovalSql(alias = "bm"): string {
       SELECT 1
       FROM qris_mutation_batch_candidates qris_ready
       WHERE qris_ready.mutation_id = ${alias}.id
+        -- An older generic/canonical approval owns this mutation already.
+        -- Keep it out of the "ready" queue; canonical approval will (correctly)
+        -- reject a second identity as MUTATION_ALREADY_USED.
+        AND NOT EXISTS (
+          SELECT 1
+          FROM bank_reconciliation_matches qris_existing_approval
+          WHERE qris_existing_approval.mutation_id = ${alias}.id
+            AND qris_existing_approval.status = 'approved'
+        )
         AND UPPER(COALESCE(qris_ready.status, '')) NOT IN (
           'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
         )
@@ -6400,6 +6409,15 @@ router.get("/summary", async (req, res) => {
   const { rows } = await db.execute(sql.raw(`
     SELECT
       CASE
+        WHEN bm.status = 'matched'
+          AND ${bankMutationPaymentTypeSql("bm")} = 'qris'
+          AND EXISTS (
+            SELECT 1
+            FROM bank_reconciliation_matches approved_qris_match
+            WHERE approved_qris_match.mutation_id = bm.id
+              AND approved_qris_match.status = 'approved'
+          )
+        THEN 'duplicate_need_review'
         WHEN bm.status = 'matched'
           AND ${qrisMutationNeedsMatchingSql("bm")}
         THEN 'unmatched'
