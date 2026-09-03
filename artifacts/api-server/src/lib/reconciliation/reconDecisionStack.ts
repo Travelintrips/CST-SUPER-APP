@@ -96,6 +96,8 @@ export type DecisionSource =
   | "FALLBACK_UNKNOWN"
   | "BLOCKED_STATUS";
 
+export type RuleCandidateRequirement = "required" | "not_required";
+
 export interface ConfidenceReason {
   code: string;
   label: string;
@@ -108,6 +110,7 @@ export interface DecisionStackResult {
   blockedReason?: string;
   decisionSource: DecisionSource;
   matchedRuleId: number | null;
+  candidateRequirement?: RuleCandidateRequirement;
   /** Batch 2: version id of the rule that matched — for immutable audit trail */
   matchedRuleVersionId: number | null;
   expectedCashFlowId: string | null;
@@ -165,7 +168,7 @@ export async function loadReconRulesForCompany(companyId: number): Promise<Recon
         condition_operator, condition_value, target_type, target_id,
         target_coa_code, confidence_score, stop_processing,
         conditions_json, logic, specificity, amount_tolerance, reference_amount,
-         requires_document_upload, tax_type,
+          candidate_requirement, requires_document_upload, tax_type,
         ai_classification_rule_id,
         match_count, last_matched_at, created_by, created_at, updated_at
       FROM recon_rules
@@ -196,6 +199,7 @@ export async function loadReconRulesForCompany(companyId: number): Promise<Recon
       specificity:      Number(r.specificity ?? 1),
       amountTolerance:  r.amount_tolerance != null ? Number(r.amount_tolerance) : null,
       referenceAmount:  r.reference_amount != null ? Number(r.reference_amount) : null,
+       candidateRequirement: r.candidate_requirement === "required" ? "required" : "not_required",
        requiresDocumentUpload: Boolean(r.requires_document_upload),
        taxType: r.tax_type === "ppn_input" || r.tax_type === "ppn_output" ? r.tax_type : "none",
       aiClassificationRuleId: r.ai_classification_rule_id != null ? Number(r.ai_classification_rule_id) : null,
@@ -337,6 +341,7 @@ export async function runReconDecisionStack(
         eligible: true,
         decisionSource: "MANUAL_RULE",
         matchedRuleId: ruleResult.ruleId,
+        candidateRequirement: rules.find((rule) => rule.id === ruleResult.ruleId)?.candidateRequirement ?? "not_required",
         matchedRuleVersionId,
         expectedCashFlowId: null,
         confidence: ruleResult.confidence ?? 100,

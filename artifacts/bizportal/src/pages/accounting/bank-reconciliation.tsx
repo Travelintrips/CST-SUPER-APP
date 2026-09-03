@@ -2772,6 +2772,7 @@ function CoaReferenceDialog({
     amountTolerance: "",
     confidence: "1",
     priority: "120",
+    candidateRequirement: "not_required",
   });
   const [creatingCoa, setCreatingCoa] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -3463,6 +3464,30 @@ function CoaReferenceDialog({
                 <p className="text-[11px] text-muted-foreground">
                   Toleransi hanya boleh diisi jika nominal referensi diisi. Kondisi ini tetap berjalan bersama kondisi deskripsi/referensi dan arah transaksi.
                 </p>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-medium">
+                    Kandidat untuk auto-match
+                  </Label>
+                  <Select
+                    value={ruleMetadata.candidateRequirement ?? "not_required"}
+                    onValueChange={value => setRuleMetadata(metadata => ({
+                      ...metadata,
+                      candidateRequirement: value as "required" | "not_required",
+                    }))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="required">Wajib ada kandidat transaksi</SelectItem>
+                      <SelectItem value="not_required">Tidak perlu kandidat transaksi</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[11px] text-muted-foreground">
+                    Jika wajib, Rule AI tidak dapat menyelesaikan auto-match tanpa kandidat pembayaran atau invoice.
+                  </p>
+                </div>
 
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div className="space-y-1.5">

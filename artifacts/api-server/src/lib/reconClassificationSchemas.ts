@@ -35,6 +35,7 @@ export const AiRuleSchema = z.object({
   action_config_code: z.string().optional().nullable(),
   amount_tolerance: z.coerce.number().min(0).max(1_000_000_000).optional().nullable(),
   reference_amount: z.coerce.number().finite().min(0).optional().nullable(),
+  candidate_requirement: z.enum(["required", "not_required"]).default("not_required"),
   requires_document_upload: z.boolean().default(false),
   tax_type: z.enum(["none", "ppn_input", "ppn_output"]).default("none"),
   confidence: z.coerce.number().min(0).max(1).default(0.8),

@@ -85,6 +85,7 @@ describe("COA picker Rule AI metadata", () => {
       amount_tolerance: 5000,
       confidence: 0.87,
       priority: 240,
+      candidate_requirement: "not_required",
     });
   });
 

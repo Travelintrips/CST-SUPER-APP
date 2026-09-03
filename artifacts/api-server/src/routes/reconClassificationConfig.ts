@@ -177,6 +177,7 @@ function aiRowToReconRule(row: any, fallbackCompanyId: number): ReconRule {
     targetId: null, targetCoaCode: row.action_coa_code ?? null,
     amountTolerance: row.amount_tolerance == null ? null : Number(row.amount_tolerance),
     referenceAmount: row.reference_amount == null ? null : Number(row.reference_amount),
+    candidateRequirement: row.candidate_requirement === "required" ? "required" : "not_required",
     aiClassificationRuleId: row.id == null ? null : Number(row.id),
     confidenceScore: Math.round(Number(row.confidence ?? 0) * 100), stopProcessing: true,
     requiresDocumentUpload: Boolean(row.requires_document_upload),
@@ -587,6 +588,7 @@ reconClassificationRouter.post("/ai-rules", async (req, res) => {
           action_config_code = ${actionConfigSql},
           amount_tolerance = ${amountToleranceSql},
           reference_amount = ${referenceAmountSql},
+          candidate_requirement = '${d.candidate_requirement}',
            requires_document_upload = ${d.requires_document_upload},
            tax_type = '${d.tax_type}',
           confidence = ${d.confidence},
@@ -602,7 +604,7 @@ reconClassificationRouter.post("/ai-rules", async (req, res) => {
           (company_id, config_id, name, description, condition_field, condition_operator, condition_value,
            conditions_json, logic, specificity,
            action_flow, action_coa_code, action_config_code, amount_tolerance, reference_amount,
-            requires_document_upload, tax_type,
+            candidate_requirement, requires_document_upload, tax_type,
            confidence, priority, source, created_by)
         VALUES (
           ${d.company_id ?? "NULL"},
@@ -619,6 +621,7 @@ reconClassificationRouter.post("/ai-rules", async (req, res) => {
           ${actionConfigSql},
            ${amountToleranceSql},
            ${referenceAmountSql},
+           '${d.candidate_requirement}',
            ${d.requires_document_upload},
            '${d.tax_type}',
           ${d.confidence},
@@ -678,8 +681,9 @@ reconClassificationRouter.post("/ai-rules/preview", async (req, res) => {
       conditions_json: draftConditions, logic: req.body?.logic,
       specificity: req.body?.specificity ?? draftConditions.length,
       action_flow: req.body?.action_flow, action_coa_code: req.body?.action_coa_code,
-      amount_tolerance: req.body?.amount_tolerance ?? null,
-      reference_amount: req.body?.reference_amount ?? null,
+       amount_tolerance: req.body?.amount_tolerance ?? null,
+       reference_amount: req.body?.reference_amount ?? null,
+       candidate_requirement: req.body?.candidate_requirement === "required" ? "required" : "not_required",
        requires_document_upload: Boolean(req.body?.requires_document_upload),
        tax_type: req.body?.tax_type,
       confidence: req.body?.confidence ?? 0.8,
@@ -689,7 +693,10 @@ reconClassificationRouter.post("/ai-rules/preview", async (req, res) => {
       description, matched: result.matched, ambiguityCode: result.ambiguityCode ?? null,
       ambiguityReason: result.ambiguityReason ?? null, rule: result.matched ? {
         id: result.ruleId, name: result.ruleName, targetType: result.targetType,
-        targetCoaCode: result.targetCoaCode, confidence: result.confidence,
+         targetCoaCode: result.targetCoaCode, confidence: result.confidence,
+         candidateRequirement: result.ruleId === -1
+           ? (req.body?.candidate_requirement === "required" ? "required" : "not_required")
+           : (savedRules.find((rule) => rule.id === result.ruleId)?.candidateRequirement ?? "not_required"),
       } : null,
        matchedConditions: result.reasons ?? [], evaluated: result.evaluated,
        documentRequired: result.documentRequired ?? null,
@@ -799,6 +806,7 @@ reconClassificationRouter.patch("/ai-rules/:id", async (req, res) => {
       const normalizedReferenceAmount = normalizeReferenceAmount(d.reference_amount, d.amount_tolerance);
       setClauses.push(`reference_amount = ${normalizedReferenceAmount == null ? "NULL" : normalizedReferenceAmount}`);
     }
+    if (d.candidate_requirement !== undefined) setClauses.push(`candidate_requirement = '${d.candidate_requirement}'`);
     if (d.requires_document_upload !== undefined) setClauses.push(`requires_document_upload = ${d.requires_document_upload}`);
     if (d.tax_type !== undefined || resolvedTaxCoaCode) setClauses.push(`tax_type = '${nextTaxType}'`);
     if (d.confidence !== undefined)         setClauses.push(`confidence = ${d.confidence}`);

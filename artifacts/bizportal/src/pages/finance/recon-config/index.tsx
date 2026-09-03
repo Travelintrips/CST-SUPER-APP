@@ -912,6 +912,7 @@ function AiRulesTab() {
       conditions: [{ field: "description", operator: "contains", value: "" }], logic: "AND",
       specificity: 1, amount_tolerance: 0, reference_amount: null,
       confidence: 0.8, priority: 50, source: "manual",
+      candidate_requirement: "not_required",
       requires_document_upload: false, tax_type: "none" });
     setCreatingCoa(false);
     setQuickCreateChild(false);
@@ -937,6 +938,7 @@ function AiRulesTab() {
       priority: editableMetadata.priority, specificity: Number(row.specificity ?? Math.max(1, conditions.length)),
       reference_amount: editableMetadata.reference_amount,
       amount_tolerance: editableMetadata.amount_tolerance,
+       candidate_requirement: editableMetadata.candidate_requirement,
        requires_document_upload: Boolean(row.requires_document_upload),
        tax_type: row.tax_type === "ppn_input" || row.tax_type === "ppn_output" ? row.tax_type : "none" });
     setCreatingCoa(false);
@@ -1135,6 +1137,7 @@ function AiRulesTab() {
            action_flow: form.action_flow, action_coa_code: form.action_coa_code,
            amount_tolerance: form.amount_tolerance,
            reference_amount: form.reference_amount,
+            candidate_requirement: form.candidate_requirement ?? "not_required",
             requires_document_upload: Boolean(form.requires_document_upload),
             tax_type: form.tax_type ?? "none",
             has_document_upload: true,
@@ -1268,7 +1271,8 @@ function AiRulesTab() {
                   <th className="pb-2 pr-3">Nominal referensi</th>
                  <th className="pb-2 pr-3">Conf.</th>
                 <th className="pb-2 pr-3">Prioritas</th>
-                 <th className="pb-2 pr-3">Dokumen / Pajak</th>
+                  <th className="pb-2 pr-3">Kandidat</th>
+                  <th className="pb-2 pr-3">Dokumen / Pajak</th>
                  <th className="pb-2 pr-3">Status</th>
                  <th className="pb-2 pr-3">Sumber</th>
                 <th className="pb-2">Aksi</th>
@@ -1276,10 +1280,10 @@ function AiRulesTab() {
             </thead>
             <tbody>
               {rows.length === 0 && (
-                  <tr><td colSpan={11} className="py-8 text-center text-slate-500">Belum ada AI rule.</td></tr>
+                  <tr><td colSpan={12} className="py-8 text-center text-slate-500">Belum ada AI rule.</td></tr>
               )}
               {rows.length > 0 && filteredRows.length === 0 && (
-                 <tr><td colSpan={11} className="py-8 text-center text-slate-500">Tidak ada rule yang sesuai filter.</td></tr>
+                 <tr><td colSpan={12} className="py-8 text-center text-slate-500">Tidak ada rule yang sesuai filter.</td></tr>
               )}
               {filteredRows.map(row => (
                 <tr
@@ -1326,8 +1330,13 @@ function AiRulesTab() {
                    </td>
                   <td className="py-2 pr-3 text-slate-400">{Number(row.confidence).toFixed(2)}</td>
                   <td className="py-2 pr-3 text-slate-400">{row.priority}</td>
-                   <td className="py-2 pr-3">
-                     <div className="flex flex-wrap gap-1">
+                    <td className="py-2 pr-3">
+                      {row.candidate_requirement === "required"
+                        ? <Badge className="bg-amber-900 text-amber-300 text-xs">Kandidat wajib</Badge>
+                        : <Badge className="bg-slate-700 text-slate-300 text-xs">Tanpa kandidat</Badge>}
+                    </td>
+                    <td className="py-2 pr-3">
+                      <div className="flex flex-wrap gap-1">
                        {row.requires_document_upload && (
                          <Badge className="bg-amber-900 text-amber-300 text-xs">Upload wajib</Badge>
                        )}
@@ -1668,6 +1677,27 @@ function AiRulesTab() {
                 </p>
               </div>
             </div>
+            <div className="rounded-lg border border-indigo-500/30 bg-indigo-500/5 p-3">
+              <Label className="text-slate-300">Kandidat untuk auto-match</Label>
+              <Select
+                value={form.candidate_requirement ?? "not_required"}
+                onValueChange={(value) => setForm((current: any) => ({
+                  ...current,
+                  candidate_requirement: value,
+                }))}
+              >
+                <SelectTrigger className="bg-slate-800 border-slate-600 text-white mt-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-800 border-slate-600 text-white">
+                  <SelectItem value="required">Wajib ada kandidat transaksi</SelectItem>
+                  <SelectItem value="not_required">Tidak perlu kandidat transaksi</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="mt-1 text-[11px] text-slate-500">
+                Wajib kandidat cocok untuk pembayaran/invoice. Pilih tanpa kandidat untuk biaya admin atau alokasi langsung berbasis rule.
+              </p>
+            </div>
             <div className={`rounded-lg border p-3 ${
               taxTreatment.tone === "blue"
                 ? "border-sky-500/30 bg-sky-500/5"
@@ -1766,6 +1796,7 @@ function AiRulesTab() {
               {preview && <div className={`text-xs rounded p-2 ${preview.ambiguityCode ? "bg-red-950 text-red-300" : "bg-slate-800 text-slate-300"}`}>
                 {preview.ambiguityCode ? <><b>AMBIGUOUS_RULE_MATCH</b><div>{preview.ambiguityReason}</div></> :
                   preview.rule ? <><b>Matched rule:</b> {preview.rule.name} <span className="ml-2">COA: {preview.rule.targetCoaCode ?? "—"}</span>
+                    <span className="ml-2">Kandidat: {preview.rule.candidateRequirement === "required" ? "wajib" : "tidak wajib"}</span>
                     <div className="mt-1">Matched conditions: {(preview.matchedConditions ?? []).map((c: any) => `✓ ${c.label}`).join(" · ") || "—"}</div></> :
                     <span>Tidak ada rule yang cocok — manual review.</span>}
               </div>}

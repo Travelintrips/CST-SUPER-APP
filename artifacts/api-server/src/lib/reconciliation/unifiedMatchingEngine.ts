@@ -478,6 +478,7 @@ export interface AtomicRuleAiInput {
   confidence: number;
   priority: number;
   source?: string;
+  candidateRequirement?: "required" | "not_required";
 }
 
 /**
@@ -553,6 +554,7 @@ export async function persistRuleAiWithinTransaction(
   const priority = Math.max(1, Math.min(999, Math.trunc(input.priority)));
   const confidence = Math.max(0, Math.min(1, Number(input.confidence)));
   const confidenceScore = Math.max(0, Math.min(100, Math.round(confidence * 100)));
+  const candidateRequirement = input.candidateRequirement === "required" ? "required" : "not_required";
 
   // Same condition/action identity must serialize before SELECT+UPDATE/INSERT.
   const lockIdentity = [
@@ -607,6 +609,7 @@ export async function persistRuleAiWithinTransaction(
           action_coa_code = '${actionCoaCode}',
           confidence = ${confidence},
           priority = ${priority},
+           candidate_requirement = '${candidateRequirement}',
           source = '${source}',
           is_active = TRUE,
           updated_at = NOW()
@@ -617,12 +620,12 @@ export async function persistRuleAiWithinTransaction(
       INSERT INTO recon_ai_classification_rules
         (company_id, name, description, condition_field, condition_operator,
          condition_value, conditions_json, logic, specificity, action_flow,
-         action_coa_code, confidence, priority, source, created_by)
+          action_coa_code, candidate_requirement, confidence, priority, source, created_by)
       VALUES
         (${input.companyId}, '${escapeSql(input.name.trim())}', ${descriptionSql},
          ${conditionFieldSql}, ${conditionOperatorSql}, ${conditionValueSql},
          ${conditionsSql}, '${logic}', ${specificity}, '${actionFlow}',
-         '${actionCoaCode}', ${confidence}, ${priority}, '${source}', '${escapedActor}')
+          '${actionCoaCode}', '${candidateRequirement}', ${confidence}, ${priority}, '${source}', '${escapedActor}')
       RETURNING *
     `));
   const aiRule = ruleResult.rows[0] as Record<string, unknown> | undefined;
@@ -689,6 +692,7 @@ export async function persistRuleAiWithinTransaction(
           specificity = ${specificity},
           target_type = '${targetType}',
           target_coa_code = '${actionCoaCode}',
+           candidate_requirement = '${candidateRequirement}',
           confidence_score = ${confidenceScore},
           stop_processing = TRUE,
           ai_classification_rule_id = ${aiRuleId},
@@ -701,13 +705,13 @@ export async function persistRuleAiWithinTransaction(
         (company_id, name, description, priority, is_active, direction,
          condition_type, condition_field, condition_operator, condition_value,
          conditions_json, logic, specificity, target_type, target_coa_code,
-         confidence_score, stop_processing, created_by, ai_classification_rule_id)
+          candidate_requirement, confidence_score, stop_processing, created_by, ai_classification_rule_id)
       VALUES
         (${input.companyId}, '${escapeSql(input.name.trim())}', ${descriptionSql},
          ${priority}, TRUE, ${directionSql}, 'AI_CLASSIFICATION',
          ${conditionFieldSql}, ${conditionOperatorSql}, ${conditionValueSql},
          ${conditionsSql}, '${logic}', ${specificity}, '${targetType}',
-         '${actionCoaCode}', ${confidenceScore}, TRUE, '${escapedActor}',
+          '${actionCoaCode}', '${candidateRequirement}', ${confidenceScore}, TRUE, '${escapedActor}',
          ${aiRuleId})
       RETURNING id
     `));

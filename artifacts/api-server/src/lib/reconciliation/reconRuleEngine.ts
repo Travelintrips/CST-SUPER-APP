@@ -83,6 +83,8 @@ export interface ReconRule {
   amountTolerance?: number | null;
   /** Amount captured when a reference rule was created. */
   referenceAmount?: number | null;
+  /** Whether a real reconciliation candidate must exist before auto-match. */
+  candidateRequirement?: "required" | "not_required";
   /** A matching mutation must have a proof document before this rule can apply. */
   requiresDocumentUpload?: boolean;
   /** Optional tax routing selected in the Rule AI editor. */

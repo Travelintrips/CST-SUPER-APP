@@ -1154,8 +1154,8 @@ async function postBatchFromNormalized(
           let _result: any;
           let _ruleAutoPosted = false;
           if (_decision?.decisionSource === 'MANUAL_RULE' && _decision.matchedRuleId) {
-            const { rows: _ruleRows } = await db.execute(sql.raw(`
-              SELECT target_coa_code, confidence_score
+             const { rows: _ruleRows } = await db.execute(sql.raw(`
+               SELECT target_coa_code, confidence_score, candidate_requirement
               FROM recon_rules
               WHERE id = ${Number(_decision.matchedRuleId)}
                 AND company_id = ${Number(_effCoId)}
@@ -1163,6 +1163,34 @@ async function postBatchFromNormalized(
               LIMIT 1
             `)).catch(() => ({ rows: [] as any[] }));
             const _rule = _ruleRows[0] as any;
+             const _candidateRequirement = _rule?.candidate_requirement === 'required'
+               ? 'required'
+               : 'not_required';
+
+             if (_candidateRequirement === 'required') {
+               _result = await runUnifiedMatching({
+                 id: _mutId,
+                 amount: _amount,
+                 transaction_date: _txDate,
+                 mutation_key: _mk,
+                 company_id: _effCoId ?? null,
+                 provider_name: null,
+                 direction: _dir,
+               }, actor).catch(() => ({ status: 'unmatched' as const, all: [] }));
+
+               if (!_result.best) {
+                 const _reason = 'Rule AI ini mewajibkan kandidat transaksi sebelum auto-match.';
+                 await db.execute(sql.raw(`
+                   UPDATE bank_mutations
+                   SET status = 'manual_review',
+                       review_reason = '${_reason}',
+                       review_code = 'RULE_CANDIDATE_REQUIRED',
+                       updated_at = NOW()
+                   WHERE id = ${_mutId}
+                 `)).catch(() => {});
+                 _result = { status: 'manual_review', all: [] };
+               }
+             } else {
             const _coaCode = String(_rule?.target_coa_code ?? '').trim();
             const _plan = planReferenceCoaAutoPost({
               targetCoaCode: _coaCode,
@@ -1220,6 +1248,7 @@ async function postBatchFromNormalized(
               best: { candidate: { type: 'recon_rule', id: Number(_decision.matchedRuleId) } },
               all: [],
             };
+             }
           } else {
             _result = await runUnifiedMatching({
               id: _mutId, amount: _amount, transaction_date: _txDate,

@@ -6310,7 +6310,7 @@ router.post("/run-matching", async (req, res) => {
         // complete the same bank mutation without another manual click.
         // Ambiguous/missing COA rules remain manual-review only.
         const { rows: matchedRuleRows } = await db.execute(sql.raw(`
-          SELECT target_coa_code, confidence_score
+          SELECT target_coa_code, confidence_score, candidate_requirement
           FROM recon_rules
           WHERE id = ${Number(decision.matchedRuleId)}
             AND company_id = ${mutationCompanyId}
@@ -6318,9 +6318,57 @@ router.post("/run-matching", async (req, res) => {
           LIMIT 1
         `)).catch(() => ({ rows: [] as any[] }));
         const matchedRule = matchedRuleRows[0] as any;
+        const candidateRequirement = matchedRule?.candidate_requirement === "required"
+          ? "required"
+          : "not_required";
         const autoCoaCode = matchedRule?.target_coa_code
           ? String(matchedRule.target_coa_code).trim()
           : "";
+
+        // A Rule AI hit is not itself a business transaction candidate. Rules
+        // marked as required must go through the normal candidate engine first.
+        if (candidateRequirement === "required") {
+          const candidateResult = await runUnifiedMatching({
+            id: m.id,
+            transaction_date: m.transaction_date,
+            amount: Number(m.amount),
+            mutation_key: m.mutation_key,
+            provider_order_id: m.provider_order_id,
+            provider_name: m.provider_name,
+            normalized_description: m.normalized_description,
+            uploaded_proof_url: m.uploaded_proof_url ?? null,
+            company_id: m.company_id ?? null,
+            bank_account_id: m.bank_account_id ?? null,
+            direction: m.direction,
+          }, actor);
+
+          if (!candidateResult.best) {
+            const reason = "Rule AI ini mewajibkan kandidat transaksi sebelum auto-match.";
+            await db.execute(sql.raw(`
+              UPDATE bank_mutations
+              SET status = 'manual_review',
+                  review_reason = '${reason.replace(/'/g, "''")}',
+                  review_code = 'RULE_CANDIDATE_REQUIRED',
+                  updated_at = NOW()
+              WHERE id = ${Number(m.id)}
+                AND status NOT IN ('posted', 'approved', 'approved_pending_posting', 'void')
+            `)).catch(() => {});
+            await auditLog(Number(m.id), "RULE_CANDIDATE_REQUIRED", actor, {
+              rule_id: decision.matchedRuleId,
+              candidate_requirement: candidateRequirement,
+              candidate_count: 0,
+            });
+            manual_review++;
+          } else if (candidateResult.status === "auto_matched") {
+            auto_matched++;
+          } else if (candidateResult.status === "manual_review") {
+            manual_review++;
+          } else {
+            unmatched_count++;
+          }
+          return;
+        }
+
         const autoPostPlan = planReferenceCoaAutoPost({
           targetCoaCode: autoCoaCode,
           ruleConfidence: matchedRule?.confidence_score ?? null,

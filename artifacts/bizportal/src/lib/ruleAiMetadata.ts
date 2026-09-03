@@ -5,6 +5,7 @@ export interface RuleAiMetadataForm {
   amountTolerance: string;
   confidence: string;
   priority: string;
+  candidateRequirement?: "required" | "not_required";
 }
 
 export interface EditableRuleAiFields {
@@ -12,6 +13,7 @@ export interface EditableRuleAiFields {
   amount_tolerance: number;
   confidence: number;
   priority: number;
+  candidate_requirement: "required" | "not_required";
 }
 
 interface RuleAiMutation {
@@ -35,6 +37,7 @@ export function defaultRuleAiMetadata(mutation: RuleAiMutation): RuleAiMetadataF
     amountTolerance: "",
     confidence: "1",
     priority: "120",
+    candidateRequirement: "not_required",
   };
 }
 
@@ -59,6 +62,7 @@ export function editableRuleAiFieldsFromRow(row: Record<string, unknown>): Edita
       : 0,
     confidence: Number(row.confidence ?? 0.8),
     priority: Number(row.priority ?? 50),
+    candidate_requirement: row.candidate_requirement === "required" ? "required" : "not_required",
   };
 }
 
@@ -131,6 +135,7 @@ export function buildManualRuleAiPayload(
     reference_amount: referenceAmount,
     confidence,
     priority,
+    candidate_requirement: metadata.candidateRequirement === "required" ? "required" : "not_required",
     source: "manual" as const,
     company_id: companyId,
   };

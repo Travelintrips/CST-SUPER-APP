@@ -159,6 +159,7 @@ export async function runReconClassificationMigration(): Promise<void> {
       action_config_code  TEXT,
       amount_tolerance    NUMERIC(16,2),
       reference_amount    NUMERIC(16,2),
+       candidate_requirement TEXT NOT NULL DEFAULT 'not_required',
        requires_document_upload BOOLEAN NOT NULL DEFAULT FALSE,
        tax_type            TEXT NOT NULL DEFAULT 'none',
       confidence          NUMERIC(4,2) DEFAULT 0.80,
@@ -178,6 +179,7 @@ export async function runReconClassificationMigration(): Promise<void> {
       ADD COLUMN IF NOT EXISTS operational_rule_id INTEGER,
       ADD COLUMN IF NOT EXISTS amount_tolerance NUMERIC(16,2),
        ADD COLUMN IF NOT EXISTS reference_amount NUMERIC(16,2),
+        ADD COLUMN IF NOT EXISTS candidate_requirement TEXT NOT NULL DEFAULT 'not_required',
        ADD COLUMN IF NOT EXISTS requires_document_upload BOOLEAN NOT NULL DEFAULT FALSE,
        ADD COLUMN IF NOT EXISTS tax_type TEXT NOT NULL DEFAULT 'none'
   `));
@@ -354,7 +356,7 @@ export async function syncOperationalReconRulesToClassification(): Promise<void>
         (company_id, name, description, condition_field, condition_operator,
          condition_value, action_flow, action_coa_code, action_config_code,
          conditions_json, logic, specificity, config_id, amount_tolerance,
-          reference_amount, requires_document_upload, tax_type, confidence, priority, source)
+           reference_amount, candidate_requirement, requires_document_upload, tax_type, confidence, priority, source)
       SELECT
         r.company_id,
         LEFT(COALESCE(r.name, 'Referensi Bank — ' || r.condition_value), 120),
@@ -375,6 +377,7 @@ export async function syncOperationalReconRulesToClassification(): Promise<void>
         c.id,
          r.amount_tolerance,
          r.reference_amount,
+          COALESCE(r.candidate_requirement, 'not_required'),
          COALESCE(r.requires_document_upload, FALSE),
          COALESCE(r.tax_type, 'none'),
         1.00,
@@ -542,6 +545,7 @@ export async function syncAiClassificationRulesToOperational(
         specificity = COALESCE(r.specificity, 1),
         amount_tolerance = r.amount_tolerance,
         reference_amount = r.reference_amount,
+        candidate_requirement = COALESCE(r.candidate_requirement, 'not_required'),
          requires_document_upload = COALESCE(r.requires_document_upload, FALSE),
          tax_type = COALESCE(r.tax_type, 'none'),
         target_type = CASE
@@ -568,7 +572,7 @@ export async function syncAiClassificationRulesToOperational(
          bank_account_id, condition_type, condition_field, condition_operator,
          condition_value, conditions_json, logic, specificity,
          target_type, target_id, target_coa_code,
-          amount_tolerance, reference_amount, requires_document_upload, tax_type,
+           amount_tolerance, reference_amount, candidate_requirement, requires_document_upload, tax_type,
           confidence_score, stop_processing,
          created_by, ai_classification_rule_id)
       SELECT
@@ -599,6 +603,7 @@ export async function syncAiClassificationRulesToOperational(
         r.action_coa_code,
          r.amount_tolerance,
          r.reference_amount,
+         COALESCE(r.candidate_requirement, 'not_required'),
          COALESCE(r.requires_document_upload, FALSE),
          COALESCE(r.tax_type, 'none'),
         LEAST(100, GREATEST(0, ROUND(COALESCE(r.confidence, 1.0) * 100))),

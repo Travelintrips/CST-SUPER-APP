@@ -91,6 +91,7 @@ export async function runReconRulesMigration(): Promise<void> {
       ADD COLUMN IF NOT EXISTS specificity INTEGER NOT NULL DEFAULT 1,
       ADD COLUMN IF NOT EXISTS amount_tolerance NUMERIC(16,2),
       ADD COLUMN IF NOT EXISTS reference_amount NUMERIC(16,2),
+       ADD COLUMN IF NOT EXISTS candidate_requirement TEXT NOT NULL DEFAULT 'not_required',
       ADD COLUMN IF NOT EXISTS ai_classification_rule_id INTEGER,
       ADD COLUMN IF NOT EXISTS requires_document_upload BOOLEAN NOT NULL DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS tax_type TEXT NOT NULL DEFAULT 'none'
@@ -296,7 +297,7 @@ router.post("/", async (req, res) => {
          condition_type, condition_field, condition_operator, condition_value,
          conditions_json, logic, specificity,
          target_type, target_id, target_coa_code, amount_tolerance, reference_amount,
-         confidence_score, stop_processing, created_by)
+         candidate_requirement, confidence_score, stop_processing, created_by)
       VALUES
         (${companyId}, ${escStr(body.name)}, ${escStr(body.description)},
          ${Number(body.priority ?? 100)}, ${body.is_active !== false},
@@ -316,6 +317,7 @@ router.post("/", async (req, res) => {
          ${escStr(body.target_coa_code)},
          ${body.amount_tolerance == null ? "NULL" : Number(body.amount_tolerance)},
           ${body.reference_amount == null ? "NULL" : Number(body.reference_amount)},
+         ${body.candidate_requirement === "required" ? "'required'" : "'not_required'"},
          ${Number(body.confidence_score ?? 100)},
          ${body.stop_processing !== false},
          ${escStr((req as any).user?.email ?? null)})
