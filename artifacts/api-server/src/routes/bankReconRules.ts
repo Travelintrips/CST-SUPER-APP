@@ -223,6 +223,7 @@ function rowToRule(r: Record<string, unknown>): ReconRule {
     targetCoaCode:    r.target_coa_code ? String(r.target_coa_code) : null,
     amountTolerance:  r.amount_tolerance == null ? null : Number(r.amount_tolerance),
     referenceAmount:  r.reference_amount == null ? null : Number(r.reference_amount),
+    candidateRequirement: r.candidate_requirement === "required" ? "required" : "not_required",
     requiresDocumentUpload: Boolean(r.requires_document_upload),
     taxType: r.tax_type === "ppn_input" || r.tax_type === "ppn_output" ? r.tax_type : "none",
     aiClassificationRuleId: r.ai_classification_rule_id == null ? null : Number(r.ai_classification_rule_id),
