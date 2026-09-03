@@ -963,11 +963,14 @@ const canPost = (m: BankMutation) =>
   m.status === "approved_pending_posting" &&
   !m.candidates?.some(c => c.candidate_source === CANONICAL_SETTLEMENT_SOURCE);
 
-/** Reject → hanya sebelum posted. */
+/** Reject → hanya sebelum approval dan sebelum journal dibuat. */
 const canReject = (m: BankMutation) =>
   m.status === "unmatched" || m.status === "matched" ||
-  m.status === "manual_review" || m.status === "duplicate_need_review" ||
-  m.status === "approved_pending_posting";
+  m.status === "manual_review" || m.status === "duplicate_need_review";
+
+/** Batalkan draft journal → mengembalikan approval ke kandidat matched. */
+const canUnapprove = (m: BankMutation) =>
+  m.status === "approved_pending_posting" || m.status === "approved";
 
 /** Reverse/Void → hanya setelah posted. */
 const canReverse = (m: BankMutation) =>
@@ -4427,6 +4430,7 @@ function MutationCard({
   onApprove,
   onPost,
   onReject,
+  onUnapprove,
   onReverse,
   onReopen,
   onDelete,
@@ -4462,6 +4466,7 @@ function MutationCard({
   onApprove: (m: BankMutation) => void;
   onPost:    (m: BankMutation) => void;
   onReject:  (m: BankMutation) => void;
+  onUnapprove: (m: BankMutation) => void;
   onReverse: (m: BankMutation) => void;
   onReopen:  (m: BankMutation) => void;
   onDelete:  (id: number) => void;
@@ -5060,7 +5065,7 @@ function MutationCard({
                 Lihat Detail
               </Button>
             )}
-            {/* Reject — only before posted */}
+            {/* Reject — only before approval/draft journal */}
             {canReject(m) && (
               <Button
                 size="sm"
@@ -5072,6 +5077,18 @@ function MutationCard({
                 Reject
               </Button>
             )}
+            {/* Batalkan draft approval — draft journal has no financial impact */}
+            {canUnapprove(m) && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs gap-1 text-orange-600 hover:text-orange-700 border-orange-200 hover:bg-orange-50"
+                onClick={() => onUnapprove(m)}
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                Batalkan Draft
+              </Button>
+            )}
             {/* Reverse/Void — only for posted */}
             {canReverse(m) && (
               <Button
@@ -5081,7 +5098,7 @@ function MutationCard({
                 onClick={() => onReverse(m)}
               >
                 <RotateCcw className="w-3.5 h-3.5" />
-                Reverse
+                Reverse / Void
               </Button>
             )}
             {/* Reopen — only for void mutations */}
@@ -5387,6 +5404,7 @@ function MutationDetailPanel({
   onApprove,
   onPost,
   onReject,
+  onUnapprove,
   onReverse,
   onReopen,
   onApproveQris,
@@ -5411,6 +5429,7 @@ function MutationDetailPanel({
   onApprove: (m: BankMutation) => void;
   onPost:    (m: BankMutation) => void;
   onReject:  (m: BankMutation) => void;
+  onUnapprove: (m: BankMutation) => void;
   onReverse: (m: BankMutation) => void;
   onReopen:  (m: BankMutation) => void;
   onApproveQris: (m: BankMutation) => void;
@@ -6057,6 +6076,16 @@ function MutationDetailPanel({
               Post ke Accounting
             </Button>
           )}
+          {canUnapprove(m) && (
+            <Button
+              variant="outline"
+              className="flex-1 gap-1.5 text-orange-600 hover:text-orange-700 border-orange-200 hover:bg-orange-50 min-w-[120px]"
+              onClick={() => { onClose(); onUnapprove(m); }}
+            >
+              <RotateCcw className="w-4 h-4" />
+              Batalkan Draft
+            </Button>
+          )}
           {canReject(m) && (
             <Button variant="outline" className="flex-1 gap-1.5 text-red-600 hover:text-red-700 border-red-200 hover:bg-red-50 min-w-[100px]"
               onClick={() => { onClose(); onReject(m); }}>
@@ -6084,7 +6113,7 @@ function MutationDetailPanel({
               Jurnal reversal sudah dibuat. Klik <strong>Buka Ulang</strong> untuk cocokkan mutasi ini kembali.
             </p>
           )}
-          {!isUiApprovalEligible(m) && !canPost(m) && !canReject(m) && !canReverse(m) && !canReopen(m) && (
+          {!isUiApprovalEligible(m) && !canPost(m) && !canReject(m) && !canUnapprove(m) && !canReverse(m) && !canReopen(m) && (
             <p className="text-xs text-muted-foreground py-1 w-full text-center">Tidak ada aksi tersedia untuk status ini</p>
           )}
         </div>
@@ -6441,7 +6470,7 @@ function OnboardingModal() {
 //   Summary:          GET  /api/bank-reconciliation/summary
 //   Import:           POST /api/bank-reconciliation/import
 
-type DialogMode = "approve" | "post" | "reject" | "reverse";
+type DialogMode = "approve" | "post" | "reject" | "unapprove" | "reverse";
 
 export default function BankReconciliationPage() {
   const { toast }  = useToast();
@@ -7556,6 +7585,30 @@ export default function BankReconciliationPage() {
     onError: (e: Error) => toast({ title: "Gagal posting", description: e.message, variant: "destructive" }),
   });
 
+  // Unapprove draft → removes the draft journal and returns the mutation to
+  // matched so the reviewer can choose another candidate or COA.
+  const unapproveMut = useMutation({
+    mutationFn: async (mutId: number) => {
+      const r = await fetch(`/api/bank-reconciliation/${mutId}/unapprove`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({ error: "Unknown error" }));
+        throw new Error(body.error ?? r.statusText);
+      }
+      return r.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Draft jurnal dibatalkan — mutasi kembali ke status Cocok." });
+      setActionDialog(null);
+      invalidate();
+    },
+    onError: (e: Error) => toast({ title: "Gagal membatalkan draft", description: e.message, variant: "destructive" }),
+  });
+
   const rejectMut = useMutation({
     mutationFn: async (mutId: number) => {
       const r = await fetch(`/api/bank-reconciliation/${mutId}/reject`, {
@@ -7642,6 +7695,7 @@ export default function BankReconciliationPage() {
   const handleOpenApprove  = (m: BankMutation) => { setSelectedCandidateId(null); setManualReviewWarning(null); setActionDialog({ mutation: m, mode: "approve" }); };
   const handleOpenPost     = (m: BankMutation) => { setPostDialogJournalStatus(null); setActionDialog({ mutation: m, mode: "post" }); };
   const handleOpenReject   = (m: BankMutation) => setActionDialog({ mutation: m, mode: "reject" });
+  const handleOpenUnapprove = (m: BankMutation) => setActionDialog({ mutation: m, mode: "unapprove" });
   const handleOpenReverse  = (m: BankMutation) => { setReverseReason(""); setActionDialog({ mutation: m, mode: "reverse" }); };
   const handleOpenReopen   = (m: BankMutation) => reopenMut.mutate(m.id);
   const handleApproveQris = (m: BankMutation) => {
@@ -8509,6 +8563,7 @@ export default function BankReconciliationPage() {
                   onApprove={handleOpenApprove}
                   onPost={handleOpenPost}
                   onReject={handleOpenReject}
+                  onUnapprove={handleOpenUnapprove}
                   onReverse={handleOpenReverse}
                   onReopen={handleOpenReopen}
                   onDelete={id => deleteMut.mutate(id)}
@@ -8770,6 +8825,7 @@ export default function BankReconciliationPage() {
         onApprove={handleOpenApprove}
         onPost={handleOpenPost}
         onReject={handleOpenReject}
+        onUnapprove={handleOpenUnapprove}
         onReverse={handleOpenReverse}
         onReopen={handleOpenReopen}
         onApproveQris={handleApproveQris}
@@ -9050,6 +9106,43 @@ export default function BankReconciliationPage() {
                 {postMut.isPending ? "Memposting..." : "Post ke Accounting"}
               </Button>
             )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Unapprove Draft Dialog ─────────────────────────────── */}
+      <Dialog open={actionDialog?.mode === "unapprove"} onOpenChange={o => !o && setActionDialog(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Batalkan Draft Jurnal</DialogTitle>
+          </DialogHeader>
+          {actionDialog?.mode === "unapprove" && (
+            <div className="space-y-3">
+              <div className="bg-muted/40 rounded-lg p-3 text-sm space-y-1">
+                <p className="font-medium">{actionDialog.mutation.description}</p>
+                <p className="text-muted-foreground">
+                  {fmtDate(actionDialog.mutation.transaction_date)} · {idr(actionDialog.mutation.amount)}
+                </p>
+                {actionDialog.mutation.journal_entry_id && (
+                  <p className="text-xs text-gray-600 mt-1">Draft Journal #{actionDialog.mutation.journal_entry_id}</p>
+                )}
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Draft jurnal akan dihapus tanpa membalik transaksi keuangan. Mutasi kembali ke status <strong>Cocok</strong> agar dapat ditinjau atau dipilihkan COA lain.
+              </p>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setActionDialog(null)}>Batal</Button>
+            <Button
+              variant="destructive"
+              className="gap-1.5"
+              onClick={() => actionDialog && unapproveMut.mutate(actionDialog.mutation.id)}
+              disabled={unapproveMut.isPending}
+            >
+              {unapproveMut.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+              {unapproveMut.isPending ? "Membatalkan..." : "Batalkan Draft"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
