@@ -662,7 +662,9 @@ async function queueSseAndFinanceProof() {
 
   const journal = await query(
     client,
-    `SELECT id FROM accounting_journals ORDER BY id LIMIT 1`,
+    `SELECT id, company_id FROM accounting_journals
+     WHERE company_id IS NOT NULL
+     ORDER BY id LIMIT 1`,
   );
   const accounts = await query(
     client,
@@ -672,6 +674,10 @@ async function queueSseAndFinanceProof() {
     throw new Error("Required development journal/account data is unavailable");
   }
   const journalId = journal.rows[0].id;
+  // Synthetic portal tenants do not own seeded accounting journals. Accounting
+  // rows must still use the company that owns the selected DEV journal, or the
+  // live journal/company integrity trigger correctly rejects the proof fixture.
+  const accountingCompanyId = journal.rows[0].company_id;
   const debitAccountId = accounts.rows[0].id;
   const creditAccountId = accounts.rows[1].id;
   const entryNumber = `${runId}:JOURNAL`;
@@ -685,7 +691,7 @@ async function queueSseAndFinanceProof() {
               $6, 'DRAFT', $7, 'runtime-test', 'runtime_test')
      RETURNING id`,
     [
-      fixture.companyA,
+      accountingCompanyId,
       entryNumber,
       journalId,
       `${runId}:FINANCE`,
@@ -704,7 +710,7 @@ async function queueSseAndFinanceProof() {
       entry.rows[0].id,
       debitAccountId,
       `${runId} balanced line`,
-      fixture.companyA,
+      accountingCompanyId,
       creditAccountId,
     ],
   );
@@ -713,14 +719,14 @@ async function queueSseAndFinanceProof() {
     `INSERT INTO financial_outbox_events
      (event_type, payload, status, entry_id, company_id)
      VALUES ('runtime_test_journal_posted', $1::jsonb, 'pending', $2, $3)`,
-    [JSON.stringify({ runtimeTestRunId: runId, entryNumber }), entry.rows[0].id, fixture.companyA],
+    [JSON.stringify({ runtimeTestRunId: runId, entryNumber }), entry.rows[0].id, accountingCompanyId],
   );
   await query(
     client,
     `INSERT INTO financial_event_bus
      (event_type, source_type, entity_type, entity_id, payload, company_id, status)
      VALUES ('ENTRY_POSTED', 'accounting_entry', 'accounting_entry', $1, $2::jsonb, $3, 'PENDING')`,
-    [String(entry.rows[0].id), JSON.stringify({ runtimeTestRunId: runId, entryNumber }), fixture.companyA],
+    [String(entry.rows[0].id), JSON.stringify({ runtimeTestRunId: runId, entryNumber }), accountingCompanyId],
   );
   const finance = await query(
     client,
@@ -764,7 +770,7 @@ async function queueSseAndFinanceProof() {
              'portal_product_orders')
      RETURNING id, amount, status`,
     [
-      fixture.companyA,
+      accountingCompanyId,
       `${runId}:PAYMENT`,
       journalId,
       `${runId} Customer A`,
