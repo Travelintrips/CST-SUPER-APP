@@ -85,6 +85,7 @@ import {
   listGoodsReceiptItems,
 } from "../lib/services/mktPoGoodsReceiptService.js";
 import { logger } from "../lib/logger.js";
+import { notifyCustomerPortal } from "../lib/customerPortalNotificationService.js";
 import { assertCompanyAccess } from "../lib/assertCompanyAccess.js";
 import { resolveCompanyId } from "../lib/resolveCompany.js";
 import {
@@ -2018,6 +2019,20 @@ router.post("/rfqs/:rfqId/send-to-customer", async (req, res) => {
           updated_at        = NOW()
       WHERE id = ${rfqId}
     `);
+    await notifyCustomerPortal({
+      portalCustomerId: row["portal_customer_id"] as number | null,
+      eventKey: `marketplace:${rfqId}:customer-review`,
+      type: "marketplace_status_changed",
+      title: "Quotation Marketplace siap ditinjau",
+      message: `RFQ ${String(row["rfq_number"] ?? rfqId)} sudah memiliki quotation vendor untuk ditinjau.`,
+      payload: {
+        service: "marketplace",
+        rfqId,
+        orderNumber: row["rfq_number"],
+        status: "customer_review",
+        vendorName: row["vendor_name"],
+      },
+    });
 
     // Notify buyer (WA) — recipientPhone was previously omitted, so the row
     // always ended up with no phone number and the notification never sent.

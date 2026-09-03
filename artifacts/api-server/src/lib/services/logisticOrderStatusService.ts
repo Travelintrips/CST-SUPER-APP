@@ -22,6 +22,7 @@ import { normalizeStatus, CUSTOMER_WA_MESSAGES } from "../logisticStatusConstant
 import { logOrderStatusChange } from "../auditTrail.js";
 import { logger } from "../logger.js";
 import { writeAuditLog } from "../auditLog.js";
+import { notifyCustomerPortal } from "../customerPortalNotificationService.js";
 
 /** Status yang memicu notifikasi WA ke customer (In Progress sudah ditangani di confirm_fulfillment) */
 export const CUSTOMER_NOTIFY_STATUS_SET = new Set([
@@ -168,6 +169,7 @@ export async function transitionLogisticOrderStatus(
     .select({
       status: logisticOrdersTable.status,
       orderNumber: logisticOrdersTable.orderNumber,
+      portalCustomerId: logisticOrdersTable.portalCustomerId,
     })
     .from(logisticOrdersTable)
     .where(eq(logisticOrdersTable.id, orderId));
@@ -301,6 +303,20 @@ export async function transitionLogisticOrderStatus(
     { orderId, orderNumber: row.orderNumber, from: row.status, to: newStatus, source: opts.source ?? "service" },
     "logisticOrder status transitioned",
   );
+
+  await notifyCustomerPortal({
+    portalCustomerId: row.portalCustomerId,
+    eventKey: `logistic-order:${orderId}:status:${newStatus}`,
+    type: "logistic_order_status_changed",
+    title: "Status layanan diperbarui",
+    message: `Order ${row.orderNumber} sekarang berstatus ${newStatus}.`,
+    payload: {
+      service: "custom-clearance",
+      orderId,
+      orderNumber: row.orderNumber,
+      status: newStatus,
+    },
+  });
 
   // ── Customer WA notification (non-blocking) ───────────────────────────────
   if (CUSTOMER_NOTIFY_STATUS_SET.has(newStatus) && CUSTOMER_WA_MESSAGES[newStatus]) {

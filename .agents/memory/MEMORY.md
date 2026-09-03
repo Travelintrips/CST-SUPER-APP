@@ -3,10 +3,6 @@
 - [Production secret bundle JSON](production-secret-json-loader.md) — malformed managed PROD JSON blocks recovery before DB access; never bypass the official loader.
 - [Customer Portal harness fixtures](customer-portal-harness-fixtures.md) — order fixtures need one active company membership; reset capture stays loopback-only and DEV-harness gated.
 - [Customer Portal runtime proofs](customer-portal-runtime-proofs.md) — run one-off portal proofs through the development Secret Manager loader or they may fall back to a schema-less local DB.
-- [Customer Portal proof cleanup](customer-portal-proof-cleanup.md) — explicit child deletion is required when live Supabase relationships are not enforced as foreign keys.
-- [DB Pool lock_timeout fix](lock-timeout-db-pool.md) — set lock_timeout via on('connect') handler (not pool options) to prevent DDL hang after kill-restart cycles.
-- [Startup pooler latency](startup-pooler-latency.md) — cold pooler checkout can dominate registry startup; measure phases and reuse one client for adjacent checks.
-- [Supavisor advisory locks](supavisor-advisory-locks.md) — session advisory locks can survive pooled client restarts; clear only the identified DEV backend before retrying startup.
 - [Asset storage rule](asset-storage-rule.md) — gambar/biner wajib ke Supabase Storage, bukan git; history sudah di-rewrite Jul 2026 (475 MB → 139 MB).
 - [Development Storage writes](development-storage-writes.md) — safe-dev tetap memblokir integrasi eksternal, tetapi preview upload boleh menulis hanya ke Supabase Storage development.
 - [Production static asset promotion](production-static-assets.md) — asset dev tidak otomatis ada di bucket production; cek secret runtime live dan verifikasi bucket production sebelum publish.
@@ -26,12 +22,10 @@
 - [Google credential separation](google-credential-separation.md) — Service Account Google Sheets dan bootstrap Secret Manager dapat berbeda dan membutuhkan izin berbeda.
 - [BizPortal preview API proxy](bizportal-preview-api-proxy.md) — preview BizPortal harus meneruskan `/api` ke API server port 8080 agar login tidak 502.
 - [Dev/Prod DB Isolation](dev-prod-isolation.md) — APP_ENV=development di start-dev.sh; load-secrets.mjs inject *_DEV keys as canonical + shared keys tanpa _DEV counterpart.
-- [accounting_entries missing columns](accounting-entries-missing-columns.md) — is_voided/is_reversed missing → journalReuseEngine FAIL-CLOSED → false MANUAL_REVIEW_REQUIRED saat approve sport payment.
+
 - [Drizzle v0.45 Serial Sequence Desync](sequence-desync-drizzle.md) — Drizzle v0.45 eksplisit `id DEFAULT`; sequence yg di-bypass saat bulk-import → duplicate key; fix: syncAccountingSequences() di startup.
 - [Draft journal reuse policy](draft-journal-reuse.md) — bank recon on unlinked draft + matching amount → REUSE_EXISTING_JOURNAL; was incorrectly blocked as MANUAL_REVIEW_REQUIRED → false "Buat Proposal COA".
 - [Posting service draft-first rule](posting-service-draft-first.md) — insert entry as 'draft', insert lines, then promote to 'posted'; trigger blocks line INSERT on posted entries.
-- [Ledger trigger conflict ae_immutability](ledger-trigger-conflict.md) — ae_immutability_fn (ledgerGuard) is stricter than fn_block_posted_entry_update; both must allow posted→draft with cancel_reason for repair to work.
-- [Drizzle sql array ANY syntax](drizzle-sql-array-any.md) — sql`= ANY(${jsArray})` generates tuple ($1,$2,…) not ARRAY[$1,…]; use sql.raw(inList) for static IN-lists.
 - [Production COA ID mismatch](prod-coa-id-mismatch.md) — import data produksi tanpa COA → Trial Balance kosong; remap account_id via session_replication_role + CASE UPDATE.
 - [Dev COA ID sync on startup](coa-dev-sync.md) — syncDevCoaToFixture() auto-remaps dev IDs to prod IDs after DB reset; fixture in coa-prod-fixture.json; refresh with generate-coa-fixture.mjs.
 - [Customer Portal bootstrap secrets](customer-portal-bootstrap-secrets.md) — Customer Portal startup invokes Secret Manager loader and fails closed when bootstrap credentials are unavailable.
@@ -49,7 +43,6 @@
 - [Candidate display identity](candidate-display-identity.md) — technical candidate identities can mirror one business payment; collapse known references for reviewer display.
 - [Unified vendor service label](unified-vendor-service-label.md) — preserve canonical marketplace line/catalog names before normalized service keys in Admin vendor-request display.
 - [Marketplace invoice upload idempotency](marketplace-invoice-upload-idempotency.md) — hapus attachment private baru pada duplicate/failure; hanya pertahankan setelah invoice baru commit.
-- [Bank recon SQL column audit](bank-recon-sql-column-audit.md) — candidateDetailsSql had wrong column names on 4 tables; UNION ALL type mismatch (ENUM vs TEXT); Drizzle hides real error in e.cause?.message; DROP VIEW before CREATE OR REPLACE VIEW.
 - [Recon validation environment](recon-validation-environment.md) — restore with frozen pnpm lockfile and build shared declarations before API typecheck; two isolation tests require missing dev tables.
 - [Sport Center audit contract](sport-center-audit-contract.md) — mirror trigger tetap owner; payment hanya posted setelah entry_id valid; jangan menambah relasi jurnal paralel.
 - [Sport Center payment method backfill](sport-center-payment-method-backfill.md) — legacy sync mengisi accounting_payments tetapi journal header bisa tetap NULL; backfill keduanya dari mirror source.
@@ -147,6 +140,7 @@
 - [Portal service operations runtime schema](portal-service-ops-runtime-schema.md) — cross-service UNION read models must match live Supabase columns; missing fields need typed constants, not assumptions.
 - [Sport payment group note identity](sport-payment-group-note-identity.md) — group note dapat mencakup banyak booking; bukan unique key payment, gunakan booking dan identitas provider untuk duplicate.
 - [Sport payment provider deduplication](sport-payment-provider-deduplication.md) — recurring bookings can create repeated source rows; provider_order_id is the logical payment identity for display and QRIS candidates.
+- [QRIS snapshot publish boundary](qris-snapshot-publish-boundary.md) — a corrected production snapshot can be superseded by an older deployed generator until the matching code is published.
 - [Scoped Rule AI retry](scoped-rule-ai-retry.md) — AUTO_POST_GUARD with a full-confidence recon rule needs a mutation-scoped retry, while final statuses remain backend-blocked.
 - [Isolated test DB connectivity](isolated-test-db-connectivity.md) — TEST_DATABASE_URL may be IPv6-only or schema-incomplete; never bypass isolation with DEV/PROD fallback.
 - [Bank recon list schema gate](bank-recon-list-schema-gate.md) — summary and mutation list must initialize the same QRIS schema; never hide list query failures as “0 mutasi”.
@@ -157,3 +151,4 @@
 - [Canonical payment status repair](canonical-payment-status-repair.md) — source status resets can fire posted-journal mirrors; use the transaction-local metadata correction window, never disable guards.
 - [Rule AI internal transfer posting](rule-ai-internal-transfer-posting.md) — internal-transfer rules use their configured destination cash/bank COA with asset treatment; never infer it from description.
 - [Bank mutation allocation runtime contract](bank-mutation-allocation-runtime-contract.md) — additive lineage DDL needs a registered startup stage; legacy mutation dates may be text in development runtime.
+- [Package firewall dependency recovery](package-firewall-dependency-recovery.md) — if the firewall blocks a direct package tarball, check the latest safe version and update the pinned importer before retrying frozen install.

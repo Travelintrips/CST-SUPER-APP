@@ -3,7 +3,7 @@ import { randomBytes } from "crypto";
 import { db } from "@workspace/db";
 import { suppliersTable } from "@workspace/db";
 import { eq, sql, inArray, desc } from "drizzle-orm";
-import { requireAdmin } from "../lib/requireAdmin.js";
+import { requireAdmin, requireAdminMiddleware } from "../lib/requireAdmin.js";
 import { sendViaService as sendWhatsApp } from "../lib/waTransport.js";
 import { getAdminGroupWa } from "../lib/adminWa.js";
 import { getPreferredDomain } from "../lib/domain.js";
@@ -11,6 +11,7 @@ import { sendMail, isSmtpConfigured } from "../lib/mailer.js";
 import { logger } from "../lib/logger.js";
 import { resolveCompanyId } from "../lib/resolveCompany.js";
 import { assertCompanyAccess } from "../lib/assertCompanyAccess.js";
+import { notifyCustomerPortal } from "../lib/customerPortalNotificationService.js";
 import { filterSuppliersByCapability, VENDOR_CAPABILITY_KEYS } from "../lib/vendorCapabilityService.js";
 
 export const oceanFreightRouter = Router();
@@ -428,7 +429,7 @@ const router = Router();
 // ── Tables dikelola Drizzle schema (lib/db/src/schema/oceanFreight.ts) ────────
 
 // ── GET /api/ocean-freight — list orders ──────────────────────────────────────
-router.get("/", requireAdmin, async (req: Request, res: Response) => {
+router.get("/", requireAdminMiddleware, async (req: Request, res: Response) => {
   try {
     const { status, search } = req.query as Record<string, string>;
     const { rows } = await db.execute(sql`
@@ -449,23 +450,34 @@ router.get("/", requireAdmin, async (req: Request, res: Response) => {
 });
 
 // ── GET /api/ocean-freight/:id ────────────────────────────────────────────────
-router.get("/:id", requireAdmin, async (req: Request, res: Response) => {
+router.get("/:id", requireAdminMiddleware, async (req: Request, res: Response) => {
   try {
     const id = Number(String(req.params.id));
+    const trace = process.env.SAFE_DEV_TEST_MODE === "true";
+    const traceStartedAt = trace ? Date.now() : 0;
+    const traceQuery = <T>(name: string, query: Promise<T>): Promise<T> =>
+      query.then((result) => {
+        if (trace) console.log(`[ocean-freight/detail] ${name} ${Date.now() - traceStartedAt}ms`);
+        return result;
+      });
     const [{ rows: orders }, { rows: rfqs }, { rows: submissions }] = await Promise.all([
-      db.execute(sql`SELECT * FROM ocean_freight_orders WHERE id = ${id}`),
-      db.execute(sql`SELECT * FROM ocean_freight_rfqs WHERE order_id = ${id} ORDER BY created_at DESC`),
-      db.execute(sql`
+      traceQuery("orders", db.execute(sql`SELECT * FROM ocean_freight_orders WHERE id = ${id}`)),
+      traceQuery("rfqs", db.execute(sql`SELECT * FROM ocean_freight_rfqs WHERE order_id = ${id} ORDER BY created_at DESC`)),
+      traceQuery("submissions", db.execute(sql`
         SELECT s.*, v.name AS vendor_name_db
         FROM ocean_freight_rate_submissions s
         LEFT JOIN suppliers v ON v.id = s.vendor_id
         WHERE s.order_id = ${id}
         ORDER BY s.created_at DESC
-      `),
+      `)),
     ]);
+    if (trace) console.log(`[ocean-freight/detail] all queries ${Date.now() - traceStartedAt}ms`);
     if (!orders.length) return res.status(404).json({ error: "Order tidak ditemukan" });
-    const cid = resolveCompanyId(req);
-    if (!await assertCompanyAccess((orders[0] as any).company_id, cid, req, res, { resourceType: "ocean_freight_order", resourceId: id })) return;
+    const resourceCompanyId = (orders[0] as any).company_id;
+    if (resourceCompanyId != null) {
+      const cid = resolveCompanyId(req);
+      if (!await assertCompanyAccess(resourceCompanyId, cid, req, res, { resourceType: "ocean_freight_order", resourceId: id })) return;
+    }
     return res.json({ order: orders[0], rfqs, submissions });
   } catch (e) {
     console.error("[ocean-freight/get]", e);
@@ -474,20 +486,40 @@ router.get("/:id", requireAdmin, async (req: Request, res: Response) => {
 });
 
 // ── PATCH /api/ocean-freight/:id/status ──────────────────────────────────────
-router.patch("/:id/status", requireAdmin, async (req: Request, res: Response) => {
+router.patch("/:id/status", requireAdminMiddleware, async (req: Request, res: Response) => {
   try {
     const id     = Number(String(req.params.id));
     const status = String(req.body?.status ?? "");
     const validStatuses = ["draft","estimated","waiting_rate","rate_requested","rate_received","quoted","approved","booked","sailed","arrived","completed","cancelled","quote_declined"];
     if (!validStatuses.includes(status)) return res.status(400).json({ error: "Status tidak valid" });
 
-    const existingOcn = await db.execute(sql`SELECT company_id FROM ocean_freight_orders WHERE id = ${id} LIMIT 1`);
-    if (!existingOcn.rows.length) return res.status(404).json({ error: "Order tidak ditemukan" });
-    const cid = resolveCompanyId(req);
-    if (!await assertCompanyAccess((existingOcn.rows[0] as any).company_id, cid, req, res, { resourceType: "ocean_freight_order", resourceId: id })) return;
-    await db.execute(sql`
-      UPDATE ocean_freight_orders SET status = ${status}, updated_at = NOW() WHERE id = ${id}
+    const existingOcn = await db.execute(sql`
+      SELECT company_id, portal_customer_id, order_number
+      FROM ocean_freight_orders WHERE id = ${id} LIMIT 1
     `);
+    if (!existingOcn.rows.length) return res.status(404).json({ error: "Order tidak ditemukan" });
+    const resourceCompanyId = (existingOcn.rows[0] as any).company_id;
+    if (resourceCompanyId != null) {
+      const cid = resolveCompanyId(req);
+      if (!await assertCompanyAccess(resourceCompanyId, cid, req, res, { resourceType: "ocean_freight_order", resourceId: id })) return;
+    }
+    const updated = await db.execute(sql`
+      UPDATE ocean_freight_orders SET status = ${status}, updated_at = NOW() WHERE id = ${id}
+      RETURNING status
+    `);
+    await notifyCustomerPortal({
+      portalCustomerId: (existingOcn.rows[0] as any).portal_customer_id,
+      eventKey: `ocean-freight:${id}:status:${status}`,
+      type: "ocean_freight_status_changed",
+      title: "Status Ocean Freight diperbarui",
+      message: `Order ${(existingOcn.rows[0] as any).order_number} sekarang berstatus ${status}.`,
+      payload: {
+        service: "ocean-freight",
+        orderId: id,
+        orderNumber: (existingOcn.rows[0] as any).order_number,
+        status: (updated.rows[0] as any)?.status ?? status,
+      },
+    });
     return res.json({ ok: true });
   } catch (e) {
     return res.status(500).json({ error: "Gagal update status" });
@@ -495,7 +527,7 @@ router.patch("/:id/status", requireAdmin, async (req: Request, res: Response) =>
 });
 
 // ── POST /api/ocean-freight/:id/blast-rfq ────────────────────────────────────
-router.post("/:id/blast-rfq", requireAdmin, async (req: Request, res: Response) => {
+router.post("/:id/blast-rfq", requireAdminMiddleware, async (req: Request, res: Response) => {
   try {
     const orderId = Number(String(req.params.id));
     const { vendor_ids, blast_notes, response_hours } = req.body ?? {};
@@ -591,7 +623,7 @@ router.post("/:id/blast-rfq", requireAdmin, async (req: Request, res: Response) 
 });
 
 // ── POST /api/ocean-freight/:id/final-quote ───────────────────────────────────
-router.post("/:id/final-quote", requireAdmin, async (req: Request, res: Response) => {
+router.post("/:id/final-quote", requireAdminMiddleware, async (req: Request, res: Response) => {
   try {
     const orderId = Number(String(req.params.id));
     const b = req.body ?? {};
@@ -648,7 +680,7 @@ router.post("/:id/final-quote", requireAdmin, async (req: Request, res: Response
 });
 
 // ── POST /api/ocean-freight/:id/confirm-booking ──────────────────────────────
-router.post("/:id/confirm-booking", requireAdmin, async (req: Request, res: Response) => {
+router.post("/:id/confirm-booking", requireAdminMiddleware, async (req: Request, res: Response) => {
   try {
     const orderId = Number(String(req.params.id));
     const b = req.body ?? {};
@@ -689,7 +721,7 @@ router.post("/:id/confirm-booking", requireAdmin, async (req: Request, res: Resp
 });
 
 // ── PATCH /api/ocean-freight/:id/tracking ─────────────────────────────────────
-router.patch("/:id/tracking", requireAdmin, async (req: Request, res: Response) => {
+router.patch("/:id/tracking", requireAdminMiddleware, async (req: Request, res: Response) => {
   try {
     const orderId = Number(String(req.params.id));
     const trackingStatus = String(req.body?.tracking_status ?? "");
@@ -754,7 +786,7 @@ router.post("/", async (req: Request, res: Response) => {
 });
 
 // ── PATCH /api/ocean-freight/:id ─────────────────────────────────────────────
-router.patch("/:id", requireAdmin, async (req: Request, res: Response) => {
+router.patch("/:id", requireAdminMiddleware, async (req: Request, res: Response) => {
   try {
     const id = Number(String(req.params.id));
     const b  = req.body ?? {};

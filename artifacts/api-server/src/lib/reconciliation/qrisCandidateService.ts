@@ -387,8 +387,34 @@ export async function generateQrisCandidates(options: {
          WHERE psc.company_id = sp.company_id
            AND LOWER(BTRIM(psc.provider_code::text)) =
              LOWER(BTRIM(COALESCE(sp.payment_provider::text, sp.provider_name::text, '')))
-           AND BTRIM(psc.bank_account_id::text) =
-             BTRIM(COALESCE(sp.bank_account_id::text, ''))
+            AND (
+              -- Legacy Sport Center rows may store either the internal
+              -- company_bank_accounts.id or the external account number.
+              -- Settlement configs are owner-approved and commonly use the
+              -- external number, so compare both representations through the
+              -- active company account identity before treating the config as
+              -- unavailable.
+              BTRIM(psc.bank_account_id::text) =
+                BTRIM(COALESCE(sp.bank_account_id::text, ''))
+              OR EXISTS (
+                SELECT 1
+                FROM company_bank_accounts payment_account
+                WHERE payment_account.company_id = sp.company_id
+                  AND payment_account.is_active = TRUE
+                  AND (
+                    BTRIM(payment_account.id::text) =
+                      BTRIM(COALESCE(sp.bank_account_id::text, ''))
+                    OR BTRIM(payment_account.account_number::text) =
+                      BTRIM(COALESCE(sp.bank_account_id::text, ''))
+                  )
+                  AND (
+                    BTRIM(psc.bank_account_id::text) =
+                      BTRIM(payment_account.id::text)
+                    OR BTRIM(psc.bank_account_id::text) =
+                      BTRIM(payment_account.account_number::text)
+                  )
+              )
+            )
            AND psc.is_active = TRUE
            AND psc.source = 'OWNER_APPROVED'
            AND psc.effective_from <= COALESCE(

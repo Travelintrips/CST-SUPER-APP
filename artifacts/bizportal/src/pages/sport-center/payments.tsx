@@ -79,7 +79,7 @@ export default function SportCenterPayments() {
   const [editPayment, setEditPayment] = useState<Payment | null>(null);
   const [editForm, setEditForm] = useState({
     method: "cash", bank_account_id: "", mdr_rate: "", mdr_amount: "",
-    settlement_reference: "", settlement_date: "", settlement_status: "unsettled",
+    settlement_reference: "", settlement_date: "",
   });
 
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -387,7 +387,6 @@ export default function SportCenterPayments() {
                                mdr_amount: p.mdr_amount ? String(p.mdr_amount) : "",
                                settlement_reference: p.settlement_reference ?? "",
                                settlement_date: p.settlement_date?.slice(0, 10) ?? "",
-                               settlement_status: p.settlement_status ?? "unsettled",
                             });
                           }}
                         >
@@ -606,30 +605,13 @@ export default function SportCenterPayments() {
                         placeholder="Reference dari provider/bank"
                       />
                     </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1">
-                        <Label className="text-xs">Tanggal Settlement</Label>
-                        <Input
-                          type="date"
-                          value={editForm.settlement_date}
-                          onChange={(e) => setEditForm((p) => ({ ...p, settlement_date: e.target.value }))}
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs">Status Settlement</Label>
-                        <Select
-                          value={editForm.settlement_status}
-                          onValueChange={(v) => setEditForm((p) => ({ ...p, settlement_status: v }))}
-                        >
-                          <SelectTrigger><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="unsettled">Belum settle</SelectItem>
-                            <SelectItem value="partial">Partial</SelectItem>
-                            <SelectItem value="settled">Settled</SelectItem>
-                            <SelectItem value="exception">Exception</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Tanggal Settlement</Label>
+                      <Input
+                        type="date"
+                        value={editForm.settlement_date}
+                        onChange={(e) => setEditForm((p) => ({ ...p, settlement_date: e.target.value }))}
+                      />
                     </div>
                     <div className="flex justify-between text-xs text-muted-foreground border-t border-border/30 pt-2">
                       <span>Net settlement</span>
@@ -656,7 +638,6 @@ export default function SportCenterPayments() {
                           mdr_amount: editForm.mdr_amount === "" ? 0 : Number(editForm.mdr_amount),
                           settlement_reference: editForm.settlement_reference.trim(),
                           settlement_date: editForm.settlement_date || null,
-                          settlement_status: editForm.settlement_status,
                         }
                       : {}),
                   },

@@ -12,6 +12,7 @@ import {
   Package, Wind, Globe, FileText, Factory, Coffee, Flame,
   Droplets, Fish, Feather, Plane, BookOpen,
   Plus, Receipt, Building2, FolderOpen, Store,
+  Bell, CheckCheck,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { isAuthenticated, removeAuthToken, isPortalAdmin, getPortalRole, logout as portalLogout } from "@/lib/auth";
@@ -39,6 +40,139 @@ interface NavServiceGroup {
   accentText: string;
   headerBg: string;
   items: NavServiceItem[];
+}
+
+interface CustomerNotification {
+  id: number;
+  type: string;
+  title: string;
+  message: string;
+  payload: Record<string, unknown>;
+  isRead: boolean;
+  createdAt: string;
+}
+
+function CustomerNotificationBell() {
+  const isCustomer = isAuthenticated() && getPortalRole() === "customer";
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState<CustomerNotification[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  useEffect(() => {
+    if (!isCustomer) return;
+    let disposed = false;
+    const load = async () => {
+      try {
+        const response = await fetch("/api/portal/notifications", { credentials: "include" });
+        if (!response.ok || disposed) return;
+        const data = await response.json() as {
+          items?: CustomerNotification[];
+          unreadCount?: number;
+        };
+        if (!disposed) {
+          setItems(Array.isArray(data.items) ? data.items : []);
+          setUnreadCount(Number(data.unreadCount ?? 0));
+        }
+      } catch {
+        // A transient notification request must not affect the rest of the portal.
+      }
+    };
+    void load();
+
+    const events = new EventSource("/api/portal/notifications/events");
+    events.addEventListener("customer_notification", (event) => {
+      try {
+        const item = JSON.parse((event as MessageEvent).data) as CustomerNotification;
+        setItems((current) => [item, ...current.filter((entry) => entry.id !== item.id)].slice(0, 50));
+        if (!item.isRead) setUnreadCount((count) => count + 1);
+      } catch {
+        void load();
+      }
+    });
+    return () => {
+      disposed = true;
+      events.close();
+    };
+  }, [isCustomer]);
+
+  if (!isCustomer) return null;
+
+  async function markRead(id: number) {
+    const response = await fetch(`/api/portal/notifications/${id}/read`, {
+      method: "POST",
+      credentials: "include",
+    });
+    if (!response.ok) return;
+    setItems((current) => current.map((item) => item.id === id ? { ...item, isRead: true } : item));
+    setUnreadCount((count) => Math.max(0, count - 1));
+  }
+
+  async function markAllRead() {
+    const response = await fetch("/api/portal/notifications/read-all", {
+      method: "POST",
+      credentials: "include",
+    });
+    if (!response.ok) return;
+    setItems((current) => current.map((item) => ({ ...item, isRead: true })));
+    setUnreadCount(0);
+  }
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((value) => !value)}
+        className="relative flex items-center justify-center w-9 h-9 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-all duration-200"
+        aria-label="Notifikasi"
+        aria-expanded={open}
+      >
+        <Bell className="h-[17px] w-[17px]" />
+        {unreadCount > 0 && (
+          <span className="absolute -top-0.5 -right-0.5 bg-rose-500 text-white text-[9px] font-bold min-w-[16px] h-4 flex items-center justify-center rounded-full px-0.5 leading-none">
+            {unreadCount > 99 ? "99+" : unreadCount}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="absolute right-0 top-11 z-50 w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
+          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-900">Notifikasi</p>
+              <p className="text-[11px] text-slate-400">Update order dari tim CST</p>
+            </div>
+            {unreadCount > 0 && (
+              <button onClick={() => void markAllRead()} className="text-[11px] font-medium text-sky-600 hover:text-sky-800">
+                Tandai semua dibaca
+              </button>
+            )}
+          </div>
+          <div className="max-h-[22rem] overflow-y-auto">
+            {items.length === 0 ? (
+              <div className="px-4 py-8 text-center text-sm text-slate-400">Belum ada notifikasi.</div>
+            ) : items.map((item) => (
+              <button
+                key={item.id}
+                onClick={() => !item.isRead && void markRead(item.id)}
+                className={`block w-full border-b border-slate-50 px-4 py-3 text-left transition-colors hover:bg-slate-50 ${item.isRead ? "bg-white" : "bg-sky-50/60"}`}
+              >
+                <div className="flex gap-3">
+                  <div className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${item.isRead ? "bg-slate-100 text-slate-400" : "bg-sky-100 text-sky-600"}`}>
+                    {item.isRead ? <CheckCheck className="h-3.5 w-3.5" /> : <Bell className="h-3.5 w-3.5" />}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-slate-800">{item.title}</p>
+                    <p className="mt-0.5 text-xs leading-relaxed text-slate-500">{item.message}</p>
+                    <p className="mt-1 text-[10px] text-slate-400">
+                      {new Date(item.createdAt).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" })}
+                    </p>
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // SERVICES_GROUPS is now a function so labels/titles/descs go through t() and
@@ -1085,6 +1219,7 @@ export function Navbar() {
             </div>
 
             {/* Cart */}
+            <CustomerNotificationBell />
             <button
               onClick={() => window.dispatchEvent(new Event("open-cart-drawer"))}
               className="relative flex items-center justify-center w-9 h-9 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-all duration-200"

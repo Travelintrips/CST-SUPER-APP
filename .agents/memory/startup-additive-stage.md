@@ -8,3 +8,9 @@ When a persistent startup registry may already mark a legacy migration complete,
 **Why:** A completed legacy vendor-form stage skipped its newer `customer_invoice_links` column work even though the current source contained the correct `CREATE`/`ALTER` statements. A later Customer Portal tax seed also appeared completed while inserting no rows because a legacy unique index omitted the new product scope and the insert error was discarded. The all-services portal proof found the same class of drift on freight ownership/customer columns.
 
 **How to apply:** Give the repair its own stable registry name, register every new server-chain stage before startup, wire it into the standalone development runner, backfill only from canonical parents, update registry contract tests when the stage count changes, and leave unresolved legacy ownership NULL so payment paths remain fail-closed. If a marker unexpectedly reports the target version complete, verify the catalog with a DEV-only runner instead of assuming source execution.
+
+The persistent gate resolves server-chain stages by their exact display name, so adding a migration function and chaining its call is insufficient unless the matching registry row is also present.
+
+**Why:** An unregistered display name fails closed before the migration callback runs, leaving the API unready even when the migration implementation itself is valid.
+
+**How to apply:** Add the stable machine name and exact display name to the registry in the same change as the chain call, and cover both names with a registry contract test.

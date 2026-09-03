@@ -431,6 +431,43 @@ async function verifyIndividualRfq() {
       : "not retried",
   );
 
+  const independentSubmission = submitted
+    ? await submitQuote("individual independent key", jars.relogin, {
+      qty: preservedRfqState.qty,
+      phone: preservedRfqState.phone,
+      guest_contact: preservedRfqState.phone,
+      notes: preservedRfqState.notes,
+      required_date: preservedRfqState.requiredDate,
+    }, {
+      forwardedFor: "198.51.100.252",
+      idempotencyKey: `${MARKER}:individual-independent`,
+    })
+    : null;
+  const independentCount = independentSubmission?.rfqId
+    ? await one(
+      `SELECT COUNT(DISTINCT r.id)::int AS count
+         FROM mkt_rfqs r
+         JOIN mkt_rfq_lines l ON l.rfq_id = r.id
+        WHERE r.portal_customer_id = $1
+          AND r.notes LIKE $2
+          AND l.vendor_catalog_item_id = $3`,
+      [individualId, `${preservedRfqState.notes}%`, Number(catalogItem.id)],
+    )
+    : null;
+  const independentPass = independentSubmission?.result.status === 201
+    && Number.isInteger(independentSubmission.rfqId)
+    && Number.isInteger(independentSubmission.orderId)
+    && independentSubmission.rfqId !== submitted?.rfqId
+    && independentSubmission.orderId !== submitted?.orderId
+    && Number(independentCount?.count) === 2;
+  record(
+    "same payload with different idempotency key creates a valid second submission",
+    independentPass,
+    independentSubmission
+      ? `HTTP ${independentSubmission.result.status}; first=${submitted?.rfqId}/${submitted?.orderId}; second=${independentSubmission.rfqId}/${independentSubmission.orderId}; canonical=${independentCount?.count ?? "missing"}`
+      : "not submitted",
+  );
+
   const rfq = submitted?.rfqId
     ? await one(
       `SELECT id, portal_customer_id, company_id, buyer_email, delivery_address,

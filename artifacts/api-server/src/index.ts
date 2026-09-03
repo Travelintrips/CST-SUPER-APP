@@ -82,6 +82,7 @@ import { runNavPreferencesMigration } from "./lib/navPreferencesMigration";
 import { runNotificationLogMigration } from "./lib/notificationLogMigration";
 import { runAdminNotificationsMigration } from "./lib/adminNotificationsMigration";
 import { runVendorNotificationsMigration } from "./lib/vendorNotificationsMigration.js";
+import { runCustomerPortalNotificationsMigration } from "./lib/customerPortalNotificationsMigration.js";
 
 import { runVendorMiniFormMigration } from "./lib/vendorMiniFormMigration";
 import { runCustomerInvoiceCompanyScopeMigration } from "./lib/customerInvoiceCompanyScopeMigration.js";
@@ -2069,6 +2070,7 @@ async function startServer() {
     .then(() => runWithRetry("Notification log migration", runNotificationLogMigration))
     .then(() => runWithRetry("Admin notifications migration", runAdminNotificationsMigration))
     .then(() => runWithRetry("Vendor notifications migration", runVendorNotificationsMigration))
+    .then(() => runWithRetry("Customer portal notifications migration", runCustomerPortalNotificationsMigration))
     .then(() => runWithRetry("Vendor profile fields migration", runVendorProfileFieldsMigration))
     .then(() => runWithRetry("Supplier enhancement migration (status/marketplace/documents/reviews)", runSupplierEnhancementMigration))
     .then(() => runWithRetry("Nav preferences migration", runNavPreferencesMigration))

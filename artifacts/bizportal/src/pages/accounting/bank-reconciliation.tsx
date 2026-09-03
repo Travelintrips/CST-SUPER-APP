@@ -40,6 +40,11 @@ import {
   isInhouseBankTransferDescription,
   isQrisBankApprovalAllowed,
 } from "@/lib/bankMutationPaymentType";
+import {
+  buildManualRuleAiPayload,
+  defaultRuleAiMetadata,
+  type RuleAiMetadataForm,
+} from "@/lib/ruleAiMetadata";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -549,6 +554,9 @@ interface CandidateDetails {
   settlementStatus?: string | null;
   settlementPartial?: boolean;
   settlementItemCount?: number | null;
+  settlementJournalId?: number | null;
+  bankMutationId?: number | null;
+  canonicalBankMutationId?: number | null;
   expectedAmount?: number | string | null;
   actualBankAmount?: number | string | null;
   amountDifference?: number | string | null;
@@ -1008,15 +1016,44 @@ function isCanonicalSettlementManualOverrideEligible(m: BankMutation): boolean {
   const settlementStatus = String(candidate?.details?.settlementStatus ?? "").toLowerCase();
   return canApprove(m)
     && candidate != null
+    && candidate.amount_match !== false
+    && candidate.date_match !== false
     && String(candidate.status ?? "").toLowerCase() !== "approved"
     && !hasApprovedReconciliationMatch(m)
     && settlementStatus === "posted";
 }
 
+function hasLiveQrisPaymentsForCanonicalApproval(m: BankMutation): boolean {
+  // A canonical candidate without a QRIS audit is still eligible for the
+  // existing non-batch/manual path. Once a live audit exists, its current
+  // payment scope is authoritative over the old candidate snapshot.
+  const audit = m.qris_candidate_audit
+    ?? (Array.isArray(m.qris_candidate_audits) ? m.qris_candidate_audits[0] : undefined);
+  if (!audit) return true;
+  return getAvailableQrisPaymentIdsFromCandidate(audit).length > 0;
+}
+
 function isCanonicalSettlementApprovalEligible(m: BankMutation): boolean {
   const candidate = canonicalSettlementCandidateForMutation(m);
   if (!candidate || !isCanonicalSettlementManualOverrideEligible(m)) return false;
-  return candidate.amount_match && candidate.date_match;
+  return candidate.amount_match
+    && candidate.date_match
+    && hasLiveQrisPaymentsForCanonicalApproval(m);
+}
+
+function isCanonicalHistoricalRepairEligible(
+  m: BankMutation,
+  candidate: Candidate | undefined,
+): boolean {
+  const details = candidate?.details;
+  return isCanonicalSettlementManualOverrideEligible(m)
+    && candidate?.amount_match === true
+    && candidate?.date_match === true
+    && candidate === canonicalSettlementCandidateForMutation(m)
+    && String(details?.settlementStatus ?? "").toLowerCase() === "posted"
+    && details?.settlementJournalId != null
+    && details?.bankMutationId == null
+    && details?.canonicalBankMutationId == null;
 }
 
 function qrisAuditsForMutation(m: BankMutation): QrisCandidateAudit[] {
@@ -1069,6 +1106,12 @@ function QrisCandidateDiagnosticBlock({
     : null;
   const items = diagnostic?.payment_items ?? [];
   const itemCount = Number(diagnostic?.diagnostic_payment_count ?? items.length);
+  const expectedPaymentDate = bankDate ? qrisPreviousCalendarDate(bankDate) : null;
+  const paymentDates = [...new Set(
+    items
+      .map(item => qrisPaymentDateValue(item)?.slice(0, 10))
+      .filter((value): value is string => Boolean(value)),
+  )];
   const hasProvider = Boolean(
     diagnostic?.provider_code
       && !["unknown", "unidentified"].includes(String(diagnostic.provider_code).toLowerCase()),
@@ -1092,6 +1135,15 @@ function QrisCandidateDiagnosticBlock({
       label: "Payment sumber",
       ok: itemCount > 0,
       detail: itemCount > 0 ? `${itemCount} payment QRIS ditemukan` : "Tidak ada payment QRIS yang ditemukan",
+    },
+    {
+      label: "Tanggal pembayaran",
+      ok: paymentDates.length > 0,
+      detail: paymentDates.length > 0
+        ? paymentDates.map(date => fmtDate(date)).join(", ")
+        : expectedPaymentDate
+          ? `Tidak ada paid_at/confirmed_at untuk cohort H-1 (diharapkan ${fmtDate(expectedPaymentDate)})`
+          : "Tidak ada paid_at/confirmed_at yang dapat dipakai untuk cohort H-1",
     },
     {
       label: "Tanggal settlement",
@@ -1134,7 +1186,7 @@ function QrisCandidateDiagnosticBlock({
               ? failedChecks.length > 0
                 ? `${failedChecks.length} syarat belum terpenuhi. Status pemeriksaan: ${status}.`
                 : "Kandidat ada, tetapi belum masuk cohort settlement yang dapat direview."
-              : "Sistem belum menyimpan hasil pemeriksaan untuk mutasi ini. Jalankan pencarian kandidat QRIS terlebih dahulu."}
+              : "Sistem belum menyimpan snapshot pemeriksaan untuk mutasi ini. Jalankan pencarian kandidat QRIS terlebih dahulu."}
           </p>
         </div>
       </div>
@@ -1170,6 +1222,9 @@ function statusLabel(m: BankMutation): string {
   if (m.status === "approved_pending_posting") return STATUS_LABELS.approved_pending_posting;
   if (m.status === "manual_review") return STATUS_LABELS.manual_review;
   if (m.status === "matched" && hasApprovedReconciliationMatch(m)) return "Perlu Diperiksa";
+  if (isCanonicalHistoricalRepairEligible(m, canonicalSettlementCandidateForMutation(m))) {
+    return "Settlement Tertunda";
+  }
   if (isCanonicalSettlementApprovalEligible(m)) return "Siap Direconcile";
   if (isCanonicalSettlementManualOverrideEligible(m)) return "Override Manual Tersedia";
   if (isQrisMutation(m) && qrisAuditsForMutation(m).length === 0) return "Perlu Kandidat QRIS";
@@ -1185,6 +1240,7 @@ function statusColor(m: BankMutation): string {
   if (m.status === "approved" || m.status === "posted") return STATUS_COLORS.approved;
   if (m.status === "manual_review") return STATUS_COLORS.manual_review;
   if (m.status === "matched" && hasApprovedReconciliationMatch(m)) return STATUS_COLORS.duplicate_need_review;
+  if (isCanonicalHistoricalRepairEligible(m, canonicalSettlementCandidateForMutation(m))) return STATUS_COLORS.manual_review;
   if (isCanonicalSettlementApprovalEligible(m)) return STATUS_COLORS.matched;
   if (isCanonicalSettlementManualOverrideEligible(m)) return STATUS_COLORS.manual_review;
   if (isQrisMutation(m) && qrisAuditsForMutation(m).length === 0) return STATUS_COLORS.duplicate_need_review;
@@ -1246,6 +1302,14 @@ function qrisPaymentDateValue(item: QrisPaymentItem): string | null {
     ?? null;
   if (value == null || String(value).trim() === "") return null;
   return String(value);
+}
+
+function qrisPreviousCalendarDate(value: string): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const date = new Date(`${value}T12:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
 }
 
 function qrisPaymentCustomerName(item: QrisPaymentItem): string {
@@ -1603,6 +1667,7 @@ function CandidateDetailsBlock({
   candidate: Candidate;
   compact?: boolean;
 }) {
+  const [open, setOpen] = useState(false);
   const d = candidate.details;
   if (!d) return null;
   const isCanonicalSettlement =
@@ -1658,81 +1723,103 @@ function CandidateDetailsBlock({
   if (rows.length === 0) return null;
 
   return (
-    <div className={`min-w-0 rounded-md bg-muted/35 border border-dashed space-y-1 ${compact ? "p-2 mt-1.5" : "p-2.5 mt-2"}`}>
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {isRuleCandidate ? "Detail Rule AI / sumber pencocokan" : "Detail transaksi sumber"}
-      </p>
-      {d.settlementPartial && (
-        <p className="text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-          Settlement QRIS PARTIAL — hanya sebagian dana/provider batch yang sudah tersettle; perlu review sebelum dianggap lunas.
-        </p>
-      )}
-      {hasVarianceEvidence && (
-        <div className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-2 text-[11px] text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
-          <div className="flex items-center justify-between gap-2">
-            <p className="font-semibold">Variance settlement QRIS</p>
-            <Badge variant="outline" className="border-amber-400 bg-amber-100 text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
-              Perlu Review
-            </Badge>
+    <Collapsible
+      open={open}
+      onOpenChange={setOpen}
+      className={`min-w-0 rounded-md border border-dashed bg-muted/35 ${compact ? "mt-1.5" : "mt-2"}`}
+    >
+      <CollapsibleTrigger asChild>
+        <button
+          type="button"
+          className={`flex w-full items-center justify-between gap-2 rounded-md text-left transition-colors hover:bg-muted/60 ${compact ? "p-2" : "p-2.5"}`}
+          onClick={event => event.stopPropagation()}
+          onKeyDown={event => event.stopPropagation()}
+          aria-label={`${open ? "Sembunyikan" : "Lihat"} ${isRuleCandidate ? "detail Rule AI" : "detail transaksi sumber"}`}
+        >
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            {open
+              ? (isRuleCandidate ? "Sembunyikan detail Rule AI / sumber pencocokan" : "Sembunyikan detail transaksi sumber")
+              : (isRuleCandidate ? "Lihat detail Rule AI / sumber pencocokan" : "Lihat detail transaksi sumber")}
+          </span>
+          {open ? <ChevronUp className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+        </button>
+      </CollapsibleTrigger>
+      <CollapsibleContent
+        className={`space-y-1 border-t border-dashed ${compact ? "p-2" : "p-2.5"}`}
+        onClick={event => event.stopPropagation()}
+      >
+        {d.settlementPartial && (
+          <p className="text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+            Settlement QRIS PARTIAL — hanya sebagian dana/provider batch yang sudah tersettle; perlu review sebelum dianggap lunas.
+          </p>
+        )}
+        {hasVarianceEvidence && (
+          <div className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-2 text-[11px] text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
+            <div className="flex items-center justify-between gap-2">
+              <p className="font-semibold">Variance settlement QRIS</p>
+              <Badge variant="outline" className="border-amber-400 bg-amber-100 text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
+                Perlu Review
+              </Badge>
+            </div>
+            <div className="mt-1 grid grid-cols-1 gap-0.5 sm:grid-cols-2">
+              <span>Expected Settlement: <b>{idr(d.expectedAmount ?? 0)}</b></span>
+              <span>Mutasi Bank: <b>{idr(d.actualBankAmount ?? 0)}</b></span>
+              <span>Selisih: <b>{Number(d.varianceAmount) >= 0 ? "+" : ""}{idr(d.varianceAmount ?? 0)}</b></span>
+              <span>Variance: <b>{Number(d.variancePercent ?? 0).toFixed(2)}%</b></span>
+            </div>
+            <p className="mt-1 text-[10px]">
+              Status: <b>need_review</b> · reason: <b>amount_variance</b>
+              {d.settlementRuleVersion ? <> · rule {d.settlementRuleVersion}</> : null}
+            </p>
+            <p className="mt-1 text-[10px] text-amber-800 dark:text-amber-200">
+              Kandidat ini tidak auto-match dan tidak auto-approve.
+            </p>
           </div>
-          <div className="mt-1 grid grid-cols-1 gap-0.5 sm:grid-cols-2">
-            <span>Expected Settlement: <b>{idr(d.expectedAmount ?? 0)}</b></span>
-            <span>Mutasi Bank: <b>{idr(d.actualBankAmount ?? 0)}</b></span>
-            <span>Selisih: <b>{Number(d.varianceAmount) >= 0 ? "+" : ""}{idr(d.varianceAmount ?? 0)}</b></span>
-            <span>Variance: <b>{Number(d.variancePercent ?? 0).toFixed(2)}%</b></span>
-          </div>
-          <p className="mt-1 text-[10px]">
-            Status: <b>need_review</b> · reason: <b>amount_variance</b>
-            {d.settlementRuleVersion ? <> · rule {d.settlementRuleVersion}</> : null}
-          </p>
-          <p className="mt-1 text-[10px] text-amber-800 dark:text-amber-200">
-            Kandidat ini tidak auto-match dan tidak auto-approve.
-          </p>
-        </div>
-      )}
-      {d.settlementItems && d.settlementItems.length > 0 && (
-        <div className="border-t pt-1.5 mt-1.5 space-y-1.5">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-            Rincian payment settlement
-          </p>
-          <div className="space-y-1">
-            {d.settlementItems.map((item, index) => (
-              <div
-                key={item.id ?? item.sportPaymentId ?? index}
-                className="rounded border bg-background/70 px-2 py-1.5 text-[10px]"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-medium">
-                    {item.paymentNumber ?? `Payment #${item.sportPaymentId ?? "—"}`}
-                  </span>
-                  {item.bookingId != null && (
-                    <span className="text-muted-foreground">Booking #{item.bookingId}</span>
-                  )}
+        )}
+        {d.settlementItems && d.settlementItems.length > 0 && (
+          <div className="border-t pt-1.5 mt-1.5 space-y-1.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Rincian payment settlement
+            </p>
+            <div className="space-y-1">
+              {d.settlementItems.map((item, index) => (
+                <div
+                  key={item.id ?? item.sportPaymentId ?? index}
+                  className="rounded border bg-background/70 px-2 py-1.5 text-[10px]"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium">
+                      {item.paymentNumber ?? `Payment #${item.sportPaymentId ?? "—"}`}
+                    </span>
+                    {item.bookingId != null && (
+                      <span className="text-muted-foreground">Booking #{item.bookingId}</span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-2 gap-y-0.5 mt-1 text-muted-foreground">
+                    <span>Gross: <b className="text-foreground">{item.grossAmount != null ? idr(item.grossAmount) : "—"}</b></span>
+                    <span>MDR: <b className="text-foreground">{item.mdrAmount != null ? idr(item.mdrAmount) : "—"}</b></span>
+                    <span>Pajak/fee: <b className="text-foreground">
+                      {idr(Number(item.taxWithheldAmount ?? 0) + Number(item.otherFeeAmount ?? 0))}
+                    </b></span>
+                    <span>Net: <b className="text-foreground">{item.netAmount != null ? idr(item.netAmount) : "—"}</b></span>
+                  </div>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-2 gap-y-0.5 mt-1 text-muted-foreground">
-                  <span>Gross: <b className="text-foreground">{item.grossAmount != null ? idr(item.grossAmount) : "—"}</b></span>
-                  <span>MDR: <b className="text-foreground">{item.mdrAmount != null ? idr(item.mdrAmount) : "—"}</b></span>
-                  <span>Pajak/fee: <b className="text-foreground">
-                    {idr(Number(item.taxWithheldAmount ?? 0) + Number(item.otherFeeAmount ?? 0))}
-                  </b></span>
-                  <span>Net: <b className="text-foreground">{item.netAmount != null ? idr(item.netAmount) : "—"}</b></span>
-                </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
+        )}
+        <div className={`min-w-0 grid ${compact ? "grid-cols-1" : "grid-cols-1 sm:grid-cols-[minmax(0,auto)_minmax(0,1fr)]"} gap-x-3 gap-y-1`}>
+          {rows.map(row => (
+            <React.Fragment key={row.label}>
+              <span className="min-w-0 text-[10px] text-muted-foreground">{row.label}</span>
+              <span className={`min-w-0 text-xs font-medium ${compact ? "" : "sm:text-right"} break-all`}>
+                {String(row.value)}
+              </span>
+            </React.Fragment>
+          ))}
         </div>
-      )}
-      <div className={`min-w-0 grid ${compact ? "grid-cols-1" : "grid-cols-1 sm:grid-cols-[minmax(0,auto)_minmax(0,1fr)]"} gap-x-3 gap-y-1`}>
-        {rows.map(row => (
-          <React.Fragment key={row.label}>
-            <span className="min-w-0 text-[10px] text-muted-foreground">{row.label}</span>
-            <span className={`min-w-0 text-xs font-medium ${compact ? "" : "sm:text-right"} break-all`}>
-              {String(row.value)}
-            </span>
-          </React.Fragment>
-        ))}
-      </div>
-    </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -2650,7 +2737,7 @@ function ProofUploadButton({ mutationId, proofUrl }: { mutationId: number; proof
   );
 }
 
-// ── COA Selection + Rule AI Dialog ───────────────────────────────────────────
+// ── COA Selection Dialog ─────────────────────────────────────────────────────
 // The selected account is persisted as a company-scoped Rule AI mapping and
 // is also sent to the current approval request for the draft journal.
 function CoaReferenceDialog({
@@ -2659,6 +2746,7 @@ function CoaReferenceDialog({
   activeCompanyId,
   canonicalCandidate,
   onApproveCanonical,
+  onRecoverCanonical,
   onClose,
   onSaved,
 }: {
@@ -2667,15 +2755,24 @@ function CoaReferenceDialog({
   activeCompanyId: number | null;
   canonicalCandidate?: Candidate | null;
   onApproveCanonical?: (mutation: BankMutation, candidate: Candidate) => Promise<unknown>;
+  onRecoverCanonical?: (mutation: BankMutation, candidate: Candidate) => Promise<unknown>;
   onClose: () => void;
   onSaved: (ruleId: number | null) => void | Promise<void>;
 }) {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const [, setLocation] = useLocation();
   const [search, setSearch] = useState("");
   const [selectedCode, setSelectedCode] = useState("");
   const [saving, setSaving] = useState(false);
+  const [showRuleMetadata, setShowRuleMetadata] = useState(true);
+  const [ruleMetadata, setRuleMetadata] = useState<RuleAiMetadataForm>({
+    name: "",
+    description: "",
+    referenceAmount: "",
+    amountTolerance: "",
+    confidence: "1",
+    priority: "120",
+  });
   const [creatingCoa, setCreatingCoa] = useState(false);
   const [creating, setCreating] = useState(false);
   const approvalKeyRef = useRef<{ mutationId: number; coaCode: string; key: string } | null>(null);
@@ -2730,6 +2827,8 @@ function CoaReferenceDialog({
     setSearch("");
     setSelectedCode("");
     setSaving(false);
+    setShowRuleMetadata(true);
+    setRuleMetadata(defaultRuleAiMetadata(mutation));
     setCreatingCoa(false);
     setCreating(false);
     setNewCoaRole("child");
@@ -2893,41 +2992,7 @@ function CoaReferenceDialog({
       throw new Error("Perusahaan aktif atau mutasi belum tersedia");
     }
 
-    const description = String(mutation.description ?? "").trim();
-    if (!description) {
-      throw new Error("Deskripsi mutasi wajib tersedia untuk membuat Rule AI");
-    }
-
-    // Prefer a provider/order reference when available because it is more
-    // specific than a generic bank description. Direction is always included
-    // so an incoming and outgoing transaction cannot share the same mapping.
-    const primaryCondition = ruleAiReference
-      ? { field: "reference", operator: "equals", value: ruleAiReference }
-      : { field: "description", operator: "contains", value: description };
-    const conditions = [
-      primaryCondition,
-      { field: "direction", operator: "equals", value: mutation.direction },
-    ];
-    const ruleName = `Pemetaan COA — ${description}`.slice(0, 120);
-
-    return {
-      name: ruleName,
-      description: `Dibuat dari pemilihan COA pada mutasi bank #${mutation.id}`,
-      condition_field: primaryCondition.field,
-      condition_operator: primaryCondition.operator,
-      condition_value: primaryCondition.value,
-      conditions,
-      logic: "AND" as const,
-      specificity: conditions.length,
-      action_flow: mutation.direction === "IN"
-        ? "INCOME_ALLOCATION"
-        : "ROUTINE_EXPENSE_ALLOCATION",
-      action_coa_code: selected.code,
-      confidence: 1,
-      priority: 120,
-      source: "manual",
-      company_id: companyId,
-    };
+    return buildManualRuleAiPayload(mutation, selected, ruleMetadata, companyId);
   };
 
   const save = async () => {
@@ -2953,8 +3018,8 @@ function CoaReferenceDialog({
     try {
       const ruleAi = buildRuleAiPayload(selectedAccount);
       const previousApprovalKey = approvalKeyRef.current;
-      const approvalKey = previousApprovalKey?.mutationId === mutation.id &&
-        previousApprovalKey.coaCode === selectedAccount.code
+      const approvalKey = previousApprovalKey?.mutationId === mutation.id
+        && previousApprovalKey.coaCode === selectedAccount.code
         ? previousApprovalKey.key
         : crypto.randomUUID();
       approvalKeyRef.current = {
@@ -2962,8 +3027,14 @@ function CoaReferenceDialog({
         coaCode: selectedAccount.code,
         key: approvalKey,
       };
-      let ruleAiBody: { data?: { id?: number }; rule_ai_id?: number } = {};
+
+      let savedRuleId: number | null = null;
+
       if (isQris) {
+        if (!canonicalCandidate || (!onApproveCanonical && !onRecoverCanonical)) {
+          throw new Error("Settlement QRIS belum memenuhi syarat approval canonical.");
+        }
+
         const ruleResponse = await fetch("/api/recon-classification/ai-rules", {
           method: "POST",
           credentials: "include",
@@ -2972,21 +3043,31 @@ function CoaReferenceDialog({
         });
         const ruleBody = await ruleResponse.json().catch(() => ({}));
         if (!ruleResponse.ok) {
-          throw new Error(ruleBody.error ?? "Rule AI gagal disimpan.");
+          throw new Error(ruleBody.error ?? "Rule AI QRIS belum berhasil disimpan.");
         }
-        ruleAiBody = ruleBody;
-        if (!canonicalCandidate || !onApproveCanonical) {
-          throw new Error("Settlement QRIS belum memenuhi syarat approval canonical.");
+        const createdRuleId = Number(ruleBody?.data?.id);
+        savedRuleId = Number.isSafeInteger(createdRuleId) && createdRuleId > 0
+          ? createdRuleId
+          : null;
+
+        if (isCanonicalHistoricalRepairEligible(mutation, canonicalCandidate) && onRecoverCanonical) {
+          await onRecoverCanonical(mutation, canonicalCandidate);
+        } else if (onApproveCanonical) {
+          await onApproveCanonical(mutation, canonicalCandidate);
+        } else {
+          throw new Error("Settlement QRIS belum memiliki jalur recovery yang tersedia.");
         }
-        await onApproveCanonical(mutation, canonicalCandidate);
       } else {
         const approveResponse = await fetch(`/api/bank-reconciliation/${mutation.id}/approve`, {
           method: "POST",
           credentials: "include",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "x-idempotency-key": approvalKey,
+          },
           body: JSON.stringify({
             manual_coa_code: selectedAccount.code,
-            note: `COA dipilih manual untuk mutasi ini: ${selectedAccount.code}`,
+            note: `COA dipilih manual hanya untuk mutasi ini: ${selectedAccount.code}`,
             rule_ai: ruleAi,
           }),
         });
@@ -2996,8 +3077,12 @@ function CoaReferenceDialog({
             approveBody.error ?? "COA dipilih, tetapi draft jurnal untuk mutasi ini belum berhasil dibuat.",
           );
         }
-        ruleAiBody = approveBody;
+        const createdRuleId = Number(approveBody?.rule_ai_id);
+        savedRuleId = Number.isSafeInteger(createdRuleId) && createdRuleId > 0
+          ? createdRuleId
+          : null;
       }
+
       toast({
         title: isQris
           ? "Rule AI aktif dan settlement QRIS disetujui"
@@ -3008,6 +3093,13 @@ function CoaReferenceDialog({
       qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] });
       const savedRuleId = Number(ruleAiBody?.data?.id ?? ruleAiBody?.rule_ai_id);
       await onSaved(Number.isSafeInteger(savedRuleId) && savedRuleId > 0 ? savedRuleId : null);
+          ? "COA dipilih dan settlement QRIS disetujui"
+          : "COA dipilih dan draft jurnal dibuat",
+        description: `${selectedAccount.code} — ${selectedAccount.name}.`,
+      });
+      approvalKeyRef.current = null;
+      qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] });
+      await onSaved(savedRuleId);
       onClose();
     } catch (error) {
       toast({
@@ -3024,29 +3116,18 @@ function CoaReferenceDialog({
 
   return (
     <Dialog open={open} onOpenChange={value => !value && onClose()}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <BookOpen className="h-4 w-4 text-indigo-600" />
-            Pilih COA untuk Transaksi Ini
+            Pilih COA
           </DialogTitle>
           <DialogDescription>
-            Pilih akun tujuan untuk {mutation.direction === "IN" ? "uang masuk" : "uang keluar"} ini.
-            {isQris
-              ? " Pilihan disimpan sebagai Rule AI perusahaan lalu settlement QRIS langsung disetujui dengan validasi canonical."
-              : " Pilihan disimpan sebagai Rule AI perusahaan dan dipakai untuk membuat draft jurnal transaksi ini."}
+            Pilih akun COA tujuan untuk menyelesaikan transaksi ini.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3">
-          <div className="rounded-md border bg-muted/30 p-3 text-sm">
-            <p className="font-medium">{mutation.description}</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {fmtDate(mutation.transaction_date)} · {idr(mutation.amount)} ·{" "}
-              {mutation.direction === "IN" ? "Uang Masuk" : "Uang Keluar"}
-            </p>
-          </div>
-
           <div className="space-y-1.5">
             <label className="text-xs font-medium">
               Pilih akun COA debit atau kredit
@@ -3281,6 +3362,150 @@ function CoaReferenceDialog({
             )}
           </div>
 
+          <div className="rounded-md border border-indigo-200 bg-indigo-50/40 p-3 dark:border-indigo-900 dark:bg-indigo-950/20">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-indigo-950 dark:text-indigo-100">
+                  Metadata Rule AI
+                </p>
+                <p className="text-[11px] text-indigo-800/80 dark:text-indigo-200/80">
+                  Isi atau ubah informasi yang akan disimpan bersama mapping COA ini.
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="shrink-0 text-xs text-indigo-700 hover:bg-indigo-100 hover:text-indigo-900 dark:text-indigo-200 dark:hover:bg-indigo-900"
+                onClick={() => setShowRuleMetadata(value => !value)}
+                aria-expanded={showRuleMetadata}
+              >
+                {showRuleMetadata ? "Sembunyikan" : "Tampilkan"}
+              </Button>
+            </div>
+
+            {showRuleMetadata && (
+              <div className="mt-3 space-y-3 border-t border-indigo-200/70 pt-3 dark:border-indigo-900/70">
+                <div className="space-y-1.5">
+                  <Label htmlFor="coa-rule-name" className="text-xs font-medium">
+                    Nama Rule AI <span className="text-red-500">*</span>
+                  </Label>
+                  <Input
+                    id="coa-rule-name"
+                    value={ruleMetadata.name}
+                    maxLength={120}
+                    onChange={event => setRuleMetadata(metadata => ({
+                      ...metadata,
+                      name: event.target.value,
+                    }))}
+                    placeholder="Contoh: Pembayaran vendor listrik"
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    Nama ini tampil di daftar Rule AI dan dapat diedit lagi dari menu Konfigurasi Rekonsiliasi.
+                  </p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="coa-rule-description" className="text-xs font-medium">
+                    Deskripsi / catatan
+                  </Label>
+                  <Textarea
+                    id="coa-rule-description"
+                    value={ruleMetadata.description}
+                    maxLength={500}
+                    rows={2}
+                    onChange={event => setRuleMetadata(metadata => ({
+                      ...metadata,
+                      description: event.target.value,
+                    }))}
+                    placeholder="Jelaskan kapan rule ini boleh digunakan..."
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="coa-rule-reference-amount" className="text-xs font-medium">
+                      Nominal referensi (Rp)
+                    </Label>
+                    <Input
+                      id="coa-rule-reference-amount"
+                      type="number"
+                      min={0}
+                      step={1}
+                      inputMode="numeric"
+                      value={ruleMetadata.referenceAmount}
+                      onChange={event => setRuleMetadata(metadata => ({
+                        ...metadata,
+                        referenceAmount: event.target.value,
+                      }))}
+                      placeholder="Kosong = semua nominal"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="coa-rule-amount-tolerance" className="text-xs font-medium">
+                      Toleransi nominal (Rp)
+                    </Label>
+                    <Input
+                      id="coa-rule-amount-tolerance"
+                      type="number"
+                      min={0}
+                      step={1}
+                      inputMode="numeric"
+                      value={ruleMetadata.amountTolerance}
+                      onChange={event => setRuleMetadata(metadata => ({
+                        ...metadata,
+                        amountTolerance: event.target.value,
+                      }))}
+                      placeholder="Kosong = exact"
+                    />
+                  </div>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Toleransi hanya boleh diisi jika nominal referensi diisi. Kondisi ini tetap berjalan bersama kondisi deskripsi/referensi dan arah transaksi.
+                </p>
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="coa-rule-confidence" className="text-xs font-medium">
+                      Confidence (0–1)
+                    </Label>
+                    <Input
+                      id="coa-rule-confidence"
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      inputMode="decimal"
+                      value={ruleMetadata.confidence}
+                      onChange={event => setRuleMetadata(metadata => ({
+                        ...metadata,
+                        confidence: event.target.value,
+                      }))}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="coa-rule-priority" className="text-xs font-medium">
+                      Prioritas (1–999)
+                    </Label>
+                    <Input
+                      id="coa-rule-priority"
+                      type="number"
+                      min={1}
+                      max={999}
+                      step={1}
+                      inputMode="numeric"
+                      value={ruleMetadata.priority}
+                      onChange={event => setRuleMetadata(metadata => ({
+                        ...metadata,
+                        priority: event.target.value,
+                      }))}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="rounded-md border border-indigo-200 bg-indigo-50/70 px-3 py-2.5 text-xs text-indigo-800 dark:border-indigo-900 dark:bg-indigo-950/30 dark:text-indigo-200">
             Rule AI akan memakai {ruleAiReference ? "referensi provider/order ID" : "deskripsi mutasi"} dan arah transaksi sebagai kondisi.
             Rule tetap terbatas pada perusahaan aktif.
@@ -3311,10 +3536,10 @@ function CoaReferenceDialog({
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             )}
             {saving
-              ? "Menyimpan Rule AI..."
+              ? "Menyimpan..."
               : isQris
-                ? "Simpan Rule AI & Approve Settlement"
-                : "Simpan Rule AI & Buat Draft"}
+                ? "Pilih COA & Approve Settlement"
+                : "Pilih COA & Buat Draft"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -3402,7 +3627,8 @@ function QrisMutationCard({
       && liveSettlementStatus === "unsettled"
       && (currentPaymentIds
         ? currentPaymentIds.has(Number(paymentId))
-        : !settledPaymentIds.has(Number(paymentId)));
+        : !settledPaymentIds.has(Number(paymentId))
+          && !activeSettlementPaymentIds.has(Number(paymentId)));
   });
   const items = availableItems;
   const availablePaymentIds = availableItems
@@ -3434,8 +3660,16 @@ function QrisMutationCard({
     candidate.candidate_type === "qris_settlement"
     && candidate.candidate_source === CANONICAL_SETTLEMENT_SOURCE,
   );
-  const canonicalOverrideReady = isCanonicalSettlementManualOverrideEligible(m);
+  const canonicalOverrideReady =
+    isCanonicalSettlementManualOverrideEligible(m)
+    && canonicalSettlementCandidate != null
+    && canonicalSettlementCandidate.amount_match !== false
+    && canonicalSettlementCandidate.date_match !== false;
   const canonicalApprovalReady = isCanonicalSettlementApprovalEligible(m);
+  const canonicalHistoricalRepairReady = isCanonicalHistoricalRepairEligible(
+    m,
+    canonicalSettlementCandidate,
+  );
   const canonicalSettlementDetails = canonicalSettlementCandidate?.details;
   const hasCanonicalSettlementCandidate = canonicalSettlementCandidate != null;
   const isApproved = isCanonicalReconciled
@@ -3462,8 +3696,20 @@ function QrisMutationCard({
   const canonicalExpectedNet = numericValue(canonicalSettlementDetails?.expectedAmount)
     ?? numericValue(canonicalSettlementDetails?.netAmount);
   const auditExpectedNet = numericValue(audit.net_amount);
+  const auditObservedDeduction = hasLiveSettlementProposal
+    ? numericValue(audit.observed_deduction)
+    : null;
+  // Some older review snapshots persisted gross and observed MDR but did not
+  // persist net_amount. Reconstruct the original expected net for display
+  // only; approval still uses the server-side settlement validation.
+  const estimatedOriginalExpectedNet =
+    snapshotGross > 0 && auditObservedDeduction != null
+      ? Math.max(0, snapshotGross - auditObservedDeduction)
+      : null;
   const originalExpectedNet = canonicalExpectedNet
-    ?? (hasLiveSettlementProposal ? auditExpectedNet : null);
+    ?? (hasLiveSettlementProposal
+      ? auditExpectedNet ?? estimatedOriginalExpectedNet
+      : null);
   const hasIdentifiedSettlement = originalExpectedNet != null;
   const expectedNet = hasLiveScope && !isReadOnlyEvidence
     ? (numericValue(audit.current_expected_amount)
@@ -3471,12 +3717,15 @@ function QrisMutationCard({
         ? candidateGross * originalExpectedNet / snapshotGross
         : null))
     : originalExpectedNet;
-  const mdr = canonicalSettlementDetails?.mdrAmount != null
+  const canonicalMdr = canonicalSettlementDetails?.mdrAmount != null
     ? numericValue(canonicalSettlementDetails.mdrAmount)
+    : null;
+  const mdr = canonicalSettlementDetails?.mdrAmount != null
+    ? canonicalMdr
     : hasLiveScope && !isReadOnlyEvidence && expectedNet != null
       ? Math.max(0, candidateGross - expectedNet)
       : hasLiveSettlementProposal
-        ? numericValue(audit.observed_deduction)
+        ? auditObservedDeduction
         : null;
   const difference = originalExpectedNet == null ? null : bankAmount - originalExpectedNet;
   const differenceAbs = difference == null ? null : Math.abs(difference);
@@ -3490,6 +3739,7 @@ function QrisMutationCard({
   const canSelect = audit.id != null
     && (isMatched || isReview)
     && !isApproved
+    && !canonicalHistoricalRepairReady
     && !hasApprovedReconciliationMatch(m)
     && unconfirmedPaymentIds.size === 0
     && availablePaymentIds.length > 0
@@ -3529,8 +3779,10 @@ function QrisMutationCard({
       ? "Auto-post gagal — Perlu Revisi"
     : audit.auto_post_status === "succeeded"
       ? "Auto-post selesai"
+     : canonicalHistoricalRepairReady
+       ? "Settlement Tertunda — Siap Ditautkan"
     : hasCanonicalSettlementCandidate
-      ? "Settlement Canonical — Perlu Review"
+       ? "Settlement Canonical — Perlu Review"
     : isApproved
       ? "Sudah Disetujui"
       : isDepleted
@@ -3539,7 +3791,7 @@ function QrisMutationCard({
           ? "Bukti Stale — Revisi"
           : isEmptyMatchedCandidate || isStaleMatchedCandidate
             ? "Perlu Diperbarui"
-            : isMatched
+           : isMatched
               ? "Cocok"
               : "Perlu Diperiksa";
   const positiveStatus = isCanonicalReconciled
@@ -3688,7 +3940,7 @@ function QrisMutationCard({
                     <div className="grid gap-x-4 gap-y-1 sm:grid-cols-2">
                       <span>Mutasi bank: <strong>{idr(bankAmount)}</strong></span>
                       <span>Gross payment: <strong>{idr(snapshotGross)}</strong></span>
-                       <span>Potongan MDR/biaya: <strong>{mdr == null ? "Belum dapat dihitung" : idr(mdr)}</strong></span>
+                        <span>Potongan MDR/biaya: <strong>{(canonicalMdr ?? auditObservedDeduction) == null ? "Belum dapat dihitung" : idr(canonicalMdr ?? auditObservedDeduction!)}</strong></span>
                        <span>Netto yang diharapkan: <strong>{originalExpectedNet == null ? "Belum dapat dihitung" : idr(originalExpectedNet)}</strong></span>
                        <span className="sm:col-span-2">Selisih bank − netto: <strong>{difference == null ? "Belum dapat dihitung" : idrWhole(difference)}</strong></span>
                     </div>
@@ -3837,7 +4089,7 @@ function QrisMutationCard({
                                       type="button"
                                       className="inline-flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[9px] font-medium text-amber-700 hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:text-amber-300 dark:hover:bg-amber-950"
                                       disabled={!canRequestUnsettle || unsettledPaymentId === numericPaymentId}
-                                      title="Reset status payment menjadi unsettled"
+                                       title="Reset hanya melalui workflow settlement yang terkontrol"
                                       onClick={(event) => {
                                         event.stopPropagation();
                                         if (canRequestUnsettle) {
@@ -3852,7 +4104,7 @@ function QrisMutationCard({
                                       {unsettledPaymentId === numericPaymentId
                                         ? <Loader2 className="h-2.5 w-2.5 animate-spin" />
                                         : <RefreshCw className="h-2.5 w-2.5" />}
-                                      Unsettle
+                                       Reset terkontrol
                                     </button>
                                   )
                                 )}
@@ -3897,7 +4149,7 @@ function QrisMutationCard({
                     })}
                   </div>
                 </div>
-                <p className="border-t bg-muted/15 px-2.5 py-1.5 text-[10px] text-muted-foreground">
+                 <p className="border-t bg-muted/15 px-2.5 py-1.5 text-[10px] text-muted-foreground">
                    {isReadOnlyEvidence
                      ? "Audit = bukti snapshot, bukan persetujuan. Revisi sumber payment lalu buat kandidat baru."
                      : "Legenda: MDR (Estimasi) = Total potongan QRIS · Approval hanya memproses payment yang dipilih."}
@@ -3974,8 +4226,9 @@ function QrisMutationCard({
               </Alert>
             )}
 
-            <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t pt-3" onClick={e => e.stopPropagation()}>
-              <Button
+             <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t pt-3" onClick={e => e.stopPropagation()}>
+               {!canonicalHistoricalRepairReady && (
+                 <Button
                 size="sm"
                 variant="outline"
                 className="h-8 gap-1.5 border-indigo-300 text-xs text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:text-indigo-300"
@@ -3983,7 +4236,8 @@ function QrisMutationCard({
               >
                 <BookOpen className="h-3.5 w-3.5" />
                 Pilih COA &amp; Simpan Rule AI
-              </Button>
+                 </Button>
+               )}
               {!isApproved && !isDepleted && !isMatched && (
                 <Button
                   size="sm"
@@ -4037,6 +4291,26 @@ function QrisMutationCard({
                   {approveQrisPending ? "Memproses approval QRIS..." : `Approve QRIS Terpilih (${selectedPaymentIds.length})`}
                 </Button>
               )}
+              {!isApproved
+                && canonicalHistoricalRepairReady
+                && canonicalSettlementCandidate
+                && onRecoverQrisSettlement && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="ml-auto h-8 gap-1.5 border-indigo-300 text-xs text-indigo-700 hover:bg-indigo-50 dark:border-indigo-700 dark:text-indigo-300"
+                  disabled={recoverQrisPending}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onRecoverQrisSettlement(m.id, canonicalSettlementCandidate.candidate_id);
+                  }}
+                >
+                  {recoverQrisPending
+                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    : <Link2 className="h-3.5 w-3.5" />}
+                     {recoverQrisPending ? "Menyelesaikan link..." : "Selesaikan link historical"}
+                </Button>
+              )}
               {!isApproved && hasApprovedReconciliationMatch(m) && (
                 <div className="ml-auto rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
                   Mutasi sudah memiliki approved match lain. Approval QRIS dikunci; periksa atau batalkan approval sebelumnya.
@@ -4047,7 +4321,7 @@ function QrisMutationCard({
                 && !canonicalApprovalReady
                 && canonicalSettlementCandidate
                 && onManualOverrideCandidate && (
-                <Button
+               <Button
                   size="sm"
                   variant="outline"
                   className="ml-auto h-8 gap-1.5 border-orange-400 text-xs text-orange-800 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-200"
@@ -4204,6 +4478,10 @@ function MutationCard({
   const qrisAudits = qrisAuditsForMutation(m);
   const canonicalApprovalCandidate = canonicalSettlementCandidateForMutation(m);
   const canonicalApprovalReady = isCanonicalSettlementApprovalEligible(m);
+  const canonicalHistoricalRepairReady = isCanonicalHistoricalRepairEligible(
+    m,
+    canonicalApprovalCandidate,
+  );
   const canonicalOverrideReady = isCanonicalSettlementManualOverrideEligible(m);
   const best   = cands[0];
   const evidence = reconciliationEvidence(m);
@@ -4355,14 +4633,8 @@ function MutationCard({
               </div>
             )}
 
-             {isQris && qrisAudits.length === 0 && !canonicalApprovalReady && (
+             {isQris && qrisAudits.length === 0 && !canonicalApprovalReady && evidence.transactions.length > 0 && (
               <div>
-                <QrisCandidateDiagnosticBlock
-                  mutation={m}
-                  diagnostic={m.qris_candidate_diagnostic}
-                  compact
-                />
-                {evidence.transactions.length > 0 && (
                   <div className="mt-2 rounded-md border border-amber-800/60 bg-card px-3 py-2 text-xs">
                     <div className="flex items-center justify-between gap-2">
                       <p className="font-semibold text-amber-300">
@@ -4398,24 +4670,6 @@ function MutationCard({
                       ))}
                     </div>
                   </div>
-                )}
-                {onGenerateQrisCandidates && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="mt-2 h-7 gap-1 border-indigo-300 bg-indigo-950 text-[11px] text-indigo-50 hover:bg-indigo-900 dark:border-indigo-700"
-                    disabled={qrisGenerationPending}
-                    onClick={event => {
-                      event.stopPropagation();
-                      onGenerateQrisCandidates();
-                    }}
-                  >
-                    {qrisGenerationPending
-                      ? <Loader2 className="h-3 w-3 animate-spin" />
-                      : <CreditCard className="h-3 w-3" />}
-                    {qrisGenerationPending ? "Membuat kandidat..." : "Cari Kandidat QRIS"}
-                  </Button>
-                )}
               </div>
             )}
 
@@ -4582,15 +4836,17 @@ function MutationCard({
           onClick={e => e.stopPropagation()}
         >
           <div className="flex gap-1.5 flex-wrap">
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 gap-1 border-indigo-300 text-xs text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:text-indigo-300"
-              onClick={() => onMapCoa(m)}
-            >
-              <BookOpen className="h-3.5 w-3.5" />
-              Pilih COA &amp; Simpan Rule AI
-            </Button>
+            {!isManualReviewActionable(m) && !canonicalHistoricalRepairReady && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1 border-indigo-300 text-xs text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:text-indigo-300"
+                onClick={() => onMapCoa(m)}
+              >
+                <BookOpen className="h-3.5 w-3.5" />
+                Pilih COA &amp; Simpan Rule AI
+              </Button>
+            )}
             {onMultiAllocate && canMultiAllocate(m) && (
               <Button
                 size="sm"
@@ -4679,20 +4935,39 @@ function MutationCard({
                 Setujui
               </Button>
             )}
-            {canonicalApprovalReady && canonicalApprovalCandidate && onApproveCandidate && (
-              <Button
-                size="sm"
-                className="h-7 text-xs gap-1 bg-green-600 hover:bg-green-700 disabled:opacity-50"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onApproveCandidate(m, canonicalApprovalCandidate);
-                }}
-              >
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                Tautkan &amp; Approve Settlement
-              </Button>
-            )}
-            {canonicalOverrideReady
+             {(canonicalApprovalReady || canonicalHistoricalRepairReady) && canonicalApprovalCandidate && (
+               canonicalHistoricalRepairReady && onRecoverQrisSettlement ? (
+                 <Button
+                   size="sm"
+                   variant="outline"
+                   className="h-7 gap-1 border-indigo-300 text-xs text-indigo-700 hover:bg-indigo-50 dark:border-indigo-700 dark:text-indigo-300"
+                   disabled={recoverQrisPending}
+                   onClick={(event) => {
+                     event.stopPropagation();
+                     onRecoverQrisSettlement(m.id, canonicalApprovalCandidate.candidate_id);
+                   }}
+                 >
+                   {recoverQrisPending
+                     ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                     : <CheckCircle2 className="h-3.5 w-3.5" />}
+               {recoverQrisPending ? "Menyelesaikan link..." : "Selesaikan link historical"}
+                 </Button>
+               ) : onApproveCandidate ? (
+                 <Button
+                   size="sm"
+                   className="h-7 text-xs gap-1 bg-green-600 hover:bg-green-700 disabled:opacity-50"
+                   onClick={(event) => {
+                     event.stopPropagation();
+                     onApproveCandidate(m, canonicalApprovalCandidate);
+                   }}
+                 >
+                   <CheckCircle2 className="w-3.5 h-3.5" />
+                   Tautkan &amp; Approve Settlement
+                 </Button>
+               ) : null
+             )}
+             {canonicalOverrideReady
+               && !canonicalHistoricalRepairReady
               && !canonicalApprovalReady
               && canonicalApprovalCandidate
               && onManualOverrideCandidate && (
@@ -5097,6 +5372,8 @@ function MutationDetailPanel({
   matchingPending,
   mappingError,
   onApproveQrisBatch,
+  onRecoverQrisSettlement,
+  recoverQrisPending,
   approveQrisPending,
   selectedQrisPaymentIds,
   onToggleQrisPayment,
@@ -5119,6 +5396,8 @@ function MutationDetailPanel({
   matchingPending: boolean;
   mappingError?: MappingRequiredError;
   onApproveQrisBatch?: (candidateId: number, mutationId: number, candidate: QrisCandidateAudit, paymentIds?: number[]) => void;
+  onRecoverQrisSettlement?: (mutationId: number, settlementId: number) => void;
+  recoverQrisPending?: boolean;
   approveQrisPending?: boolean;
   selectedQrisPaymentIds: number[];
   onToggleQrisPayment?: (candidateId: number, paymentId: number, checked: boolean) => void;
@@ -5132,11 +5411,17 @@ function MutationDetailPanel({
   const qrisNetAmount = numericValue(qrisAudit?.net_amount) ?? 0;
   const qrisStoredDeduction = numericValue(qrisAudit?.observed_deduction) ?? 0;
   const qrisImpliedDeduction = Math.max(0, qrisGrossAmount - qrisNetAmount);
+  const qrisAuditNetMatchesMutation =
+    qrisAudit != null && Math.abs(qrisNetAmount - (numericValue(m.amount) ?? 0)) < 0.5;
   const qrisDeductionMetadataMismatch =
     qrisAudit != null && Math.abs(qrisStoredDeduction - qrisImpliedDeduction) >= 0.5;
   const qrisDiagnostic = m.qris_candidate_diagnostic ?? null;
   const canonicalApprovalCandidate = canonicalSettlementCandidateForMutation(m);
   const canonicalApprovalReady = isCanonicalSettlementApprovalEligible(m);
+  const canonicalHistoricalRepairReady = isCanonicalHistoricalRepairEligible(
+    m,
+    canonicalApprovalCandidate,
+  );
   const canonicalOverrideReady = isCanonicalSettlementManualOverrideEligible(m);
   const canGenerateQrisForMutation = isQrisMutation(m)
     && qrisAudit == null
@@ -5200,7 +5485,7 @@ function MutationDetailPanel({
                           </p>
                           {m.review_code && <p className="font-mono text-[11px] opacity-80">Kode: {m.review_code}</p>}
                           <p className="text-xs">
-                            Periksa COA dan gunakan “Pilih COA & Simpan Rule AI” setelah transaksi dipastikan benar.
+                            Periksa COA dan gunakan “{isManualReviewActionable(m) ? "Pilih COA & Buat Draft" : "Pilih COA & Simpan Rule AI"}” setelah transaksi dipastikan benar.
                           </p>
                         </AlertDescription>
                       </Alert>
@@ -5475,8 +5760,8 @@ function MutationDetailPanel({
                   {/* Approve button — MATCHED = normal, REVIEW = force-approve with warning */}
                   {String(qrisAudit.status ?? "").toLowerCase() !== "approved" && qrisAudit.id != null && onApproveQrisBatch && (() => {
                     const recoStatus = String(qrisAudit.reconciliation_status ?? "").toUpperCase();
-                    const isMatched = recoStatus === "MATCHED";
-                    const isReview  = recoStatus === "REVIEW";
+                    const isMatched = recoStatus === "MATCHED" && qrisAuditNetMatchesMutation;
+                    const isReview  = recoStatus === "REVIEW" && qrisAuditNetMatchesMutation;
                     if (isMatched) {
                       return (
                         <Button
@@ -5669,7 +5954,24 @@ function MutationDetailPanel({
               {matchingPending ? "Mencari kandidat..." : "Cari Kandidat QRIS"}
             </Button>
           )}
-          {canonicalApprovalReady && canonicalApprovalCandidate && onApproveCandidate && (
+          {canonicalHistoricalRepairReady
+            && canonicalApprovalCandidate
+            && onRecoverQrisSettlement ? (
+            <Button
+              className="flex-1 gap-1.5 border-indigo-300 text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:text-indigo-300 min-w-[190px]"
+              variant="outline"
+              disabled={recoverQrisPending}
+              onClick={() => {
+                onClose();
+                onRecoverQrisSettlement(m.id, canonicalApprovalCandidate.candidate_id);
+              }}
+            >
+              {recoverQrisPending
+                ? <Loader2 className="h-4 w-4 animate-spin" />
+                : <Link2 className="h-4 w-4" />}
+                     {recoverQrisPending ? "Menyelesaikan link..." : "Selesaikan link historical"}
+            </Button>
+          ) : canonicalApprovalReady && canonicalApprovalCandidate && onApproveCandidate && (
             <Button
               className="flex-1 gap-1.5 bg-green-600 hover:bg-green-700 min-w-[190px]"
               onClick={() => {
@@ -7059,6 +7361,18 @@ export default function BankReconciliationPage() {
           description: e.message || "Approval QRIS tidak dapat diselesaikan. Periksa konfigurasi lalu coba lagi.",
           variant: "destructive",
         });
+      } else if (!variables?.silent && (e as QrisSelectionConflictError).code === "CANONICAL_SETTLEMENT_SELECTION_CONFLICT") {
+        const conflict = e as QrisSelectionConflictError;
+        const eligibleCount = Array.isArray(conflict.eligiblePaymentIds)
+          ? conflict.eligiblePaymentIds.length
+          : 0;
+        toast({
+          title: "Status payment berubah",
+          description: eligibleCount > 0
+            ? "Sebagian payment sudah diproses. Daftar sudah dimuat ulang; pilih hanya payment yang masih eligible."
+            : "Semua payment pada kandidat sudah diproses. Daftar sudah dimuat ulang dan approval dikunci.",
+          variant: "destructive",
+        });
       }
       // Keep the screen aligned with the server even when approval is rejected
       // by a governance/configuration guard (for example, a missing bank COA).
@@ -8405,12 +8719,20 @@ export default function BankReconciliationPage() {
           }
           return result;
         }}
+        onRecoverCanonical={async (mutation, candidate) => {
+          const settlementId = Number(candidate.candidate_id);
+          if (!Number.isSafeInteger(settlementId) || settlementId <= 0) {
+            throw new Error("ID settlement canonical tidak valid untuk recovery.");
+          }
+          return recoverQrisSettlementMut.mutateAsync({
+            mutationId: mutation.id,
+            settlementId,
+            reason: "Rule AI dipilih; menautkan batch canonical posted ke mutasi bank.",
+          });
+        }}
         onClose={() => setCoaReferenceTarget(null)}
-        onSaved={async (ruleId) => {
+        onSaved={async () => {
           await invalidate();
-          const params = new URLSearchParams({ tab: "ai-rules" });
-          if (ruleId != null) params.set("ruleId", String(ruleId));
-          setLocation(`/finance/recon-config?${params.toString()}`);
         }}
       />
 
@@ -8440,6 +8762,8 @@ export default function BankReconciliationPage() {
         matchingPending={matchMut.isPending || matchingBackgroundPending}
         mappingError={detailMutation ? mappingRequiredErrors.get(detailMutation.id) : undefined}
         onApproveQrisBatch={handleApproveQrisBatch}
+         onRecoverQrisSettlement={handleRecoverQrisSettlement}
+         recoverQrisPending={recoverQrisSettlementMut.isPending}
         onManualOverrideCandidate={handleManualOverrideCandidate}
         approveQrisPending={approveQrisBatchMut.isPending}
         selectedQrisPaymentIds={

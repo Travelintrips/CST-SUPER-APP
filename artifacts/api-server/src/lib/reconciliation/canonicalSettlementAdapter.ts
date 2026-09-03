@@ -69,6 +69,11 @@ export type CanonicalSettlementCandidate = {
 
 export type CanonicalSettlementQueueItem = CanonicalSettlementCandidate & {
   queue_status: "active" | "completed";
+  audit_status: "undocumented" | "documented";
+  outcome_status: "linked" | "audit_documented" | "unresolved_undocumented";
+  audit_reason: string | null;
+  audit_actor: string | null;
+  audit_at: string | null;
   payment_items: Array<{
     paymentId: number;
     grossAmount: number;
@@ -398,13 +403,30 @@ export async function listCanonicalSettlementQueue(options: {
       bm.status::text AS bank_status,
       bm.transaction_date AS bank_transaction_date,
       bm.amount AS bank_amount,
-      bm.description AS bank_description
+      bm.description AS bank_description,
+      audit.reason AS audit_reason,
+      audit.actor AS audit_actor,
+      audit.created_at AS audit_at
     FROM sport_center.expected_bank_settlements ebs
     JOIN sport_center.accounting_journals aj
       ON aj.id = ebs.settlement_journal_id
      AND aj.status = 'posted'
     LEFT JOIN public.bank_mutations bm
       ON bm.id = ebs.bank_mutation_id
+    LEFT JOIN LATERAL (
+      SELECT
+        ba.meta->>'reason' AS reason,
+        ba.actor,
+        ba.created_at
+      FROM public.bank_reconciliation_audit ba
+      WHERE ba.action = 'CANONICAL_SETTLEMENT_AUDIT_RECORDED'
+        AND COALESCE(
+          ba.meta->>'settlement_id',
+          ba.meta->>'canonical_settlement_id'
+        ) = ebs.settlement_id::text
+      ORDER BY ba.id DESC
+      LIMIT 1
+    ) audit ON TRUE
     WHERE 1 = 1
       ${companyFilter}
       ${activeFilter}
@@ -423,6 +445,9 @@ export async function listCanonicalSettlementQueue(options: {
     bank_transaction_date?: unknown;
     bank_amount?: unknown;
     bank_description?: unknown;
+    audit_reason?: unknown;
+    audit_actor?: unknown;
+    audit_at?: unknown;
   }>).map((row) => {
     // Queue/history includes reconciled rows, so use the display projection
     // without applying the stricter approval-candidate assertion.
@@ -451,6 +476,8 @@ export async function listCanonicalSettlementQueue(options: {
     const isCompleted =
       String(row.settlement_status ?? "").toLowerCase() === "reconciled"
       || linkedMutationId != null;
+    const hasAuditReason =
+      row.audit_reason != null && String(row.audit_reason).trim() !== "";
 
     return {
       ...canonical,
@@ -458,6 +485,17 @@ export async function listCanonicalSettlementQueue(options: {
       bank_mutation_id: linkedMutationId,
       canonical_bank_mutation_id: null,
       queue_status: isCompleted ? "completed" : "active",
+      audit_status: row.audit_reason == null || String(row.audit_reason).trim() === ""
+        ? "undocumented"
+        : "documented",
+      outcome_status: isCompleted
+        ? "linked"
+        : hasAuditReason
+          ? "audit_documented"
+          : "unresolved_undocumented",
+      audit_reason: row.audit_reason == null ? null : String(row.audit_reason),
+      audit_actor: row.audit_actor == null ? null : String(row.audit_actor),
+      audit_at: row.audit_at == null ? null : String(row.audit_at),
       payment_items: paymentItems,
       bank_status: row.bank_status == null ? null : String(row.bank_status),
       bank_transaction_date: dateText(row.bank_transaction_date),

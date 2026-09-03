@@ -159,6 +159,21 @@ describe("QRIS exact-net approval route", () => {
     expect(candidateServiceSource).toContain("FROM public.bank_mutations bm");
   });
 
+  it("normalizes internal and external payment bank-account identities before MDR lookup", () => {
+    expect(candidateServiceSource).toContain(
+      "FROM company_bank_accounts payment_account",
+    );
+    expect(candidateServiceSource).toContain(
+      "payment_account.id::text",
+    );
+    expect(candidateServiceSource).toContain(
+      "payment_account.account_number::text",
+    );
+    expect(candidateServiceSource).toContain(
+      "payment_account.is_active = TRUE",
+    );
+  });
+
   it("resolves the settlement account number through an active company account before comparing IDs", () => {
     expect(route).toContain("JOIN public.company_bank_accounts cba");
     expect(route).toContain("cba.account_number::text = psc.bank_account_id::text");

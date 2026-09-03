@@ -22,6 +22,10 @@ type MutationFixture = {
   status: string;
   candidates: CandidateFixture[];
   canonicalSettlementStatus: string;
+  qrisSnapshotPaymentIds?: number[];
+  currentPaymentIds?: number[];
+  settledPaymentIds?: number[];
+  activeSettlementPaymentIds?: number[];
 };
 
 function hasApprovedMatch(mutation: MutationFixture): boolean {
@@ -43,7 +47,33 @@ function isCanonicalApprovalEligible(mutation: MutationFixture): boolean {
     !hasApprovedMatch(mutation) &&
     mutation.canonicalSettlementStatus === "posted" &&
     candidate.amount_match === true &&
-    candidate.date_match === true
+    candidate.date_match === true &&
+    hasLiveUnsettledPayments(mutation)
+  );
+}
+
+function hasLiveUnsettledPayments(mutation: MutationFixture): boolean {
+  const snapshotIds = mutation.qrisSnapshotPaymentIds ?? [];
+  const settledIds = new Set(mutation.settledPaymentIds ?? []);
+  const activeSettlementIds = new Set(mutation.activeSettlementPaymentIds ?? []);
+  const currentIds = mutation.currentPaymentIds ?? snapshotIds;
+
+  return currentIds.some(
+    paymentId => snapshotIds.includes(paymentId)
+      && !settledIds.has(paymentId)
+      && !activeSettlementIds.has(paymentId),
+  );
+}
+
+function isLiveCanonicalApprovalEligible(mutation: MutationFixture): boolean {
+  return isCanonicalApprovalEligible(mutation) && hasLiveUnsettledPayments(mutation);
+}
+
+function isHistoricalRecoveryEligible(mutation: MutationFixture): boolean {
+  return (
+    mutation.status === "matched" &&
+    mutation.canonicalSettlementStatus === "posted" &&
+    !hasLiveUnsettledPayments(mutation)
   );
 }
 
@@ -51,6 +81,7 @@ function isQrisApprovalButtonEnabled(mutation: MutationFixture): boolean {
   return (
     mutation.status === "matched" &&
     !hasApprovedMatch(mutation)
+    && !isHistoricalRecoveryEligible(mutation)
   );
 }
 
@@ -103,10 +134,28 @@ describe("bank reconciliation approved-match UI guard", () => {
       status: "matched",
       candidates: [canonicalCandidate],
       canonicalSettlementStatus: "posted",
+      qrisSnapshotPaymentIds: [11],
+      currentPaymentIds: [11],
     };
 
-    expect(isCanonicalApprovalEligible(mutation)).toBe(true);
+    expect(isLiveCanonicalApprovalEligible(mutation)).toBe(true);
     expect(isQrisApprovalButtonEnabled(mutation)).toBe(true);
+  });
+
+  it("routes an old posted snapshot with all live payments settled to recovery", () => {
+    const mutation: MutationFixture = {
+      status: "matched",
+      candidates: [canonicalCandidate],
+      canonicalSettlementStatus: "posted",
+      qrisSnapshotPaymentIds: [11, 12],
+      currentPaymentIds: [],
+      settledPaymentIds: [11],
+      activeSettlementPaymentIds: [12],
+    };
+
+    expect(isLiveCanonicalApprovalEligible(mutation)).toBe(false);
+    expect(isHistoricalRecoveryEligible(mutation)).toBe(true);
+    expect(isQrisApprovalButtonEnabled(mutation)).toBe(false);
   });
 
   it("asserts the rendered component uses the approved-match guard", () => {
@@ -120,5 +169,9 @@ describe("bank reconciliation approved-match UI guard", () => {
     expect(componentSource).toContain(
       "Mutasi sudah memiliki approved match lain. Approval QRIS dikunci",
     );
+    expect(componentSource).toContain("const canonicalHistoricalRepairReady = isCanonicalHistoricalRepairEligible(");
+    expect(componentSource).toContain("&& !canonicalHistoricalRepairReady");
+    expect(componentSource).toContain("Settlement Tertunda");
+    expect(componentSource).toContain("Selesaikan Settlement Tertunda");
   });
 });

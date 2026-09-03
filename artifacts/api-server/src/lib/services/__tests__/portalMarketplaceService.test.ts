@@ -242,6 +242,7 @@ describe("submitMarketplaceQuote authenticated ownership boundary", () => {
         email: "forged@example.test",
         guest_contact: individualContext.customer.phone!,
         destination: "Jakarta",
+        idempotency_key: "already-completed-request",
       },
     });
 

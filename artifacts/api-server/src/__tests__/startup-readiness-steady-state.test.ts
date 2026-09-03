@@ -140,6 +140,8 @@ describe("startup readiness steady-state contract", () => {
     expect(startupRegistry).toContain("critical: true");
     expect(startupRegistry).toContain('"schema"');
     expect(startupRegistry).toContain('"customer_invoice_company_scope"');
+    expect(startupRegistry).toContain('"customer_portal_notifications"');
+    expect(startupRegistry).toContain('"Customer portal notifications migration"');
     expect(startupRegistry).toContain('"sport_center_payment_mirror_refresh"');
     expect(startupRegistry).toContain("getStartupStageDefinition");
   });
