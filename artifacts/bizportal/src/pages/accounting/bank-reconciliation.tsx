@@ -4620,15 +4620,17 @@ function MutationCard({
           onClick={e => e.stopPropagation()}
         >
           <div className="flex gap-1.5 flex-wrap">
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 gap-1 border-indigo-300 text-xs text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:text-indigo-300"
-              onClick={() => onMapCoa(m)}
-            >
-              <BookOpen className="h-3.5 w-3.5" />
-              Pilih COA &amp; Simpan Rule AI
-            </Button>
+            {!isManualReviewActionable(m) && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1 border-indigo-300 text-xs text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:text-indigo-300"
+                onClick={() => onMapCoa(m)}
+              >
+                <BookOpen className="h-3.5 w-3.5" />
+                Pilih COA &amp; Simpan Rule AI
+              </Button>
+            )}
             {onMultiAllocate && canMultiAllocate(m) && (
               <Button
                 size="sm"
@@ -5264,7 +5266,7 @@ function MutationDetailPanel({
                           </p>
                           {m.review_code && <p className="font-mono text-[11px] opacity-80">Kode: {m.review_code}</p>}
                           <p className="text-xs">
-                            Periksa COA dan gunakan “Pilih COA & Simpan Rule AI” setelah transaksi dipastikan benar.
+                            Periksa COA dan gunakan “{isManualReviewActionable(m) ? "Pilih COA & Buat Draft" : "Pilih COA & Simpan Rule AI"}” setelah transaksi dipastikan benar.
                           </p>
                         </AlertDescription>
                       </Alert>
