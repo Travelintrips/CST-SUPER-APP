@@ -18,6 +18,7 @@ import { runPhase2Migration } from "./lib/phase2Migration";
 import { runPhase3aRfqVendorLinksFix } from "./lib/phase3aRfqVendorLinksFix";
 import { runUnifiedViewsMigration } from "./lib/unifiedViewsMigration";
 import { runOrderLinksMigration } from "./lib/orderLinksMigration";
+import { runReconCandidateRequirementMigration } from "./routes/bankReconRules.js";
 import { runVendorProfileMigration } from "./lib/vendorProfileMigration";
 import { startWorkflowWorker } from "./lib/workflowWorker";
 import { startDriverJobWorker } from "./lib/driverJobWorker.js";
@@ -2141,6 +2142,7 @@ async function startServer() {
     .then(() => runWithRetry("Freight accounting migration", runFreightAccountingMigration))
     .then(() => runWithRetry("Logistics rates migration", runLogisticsRatesMigration))
     .then(() => runWithRetry("Bank reconciliation core migration", runBankReconciliationCoreMigration))
+     .then(() => runWithRetry("Reconciliation Rule AI candidate requirement migration", runReconCandidateRequirementMigration))
     .then(() => runWithRetry("QRIS settlement migration", runQrisSettlementMigration))
     .then(() => runWithRetry("Usage tracking migration", runUsageTrackingMigration))
     .then(() => runWithRetry("Bank mutation masters migration", runBankMutationMastersMigration))

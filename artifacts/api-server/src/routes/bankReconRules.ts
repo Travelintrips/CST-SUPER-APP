@@ -122,6 +122,70 @@ export async function runReconRulesMigration(): Promise<void> {
   logger.info("[recon_rules] migration complete (batch 1+2)");
 }
 
+/**
+ * Additive startup repair for the Rule AI candidate requirement contract.
+ *
+ * The original recon-rules migration is also used lazily by route handlers and
+ * may already be marked complete in a long-lived database. Keep this repair as
+ * a separately callable stage so existing startup markers cannot skip the
+ * candidate requirement columns.
+ */
+export async function runReconCandidateRequirementMigration(): Promise<void> {
+  await runReconRulesMigration();
+
+  await db.execute(sql.raw(`
+    ALTER TABLE recon_ai_classification_rules
+      ADD COLUMN IF NOT EXISTS candidate_requirement TEXT NOT NULL DEFAULT 'not_required'
+  `));
+  await db.execute(sql.raw(`
+    ALTER TABLE recon_rules
+      ADD COLUMN IF NOT EXISTS candidate_requirement TEXT NOT NULL DEFAULT 'not_required'
+  `));
+  await db.execute(sql.raw(`
+    UPDATE recon_ai_classification_rules
+    SET candidate_requirement = 'not_required'
+    WHERE candidate_requirement IS NULL
+       OR candidate_requirement NOT IN ('required', 'not_required')
+  `));
+  await db.execute(sql.raw(`
+    UPDATE recon_rules
+    SET candidate_requirement = 'not_required'
+    WHERE candidate_requirement IS NULL
+       OR candidate_requirement NOT IN ('required', 'not_required')
+  `));
+
+  const catalog = await db.execute(sql.raw(`
+    SELECT
+      to_regclass('public.recon_ai_classification_rules') AS ai_rules_table,
+      to_regclass('public.recon_rules') AS operational_rules_table,
+      EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'recon_ai_classification_rules'
+          AND column_name = 'candidate_requirement'
+      ) AS ai_requirement_column,
+      EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'recon_rules'
+          AND column_name = 'candidate_requirement'
+      ) AS operational_requirement_column
+  `));
+  const state = (catalog.rows[0] ?? {}) as Record<string, unknown>;
+  if (
+    !state.ai_rules_table
+    || !state.operational_rules_table
+    || state.ai_requirement_column !== true
+    || state.operational_requirement_column !== true
+  ) {
+    throw new Error("Rule AI candidate requirement schema verification failed.");
+  }
+
+  logger.info("[recon_rules] candidate requirement migration verified");
+}
+
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
 function requireCompanyId(req: any, res: any): number | null {
