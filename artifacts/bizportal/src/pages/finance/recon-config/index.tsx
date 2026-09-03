@@ -28,6 +28,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { CreatableCombobox, type ComboboxOption } from "@/components/ui/creatable-combobox";
 import { useCompany } from "@/contexts/CompanyContext";
+import { editableRuleAiFieldsFromRow } from "@/lib/ruleAiMetadata";
 import {
   SlidersHorizontal, Plus, Pencil, PowerOff, RefreshCw,
   Brain, BookOpen, Tag, Upload, Shield, ArrowLeft,
@@ -929,21 +930,13 @@ function AiRulesTab() {
 
   const openEdit = (row: any) => {
     const conditions = ruleConditions(row);
+    const editableMetadata = editableRuleAiFieldsFromRow(row);
     setEditRow(row);
     setForm({ ...row, conditions: conditions.length ? conditions : [{ field: "description", operator: "contains", value: "" }],
-      logic: row.logic === "OR" ? "OR" : "AND", confidence: Number(row.confidence ?? 0.8),
-      priority: Number(row.priority ?? 50), specificity: Number(row.specificity ?? Math.max(1, conditions.length)),
-      // Before the reference-amount field existed, this screen incorrectly
-      // stored its nominal input as amount_tolerance. Treat that legacy value
-      // as the reference when opening it so saving repairs the rule.
-      reference_amount: row.reference_amount != null && Number(row.reference_amount) !== 0
-        ? Number(row.reference_amount)
-        : row.amount_tolerance != null && Number(row.amount_tolerance) > 0
-          ? Number(row.amount_tolerance)
-          : null,
-      amount_tolerance: row.reference_amount != null && row.amount_tolerance != null
-        ? Number(row.amount_tolerance)
-         : 0,
+      logic: row.logic === "OR" ? "OR" : "AND", confidence: editableMetadata.confidence,
+      priority: editableMetadata.priority, specificity: Number(row.specificity ?? Math.max(1, conditions.length)),
+      reference_amount: editableMetadata.reference_amount,
+      amount_tolerance: editableMetadata.amount_tolerance,
        requires_document_upload: Boolean(row.requires_document_upload),
        tax_type: row.tax_type === "ppn_input" || row.tax_type === "ppn_output" ? row.tax_type : "none" });
     setCreatingCoa(false);

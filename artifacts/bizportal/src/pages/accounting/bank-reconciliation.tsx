@@ -40,6 +40,11 @@ import {
   isInhouseBankTransferDescription,
   isQrisBankApprovalAllowed,
 } from "@/lib/bankMutationPaymentType";
+import {
+  buildManualRuleAiPayload,
+  defaultRuleAiMetadata,
+  type RuleAiMetadataForm,
+} from "@/lib/ruleAiMetadata";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -2631,7 +2636,7 @@ function CoaReferenceDialog({
   const [selectedCode, setSelectedCode] = useState("");
   const [saving, setSaving] = useState(false);
   const [showRuleMetadata, setShowRuleMetadata] = useState(true);
-  const [ruleMetadata, setRuleMetadata] = useState({
+  const [ruleMetadata, setRuleMetadata] = useState<RuleAiMetadataForm>({
     name: "",
     description: "",
     referenceAmount: "",
@@ -2693,16 +2698,8 @@ function CoaReferenceDialog({
     setSearch("");
     setSelectedCode("");
     setSaving(false);
-    const mutationDescription = String(mutation.description ?? "").trim();
     setShowRuleMetadata(true);
-    setRuleMetadata({
-      name: `Pemetaan COA — ${mutationDescription}`.slice(0, 120),
-      description: `Dibuat dari pemilihan COA pada mutasi bank #${mutation.id}`,
-      referenceAmount: "",
-      amountTolerance: "",
-      confidence: "1",
-      priority: "120",
-    });
+    setRuleMetadata(defaultRuleAiMetadata(mutation));
     setCreatingCoa(false);
     setCreating(false);
     setNewCoaRole("child");
@@ -2866,69 +2863,7 @@ function CoaReferenceDialog({
       throw new Error("Perusahaan aktif atau mutasi belum tersedia");
     }
 
-    const description = String(mutation.description ?? "").trim();
-    if (!description) {
-      throw new Error("Deskripsi mutasi wajib tersedia untuk membuat Rule AI");
-    }
-
-    // Prefer a provider/order reference when available because it is more
-    // specific than a generic bank description. Direction is always included
-    // so an incoming and outgoing transaction cannot share the same mapping.
-    const primaryCondition = ruleAiReference
-      ? { field: "reference", operator: "equals", value: ruleAiReference }
-      : { field: "description", operator: "contains", value: description };
-    const conditions = [
-      primaryCondition,
-      { field: "direction", operator: "equals", value: mutation.direction },
-    ];
-    const ruleName = ruleMetadata.name.trim();
-    if (!ruleName) {
-      throw new Error("Nama Rule AI wajib diisi");
-    }
-    const confidence = Number(ruleMetadata.confidence);
-    if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
-      throw new Error("Confidence harus berupa angka antara 0 dan 1");
-    }
-    const priority = Number(ruleMetadata.priority);
-    if (!Number.isSafeInteger(priority) || priority < 1 || priority > 999) {
-      throw new Error("Prioritas harus berupa angka bulat antara 1 dan 999");
-    }
-    const referenceAmount = ruleMetadata.referenceAmount.trim() === ""
-      ? null
-      : Number(ruleMetadata.referenceAmount);
-    const amountTolerance = ruleMetadata.amountTolerance.trim() === ""
-      ? null
-      : Number(ruleMetadata.amountTolerance);
-    if (referenceAmount !== null && (!Number.isFinite(referenceAmount) || referenceAmount < 0)) {
-      throw new Error("Nominal referensi harus berupa angka nol atau lebih");
-    }
-    if (amountTolerance !== null && (!Number.isFinite(amountTolerance) || amountTolerance < 0)) {
-      throw new Error("Toleransi nominal harus berupa angka nol atau lebih");
-    }
-    if (amountTolerance !== null && amountTolerance > 0 && referenceAmount === null) {
-      throw new Error("Nominal referensi wajib diisi jika toleransi nominal lebih besar dari nol");
-    }
-
-    return {
-      name: ruleName,
-      description: ruleMetadata.description.trim() || null,
-      condition_field: primaryCondition.field,
-      condition_operator: primaryCondition.operator,
-      condition_value: primaryCondition.value,
-      conditions,
-      logic: "AND" as const,
-      specificity: conditions.length,
-      action_flow: mutation.direction === "IN"
-        ? "INCOME_ALLOCATION"
-        : "ROUTINE_EXPENSE_ALLOCATION",
-      action_coa_code: selected.code,
-      amount_tolerance: amountTolerance,
-      reference_amount: referenceAmount,
-      confidence,
-      priority,
-      source: "manual",
-      company_id: companyId,
-    };
+    return buildManualRuleAiPayload(mutation, selected, ruleMetadata, companyId);
   };
 
   const save = async () => {
