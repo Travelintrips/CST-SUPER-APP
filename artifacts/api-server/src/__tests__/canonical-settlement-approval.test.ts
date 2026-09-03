@@ -9,6 +9,7 @@ import {
   isCanonicalApprovalIdempotentState,
   isCanonicalBankMutationEligible,
   isCanonicalReopenIdempotentState,
+  hasCanonicalSettlementSelectionConflict,
   validateHistoricalSettlementRepairEvidence,
 } from "../lib/reconciliation/canonicalSettlementApproval.js";
 
@@ -72,6 +73,20 @@ describe("Phase 4C-6 canonical link-only approval contract", () => {
     expect(CANONICAL_APPROVAL_CODES.GENERIC_JOURNAL_ALREADY_EXISTS).toBe(
       "CANONICAL_GENERIC_JOURNAL_ALREADY_EXISTS",
     );
+    expect(CANONICAL_APPROVAL_CODES.SELECTION_CONFLICT).toBe(
+      "CANONICAL_SETTLEMENT_SELECTION_CONFLICT",
+    );
+    expect(hasCanonicalSettlementSelectionConflict([
+      { id: 10, candidate_id: 24 },
+    ])).toBe(false);
+    expect(hasCanonicalSettlementSelectionConflict([
+      { id: 10, candidate_id: 24 },
+      { id: 11, candidate_id: 25 },
+    ])).toBe(true);
+    expect(hasCanonicalSettlementSelectionConflict([
+      { id: 10, candidate_id: 24 },
+      { id: 11, candidate_id: 24 },
+    ])).toBe(true);
   });
 
   it("models canonical reopen as link removal, not accounting reversal", () => {
