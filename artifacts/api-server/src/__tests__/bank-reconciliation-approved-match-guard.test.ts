@@ -31,28 +31,34 @@ function isCompleteCanonicalRetry(row: CanonicalRetryFixture): boolean {
 describe("bank reconciliation approved-match guard", () => {
   it("excludes a QRIS mutation with any approved match from the matched queue", () => {
     expect(routeSource).toContain(
-      "AND NOT EXISTS (\n" +
-        "          SELECT 1\n" +
-        "          FROM bank_reconciliation_matches qris_existing_approval\n" +
-        "          WHERE qris_existing_approval.mutation_id = ${alias}.id\n" +
-        "            AND qris_existing_approval.status = 'approved'",
+      "function qrisMutationReadyForApprovalSql(alias = \"bm\"): string",
     );
     expect(routeSource).toContain(
-      'AND ${qrisMutationReadyForApprovalSql("bm")}',
+      "qris_existing_approval.mutation_id = ${alias}.id",
+    );
+    expect(routeSource).toContain(
+      "qris_existing_approval.status = 'approved'",
+    );
+    expect(routeSource).toContain(
+      'bmFilters.push(`${effectiveBankMutationStatusSql("bm")} =',
     );
   });
 
   it("reports a stale matched QRIS row with an approved match as duplicate_need_review", () => {
     expect(routeSource).toContain(
-      "WHEN bm.status = 'matched'\n" +
-        "          AND ${bankMutationPaymentTypeSql(\"bm\")} = 'qris'\n" +
-        "          AND EXISTS (\n" +
-        "            SELECT 1\n" +
-        "            FROM bank_reconciliation_matches approved_qris_match\n" +
-        "            WHERE approved_qris_match.mutation_id = bm.id\n" +
-        "              AND approved_qris_match.status = 'approved'\n" +
-        "          )\n" +
-        "        THEN 'duplicate_need_review'",
+      "function effectiveBankMutationStatusSql(alias = \"bm\"): string",
+    );
+    expect(routeSource).toContain(
+      "effective_approved_qris.mutation_id = ${alias}.id",
+    );
+    expect(routeSource).toContain(
+      "effective_approved_qris.status = 'approved'",
+    );
+    expect(routeSource).toContain(
+      "THEN 'duplicate_need_review'",
+    );
+    expect(routeSource).toContain(
+      '${effectiveBankMutationStatusSql("bm")} AS status',
     );
   });
 

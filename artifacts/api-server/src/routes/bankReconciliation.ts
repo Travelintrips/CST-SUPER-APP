@@ -323,6 +323,51 @@ function genericCandidateSameDaySql(matchAlias = "m", mutationAlias = "bm"): str
     ))
   )`;
 }
+
+/**
+ * Resolves the status shown by the reconciliation UI from the mutation state
+ * and its current matching evidence. The summary and list must use the same
+ * effective status; otherwise a summary card can report a mutation that the
+ * corresponding list filter cannot retrieve.
+ */
+function effectiveBankMutationStatusSql(alias = "bm"): string {
+  const genericCandidateTypes = `(
+    'accounting_payment', 'invoice', 'expense',
+    'logistic_order', 'tenant_invoice'
+  )`;
+  return `CASE
+    WHEN ${alias}.status = 'matched'
+      AND ${bankMutationPaymentTypeSql(alias)} = 'qris'
+      AND EXISTS (
+        SELECT 1
+        FROM bank_reconciliation_matches effective_approved_qris
+        WHERE effective_approved_qris.mutation_id = ${alias}.id
+          AND effective_approved_qris.status = 'approved'
+      )
+    THEN 'duplicate_need_review'
+    WHEN ${alias}.status = 'matched'
+      AND ${qrisMutationNeedsMatchingSql(alias)}
+    THEN 'unmatched'
+    WHEN ${alias}.status = 'matched'
+      AND NOT EXISTS (
+        SELECT 1
+        FROM bank_reconciliation_matches effective_valid_match
+        WHERE effective_valid_match.mutation_id = ${alias}.id
+          AND effective_valid_match.status IN ('candidate', 'approved')
+          AND effective_valid_match.candidate_type IN ${genericCandidateTypes}
+          AND ${genericCandidateSameDaySql("effective_valid_match", alias)}
+      )
+      AND EXISTS (
+        SELECT 1
+        FROM bank_reconciliation_matches effective_any_match
+        WHERE effective_any_match.mutation_id = ${alias}.id
+          AND effective_any_match.status IN ('candidate', 'approved')
+          AND effective_any_match.candidate_type IN ${genericCandidateTypes}
+      )
+    THEN 'duplicate_need_review'
+    ELSE ${alias}.status::text
+  END`;
+}
 // The full-bank matching run can legitimately outlive the browser request
 // timeout. Keep one background run per API process so repeated clicks do not
 // fan out duplicate work against the same mutation set.
@@ -4103,48 +4148,11 @@ router.get("/mutations", async (req, res) => {
   // Filters untuk sumber bank_mutations (bm)
   const bmFilters: string[] = [];
   if (status && status !== "all") {
-    if (status === "duplicate_need_review") {
-      const anyGeneric = `
-        EXISTS (
-          SELECT 1
-          FROM bank_reconciliation_matches filter_any_match
-          WHERE filter_any_match.mutation_id = bm.id
-            AND filter_any_match.status IN ('candidate', 'approved')
-            AND filter_any_match.candidate_type IN (
-              'accounting_payment', 'invoice', 'expense',
-              'logistic_order', 'tenant_invoice'
-            )
-        )`;
-      const validGeneric = `
-        EXISTS (
-          SELECT 1
-          FROM bank_reconciliation_matches filter_valid_match
-          WHERE filter_valid_match.mutation_id = bm.id
-            AND filter_valid_match.status IN ('candidate', 'approved')
-            AND ${genericCandidateSameDaySql("filter_valid_match", "bm")}
-        )`;
-      bmFilters.push(`(
-        bm.status = 'duplicate_need_review'
-        OR (
-          bm.status = 'matched'
-          AND ${anyGeneric}
-          AND NOT ${validGeneric}
-        )
-      )`);
-    } else if (status === "unmatched") {
-      // A generic matching run can leave a QRIS bank row as `matched` even
-      // though its provider-aware QRIS candidate is still UNMATCHED/REVIEW or
-      // missing. Keep that row in the unresolved queue.
-      bmFilters.push(`(
-        bm.status = 'unmatched'
-        OR (bm.status = 'matched' AND ${qrisMutationNeedsMatchingSql("bm")})
-      )`);
-    } else if (status === "matched") {
-      // The approval queue must not contain unresolved QRIS rows.
-      bmFilters.push(`(
-        bm.status = 'matched'
-        AND ${qrisMutationReadyForApprovalSql("bm")}
-      )`);
+    if (status === "duplicate_need_review" || status === "unmatched" || status === "matched") {
+      // Use the same derived status as the summary endpoint. In particular,
+      // QRIS rows with an already-approved match are surfaced as
+      // duplicate_need_review even when bank_mutations.status is still matched.
+      bmFilters.push(`${effectiveBankMutationStatusSql("bm")} = '${esc(status)}'`);
     } else {
       bmFilters.push(`bm.status = '${esc(status)}'`);
     }
@@ -4404,7 +4412,8 @@ router.get("/mutations", async (req, res) => {
       bm.credit_amount, bm.debit_amount, bm.amount, bm.direction::text,
       bm.mutation_key, bm.normalized_description,
       bm.provider_name, bm.provider_order_id,
-      bm.status::text, bm.journal_entry_id, bm.company_id,
+      ${effectiveBankMutationStatusSql("bm")} AS status,
+      bm.journal_entry_id, bm.company_id,
       (
         SELECT COALESCE(jsonb_agg(
           jsonb_build_object(
@@ -6440,44 +6449,7 @@ router.get("/summary", async (req, res) => {
     : `WHERE bm.company_id = ${requestedCompanyId}`;
   const { rows } = await db.execute(sql.raw(`
     SELECT
-      CASE
-        WHEN bm.status = 'matched'
-          AND ${bankMutationPaymentTypeSql("bm")} = 'qris'
-          AND EXISTS (
-            SELECT 1
-            FROM bank_reconciliation_matches approved_qris_match
-            WHERE approved_qris_match.mutation_id = bm.id
-              AND approved_qris_match.status = 'approved'
-          )
-        THEN 'duplicate_need_review'
-        WHEN bm.status = 'matched'
-          AND ${qrisMutationNeedsMatchingSql("bm")}
-        THEN 'unmatched'
-        WHEN bm.status = 'matched'
-          AND NOT EXISTS (
-            SELECT 1
-            FROM bank_reconciliation_matches stale_match
-            WHERE stale_match.mutation_id = bm.id
-              AND stale_match.status IN ('candidate', 'approved')
-              AND stale_match.candidate_type IN (
-                'accounting_payment', 'invoice', 'expense',
-                'logistic_order', 'tenant_invoice'
-              )
-              AND ${genericCandidateSameDaySql("stale_match", "bm")}
-          )
-          AND EXISTS (
-            SELECT 1
-            FROM bank_reconciliation_matches any_generic_match
-            WHERE any_generic_match.mutation_id = bm.id
-              AND any_generic_match.status IN ('candidate', 'approved')
-              AND any_generic_match.candidate_type IN (
-                'accounting_payment', 'invoice', 'expense',
-                'logistic_order', 'tenant_invoice'
-              )
-          )
-        THEN 'duplicate_need_review'
-        ELSE bm.status
-      END AS status,
+      ${effectiveBankMutationStatusSql("bm")} AS status,
       COUNT(*) as count,
       SUM(bm.amount) as total_amount
     FROM bank_mutations bm
