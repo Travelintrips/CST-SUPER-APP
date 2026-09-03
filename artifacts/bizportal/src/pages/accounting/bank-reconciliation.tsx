@@ -549,6 +549,9 @@ interface CandidateDetails {
   settlementStatus?: string | null;
   settlementPartial?: boolean;
   settlementItemCount?: number | null;
+  settlementJournalId?: number | null;
+  bankMutationId?: number | null;
+  canonicalBankMutationId?: number | null;
   expectedAmount?: number | string | null;
   actualBankAmount?: number | string | null;
   amountDifference?: number | string | null;
@@ -1017,6 +1020,19 @@ function isCanonicalSettlementApprovalEligible(m: BankMutation): boolean {
   const candidate = canonicalSettlementCandidateForMutation(m);
   if (!candidate || !isCanonicalSettlementManualOverrideEligible(m)) return false;
   return candidate.amount_match && candidate.date_match;
+}
+
+function isCanonicalHistoricalRepairEligible(
+  m: BankMutation,
+  candidate: Candidate | undefined,
+): boolean {
+  const details = candidate?.details;
+  return isCanonicalSettlementApprovalEligible(m)
+    && candidate === canonicalSettlementCandidateForMutation(m)
+    && String(details?.settlementStatus ?? "").toLowerCase() === "posted"
+    && details?.settlementJournalId != null
+    && details?.bankMutationId == null
+    && details?.canonicalBankMutationId == null;
 }
 
 function qrisAuditsForMutation(m: BankMutation): QrisCandidateAudit[] {
@@ -2553,6 +2569,7 @@ function CoaReferenceDialog({
   activeCompanyId,
   canonicalCandidate,
   onApproveCanonical,
+  onRecoverCanonical,
   onClose,
   onSaved,
 }: {
@@ -2561,6 +2578,7 @@ function CoaReferenceDialog({
   activeCompanyId: number | null;
   canonicalCandidate?: Candidate | null;
   onApproveCanonical?: (mutation: BankMutation, candidate: Candidate) => Promise<unknown>;
+  onRecoverCanonical?: (mutation: BankMutation, candidate: Candidate) => Promise<unknown>;
   onClose: () => void;
   onSaved: (ruleId: number | null) => void | Promise<void>;
 }) {
@@ -2845,13 +2863,9 @@ function CoaReferenceDialog({
     setSaving(true);
     try {
       const ruleAi = buildRuleAiPayload(selectedAccount);
-
-      let savedRuleId: number | null = null;
-
-
       const previousApprovalKey = approvalKeyRef.current;
-      const approvalKey = previousApprovalKey?.mutationId === mutation.id &&
-        previousApprovalKey.coaCode === selectedAccount.code
+      const approvalKey = previousApprovalKey?.mutationId === mutation.id
+        && previousApprovalKey.coaCode === selectedAccount.code
         ? previousApprovalKey.key
         : crypto.randomUUID();
       approvalKeyRef.current = {
@@ -2859,9 +2873,14 @@ function CoaReferenceDialog({
         coaCode: selectedAccount.code,
         key: approvalKey,
       };
-      let ruleAiBody: { data?: { id?: number }; rule_ai_id?: number } = {};
+
+      let savedRuleId: number | null = null;
 
       if (isQris) {
+        if (!canonicalCandidate || (!onApproveCanonical && !onRecoverCanonical)) {
+          throw new Error("Settlement QRIS belum memenuhi syarat approval canonical.");
+        }
+
         const ruleResponse = await fetch("/api/recon-classification/ai-rules", {
           method: "POST",
           credentials: "include",
@@ -2870,7 +2889,6 @@ function CoaReferenceDialog({
         });
         const ruleBody = await ruleResponse.json().catch(() => ({}));
         if (!ruleResponse.ok) {
-
           throw new Error(ruleBody.error ?? "Rule AI QRIS belum berhasil disimpan.");
         }
         const createdRuleId = Number(ruleBody?.data?.id);
@@ -2878,27 +2896,14 @@ function CoaReferenceDialog({
           ? createdRuleId
           : null;
 
-
-          throw new Error(ruleBody.error ?? "Rule AI gagal disimpan.");
+        if (isCanonicalHistoricalRepairEligible(mutation, canonicalCandidate) && onRecoverCanonical) {
+          await onRecoverCanonical(mutation, canonicalCandidate);
+        } else if (onApproveCanonical) {
+          await onApproveCanonical(mutation, canonicalCandidate);
+        } else {
+          throw new Error("Settlement QRIS belum memiliki jalur recovery yang tersedia.");
         }
-        ruleAiBody = ruleBody;
-
-        if (!canonicalCandidate || !onApproveCanonical) {
-          throw new Error("Settlement QRIS belum memenuhi syarat approval canonical.");
-        }
-        await onApproveCanonical(mutation, canonicalCandidate);
       } else {
-
-        const previousApprovalKey = approvalKeyRef.current;
-        const approvalKey = previousApprovalKey?.mutationId === mutation.id &&
-          previousApprovalKey.coaCode === selectedAccount.code
-          ? previousApprovalKey.key
-          : crypto.randomUUID();
-        approvalKeyRef.current = {
-          mutationId: mutation.id,
-          coaCode: selectedAccount.code,
-          key: approvalKey,
-        };
         const approveResponse = await fetch(`/api/bank-reconciliation/${mutation.id}/approve`, {
           method: "POST",
           credentials: "include",
@@ -2909,15 +2914,6 @@ function CoaReferenceDialog({
           body: JSON.stringify({
             manual_coa_code: selectedAccount.code,
             note: `COA dipilih manual hanya untuk mutasi ini: ${selectedAccount.code}`,
-
-        const approveResponse = await fetch(`/api/bank-reconciliation/${mutation.id}/approve`, {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            manual_coa_code: selectedAccount.code,
-            note: `COA dipilih manual untuk mutasi ini: ${selectedAccount.code}`,
-
             rule_ai: ruleAi,
           }),
         });
@@ -2927,58 +2923,21 @@ function CoaReferenceDialog({
             approveBody.error ?? "COA dipilih, tetapi draft jurnal untuk mutasi ini belum berhasil dibuat.",
           );
         }
-
         const createdRuleId = Number(approveBody?.rule_ai_id);
         savedRuleId = Number.isSafeInteger(createdRuleId) && createdRuleId > 0
           ? createdRuleId
           : null;
       }
 
-
-        ruleAiBody = approveBody;
-      }
-
       toast({
         title: isQris
           ? "Rule AI aktif dan settlement QRIS disetujui"
           : "COA disimpan ke Rule AI dan draft jurnal dibuat",
-
         description: `${selectedAccount.code} — ${selectedAccount.name}. Rule AI #${savedRuleId ?? "baru"} aktif untuk perusahaan ini.`,
-
-        description: `${selectedAccount.code} — ${selectedAccount.name}. Rule AI #${ruleAiBody?.data?.id ?? ruleAiBody?.rule_ai_id ?? "baru"} aktif untuk perusahaan ini.`,
-      const approveResponse = await fetch(`/api/bank-reconciliation/${mutation.id}/approve`, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          "x-idempotency-key": approvalKey,
-        },
-        body: JSON.stringify({
-          manual_coa_code: selectedAccount.code,
-          note: `COA dipilih manual hanya untuk mutasi ini: ${selectedAccount.code}`,
-          rule_ai: ruleAi,
-        }),
-      });
-      const approveBody = await approveResponse.json().catch(() => ({}));
-      if (!approveResponse.ok) {
-        throw new Error(
-          approveBody.error ?? "COA dipilih, tetapi draft jurnal untuk mutasi ini belum berhasil dibuat.",
-        );
-      }
-      toast({
-        title: "COA disimpan ke Rule AI dan draft jurnal dibuat",
-        description: `${selectedAccount.code} — ${selectedAccount.name}. Rule AI dan draft jurnal tersimpan atomik.`,
-
       });
       approvalKeyRef.current = null;
       qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] });
-
       await onSaved(savedRuleId);
-
-      const savedRuleId = Number(ruleAiBody?.data?.id ?? ruleAiBody?.rule_ai_id);
-      const savedRuleId = Number(approveBody?.rule_ai_id);
-      await onSaved(Number.isSafeInteger(savedRuleId) && savedRuleId > 0 ? savedRuleId : null);
-
       onClose();
     } catch (error) {
       toast({
@@ -3373,7 +3332,8 @@ function QrisMutationCard({
       && liveSettlementStatus === "unsettled"
       && (currentPaymentIds
         ? currentPaymentIds.has(Number(paymentId))
-        : !settledPaymentIds.has(Number(paymentId)));
+        : !settledPaymentIds.has(Number(paymentId))
+          && !activeSettlementPaymentIds.has(Number(paymentId)));
   });
   const items = availableItems;
   const availablePaymentIds = availableItems
@@ -4175,6 +4135,10 @@ function MutationCard({
   const qrisAudits = qrisAuditsForMutation(m);
   const canonicalApprovalCandidate = canonicalSettlementCandidateForMutation(m);
   const canonicalApprovalReady = isCanonicalSettlementApprovalEligible(m);
+  const canonicalHistoricalRepairReady = isCanonicalHistoricalRepairEligible(
+    m,
+    canonicalApprovalCandidate,
+  );
   const canonicalOverrideReady = isCanonicalSettlementManualOverrideEligible(m);
   const best   = cands[0];
   const evidence = reconciliationEvidence(m);
@@ -4685,19 +4649,37 @@ function MutationCard({
                 Setujui
               </Button>
             )}
-            {canonicalApprovalReady && canonicalApprovalCandidate && onApproveCandidate && (
-              <Button
-                size="sm"
-                className="h-7 text-xs gap-1 bg-green-600 hover:bg-green-700 disabled:opacity-50"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onApproveCandidate(m, canonicalApprovalCandidate);
-                }}
-              >
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                Tautkan &amp; Approve Settlement
-              </Button>
-            )}
+             {canonicalApprovalReady && canonicalApprovalCandidate && (
+               canonicalHistoricalRepairReady && onRecoverQrisSettlement ? (
+                 <Button
+                   size="sm"
+                   variant="outline"
+                   className="h-7 gap-1 border-indigo-300 text-xs text-indigo-700 hover:bg-indigo-50 dark:border-indigo-700 dark:text-indigo-300"
+                   disabled={recoverQrisPending}
+                   onClick={(event) => {
+                     event.stopPropagation();
+                     onRecoverQrisSettlement(m.id, canonicalApprovalCandidate.candidate_id);
+                   }}
+                 >
+                   {recoverQrisPending
+                     ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                     : <CheckCircle2 className="h-3.5 w-3.5" />}
+                   {recoverQrisPending ? "Menyelesaikan link..." : "Tautkan Settlement Posted"}
+                 </Button>
+               ) : onApproveCandidate ? (
+                 <Button
+                   size="sm"
+                   className="h-7 text-xs gap-1 bg-green-600 hover:bg-green-700 disabled:opacity-50"
+                   onClick={(event) => {
+                     event.stopPropagation();
+                     onApproveCandidate(m, canonicalApprovalCandidate);
+                   }}
+                 >
+                   <CheckCircle2 className="w-3.5 h-3.5" />
+                   Tautkan &amp; Approve Settlement
+                 </Button>
+               ) : null
+             )}
             {canonicalOverrideReady
               && !canonicalApprovalReady
               && canonicalApprovalCandidate
@@ -7065,6 +7047,18 @@ export default function BankReconciliationPage() {
           description: e.message || "Approval QRIS tidak dapat diselesaikan. Periksa konfigurasi lalu coba lagi.",
           variant: "destructive",
         });
+      } else if (!variables?.silent && (e as QrisSelectionConflictError).code === "CANONICAL_SETTLEMENT_SELECTION_CONFLICT") {
+        const conflict = e as QrisSelectionConflictError;
+        const eligibleCount = Array.isArray(conflict.eligiblePaymentIds)
+          ? conflict.eligiblePaymentIds.length
+          : 0;
+        toast({
+          title: "Status payment berubah",
+          description: eligibleCount > 0
+            ? "Sebagian payment sudah diproses. Daftar sudah dimuat ulang; pilih hanya payment yang masih eligible."
+            : "Semua payment pada kandidat sudah diproses. Daftar sudah dimuat ulang dan approval dikunci.",
+          variant: "destructive",
+        });
       }
       // Keep the screen aligned with the server even when approval is rejected
       // by a governance/configuration guard (for example, a missing bank COA).
@@ -8410,6 +8404,17 @@ export default function BankReconciliationPage() {
             throw new Error((result as any).error ?? "Settlement QRIS memerlukan review manual.");
           }
           return result;
+        }}
+        onRecoverCanonical={async (mutation, candidate) => {
+          const settlementId = Number(candidate.candidate_id);
+          if (!Number.isSafeInteger(settlementId) || settlementId <= 0) {
+            throw new Error("ID settlement canonical tidak valid untuk recovery.");
+          }
+          return recoverQrisSettlementMut.mutateAsync({
+            mutationId: mutation.id,
+            settlementId,
+            reason: "Rule AI dipilih; menautkan batch canonical posted ke mutasi bank.",
+          });
         }}
         onClose={() => setCoaReferenceTarget(null)}
         onSaved={async (ruleId) => {

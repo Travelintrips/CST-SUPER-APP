@@ -79,6 +79,30 @@ describe("QRIS candidate presentation state", () => {
     expect(getAvailableQrisPaymentIds(candidate)).toEqual([361]);
     expect(getQrisCandidatePresentationState(candidate)).toBe("ineligible");
   });
+
+  it("uses active canonical settlement ids when a legacy snapshot has no live id list", () => {
+    const candidate = {
+      reconciliation_status: "MATCHED",
+      payment_items: [item(11), item(12), item(13)],
+      settled_payment_ids: [12],
+      active_settlement_payment_ids: [13],
+    };
+
+    expect(getAvailableQrisPaymentIds(candidate)).toEqual([11]);
+    expect(getQrisCandidatePresentationState(candidate)).toBe("ready");
+  });
+
+  it("treats a snapshot covered by active canonical settlements as depleted", () => {
+    const candidate = {
+      reconciliation_status: "MATCHED",
+      payment_items: [item(11), item(12)],
+      settled_payment_ids: [11],
+      active_settlement_payment_ids: [12],
+    };
+
+    expect(getAvailableQrisPaymentIds(candidate)).toEqual([]);
+    expect(getQrisCandidatePresentationState(candidate)).toBe("depleted");
+  });
 });
 
 describe("QRIS bank-evidence approval boundary", () => {

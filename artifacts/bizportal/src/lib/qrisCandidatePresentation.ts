@@ -15,6 +15,7 @@ type QrisCandidateLike = {
   payment_items?: QrisPaymentItemLike[] | null;
   current_payment_ids?: Array<number | string> | null;
   settled_payment_ids?: Array<number | string> | null;
+  active_settlement_payment_ids?: Array<number | string> | null;
   unconfirmed_payment_ids?: Array<number | string> | null;
 };
 
@@ -37,7 +38,10 @@ export function getAvailableQrisPaymentIds(candidate: QrisCandidateLike): number
     return validIds(candidate.current_payment_ids).filter((id) => !unconfirmed.has(id));
   }
 
-  const settled = new Set(validIds(candidate.settled_payment_ids));
+  const settled = new Set([
+    ...validIds(candidate.settled_payment_ids),
+    ...validIds(candidate.active_settlement_payment_ids),
+  ]);
   return qrisCandidatePaymentIds(candidate).filter(
     (id) => !settled.has(id) && !unconfirmed.has(id),
   );
@@ -67,7 +71,10 @@ export function getQrisCandidatePresentationState(
   const availableIds = getAvailableQrisPaymentIds(candidate);
   if (availableIds.length > 0) return "ready";
 
-  const settled = new Set(validIds(candidate.settled_payment_ids));
+  const settled = new Set([
+    ...validIds(candidate.settled_payment_ids),
+    ...validIds(candidate.active_settlement_payment_ids),
+  ]);
   const allSettled = snapshotIds.every((id) => settled.has(id));
   return allSettled ? "depleted" : "stale";
 }
