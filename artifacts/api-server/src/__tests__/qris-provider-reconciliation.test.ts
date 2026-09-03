@@ -980,6 +980,80 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     expect(result[0]?.reason).toContain("218460.00");
   });
 
+  it("holds same-booking duplicate QRIS payments out of automatic settlement", () => {
+    const result = generateQrisMutationBatchCandidates({
+      candidateRule: "strict_h_minus_one_auto",
+      payments: [
+        {
+          id: 40,
+          companyId: 1,
+          bankAccountId: 2,
+          amount: 30_000,
+          method: "QRIS",
+          status: "confirmed",
+          paidAt: "2026-08-27T12:58:19.716Z",
+          canonicalMdrAmount: 210,
+          expectedSettlementDate: null,
+          providerName: "mandiri_direct",
+          bookingId: 554,
+          bookingNumber: "SC-0494",
+        },
+        {
+          id: 41,
+          companyId: 1,
+          bankAccountId: 2,
+          amount: 30_000,
+          method: "QRIS",
+          status: "confirmed",
+          paidAt: "2026-08-27T05:00:00.000Z",
+          canonicalMdrAmount: 210,
+          expectedSettlementDate: null,
+          providerName: "mandiri_direct",
+          bookingId: 554,
+          bookingNumber: "SC-0494",
+        },
+        {
+          id: 42,
+          companyId: 1,
+          bankAccountId: 2,
+          amount: 350_000,
+          method: "QRIS",
+          status: "confirmed",
+          paidAt: "2026-08-27T10:00:00.000Z",
+          canonicalMdrAmount: 2_450,
+          expectedSettlementDate: null,
+          providerName: "mandiri_direct",
+          bookingId: 551,
+          bookingNumber: "SC-0491",
+        },
+      ],
+      mutations: [{
+        id: 43,
+        companyId: 1,
+        bankAccountId: 2,
+        amount: 377_340,
+        transactionDate: "2026-08-28",
+        direction: "IN",
+        source: "bank_import",
+        sourceClassification: "actual_bank_mutation",
+        providerName: "mandiri_direct",
+      }],
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      mutationId: 43,
+      status: "REVIEW",
+      grossAmount: 380_000,
+      paymentItems: [
+        { paymentId: 40, bookingNumber: "SC-0494" },
+        { paymentId: 42, bookingNumber: "SC-0491" },
+      ],
+    });
+    expect(result[0]?.reason).toContain("DUPLICATE_BOOKING_PAYMENT");
+    expect(result[0]?.reason).toContain("Payment ID 41");
+  });
+
   it("retains QRIS bank evidence when the exact H-1 source payment is missing", () => {
     const result = generateQrisMutationBatchCandidates({
       candidateRule: "strict_h_minus_one_auto",

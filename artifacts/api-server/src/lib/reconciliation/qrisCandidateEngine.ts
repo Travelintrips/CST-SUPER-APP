@@ -185,6 +185,60 @@ function canonicalPaymentDate(payment: QrisPaymentCandidateInput): string | null
   return calendarDate(payment.paidAt);
 }
 
+interface DuplicateBookingResolution {
+  selectedPayments: QrisPaymentCandidateInput[];
+  duplicatePaymentIds: number[];
+  duplicateBookingNumbers: string[];
+}
+
+/**
+ * A retry can create a new provider order for the same full booking payment.
+ * Keep the oldest source row as the provisional representative, but surface
+ * the collision so it can never become an automatic settlement.
+ */
+function resolveDuplicateBookingPayments(
+  payments: readonly QrisPaymentCandidateInput[],
+): DuplicateBookingResolution {
+  const groups = new Map<string, QrisPaymentCandidateInput[]>();
+
+  for (const payment of payments) {
+    if (payment.bookingId == null) continue;
+    const key = `${payment.bookingId}:${roundMoney(Number(payment.amount) || 0)}`;
+    const group = groups.get(key) ?? [];
+    group.push(payment);
+    groups.set(key, group);
+  }
+
+  const duplicatePaymentIds = new Set<number>();
+  const duplicateBookingNumbers = new Set<string>();
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const ordered = [...group].sort((a, b) => a.id - b.id);
+    for (const duplicate of ordered.slice(1)) {
+      duplicatePaymentIds.add(duplicate.id);
+    }
+    for (const payment of ordered) {
+      const bookingNumber = String(payment.bookingNumber ?? "").trim();
+      if (bookingNumber) duplicateBookingNumbers.add(bookingNumber);
+    }
+  }
+
+  return {
+    selectedPayments: payments.filter((payment) => !duplicatePaymentIds.has(payment.id)),
+    duplicatePaymentIds: [...duplicatePaymentIds].sort((a, b) => a - b),
+    duplicateBookingNumbers: [...duplicateBookingNumbers].sort(),
+  };
+}
+
+function duplicateBookingReason(resolution: DuplicateBookingResolution): string | null {
+  if (resolution.duplicatePaymentIds.length === 0) return null;
+  const bookingLabel = resolution.duplicateBookingNumbers.length > 0
+    ? resolution.duplicateBookingNumbers.join(", ")
+    : "booking yang sama";
+  return `DUPLICATE_BOOKING_PAYMENT: ${bookingLabel} memiliki beberapa payment QRIS confirmed dengan nominal sama. `
+    + `Payment ID ${resolution.duplicatePaymentIds.join(", ")} ditahan dari batch; verifikasi source sebelum approval.`;
+}
+
 function isPaymentChronologicallyValid(
   payment: QrisPaymentCandidateInput,
   mutationDate: string,
@@ -351,17 +405,18 @@ export function generateQrisMutationBatchCandidates(input: {
      *      this amount does not agree.
      *
      * Do not add provider, bank-account, settlement metadata, source-label,
-     * or partition guards here. Those fields are frequently absent on valid
-     * imports and must not turn a deterministic H-1/MDR match into REVIEW.
+     * or arbitrary partition guards here. Those fields are frequently absent
+     * on valid imports. Same-booking duplicate payment evidence is the
+     * intentional exception because it identifies a source collision.
      */
     if (strictHMinusOneAuto) {
-      const selectedPayments = eligiblePayments.filter((payment) =>
+      const cohortPayments = eligiblePayments.filter((payment) =>
         payment.companyId === mutation.companyId
           && !claimedPaymentIds.has(payment.id)
           && calendarDate(payment.paidAt) != null
           && resolveSettlementDate(payment.paidAt, null, 1) === mutation.transactionDate,
       );
-      if (selectedPayments.length === 0) {
+      if (cohortPayments.length === 0) {
         // Keep a QRIS bank row auditable even when no confirmed source payment
         // was found for the exact H-1 cohort. This is diagnostic evidence only:
         // the empty payment_items array can never pass approval eligibility.
@@ -409,6 +464,10 @@ export function generateQrisMutationBatchCandidates(input: {
         continue;
       }
 
+      const duplicateResolution = resolveDuplicateBookingPayments(cohortPayments);
+      const selectedPayments = duplicateResolution.selectedPayments;
+      const duplicateReason = duplicateBookingReason(duplicateResolution);
+      const hasDuplicateBookingPayments = duplicateResolution.duplicatePaymentIds.length > 0;
       const grossAmount = roundMoney(
         selectedPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0),
       );
@@ -420,10 +479,10 @@ export function generateQrisMutationBatchCandidates(input: {
       const mdrAmount = roundMoney(
         validMdrAmounts.reduce((sum, amount) => sum + amount, 0),
       );
-       const expectedNetAmount = roundMoney(grossAmount - mdrAmount);
+      const expectedNetAmount = roundMoney(grossAmount - mdrAmount);
       const bankAmount = roundMoney(Number(mutation.amount) || 0);
-       const amountMatches = expectedNetAmount === bankAmount;
-       const amountDifference = roundMoney(Math.abs(expectedNetAmount - bankAmount));
+      const amountMatches = expectedNetAmount === bankAmount;
+      const amountDifference = roundMoney(Math.abs(expectedNetAmount - bankAmount));
       const paymentProviders = new Set(
         selectedPayments
           .map((payment) => normalizeQrisProvider(payment.providerName))
@@ -474,13 +533,19 @@ export function generateQrisMutationBatchCandidates(input: {
           paidAt: payment.paidAt == null ? null : String(payment.paidAt),
           paymentDate: canonicalPaymentDate(payment),
         })),
-         status: amountMatches ? "MATCHED" : "UNMATCHED",
-         confidence: amountMatches ? 1 : 0,
-         reason: amountMatches
-           ? "Auto-match QRIS: payment confirmed, tanggal paid_at tepat H-1, dan netto setelah MDR sama dengan mutasi bank."
-           : `Review QRIS H-1: payment confirmed dan tanggal paid_at tepat H-1, tetapi netto yang dihitung ${expectedNetAmount.toFixed(2)} tidak sama dengan mutasi bank ${bankAmount.toFixed(2)} (selisih ${amountDifference.toFixed(2)}).`,
+         status: amountMatches
+           ? hasDuplicateBookingPayments ? "REVIEW" : "MATCHED"
+           : "UNMATCHED",
+         confidence: amountMatches && !hasDuplicateBookingPayments ? 1 : 0,
+         reason: duplicateReason
+           ?? (amountMatches
+             ? "Auto-match QRIS: payment confirmed, tanggal paid_at tepat H-1, dan netto setelah MDR sama dengan mutasi bank."
+             : `Review QRIS H-1: payment confirmed dan tanggal paid_at tepat H-1, tetapi netto yang dihitung ${expectedNetAmount.toFixed(2)} tidak sama dengan mutasi bank ${bankAmount.toFixed(2)} (selisih ${amountDifference.toFixed(2)}).`),
       });
       for (const payment of selectedPayments) claimedPaymentIds.add(payment.id);
+       for (const duplicatePaymentId of duplicateResolution.duplicatePaymentIds) {
+         claimedPaymentIds.add(duplicatePaymentId);
+       }
       continue;
     }
 
@@ -628,7 +693,9 @@ export function generateQrisMutationBatchCandidates(input: {
 
       // Unknown provider evidence is review-only in the legacy path. The
       // strict path does not emit this row at all.
-    let selectedPayments = naturalPayments;
+    const duplicateResolution = resolveDuplicateBookingPayments(naturalPayments);
+    let selectedPayments = duplicateResolution.selectedPayments;
+    const duplicateReason = duplicateBookingReason(duplicateResolution);
     let partitionBlocked = false;
     if (hasMultipleSettlements && !hMinusOneRule) {
       // Multiple settlements on the same provider/date/account are not
@@ -704,7 +771,8 @@ export function generateQrisMutationBatchCandidates(input: {
         && !partitionBlocked
         && !splitSettlementReconcilesTotal
         && validDeduction;
-    const reviewReason = strictHMinusOneAuto
+    const reviewReason = duplicateReason
+      ?? (strictHMinusOneAuto
       ? "Auto-match QRIS: payment confirmed, H-1 kalender Jakarta, provider/rekening/company cocok, dan gross-net-MDR tervalidasi."
       : paymentMethodHMinusOneOnly
       ? "Kandidat QRIS: payment_method QRIS dan tanggal pembayaran tepat H-1 dari tanggal mutasi. Guard provider, rekening, metadata, nominal, dan rate tidak digunakan pada tahap kandidat."
@@ -736,11 +804,13 @@ export function generateQrisMutationBatchCandidates(input: {
                               ? "Observed deduction/rate di luar tolerance provider."
                               : !settlementMetadataComplete
                                 ? "Settlement metadata payment belum lengkap; tanggal H+1 dihitung dari paid_at dan kandidat wajib direview."
-                                : `${evidence.providerCode} natural batch cocok secara deterministic.`;
+                                  : `${evidence.providerCode} natural batch cocok secara deterministic.`);
 
     // Strict generation is a positive allow-list. Invalid evidence is kept
-    // only in the bank/source audit, never as a noisy REVIEW candidate.
-    if (strictHMinusOneAuto && !matched) continue;
+    // only in the bank/source audit, never as a noisy REVIEW candidate. A
+    // same-booking collision is retained as explicit review evidence so the
+    // duplicate cannot silently disappear.
+    if (strictHMinusOneAuto && !matched && !duplicateReason) continue;
 
     output.push({
       mutationId: mutation.id,
@@ -778,7 +848,7 @@ export function generateQrisMutationBatchCandidates(input: {
         paymentDate: canonicalPaymentDate(payment),
       })),
       status: strictHMinusOneAuto
-        ? "MATCHED"
+        ? matched ? "MATCHED" : "REVIEW"
         : paymentMethodHMinusOneOnly
         ? "REVIEW"
         : matched ? "MATCHED" : !completeBankDimension
