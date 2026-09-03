@@ -4519,14 +4519,8 @@ function MutationCard({
               </div>
             )}
 
-             {isQris && qrisAudits.length === 0 && !canonicalApprovalReady && (
+             {isQris && qrisAudits.length === 0 && !canonicalApprovalReady && evidence.transactions.length > 0 && (
               <div>
-                <QrisCandidateDiagnosticBlock
-                  mutation={m}
-                  diagnostic={m.qris_candidate_diagnostic}
-                  compact
-                />
-                {evidence.transactions.length > 0 && (
                   <div className="mt-2 rounded-md border border-amber-800/60 bg-card px-3 py-2 text-xs">
                     <div className="flex items-center justify-between gap-2">
                       <p className="font-semibold text-amber-300">
@@ -4562,24 +4556,6 @@ function MutationCard({
                       ))}
                     </div>
                   </div>
-                )}
-                {onGenerateQrisCandidates && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="mt-2 h-7 gap-1 border-indigo-300 bg-indigo-950 text-[11px] text-indigo-50 hover:bg-indigo-900 dark:border-indigo-700"
-                    disabled={qrisGenerationPending}
-                    onClick={event => {
-                      event.stopPropagation();
-                      onGenerateQrisCandidates();
-                    }}
-                  >
-                    {qrisGenerationPending
-                      ? <Loader2 className="h-3 w-3 animate-spin" />
-                      : <CreditCard className="h-3 w-3" />}
-                    {qrisGenerationPending ? "Membuat kandidat..." : "Cari Kandidat QRIS"}
-                  </Button>
-                )}
               </div>
             )}
 
