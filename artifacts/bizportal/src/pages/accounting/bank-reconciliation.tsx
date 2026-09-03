@@ -3593,8 +3593,20 @@ function QrisMutationCard({
   const canonicalExpectedNet = numericValue(canonicalSettlementDetails?.expectedAmount)
     ?? numericValue(canonicalSettlementDetails?.netAmount);
   const auditExpectedNet = numericValue(audit.net_amount);
+  const auditObservedDeduction = hasLiveSettlementProposal
+    ? numericValue(audit.observed_deduction)
+    : null;
+  // Some older review snapshots persisted gross and observed MDR but did not
+  // persist net_amount. Reconstruct the original expected net for display
+  // only; approval still uses the server-side settlement validation.
+  const estimatedOriginalExpectedNet =
+    snapshotGross > 0 && auditObservedDeduction != null
+      ? Math.max(0, snapshotGross - auditObservedDeduction)
+      : null;
   const originalExpectedNet = canonicalExpectedNet
-    ?? (hasLiveSettlementProposal ? auditExpectedNet : null);
+    ?? (hasLiveSettlementProposal
+      ? auditExpectedNet ?? estimatedOriginalExpectedNet
+      : null);
   const hasIdentifiedSettlement = originalExpectedNet != null;
   const expectedNet = hasLiveScope && !isReadOnlyEvidence
     ? (numericValue(audit.current_expected_amount)
@@ -3602,12 +3614,15 @@ function QrisMutationCard({
         ? candidateGross * originalExpectedNet / snapshotGross
         : null))
     : originalExpectedNet;
-  const mdr = canonicalSettlementDetails?.mdrAmount != null
+  const canonicalMdr = canonicalSettlementDetails?.mdrAmount != null
     ? numericValue(canonicalSettlementDetails.mdrAmount)
+    : null;
+  const mdr = canonicalSettlementDetails?.mdrAmount != null
+    ? canonicalMdr
     : hasLiveScope && !isReadOnlyEvidence && expectedNet != null
       ? Math.max(0, candidateGross - expectedNet)
       : hasLiveSettlementProposal
-        ? numericValue(audit.observed_deduction)
+        ? auditObservedDeduction
         : null;
   const difference = originalExpectedNet == null ? null : bankAmount - originalExpectedNet;
   const differenceAbs = difference == null ? null : Math.abs(difference);
@@ -3822,7 +3837,7 @@ function QrisMutationCard({
                     <div className="grid gap-x-4 gap-y-1 sm:grid-cols-2">
                       <span>Mutasi bank: <strong>{idr(bankAmount)}</strong></span>
                       <span>Gross payment: <strong>{idr(snapshotGross)}</strong></span>
-                       <span>Potongan MDR/biaya: <strong>{mdr == null ? "Belum dapat dihitung" : idr(mdr)}</strong></span>
+                        <span>Potongan MDR/biaya: <strong>{(canonicalMdr ?? auditObservedDeduction) == null ? "Belum dapat dihitung" : idr(canonicalMdr ?? auditObservedDeduction!)}</strong></span>
                        <span>Netto yang diharapkan: <strong>{originalExpectedNet == null ? "Belum dapat dihitung" : idr(originalExpectedNet)}</strong></span>
                        <span className="sm:col-span-2">Selisih bank − netto: <strong>{difference == null ? "Belum dapat dihitung" : idrWhole(difference)}</strong></span>
                     </div>
