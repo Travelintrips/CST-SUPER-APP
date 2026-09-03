@@ -398,8 +398,8 @@ export async function submitMarketplaceQuote(params: {
 
   // ── 4. RFQ idempotency — exact logical request only ─────────────────────
   // Do not deduplicate by customer/payload/time window: two legitimate orders
-  // may contain the same values. Explicit Idempotency-Key and correlation
-  // identity are the only reusable request identities.
+  // may contain the same values. This fast path is only for a fully linked
+  // prior logical request; canonical creation still owns the concurrency lock.
   const existingQuote = await db.execute(sql`
     SELECT
       ppo.id,
@@ -411,6 +411,7 @@ export async function submitMarketplaceQuote(params: {
       ON dwl.portal_order_id = ppo.id
      AND dwl.mkt_rfq_id IS NOT NULL
     WHERE ppo.idempotency_key = ${logicalRequestKey}
+      AND dwl.mkt_rfq_id IS NOT NULL
     ORDER BY ppo.id ASC
     LIMIT 1
   `);
