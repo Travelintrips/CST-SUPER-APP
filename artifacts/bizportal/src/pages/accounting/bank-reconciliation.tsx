@@ -1016,10 +1016,22 @@ function isCanonicalSettlementManualOverrideEligible(m: BankMutation): boolean {
     && settlementStatus === "posted";
 }
 
+function hasLiveQrisPaymentsForCanonicalApproval(m: BankMutation): boolean {
+  // A canonical candidate without a QRIS audit is still eligible for the
+  // existing non-batch/manual path. Once a live audit exists, its current
+  // payment scope is authoritative over the old candidate snapshot.
+  const audit = m.qris_candidate_audit
+    ?? (Array.isArray(m.qris_candidate_audits) ? m.qris_candidate_audits[0] : undefined);
+  if (!audit) return true;
+  return getAvailableQrisPaymentIdsFromCandidate(audit).length > 0;
+}
+
 function isCanonicalSettlementApprovalEligible(m: BankMutation): boolean {
   const candidate = canonicalSettlementCandidateForMutation(m);
   if (!candidate || !isCanonicalSettlementManualOverrideEligible(m)) return false;
-  return candidate.amount_match && candidate.date_match;
+  return candidate.amount_match
+    && candidate.date_match
+    && hasLiveQrisPaymentsForCanonicalApproval(m);
 }
 
 function isCanonicalHistoricalRepairEligible(
@@ -1027,7 +1039,9 @@ function isCanonicalHistoricalRepairEligible(
   candidate: Candidate | undefined,
 ): boolean {
   const details = candidate?.details;
-  return isCanonicalSettlementApprovalEligible(m)
+  return isCanonicalSettlementManualOverrideEligible(m)
+    && candidate?.amount_match === true
+    && candidate?.date_match === true
     && candidate === canonicalSettlementCandidateForMutation(m)
     && String(details?.settlementStatus ?? "").toLowerCase() === "posted"
     && details?.settlementJournalId != null
@@ -1186,6 +1200,9 @@ function statusLabel(m: BankMutation): string {
   if (m.status === "approved_pending_posting") return STATUS_LABELS.approved_pending_posting;
   if (m.status === "manual_review") return STATUS_LABELS.manual_review;
   if (m.status === "matched" && hasApprovedReconciliationMatch(m)) return "Perlu Diperiksa";
+  if (isCanonicalHistoricalRepairEligible(m, canonicalSettlementCandidateForMutation(m))) {
+    return "Settlement Tertunda";
+  }
   if (isCanonicalSettlementApprovalEligible(m)) return "Siap Direconcile";
   if (isCanonicalSettlementManualOverrideEligible(m)) return "Override Manual Tersedia";
   if (isQrisMutation(m) && qrisAuditsForMutation(m).length === 0) return "Perlu Kandidat QRIS";
@@ -1201,6 +1218,7 @@ function statusColor(m: BankMutation): string {
   if (m.status === "approved" || m.status === "posted") return STATUS_COLORS.approved;
   if (m.status === "manual_review") return STATUS_COLORS.manual_review;
   if (m.status === "matched" && hasApprovedReconciliationMatch(m)) return STATUS_COLORS.duplicate_need_review;
+  if (isCanonicalHistoricalRepairEligible(m, canonicalSettlementCandidateForMutation(m))) return STATUS_COLORS.manual_review;
   if (isCanonicalSettlementApprovalEligible(m)) return STATUS_COLORS.matched;
   if (isCanonicalSettlementManualOverrideEligible(m)) return STATUS_COLORS.manual_review;
   if (isQrisMutation(m) && qrisAuditsForMutation(m).length === 0) return STATUS_COLORS.duplicate_need_review;
@@ -3367,6 +3385,10 @@ function QrisMutationCard({
   );
   const canonicalOverrideReady = isCanonicalSettlementManualOverrideEligible(m);
   const canonicalApprovalReady = isCanonicalSettlementApprovalEligible(m);
+  const canonicalHistoricalRepairReady = isCanonicalHistoricalRepairEligible(
+    m,
+    canonicalSettlementCandidate,
+  );
   const canonicalSettlementDetails = canonicalSettlementCandidate?.details;
   const hasCanonicalSettlementCandidate = canonicalSettlementCandidate != null;
   const isApproved = isCanonicalReconciled
@@ -3421,6 +3443,7 @@ function QrisMutationCard({
   const canSelect = audit.id != null
     && (isMatched || isReview)
     && !isApproved
+    && !canonicalHistoricalRepairReady
     && !hasApprovedReconciliationMatch(m)
     && unconfirmedPaymentIds.size === 0
     && availablePaymentIds.length > 0
@@ -3470,6 +3493,8 @@ function QrisMutationCard({
           ? "Bukti Stale — Revisi"
           : isEmptyMatchedCandidate || isStaleMatchedCandidate
             ? "Perlu Diperbarui"
+          : canonicalHistoricalRepairReady
+            ? "Settlement Tertunda — Siap Ditautkan"
             : isMatched
               ? "Cocok"
               : "Perlu Diperiksa";
@@ -3966,6 +3991,26 @@ function QrisMutationCard({
                     ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     : <CheckCircle2 className="h-3.5 w-3.5" />}
                   {approveQrisPending ? "Memproses approval QRIS..." : `Approve QRIS Terpilih (${selectedPaymentIds.length})`}
+                </Button>
+              )}
+              {!isApproved
+                && canonicalHistoricalRepairReady
+                && canonicalSettlementCandidate
+                && onRecoverQrisSettlement && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="ml-auto h-8 gap-1.5 border-indigo-300 text-xs text-indigo-700 hover:bg-indigo-50 dark:border-indigo-700 dark:text-indigo-300"
+                  disabled={recoverQrisPending}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onRecoverQrisSettlement(m.id, canonicalSettlementCandidate.candidate_id);
+                  }}
+                >
+                  {recoverQrisPending
+                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    : <Link2 className="h-3.5 w-3.5" />}
+                  {recoverQrisPending ? "Menyelesaikan link..." : "Tautkan Settlement Posted"}
                 </Button>
               )}
               {!isApproved && hasApprovedReconciliationMatch(m) && (
@@ -5085,6 +5130,8 @@ function MutationDetailPanel({
   matchingPending,
   mappingError,
   onApproveQrisBatch,
+  onRecoverQrisSettlement,
+  recoverQrisPending,
   approveQrisPending,
   selectedQrisPaymentIds,
   onToggleQrisPayment,
@@ -5107,6 +5154,8 @@ function MutationDetailPanel({
   matchingPending: boolean;
   mappingError?: MappingRequiredError;
   onApproveQrisBatch?: (candidateId: number, mutationId: number, candidate: QrisCandidateAudit, paymentIds?: number[]) => void;
+  onRecoverQrisSettlement?: (mutationId: number, settlementId: number) => void;
+  recoverQrisPending?: boolean;
   approveQrisPending?: boolean;
   selectedQrisPaymentIds: number[];
   onToggleQrisPayment?: (candidateId: number, paymentId: number, checked: boolean) => void;
@@ -5125,6 +5174,10 @@ function MutationDetailPanel({
   const qrisDiagnostic = m.qris_candidate_diagnostic ?? null;
   const canonicalApprovalCandidate = canonicalSettlementCandidateForMutation(m);
   const canonicalApprovalReady = isCanonicalSettlementApprovalEligible(m);
+  const canonicalHistoricalRepairReady = isCanonicalHistoricalRepairEligible(
+    m,
+    canonicalApprovalCandidate,
+  );
   const canonicalOverrideReady = isCanonicalSettlementManualOverrideEligible(m);
   const canGenerateQrisForMutation = isQrisMutation(m)
     && qrisAudit == null
@@ -5657,7 +5710,24 @@ function MutationDetailPanel({
               {matchingPending ? "Mencari kandidat..." : "Cari Kandidat QRIS"}
             </Button>
           )}
-          {canonicalApprovalReady && canonicalApprovalCandidate && onApproveCandidate && (
+          {canonicalHistoricalRepairReady
+            && canonicalApprovalCandidate
+            && onRecoverQrisSettlement ? (
+            <Button
+              className="flex-1 gap-1.5 border-indigo-300 text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:text-indigo-300 min-w-[190px]"
+              variant="outline"
+              disabled={recoverQrisPending}
+              onClick={() => {
+                onClose();
+                onRecoverQrisSettlement(m.id, canonicalApprovalCandidate.candidate_id);
+              }}
+            >
+              {recoverQrisPending
+                ? <Loader2 className="h-4 w-4 animate-spin" />
+                : <Link2 className="h-4 w-4" />}
+              {recoverQrisPending ? "Menyelesaikan link..." : "Tautkan Settlement Posted"}
+            </Button>
+          ) : canonicalApprovalReady && canonicalApprovalCandidate && onApproveCandidate && (
             <Button
               className="flex-1 gap-1.5 bg-green-600 hover:bg-green-700 min-w-[190px]"
               onClick={() => {
@@ -8451,6 +8521,8 @@ export default function BankReconciliationPage() {
         matchingPending={matchMut.isPending || matchingBackgroundPending}
         mappingError={detailMutation ? mappingRequiredErrors.get(detailMutation.id) : undefined}
         onApproveQrisBatch={handleApproveQrisBatch}
+         onRecoverQrisSettlement={handleRecoverQrisSettlement}
+         recoverQrisPending={recoverQrisSettlementMut.isPending}
         onManualOverrideCandidate={handleManualOverrideCandidate}
         approveQrisPending={approveQrisBatchMut.isPending}
         selectedQrisPaymentIds={
