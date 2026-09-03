@@ -22,6 +22,8 @@
 - [Google credential separation](google-credential-separation.md) — Service Account Google Sheets dan bootstrap Secret Manager dapat berbeda dan membutuhkan izin berbeda.
 - [BizPortal preview API proxy](bizportal-preview-api-proxy.md) — preview BizPortal harus meneruskan `/api` ke API server port 8080 agar login tidak 502.
 - [Dev/Prod DB Isolation](dev-prod-isolation.md) — APP_ENV=development di start-dev.sh; load-secrets.mjs inject *_DEV keys as canonical + shared keys tanpa _DEV counterpart.
+
+- [Drizzle v0.45 Serial Sequence Desync](sequence-desync-drizzle.md) — Drizzle v0.45 eksplisit `id DEFAULT`; sequence yg di-bypass saat bulk-import → duplicate key; fix: syncAccountingSequences() di startup.
 - [Draft journal reuse policy](draft-journal-reuse.md) — bank recon on unlinked draft + matching amount → REUSE_EXISTING_JOURNAL; was incorrectly blocked as MANUAL_REVIEW_REQUIRED → false "Buat Proposal COA".
 - [Posting service draft-first rule](posting-service-draft-first.md) — insert entry as 'draft', insert lines, then promote to 'posted'; trigger blocks line INSERT on posted entries.
 - [Production COA ID mismatch](prod-coa-id-mismatch.md) — import data produksi tanpa COA → Trial Balance kosong; remap account_id via session_replication_role + CASE UPDATE.
@@ -41,7 +43,6 @@
 - [Candidate display identity](candidate-display-identity.md) — technical candidate identities can mirror one business payment; collapse known references for reviewer display.
 - [Unified vendor service label](unified-vendor-service-label.md) — preserve canonical marketplace line/catalog names before normalized service keys in Admin vendor-request display.
 - [Marketplace invoice upload idempotency](marketplace-invoice-upload-idempotency.md) — hapus attachment private baru pada duplicate/failure; hanya pertahankan setelah invoice baru commit.
-- [Bank recon SQL column audit](bank-recon-sql-column-audit.md) — candidateDetailsSql had wrong column names on 4 tables; UNION ALL type mismatch (ENUM vs TEXT); Drizzle hides real error in e.cause?.message; DROP VIEW before CREATE OR REPLACE VIEW.
 - [Recon validation environment](recon-validation-environment.md) — restore with frozen pnpm lockfile and build shared declarations before API typecheck; two isolation tests require missing dev tables.
 - [Sport Center audit contract](sport-center-audit-contract.md) — mirror trigger tetap owner; payment hanya posted setelah entry_id valid; jangan menambah relasi jurnal paralel.
 - [Sport Center payment method backfill](sport-center-payment-method-backfill.md) — legacy sync mengisi accounting_payments tetapi journal header bisa tetap NULL; backfill keduanya dari mirror source.
@@ -150,3 +151,4 @@
 - [Canonical payment status repair](canonical-payment-status-repair.md) — source status resets can fire posted-journal mirrors; use the transaction-local metadata correction window, never disable guards.
 - [Rule AI internal transfer posting](rule-ai-internal-transfer-posting.md) — internal-transfer rules use their configured destination cash/bank COA with asset treatment; never infer it from description.
 - [Bank mutation allocation runtime contract](bank-mutation-allocation-runtime-contract.md) — additive lineage DDL needs a registered startup stage; legacy mutation dates may be text in development runtime.
+- [Package firewall dependency recovery](package-firewall-dependency-recovery.md) — if the firewall blocks a direct package tarball, check the latest safe version and update the pinned importer before retrying frozen install.

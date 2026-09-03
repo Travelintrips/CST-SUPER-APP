@@ -21,6 +21,12 @@ Manual QRIS approval memakai `company_bank_accounts.id` hanya untuk membuktikan 
 
 **How to apply:** Setelah config dibuktikan melalui join account-number → active internal ID, materialize nomor rekening config ke payment sebelum canonical builder; jangan meneruskan internal mutation account ID sebagai group identity.
 
+Lookup konfigurasi MDR juga wajib memakai boundary identitas rekening yang sama; menyelesaikan rekening setelah query config terlalu terlambat. Bandingkan ID internal dan nomor rekening eksternal payment melalui satu rekening aktif milik company sebelum config owner-approved dianggap tidak tersedia.
+
+**Why:** Di PROD, payment 361 menyimpan ID rekening internal `2`, sedangkan config Mandiri aktif memakai nomor rekening eksternal `1640006707220`; equality mentah menghilangkan MDR 0,7% payment tersebut dan menghasilkan potongan palsu Rp1.400 untuk batch Rp500.000.
+
+**How to apply:** Pertahankan fast path equality mentah, lalu cocokkan kedua representasi melalui rekening aktif yang scope ke company. Jangan memilih rekening sembarang atau wildcard saat mapping kosong/ambigu.
+
 Daftar mutasi juga harus memperlakukan `public.bank_mutations.bank_account_id` sebagai identitas teks pada runtime produksi, walaupun instalasi lama atau deklarasi awal dapat mengasumsikannya sebagai INTEGER.
 
 **Why:** Join langsung ke `company_bank_accounts.id` membuat seluruh endpoint daftar gagal dengan `integer = text`, sementara kartu ringkasan tetap berhasil dan UI terlihat seperti memiliki data tetapi menampilkan nol baris.
