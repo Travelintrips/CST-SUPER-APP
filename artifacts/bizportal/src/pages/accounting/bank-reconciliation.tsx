@@ -1667,6 +1667,7 @@ function CandidateDetailsBlock({
   candidate: Candidate;
   compact?: boolean;
 }) {
+  const [open, setOpen] = useState(false);
   const d = candidate.details;
   if (!d) return null;
   const isCanonicalSettlement =
@@ -1722,81 +1723,103 @@ function CandidateDetailsBlock({
   if (rows.length === 0) return null;
 
   return (
-    <div className={`min-w-0 rounded-md bg-muted/35 border border-dashed space-y-1 ${compact ? "p-2 mt-1.5" : "p-2.5 mt-2"}`}>
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {isRuleCandidate ? "Detail Rule AI / sumber pencocokan" : "Detail transaksi sumber"}
-      </p>
-      {d.settlementPartial && (
-        <p className="text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-          Settlement QRIS PARTIAL — hanya sebagian dana/provider batch yang sudah tersettle; perlu review sebelum dianggap lunas.
-        </p>
-      )}
-      {hasVarianceEvidence && (
-        <div className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-2 text-[11px] text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
-          <div className="flex items-center justify-between gap-2">
-            <p className="font-semibold">Variance settlement QRIS</p>
-            <Badge variant="outline" className="border-amber-400 bg-amber-100 text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
-              Perlu Review
-            </Badge>
+    <Collapsible
+      open={open}
+      onOpenChange={setOpen}
+      className={`min-w-0 rounded-md border border-dashed bg-muted/35 ${compact ? "mt-1.5" : "mt-2"}`}
+    >
+      <CollapsibleTrigger asChild>
+        <button
+          type="button"
+          className={`flex w-full items-center justify-between gap-2 rounded-md text-left transition-colors hover:bg-muted/60 ${compact ? "p-2" : "p-2.5"}`}
+          onClick={event => event.stopPropagation()}
+          onKeyDown={event => event.stopPropagation()}
+          aria-label={`${open ? "Sembunyikan" : "Lihat"} ${isRuleCandidate ? "detail Rule AI" : "detail transaksi sumber"}`}
+        >
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            {open
+              ? (isRuleCandidate ? "Sembunyikan detail Rule AI / sumber pencocokan" : "Sembunyikan detail transaksi sumber")
+              : (isRuleCandidate ? "Lihat detail Rule AI / sumber pencocokan" : "Lihat detail transaksi sumber")}
+          </span>
+          {open ? <ChevronUp className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+        </button>
+      </CollapsibleTrigger>
+      <CollapsibleContent
+        className={`space-y-1 border-t border-dashed ${compact ? "p-2" : "p-2.5"}`}
+        onClick={event => event.stopPropagation()}
+      >
+        {d.settlementPartial && (
+          <p className="text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+            Settlement QRIS PARTIAL — hanya sebagian dana/provider batch yang sudah tersettle; perlu review sebelum dianggap lunas.
+          </p>
+        )}
+        {hasVarianceEvidence && (
+          <div className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-2 text-[11px] text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
+            <div className="flex items-center justify-between gap-2">
+              <p className="font-semibold">Variance settlement QRIS</p>
+              <Badge variant="outline" className="border-amber-400 bg-amber-100 text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">
+                Perlu Review
+              </Badge>
+            </div>
+            <div className="mt-1 grid grid-cols-1 gap-0.5 sm:grid-cols-2">
+              <span>Expected Settlement: <b>{idr(d.expectedAmount ?? 0)}</b></span>
+              <span>Mutasi Bank: <b>{idr(d.actualBankAmount ?? 0)}</b></span>
+              <span>Selisih: <b>{Number(d.varianceAmount) >= 0 ? "+" : ""}{idr(d.varianceAmount ?? 0)}</b></span>
+              <span>Variance: <b>{Number(d.variancePercent ?? 0).toFixed(2)}%</b></span>
+            </div>
+            <p className="mt-1 text-[10px]">
+              Status: <b>need_review</b> · reason: <b>amount_variance</b>
+              {d.settlementRuleVersion ? <> · rule {d.settlementRuleVersion}</> : null}
+            </p>
+            <p className="mt-1 text-[10px] text-amber-800 dark:text-amber-200">
+              Kandidat ini tidak auto-match dan tidak auto-approve.
+            </p>
           </div>
-          <div className="mt-1 grid grid-cols-1 gap-0.5 sm:grid-cols-2">
-            <span>Expected Settlement: <b>{idr(d.expectedAmount ?? 0)}</b></span>
-            <span>Mutasi Bank: <b>{idr(d.actualBankAmount ?? 0)}</b></span>
-            <span>Selisih: <b>{Number(d.varianceAmount) >= 0 ? "+" : ""}{idr(d.varianceAmount ?? 0)}</b></span>
-            <span>Variance: <b>{Number(d.variancePercent ?? 0).toFixed(2)}%</b></span>
-          </div>
-          <p className="mt-1 text-[10px]">
-            Status: <b>need_review</b> · reason: <b>amount_variance</b>
-            {d.settlementRuleVersion ? <> · rule {d.settlementRuleVersion}</> : null}
-          </p>
-          <p className="mt-1 text-[10px] text-amber-800 dark:text-amber-200">
-            Kandidat ini tidak auto-match dan tidak auto-approve.
-          </p>
-        </div>
-      )}
-      {d.settlementItems && d.settlementItems.length > 0 && (
-        <div className="border-t pt-1.5 mt-1.5 space-y-1.5">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-            Rincian payment settlement
-          </p>
-          <div className="space-y-1">
-            {d.settlementItems.map((item, index) => (
-              <div
-                key={item.id ?? item.sportPaymentId ?? index}
-                className="rounded border bg-background/70 px-2 py-1.5 text-[10px]"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-medium">
-                    {item.paymentNumber ?? `Payment #${item.sportPaymentId ?? "—"}`}
-                  </span>
-                  {item.bookingId != null && (
-                    <span className="text-muted-foreground">Booking #{item.bookingId}</span>
-                  )}
+        )}
+        {d.settlementItems && d.settlementItems.length > 0 && (
+          <div className="border-t pt-1.5 mt-1.5 space-y-1.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Rincian payment settlement
+            </p>
+            <div className="space-y-1">
+              {d.settlementItems.map((item, index) => (
+                <div
+                  key={item.id ?? item.sportPaymentId ?? index}
+                  className="rounded border bg-background/70 px-2 py-1.5 text-[10px]"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium">
+                      {item.paymentNumber ?? `Payment #${item.sportPaymentId ?? "—"}`}
+                    </span>
+                    {item.bookingId != null && (
+                      <span className="text-muted-foreground">Booking #{item.bookingId}</span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-2 gap-y-0.5 mt-1 text-muted-foreground">
+                    <span>Gross: <b className="text-foreground">{item.grossAmount != null ? idr(item.grossAmount) : "—"}</b></span>
+                    <span>MDR: <b className="text-foreground">{item.mdrAmount != null ? idr(item.mdrAmount) : "—"}</b></span>
+                    <span>Pajak/fee: <b className="text-foreground">
+                      {idr(Number(item.taxWithheldAmount ?? 0) + Number(item.otherFeeAmount ?? 0))}
+                    </b></span>
+                    <span>Net: <b className="text-foreground">{item.netAmount != null ? idr(item.netAmount) : "—"}</b></span>
+                  </div>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-2 gap-y-0.5 mt-1 text-muted-foreground">
-                  <span>Gross: <b className="text-foreground">{item.grossAmount != null ? idr(item.grossAmount) : "—"}</b></span>
-                  <span>MDR: <b className="text-foreground">{item.mdrAmount != null ? idr(item.mdrAmount) : "—"}</b></span>
-                  <span>Pajak/fee: <b className="text-foreground">
-                    {idr(Number(item.taxWithheldAmount ?? 0) + Number(item.otherFeeAmount ?? 0))}
-                  </b></span>
-                  <span>Net: <b className="text-foreground">{item.netAmount != null ? idr(item.netAmount) : "—"}</b></span>
-                </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
+        )}
+        <div className={`min-w-0 grid ${compact ? "grid-cols-1" : "grid-cols-1 sm:grid-cols-[minmax(0,auto)_minmax(0,1fr)]"} gap-x-3 gap-y-1`}>
+          {rows.map(row => (
+            <React.Fragment key={row.label}>
+              <span className="min-w-0 text-[10px] text-muted-foreground">{row.label}</span>
+              <span className={`min-w-0 text-xs font-medium ${compact ? "" : "sm:text-right"} break-all`}>
+                {String(row.value)}
+              </span>
+            </React.Fragment>
+          ))}
         </div>
-      )}
-      <div className={`min-w-0 grid ${compact ? "grid-cols-1" : "grid-cols-1 sm:grid-cols-[minmax(0,auto)_minmax(0,1fr)]"} gap-x-3 gap-y-1`}>
-        {rows.map(row => (
-          <React.Fragment key={row.label}>
-            <span className="min-w-0 text-[10px] text-muted-foreground">{row.label}</span>
-            <span className={`min-w-0 text-xs font-medium ${compact ? "" : "sm:text-right"} break-all`}>
-              {String(row.value)}
-            </span>
-          </React.Fragment>
-        ))}
-      </div>
-    </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
