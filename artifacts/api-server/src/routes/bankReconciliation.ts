@@ -4782,7 +4782,6 @@ router.get("/mutations", async (req, res) => {
             AND UPPER(COALESCE(qc.status, '')) NOT IN (
               'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
             )
-            AND ${qrisSnapshotPaymentMethodSql}
             AND ${bankMutationPaymentTypeSql("bm")} = 'qris'
           ORDER BY qc.updated_at DESC, qc.id DESC
           LIMIT 1

@@ -18,6 +18,7 @@ import {
   type QrisProviderRuleCatalog,
 } from "./providerSettlementRules.js";
 import {
+  addCalendarDays,
   businessDayDistance,
   jakartaDateFromTimestamp,
 } from "./businessCalendar.js";
@@ -360,7 +361,44 @@ export function generateQrisMutationBatchCandidates(input: {
           && calendarDate(payment.paidAt) != null
           && resolveSettlementDate(payment.paidAt, null, 1) === mutation.transactionDate,
       );
-      if (selectedPayments.length === 0) continue;
+      if (selectedPayments.length === 0) {
+        // Keep a QRIS bank row auditable even when no confirmed source payment
+        // was found for the exact H-1 cohort. This is diagnostic evidence only:
+        // the empty payment_items array can never pass approval eligibility.
+        // Without this row the UI misleadingly says that no QRIS check exists,
+        // which hides whether the problem is paid_at, status, company, or sync.
+        if (!isQrisSettlementDescription(mutation.description)) continue;
+        const mutationProvider = normalizeQrisProvider(mutation.description);
+        const expectedPaymentDate = addCalendarDays(mutation.transactionDate, -1);
+        output.push({
+          mutationId: mutation.id,
+          companyId: mutation.companyId,
+          bankAccountId: mutation.bankAccountId,
+          providerCode: mutationProvider,
+          providerDetectionSource: mutationProvider === "unknown"
+            ? "unknown"
+            : "mutation_description",
+          mutationSourceClassification: classifyBankMutationSource(
+            mutation.source,
+            mutation.sourceClassification,
+          ),
+          sourceDate: mutation.transactionDate,
+          estimatedSettlementDate: mutation.transactionDate,
+          settlementRuleVersion: "payment-method-h-minus-one-v1",
+          grossAmount: 0,
+          netAmount: roundMoney(Number(mutation.amount) || 0),
+          observedDeduction: 0,
+          effectiveDeductionRate: null,
+          paymentItems: [],
+          status: "UNMATCHED",
+          confidence: 0,
+          reason:
+            `Belum ditemukan payment QRIS confirmed dengan paid_at ${expectedPaymentDate} `
+            + `untuk settlement mutasi ${mutation.transactionDate}. `
+            + "Periksa status payment, paid_at, company, dan sinkronisasi Sport Center.",
+        });
+        continue;
+      }
 
       const grossAmount = roundMoney(
         selectedPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0),
