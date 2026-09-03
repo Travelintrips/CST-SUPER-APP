@@ -2630,6 +2630,15 @@ function CoaReferenceDialog({
   const [search, setSearch] = useState("");
   const [selectedCode, setSelectedCode] = useState("");
   const [saving, setSaving] = useState(false);
+  const [showRuleMetadata, setShowRuleMetadata] = useState(true);
+  const [ruleMetadata, setRuleMetadata] = useState({
+    name: "",
+    description: "",
+    referenceAmount: "",
+    amountTolerance: "",
+    confidence: "1",
+    priority: "120",
+  });
   const [creatingCoa, setCreatingCoa] = useState(false);
   const [creating, setCreating] = useState(false);
   const approvalKeyRef = useRef<{ mutationId: number; coaCode: string; key: string } | null>(null);
@@ -2684,6 +2693,16 @@ function CoaReferenceDialog({
     setSearch("");
     setSelectedCode("");
     setSaving(false);
+    const mutationDescription = String(mutation.description ?? "").trim();
+    setShowRuleMetadata(true);
+    setRuleMetadata({
+      name: `Pemetaan COA — ${mutationDescription}`.slice(0, 120),
+      description: `Dibuat dari pemilihan COA pada mutasi bank #${mutation.id}`,
+      referenceAmount: "",
+      amountTolerance: "",
+      confidence: "1",
+      priority: "120",
+    });
     setCreatingCoa(false);
     setCreating(false);
     setNewCoaRole("child");
@@ -2862,11 +2881,37 @@ function CoaReferenceDialog({
       primaryCondition,
       { field: "direction", operator: "equals", value: mutation.direction },
     ];
-    const ruleName = `Pemetaan COA — ${description}`.slice(0, 120);
+    const ruleName = ruleMetadata.name.trim();
+    if (!ruleName) {
+      throw new Error("Nama Rule AI wajib diisi");
+    }
+    const confidence = Number(ruleMetadata.confidence);
+    if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+      throw new Error("Confidence harus berupa angka antara 0 dan 1");
+    }
+    const priority = Number(ruleMetadata.priority);
+    if (!Number.isSafeInteger(priority) || priority < 1 || priority > 999) {
+      throw new Error("Prioritas harus berupa angka bulat antara 1 dan 999");
+    }
+    const referenceAmount = ruleMetadata.referenceAmount.trim() === ""
+      ? null
+      : Number(ruleMetadata.referenceAmount);
+    const amountTolerance = ruleMetadata.amountTolerance.trim() === ""
+      ? null
+      : Number(ruleMetadata.amountTolerance);
+    if (referenceAmount !== null && (!Number.isFinite(referenceAmount) || referenceAmount < 0)) {
+      throw new Error("Nominal referensi harus berupa angka nol atau lebih");
+    }
+    if (amountTolerance !== null && (!Number.isFinite(amountTolerance) || amountTolerance < 0)) {
+      throw new Error("Toleransi nominal harus berupa angka nol atau lebih");
+    }
+    if (amountTolerance !== null && amountTolerance > 0 && referenceAmount === null) {
+      throw new Error("Nominal referensi wajib diisi jika toleransi nominal lebih besar dari nol");
+    }
 
     return {
       name: ruleName,
-      description: `Dibuat dari pemilihan COA pada mutasi bank #${mutation.id}`,
+      description: ruleMetadata.description.trim() || null,
       condition_field: primaryCondition.field,
       condition_operator: primaryCondition.operator,
       condition_value: primaryCondition.value,
@@ -2877,8 +2922,10 @@ function CoaReferenceDialog({
         ? "INCOME_ALLOCATION"
         : "ROUTINE_EXPENSE_ALLOCATION",
       action_coa_code: selected.code,
-      confidence: 1,
-      priority: 120,
+      amount_tolerance: amountTolerance,
+      reference_amount: referenceAmount,
+      confidence,
+      priority,
       source: "manual",
       company_id: companyId,
     };
@@ -2997,7 +3044,7 @@ function CoaReferenceDialog({
 
   return (
     <Dialog open={open} onOpenChange={value => !value && onClose()}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <BookOpen className="h-4 w-4 text-indigo-600" />
@@ -3251,6 +3298,150 @@ function CoaReferenceDialog({
               <p className="text-xs text-indigo-700 dark:text-indigo-300">
                 Terpilih: <strong>{selectedAccount.code} — {selectedAccount.name}</strong>
               </p>
+            )}
+          </div>
+
+          <div className="rounded-md border border-indigo-200 bg-indigo-50/40 p-3 dark:border-indigo-900 dark:bg-indigo-950/20">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-indigo-950 dark:text-indigo-100">
+                  Metadata Rule AI
+                </p>
+                <p className="text-[11px] text-indigo-800/80 dark:text-indigo-200/80">
+                  Isi atau ubah informasi yang akan disimpan bersama mapping COA ini.
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="shrink-0 text-xs text-indigo-700 hover:bg-indigo-100 hover:text-indigo-900 dark:text-indigo-200 dark:hover:bg-indigo-900"
+                onClick={() => setShowRuleMetadata(value => !value)}
+                aria-expanded={showRuleMetadata}
+              >
+                {showRuleMetadata ? "Sembunyikan" : "Tampilkan"}
+              </Button>
+            </div>
+
+            {showRuleMetadata && (
+              <div className="mt-3 space-y-3 border-t border-indigo-200/70 pt-3 dark:border-indigo-900/70">
+                <div className="space-y-1.5">
+                  <Label htmlFor="coa-rule-name" className="text-xs font-medium">
+                    Nama Rule AI <span className="text-red-500">*</span>
+                  </Label>
+                  <Input
+                    id="coa-rule-name"
+                    value={ruleMetadata.name}
+                    maxLength={120}
+                    onChange={event => setRuleMetadata(metadata => ({
+                      ...metadata,
+                      name: event.target.value,
+                    }))}
+                    placeholder="Contoh: Pembayaran vendor listrik"
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    Nama ini tampil di daftar Rule AI dan dapat diedit lagi dari menu Konfigurasi Rekonsiliasi.
+                  </p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="coa-rule-description" className="text-xs font-medium">
+                    Deskripsi / catatan
+                  </Label>
+                  <Textarea
+                    id="coa-rule-description"
+                    value={ruleMetadata.description}
+                    maxLength={500}
+                    rows={2}
+                    onChange={event => setRuleMetadata(metadata => ({
+                      ...metadata,
+                      description: event.target.value,
+                    }))}
+                    placeholder="Jelaskan kapan rule ini boleh digunakan..."
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="coa-rule-reference-amount" className="text-xs font-medium">
+                      Nominal referensi (Rp)
+                    </Label>
+                    <Input
+                      id="coa-rule-reference-amount"
+                      type="number"
+                      min={0}
+                      step={1}
+                      inputMode="numeric"
+                      value={ruleMetadata.referenceAmount}
+                      onChange={event => setRuleMetadata(metadata => ({
+                        ...metadata,
+                        referenceAmount: event.target.value,
+                      }))}
+                      placeholder="Kosong = semua nominal"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="coa-rule-amount-tolerance" className="text-xs font-medium">
+                      Toleransi nominal (Rp)
+                    </Label>
+                    <Input
+                      id="coa-rule-amount-tolerance"
+                      type="number"
+                      min={0}
+                      step={1}
+                      inputMode="numeric"
+                      value={ruleMetadata.amountTolerance}
+                      onChange={event => setRuleMetadata(metadata => ({
+                        ...metadata,
+                        amountTolerance: event.target.value,
+                      }))}
+                      placeholder="Kosong = exact"
+                    />
+                  </div>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Toleransi hanya boleh diisi jika nominal referensi diisi. Kondisi ini tetap berjalan bersama kondisi deskripsi/referensi dan arah transaksi.
+                </p>
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="coa-rule-confidence" className="text-xs font-medium">
+                      Confidence (0–1)
+                    </Label>
+                    <Input
+                      id="coa-rule-confidence"
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      inputMode="decimal"
+                      value={ruleMetadata.confidence}
+                      onChange={event => setRuleMetadata(metadata => ({
+                        ...metadata,
+                        confidence: event.target.value,
+                      }))}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="coa-rule-priority" className="text-xs font-medium">
+                      Prioritas (1–999)
+                    </Label>
+                    <Input
+                      id="coa-rule-priority"
+                      type="number"
+                      min={1}
+                      max={999}
+                      step={1}
+                      inputMode="numeric"
+                      value={ruleMetadata.priority}
+                      onChange={event => setRuleMetadata(metadata => ({
+                        ...metadata,
+                        priority: event.target.value,
+                      }))}
+                    />
+                  </div>
+                </div>
+              </div>
             )}
           </div>
 
