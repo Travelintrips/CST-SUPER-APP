@@ -181,8 +181,15 @@ const sourceRows = sql`
       COALESCE(r.customer_company, '')::text,
       r.company_id::int,
       COALESCE(r.portal_customer_id, r.customer_id)::int,
-      r.status::text IN ('submitted', 'pending_review', 'waiting_rate', 'reviewing', 'quoted'),
-      r.status::text IN ('draft', 'submitted', 'pending_review', 'waiting_rate', 'reviewing', 'quoted', 'approved', 'booked', 'completed', 'cancelled', 'quote_declined'),
+      r.status::text IN (
+        'submitted', 'pending_review', 'need_review', 'need_more_data',
+        'waiting_rate', 'reviewing', 'quoted', 'approved_for_rfq'
+      ),
+      r.status::text IN (
+        'draft', 'submitted', 'pending_review', 'need_review', 'need_more_data',
+        'waiting_rate', 'reviewing', 'quoted', 'approved_for_rfq',
+        'approved', 'booked', 'completed', 'rejected', 'cancelled', 'quote_declined'
+      ),
       r.created_at,
       COALESCE(r.updated_at, r.created_at),
       ('/bizportal/logistics/service-requests/' || r.id)::text,
@@ -222,7 +229,7 @@ const sourceRows = sql`
       r.customer_name::text,
       ''::text,
       r.company_id::int,
-      NULL::int,
+      r.portal_customer_id::int,
       r.status::text IN ('new', 'submitted', 'pending_review', 'waiting_rate', 'quoted', 'approved', 'booked', 'in_progress'),
       r.status::text IN ('new', 'submitted', 'pending_review', 'waiting_rate', 'quoted', 'approved', 'booked', 'in_progress', 'delivered', 'completed', 'cancelled'),
       r.created_at,
@@ -243,7 +250,7 @@ const sourceRows = sql`
       r.customer_name::text,
       COALESCE(r.customer_company, '')::text,
       r.company_id::int,
-      NULL::int,
+      r.portal_customer_id::int,
       r.status::text IN ('new', 'submitted', 'pending_review', 'waiting_rate', 'quoted', 'approved', 'booked', 'in_progress'),
       r.status::text IN ('new', 'submitted', 'pending_review', 'waiting_rate', 'quoted', 'approved', 'booked', 'in_progress', 'delivered', 'completed', 'cancelled'),
       r.created_at,

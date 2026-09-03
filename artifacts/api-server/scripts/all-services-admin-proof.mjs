@@ -26,13 +26,19 @@ const pool = new pg.Pool({
 });
 
 const created = {
+  marketplace: [],
   ocean: [],
   air: [],
   trucking: [],
   csr: [],
+  portalCustomers: [],
 };
 const checks = [];
 let adminToken = "";
+let customerToken = "";
+let customerId = 0;
+let secondaryCustomerToken = "";
+let marketplaceQuoteId = 0;
 let internalCookie = "";
 
 function check(name, ok, detail = "") {
@@ -54,9 +60,49 @@ async function http(path, options = {}, expected = [200]) {
 }
 
 const adminHeaders = () => ({ authorization: `Bearer ${adminToken}` });
+const customerHeaders = () => ({ authorization: `Bearer ${customerToken}` });
+const internalHeaders = () => ({ cookie: internalCookie });
 
 async function db(sql, params = []) {
   return (await pool.query(sql, params)).rows;
+}
+
+async function ensureInternalAdmin() {
+  if (internalCookie) return;
+  const configuredAdminEmail = [
+    ...(process.env.ADMIN_EMAIL ?? "").split(","),
+    ...(process.env.ADMIN_EMAILS ?? "").split(","),
+  ].map((value) => value.trim()).filter(Boolean)[0];
+  const devUsers = await http("/api/dev-users", {}, [200]);
+  const seededAdminEmail = (devUsers.body?.users ?? [])
+    .find((user) => ["admin", "super_admin", "logistics", "operations"].includes(user?.role) && typeof user?.email === "string")
+    ?.email;
+  const adminEmail = configuredAdminEmail ?? seededAdminEmail ?? "audit-admin@example.invalid";
+  const internal = await http("/api/dev-login", {
+    method: "POST",
+    body: JSON.stringify({ email: adminEmail }),
+  }, [200]);
+  internalCookie = internal.headers.get("set-cookie") ?? "";
+  check("Development internal BizPortal session", Boolean(internalCookie));
+}
+
+async function signupFixture(label) {
+  const suffix = `${marker}-${label}`.toLowerCase();
+  const signup = await http("/api/portal/auth/signup", {
+    method: "POST",
+    body: JSON.stringify({
+      name: `${marker} ${label}`,
+      email: `${label.toLowerCase()}-${suffix}@example.invalid`,
+      password: "AuditProof!2026",
+      phone: `08${[...suffix].map((char) => char.charCodeAt(0) % 10).join("").slice(0, 10)}`,
+      customerType: "individual",
+    }),
+  }, [201]);
+  const token = String(signup.body?.token ?? "");
+  const id = Number(signup.body?.user?.id ?? signup.body?.profile?.id);
+  created.portalCustomers.push(id);
+  check(`${label} customer session`, Boolean(token) && id > 0, `customer ${id}`);
+  return { token, id };
 }
 
 async function waitForNotifications(ids, timeoutMs = 4000) {
@@ -90,6 +136,7 @@ async function waitForNotifications(ids, timeoutMs = 4000) {
 async function createCsr(serviceType, label) {
   const draft = await http("/api/customer-service-requests", {
     method: "POST",
+    headers: customerHeaders(),
     body: JSON.stringify({
       customerName: `${marker} ${label}`,
       customerEmail: `${label.toLowerCase()}-${marker.toLowerCase()}@example.invalid`,
@@ -106,6 +153,7 @@ async function createCsr(serviceType, label) {
 
   const item = await http(`/api/customer-service-requests/${requestId}/items`, {
     method: "POST",
+    headers: customerHeaders(),
     body: JSON.stringify({
       itemType: serviceType,
       title: `${marker} ${label}`,
@@ -116,6 +164,7 @@ async function createCsr(serviceType, label) {
 
   const submitted = await http(`/api/customer-service-requests/${requestId}/submit`, {
     method: "POST",
+    headers: customerHeaders(),
     body: JSON.stringify({}),
   }, [200]);
   check(`${label} customer submit`, submitted.body?.status === "submitted", `request ${requestId}`);
@@ -123,8 +172,86 @@ async function createCsr(serviceType, label) {
 }
 
 async function createFixtures() {
+  const catalog = await http("/api/portal/marketplace", {}, [200]);
+  const catalogItems = Array.isArray(catalog.body)
+    ? catalog.body
+    : (catalog.body?.items ?? catalog.body?.data ?? []);
+  const catalogItem = Array.isArray(catalogItems)
+    ? catalogItems.find((item) => Number.isInteger(Number(item?.id)))
+    : null;
+  if (!catalogItem?.id) {
+    check("Marketplace published catalog available", false, "item none");
+  }
+  check("Marketplace published catalog available", true, `item ${catalogItem.id}`);
+
+  const marketplace = await http(`/api/portal/marketplace/${catalogItem.id}/quote`, {
+    method: "POST",
+    headers: { ...customerHeaders(), "Idempotency-Key": `${marker}:marketplace-submit` },
+    body: JSON.stringify({
+      buyer_name: `${marker} Marketplace`,
+      email: `marketplace-${marker.toLowerCase()}@example.invalid`,
+      phone: "081234567890",
+      quantity: 1,
+      destination: `${marker} Destination`,
+      notes: marker,
+    }),
+  }, [201]);
+  const marketplaceId = Number(marketplace.body?.rfqId ?? marketplace.body?.rfq?.id);
+  created.marketplace.push(marketplaceId);
+  check("Marketplace customer submit", marketplaceId > 0, `rfq ${marketplaceId}`);
+
+  const vendor = (await db(
+    "SELECT id FROM suppliers WHERE is_active = TRUE ORDER BY id LIMIT 1",
+  ))[0];
+  if (!vendor?.id) {
+    check("Marketplace proof vendor fixture available", false, "vendor none");
+  }
+  check("Marketplace proof vendor fixture available", true, `vendor ${vendor.id}`);
+  const invite = await http(`/api/mkt/admin/rfqs/${marketplaceId}/invite-vendor`, {
+    method: "POST",
+    headers: internalHeaders(),
+    body: JSON.stringify({ vendorId: Number(vendor.id) }),
+  }, [201]);
+  marketplaceQuoteId = Number(invite.body?.data?.quoteId);
+  const quoteRows = await db(
+    "SELECT token FROM mkt_vendor_quotes WHERE id = $1 AND rfq_id = $2",
+    [marketplaceQuoteId, marketplaceId],
+  );
+  const rfqLines = await db(
+    "SELECT id, requested_qty FROM mkt_rfq_lines WHERE rfq_id = $1 ORDER BY sort_order, id",
+    [marketplaceId],
+  );
+  check("Marketplace vendor quote invite", Boolean(quoteRows[0]?.token) && rfqLines.length > 0,
+    `quote ${marketplaceQuoteId}, lines=${rfqLines.length}`);
+  const vendorQuote = await http(`/api/vendor-quote/${quoteRows[0].token}/submit`, {
+    method: "POST",
+    body: JSON.stringify({
+      quotationNumber: `${marker}-QUOTE`,
+      quotationDate: "2026-09-03",
+      currency: "USD",
+      lines: rfqLines.map((line) => ({
+        rfqLineId: Number(line.id),
+        offeredUnitPrice: 100,
+        offeredQty: Math.max(1, Number(line.requested_qty ?? 1)),
+        currency: "USD",
+        validUntil: "2026-09-30",
+        leadTimeDays: 7,
+        stockStatus: "available",
+      })),
+    }),
+  }, [200]);
+  check("Marketplace vendor quote submitted", vendorQuote.body?.ok === true, `quote ${marketplaceQuoteId}`);
+  const sendToCustomer = await http(`/api/mkt/admin/rfqs/${marketplaceId}/send-to-customer`, {
+    method: "POST",
+    headers: internalHeaders(),
+    body: JSON.stringify({ quoteId: marketplaceQuoteId, notes: marker }),
+  }, [200]);
+  check("Marketplace canonical admin action", sendToCustomer.body?.data?.status === "customer_review",
+    `status=${sendToCustomer.body?.data?.status}`);
+
   const ocean = await http("/api/ocean-freight/inquiry", {
     method: "POST",
+    headers: customerHeaders(),
     body: JSON.stringify({
       customer_name: `${marker} Ocean`,
       customer_phone: "081234567890",
@@ -150,6 +277,7 @@ async function createFixtures() {
 
   const air = await http("/api/air-freight/public/orders", {
     method: "POST",
+    headers: customerHeaders(),
     body: JSON.stringify({
       customer_name: `${marker} Air`,
       customer_phone: "081234567890",
@@ -176,6 +304,7 @@ async function createFixtures() {
 
   const trucking = await http("/api/trucking/bookings", {
     method: "POST",
+    headers: customerHeaders(),
     body: JSON.stringify({
       vehicleType: "CDE",
       vehicleName: `${marker} CDE`,
@@ -218,15 +347,17 @@ function rowFor(data, service, id) {
 }
 
 async function proveAdminReadModel() {
+  await waitForNotifications(created.marketplace.concat(created.ocean, created.air, created.trucking, created.csr));
   const all = await http("/api/portal/admin/service-operations?service=all&limit=100", {
     headers: adminHeaders(),
   });
   const data = all.body?.data ?? [];
-  check("Admin Customer Portal all-services list", created.ocean.concat(created.air, created.trucking, created.csr)
+  check("Admin Customer Portal all-services list", created.marketplace.concat(created.ocean, created.air, created.trucking, created.csr)
     .every((id) => data.some((row) => Number(row.id) === Number(id))), `found ${data.length} rows`);
   check("Admin unread badge/count", Number(all.body?.unreadNotifications) >= 5, `unread=${all.body?.unreadNotifications}`);
 
   const mappings = [
+    ["marketplace", created.marketplace[0], "Marketplace"],
     ["ocean-freight", created.ocean[0], "Ocean Freight"],
     ["air-freight", created.air[0], "Air Freight"],
     ["domestic-trucking", created.trucking[0], "Domestic/Trucking"],
@@ -255,7 +386,8 @@ async function proveAdminReadModel() {
   }
 
   for (const [service, id, label] of mappings) {
-    const sourceStatus = service === "ocean-freight" ? "waiting_rate"
+    const sourceStatus = service === "marketplace" ? "customer_review"
+      : service === "ocean-freight" ? "waiting_rate"
       : service === "air-freight" ? "waiting_rate"
       : service === "domestic-trucking" ? "pending_review"
       : "submitted";
@@ -274,8 +406,182 @@ async function proveAdminReadModel() {
   }));
 }
 
+async function proveCanonicalLifecycle() {
+  const transitions = [
+    {
+      service: "marketplace",
+      id: created.marketplace[0],
+      label: "Marketplace",
+      status: "customer_review",
+      path: null,
+      method: null,
+      body: null,
+      publicPath: async () => `/api/mkt/portal/rfqs/${created.marketplace[0]}`,
+    },
+    {
+      service: "ocean-freight",
+      id: created.ocean[0],
+      label: "Ocean Freight",
+      status: "quoted",
+      path: `/api/ocean-freight/${created.ocean[0]}/status`,
+      method: "PATCH",
+      body: { status: "quoted" },
+      publicPath: async () => {
+        const rows = await db("SELECT order_number FROM ocean_freight_orders WHERE id = $1", [created.ocean[0]]);
+        return `/api/ocean-freight-public/track/${encodeURIComponent(rows[0].order_number)}`;
+      },
+    },
+    {
+      service: "air-freight",
+      id: created.air[0],
+      label: "Air Freight",
+      status: "quoted",
+      path: `/api/air-freight/orders/${created.air[0]}/status`,
+      method: "PATCH",
+      body: { status: "quoted" },
+      publicPath: async () => {
+        const rows = await db("SELECT order_number FROM air_freight_orders WHERE id = $1", [created.air[0]]);
+        return `/api/air-freight/track/${encodeURIComponent(rows[0].order_number)}`;
+      },
+    },
+    {
+      service: "domestic-trucking",
+      id: created.trucking[0],
+      label: "Domestic/Trucking",
+      status: "quoted",
+      path: `/api/trucking/bookings/${created.trucking[0]}`,
+      method: "PUT",
+      body: { status: "quoted" },
+      publicPath: async () => {
+        const rows = await db("SELECT booking_number FROM trucking_booking_requests WHERE id = $1", [created.trucking[0]]);
+        return `/api/trucking/bookings/${encodeURIComponent(rows[0].booking_number)}`;
+      },
+    },
+    {
+      service: "service-request",
+      id: created.csr[0],
+      label: "Pabean",
+      status: "need_review",
+      path: `/api/admin/service-requests/${created.csr[0]}/status`,
+      method: "PUT",
+      body: { status: "need_review", adminNotes: marker },
+      publicPath: async () => `/api/customer-service-requests/${created.csr[0]}`,
+    },
+    {
+      service: "service-request",
+      id: created.csr[1],
+      label: "Custom Clearance",
+      status: "need_review",
+      path: `/api/admin/service-requests/${created.csr[1]}/status`,
+      method: "PUT",
+      body: { status: "need_review", adminNotes: marker },
+      publicPath: async () => `/api/customer-service-requests/${created.csr[1]}`,
+    },
+  ];
+
+  for (const transition of transitions) {
+    if (!transition.path) {
+      const publicView = await http(await transition.publicPath(), { headers: customerHeaders() }, [200]);
+      check(`${transition.label} latest status in Customer Portal`,
+        publicView.body?.data?.status === transition.status,
+        `status=${publicView.body?.data?.status ?? "missing"}`);
+      continue;
+    }
+    const updated = await http(transition.path, {
+      method: transition.method,
+      headers: internalHeaders(),
+      body: JSON.stringify(transition.body),
+    }, [200]);
+    const actionStatus = updated.body?.status ?? updated.body?.order?.status;
+    check(`${transition.label} canonical admin action`,
+      actionStatus === transition.status || (transition.service === "ocean-freight" && updated.body?.ok === true),
+      `status=${updated.body?.status ?? updated.body?.order?.status}`);
+
+    const all = await http(`/api/portal/admin/service-operations?service=${transition.service}&status=${encodeURIComponent(transition.status)}&limit=100`, {
+      headers: adminHeaders(),
+    });
+    const row = rowFor(all.body?.data ?? [], transition.service, transition.id);
+    check(`${transition.label} latest status in Admin/BizPortal workload`, row?.status === transition.status, `status=${row?.status ?? "missing"}`);
+
+    const publicView = await http(await transition.publicPath(), { headers: customerHeaders() }, [200]);
+    const publicStatus = publicView.body?.status ?? publicView.body?.order?.status;
+    check(`${transition.label} latest status in Customer Portal`, publicStatus === transition.status, `status=${publicStatus}`);
+  }
+
+  const firstNotifications = await http("/api/portal/notifications?limit=100", {
+    headers: customerHeaders(),
+  }, [200]);
+  const items = firstNotifications.body?.items ?? [];
+  check("Customer in-app notifications persisted", transitions.every((transition) =>
+    items.some((item) => Number(item.payload?.orderId ?? item.payload?.requestId ?? item.payload?.rfqId) === Number(transition.id))),
+  `notifications=${items.length}`);
+
+  const beforeByKey = await db(
+    "SELECT event_key, COUNT(*)::int AS count FROM portal_customer_notifications WHERE portal_customer_id = $1 GROUP BY event_key ORDER BY event_key",
+    [customerId],
+  );
+  for (const transition of transitions) {
+    if (!transition.path) continue;
+    await http(transition.path, {
+      method: transition.method,
+      headers: internalHeaders(),
+      body: JSON.stringify(transition.body),
+    }, [200, 409, 422]);
+  }
+  const afterByKey = await db(
+    "SELECT event_key, COUNT(*)::int AS count FROM portal_customer_notifications WHERE portal_customer_id = $1 GROUP BY event_key ORDER BY event_key",
+    [customerId],
+  );
+  check("Customer notification retry dedupe",
+    JSON.stringify(afterByKey.map((row) => [row.event_key, Number(row.count)]))
+      === JSON.stringify(beforeByKey.map((row) => [row.event_key, Number(row.count)])),
+    `${beforeByKey.length} event keys before/after`);
+}
+
+async function proveSseOwnership() {
+  const firstResponse = await fetch(`${API}/api/portal/notifications/events`, {
+    headers: customerHeaders(),
+  });
+  const secondResponse = await fetch(`${API}/api/portal/notifications/events`, {
+    headers: { authorization: `Bearer ${secondaryCustomerToken}` },
+  });
+  check("Customer SSE first session connected", firstResponse.status === 200 && Boolean(firstResponse.body));
+  check("Customer SSE second session connected", secondResponse.status === 200 && Boolean(secondResponse.body));
+
+  const firstReader = firstResponse.body?.getReader();
+  const secondReader = secondResponse.body?.getReader();
+  if (!firstReader || !secondReader) {
+    await firstResponse.body?.cancel();
+    await secondResponse.body?.cancel();
+    throw new Error("Customer SSE stream body unavailable");
+  }
+
+  const readChunk = async (reader, timeoutMs) => {
+    const timer = new Promise((resolve) => setTimeout(() => resolve(""), timeoutMs));
+    const next = reader.read().then(({ value }) => value ? new TextDecoder().decode(value) : "");
+    return Promise.race([next, timer]);
+  };
+
+  try {
+    await firstReader.read();
+    await secondReader.read();
+    await http(`/api/ocean-freight/${created.ocean[0]}/status`, {
+      method: "PATCH",
+      headers: internalHeaders(),
+      body: JSON.stringify({ status: "approved" }),
+    }, [200]);
+    const firstEvent = await readChunk(firstReader, 3000);
+    const secondEvent = await readChunk(secondReader, 500);
+    check("Customer SSE receives owned event", String(firstEvent).includes("customer_notification"));
+    check("Customer SSE does not receive another customer's event", !String(secondEvent).includes("customer_notification"));
+  } finally {
+    await firstReader.cancel();
+    await secondReader.cancel();
+  }
+}
+
 async function proveNotifications() {
-  const ids = created.ocean.concat(created.air, created.trucking, created.csr);
+  const ids = created.marketplace.concat(created.ocean, created.air, created.trucking, created.csr);
   const before = await waitForNotifications(ids);
   check("Admin notification generated per canonical submit", ids.every((id) =>
     before.some((row) => Number(row.order_id) === Number(id))), `notifications=${before.length}`);
@@ -311,21 +617,24 @@ async function proveNotifications() {
   const entryPath = `${artifactDir}/scripts/.all-services-notification-proof-entry.ts`;
   const bundlePath = `${artifactDir}/scripts/.all-services-notification-proof.mjs`;
   await writeFile(entryPath, duplicateScript);
-  await new Promise((resolve, reject) => {
-    execFile("pnpm", ["exec", "esbuild", "--bundle", "--platform=node", "--format=esm",
-      "--packages=bundle", "--external:pg", "--external:pino", "--external:pino-pretty",
-      "--external:thread-stream", "--external:ws", `--outfile=${bundlePath}`, entryPath], {
-      cwd: artifactDir,
-    }, (error) => error ? reject(error) : resolve());
-  });
-  await new Promise((resolve, reject) => {
-    execFile("node", [bundlePath], {
-      cwd: artifactDir,
-      env: process.env,
-    }, (error) => error ? reject(error) : resolve());
-  });
-  await rm(entryPath, { force: true });
-  await rm(bundlePath, { force: true });
+  try {
+    await new Promise((resolve, reject) => {
+      execFile("pnpm", ["exec", "esbuild", "--bundle", "--platform=node", "--format=esm",
+        "--packages=bundle", "--external:pg", "--external:pino", "--external:pino-pretty",
+        "--external:thread-stream", "--external:ws", `--outfile=${bundlePath}`, entryPath], {
+        cwd: artifactDir,
+      }, (error) => error ? reject(error) : resolve());
+    });
+    await new Promise((resolve, reject) => {
+      execFile("node", [bundlePath], {
+        cwd: artifactDir,
+        env: process.env,
+      }, (error) => error ? reject(error) : resolve());
+    });
+  } finally {
+    await rm(entryPath, { force: true });
+    await rm(bundlePath, { force: true });
+  }
   const countAfter = Number((await db(
     "SELECT COUNT(*)::int AS count FROM admin_notifications WHERE dedupe_key = $1",
     [row.dedupe_key],
@@ -358,22 +667,7 @@ async function proveNotifications() {
 }
 
 async function proveVendorDiscovery() {
-  const configuredAdminEmail = [
-    ...(process.env.ADMIN_EMAIL ?? "").split(","),
-    ...(process.env.ADMIN_EMAILS ?? "").split(","),
-  ].map((value) => value.trim()).filter(Boolean)[0];
-  const devUsers = await http("/api/dev-users", {}, [200]);
-  const seededAdminEmail = (devUsers.body?.users ?? [])
-    .find((user) => ["admin", "super_admin", "logistics", "operations"].includes(user?.role) && typeof user?.email === "string")
-    ?.email;
-  const adminEmail = configuredAdminEmail ?? seededAdminEmail ?? "audit-admin@example.invalid";
-  const internal = await http("/api/dev-login", {
-    method: "POST",
-    body: JSON.stringify({ email: adminEmail }),
-  }, [200]);
-  internalCookie = internal.headers.get("set-cookie") ?? "";
-  check("Development internal BizPortal session", Boolean(internalCookie));
-  const internalHeaders = () => ({ cookie: internalCookie });
+  await ensureInternalAdmin();
 
   const ppjk = await http("/api/ppjk/vendors", { headers: internalHeaders() });
   const ppjkVendors = ppjk.body?.vendors ?? [];
@@ -431,7 +725,20 @@ async function cleanup() {
   // Resolve marker parents from their identifying customer fields. This is
   // deliberately explicit and development-only; no global deletes or IDs from
   // another run are accepted.
+  const marketplaceRfqs = (await db(
+    "SELECT id FROM mkt_rfqs WHERE notes LIKE $1 OR buyer_name LIKE $1",
+    [`%${marker}%`],
+  )).map((r) => Number(r.id));
+  const marketplacePortalOrders = marketplaceRfqs.length
+    ? (await db(
+      "SELECT portal_order_id FROM mkt_dual_write_log WHERE mkt_rfq_id = ANY($1::int[]) AND portal_order_id IS NOT NULL",
+      [marketplaceRfqs],
+    )).map((r) => Number(r.portal_order_id)).filter(Number.isInteger)
+    : [];
   const roots = {
+    portal_customers: created.portalCustomers,
+    mkt_rfqs: marketplaceRfqs,
+    portal_product_orders: marketplacePortalOrders,
     ocean_freight_orders: (await db("SELECT id FROM ocean_freight_orders WHERE customer_name LIKE $1", [`${marker}%`])).map((r) => Number(r.id)),
     air_freight_orders: (await db("SELECT id FROM air_freight_orders WHERE customer_name LIKE $1", [`${marker}%`])).map((r) => Number(r.id)),
     trucking_booking_requests: (await db("SELECT id FROM trucking_booking_requests WHERE pic_pickup LIKE $1 OR catatan LIKE $1", [`${marker}%`])).map((r) => Number(r.id)),
@@ -498,6 +805,12 @@ async function cleanup() {
         }
       }
     }
+    if (created.portalCustomers.length) {
+      await client.query(
+        `DELETE FROM portal_customer_notifications WHERE portal_customer_id = ANY($1::int[])`,
+        [created.portalCustomers],
+      );
+    }
     for (const edge of edges.sort((a, b) => b.depth - a.depth)) {
       const table = `"${edge.child_table.replaceAll('"', '""')}"`;
       const column = `"${edge.child_column.replaceAll('"', '""')}"`;
@@ -520,6 +833,17 @@ async function cleanup() {
       [`%${marker}%`],
     );
     if (Number(remaining.rows[0].count) !== 0) throw new Error("marker notification cleanup incomplete");
+    const remainingCustomer = await client.query(
+      `SELECT COUNT(*)::int AS count FROM portal_customer_notifications
+        WHERE portal_customer_id = ANY($1::int[])`,
+      [created.portalCustomers],
+    );
+    if (Number(remainingCustomer.rows[0].count) !== 0) throw new Error("customer notification cleanup incomplete");
+    const remainingAccounts = await client.query(
+      `SELECT COUNT(*)::int AS count FROM portal_customers WHERE id = ANY($1::int[])`,
+      [created.portalCustomers],
+    );
+    if (Number(remainingAccounts.rows[0].count) !== 0) throw new Error("customer fixture cleanup incomplete");
     return { roots: rootEntries.reduce((n, [, ids]) => n + ids.length, 0), descendants, notifications: 0 };
   } catch (error) {
     await client.query("ROLLBACK");
@@ -531,6 +855,13 @@ async function cleanup() {
 
 async function main() {
   console.log(`Starting development-only proof with marker ${marker}`);
+  const customer = await signupFixture("Customer");
+  customerToken = customer.token;
+  customerId = customer.id;
+  const secondaryCustomer = await signupFixture("OtherCustomer");
+  secondaryCustomerToken = secondaryCustomer.token;
+  await ensureInternalAdmin();
+
   const login = await http("/api/portal/auth/dev-login", {
     method: "POST",
     body: JSON.stringify({ role: "admin" }),
@@ -539,6 +870,8 @@ async function main() {
   check("Development admin session", Boolean(adminToken));
   await createFixtures();
   await proveAdminReadModel();
+  await proveCanonicalLifecycle();
+  await proveSseOwnership();
   await proveNotifications();
   await proveVendorDiscovery();
   await proveRbac();
