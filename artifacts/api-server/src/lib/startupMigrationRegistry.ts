@@ -104,6 +104,7 @@ const REGISTRY_ROWS: readonly RegistryRow[] = [
   ["freight_accounting", "Freight accounting migration", "schema"],
   ["logistics_rates", "Logistics rates migration", "schema"],
   ["bank_reconciliation_core", "Bank reconciliation core migration", "schema"],
+  ["recon_candidate_requirement", "Reconciliation Rule AI candidate requirement migration", "schema"],
   ["qris_settlement", "QRIS settlement migration", "schema"],
   ["usage_tracking", "Usage tracking migration", "schema"],
   ["bank_mutation_masters", "Bank mutation masters migration", "schema"],
