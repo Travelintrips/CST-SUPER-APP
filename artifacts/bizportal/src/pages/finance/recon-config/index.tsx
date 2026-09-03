@@ -795,10 +795,6 @@ function AiRulesTab() {
   const [previewing, setPreviewing] = useState(false);
   const [ruleSearch, setRuleSearch] = useState("");
   const [coaDirectionFilter, setCoaDirectionFilter] = useState<"all" | "in" | "out">("all");
-  const [highlightedRuleId] = useState(() => {
-    const value = Number(new URLSearchParams(window.location.search).get("highlightRuleId") ?? 0);
-    return Number.isInteger(value) && value > 0 ? value : null;
-  });
 
   const loadCoaOptions = useCallback(async () => {
     setLoadingCoaOptions(true);
@@ -1311,15 +1307,6 @@ function AiRulesTab() {
                       )}
                     </div>
                   </td>
-                 <tr
-                   key={row.id}
-                   className={`border-b border-slate-800 hover:bg-slate-800/40 ${
-                     Number(row.id) === highlightedRuleId
-                       ? "bg-emerald-500/10 ring-1 ring-inset ring-emerald-500/40"
-                       : ""
-                   }`}
-                 >
-                  <td className="py-2 pr-3 text-white">{row.name}</td>
                   <td className="py-2 pr-3 font-mono text-xs text-slate-400">
                     {conditionSummary(row)}
                   </td>
@@ -2385,12 +2372,6 @@ export default function ReconClassificationConfigPage() {
   const [tab, setTab] = useState(
     requestedTab && allowedTabs.has(requestedTab) ? requestedTab : "business",
   );
-  const [tab, setTab] = useState(() => {
-    const requestedTab = new URLSearchParams(window.location.search).get("tab");
-    return ["business", "routine", "income", "ai-rules", "keywords", "upload", "approval", "stats"].includes(requestedTab ?? "")
-      ? requestedTab!
-      : "business";
-  });
 
   const TABS = [
     { value: "business",  label: "Tipe Bisnis",          icon: BookOpen },
