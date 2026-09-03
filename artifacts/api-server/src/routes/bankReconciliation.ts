@@ -4258,6 +4258,41 @@ router.get("/mutations", async (req, res) => {
         LEFT JOIN customers c ON c.id = sb.customer_id
         WHERE sp.id = m.candidate_id
       )
+      WHEN m.candidate_type = 'recon_rule' THEN (
+        SELECT jsonb_build_object(
+          'name', rr.name,
+          'reference', CONCAT('Rule AI #', rr.id),
+          'ruleId', rr.id,
+          'ruleDescription', rr.description,
+          'rulePriority', rr.priority,
+          'ruleDirection', rr.direction,
+          'conditionType', rr.condition_type,
+          'conditionField', rr.condition_field,
+          'conditionOperator', rr.condition_operator,
+          'conditionValue', rr.condition_value,
+          'conditions', COALESCE(rr.conditions_json, '[]'::jsonb),
+          'logic', rr.logic,
+          'specificity', rr.specificity,
+          'targetType', rr.target_type,
+          'targetCoaCode', rr.target_coa_code,
+          'targetCoaName', (
+            SELECT coa.name
+            FROM chart_of_accounts coa
+            WHERE coa.code = rr.target_coa_code
+              AND (coa.company_id = rr.company_id OR coa.company_id IS NULL)
+            ORDER BY CASE WHEN coa.company_id = rr.company_id THEN 0 ELSE 1 END, coa.id
+            LIMIT 1
+          ),
+          'confidenceScore', rr.confidence_score,
+          'stopProcessing', rr.stop_processing,
+          'requiresDocumentUpload', rr.requires_document_upload,
+          'taxType', rr.tax_type,
+          'status', CASE WHEN rr.is_active THEN 'active' ELSE 'inactive' END,
+          'sourceType', 'recon_rule'
+        )
+        FROM recon_rules rr
+        WHERE rr.id = m.candidate_id
+      )
       WHEN m.candidate_type = 'qris_settlement'
        AND m.candidate_source = '${RECONCILIATION_CANDIDATE_SOURCES.LEGACY_QRIS}' THEN (
         SELECT jsonb_build_object(

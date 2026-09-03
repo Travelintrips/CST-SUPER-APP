@@ -557,6 +557,24 @@ interface CandidateDetails {
   varianceStatus?: string | null;
   varianceReason?: string | null;
   settlementRuleVersion?: string | null;
+  ruleId?: number | null;
+  ruleDescription?: string | null;
+  rulePriority?: number | null;
+  ruleDirection?: string | null;
+  conditionType?: string | null;
+  conditionField?: string | null;
+  conditionOperator?: string | null;
+  conditionValue?: string | null;
+  conditions?: unknown;
+  logic?: string | null;
+  specificity?: number | null;
+  targetType?: string | null;
+  targetCoaCode?: string | null;
+  targetCoaName?: string | null;
+  confidenceScore?: number | null;
+  stopProcessing?: boolean | null;
+  requiresDocumentUpload?: boolean | null;
+  taxType?: string | null;
   settlementItems?: Array<{
     id?: number;
     sportPaymentId?: number;
@@ -828,6 +846,7 @@ const CANDIDATE_TYPE_LABELS: Record<string, string> = {
   kasbon: "Kasbon",
   talangan: "Dana Talangan",
   transfer: "Transfer Internal",
+  recon_rule: "Rule AI",
 };
 
 type SportPaymentType = "bank_transfer" | "qris" | "paylabs";
@@ -1579,6 +1598,7 @@ function CandidateDetailsBlock({
   const isCanonicalSettlement =
     candidate.candidate_type === "qris_settlement" &&
     candidate.candidate_source === CANONICAL_SETTLEMENT_SOURCE;
+  const isRuleCandidate = candidate.candidate_type === "recon_rule";
   const hasVarianceEvidence =
     isCanonicalSettlement &&
     d.expectedAmount != null &&
@@ -1606,6 +1626,23 @@ function CandidateDetailsBlock({
     { label: "Provider", value: d.paymentProvider },
     { label: "Status", value: d.status },
     { label: "Memo / Catatan", value: d.memo },
+    { label: "COA target", value: d.targetCoaCode ? `${d.targetCoaCode}${d.targetCoaName ? ` — ${d.targetCoaName}` : ""}` : null },
+    { label: "Deskripsi rule", value: d.ruleDescription },
+    { label: "Prioritas rule", value: d.rulePriority },
+    { label: "Arah rule", value: d.ruleDirection },
+    { label: "Tipe kondisi", value: d.conditionType },
+    {
+      label: "Kondisi rule",
+      value: d.conditionField
+        ? `${d.conditionField} ${d.conditionOperator ?? ""} ${d.conditionValue ?? ""}`.trim()
+        : null,
+    },
+    { label: "Logika kondisi", value: d.logic },
+    { label: "Spesifisitas", value: d.specificity },
+    { label: "Confidence rule", value: d.confidenceScore != null ? `${d.confidenceScore}%` : null },
+    { label: "Stop processing", value: d.stopProcessing == null ? null : d.stopProcessing ? "Ya" : "Tidak" },
+    { label: "Dokumen wajib", value: d.requiresDocumentUpload == null ? null : d.requiresDocumentUpload ? "Ya" : "Tidak" },
+    { label: "Pajak", value: d.taxType },
   ].filter(row => row.value != null && String(row.value).trim() !== "");
 
   if (rows.length === 0) return null;
@@ -1613,7 +1650,7 @@ function CandidateDetailsBlock({
   return (
     <div className={`min-w-0 rounded-md bg-muted/35 border border-dashed space-y-1 ${compact ? "p-2 mt-1.5" : "p-2.5 mt-2"}`}>
       <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-        Detail transaksi sumber
+        {isRuleCandidate ? "Detail Rule AI / sumber pencocokan" : "Detail transaksi sumber"}
       </p>
       {d.settlementPartial && (
         <p className="text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
@@ -2831,40 +2868,10 @@ function CoaReferenceDialog({
       toast({
         title: "COA disimpan ke Rule AI dan draft jurnal dibuat",
         description: `${selectedAccount.code} — ${selectedAccount.name}. Rule AI dan draft jurnal tersimpan atomik.`,
-      const ruleAiBody = await saveRuleAi(selectedAccount);
-      if (isQris) {
-        if (!canonicalCandidate || !onApproveCanonical) {
-          throw new Error("Settlement QRIS belum memenuhi syarat approval canonical.");
-        }
-        await onApproveCanonical(mutation, canonicalCandidate);
-      } else {
-        const approveResponse = await fetch(`/api/bank-reconciliation/${mutation.id}/approve`, {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            manual_coa_code: selectedAccount.code,
-            note: `COA dipilih manual untuk mutasi ini: ${selectedAccount.code}`,
-          }),
-        });
-        const approveBody = await approveResponse.json().catch(() => ({}));
-        if (!approveResponse.ok) {
-          throw new Error(
-            approveBody.error ?? "COA dipilih, tetapi draft jurnal untuk mutasi ini belum berhasil dibuat.",
-          );
-        }
-      }
-      toast({
-        title: isQris
-          ? "Rule AI aktif dan settlement QRIS disetujui"
-          : "COA disimpan ke Rule AI dan draft jurnal dibuat",
-        description: `${selectedAccount.code} — ${selectedAccount.name}. Rule AI #${ruleAiBody?.data?.id ?? "baru"} aktif untuk perusahaan ini.`,
       });
       approvalKeyRef.current = null;
-      // The mutation list and QRIS candidate audit use different React Query
-      // keys, so refresh both views after the one-time approval.
       qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] });
-      const savedRuleId = Number(ruleAiBody?.data?.id);
+      const savedRuleId = Number(approveBody?.rule_ai_id);
       await onSaved(Number.isSafeInteger(savedRuleId) && savedRuleId > 0 ? savedRuleId : null);
       onClose();
     } catch (error) {
@@ -3995,6 +4002,7 @@ function MutationCard({
   onToggleCandidate,
   onApproveCandidate,
   onManualOverrideCandidate,
+  approvePending,
   approveQrisPending,
   recoverQrisPending,
   selectedQrisPaymentIds,
@@ -4037,6 +4045,7 @@ function MutationCard({
   onToggleCandidate?: (mutationId: number, candidateId: number, checked: boolean) => void;
   onApproveCandidate?: (m: BankMutation, candidate: Candidate) => void;
   onManualOverrideCandidate?: (m: BankMutation, candidate: Candidate) => void;
+  approvePending?: boolean;
   approveQrisPending?: boolean;
   recoverQrisPending?: boolean;
   selectedQrisPaymentIds: Record<number, number[]>;
@@ -4336,7 +4345,7 @@ function MutationCard({
                       ?? candidateDetails?.reference
                       ?? `#${candidate.candidate_id}`;
                     return (
-                      <label
+                      <div
                         key={candidate.id}
                         className={`flex cursor-pointer items-start gap-2 rounded border px-2 py-1.5 transition-colors ${
                           checked
@@ -4351,7 +4360,7 @@ function MutationCard({
                           aria-label={`Pilih kandidat ${candidateReference}`}
                           className="mt-0.5"
                         />
-                        <span className="min-w-0 flex-1">
+                        <div className="min-w-0 flex-1">
                           <span className="flex items-center justify-between gap-2">
                             <span className="truncate text-xs font-medium text-foreground">
                               {candidateName || `${CANDIDATE_TYPE_LABELS[candidate.candidate_type] ?? candidate.candidate_type} #${candidate.candidate_id}`}
@@ -4363,8 +4372,27 @@ function MutationCard({
                             {candidateDetails?.date && <span>{fmtDate(String(candidateDetails.date))}</span>}
                             {candidateDetails?.amount != null && <span>{idr(candidateDetails.amount)}</span>}
                           </span>
-                        </span>
-                      </label>
+                           <CandidateDetailsBlock candidate={candidate} compact />
+                           {onApproveCandidate && canApprove(m) && (
+                             <Button
+                               type="button"
+                               size="sm"
+                               className="mt-2 h-7 gap-1 bg-green-600 px-2.5 text-[11px] text-white hover:bg-green-700"
+                               disabled={approvePending}
+                               onClick={event => {
+                                 event.preventDefault();
+                                 event.stopPropagation();
+                                 onApproveCandidate(m, candidate);
+                               }}
+                             >
+                               {approvePending
+                                 ? <Loader2 className="h-3 w-3 animate-spin" />
+                                 : <CheckCircle2 className="h-3 w-3" />}
+                               {approvePending ? "Menyimpan..." : "Approve kandidat"}
+                             </Button>
+                           )}
+                        </div>
+                      </div>
                     );
                   })}
                 </div>
@@ -8064,6 +8092,7 @@ export default function BankReconciliationPage() {
                   selectedCandidateId={selectedCandidateByMutation[m.id] ?? null}
                   onToggleCandidate={toggleCandidate}
                   onApproveCandidate={handleDirectApproveCandidate}
+                   approvePending={approveMut.isPending}
                   approveQrisPending={approveQrisBatchMut.isPending}
                   selectedQrisPaymentIds={selectedPaymentIdsByMutation(m)}
                   onToggleQrisPayment={toggleQrisPayment}
