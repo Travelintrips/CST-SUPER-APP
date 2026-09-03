@@ -2504,17 +2504,22 @@ function CoaReferenceDialog({
   mutation,
   open,
   activeCompanyId,
+  canonicalCandidate,
+  onApproveCanonical,
   onClose,
   onSaved,
 }: {
   mutation: BankMutation | null;
   open: boolean;
   activeCompanyId: number | null;
+  canonicalCandidate?: Candidate | null;
+  onApproveCanonical?: (mutation: BankMutation, candidate: Candidate) => Promise<unknown>;
   onClose: () => void;
-  onSaved: () => void | Promise<void>;
+  onSaved: (ruleId: number | null) => void | Promise<void>;
 }) {
   const { toast } = useToast();
   const qc = useQueryClient();
+  const [, setLocation] = useLocation();
   const [search, setSearch] = useState("");
   const [selectedCode, setSelectedCode] = useState("");
   const [saving, setSaving] = useState(false);
@@ -2615,12 +2620,16 @@ function CoaReferenceDialog({
     const query = parentSearch.trim().toLowerCase();
     return !query || `${account.code} ${account.name}`.toLowerCase().includes(query);
   });
+  const isQris = !!mutation && isQrisMutation(mutation);
   const canApplyCurrent =
     !!mutation &&
     canApprove(mutation) &&
-    !isQrisMutation(mutation) &&
-    !isCanonicalSettlementMutation(mutation) &&
-    (mutation.status === "manual_review" || visibleCandidates(mutation).length === 0);
+    (
+      isQris
+        ? !!canonicalCandidate && isCanonicalSettlementApprovalEligible(mutation)
+        : !isCanonicalSettlementMutation(mutation) &&
+          (mutation.status === "manual_review" || visibleCandidates(mutation).length === 0)
+    );
 
   const startCreateCoa = () => {
     setCreatingCoa(true);
@@ -2822,13 +2831,47 @@ function CoaReferenceDialog({
       toast({
         title: "COA disimpan ke Rule AI dan draft jurnal dibuat",
         description: `${selectedAccount.code} — ${selectedAccount.name}. Rule AI dan draft jurnal tersimpan atomik.`,
+      const ruleAiBody = await saveRuleAi(selectedAccount);
+      if (isQris) {
+        if (!canonicalCandidate || !onApproveCanonical) {
+          throw new Error("Settlement QRIS belum memenuhi syarat approval canonical.");
+        }
+        await onApproveCanonical(mutation, canonicalCandidate);
+      } else {
+        const approveResponse = await fetch(`/api/bank-reconciliation/${mutation.id}/approve`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            manual_coa_code: selectedAccount.code,
+            note: `COA dipilih manual untuk mutasi ini: ${selectedAccount.code}`,
+          }),
+        });
+        const approveBody = await approveResponse.json().catch(() => ({}));
+        if (!approveResponse.ok) {
+          throw new Error(
+            approveBody.error ?? "COA dipilih, tetapi draft jurnal untuk mutasi ini belum berhasil dibuat.",
+          );
+        }
+      }
+      toast({
+        title: isQris
+          ? "Rule AI aktif dan settlement QRIS disetujui"
+          : "COA disimpan ke Rule AI dan draft jurnal dibuat",
+        description: `${selectedAccount.code} — ${selectedAccount.name}. Rule AI #${ruleAiBody?.data?.id ?? "baru"} aktif untuk perusahaan ini.`,
+        title: "Rule AI disetujui & referensi aktif",
+        description: `${selectedAccount.code} — ${selectedAccount.name}. Mutasi disetujui dan draft jurnal dibuat; Rule AI akan menjadi referensi transaksi berikutnya.`,
       });
       approvalKeyRef.current = null;
       // The mutation list and QRIS candidate audit use different React Query
       // keys, so refresh both views after the one-time approval.
       qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] });
-      await onSaved();
+      const savedRuleId = Number(ruleAiBody?.data?.id);
+      await onSaved(Number.isSafeInteger(savedRuleId) && savedRuleId > 0 ? savedRuleId : null);
       onClose();
+      const ruleId = Number(ruleAiBody?.data?.id ?? 0);
+      const ruleQuery = ruleId > 0 ? `&highlightRuleId=${ruleId}` : "";
+      setLocation(`/finance/recon-config?tab=ai-rules${ruleQuery}`);
     } catch (error) {
       toast({
         title: "Gagal menyimpan pemetaan COA",
@@ -2852,7 +2895,9 @@ function CoaReferenceDialog({
           </DialogTitle>
           <DialogDescription>
             Pilih akun tujuan untuk {mutation.direction === "IN" ? "uang masuk" : "uang keluar"} ini.
-            Pilihan ini disimpan sebagai Rule AI perusahaan dan dipakai untuk membuat draft jurnal transaksi ini.
+            {isQris
+              ? " Pilihan disimpan sebagai Rule AI perusahaan lalu settlement QRIS langsung disetujui dengan validasi canonical."
+              : " Pilihan disimpan sebagai Rule AI perusahaan dan dipakai untuk membuat draft jurnal transaksi ini."}
           </DialogDescription>
         </DialogHeader>
 
@@ -3104,15 +3149,16 @@ function CoaReferenceDialog({
             Rule tetap terbatas pada perusahaan aktif.
           </div>
 
-          {!canApplyCurrent && canApprove(mutation) && visibleCandidates(mutation).length > 0 && (
+          {!canApplyCurrent && !isQris && canApprove(mutation) && visibleCandidates(mutation).length > 0 && (
               <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                 Mutasi ini memiliki kandidat transaksi. Pilih kandidat yang benar melalui alur review sebelum membuat draft jurnal.
             </p>
           )}
-          {isQrisMutation(mutation) && canApprove(mutation) && (
+          {isQris && canApprove(mutation) && (
             <p className="rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-800">
-              Untuk QRIS, pemilihan COA manual tidak tersedia di alur ini. Approval tetap
-              mengikuti alur settlement QRIS agar jurnal settlement tidak terduplikasi.
+              {canApplyCurrent
+                ? "Setelah disimpan, Rule AI langsung aktif dan settlement QRIS diproses dengan safeguard yang sama seperti tombol Tautkan & Approve Settlement."
+                : "Settlement QRIS belum siap disetujui. Pastikan kandidat canonical sudah posted serta nominal dan tanggal cocok."}
             </p>
           )}
         </div>
@@ -3127,7 +3173,11 @@ function CoaReferenceDialog({
             {saving && (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             )}
-            {saving ? "Menyimpan Rule AI..." : "Simpan Rule AI & Buat Draft"}
+            {saving
+              ? "Menyimpan Rule AI..."
+              : isQris
+                ? "Simpan Rule AI & Approve Settlement"
+                : "Simpan Rule AI & Buat Draft"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -8207,8 +8257,31 @@ export default function BankReconciliationPage() {
         mutation={coaReferenceTarget}
         open={!!coaReferenceTarget}
         activeCompanyId={qrisCompanyId}
+        canonicalCandidate={
+          coaReferenceTarget
+            ? canonicalSettlementCandidateForMutation(coaReferenceTarget) ?? null
+            : null
+        }
+        onApproveCanonical={async (mutation, candidate) => {
+          const result = await approveMut.mutateAsync({
+            mutId: mutation.id,
+            matchId: candidate.id,
+            candidateType: candidate.candidate_type,
+            candidateId: candidate.candidate_id,
+            candidateSource: candidate.candidate_source ?? null,
+          });
+          if ((result as any)?.__manualReview) {
+            throw new Error((result as any).error ?? "Settlement QRIS memerlukan review manual.");
+          }
+          return result;
+        }}
         onClose={() => setCoaReferenceTarget(null)}
-        onSaved={invalidate}
+        onSaved={async (ruleId) => {
+          await invalidate();
+          const params = new URLSearchParams({ tab: "ai-rules" });
+          if (ruleId != null) params.set("ruleId", String(ruleId));
+          setLocation(`/finance/recon-config?${params.toString()}`);
+        }}
       />
 
       {/* ── Detail Side Panel ─────────────────────────────────── */}
