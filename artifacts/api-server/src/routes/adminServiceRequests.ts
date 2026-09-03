@@ -10,6 +10,7 @@ import {
 import { eq, desc, and, ilike, or, sql } from "drizzle-orm";
 import { requireAdmin } from "../lib/requireAdmin.js";
 import { logger } from "../lib/logger.js";
+import { notifyCustomerPortal } from "../lib/customerPortalNotificationService.js";
 
 export const adminServiceRequestsRouter = Router();
 
@@ -157,6 +158,19 @@ adminServiceRequestsRouter.put("/:id/status", async (req: Request, res: Response
       .returning();
 
     if (!updated) return res.status(404).json({ error: "Request tidak ditemukan" });
+    await notifyCustomerPortal({
+      portalCustomerId: updated.customerId,
+      eventKey: `service-request:${updated.id}:status:${status}`,
+      type: "service_request_status_changed",
+      title: "Status permintaan layanan diperbarui",
+      message: `Request ${updated.requestNumber} sekarang berstatus ${status}.`,
+      payload: {
+        service: "service-request",
+        requestId: updated.id,
+        orderNumber: updated.requestNumber,
+        status: updated.status,
+      },
+    });
     logger.info({ id, status }, "[adminCSR] status updated");
     return res.json(updated);
   } catch (err) {

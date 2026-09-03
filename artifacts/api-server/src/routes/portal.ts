@@ -53,6 +53,16 @@ import { normalizeMarketplaceStockStatus } from "../lib/catalogNormalization.js"
 import { broadcastToAdmins, broadcastToPortal } from "../lib/sseManager";
 import { NotificationService } from "../lib/services/notificationService.js";
 import {
+  getCustomerPortalUnreadCount,
+  listCustomerPortalNotifications,
+  markAllCustomerPortalNotificationsRead,
+  markCustomerPortalNotificationRead,
+} from "../lib/customerPortalNotificationService.js";
+import {
+  registerCustomerPortalConnection,
+  unregisterCustomerPortalConnection,
+} from "../lib/sseManager.js";
+import {
   listApprovals,
   processApproval,
   getApprovalAuditTrail,
@@ -221,6 +231,71 @@ import {
 } from "../lib/services/portalLogisticOrderService.js";
 
 const router = Router();
+
+// ── Customer in-app notifications ───────────────────────────────────────────
+// The feed is customer-scoped by the authenticated portal identity. SSE is a
+// separate stream from the legacy global portal stream so private events never
+// get broadcast to another customer.
+router.get("/notifications", requireCustomerPortalAuth, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  try {
+    const limit = Number(req.query.limit ?? 50);
+    const [items, unreadCount] = await Promise.all([
+      listCustomerPortalNotifications(customerId, limit),
+      getCustomerPortalUnreadCount(customerId),
+    ]);
+    return res.json({ items, unreadCount });
+  } catch (error) {
+    console.error("[portal/notifications] list failed", error);
+    return res.status(500).json({ message: "Gagal memuat notifikasi" });
+  }
+});
+
+router.post("/notifications/:id/read", requireCustomerPortalAuth, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  const notificationId = Number(req.params.id);
+  if (!Number.isInteger(notificationId) || notificationId <= 0) {
+    return res.status(400).json({ message: "ID notifikasi tidak valid" });
+  }
+  try {
+    const updated = await markCustomerPortalNotificationRead(customerId, notificationId);
+    return updated ? res.json({ ok: true }) : res.status(404).json({ message: "Notifikasi tidak ditemukan" });
+  } catch (error) {
+    console.error("[portal/notifications] mark read failed", error);
+    return res.status(500).json({ message: "Gagal memperbarui notifikasi" });
+  }
+});
+
+router.post("/notifications/read-all", requireCustomerPortalAuth, async (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  try {
+    const count = await markAllCustomerPortalNotificationsRead(customerId);
+    return res.json({ ok: true, count });
+  } catch (error) {
+    console.error("[portal/notifications] mark all read failed", error);
+    return res.status(500).json({ message: "Gagal memperbarui notifikasi" });
+  }
+});
+
+router.get("/notifications/events", requireCustomerPortalAuth, (req, res) => {
+  const customerId = (req as PortalAuthReq).portalCustomerId;
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+  res.write(": connected\n\n");
+
+  const keepAlive = setInterval(() => {
+    try { res.write(": ping\n\n"); } catch { clearInterval(keepAlive); }
+  }, 25_000);
+  registerCustomerPortalConnection(customerId, res);
+
+  req.on("close", () => {
+    clearInterval(keepAlive);
+    unregisterCustomerPortalConnection(customerId, res);
+  });
+});
 
 // Marketplace endpoints remain usable for an explicit guest submission, but
 // an auth token is never ignored. If one is present it must resolve through

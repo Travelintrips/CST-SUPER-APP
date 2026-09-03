@@ -12,6 +12,7 @@ import {
 import { requireAdmin } from "../lib/requireAdmin.js";
 import { resolveCompanyId } from "../lib/resolveCompany.js";
 import { assertCompanyAccess } from "../lib/assertCompanyAccess.js";
+import { notifyCustomerPortal } from "../lib/customerPortalNotificationService.js";
 import { sendViaService as sendWhatsApp } from "../lib/waTransport.js";
 import { sendMail, isSmtpConfigured } from "../lib/mailer.js";
 import { getAdminGroupWa } from "../lib/adminWa.js";
@@ -1166,7 +1167,10 @@ router.patch("/orders/:id/status", async (req: Request, res: Response) => {
     if (!status || !VALID_STATUSES.includes(status)) {
       return res.status(400).json({ error: `Status tidak valid. Pilih salah satu: ${VALID_STATUSES.join(', ')}` });
     }
-    const existingAf = await db.execute(sql`SELECT company_id FROM air_freight_orders WHERE id = ${id} LIMIT 1`);
+    const existingAf = await db.execute(sql`
+      SELECT company_id, COALESCE(portal_customer_id, customer_id) AS portal_customer_id, order_number
+      FROM air_freight_orders WHERE id = ${id} LIMIT 1
+    `);
     if (!existingAf.rows.length) return res.status(404).json({ error: "Order tidak ditemukan" });
     const cid = resolveCompanyId(req);
     if (!await assertCompanyAccess((existingAf.rows[0] as any).company_id, cid, req, res, { resourceType: "air_freight_order", resourceId: id })) return;
@@ -1177,6 +1181,19 @@ router.patch("/orders/:id/status", async (req: Request, res: Response) => {
       RETURNING *
     `);
     if (!r.rows.length) return res.status(404).json({ error: "Order tidak ditemukan" });
+    await notifyCustomerPortal({
+      portalCustomerId: (existingAf.rows[0] as any).portal_customer_id,
+      eventKey: `air-freight:${id}:status:${status}`,
+      type: "air_freight_status_changed",
+      title: "Status Air Freight diperbarui",
+      message: `Order ${(existingAf.rows[0] as any).order_number} sekarang berstatus ${status}.`,
+      payload: {
+        service: "air-freight",
+        orderId: id,
+        orderNumber: (existingAf.rows[0] as any).order_number,
+        status,
+      },
+    });
     res.json(r.rows[0]);
   } catch (err) {
     console.error("[air-freight] PATCH /orders/:id/status error:", err);

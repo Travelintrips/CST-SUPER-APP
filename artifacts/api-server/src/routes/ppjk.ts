@@ -34,6 +34,7 @@ import { getOpenAI } from "../lib/openaiClient.js";
 import { resolveRequiredDocuments, checkReadyForCeisa } from "../lib/ppjkDocumentResolver.js";
 import { calculatePpjkFinancials, PpjkFinancialError } from "../lib/ppjkFinancialService.js";
 import { filterSuppliersByCapability, VENDOR_CAPABILITY_KEYS } from "../lib/vendorCapabilityService.js";
+import { notifyCustomerPortal } from "../lib/customerPortalNotificationService.js";
 import {
   PPJK_CUSTOMS_STATUSES,
   isValidCustomsStatus,
@@ -763,6 +764,29 @@ router.post("/orders/:id/workflow", async (req, res) => {
 
   if (status) {
     const normStatus = normaliseStatus(String(status));
+    let portalCustomerId: number | null = null;
+    if (updated.portalOrderId) {
+      const [portalOrder] = await db.execute(sql`
+        SELECT portal_customer_id
+        FROM logistic_orders
+        WHERE id = ${updated.portalOrderId}
+        LIMIT 1
+      `).then((r) => r.rows as any[]);
+      portalCustomerId = portalOrder?.portal_customer_id ? Number(portalOrder.portal_customer_id) : null;
+    }
+    await notifyCustomerPortal({
+      portalCustomerId,
+      eventKey: `ppjk:${id}:status:${normStatus}`,
+      type: "ppjk_status_changed",
+      title: "Status Pabean diperbarui",
+      message: `Order ${updated.orderNumber} sekarang berstatus ${normStatus}.`,
+      payload: {
+        service: "pabean",
+        orderId: id,
+        orderNumber: updated.orderNumber,
+        status: normStatus,
+      },
+    });
     // P1 — Enhanced audit log: includes actor ID, role, IP, user-agent, old status, new status, reason
     const auditNote = [
       notes,

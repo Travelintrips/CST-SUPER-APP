@@ -68,6 +68,7 @@ import { runNavPreferencesMigration } from "./lib/navPreferencesMigration.js";
 import { runNotificationLogMigration } from "./lib/notificationLogMigration.js";
 import { runAdminNotificationsMigration } from "./lib/adminNotificationsMigration.js";
 import { runVendorNotificationsMigration } from "./lib/vendorNotificationsMigration.js";
+import { runCustomerPortalNotificationsMigration } from "./lib/customerPortalNotificationsMigration.js";
 import { runVendorMiniFormMigration } from "./lib/vendorMiniFormMigration.js";
 import { runCustomerInvoiceCompanyScopeMigration } from "./lib/customerInvoiceCompanyScopeMigration.js";
 import { runCustomerPortalProductCoaMigration } from "./lib/customerPortalProductCoaMigration.js";
@@ -202,6 +203,7 @@ async function main() {
   await runSafe("notificationLog", runNotificationLogMigration);
   await runSafe("adminNotifications", runAdminNotificationsMigration);
   await runSafe("vendorNotifications", runVendorNotificationsMigration);
+  await runSafe("customerPortalNotifications", runCustomerPortalNotificationsMigration);
   await runSafe("vendorMiniForm", runVendorMiniFormMigration);
   await runSafe("customerInvoiceCompanyScope", runCustomerInvoiceCompanyScopeMigration);
   await runSafe("customerPortalProductCoa", runCustomerPortalProductCoaMigration);

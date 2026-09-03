@@ -16,6 +16,7 @@ import {
   PortalCustomerContextError,
 } from "../lib/services/portalCustomerContextService.js";
 import { validateTruckingVendorIds } from "../lib/truckingVendorEligibility.js";
+import { notifyCustomerPortal } from "../lib/customerPortalNotificationService.js";
 
 const router = Router();
 
@@ -110,7 +111,18 @@ const BookingSchema = z.object({
 
 const ReviewSchema = z.object({
   finalPrice: z.number().nonnegative().optional(),
-  status:     z.string().optional(),
+  status:     z.enum([
+    "pending_review",
+    "reviewing",
+    "quoted",
+    "approved",
+    "assigned",
+    "in_transit",
+    "delivered",
+    "completed",
+    "cancelled",
+    "rejected",
+  ]).optional(),
   note:       z.string().optional(),
 });
 
@@ -403,7 +415,23 @@ router.put("/:id", async (req: Request, res: Response) => {
       res.status(404).json({ message: "Order tidak ditemukan" });
       return;
     }
-    res.json(result.rows[0]);
+    const updated = result.rows[0] as any;
+    if (status) {
+      await notifyCustomerPortal({
+        portalCustomerId: updated.portal_customer_id,
+        eventKey: `trucking:${id}:status:${status}`,
+        type: "trucking_status_changed",
+        title: "Status Trucking diperbarui",
+        message: `Order ${updated.booking_number} sekarang berstatus ${status}.`,
+        payload: {
+          service: "domestic-trucking",
+          orderId: id,
+          orderNumber: updated.booking_number,
+          status: updated.status,
+        },
+      });
+    }
+    res.json(updated);
   } catch (err) {
     logger.error({ err }, "[truckingBookings] PUT update failed");
     res.status(500).json({ message: "Gagal memperbarui order" });

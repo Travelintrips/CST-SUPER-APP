@@ -11,6 +11,7 @@ import { sendMail, isSmtpConfigured } from "../lib/mailer.js";
 import { logger } from "../lib/logger.js";
 import { resolveCompanyId } from "../lib/resolveCompany.js";
 import { assertCompanyAccess } from "../lib/assertCompanyAccess.js";
+import { notifyCustomerPortal } from "../lib/customerPortalNotificationService.js";
 import { filterSuppliersByCapability, VENDOR_CAPABILITY_KEYS } from "../lib/vendorCapabilityService.js";
 
 export const oceanFreightRouter = Router();
@@ -481,13 +482,30 @@ router.patch("/:id/status", requireAdmin, async (req: Request, res: Response) =>
     const validStatuses = ["draft","estimated","waiting_rate","rate_requested","rate_received","quoted","approved","booked","sailed","arrived","completed","cancelled","quote_declined"];
     if (!validStatuses.includes(status)) return res.status(400).json({ error: "Status tidak valid" });
 
-    const existingOcn = await db.execute(sql`SELECT company_id FROM ocean_freight_orders WHERE id = ${id} LIMIT 1`);
+    const existingOcn = await db.execute(sql`
+      SELECT company_id, portal_customer_id, order_number
+      FROM ocean_freight_orders WHERE id = ${id} LIMIT 1
+    `);
     if (!existingOcn.rows.length) return res.status(404).json({ error: "Order tidak ditemukan" });
     const cid = resolveCompanyId(req);
     if (!await assertCompanyAccess((existingOcn.rows[0] as any).company_id, cid, req, res, { resourceType: "ocean_freight_order", resourceId: id })) return;
-    await db.execute(sql`
+    const updated = await db.execute(sql`
       UPDATE ocean_freight_orders SET status = ${status}, updated_at = NOW() WHERE id = ${id}
+      RETURNING status
     `);
+    await notifyCustomerPortal({
+      portalCustomerId: (existingOcn.rows[0] as any).portal_customer_id,
+      eventKey: `ocean-freight:${id}:status:${status}`,
+      type: "ocean_freight_status_changed",
+      title: "Status Ocean Freight diperbarui",
+      message: `Order ${(existingOcn.rows[0] as any).order_number} sekarang berstatus ${status}.`,
+      payload: {
+        service: "ocean-freight",
+        orderId: id,
+        orderNumber: (existingOcn.rows[0] as any).order_number,
+        status: (updated.rows[0] as any)?.status ?? status,
+      },
+    });
     return res.json({ ok: true });
   } catch (e) {
     return res.status(500).json({ error: "Gagal update status" });
