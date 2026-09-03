@@ -367,8 +367,17 @@ export function generateQrisMutationBatchCandidates(input: {
         // the empty payment_items array can never pass approval eligibility.
         // Without this row the UI misleadingly says that no QRIS check exists,
         // which hides whether the problem is paid_at, status, company, or sync.
-        if (!isQrisSettlementDescription(mutation.description)) continue;
-        const mutationProvider = normalizeQrisProvider(mutation.description);
+        const qrisEvidence = [
+          mutation.providerName,
+          mutation.providerOrderId,
+          mutation.description,
+        ];
+        if (!qrisEvidence.some((value) =>
+          isQrisSettlementDescription(value) || normalizeQrisProvider(value) !== "unknown"
+        )) continue;
+        const mutationProvider = qrisEvidence
+          .map((value) => normalizeQrisProvider(value))
+          .find((provider) => provider !== "unknown") ?? "unknown";
         const expectedPaymentDate = addCalendarDays(mutation.transactionDate, -1);
         output.push({
           mutationId: mutation.id,

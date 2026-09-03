@@ -1099,6 +1099,12 @@ function QrisCandidateDiagnosticBlock({
     : null;
   const items = diagnostic?.payment_items ?? [];
   const itemCount = Number(diagnostic?.diagnostic_payment_count ?? items.length);
+  const expectedPaymentDate = bankDate ? qrisPreviousCalendarDate(bankDate) : null;
+  const paymentDates = [...new Set(
+    items
+      .map(item => qrisPaymentDateValue(item)?.slice(0, 10))
+      .filter((value): value is string => Boolean(value)),
+  )];
   const hasProvider = Boolean(
     diagnostic?.provider_code
       && !["unknown", "unidentified"].includes(String(diagnostic.provider_code).toLowerCase()),
@@ -1122,6 +1128,15 @@ function QrisCandidateDiagnosticBlock({
       label: "Payment sumber",
       ok: itemCount > 0,
       detail: itemCount > 0 ? `${itemCount} payment QRIS ditemukan` : "Tidak ada payment QRIS yang ditemukan",
+    },
+    {
+      label: "Tanggal pembayaran",
+      ok: paymentDates.length > 0,
+      detail: paymentDates.length > 0
+        ? paymentDates.map(date => fmtDate(date)).join(", ")
+        : expectedPaymentDate
+          ? `Tidak ada paid_at/confirmed_at untuk cohort H-1 (diharapkan ${fmtDate(expectedPaymentDate)})`
+          : "Tidak ada paid_at/confirmed_at yang dapat dipakai untuk cohort H-1",
     },
     {
       label: "Tanggal settlement",
@@ -1164,7 +1179,7 @@ function QrisCandidateDiagnosticBlock({
               ? failedChecks.length > 0
                 ? `${failedChecks.length} syarat belum terpenuhi. Status pemeriksaan: ${status}.`
                 : "Kandidat ada, tetapi belum masuk cohort settlement yang dapat direview."
-              : "Sistem belum menyimpan hasil pemeriksaan untuk mutasi ini. Jalankan pencarian kandidat QRIS terlebih dahulu."}
+              : "Sistem belum menyimpan snapshot pemeriksaan untuk mutasi ini. Jalankan pencarian kandidat QRIS terlebih dahulu."}
           </p>
         </div>
       </div>
@@ -1280,6 +1295,14 @@ function qrisPaymentDateValue(item: QrisPaymentItem): string | null {
     ?? null;
   if (value == null || String(value).trim() === "") return null;
   return String(value);
+}
+
+function qrisPreviousCalendarDate(value: string): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const date = new Date(`${value}T12:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
 }
 
 function qrisPaymentCustomerName(item: QrisPaymentItem): string {

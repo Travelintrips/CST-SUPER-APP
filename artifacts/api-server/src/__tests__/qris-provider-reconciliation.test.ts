@@ -980,6 +980,43 @@ describe("provider-aware QRIS dry-run reconciliation", () => {
     expect(result[0]?.reason).toContain("218460.00");
   });
 
+  it("retains QRIS bank evidence when the exact H-1 source payment is missing", () => {
+    const result = generateQrisMutationBatchCandidates({
+      candidateRule: "strict_h_minus_one_auto",
+      payments: [{
+        id: 37,
+        companyId: 10,
+        bankAccountId: 77,
+        amount: 250_000,
+        method: "QRIS",
+        status: "confirmed",
+        // This payment belongs to the 23rd settlement cohort, not the 24th.
+        paidAt: "2026-08-22T09:00:00+07:00",
+        canonicalMdrAmount: 0,
+        expectedSettlementDate: null,
+      }],
+      mutations: [{
+        id: 38,
+        companyId: 10,
+        bankAccountId: 77,
+        amount: 218_460,
+        transactionDate: "2026-08-24",
+        direction: "IN",
+        source: "bank_import",
+        sourceClassification: "actual_bank_mutation",
+        description: "TRAVELI QRTRAVELI SETTLEMENT",
+      }],
+    });
+
+    expect(result).toMatchObject([{
+      mutationId: 38,
+      estimatedSettlementDate: "2026-08-24",
+      status: "UNMATCHED",
+      paymentItems: [],
+    }]);
+    expect(result[0]?.reason).toContain("paid_at 2026-08-23");
+  });
+
   it("keeps negative observed deduction out of MATCHED", () => {
     const result = generateQrisMutationBatchCandidates({
       payments: [{
