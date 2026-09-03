@@ -2603,7 +2603,7 @@ function ProofUploadButton({ mutationId, proofUrl }: { mutationId: number; proof
   );
 }
 
-// ── COA Selection + Rule AI Dialog ───────────────────────────────────────────
+// ── COA Selection Dialog ─────────────────────────────────────────────────────
 // The selected account is persisted as a company-scoped Rule AI mapping and
 // is also sent to the current approval request for the draft journal.
 function CoaReferenceDialog({
@@ -2974,9 +2974,9 @@ function CoaReferenceDialog({
 
       toast({
         title: isQris
-          ? "Rule AI aktif dan settlement QRIS disetujui"
-          : "COA disimpan ke Rule AI dan draft jurnal dibuat",
-        description: `${selectedAccount.code} — ${selectedAccount.name}. Rule AI #${savedRuleId ?? "baru"} aktif untuk perusahaan ini.`,
+          ? "COA dipilih dan settlement QRIS disetujui"
+          : "COA dipilih dan draft jurnal dibuat",
+        description: `${selectedAccount.code} — ${selectedAccount.name}.`,
       });
       approvalKeyRef.current = null;
       qc.invalidateQueries({ queryKey: ["qris-candidate-audit"] });
@@ -3001,25 +3001,14 @@ function CoaReferenceDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <BookOpen className="h-4 w-4 text-indigo-600" />
-            Pilih COA untuk Transaksi Ini
+            Pilih COA
           </DialogTitle>
           <DialogDescription>
-            Pilih akun tujuan untuk {mutation.direction === "IN" ? "uang masuk" : "uang keluar"} ini.
-            {isQris
-              ? " Pilihan disimpan sebagai Rule AI perusahaan lalu settlement QRIS langsung disetujui dengan validasi canonical."
-              : " Pilihan disimpan sebagai Rule AI perusahaan dan dipakai untuk membuat draft jurnal transaksi ini."}
+            Pilih akun COA tujuan untuk menyelesaikan transaksi ini.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3">
-          <div className="rounded-md border bg-muted/30 p-3 text-sm">
-            <p className="font-medium">{mutation.description}</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {fmtDate(mutation.transaction_date)} · {idr(mutation.amount)} ·{" "}
-              {mutation.direction === "IN" ? "Uang Masuk" : "Uang Keluar"}
-            </p>
-          </div>
-
           <div className="space-y-1.5">
             <label className="text-xs font-medium">
               Pilih akun COA debit atau kredit
@@ -3254,11 +3243,6 @@ function CoaReferenceDialog({
             )}
           </div>
 
-          <div className="rounded-md border border-indigo-200 bg-indigo-50/70 px-3 py-2.5 text-xs text-indigo-800 dark:border-indigo-900 dark:bg-indigo-950/30 dark:text-indigo-200">
-            Rule AI akan memakai {ruleAiReference ? "referensi provider/order ID" : "deskripsi mutasi"} dan arah transaksi sebagai kondisi.
-            Rule tetap terbatas pada perusahaan aktif.
-          </div>
-
           {!canApplyCurrent && !isQris && canApprove(mutation) && visibleCandidates(mutation).length > 0 && (
               <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                 Mutasi ini memiliki kandidat transaksi. Pilih kandidat yang benar melalui alur review sebelum membuat draft jurnal.
@@ -3284,10 +3268,10 @@ function CoaReferenceDialog({
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             )}
             {saving
-              ? "Menyimpan Rule AI..."
+              ? "Menyimpan..."
               : isQris
-                ? "Simpan Rule AI & Approve Settlement"
-                : "Simpan Rule AI & Buat Draft"}
+                ? "Pilih COA & Approve Settlement"
+                : "Pilih COA & Buat Draft"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -8523,11 +8507,8 @@ export default function BankReconciliationPage() {
           });
         }}
         onClose={() => setCoaReferenceTarget(null)}
-        onSaved={async (ruleId) => {
+        onSaved={async () => {
           await invalidate();
-          const params = new URLSearchParams({ tab: "ai-rules" });
-          if (ruleId != null) params.set("ruleId", String(ruleId));
-          setLocation(`/finance/recon-config?${params.toString()}`);
         }}
       />
 

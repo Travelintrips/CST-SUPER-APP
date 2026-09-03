@@ -172,6 +172,6 @@ describe("bank reconciliation approved-match UI guard", () => {
     expect(componentSource).toContain("const canonicalHistoricalRepairReady = isCanonicalHistoricalRepairEligible(");
     expect(componentSource).toContain("&& !canonicalHistoricalRepairReady");
     expect(componentSource).toContain("Settlement Tertunda");
-    expect(componentSource).toContain("Tautkan Settlement Posted");
+    expect(componentSource).toContain("Selesaikan Settlement Tertunda");
   });
 });
