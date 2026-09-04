@@ -251,35 +251,35 @@
   .text-stone-700, .text-stone-600 { color: #a8a29e; }
 
   /* --- Colored text: dark shade → bright (readable on dark bg) --- */
-  .text-blue-900, .text-blue-800   { color: #93c5fd; }
+  .text-blue-950, .text-blue-900, .text-blue-800 { color: #dbeafe; }
+  .text-green-950, .text-green-900, .text-green-800 { color: #dcfce7; }
+  .text-emerald-950, .text-emerald-900, .text-emerald-800 { color: #d1fae5; }
+  .text-teal-950, .text-teal-900, .text-teal-800 { color: #ccfbf1; }
+  .text-cyan-950, .text-cyan-900, .text-cyan-800 { color: #cffafe; }
+  .text-red-950, .text-red-900, .text-red-800 { color: #fee2e2; }
+  .text-rose-950, .text-rose-900, .text-rose-800 { color: #ffe4e6; }
+  .text-orange-950, .text-orange-900, .text-orange-800 { color: #ffedd5; }
+  .text-amber-950, .text-amber-900, .text-amber-800 { color: #fef3c7; }
+  .text-yellow-950, .text-yellow-900, .text-yellow-800 { color: #fef9c3; }
+  .text-purple-950, .text-purple-900, .text-purple-800 { color: #f3e8ff; }
+  .text-violet-950, .text-violet-900, .text-violet-800 { color: #ede9fe; }
+  .text-indigo-950, .text-indigo-900, .text-indigo-800 { color: #e0e7ff; }
+  .text-pink-950, .text-pink-900, .text-pink-800 { color: #fce7f3; }
+  .text-sky-950, .text-sky-900, .text-sky-800 { color: #e0f2fe; }
   .text-blue-700, .text-blue-600   { color: #60a5fa; }
-  .text-green-900, .text-green-800 { color: #86efac; }
   .text-green-700, .text-green-600 { color: #4ade80; }
-  .text-emerald-900, .text-emerald-800 { color: #6ee7b7; }
   .text-emerald-700, .text-emerald-600 { color: #34d399; }
-  .text-teal-900, .text-teal-800   { color: #5eead4; }
   .text-teal-700, .text-teal-600   { color: #2dd4bf; }
-  .text-cyan-900, .text-cyan-800   { color: #67e8f9; }
   .text-cyan-700, .text-cyan-600   { color: #22d3ee; }
-  .text-red-900, .text-red-800     { color: #fca5a5; }
   .text-red-700, .text-red-600     { color: #f87171; }
-  .text-rose-900, .text-rose-800   { color: #fda4af; }
   .text-rose-700, .text-rose-600   { color: #fb7185; }
-  .text-orange-900, .text-orange-800 { color: #fdba74; }
   .text-orange-700, .text-orange-600 { color: #fb923c; }
-  .text-amber-900, .text-amber-800 { color: #fcd34d; }
   .text-amber-700, .text-amber-600 { color: #fbbf24; }
-  .text-yellow-900, .text-yellow-800 { color: #fde047; }
   .text-yellow-700, .text-yellow-600 { color: #facc15; }
-  .text-purple-900, .text-purple-800 { color: #d8b4fe; }
   .text-purple-700, .text-purple-600 { color: #c084fc; }
-  .text-violet-900, .text-violet-800 { color: #c4b5fd; }
   .text-violet-700, .text-violet-600 { color: #a78bfa; }
-  .text-indigo-900, .text-indigo-800 { color: #a5b4fc; }
   .text-indigo-700, .text-indigo-600 { color: #818cf8; }
-  .text-pink-900, .text-pink-800   { color: #f9a8d4; }
   .text-pink-700, .text-pink-600   { color: #f472b6; }
-  .text-sky-900, .text-sky-800     { color: #7dd3fc; }
   .text-sky-700, .text-sky-600     { color: #38bdf8; }
 
   /* --- Background: light → dark equivalents --- */

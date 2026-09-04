@@ -87,6 +87,7 @@ pnpm install
 - `AI_ARCHITECTURE_GUARDRAILS.md` — Architecture constitution
 - `ARCHITECTURE_DECISIONS.md` — Formal ADRs
 - `AI_RULES.md` — Rules for AI agents
+- `docs/ui-color-contrast-guidelines.md` — Aturan kontras warna untuk UI BizPortal bertema gelap
 - `docs/` — Deployment, secret architecture, and more
 
 ## User Preferences
