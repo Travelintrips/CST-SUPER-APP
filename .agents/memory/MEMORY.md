@@ -46,6 +46,7 @@
 - [Marketplace invoice upload idempotency](marketplace-invoice-upload-idempotency.md) — hapus attachment private baru pada duplicate/failure; hanya pertahankan setelah invoice baru commit.
 - [Recon validation environment](recon-validation-environment.md) — restore with frozen pnpm lockfile and build shared declarations before API typecheck; two isolation tests require missing dev tables.
 - [Sport Center audit contract](sport-center-audit-contract.md) — mirror trigger tetap owner; payment hanya posted setelah entry_id valid; jangan menambah relasi jurnal paralel.
+- [Sport payment posted amount correction](sport-payment-amount-correction.md) — posted amount fixes need a balanced additive correction, canonical/mirror update, manual review, then candidate regeneration.
 - [Sport Center mirror duplicate booking](sport-center-mirror-duplicate-booking.md) — duplicate public booking dengan sc_booking_id sama dapat membuat trigger mirror memilih booking terbaru yang salah.
 - [QRIS approval race guard](qris-approval-race-guard.md) — approval batch harus mengunci payment dan tetap mengandalkan unique index sebagai invariant double-settlement.
 - [Sport Center isolation proof boundary](sport-center-isolation-verification.md) — runtime proof wajib memakai Supabase development DB; heliumdb yang reachable belum tentu punya schema aplikasi.
