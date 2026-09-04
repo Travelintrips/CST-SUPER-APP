@@ -436,7 +436,7 @@ async function proveCanonicalLifecycle() {
       body: { status: "quoted" },
       publicPath: async () => {
         const rows = await db("SELECT order_number FROM ocean_freight_orders WHERE id = $1", [created.ocean[0]]);
-        return `/api/ocean-freight-public/track/${encodeURIComponent(rows[0].order_number)}`;
+        return `/api/ocean-freight/track/${encodeURIComponent(rows[0].order_number)}`;
       },
     },
     {
@@ -571,8 +571,6 @@ async function proveSseOwnership() {
   };
 
   try {
-    await firstReader.read();
-    await secondReader.read();
     await http(`/api/ocean-freight/${created.ocean[0]}/status`, {
       method: "PATCH",
       headers: internalHeaders(),

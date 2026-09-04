@@ -814,6 +814,20 @@ airFreightRouter.delete("/orders/:id", async (req: Request, res: Response) => {
 
 const router = Router();
 
+async function assertAirFreightOrderCompanyAccess(
+  req: Request,
+  res: Response,
+  resourceCompanyId: number | null | undefined,
+  resourceId: number,
+): Promise<boolean> {
+  if (resourceCompanyId == null) return true;
+  const companyId = resolveCompanyId(req);
+  return assertCompanyAccess(resourceCompanyId, companyId, req, res, {
+    resourceType: "air_freight_order",
+    resourceId,
+  });
+}
+
 // ── air_freight_orders dikelola Drizzle schema — CREATE TABLE dihapus ────────
 
 // ── ALTER TABLE — new columns (FASE 10) ──────────────────────────────────────
@@ -1051,8 +1065,7 @@ router.get("/orders/:id", async (req: Request, res: Response) => {
     const id = Number(String(req.params.id));
     const r = await db.execute(sql`SELECT * FROM air_freight_orders WHERE id = ${id} LIMIT 1`);
     if (!r.rows.length) return res.status(404).json({ error: "Order tidak ditemukan" });
-    const cid = resolveCompanyId(req);
-    if (!await assertCompanyAccess((r.rows[0] as any).company_id, cid, req, res, { resourceType: "air_freight_order", resourceId: id })) return;
+    if (!await assertAirFreightOrderCompanyAccess(req, res, (r.rows[0] as any).company_id, id)) return;
     res.json(r.rows[0]);
   } catch (err) {
     console.error("[air-freight] GET /orders/:id error:", err);
@@ -1069,8 +1082,7 @@ router.put("/orders/:id", async (req: Request, res: Response) => {
 
     const existing = await db.execute(sql`SELECT id, company_id FROM air_freight_orders WHERE id = ${id} LIMIT 1`);
     if (!existing.rows.length) return res.status(404).json({ error: "Order tidak ditemukan" });
-    const cid = resolveCompanyId(req);
-    if (!await assertCompanyAccess((existing.rows[0] as any).company_id, cid, req, res, { resourceType: "air_freight_order", resourceId: id })) return;
+    if (!await assertAirFreightOrderCompanyAccess(req, res, (existing.rows[0] as any).company_id, id)) return;
 
     const r = await db.execute(sql`
       UPDATE air_freight_orders SET
@@ -1136,9 +1148,7 @@ router.post("/orders/:id/request-quote", async (req: Request, res: Response) => 
       SELECT id, status, company_id FROM air_freight_orders WHERE id = ${id} LIMIT 1
     `);
     if (!existing.rows.length) return res.status(404).json({ error: "Order tidak ditemukan" });
-    const cid = resolveCompanyId(req);
-    if (!await assertCompanyAccess((existing.rows[0] as any).company_id, cid, req, res,
-      { resourceType: "air_freight_order", resourceId: id })) return;
+    if (!await assertAirFreightOrderCompanyAccess(req, res, (existing.rows[0] as any).company_id, id)) return;
 
     const r = await db.execute(sql`
       UPDATE air_freight_orders
@@ -1172,8 +1182,7 @@ router.patch("/orders/:id/status", async (req: Request, res: Response) => {
       FROM air_freight_orders WHERE id = ${id} LIMIT 1
     `);
     if (!existingAf.rows.length) return res.status(404).json({ error: "Order tidak ditemukan" });
-    const cid = resolveCompanyId(req);
-    if (!await assertCompanyAccess((existingAf.rows[0] as any).company_id, cid, req, res, { resourceType: "air_freight_order", resourceId: id })) return;
+    if (!await assertAirFreightOrderCompanyAccess(req, res, (existingAf.rows[0] as any).company_id, id)) return;
     const r = await db.execute(sql`
       UPDATE air_freight_orders
       SET status = ${status}, updated_at = NOW()
@@ -1208,8 +1217,7 @@ router.delete("/orders/:id", async (req: Request, res: Response) => {
     const id = Number(String(req.params.id));
     const existingAfd = await db.execute(sql`SELECT company_id FROM air_freight_orders WHERE id = ${id} LIMIT 1`);
     if (!existingAfd.rows.length) return res.status(404).json({ error: "Order tidak ditemukan" });
-    const cid = resolveCompanyId(req);
-    if (!await assertCompanyAccess((existingAfd.rows[0] as any).company_id, cid, req, res, { resourceType: "air_freight_order", resourceId: id })) return;
+    if (!await assertAirFreightOrderCompanyAccess(req, res, (existingAfd.rows[0] as any).company_id, id)) return;
     const r = await db.execute(sql`
       UPDATE air_freight_orders
       SET status = 'cancelled', updated_at = NOW()
@@ -1232,9 +1240,7 @@ router.post("/orders/:id/send-final-quote", async (req: Request, res: Response) 
     const body = req.body;
     const existing = await db.execute(sql`SELECT * FROM air_freight_orders WHERE id = ${id} LIMIT 1`);
     if (!existing.rows.length) return res.status(404).json({ error: "Order tidak ditemukan" });
-    const cid = resolveCompanyId(req);
-    if (!await assertCompanyAccess((existing.rows[0] as any).company_id, cid, req, res,
-      { resourceType: "air_freight_order", resourceId: id })) return;
+    if (!await assertAirFreightOrderCompanyAccess(req, res, (existing.rows[0] as any).company_id, id)) return;
 
     const REQUIRED = ["final_price_idr","grand_total"];
     for (const f of REQUIRED) {
@@ -1339,9 +1345,7 @@ router.post("/orders/:id/confirm-booking", async (req: Request, res: Response) =
     const body = req.body;
     const existing = await db.execute(sql`SELECT id, status, company_id FROM air_freight_orders WHERE id = ${id} LIMIT 1`);
     if (!existing.rows.length) return res.status(404).json({ error: "Order tidak ditemukan" });
-    const cid = resolveCompanyId(req);
-    if (!await assertCompanyAccess((existing.rows[0] as any).company_id, cid, req, res,
-      { resourceType: "air_freight_order", resourceId: id })) return;
+    if (!await assertAirFreightOrderCompanyAccess(req, res, (existing.rows[0] as any).company_id, id)) return;
 
     const r = await db.execute(sql`
       UPDATE air_freight_orders SET
@@ -1394,9 +1398,7 @@ router.patch("/orders/:id/tracking-status", async (req: Request, res: Response) 
 
     const orderOwn = await db.execute(sql`SELECT company_id FROM air_freight_orders WHERE id = ${id} LIMIT 1`);
     if (!orderOwn.rows.length) return res.status(404).json({ error: "Order tidak ditemukan" });
-    const cid = resolveCompanyId(req);
-    if (!await assertCompanyAccess((orderOwn.rows[0] as any).company_id, cid, req, res,
-      { resourceType: "air_freight_order", resourceId: id })) return;
+    if (!await assertAirFreightOrderCompanyAccess(req, res, (orderOwn.rows[0] as any).company_id, id)) return;
 
     const VALID_TRACKING = [
       "booked","cargo_received","departed","in_transit","arrived",
@@ -1449,9 +1451,7 @@ router.get("/orders/:id/tracking-events", async (req: Request, res: Response) =>
 
     const orderOwn = await db.execute(sql`SELECT company_id FROM air_freight_orders WHERE id = ${id} LIMIT 1`);
     if (!orderOwn.rows.length) return res.status(404).json({ error: "Order tidak ditemukan" });
-    const cid = resolveCompanyId(req);
-    if (!await assertCompanyAccess((orderOwn.rows[0] as any).company_id, cid, req, res,
-      { resourceType: "air_freight_order", resourceId: id })) return;
+    if (!await assertAirFreightOrderCompanyAccess(req, res, (orderOwn.rows[0] as any).company_id, id)) return;
 
     const r = await db.execute(sql`
       SELECT id, event_type, note, created_by, created_at
