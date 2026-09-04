@@ -538,6 +538,8 @@ export async function waLogin(
  */
 export async function waTrustedLogin(rawPhone: string, deviceToken: string) {
   const normalizedPhone = normalizePhoneID(rawPhone);
+  const phoneCandidates = phoneMatchCandidates(normalizedPhone);
+  const storedPhoneDigits = sql`regexp_replace(coalesce(${trustedDevicesTable.phone}, ''), '[^0-9]', '', 'g')`;
   const [device] = await db
     .select()
     .from(trustedDevicesTable)
@@ -548,9 +550,9 @@ export async function waTrustedLogin(rawPhone: string, deviceToken: string) {
           eq(trustedDevicesTable.deviceTokenHash, hashToken(String(deviceToken))),
           and(isNull(trustedDevicesTable.deviceTokenHash), eq(trustedDevicesTable.deviceToken, String(deviceToken)))
         ),
-        eq(
-          sql`regexp_replace(${trustedDevicesTable.phone}, '[^0-9]', '', 'g')`,
-          normalizedPhone,
+        or(
+          inArray(trustedDevicesTable.phone, phoneCandidates),
+          eq(storedPhoneDigits, normalizedPhone),
         )
       )
     )
@@ -607,6 +609,7 @@ export async function getTrustedDevices(customerId: number) {
     .limit(1);
   if (!customer?.phone) return [];
 
+  const normalizedPhone = normalizePhoneID(customer.phone);
   return db
     .select({
       id: trustedDevicesTable.id,
@@ -614,7 +617,10 @@ export async function getTrustedDevices(customerId: number) {
       expiresAt: trustedDevicesTable.expiresAt,
     })
     .from(trustedDevicesTable)
-    .where(eq(trustedDevicesTable.phone, customer.phone))
+    .where(or(
+      inArray(trustedDevicesTable.phone, phoneMatchCandidates(normalizedPhone)),
+      eq(sql`regexp_replace(coalesce(${trustedDevicesTable.phone}, ''), '[^0-9]', '', 'g')`, normalizedPhone),
+    ))
     .orderBy(trustedDevicesTable.createdAt);
 }
 
@@ -629,10 +635,17 @@ export async function revokeTrustedDevice(customerId: number, deviceId: number) 
     .limit(1);
   if (!customer?.phone) throw new AuthServiceError(404, "User tidak ditemukan.");
 
+  const normalizedPhone = normalizePhoneID(customer.phone);
   const [device] = await db
     .select({ id: trustedDevicesTable.id })
     .from(trustedDevicesTable)
-    .where(and(eq(trustedDevicesTable.id, deviceId), eq(trustedDevicesTable.phone, customer.phone)))
+    .where(and(
+      eq(trustedDevicesTable.id, deviceId),
+      or(
+        inArray(trustedDevicesTable.phone, phoneMatchCandidates(normalizedPhone)),
+        eq(sql`regexp_replace(coalesce(${trustedDevicesTable.phone}, ''), '[^0-9]', '', 'g')`, normalizedPhone),
+      ),
+    ))
     .limit(1);
   if (!device) throw new AuthServiceError(404, "Perangkat tidak ditemukan.");
 
@@ -650,7 +663,11 @@ export async function revokeAllTrustedDevices(customerId: number) {
     .limit(1);
   if (!customer?.phone) throw new AuthServiceError(404, "User tidak ditemukan.");
 
-  await db.delete(trustedDevicesTable).where(eq(trustedDevicesTable.phone, customer.phone));
+  const normalizedPhone = normalizePhoneID(customer.phone);
+  await db.delete(trustedDevicesTable).where(or(
+    inArray(trustedDevicesTable.phone, phoneMatchCandidates(normalizedPhone)),
+    eq(sql`regexp_replace(coalesce(${trustedDevicesTable.phone}, ''), '[^0-9]', '', 'g')`, normalizedPhone),
+  ));
 }
 
 /**
@@ -684,10 +701,7 @@ export async function signup(params: {
 
   const normalizedPhone = phone ? normalizePhoneID(String(phone)) : null;
   if (normalizedPhone) {
-    const [phoneExisting] = await db
-      .select({ id: portalCustomersTable.id })
-      .from(portalCustomersTable)
-      .where(eq(portalCustomersTable.phone, normalizedPhone));
+    const [phoneExisting] = await findPortalCustomersByPhone(normalizedPhone);
     if (phoneExisting) throw new AuthServiceError(409, "Nomor HP sudah terdaftar.");
   }
 
@@ -878,7 +892,7 @@ export async function syncProfile(
 ) {
   const {
     name, phone, company, customerType, companyId, requestedCompanyName,
-    requestedRegistrationNumber, role: requestedRole, serviceIds,
+    requestedRegistrationNumber, serviceIds,
   } = params;
 
   const patch: Record<string, unknown> = {};
@@ -898,11 +912,15 @@ export async function syncProfile(
     }
     patch.customerType = customerType;
   }
-  const ALLOWED_ROLES = ["customer", "vendor"];
-  const effectiveRole = requestedRole && ALLOWED_ROLES.includes(String(requestedRole))
-    ? String(requestedRole)
-    : undefined;
-  if (effectiveRole) patch.role = effectiveRole;
+  // Role is an ownership attribute assigned by registration/admin approval.
+  // Never accept a browser payload that changes it during profile sync.
+  const [currentCustomer] = await db
+    .select({ role: portalCustomersTable.role })
+    .from(portalCustomersTable)
+    .where(eq(portalCustomersTable.id, customerId))
+    .limit(1);
+  if (!currentCustomer) throw new AuthServiceError(404, "Akun portal tidak ditemukan.");
+  const effectiveRole = currentCustomer.role;
   if (effectiveRole !== "customer" && company !== undefined) {
     patch.company = company ? String(company) : null;
   }
@@ -922,7 +940,7 @@ export async function syncProfile(
   }
 
   let organization: Awaited<ReturnType<typeof configureCustomerOrganization>> | null = null;
-  if (customerType !== undefined && (effectiveRole === "customer" || !effectiveRole)) {
+  if (customerType !== undefined && effectiveRole === "customer") {
     if (customerType !== "individual" && customerType !== "company") {
       throw new AuthServiceError(400, "Tipe customer tidak valid.");
     }
