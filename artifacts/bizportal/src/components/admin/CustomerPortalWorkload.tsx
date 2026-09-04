@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { AlertCircle, Inbox, Loader2, RefreshCw } from "lucide-react";
+import { AlertCircle, Check, Inbox, Loader2, MessageCircle, RefreshCw, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,10 +20,12 @@ type WorkloadRow = {
   status: string;
   customer_name: string;
   customer_company: string;
+  customer_phone?: string | null;
   created_at: string;
   is_pending: boolean;
   status_known: boolean;
   management_path: string;
+  available_actions?: string[];
 };
 
 type Payload = {
@@ -52,6 +54,7 @@ export function CustomerPortalWorkload() {
   const [payload, setPayload] = useState<Payload>({ data: [], total: 0, summary: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [actionBusy, setActionBusy] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -74,6 +77,38 @@ export function CustomerPortalWorkload() {
       setLoading(false);
     }
   }, []);
+
+  async function runAction(row: WorkloadRow, action: "approve" | "request_revision" | "reject" | "contact") {
+    if (actionBusy) return;
+    let reason = "";
+    if (action === "reject" || action === "request_revision") {
+      reason = window.prompt(action === "reject" ? "Alasan penolakan" : "Data yang perlu direvisi")?.trim() ?? "";
+      if (!reason) return;
+    } else if (action === "approve" && !window.confirm("Setujui transaksi ini dan lanjutkan lifecycle canonical?")) {
+      return;
+    }
+    setActionBusy(`${row.service_key}-${row.id}`);
+    setError("");
+    try {
+      const response = await fetch(`/api/portal/admin/service-operations/${row.service_key}/${row.id}/actions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ action, reason }),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? "Action gagal dijalankan");
+      if (action === "contact" && body.contactUrl) {
+        window.open(body.contactUrl, "_blank", "noopener,noreferrer");
+      } else {
+        await load();
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Action gagal dijalankan");
+    } finally {
+      setActionBusy("");
+    }
+  }
 
   useEffect(() => {
     void load();
@@ -125,16 +160,43 @@ export function CustomerPortalWorkload() {
           <CardContent className="p-0">
             <div className="divide-y">
               {payload.data.map((row) => (
-                <a key={`${row.service_key}-${row.id}`} href={row.management_path} className="flex items-center justify-between gap-4 px-4 py-3 hover:bg-muted/40">
+                <div key={`${row.service_key}-${row.id}`} className="flex flex-col gap-2 px-4 py-3 hover:bg-muted/40">
+                  <div className="flex items-center justify-between gap-4">
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium">{row.service_label} · <span className="font-mono text-xs">{row.reference}</span></p>
-                    <p className="truncate text-xs text-muted-foreground">{row.customer_name}{row.customer_company ? ` · ${row.customer_company}` : ""} · {formatDate(row.created_at)}</p>
+                    <p className="truncate text-xs text-muted-foreground">{row.customer_name}{row.customer_company ? ` · ${row.customer_company}` : ""}{row.customer_phone ? ` · ${row.customer_phone}` : ""} · {formatDate(row.created_at)}</p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     {!row.status_known && <Badge variant="outline" className="text-slate-500">Mapping perlu review</Badge>}
                     <Badge variant="outline" className={statusClass(row.status)}>{formatStatus(row.status)}</Badge>
                   </div>
-                </a>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button variant="outline" size="sm" className="h-7 text-xs" asChild>
+                      <a href={row.management_path}>Buka BizPortal</a>
+                    </Button>
+                    {row.available_actions?.includes("approve") && (
+                      <Button size="sm" className="h-7 bg-emerald-600 text-xs hover:bg-emerald-700" disabled={!!actionBusy} onClick={() => void runAction(row, "approve")}>
+                        <Check className="mr-1 h-3.5 w-3.5" /> Setujui
+                      </Button>
+                    )}
+                    {row.available_actions?.includes("request_revision") && (
+                      <Button variant="outline" size="sm" className="h-7 border-amber-300 bg-amber-50 text-xs text-amber-800" disabled={!!actionBusy} onClick={() => void runAction(row, "request_revision")}>
+                        <RefreshCw className="mr-1 h-3.5 w-3.5" /> Minta Revisi
+                      </Button>
+                    )}
+                    {row.available_actions?.includes("reject") && (
+                      <Button variant="outline" size="sm" className="h-7 border-rose-200 bg-rose-50 text-xs text-rose-700" disabled={!!actionBusy} onClick={() => void runAction(row, "reject")}>
+                        <X className="mr-1 h-3.5 w-3.5" /> Tolak
+                      </Button>
+                    )}
+                    {row.available_actions?.includes("contact") && (
+                      <Button variant="outline" size="sm" className="h-7 border-indigo-200 bg-indigo-50 text-xs text-indigo-700" disabled={!!actionBusy} onClick={() => void runAction(row, "contact")}>
+                        <MessageCircle className="mr-1 h-3.5 w-3.5" /> Hubungi
+                      </Button>
+                    )}
+                  </div>
+                </div>
               ))}
             </div>
           </CardContent>

@@ -8,6 +8,7 @@ import {
   Filter,
   Inbox,
   Loader2,
+  MessageCircle,
   RefreshCw,
   Search,
   X,
@@ -31,8 +32,10 @@ type ServiceRow = {
   status_known?: boolean;
   customer_name: string;
   customer_company: string;
+  customer_phone?: string | null;
   company_id: number | null;
   portal_customer_id: number | null;
+  available_actions?: string[];
   created_at: string;
   updated_at: string;
   management_path: string;
@@ -112,6 +115,8 @@ export function ServiceOperationsTab() {
   const [selected, setSelected] = useState<Detail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -200,6 +205,41 @@ export function ServiceOperationsTab() {
     });
     setNotifications((items) => items.map((item) => item.id === id ? { ...item, read_at: new Date().toISOString() } : item));
     setUnread((count) => Math.max(0, count - 1));
+  }
+
+  async function runAction(action: "approve" | "request_revision" | "reject" | "contact") {
+    if (!selected || actionBusy) return;
+    const row = rows.find((item) => item.service_key === selected.service && item.id === selected.id);
+    if (action !== "contact" && row?.available_actions && !row.available_actions.includes(action)) return;
+    let reason = "";
+    if (action === "reject" || action === "request_revision") {
+      reason = window.prompt(action === "reject" ? "Alasan penolakan" : "Data yang perlu direvisi")?.trim() ?? "";
+      if (!reason) return;
+    } else if (action === "approve" && !window.confirm("Setujui transaksi ini dan lanjutkan lifecycle canonical?")) {
+      return;
+    }
+    setActionBusy(true);
+    setActionError("");
+    try {
+      const response = await fetch(`/api/portal/admin/service-operations/${selected.service}/${selected.id}/actions`, {
+        method: "POST",
+        headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ action, reason }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error ?? "Action gagal dijalankan");
+      if (action === "contact" && payload.contactUrl) {
+        window.open(payload.contactUrl, "_blank", "noopener,noreferrer");
+      } else {
+        setSelected(null);
+        await Promise.all([load(), loadNotifications()]);
+      }
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : "Action gagal dijalankan");
+    } finally {
+      setActionBusy(false);
+    }
   }
 
   return (
@@ -345,6 +385,7 @@ export function ServiceOperationsTab() {
                   <span className="block font-mono text-xs text-indigo-700">{row.reference}</span>
                   <span className="block text-sm text-slate-700 mt-1">{row.customer_name}</span>
                   {row.customer_company && <span className="block text-xs text-slate-400">{row.customer_company}</span>}
+                   {row.customer_phone && <span className="block text-xs text-slate-400">{row.customer_phone}</span>}
                 </span>
                 <span>
                   {!row.status_known && <span className="block text-[10px] text-slate-500 mb-1">Mapping perlu review</span>}
@@ -375,6 +416,7 @@ export function ServiceOperationsTab() {
                 {[
                   ["Customer", selected.record["customer_name"] ?? selected.record["buyer_name"]],
                   ["Perusahaan", selected.record["customer_company"] ?? selected.record["buyer_company"]],
+                   ["Telepon", selected.record["customer_phone"] ?? selected.record["phone"] ?? selected.record["whatsapp"]],
                   ["Status", selected.record["status"]],
                   ["Dibuat", formatDate(String(selected.record["created_at"] ?? ""))],
                 ].map(([label, value]) => (
@@ -395,8 +437,32 @@ export function ServiceOperationsTab() {
                   ))}
                 </div>
               </div>
+              {actionError && <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{actionError}</div>}
+              <div className="flex flex-wrap items-center gap-2 border-t pt-4">
+                <span className="mr-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Action</span>
+                {(rows.find((row) => row.service_key === selected.service && row.id === selected.id)?.available_actions ?? []).includes("approve") && (
+                  <button type="button" disabled={actionBusy} onClick={() => void runAction("approve")} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">
+                    <Check className="h-3.5 w-3.5" /> Setujui
+                  </button>
+                )}
+                {(rows.find((row) => row.service_key === selected.service && row.id === selected.id)?.available_actions ?? []).includes("request_revision") && (
+                  <button type="button" disabled={actionBusy} onClick={() => void runAction("request_revision")} className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50">
+                    <RefreshCw className="h-3.5 w-3.5" /> Minta Revisi
+                  </button>
+                )}
+                {(rows.find((row) => row.service_key === selected.service && row.id === selected.id)?.available_actions ?? []).includes("reject") && (
+                  <button type="button" disabled={actionBusy} onClick={() => void runAction("reject")} className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-50">
+                    <X className="h-3.5 w-3.5" /> Tolak
+                  </button>
+                )}
+                {(rows.find((row) => row.service_key === selected.service && row.id === selected.id)?.available_actions ?? []).includes("contact") && (
+                  <button type="button" disabled={actionBusy} onClick={() => void runAction("contact")} className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50">
+                    <MessageCircle className="h-3.5 w-3.5" /> Hubungi Customer
+                  </button>
+                )}
+              </div>
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t pt-4">
-                <p className="text-xs text-slate-500">Tindakan lifecycle dijalankan di modul BizPortal canonical.</p>
+                <p className="text-xs text-slate-500">Action lifecycle memakai state machine atau update conditional canonical.</p>
                 <a href={String((rows.find((row) => row.service_key === selected.service && row.id === selected.id)?.management_path) ?? "/bizportal/dashboard")} target="_blank" rel="noopener noreferrer" className="inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700">
                   <ExternalLink className="h-4 w-4" /> Buka modul BizPortal
                 </a>

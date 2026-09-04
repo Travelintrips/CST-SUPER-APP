@@ -2,6 +2,10 @@ import { Router, type Request, type Response } from "express";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { requirePortalAdmin } from "../lib/supabaseAuth.js";
+import { transitionLogisticOrderStatus } from "../lib/services/logisticOrderStatusService.js";
+import { notifyCustomerPortal } from "../lib/customerPortalNotificationService.js";
+import { normalizePhone, isValidIndonesianPhone } from "../lib/phoneUtils.js";
+import { sendViaService } from "../lib/waTransport.js";
 
 /**
  * Canonical read-only Customer Portal workload.
@@ -14,6 +18,71 @@ import { requirePortalAdmin } from "../lib/supabaseAuth.js";
 const router = Router();
 router.use(requirePortalAdmin);
 
+type LifecycleAction = "approve" | "request_revision" | "reject";
+type ActionTarget = { nextStatus: string; allowedFrom: string[] };
+
+export const ACTION_TARGETS: Record<string, Record<LifecycleAction, ActionTarget>> = {
+  "service-request": {
+    approve: { nextStatus: "approved_for_rfq", allowedFrom: ["submitted", "need_review", "need_more_data"] },
+    request_revision: { nextStatus: "need_more_data", allowedFrom: ["submitted", "need_review", "approved_for_rfq"] },
+    reject: { nextStatus: "rejected", allowedFrom: ["submitted", "need_review", "need_more_data", "approved_for_rfq"] },
+  },
+  "logistic-order": {
+    approve: { nextStatus: "RFQ Sent", allowedFrom: ["Admin Review"] },
+    request_revision: { nextStatus: "Admin Review", allowedFrom: ["Order Received", "RFQ Sent", "Quote Received", "Customer Approval"] },
+    reject: { nextStatus: "Cancelled", allowedFrom: ["Order Received", "Admin Review", "RFQ Sent", "Quote Received", "Customer Approval", "Vendor Confirmed", "In Progress"] },
+  },
+  ppjk: {
+    approve: { nextStatus: "document_review", allowedFrom: ["waiting_documents", "document_review"] },
+    request_revision: { nextStatus: "waiting_documents", allowedFrom: ["document_review", "quotation", "waiting_customer"] },
+    reject: { nextStatus: "cancelled", allowedFrom: ["waiting_documents", "document_review", "quotation", "waiting_customer", "customer_approved"] },
+  },
+  "product-order": {
+    approve: { nextStatus: "Product RFQ Sent", allowedFrom: ["Quote Request", "Admin Review"] },
+    request_revision: { nextStatus: "Admin Review", allowedFrom: ["Quote Request", "Product Quote Received", "Product Vendor Selected", "Customer Product Approval"] },
+    reject: { nextStatus: "Admin Review", allowedFrom: ["Quote Request", "Product Quote Received", "Product Vendor Selected", "Customer Product Approval"] },
+  },
+  "domestic-trucking": {
+    approve: { nextStatus: "reviewing", allowedFrom: ["new", "submitted", "pending_review", "waiting_rate"] },
+    request_revision: { nextStatus: "pending_review", allowedFrom: ["reviewing", "quoted", "approved"] },
+    reject: { nextStatus: "rejected", allowedFrom: ["new", "submitted", "pending_review", "reviewing", "waiting_rate", "quoted"] },
+  },
+  "air-freight": {
+    approve: { nextStatus: "reviewing", allowedFrom: ["inquiry", "new", "submitted", "pending_review", "waiting_rate"] },
+    request_revision: { nextStatus: "pending_review", allowedFrom: ["reviewing", "quoted"] },
+    reject: { nextStatus: "cancelled", allowedFrom: ["inquiry", "new", "submitted", "pending_review", "reviewing", "waiting_rate", "quoted"] },
+  },
+  "ocean-freight": {
+    approve: { nextStatus: "reviewing", allowedFrom: ["waiting_rate", "new", "submitted", "pending_review"] },
+    request_revision: { nextStatus: "waiting_rate", allowedFrom: ["reviewing", "quoted"] },
+    reject: { nextStatus: "cancelled", allowedFrom: ["waiting_rate", "new", "submitted", "pending_review", "reviewing", "quoted"] },
+  },
+  "quote-request": {
+    approve: { nextStatus: "contacted", allowedFrom: ["new"] },
+    request_revision: { nextStatus: "contacted", allowedFrom: ["new", "contacted", "quoted"] },
+    reject: { nextStatus: "cancelled", allowedFrom: ["new", "contacted", "quoted"] },
+  },
+  marketplace: {
+    approve: { nextStatus: "quoting", allowedFrom: ["submitted"] },
+    request_revision: { nextStatus: "draft", allowedFrom: ["submitted", "quoting", "quoted"] },
+    reject: { nextStatus: "cancelled", allowedFrom: ["submitted", "quoting", "quoted", "awarded"] },
+  },
+};
+
+export function getActionTarget(service: string, action: LifecycleAction, status: string): ActionTarget | null {
+  const target = ACTION_TARGETS[service]?.[action];
+  return target && target.allowedFrom.includes(status) ? target : null;
+}
+
+export function availableActions(service: string, status: string): string[] {
+  const actions = (["approve", "request_revision", "reject"] as LifecycleAction[])
+    .filter((action) => getActionTarget(service, action, status))
+    .map((action) => action as string)
+  return DIRECT_SOURCES[service] || service === "marketplace-po"
+    ? actions.concat("contact")
+    : actions;
+}
+
 const sourceRows = sql`
   (
     SELECT
@@ -25,7 +94,8 @@ const sourceRows = sql`
       r.buyer_name::text AS customer_name,
       COALESCE(r.buyer_company, '')::text AS customer_company,
       COALESCE(po.company_id, r.company_id)::int AS company_id,
-      r.portal_customer_id::int AS portal_customer_id,
+       (to_jsonb(r)->>'portal_customer_id')::int AS portal_customer_id,
+       COALESCE(pc.phone, r.buyer_phone)::text AS customer_phone,
       CASE WHEN po.id IS NULL
         THEN r.status::text IN ('submitted', 'customer_review', 'quoted', 'awarded')
         ELSE po.status::text IN ('pending', 'confirmed', 'in_progress', 'delivered', 'issued', 'vendor_accepted', 'revision_requested', 'vendor_rejected', 'production', 'ready_to_ship', 'in_transit', 'partially_delivered', 'rejected_goods')
@@ -44,7 +114,8 @@ const sourceRows = sql`
         THEN COALESCE(r.notes, '')
         ELSE CONCAT('RFQ ', r.rfq_number, ' · ', COALESCE(po.vendor_name_snapshot, 'Vendor belum ditentukan'))
       END::text AS summary
-    FROM mkt_rfqs r
+     FROM mkt_rfqs r
+     LEFT JOIN portal_customers pc ON pc.id = (to_jsonb(r)->>'portal_customer_id')::int
     LEFT JOIN LATERAL (
       SELECT p.*
       FROM mkt_purchase_orders p
@@ -65,7 +136,8 @@ const sourceRows = sql`
       r.customer_name::text,
       COALESCE(r.company_name, '')::text,
       r.company_id::int,
-      NULL::int,
+       (to_jsonb(r)->>'portal_customer_id')::int,
+       r.phone::text AS customer_phone,
       r.status::text IN (
         'Order Received', 'Admin Review', 'Product RFQ Sent', 'Product Quote Received',
         'Product Vendor Selected', 'Customer Product Approval', 'Shipment Selection Pending',
@@ -100,6 +172,7 @@ const sourceRows = sql`
       COALESCE(r.customer_company, '')::text,
       r.company_id::int,
       NULL::int,
+       r.customer_phone::text AS customer_phone,
       r.status::text IN (
         'draft', 'waiting_documents', 'document_review', 'document_completed',
         'quotation', 'waiting_customer', 'customer_approved', 'preparing_pib',
@@ -131,6 +204,7 @@ const sourceRows = sql`
       ''::text,
       NULL::int,
       NULL::int,
+       r.whatsapp::text AS customer_phone,
       r.status::text IN ('new', 'contacted'),
       r.status::text IN ('new', 'contacted', 'quoted', 'completed', 'cancelled'),
       r.created_at,
@@ -150,7 +224,8 @@ const sourceRows = sql`
       r.customer_name::text,
       ''::text,
       r.company_id::int,
-      r.portal_customer_id::int,
+      (to_jsonb(r)->>'portal_customer_id')::int,
+       r.phone::text AS customer_phone,
       r.status::text IN (
         'Quote Request', 'Product RFQ Sent', 'Product Quote Received',
         'Product Vendor Selected', 'Customer Product Approval',
@@ -180,7 +255,8 @@ const sourceRows = sql`
       r.customer_name::text,
       COALESCE(r.customer_company, '')::text,
       r.company_id::int,
-      COALESCE(r.portal_customer_id, r.customer_id)::int,
+      COALESCE((to_jsonb(r)->>'portal_customer_id')::int, r.customer_id)::int,
+       r.customer_phone::text AS customer_phone,
       r.status::text IN (
         'submitted', 'pending_review', 'need_review', 'need_more_data',
         'waiting_rate', 'reviewing', 'quoted', 'approved_for_rfq'
@@ -208,7 +284,8 @@ const sourceRows = sql`
       COALESCE(r.pic_pickup, 'Customer')::text,
       ''::text,
       r.company_id::int,
-      COALESCE(r.portal_customer_id, r.customer_id)::int,
+      COALESCE((to_jsonb(r)->>'portal_customer_id')::int, r.customer_id)::int,
+       r.hp_pickup::text AS customer_phone,
       r.status::text IN ('new', 'submitted', 'pending_review', 'waiting_rate', 'quoted', 'approved', 'booked', 'in_progress'),
       r.status::text IN ('new', 'submitted', 'pending_review', 'waiting_rate', 'quoted', 'approved', 'booked', 'in_progress', 'delivered', 'completed', 'cancelled'),
       r.created_at,
@@ -229,7 +306,8 @@ const sourceRows = sql`
       r.customer_name::text,
       ''::text,
       r.company_id::int,
-      r.portal_customer_id::int,
+      (to_jsonb(r)->>'portal_customer_id')::int,
+       r.customer_phone::text AS customer_phone,
       r.status::text IN ('new', 'submitted', 'pending_review', 'waiting_rate', 'quoted', 'approved', 'booked', 'in_progress'),
       r.status::text IN ('new', 'submitted', 'pending_review', 'waiting_rate', 'quoted', 'approved', 'booked', 'in_progress', 'delivered', 'completed', 'cancelled'),
       r.created_at,
@@ -250,7 +328,8 @@ const sourceRows = sql`
       r.customer_name::text,
       COALESCE(r.customer_company, '')::text,
       r.company_id::int,
-      r.portal_customer_id::int,
+      (to_jsonb(r)->>'portal_customer_id')::int,
+       r.customer_phone::text AS customer_phone,
       r.status::text IN ('new', 'submitted', 'pending_review', 'waiting_rate', 'quoted', 'approved', 'booked', 'in_progress'),
       r.status::text IN ('new', 'submitted', 'pending_review', 'waiting_rate', 'quoted', 'approved', 'booked', 'in_progress', 'delivered', 'completed', 'cancelled'),
       r.created_at,
@@ -282,6 +361,7 @@ const sourceRows = sql`
       ''::text,
       d.company_id::int,
       NULL::int,
+       NULL::text AS customer_phone,
       d.status::text IN ('draft', 'submitted', 'pending_review', 'approved', 'booked'),
       d.status::text IN ('draft', 'submitted', 'pending_review', 'approved', 'booked', 'completed', 'cancelled', 'paid'),
       d.created_at,
@@ -335,7 +415,7 @@ router.get("/", async (req: Request, res: Response) => {
     const [rows, count, summary, unread] = await Promise.all([
       db.execute(sql`
         SELECT service_key, service_label, id, reference, status,
-               customer_name, customer_company, company_id, portal_customer_id,
+               customer_name, customer_company, customer_phone, company_id, portal_customer_id,
                created_at, updated_at, management_path, summary,
                is_pending, status_known
         ${from}
@@ -355,7 +435,10 @@ router.get("/", async (req: Request, res: Response) => {
     ]);
 
     return res.json({
-      data: rows.rows,
+      data: rows.rows.map((row) => ({
+        ...row,
+        available_actions: availableActions(String((row as any).service_key), String((row as any).status)),
+      })),
       total: Number((count.rows[0] as { total: number }).total ?? 0),
       limit,
       offset,
@@ -395,6 +478,220 @@ router.post("/notifications/:id/read", async (req: Request, res: Response) => {
   if (!Number.isInteger(id)) return res.status(400).json({ error: "ID notifikasi tidak valid" });
   await db.execute(sql`UPDATE admin_notifications SET read_at = NOW() WHERE id = ${id}`);
   return res.json({ ok: true });
+});
+
+type DirectSource = {
+  table: string;
+  referenceColumn: string;
+  phoneColumn: string;
+  customerIdExpression: string;
+};
+
+const DIRECT_SOURCES: Record<string, DirectSource> = {
+  marketplace: { table: "mkt_rfqs", referenceColumn: "rfq_number", phoneColumn: "buyer_phone", customerIdExpression: "(to_jsonb(r)->>'portal_customer_id')" },
+  "logistic-order": { table: "logistic_orders", referenceColumn: "order_number", phoneColumn: "phone", customerIdExpression: "(to_jsonb(r)->>'portal_customer_id')" },
+  ppjk: { table: "ppjk_orders", referenceColumn: "order_number", phoneColumn: "customer_phone", customerIdExpression: "NULL" },
+  "quote-request": { table: "quote_requests", referenceColumn: "id", phoneColumn: "whatsapp", customerIdExpression: "NULL" },
+  "product-order": { table: "portal_product_orders", referenceColumn: "order_number", phoneColumn: "phone", customerIdExpression: "(to_jsonb(r)->>'portal_customer_id')" },
+  "service-request": { table: "customer_service_requests", referenceColumn: "request_number", phoneColumn: "customer_phone", customerIdExpression: "COALESCE((to_jsonb(r)->>'portal_customer_id')::int, r.customer_id)" },
+  "domestic-trucking": { table: "trucking_booking_requests", referenceColumn: "booking_number", phoneColumn: "hp_pickup", customerIdExpression: "COALESCE((to_jsonb(r)->>'portal_customer_id')::int, r.customer_id)" },
+  "air-freight": { table: "air_freight_orders", referenceColumn: "order_number", phoneColumn: "customer_phone", customerIdExpression: "(to_jsonb(r)->>'portal_customer_id')" },
+  "ocean-freight": { table: "ocean_freight_orders", referenceColumn: "order_number", phoneColumn: "customer_phone", customerIdExpression: "(to_jsonb(r)->>'portal_customer_id')" },
+};
+
+async function loadDirectRecord(service: string, id: number) {
+  if (service === "marketplace-po") {
+    const result = await db.execute(sql`
+      SELECT p.status::text AS status, r.buyer_phone::text AS customer_phone,
+             (to_jsonb(r)->>'portal_customer_id')::int AS portal_customer_id, p.po_number::text AS reference
+      FROM mkt_purchase_orders p
+      JOIN mkt_rfqs r ON r.id = p.rfq_id
+      WHERE p.id = ${id}
+      LIMIT 1
+    `);
+    return result.rows[0] as {
+      status: string;
+      customer_phone: string | null;
+      portal_customer_id: number | null;
+      reference: string;
+    } | undefined;
+  }
+  const source = DIRECT_SOURCES[service];
+  if (!source) return null;
+  const result = await db.execute(sql`
+    SELECT r.status::text AS status,
+           r.${sql.raw(source.phoneColumn)}::text AS customer_phone,
+           ${sql.raw(source.customerIdExpression)}::int AS portal_customer_id,
+           r.${sql.raw(source.referenceColumn)}::text AS reference
+    FROM ${sql.raw(source.table)} r
+    WHERE id = ${id}
+    LIMIT 1
+  `);
+  return result.rows[0] as {
+    status: string;
+    customer_phone: string | null;
+    portal_customer_id: number | null;
+    reference: string;
+  } | undefined;
+}
+
+async function resolveContactPhone(portalCustomerId: number | null, sourcePhone: string | null) {
+  if (portalCustomerId) {
+    const result = await db.execute(sql`
+      SELECT phone FROM portal_customers WHERE id = ${portalCustomerId} LIMIT 1
+    `);
+    const profilePhone = String((result.rows[0] as { phone?: string | null } | undefined)?.phone ?? "").trim();
+    if (profilePhone) return profilePhone;
+  }
+  return sourcePhone?.trim() || null;
+}
+
+async function sendLifecycleWhatsApp(
+  service: string,
+  id: number,
+  reference: string | null,
+  status: string,
+  phone: string | null,
+  reason: string | null,
+) {
+  if (!phone) return;
+  const normalized = normalizePhone(phone);
+  if (!isValidIndonesianPhone(normalized)) return;
+  const detail = reason ? `\nCatatan admin: ${reason}` : "";
+  await sendViaService(
+    normalized,
+    `📋 Update layanan Customer Portal\nReferensi: ${reference ?? `${service} #${id}`}\nStatus: ${status}${detail}`,
+    { context: `customer-portal-${service}-status`, refType: service, refId: `${id}:${status}` },
+  );
+}
+
+async function performDirectAction(
+  service: string,
+  id: number,
+  action: LifecycleAction,
+  reason: string | null,
+  actorId: string,
+) {
+  const source = DIRECT_SOURCES[service];
+  if (!source) {
+    return { ok: false as const, code: "UNSUPPORTED", error: "Layanan ini memakai action di modul canonical masing-masing." };
+  }
+  const initial = await loadDirectRecord(service, id);
+  if (!initial) return { ok: false as const, code: "NOT_FOUND", error: "Transaksi canonical tidak ditemukan." };
+  const target = getActionTarget(service, action, initial.status);
+  if (!target) {
+    return { ok: false as const, code: "INVALID_TRANSITION", error: `Action ${action} tidak tersedia dari status ${initial.status}.` };
+  }
+
+  const result = await db.transaction(async (tx) => {
+    const locked = await tx.execute(sql`
+      SELECT status::text AS status
+      FROM ${sql.raw(source.table)}
+      WHERE id = ${id}
+      FOR UPDATE
+    `);
+    const current = String((locked.rows[0] as { status?: string } | undefined)?.status ?? "");
+    if (!current) return null;
+    if (current === target.nextStatus) return { alreadyAt: true };
+    if (current !== initial.status) throw new Error(`CONCURRENT_STATUS:${current}`);
+    const changed = await tx.execute(sql`
+      UPDATE ${sql.raw(source.table)}
+      SET status = ${target.nextStatus}, updated_at = NOW()
+      WHERE id = ${id} AND status::text = ${current}
+      RETURNING status::text AS status
+    `);
+    if (changed.rows.length !== 1) throw new Error("CONCURRENT_STATUS");
+    await tx.execute(sql`
+      INSERT INTO erp_audit_logs (
+        action, module, reference_id, user_id, old_data, new_data, created_at
+      ) VALUES (
+        ${action}, ${"portal_customer_lifecycle"}, ${`${service}:${id}`}, ${actorId},
+        ${JSON.stringify({ service, id, status: current })}::jsonb,
+        ${JSON.stringify({ service, id, status: target.nextStatus, reason })}::jsonb,
+        NOW()
+      )
+    `);
+    return { alreadyAt: false };
+  });
+  if (!result) return { ok: false as const, code: "NOT_FOUND", error: "Transaksi canonical tidak ditemukan." };
+  if (result.alreadyAt) return { ok: true as const, alreadyAt: true, status: target.nextStatus };
+
+  const latest = await loadDirectRecord(service, id);
+  const customerPhone = await resolveContactPhone(latest?.portal_customer_id ?? null, latest?.customer_phone ?? null);
+  if (latest?.portal_customer_id) {
+    await notifyCustomerPortal({
+      portalCustomerId: latest.portal_customer_id,
+      eventKey: `portal-lifecycle:${service}:${id}:${action}:${target.nextStatus}`,
+      type: "portal_service_status_changed",
+      title: "Status layanan diperbarui",
+      message: `${latest.reference ?? `${service} #${id}`} sekarang berstatus ${target.nextStatus}.`,
+      payload: { service, id, reference: latest.reference ?? null, status: target.nextStatus, action, reason },
+    });
+  }
+  await sendLifecycleWhatsApp(service, id, latest?.reference ?? null, target.nextStatus, customerPhone, reason);
+  return { ok: true as const, alreadyAt: false, status: target.nextStatus };
+}
+
+router.post("/:service/:id/actions", async (req: Request, res: Response) => {
+  const service = String(req.params.service);
+  const id = Number(req.params.id);
+  const action = String(req.body?.action ?? "") as LifecycleAction | "contact";
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 1000) : "";
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "ID transaksi tidak valid" });
+  if (!["approve", "request_revision", "reject", "contact"].includes(action)) {
+    return res.status(400).json({ error: "Action tidak valid" });
+  }
+  if ((action === "reject" || action === "request_revision") && !reason) {
+    return res.status(400).json({ error: "Alasan wajib diisi untuk revisi atau penolakan" });
+  }
+
+  try {
+    if (action === "contact") {
+      const record = await loadDirectRecord(service, id);
+      if (!record) return res.status(404).json({ error: "Kontak transaksi tidak ditemukan" });
+      const phone = await resolveContactPhone(record.portal_customer_id, record.customer_phone);
+      const normalized = phone ? normalizePhone(phone) : "";
+      if (!normalized || !isValidIndonesianPhone(normalized)) {
+        return res.status(422).json({ error: "Nomor WhatsApp customer tidak tersedia atau tidak valid" });
+      }
+      return res.json({ ok: true, action, reference: record.reference, phone: normalized, contactUrl: `https://wa.me/${normalized}` });
+    }
+
+    const internalActor = (req as Request & { isInternalSession?: boolean; user?: { id?: string } }).isInternalSession
+      ? (req.user as { id?: string } | undefined)?.id
+      : undefined;
+    const actorId = String(internalActor ?? (req as any).portalCustomerId ?? "portal-admin");
+    if (service === "logistic-order") {
+      const current = await loadDirectRecord(service, id);
+      if (!current) return res.status(404).json({ error: "Order canonical tidak ditemukan" });
+      const target = getActionTarget(service, action, current.status);
+      if (!target) return res.status(409).json({ error: `Action ${action} tidak tersedia dari status ${current.status}` });
+      const transition = await transitionLogisticOrderStatus(id, target.nextStatus, {
+        actorType: "admin",
+        actorId,
+        actorName: actorId,
+        source: "portal-admin-service-operations",
+        notes: reason || null,
+      });
+      if (!transition.ok) {
+        return res.status(409).json({ error: transition.error ?? "Transisi order ditolak", allowedTransitions: transition.allowedTransitions });
+      }
+      return res.json({ ok: true, action, alreadyAt: transition.alreadyAt ?? false, status: transition.toStatus, reference: transition.orderNumber });
+    }
+
+    const result = await performDirectAction(service, id, action, reason || null, actorId);
+    if (!result.ok) {
+      const statusCode = result.code === "NOT_FOUND" ? 404 : result.code === "INVALID_TRANSITION" ? 409 : 422;
+      return res.status(statusCode).json({ error: result.error });
+    }
+    return res.json({ ...result, action });
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("CONCURRENT_STATUS:")) {
+      return res.status(409).json({ error: "Status transaksi berubah bersamaan. Muat ulang lalu coba lagi." });
+    }
+    console.error("[portal-admin-service-ops] action failed", { service, id, action, error });
+    return res.status(500).json({ error: "Gagal menjalankan action lifecycle" });
+  }
 });
 
 router.get("/:service/:id", async (req: Request, res: Response) => {
@@ -453,6 +750,14 @@ router.get("/:service/:id", async (req: Request, res: Response) => {
           : []),
       ];
     }
+    const lifecycleHistory = await db.execute(sql`
+      SELECT id, action, old_data, new_data, created_at
+      FROM erp_audit_logs
+      WHERE module = 'portal_customer_lifecycle'
+        AND reference_id = ${`${service}:${id}`}
+      ORDER BY created_at ASC, id ASC
+    `);
+    history = [...history, ...lifecycleHistory.rows];
     return res.json({ service, id, record: record.record, history });
   } catch (error) {
     console.error("[portal-admin-service-ops] detail failed", { service, id, error });

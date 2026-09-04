@@ -169,7 +169,10 @@ export async function transitionLogisticOrderStatus(
     .select({
       status: logisticOrdersTable.status,
       orderNumber: logisticOrdersTable.orderNumber,
-      portalCustomerId: logisticOrdersTable.portalCustomerId,
+      // Some development runtimes predate the optional portal_customer_id
+      // column. JSON extraction keeps the canonical transition path usable
+      // without weakening the state-machine or notification contract.
+      portalCustomerId: sql<number | null>`(to_jsonb(logistic_orders)->>'portal_customer_id')::int`,
     })
     .from(logisticOrdersTable)
     .where(eq(logisticOrdersTable.id, orderId));
