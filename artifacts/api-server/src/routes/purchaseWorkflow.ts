@@ -174,6 +174,12 @@ db.execute(sql`
 // Boot migration: SAP Invoice Lock — immutable snapshot column
 db.execute(sql`
   ALTER TABLE vendor_invoices ADD COLUMN IF NOT EXISTS sap_lock_snapshot JSONB;
+  ALTER TABLE vendor_invoices ADD COLUMN IF NOT EXISTS tax_review_status TEXT NOT NULL DEFAULT 'not_required';
+  ALTER TABLE vendor_invoices ADD COLUMN IF NOT EXISTS tax_review_reason TEXT;
+  ALTER TABLE vendor_invoices ADD COLUMN IF NOT EXISTS withholding_tax_type TEXT;
+  ALTER TABLE vendor_invoices ADD COLUMN IF NOT EXISTS tax_object TEXT;
+  ALTER TABLE vendor_invoices ADD COLUMN IF NOT EXISTS withholding_tax_amount NUMERIC(14,2);
+  ALTER TABLE vendor_invoice_lines ADD COLUMN IF NOT EXISTS coa_hint TEXT;
 `).catch((e: unknown) => console.warn("[vendor_invoices] sap_lock_snapshot boot migration warn:", e));
 
 // Boot migration: SAP DB-LEVEL LOCK — is_locked column only (trigger removed; lock enforced at app level)
@@ -1181,6 +1187,7 @@ router.get("/vendor-invoices/:id", async (req, res) => {
 });
 
 router.get("/vendor-invoices/check-duplicate", async (req, res) => {
+  const companyId = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
   const vendorInvoiceRef = req.query.vendorInvoiceRef ? String(req.query.vendorInvoiceRef).trim() : "";
   const supplierId = req.query.supplierId ? Number(req.query.supplierId) : undefined;
   const supplierName = req.query.supplierName ? String(req.query.supplierName).trim() : "";
@@ -1192,11 +1199,13 @@ router.get("/vendor-invoices/check-duplicate", async (req, res) => {
 
   const dupWhere = supplierId
     ? and(
+        eq(vendorInvoicesTable.companyId, companyId),
         sql`lower(${vendorInvoicesTable.vendorInvoiceRef}) = lower(${vendorInvoiceRef})`,
         eq(vendorInvoicesTable.supplierId, supplierId),
         sql`${vendorInvoicesTable.status} != 'cancelled'`,
       )
     : and(
+        eq(vendorInvoicesTable.companyId, companyId),
         sql`lower(${vendorInvoicesTable.vendorInvoiceRef}) = lower(${vendorInvoiceRef})`,
         sql`lower(${vendorInvoicesTable.supplierName}) = lower(${supplierName})`,
         sql`${vendorInvoicesTable.status} != 'cancelled'`,
@@ -1228,14 +1237,32 @@ router.post("/vendor-invoices", async (req, res) => {
   const supplierId = body.supplierId ? Number(body.supplierId) : undefined;
   const supplierName = String(body.supplierName ?? "").trim();
 
+  if (supplierId) {
+    const [supplier] = await db
+      .select({ id: suppliersTable.id, companyId: suppliersTable.companyId })
+      .from(suppliersTable)
+      .where(eq(suppliersTable.id, supplierId))
+      .limit(1);
+    if (!supplier) {
+      res.status(422).json({ error: "supplier_not_found", message: "Supplier tidak ditemukan." });
+      return;
+    }
+    if (supplier.companyId != null && supplier.companyId !== companyId) {
+      res.status(403).json({ error: "supplier_company_mismatch", message: "Supplier bukan milik company aktif." });
+      return;
+    }
+  }
+
   if (vendorInvoiceRef) {
     const dupWhere = supplierId
       ? and(
+          eq(vendorInvoicesTable.companyId, companyId),
           sql`lower(${vendorInvoicesTable.vendorInvoiceRef}) = lower(${vendorInvoiceRef})`,
           eq(vendorInvoicesTable.supplierId, supplierId),
           sql`${vendorInvoicesTable.status} != 'cancelled'`,
         )
       : and(
+          eq(vendorInvoicesTable.companyId, companyId),
           sql`lower(${vendorInvoicesTable.vendorInvoiceRef}) = lower(${vendorInvoiceRef})`,
           sql`lower(${vendorInvoicesTable.supplierName}) = lower(${supplierName})`,
           sql`${vendorInvoicesTable.status} != 'cancelled'`,
@@ -1267,6 +1294,13 @@ router.post("/vendor-invoices", async (req, res) => {
   const headerVat   = body.headerVat   != null && Number.isFinite(Number(body.headerVat))   ? Number(body.headerVat)   : null;
   const headerGross = body.headerGross != null && Number.isFinite(Number(body.headerGross)) ? Number(body.headerGross) : null;
   const hasSapHeader = headerGross != null;
+  const taxReviewRequired = body.taxReviewRequired === true;
+  const taxReviewReason = body.taxReviewReason ? String(body.taxReviewReason) : null;
+  const withholdingTaxType = body.withholdingTaxType ? String(body.withholdingTaxType) : null;
+  const taxObject = body.taxObject ? String(body.taxObject) : null;
+  const withholdingTaxAmount = body.withholdingTaxAmount != null && Number.isFinite(Number(body.withholdingTaxAmount))
+    ? Number(body.withholdingTaxAmount)
+    : null;
 
   const totalAmount = hasSapHeader
     ? (headerNet ?? (headerGross - (headerVat ?? 0)))
@@ -1288,12 +1322,29 @@ router.post("/vendor-invoices", async (req, res) => {
   let poTemplateVersion: string | null = null;
   let poTemplateSnapshot: Record<string, unknown> | null = null;
   if (body.poId) {
-    const [po] = await db.select().from(purchaseDocumentsTable).where(eq(purchaseDocumentsTable.id, Number(body.poId))).limit(1);
+    const [po] = await db.select().from(purchaseDocumentsTable).where(and(
+      eq(purchaseDocumentsTable.id, Number(body.poId)),
+      eq(purchaseDocumentsTable.companyId, companyId),
+    )).limit(1);
+    if (!po) {
+      res.status(422).json({ error: "purchase_order_company_mismatch", message: "Purchase Order tidak ditemukan pada company aktif." });
+      return;
+    }
     if (po) {
       poCategoryKey = po.categoryKey ?? null;
       poTemplateId = po.templateId ?? null;
       poTemplateVersion = po.templateVersion ?? null;
       poTemplateSnapshot = (po.templateSnapshot as Record<string, unknown> | null) ?? null;
+    }
+  }
+  if (body.grId) {
+    const [gr] = await db.select({ id: goodsReceiptsTable.id }).from(goodsReceiptsTable).where(and(
+      eq(goodsReceiptsTable.id, Number(body.grId)),
+      eq(goodsReceiptsTable.companyId, companyId),
+    )).limit(1);
+    if (!gr) {
+      res.status(422).json({ error: "goods_receipt_company_mismatch", message: "Goods Receipt tidak ditemukan pada company aktif." });
+      return;
     }
   }
 
@@ -1310,6 +1361,11 @@ router.post("/vendor-invoices", async (req, res) => {
     paymentTermDays: body.paymentTermDays ? Number(body.paymentTermDays) : 30,
     totalAmount: String(totalAmount),
     taxAmount: String(taxAmount),
+    taxReviewStatus: taxReviewRequired ? "required" : "not_required",
+    taxReviewReason,
+    withholdingTaxType,
+    taxObject,
+    withholdingTaxAmount: withholdingTaxAmount == null ? undefined : String(withholdingTaxAmount),
     grandTotal: String(grandTotal),
     notes: body.notes ? String(body.notes) : undefined,
     createdBy: body.createdBy ? String(body.createdBy) : undefined,
@@ -1326,6 +1382,7 @@ router.post("/vendor-invoices", async (req, res) => {
         unitCost: String(l.unitCost ?? "0"),
         subtotal: String(num(l.quantity) * num(l.unitCost)),
         taxAmount: String(l.taxAmount ?? "0"),
+        coaHint: l.coaHint ? String(l.coaHint) : undefined,
         notes: l.notes ? String(l.notes) : undefined,
       }))
     );
@@ -1390,6 +1447,7 @@ router.put("/vendor-invoices/:id", sapInvoiceLockMiddleware, async (req, res) =>
         unitCost: String(l.unitCost ?? "0"),
         subtotal: String(num(l.quantity) * num(l.unitCost)),
         taxAmount: String(l.taxAmount ?? "0"),
+        coaHint: l.coaHint ? String(l.coaHint) : undefined,
       }))
     );
   }
@@ -1403,6 +1461,14 @@ router.post("/vendor-invoices/:id/post", async (req, res) => {
   const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
   if (!await assertCompanyAccess(vi.companyId, cid, req, res, { resourceType: "vendor_invoice", resourceId: id })) return;
   if (vi.status !== "draft") { res.status(400).json({ error: "Already posted" }); return; }
+  if (vi.taxReviewStatus === "required") {
+    res.status(422).json({
+      error: "tax_review_required",
+      message: "Invoice mengandung klasifikasi PPh/tax object yang belum direview. Jurnal tidak boleh dibuat otomatis.",
+      reason: vi.taxReviewReason,
+    });
+    return;
+  }
 
   // 3-way match check
   let matchStatus = "unmatched";
@@ -1592,12 +1658,19 @@ router.post("/vendor-invoices/:id/post", async (req, res) => {
 });
 
 router.post("/vendor-invoices/:id/cancel", async (req, res) => {
-  await db.update(vendorInvoicesTable).set({ status: "cancelled", cancelledAt: new Date(), updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, Number(String(req.params.id))));
   const id = Number(req.params.id);
   const [viOwner] = await db.select({ companyId: vendorInvoicesTable.companyId }).from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
   if (!viOwner) { res.status(404).json({ error: "Not found" }); return; }
   const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
   if (!await assertCompanyAccess(viOwner.companyId, cid, req, res, { resourceType: "vendor_invoice", resourceId: id })) return;
+  const [current] = await db.select({
+    status: vendorInvoicesTable.status,
+    isLocked: vendorInvoicesTable.isLocked,
+  }).from(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id)).limit(1);
+  if (current?.isLocked || current?.status === "posted" || current?.status === "paid") {
+    res.status(409).json({ error: "posted_invoice_requires_reversal", message: "Invoice posted/locked tidak boleh dibatalkan langsung; gunakan reversal/correction flow." });
+    return;
+  }
   await db.update(vendorInvoicesTable).set({ status: "cancelled", cancelledAt: new Date(), updatedAt: new Date() }).where(eq(vendorInvoicesTable.id, id));
   res.json({ ok: true });
 });
@@ -1608,7 +1681,10 @@ router.delete("/vendor-invoices/:id", async (req, res) => {
   if (!vi) { res.status(404).json({ error: "Not found" }); return; }
   const cid = resolveCompanyId(req as Parameters<typeof resolveCompanyId>[0]);
   if (!await assertCompanyAccess(vi.companyId, cid, req, res, { resourceType: "vendor_invoice", resourceId: id })) return;
-  if (vi.status === "paid") { res.status(400).json({ error: "Invoice yang sudah dibayar tidak bisa dihapus" }); return; }
+  if (vi.isLocked || vi.status === "posted" || vi.status === "paid") {
+    res.status(409).json({ error: "posted_invoice_requires_reversal", message: "Invoice posted/locked tidak boleh dihapus; gunakan reversal/correction flow." });
+    return;
+  }
   await db.delete(vendorInvoiceLinesTable).where(eq(vendorInvoiceLinesTable.invoiceId, id));
   await db.delete(vendorInvoicesTable).where(eq(vendorInvoicesTable.id, id));
   res.json({ ok: true });

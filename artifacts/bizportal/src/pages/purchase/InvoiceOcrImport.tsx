@@ -38,6 +38,7 @@ interface OcrLineItem {
   quantity: number | null;
   unit_price: number | null;
   total: number | null;
+  coa_hint?: string | null;
 }
 
 interface OcrResult {
@@ -54,6 +55,17 @@ interface OcrResult {
   shipping_cost: number | null;
   total_amount: number | null;
   line_items: OcrLineItem[];
+  tax_review?: {
+    required: boolean;
+    status: "required" | "not_required";
+    reasons: string[];
+    withholding_tax_type: string | null;
+    tax_object: string | null;
+    withholding_amount: number | null;
+  };
+  withholding_tax_type?: string | null;
+  tax_object?: string | null;
+  withholding_amount?: number | null;
   payment_status_hint: string | null;
   raw_confidence: number;
   flags: string[];
@@ -96,6 +108,7 @@ interface DisplayLine {
   unit: string;
   unitPrice: string;
   notes: string;
+  coaHint: string;
 }
 
 function confidenceColor(c: number) {
@@ -141,6 +154,9 @@ function getOcrAutoPostReviewReasons(
   }
   if (sapTax.tax.type === "PPN" && !(typeof vat === "number" && vat > 0)) {
     reasons.push("Invoice PPN tidak memiliki nilai PPN yang terbaca.");
+  }
+  if (result.tax_review?.required) {
+    reasons.push(...result.tax_review.reasons);
   }
   return reasons;
 }
@@ -273,6 +289,7 @@ export default function InvoiceOcrImportPage() {
               // SAP LOCK: unit_price is display-only; never multiplied here
               unitPrice: l.unit_price != null ? String(l.unit_price) : "",
               notes: "",
+              coaHint: l.coa_hint ?? "",
             }))
           : [
               {
@@ -281,6 +298,7 @@ export default function InvoiceOcrImportPage() {
                 unit: "ls",
                 unitPrice: "",
                 notes: "",
+                coaHint: "",
               },
             ];
 
@@ -423,8 +441,14 @@ export default function InvoiceOcrImportPage() {
           unit: l.unit,
           unitCost: Number(l.unitPrice) || 0,
           taxAmount: 0,
+          coaHint: l.coaHint || undefined,
           notes: l.notes,
         })),
+        taxReviewRequired: Boolean(result?.tax_review?.required),
+        taxReviewReason: result?.tax_review?.reasons?.join(" ") || undefined,
+        withholdingTaxType: result?.tax_review?.withholding_tax_type || undefined,
+        taxObject: result?.tax_review?.tax_object || undefined,
+        withholdingTaxAmount: result?.tax_review?.withholding_amount ?? undefined,
       };
       const res = await fetch("/api/purchase-workflow/vendor-invoices", {
         method: "POST",
@@ -582,11 +606,16 @@ export default function InvoiceOcrImportPage() {
             >
               <CheckCircle2 className="h-5 w-5 shrink-0 mt-0.5" />
               <div className="flex-1">
-                <p className="font-semibold">
+                  <p className="font-semibold">
                   Ekstraksi selesai — Tingkat kepercayaan OCR:{" "}
                   <strong>{confidenceLabel(result.raw_confidence)}</strong> (
                   {Math.round(result.raw_confidence * 100)}%)
                 </p>
+                {result.tax_review?.required && (
+                  <p className="mt-2 text-xs font-semibold text-amber-700">
+                    Tax review wajib — PPh tidak akan auto-post sebelum jenis, tax object, dan bukti pendukung direview.
+                  </p>
+                )}
                 {result.flags?.length > 0 && (
                   <ul className="mt-2 space-y-1">
                     {result.flags.map((f, i) => (
@@ -863,6 +892,7 @@ export default function InvoiceOcrImportPage() {
                         unit: "ls",
                         unitPrice: "",
                         notes: "",
+                        coaHint: "",
                       },
                     ])
                   }
