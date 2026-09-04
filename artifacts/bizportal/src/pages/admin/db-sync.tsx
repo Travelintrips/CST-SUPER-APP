@@ -16,6 +16,8 @@ import { useQuery } from "@tanstack/react-query";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface DbStatus {
+  enabled: boolean;
+  reason?: string;
   local:  { configured: boolean; masked: string };
   prod:   { configured: boolean; masked: string };
   dev:    { configured: boolean; masked: string };
@@ -284,7 +286,7 @@ export default function DbSyncPage() {
               Sinkronisasi Database
             </h1>
             <p className="text-sm text-muted-foreground mt-0.5">
-              Sync 2 arah antara Replit DB dan Supabase (Prod &amp; Dev)
+              Sinkronisasi database legacy dinonaktifkan
             </p>
           </div>
           <Button variant="ghost" size="icon" className="ml-auto h-8 w-8" onClick={() => refetch()}>
@@ -292,13 +294,12 @@ export default function DbSyncPage() {
           </Button>
         </div>
 
-        {/* Warning */}
-        <Alert className="border-orange-200 bg-orange-50 dark:bg-orange-950">
-          <AlertCircle className="h-4 w-4 text-orange-500" />
+         <Alert className="border-blue-200 bg-blue-50 dark:bg-blue-950">
+           <AlertCircle className="h-4 w-4 text-blue-500" />
           <AlertDescription className="text-sm">
-            <strong>Perhatian:</strong> Operasi <em>Push</em> akan menimpa data di Supabase dengan data Replit.
-            Operasi <em>Pull</em> akan menimpa data Replit dengan data dari Supabase.
-            Pastikan ada backup sebelum menjalankan sync.
+             <strong>Supabase adalah satu-satunya database aplikasi.</strong>{" "}
+             Sinkronisasi dua arah dengan database Replit/Helium telah dinonaktifkan.
+             Gunakan alat migrasi Supabase yang eksplisit untuk perubahan schema.
           </AlertDescription>
         </Alert>
 
@@ -317,17 +318,10 @@ export default function DbSyncPage() {
 
         {data && (
           <>
-            {/* Connections */}
+             {/* Connections */}
             <div>
               <h2 className="text-sm font-medium text-muted-foreground mb-2">Status Koneksi</h2>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <ConnectionCard
-                  label="Replit DB (Primary)"
-                  icon={Database}
-                  configured={data.local.configured}
-                  masked={data.local.masked}
-                  colorClass="border-l-indigo-500"
-                />
+               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <ConnectionCard
                   label="Supabase Prod"
                   icon={Server}
@@ -345,24 +339,13 @@ export default function DbSyncPage() {
               </div>
             </div>
 
-            {/* Sync panels */}
-            <div>
-              <h2 className="text-sm font-medium text-muted-foreground mb-2">Jalankan Sync</h2>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <SyncPanel
-                  target="prod"
-                  localOk={data.local.configured}
-                  remoteOk={data.prod.configured}
-                  onJobStarted={handleJobStarted}
-                />
-                <SyncPanel
-                  target="dev"
-                  localOk={data.local.configured}
-                  remoteOk={data.dev.configured}
-                  onJobStarted={handleJobStarted}
-                />
-              </div>
-            </div>
+             <Alert>
+               <Server className="h-4 w-4" />
+               <AlertDescription className="text-sm">
+                 Endpoint sync lama tetap tersedia hanya untuk menampilkan status
+                 kompatibilitas, tetapi semua operasi push/pull akan ditolak.
+               </AlertDescription>
+             </Alert>
 
             {/* Live log */}
             {showLive && activeJob && (

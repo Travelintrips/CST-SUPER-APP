@@ -9,10 +9,11 @@
  */
 
 import { execSync } from "child_process";
+import { resolveSupabaseDatabaseUrl } from "./resolve-supabase-db-url.mjs";
 
 // ── Safety guard ──────────────────────────────────────────────────────────────
 const APP_ENV = process.env.APP_ENV ?? process.env.NODE_ENV ?? "development";
-const DB_URL  = process.env.SUPABASE_DATABASE_URL_DEV ?? process.env.DATABASE_URL;
+const DB_URL  = resolveSupabaseDatabaseUrl().url;
 
 if (!DB_URL) {
   console.error("[seed] ERROR: SUPABASE_DATABASE_URL_DEV tidak tersedia. Abort.");

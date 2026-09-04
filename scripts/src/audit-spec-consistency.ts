@@ -9,9 +9,10 @@
  */
 import pg from "pg";
 import { templates } from "../../lib/product-templates/src/templates";
+import { resolveSupabaseDatabaseUrl } from "../resolve-supabase-db-url.mjs";
 
 const { Pool } = pg;
-const connStr = process.env.SUPABASE_DATABASE_URL_DEV || process.env.SUPABASE_DATABASE_URL;
+const { url: connStr } = resolveSupabaseDatabaseUrl();
 const pool = new Pool({ connectionString: connStr, options: "-c search_path=public" });
 
 async function main() {

@@ -39,15 +39,7 @@ function resolveUrl(env) {
   const devUrl = process.env.SUPABASE_DATABASE_URL_DEV;
   if (devUrl) return { url: devUrl, key: "SUPABASE_DATABASE_URL_DEV" };
 
-  // Fallback: shared DB (warn)
-  const sharedUrl = process.env.SUPABASE_DATABASE_URL;
-  if (sharedUrl) {
-    console.warn("[verify-db] WARNING: SUPABASE_DATABASE_URL_DEV tidak di-set — menggunakan shared DB (SUPABASE_DATABASE_URL).");
-    console.warn("[verify-db] Ini aman untuk baca, tapi HATI-HATI untuk migration/write.");
-    return { url: sharedUrl, key: "SUPABASE_DATABASE_URL" };
-  }
-
-  console.error("[verify-db] ERROR: Tidak ada URL DB yang tersedia. Set SUPABASE_DATABASE_URL_DEV atau SUPABASE_DATABASE_URL.");
+  console.error("[verify-db] ERROR: SUPABASE_DATABASE_URL_DEV wajib di-set untuk development.");
   process.exit(1);
 }
 
@@ -161,11 +153,6 @@ if (!connected) process.exit(1);
 
 // ── Summary ──────────────────────────────────────────────────────────────────
 console.log("=".repeat(60));
-if (targetEnv === "development" && isPointingToProd && !process.env.SUPABASE_DATABASE_URL_DEV) {
-  console.warn("[verify-db] WARNING: Dev menggunakan shared PROD DB. Aman untuk dev tapi idealnya pakai DB terpisah.");
-  console.warn("[verify-db] Set SUPABASE_DATABASE_URL_DEV ke Supabase project DEV yang terpisah.");
-} else {
-  console.log(`[verify-db] ✓ Target ${targetEnv.toUpperCase()} DB terverifikasi.`);
-}
+console.log(`[verify-db] ✓ Target ${targetEnv.toUpperCase()} DB terverifikasi.`);
 console.log("[verify-db] Aman untuk melanjutkan migration pada target ini.");
 console.log("=".repeat(60));

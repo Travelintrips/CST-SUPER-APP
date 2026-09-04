@@ -4,21 +4,12 @@
  * Run: pnpm exec tsx lib/db/migrate-warehouse.ts
  */
 import pg from "pg";
+import { resolveSupabaseDatabaseUrl } from "../../scripts/resolve-supabase-db-url.mjs";
 
 const { Pool } = pg;
 
 function resolveUrl(): string {
-  const candidates = [
-    process.env.SUPABASE_PG_URL,
-    process.env.SUPABASE_DATABASE_URL,
-    process.env.DATABASE_URL,
-  ];
-  for (const url of candidates) {
-    if (url && /^postgres(?:ql)?:\/\//i.test(url)) {
-      return url.replace(/:6543\//, ":5432/");
-    }
-  }
-  throw new Error("No PostgreSQL URL found");
+  return resolveSupabaseDatabaseUrl().url.replace(/:6543\//, ":5432/");
 }
 
 const pool = new Pool({ connectionString: resolveUrl(), ssl: { rejectUnauthorized: false }, max: 1 });

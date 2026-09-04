@@ -18,17 +18,10 @@
 
 import pg from 'pg';
 import crypto from 'crypto';
+import { resolveSupabaseDatabaseUrl } from './resolve-supabase-db-url.mjs';
 
 const { Pool } = pg;
-const connStr =
-  process.env.SUPABASE_DATABASE_URL_DEV ||
-  process.env.SUPABASE_DATABASE_URL ||
-  process.env.DATABASE_URL;
-
-if (!connStr) {
-  console.error('❌  Set SUPABASE_DATABASE_URL_DEV / SUPABASE_DATABASE_URL / DATABASE_URL');
-  process.exit(1);
-}
+const { url: connStr } = resolveSupabaseDatabaseUrl();
 
 const pool = new Pool({ connectionString: connStr, ssl: { rejectUnauthorized: false }, max: 3 });
 

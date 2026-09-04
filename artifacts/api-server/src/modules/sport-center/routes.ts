@@ -17,7 +17,7 @@ import { saveAndBroadcast } from "../../lib/notificationStore.js";
 // primary endpoint. All tables are in the SAME Supabase instance; distinction
 // is between the canonical sport_center schema vs the public mirror tables.
 {
-  const rawUrl = process.env.SUPABASE_DATABASE_URL ?? process.env.DATABASE_URL ?? "NOT SET";
+  const rawUrl = process.env.SUPABASE_DATABASE_URL ?? "NOT SET";
   const maskedUrl = rawUrl.replace(/\/\/[^@]+@/, "//***@").split("?")[0];
   console.log(
     `[DB SOURCE CHECK]\n` +
@@ -4628,8 +4628,8 @@ router.get("/sync/debug", async (req, res) => {
     : (process.env.SUPABASE_SERVICE_ROLE_KEY_DEV ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? "");
 
   const dbUrlRaw = isProd
-    ? (process.env.SUPABASE_DATABASE_URL ?? process.env.DATABASE_URL ?? "")
-    : (process.env.SUPABASE_DATABASE_URL_DEV ?? process.env.SUPABASE_DATABASE_URL ?? process.env.DATABASE_URL ?? "");
+    ? (process.env.SUPABASE_DATABASE_URL ?? "")
+    : (process.env.SUPABASE_DATABASE_URL_DEV ?? "");
 
   const dbMasked  = dbUrlRaw  ? dbUrlRaw.replace(/\/\/[^@]+@/, "//***@").split("?")[0] : "(not set)";
   const dbMode    = isProd ? "production" : "development";

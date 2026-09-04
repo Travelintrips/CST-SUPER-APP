@@ -4,15 +4,16 @@ description: How dev workspace is isolated from production database via APP_ENV 
 ---
 
 ## Rule
-Dev workspace uses `APP_ENV=development` (default in `start-dev.sh`).
+Dev workspace uses unconditional `APP_ENV=development` in every `start-dev.sh`.
 Production deployment has `REPLIT_DEPLOYMENT=1` set automatically.
 
 **Why:** Previously `APP_ENV` defaulted to `production`, causing `NODE_ENV=production` in `dev.mjs`, which made `lib/db` use `SUPABASE_DATABASE_URL` (prod DB). All dev transactions were hitting production data.
 
 **How to apply:**
-- `start-dev.sh`: `APP_ENV=${APP_ENV:-development}` — do NOT change back to `production`
+- `start-dev.sh`: `APP_ENV=development` — do not use a fallback expression that can inherit production
 - `load-secrets.mjs` dev mode: injects `*_DEV` GCP keys as canonical names, PLUS non-`_DEV` keys that have no `_DEV` counterpart (shared API keys)
-- `lib/db/src/index.ts`: in dev mode (`NODE_ENV=development`), tries `SUPABASE_DATABASE_URL_DEV` first, then `SUPABASE_DATABASE_URL`
+- `lib/db/src/index.ts`: dev accepts only the matched DEV migration target or `SUPABASE_DATABASE_URL_DEV`; production accepts only production Supabase URLs
+- `load-secrets.mjs`: removes `DATABASE_URL` and PG connection components before spawning application children
 - GCP Secret Manager stores `SUPABASE_DATABASE_URL_DEV` (dev DB URL) alongside `SUPABASE_DATABASE_URL` (prod)
 
 Environment-specific bundles may still contain the legacy `_DEV` key names. The development loader must preserve those suffixed keys for runtime guards while also exposing their values under canonical names consumed by the application.
@@ -27,7 +28,7 @@ Environment-specific bundles may still contain the legacy `_DEV` key names. The 
 - `SUPABASE_DATABASE_URL` always points to the environment-appropriate DB after secrets are injected
 
 ## Required _DEV keys in GCP Secret Manager for full isolation
-If any of these are missing, dev falls back to the prod value (shared DB):
+If any of these are missing, development startup should fail closed rather than use the production database:
 1. `SUPABASE_DATABASE_URL_DEV` — PostgreSQL connection string (pooler port 6543)
 2. `SUPABASE_URL_DEV` — Supabase project API URL (https://xxx.supabase.co)
 3. `SUPABASE_ANON_KEY_DEV` — anon/public JWT key
@@ -41,7 +42,7 @@ If any of these are missing, dev falls back to the prod value (shared DB):
 Run via: `cd artifacts/api-server && node load-secrets.mjs node ../../scripts/setup-dev-supabase.mjs`
 After adding keys: restart Gateway, then run `node scripts/run-dev-migrations.mjs` to apply schema to dev DB.
 
-## Root cause of "prod data in dev" (resolved Aug 2026)
+## Root cause of "prod data in dev" (resolved August 2026)
 GCP Secret Manager correctly had separate _DEV keys all along. The real bug:
 - Replit workspace has `APP_ENV=production` set as a persistent environment variable
 - `start-dev.sh` used `APP_ENV=${APP_ENV:-development}` — bash `:-` does NOT override an already-set variable

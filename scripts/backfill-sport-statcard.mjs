@@ -7,14 +7,11 @@
  */
 
 import pg from "pg";
+import { resolveSupabaseDatabaseUrl } from "./resolve-supabase-db-url.mjs";
 
 const { Pool } = pg;
 
-const connStr = process.env.SUPABASE_PG_URL || process.env.DATABASE_URL;
-if (!connStr) {
-  console.error("❌  Set SUPABASE_PG_URL atau DATABASE_URL terlebih dahulu.");
-  process.exit(1);
-}
+const { url: connStr } = resolveSupabaseDatabaseUrl();
 
 const pool = new Pool({
   connectionString: connStr,

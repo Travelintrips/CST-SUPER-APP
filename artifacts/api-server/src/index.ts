@@ -1930,7 +1930,6 @@ async function startServer() {
   registerWorker("fleet-notification-worker", startFleetNotificationWorker, 75_000);
   registerWorker("sport-center-payment-sync", startSportCenterPaymentSyncWorker, 72_000);
   registerWorker("sport-center-incremental-sync", startIncrementalSyncWorker, 8_000);
-  registerWorker("db-sync-check", startDbSyncWorker, 90_000);
   registerWorker("daily-report-wa", startDailyReportWorker, 95_000);
   registerWorker("ledger-consistency-check", startLedgerConsistencyWorker, 95_000);
   registerWorker("financial-outbox-processor", startOutboxProcessor, 3_000);
@@ -2453,7 +2452,6 @@ process.on("uncaughtException", (err: Error) => {
   const activeDbUrl =
     (!isDeployment ? process.env["SUPABASE_DATABASE_URL_DEV"] : undefined) ??
     process.env["SUPABASE_DATABASE_URL"] ??
-    process.env["DATABASE_URL"] ??
     "";
 
   const dbHostMatch = activeDbUrl.match(/@([^/?:]+)/);

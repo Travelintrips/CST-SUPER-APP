@@ -19,15 +19,11 @@ import { resolveTemplate } from "../../lib/product-templates/src/registry";
 import { resolveServiceTemplate } from "../../lib/service-templates/src/registry";
 import type { ProductTemplateOverride } from "../../lib/product-templates/src/types";
 import type { ServiceTemplateOverride } from "../../lib/service-templates/src/types";
+import { resolveSupabaseDatabaseUrl } from "../resolve-supabase-db-url.mjs";
 
 const { Pool } = pg;
 
-const connStr =
-  process.env.SUPABASE_DATABASE_URL_DEV ||
-  process.env.SUPABASE_DATABASE_URL ||
-  process.env.SUPABASE_PG_URL ||
-  process.env.DATABASE_URL;
-if (!connStr) throw new Error("No DB connection string found");
+const { url: connStr } = resolveSupabaseDatabaseUrl();
 
 const pool = new Pool({ connectionString: connStr, max: 2, options: "-c search_path=public" });
 

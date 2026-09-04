@@ -33,10 +33,6 @@ function resolveDbUrl() {
       ]
     : [
         process.env.SUPABASE_DATABASE_URL_DEV,
-        process.env.SUPABASE_DATABASE_URL,
-        process.env.SUPABASE_SESSION_URL,
-        process.env.SUPABASE_DIRECT_URL,
-        process.env.SUPABASE_PG_URL,
       ];
   for (const url of candidates) {
     if (url && /^postgres(?:ql)?:\/\//i.test(url)) return url;

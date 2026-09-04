@@ -9,6 +9,7 @@ import pg from "pg";
 import { randomUUID } from "node:crypto";
 import { writeFile, rm } from "node:fs/promises";
 import { execFile } from "node:child_process";
+import { resolveSupabaseDatabaseUrl } from "../../../scripts/resolve-supabase-db-url.mjs";
 
 const API = process.env.PROOF_API_URL ?? "http://127.0.0.1:8080";
 const marker = `AUDIT-ADMIN-ALL-SERVICES-${randomUUID()}`;
@@ -20,7 +21,7 @@ if (appEnv !== "development" || !safeMode || process.env.REPLIT_DEPLOYMENT === "
 }
 
 const pool = new pg.Pool({
-  connectionString: process.env.SUPABASE_DATABASE_URL_DEV ?? process.env.SUPABASE_DATABASE_URL,
+  connectionString: resolveSupabaseDatabaseUrl().url,
   ssl: { rejectUnauthorized: false },
   max: 2,
 });

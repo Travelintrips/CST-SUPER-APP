@@ -85,11 +85,9 @@ interface ConfigRow {
   value: string | null;
 }
 
-const BOOTSTRAP_SOURCES = [
-  process.env.SUPABASE_MIGRATION_URL,
-  process.env.SUPABASE_DATABASE_URL,
-  process.env.SUPABASE_DATABASE_URL_DEV,
-];
+const BOOTSTRAP_SOURCES = process.env.APP_ENV === "production"
+  ? [process.env.SUPABASE_MIGRATION_URL, process.env.SUPABASE_DATABASE_URL]
+  : [process.env.SUPABASE_MIGRATION_URL, process.env.SUPABASE_DATABASE_URL_DEV];
 
 function getBootstrapUrl(): string | null {
   for (const url of BOOTSTRAP_SOURCES) {

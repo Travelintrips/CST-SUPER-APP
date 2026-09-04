@@ -384,7 +384,6 @@ router.get("/db-connections", async (req, res) => {
     const envPresence = {
       SUPABASE_DATABASE_URL: !!process.env.SUPABASE_DATABASE_URL,
       SUPABASE_DATABASE_URL_DEV: !!process.env.SUPABASE_DATABASE_URL_DEV,
-      DATABASE_URL: !!process.env.DATABASE_URL,
     };
 
     // Audit seluruh sumber koneksi yang dikenal
@@ -402,8 +401,8 @@ router.get("/db-connections", async (req, res) => {
         file: "artifacts/api-server/src/lib/dbBackup.ts",
         type: "pg_dump CLI",
         activeSource: dbInfo.mode === "production"
-          ? (process.env.SUPABASE_DATABASE_URL ? "SUPABASE_DATABASE_URL" : "DATABASE_URL (fallback)")
-          : (process.env.SUPABASE_DATABASE_URL_DEV ? "SUPABASE_DATABASE_URL_DEV" : process.env.SUPABASE_DATABASE_URL ? "SUPABASE_DATABASE_URL" : "DATABASE_URL (fallback)"),
+          ? (process.env.SUPABASE_DATABASE_URL ? "SUPABASE_DATABASE_URL" : "(not configured)")
+          : (process.env.SUPABASE_DATABASE_URL_DEV ? "SUPABASE_DATABASE_URL_DEV" : "(not configured)"),
         host: dbInfo.host,
         mode: dbInfo.mode,
         pooler: false,

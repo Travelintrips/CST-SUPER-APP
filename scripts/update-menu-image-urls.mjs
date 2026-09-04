@@ -16,9 +16,9 @@ import { dirname, join } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const DB_URL = process.env.SUPABASE_DATABASE_URL_DEV ?? process.env.SUPABASE_DATABASE_URL;
+const DB_URL = process.env.SUPABASE_DATABASE_URL_DEV;
 if (!DB_URL) {
-  console.error("ERROR: SUPABASE_DATABASE_URL_DEV (or SUPABASE_DATABASE_URL) is not set");
+  console.error("ERROR: SUPABASE_DATABASE_URL_DEV is not set");
   process.exit(1);
 }
 

@@ -18,8 +18,7 @@
  *   6. Kasbon/Talangan hilang dari tabel sumber padahal masih dirujuk jurnal
  *      (integrity break dua arah — DELETE fisik sesudah ada jurnal itu bug).
  *
- * DB URL priority (sesuai permintaan): SUPABASE_DATABASE_URL →
- * SUPABASE_DATABASE_URL_DEV → SUPABASE_PG_URL → DATABASE_URL.
+ * The official resolver selects the Supabase target from APP_ENV.
  *
  * Read-only: script ini TIDAK PERNAH melakukan INSERT/UPDATE/DELETE/DDL.
  *
@@ -31,30 +30,11 @@
  */
 
 import pg from "pg";
+import { resolveSupabaseDatabaseUrl } from "./resolve-supabase-db-url.mjs";
 
 const { Client } = pg;
 
-const DB_URL =
-  process.env.SUPABASE_DATABASE_URL ||
-  process.env.SUPABASE_DATABASE_URL_DEV ||
-  process.env.SUPABASE_PG_URL ||
-  process.env.DATABASE_URL;
-
-if (!DB_URL) {
-  console.error(
-    "ERROR: tidak ada connection string. Set salah satu dari: " +
-      "SUPABASE_DATABASE_URL, SUPABASE_DATABASE_URL_DEV, SUPABASE_PG_URL, DATABASE_URL",
-  );
-  process.exit(2);
-}
-
-const DB_LABEL = process.env.SUPABASE_DATABASE_URL
-  ? "SUPABASE_DATABASE_URL (prod)"
-  : process.env.SUPABASE_DATABASE_URL_DEV
-    ? "SUPABASE_DATABASE_URL_DEV (dev)"
-    : process.env.SUPABASE_PG_URL
-      ? "SUPABASE_PG_URL"
-      : "DATABASE_URL";
+const { name: DB_LABEL, url: DB_URL } = resolveSupabaseDatabaseUrl();
 
 const client = new Client({
   connectionString: DB_URL,

@@ -13,11 +13,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FORCE = process.argv.includes("--force");
 
 const DB_URL =
-  process.env.SUPABASE_DATABASE_URL_DEV ??
-  process.env.SUPABASE_DATABASE_URL;
+  process.env.SUPABASE_DATABASE_URL_DEV;
 
 if (!DB_URL) {
-  console.error("ERROR: SUPABASE_DATABASE_URL_DEV or SUPABASE_DATABASE_URL must be set");
+  console.error("ERROR: SUPABASE_DATABASE_URL_DEV must be set");
   process.exit(1);
 }
 

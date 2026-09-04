@@ -22,18 +22,11 @@
  */
 
 import { Pool } from "pg";
+import { resolveSupabaseDatabaseUrl } from "./resolve-supabase-db-url.mjs";
 
 // ── DB connection ──────────────────────────────────────────────────────────────
 function resolveDbUrl() {
-  const isProd = process.env.NODE_ENV === "production" || !!process.env.REPLIT_DEPLOYMENT;
-  if (isProd) {
-    return process.env.SUPABASE_DATABASE_URL || process.env.DATABASE_URL;
-  }
-  return (
-    process.env.SUPABASE_DATABASE_URL_DEV ||
-    process.env.SUPABASE_DATABASE_URL ||
-    process.env.DATABASE_URL
-  );
+  return resolveSupabaseDatabaseUrl().url;
 }
 
 const pool = new Pool({

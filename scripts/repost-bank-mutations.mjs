@@ -3,11 +3,10 @@
  * Jalankan: node scripts/repost-bank-mutations.mjs
  */
 import pg from "pg";
+import { resolveSupabaseDatabaseUrl } from "./resolve-supabase-db-url.mjs";
 
 const { Pool } = pg;
-const DB_URL = process.env.OVERRIDE_DB_URL
-  || (process.env.SUPABASE_DATABASE_URL || "").trim();
-if (!DB_URL) { console.error("SUPABASE_DATABASE_URL tidak ada"); process.exit(1); }
+const { url: DB_URL } = resolveSupabaseDatabaseUrl();
 
 const pool = new Pool({ connectionString: DB_URL, max: 3, connectionTimeoutMillis: 10000 });
 

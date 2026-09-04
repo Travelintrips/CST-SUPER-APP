@@ -26,7 +26,7 @@ if (process.env.TEST_DATABASE_URL && process.env.SUPABASE_DATABASE_URL === proce
 }
 
 const pool = new pg.Pool({
-  connectionString: process.env.SUPABASE_DATABASE_URL,
+  connectionString: process.env.SUPABASE_DATABASE_URL_DEV,
   ssl: { rejectUnauthorized: false },
   max: 2,
   connectionTimeoutMillis: 30_000,

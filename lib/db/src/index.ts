@@ -103,14 +103,10 @@ function resolveConnectionString(): string {
   const candidates = isProd
     ? [
         process.env.SUPABASE_DATABASE_URL,
-        process.env.DATABASE_URL,
-        process.env.SUPABASE_PG_URL,
       ]
     : [
         matchedDevMigrationUrl,
         process.env.SUPABASE_DATABASE_URL_DEV,
-        process.env.SUPABASE_DATABASE_URL,
-        process.env.DATABASE_URL,
       ];
 
   for (const url of candidates) {
@@ -126,7 +122,7 @@ function resolveConnectionString(): string {
   throw new Error(
     isProd
       ? "No valid PostgreSQL connection string found. Set SUPABASE_DATABASE_URL."
-      : "No valid PostgreSQL connection string found. Set SUPABASE_MIGRATION_URL or SUPABASE_DATABASE_URL_DEV (or SUPABASE_DATABASE_URL for shared-DB mode).",
+      : "No valid development Supabase connection string found. Set a matching SUPABASE_MIGRATION_URL or SUPABASE_DATABASE_URL_DEV.",
   );
 }
 
@@ -508,12 +504,9 @@ export function getActiveDbInfo(): {
   const candidates = isProd
     ? [
         { key: "SUPABASE_DATABASE_URL", val: process.env.SUPABASE_DATABASE_URL },
-        { key: "DATABASE_URL", val: process.env.DATABASE_URL },
       ]
     : [
         { key: "SUPABASE_DATABASE_URL_DEV", val: process.env.SUPABASE_DATABASE_URL_DEV },
-        { key: "SUPABASE_DATABASE_URL", val: process.env.SUPABASE_DATABASE_URL },
-        { key: "DATABASE_URL", val: process.env.DATABASE_URL },
       ];
 
   for (const c of candidates) {

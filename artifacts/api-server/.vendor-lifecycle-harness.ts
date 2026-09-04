@@ -14,7 +14,7 @@ type Jar = Map<string, string>;
 type ResponseData = { status: number; body: any; headers: Headers };
 
 const pool = new Pool({
-  connectionString: process.env.SUPABASE_DATABASE_URL_DEV || process.env.DATABASE_URL,
+  connectionString: process.env.SUPABASE_DATABASE_URL_DEV,
   max: 1,
   connectionTimeoutMillis: 20_000,
   idleTimeoutMillis: 20_000,

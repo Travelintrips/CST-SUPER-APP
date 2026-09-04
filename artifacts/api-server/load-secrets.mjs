@@ -520,6 +520,15 @@ async function main() {
 
   // ── Phase 6: Inject secrets ─────────────────────────────────────────────────
   const merged = { ...process.env };
+  // Never pass the built-in Replit/Helium database target to an application
+  // child process. Supabase URLs are injected below and are the only supported
+  // database configuration.
+  delete merged.DATABASE_URL;
+  delete merged.PGHOST;
+  delete merged.PGPORT;
+  delete merged.PGUSER;
+  delete merged.PGPASSWORD;
+  delete merged.PGDATABASE;
   delete merged.APP_SECRET_BUNDLE_VERSION;
   if (resolvedSecretVersion) {
     // Keep only the non-secret version identifier in the child runtime.

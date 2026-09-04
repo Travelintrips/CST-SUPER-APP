@@ -1,19 +1,10 @@
 import pg from "pg";
+import { resolveSupabaseDatabaseUrl } from "./resolve-supabase-db-url.mjs";
 
 const { Pool } = pg;
 
 function resolveConnectionString() {
-  const candidates = [
-    process.env.SUPABASE_PG_URL,
-    process.env.SUPABASE_DATABASE_URL,
-    process.env.DATABASE_URL,
-  ];
-  for (const url of candidates) {
-    if (url && /^postgres(?:ql)?:\/\//i.test(url)) {
-      return url.replace(/:6543\//, ":5432/");
-    }
-  }
-  throw new Error("No valid PostgreSQL connection string found.");
+  return resolveSupabaseDatabaseUrl().url.replace(/:6543\//, ":5432/");
 }
 
 const pool = new Pool({ connectionString: resolveConnectionString() });

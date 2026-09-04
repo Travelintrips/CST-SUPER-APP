@@ -14,6 +14,7 @@ import { readFileSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { gzipSync } from "zlib";
+import { resolveSupabaseDatabaseUrl } from "../resolve-supabase-db-url.mjs";
 
 const PARENT_FOLDER_NAME = "BizPortal Backup";
 
@@ -87,12 +88,7 @@ async function uploadFileToDrive(
 
 async function main() {
   const connectors = new ReplitConnectors();
-  const databaseUrl = process.env.DATABASE_URL;
-
-  if (!databaseUrl) {
-    console.error("DATABASE_URL tidak ditemukan.");
-    process.exit(1);
-  }
+  const { url: databaseUrl } = resolveSupabaseDatabaseUrl();
 
   const dateLabel = new Date().toISOString().slice(0, 10);
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);

@@ -20,6 +20,7 @@
  */
 
 import pg from "pg";
+import { resolveSupabaseDatabaseUrl } from "./resolve-supabase-db-url.mjs";
 
 const { Client } = pg;
 
@@ -27,7 +28,7 @@ const CHECKER = "bd36836b-b9c9-4e42-b436-47354cfadbda"; // admin@demo.cst.id (â‰
 const MAKER   = "system:coa-tax-migration-v1";
 
 const client = new Client({
-  connectionString: process.env.SUPABASE_DATABASE_URL_DEV || process.env.SUPABASE_DATABASE_URL,
+  connectionString: resolveSupabaseDatabaseUrl().url,
   ssl: { rejectUnauthorized: false },
 });
 

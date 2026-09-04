@@ -8,14 +8,10 @@
  */
 
 import pg from "pg";
+import { resolveSupabaseDatabaseUrl } from "./resolve-supabase-db-url.mjs";
 
 const dryRun = !process.argv.includes("--execute");
-const connStr = process.env.SUPABASE_DATABASE_URL || process.env.DATABASE_URL;
-
-if (!connStr) {
-  console.error("ERROR: SUPABASE_DATABASE_URL atau DATABASE_URL tidak ada di environment.");
-  process.exit(1);
-}
+const { url: connStr } = resolveSupabaseDatabaseUrl();
 
 const client = new pg.Client({
   connectionString: connStr,

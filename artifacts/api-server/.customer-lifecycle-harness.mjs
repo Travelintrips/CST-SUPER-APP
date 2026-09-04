@@ -8,7 +8,7 @@ const emailB = `${marker}-b@example.test`;
 const password = "CstLifecyclePass!2026";
 const startedAt = new Date();
 const pool = new Pool({
-  connectionString: process.env.SUPABASE_DATABASE_URL_DEV || process.env.DATABASE_URL,
+  connectionString: process.env.SUPABASE_DATABASE_URL_DEV,
   max: 1,
   connectionTimeoutMillis: 20_000,
   idleTimeoutMillis: 20_000,

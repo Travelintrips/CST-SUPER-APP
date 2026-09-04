@@ -6,19 +6,16 @@
  * via API (yang secara otomatis menangani sync Supabase + jurnal akuntansi).
  *
  * Run: node scripts/sync-sport-center-payments.mjs
- * Requires: SUPABASE_PG_URL atau DATABASE_URL env var
+ * Requires: Supabase database URL selected by APP_ENV
  */
 
 import pg from "pg";
 import crypto from "crypto";
+import { resolveSupabaseDatabaseUrl } from "./resolve-supabase-db-url.mjs";
 
 const { Pool } = pg;
 
-const DB_URL = process.env.SUPABASE_PG_URL || process.env.DATABASE_URL;
-if (!DB_URL) {
-  console.error("ERROR: Set env SUPABASE_PG_URL atau DATABASE_URL terlebih dahulu.");
-  process.exit(1);
-}
+const { url: DB_URL } = resolveSupabaseDatabaseUrl();
 
 const pool = new Pool({
   connectionString: DB_URL,

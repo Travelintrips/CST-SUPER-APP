@@ -50,8 +50,13 @@ const ZERO_EFFECT_TABLES = [
 let pool: pg.Pool | null = null;
 
 function getPool(): pg.Pool | null {
-  const connectionString = process.env.SUPABASE_DATABASE_URL ??
-    process.env.SUPABASE_DATABASE_URL_DEV;
+  const isProduction =
+    process.env.APP_ENV === "production" ||
+    process.env.NODE_ENV === "production" ||
+    !!process.env.REPLIT_DEPLOYMENT;
+  const connectionString = isProduction
+    ? process.env.SUPABASE_DATABASE_URL
+    : process.env.SUPABASE_DATABASE_URL_DEV;
   if (!connectionString) return null;
   pool ??= new pg.Pool({
     connectionString,

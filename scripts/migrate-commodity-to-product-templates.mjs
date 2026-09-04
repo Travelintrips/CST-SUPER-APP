@@ -14,10 +14,11 @@
  */
 
 import pg from "pg";
+import { resolveSupabaseDatabaseUrl } from "./resolve-supabase-db-url.mjs";
 
 const { Pool } = pg;
 const pool = new Pool({
-  connectionString: process.env.SUPABASE_PG_URL || process.env.DATABASE_URL,
+  connectionString: resolveSupabaseDatabaseUrl().url,
   ssl: { rejectUnauthorized: false },
 });
 

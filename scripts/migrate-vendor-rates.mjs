@@ -3,20 +3,11 @@
  * Run: node scripts/migrate-vendor-rates.mjs
  */
 import pg from "pg";
+import { resolveSupabaseDatabaseUrl } from "./resolve-supabase-db-url.mjs";
 
 const { Pool } = pg;
 
-const connectionString = (
-  process.env.SUPABASE_PG_URL ||
-  process.env.SUPABASE_DATABASE_URL ||
-  process.env.DATABASE_URL ||
-  ""
-).replace(/:6543\//, ":5432/");
-
-if (!connectionString) {
-  console.error("ERROR: No DB connection string found (SUPABASE_PG_URL / DATABASE_URL)");
-  process.exit(1);
-}
+const { url: connectionString } = resolveSupabaseDatabaseUrl();
 
 const pool = new Pool({ connectionString, ssl: { rejectUnauthorized: false } });
 

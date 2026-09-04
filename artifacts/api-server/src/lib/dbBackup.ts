@@ -76,11 +76,10 @@ function runPgDump(databaseUrl: string): Promise<Buffer> {
 
 export async function runDbBackup(): Promise<{ ok: boolean; key?: string; sizeKb?: number; error?: string }> {
   // Gunakan SUPABASE_DATABASE_URL (prod) atau SUPABASE_DATABASE_URL_DEV (dev)
-  // DATABASE_URL lama sudah deprecated — hanya sebagai last-resort fallback.
   const isProd = process.env.NODE_ENV === "production" || !!process.env.REPLIT_DEPLOYMENT;
   const databaseUrl = isProd
-    ? (process.env["SUPABASE_DATABASE_URL"] ?? process.env["DATABASE_URL"])
-    : (process.env["SUPABASE_DATABASE_URL_DEV"] ?? process.env["SUPABASE_DATABASE_URL"] ?? process.env["DATABASE_URL"]);
+    ? process.env["SUPABASE_DATABASE_URL"]
+    : process.env["SUPABASE_DATABASE_URL_DEV"];
   if (!databaseUrl) {
     logger.warn("DB backup: no database URL configured (SUPABASE_DATABASE_URL not set) — skipping");
     return { ok: false, error: "SUPABASE_DATABASE_URL not set" };

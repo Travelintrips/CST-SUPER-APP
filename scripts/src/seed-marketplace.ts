@@ -5,13 +5,10 @@
  * Idempotent: vendors are identified by name; existing ones are skipped.
  */
 import pg from "pg";
+import { resolveSupabaseDatabaseUrl } from "../resolve-supabase-db-url.mjs";
 const { Pool } = pg;
 
-const connStr =
-  process.env.SUPABASE_DATABASE_URL_DEV ||
-  process.env.SUPABASE_PG_URL ||
-  process.env.DATABASE_URL;
-if (!connStr) throw new Error("No DB connection string found");
+const { url: connStr } = resolveSupabaseDatabaseUrl();
 
 const pool = new Pool({ connectionString: connStr, max: 3 });
 

@@ -19,7 +19,7 @@ if (process.env.PROD_WRITES === "1" || process.env.PROD_MIGRATIONS === "1") {
 }
 
 const pool = new Pool({
-  connectionString: process.env.SUPABASE_DATABASE_URL_DEV || process.env.DATABASE_URL,
+  connectionString: process.env.SUPABASE_DATABASE_URL_DEV,
   max: 2,
   connectionTimeoutMillis: 20_000,
   idleTimeoutMillis: 5_000,

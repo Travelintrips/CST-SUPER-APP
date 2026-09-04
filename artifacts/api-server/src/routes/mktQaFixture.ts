@@ -231,7 +231,6 @@ function isProduction(): boolean {
   // Check primary DB URLs for PROD project ref
   const dbUrls = [
     process.env["SUPABASE_DATABASE_URL"],
-    process.env["DATABASE_URL"],
   ].filter(Boolean).join("|");
   return (
     appEnv  === "production" ||
@@ -249,8 +248,7 @@ function prodGuardResponse(res: Response): boolean {
         APP_ENV:  process.env["APP_ENV"]  ?? "(not set)",
         NODE_ENV: process.env["NODE_ENV"] ?? "(not set)",
         dbContainsProdRef: (
-          (process.env["SUPABASE_DATABASE_URL"] ?? "") +
-          (process.env["DATABASE_URL"] ?? "")
+          process.env["SUPABASE_DATABASE_URL"] ?? ""
         ).includes(PROD_REF),
       },
     });
@@ -327,7 +325,7 @@ router.get("/status", async (req: Request, res: Response) => {
   try {
     const stats = await getDatasetStats();
 
-    const dbUrl = process.env["SUPABASE_DATABASE_URL"] ?? process.env["DATABASE_URL"] ?? "";
+    const dbUrl = process.env["SUPABASE_DATABASE_URL"] ?? "";
     const projectRefMatch = dbUrl.match(/db\.([a-z0-9]+)\.supabase\.co/)
       ?? dbUrl.match(/\/([a-z0-9]{20})\./);
     const projectRef = projectRefMatch?.[1] ?? "(unknown)";

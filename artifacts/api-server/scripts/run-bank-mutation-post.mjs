@@ -7,11 +7,11 @@
  */
 
 import pg from "/home/runner/workspace/node_modules/pg/lib/index.js";
+import { resolveSupabaseDatabaseUrl } from "../../../scripts/resolve-supabase-db-url.mjs";
 const { Pool } = pg;
 
 // ── DB connection ─────────────────────────────────────────────────────────────
-const DB_URL = process.env.SUPABASE_DATABASE_URL || process.env.DATABASE_URL;
-if (!DB_URL) { console.error("❌ SUPABASE_DATABASE_URL tidak diset"); process.exit(1); }
+const { url: DB_URL } = resolveSupabaseDatabaseUrl();
 
 const pool = new Pool({
   connectionString: DB_URL,

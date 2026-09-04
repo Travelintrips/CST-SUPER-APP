@@ -38,6 +38,7 @@
 
 import pg from "pg";
 import process from "process";
+import { resolveSupabaseDatabaseUrl } from "./resolve-supabase-db-url.mjs";
 
 const { Pool } = pg;
 
@@ -58,11 +59,7 @@ if (COMPANY_ID) {
 console.log("");
 
 // ─── DB connection ────────────────────────────────────────────────────────────
-const dbUrl = process.env.SUPABASE_DATABASE_URL_DEV || process.env.SUPABASE_DATABASE_URL;
-if (!dbUrl) {
-  console.error("❌ No database URL found. Set SUPABASE_DATABASE_URL_DEV or SUPABASE_DATABASE_URL.");
-  process.exit(1);
-}
+const { url: dbUrl } = resolveSupabaseDatabaseUrl();
 
 const pool = new Pool({ connectionString: dbUrl, max: 2, connectionTimeoutMillis: 15000 });
 
