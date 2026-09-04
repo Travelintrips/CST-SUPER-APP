@@ -258,13 +258,32 @@ export class ObjectStorageService {
   // ── Server-proxied upload path — fail-closed if storage not configured ───────
   // Previously returned a fake placeholder URL which could be persisted to DB.
   // Now throws explicitly so callers cannot silently proceed with a phantom path.
-  async getObjectEntityUploadURL(): Promise<string> {
+  async getObjectEntityUploadURL(contentType = "application/octet-stream"): Promise<string> {
     // Validate that Supabase storage is reachable before issuing a path
     getSupabase(); // throws if SUPABASE_URL / SUPABASE_KEY missing
     const objectId = randomUUID();
+    const ext = extFromMime(contentType);
     // Return a server-internal path (not a public URL) — actual bytes arrive via
     // the server-proxied upload endpoint, not a presigned URL.
-    return `/objects/uploads/${objectId}`;
+    return `/objects/uploads/${objectId}.${ext}`;
+  }
+
+  /**
+   * Store bytes at the exact private path issued by the server-proxied upload
+   * flow. The path is intentionally constrained to the private uploads prefix
+   * so callers cannot turn this into an arbitrary Supabase Storage write.
+   */
+  async uploadPrivateEntityAtPath(
+    objectPath: string,
+    buffer: Buffer,
+    contentType: string,
+  ): Promise<string> {
+    if (!/^\/objects\/uploads\/[a-zA-Z0-9._-]+$/.test(objectPath)) {
+      throw new Error("Invalid private upload path");
+    }
+    const storagePath = objectPath.slice("/objects/".length);
+    await supabaseUpload(PRIVATE_BUCKET, storagePath, buffer, contentType);
+    return objectPath;
   }
 
   // ── Normalize object path from presigned URL ─────────────────────────────────
@@ -305,6 +324,17 @@ export class ObjectStorageService {
     if (!exists) throw new ObjectNotFoundError();
     const acl = aclStore.get(objectPath);
     return { bucket: PRIVATE_BUCKET, path: entityId, metadata: acl ? { acl_policy: JSON.stringify(acl) } : {} };
+  }
+
+  async getObjectEntitySize(objectPath: string): Promise<number> {
+    if (!objectPath.startsWith("/objects/")) throw new ObjectNotFoundError();
+    const entityId = objectPath.slice("/objects/".length);
+    const dir = entityId.includes("/") ? entityId.slice(0, entityId.lastIndexOf("/")) : "";
+    const filename = entityId.includes("/") ? entityId.slice(entityId.lastIndexOf("/") + 1) : entityId;
+    const { data, error } = await getSupabase().storage.from(PRIVATE_BUCKET).list(dir, { search: filename });
+    const match = data?.find((file) => file.name === filename);
+    if (error || !match) throw new ObjectNotFoundError();
+    return Number((match.metadata as Record<string, unknown> | null)?.size ?? 0);
   }
 
   // ── ACL helpers ──────────────────────────────────────────────────────────────

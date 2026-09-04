@@ -1,6 +1,6 @@
 # Attachment & File Storage Flow
 
-> CST Logistics — how files are uploaded, stored in GCS via Replit Object Storage, served, and secured.
+> CST Logistics — how files are uploaded, stored in Supabase Storage, served, and secured.
 
 ---
 
@@ -19,12 +19,12 @@ Client (browser / mobile)
      │              ↓
      │         ObjectStorageService.uploadPrivateEntity()
      │              ↓
-     │         GCS bucket  →  /objects/uploads/<uuid>
+│         Supabase private-uploads  →  /objects/uploads/<uuid>
      │
-     └─── Presigned URL (BizPortal admin staff)
+└─── Server-proxied upload path (BizPortal admin staff)
                POST /api/storage/uploads/request-url
-                    ↓ returns presigned GCS PUT URL
-               Client PUT directly to GCS
+         ↓ returns API PUT URL
+       Client PUT through API to Supabase
                     ↓ background guard checks size after URL expires
                Path registered in pendingUploadGuards map
 ```
@@ -33,10 +33,10 @@ Client (browser / mobile)
 
 ## Storage Paths
 
-| Type | GCS path | Env var |
+| Type | Supabase path | Bucket |
 |---|---|---|
-| Private uploads | `<PRIVATE_OBJECT_DIR>/uploads/<uuid>` | `PRIVATE_OBJECT_DIR` |
-| Public assets | `<PUBLIC_OBJECT_SEARCH_PATHS[0]>/<filePath>` | `PUBLIC_OBJECT_SEARCH_PATHS` |
+| Private uploads | `private-uploads/uploads/<uuid>` | `private-uploads` |
+| Public assets | `public-assets/<filePath>` | `public-assets` |
 
 Normalized DB path: `/objects/uploads/<uuid>` (stored in DB, not a full URL)
 
@@ -60,19 +60,19 @@ Key files:
 - `artifacts/api-server/src/routes/driver.ts` — POD photo upload
 - `artifacts/api-server/src/lib/imageCompress.ts` — compression
 
-### 2. Presigned URL (Direct-to-GCS) — BizPortal Staff
+### 2. Server-Proxied PUT — BizPortal Staff
 Used by: admin staff uploading documents/attachments in BizPortal.
 
 ```
 Client  →  POST /api/storage/uploads/request-url
-        ←  { presignedUrl, objectPath }
-Client  →  PUT <presignedUrl>  (direct to GCS, no server proxy)
-        ←  GCS 200 OK
+         ←  { uploadURL, objectPath }
+Client  →  PUT <uploadURL>  (API validates and writes to Supabase)
+         ←  API 201
 Client  →  stores objectPath in form/DB
 ```
 
 Security guard (background check):
-- After URL TTL expires, server fetches object metadata
+- After the upload window expires, server fetches object metadata
 - If size > 100MB hard cap → object deleted automatically
 - MIME type whitelist enforced on `request-url` before issuing presigned URL
 
@@ -90,7 +90,8 @@ Request → requireAuth (Clerk or portal JWT)
         → Response with Content-Type, Content-Length, Cache-Control
 ```
 
-ACL metadata is stored directly on the GCS object (not in DB).
+ACL metadata is tracked by the API for the current session; the business
+database remains the durable owner/audit record.
 Access granted if: user is recorded `owner` OR user has `admin` role.
 
 ### Public objects: `GET /api/storage/public-objects/{*path}`
@@ -111,7 +112,7 @@ if (attachmentUrl && !attachmentUrl.startsWith("/objects/")) {
 
 Upload endpoint for VMF: `POST /api/vendor-form/upload/:token`
 - Token validated before accepting file
-- Stored to private GCS, path returned to client
+- Stored to Supabase private-uploads, path returned to client
 
 ---
 
@@ -119,12 +120,12 @@ Upload endpoint for VMF: `POST /api/vendor-form/upload/:token`
 
 | File | Purpose |
 |---|---|
-| `lib/objectStorage.ts` | Core GCS client, upload/download/presign methods |
+| `lib/objectStorage.ts` | Supabase Storage adapter and private upload methods |
 | `lib/objectAcl.ts` | Metadata-based ACL (owner, visibility) |
 | `lib/imageCompress.ts` | Sharp-based JPEG/PNG compression |
 | `routes/storage.ts` | `/api/storage/*` endpoints, presign guard |
 | `routes/portal.ts` | Customer portal upload routes |
-| `routes/driver.ts` | Driver photo upload (multer + GCS) |
+| `routes/driver.ts` | Driver photo upload (multer + Supabase Storage) |
 | `routes/vendorMiniForm.ts` | VMF attachment upload + validation |
 | `lib/storageAuditLog.ts` | Audit log for uploads/URL requests |
 
@@ -133,7 +134,7 @@ Upload endpoint for VMF: `POST /api/vendor-form/upload/:token`
 ## Security Rules
 
 1. **No public write** — all uploads go through server-side validation or presigned URLs with MIME whitelist
-2. **Private by default** — all uploads land in `PRIVATE_OBJECT_DIR`, ACL defaults to private
+2. **Private by default** — all uploads land in the `private-uploads` bucket
 3. **No path traversal** — `..` segments blocked in storage routes
 4. **MIME whitelist** — only approved content types can get presigned URLs
 5. **Size caps** — 10–20MB for portal/driver uploads; 100MB background guard for presigned

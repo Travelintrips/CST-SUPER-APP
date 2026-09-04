@@ -1,4 +1,4 @@
-import { Router, type IRouter, type Request, type Response } from "express";
+import { Router, raw, type IRouter, type Request, type Response } from "express";
 import { Readable } from "stream";
 import { extname } from "path";
 import multer from "multer";
@@ -204,6 +204,7 @@ const PRESIGNED_URL_TTL_SEC = 900;              // must match signObjectURL ttlS
 interface UploadGuardSession {
   objectPath: string;
   userId: string;
+  contentType: string;
   checkAfter: number; // ms — check once URL has expired + 60s grace
 }
 const pendingUploadGuards = new Map<string, UploadGuardSession>();
@@ -215,11 +216,9 @@ const _uploadGuardInterval = setInterval(async () => {
     if (now < session.checkAfter) continue;
     pendingUploadGuards.delete(key);
     try {
-      const objectFile = await objectStorageService.getObjectEntityFile(session.objectPath) as any;
-      const [metadata] = await objectFile.getMetadata();
-      const sizeBytes = Number(metadata.size ?? 0);
+      const sizeBytes = await objectStorageService.getObjectEntitySize(session.objectPath);
       if (sizeBytes > PRESIGNED_MAX_BYTES) {
-        await objectFile.delete();
+        await objectStorageService.tryDeletePrivateEntity(session.objectPath);
         console.warn(
           `[upload-guard] Deleted oversized presigned upload: ${session.objectPath}` +
           ` (${(sizeBytes / 1024 / 1024).toFixed(1)} MB, user: ${session.userId})`,
@@ -239,15 +238,15 @@ if (typeof _uploadGuardInterval.unref === "function") _uploadGuardInterval.unref
  * Request a server-proxied Supabase Storage upload path.
  * Restricted to internal BizPortal staff (Clerk/session auth).
  *
- * Size enforcement: every issued URL is registered with the upload-guard
+ * Size enforcement: every issued path is registered with the upload-guard
  * background job.  After the URL's TTL expires the guard automatically checks
  * the uploaded object's size and deletes it if it exceeds PRESIGNED_MAX_BYTES
- * (100 MB).  This is a server-side, non-optional enforcement that does not
+ * (100 MB). This is a server-side, non-optional enforcement that does not
  * depend on the client calling a separate validate endpoint.
  *
  * ACL metadata: cannot be set here because the Supabase object does not yet exist.
- * The business route that ultimately saves objectPath is responsible for calling
- * trySetObjectEntityAclPolicy.  Until then the download endpoint applies
+ * The PUT handler stamps ownership after the bytes arrive. Until then the
+ * download endpoint applies
  * admin-only fallback.
  */
 router.post("/storage/uploads/request-url", async (req: Request, res: Response) => {
@@ -279,14 +278,16 @@ router.post("/storage/uploads/request-url", async (req: Request, res: Response) 
       return;
     }
 
-    const uploadURL = await objectStorageService.getObjectEntityUploadURL();
-    const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
+    const uploadPath = await objectStorageService.getObjectEntityUploadURL(contentType);
+    const objectPath = objectStorageService.normalizeObjectEntityPath(uploadPath);
+    const uploadURL = `/api/storage${objectPath}`;
 
     // Register size-guard session: background job will delete this object after
     // the presigned URL expires if its size exceeds PRESIGNED_MAX_BYTES.
     pendingUploadGuards.set(objectPath, {
       objectPath,
       userId,
+      contentType,
       checkAfter: Date.now() + (PRESIGNED_URL_TTL_SEC + 60) * 1000,
     });
 
@@ -316,6 +317,55 @@ router.post("/storage/uploads/request-url", async (req: Request, res: Response) 
     res.status(500).json({ error: "Failed to generate upload URL" });
   }
 });
+
+/**
+ * PUT /storage/objects/uploads/*
+ *
+ * Completes the server-proxied upload path returned by request-url. Bytes are
+ * written only to the exact path issued for the authenticated Clerk user.
+ */
+router.put(
+  "/storage/objects/{*path}",
+  raw({ type: "*/*", limit: `${PRESIGNED_MAX_BYTES}b` }),
+  async (req: Request, res: Response) => {
+    if (!(await requireClerkUser(req, res))) return;
+    const rawParam = req.params.path as unknown;
+    const wildcardPath = Array.isArray(rawParam) ? rawParam.join("/") : String(rawParam);
+    const objectPath = `/objects/${wildcardPath}`;
+    const session = pendingUploadGuards.get(objectPath);
+    if (!session) {
+      res.status(404).json({ error: "Upload path tidak ditemukan atau sudah kedaluwarsa." });
+      return;
+    }
+    if (session.userId !== req.user?.id) {
+      res.status(403).json({ error: "Upload path bukan milik akun ini." });
+      return;
+    }
+
+    const contentType = String(req.headers["content-type"] ?? "").split(";")[0].toLowerCase();
+    const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    if (contentType !== session.contentType.toLowerCase()) {
+      res.status(415).json({ error: "Content-Type upload tidak sesuai dengan URL yang diterbitkan." });
+      return;
+    }
+    if (body.length === 0) {
+      res.status(400).json({ error: "File kosong tidak diizinkan." });
+      return;
+    }
+
+    try {
+      await objectStorageService.uploadPrivateEntityAtPath(objectPath, body, contentType);
+      await objectStorageService.trySetObjectEntityAclPolicy(objectPath, {
+        owner: req.user.id,
+        visibility: "private",
+      });
+      res.status(201).json({ ok: true, objectPath, url: `/api/storage${objectPath}` });
+    } catch (error) {
+      req.log.error({ err: error }, "Error storing server-proxied upload");
+      res.status(500).json({ error: "Failed to upload file" });
+    }
+  },
+);
 
 /**
  * GET /storage/public-objects/*
