@@ -30,7 +30,6 @@ import { useUpload } from "@workspace/object-storage-web";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { useCompany } from "@/contexts/CompanyContext";
 import { useVendors } from "@/hooks/useVendors";
 import {
   ArrowLeft, Save, Send, CheckCircle, XCircle, FileText, Banknote,
@@ -384,6 +383,22 @@ const EMPTY_FORM = {
   shipmentId: null as number | null,
 };
 
+type ExpenseLineDraft = {
+  description: string;
+  qty: number;
+  unit: string;
+  unitPrice: number;
+  coaAccountId: number | null;
+};
+
+const newExpenseLine = (
+  description = "",
+  qty = 1,
+  unit = "",
+  unitPrice = 0,
+  coaAccountId: number | null = null,
+): ExpenseLineDraft => ({ description, qty, unit, unitPrice, coaAccountId });
+
 export default function ExpenseEditorPage() {
   const { id } = useParams<{ id?: string }>();
   const isNew = !id || id === "new";
@@ -391,7 +406,6 @@ export default function ExpenseEditorPage() {
   const qc = useQueryClient();
   const { toast } = useToast();
   const { t } = useLanguage();
-  const { activeCompanyId } = useCompany();
 
   const expId = isNew ? 0 : Number(id);
   const { data: expense, isLoading } = useGetExpense(
@@ -403,17 +417,19 @@ export default function ExpenseEditorPage() {
   const { data: taxes = [] } = useListTaxes();
   const { data: suppliers = [] } = useVendors();
   const { data: customers = [] } = useListCustomers();
-  const { data: paymentAccounts = [] } = useQuery({
-    queryKey: ["expense-payment-accounts", activeCompanyId],
-    queryFn: () => apiFetch(`/api/expenses/payment-accounts${activeCompanyId ? `?company=${activeCompanyId}` : ""}`),
-  });
-
   const { data: userList = [] } = useQuery({
     queryKey: ["users-list"],
     queryFn: () => apiFetch("/api/users"),
   });
 
-  const createMut = useCreateExpense();
+  const createIdempotencyKey = useRef(
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `expense-create-${Date.now()}`,
+  );
+  const createMut = useCreateExpense({
+    request: { headers: { "x-idempotency-key": createIdempotencyKey.current } },
+  });
   const updateMut = useUpdateExpense();
   const actionMut = useExpenseAction();
   const addAttachmentMut = useAddExpenseAttachment();
@@ -421,6 +437,7 @@ export default function ExpenseEditorPage() {
 
   const [form, setForm] = useState({ ...EMPTY_FORM });
   const [sourceAccountId, setSourceAccountId] = useState<number | null>(null);
+  const [lines, setLines] = useState<ExpenseLineDraft[]>([newExpenseLine()]);
   const [vendorId, setVendorId] = useState<number | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [scanOpen, setScanOpen] = useState(false);
@@ -507,12 +524,34 @@ export default function ExpenseEditorPage() {
       setSourceAccountId(expAny.sourceAccountId ?? null);
       setVendorId(expAny.vendorId ?? null);
       setUserId(expAny.userId ?? null);
+      const persistedLines = Array.isArray(expAny.lines) ? expAny.lines : [];
+      setLines(
+        persistedLines.length > 0
+          ? persistedLines.map((line: any) =>
+              newExpenseLine(
+                line.description ?? "",
+                Number(line.qty ?? 1),
+                line.unit ?? "",
+                Number(line.unitPrice ?? line.unit_price ?? 0),
+                Number(line.coaAccountId ?? line.coa_account_id) || null,
+              ),
+            )
+          : [
+              newExpenseLine(
+                expense.description ?? "",
+                Number(expense.qty ?? 1),
+                expense.unit ?? "",
+                Number(expense.unitPrice ?? 0),
+                expense.expenseAccountId ?? null,
+              ),
+            ],
+      );
     }
   }, [expense, isNew]);
 
   const purchaseTaxes = taxes.filter((t) => t.kind === "purchase" && t.isActive);
   const selectedTax = taxes.find((t) => t.id === form.taxRateId);
-  const subtotal = Math.round(form.qty * form.unitPrice * 100) / 100;
+  const subtotal = Math.round(lines.reduce((sum, line) => sum + line.qty * line.unitPrice, 0) * 100) / 100;
   const taxAmount = selectedTax ? Math.round(subtotal * selectedTax.rate / 100 * 100) / 100 : 0;
   const isWithholdingTax = selectedTax?.kind === "withholding";
   const total = isWithholdingTax ? subtotal - taxAmount : subtotal + taxAmount;
@@ -525,7 +564,6 @@ export default function ExpenseEditorPage() {
     const filled = new Set<string>();
     if (cat) {
       if (cat.expenseAccountId) filled.add("expenseAccountId");
-      if (cat.payableAccountId) filled.add("payableAccountId");
       if ((cat as any).defaultTaxId) filled.add("taxRateId");
     }
     setAutoFilled(filled);
@@ -533,9 +571,14 @@ export default function ExpenseEditorPage() {
       ...f,
       categoryId: catId,
       expenseAccountId: cat ? (cat.expenseAccountId ?? null) : f.expenseAccountId,
-      payableAccountId: cat ? (cat.payableAccountId ?? null) : f.payableAccountId,
+      payableAccountId: null,
       taxRateId: cat ? ((cat as any).defaultTaxId ?? null) : f.taxRateId,
     }));
+    if (cat?.expenseAccountId) {
+      setLines((current) => current.map((line, index) => index === 0 && !line.coaAccountId
+        ? { ...line, coaAccountId: cat.expenseAccountId! }
+        : line));
+    }
   };
 
   const { data: _salesDocsPaginated } = useListSalesDocuments({ kind: "order", limit: 500 });
@@ -544,6 +587,13 @@ export default function ExpenseEditorPage() {
 
   const save = async () => {
     if (!form.date) { toast({ title: t.common.error, variant: "destructive" }); return; }
+    if (
+      lines.length === 0 ||
+      lines.some((line) => !line.description.trim() || !(line.qty > 0) || line.unitPrice < 0 || !line.coaAccountId)
+    ) {
+      toast({ title: "Lengkapi deskripsi, nominal, dan COA existing untuk setiap line.", variant: "destructive" });
+      return;
+    }
     const body: any = {
       date: form.date,
       vendorEmployee: form.vendorEmployee || undefined,
@@ -558,12 +608,19 @@ export default function ExpenseEditorPage() {
       currency: form.currency,
       notes: form.notes || undefined,
       expenseAccountId: form.expenseAccountId || undefined,
-      payableAccountId: form.payableAccountId || undefined,
+      payableAccountId: undefined,
       salesDocId: form.salesDocId || undefined,
       shipmentId: form.shipmentId || undefined,
       sourceAccountId: sourceAccountId ?? undefined,
       vendorId: vendorId ?? undefined,
       userId: userId ?? undefined,
+      lines: lines.map((line) => ({
+        description: line.description,
+        qty: line.qty,
+        unit: line.unit || undefined,
+        unitPrice: line.unitPrice,
+        coaAccountId: line.coaAccountId,
+      })),
     };
     try {
       if (isNew) {
@@ -764,6 +821,47 @@ export default function ExpenseEditorPage() {
           </button>
         </div>
 
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center justify-between">
+              <span>Rincian Pengeluaran</span>
+              <Button type="button" variant="outline" size="sm" disabled={locked}
+                onClick={() => setLines((current) => [...current, newExpenseLine()])}>
+                Tambah line
+              </Button>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {lines.map((line, index) => (
+              <div key={index} className="grid grid-cols-1 gap-2 rounded-md border border-border p-3 md:grid-cols-[1.6fr_0.55fr_0.7fr_1.2fr_auto]">
+                <Input placeholder={`Deskripsi line ${index + 1}`} value={line.description} disabled={locked}
+                  onChange={(event) => setLines((current) => current.map((item, i) => i === index ? { ...item, description: event.target.value } : item))} />
+                <Input type="number" min="0.0001" step="0.0001" placeholder="Qty" value={line.qty} disabled={locked}
+                  onChange={(event) => setLines((current) => current.map((item, i) => i === index ? { ...item, qty: Number(event.target.value) } : item))} />
+                <Input placeholder="Satuan" value={line.unit} disabled={locked}
+                  onChange={(event) => setLines((current) => current.map((item, i) => i === index ? { ...item, unit: event.target.value } : item))} />
+                <Input type="number" min="0" step="0.01" placeholder="Harga" value={line.unitPrice} disabled={locked}
+                  onChange={(event) => setLines((current) => current.map((item, i) => i === index ? { ...item, unitPrice: Number(event.target.value) } : item))} />
+                <Button type="button" variant="ghost" size="icon" disabled={locked || lines.length === 1}
+                  onClick={() => setLines((current) => current.filter((_, i) => i !== index))} aria-label={`Hapus line ${index + 1}`}>
+                  <X size={15} />
+                </Button>
+                <div className="md:col-span-4">
+                  <AccountCombobox
+                    accounts={accounts.filter((account) => account.type === "expense" || account.type === "asset")}
+                    value={line.coaAccountId}
+                    disabled={locked}
+                    onChange={(id) => setLines((current) => current.map((item, i) => i === index ? { ...item, coaAccountId: id } : item))}
+                    placeholder="Pilih COA existing untuk line ini"
+                  />
+                  {!line.coaAccountId && <p className="mt-1 text-xs text-amber-400">COA belum dikonfirmasi; line ini belum dapat diposting.</p>}
+                </div>
+              </div>
+            ))}
+            <div className="flex justify-end border-t pt-3 text-sm font-medium">Total sebelum pajak: {idr(subtotal)}</div>
+          </CardContent>
+        </Card>
+
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
           {/* Left column */}
           <Card>
@@ -877,22 +975,11 @@ export default function ExpenseEditorPage() {
                   <SelectTrigger><SelectValue placeholder="Pilih akun kas/bank..." /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="__none__">— Tidak dipilih —</SelectItem>
-                    {(paymentAccounts as any[]).filter((a: any) => a.account_class === "kas").length > 0 && (
-                      <>
-                        <div className="px-2 py-1 text-xs font-semibold text-muted-foreground">💵 Kas</div>
-                        {(paymentAccounts as any[]).filter((a: any) => a.account_class === "kas").map((a: any) => (
-                          <SelectItem key={a.id} value={String(a.id)}>{a.code} – {a.name}</SelectItem>
-                        ))}
-                      </>
-                    )}
-                    {(paymentAccounts as any[]).filter((a: any) => a.account_class === "bank").length > 0 && (
-                      <>
-                        <div className="px-2 py-1 text-xs font-semibold text-muted-foreground">🏦 Bank</div>
-                        {(paymentAccounts as any[]).filter((a: any) => a.account_class === "bank").map((a: any) => (
-                          <SelectItem key={a.id} value={String(a.id)}>{a.code} – {a.name}</SelectItem>
-                        ))}
-                      </>
-                    )}
+                    {accounts
+                      .filter((account) => ["asset", "bank", "cash"].includes(String(account.type)))
+                      .map((account) => (
+                        <SelectItem key={account.id} value={String(account.id)}>{account.code} – {account.name}</SelectItem>
+                      ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -1023,50 +1110,18 @@ export default function ExpenseEditorPage() {
                     onChange={(id) => {
                       setAutoFilled((s) => { const n = new Set(s); n.delete("expenseAccountId"); return n; });
                       setForm((f) => ({ ...f, expenseAccountId: id }));
+                      setLines((current) => current.map((line, index) => index === 0 && !line.coaAccountId
+                        ? { ...line, coaAccountId: id }
+                        : line));
                     }}
                     placeholder="Dari kategori / default"
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="flex items-center gap-1.5">
-                    Akun Hutang (Kredit)
-                    {autoFilled.has("payableAccountId") && (
-                      <span className="text-xs font-normal text-sky-400 bg-sky-950 border border-sky-800 px-1.5 py-0.5 rounded">auto</span>
-                    )}
-                  </Label>
-                  <Select
-                    value={form.payableAccountId?.toString() ?? "none"}
-                    disabled={locked}
-                    onValueChange={(v) => {
-                      setAutoFilled((s) => { const n = new Set(s); n.delete("payableAccountId"); return n; });
-                      setForm((f) => ({ ...f, payableAccountId: v === "none" ? null : Number(v) }));
-                    }}
-                  >
-                    <SelectTrigger><SelectValue placeholder="Dari kategori / default" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">— Dari kategori / default —</SelectItem>
-                      {accounts.filter((a) => a.type === "liability").map((a) => (
-                        <SelectItem key={a.id} value={a.id.toString()}>{a.code} — {a.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Sumber Dana (Bank/Kas)</Label>
-                  <p className="text-xs text-muted-foreground">Akun kas/bank sebagai sumber pembayaran.</p>
-                  <Select
-                    value={form.sourceAccountId?.toString() ?? "none"}
-                    disabled={locked}
-                    onValueChange={(v) => setForm((f) => ({ ...f, sourceAccountId: v === "none" ? null : Number(v) }))}
-                  >
-                    <SelectTrigger><SelectValue placeholder="Dari pengaturan default" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">— Dari pengaturan default —</SelectItem>
-                      {accounts.filter((a) => (a.type as string) === "asset" || (a.type as string) === "bank" || (a.type as string) === "cash").map((a) => (
-                        <SelectItem key={a.id} value={a.id.toString()}>{a.code} — {a.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Direct expense selalu dicatat sebagai Dr COA line/PPN Masukan → Cr Bank/Kas.
+                    Untuk transaksi hutang, gunakan modul Vendor Invoice/AP.
+                  </p>
                 </div>
               </CardContent>
             </Card>
@@ -1250,11 +1305,23 @@ export default function ExpenseEditorPage() {
         onOpenChange={setScanOpen}
         title="Scan Bukti Pengeluaran (OCR)"
         onDataExtracted={(data) => {
+          if (data.lines?.length) {
+            setLines(
+              data.lines.map((line: any) =>
+                newExpenseLine(
+                  line.description ?? line.name ?? "",
+                  Number(line.quantity ?? line.qty ?? 1),
+                  line.unit ?? "",
+                  Number(line.unitPrice ?? 0),
+                ),
+              ),
+            );
+          }
           setForm((f) => {
             const next = { ...f };
             if (data.docDate) next.date = data.docDate.slice(0, 10);
             const cost = data.estimatedCost ?? data.lines?.[0]?.unitPrice ?? null;
-            if (cost != null && cost > 0) next.unitPrice = cost;
+            if (cost != null && cost > 0 && !data.lines?.length) next.unitPrice = cost;
             if (data.partyName) next.vendorEmployee = data.partyName;
             if (data.notes) next.description = data.notes;
             return next;
