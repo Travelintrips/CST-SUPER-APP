@@ -48,14 +48,16 @@ export const ACTION_TARGETS: Record<string, Record<LifecycleAction, ActionTarget
     reject: { nextStatus: "rejected", allowedFrom: ["new", "submitted", "pending_review", "reviewing", "waiting_rate", "quoted"] },
   },
   "air-freight": {
-    approve: { nextStatus: "reviewing", allowedFrom: ["inquiry", "new", "submitted", "pending_review", "waiting_rate"] },
-    request_revision: { nextStatus: "pending_review", allowedFrom: ["reviewing", "quoted"] },
-    reject: { nextStatus: "cancelled", allowedFrom: ["inquiry", "new", "submitted", "pending_review", "reviewing", "waiting_rate", "quoted"] },
+    // air_freight_orders has a runtime CHECK constraint with the canonical
+    // rate lifecycle, not the generic reviewing/pending_review labels.
+    approve: { nextStatus: "waiting_rate", allowedFrom: ["draft", "inquiry", "new", "submitted", "pending_review", "waiting_rate"] },
+    request_revision: { nextStatus: "waiting_rate", allowedFrom: ["quoted", "approved", "rate_received"] },
+    reject: { nextStatus: "cancelled", allowedFrom: ["draft", "inquiry", "new", "submitted", "pending_review", "reviewing", "waiting_rate", "quoted", "rate_requested", "approved", "rate_received"] },
   },
   "ocean-freight": {
-    approve: { nextStatus: "reviewing", allowedFrom: ["waiting_rate", "new", "submitted", "pending_review"] },
-    request_revision: { nextStatus: "waiting_rate", allowedFrom: ["reviewing", "quoted"] },
-    reject: { nextStatus: "cancelled", allowedFrom: ["waiting_rate", "new", "submitted", "pending_review", "reviewing", "quoted"] },
+    approve: { nextStatus: "rate_requested", allowedFrom: ["waiting_rate", "new", "submitted", "pending_review"] },
+    request_revision: { nextStatus: "waiting_rate", allowedFrom: ["reviewing", "quoted", "rate_received"] },
+    reject: { nextStatus: "cancelled", allowedFrom: ["waiting_rate", "new", "submitted", "pending_review", "reviewing", "quoted", "rate_requested", "rate_received"] },
   },
   "quote-request": {
     approve: { nextStatus: "contacted", allowedFrom: ["new"] },
