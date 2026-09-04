@@ -6498,6 +6498,7 @@ export default function BankReconciliationPage() {
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [showQrisAuditList, setShowQrisAuditList] = useState(false);
   const [showCanonicalSettlementQueue, setShowCanonicalSettlementQueue] = useState(true);
+  const [expandedCanonicalSettlementIds, setExpandedCanonicalSettlementIds] = useState<number[]>([]);
   const PAGE_SIZE = 20;
 
   // ── UI state ──────────────────────────────────────────────────────────────
@@ -7955,10 +7956,41 @@ export default function BankReconciliationPage() {
         {/* ── Summary Cards ─────────────────────────────────── */}
         <SummaryCards summaryMap={summaryMap} activeFilter={filterStatus} onFilter={v => { setFilterStatus(v); setPage(0); }} />
 
+        {/* One payment-type filter controls both the canonical QRIS history and
+            the bank-mutation list. Canonical safeguards remain separate. */}
+        <Card>
+          <CardContent className="p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-medium text-slate-900 dark:text-slate-100">Jenis Pembayaran</p>
+                <p className="text-[11px] text-muted-foreground">
+                  Filter berlaku untuk antrean QRIS dan daftar mutasi bank.
+                </p>
+              </div>
+              <Select
+                value={filterPaymentType}
+                onValueChange={value => {
+                  setFilterPaymentType(value as "all" | "bank_transfer" | "qris");
+                  setPage(0);
+                }}
+              >
+                <SelectTrigger className="h-8 w-[180px] text-xs" aria-label="Filter jenis pembayaran">
+                  <SelectValue placeholder="Jenis pembayaran" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Semua</SelectItem>
+                  <SelectItem value="bank_transfer">Transfer Bank</SelectItem>
+                  <SelectItem value="qris">QRIS</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </CardContent>
+        </Card>
+
         {/* Canonical QRIS settlement queue/history. The legacy candidate audit
             remains available below for bank-evidence approval compatibility,
             but this is the source-of-truth view for settlement lifecycle. */}
-        <Collapsible
+        {filterPaymentType !== "bank_transfer" && <Collapsible
           open={showCanonicalSettlementQueue}
           onOpenChange={setShowCanonicalSettlementQueue}
           className="w-full"
@@ -8017,6 +8049,7 @@ export default function BankReconciliationPage() {
               <div className="space-y-2">
                 {canonicalSettlements.map((settlement) => {
                   const isCompleted = settlement.queue_status === "completed";
+                  const isExpanded = expandedCanonicalSettlementIds.includes(settlement.id);
                   return (
                     <div
                       key={`canonical-settlement-${settlement.id}`}
@@ -8069,6 +8102,68 @@ export default function BankReconciliationPage() {
                           {settlement.bank_description}
                         </p>
                       )}
+                      <div className="mt-2 flex items-center justify-between gap-2 border-t pt-2 dark:border-slate-800">
+                        <p className="text-[11px] text-slate-500">
+                          {isCompleted
+                            ? "History selesai tersedia untuk cross-check admin."
+                            : "Kandidat canonical menunggu rekonsiliasi mutasi."}
+                        </p>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 shrink-0 gap-1 px-2 text-[11px]"
+                          onClick={() => setExpandedCanonicalSettlementIds(current =>
+                            current.includes(settlement.id)
+                              ? current.filter(id => id !== settlement.id)
+                              : [...current, settlement.id],
+                          )}
+                        >
+                          <Eye className="h-3 w-3" />
+                          {isExpanded ? "Tutup kandidat" : "Lihat kandidat"}
+                        </Button>
+                      </div>
+                      {isExpanded && (
+                        <div className="mt-2 space-y-2 rounded-md border bg-slate-50/70 p-2.5 dark:border-slate-800 dark:bg-slate-950/40">
+                          <div className="grid gap-1 text-[11px] text-slate-600 dark:text-slate-400 sm:grid-cols-2">
+                            <span>Mutasi: <strong className="text-slate-900 dark:text-slate-100">
+                              {settlement.bank_mutation_id != null ? `#${settlement.bank_mutation_id}` : "Belum ter-link"}
+                            </strong></span>
+                            <span>Status mutasi: <strong className="text-slate-900 dark:text-slate-100">
+                              {settlement.bank_status || "—"}
+                            </strong></span>
+                            <span>Tanggal mutasi: <strong className="text-slate-900 dark:text-slate-100">
+                              {settlement.bank_transaction_date ? fmtDate(settlement.bank_transaction_date) : "—"}
+                            </strong></span>
+                            <span>Nominal mutasi: <strong className="text-slate-900 dark:text-slate-100">
+                              {settlement.bank_amount != null ? idr(settlement.bank_amount) : "—"}
+                            </strong></span>
+                          </div>
+                          <div>
+                            <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                              Kandidat payment ({settlement.payment_items.length})
+                            </p>
+                            {settlement.payment_items.length === 0 ? (
+                              <p className="text-[11px] text-slate-500">Tidak ada item payment pada snapshot canonical.</p>
+                            ) : (
+                              <div className="grid gap-1 sm:grid-cols-2">
+                                {settlement.payment_items.map(item => (
+                                  <div
+                                    key={`${settlement.id}-${item.paymentId}`}
+                                    className="flex items-center justify-between gap-2 rounded border bg-white px-2 py-1.5 text-[11px] dark:border-slate-700 dark:bg-slate-900"
+                                  >
+                                    <span>
+                                      Payment #{item.paymentId}
+                                      {item.itemStatus ? ` · ${item.itemStatus}` : ""}
+                                    </span>
+                                    <strong>{idr(item.grossAmount)}</strong>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -8077,7 +8172,7 @@ export default function BankReconciliationPage() {
           </CardContent>
           </CollapsibleContent>
           </Card>
-        </Collapsible>
+        </Collapsible>}
 
         {/* QRIS candidates are shown directly inside each bank mutation card.
             Keep the legacy audit block unreachable while the endpoint contract
@@ -8460,15 +8555,6 @@ export default function BankReconciliationPage() {
                       <SelectItem value="DANA">DANA</SelectItem>
                       <SelectItem value="QRIS">QRIS</SelectItem>
                       <SelectItem value="SHOPEEPAY">ShopeePay</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Select value={filterPaymentType} onValueChange={v => { setFilterPaymentType(v as "all" | SportPaymentType); setPage(0); }}>
-                    <SelectTrigger className="w-[165px] h-8 text-xs"><SelectValue placeholder="Jenis payment" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Semua Jenis Payment</SelectItem>
-                      <SelectItem value="bank_transfer">Transfer Bank</SelectItem>
-                      <SelectItem value="qris">QRIS</SelectItem>
-                      <SelectItem value="paylabs">Paylabs</SelectItem>
                     </SelectContent>
                   </Select>
                   <div className="flex items-center gap-1.5">
