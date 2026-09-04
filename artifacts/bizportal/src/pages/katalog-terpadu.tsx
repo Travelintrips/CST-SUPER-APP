@@ -133,7 +133,7 @@ function MasterItemTab({ initialSearch = "" }: { initialSearch?: string }) {
   const [form, setForm] = useState({ name: "", sku: "", itemType: "barang", kategori: "", subcategory: "", unit: "pcs", price: "0", isActive: true, description: "", currencyCode: "IDR" });
 
   const { data: _productsPaginated, isLoading } = useListProducts({ limit: 500 }, { query: { queryKey: getListProductsQueryKey({}) } });
-  const products = _productsPaginated?.data ?? [];
+  const products = useMemo(() => _productsPaginated?.data ?? [], [_productsPaginated]);
   const { data: productCategories = [] } = useListProductCategories();
   const createMut = useCreateProduct();
   const updateMut = useUpdateProduct();

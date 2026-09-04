@@ -108,6 +108,7 @@ export default function LogisticsFreightDetailPage() {
 
   const { data: shipment, isLoading } = useGetFreightShipment(id);
   const typedShipment = shipment as FreightShipmentDetail | undefined;
+  const shipmentStages = typedShipment?.stages;
   const salesDocId = typedShipment?.salesDocId;
   const purchaseDocId = typedShipment?.purchaseDocId;
   const { data: linkedSalesDoc } = useGetSalesDocument(salesDocId ?? 0, { query: { queryKey: getGetSalesDocumentQueryKey(salesDocId ?? 0), enabled: !!salesDocId } });
@@ -205,8 +206,8 @@ export default function LogisticsFreightDetailPage() {
   const [accountingLoading, setAccountingLoading] = useState({ invoice: false, bill: false, post: false, financial: false });
 
   useEffect(() => {
-    if (typedShipment?.stages && !stagesInitialized) {
-      const stages: ShipmentStage[] = typedShipment.stages ?? [];
+    if (shipmentStages && !stagesInitialized) {
+      const stages: ShipmentStage[] = shipmentStages;
       setStageForms((prev) => {
         const next = { ...prev };
         for (const s of stages) {
@@ -224,7 +225,7 @@ export default function LogisticsFreightDetailPage() {
       });
       setStagesInitialized(true);
     }
-  }, [shipment, stagesInitialized]);
+  }, [shipmentStages, stagesInitialized]);
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: getGetFreightShipmentQueryKey(id) });
 
@@ -242,7 +243,7 @@ export default function LogisticsFreightDetailPage() {
     setLiveRefreshFlash(true);
     const timer = setTimeout(() => setLiveRefreshFlash(false), 2500);
     return () => clearTimeout(timer);
-  }, [lastFreightEventAt, notifications]);
+  }, [id, lastFreightEventAt, notifications, queryClient, refetchAuditLog]);
 
   const handleSaveStage = (stageType: StageType) => {
     const f = stageForms[stageType];

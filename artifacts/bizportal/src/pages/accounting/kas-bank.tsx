@@ -1,5 +1,5 @@
 import { DatePicker } from "@/components/ui/date-picker";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -76,7 +76,7 @@ export default function KasBankPage() {
     from_account_id: "", to_account_id: "", amount: "", date: new Date().toISOString().split("T")[0], description: "",
   });
 
-  async function fetchAll() {
+  const fetchAll = useCallback(async () => {
     if (activeCompanyId === null || activeCompanyId === undefined || activeCompanyId === 0) return;
     setLoading(true);
     try {
@@ -96,7 +96,7 @@ export default function KasBankPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [activeCompanyId]);
 
   async function fetchMutations(account: any) {
     setMutationAccount(account);
@@ -110,7 +110,7 @@ export default function KasBankPage() {
     setMutations(data.data ?? []);
   }
 
-  useEffect(() => { fetchAll(); }, [activeCompanyId]);
+  useEffect(() => { void fetchAll(); }, [fetchAll]);
 
   function openAdd() {
     setEditAccount(null);

@@ -75,7 +75,7 @@ export default function AuditDanaTalanganPage() {
     if (to) p.set("to", to);
     p.set("limit", "300");
     return p.toString();
-  }, [activeCompanyId, filterMasalah, from, to]);
+  }, [activeCompanyId, cq, filterMasalah, from, to]);
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ["audit-dana-talangan", queryStr],

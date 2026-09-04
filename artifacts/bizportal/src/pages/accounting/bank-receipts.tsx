@@ -152,7 +152,7 @@ const idr = (n: number) =>
 // ─────────────────────────────────────────────────────────────────────────────
 
 function useApi(companyId: number | null | undefined) {
-  const headers = () => ({ "Content-Type": "application/json", "x-company-id": String(companyId ?? "") });
+  const headers = useCallback(() => ({ "Content-Type": "application/json", "x-company-id": String(companyId ?? "") }), [companyId]);
   const base = "/api";
   const cq = companyId ? `company=${companyId}` : "";
 
@@ -163,14 +163,14 @@ function useApi(companyId: number | null | undefined) {
     if (!r.ok) throw new Error(await r.text());
     const d = await r.json();
     return Array.isArray(d) ? d : (d.data ?? []);
-  }, [companyId]);
+  }, [companyId, headers]);
 
   const fetchDetail = useCallback(async (id: number) => {
     const qs = cq ? `?${cq}` : "";
     const r = await fetch(`${base}/accounting/bank-receipts/${id}${qs}`, { credentials: "include", headers: headers() });
     if (!r.ok) throw new Error(await r.text());
     return r.json();
-  }, [companyId]);
+  }, [cq, headers]);
 
   const fetchJournals = useCallback(async (): Promise<Journal[]> => {
     const qs = cq ? `?${cq}` : "";
@@ -179,7 +179,7 @@ function useApi(companyId: number | null | undefined) {
     const d = await r.json();
     const list: Journal[] = Array.isArray(d) ? d : (d.data ?? []);
     return list.filter((j) => j.type === "bank" || j.type === "cash");
-  }, [companyId]);
+  }, [cq, headers]);
 
   const fetchAccounts = useCallback(async (forType?: string): Promise<Account[]> => {
     const params = new URLSearchParams();
@@ -190,14 +190,14 @@ function useApi(companyId: number | null | undefined) {
     if (!r.ok) return [];
     const d = await r.json();
     return Array.isArray(d) ? d : [];
-  }, [companyId]);
+  }, [companyId, headers]);
 
   const fetchSummary = useCallback(async () => {
     const qs = cq ? `?${cq}` : "";
     const r = await fetch(`${base}/accounting/bank-receipts/summary${qs}`, { credentials: "include", headers: headers() });
     if (!r.ok) return { receiptToday: 0, receiptWeek: 0, receiptMonth: 0 };
     return r.json();
-  }, [companyId]);
+  }, [cq, headers]);
 
   const fetchKasbonEmployees = useCallback(async (): Promise<KasbonEmployee[]> => {
     const qs = cq ? `?${cq}` : "";
@@ -205,7 +205,7 @@ function useApi(companyId: number | null | undefined) {
     if (!r.ok) return [];
     const d = await r.json();
     return Array.isArray(d) ? d : [];
-  }, [companyId]);
+  }, [cq, headers]);
 
   const fetchArCustomers = useCallback(async (): Promise<ArCustomer[]> => {
     const qs = cq ? `?${cq}` : "";
@@ -213,7 +213,7 @@ function useApi(companyId: number | null | undefined) {
     if (!r.ok) return [];
     const d = await r.json();
     return Array.isArray(d) ? d : [];
-  }, [companyId]);
+  }, [cq, headers]);
 
   const createReceipt = useCallback(async (body: object) => {
     const r = await fetch(`${base}/accounting/bank-receipts`, {
@@ -224,7 +224,7 @@ function useApi(companyId: number | null | undefined) {
       throw new Error((e as Record<string, string>).message ?? `HTTP ${r.status}`);
     }
     return r.json();
-  }, [companyId]);
+  }, [headers]);
 
   const voidReceipt = useCallback(async (id: number, reason: string) => {
     const r = await fetch(`${base}/accounting/bank-receipts/${id}/void`, {
@@ -235,12 +235,12 @@ function useApi(companyId: number | null | undefined) {
       throw new Error((e as Record<string, string>).message ?? `HTTP ${r.status}`);
     }
     return r.json();
-  }, [companyId]);
+  }, [headers]);
 
-  return {
+  return useMemo(() => ({
     fetchReceipts, fetchDetail, fetchJournals, fetchAccounts, fetchSummary,
     fetchKasbonEmployees, fetchArCustomers, createReceipt, voidReceipt,
-  };
+  }), [fetchReceipts, fetchDetail, fetchJournals, fetchAccounts, fetchSummary, fetchKasbonEmployees, fetchArCustomers, createReceipt, voidReceipt]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -449,7 +449,7 @@ function CreateReceiptDialog({
         fetchAccounts().then(setOtherAccounts);
         break;
     }
-  }, [open, mode]);
+  }, [open, mode, fetchAccounts, fetchArCustomers, fetchKasbonEmployees]);
 
   // ── Reset smart state on mode change ──────────────────────────────────────
   useEffect(() => {
@@ -1117,7 +1117,7 @@ function DetailDialog({ receiptId, onClose, fetchDetail, onVoid }: {
     if (!receiptId) return;
     setLoading(true);
     fetchDetail(receiptId).then(setData).catch(() => {}).finally(() => setLoading(false));
-  }, [receiptId]);
+  }, [receiptId, fetchDetail]);
 
   if (!receiptId) return null;
 
@@ -1235,7 +1235,7 @@ export default function BankReceiptsPage() {
     } catch (err) {
       toast({ title: "Gagal memuat data", description: String(err), variant: "destructive" });
     } finally { setLoading(false); }
-  }, [activeCompanyId]);
+  }, [api, toast]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
 

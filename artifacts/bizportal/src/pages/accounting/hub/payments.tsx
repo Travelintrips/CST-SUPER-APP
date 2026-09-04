@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -33,17 +33,18 @@ export default function AccountingHubPaymentsPage() {
   const [error, setError]     = useState<string | null>(null);
   const [page, setPage]       = useState(1);
   const [filters, setFilters] = useState({ company_id: "", source_module: "" });
+  const [appliedFilters, setAppliedFilters] = useState({ company_id: "", source_module: "" });
   const [voidDialog, setVoidDialog] = useState<{ open: boolean; id: number | null }>({ open: false, id: null });
   const [voidReason, setVoidReason] = useState("");
   const [voidLoading, setVoidLoading] = useState(false);
   const limit = 50;
 
-  const load = async (p = page) => {
+  const load = useCallback(async (p: number) => {
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams({ page: String(p), limit: String(limit) });
-      Object.entries(filters).forEach(([k, v]) => { if (v) params.set(k, v); });
+      Object.entries(appliedFilters).forEach(([k, v]) => { if (v) params.set(k, v); });
       const res = await fetch(`/api/accounting/hub/payments?${params}`, { credentials: "include" });
       if (!res.ok) {
         const msg = await res.text().catch(() => "");
@@ -58,9 +59,9 @@ export default function AccountingHubPaymentsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [appliedFilters]);
 
-  useEffect(() => { load(1); setPage(1); }, []);
+  useEffect(() => { void load(1); setPage(1); }, [load]);
 
   const handleVoid = async () => {
     if (!voidDialog.id || !voidReason.trim()) return;
@@ -116,7 +117,7 @@ export default function AccountingHubPaymentsPage() {
                 {MODULES.filter(Boolean).map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
               </SelectContent>
             </Select>
-            <Button size="sm" onClick={() => { setPage(1); load(1); }}>Terapkan</Button>
+            <Button size="sm" onClick={() => { setPage(1); setAppliedFilters({ ...filters }); }}>Terapkan</Button>
           </div>
         </CardContent>
       </Card>

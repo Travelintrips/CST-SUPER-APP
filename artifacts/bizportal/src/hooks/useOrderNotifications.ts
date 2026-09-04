@@ -724,7 +724,7 @@ export function useOrderNotifications() {
       esRef.current?.close();
       esRef.current = null;
     };
-  }, [isAuthenticated]);
+  }, [isAuthenticated, queryClient]);
 
   const geofenceAlerts = [...geofenceAlertMap.values()].sort(
     (a, b) => b.triggeredAt.localeCompare(a.triggeredAt)

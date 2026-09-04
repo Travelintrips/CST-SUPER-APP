@@ -274,7 +274,7 @@ export default function VendorsPage() {
   const assignmentFetchAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    if (!editing) {
+    if (!editing?.id) {
       setAssignedCompanyIds([]);
       return;
     }

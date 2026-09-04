@@ -193,7 +193,7 @@ export default function ProductTemplatesPage() {
   const [syncing, setSyncing] = useState(false);
   const [syncConfirmOpen, setSyncConfirmOpen] = useState(false);
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       // ?raw=1 → DB row shape (categoryKey, isActive, id) required by the admin CMS.
@@ -206,9 +206,9 @@ export default function ProductTemplatesPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [toast]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { void load(); }, [load]);
 
   const filtered = templates.filter((t) =>
     t.categoryKey.toLowerCase().includes(search.toLowerCase()) ||

@@ -123,11 +123,7 @@ export default function AiChatbotKnowledgePage() {
   const [bulkSaving, setBulkSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    void loadEntries();
-  }, []);
-
-  async function loadEntries() {
+  const loadEntries = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch("/api/ai-agent/knowledge-base", { credentials: "include" });
@@ -139,7 +135,11 @@ export default function AiChatbotKnowledgePage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [toast]);
+
+  useEffect(() => {
+    void loadEntries();
+  }, [loadEntries]);
 
   function openCreate() {
     setEditingId(null);

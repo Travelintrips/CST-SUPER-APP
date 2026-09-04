@@ -1,5 +1,5 @@
 import { DatePicker } from "@/components/ui/date-picker";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -31,14 +31,15 @@ export default function AccountingHubIndexPage() {
   const [error, setError] = useState<string | null>(null);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [appliedDateRange, setAppliedDateRange] = useState({ dateFrom: "", dateTo: "" });
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams();
-      if (dateFrom) params.set("date_from", dateFrom);
-      if (dateTo)   params.set("date_to", dateTo);
+      if (appliedDateRange.dateFrom) params.set("date_from", appliedDateRange.dateFrom);
+      if (appliedDateRange.dateTo)   params.set("date_to", appliedDateRange.dateTo);
       const res = await fetch(`/api/accounting/hub/overview?${params}`, { credentials: "include" });
       if (!res.ok) { setData(null); setError(`Gagal memuat data (${res.status})`); return; }
       const json = await res.json();
@@ -49,9 +50,9 @@ export default function AccountingHubIndexPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [appliedDateRange]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { void load(); }, [load]);
 
   const t = data?.totals;
 
@@ -97,7 +98,7 @@ export default function AccountingHubIndexPage() {
               <label className="text-sm font-medium whitespace-nowrap">Sampai:</label>
               <DatePicker value={dateTo} onChange={v => setDateTo(v)} className="w-40" />
             </div>
-            <Button size="sm" onClick={load}>Terapkan</Button>
+            <Button size="sm" onClick={() => setAppliedDateRange({ dateFrom, dateTo })}>Terapkan</Button>
           </div>
         </CardContent>
       </Card>

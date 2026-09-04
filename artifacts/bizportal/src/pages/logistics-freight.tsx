@@ -222,7 +222,7 @@ export default function LogisticsFreightPage() {
     setAutoRefreshFlash(true);
     const t = setTimeout(() => setAutoRefreshFlash(false), 2500);
     return () => clearTimeout(t);
-  }, [lastFreightEventAt]);
+  }, [lastFreightEventAt, refetch]);
 
   const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
 
@@ -332,7 +332,7 @@ export default function LogisticsFreightPage() {
         localStorage.removeItem(FREIGHT_BL_LS_KEY);
       }
     } catch {}
-  }, [statusFilter, blReadyFilter, datePreset, customDateFrom, customDateTo]);
+  }, [statusFilter, blReadyFilter, datePreset, customDateFrom, customDateTo, navigate]);
 
   const setStatusFilter = (value: string | null) => {
     setStatusFilterState(value);

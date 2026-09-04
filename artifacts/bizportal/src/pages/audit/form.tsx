@@ -171,7 +171,7 @@ export default function AuditReportFormPage() {
       saveHeaderMut.mutateAsync(),
     ]);
     toast({ title: "✅ Semua perubahan tersimpan" });
-  }, [responses, header]);
+  }, [responses, saveHeaderMut, saveResponsesMut, toast]);
 
   const setItemStatus = useCallback((itemId: string, status: ItemStatus) => {
     setResponses(prev => {
@@ -181,7 +181,7 @@ export default function AuditReportFormPage() {
       return next;
     });
     setDirty(true);
-  }, []);
+  }, [saveResponsesMut]);
 
   const setItemNotes = useCallback((itemId: string, notes: string) => {
     setResponses(prev => {
@@ -191,7 +191,7 @@ export default function AuditReportFormPage() {
       return next;
     });
     setDirty(true);
-  }, []);
+  }, [saveResponsesMut]);
 
   const totalAnswered = Object.values(responses).filter(r => r.status !== "na").length;
   const totalOk = Object.values(responses).filter(r => r.status === "ok").length;

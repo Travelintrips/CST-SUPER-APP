@@ -286,7 +286,7 @@ interface TreasurySummaryResponse {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function useApi(companyId: number | null | undefined) {
-  const headers = () => ({ "Content-Type": "application/json", "x-company-id": String(companyId ?? "") });
+  const headers = useCallback(() => ({ "Content-Type": "application/json", "x-company-id": String(companyId ?? "") }), [companyId]);
   const base = "/api";
   const cq = companyId ? `company=${companyId}` : "";
 
@@ -300,7 +300,7 @@ function useApi(companyId: number | null | undefined) {
     if (!r.ok) throw new Error(await r.text());
     const data = await r.json();
     return Array.isArray(data) ? data : (data.data ?? []);
-  }, [companyId]);
+  }, [companyId, headers]);
 
   const fetchVendors = useCallback(async (): Promise<{ id: number; name: string }[]> => {
     const qs = cq ? `?${cq}` : "";
@@ -309,7 +309,7 @@ function useApi(companyId: number | null | undefined) {
     });
     if (!r.ok) return [];
     return r.json();
-  }, [companyId]);
+  }, [cq, headers]);
 
   const fetchDetail = useCallback(async (id: number) => {
     const qs = cq ? `?${cq}` : "";
@@ -318,7 +318,7 @@ function useApi(companyId: number | null | undefined) {
     });
     if (!r.ok) throw new Error(await r.text());
     return r.json();
-  }, [companyId]);
+  }, [cq, headers]);
 
   const fetchJournals = useCallback(async (): Promise<Journal[]> => {
     const qs = cq ? `?${cq}` : "";
@@ -329,7 +329,7 @@ function useApi(companyId: number | null | undefined) {
     const d = await r.json();
     const list: Journal[] = Array.isArray(d) ? d : (d.data ?? []);
     return list.filter((j) => j.type === "bank" || j.type === "cash");
-  }, [companyId]);
+  }, [cq, headers]);
 
   const fetchAccounts = useCallback(async (type?: string, subtype?: string, forTxType?: string): Promise<CoacAccount[]> => {
     const params = new URLSearchParams();
@@ -344,7 +344,7 @@ function useApi(companyId: number | null | undefined) {
     if (!r.ok) return [];
     const d = await r.json();
     return Array.isArray(d) ? d : [];
-  }, [companyId]);
+  }, [companyId, headers]);
 
   const createDisb = useCallback(async (body: object) => {
     const qs = companyId ? `?company=${companyId}` : "";
@@ -357,7 +357,7 @@ function useApi(companyId: number | null | undefined) {
     const d = await r.json();
     if (!r.ok) throw new Error(d.message ?? "Gagal menyimpan");
     return d;
-  }, [companyId]);
+  }, [companyId, headers]);
 
   const voidDisb = useCallback(async (id: number, reason: string) => {
     const qs = companyId ? `?company=${companyId}` : "";
@@ -370,7 +370,7 @@ function useApi(companyId: number | null | undefined) {
     const d = await r.json();
     if (!r.ok) throw new Error(d.message ?? "Gagal void");
     return d;
-  }, [companyId]);
+  }, [companyId, headers]);
 
   const fetchOutstandingInvoices = useCallback(async (): Promise<OutstandingInvoicesResponse> => {
     const qs = cq ? `?${cq}` : "";
@@ -379,7 +379,7 @@ function useApi(companyId: number | null | undefined) {
     });
     if (!r.ok) throw new Error(await r.text());
     return r.json();
-  }, [companyId]);
+  }, [cq, headers]);
 
   const fetchSummary = useCallback(async (): Promise<TreasurySummaryResponse> => {
     const qs = cq ? `?${cq}` : "";
@@ -388,9 +388,9 @@ function useApi(companyId: number | null | undefined) {
     });
     if (!r.ok) throw new Error(await r.text());
     return r.json();
-  }, [companyId]);
+  }, [cq, headers]);
 
-  return { fetchDisbs, fetchDetail, fetchJournals, fetchAccounts, createDisb, voidDisb, fetchOutstandingInvoices, fetchSummary, fetchVendors };
+  return useMemo(() => ({ fetchDisbs, fetchDetail, fetchJournals, fetchAccounts, createDisb, voidDisb, fetchOutstandingInvoices, fetchSummary, fetchVendors }), [fetchDisbs, fetchDetail, fetchJournals, fetchAccounts, createDisb, voidDisb, fetchOutstandingInvoices, fetchSummary, fetchVendors]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2537,7 +2537,7 @@ function CreateDisbDialog({
       })
       .catch((e) => toast({ title: "Gagal memuat invoice outstanding", description: String(e), variant: "destructive" }))
       .finally(() => setLoadingInvoices(false));
-  }, [open, paymentMode]);
+  }, [open, paymentMode, fetchOutstandingInvoices, initialInvoiceIds, toast]);
 
   const handleItemChange = (idx: number, field: keyof DisbursementItem, value: string | number | null) => {
     setItems((prev) => {
@@ -3307,7 +3307,7 @@ function DisbDetailDialog({
     if (!disbId) { setData(null); return; }
     setLoading(true);
     fetchDetail(disbId).then(setData).catch(console.error).finally(() => setLoading(false));
-  }, [disbId]);
+  }, [disbId, fetchDetail]);
 
   if (!disbId) return null;
 
@@ -3761,7 +3761,7 @@ export default function BankDisbursementsPage() {
       loadFormData();
       api.fetchVendors().then(setVendors).catch(() => {});
     }
-  }, [activeCompanyId]);
+  }, [activeCompanyId, api, loadFormData, loadTreasury]);
 
   // ── Load disbursements list (dengan filter vendor) ────────────────────────
   const loadDisbList = useCallback(async () => {
@@ -3779,7 +3779,7 @@ export default function BankDisbursementsPage() {
 
   useEffect(() => {
     if (activeCompanyId) loadDisbList();
-  }, [activeCompanyId, filterVendorId]);
+  }, [activeCompanyId, filterVendorId, loadDisbList]);
 
   // ── URL params: auto-open create dialog ───────────────────────────────────
   useEffect(() => {

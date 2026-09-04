@@ -4,7 +4,7 @@
  * API:   /api/portal/admin/master-price  (requirePortalAdmin — BizPortal session cookie accepted)
  */
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useMemo } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
@@ -399,7 +399,7 @@ function PriceListTab() {
     },
   });
 
-  const items = data?.data ?? [];
+  const items = useMemo(() => data?.data ?? [], [data?.data]);
   const hasInternal = items.filter(i => selected.has(i.id)).some(i => i.isInternal);
 
   const toggleAll = useCallback(() => {

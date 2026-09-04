@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "wouter";
 import { AppShell } from "@/components/layout/AppShell";
@@ -280,7 +280,7 @@ export default function ProductTemplateDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { toast } = useToast();
   const qc = useQueryClient();
-  const QUERY_KEY = ["product-template-raw", id];
+  const QUERY_KEY = useMemo(() => ["product-template-raw", id], [id]);
 
   const [addFieldOpen, setAddFieldOpen] = useState(false);
   const [addDocOpen, setAddDocOpen] = useState(false);

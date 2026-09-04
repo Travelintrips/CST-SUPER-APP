@@ -1,5 +1,5 @@
 import { DatePicker } from "@/components/ui/date-picker";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -84,7 +84,7 @@ export default function BankReconPage() {
   const [rows, setRows] = useState<ReconRow[]>([]);
   const [loading, setLoading] = useState(false);
 
-  async function loadData() {
+  const loadData = useCallback(async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams();
@@ -99,9 +99,9 @@ export default function BankReconPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [dateFrom, dateTo, statusFilter]);
 
-  useEffect(() => { loadData(); }, []);
+  useEffect(() => { void loadData(); }, [loadData]);
 
   const statuses = rows.map(reconStatus);
   const matched   = statuses.filter(s => s === "MATCHED").length;

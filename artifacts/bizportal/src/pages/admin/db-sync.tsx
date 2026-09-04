@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -117,7 +117,7 @@ function LiveLog({ jobId, onDone }: { jobId: string; onDone: () => void }) {
     };
     es.onerror = () => es.close();
     return () => es.close();
-  }, [jobId]);
+  }, [jobId, onDone]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -266,9 +266,9 @@ export default function DbSyncPage() {
     setShowLive(true);
   };
 
-  const handleDone = () => {
+  const handleDone = useCallback(() => {
     refetch();
-  };
+  }, [refetch]);
 
   return (
     <AppShell>

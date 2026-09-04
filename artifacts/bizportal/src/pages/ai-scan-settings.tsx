@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -86,12 +86,7 @@ export default function AiScanSettingsPage() {
     return { matchedPhrase: null, lineIndex: -1, lines };
   }, [testText, bpPhrases]);
 
-  useEffect(() => {
-    void loadFields();
-    void loadBoilerplate();
-  }, []);
-
-  async function loadFields() {
+  const loadFields = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch("/api/scan-document/fields", { credentials: "include" });
@@ -105,9 +100,9 @@ export default function AiScanSettingsPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [toast]);
 
-  async function loadBoilerplate() {
+  const loadBoilerplate = useCallback(async () => {
     setBpLoading(true);
     try {
       const res = await fetch("/api/scan-document/boilerplate-headers", { credentials: "include" });
@@ -122,7 +117,12 @@ export default function AiScanSettingsPage() {
     } finally {
       setBpLoading(false);
     }
-  }
+  }, [toast]);
+
+  useEffect(() => {
+    void loadFields();
+    void loadBoilerplate();
+  }, [loadBoilerplate, loadFields]);
 
   async function handleSaveFields() {
     setSaving(true);

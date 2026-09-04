@@ -226,7 +226,7 @@ export default function CashFlowForecastPage() {
     } finally {
       setLoading(false);
     }
-  }, [activeCompanyId]);
+  }, [activeCompanyId, activePeriod]);
 
   React.useEffect(() => {
     fetchForecast();

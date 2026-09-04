@@ -508,7 +508,7 @@ export default function ExpenseEditorPage() {
       setVendorId(expAny.vendorId ?? null);
       setUserId(expAny.userId ?? null);
     }
-  }, [expense]);
+  }, [expense, isNew]);
 
   const purchaseTaxes = taxes.filter((t) => t.kind === "purchase" && t.isActive);
   const selectedTax = taxes.find((t) => t.id === form.taxRateId);

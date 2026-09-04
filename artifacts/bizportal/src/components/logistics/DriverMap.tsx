@@ -211,7 +211,7 @@ export default function DriverMap({ drivers, activeJobByDriver, sseConnected, ge
         map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
       } catch {}
     }
-  }, [locations, activeJobByDriver]);
+  }, [locations, activeJobByDriver, geofenceAlertDriverIds]);
 
   const locCount = locations.size;
   const onJobCount = [...locations.keys()].filter((id) => {

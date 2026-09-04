@@ -229,15 +229,15 @@ export default function AdvanceManagementPage() {
   }, [api]);
 
   useEffect(() => { loadAdvances(); }, [loadAdvances]);
-  useEffect(() => { loadDashboard(); loadAccounts(); }, [activeCompanyId]);
+  useEffect(() => { loadDashboard(); loadAccounts(); }, [loadDashboard, loadAccounts]);
 
   useEffect(() => {
     if (tab === "aging") loadAging();
-  }, [tab, activeCompanyId]);
+  }, [tab, loadAging]);
 
   useEffect(() => {
     if (detailId != null) loadDetail(detailId);
-  }, [detailId]);
+  }, [detailId, loadDetail]);
 
   // ── Stats totals ──────────────────────────────────────────────────────────
   const stats = dashboard?.stats ?? {};

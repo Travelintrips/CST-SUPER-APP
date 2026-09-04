@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useRoute, useLocation } from "wouter";
 import { QueryState } from "@/components/ui/query-state";
 import { Button } from "@/components/ui/button";
@@ -247,7 +247,7 @@ export default function BankMutationImportDetailPage() {
   const [retriggeringNorm, setRetriggeringNorm] = useState(false);
   const [editingNormId, setEditingNormId] = useState<number | null>(null);
 
-  async function loadData() {
+  const loadData = useCallback(async () => {
     if (!batchId) return;
     setLoading(true);
     try {
@@ -262,7 +262,7 @@ export default function BankMutationImportDetailPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [batchId, toast]);
 
   async function loadNormalized() {
     if (!batchId) return;
@@ -375,18 +375,10 @@ export default function BankMutationImportDetailPage() {
     }
   }
 
-  useEffect(() => { loadData(); loadCompanies(); }, [batchId]);
+  useEffect(() => { void loadData(); void loadCompanies(); }, [batchId, loadData]);
 
   // Cleanup polling saat component unmount
   useEffect(() => () => { if (pollIntervalRef) clearInterval(pollIntervalRef); }, [pollIntervalRef]);
-
-  // Auto-resume polling jika batch sedang PROCESSING saat page dimuat
-  useEffect(() => {
-    if (batch?.status === "PROCESSING" && !pollIntervalRef && batchId) {
-      setPosting(true);
-      startPolling(batchId);
-    }
-  }, [batch?.status]);
 
   async function updateRow(rowId: number, field: "accounting_class" | "status", value: string) {
     setEditingRow(rowId);
@@ -471,14 +463,14 @@ export default function BankMutationImportDetailPage() {
     }
   }
 
-  function stopPolling() {
+  const stopPolling = useCallback(() => {
     setPollIntervalRef(prev => {
       if (prev) clearInterval(prev);
       return null;
     });
-  }
+  }, []);
 
-  function startPolling(bId: number) {
+  const startPolling = useCallback((bId: number) => {
     stopPolling();
     setJobProgress(null);
     let attempts = 0;
@@ -554,7 +546,15 @@ export default function BankMutationImportDetailPage() {
       }
     }, 3000);
     setPollIntervalRef(iv);
-  }
+  }, [batch?.import_mode, loadData, stopPolling, toast]);
+
+  // Auto-resume polling jika batch sedang PROCESSING saat page dimuat
+  useEffect(() => {
+    if (batch?.status === "PROCESSING" && !pollIntervalRef && batchId) {
+      setPosting(true);
+      startPolling(batchId);
+    }
+  }, [batch?.status, batchId, pollIntervalRef, startPolling]);
 
   async function doDeleteRow() {
     if (!batchId || !deleteRowConfirm) return;

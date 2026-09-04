@@ -565,7 +565,7 @@ export default function SalesDocumentEditorPage({ kind: propKind }: EditorProps 
   useEffect(() => {
     setNpwpDraft(selectedCustomer?.taxId ?? "");
     setEditingNpwp(false);
-  }, [selectedCustomer?.id]);
+  }, [selectedCustomer?.id, selectedCustomer?.taxId]);
 
   const handleSaveNpwp = async () => {
     if (!selectedCustomer) return;

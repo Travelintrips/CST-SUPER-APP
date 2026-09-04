@@ -193,16 +193,14 @@ export default function InvoiceOcrImportPage() {
   // Fetch supplier list for existence check.
   // limit:1000 — needs the full vendor list, not the paginated default (25).
   const { data: suppliersResponse } = useListSuppliers({ limit: 1000 });
-  const suppliers = suppliersResponse?.data ?? [];
-
   // Check if current supplierName matches any existing supplier (case-insensitive)
   const supplierExists = useMemo(() => {
     const q = form.supplierName?.trim().toLowerCase();
     if (!q) return true; // no name yet — don't show warning
-    return (suppliers as Array<{ name: string }>).some(
+    return ((suppliersResponse?.data ?? []) as Array<{ name: string }>).some(
       (s) => s.name?.toLowerCase() === q
     );
-  }, [suppliers, form.supplierName]);
+  }, [suppliersResponse?.data, form.supplierName]);
 
   const createSupplierMut = useCreateSupplier({
     mutation: {

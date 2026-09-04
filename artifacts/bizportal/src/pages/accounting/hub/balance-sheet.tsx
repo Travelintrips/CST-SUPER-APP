@@ -1,5 +1,5 @@
 import { DatePicker } from "@/components/ui/date-picker";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -50,18 +50,19 @@ export default function AccountingHubBalanceSheetPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState({ company_id: "", date_to: "", branch_id: "" });
+  const [appliedFilters, setAppliedFilters] = useState({ company_id: "", date_to: "", branch_id: "" });
   const [selectedRow, setSelectedRow] = useState<BSRow | null>(null);
   const [detail, setDetail] = useState<AccountDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams();
-      Object.entries(filters).forEach(([k, v]) => { if (v) params.set(k, v); });
+      Object.entries(appliedFilters).forEach(([k, v]) => { if (v) params.set(k, v); });
       const res = await fetch(`/api/accounting/hub/balance-sheet?${params}`, { credentials: "include" });
       if (!res.ok) {
         const msg = await res.text().catch(() => "");
@@ -76,9 +77,9 @@ export default function AccountingHubBalanceSheetPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [appliedFilters]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { void load(); }, [load]);
 
   const openDetails = async (row: BSRow) => {
     setSelectedRow(row);
@@ -100,7 +101,7 @@ export default function AccountingHubBalanceSheetPage() {
       // scope so the detail total always explains the clicked row.
       if (row.company_id != null) params.set("company_id", String(row.company_id));
       if (row.branch_id != null) params.set("branch_id", String(row.branch_id));
-      if (filters.date_to) params.set("date_to", filters.date_to);
+      if (appliedFilters.date_to) params.set("date_to", appliedFilters.date_to);
 
       const res = await fetch(`/api/accounting/hub/general-ledger?${params}`, { credentials: "include" });
       const json = await res.json().catch(() => ({}));
@@ -177,7 +178,7 @@ export default function AccountingHubBalanceSheetPage() {
               <label className="text-xs whitespace-nowrap">Per tanggal:</label>
               <DatePicker value={filters.date_to} onChange={v => setFilters(f => ({...f, date_to: v}))} className="w-40" />
             </div>
-            <Button size="sm" onClick={load}>Terapkan</Button>
+            <Button size="sm" onClick={() => setAppliedFilters({ ...filters })}>Terapkan</Button>
           </div>
         </CardContent>
       </Card>
@@ -277,7 +278,7 @@ export default function AccountingHubBalanceSheetPage() {
             <DialogDescription>
               {selectedRow?.name ?? "—"} · {selectedRow?.company_code ?? "GLOBAL"}
               {selectedRow?.branch_id != null ? ` · Cabang ${selectedRow.branch_id}` : ""}
-              {filters.date_to ? ` · sampai ${fmtDate(filters.date_to)}` : " · seluruh periode"}
+              {appliedFilters.date_to ? ` · sampai ${fmtDate(appliedFilters.date_to)}` : " · seluruh periode"}
             </DialogDescription>
           </DialogHeader>
 
@@ -367,7 +368,7 @@ export default function AccountingHubBalanceSheetPage() {
 
           {selectedRow && (
             <DialogFooter>
-              <Link href={`/finance/transactions/detail?accountId=${selectedRow.account_id}&accountCode=${encodeURIComponent(selectedRow.code)}&accountName=${encodeURIComponent(selectedRow.name)}${selectedRow.company_id != null ? `&company=${selectedRow.company_id}` : ""}${filters.date_to ? `&endDate=${filters.date_to}` : ""}`}>
+              <Link href={`/finance/transactions/detail?accountId=${selectedRow.account_id}&accountCode=${encodeURIComponent(selectedRow.code)}&accountName=${encodeURIComponent(selectedRow.name)}${selectedRow.company_id != null ? `&company=${selectedRow.company_id}` : ""}${appliedFilters.date_to ? `&endDate=${appliedFilters.date_to}` : ""}`}>
                 <Button variant="outline" className="gap-2">
                   <ExternalLink className="h-4 w-4" /> Buka Buku Besar Lengkap
                 </Button>

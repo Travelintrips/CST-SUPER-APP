@@ -1,7 +1,7 @@
 import { AppShell } from "@/components/layout/AppShell";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLocation, useParams } from "wouter";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -163,7 +163,7 @@ export default function LogisticsFreightEditorPage() {
   const updateSupplier = useUpdateSupplier();
 
   const { data: _salesOrdersPaginated } = useListSalesDocuments({ kind: "order", limit: 500 }, { query: { queryKey: getListSalesDocumentsQueryKey({ kind: "order" }) } });
-  const salesOrders = _salesOrdersPaginated?.data ?? [];
+  const salesOrders = useMemo(() => _salesOrdersPaginated?.data ?? [], [_salesOrdersPaginated]);
   const { data: purchaseOrders = [] } = useListPurchaseDocuments({ kind: "order" }, { query: { queryKey: getListPurchaseDocumentsQueryKey({ kind: "order" }) } });
   const { data: suppliers = [], isFetched: suppliersFetched } = useVendors();
   const [soPickerOpen, setSoPickerOpen] = useState(false);
@@ -229,6 +229,9 @@ export default function LogisticsFreightEditorPage() {
 
   const [routeDistanceKm, setRouteDistanceKm] = useState<number | null>(null);
   const [ratePerKm, setRatePerKm] = useState("");
+  const handleDistanceFetched = useCallback((km: number | null) => {
+    setRouteDistanceKm(km);
+  }, []);
 
   useEffect(() => {
     if (!isEdit) {
@@ -320,7 +323,7 @@ export default function LogisticsFreightEditorPage() {
   }, [id]);
 
   // Catalog-aware PO autofill helper (shared by manual selection, URL pre-link, and edit load)
-  const applyPoAutoFill = (poDoc: { supplierName?: string | null; supplierAddress?: string | null }) => {
+  const applyPoAutoFill = useCallback((poDoc: { supplierName?: string | null; supplierAddress?: string | null }) => {
     const normalise = (s: string) => s.trim().toLowerCase();
     // Find a catalog vendor that matches the PO's supplier name
     const catalogVendor = poDoc.supplierName
@@ -359,7 +362,7 @@ export default function LogisticsFreightEditorPage() {
         shipperAddress: f.shipperAddress || (poDoc.supplierAddress ?? "") || (catalogVendor?.address ?? ""),
       };
     });
-  };
+  }, [form.shipperAddress, form.shipperName, suppliers]);
 
   // Create mode: auto-fill shipper info when a PO is pre-linked via URL param
   useEffect(() => {
@@ -371,7 +374,7 @@ export default function LogisticsFreightEditorPage() {
     if (!poDoc) return;
     poUrlPreLinkDone.current = true;
     applyPoAutoFill(poDoc);
-  }, [isEdit, purchaseDocId, purchaseOrders, suppliersFetched, suppliers]);
+  }, [applyPoAutoFill, isEdit, purchaseDocId, purchaseOrders, suppliersFetched]);
 
   useEffect(() => {
     if (!isEdit || !existing || autoFillSetupDone.current) return;
@@ -400,7 +403,7 @@ export default function LogisticsFreightEditorPage() {
     }
     // Mark setup complete only when all linked sources are resolved
     if (soProcessed && poProcessed) autoFillSetupDone.current = true;
-  }, [isEdit, existing, salesOrders, purchaseOrders, suppliersFetched, suppliers]);
+  }, [applyPoAutoFill, isEdit, existing, salesOrders, purchaseOrders, suppliersFetched]);
 
   // On edit load: if no PO is linked but shipperName matches a catalog vendor, pre-select that vendor
   // and mark it as manually-chosen so unlinking a PO later won't clear it.
@@ -1153,7 +1156,7 @@ export default function LogisticsFreightEditorPage() {
               <RouteMapPreview
                 origin={form.shipperAddress}
                 destination={form.consigneeAddress}
-                onDistanceFetched={(km) => setRouteDistanceKm(km)}
+                onDistanceFetched={handleDistanceFetched}
               />
             )}
 

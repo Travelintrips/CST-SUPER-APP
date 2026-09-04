@@ -301,7 +301,7 @@ export default function SalesItemsPage() {
     { limit: 500 },
     { query: { queryKey: getListProductsQueryKey({}) } }
   );
-  const products = _productsPaginated?.data ?? [];
+  const products = useMemo(() => _productsPaginated?.data ?? [], [_productsPaginated?.data]);
   const { data: categories = [] } = useListProductCategories();
   const { data: taxes = [] } = useListTaxes();
   const { data: apiSubcats = [...DEFAULT_SUBCATEGORIES] } = useQuery<string[]>({

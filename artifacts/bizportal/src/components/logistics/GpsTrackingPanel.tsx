@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -107,7 +107,7 @@ export default function GpsTrackingPanel({ orderId, orderNumber }: GpsTrackingPa
     staleTime: 25_000,
   });
 
-  const locations = data?.locations ?? [];
+  const locations = useMemo(() => data?.locations ?? [], [data?.locations]);
   const alerts = alertsData?.alerts ?? [];
   const hasAlerts = alerts.length > 0;
 

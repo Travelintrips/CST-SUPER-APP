@@ -217,7 +217,7 @@ export default function AuditImportPage() {
 
   const counts: any    = data?.counts ?? {};
   const pendingER: number = data?.pending_entity_review ?? 0;
-  const batches: any[] = data?.batches ?? [];
+  const batches = useMemo<any[]>(() => data?.batches ?? [], [data?.batches]);
   const activity: any[] = data?.recent_activity ?? [];
 
   const batchMonthOptions = useMemo(() => {

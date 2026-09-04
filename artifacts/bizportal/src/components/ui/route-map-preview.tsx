@@ -41,7 +41,7 @@ export function RouteMapPreview({ origin, destination, onDistanceFetched }: Prop
       return () => controller.abort();
     }, 600);
     return () => clearTimeout(timer);
-  }, [origin, destination, isReady]);
+  }, [origin, destination, isReady, onDistanceFetched]);
 
   if (!isReady) return null;
 

@@ -164,7 +164,7 @@ export default function DriverMacetPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const allOpen = data?.outstanding ?? [];
+  const allOpen = useMemo(() => data?.outstanding ?? [], [data?.outstanding]);
   const macetList = useMemo(
     () => allOpen.filter((r) => (parseFloat(String(r.outstanding_amount)) || 0) >= MIN_MACET),
     [allOpen]
