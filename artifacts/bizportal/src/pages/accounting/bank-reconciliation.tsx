@@ -1007,6 +1007,14 @@ function hasApprovedReconciliationMatch(m: BankMutation): boolean {
   ) ?? false;
 }
 
+function isFullyUsedQrisCandidate(candidate: Candidate): boolean {
+  if (candidate.candidate_type !== "qris_settlement") return false;
+  const candidateStatus = String(candidate.status ?? "").toLowerCase();
+  const settlementStatus = String(candidate.details?.settlementStatus ?? "").toLowerCase();
+  return ["approved", "completed"].includes(candidateStatus)
+    || ["posted", "reconciled", "settled", "completed"].includes(settlementStatus);
+}
+
 function activeCanonicalSettlementCandidatesForMutation(m: BankMutation): Candidate[] {
   return (m.candidates ?? []).filter(candidate =>
     candidate.candidate_type === "qris_settlement"
@@ -4552,6 +4560,11 @@ function MutationCard({
   const amount = Number(m.amount) || 0;
   const isIN   = m.direction === "IN";
   const isQris = isQrisMutation(m);
+  const isClosedQrisSettlement =
+    isQris
+    && !canonicalHistoricalRepairReady
+    && matchingCandidates.length > 0
+    && matchingCandidates.every(isFullyUsedQrisCandidate);
   // QRIS candidates without a batch audit are still valuable reviewer
   // evidence. They must be visible on the card, but they must not be
   // selectable through the generic candidate approval flow.
@@ -4879,7 +4892,7 @@ function MutationCard({
           onClick={e => e.stopPropagation()}
         >
           <div className="flex gap-1.5 flex-wrap">
-            {!isManualReviewActionable(m) && !canonicalHistoricalRepairReady && (
+            {!isClosedQrisSettlement && !isManualReviewActionable(m) && !canonicalHistoricalRepairReady && (
               <Button
                 size="sm"
                 variant="outline"
@@ -4890,7 +4903,7 @@ function MutationCard({
                 Pilih COA &amp; Simpan Rule AI
               </Button>
             )}
-            {onMultiAllocate && canMultiAllocate(m) && (
+            {!isClosedQrisSettlement && onMultiAllocate && canMultiAllocate(m) && (
               <Button
                 size="sm"
                 variant="outline"
@@ -4905,7 +4918,7 @@ function MutationCard({
                 Multi-Allocation
               </Button>
             )}
-            {canRematchHistoricalReview && (
+            {!isClosedQrisSettlement && canRematchHistoricalReview && (
               <Button
                 size="sm"
                 variant="outline"
@@ -4917,7 +4930,7 @@ function MutationCard({
                 Jalankan Ulang Matching
               </Button>
             )}
-            {canRetryRuleAutoPost && onRetryMatching && (
+            {!isClosedQrisSettlement && canRetryRuleAutoPost && onRetryMatching && (
               <Button
                 size="sm"
                 variant="outline"
@@ -4932,7 +4945,7 @@ function MutationCard({
                 {retryMatchingPending ? "Recon ulang..." : "Recon Ulang"}
               </Button>
             )}
-            {isLegacyReferenceCoaRetryable(m) && onRetryReferenceCoa && (
+            {!isClosedQrisSettlement && isLegacyReferenceCoaRetryable(m) && onRetryReferenceCoa && (
               <Button
                 size="sm"
                 variant="outline"
@@ -4948,7 +4961,7 @@ function MutationCard({
               </Button>
             )}
             {/* One clear primary action per mutation. Backend remains the final guard. */}
-            {isManualReviewActionable(m) && (
+            {!isClosedQrisSettlement && isManualReviewActionable(m) && (
               <Button
                 size="sm"
                 className="h-7 text-xs gap-1 bg-orange-600 hover:bg-orange-700 disabled:opacity-50"
@@ -4959,7 +4972,7 @@ function MutationCard({
                 Pilih COA &amp; Buat Draft
               </Button>
             )}
-            {!mappingError && isUiApprovalEligible(m) && (
+            {!isClosedQrisSettlement && !mappingError && isUiApprovalEligible(m) && (
               <Button
                 size="sm"
                 className="h-7 text-xs gap-1 bg-green-600 hover:bg-green-700 disabled:opacity-50"
@@ -4978,7 +4991,7 @@ function MutationCard({
                 Setujui
               </Button>
             )}
-             {(canonicalApprovalReady || canonicalHistoricalRepairReady) && canonicalApprovalCandidate && (
+             {!isClosedQrisSettlement && (canonicalApprovalReady || canonicalHistoricalRepairReady) && canonicalApprovalCandidate && (
                canonicalHistoricalRepairReady && onRecoverQrisSettlement ? (
                  <Button
                    size="sm"
@@ -5009,7 +5022,7 @@ function MutationCard({
                  </Button>
                ) : null
              )}
-             {canonicalOverrideReady
+              {!isClosedQrisSettlement && canonicalOverrideReady
                && !canonicalHistoricalRepairReady
               && !canonicalApprovalReady
               && canonicalApprovalCandidate
@@ -5027,7 +5040,7 @@ function MutationCard({
                 Selesaikan Manual (Override)
               </Button>
             )}
-             {!isManualReviewActionable(m) && !isUiApprovalEligible(m) && !canonicalApprovalReady && matchingCandidates.length === 0 && (m.status === "unmatched" || m.status === "matched" || m.status === "duplicate_need_review") && (
+             {!isClosedQrisSettlement && !isManualReviewActionable(m) && !isUiApprovalEligible(m) && !canonicalApprovalReady && matchingCandidates.length === 0 && (m.status === "unmatched" || m.status === "matched" || m.status === "duplicate_need_review") && (
               <Button
                 size="sm"
                 variant="outline"
@@ -5060,7 +5073,7 @@ function MutationCard({
               </Button>
             )}
             {/* Post ke Accounting — only for approved_pending_posting; disabled when mapping-required */}
-            {canPost(m) && (
+            {!isClosedQrisSettlement && canPost(m) && (
               <Button
                 size="sm"
                 className="h-7 text-xs gap-1 bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50"
@@ -5072,14 +5085,14 @@ function MutationCard({
                 Post ke Accounting
               </Button>
             )}
-            {(m.status === "approved" || m.status === "posted") && (
+            {!isClosedQrisSettlement && (m.status === "approved" || m.status === "posted") && (
               <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => onDetail(m)}>
                 <Eye className="w-3.5 h-3.5" />
                 Lihat Detail
               </Button>
             )}
             {/* Reject — only before approval/draft journal */}
-            {canReject(m) && (
+            {!isClosedQrisSettlement && canReject(m) && (
               <Button
                 size="sm"
                 variant="outline"
@@ -5091,7 +5104,7 @@ function MutationCard({
               </Button>
             )}
             {/* Batalkan draft approval — draft journal has no financial impact */}
-            {canUnapprove(m) && (
+            {!isClosedQrisSettlement && canUnapprove(m) && (
               <Button
                 size="sm"
                 variant="outline"
@@ -5103,7 +5116,7 @@ function MutationCard({
               </Button>
             )}
             {/* Reverse/Void — only for posted */}
-            {canReverse(m) && (
+            {!isClosedQrisSettlement && canReverse(m) && (
               <Button
                 size="sm"
                 variant="outline"
@@ -5115,7 +5128,7 @@ function MutationCard({
               </Button>
             )}
             {/* Reopen — only for void mutations */}
-            {canReopen(m) && (
+            {!isClosedQrisSettlement && canReopen(m) && (
               <Button
                 size="sm"
                 variant="outline"
@@ -5148,24 +5161,32 @@ function MutationCard({
             )}
           </div>
           <div className="flex gap-1 items-center">
-            <ProofUploadButton mutationId={m.id} proofUrl={m.uploaded_proof_url ?? null} />
-            <Button
-              size="sm" variant="ghost"
-              className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
-              title="Lihat Detail"
-              onClick={() => onDetail(m)}
-            >
-              <Eye className="w-3.5 h-3.5" />
-            </Button>
-            {canDelete(m) && (
-              <Button
-                size="sm" variant="ghost"
-                className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
-                title="Hapus Mutasi"
-                onClick={() => { if (confirm("Hapus mutasi ini?")) onDelete(m.id); }}
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </Button>
+            {isClosedQrisSettlement ? (
+              <span className="text-[10px] font-medium text-green-700 dark:text-green-300">
+                Settlement sudah digunakan
+              </span>
+            ) : (
+              <>
+                <ProofUploadButton mutationId={m.id} proofUrl={m.uploaded_proof_url ?? null} />
+                <Button
+                  size="sm" variant="ghost"
+                  className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+                  title="Lihat Detail"
+                  onClick={() => onDetail(m)}
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                </Button>
+                {canDelete(m) && (
+                  <Button
+                    size="sm" variant="ghost"
+                    className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                    title="Hapus Mutasi"
+                    onClick={() => { if (confirm("Hapus mutasi ini?")) onDelete(m.id); }}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </Button>
+                )}
+              </>
             )}
           </div>
         </div>

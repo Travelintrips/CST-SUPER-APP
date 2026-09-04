@@ -28,6 +28,19 @@ type MutationFixture = {
   activeSettlementPaymentIds?: number[];
 };
 
+function isClosedQrisSettlement(mutation: MutationFixture): boolean {
+  if (mutation.canonicalSettlementStatus !== "posted") return false;
+  const qrisCandidates = mutation.candidates.filter(
+    candidate => candidate.candidate_type === "qris_settlement",
+  );
+  return qrisCandidates.length > 0 && qrisCandidates.every(candidate =>
+    ["approved", "completed"].includes(candidate.status.toLowerCase())
+    || ["posted", "reconciled", "settled", "completed"].includes(
+      (candidate.settlement_status ?? "").toLowerCase(),
+    ),
+  );
+}
+
 function hasApprovedMatch(mutation: MutationFixture): boolean {
   return mutation.candidates.some(
     candidate => candidate.status.toLowerCase() === "approved",
@@ -172,6 +185,20 @@ describe("bank reconciliation approved-match UI guard", () => {
     expect(isQrisApprovalButtonEnabled(mutation)).toBe(false);
   });
 
+  it("closes all card actions when the QRIS settlement is already fully used", () => {
+    const mutation: MutationFixture = {
+      status: "approved",
+      candidates: [{
+        ...canonicalCandidate,
+        status: "approved",
+        settlement_status: "posted",
+      }],
+      canonicalSettlementStatus: "posted",
+    };
+
+    expect(isClosedQrisSettlement(mutation)).toBe(true);
+  });
+
   it("asserts the rendered component uses the approved-match guard", () => {
     expect(componentSource).toContain("function hasApprovedReconciliationMatch");
     expect(componentSource).toContain(
@@ -193,5 +220,8 @@ describe("bank reconciliation approved-match UI guard", () => {
     expect(componentSource).toContain("&& !canonicalHistoricalRepairReady");
     expect(componentSource).toContain("Settlement Tertunda");
     expect(componentSource).toContain("Selesaikan Settlement Tertunda");
+    expect(componentSource).toContain("function isFullyUsedQrisCandidate");
+    expect(componentSource).toContain("const isClosedQrisSettlement =");
+    expect(componentSource).toContain("Settlement sudah digunakan");
   });
 });
