@@ -36,6 +36,10 @@ import {
 } from "lucide-react";
 import { ScanDocumentDialog } from "@/components/ScanDocumentDialog";
 import { cn } from "@/lib/utils";
+import {
+  filterRoutineExpenseAccounts,
+  filterRoutineSourceAccounts,
+} from "./routineAccountFilters";
 
 const idr = (n: number) =>
   new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
@@ -186,25 +190,11 @@ export default function ExpenseRoutinePage() {
   // suffix "CST": perusahaan lain memiliki suffix COA yang berbeda (atau
   // memakai kode dasar tanpa suffix), tetapi tetap harus bisa mencatat biaya.
   const sourceAccounts = useMemo(
-    () => accounts.filter((a) => {
-      if (a.type !== "asset" || a.isActive === false || a.isPostable === false || a.isHeader === true) return false;
-      const name = String(a.name ?? "").toLowerCase();
-      const code = String(a.code ?? "").toUpperCase();
-      return a.subtype === "cash_bank" ||
-        name.includes("kas") ||
-        name.includes("bank") ||
-        code.startsWith("1-101") ||
-        code.startsWith("1-102");
-    }),
+    () => filterRoutineSourceAccounts(accounts),
     [accounts],
   );
   const expenseAccounts = useMemo(
-    () => accounts.filter((a) =>
-      a.type === "expense" &&
-      a.isActive !== false &&
-      a.isPostable !== false &&
-      a.isHeader !== true,
-    ),
+    () => filterRoutineExpenseAccounts(accounts),
     [accounts],
   );
 
