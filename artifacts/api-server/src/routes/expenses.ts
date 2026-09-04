@@ -79,6 +79,18 @@ async function ensureExpenseColumns() {
   for (const stmt of stmts) {
     try { await db.execute(sql.raw(stmt)); } catch {}
   }
+  // Legacy/imported expense lines can leave the serial sequence behind the
+  // current MAX(id), causing the first canonical insert to fail on a line
+  // uniqueness conflict after the parent expense has been allocated.
+  try {
+    await db.execute(sql`
+      SELECT setval(
+        pg_get_serial_sequence('expense_lines', 'id'),
+        GREATEST(COALESCE((SELECT MAX(id) FROM expense_lines), 0) + 1, 1),
+        false
+      )
+    `);
+  } catch {}
 }
 
 async function validateExpenseAccounts(

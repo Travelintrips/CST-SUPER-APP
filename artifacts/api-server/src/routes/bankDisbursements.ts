@@ -1253,9 +1253,12 @@ router.post("/", async (req, res) => {
       }
 
       // Compute totals
-       const totalAmount = round2(processedItems.reduce((s, it) => s + it.amount, 0));
+      // `amount` is the net cash amount supplied by the caller. WHT is
+      // allocated inside the gross AP settlement, so subtracting it again
+      // would make the journal unbalanced (DR gross vs CR net-minus-WHT).
+      const totalAmount = round2(processedItems.reduce((s, it) => s + it.amount, 0));
       const totalWht    = round2(processedItems.reduce((s, it) => s + it.wht_amount, 0));
-      const bankCredit  = round2(totalAmount - totalWht);
+      const bankCredit  = totalAmount;
 
       // Build journal lines
       const journalLines: Array<{ accountId: number; debit: number; credit: number; description: string }> = [];
