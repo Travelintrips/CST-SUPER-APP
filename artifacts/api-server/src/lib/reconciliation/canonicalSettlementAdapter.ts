@@ -580,10 +580,25 @@ export function canonicalSettlementDetailsSql(
        FROM sport_center.expected_bank_settlements ebs
         JOIN public.bank_mutations bm
          ON bm.id = m.mutation_id
-       WHERE ebs.settlement_id = ${candidateIdExpression}
-        AND ebs.settlement_status = 'posted'
-        AND ebs.bank_mutation_id IS NULL
-        AND ebs.settlement_journal_id IS NOT NULL
+        WHERE ebs.settlement_id = ${candidateIdExpression}
+         AND ebs.settlement_journal_id IS NOT NULL
+         AND (
+           (
+             -- Approved matches are finalized evidence. Their canonical
+             -- settlement is reconciled and linked to this exact mutation,
+             -- so keep the detail visible even though it is no longer
+             -- eligible for another approval.
+             m.status = 'approved'
+             AND ebs.settlement_status = 'reconciled'
+             AND ebs.bank_mutation_id = m.mutation_id
+           )
+           OR (
+             -- Unapproved candidates must remain unlinked and postable.
+             m.status <> 'approved'
+             AND ebs.settlement_status = 'posted'
+             AND ebs.bank_mutation_id IS NULL
+           )
+         )
     )
   `;
 }

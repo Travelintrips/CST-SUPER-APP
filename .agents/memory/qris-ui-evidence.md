@@ -14,3 +14,9 @@ Persisted QRIS candidates without a batch audit remain reviewer evidence on the 
 **Why:** Hiding the candidate makes an already matched/approved mutation look unexplained, while enabling the generic approval path would bypass QRIS settlement governance.
 
 **How to apply:** Render the candidate on the card when it is present and valid for the review date; label approved candidates as already used and keep selection disabled for QRIS or finalized mutation states.
+
+Canonical settlement detail resolution has two read states: pending `posted` + unlinked for approval candidates, and finalized `approved` + `reconciled` + exact bank-mutation link for read-only evidence. Reusing only the pending eligibility predicate makes approved candidates lose `details`, so the UI date gate hides them.
+
+**Why:** The production settlement source transitions to `reconciled` and stores its bank mutation link after approval; that is valid evidence, not a second approval opportunity.
+
+**How to apply:** Keep approval eligibility strict, but let the display resolver load finalized details only when the approved match and canonical batch point to the same mutation.

@@ -110,6 +110,9 @@ describe("Phase 4C-3 canonical settlement adapter", () => {
     expect(detailsSql).toContain("amountDifference");
     expect(detailsSql).toContain("mutationDate");
     expect(detailsSql).toContain(CANONICAL_SETTLEMENT_SOURCE);
+    expect(detailsSql).toContain("m.status = 'approved'");
+    expect(detailsSql).toContain("ebs.settlement_status = 'reconciled'");
+    expect(detailsSql).toContain("ebs.bank_mutation_id = m.mutation_id");
     expect(detailsSql).not.toContain("public.qris_settlements");
   });
 
