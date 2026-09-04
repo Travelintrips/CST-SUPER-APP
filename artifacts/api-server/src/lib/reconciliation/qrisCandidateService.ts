@@ -836,8 +836,7 @@ export async function generateQrisCandidates(options: {
           const mutationId = Number(existing.mutation_id);
           const existingStatus = String(existing.status ?? "").toLowerCase();
           if (
-            !currentMutationIds.has(mutationId)
-            || auditedMutationIds.has(mutationId)
+            auditedMutationIds.has(mutationId)
             || ["approved", "completed", "superseded", "stale", "ineligible"].includes(existingStatus)
           ) {
             continue;

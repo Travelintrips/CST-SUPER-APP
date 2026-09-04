@@ -154,3 +154,4 @@
 - [Rule AI internal transfer posting](rule-ai-internal-transfer-posting.md) — internal-transfer rules use their configured destination cash/bank COA with asset treatment; never infer it from description.
 - [Bank mutation allocation runtime contract](bank-mutation-allocation-runtime-contract.md) — additive lineage DDL needs a registered startup stage; legacy mutation dates may be text in development runtime.
 - [Package firewall dependency recovery](package-firewall-dependency-recovery.md) — if the firewall blocks a direct package tarball, check the latest safe version and update the pinned importer before retrying frozen install.
+- [QRIS canonical remediation](qris-canonical-remediation.md) — retire stale evidence before correcting reconciled membership; reverse first, then rebuild and approve only a proven replacement cohort.

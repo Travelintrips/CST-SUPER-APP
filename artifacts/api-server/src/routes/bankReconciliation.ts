@@ -111,6 +111,7 @@ import {
   CANONICAL_SETTLEMENT_SOURCE,
 } from "../lib/reconciliation/canonicalSettlementApproval.js";
 import { recoverPostedSettlementFromBankMutation } from "../lib/reconciliation/canonicalSettlementRecovery.js";
+import { reverseCanonicalSettlementForCorrection } from "../lib/reconciliation/canonicalSettlementCorrection.js";
 import { buildCanonicalSportCenterSettlements } from "../lib/reconciliation/canonicalSettlementBuilder.js";
 import {
   assertGenericPostAllowed,
@@ -5436,6 +5437,86 @@ router.post("/:mutationId/recover-canonical-settlement", async (req, res) => {
     return res.status(409).json({
       error: message,
       code: "CANONICAL_SETTLEMENT_RECOVERY_FAILED",
+    });
+  }
+});
+
+// ─── POST /api/bank-reconciliation/:mutationId/correct-canonical-membership ─
+// Owner-only correction for an already reconciled batch whose payment
+// membership is wrong. This reverses the settlement journal by creating a new
+// balanced reversal journal, releases the bank mutation, and records the exact
+// replacement selection. It never edits/deletes the posted source journal and
+// never auto-approves the replacement.
+router.post("/:mutationId/correct-canonical-membership", async (req, res) => {
+  if (!await requireAdmin(req, res)) return;
+  await runBankReconciliationCoreMigration();
+  await runQrisSettlementMigration();
+
+  const mutationId = Number.parseInt(String(req.params.mutationId ?? ""), 10);
+  const settlementId = Number(req.body?.settlement_id);
+  const replacementPaymentIds = Array.isArray(req.body?.replacement_payment_ids)
+    ? req.body.replacement_payment_ids.map(Number)
+    : [];
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  const actor = String((req as any).user?.email ?? "admin").trim() || "admin";
+
+  if (
+    !Number.isSafeInteger(mutationId)
+    || mutationId <= 0
+    || !Number.isSafeInteger(settlementId)
+    || settlementId <= 0
+  ) {
+    return res.status(400).json({
+      error: "mutationId dan settlement_id wajib berupa ID positif.",
+      code: "CANONICAL_MEMBERSHIP_CORRECTION_INVALID_ID",
+    });
+  }
+  if (
+    replacementPaymentIds.length === 0
+    || replacementPaymentIds.some((id: number) => !Number.isSafeInteger(id) || id <= 0)
+  ) {
+    return res.status(400).json({
+      error: "replacement_payment_ids wajib berisi minimal satu ID payment yang valid.",
+      code: "CANONICAL_MEMBERSHIP_CORRECTION_INVALID_PAYMENTS",
+    });
+  }
+  if (reason.length < 10 || reason.length > 2000) {
+    return res.status(400).json({
+      error: "Alasan correction wajib diisi antara 10 dan 2000 karakter.",
+      code: "CANONICAL_MEMBERSHIP_CORRECTION_REASON_REQUIRED",
+    });
+  }
+
+  try {
+    const result = await reverseCanonicalSettlementForCorrection(db as any, {
+      settlementId,
+      expectedBankMutationId: mutationId,
+      replacementPaymentIds,
+      actor,
+      reason,
+    });
+    audit(req, {
+      action: "correct-canonical-membership",
+      module: "bank-reconciliation",
+      resourceId: `bank-mutation-${mutationId}`,
+      after: result,
+    });
+    return res.json({
+      ...result,
+      next_step: "Gunakan canonical builder dan approval normal untuk replacement_payment_ids; replacement belum disettle atau di-approve.",
+    });
+  } catch (error: any) {
+    logger.warn(
+      {
+        err: error?.cause?.message ?? error?.message,
+        mutationId,
+        settlementId,
+      },
+      "[bankRecon/correct-canonical-membership] rejected",
+    );
+    return res.status(409).json({
+      error: error?.cause?.message ?? error?.message ?? "Canonical membership correction gagal",
+      code: "CANONICAL_MEMBERSHIP_CORRECTION_FAILED",
     });
   }
 });
