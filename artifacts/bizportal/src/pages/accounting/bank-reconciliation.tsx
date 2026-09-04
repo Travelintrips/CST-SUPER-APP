@@ -6560,6 +6560,13 @@ export default function BankReconciliationPage() {
     paymentDate: string;
   } | null>(null);
   const [qrisPaymentDate, setQrisPaymentDate] = useState("");
+  const [qrisAmountTarget, setQrisAmountTarget] = useState<{
+    paymentId: number;
+    paymentNumber: string;
+    currentAmount: number;
+  } | null>(null);
+  const [qrisPaymentAmount, setQrisPaymentAmount] = useState("");
+  const [qrisPaymentAmountReason, setQrisPaymentAmountReason] = useState("");
   const [qrisSettlementResetTarget, setQrisSettlementResetTarget] = useState<{
     paymentId: number;
     paymentNumber: string;
@@ -6795,6 +6802,94 @@ export default function BankReconciliationPage() {
     onError: (error: Error) => {
       toast({
         title: "Gagal mereset status settlement",
+        description: error.message,
+        variant: "destructive",
+      });
+      void refetchQrisAudit();
+    },
+  });
+
+  const qrisPaymentAmountMut = useMutation({
+    mutationFn: async ({
+      paymentId,
+      amount,
+      reason,
+    }: {
+      paymentId: number;
+      amount: number;
+      reason: string;
+    }) => {
+      const response = await fetch(
+        `/api/bank-reconciliation/qris-candidates/payments/${paymentId}/amount`,
+        {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            amount,
+            reason,
+            companyId: qrisCompanyId,
+          }),
+        },
+      );
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(body?.error ?? "Gagal mengoreksi nominal payment");
+      }
+      return body as {
+        changed?: boolean;
+        idempotent?: boolean;
+        correctionEntryId?: number | null;
+        candidateRefreshPending?: boolean;
+        message?: string;
+      };
+    },
+    onSuccess: (result, variables) => {
+      setQrisAmountTarget(null);
+      setQrisPaymentAmount("");
+      setQrisPaymentAmountReason("");
+      toast({
+        title: result.changed ? "Nominal payment berhasil dikoreksi" : "Tidak ada perubahan",
+        description: result.changed
+          ? `Jurnal koreksi #${result.correctionEntryId ?? "—"} dibuat. Kandidat QRIS akan diregenerasi sebagai review-only.`
+          : result.message ?? "Nominal payment sudah sesuai.",
+      });
+
+      void (async () => {
+        const retryDelays = [0, 750, 1500, 3000, 5000];
+        let candidateUpdated = false;
+        for (const delay of retryDelays) {
+          if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
+          try {
+            const refreshed = await refetchQrisAudit();
+            candidateUpdated = (refreshed.data?.candidates ?? []).some(candidate =>
+              (candidate.payment_items ?? []).some(item =>
+                Number(item.payment_id ?? item.paymentId) === variables.paymentId
+                && Math.abs(
+                  Number(item.gross_amount ?? item.grossAmount ?? 0) - variables.amount,
+                ) <= 0.01,
+              ),
+            );
+            if (candidateUpdated) break;
+          } catch {
+            // The next poll can observe the background candidate refresh.
+          }
+        }
+        await Promise.allSettled([refetch()]);
+        void qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
+        toast({
+          title: candidateUpdated ? "Kandidat QRIS sudah diperbarui" : "Kandidat QRIS masih diproses",
+          description: candidateUpdated
+            ? "Nominal baru sudah terbaca pada snapshot kandidat."
+            : "Nominal sumber sudah tersimpan. Kandidat akan diperbarui pada refresh berikutnya.",
+        });
+      })().catch(() => {
+        void qc.invalidateQueries({ queryKey: ["bank-reconciliation"] });
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Gagal mengoreksi nominal payment",
         description: error.message,
         variant: "destructive",
       });
@@ -8406,7 +8501,12 @@ export default function BankReconciliationPage() {
                                      const paymentDate = qrisPaymentDateValue(item);
                                       const paymentDateIso = paymentDate ? String(paymentDate).slice(0, 10) : "";
                                       const numericPaymentId = Number(paymentId);
+                                      const numericGrossAmount = Number(grossAmount ?? 0);
                                       const canEditPaymentDate = Number.isInteger(numericPaymentId) && numericPaymentId > 0;
+                                      const canEditPaymentAmount =
+                                        canEditPaymentDate
+                                        && Number.isFinite(numericGrossAmount)
+                                        && numericGrossAmount > 0;
                                       const paymentSettlementStatus = String(
                                         item.settlementStatus
                                         ?? item.settlement_status
@@ -8432,8 +8532,28 @@ export default function BankReconciliationPage() {
                                           <span className="min-w-0 truncate font-semibold text-slate-700 dark:text-slate-300">
                                             {bookingNumber || `Booking SC-${String(item.booking_id ?? "—").padStart(4, "0")}`}
                                           </span>
-                                          <span className="shrink-0 font-medium text-slate-800 dark:text-slate-200">
-                                            {idr(grossAmount ?? 0)}
+                                           <span className="flex shrink-0 items-center gap-1 font-medium text-slate-800 dark:text-slate-200">
+                                             {idr(numericGrossAmount)}
+                                             {canEditPaymentAmount && (
+                                               <button
+                                                 type="button"
+                                                 className="inline-flex items-center rounded p-0.5 text-indigo-600 hover:bg-indigo-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-indigo-300 dark:hover:bg-indigo-950"
+                                                 aria-label={`Edit nominal payment ${paymentNumber || paymentId}`}
+                                                 title="Edit nominal payment"
+                                                 onClick={(event) => {
+                                                   event.stopPropagation();
+                                                   setQrisAmountTarget({
+                                                     paymentId: numericPaymentId,
+                                                     paymentNumber: paymentNumber || `SCPAY-SC-${numericPaymentId}`,
+                                                     currentAmount: numericGrossAmount,
+                                                   });
+                                                   setQrisPaymentAmount(String(numericGrossAmount));
+                                                   setQrisPaymentAmountReason("");
+                                                 }}
+                                               >
+                                                 <Pencil className="h-3 w-3" />
+                                               </button>
+                                             )}
                                           </span>
                                         </div>
                                         <div className="mt-0.5 grid gap-x-3 gap-y-0.5 text-[10px] text-slate-500 dark:text-slate-400 sm:grid-cols-2">
@@ -8856,6 +8976,119 @@ export default function BankReconciliationPage() {
             >
               {qrisPaymentDateMut.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
               {qrisPaymentDateMut.isPending ? "Menyimpan..." : "Simpan tanggal"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={qrisAmountTarget != null}
+        onOpenChange={(open) => {
+          if (!open && !qrisPaymentAmountMut.isPending) {
+            setQrisAmountTarget(null);
+            setQrisPaymentAmount("");
+            setQrisPaymentAmountReason("");
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Koreksi nominal payment Sport Center</DialogTitle>
+            <DialogDescription>
+              Jurnal posted lama tidak diubah. Sistem akan membuat jurnal additive yang seimbang,
+              memperbarui source/mirror, lalu meregenerasi kandidat QRIS sebagai review-only.
+            </DialogDescription>
+          </DialogHeader>
+          {qrisAmountTarget && (
+            <div className="space-y-4">
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
+                <p className="font-medium">{qrisAmountTarget.paymentNumber}</p>
+                <p className="mt-1 text-xs">
+                  Koreksi akan ditolak jika payment sudah settled, identity source/mirror/jurnal drift,
+                  atau sudah memiliki jurnal koreksi sebelumnya.
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="rounded-md bg-muted/40 px-3 py-2">
+                  <p className="text-xs text-muted-foreground">Nominal saat ini</p>
+                  <p className="mt-1 font-semibold">{idr(qrisAmountTarget.currentAmount)}</p>
+                </div>
+                <div className="rounded-md bg-indigo-50 px-3 py-2 text-indigo-950 dark:bg-indigo-950/40 dark:text-indigo-100">
+                  <p className="text-xs opacity-75">Nominal baru</p>
+                  <p className="mt-1 font-semibold">
+                    {Number(qrisPaymentAmount) > 0 ? idr(Number(qrisPaymentAmount)) : "—"}
+                  </p>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="qris-payment-amount">Nominal payment baru *</Label>
+                <Input
+                  id="qris-payment-amount"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={qrisPaymentAmount}
+                  onChange={(event) => setQrisPaymentAmount(event.target.value)}
+                  disabled={qrisPaymentAmountMut.isPending}
+                  inputMode="decimal"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="qris-payment-amount-reason">Alasan koreksi *</Label>
+                <Textarea
+                  id="qris-payment-amount-reason"
+                  value={qrisPaymentAmountReason}
+                  onChange={(event) => setQrisPaymentAmountReason(event.target.value)}
+                  placeholder="Contoh: nominal payment di source Sport Center salah input."
+                  maxLength={500}
+                  rows={4}
+                  disabled={qrisPaymentAmountMut.isPending}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Minimal 5 karakter. Alasan disimpan di audit log.
+                </p>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setQrisAmountTarget(null);
+                setQrisPaymentAmount("");
+                setQrisPaymentAmountReason("");
+              }}
+              disabled={qrisPaymentAmountMut.isPending}
+            >
+              Batal
+            </Button>
+            <Button
+              className="gap-1.5 bg-indigo-600 text-white hover:bg-indigo-700"
+              onClick={() => {
+                const amount = Number(qrisPaymentAmount);
+                if (
+                  qrisAmountTarget
+                  && Number.isFinite(amount)
+                  && amount > 0
+                  && qrisPaymentAmountReason.trim().length >= 5
+                ) {
+                  qrisPaymentAmountMut.mutate({
+                    paymentId: qrisAmountTarget.paymentId,
+                    amount,
+                    reason: qrisPaymentAmountReason.trim(),
+                  });
+                }
+              }}
+              disabled={
+                !qrisAmountTarget
+                || !Number.isFinite(Number(qrisPaymentAmount))
+                || Number(qrisPaymentAmount) <= 0
+                || qrisPaymentAmountReason.trim().length < 5
+                || qrisPaymentAmountMut.isPending
+              }
+            >
+              {qrisPaymentAmountMut.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
+              {qrisPaymentAmountMut.isPending ? "Menyimpan..." : "Konfirmasi koreksi"}
             </Button>
           </DialogFooter>
         </DialogContent>
