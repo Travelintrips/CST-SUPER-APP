@@ -305,6 +305,10 @@ async function cleanup() {
                         where disbursement_id = any($1::int[])`, [ids(fixture.disbursements)]);
     await client.query(`delete from bank_disbursements where id = any($1::int[])`,
       [ids(fixture.disbursements)]);
+    await client.query(`delete from expense_lines
+                        where expense_id = any($1::int[])
+                           or description like $2`,
+      [ids(fixture.expenses), `${MARKER}%`]);
     await client.query(`delete from expenses where id = any($1::int[])`, [ids(fixture.expenses)]);
     await client.query(`delete from accounting_entry_lines
                         where entry_id = any($1::int[])`, [ids(fixture.entries)]);
@@ -330,6 +334,8 @@ async function residuals() {
                          where notes like $1 or supplier_name like $1`, [`%${MARKER}%`]),
     disbursements: await sql(`select count(*)::int as count from bank_disbursements
                               where memo like $1 or ref like $1`, [`%${MARKER}%`]),
+    expenseLines: await sql(`select count(*)::int as count from expense_lines
+                             where description like $1`, [`%${MARKER}%`]),
     entries: await sql(`select count(*)::int as count from accounting_entries
                         where description like $1 or ref like $1`, [`%${MARKER}%`]),
   };
