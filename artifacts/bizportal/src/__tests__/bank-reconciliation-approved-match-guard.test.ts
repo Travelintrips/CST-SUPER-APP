@@ -35,11 +35,13 @@ function hasApprovedMatch(mutation: MutationFixture): boolean {
 }
 
 function isCanonicalApprovalEligible(mutation: MutationFixture): boolean {
-  const candidate = mutation.candidates.find(
+  const canonicalCandidates = mutation.candidates.filter(
     item =>
       item.candidate_type === "qris_settlement" &&
-      item.candidate_source === "sport_center.payment_settlement_batches",
+      item.candidate_source === "sport_center.payment_settlement_batches" &&
+      ["candidate", "approved"].includes(item.status.toLowerCase()),
   );
+  const candidate = canonicalCandidates.length === 1 ? canonicalCandidates[0] : undefined;
   return (
     mutation.status === "matched" &&
     candidate != null &&
@@ -78,11 +80,7 @@ function isHistoricalRecoveryEligible(mutation: MutationFixture): boolean {
 }
 
 function isQrisApprovalButtonEnabled(mutation: MutationFixture): boolean {
-  return (
-    mutation.status === "matched" &&
-    !hasApprovedMatch(mutation)
-    && !isHistoricalRecoveryEligible(mutation)
-  );
+  return isLiveCanonicalApprovalEligible(mutation);
 }
 
 const canonicalCandidate: CandidateFixture = {
@@ -142,6 +140,22 @@ describe("bank reconciliation approved-match UI guard", () => {
     expect(isQrisApprovalButtonEnabled(mutation)).toBe(true);
   });
 
+  it("hides the canonical action when duplicate active candidates exist", () => {
+    const mutation: MutationFixture = {
+      status: "matched",
+      candidates: [
+        canonicalCandidate,
+        { ...canonicalCandidate, candidate_id: 52 },
+      ],
+      canonicalSettlementStatus: "posted",
+      qrisSnapshotPaymentIds: [11],
+      currentPaymentIds: [11],
+    };
+
+    expect(isCanonicalApprovalEligible(mutation)).toBe(false);
+    expect(isQrisApprovalButtonEnabled(mutation)).toBe(false);
+  });
+
   it("routes an old posted snapshot with all live payments settled to recovery", () => {
     const mutation: MutationFixture = {
       status: "matched",
@@ -170,6 +184,12 @@ describe("bank reconciliation approved-match UI guard", () => {
       "Mutasi sudah memiliki approved match lain. Approval QRIS dikunci",
     );
     expect(componentSource).toContain("const canonicalHistoricalRepairReady = isCanonicalHistoricalRepairEligible(");
+    expect(componentSource).toContain("function activeCanonicalSettlementCandidatesForMutation");
+    expect(componentSource).toContain("if (activeCandidates.length !== 1) return undefined;");
+    expect(componentSource).toContain("const canonicalSettlementSelectionConflict");
+    expect(componentSource).toContain("&& !canonicalSettlementSelectionConflict");
+    expect(componentSource).toContain("onApproveCandidate?: (m: BankMutation, candidate: Candidate) => void;");
+    expect(componentSource).toContain("Tautkan & Rekonsiliasi");
     expect(componentSource).toContain("&& !canonicalHistoricalRepairReady");
     expect(componentSource).toContain("Settlement Tertunda");
     expect(componentSource).toContain("Selesaikan Settlement Tertunda");

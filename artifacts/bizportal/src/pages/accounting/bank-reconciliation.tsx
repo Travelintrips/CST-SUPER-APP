@@ -1007,11 +1007,20 @@ function hasApprovedReconciliationMatch(m: BankMutation): boolean {
   ) ?? false;
 }
 
-function canonicalSettlementCandidateForMutation(m: BankMutation): Candidate | undefined {
-  return visibleCandidates(m).find(candidate =>
+function activeCanonicalSettlementCandidatesForMutation(m: BankMutation): Candidate[] {
+  return (m.candidates ?? []).filter(candidate =>
     candidate.candidate_type === "qris_settlement"
-    && candidate.candidate_source === CANONICAL_SETTLEMENT_SOURCE,
+    && candidate.candidate_source === CANONICAL_SETTLEMENT_SOURCE
+    && ["candidate", "approved"].includes(String(candidate.status ?? "").toLowerCase()),
   );
+}
+
+function canonicalSettlementCandidateForMutation(m: BankMutation): Candidate | undefined {
+  const activeCandidates = activeCanonicalSettlementCandidatesForMutation(m);
+  if (activeCandidates.length !== 1) return undefined;
+
+  const [candidate] = activeCandidates;
+  return visibleCandidates(m).find(visibleCandidate => visibleCandidate.id === candidate.id);
 }
 
 function isCanonicalSettlementManualOverrideEligible(m: BankMutation): boolean {
@@ -3582,6 +3591,7 @@ function QrisMutationCard({
   onRequestUnsettlePayment,
   unsettledPaymentId,
   onApproveQrisBatch,
+  onApproveCandidate,
   onManualOverrideCandidate,
   onRecoverQrisSettlement,
   approveQrisPending,
@@ -3612,6 +3622,7 @@ function QrisMutationCard({
   }) => void;
   unsettledPaymentId?: number | null;
   onApproveQrisBatch?: (candidateId: number, mutationId: number, candidate: QrisCandidateAudit, paymentIds?: number[]) => void;
+  onApproveCandidate?: (m: BankMutation, candidate: Candidate) => void;
   onManualOverrideCandidate?: (m: BankMutation, candidate: Candidate) => void;
   onRecoverQrisSettlement?: (mutationId: number, settlementId: number) => void;
   approveQrisPending?: boolean;
@@ -3676,10 +3687,9 @@ function QrisMutationCard({
     && onRecoverQrisSettlement != null;
   const isCanonicalReconciled = isCanonicalSettlementMutation(m)
     && ["approved", "posted"].includes(String(m.status ?? "").toLowerCase());
-  const canonicalSettlementCandidate = (m.candidates ?? []).find(candidate =>
-    candidate.candidate_type === "qris_settlement"
-    && candidate.candidate_source === CANONICAL_SETTLEMENT_SOURCE,
-  );
+  const canonicalSettlementCandidate = canonicalSettlementCandidateForMutation(m);
+  const canonicalSettlementSelectionConflict =
+    activeCanonicalSettlementCandidatesForMutation(m).length > 1;
   const canonicalOverrideReady =
     isCanonicalSettlementManualOverrideEligible(m)
     && canonicalSettlementCandidate != null
@@ -4297,7 +4307,12 @@ function QrisMutationCard({
                   Reject
                 </Button>
               )}
-              {!isApproved && audit.id != null && onApproveQrisBatch && canSelect && (
+              {!isApproved
+                && !canonicalApprovalReady
+                && !canonicalSettlementSelectionConflict
+                && audit.id != null
+                && onApproveQrisBatch
+                && canSelect && (
                 <Button
                   size="sm"
                   className="ml-auto h-8 gap-1.5 bg-green-600 text-xs text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
@@ -4309,6 +4324,25 @@ function QrisMutationCard({
                     ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     : <CheckCircle2 className="h-3.5 w-3.5" />}
                   {approveQrisPending ? "Memproses approval QRIS..." : `Approve QRIS Terpilih (${selectedPaymentIds.length})`}
+                </Button>
+              )}
+              {!isApproved
+                && canonicalApprovalReady
+                && canonicalSettlementCandidate
+                && onApproveCandidate && (
+                <Button
+                  size="sm"
+                  className="ml-auto h-8 gap-1.5 bg-green-600 text-xs text-white hover:bg-green-700"
+                  disabled={approveQrisPending}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onApproveCandidate(m, canonicalSettlementCandidate);
+                  }}
+                >
+                  {approveQrisPending
+                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    : <CheckCircle2 className="h-3.5 w-3.5" />}
+                  {approveQrisPending ? "Menyelesaikan..." : "Tautkan & Rekonsiliasi"}
                 </Button>
               )}
               {!isApproved
@@ -4552,6 +4586,7 @@ function MutationCard({
             onRequestUnsettlePayment={onRequestUnsettlePayment}
             unsettledPaymentId={unsettledPaymentId}
             onApproveQrisBatch={onApproveQrisBatch}
+            onApproveCandidate={onApproveCandidate}
             onRecoverQrisSettlement={onRecoverQrisSettlement}
             recoverQrisPending={recoverQrisPending}
             onManualOverrideCandidate={onManualOverrideCandidate}
