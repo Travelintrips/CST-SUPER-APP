@@ -1,7 +1,7 @@
 /**
  * Automated daily database backup.
  *
- * - Runs pg_dump, gzips the output in-memory, uploads to Replit Object Storage
+ * - Runs pg_dump, gzips the output in-memory, uploads to Supabase Storage
  *   under the private bucket at prefix `db-backups/`.
  * - Rotates: keeps only the last KEEP_BACKUPS files (default 7).
  * - Scheduled daily at 02:00 WIB (19:00 UTC). Can also be triggered on demand.

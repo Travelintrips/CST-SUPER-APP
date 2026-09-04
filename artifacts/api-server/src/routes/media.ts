@@ -218,13 +218,13 @@ router.post("/bulk-delete", async (req, res): Promise<void> => {
       timestamp: new Date().toISOString(),
     },
   });
-  // Lookup storage paths before deletion so we can clean up GCS objects
+  // Lookup storage paths before deletion so we can clean up Supabase objects
   const assets = await db
     .select({ id: mediaAssetsTable.id, objectPath: mediaAssetsTable.objectPath, publicUrl: mediaAssetsTable.publicUrl })
     .from(mediaAssetsTable)
     .where(inArray(mediaAssetsTable.id, ids));
   const result = await db.delete(mediaAssetsTable).where(inArray(mediaAssetsTable.id, ids));
-  // Delete from GCS (non-fatal) after DB record is removed
+  // Delete from Supabase Storage (non-fatal) after DB record is removed
   const actor = getActor(req);
   const ip = getRequestIp(req);
   for (const asset of assets) {
@@ -302,7 +302,7 @@ router.post("/:id/copy-public", async (req, res): Promise<void> => {
       res.json({ ok: true, publicUrl: absoluteUrl, cached: true }); return;
     }
 
-    // File lama dari private GCS — download lalu re-upload ke Supabase public
+    // Legacy private object — download lalu re-upload ke Supabase public
     const baseUrl = `${req.protocol}://${req.get("host")}`;
     let fileBuffer: Buffer;
     if (asset.objectPath.startsWith("supabase:media/")) {
@@ -329,7 +329,7 @@ router.post("/:id/copy-public", async (req, res): Promise<void> => {
 router.delete("/:id", async (req, res): Promise<void> => {
   const id = Number(req.params.id);
   if (!id) { res.status(400).json({ error: "ID tidak valid" }); return; }
-  // Lookup storage paths before deletion so we can clean up GCS objects
+  // Lookup storage paths before deletion so we can clean up Supabase objects
   const [asset] = await db
     .select({ objectPath: mediaAssetsTable.objectPath, publicUrl: mediaAssetsTable.publicUrl, uploadedBy: mediaAssetsTable.uploadedBy })
     .from(mediaAssetsTable)
@@ -345,7 +345,7 @@ router.delete("/:id", async (req, res): Promise<void> => {
   }
 
   await db.delete(mediaAssetsTable).where(eq(mediaAssetsTable.id, id));
-  // Delete from GCS (non-fatal) after DB record is removed
+  // Delete from Supabase Storage (non-fatal) after DB record is removed
   if (asset?.objectPath) {
     deleteFromSupabase(asset.objectPath).catch(() => {});
   }

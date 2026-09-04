@@ -1364,8 +1364,8 @@ const _portalUpload = multer({
 
 // POST /api/portal/order-upload
 // Server-side proxy upload: file goes through the API server so multer enforces
-// the 20 MB size limit before any byte reaches object storage.  This replaces
-// the old presigned-URL flow (/order-upload-url) which issued unconstrained GCS
+// the 20 MB size limit before any byte reaches Supabase Storage. This replaces
+// the old presigned-URL flow (/order-upload-url) which issued unconstrained
 // PUT URLs that bypassed all server-side size limits.
 router.post("/order-upload", requireCustomerPortalAuth, (req, res, next) => {
   _portalUpload.single("file")(req, res, (err) => {
@@ -3377,7 +3377,7 @@ router.put("/vendor/catalog/:id", requirePortalAuth, requireActiveVendor, async 
 });
 
 // POST /api/portal/vendor/catalog/:id/media-assets/upload
-// Upload file → Replit Object Storage → return URL. Frontend manages the array and PATCHes below.
+// Upload file → Supabase Storage → return URL. Frontend manages the array and PATCHes below.
 router.post(
   "/vendor/catalog/:id/media-assets/upload",
   requirePortalAuth,
@@ -5342,7 +5342,7 @@ router.post("/admin/vendor-catalog-items/bulk", requirePortalAdmin, async (req, 
 // ── media-assets endpoints (canonical media_assets JSONB — preferred over product_media) ─────────
 
 // POST /api/portal/admin/vendor-catalog-items/:id/media-assets/upload
-// Upload file → Replit Object Storage → return URL + metadata. Frontend saves array via PATCH below.
+// Upload file → Supabase Storage → return URL + metadata. Frontend saves array via PATCH below.
 router.post(
   "/admin/vendor-catalog-items/:id/media-assets/upload",
   requirePortalAdmin,

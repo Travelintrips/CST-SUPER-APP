@@ -1596,7 +1596,7 @@ router.patch("/suppliers/catalog/:itemId/media", async (req, res) => {
 });
 
 // POST /api/trading/suppliers/catalog/:itemId/media/upload
-// Upload file → Replit Object Storage → return URL. BizPortal adds to local array, saves via PATCH /media.
+// Upload file → Supabase Storage → return URL. BizPortal adds to local array, saves via PATCH /media.
 router.post(
   "/suppliers/catalog/:itemId/media/upload",
   (req: any, res: any, next: any) =>

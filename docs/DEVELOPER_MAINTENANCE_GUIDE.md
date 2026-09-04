@@ -80,7 +80,7 @@ Public forms (VMF, customer approval):
 
 ### Storage Architecture
 - **Backend**: `artifacts/api-server/src/lib/objectStorage.ts`
-- **Provider**: Replit Object Storage (`@replit/object-storage`)
+- **Provider**: Supabase Storage (`public-assets` / `private-uploads`)
 - **Bucket**: dikonfigurasi via `DEFAULT_OBJECT_STORAGE_BUCKET_ID`
 - **Public files**: path prefix di `PUBLIC_OBJECT_SEARCH_PATHS`
 - **Private files**: path prefix di `PRIVATE_OBJECT_DIR` — hanya accessible via signed URL

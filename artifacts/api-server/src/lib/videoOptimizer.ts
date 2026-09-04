@@ -9,7 +9,7 @@
  *     → Probe   (extract duration, resolution, codec)
  *     → Compress (H.264 CRF 28, scale ≤1280 px, AAC 128 k, mp4)
  *     → Thumbnail (JPEG 640×360, at 2 s or 10% of duration)
- *     → Upload  (videoUrl + thumbnailUrl → Replit Object Storage)
+ *     → Upload  (videoUrl + thumbnailUrl → Supabase Storage)
  *     → Report  (VIDEO OPTIMIZATION REPORT)
  */
 

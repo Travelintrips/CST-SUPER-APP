@@ -67,8 +67,8 @@ function getSupabase() {
 const aclStore = new Map<string, ObjectAclPolicy>();
 
 // ── Exports kept for backward compat with objectAcl.ts consumers ─────────────
-// objectStorageClient is no longer a GCS Storage instance; export a dummy
-// so any rare direct import doesn't crash at module load.
+// The old object-storage client export is retained for compatibility with
+// legacy imports. All actual reads/writes go through Supabase Storage below.
 export const objectStorageClient = {} as never;
 
 export class ObjectNotFoundError extends Error {
@@ -255,7 +255,7 @@ export class ObjectStorageService {
     });
   }
 
-  // ── Presigned upload URL — fail-closed if storage not configured ─────────────
+  // ── Server-proxied upload path — fail-closed if storage not configured ───────
   // Previously returned a fake placeholder URL which could be persisted to DB.
   // Now throws explicitly so callers cannot silently proceed with a phantom path.
   async getObjectEntityUploadURL(): Promise<string> {

@@ -190,7 +190,7 @@ router.post("/storage/uploads/file", upload.single("file"), async (req: Request,
 //
 // Enforcement timeline:
 //   t=0        : URL issued, session recorded with checkAfter = t + ttl + 60s
-//   t=15m      : presigned URL expires (GCS rejects any PUT after this)
+//   t=15m      : the server-proxied upload window expires
 //   t=16m      : background interval may fire and check the object
 //   t≤16m+5min : background interval fires; oversized object deleted if present
 //
@@ -236,7 +236,7 @@ if (typeof _uploadGuardInterval.unref === "function") _uploadGuardInterval.unref
 /**
  * POST /storage/uploads/request-url
  *
- * Request a presigned GCS URL for file upload.
+ * Request a server-proxied Supabase Storage upload path.
  * Restricted to internal BizPortal staff (Clerk/session auth).
  *
  * Size enforcement: every issued URL is registered with the upload-guard
@@ -245,7 +245,7 @@ if (typeof _uploadGuardInterval.unref === "function") _uploadGuardInterval.unref
  * (100 MB).  This is a server-side, non-optional enforcement that does not
  * depend on the client calling a separate validate endpoint.
  *
- * ACL metadata: cannot be set here because the GCS object does not yet exist.
+ * ACL metadata: cannot be set here because the Supabase object does not yet exist.
  * The business route that ultimately saves objectPath is responsible for calling
  * trySetObjectEntityAclPolicy.  Until then the download endpoint applies
  * admin-only fallback.
@@ -401,7 +401,7 @@ router.get("/storage/public-objects/{*filePath}", async (req: Request, res: Resp
 /**
  * GET /storage/objects/*
  *
- * Serve private object entities from PRIVATE_OBJECT_DIR.
+ * Serve private object entities from the Supabase private-uploads bucket.
  *
  * Authorization (two layers, evaluated in order):
  *

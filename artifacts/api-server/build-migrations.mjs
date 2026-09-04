@@ -47,8 +47,6 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
     "sharp",
     "fluent-ffmpeg",
     "canvas",
-    "@replit/object-storage",
-    "@google-cloud/storage",
     "pdf-parse",
     "xlsx",
     "exceljs",

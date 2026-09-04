@@ -24,9 +24,7 @@
   },
   "dependencies": {
     "@google-cloud/secret-manager": "^6.3.0",
-    "@google-cloud/storage": "^7.19.0",
     "@replit/connectors-sdk": "^0.4.0",
-    "@replit/object-storage": "^1.0.0",
     "@supabase/supabase-js": "^2.105.4",
     "@swc/helpers": "^0.5.21",
     "@types/archiver": "^8.0.0",

@@ -917,7 +917,7 @@ router.delete("/freight-shipments/:shipmentId/attachments/:attachmentId", async 
     .where(and(eq(freightAttachmentsTable.id, attachmentId), eq(freightAttachmentsTable.shipmentId, shipmentId)))
     .returning();
   if (!deleted) return res.status(404).json({ message: "Attachment tidak ditemukan" });
-  // Delete the underlying GCS object (non-fatal — DB record already removed)
+  // Delete the underlying Supabase object (non-fatal — DB record already removed)
   if (deleted.objectPath) {
     _freightObjectStorage.tryDeletePrivateEntity(deleted.objectPath).catch(() => {});
   }

@@ -157,7 +157,7 @@ export async function runBankDisbursementMigration(): Promise<void> {
   `).catch(() => {});
 
   // ── Phase 5 columns — attachment / bukti pembayaran ─────────────────────
-  // attachment_url: URL public dari Replit Object Storage (image/PDF bukti transfer)
+  // attachment_url: URL public dari Supabase Storage (image/PDF bukti transfer)
   await db.execute(sql`
     ALTER TABLE bank_disbursements
       ADD COLUMN IF NOT EXISTS attachment_url TEXT

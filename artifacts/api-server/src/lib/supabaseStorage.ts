@@ -24,7 +24,7 @@ function extFromContentType(contentType: string): string {
 }
 
 /**
- * Upload buffer ke Replit Object Storage (public).
+ * Upload buffer ke Supabase Storage (public-assets bucket).
  * Returns absolute public URL path.
  */
 export async function uploadToSupabase(
@@ -55,7 +55,7 @@ export async function uploadToSupabase(
 }
 
 /**
- * Download file dari Replit Object Storage.
+ * Download file dari Supabase Storage.
  * Returns Buffer.
  */
 export async function downloadFromSupabase(storagePath: string): Promise<Buffer> {
@@ -67,7 +67,7 @@ export async function downloadFromSupabase(storagePath: string): Promise<Buffer>
 }
 
 /**
- * Delete file dari Replit Object Storage (public).
+ * Delete file dari Supabase Storage (public-assets bucket).
  * Menerima storagePath (e.g. "uploads/uuid.jpg") atau serving URL
  * ("/api/storage/public-objects/portal-assets/uploads/uuid.jpg").
  * Non-fatal — diam jika objek tidak ditemukan.
@@ -92,7 +92,7 @@ export async function deleteFromSupabase(storagePath: string): Promise<void> {
 }
 
 /**
- * Check apakah URL adalah Supabase URL (legacy — always false on Replit)
+ * Check apakah URL adalah Supabase Storage URL.
  */
 export function isSupabaseUrl(url: string): boolean {
   return url.includes("supabase.co/storage");
