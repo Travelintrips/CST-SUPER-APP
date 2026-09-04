@@ -7,6 +7,7 @@
     "dev": "bash start-dev.sh",
     "build": "node scripts/build-vite.mjs",
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
+    "pretypecheck": "pnpm --filter @workspace/api-client-react --filter @workspace/object-storage-web run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
