@@ -26,6 +26,15 @@ export async function runVendorPaymentHardeningMigration(): Promise<void> {
       ADD COLUMN IF NOT EXISTS coa_mapping_key TEXT
   `);
 
+  // Some legacy DEV databases have the id column but lost the declared
+  // primary/unique constraint during an earlier schema import. PostgreSQL
+  // refuses an FK to such a column, so restore the minimal uniqueness
+  // invariant before adding the new line-level child tables.
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS vendor_invoice_lines_id_unique
+      ON vendor_invoice_lines (id)
+  `);
+
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS vendor_invoice_line_taxes (
       id SERIAL PRIMARY KEY,
@@ -72,7 +81,7 @@ export async function runVendorPaymentHardeningMigration(): Promise<void> {
       tax_object TEXT NOT NULL,
       base_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
       tax_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
-      liability_account_id INTEGER NOT NULL REFERENCES chart_of_accounts(id) ON DELETE RESTRICT,
+       liability_account_id INTEGER REFERENCES chart_of_accounts(id) ON DELETE RESTRICT,
       status TEXT NOT NULL DEFAULT 'proof_pending',
       proof_object_path TEXT,
       proof_reference TEXT,
@@ -84,6 +93,10 @@ export async function runVendorPaymentHardeningMigration(): Promise<void> {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
+  `);
+  await db.execute(sql`
+    ALTER TABLE vendor_withholding_records
+      ALTER COLUMN liability_account_id DROP NOT NULL
   `);
 
   await db.execute(sql`

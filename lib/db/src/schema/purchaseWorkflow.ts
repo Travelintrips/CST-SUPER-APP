@@ -425,7 +425,7 @@ export const vendorWithholdingRecordsTable = pgTable("vendor_withholding_records
   taxObject: text("tax_object").notNull(),
   baseAmount: numeric("base_amount", { precision: 14, scale: 2 }).notNull().default("0"),
   taxAmount: numeric("tax_amount", { precision: 14, scale: 2 }).notNull().default("0"),
-  liabilityAccountId: integer("liability_account_id").notNull(),
+  liabilityAccountId: integer("liability_account_id"),
   status: text("status").notNull().default("proof_pending"),
   proofObjectPath: text("proof_object_path"),
   proofReference: text("proof_reference"),

@@ -600,6 +600,56 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
       `)
     );
 
+    const vendorInvoiceIds = rows.filter((r) => r.source === "vendor_invoice").map((r) => r.id);
+    const withholdingByInvoice = new Map<number, Array<{
+      lineTaxId: number;
+      invoiceLineId: number;
+      taxType: string;
+      taxObject: string;
+      taxAmount: number;
+      liabilityAccountId: number | null;
+      status: string;
+    }>>();
+    if (vendorInvoiceIds.length > 0) {
+      const withholdingRows = execRows<{
+        vendor_invoice_id: number;
+        line_tax_id: number;
+        invoice_line_id: number;
+        tax_type: string;
+        tax_object: string;
+        tax_amount: string;
+        liability_account_id: number | null;
+        status: string;
+      }>(await db.execute(sql`
+        SELECT
+          vwr.vendor_invoice_id,
+          vwr.line_tax_id,
+          vwr.invoice_line_id,
+          vwr.tax_type,
+          vwr.tax_object,
+          vwr.tax_amount,
+          vwr.liability_account_id,
+          vwr.status
+        FROM vendor_withholding_records vwr
+        WHERE vwr.company_id = ${companyId}
+          AND vwr.vendor_invoice_id IN (${sql.join(vendorInvoiceIds.map((invoiceId) => sql`${invoiceId}`), sql`, `)})
+        ORDER BY vwr.vendor_invoice_id, vwr.invoice_line_id, vwr.id
+      `));
+      for (const row of withholdingRows) {
+        const list = withholdingByInvoice.get(row.vendor_invoice_id) ?? [];
+        list.push({
+          lineTaxId: row.line_tax_id,
+          invoiceLineId: row.invoice_line_id,
+          taxType: row.tax_type,
+          taxObject: row.tax_object,
+          taxAmount: Number(row.tax_amount),
+          liabilityAccountId: row.liability_account_id,
+          status: row.status,
+        });
+        withholdingByInvoice.set(row.vendor_invoice_id, list);
+      }
+    }
+
     const invoices = rows.map((r) => ({
       id: r.id,
       docNumber: r.doc_number,
@@ -612,6 +662,7 @@ router.get("/vendor-invoices/outstanding", async (req, res) => {
       dueDate: r.due_date,
       currency: "IDR",
       source: r.source,
+      withholdingLines: r.source === "vendor_invoice" ? (withholdingByInvoice.get(r.id) ?? []) : [],
     }));
 
     // Fetch all active suppliers for this company (include global suppliers with null company_id)
@@ -1003,6 +1054,7 @@ router.post("/", async (req, res) => {
         vendor_invoice_id: number | null;
         wht_amount: number;
         wht_account_id: number | null;
+        withholding_allocations: Array<{ lineTaxId: number; invoiceLineId: number; amount: number; accountId: number }>;
         invoice_number: string | null;
       };
 
@@ -1019,7 +1071,6 @@ router.post("/", async (req, res) => {
 
         const whtAmt = round2(Number(ip.whtAmount ?? 0));
         if (whtAmt < 0) return res.status(400).json({ message: `${itemLabel}: wht_amount tidak boleh negatif` });
-        if (whtAmt >= payAmt) return res.status(400).json({ message: `${itemLabel}: WHT tidak boleh >= jumlah bayar` });
 
         let whtAccountId: number | null = null;
         if (whtAmt > 0) {
@@ -1039,7 +1090,7 @@ router.post("/", async (req, res) => {
 
         // ── Path A: vendor_invoice (standalone invoice dari AI Import / direct create) ──
         if (ip.vendorInvoiceId) {
-          const viRows = execRows<{ id: number; grand_total: string; amount_paid: string; invoice_number: string; supplier_name: string }>(
+           const viRows = execRows<{ id: number; grand_total: string; amount_paid: string; invoice_number: string; supplier_name: string }>(
             await db.execute(sql`
               SELECT id, grand_total, amount_paid, invoice_number, supplier_name
               FROM vendor_invoices
@@ -1062,8 +1113,79 @@ router.post("/", async (req, res) => {
               message: `${itemLabel}: Jumlah bayar (${payAmt}) melebihi sisa hutang invoice (${viOutstanding}).`,
             });
           }
+           const taxRows = execRows<{
+             id: number;
+             invoice_line_id: number;
+             tax_amount: string;
+             liability_account_id: number | null;
+             resolution_status: string;
+           }>(await db.execute(sql`
+             SELECT id, invoice_line_id, tax_amount, liability_account_id, resolution_status
+             FROM vendor_invoice_line_taxes
+             WHERE company_id = ${companyId} AND invoice_line_id IN (
+               SELECT id FROM vendor_invoice_lines WHERE invoice_id = ${vi.id}
+             )
+             ORDER BY id
+           `));
+           const rawAllocations = Array.isArray(ip.withholdingAllocations)
+             ? ip.withholdingAllocations as Array<Record<string, unknown>>
+             : [];
+           let withholdingAllocations: Array<{ lineTaxId: number; invoiceLineId: number; amount: number; accountId: number }> = [];
+           if (whtAmt > 0) {
+             const candidates = rawAllocations.length > 0
+               ? rawAllocations.map((allocation) => {
+                   const lineTaxId = Number(allocation.lineTaxId);
+                   const matched = taxRows.find((tax) => tax.id === lineTaxId);
+                   return {
+                     lineTaxId,
+                     invoiceLineId: matched?.invoice_line_id ?? Number(allocation.invoiceLineId),
+                     amount: round2(Number(allocation.amount)),
+                     accountId: Number(allocation.liabilityAccountId ?? allocation.accountId),
+                     matched,
+                   };
+                 })
+               : taxRows.length === 1
+                 ? [{
+                     lineTaxId: taxRows[0]!.id,
+                     invoiceLineId: taxRows[0]!.invoice_line_id,
+                     amount: whtAmt,
+                     accountId: Number(taxRows[0]!.liability_account_id ?? ip.whtAccountId),
+                     matched: taxRows[0],
+                   }]
+                 : [];
+             if (candidates.length === 0) {
+               return res.status(422).json({
+                 message: `${itemLabel}: PPh invoice multi-line wajib dikirim sebagai withholdingAllocations per line.`,
+               });
+             }
+             if (candidates.some((allocation) =>
+               !allocation.matched ||
+               allocation.matched.resolution_status !== "confirmed" ||
+               !Number.isInteger(allocation.accountId) ||
+               allocation.accountId !== Number(allocation.matched.liability_account_id) ||
+               allocation.amount <= 0 ||
+               allocation.amount > Number(allocation.matched.tax_amount) + 0.01
+             )) {
+               return res.status(422).json({
+                 message: `${itemLabel}: allocation PPh per line belum memiliki tax review/liability yang valid.`,
+               });
+             }
+             const allocatedTotal = round2(candidates.reduce((sum, allocation) => sum + allocation.amount, 0));
+             if (Math.abs(allocatedTotal - whtAmt) > 0.01) {
+               return res.status(422).json({
+                 message: `${itemLabel}: total withholding allocation per line tidak sama dengan whtAmount.`,
+               });
+             }
+             withholdingAllocations = candidates.map(({ matched: _matched, ...allocation }) => allocation);
+           }
+           const grossSettlement = round2(payAmt + whtAmt);
+           if (grossSettlement > viOutstanding + 0.01) {
+             return res.status(400).json({
+               message: `${itemLabel}: pembayaran gross (${grossSettlement}) melebihi sisa hutang invoice (${viOutstanding}).`,
+             });
+           }
           // Resolve debit account: use user-selected expenseAccountId if provided, else AP account
-        const debitAccountIdA = ip.expenseAccountId ? Number(ip.expenseAccountId) : apAccountId;
+           const debitAccountIdA = apAccountId;
         processedItems.push({
             seq: i + 1,
             transaction_type: "supplier_payment",
@@ -1074,7 +1196,8 @@ router.post("/", async (req, res) => {
             purchase_document_id: null,
             vendor_invoice_id: Number(ip.vendorInvoiceId),
             wht_amount: whtAmt,
-            wht_account_id: whtAccountId,
+             wht_account_id: withholdingAllocations.length === 1 ? withholdingAllocations[0]!.accountId : whtAccountId,
+             withholding_allocations: withholdingAllocations,
             invoice_number: vi.invoice_number,
           });
           continue;
@@ -1124,25 +1247,40 @@ router.post("/", async (req, res) => {
           vendor_invoice_id: null,
           wht_amount: whtAmt,
           wht_account_id: whtAccountId,
+          withholding_allocations: [],
           invoice_number: invoiceLabel,
         });
       }
 
       // Compute totals
-      const totalAmount = round2(processedItems.reduce((s, it) => s + it.amount, 0));
+       const totalAmount = round2(processedItems.reduce((s, it) => s + it.amount, 0));
       const totalWht    = round2(processedItems.reduce((s, it) => s + it.wht_amount, 0));
       const bankCredit  = round2(totalAmount - totalWht);
 
       // Build journal lines
       const journalLines: Array<{ accountId: number; debit: number; credit: number; description: string }> = [];
-      for (const it of processedItems) {
-        journalLines.push({ accountId: it.account_id, debit: it.amount, credit: 0, description: it.description ?? "Hutang Supplier" });
+       for (const it of processedItems) {
+         // The invoice/AP balance is gross. The supplier receives net cash,
+         // while withholding is credited to its own liability account.
+         journalLines.push({
+           accountId: it.account_id,
+           debit: round2(it.amount + it.wht_amount),
+           credit: 0,
+           description: it.description ?? "Hutang Supplier gross",
+         });
       }
       const whtByAccount = new Map<number, number>();
-      for (const it of processedItems) {
-        if (it.wht_amount > 0 && it.wht_account_id) {
-          whtByAccount.set(it.wht_account_id, round2((whtByAccount.get(it.wht_account_id) ?? 0) + it.wht_amount));
-        }
+       for (const it of processedItems) {
+         if (it.withholding_allocations.length > 0) {
+           for (const allocation of it.withholding_allocations) {
+             whtByAccount.set(
+               allocation.accountId,
+               round2((whtByAccount.get(allocation.accountId) ?? 0) + allocation.amount),
+             );
+           }
+         } else if (it.wht_amount > 0 && it.wht_account_id) {
+           whtByAccount.set(it.wht_account_id, round2((whtByAccount.get(it.wht_account_id) ?? 0) + it.wht_amount));
+         }
       }
       for (const [whtAccId, whtTotal] of whtByAccount) {
         journalLines.push({ accountId: whtAccId, debit: 0, credit: whtTotal, description: `WHT Payable — Bank Disbursement${ref ? ` ${ref}` : ""}` });
@@ -1213,8 +1351,10 @@ router.post("/", async (req, res) => {
 
       // ── Update amount_paid on vendor_invoices after disbursement is posted ──
       const linkedVIIds = processedItems.map((it) => it.vendor_invoice_id!).filter(Boolean);
-      for (const viId of linkedVIIds) {
-        const paid = processedItems.filter((it) => it.vendor_invoice_id === viId).reduce((s, it) => s + it.amount, 0);
+       for (const viId of linkedVIIds) {
+         const paid = processedItems
+           .filter((it) => it.vendor_invoice_id === viId)
+           .reduce((s, it) => s + it.amount + it.wht_amount, 0);
         const [viRow] = await db
           .select({ grandTotal: vendorInvoicesTable.grandTotal, amountPaid: vendorInvoicesTable.amountPaid })
           .from(vendorInvoicesTable)
@@ -1222,9 +1362,21 @@ router.post("/", async (req, res) => {
         if (viRow) {
           const newPaid = round2(Number(viRow.amountPaid) + paid);
           const isPaid = newPaid >= round2(Number(viRow.grandTotal)) - 0.01;
+          const proofRows = execRows<{ pending_count: number }>(await db.execute(sql`
+            SELECT COUNT(*)::int AS pending_count
+            FROM vendor_withholding_records
+            WHERE vendor_invoice_id = ${viId}
+              AND company_id = ${companyId}
+              AND status <> 'proof_received'
+          `));
+          const withholdingPending = Number(proofRows[0]?.pending_count ?? 0) > 0;
           await db
             .update(vendorInvoicesTable)
-            .set({ amountPaid: String(newPaid), status: isPaid ? "paid" : "posted", updatedAt: new Date() })
+            .set({
+              amountPaid: String(newPaid),
+              status: isPaid && !withholdingPending ? "paid" : "posted",
+              updatedAt: new Date(),
+            })
             .where(eq(vendorInvoicesTable.id, viId));
         }
       }

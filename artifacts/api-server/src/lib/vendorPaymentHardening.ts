@@ -105,10 +105,10 @@ export function evaluateVendorWithholdingGate(
         lineId,
       });
     }
-    if (tax.withholdingRecordStatus !== "proof_received") {
+    if (!["proof_pending", "proof_received", "posted"].includes(String(tax.withholdingRecordStatus))) {
       reasons.push({
-        code: "WITHHOLDING_PROOF_REQUIRED",
-        message: `Bukti potong PPh line ${lineId} belum lengkap.`,
+        code: "WITHHOLDING_RECORD_REQUIRED",
+        message: `Record withholding PPh line ${lineId} belum dibuat melalui tax review.`,
         lineId,
       });
     }
@@ -169,7 +169,7 @@ export function evaluateThreeWayMatchLines(
 }
 
 export function buildGrossVendorInvoicePostingLines(input: {
-  lines: readonly Array<{ coaAccountId: number; subtotal: number; description?: string | null }>;
+  lines: ReadonlyArray<{ coaAccountId: number; subtotal: number; description?: string | null }>;
   ppnInputAccountId?: number | null;
   taxAmount: number;
   apAccountId: number;

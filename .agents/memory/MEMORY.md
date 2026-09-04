@@ -18,6 +18,8 @@
 - [Auth user role contract](auth-user-role-contract.md) — `/api/auth/user` wajib mempertahankan `role` dan `companyId` agar authorization UI tidak salah.
 - [COA proposal and bank reconciliation flow](coa-proposal-bank-reconciliation-flow.md) — approval proposal and bank-mutation approval are separate governance states.
 - [Payment posting visibility](payment-posting-visibility.md) — payment sumber harus menyimpan status error dan pesan saat accounting entry gagal; jangan tandai posted hanya karena row payment berhasil dibuat.
+- [Vendor withholding lifecycle](vendor-withholding-lifecycle.md) — invoice boleh posted saat bukti potong pending; settlement tetap gross AP dan status paid menunggu proof_received.
+- [Vendor line FK migration](vendor-line-fk-migration.md) — legacy line tables may lack live uniqueness despite source schema; restore the key invariant before adding child FKs.
 - [Deployment publish build prerequisites](deployment-publish-build.md) — root manifest yang tidak terpakai dapat memicu builder bahasa lain; validasi build publish dan preflight environment harus dipisahkan.
 - [Production DB availability gate](production-db-availability-gate.md) — audit PROD harus berhenti jika workspace belum memiliki production database; jangan substitusi DEV atau inferensi historis.
 - [Production connection contract](production-connection-contract.md) — PROD business DB eksternal Supabase dimuat dari GCP bundle production; jangan samakan dengan abstraction DB pane Replit.

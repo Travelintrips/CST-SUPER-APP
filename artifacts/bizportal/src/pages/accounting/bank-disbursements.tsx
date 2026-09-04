@@ -214,6 +214,15 @@ interface OutstandingInvoice {
   dueDate: string | null;
   currency: string;
   source: "purchase_document" | "vendor_invoice";
+  withholdingLines?: Array<{
+    lineTaxId: number;
+    invoiceLineId: number;
+    taxType: string;
+    taxObject: string;
+    taxAmount: number;
+    liabilityAccountId: number | null;
+    status: string;
+  }>;
 }
 
 interface OutstandingInvoicesResponse {
@@ -238,6 +247,7 @@ interface InvoicePaymentLine {
   dpp: number;
   taxAmount: number;
   expenseAccountId: number | null;
+  withholdingAllocations?: Array<{ lineTaxId: number; invoiceLineId: number; amount: number; liabilityAccountId: number }>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -910,7 +920,10 @@ function VendorInvoicePanel({ allInvoices, allSuppliers, apAccountName, lines, o
     if (isChecked(inv)) {
       onLinesChange(lines.filter((l) => l.lineKey !== key));
     } else {
-      const { dpp, taxAmount } = computeTaxBreakdown(inv.outstanding, "ppn");
+       const withholdingLines = inv.withholdingLines ?? [];
+       const withholdingAmount = withholdingLines.reduce((sum, line) => sum + line.taxAmount, 0);
+       const dpp = Math.max(0, inv.outstanding - withholdingAmount);
+       const taxAmount = withholdingAmount;
       onLinesChange([...lines, {
         purchaseDocumentId: inv.source === "purchase_document" ? inv.id : null,
         vendorInvoiceId: inv.source === "vendor_invoice" ? inv.id : null,
@@ -918,11 +931,17 @@ function VendorInvoicePanel({ allInvoices, allSuppliers, apAccountName, lines, o
         docNumber: inv.billNumber ?? inv.docNumber,
         supplierName: inv.supplierName,
         outstanding: inv.outstanding,
-        paymentAmount: inv.outstanding,
-        whtAmount: 0,
-        whtAccountId: null,
-        taxTreatment: "bayar_berikut",
-        taxType: "ppn",
+         paymentAmount: dpp,
+         whtAmount: withholdingAmount,
+         whtAccountId: withholdingLines.length === 1 ? withholdingLines[0]!.liabilityAccountId : null,
+         withholdingAllocations: withholdingLines.map((line) => ({
+           lineTaxId: line.lineTaxId,
+           invoiceLineId: line.invoiceLineId,
+           amount: line.taxAmount,
+           liabilityAccountId: line.liabilityAccountId ?? 0,
+         })),
+         taxTreatment: withholdingAmount > 0 ? "setor_sendiri" : "bayar_berikut",
+         taxType: withholdingLines.map((line) => line.taxType).join(", ") || "ppn",
         dpp,
         taxAmount,
         expenseAccountId: null,
@@ -2585,8 +2604,10 @@ function CreateDisbDialog({
       const imbalanced = invoiceLines.find((l) => Math.abs((l.paymentAmount + l.whtAmount) - l.outstanding) > 1);
       if (imbalanced) { toast({ title: `Invoice ${imbalanced.docNumber}: Supplier Dibayar + Pajak Dipotong ≠ Grand Total`, variant: "destructive" }); return; }
       if (invoiceLines.some((l) => l.paymentAmount <= 0)) { toast({ title: "Jumlah bayar setiap invoice harus > 0", variant: "destructive" }); return; }
-      if (invoiceLines.some((l) => l.whtAmount > 0 && !l.whtAccountId)) { toast({ title: "Pilih akun WHT untuk setiap invoice yang ada WHT", variant: "destructive" }); return; }
-      if (invoiceLines.some((l) => !l.expenseAccountId)) { toast({ title: "Pilih akun pengeluaran (COA) untuk setiap invoice", variant: "destructive" }); return; }
+       if (invoiceLines.some((l) => l.whtAmount > 0 && (!l.withholdingAllocations?.length || l.withholdingAllocations.some((allocation) => !allocation.liabilityAccountId)))) {
+         toast({ title: "PPh harus memiliki alokasi liability per line", variant: "destructive" });
+         return;
+       }
     } else {
       if (items.some((it) => !it.accountId)) { toast({ title: "Semua item harus memilih akun", variant: "destructive" }); return; }
       if (items.some((it) => Number(it.amount) <= 0)) { toast({ title: "Jumlah setiap item harus > 0", variant: "destructive" }); return; }
@@ -2615,7 +2636,12 @@ function CreateDisbDialog({
             paymentAmount: l.paymentAmount,
             whtAmount: l.whtAmount || undefined,
             whtAccountId: l.whtAccountId || undefined,
-            expenseAccountId: l.expenseAccountId || undefined,
+             withholdingAllocations: l.withholdingAllocations?.map((allocation) => ({
+               lineTaxId: allocation.lineTaxId,
+               invoiceLineId: allocation.invoiceLineId,
+               amount: allocation.amount,
+               liabilityAccountId: allocation.liabilityAccountId,
+             })),
           })),
         });
       } else {

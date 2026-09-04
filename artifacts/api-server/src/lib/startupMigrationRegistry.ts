@@ -118,6 +118,7 @@ const REGISTRY_ROWS: readonly RegistryRow[] = [
   ["bank_disbursement", "Bank disbursement migration", "schema"],
   ["expense_disbursement_bridge", "Expense-Disbursement bridge migration", "schema"],
   ["vendor_payments_historical", "Vendor payments migration (historical)", "backfill"],
+  ["vendor_payment_hardening", "Vendor payment hardening migration", "schema"],
   ["kas_bank", "Kas Bank migration", "schema"],
   ["cash_bank_enterprise", "Cash Bank enterprise migration", "schema"],
   ["finance_core", "Finance core migration", "schema"],
