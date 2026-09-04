@@ -20,6 +20,7 @@ import OpenAI from "openai";
 import { KtpOcrError, classifyKtpOcrError } from "./ktpOcrErrors.js";
 import { configureCustomerOrganization } from "./portalCustomerOrganizationService.js";
 import { normalizePhone } from "../phoneUtils.js";
+import { isSafeDevTestMode } from "../safeDev.js";
 
 // ── OpenAI client ─────────────────────────────────────────────────────────────
 
@@ -225,6 +226,11 @@ export interface CompleteOnboardingInput {
     division?: string;
     position?: string;
   };
+  /**
+   * Test-only failure injection. The route only maps this from a request
+   * header while APP_ENV=development and SAFE_DEV_TEST_MODE=true.
+   */
+  _devForceFailureStage?: "customer-mid-flow" | "vendor-mid-flow";
 }
 
 export async function completeOnboarding(
@@ -274,210 +280,249 @@ export async function completeOnboarding(
     throw new OnboardingServiceError(409, "Nomor telepon sudah digunakan oleh akun lain. Gunakan nomor yang berbeda.");
   }
 
-  // Fetch ktpUrl lama sebelum upsert (untuk cleanup storage jika berubah)
-  const [existingProfile] = await db
-    .select({ ktpUrl: userProfilesTable.ktpUrl })
-    .from(userProfilesTable)
-    .where(eq(userProfilesTable.customerId, customerId));
+  const devFailureStage = input._devForceFailureStage;
+  const shouldForceFailure = process.env.APP_ENV === "development"
+    && isSafeDevTestMode()
+    && (devFailureStage === "customer-mid-flow" || devFailureStage === "vendor-mid-flow");
 
-  // Upsert user_profiles
-  await db.insert(userProfilesTable).values({
-    customerId,
-    fullName: String(fullName),
-    phone: normalizedPhone,
-    address: String(address),
-    accountType: String(accountType),
-    status,
-    ktpUrl: ktpUrl ? String(ktpUrl) : null,
-    completedAt: now,
-    updatedAt: now,
-  }).onConflictDoUpdate({
-    target: userProfilesTable.customerId,
-    set: {
+  // All onboarding DB writes share this transaction. The transaction-scoped
+  // advisory lock serializes retries for one portal customer even when the
+  // request arrives on different pool connections.
+  const transactionResult = await db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(${customerId})`);
+
+    const [customer] = await tx
+      .select({ id: portalCustomersTable.id, email: portalCustomersTable.email })
+      .from(portalCustomersTable)
+      .where(eq(portalCustomersTable.id, customerId))
+      .limit(1);
+    if (!customer) throw new OnboardingServiceError(404, "Akun customer tidak ditemukan.");
+
+    // Fetch old document URLs inside the transaction so cleanup only happens
+    // after the transaction commits successfully.
+    const [existingProfile] = await tx
+      .select({ ktpUrl: userProfilesTable.ktpUrl })
+      .from(userProfilesTable)
+      .where(eq(userProfilesTable.customerId, customerId));
+    const [existingVendorProfile] = accountType === "vendor"
+      ? await tx
+        .select({ legalityDocUrl: vendorProfilesTable.legalityDocUrl })
+        .from(vendorProfilesTable)
+        .where(eq(vendorProfilesTable.customerId, customerId))
+      : [undefined];
+
+    const [existingApproval] = !isCustomer
+      ? await tx
+        .select({ id: onboardingApprovalsTable.id, status: onboardingApprovalsTable.status })
+        .from(onboardingApprovalsTable)
+        .where(eq(onboardingApprovalsTable.customerId, customerId))
+        .orderBy(sql`${onboardingApprovalsTable.createdAt} DESC`)
+        .limit(1)
+      : [undefined];
+
+    // An already approved vendor must not be downgraded by a harmless retry.
+    const effectiveStatus = existingApproval?.status === "approved" ? "active" : status;
+
+    await tx.insert(userProfilesTable).values({
+      customerId,
       fullName: String(fullName),
       phone: normalizedPhone,
       address: String(address),
       accountType: String(accountType),
-      status,
+      status: effectiveStatus,
       ktpUrl: ktpUrl ? String(ktpUrl) : null,
       completedAt: now,
       updatedAt: now,
-    },
-  });
-
-  // Hapus file KTP lama dari storage jika diganti
-  const newKtpUrl = ktpUrl ? String(ktpUrl) : null;
-  if (existingProfile?.ktpUrl && existingProfile.ktpUrl !== newKtpUrl) {
-    deleteFromSupabase(existingProfile.ktpUrl).catch(() => {});
-  }
-
-  // Update portal_customers role + phone
-  try {
-    await db.update(portalCustomersTable).set({
-      name: String(fullName),
-      phone: normalizedPhone,
-    ...(isCustomer ? { customerType } : {}),
-      role: accountType === "vendor"
-        ? "vendor"
-        : accountType === "driver"
-          ? "driver"
-          : accountType === "employee"
-            ? "employee"
-            : "customer",
-    }).where(eq(portalCustomersTable.id, customerId));
-  } catch (err: any) {
-    if (err?.code === "23505" && err?.constraint?.includes("phone")) {
-      throw new OnboardingServiceError(409, "Nomor telepon sudah digunakan oleh akun lain. Gunakan nomor yang berbeda.");
-    }
-    throw err;
-  }
-
-  const organization = isCustomer
-    ? await configureCustomerOrganization({
-        customerId,
-        customerType: customerType!,
-        companyId,
-        requestedCompanyName,
-        requestedRegistrationNumber,
-      })
-    : null;
-  const responseStatus = organization?.pendingRequest ? "company_pending" : status;
-
-  // Update OCR result name if provided
-  if (ocrData?.nik) {
-    await db.update(ocrResultsTable)
-      .set({ name: ocrData.name ?? null, nik: ocrData.nik ?? null })
-      .where(eq(ocrResultsTable.customerId, customerId));
-  }
-
-  // Upsert vendor profile
-  if (accountType === "vendor" && vendor) {
-    const [[existingVendorProfile], [portalCustomer]] = await Promise.all([
-      db
-        .select({ legalityDocUrl: vendorProfilesTable.legalityDocUrl })
-        .from(vendorProfilesTable)
-        .where(eq(vendorProfilesTable.customerId, customerId)),
-      db
-        .select({ email: portalCustomersTable.email })
-        .from(portalCustomersTable)
-        .where(eq(portalCustomersTable.id, customerId))
-        .limit(1),
-    ]);
-
-    await db.insert(vendorProfilesTable).values({
-      customerId,
-      companyName: vendor.companyName ?? null,
-      nib: vendor.nib ?? null,
-      npwp: vendor.npwp ?? null,
-      serviceType: vendor.serviceType ?? null,
-      // These values come from the required basic onboarding fields/account.
-      // Do not fabricate province, city, postal code, or bank details here.
-      picName: fullName,
-       phone: normalizedPhone,
-      email: portalCustomer?.email ?? null,
-      fullAddress: address,
-      legalityDocUrl: vendor.legalityDocUrl ?? null,
-      updatedAt: now,
     }).onConflictDoUpdate({
-      target: vendorProfilesTable.customerId,
+      target: userProfilesTable.customerId,
       set: {
-        companyName: vendor.companyName ?? null,
-        nib: vendor.nib ?? null,
-        npwp: vendor.npwp ?? null,
-        serviceType: vendor.serviceType ?? null,
-        picName: fullName,
-         phone: normalizedPhone,
-        email: portalCustomer?.email ?? null,
-        fullAddress: address,
-        legalityDocUrl: vendor.legalityDocUrl ?? null,
+        fullName: String(fullName),
+        phone: normalizedPhone,
+        address: String(address),
+        accountType: String(accountType),
+        status: effectiveStatus,
+        ktpUrl: ktpUrl ? String(ktpUrl) : null,
+        completedAt: now,
         updatedAt: now,
       },
     });
 
-    const newLegalityUrl = vendor.legalityDocUrl ?? null;
-    if (existingVendorProfile?.legalityDocUrl && existingVendorProfile.legalityDocUrl !== newLegalityUrl) {
-      deleteFromSupabase(existingVendorProfile.legalityDocUrl).catch(() => {});
+    try {
+      await tx.update(portalCustomersTable).set({
+        name: String(fullName),
+        phone: normalizedPhone,
+        ...(isCustomer ? { customerType } : {}),
+        role: accountType === "vendor"
+          ? "vendor"
+          : accountType === "driver"
+            ? "driver"
+            : accountType === "employee"
+              ? "employee"
+              : "customer",
+      }).where(eq(portalCustomersTable.id, customerId));
+    } catch (err: any) {
+      if (err?.code === "23505" && err?.constraint?.includes("phone")) {
+        throw new OnboardingServiceError(409, "Nomor telepon sudah digunakan oleh akun lain. Gunakan nomor yang berbeda.");
+      }
+      throw err;
     }
-  }
 
-  // Upsert driver profile
-  if (accountType === "driver" && driver) {
-    const [existingDriverProfile] = await db
-      .select({ simUrl: driverProfilesTable.simUrl, stnkUrl: driverProfilesTable.stnkUrl })
-      .from(driverProfilesTable)
-      .where(eq(driverProfilesTable.customerId, customerId));
+    const organization = isCustomer
+      ? await configureCustomerOrganization({
+          customerId,
+          customerType: customerType!,
+          companyId,
+          requestedCompanyName,
+          requestedRegistrationNumber,
+          executor: tx,
+        })
+      : null;
 
-    await db.insert(driverProfilesTable).values({
-      customerId,
-      licenseNumber: driver.licenseNumber ?? null,
-      vehicleType: driver.vehicleType ?? null,
-      plateNumber: driver.plateNumber ?? null,
-      simUrl: driver.simUrl ?? null,
-      stnkUrl: driver.stnkUrl ?? null,
-      updatedAt: now,
-    }).onConflictDoUpdate({
-      target: driverProfilesTable.customerId,
-      set: {
+    if (shouldForceFailure && devFailureStage === "customer-mid-flow" && isCustomer) {
+      throw new OnboardingServiceError(500, "DEV TEST: forced customer onboarding rollback");
+    }
+
+    if (ocrData?.nik) {
+      await tx.update(ocrResultsTable)
+        .set({ name: ocrData.name ?? null, nik: ocrData.nik ?? null })
+        .where(eq(ocrResultsTable.customerId, customerId));
+    }
+
+    let oldVendorLegalityUrl: string | null = null;
+    if (accountType === "vendor" && vendor) {
+      oldVendorLegalityUrl = existingVendorProfile?.legalityDocUrl ?? null;
+      await tx.insert(vendorProfilesTable).values({
+        customerId,
+        companyName: vendor.companyName ?? null,
+        nib: vendor.nib ?? null,
+        npwp: vendor.npwp ?? null,
+        serviceType: vendor.serviceType ?? null,
+        // These values come from the required basic onboarding fields/account.
+        // Do not fabricate province, city, postal code, or bank details here.
+        picName: fullName,
+        phone: normalizedPhone,
+        email: customer.email ?? null,
+        fullAddress: address,
+        legalityDocUrl: vendor.legalityDocUrl ?? null,
+        updatedAt: now,
+      }).onConflictDoUpdate({
+        target: vendorProfilesTable.customerId,
+        set: {
+          companyName: vendor.companyName ?? null,
+          nib: vendor.nib ?? null,
+          npwp: vendor.npwp ?? null,
+          serviceType: vendor.serviceType ?? null,
+          picName: fullName,
+          phone: normalizedPhone,
+          email: customer.email ?? null,
+          fullAddress: address,
+          legalityDocUrl: vendor.legalityDocUrl ?? null,
+          updatedAt: now,
+        },
+      });
+    }
+
+    if (shouldForceFailure && devFailureStage === "vendor-mid-flow" && accountType === "vendor") {
+      throw new OnboardingServiceError(500, "DEV TEST: forced vendor onboarding rollback");
+    }
+
+    if (accountType === "driver" && driver) {
+      const [existingDriverProfile] = await tx
+        .select({ simUrl: driverProfilesTable.simUrl, stnkUrl: driverProfilesTable.stnkUrl })
+        .from(driverProfilesTable)
+        .where(eq(driverProfilesTable.customerId, customerId));
+
+      await tx.insert(driverProfilesTable).values({
+        customerId,
         licenseNumber: driver.licenseNumber ?? null,
         vehicleType: driver.vehicleType ?? null,
         plateNumber: driver.plateNumber ?? null,
         simUrl: driver.simUrl ?? null,
         stnkUrl: driver.stnkUrl ?? null,
         updatedAt: now,
-      },
-    });
+      }).onConflictDoUpdate({
+        target: driverProfilesTable.customerId,
+        set: {
+          licenseNumber: driver.licenseNumber ?? null,
+          vehicleType: driver.vehicleType ?? null,
+          plateNumber: driver.plateNumber ?? null,
+          simUrl: driver.simUrl ?? null,
+          stnkUrl: driver.stnkUrl ?? null,
+          updatedAt: now,
+        },
+      });
 
-    if (existingDriverProfile?.simUrl && existingDriverProfile.simUrl !== (driver.simUrl ?? null)) {
-      deleteFromSupabase(existingDriverProfile.simUrl).catch(() => {});
+      if (existingDriverProfile?.simUrl && existingDriverProfile.simUrl !== (driver.simUrl ?? null)) {
+        deleteFromSupabase(existingDriverProfile.simUrl).catch(() => {});
+      }
+      if (existingDriverProfile?.stnkUrl && existingDriverProfile.stnkUrl !== (driver.stnkUrl ?? null)) {
+        deleteFromSupabase(existingDriverProfile.stnkUrl).catch(() => {});
+      }
     }
-    if (existingDriverProfile?.stnkUrl && existingDriverProfile.stnkUrl !== (driver.stnkUrl ?? null)) {
-      deleteFromSupabase(existingDriverProfile.stnkUrl).catch(() => {});
-    }
-  }
 
-  // Upsert employee profile
-  if (accountType === "employee" && employee) {
-    await db.insert(employeeProfilesTable).values({
-      customerId,
-      companyName: employee.companyName ?? null,
-      branch: employee.branch ?? null,
-      department: employee.department ?? null,
-      division: employee.division ?? null,
-      position: employee.position ?? null,
-      updatedAt: now,
-    }).onConflictDoUpdate({
-      target: employeeProfilesTable.customerId,
-      set: {
+    if (accountType === "employee" && employee) {
+      await tx.insert(employeeProfilesTable).values({
+        customerId,
         companyName: employee.companyName ?? null,
         branch: employee.branch ?? null,
         department: employee.department ?? null,
         division: employee.division ?? null,
         position: employee.position ?? null,
         updatedAt: now,
-      },
-    });
+      }).onConflictDoUpdate({
+        target: employeeProfilesTable.customerId,
+        set: {
+          companyName: employee.companyName ?? null,
+          branch: employee.branch ?? null,
+          department: employee.department ?? null,
+          division: employee.division ?? null,
+          position: employee.position ?? null,
+          updatedAt: now,
+        },
+      });
+    }
+
+    // There is no unique constraint on this legacy table. The advisory lock
+    // plus the existing-row check makes retry/concurrent submits idempotent
+    // without changing the approval lifecycle or adding a new status.
+    if (!isCustomer && !existingApproval) {
+      await tx.insert(onboardingApprovalsTable).values({
+        customerId,
+        accountType: String(accountType),
+        status: "pending",
+        updatedAt: now,
+      });
+    }
+
+    return {
+      organization,
+      responseStatus: organization?.pendingRequest ? "company_pending" : effectiveStatus,
+      oldKtpUrl: existingProfile?.ktpUrl ?? null,
+      newKtpUrl: ktpUrl ? String(ktpUrl) : null,
+      oldVendorLegalityUrl,
+      newVendorLegalityUrl: vendor?.legalityDocUrl ?? null,
+      customerEmail: customer.email,
+    };
+  });
+
+  // Storage is outside the DB transaction. Delete old private objects only
+  // after the DB commit, otherwise a failed onboarding could lose the old doc.
+  if (transactionResult.oldKtpUrl && transactionResult.oldKtpUrl !== transactionResult.newKtpUrl) {
+    deleteFromSupabase(transactionResult.oldKtpUrl).catch(() => {});
+  }
+  if (
+    transactionResult.oldVendorLegalityUrl
+    && transactionResult.oldVendorLegalityUrl !== transactionResult.newVendorLegalityUrl
+  ) {
+    deleteFromSupabase(transactionResult.oldVendorLegalityUrl).catch(() => {});
   }
 
-  // Create approval request for non-customer accounts
   if (!isCustomer) {
-    await db.insert(onboardingApprovalsTable).values({
-      customerId,
-      accountType: String(accountType),
-      status: "pending",
-      updatedAt: now,
-    }).onConflictDoNothing();
-
-    // Notify admin via WA + in-app — fire and forget
+    // Notify admin via WA + in-app — fire and forget, strictly after commit.
     void (async () => {
       try {
-        const [customer] = await db
-          .select()
-          .from(portalCustomersTable)
-          .where(eq(portalCustomersTable.id, customerId));
-
         const timestamp = new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" }) + " WIB";
 
-        // In-app notification (admin_notifications + SSE broadcast)
         await NotificationService.saveAndBroadcast("admin_notification", {
           type:         "vendor_onboarding_new",
           orderNumber:  `ONBOARD-${customerId}`,
@@ -485,13 +530,12 @@ export async function completeOnboarding(
           companyName:  vendor?.companyName ?? null,
           orderId:      customerId,
           accountType,
-          email:        customer?.email ?? "-",
-           phone: normalizedPhone,
+          email:        transactionResult.customerEmail ?? "-",
+          phone: normalizedPhone,
           timestamp,
           message:      `Permohonan akun baru: ${fullName} (${accountType}) — ${timestamp}`,
         });
 
-        // WA notification
         const adminWa = await getAdminWa();
         if (adminWa) {
           const tplBody = await getWaTemplateConfig("admin_group", "portal_onboarding_admin", [
@@ -506,7 +550,7 @@ export async function completeOnboarding(
           ]);
           const msg = renderTemplate(tplBody, {
             customerName: fullName,
-            customerEmail: customer?.email ?? "-",
+            customerEmail: transactionResult.customerEmail ?? "-",
             phone,
             accountType,
             timestamp,
@@ -517,5 +561,5 @@ export async function completeOnboarding(
     })();
   }
 
-  return { ok: true, status: responseStatus, organization };
+  return { ok: true, status: transactionResult.responseStatus, organization: transactionResult.organization };
 }

@@ -1827,6 +1827,11 @@ router.post(
         fullName, phone, address, accountType, customerType, companyId,
         requestedCompanyName, requestedRegistrationNumber,
         ktpUrl, ocrData, vendor, driver, employee,
+        _devForceFailureStage: process.env.APP_ENV === "development"
+          && process.env.SAFE_DEV_TEST_MODE === "true"
+          && ["customer-mid-flow", "vendor-mid-flow"].includes(String(req.header("x-dev-onboarding-failure") ?? ""))
+          ? String(req.header("x-dev-onboarding-failure")) as "customer-mid-flow" | "vendor-mid-flow"
+          : undefined,
       });
       res.json(result);
     } catch (err: any) {
