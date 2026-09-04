@@ -5,6 +5,11 @@ const adminConnections = new Set<Response>();
 const portalConnections = new Set<Response>();
 const customerPortalConnections = new Map<number, Set<Response>>();
 
+function flushSse(res: Response): void {
+  const flushable = res as Response & { flush?: () => void };
+  flushable.flush?.();
+}
+
 export function registerDriverConnection(driverId: number, res: Response): void {
   if (!driverConnections.has(driverId)) {
     driverConnections.set(driverId, new Set());
@@ -94,6 +99,7 @@ export function broadcastToCustomer(customerId: number, event: string, data: unk
   for (const res of connections) {
     try {
       res.write(payload);
+      flushSse(res);
     } catch {
       connections.delete(res);
     }
@@ -142,6 +148,7 @@ setInterval(() => {
     for (const res of connections) {
       try {
         res.write(heartbeat);
+        flushSse(res);
       } catch {
         connections.delete(res);
       }

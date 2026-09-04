@@ -285,6 +285,7 @@ router.get("/notifications/events", requireCustomerPortalAuth, (req, res) => {
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
   res.write(": connected\n\n");
+  (res as Response & { flush?: () => void }).flush?.();
 
   const keepAlive = setInterval(() => {
     try { res.write(": ping\n\n"); } catch { clearInterval(keepAlive); }

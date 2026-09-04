@@ -129,15 +129,27 @@ async function countOwnedNotification(customerId, orderId) {
   const rows = await db(`SELECT event_key, COUNT(*)::int AS count
     FROM portal_customer_notifications
     WHERE portal_customer_id = $1
-      AND payload::text LIKE $2
-    GROUP BY event_key`, [customerId, `%"orderId":${orderId}%`]);
+      AND payload->>'orderId' = $2
+    GROUP BY event_key`, [customerId, String(orderId)]);
   return rows;
 }
-async function drainSsePreamble(reader) {
-  await Promise.race([
-    reader.read(),
-    new Promise(resolve => setTimeout(resolve, 1000)),
-  ]);
+async function readSseEvent(reader, timeoutMs) {
+  const timeout = Symbol('sse-timeout');
+  const deadline = Date.now() + timeoutMs;
+  let text = '';
+  while (Date.now() < deadline) {
+    const remaining = Math.max(1, deadline - Date.now());
+    const result = await Promise.race([
+      reader.read(),
+      new Promise(resolve => setTimeout(() => resolve(timeout), remaining)),
+    ]);
+    if (result === timeout || result.done) return text;
+    if (result.value) {
+      text += new TextDecoder().decode(result.value);
+      if (text.includes('event: customer_notification')) return text;
+    }
+  }
+  return text;
 }
 async function marketplacePayload() {
   const catalog = await http('/api/portal/marketplace');
@@ -305,19 +317,14 @@ try {
   log('Owner SSE connected', aResponse.status === 200 && Boolean(aResponse.body));
   log('Other customer SSE connected', bResponse.status === 200 && Boolean(bResponse.body));
   const aReader = aResponse.body.getReader(); const bReader = bResponse.body.getReader();
-  await Promise.all([drainSsePreamble(aReader), drainSsePreamble(bReader)]);
-  const read = (reader, timeout) => Promise.race([
-    reader.read().then(({ value }) => value ? new TextDecoder().decode(value) : ''),
-    new Promise(resolve => setTimeout(() => resolve(''), timeout)),
-  ]);
   const action = await http(`/api/ocean-freight/${oceanId}/status`, { method: 'PATCH', headers: { cookie: internalCookie }, body: { status: 'approved' } }, [200]);
   log('Canonical notification action', action.status === 200);
   const persistedOwnerNotification = await db(
-    'SELECT portal_customer_id, event_key, payload FROM portal_customer_notifications WHERE payload::text LIKE $1',
-    [`%"orderId":${oceanId}%`],
+    'SELECT portal_customer_id, event_key, payload FROM portal_customer_notifications WHERE portal_customer_id = $1 AND payload->>\'orderId\' = $2',
+    [customerA.id, String(oceanId)],
   );
   console.log(`Focused persisted notification — ${JSON.stringify(persistedOwnerNotification)}`);
-  const [aEvent, bEvent] = await Promise.all([read(aReader, 3000), read(bReader, 700)]);
+  const [aEvent, bEvent] = await Promise.all([readSseEvent(aReader, 3000), readSseEvent(bReader, 700)]);
   await aReader.cancel().catch(() => {}); await bReader.cancel().catch(() => {});
   log('NOTIFICATION_OWNERSHIP', aEvent.includes('customer_notification') && aEvent.includes(String(oceanId)) && !bEvent.includes('customer_notification'), `ownerBytes=${aEvent.length}, otherBytes=${bEvent.length}`);
   const ownerList = await http('/api/portal/notifications?limit=100', { headers: auth(customerA.token) });
@@ -328,9 +335,8 @@ try {
   const before = await countOwnedNotification(customerA.id, oceanId);
   const retryStream = fetch(`${API}/api/portal/notifications/events`, { headers: auth(customerA.token) });
   const retryResponse = await retryStream; const retryReader = retryResponse.body.getReader();
-  await drainSsePreamble(retryReader);
   await http(`/api/ocean-freight/${oceanId}/status`, { method: 'PATCH', headers: { cookie: internalCookie }, body: { status: 'approved' } }, [200, 409, 422]);
-  const retryEvent = await read(retryReader, 900); await retryReader.cancel().catch(() => {});
+  const retryEvent = await readSseEvent(retryReader, 900); await retryReader.cancel().catch(() => {});
   const after = await countOwnedNotification(customerA.id, oceanId);
   log('NOTIFICATION_DEDUPE', JSON.stringify(before) === JSON.stringify(after) && !retryEvent.includes('customer_notification'), `before=${JSON.stringify(before)}, after=${JSON.stringify(after)}`);
 
