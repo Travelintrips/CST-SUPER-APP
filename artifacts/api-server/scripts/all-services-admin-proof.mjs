@@ -757,6 +757,21 @@ async function cleanup() {
   let descendants = 0;
   try {
     await client.query("BEGIN");
+    // The Marketplace dual-write ledger is an audit child but does not have
+    // a discoverable FK in every DEV schema snapshot. Remove only rows tied
+    // to this proof's exact roots/marker before generic FK cleanup.
+    const dualWriteCleanup = await client.query(
+      `DELETE FROM mkt_dual_write_log
+        WHERE mkt_rfq_id = ANY($1::int[])
+           OR portal_order_id = ANY($2::int[])
+           OR idempotency_key LIKE $3
+           OR payload::text LIKE $3
+           OR buyer_email LIKE $3
+           OR buyer_name LIKE $3
+           OR shipping_address LIKE $3`,
+      [roots.mkt_rfqs, roots.portal_product_orders, `%${marker}%`],
+    );
+    descendants += dualWriteCleanup.rowCount ?? 0;
     if (roots.customer_service_requests.length) {
       const csrChildren = await client.query(
         `DELETE FROM customer_service_request_documents WHERE request_id = ANY($1::int[])`,
@@ -845,6 +860,18 @@ async function cleanup() {
       [created.portalCustomers],
     );
     if (Number(remainingCustomer.rows[0].count) !== 0) throw new Error("customer notification cleanup incomplete");
+    const remainingDualWrite = await client.query(
+      `SELECT COUNT(*)::int AS count FROM mkt_dual_write_log
+        WHERE mkt_rfq_id = ANY($1::int[])
+           OR portal_order_id = ANY($2::int[])
+           OR idempotency_key LIKE $3
+           OR payload::text LIKE $3
+           OR buyer_email LIKE $3
+           OR buyer_name LIKE $3
+           OR shipping_address LIKE $3`,
+      [roots.mkt_rfqs, roots.portal_product_orders, `%${marker}%`],
+    );
+    if (Number(remainingDualWrite.rows[0].count) !== 0) throw new Error("dual-write ledger cleanup incomplete");
     const remainingAccounts = await client.query(
       `SELECT COUNT(*)::int AS count FROM portal_customers WHERE id = ANY($1::int[])`,
       [created.portalCustomers],
