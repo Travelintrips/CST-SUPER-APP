@@ -523,7 +523,6 @@ function CreateProposalDialog({
               onChange={(e) => setIntent(e.target.value)}
               placeholder="misal: JOURNAL_MAPPING_REQUIRED, biaya pajak, dll."
               className="h-8 text-sm"
-              // eslint-disable-next-line jsx-a11y/no-autofocus
               autoFocus
             />
             <p className="text-[11px] text-muted-foreground">
