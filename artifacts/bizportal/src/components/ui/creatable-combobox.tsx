@@ -4,7 +4,7 @@
  * Styled for the dark BizPortal theme (bg-slate-800 / border-slate-600).
  */
 
-import { useState, useRef, useEffect } from "react";
+import { useState } from "react";
 import { Check, ChevronsUpDown, Plus, Loader2 } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {

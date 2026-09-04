@@ -130,7 +130,6 @@ export function NotificationBell() {
   const {
     notifications,
     dbUnreadTotal,
-    unreadCount,
     markAllRead,
     clearAll,
     setOnNewOrder,

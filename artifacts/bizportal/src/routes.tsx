@@ -49,7 +49,6 @@ const LogisticsDriverPerformancePage = React.lazy(() => import("@/pages/logistic
 const DriverAnalyticsDashboardPage = React.lazy(() => import("@/pages/logistics/drivers-analytics"));
 const TruckingOrdersPage = React.lazy(() => import("@/pages/logistics/trucking-orders"));
 const LogisticsQuoteRequestsPage = React.lazy(() => import("@/pages/logistics-quote-requests"));
-const LogisticsVendorsPage = React.lazy(() => import("@/pages/logistics-vendors"));
 const LogisticsQuotationReplyPage = React.lazy(() => import("@/pages/logistics-quotation-reply"));
 const LogisticsVendorQuotePage = React.lazy(() => import("@/pages/logistics-vendor-quote"));
 const LogisticsMarginRulesPage = React.lazy(() => import("@/pages/logistics-margin-rules"));
@@ -306,7 +305,6 @@ const IntelligenceAlertsPage = React.lazy(() => import("@/pages/intelligence-ale
 const AiApprovalsPage = React.lazy(() => import("@/pages/ai-approvals"));
 const OperationalContextPage = React.lazy(() => import("@/pages/operational-context"));
 const AiReviewIndexPage = React.lazy(() => import("@/pages/ai-review/index"));
-const AiReviewQueuePage = React.lazy(() => import("@/pages/ai-review/queue"));
 const AiReviewDetailPage = React.lazy(() => import("@/pages/ai-review/detail"));
 const AiReviewObservabilityPage = React.lazy(() => import("@/pages/ai-review/observability"));
 const AiLearningPage = React.lazy(() => import("@/pages/ai-review/learning"));

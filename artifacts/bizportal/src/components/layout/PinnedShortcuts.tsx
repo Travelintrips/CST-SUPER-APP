@@ -4,7 +4,7 @@ import { Pin, PinOff, Plus, X, GripVertical } from "lucide-react";
 import {
   ShoppingCart, DollarSign, Truck, Package, Receipt, BarChart2,
   Users, FileText, LayoutDashboard, Send, Plane, Anchor,
-  ClipboardList, PackageCheck, TrendingUp, Settings, BookOpen,
+  PackageCheck, TrendingUp, Settings, BookOpen,
   Bot, Database, Trophy, Warehouse, CreditCard, Calendar,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";

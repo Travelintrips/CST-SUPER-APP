@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
 import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Clock, Pin, PinOff, ExternalLink } from "lucide-react";
+import { Clock, Pin, ExternalLink } from "lucide-react";
 import { EmptyState } from "@/components/ui/empty-state";
 import { COMMANDS, RECENT_KEY, PINNED_KEY, RECENT_TIMES_KEY, readStore } from "@/components/CommandPalette";
 import { cn } from "@/lib/utils";

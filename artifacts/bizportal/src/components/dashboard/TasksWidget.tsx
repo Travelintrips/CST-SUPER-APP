@@ -39,12 +39,6 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled: "bg-gray-100 text-gray-600 border-gray-200",
 };
 
-const PRIORITY_COLORS: Record<string, string> = {
-  high: "text-red-500",
-  medium: "text-amber-500",
-  low: "text-slate-400",
-};
-
 function StatusIcon({ status }: { status: string }) {
   if (status === "completed") return <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />;
   if (status === "in_progress") return <Loader2 className="h-3.5 w-3.5 text-amber-500 shrink-0" />;

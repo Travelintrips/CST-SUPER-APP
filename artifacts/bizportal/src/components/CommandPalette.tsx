@@ -15,13 +15,13 @@ import {
 } from "@/components/ui/command";
 import {
   LayoutDashboard, Package, Truck, Calculator, Settings, Building2,
-  Users, TrendingUp, ShoppingBag, FileText, Receipt, ClipboardList,
+  TrendingUp, ShoppingBag, FileText, Receipt, ClipboardList,
   UserCircle, BookOpen, Wallet, FileSpreadsheet, Landmark, Mail,
-  Ship, Boxes, DollarSign, Tags, BarChart2,
+  Ship, Boxes, Tags, BarChart2,
   GitMerge, Bot, ScanLine, MessageCircle, Layers, ImageIcon,
-  Warehouse, LayoutGrid, PackageSearch, ArrowLeftRight, ClipboardCheck,
-  Activity, FlaskConical, GitBranch, RotateCcw, AlertTriangle,
-  PackageCheck, FileBarChart2, ShieldCheck, Shield, Calendar,
+  PackageSearch, ClipboardCheck,
+  FlaskConical, RotateCcw,
+  PackageCheck, ShieldCheck, Shield,
   Network, Clock, X, Pin, PinOff,
   type LucideIcon,
 } from "lucide-react";

@@ -3,7 +3,7 @@
  */
 import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
-import { Clock, AlertTriangle, CheckCircle } from "lucide-react";
+import { Clock, AlertTriangle } from "lucide-react";
 
 interface SlaData {
   status: string;

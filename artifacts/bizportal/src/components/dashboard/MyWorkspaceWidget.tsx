@@ -4,7 +4,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Star, Clock, Pin, ExternalLink, LayoutGrid } from "lucide-react";
 import { COMMANDS, RECENT_KEY, PINNED_KEY, RECENT_TIMES_KEY, readStore } from "@/components/CommandPalette";
 import { useFavorites } from "@/hooks/useFavorites";
-import { cn } from "@/lib/utils";
 
 function relativeTime(ts: number): string {
   if (!ts) return "—";

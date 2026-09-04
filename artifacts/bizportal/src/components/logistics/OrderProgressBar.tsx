@@ -49,30 +49,6 @@ const STATUS_TO_STEP: Record<string, StepKey> = {
   "Confirmed":         "VENDOR_CONFIRMED",
 };
 
-const STATUS_RANK: Record<string, number> = {
-  "Order Received":    0,
-  "Admin Review":      1,
-  "RFQ Sent":          2,
-  "Quote Received":    3,
-  "Customer Approval": 4,
-  "Vendor Confirmed":  5,
-  "In Progress":       6,
-  "Pickup":            7,
-  "In Transit":        8,
-  "Arrived":           9,
-  "Delivered":         10,
-  "POD Uploaded":      11,
-  "Invoice Issued":    12,
-  "Payment Received":  13,
-  "Completed":         14,
-  "New Order":         0,
-  "Under Review":      1,
-  "Quotation Sent":    3,
-  "Customer Approved": 5,
-  "Confirmed":         5,
-  "Done":              14,
-};
-
 export function deriveCompletedSteps(order: {
   status: string;
   latestRfq?: { rfqStatus?: string } | null;

@@ -1,5 +1,5 @@
 import React from "react";
-import { Router as WouterRouter, Switch, Route, Redirect } from "wouter";
+import { Router as WouterRouter, Redirect } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -10,7 +10,6 @@ import { useGetCurrentUser, getGetCurrentUserQueryKey } from "@workspace/api-cli
 import { AppRoutes } from "@/routes";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { OrderNotificationsProvider } from "@/contexts/OrderNotificationsContext";
-import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { BIZ_ASSETS } from "@/lib/staticAssets";
 
 
@@ -168,7 +167,7 @@ function DevLoginSection() {
         return;
       }
       window.location.href = "/bizportal/";
-    } catch (err) {
+    } catch {
       setError("Gagal terhubung ke server. Pastikan API Server berjalan.");
     } finally {
       setLoading(false);

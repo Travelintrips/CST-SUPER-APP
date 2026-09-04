@@ -1,7 +1,6 @@
-import { useState, useCallback } from "react";
 import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Star, ChevronRight, ExternalLink } from "lucide-react";
+import { Star, ExternalLink } from "lucide-react";
 import { EmptyState } from "@/components/ui/empty-state";
 import { COMMANDS } from "@/components/CommandPalette";
 import { useFavorites } from "@/hooks/useFavorites";
