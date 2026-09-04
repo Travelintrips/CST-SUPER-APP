@@ -122,17 +122,20 @@ function phoneMatchCandidates(normalizedPhone: string): string[] {
   return [...candidates];
 }
 
-async function findPortalCustomersByPhone(normalizedPhone: string) {
+async function findPortalCustomersByPhone(normalizedPhone: string, excludeCustomerId?: number) {
   const candidates = phoneMatchCandidates(normalizedPhone);
   const digitsOnlyPhone = sql`regexp_replace(coalesce(${portalCustomersTable.phone}, ''), '[^0-9]', '', 'g')`;
+  const phoneCondition = or(
+    inArray(portalCustomersTable.phone, candidates),
+    eq(digitsOnlyPhone, normalizedPhone),
+  )!;
 
   return db
     .select()
     .from(portalCustomersTable)
-    .where(or(
-      inArray(portalCustomersTable.phone, candidates),
-      eq(digitsOnlyPhone, normalizedPhone),
-    ))
+    .where(excludeCustomerId
+      ? and(phoneCondition, sql`${portalCustomersTable.id} <> ${excludeCustomerId}`)
+      : phoneCondition)
     .limit(2);
 }
 
@@ -364,41 +367,67 @@ export async function waRegister(params: {
     if (existingEmail) throw new AuthServiceError(409, "Email sudah terdaftar.");
   }
 
-  const [created] = await db
-    .insert(portalCustomersTable)
-    .values({
-      name: String(name),
-      email: finalEmail,
-      passwordHash: "",
-      phone,
-      company: role === "vendor" && company ? String(company) : null,
-      customerType: role === "customer" ? customerType : null,
-      role,
-    })
-    .returning();
-
   let organization: Awaited<ReturnType<typeof configureCustomerOrganization>> | null = null;
-  if (role === "customer") {
-    organization = await configureCustomerOrganization({
-      customerId: created.id,
-      customerType: customerType!,
-      companyId,
-      requestedCompanyName: requestedCompanyName ?? company,
-      requestedRegistrationNumber,
+  let created!: typeof portalCustomersTable.$inferSelect;
+  let deviceToken: string | undefined;
+  try {
+    const result = await db.transaction(async (tx) => {
+      const [account] = await tx
+        .insert(portalCustomersTable)
+        .values({
+          name: String(name).trim(),
+          email: finalEmail,
+          passwordHash: "",
+          phone,
+          company: role === "vendor" && company ? String(company).trim() : null,
+          customerType: role === "customer" ? customerType : null,
+          role,
+        })
+        .returning();
+      if (!account) throw new AuthServiceError(500, "Akun portal gagal dibuat.");
+
+      if (role === "customer") {
+        organization = await configureCustomerOrganization({
+          customerId: account.id,
+          customerType: customerType!,
+          companyId,
+          requestedCompanyName: requestedCompanyName ?? company,
+          requestedRegistrationNumber,
+          executor: tx,
+        });
+      }
+
+      if (Array.isArray(serviceIds) && serviceIds.length > 0) {
+        await tx
+          .insert(portalCustomerServicesTable)
+          .values((serviceIds as number[]).map((sid) => ({ customerId: account.id, serviceId: Number(sid) })))
+          .onConflictDoNothing();
+      }
+
+      // Consume the verified token in the same transaction as account creation.
+      await tx.update(waOtpCodesTable)
+        .set({ verifyToken: null, verifyTokenHash: null, expiresAt: new Date(0) })
+        .where(eq(waOtpCodesTable.id, otp.id));
+
+      if (daysForTrustedDevice(rememberDays) && account.phone) {
+        deviceToken = randomUUID();
+        const expiresAt = new Date(Date.now() + daysForTrustedDevice(rememberDays)! * 86400_000);
+        await tx.insert(trustedDevicesTable).values({
+          phone: account.phone,
+          deviceToken,
+          deviceTokenHash: hashToken(deviceToken),
+          expiresAt,
+        });
+      }
+      return account;
     });
+    created = result;
+  } catch (error) {
+    if ((error as { code?: string })?.code === "23505") {
+      throw new AuthServiceError(409, "Email atau nomor HP sudah terdaftar.");
+    }
+    throw error;
   }
-
-  if (Array.isArray(serviceIds) && serviceIds.length > 0) {
-    await db
-      .insert(portalCustomerServicesTable)
-      .values((serviceIds as number[]).map((sid) => ({ customerId: created.id, serviceId: Number(sid) })))
-      .onConflictDoNothing();
-  }
-
-  // Invalidate verifyToken — clear both plaintext AND hash, force expiry for true single-use semantics
-  await db.update(waOtpCodesTable)
-    .set({ verifyToken: null, verifyTokenHash: null, expiresAt: new Date(0) })
-    .where(eq(waOtpCodesTable.id, otp.id));
 
   const token = await signPortalJwt({
     sub: String(created.id),
@@ -406,16 +435,6 @@ export async function waRegister(params: {
     customerId: created.id,
     role: created.role,
   });
-
-  let deviceToken: string | undefined;
-  const days =
-    typeof rememberDays === "number" && rememberDays > 0 && rememberDays <= 90 ? rememberDays : null;
-  if (days && created.phone) {
-    deviceToken = randomUUID();
-    const expiresAt = new Date(Date.now() + days * 86400_000);
-    // Phase 1B: store HMAC-SHA256 hash; raw token returned to client only
-    await db.insert(trustedDevicesTable).values({ phone: created.phone, deviceToken, deviceTokenHash: hashToken(deviceToken), expiresAt });
-  }
 
   return {
     token,
@@ -431,6 +450,10 @@ export async function waRegister(params: {
     },
     organization,
   };
+}
+
+function daysForTrustedDevice(value: unknown): number | null {
+  return typeof value === "number" && value > 0 && value <= 90 ? value : null;
 }
 
 /**
@@ -514,6 +537,7 @@ export async function waLogin(
  * POST /auth/wa-trusted-login — login tanpa OTP pakai device token tersimpan
  */
 export async function waTrustedLogin(rawPhone: string, deviceToken: string) {
+  const normalizedPhone = normalizePhoneID(rawPhone);
   const [device] = await db
     .select()
     .from(trustedDevicesTable)
@@ -524,7 +548,10 @@ export async function waTrustedLogin(rawPhone: string, deviceToken: string) {
           eq(trustedDevicesTable.deviceTokenHash, hashToken(String(deviceToken))),
           and(isNull(trustedDevicesTable.deviceTokenHash), eq(trustedDevicesTable.deviceToken, String(deviceToken)))
         ),
-        eq(trustedDevicesTable.phone, String(rawPhone))
+        eq(
+          sql`regexp_replace(${trustedDevicesTable.phone}, '[^0-9]', '', 'g')`,
+          normalizedPhone,
+        )
       )
     )
     .limit(1);
@@ -535,11 +562,7 @@ export async function waTrustedLogin(rawPhone: string, deviceToken: string) {
     throw new AuthServiceError(401, "Sesi perangkat kadaluarsa.", { payload: { expired: true } });
   }
 
-  const matches = await db
-    .select()
-    .from(portalCustomersTable)
-    .where(eq(portalCustomersTable.phone, device.phone))
-    .limit(2);
+  const matches = await findPortalCustomersByPhone(normalizedPhone);
 
   if (matches.length !== 1) throw new AuthServiceError(401, "Akun tidak ditemukan.");
   const user = matches[0];
@@ -670,6 +693,12 @@ export async function signup(params: {
 
   const ALLOWED_ROLES = ["customer", "vendor"];
   const role = ALLOWED_ROLES.includes(String(requestedRole)) ? String(requestedRole) : "customer";
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailLower)) {
+    throw new AuthServiceError(400, "Format email tidak valid.");
+  }
+  if (String(password).length < 8) {
+    throw new AuthServiceError(400, "Password minimal 8 karakter.");
+  }
   if (role === "customer" && customerType !== undefined && customerType !== "individual" && customerType !== "company") {
     throw new AuthServiceError(400, "Tipe customer tidak valid.");
   }
@@ -689,36 +718,40 @@ export async function signup(params: {
   }
   const passwordHash = await bcrypt.hash(String(password), 12);
 
-  const [created] = await db
-    .insert(portalCustomersTable)
-    .values({
-      name: String(name),
+  let organization: Awaited<ReturnType<typeof configureCustomerOrganization>> | null = null;
+  const created = await db.transaction(async (tx) => {
+    const [account] = await tx.insert(portalCustomersTable).values({
+      name: String(name).trim(),
       email: emailLower,
       passwordHash,
       phone: normalizedPhone,
-      company: role === "vendor" && company ? String(company) : null,
+      company: role === "vendor" && company ? String(company).trim() : null,
       customerType: role === "customer" ? customerType ?? null : null,
       role,
-    })
-    .returning();
-
-  let organization: Awaited<ReturnType<typeof configureCustomerOrganization>> | null = null;
-  if (role === "customer" && customerType) {
-    organization = await configureCustomerOrganization({
-      customerId: created.id,
-      customerType,
-      companyId,
-      requestedCompanyName: requestedCompanyName ?? company,
-      requestedRegistrationNumber,
-    });
-  }
-
-  if (Array.isArray(serviceIds) && serviceIds.length > 0) {
-    await db
-      .insert(portalCustomerServicesTable)
-      .values((serviceIds as number[]).map((sid) => ({ customerId: created.id, serviceId: Number(sid) })))
-      .onConflictDoNothing();
-  }
+    }).returning();
+    if (!account) throw new AuthServiceError(500, "Akun portal gagal dibuat.");
+    if (role === "customer" && customerType) {
+      organization = await configureCustomerOrganization({
+        customerId: account.id,
+        customerType,
+        companyId,
+        requestedCompanyName: requestedCompanyName ?? company,
+        requestedRegistrationNumber,
+        executor: tx,
+      });
+    }
+    if (Array.isArray(serviceIds) && serviceIds.length > 0) {
+      await tx.insert(portalCustomerServicesTable)
+        .values((serviceIds as number[]).map((sid) => ({ customerId: account.id, serviceId: Number(sid) })))
+        .onConflictDoNothing();
+    }
+    return account;
+  }).catch((error: unknown) => {
+    if ((error as { code?: string })?.code === "23505") {
+      throw new AuthServiceError(409, "Email atau nomor HP sudah terdaftar.");
+    }
+    throw error;
+  });
 
   const token = await signPortalJwt({
     sub: String(created.id),
@@ -850,7 +883,15 @@ export async function syncProfile(
 
   const patch: Record<string, unknown> = {};
   if (name) patch.name = String(name);
-  if (phone !== undefined) patch.phone = phone ? String(phone) : null;
+  if (phone !== undefined) {
+    if (!phone) patch.phone = null;
+    else {
+      const normalizedPhone = normalizePhoneID(String(phone));
+      const [existing] = await findPortalCustomersByPhone(normalizedPhone, customerId);
+      if (existing) throw new AuthServiceError(409, "Nomor HP sudah terdaftar.");
+      patch.phone = normalizedPhone;
+    }
+  }
   if (customerType !== undefined) {
     if (customerType !== "individual" && customerType !== "company") {
       throw new AuthServiceError(400, "Tipe customer tidak valid.");

@@ -9,7 +9,7 @@ import {
   identityDocumentsTable,
   portalCustomersTable,
 } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, or, inArray, sql } from "drizzle-orm";
 import { deleteFromSupabase } from "../supabaseStorage.js";
 import { ObjectStorageService } from "../objectStorage.js";
 import { sendViaService as sendWhatsApp } from "../waTransport.js";
@@ -19,6 +19,7 @@ import { NotificationService } from "./notificationService.js";
 import OpenAI from "openai";
 import { KtpOcrError, classifyKtpOcrError } from "./ktpOcrErrors.js";
 import { configureCustomerOrganization } from "./portalCustomerOrganizationService.js";
+import { normalizePhone } from "../phoneUtils.js";
 
 // ── OpenAI client ─────────────────────────────────────────────────────────────
 
@@ -246,6 +247,32 @@ export async function completeOnboarding(
   }
   const status = isCustomer ? "active" : "pending";
   const now = new Date();
+  const normalizedPhone = normalizePhone(String(phone));
+  if (normalizedPhone.length < 10) {
+    throw new OnboardingServiceError(400, "Nomor telepon tidak valid.");
+  }
+
+  // Fail before mutating user_profiles. The database unique index remains the
+  // final race guard, but this gives an existing-account edit a clean response.
+  const [phoneOwner] = await db
+    .select({ id: portalCustomersTable.id })
+    .from(portalCustomersTable)
+    .where(and(
+      or(
+        inArray(portalCustomersTable.phone, [
+          normalizedPhone,
+          `0${normalizedPhone.slice(2)}`,
+          `+${normalizedPhone}`,
+          `620${normalizedPhone.slice(2)}`,
+        ]),
+        eq(sql`regexp_replace(coalesce(${portalCustomersTable.phone}, ''), '[^0-9]', '', 'g')`, normalizedPhone),
+      ),
+      sql`${portalCustomersTable.id} <> ${customerId}`,
+    ))
+    .limit(1);
+  if (phoneOwner) {
+    throw new OnboardingServiceError(409, "Nomor telepon sudah digunakan oleh akun lain. Gunakan nomor yang berbeda.");
+  }
 
   // Fetch ktpUrl lama sebelum upsert (untuk cleanup storage jika berubah)
   const [existingProfile] = await db
@@ -257,7 +284,7 @@ export async function completeOnboarding(
   await db.insert(userProfilesTable).values({
     customerId,
     fullName: String(fullName),
-    phone: String(phone),
+    phone: normalizedPhone,
     address: String(address),
     accountType: String(accountType),
     status,
@@ -268,7 +295,7 @@ export async function completeOnboarding(
     target: userProfilesTable.customerId,
     set: {
       fullName: String(fullName),
-      phone: String(phone),
+      phone: normalizedPhone,
       address: String(address),
       accountType: String(accountType),
       status,
@@ -288,7 +315,7 @@ export async function completeOnboarding(
   try {
     await db.update(portalCustomersTable).set({
       name: String(fullName),
-      phone: String(phone),
+      phone: normalizedPhone,
     ...(isCustomer ? { customerType } : {}),
       role: accountType === "vendor"
         ? "vendor"
@@ -346,7 +373,7 @@ export async function completeOnboarding(
       // These values come from the required basic onboarding fields/account.
       // Do not fabricate province, city, postal code, or bank details here.
       picName: fullName,
-      phone: phone,
+       phone: normalizedPhone,
       email: portalCustomer?.email ?? null,
       fullAddress: address,
       legalityDocUrl: vendor.legalityDocUrl ?? null,
@@ -359,7 +386,7 @@ export async function completeOnboarding(
         npwp: vendor.npwp ?? null,
         serviceType: vendor.serviceType ?? null,
         picName: fullName,
-        phone: phone,
+         phone: normalizedPhone,
         email: portalCustomer?.email ?? null,
         fullAddress: address,
         legalityDocUrl: vendor.legalityDocUrl ?? null,
@@ -459,7 +486,7 @@ export async function completeOnboarding(
           orderId:      customerId,
           accountType,
           email:        customer?.email ?? "-",
-          phone,
+           phone: normalizedPhone,
           timestamp,
           message:      `Permohonan akun baru: ${fullName} (${accountType}) — ${timestamp}`,
         });

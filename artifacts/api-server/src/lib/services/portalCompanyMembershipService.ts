@@ -7,6 +7,7 @@ import {
 import { and, asc, eq } from "drizzle-orm";
 
 const BUYER_ROLES = new Set(["requester", "procurement", "finance", "admin", "viewer"]);
+type PortalDbExecutor = Pick<typeof db, "select" | "insert" | "update">;
 
 export class PortalCompanyMembershipError extends Error {
   constructor(
@@ -78,7 +79,10 @@ export async function listPortalCustomerMemberships(customerId: number) {
  * portal_customers.company and customer-submitted profile fields are never used
  * as an authority for this relationship.
  */
-export async function assignPortalCustomerMembership(input: PortalCompanyMembershipInput) {
+export async function assignPortalCustomerMembership(
+  input: PortalCompanyMembershipInput,
+  executor: PortalDbExecutor = db,
+) {
   assertPositiveInteger(input.customerId, "Customer ID");
   assertPositiveInteger(input.companyId, "Company ID");
 
@@ -93,7 +97,7 @@ export async function assignPortalCustomerMembership(input: PortalCompanyMembers
   }
 
   const now = new Date();
-  return db.transaction(async (tx) => {
+  const assign = async (tx: PortalDbExecutor) => {
     const [customer] = await tx
       .select({
         id: portalCustomersTable.id,
@@ -165,7 +169,14 @@ export async function assignPortalCustomerMembership(input: PortalCompanyMembers
       companyCode: company.companyCode,
       companyActive: company.isActive,
     };
-  });
+  };
+
+  // Account registration passes its outer transaction executor so membership
+  // creation cannot commit independently from the portal customer row.
+  if (executor === db) {
+    return db.transaction(async (tx) => assign(tx));
+  }
+  return assign(executor);
 }
 
 export async function deactivatePortalCustomerMembership(customerId: number, companyId: number) {

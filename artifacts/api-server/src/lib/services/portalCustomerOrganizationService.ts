@@ -12,6 +12,7 @@ import {
 } from "./portalCompanyMembershipService.js";
 
 export type CustomerType = "individual" | "company";
+type PortalDbExecutor = Pick<typeof db, "select" | "update" | "insert">;
 
 export class PortalCustomerOrganizationError extends Error {
   constructor(
@@ -67,9 +68,12 @@ export async function listCustomerPortalCompanies(search?: string) {
     .limit(100);
 }
 
-export async function resolveSelectableCustomerPortalCompany(companyId: unknown) {
+export async function resolveSelectableCustomerPortalCompany(
+  companyId: unknown,
+  executor: PortalDbExecutor = db,
+) {
   const id = positiveId(companyId, "Company ID");
-  const [company] = await db
+  const [company] = await executor
     .select({
       id: companiesTable.id,
       name: companiesTable.companyName,
@@ -146,17 +150,21 @@ export async function configureCustomerOrganization(input: {
   companyId?: unknown;
   requestedCompanyName?: unknown;
   requestedRegistrationNumber?: unknown;
+  executor?: PortalDbExecutor;
 }) {
   const customerId = positiveId(input.customerId, "Customer ID");
+  const executor = input.executor ?? db;
   if (input.customerType === "individual") {
-    await db.transaction(async (tx) => {
+    const deactivate = async (tx: PortalDbExecutor) => {
       await tx.update(portalCompanyMembersTable)
         .set({ isActive: false, updatedAt: new Date() })
         .where(eq(portalCompanyMembersTable.portalCustomerId, customerId));
       await tx.update(portalCustomersTable)
         .set({ company: null, customerType: "individual" })
         .where(eq(portalCustomersTable.id, customerId));
-    });
+    };
+    if (executor === db) await db.transaction(async (tx) => deactivate(tx));
+    else await deactivate(executor);
     return { customerType: "individual" as const, companyId: null, membership: null, pendingRequest: null };
   }
 
@@ -164,19 +172,19 @@ export async function configureCustomerOrganization(input: {
     throw new PortalCustomerOrganizationError(400, "Tipe customer tidak valid.");
   }
 
-  await db.update(portalCustomersTable)
+  await executor.update(portalCustomersTable)
     .set({ customerType: "company" })
     .where(eq(portalCustomersTable.id, customerId));
 
   if (input.companyId !== undefined && input.companyId !== null && String(input.companyId).trim() !== "") {
-    const company = await resolveSelectableCustomerPortalCompany(input.companyId);
+    const company = await resolveSelectableCustomerPortalCompany(input.companyId, executor);
     try {
       const membership = await assignPortalCustomerMembership({
         customerId,
         companyId: company.id,
         buyerRole: "requester",
-      });
-      await db.update(portalCustomersTable)
+      }, executor);
+      await executor.update(portalCustomersTable)
         .set({ company: company.name })
         .where(eq(portalCustomersTable.id, customerId));
       return { customerType: "company" as const, companyId: company.id, membership, pendingRequest: null };
@@ -192,7 +200,7 @@ export async function configureCustomerOrganization(input: {
   const requestedRegistrationNumber = input.requestedRegistrationNumber
     ? String(input.requestedRegistrationNumber).trim().slice(0, 100)
     : null;
-  const [existing] = await db
+  const [existing] = await executor
     .select()
     .from(portalCompanyRequestsTable)
     .where(and(
@@ -206,7 +214,7 @@ export async function configureCustomerOrganization(input: {
     return { customerType: "company" as const, companyId: null, membership: null, pendingRequest: existing };
   }
 
-  const [request] = await db.insert(portalCompanyRequestsTable).values({
+  const [request] = await executor.insert(portalCompanyRequestsTable).values({
     portalCustomerId: customerId,
     requestedCompanyName,
     requestedRegistrationNumber,

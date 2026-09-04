@@ -11,6 +11,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useLanguage } from "@/i18n/LanguageContext";
 
 type UserRole = "customer" | "vendor";
+type CustomerType = "individual" | "company";
 type Step = "phone" | "otp" | "profile";
 
 interface SimpleItem {
@@ -37,6 +38,7 @@ export default function Register() {
   const [verifyToken, setVerifyToken] = useState("");
 
   const [role, setRole] = useState<UserRole>("customer");
+  const [customerType, setCustomerType] = useState<CustomerType>("individual");
   const [name, setName] = useState("");
   const [company, setCompany] = useState("");
   const [email, setEmail] = useState("");
@@ -151,7 +153,10 @@ export default function Register() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          verifyToken, name, role, company: company || null,
+          verifyToken, name, role,
+          customerType: role === "customer" ? customerType : undefined,
+          company: company || null,
+          requestedCompanyName: role === "customer" && customerType === "company" ? company || null : undefined,
           email: email || null,
           // Only pass IDs that actually belong to services (jasa), not products (barang)
           serviceIds: serviceIds.filter(id => services.some(s => s.id === id)),
@@ -325,6 +330,27 @@ export default function Register() {
                 <Label>{role === "vendor" ? "Nama Perusahaan / Armada" : "Perusahaan (opsional)"}</Label>
                 <Input value={company} onChange={(e) => setCompany(e.target.value)} placeholder={role === "vendor" ? "PT Mitra Logistik" : "Acme Inc."} />
               </div>
+
+              {role === "customer" && (
+                <div className="space-y-2">
+                  <Label>Tipe customer</Label>
+                  <div className="grid grid-cols-2 gap-3">
+                    {(["individual", "company"] as const).map((value) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => setCustomerType(value)}
+                        className={`rounded-lg border-2 p-3 text-left text-sm transition ${customerType === value ? "border-emerald-500 bg-emerald-50" : "border-border"}`}
+                      >
+                        <p className="font-semibold">{value === "individual" ? "Perorangan" : "Perusahaan"}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {value === "individual" ? "Akun pribadi" : "Gunakan akses perusahaan"}
+                        </p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div className="space-y-2">
                 <Label>{t("registerPage.emailLabel")}</Label>
