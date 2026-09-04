@@ -72,12 +72,34 @@ function resolveConnectionString(): string {
   const isProd = process.env.NODE_ENV === "production" || !!process.env.REPLIT_DEPLOYMENT;
   // PROD: hanya pakai SUPABASE_DATABASE_URL / DATABASE_URL / SUPABASE_PG_URL
   //       JANGAN fallback ke SUPABASE_DATABASE_URL_DEV di prod
-  // DEV : gunakan URL database development/pooler yang di-inject sebagai
-  // SUPABASE_DATABASE_URL_DEV atau canonical SUPABASE_DATABASE_URL.
-  // Jangan memakai SUPABASE_MIGRATION_URL di sini: pada arsitektur secret
-  // bersama, URL tersebut adalah direct connection production untuk tooling
-  // migrasi dan dapat mengarahkan preview ke database yang salah/kehabisan
-  // kapasitas. Runtime development harus tetap berada di database dev.
+  // DEV : gunakan target development yang writable. Some Supabase transaction
+  // pooler targets can expose a read-only session when the API opens its
+  // bounded multi-client pool, while the same DEV project remains writable
+  // through SUPABASE_MIGRATION_URL. That URL is accepted only after strict
+  // target identity matching; it is never a blind fallback.
+  function sameDatabaseTarget(left: string, right: string): boolean {
+    try {
+      const a = new URL(left);
+      const b = new URL(right);
+      return (
+        ["postgres:", "postgresql:"].includes(a.protocol) &&
+        a.protocol === b.protocol &&
+        a.hostname.toLowerCase() === b.hostname.toLowerCase() &&
+        a.pathname === b.pathname &&
+        decodeURIComponent(a.username) === decodeURIComponent(b.username)
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  const matchedDevMigrationUrl =
+    !isProd &&
+    process.env.SUPABASE_MIGRATION_URL &&
+    process.env.SUPABASE_DATABASE_URL_DEV &&
+    sameDatabaseTarget(process.env.SUPABASE_MIGRATION_URL, process.env.SUPABASE_DATABASE_URL_DEV)
+      ? process.env.SUPABASE_MIGRATION_URL
+      : undefined;
   const candidates = isProd
     ? [
         process.env.SUPABASE_DATABASE_URL,
@@ -85,6 +107,7 @@ function resolveConnectionString(): string {
         process.env.SUPABASE_PG_URL,
       ]
     : [
+        matchedDevMigrationUrl,
         process.env.SUPABASE_DATABASE_URL_DEV,
         process.env.SUPABASE_DATABASE_URL,
         process.env.DATABASE_URL,
@@ -94,7 +117,8 @@ function resolveConnectionString(): string {
     if (url && /^postgres(?:ql)?:\/\//i.test(url)) {
       const label = isProd ? "production" : "development";
       const masked = url.replace(/\/\/[^@]+@/, "//***@").split("?")[0];
-      console.log(`[db] env=${label} → ${masked}`);
+      const source = url === matchedDevMigrationUrl ? " (matched DEV migration target)" : "";
+      console.log(`[db] env=${label}${source} → ${masked}`);
       return url;
     }
   }
