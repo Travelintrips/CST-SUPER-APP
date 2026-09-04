@@ -1375,9 +1375,9 @@ function AiRulesTab() {
       )}
 
       <Dialog open={showModal} onOpenChange={setShowModal}>
-        <DialogContent className="bg-slate-900 border-slate-700 text-white max-w-xl">
+        <DialogContent className="grid-rows-[auto_minmax(0,1fr)_auto] max-h-[calc(100dvh-2rem)] overflow-hidden bg-slate-900 border-slate-700 text-white max-w-xl">
           <DialogHeader><DialogTitle>{editRow ? "Edit" : "Tambah"} AI Rule</DialogTitle></DialogHeader>
-          <div className="space-y-3 py-2">
+          <div className="min-h-0 overflow-y-auto overscroll-contain space-y-3 py-2 pr-1">
             <div>
               <Label className="text-slate-300">Nama *</Label>
               <Input value={form.name ?? ""} onChange={e => setForm((f: any) => ({ ...f, name: e.target.value }))}
