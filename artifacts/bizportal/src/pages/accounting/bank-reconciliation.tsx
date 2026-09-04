@@ -6567,6 +6567,9 @@ export default function BankReconciliationPage() {
   } | null>(null);
   const [qrisPaymentAmount, setQrisPaymentAmount] = useState("");
   const [qrisPaymentAmountReason, setQrisPaymentAmountReason] = useState("");
+  const qrisPaymentAmountDelta = qrisAmountTarget && Number.isFinite(Number(qrisPaymentAmount))
+    ? Number(qrisPaymentAmount) - qrisAmountTarget.currentAmount
+    : null;
   const [qrisSettlementResetTarget, setQrisSettlementResetTarget] = useState<{
     paymentId: number;
     paymentNumber: string;
@@ -8503,10 +8506,6 @@ export default function BankReconciliationPage() {
                                       const numericPaymentId = Number(paymentId);
                                       const numericGrossAmount = Number(grossAmount ?? 0);
                                       const canEditPaymentDate = Number.isInteger(numericPaymentId) && numericPaymentId > 0;
-                                      const canEditPaymentAmount =
-                                        canEditPaymentDate
-                                        && Number.isFinite(numericGrossAmount)
-                                        && numericGrossAmount > 0;
                                       const paymentSettlementStatus = String(
                                         item.settlementStatus
                                         ?? item.settlement_status
@@ -8521,6 +8520,12 @@ export default function BankReconciliationPage() {
                                             ?? []
                                           ).map(Number),
                                         ).has(numericPaymentId);
+                                      const canEditPaymentAmount =
+                                        canEditPaymentDate
+                                        && Number.isFinite(numericGrossAmount)
+                                        && numericGrossAmount > 0
+                                        && paymentSettlementStatus === "unsettled"
+                                        && !hasActiveSettlementMembership;
                                       const canRequestUnsettle =
                                         canEditPaymentDate
                                         && paymentSettlementStatus !== "unsettled"
@@ -9018,6 +9023,21 @@ export default function BankReconciliationPage() {
                   <p className="mt-1 font-semibold">
                     {Number(qrisPaymentAmount) > 0 ? idr(Number(qrisPaymentAmount)) : "—"}
                   </p>
+                </div>
+              </div>
+              <div className="rounded-md border border-indigo-200 bg-indigo-50/70 px-3 py-2 text-sm text-indigo-950 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-100">
+                <p className="font-medium">Ringkasan dampak</p>
+                <div className="mt-1 space-y-0.5 text-xs">
+                  <p>
+                    Selisih jurnal additive:{" "}
+                    <strong>
+                      {qrisPaymentAmountDelta == null || !Number.isFinite(qrisPaymentAmountDelta)
+                        ? "—"
+                        : `${qrisPaymentAmountDelta >= 0 ? "+" : "-"}${idr(Math.abs(qrisPaymentAmountDelta))}`}
+                    </strong>
+                  </p>
+                  <p>Jurnal posted lama tetap immutable; MDR/net payment dihitung ulang dari nominal baru.</p>
+                  <p>Kandidat QRIS diregenerasi setelah commit dan tetap review-only.</p>
                 </div>
               </div>
               <div className="space-y-2">

@@ -6237,6 +6237,9 @@ export async function runSportCenterMigration(): Promise<void> {
       CREATE UNIQUE INDEX IF NOT EXISTS accounting_entries_canonical_event_uniq
         ON accounting_entries(company_id, source, source_event_id)
         WHERE source = 'sport_center_payment' AND source_event_id IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS accounting_entries_sport_amount_correction_event_uniq
+        ON accounting_entries(company_id, source, source_event_id)
+        WHERE source = 'sport_center_amount_correction' AND source_event_id IS NOT NULL;
     `);
 
     // ── FASE 6C: recurring_expenses table ────────────────────────────────────

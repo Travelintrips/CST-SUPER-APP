@@ -60,6 +60,10 @@ export async function correctPostedSportPaymentAmount(
   if (reason.length < 5 || reason.length > 500) {
     fail("Alasan koreksi wajib diisi (5–500 karakter)", "INVALID_REASON", 400);
   }
+  // A booking can legitimately have more than one payment.  The correction
+  // identity therefore belongs to the canonical payment, not only to the
+  // booking that owns it.
+  const correctionSourceEventId = `sport-payment-amount-correction:${input.paymentId}`;
 
   const sourceResult = await tx.execute(sql`
     SELECT
@@ -192,7 +196,8 @@ export async function correctPostedSportPaymentAmount(
     FROM public.accounting_entries
     WHERE company_id = ${input.companyId}
       AND source = 'sport_center_amount_correction'
-      AND source_id = ${Number(source.booking_id)}
+      AND source_id = ${input.paymentId}
+      AND source_event_id = ${correctionSourceEventId}
       AND status IN ('draft', 'pending_approval', 'approved', 'posted')
     ORDER BY id DESC
     LIMIT 1
@@ -317,8 +322,8 @@ export async function correctPostedSportPaymentAmount(
       ref: `${String(source.booking_number)}-AMOUNT-CORRECTION-${input.paymentId}`,
       description: `[KOREKSI NOMINAL PAYMENT] ${String(source.booking_number)} ${String(source.customer_name ?? "")}: ${reason}`,
       source: "sport_center_amount_correction",
-      sourceId: Number(source.booking_id),
-      sourceEventId: `sport-payment-amount-correction:${input.paymentId}:${decision.amount.toFixed(2)}`,
+      sourceId: input.paymentId,
+      sourceEventId: correctionSourceEventId,
       sourceModule: "sport_center_payment",
       companyId: input.companyId,
       costCenterId: await resolveCostCenterId("SPORT_CENTER", input.companyId, tx),
