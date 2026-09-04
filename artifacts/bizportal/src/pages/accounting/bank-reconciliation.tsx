@@ -4518,6 +4518,13 @@ function MutationCard({
   const amount = Number(m.amount) || 0;
   const isIN   = m.direction === "IN";
   const isQris = isQrisMutation(m);
+  // QRIS candidates without a batch audit are still valuable reviewer
+  // evidence. They must be visible on the card, but they must not be
+  // selectable through the generic candidate approval flow.
+  const candidateSelectionEnabled =
+    !isQris
+    && canApprove(m)
+    && onToggleCandidate != null;
   const bestPaymentType = candidateSportPaymentType(best, m);
   const hasBankTransferCandidate = bestPaymentType === "bank_transfer";
   const canRematchHistoricalReview = m.status === "manual_review"
@@ -4704,23 +4711,24 @@ function MutationCard({
                <MatchingReviewReasonBlock mutation={m} candidate={best} />
              )}
 
-            {!isQris && matchingCandidates.length > 0 && (
+            {matchingCandidates.length > 0 && (
               <div
                 className="mt-2 rounded-md border border-green-800/60 bg-card px-3 py-2"
                 onClick={e => e.stopPropagation()}
               >
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-xs font-semibold text-green-300">
-                    Kandidat yang cocok
+                    {candidateSelectionEnabled ? "Kandidat yang cocok" : "Kandidat pencocokan"}
                   </p>
                   <span className="text-[10px] text-green-400">
-                    Pilih satu kandidat
+                    {candidateSelectionEnabled ? "Pilih satu kandidat" : "Bukti tersimpan"}
                   </span>
                 </div>
                 <div className="mt-1.5 space-y-1.5">
                   {matchingCandidates.map(candidate => {
                     const candidateDetails = candidate.details;
                     const checked = selectedCandidateId === candidate.id;
+                    const candidateApproved = String(candidate.status ?? "").toLowerCase() === "approved";
                     const candidateName = candidateDetails?.name ?? candidate.customer_name;
                     const candidateReference =
                       candidateDetails?.paymentNumber
@@ -4729,25 +4737,45 @@ function MutationCard({
                     return (
                       <div
                         key={candidate.id}
-                        className={`flex cursor-pointer items-start gap-2 rounded border px-2 py-1.5 transition-colors ${
+                        className={`flex items-start gap-2 rounded border px-2 py-1.5 transition-colors ${
+                          candidateSelectionEnabled ? "cursor-pointer" : "cursor-default"
+                        } ${
                           checked
                             ? "border-green-400 bg-muted shadow-sm"
                             : "border-border bg-background/70 hover:bg-muted"
                         }`}
                       >
-                        <Checkbox
-                          checked={checked}
-                          onCheckedChange={value => onToggleCandidate?.(m.id, candidate.id, value === true)}
-                          onClick={e => e.stopPropagation()}
-                          aria-label={`Pilih kandidat ${candidateReference}`}
-                          className="mt-0.5"
-                        />
+                        {candidateSelectionEnabled ? (
+                          <Checkbox
+                            checked={checked}
+                            onCheckedChange={value => onToggleCandidate?.(m.id, candidate.id, value === true)}
+                            onClick={e => e.stopPropagation()}
+                            aria-label={`Pilih kandidat ${candidateReference}`}
+                            className="mt-0.5"
+                          />
+                        ) : (
+                          <span
+                            className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[10px] ${
+                              candidateApproved
+                                ? "border-green-500 bg-green-500 text-white"
+                                : "border-green-400 text-green-300"
+                            }`}
+                            aria-label={candidateApproved ? "Kandidat sudah digunakan" : "Kandidat pencocokan"}
+                          >
+                            {candidateApproved ? "✓" : "•"}
+                          </span>
+                        )}
                         <div className="min-w-0 flex-1">
                           <span className="flex items-center justify-between gap-2">
                             <span className="truncate text-xs font-medium text-foreground">
                               {candidateName || `${CANDIDATE_TYPE_LABELS[candidate.candidate_type] ?? candidate.candidate_type} #${candidate.candidate_id}`}
                             </span>
-                            <ScoreBadge score={candidate.match_score} />
+                            <span className="flex shrink-0 items-center gap-1.5">
+                              {candidateApproved && (
+                                <span className="text-[10px] font-medium text-green-400">Sudah digunakan</span>
+                              )}
+                              <ScoreBadge score={candidate.match_score} />
+                            </span>
                           </span>
                           <span className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground">
                             <span>{candidateReference}</span>
