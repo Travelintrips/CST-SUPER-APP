@@ -40,6 +40,7 @@ import { runMktVendorInvoiceMigration } from "./lib/mktVendorInvoiceMigration.js
 import { runMktApPreparationMigration } from "./lib/mktApPreparationMigration.js";
 import { runMktPaymentHandoffMigration } from "./lib/mktPaymentHandoffMigration.js";
 import { runMktAccountingHandoffMigration } from "./lib/mktAccountingHandoffMigration.js";
+import { runVendorPaymentHardeningMigration } from "./lib/vendorPaymentHardeningMigration.js";
 import { runMktReconciliationLinkMigration } from "./lib/mktReconciliationLinkMigration.js";
 import { seedAccountingDefaults, seedAdditionalTaxes, backfillExpenseCategoryAccounts } from "./lib/accountingSeed.js";
 
@@ -286,6 +287,7 @@ async function main() {
   await runSafe("bankDisbursement", runBankDisbursementMigration);
   await runSafe("expenseDisbursementBridge", runExpenseDisbursementBridgeMigration);
   await runSafe("vendorPayments", runVendorPaymentsMigration);
+  await runSafe("vendorPaymentHardening", runVendorPaymentHardeningMigration);
   await runSafe("kasBank", runKasBankMigration);
   await runSafe("cashBank", runCashBankMigration);
   await runSafe("financeCore", runFinanceCoreMigration);

@@ -300,6 +300,9 @@ export const vendorInvoicesTable = pgTable("vendor_invoices", {
   taxAmount: numeric("tax_amount", { precision: 14, scale: 2 }).notNull().default("0"),
   taxReviewStatus: text("tax_review_status").notNull().default("not_required"),
   taxReviewReason: text("tax_review_reason"),
+  withholdingReviewStatus: text("withholding_review_status").notNull().default("not_required"),
+  withholdingReviewCompletedBy: text("withholding_review_completed_by"),
+  withholdingReviewCompletedAt: timestamp("withholding_review_completed_at"),
   withholdingTaxType: text("withholding_tax_type"),
   taxObject: text("tax_object"),
   withholdingTaxAmount: numeric("withholding_tax_amount", { precision: 14, scale: 2 }),
@@ -342,9 +345,102 @@ export const vendorInvoiceLinesTable = pgTable("vendor_invoice_lines", {
   subtotal: numeric("subtotal", { precision: 14, scale: 2 }).notNull().default("0"),
   taxAmount: numeric("tax_amount", { precision: 14, scale: 2 }).notNull().default("0"),
   coaHint: text("coa_hint"),
+  coaAccountId: integer("coa_account_id"),
+  coaResolutionStatus: text("coa_resolution_status").notNull().default("unresolved"),
+  coaConfirmedBy: text("coa_confirmed_by"),
+  coaConfirmedAt: timestamp("coa_confirmed_at"),
+  coaMappingKey: text("coa_mapping_key"),
   notes: text("notes"),
 }, (t) => [
   index("vi_lines_invoice_idx").on(t.invoiceId),
+]);
+
+/**
+ * One row per withholding tax object on an invoice line.  Keeping this
+ * separate from vendor_invoices prevents a header-level PPh value from being
+ * applied to every line of a multi-line invoice.
+ */
+export const vendorInvoiceLineTaxesTable = pgTable("vendor_invoice_line_taxes", {
+  id: serial("id").primaryKey(),
+  invoiceLineId: integer("invoice_line_id").notNull()
+    .references(() => vendorInvoiceLinesTable.id, { onDelete: "cascade" }),
+  companyId: integer("company_id").notNull()
+    .references(() => companiesTable.id, { onDelete: "restrict" }),
+  taxType: text("tax_type").notNull(),
+  taxObject: text("tax_object").notNull(),
+  baseAmount: numeric("base_amount", { precision: 14, scale: 2 }).notNull().default("0"),
+  taxAmount: numeric("tax_amount", { precision: 14, scale: 2 }).notNull().default("0"),
+  liabilityAccountId: integer("liability_account_id"),
+  resolutionStatus: text("resolution_status").notNull().default("tax_review"),
+  reviewReason: text("review_reason"),
+  reviewedBy: text("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [
+  index("vendor_invoice_line_taxes_line_idx").on(t.invoiceLineId),
+  index("vendor_invoice_line_taxes_company_idx").on(t.companyId),
+]);
+
+/**
+ * Approved, reusable line-to-COA mappings.  Supplier and product are optional
+ * refinements, but company ownership is mandatory.
+ */
+export const vendorInvoiceCoaMappingsTable = pgTable("vendor_invoice_coa_mappings", {
+  id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull()
+    .references(() => companiesTable.id, { onDelete: "restrict" }),
+  supplierId: integer("supplier_id").references(() => suppliersTable.id, { onDelete: "set null" }),
+  productId: integer("product_id").references(() => productsTable.id, { onDelete: "set null" }),
+  mappingKey: text("mapping_key").notNull(),
+  coaAccountId: integer("coa_account_id").notNull(),
+  status: text("status").notNull().default("approved"),
+  approvedBy: text("approved_by").notNull(),
+  approvedAt: timestamp("approved_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [
+  unique("vendor_invoice_coa_mapping_scope_unique").on(
+    t.companyId, t.supplierId, t.productId, t.mappingKey,
+  ),
+  index("vendor_invoice_coa_mapping_company_idx").on(t.companyId),
+  index("vendor_invoice_coa_mapping_lookup_idx").on(t.companyId, t.supplierId, t.productId, t.mappingKey),
+]);
+
+/**
+ * Withholding evidence/proof lifecycle.  A confirmed tax without a proof row
+ * is deliberately not considered payable/settled.
+ */
+export const vendorWithholdingRecordsTable = pgTable("vendor_withholding_records", {
+  id: serial("id").primaryKey(),
+  companyId: integer("company_id").notNull()
+    .references(() => companiesTable.id, { onDelete: "restrict" }),
+  vendorInvoiceId: integer("vendor_invoice_id").notNull()
+    .references(() => vendorInvoicesTable.id, { onDelete: "restrict" }),
+  invoiceLineId: integer("invoice_line_id").notNull()
+    .references(() => vendorInvoiceLinesTable.id, { onDelete: "restrict" }),
+  lineTaxId: integer("line_tax_id").notNull()
+    .references(() => vendorInvoiceLineTaxesTable.id, { onDelete: "restrict" }),
+  taxType: text("tax_type").notNull(),
+  taxObject: text("tax_object").notNull(),
+  baseAmount: numeric("base_amount", { precision: 14, scale: 2 }).notNull().default("0"),
+  taxAmount: numeric("tax_amount", { precision: 14, scale: 2 }).notNull().default("0"),
+  liabilityAccountId: integer("liability_account_id").notNull(),
+  status: text("status").notNull().default("proof_pending"),
+  proofObjectPath: text("proof_object_path"),
+  proofReference: text("proof_reference"),
+  proofContentType: text("proof_content_type"),
+  proofIssuedAt: timestamp("proof_issued_at"),
+  reviewedBy: text("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at"),
+  postedAt: timestamp("posted_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [
+  unique("vendor_withholding_line_tax_unique").on(t.lineTaxId),
+  index("vendor_withholding_company_idx").on(t.companyId),
+  index("vendor_withholding_invoice_idx").on(t.vendorInvoiceId),
+  index("vendor_withholding_status_idx").on(t.status),
 ]);
 
 // ── Payment Requests ───────────────────────────────────────────────────────────
@@ -540,6 +636,9 @@ export type PurchaseReturn = typeof purchaseReturnsTable.$inferSelect;
 export type PurchaseReturnLine = typeof purchaseReturnLinesTable.$inferSelect;
 export type VendorInvoice = typeof vendorInvoicesTable.$inferSelect;
 export type VendorInvoiceLine = typeof vendorInvoiceLinesTable.$inferSelect;
+export type VendorInvoiceLineTax = typeof vendorInvoiceLineTaxesTable.$inferSelect;
+export type VendorInvoiceCoaMapping = typeof vendorInvoiceCoaMappingsTable.$inferSelect;
+export type VendorWithholdingRecord = typeof vendorWithholdingRecordsTable.$inferSelect;
 export type PaymentRequest = typeof paymentRequestsTable.$inferSelect;
 export type PaymentRequestItem = typeof paymentRequestItemsTable.$inferSelect;
 export type LandedCost = typeof landedCostsTable.$inferSelect;

@@ -172,3 +172,4 @@ export * from "./payroll";
 
 // ── COA Proposal Engine (Task #7) ─────────────────────────────────────────────
 export * from "./coaProposals";
+export * from "./purchaseWorkflow";

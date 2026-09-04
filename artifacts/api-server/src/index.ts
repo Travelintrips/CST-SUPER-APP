@@ -196,6 +196,7 @@ import { runFinanceGovernanceMigration } from "./lib/financeGovernanceMigration.
 import { startDriftMonitorWorker } from "./lib/monitoring/dataDriftDetector.js";
 import { runBankDisbursementMigration, runExpenseDisbursementBridgeMigration } from "./lib/bankDisbursementMigration.js";
 import { runVendorPaymentsMigration } from "./lib/vendorPaymentsMigration.js";
+import { runVendorPaymentHardeningMigration } from "./lib/vendorPaymentHardeningMigration.js";
 import { runKasBankMigration } from "./lib/kasBankMigration.js";
 import { runCashBankMigration } from "./lib/cashBankMigration.js";
 import { runFinanceCoreMigration } from "./lib/financeCoreMigration.js";
@@ -2155,6 +2156,7 @@ async function startServer() {
     .then(() => runWithRetry("Bank disbursement migration", runBankDisbursementMigration))
     .then(() => runWithRetry("Expense-Disbursement bridge migration", runExpenseDisbursementBridgeMigration))
     .then(() => runWithRetry("Vendor payments migration (historical)", runVendorPaymentsMigration))
+    .then(() => runWithRetry("Vendor payment hardening migration", runVendorPaymentHardeningMigration))
     .then(() => runWithRetry("Kas Bank migration", runKasBankMigration))
     .then(() => runWithRetry("Cash Bank enterprise migration", runCashBankMigration))
     .then(() => runWithRetry("Finance core migration", runFinanceCoreMigration))
