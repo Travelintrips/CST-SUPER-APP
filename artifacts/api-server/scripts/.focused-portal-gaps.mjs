@@ -27,6 +27,67 @@ async function http(path, { method = 'GET', headers = {}, body } = {}, expected 
   return { status: response.status, body: parsed, headers: response.headers };
 }
 function auth(token) { return { authorization: `Bearer ${token}` }; }
+function quoteIdent(value) {
+  return `"${String(value).replaceAll('"', '""')}"`;
+}
+async function relationExists(table) {
+  const rows = await db(`
+    SELECT EXISTS (
+      SELECT 1
+      FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name = $1
+    ) AS exists
+  `, [table]);
+  return Boolean(rows[0]?.exists);
+}
+async function tableColumns(table) {
+  if (!await relationExists(table)) return [];
+  const rows = await db(`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = $1
+  `, [table]);
+  return rows.map(row => row.column_name);
+}
+async function idsByMarker(table, markerValue) {
+  if (!await relationExists(table)) return [];
+  const rows = await db(
+    `SELECT t.id FROM ${quoteIdent(table)} AS t WHERE to_jsonb(t)::text LIKE $1`,
+    [`%${markerValue}%`],
+  );
+  return rows.map(row => Number(row.id)).filter(Number.isInteger);
+}
+async function countRowsByMarker(table, markerValue) {
+  if (!await relationExists(table)) return 0;
+  const rows = await db(
+    `SELECT COUNT(*)::int AS count FROM ${quoteIdent(table)} AS t WHERE to_jsonb(t)::text LIKE $1`,
+    [`%${markerValue}%`],
+  );
+  return Number(rows[0]?.count ?? 0);
+}
+async function findFocusedMarkers() {
+  const pattern = 'FOCUSED-PORTAL-GAPS-[0-9a-f-]+';
+  const tables = [
+    'portal_customers',
+    'portal_customer_notifications',
+    'admin_notifications',
+    'mkt_rfqs',
+    'mkt_dual_write_log',
+    'portal_product_orders',
+    'ocean_freight_orders',
+  ];
+  const found = new Set();
+  for (const table of tables) {
+    if (!await relationExists(table)) continue;
+    const rows = await db(`
+      SELECT DISTINCT (regexp_matches(to_jsonb(t)::text, $1, 'g'))[1] AS marker
+      FROM ${quoteIdent(table)} AS t
+      WHERE to_jsonb(t)::text ~ $1
+    `, [pattern]);
+    for (const row of rows) if (row.marker) found.add(row.marker);
+  }
+  return [...found];
+}
 function fixturePhone(label) {
   let hash = 2166136261;
   for (const ch of `${marker}:${label}`) hash = Math.imul(hash ^ ch.charCodeAt(0), 16777619);
@@ -72,6 +133,12 @@ async function countOwnedNotification(customerId, orderId) {
     GROUP BY event_key`, [customerId, `%"orderId":${orderId}%`]);
   return rows;
 }
+async function drainSsePreamble(reader) {
+  await Promise.race([
+    reader.read(),
+    new Promise(resolve => setTimeout(resolve, 1000)),
+  ]);
+}
 async function marketplacePayload() {
   const catalog = await http('/api/portal/marketplace');
   const items = Array.isArray(catalog.body) ? catalog.body : (catalog.body?.items ?? catalog.body?.data ?? []);
@@ -91,28 +158,59 @@ async function submitQuote(itemId, body, key) {
     method: 'POST', headers: { ...auth(customerA.token), 'Idempotency-Key': key }, body,
   }, [200, 201, 409]);
 }
-async function cleanup() {
-  const marketplaceRfqs = (await db('SELECT id FROM mkt_rfqs WHERE notes LIKE $1 OR buyer_name LIKE $1', [`%${marker}%`])).map(r => Number(r.id));
-  const marketplacePortalOrders = marketplaceRfqs.length
-    ? (await db('SELECT portal_order_id FROM mkt_dual_write_log WHERE mkt_rfq_id = ANY($1::int[]) AND portal_order_id IS NOT NULL', [marketplaceRfqs])).map(r => Number(r.portal_order_id)).filter(Number.isInteger)
-    : [];
-  const roots = {
-    portal_customers: created.customers,
-    mkt_rfqs: marketplaceRfqs,
-    portal_product_orders: marketplacePortalOrders,
-    ocean_freight_orders: (await db('SELECT id FROM ocean_freight_orders WHERE customer_name LIKE $1 OR notes LIKE $1', [`%${marker}%`])).map(r => Number(r.id)),
-  };
+async function cleanup(markerToClean) {
+  const roots = {};
+  for (const table of ['portal_customers', 'mkt_rfqs', 'portal_product_orders', 'ocean_freight_orders']) {
+    roots[table] = await idsByMarker(table, markerToClean);
+  }
+  const dualColumns = await tableColumns('mkt_dual_write_log');
+  if (roots.mkt_rfqs.length && dualColumns.includes('mkt_rfq_id') && dualColumns.includes('portal_order_id')) {
+    const linkedOrders = await db(
+      'SELECT portal_order_id FROM mkt_dual_write_log WHERE mkt_rfq_id = ANY($1::int[]) AND portal_order_id IS NOT NULL',
+      [roots.mkt_rfqs],
+    );
+    roots.portal_product_orders.push(
+      ...linkedOrders.map(row => Number(row.portal_order_id)).filter(Number.isInteger),
+    );
+    roots.portal_product_orders = [...new Set(roots.portal_product_orders)];
+  }
   const entries = Object.entries(roots).filter(([, ids]) => ids.length);
+  const markerLike = `%${markerToClean}%`;
   const client = await pool.connect();
   let deleted = 0;
   try {
     await client.query('BEGIN');
-    const dual = await client.query(`DELETE FROM mkt_dual_write_log
-      WHERE mkt_rfq_id = ANY($1::int[]) OR portal_order_id = ANY($2::int[])
-         OR idempotency_key LIKE $3 OR payload::text LIKE $3 OR buyer_email LIKE $3
-         OR buyer_name LIKE $3 OR shipping_address LIKE $3`, [roots.mkt_rfqs, roots.portal_product_orders, `%${marker}%`]);
-    deleted += dual.rowCount ?? 0;
-    if (roots.portal_customers.length) await client.query('DELETE FROM portal_customer_notifications WHERE portal_customer_id = ANY($1::int[])', [roots.portal_customers]);
+    if (dualColumns.length) {
+      const dualPredicates = ['to_jsonb(t)::text LIKE $1'];
+      const params = [markerLike];
+      if (dualColumns.includes('mkt_rfq_id')) {
+        dualPredicates.push(`t.${quoteIdent('mkt_rfq_id')} = ANY($2::int[])`);
+        params.push(roots.mkt_rfqs);
+      }
+      if (dualColumns.includes('portal_order_id')) {
+        dualPredicates.push(`t.${quoteIdent('portal_order_id')} = ANY($${params.length + 1}::int[])`);
+        params.push(roots.portal_product_orders);
+      }
+      const dual = await client.query(
+        `DELETE FROM ${quoteIdent('mkt_dual_write_log')} AS t WHERE ${dualPredicates.join(' OR ')}`,
+        params,
+      );
+      deleted += dual.rowCount ?? 0;
+    }
+    if (await relationExists('portal_customer_notifications')) {
+      const notificationColumns = await tableColumns('portal_customer_notifications');
+      const predicates = ['to_jsonb(t)::text LIKE $1'];
+      const params = [markerLike];
+      if (notificationColumns.includes('portal_customer_id')) {
+        predicates.push(`t.${quoteIdent('portal_customer_id')} = ANY($2::int[])`);
+        params.push(roots.portal_customers);
+      }
+      const notifications = await client.query(
+        `DELETE FROM ${quoteIdent('portal_customer_notifications')} AS t WHERE ${predicates.join(' OR ')}`,
+        params,
+      );
+      deleted += notifications.rowCount ?? 0;
+    }
     const edges = [];
     const queue = entries.map(([table, ids]) => ({ table, ids, depth: 0 }));
     const visited = new Set(queue.map(x => `${x.table}:${x.ids.join(',')}`));
@@ -127,13 +225,13 @@ async function cleanup() {
         WHERE c.contype='f' AND cardinality(c.conkey)=1 AND cardinality(c.confkey)=1
           AND child_ns.nspname='public' AND parent_ns.nspname='public' AND parent.relname=$1`, [current.table]);
       for (const ref of refs.rows) {
-        const table = `"${ref.child_table.replaceAll('"', '""')}"`;
-        const column = `"${ref.child_column.replaceAll('"', '""')}"`;
+        const table = quoteIdent(ref.child_table);
+        const column = quoteIdent(ref.child_column);
         let result;
         try { result = await client.query(`SELECT * FROM ${table} WHERE ${column}=ANY($1::int[])`, [current.ids]); } catch { continue; }
         if (!result.rows.length) continue;
         edges.push({ ...ref, parentIds: current.ids, depth: current.depth + 1 });
-        const childIds = result.rows.map(r => Number(r.id)).filter(Number.isInteger);
+        const childIds = result.rows.map(row => Number(row.id)).filter(Number.isInteger);
         if (childIds.length) {
           const key = `${ref.child_table}:${childIds.join(',')}`;
           if (!visited.has(key)) { visited.add(key); queue.push({ table: ref.child_table, ids: childIds, depth: current.depth + 1 }); }
@@ -141,32 +239,49 @@ async function cleanup() {
       }
     }
     for (const edge of edges.sort((a, b) => b.depth - a.depth)) {
-      const table = `"${edge.child_table.replaceAll('"', '""')}"`;
-      const column = `"${edge.child_column.replaceAll('"', '""')}"`;
-      await client.query(`DELETE FROM ${table} WHERE ${column}=ANY($1::int[])`, [edge.parentIds]);
+      await client.query(`DELETE FROM ${quoteIdent(edge.child_table)} WHERE ${quoteIdent(edge.child_column)}=ANY($1::int[])`, [edge.parentIds]);
     }
-    for (const [table, ids] of entries) await client.query(`DELETE FROM "${table}" WHERE id=ANY($1::int[])`, [ids]);
-    await client.query(`DELETE FROM admin_notifications WHERE payload::text LIKE $1 OR order_number LIKE $1 OR customer_name LIKE $1 OR company_name LIKE $1 OR body LIKE $1`, [`%${marker}%`]);
+    for (const [table, ids] of entries) {
+      await client.query(`DELETE FROM ${quoteIdent(table)} WHERE id=ANY($1::int[])`, [ids]);
+    }
+    if (await relationExists('admin_notifications')) {
+      const admin = await client.query(
+        `DELETE FROM ${quoteIdent('admin_notifications')} AS t WHERE to_jsonb(t)::text LIKE $1`,
+        [markerLike],
+      );
+      deleted += admin.rowCount ?? 0;
+    }
     await client.query('COMMIT');
     deleted += edges.length;
-  } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
-  const checks = [
-    ['portal_customers', `SELECT COUNT(*)::int AS count FROM portal_customers WHERE name LIKE $1 OR email LIKE $1 OR phone LIKE $1`],
-    ['portal_customer_notifications', `SELECT COUNT(*)::int AS count FROM portal_customer_notifications WHERE payload::text LIKE $1 OR event_key LIKE $1`],
-    ['admin_notifications', `SELECT COUNT(*)::int AS count FROM admin_notifications WHERE payload::text LIKE $1 OR order_number LIKE $1 OR customer_name LIKE $1 OR company_name LIKE $1 OR body LIKE $1`],
-    ['mkt_rfqs', `SELECT COUNT(*)::int AS count FROM mkt_rfqs WHERE notes LIKE $1 OR buyer_name LIKE $1`],
-    ['mkt_dual_write_log', `SELECT COUNT(*)::int AS count FROM mkt_dual_write_log WHERE idempotency_key LIKE $1 OR payload::text LIKE $1 OR buyer_email LIKE $1 OR buyer_name LIKE $1 OR shipping_address LIKE $1`],
-    ['portal_product_orders', `SELECT COUNT(*)::int AS count FROM portal_product_orders WHERE order_number LIKE $1 OR buyer_name LIKE $1 OR notes LIKE $1`],
-    ['ocean_freight_orders', `SELECT COUNT(*)::int AS count FROM ocean_freight_orders WHERE customer_name LIKE $1 OR notes LIKE $1`],
-  ];
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
   const residuals = {};
-  for (const [name, sql] of checks) residuals[name] = Number((await db(sql, [`%${marker}%`]))[0].count);
-  const total = Object.values(residuals).reduce((a, b) => a + b, 0);
-  log('Focused DEV cleanup residual', total === 0, JSON.stringify(residuals));
+  for (const table of [
+    'portal_customers',
+    'portal_customer_notifications',
+    'admin_notifications',
+    'mkt_rfqs',
+    'mkt_dual_write_log',
+    'portal_product_orders',
+    'ocean_freight_orders',
+  ]) {
+    residuals[table] = await countRowsByMarker(table, markerToClean);
+  }
+  const total = Object.values(residuals).reduce((sum, count) => sum + count, 0);
+  log(`Focused DEV cleanup residual (${markerToClean})`, total === 0, JSON.stringify(residuals));
   return { deleted, residuals };
 }
 
 try {
+  const staleMarkers = await findFocusedMarkers();
+  for (const staleMarker of staleMarkers) {
+    console.log(`Cleaning stale focused fixture ${staleMarker}`);
+    await cleanup(staleMarker);
+  }
   customerA = await signup('OwnerA');
   customerB = await signup('OtherB');
   await ensureInternalCookie();
@@ -178,6 +293,11 @@ try {
     gross_weight: 1000, koli: 10, commodity: `${marker} Cargo`, notes: marker,
   } }, [201]);
   const oceanId = Number(ocean.body?.id); created.ocean.push(oceanId); log('Canonical owner event fixture', oceanId > 0, `ocean=${oceanId}`);
+  const ownerRow = await db(
+    'SELECT portal_customer_id, customer_name, customer_email FROM ocean_freight_orders WHERE id = $1',
+    [oceanId],
+  );
+  console.log(`Focused owner binding — ${JSON.stringify(ownerRow[0] ?? null)}`);
 
   const aStream = fetch(`${API}/api/portal/notifications/events`, { headers: auth(customerA.token) });
   const bStream = fetch(`${API}/api/portal/notifications/events`, { headers: auth(customerB.token) });
@@ -185,12 +305,18 @@ try {
   log('Owner SSE connected', aResponse.status === 200 && Boolean(aResponse.body));
   log('Other customer SSE connected', bResponse.status === 200 && Boolean(bResponse.body));
   const aReader = aResponse.body.getReader(); const bReader = bResponse.body.getReader();
+  await Promise.all([drainSsePreamble(aReader), drainSsePreamble(bReader)]);
   const read = (reader, timeout) => Promise.race([
     reader.read().then(({ value }) => value ? new TextDecoder().decode(value) : ''),
     new Promise(resolve => setTimeout(() => resolve(''), timeout)),
   ]);
   const action = await http(`/api/ocean-freight/${oceanId}/status`, { method: 'PATCH', headers: { cookie: internalCookie }, body: { status: 'approved' } }, [200]);
   log('Canonical notification action', action.status === 200);
+  const persistedOwnerNotification = await db(
+    'SELECT portal_customer_id, event_key, payload FROM portal_customer_notifications WHERE payload::text LIKE $1',
+    [`%"orderId":${oceanId}%`],
+  );
+  console.log(`Focused persisted notification — ${JSON.stringify(persistedOwnerNotification)}`);
   const [aEvent, bEvent] = await Promise.all([read(aReader, 3000), read(bReader, 700)]);
   await aReader.cancel().catch(() => {}); await bReader.cancel().catch(() => {});
   log('NOTIFICATION_OWNERSHIP', aEvent.includes('customer_notification') && aEvent.includes(String(oceanId)) && !bEvent.includes('customer_notification'), `ownerBytes=${aEvent.length}, otherBytes=${bEvent.length}`);
@@ -202,6 +328,7 @@ try {
   const before = await countOwnedNotification(customerA.id, oceanId);
   const retryStream = fetch(`${API}/api/portal/notifications/events`, { headers: auth(customerA.token) });
   const retryResponse = await retryStream; const retryReader = retryResponse.body.getReader();
+  await drainSsePreamble(retryReader);
   await http(`/api/ocean-freight/${oceanId}/status`, { method: 'PATCH', headers: { cookie: internalCookie }, body: { status: 'approved' } }, [200, 409, 422]);
   const retryEvent = await read(retryReader, 900); await retryReader.cancel().catch(() => {});
   const after = await countOwnedNotification(customerA.id, oceanId);
@@ -222,5 +349,5 @@ try {
   log('DUPLICATE_ORDER_GUARD', allRows.length === 3, `canonicalRfqs=${allRows.length}`);
   console.log(JSON.stringify({ marker, verdict: 'PASS', focused: ['notification_ownership', 'sse', 'notification_dedupe', 'marketplace_idempotency'] }, null, 2));
 } finally {
-  try { const result = await cleanup(); console.log(`CLEANUP deleted=${result.deleted}`); } finally { await pool.end(); }
+  try { const result = await cleanup(marker); console.log(`CLEANUP deleted=${result.deleted}`); } finally { await pool.end(); }
 }
