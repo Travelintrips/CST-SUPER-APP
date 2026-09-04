@@ -4,6 +4,7 @@
 - [Production secret bundle JSON](production-secret-json-loader.md) — malformed managed PROD JSON blocks recovery before DB access; never bypass the official loader.
 - [Customer Portal harness fixtures](customer-portal-harness-fixtures.md) — order fixtures need one active company membership; reset capture stays loopback-only and DEV-harness gated.
 - [Customer Portal runtime proofs](customer-portal-runtime-proofs.md) — run one-off portal proofs through the development Secret Manager loader or they may fall back to a schema-less local DB.
+- [Customer Portal SSE flushing](customer-portal-sse-flush.md) — global response compression buffers SSE writes; flush the initial frame, broadcasts, and heartbeats explicitly.
 - [Asset storage rule](asset-storage-rule.md) — gambar/biner wajib ke Supabase Storage, bukan git; history sudah di-rewrite Jul 2026 (475 MB → 139 MB).
 - [Development Storage writes](development-storage-writes.md) — safe-dev tetap memblokir integrasi eksternal, tetapi preview upload boleh menulis hanya ke Supabase Storage development.
 - [Production static asset promotion](production-static-assets.md) — asset dev tidak otomatis ada di bucket production; cek secret runtime live dan verifikasi bucket production sebelum publish.
