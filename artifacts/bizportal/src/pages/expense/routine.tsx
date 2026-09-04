@@ -100,7 +100,12 @@ async function fetchTemplates(companyId?: number | null) {
 }
 
 async function fetchAccounts(companyId?: number | null) {
-  const url = `/api/accounting/accounts${companyId ? `?company=${companyId}` : ""}`;
+  const query = companyId === 0
+    ? "?company=all"
+    : companyId
+      ? `?company=${companyId}`
+      : "";
+  const url = `/api/accounting/accounts${query}`;
   const res = await fetch(url, { credentials: "include" });
   if (!res.ok) return [];
   return res.json() as Promise<any[]>;
@@ -176,6 +181,32 @@ export default function ExpenseRoutinePage() {
     for (const a of accounts) m.set(a.id, { name: a.name, code: a.code });
     return m;
   }, [accounts]);
+
+  // Akun harus mengikuti perusahaan aktif. Jangan mengunci selector ke
+  // suffix "CST": perusahaan lain memiliki suffix COA yang berbeda (atau
+  // memakai kode dasar tanpa suffix), tetapi tetap harus bisa mencatat biaya.
+  const sourceAccounts = useMemo(
+    () => accounts.filter((a) => {
+      if (a.type !== "asset" || a.isActive === false || a.isPostable === false || a.isHeader === true) return false;
+      const name = String(a.name ?? "").toLowerCase();
+      const code = String(a.code ?? "").toUpperCase();
+      return a.subtype === "cash_bank" ||
+        name.includes("kas") ||
+        name.includes("bank") ||
+        code.startsWith("1-101") ||
+        code.startsWith("1-102");
+    }),
+    [accounts],
+  );
+  const expenseAccounts = useMemo(
+    () => accounts.filter((a) =>
+      a.type === "expense" &&
+      a.isActive !== false &&
+      a.isPostable !== false &&
+      a.isHeader !== true,
+    ),
+    [accounts],
+  );
 
   // Combined tujuan options: vendors + employees
   const tujuanOptions = useMemo(() => {
@@ -641,7 +672,7 @@ export default function ExpenseRoutinePage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">— Pilih akun —</SelectItem>
-                    {accounts.filter((a) => a.type === "asset" && (a.name.toLowerCase().includes("kas") || a.name.toLowerCase().includes("bank")) && (a.code?.includes("CST") || a.name?.includes("CST"))).map((a) => (
+                    {sourceAccounts.map((a) => (
                       <SelectItem key={a.id} value={a.id.toString()}>
                         {a.code} — {a.name}
                       </SelectItem>
@@ -823,7 +854,7 @@ export default function ExpenseRoutinePage() {
                 )}
               </Label>
               <AccountCombobox
-                accounts={accounts.filter((a) => a.type === "expense" && (a.code?.includes("CST") || a.name?.includes("CST")))}
+                accounts={expenseAccounts}
                 value={debitAccountId !== "none" ? Number(debitAccountId) : null}
                 onChange={(id) => { setDebitAccountId(String(id)); setDebitAutoFilled(false); }}
                 placeholder="— Pilih akun —"
