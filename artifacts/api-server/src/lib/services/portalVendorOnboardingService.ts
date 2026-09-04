@@ -306,9 +306,13 @@ export async function completeOnboarding(
       .where(eq(userProfilesTable.customerId, customerId));
     const [existingVendorProfile] = accountType === "vendor"
       ? await tx
-        .select({ legalityDocUrl: vendorProfilesTable.legalityDocUrl })
+        .select({
+          id: vendorProfilesTable.id,
+          legalityDocUrl: vendorProfilesTable.legalityDocUrl,
+        })
         .from(vendorProfilesTable)
         .where(eq(vendorProfilesTable.customerId, customerId))
+        .limit(1)
       : [undefined];
 
     const [existingApproval] = !isCustomer
@@ -391,8 +395,7 @@ export async function completeOnboarding(
     let oldVendorLegalityUrl: string | null = null;
     if (accountType === "vendor" && vendor) {
       oldVendorLegalityUrl = existingVendorProfile?.legalityDocUrl ?? null;
-      await tx.insert(vendorProfilesTable).values({
-        customerId,
+      const vendorValues = {
         companyName: vendor.companyName ?? null,
         nib: vendor.nib ?? null,
         npwp: vendor.npwp ?? null,
@@ -405,21 +408,21 @@ export async function completeOnboarding(
         fullAddress: address,
         legalityDocUrl: vendor.legalityDocUrl ?? null,
         updatedAt: now,
-      }).onConflictDoUpdate({
-        target: vendorProfilesTable.customerId,
-        set: {
-          companyName: vendor.companyName ?? null,
-          nib: vendor.nib ?? null,
-          npwp: vendor.npwp ?? null,
-          serviceType: vendor.serviceType ?? null,
-          picName: fullName,
-          phone: normalizedPhone,
-          email: customer.email ?? null,
-          fullAddress: address,
-          legalityDocUrl: vendor.legalityDocUrl ?? null,
-          updatedAt: now,
-        },
-      });
+      };
+      // Some legacy DEV/PROD snapshots do not have the vendor_profiles unique
+      // index even though the ORM schema declares it. The customer advisory
+      // lock makes this explicit update/insert branch concurrency-safe without
+      // relying on a runtime DDL change.
+      if (existingVendorProfile?.id) {
+        await tx.update(vendorProfilesTable)
+          .set(vendorValues)
+          .where(eq(vendorProfilesTable.id, existingVendorProfile.id));
+      } else {
+        await tx.insert(vendorProfilesTable).values({
+          customerId,
+          ...vendorValues,
+        });
+      }
     }
 
     if (shouldForceFailure && devFailureStage === "vendor-mid-flow" && accountType === "vendor") {

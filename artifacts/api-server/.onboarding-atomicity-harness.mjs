@@ -153,29 +153,19 @@ async function cleanup() {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    for (const table of [
-      "identity_documents",
-      "ocr_results",
-      "onboarding_approvals",
-      "vendor_profiles",
-      "driver_profiles",
-      "employee_profiles",
-      "user_profiles",
-      "portal_company_members",
-      "portal_company_requests",
-      "portal_customer_services",
-      "trusted_devices",
-      "wa_otp_codes",
+    for (const [table, column] of [
+      ["identity_documents", "customer_id"],
+      ["ocr_results", "customer_id"],
+      ["onboarding_approvals", "customer_id"],
+      ["vendor_profiles", "customer_id"],
+      ["driver_profiles", "customer_id"],
+      ["employee_profiles", "customer_id"],
+      ["user_profiles", "customer_id"],
+      ["portal_company_members", "portal_customer_id"],
+      ["portal_company_requests", "portal_customer_id"],
+      ["portal_customer_services", "customer_id"],
     ]) {
-      await client.query(
-        `DELETE FROM ${table} WHERE customer_id = ANY($1::int[])`,
-        [customerIds],
-      ).catch(async () => {
-        await client.query(
-          `DELETE FROM ${table} WHERE portal_customer_id = ANY($1::int[])`,
-          [customerIds],
-        ).catch(() => {});
-      });
+      await client.query(`DELETE FROM ${table} WHERE ${column} = ANY($1::int[])`, [customerIds]);
     }
     await client.query("DELETE FROM portal_customers WHERE id = ANY($1::int[])", [customerIds]);
     await client.query("COMMIT");
