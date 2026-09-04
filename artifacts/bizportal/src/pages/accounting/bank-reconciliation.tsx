@@ -6844,6 +6844,22 @@ export default function BankReconciliationPage() {
   const completedCanonicalSettlements = canonicalSettlements.filter(
     (settlement) => settlement.queue_status === "completed",
   );
+  const [canonicalSettlementFilter, setCanonicalSettlementFilter] = useState<
+    "all" | "active" | "completed"
+  >("all");
+  const visibleCanonicalSettlements = canonicalSettlementFilter === "all"
+    ? canonicalSettlements
+    : canonicalSettlements.filter(
+      (settlement) => settlement.queue_status === canonicalSettlementFilter,
+    );
+
+  const toggleCanonicalSettlement = (settlementId: number) => {
+    setExpandedCanonicalSettlementIds(current =>
+      current.includes(settlementId)
+        ? current.filter(id => id !== settlementId)
+        : [...current, settlementId],
+    );
+  };
   const selectedQrisCandidates = qrisApprovableCandidates.filter((candidate) =>
     selectedQrisCandidateIds.includes(candidate.id!),
   );
@@ -8062,29 +8078,67 @@ export default function BankReconciliationPage() {
           <CollapsibleContent asChild>
           <CardContent className="space-y-3">
             <div className="grid grid-cols-2 gap-2">
-              <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+              <Button
+                type="button"
+                variant="ghost"
+                aria-pressed={canonicalSettlementFilter === "active"}
+                onClick={() => setCanonicalSettlementFilter(current =>
+                  current === "active" ? "all" : "active",
+                )}
+                className={`h-auto min-h-0 w-full flex-col items-start rounded-lg border px-3 py-2 text-left text-amber-900 hover:bg-amber-100 dark:text-amber-200 dark:hover:bg-amber-950 ${
+                  canonicalSettlementFilter === "active"
+                    ? "border-amber-500 bg-amber-100 ring-2 ring-amber-300/60 dark:border-amber-500 dark:bg-amber-900/60"
+                    : "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950"
+                }`}
+              >
                 <p className="text-[11px] font-medium">Menunggu rekonsiliasi</p>
                 <p className="mt-1 text-xl font-bold tabular-nums">{activeCanonicalSettlements.length}</p>
-              </div>
-              <div className="rounded-lg border border-green-300 bg-green-50 px-3 py-2 text-green-900 dark:border-green-800 dark:bg-green-950 dark:text-green-200">
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                aria-pressed={canonicalSettlementFilter === "completed"}
+                onClick={() => setCanonicalSettlementFilter(current =>
+                  current === "completed" ? "all" : "completed",
+                )}
+                className={`h-auto min-h-0 w-full flex-col items-start rounded-lg border px-3 py-2 text-left text-green-900 hover:bg-green-100 dark:text-green-200 dark:hover:bg-green-950 ${
+                  canonicalSettlementFilter === "completed"
+                    ? "border-green-500 bg-green-100 ring-2 ring-green-300/60 dark:border-green-500 dark:bg-green-900/60"
+                    : "border-green-300 bg-green-50 dark:border-green-800 dark:bg-green-950"
+                }`}
+              >
                 <p className="text-[11px] font-medium">Selesai</p>
                 <p className="mt-1 text-xl font-bold tabular-nums">{completedCanonicalSettlements.length}</p>
-              </div>
+              </Button>
             </div>
 
             {canonicalSettlements.length === 0 && !qrisAuditLoading ? (
               <div className="rounded-md border border-dashed px-3 py-5 text-center text-xs text-slate-500">
                 Belum ada settlement canonical QRIS pada scope perusahaan ini.
               </div>
+            ) : visibleCanonicalSettlements.length === 0 ? (
+              <div className="rounded-md border border-dashed px-3 py-5 text-center text-xs text-slate-500">
+                Tidak ada settlement pada filter ini.
+              </div>
             ) : (
               <div className="space-y-2">
-                {canonicalSettlements.map((settlement) => {
+                {visibleCanonicalSettlements.map((settlement) => {
                   const isCompleted = settlement.queue_status === "completed";
                   const isExpanded = expandedCanonicalSettlementIds.includes(settlement.id);
                   return (
                     <div
                       key={`canonical-settlement-${settlement.id}`}
-                      className="rounded-md border px-3 py-2.5 text-xs"
+                      role="button"
+                      tabIndex={0}
+                      aria-expanded={isExpanded}
+                      onClick={() => toggleCanonicalSettlement(settlement.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          toggleCanonicalSettlement(settlement.id);
+                        }
+                      }}
+                      className="cursor-pointer rounded-md border px-3 py-2.5 text-xs transition-colors hover:border-indigo-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 dark:hover:border-indigo-700"
                     >
                       <div className="flex items-start justify-between gap-3 flex-wrap">
                         <div className="min-w-0">
@@ -8144,11 +8198,10 @@ export default function BankReconciliationPage() {
                           variant="ghost"
                           size="sm"
                           className="h-7 shrink-0 gap-1 px-2 text-[11px]"
-                          onClick={() => setExpandedCanonicalSettlementIds(current =>
-                            current.includes(settlement.id)
-                              ? current.filter(id => id !== settlement.id)
-                              : [...current, settlement.id],
-                          )}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            toggleCanonicalSettlement(settlement.id);
+                          }}
                         >
                           <Eye className="h-3 w-3" />
                           {isExpanded ? "Tutup kandidat" : "Lihat kandidat"}
