@@ -4525,8 +4525,6 @@ function MutationCard({
     !isQris
     && canApprove(m)
     && onToggleCandidate != null;
-  const bestPaymentType = candidateSportPaymentType(best, m);
-  const hasBankTransferCandidate = bestPaymentType === "bank_transfer";
   const canRematchHistoricalReview = m.status === "manual_review"
     && (
       m.review_code === "MANUAL_REVIEW_REASON_NOT_RECORDED"
@@ -4659,46 +4657,6 @@ function MutationCard({
                   <span>Uang masuk bank {idr(amount)}</span>
                   <span>Seharusnya diterima {idr(reconciliationEvidence(m).expectedAmount || amount)}</span>
                 </div>
-              </div>
-            )}
-
-             {isQris && qrisAudits.length === 0 && !canonicalApprovalReady && evidence.transactions.length > 0 && (
-              <div>
-                  <div className="mt-2 rounded-md border border-amber-800/60 bg-card px-3 py-2 text-xs">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="font-semibold text-amber-300">
-                        {hasBankTransferCandidate
-                          ? `Kandidat Transfer Bank ditemukan untuk review (${evidence.transactions.length})`
-                          : `Transaksi ditemukan untuk review (${evidence.transactions.length})`}
-                      </p>
-                      <span className="text-[10px] text-amber-400">
-                        {hasBankTransferCandidate ? "Bukan kandidat QRIS" : "Belum kandidat QRIS valid"}
-                      </span>
-                    </div>
-                    <p className="mt-1 text-[11px] text-muted-foreground">
-                      {hasBankTransferCandidate
-                        ? "Payment sumber ini tercatat Transfer Bank. Sistem menampilkannya hanya sebagai kandidat matching umum; kandidat ini tidak boleh dimasukkan atau di-approve sebagai settlement QRIS."
-                        : "Transaksi tetap ditampilkan sebagai bukti pencocokan, tetapi belum dapat di-approve otomatis sebagai settlement QRIS."}
-                    </p>
-                    <div className="mt-1.5 max-h-44 space-y-1 overflow-y-auto">
-                      {evidence.transactions.map((transaction, index) => (
-                        <div
-                          key={`${transaction.label}-${index}`}
-                          className="flex items-center justify-between gap-3 rounded border border-border/70 bg-background/60 px-2 py-1.5"
-                        >
-                          <div className="min-w-0">
-                            <p className="truncate font-medium text-foreground">{transaction.label}</p>
-                            <p className="truncate text-[10px] text-muted-foreground">
-                              {[transaction.customer, transaction.facility, transaction.date ? fmtDate(String(transaction.date)) : null]
-                                .filter(Boolean)
-                                .join(" · ") || "Detail tersedia di sistem"}
-                            </p>
-                          </div>
-                          <p className="shrink-0 font-semibold tabular-nums text-foreground">{idr(transaction.amount)}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
               </div>
             )}
 
@@ -5479,7 +5437,6 @@ function MutationDetailPanel({
     qrisAudit != null && Math.abs(qrisNetAmount - (numericValue(m.amount) ?? 0)) < 0.5;
   const qrisDeductionMetadataMismatch =
     qrisAudit != null && Math.abs(qrisStoredDeduction - qrisImpliedDeduction) >= 0.5;
-  const qrisDiagnostic = m.qris_candidate_diagnostic ?? null;
   const canonicalApprovalCandidate = canonicalSettlementCandidateForMutation(m);
   const canonicalApprovalReady = isCanonicalSettlementApprovalEligible(m);
   const canonicalHistoricalRepairReady = isCanonicalHistoricalRepairEligible(
@@ -5887,16 +5844,6 @@ function MutationDetailPanel({
                 </div>
               </>
             )}
-            {!qrisAudit && qrisDiagnostic && (
-              <>
-                <Separator />
-                <QrisCandidateDiagnosticBlock
-                  mutation={m}
-                  diagnostic={qrisDiagnostic}
-                />
-              </>
-            )}
-
             <Separator />
 
             {/* Journal Preview — real or estimated */}
