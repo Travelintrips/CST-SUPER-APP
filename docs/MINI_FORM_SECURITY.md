@@ -130,7 +130,7 @@ if (attachmentUrl && !attachmentUrl.startsWith("/objects/")) {
 }
 ```
 
-Only paths from Replit Object Storage (`/objects/...`) are accepted. External URLs (`https://...`) are rejected outright.
+Only internal object paths backed by Supabase Storage (`/objects/...`) are accepted. External URLs (`https://...`) are rejected outright.
 
 ---
 

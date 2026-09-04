@@ -114,8 +114,8 @@
 | # | Test | Expected | Status |
 |---|---|---|---|
 | 8.1 | Portal customer uploads attachment | File stored at `/objects/uploads/<uuid>`; path returned | |
-| 8.2 | Driver uploads POD photo | Stored in GCS; URL in `driver_photos` | |
-| 8.3 | Presigned URL upload (BizPortal staff) | File lands in GCS; objectPath registered | |
+| 8.2 | Driver uploads POD photo | Stored in Supabase private-uploads; URL in `driver_photos` | |
+| 8.3 | Staff upload | Server-proxied to Supabase private-uploads; objectPath registered | |
 | 8.4 | Upload > size limit | 400 or 413 rejected by multer | |
 | 8.5 | Upload MIME not in whitelist | 400 rejected | |
 | 8.6 | Background guard: file > 100MB via presigned | File deleted by background check | |

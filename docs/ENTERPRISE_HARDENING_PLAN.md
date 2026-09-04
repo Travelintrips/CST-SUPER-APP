@@ -451,7 +451,7 @@ if (!sseEnabled) return res.status(503).json({ message: "SSE disabled" });
 | Item | Status | Gap |
 |------|--------|-----|
 | DB backup | ❌ Tidak ada otomatis | Tidak ada pg_dump scheduled |
-| Storage backup | ⚠️ Replit Object Storage persistent | Tapi tidak ada cross-region backup |
+| Storage backup | ⚠️ Supabase private-uploads persistent | Tapi tidak ada cross-region backup |
 | Code backup | ✅ Git (origin/main) | Belum ada release tag |
 | Config backup | ✅ Replit Secrets | Terdokumentasi di checklist |
 | Restore testing | ❌ Belum pernah ditest | Tidak tahu apakah backup bisa restore |
@@ -476,7 +476,7 @@ pg_dump "$SUPABASE_PG_URL" \
   --no-owner --no-acl \
   | gzip > "/tmp/${BACKUP_FILE}"
 
-# Upload ke Replit Object Storage
+# Upload ke Supabase Storage
 # (atau SFTP/S3 bucket eksternal)
 echo "Backup selesai: ${BACKUP_FILE}"
 ```
@@ -510,8 +510,8 @@ users, companies, sessions
    → Verifikasi data dengan admin
 
 4. Storage file hilang:
-   → Cek Replit Object Storage dashboard
-   → File Replit Object Storage tidak hilang saat deploy — persistent
+   → Cek Supabase Storage dashboard
+   → File Supabase Storage tidak hilang saat deploy — persistent
    → Jika policy salah: update env PUBLIC_OBJECT_SEARCH_PATHS
 
 5. WA berhenti:

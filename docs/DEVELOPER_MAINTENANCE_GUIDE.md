@@ -135,7 +135,7 @@ artifacts/api-server/src/lib/
   sseManager.ts          — SSE pool & broadcast
   orderNotification.ts   — WA/email template render & send
   fonnte.ts              — Fonnte API wrapper + dedup
-  objectStorage.ts       — Replit Object Storage wrapper
+  objectStorage.ts       — Supabase Storage compatibility adapter
   supabaseStorage.ts     — Supabase Storage wrapper (public assets)
   requireAdmin.ts        — Admin auth middleware
   supabaseAuth.ts        — Portal bearer token auth

@@ -273,7 +273,7 @@ Dashboard menampilkan:
 
 ### Database Backup
 
-Backup otomatis berjalan setiap hari pukul 02:00 WIB (19:00 UTC). Backup disimpan di Replit Object Storage.
+Backup otomatis berjalan setiap hari pukul 02:00 WIB (19:00 UTC). Backup disimpan di Supabase Storage pada bucket private-uploads.
 
 ```bash
 # Log backup scheduler
@@ -292,7 +292,7 @@ Saat ini recovery manual via Supabase dashboard atau `psql`. Tidak ada prosedur 
 - Customer portal admin dilindungi `PORTAL_ADMIN_KEY`
 - JWT / cookie session diekspirasi setelah 24 jam
 - Rate limiting aktif pada route publik (`/api/portal/*`, `/api/ai/*`)
-- File upload dibatasi ukuran dan tipe via Replit Object Storage
+- File upload dibatasi ukuran dan tipe sebelum disimpan ke Supabase Storage
 
 Lihat `threat_model.md` untuk model ancaman lengkap.
 

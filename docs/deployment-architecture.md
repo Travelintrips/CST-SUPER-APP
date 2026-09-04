@@ -55,9 +55,8 @@ Internet
 └─────────────────────────────────────────────────────┘
          │                    │
          ▼                    ▼
-   Supabase DB           Replit Object
-   + Storage             Storage
-   + Realtime
+   Supabase DB           Supabase Storage
+   + Realtime            (public-assets / private-uploads)
 ```
 
 ---
