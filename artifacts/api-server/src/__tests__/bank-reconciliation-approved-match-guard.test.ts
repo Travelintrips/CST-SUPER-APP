@@ -9,6 +9,10 @@ const approvalSource = readFileSync(
   new URL("../lib/reconciliation/canonicalSettlementApproval.ts", import.meta.url),
   "utf8",
 );
+const historicalSource = readFileSync(
+  new URL("../lib/reconciliation/historicalMatchingEngine.ts", import.meta.url),
+  "utf8",
+);
 
 type CanonicalRetryFixture = {
   settlement_status: string;
@@ -59,6 +63,33 @@ describe("bank reconciliation approved-match guard", () => {
     );
     expect(routeSource).toContain(
       '${effectiveBankMutationStatusSql("bm")} AS status',
+    );
+  });
+
+  it("keeps legacy and source-less QRIS matches out of current result projections", () => {
+    expect(routeSource).toContain(
+      "function currentReconciliationMatchResultSql(alias = \"m\"): string",
+    );
+    expect(routeSource).toContain(
+      "${alias}.candidate_type <> 'qris_settlement'",
+    );
+    expect(routeSource).toContain(
+      "${alias}.candidate_source = '${RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER}'",
+    );
+    expect(routeSource).toContain(
+      "AND ${currentReconciliationMatchResultSql(\"m\")}",
+    );
+    expect(routeSource).toContain(
+      "AND ${currentReconciliationMatchResultSql(\"effective_approved_qris\")}",
+    );
+  });
+
+  it("does not let retired QRIS history seed new historical suggestions", () => {
+    expect(historicalSource).toContain(
+      "brm.candidate_type <> 'qris_settlement'",
+    );
+    expect(historicalSource).toContain(
+      "brm.candidate_source = '${RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER}'",
     );
   });
 

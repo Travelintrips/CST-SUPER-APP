@@ -155,3 +155,4 @@
 - [Bank mutation allocation runtime contract](bank-mutation-allocation-runtime-contract.md) — additive lineage DDL needs a registered startup stage; legacy mutation dates may be text in development runtime.
 - [Package firewall dependency recovery](package-firewall-dependency-recovery.md) — if the firewall blocks a direct package tarball, check the latest safe version and update the pinned importer before retrying frozen install.
 - [QRIS canonical remediation](qris-canonical-remediation.md) — retire stale evidence before correcting reconciled membership; reverse first, then rebuild and approve only a proven replacement cohort.
+- [QRIS current match-result boundary](qris-current-match-result-boundary.md) — only canonical source-aware QRIS matches may enter current results; legacy/NULL rows remain audit history.

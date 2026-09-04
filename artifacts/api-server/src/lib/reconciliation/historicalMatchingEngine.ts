@@ -18,7 +18,10 @@
  */
 
 import { db } from "@workspace/db";
-import type { ReconciliationCandidateSource } from "@workspace/db";
+import {
+  RECONCILIATION_CANDIDATE_SOURCES,
+  type ReconciliationCandidateSource,
+} from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../logger.js";
 
@@ -475,6 +478,13 @@ export async function fetchApprovedHistory(
       FROM bank_reconciliation_matches brm
       JOIN bank_mutations bm ON bm.id = brm.mutation_id
       WHERE brm.status = 'approved'
+        -- Legacy/NULL QRIS matches are retained as audit history only. They
+        -- must not seed new recommendations after a cleanup/replay recreates
+        -- the old row with an active status.
+        AND (
+          brm.candidate_type <> 'qris_settlement'
+          OR brm.candidate_source = '${RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER}'
+        )
         AND bm.status NOT IN (${excludedStatuses})
         AND bm.company_id = ${Number(companyId)}
         AND bm.direction = '${direction === "IN" ? "IN" : "OUT"}'

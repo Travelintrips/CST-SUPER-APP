@@ -217,6 +217,7 @@ function qrisMutationReadyForApprovalSql(alias = "bm"): string {
           FROM bank_reconciliation_matches qris_existing_approval
           WHERE qris_existing_approval.mutation_id = ${alias}.id
             AND qris_existing_approval.status = 'approved'
+            AND ${currentReconciliationMatchResultSql("qris_existing_approval")}
         )
         AND UPPER(COALESCE(qris_ready.status, '')) NOT IN (
           'APPROVED', 'COMPLETED', 'SUPERSEDED', 'STALE', 'INELIGIBLE'
@@ -277,6 +278,20 @@ function qrisCandidateSourcePaymentMethodSql(
           AND LOWER(COALESCE(qris_source_payment.payment_method::text, '')) LIKE '%qris%'
           AND LOWER(COALESCE(qris_source_payment.status::text, '')) IN ('confirmed', 'pending')
       )
+  )`;
+}
+
+/**
+ * The public match-result projection is source-aware. Legacy QRIS matches
+ * (including pre-source rows with NULL) are historical evidence only and must
+ * not become visible again merely because cleanup/replay recreates them with
+ * an active match status. Current QRIS reconciliation is owned by the
+ * canonical Sport Center settlement source.
+ */
+function currentReconciliationMatchResultSql(alias = "m"): string {
+  return `(
+    ${alias}.candidate_type <> 'qris_settlement'
+    OR ${alias}.candidate_source = '${RECONCILIATION_CANDIDATE_SOURCES.CANONICAL_SPORT_CENTER}'
   )`;
 }
 
@@ -344,6 +359,7 @@ function effectiveBankMutationStatusSql(alias = "bm"): string {
         FROM bank_reconciliation_matches effective_approved_qris
         WHERE effective_approved_qris.mutation_id = ${alias}.id
           AND effective_approved_qris.status = 'approved'
+          AND ${currentReconciliationMatchResultSql("effective_approved_qris")}
       )
     THEN 'duplicate_need_review'
     WHEN ${alias}.status = 'matched'
@@ -4625,6 +4641,7 @@ router.get("/mutations", async (req, res) => {
        FROM bank_reconciliation_matches m
        WHERE m.mutation_id = bm.id
           AND m.status IN ('candidate', 'approved')
+           AND ${currentReconciliationMatchResultSql("m")}
             -- Generic non-Sport candidates must be same-day. QRIS candidates
             -- use the exact H-1 settlement-date contract; ordinary non-QRIS
             -- Sport Center payments remain reviewable for manual confirmation.
